@@ -1,12 +1,21 @@
 // Test Extension tests cover test extension script behavior.
 /* oxlint-disable typescript/no-unnecessary-type-parameters -- explicit call-site result types keep mock tuple extraction precise. */
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { parseCLI } from "vitest/node";
 import {
   detectChangedExtensionIds,
   listAvailableExtensionIds,
@@ -17,14 +26,13 @@ import {
   createExtensionTestProcessTargetChunks,
   createExtensionTestShards,
   listExtensionTestFilesForRoots,
-  listTrackedTestFilesForRoots,
+  listTrackedTestPlanFiles,
   resolveExtensionBatchPlan,
   resolveExtensionTestConfig,
   resolveExtensionTestPlan,
 } from "../../scripts/lib/extension-test-plan.mts";
 import { relativizeExtensionVitestArgs } from "../../scripts/lib/extension-vitest-paths.mts";
 import type { VitestBatchRunParams } from "../../scripts/lib/vitest-batch-runner.mts";
-import { buildVitestBatchPnpmArgs } from "../../scripts/lib/vitest-batch-runner.mts";
 import {
   parseExtensionIds,
   parseExactVitestExcludePaths,
@@ -33,11 +41,13 @@ import {
 } from "../../scripts/test-extension-batch.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { waitForPidFile } from "../helpers/process-wait.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { extensionCatchAllExcludedTestRoots } from "../vitest/vitest.extensions.config.ts";
 
 const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mts");
 const posixIt = process.platform === "win32" ? it.skip : it;
 const MATRIX_TEST_PROCESS_FILE_LIMIT = 40;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type RunGroupParams = VitestBatchRunParams;
 
@@ -94,7 +104,7 @@ function findExtensionWithoutTests() {
 }
 
 function listExtensionTestFiles(extensionId: string): string[] {
-  return listTrackedTestFilesForRoots([bundledPluginRoot(extensionId)]);
+  return listExtensionTestFilesForRoots([bundledPluginRoot(extensionId)]);
 }
 
 function expectedMatrixTestProcessCount() {
@@ -197,8 +207,14 @@ describe("scripts/test-extension.mts", () => {
     expect(new Set(chunks.flat()).size).toBe(expectedFiles.length);
   });
 
+  it("excludes plugin browser tests from the server-side extension inventory", () => {
+    const files = listExtensionTestFilesForRoots([bundledPluginRoot("workboard")]);
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.some((file) => file.includes("/browser/"))).toBe(false);
+  });
+
   it("includes newly authored Matrix tests in bounded process targets", () => {
-    const root = mkdtempSync(path.join(process.cwd(), "extensions", ".extension-test-plan-"));
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-test-plan-"));
     const relativeRoot = path.relative(process.cwd(), root);
     const testFile = path.join(root, "newly-authored.test.ts");
     writeFileSync(testFile, "export {};\n");
@@ -216,6 +232,22 @@ describe("scripts/test-extension.mts", () => {
     }
   });
 
+  posixIt("preserves newline and leading-space tokens in the tracked Git inventory", () => {
+    const root = tempDirs.make("openclaw-extension-git-paths-");
+    const trackedPaths = [" extensions/example.test.ts", "extensions/example\npath.test.ts"];
+    expect(spawnSync("git", ["init", "-q", "--initial-branch=main"], { cwd: root }).status).toBe(0);
+    for (const trackedPath of trackedPaths) {
+      const absolutePath = path.join(root, trackedPath);
+      mkdirSync(path.dirname(absolutePath), { recursive: true });
+      writeFileSync(absolutePath, "export {};\n");
+    }
+    expect(spawnSync("git", ["add", "--", ...trackedPaths], { cwd: root }).status).toBe(0);
+
+    expect(listTrackedTestPlanFiles(root, [":(glob)**/*.test.ts"])?.toSorted()).toEqual(
+      trackedPaths.toSorted(),
+    );
+  });
+
   it.each([
     ["watch", ["--watch"]],
     ["short watch", ["-w"]],
@@ -223,10 +255,16 @@ describe("scripts/test-extension.mts", () => {
     ["reporter", ["--reporter=json"]],
     ["output file", ["--outputFile=results.json"]],
     ["shard", ["--shard=1/2"]],
+    ["retry with shard", ["--retry=1", "--shard=1/2"]],
+    ["retry with report", ["--retry=1", "--reporter=json"]],
+    ["missing retry value", ["--retry"]],
+    ["invalid retry value", ["--retry=invalid"]],
+    ["missing exclude value", ["--exclude"]],
     ["bail", ["--bail=2"]],
     ["changed", ["--changed=origin/main"]],
     ["exclude", ["--exclude=extensions/matrix/src/**"]],
-    ["retry", ["--retry=1"]],
+    ["one-or-more extglob exclude", ["--exclude=extensions/matrix/src/+(a).test.ts"]],
+    ["exactly-one extglob exclude", ["--exclude=extensions/matrix/src/@(a).test.ts"]],
   ])("keeps Matrix %s runs in one process", (_name, vitestArgs) => {
     const root = bundledPluginRoot("matrix");
 
@@ -289,6 +327,16 @@ describe("scripts/test-extension.mts", () => {
     ]);
 
     expect(extensionIds).toEqual(["firecrawl", "line", "slack"]);
+  });
+
+  it("does not normalize extension path lookalikes", () => {
+    expect(
+      detectChangedExtensionIds([
+        " extensions/slack/src/channel.ts",
+        String.raw`extensions\slack\src\channel.ts`,
+        " src/line/message.test.ts",
+      ]),
+    ).toEqual([]);
   });
 
   it("lists available extension ids", () => {
@@ -553,7 +601,16 @@ describe("scripts/test-extension.mts", () => {
     expect(assigned).toHaveLength(balancedExpectedExtensionIds.length);
 
     const totals = shards.map((shard) => shard.estimatedCost);
-    expect(Math.max(...totals) - Math.min(...totals)).toBeLessThanOrEqual(1);
+    const largestPlugin = Math.max(
+      ...balancedExpectedExtensionIds.map(
+        (targetArg) => resolveExtensionTestPlan({ targetArg }).estimatedCost,
+      ),
+    );
+    const lowerBound = Math.max(
+      largestPlugin,
+      Math.ceil(totals.reduce((sum, cost) => sum + cost, 0) / shards.length),
+    );
+    expect(Math.max(...totals)).toBe(lowerBound);
 
     for (const shard of shards) {
       expect(shard.extensionIds.length).toBeGreaterThan(0);
@@ -608,8 +665,8 @@ describe("scripts/test-extension.mts", () => {
         OPENCLAW_EXTENSION_BATCH_PARALLEL: "2",
         OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(
           process.cwd(),
-          "node_modules",
-          ".experimental-vitest-cache",
+          ".cache",
+          "vitest",
           "extension-batch",
           "0-heavy",
         ),
@@ -681,24 +738,99 @@ describe("scripts/test-extension.mts", () => {
     });
   });
 
-  it("places Vitest passthrough options before batch target roots", () => {
-    expect(
-      buildVitestBatchPnpmArgs({
-        args: ["--exclude", "codex/src/app-server/run-attempt.test.ts"],
-        config: "test/vitest/vitest.extensions.config.ts",
-        targets: ["codex"],
-      }),
-    ).toEqual([
-      "exec",
-      "vitest",
-      "run",
-      "--config",
-      "test/vitest/vitest.extensions.config.ts",
-      "--exclude",
-      "codex/src/app-server/run-attempt.test.ts",
-      "codex",
-    ]);
-  });
+  it.each([
+    { enableMaglev: false, realHomeReplay: false },
+    { enableMaglev: true, realHomeReplay: false },
+    { enableMaglev: false, realHomeReplay: true },
+  ])(
+    "runs installed Vitest without pnpm (Maglev: $enableMaglev, owner-authorized real home: $realHomeReplay)",
+    ({ enableMaglev, realHomeReplay }) => {
+      const root = realpathSync(
+        mkdtempSync(path.join(tmpdir(), "openclaw-test-extension-native-")),
+      );
+      const home = path.join(root, "home");
+      const report = path.join(root, "report.json");
+      const config = path.join(root, "vitest.config.mjs");
+      const entry = path.join(root, "batch.mts");
+      mkdirSync(home);
+      symlinkSync(
+        path.join(process.cwd(), "node_modules"),
+        path.join(root, "node_modules"),
+        "junction",
+      );
+      writeFileSync(
+        config,
+        `import assert from 'node:assert/strict';
+assert.equal(process.execArgv.includes('--no-maglev'), ${!enableMaglev}, 'batch Node defaults');
+export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join(root, "cache"))},test:{include:['*.test.mjs'],pool:'forks',maxWorkers:1,fileParallelism:false,cache:false,fsModuleCache:false}};`,
+      );
+      const expectedHome = realHomeReplay ? JSON.stringify(home) : "path.join(tmpdir(), 'home')";
+      writeFileSync(
+        path.join(root, "selected.test.mjs"),
+        `import {homedir,tmpdir} from 'node:os';import path from 'node:path';import {test,expect} from 'vitest';let attempts=0;test('selected native case',()=>{expect(++attempts).toBe(2);expect(process.env.HOME).toBe(${expectedHome});expect(homedir()).toBe(${expectedHome});});`,
+      );
+      for (const name of ["excluded", "unrelated"]) {
+        writeFileSync(
+          path.join(root, `${name}.test.mjs`),
+          "import {test,expect} from 'vitest';test('must not execute',()=>expect.fail('selection lost'));",
+        );
+      }
+      const params = {
+        config,
+        homeMode: realHomeReplay ? "live-aware" : undefined,
+        args: [
+          "--configLoader=native",
+          "--retry=1",
+          "--reporter=verbose",
+          "--reporter=json",
+          `--outputFile=${report}`,
+          "--exclude",
+          "**/excluded.test.mjs",
+        ],
+        targets: [path.join(root, "selected.test.mjs"), path.join(root, "excluded.test.mjs")],
+      } satisfies VitestBatchRunParams;
+      writeFileSync(
+        entry,
+        `import {runVitestBatch} from ${JSON.stringify(path.join(process.cwd(), "scripts/lib/vitest-batch-runner.mts"))};process.exitCode=await runVitestBatch({...${JSON.stringify(params)},env:{...process.env,OPENCLAW_VITEST_ENABLE_MAGLEV:${JSON.stringify(enableMaglev ? "1" : "")}}});`,
+      );
+      try {
+        const result = spawnSync(
+          process.execPath,
+          ["--import", path.join(process.cwd(), "scripts/tsx.mjs"), entry],
+          {
+            cwd: root,
+            encoding: "utf8",
+            env: {
+              PATH: "",
+              HOME: home,
+              USERPROFILE: home,
+              OPENCLAW_LIVE_TEST: realHomeReplay ? "1" : "0",
+              OPENCLAW_LIVE_USE_REAL_HOME: realHomeReplay ? "1" : "0",
+              TMPDIR: root,
+              TMP: root,
+              TEMP: root,
+              SystemRoot: process.env.SystemRoot,
+              COREPACK_ENABLE_NETWORK: "0",
+              NODE_DISABLE_COMPILE_CACHE: "1",
+              CI: "1",
+            },
+          },
+        );
+        expect(result.status, result.stdout + result.stderr).toBe(0);
+        expect(result.signal).toBeNull();
+        const native = JSON.parse(readFileSync(report, "utf8"));
+        expect(native.success).toBe(true);
+        expect(
+          native.testResults.flatMap(
+            (file: { assertionResults: { title: string; status: string }[] }) =>
+              file.assertionResults.map(({ title, status }) => [title, status]),
+          ),
+        ).toEqual([["selected native case", "passed"]]);
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("relativizes extension Vitest path args to the scoped extensions dir", () => {
     expect(
@@ -712,6 +844,8 @@ describe("scripts/test-extension.mts", () => {
         "-r",
         ".",
         "--exclude=extensions/codex/src/app-server/client.test.ts",
+        "--exclude=",
+        "extensions/codex/src/app-server/stream.test.ts",
         "extensions/codex/src/app-server/models.test.ts",
         "--reporter=dot",
       ]),
@@ -725,103 +859,89 @@ describe("scripts/test-extension.mts", () => {
       "-r",
       ".",
       "--exclude=codex/src/app-server/client.test.ts",
+      "--exclude=",
+      "codex/src/app-server/stream.test.ts",
       "codex/src/app-server/models.test.ts",
       "--reporter=dot",
     ]);
   });
 
-  posixIt("relativizes single-extension Vitest paths from extension cwd", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-test-extension-args-"));
-    const fakePnpmPath = path.join(root, "pnpm");
-    const argsPath = path.join(root, "args.json");
-    const extensionCwd = path.join(process.cwd(), "extensions", "codex");
+  it.each([
+    ["--tagsFilter", "slow"],
+    ["--tagsFilter=", "slow"],
+    ["--fsModuleCachePath", "extensions/cache"],
+    ["--attachmentsDir", "extensions/artifacts"],
+    ["--max-workers", "2"],
+    ["--watch", "false"],
+    ["--no-file-parallelism"],
+    ["--retry.delay", "100"],
+  ])("preserves native Vitest option operands from a plugin cwd: %j", (...flags) => {
+    const target = "extensions/browser/src/example.test.ts";
+    const args = relativizeExtensionVitestArgs(
+      [...flags, target],
+      path.join(process.cwd(), "extensions/browser"),
+    );
+    expect(parseCLI(["vitest", "run", ...args])).toEqual(
+      parseCLI(["vitest", "run", ...flags, "browser/src/example.test.ts"]),
+    );
+  });
 
-    writeFakePnpm(fakePnpmPath);
-    try {
-      const result = spawnSync(
-        process.execPath,
-        [
-          scriptPath,
-          "codex",
-          "--exclude",
-          path.join(extensionCwd, "src", "app-server", "run-attempt.test.ts"),
-          path.join(extensionCwd, "src", "app-server", "client.test.ts"),
-        ],
-        {
-          cwd: extensionCwd,
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            OPENCLAW_FAKE_PNPM_ARGS_PATH: argsPath,
-            npm_execpath: fakePnpmPath,
-          },
-        },
-      );
+  it("preserves native separator tails without interpreting them as plugin paths", () => {
+    const tail = ["--", "extensions/browser/src/literal.test.ts", "--exclude="];
+    const args = relativizeExtensionVitestArgs(
+      tail,
+      path.join(process.cwd(), "extensions/browser"),
+    );
+    expect(parseCLI(["vitest", "run", ...args])).toEqual(parseCLI(["vitest", "run", ...tail]));
+  });
 
-      expect(result.status).toBe(0);
-      expect(JSON.parse(readFileSync(argsPath, "utf8"))).toEqual([
-        "exec",
-        "vitest",
-        "run",
-        "--config",
-        "test/vitest/vitest.extension-codex.config.ts",
-        "--exclude",
+  it.each(["--exclude", "--exclude="])(
+    "relativizes absolute %s paths from extension cwd",
+    (flag) => {
+      const extensionCwd = path.join(process.cwd(), "extensions", "codex");
+      expect(
+        relativizeExtensionVitestArgs(
+          [
+            flag,
+            path.join(extensionCwd, "src", "app-server", "run-attempt.test.ts"),
+            path.join(extensionCwd, "src", "app-server", "client.test.ts"),
+          ],
+          extensionCwd,
+        ),
+      ).toEqual([
+        flag,
         "codex/src/app-server/run-attempt.test.ts",
         "codex/src/app-server/client.test.ts",
-        "codex",
       ]);
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
-  posixIt("runs every single-extension Matrix chunk after an earlier chunk fails", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-test-extension-chunks-"));
-    const fakePnpmPath = path.join(root, "pnpm");
-    const countPath = path.join(root, "count");
-    const expectedProcessCount = expectedMatrixTestProcessCount();
-
-    writeFakePnpm(fakePnpmPath);
-    try {
-      const result = spawnSync(process.execPath, ["--import", "tsx", scriptPath, "matrix"], {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_FAKE_PNPM_CALL_COUNT_PATH: countPath,
-          OPENCLAW_FAKE_PNPM_EXIT_CODES: ["1", ...Array(expectedProcessCount - 1).fill("0")].join(
-            ",",
-          ),
-          npm_execpath: fakePnpmPath,
-        },
-      });
-
-      expect(result.status).toBe(1);
-      expect(readFileSync(countPath, "utf8")).toBe(String(expectedProcessCount));
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
+    },
+  );
 
   posixIt(
-    "preserves wrapper termination when the pnpm child exits cleanly after SIGTERM",
+    "preserves wrapper termination when native Vitest exits cleanly after SIGTERM",
     async () => {
       const root = mkdtempSync(path.join(tmpdir(), "openclaw-test-extension-signal-"));
-      const fakePnpmPath = path.join(root, "pnpm");
+      const config = path.join(root, "vitest.config.mjs");
+      const entry = path.join(root, "batch.mts");
       const childPidPath = path.join(root, "child.pid");
       const descendantPidPath = path.join(root, "descendant.pid");
       const signaledPath = path.join(root, "signaled");
 
-      writeFakePnpm(fakePnpmPath);
-      const runner = spawn(process.execPath, ["--import", "tsx", scriptPath, "firecrawl"], {
+      writeFileSync(
+        config,
+        `import {spawn} from 'node:child_process';import fs from 'node:fs';
+process.on('SIGTERM',()=>{fs.writeFileSync(${JSON.stringify(signaledPath)},'SIGTERM');process.exit(0)});
+const descendant=spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});setInterval(()=>{},1000);process.stdout.write('ready');"],{stdio:['ignore','pipe','ignore']});
+await new Promise(resolve=>descendant.stdout.once('data',resolve));
+fs.writeFileSync(${JSON.stringify(descendantPidPath)},String(descendant.pid));
+fs.writeFileSync(${JSON.stringify(childPidPath)},String(process.pid));
+await new Promise(()=>{});export default {};`,
+      );
+      writeFileSync(
+        entry,
+        `import {runVitestBatch} from ${JSON.stringify(path.join(process.cwd(), "scripts/lib/vitest-batch-runner.mts"))};process.exitCode=await runVitestBatch({config:${JSON.stringify(config)},args:['--configLoader=native'],targets:[]});`,
+      );
+      const runner = spawn(process.execPath, ["--import", "tsx", entry], {
         cwd: process.cwd(),
-        env: {
-          ...process.env,
-          OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH: descendantPidPath,
-          OPENCLAW_FAKE_PNPM_PID_PATH: childPidPath,
-          OPENCLAW_FAKE_PNPM_SIGNALED_PATH: signaledPath,
-          npm_execpath: fakePnpmPath,
-        },
         stdio: "ignore",
       });
       let childPid = 0;
@@ -888,6 +1008,34 @@ describe("scripts/test-extension.mts", () => {
     expect(runParams.targets).toContain("codex/src/app-server/client.test.ts");
   });
 
+  it.each([
+    ["--retry=1", "--exclude", "extensions/codex/src/app-server/run-attempt.test.ts"],
+    ["--retry", "1", "--exclude=extensions/codex/src/app-server/run-attempt.test.ts"],
+  ])("preserves Codex process bounds with release options %j", async (...vitestArgs) => {
+    const runGroup = vi.fn<(params: RunGroupParams) => Promise<number>>().mockResolvedValue(0);
+    const excluded = "extensions/codex/src/app-server/run-attempt.test.ts";
+    const expectedFiles = listExtensionTestFilesForRoots([bundledPluginRoot("codex")])
+      .filter((file) => file !== excluded)
+      .map((file) => file.replace(/^extensions\//u, ""));
+
+    const result = await runExtensionBatchPlan(
+      resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds: ["codex"] }),
+      { runGroup, vitestArgs },
+    );
+
+    expect(result).toBe(0);
+    const calls = runGroup.mock.calls.map(([params]) => params);
+    expect(calls).toHaveLength(Math.ceil(expectedFiles.length / 12));
+    expect(calls.every((call) => call.targets.length <= 12)).toBe(true);
+    expect(calls.flatMap((call) => call.targets)).toEqual(expectedFiles);
+    for (const call of calls) {
+      expect(parseCLI(["vitest", "run", ...call.args]).options).toMatchObject({
+        retry: 1,
+        exclude: ["codex/src/app-server/run-attempt.test.ts"],
+      });
+    }
+  });
+
   it("runs Matrix extension batches in bounded sequential processes", async () => {
     const runGroup = vi.fn<(params: RunGroupParams) => Promise<number>>().mockResolvedValue(0);
     const expectedFiles = listExtensionTestFilesForRoots([bundledPluginRoot("matrix")]).map(
@@ -929,7 +1077,6 @@ describe("scripts/test-extension.mts", () => {
     ["--bail=2"],
     ["--changed=origin/main"],
     ["--exclude=extensions/matrix/src/**"],
-    ["--retry=1"],
   ])("keeps Matrix extension batch mode %s in one process", async (vitestArg) => {
     const runGroup = vi.fn<() => Promise<number>>().mockResolvedValue(0);
 
@@ -1025,44 +1172,6 @@ describe("scripts/test-extension.mts", () => {
     expect(result.stderr).toContain(`No tests found for ${bundledPluginRoot(extensionId)}.`);
   });
 });
-
-function writeFakePnpm(filePath: string): void {
-  writeFileSync(
-    filePath,
-    [
-      "#!/usr/bin/env node",
-      'const { spawn } = require("node:child_process");',
-      'const fs = require("node:fs");',
-      "if (process.env.OPENCLAW_FAKE_PNPM_EXIT_CODES) {",
-      "  const countPath = process.env.OPENCLAW_FAKE_PNPM_CALL_COUNT_PATH;",
-      "  const count = fs.existsSync(countPath) ? Number(fs.readFileSync(countPath, 'utf8')) : 0;",
-      "  const exitCodes = process.env.OPENCLAW_FAKE_PNPM_EXIT_CODES.split(',').map(Number);",
-      "  fs.writeFileSync(countPath, String(count + 1));",
-      "  process.exit(exitCodes[count] || 0);",
-      "}",
-      "if (process.env.OPENCLAW_FAKE_PNPM_ARGS_PATH) {",
-      "  fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_ARGS_PATH, JSON.stringify(process.argv.slice(2)));",
-      "  process.exit(0);",
-      "}",
-      'process.on("SIGTERM", () => {',
-      '  fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_SIGNALED_PATH, "SIGTERM");',
-      "  process.exit(0);",
-      "});",
-      "if (process.env.OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH) {",
-      "  const child = spawn(process.execPath, [",
-      '    "-e",',
-      "    \"process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);\",",
-      "  ], { stdio: 'ignore' });",
-      "  fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH, String(child.pid));",
-      "}",
-      "// Publishing the PID marks the fixture ready for SIGTERM delivery.",
-      "fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_PID_PATH, String(process.pid));",
-      "setInterval(() => {}, 1000);",
-      "",
-    ].join("\n"),
-  );
-  chmodSync(filePath, 0o755);
-}
 
 async function waitFor(condition: () => boolean, timeoutMs = 3_000): Promise<void> {
   const startedAt = Date.now();

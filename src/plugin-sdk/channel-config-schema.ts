@@ -13,6 +13,7 @@ export {
   buildJsonChannelConfigSchema,
   buildMultiAccountChannelSchema,
   buildNestedDmConfigSchema,
+  refineChannelDmPolicy,
 } from "../channels/plugins/config-schema.js";
 export {
   BlockStreamingChunkSchema,
@@ -39,7 +40,7 @@ export {
   buildChannelAllowBotsSchema,
   buildChannelExecApprovalsSchema,
   buildChannelReactionShape,
-  buildCommonChannelAccountShape,
+  buildChannelAccountSchemaParts,
   ChannelBotLoopProtectionSchema,
   ChannelDangerouslyAllowNameMatchingSchema,
   ChannelPreviewStreamingConfigSchema,

@@ -20,6 +20,8 @@ vi.mock("./client.js", () => ({
 }));
 
 let registerFeishuBitableTools: typeof import("./bitable.js").registerFeishuBitableTools;
+let registerFeishuChatTools: typeof import("./chat.js").registerFeishuChatTools;
+let registerFeishuDocTools: typeof import("./docx.js").registerFeishuDocTools;
 let registerFeishuDriveTools: typeof import("./drive.js").registerFeishuDriveTools;
 let registerFeishuPermTools: typeof import("./perm.js").registerFeishuPermTools;
 let registerFeishuWikiTools: typeof import("./wiki.js").registerFeishuWikiTools;
@@ -92,6 +94,8 @@ describe("feishu tool account routing", () => {
         }),
       ));
     ({ registerFeishuWikiTools } = await import("./wiki.js"));
+    ({ registerFeishuChatTools } = await import("./chat.js"));
+    ({ registerFeishuDocTools } = await import("./docx.js"));
   });
 
   afterAll(() => {
@@ -101,6 +105,41 @@ describe("feishu tool account routing", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  test.each([
+    ["missing channel", {}],
+    ["unconfigured account", { channels: { feishu: { accounts: { a: { enabled: true } } } } }],
+    [
+      "disabled channel",
+      { channels: { feishu: { ...createConfig({}).channels?.feishu, enabled: false } } },
+    ],
+    [
+      "disabled accounts",
+      {
+        channels: {
+          feishu: {
+            accounts: {
+              a: { enabled: false, appId: "app-a", appSecret: "sec-a" }, // pragma: allowlist secret
+            },
+          },
+        },
+      },
+    ],
+  ])("does not register workplace tools for %s", (_label, config) => {
+    const { api, registered } = createToolFactoryHarness(config);
+    for (const register of [
+      registerFeishuDocTools,
+      registerFeishuChatTools,
+      registerFeishuWikiTools,
+      registerFeishuDriveTools,
+      registerFeishuPermTools,
+      registerFeishuBitableTools,
+    ]) {
+      register(api);
+    }
+    expect(registered).toEqual([]);
+    expect(createFeishuClientMock).not.toHaveBeenCalled();
   });
 
   test("wiki tool registers when first account disables it and routes to agentAccountId", async () => {

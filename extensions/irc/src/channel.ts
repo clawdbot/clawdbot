@@ -7,6 +7,7 @@ import {
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import { identityEntryAuthenticationClassifier } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   createAllowlistProviderOpenWarningCollector,
   createConditionalWarningCollector,
@@ -35,7 +36,8 @@ import {
 import { IrcChannelConfigSchema } from "./config-schema.js";
 import { collectIrcMutableAllowlistWarnings } from "./doctor.js";
 import { startIrcGatewayAccount } from "./gateway.js";
-import { ircMessageAdapter } from "./message-adapter.js";
+import { ircIngressIdentity } from "./ingress-identity.js";
+import { ircMessageAdapter, sendFormattedIrcText } from "./message-adapter.js";
 import {
   isChannelTarget,
   looksLikeIrcTargetId,
@@ -129,6 +131,7 @@ const resolveIrcDmPolicy = createScopedDmSecurityResolver<ResolvedIrcAccount>({
   resolvePolicy: (account) => account.config.dmPolicy,
   resolveAllowFrom: (account) => account.config.allowFrom,
   policyPathSuffix: "dmPolicy",
+  classifyEntryAuthentication: identityEntryAuthenticationClassifier(ircIngressIdentity),
   normalizeEntry: (raw) => normalizeIrcAllowEntry(raw),
 });
 
@@ -180,7 +183,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
       media: true,
       blockStreaming: true,
     },
-    reload: { configPrefixes: ["channels.irc"] },
+    reload: { configPrefixes: ["channels.irc"], accountScopedRestart: true },
     configSchema: IrcChannelConfigSchema,
     config: {
       ...ircConfigAdapter,
@@ -326,7 +329,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
       idLabel: "ircUser",
       message: PAIRING_APPROVED_MESSAGE,
       normalizeAllowEntry: (entry) => normalizeIrcAllowEntry(entry),
-      notify: async ({ cfg, id, message }) => {
+      notify: async ({ cfg, id, message, accountId }) => {
         const target = normalizePairingTarget(id);
         if (!target) {
           throw new Error(`invalid IRC pairing id: ${id}`);
@@ -334,6 +337,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
         const { sendMessageIrc } = await loadIrcChannelRuntime();
         await sendMessageIrc(target, message, {
           cfg: cfg as CoreConfig,
+          accountId,
         });
       },
     },
@@ -343,7 +347,10 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
     collectWarnings: collectIrcSecurityWarnings,
   },
   outbound: {
-    base: ircOutboundBaseAdapter,
+    base: {
+      ...ircOutboundBaseAdapter,
+      sendFormattedText: sendFormattedIrcText,
+    },
     attachedResults: {
       channel: "irc",
       sendText: ({ onDeliveryResult: _onDeliveryResult, ...ctx }) =>

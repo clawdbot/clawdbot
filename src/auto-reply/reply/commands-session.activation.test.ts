@@ -78,7 +78,10 @@ describe("handleActivationCommand", () => {
 
     const result = await handleActivationCommand(params, true);
 
-    expect(result).toEqual({ shouldContinue: false });
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: expect.stringContaining("commands.ownerAllowFrom") },
+    });
     expect(params.sessionEntry?.groupActivation).toBe("mention");
     expect(params.sessionEntry?.groupActivationNeedsSystemIntro).toBeUndefined();
     expect(persistSessionEntryMock).not.toHaveBeenCalled();

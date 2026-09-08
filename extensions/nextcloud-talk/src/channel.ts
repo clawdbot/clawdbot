@@ -12,7 +12,7 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
-import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
+import { isNextcloudTalkAccountConfigured, type ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { nextcloudTalkApprovalAuth } from "./approval-auth.js";
 import { probeNextcloudTalkBotResponseFeature } from "./bot-preflight.js";
 import { buildChannelConfigSchema, DEFAULT_ACCOUNT_ID, type ChannelPlugin } from "./channel-api.js";
@@ -98,12 +98,11 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
       configSchema: buildChannelConfigSchema(NextcloudTalkConfigSchema),
       config: {
         ...nextcloudTalkConfigAdapter,
-        isConfigured: (account) =>
-          Boolean(account.tokenStatus !== "missing" && account.baseUrl?.trim()),
+        isConfigured: isNextcloudTalkAccountConfigured,
         describeAccount: (account) =>
           describeWebhookAccountSnapshot({
             account,
-            configured: Boolean(account.tokenStatus !== "missing" && account.baseUrl?.trim()),
+            configured: isNextcloudTalkAccountConfigured(account),
             extra: {
               secretSource: account.secretSource,
               tokenStatus: account.tokenStatus,
@@ -169,7 +168,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
           accountId: account.accountId,
           name: account.name,
           enabled: account.enabled,
-          configured: Boolean(account.tokenStatus !== "missing" && account.baseUrl?.trim()),
+          configured: isNextcloudTalkAccountConfigured(account),
           extra: {
             secretSource: account.secretSource,
             tokenStatus: account.tokenStatus,

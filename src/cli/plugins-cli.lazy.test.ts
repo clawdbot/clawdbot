@@ -46,6 +46,29 @@ describe("plugins cli lazy runtime boundary", () => {
     expect(runtimeLoaded).not.toHaveBeenCalled();
   });
 
+  it.each(["enable", "install", "update"])(
+    "parses --accept-capabilities on the %s command without loading runtime",
+    async (commandName) => {
+      const runtimeLoaded = vi.fn();
+      vi.doMock("./plugins-cli.runtime.js", () => {
+        runtimeLoaded();
+        return {};
+      });
+      const { registerPluginsCli } = await import("./plugins-cli.js");
+      const program = new Command();
+      registerPluginsCli(program);
+      const plugins = program.commands.find((command) => command.name() === "plugins");
+      const command = plugins?.commands.find((entry) => entry.name() === commandName);
+      if (!command) {
+        throw new Error(`missing plugins ${commandName} command`);
+      }
+
+      expect(command.parseOptions(["--accept-capabilities"]).unknown).toEqual([]);
+      expect(command.opts()).toEqual(expect.objectContaining({ acceptCapabilities: true }));
+      expect(runtimeLoaded).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     {
       name: "plugins",

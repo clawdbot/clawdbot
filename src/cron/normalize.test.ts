@@ -1,9 +1,14 @@
 // Cron normalization tests cover job config normalization and defaults.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   validateCronAddParams,
   validateCronUpdateParams,
 } from "../../packages/gateway-protocol/src/index.js";
+import {
+  DeliveryThreadIdFieldSchema,
+  LowercaseNonEmptyStringFieldSchema,
+  TrimmedNonEmptyStringFieldSchema,
+} from "./delivery-field-schemas.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "./normalize.js";
 
 type UnknownRecord = Record<string, unknown>;
@@ -98,6 +103,61 @@ function expectAnnounceDeliveryTarget(
   expect(delivery.to).toBe(params.to);
 }
 describe("normalizeCronJobCreate", () => {
+  it.each(["create", "patch"] as const)(
+    "does not validate absent delivery fields during %s normalization",
+    (mode) => {
+      const parsers = [
+        vi.spyOn(LowercaseNonEmptyStringFieldSchema, "safeParse"),
+        vi.spyOn(TrimmedNonEmptyStringFieldSchema, "safeParse"),
+        vi.spyOn(DeliveryThreadIdFieldSchema, "safeParse"),
+      ];
+      try {
+        for (const delivery of [
+          { mode: "none" },
+          {
+            mode: "none",
+            channel: undefined,
+            to: undefined,
+            threadId: undefined,
+            accountId: undefined,
+          },
+        ]) {
+          const normalized =
+            mode === "create" ? createAgent({ delivery }) : normalizePatch({ delivery });
+          expect(normalized.delivery).toEqual({ mode: "none" });
+        }
+        for (const parser of parsers) {
+          expect(parser).not.toHaveBeenCalled();
+        }
+      } finally {
+        for (const parser of parsers) {
+          parser.mockRestore();
+        }
+      }
+    },
+  );
+
+  it.each(["create", "patch"] as const)(
+    "does not promote prototype-only schedule fields during %s normalization",
+    (mode) => {
+      const schedule = Object.assign(Object.create({ expr: "*/17 * * * *" }) as UnknownRecord, {
+        kind: "cron",
+      });
+      const normalized =
+        mode === "create" ? createMain({ schedule }) : normalizePatch({ schedule });
+
+      expect(Object.hasOwn(schedule, "expr")).toBe(false);
+      expect(Object.hasOwn(child(normalized, "schedule"), "expr")).toBe(false);
+    },
+  );
+  it("does not promote prototype-only payload fields", () => {
+    const payload = Object.assign(
+      Object.create({ model: "openai/gpt-5" }) as UnknownRecord,
+      AGENT_TURN,
+    );
+
+    expect(child(createAgent({ payload }), "payload")).not.toHaveProperty("model");
+  });
   it("trims cron timezones and drops blank values", () => {
     const trimmed = mainSchedule({ ...CRON_SCHEDULE, tz: "  Europe/Vienna  " });
     const blank = mainSchedule({ ...CRON_SCHEDULE, tz: "   " });

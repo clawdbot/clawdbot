@@ -29,9 +29,11 @@ const PLUGIN_DOC_ALIASES = new Map([
   ["browser", "/tools/browser"],
   ["codex", "/plugins/codex-harness"],
   ["document-extract", "/tools/pdf"],
+  ["geolocation", "/plugins/geolocation"],
   ["duckduckgo", "/tools/duckduckgo-search"],
   ["exa", "/tools/exa-search"],
   ["firecrawl", "/tools/firecrawl"],
+  ["imap", "/automation/imap"],
   ["parallel", "/tools/parallel-search"],
   ["perplexity", "/tools/perplexity-search"],
   ["policy", "/cli/policy"],
@@ -41,6 +43,14 @@ const PLUGIN_DOC_ALIASES = new Map([
 const SKIPPED_REFERENCE_PAGE_IDS = new Set(["parallel"]);
 const MANUAL_SECTION_START = "<!-- openclaw-plugin-reference:manual-start -->";
 const MANUAL_SECTION_END = "<!-- openclaw-plugin-reference:manual-end -->";
+const GENERATED_NOTICE = `<!-- Generated file. Do not edit by hand.
+Run \`pnpm plugins:inventory:gen\` to rebuild it. -->`;
+// Keep the marker names in this notice unbracketed. A bracketed copy would make
+// extractManualReferenceSections match the notice instead of the real marker.
+const GENERATED_REFERENCE_NOTICE = `<!-- Generated file. Do not edit by hand.
+Run \`pnpm plugins:inventory:gen\` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->`;
 // Generated link labels are user-visible product names and translation source.
 const RELATED_DOC_PRODUCT_IDS = new Set([
   "chutes",
@@ -374,7 +384,7 @@ function resolveInstallRoute(packageJson: PluginPackageJson, status: PluginStatu
     }
     const release = packageJson.openclaw?.release;
     if (release?.publishToClawHub === true || release?.publishToNpm === true) {
-      return `included in OpenClaw; ${resolveInstallRoute(packageJson, "external")}`;
+      return `included in OpenClaw, and also from ${resolveInstallRoute(packageJson, "external")}`;
     }
     return "included in OpenClaw";
   }
@@ -388,9 +398,9 @@ function resolveInstallRoute(packageJson: PluginPackageJson, status: PluginStatu
       : "";
   if (release?.publishToClawHub === true && release?.publishToNpm === true) {
     if (install?.defaultChoice === "clawhub") {
-      return clawhubSpec ? `ClawHub${clawhubSpec}; npm${npmSpec}` : `ClawHub + npm${npmSpec}`;
+      return clawhubSpec ? `ClawHub${clawhubSpec} or npm${npmSpec}` : `ClawHub + npm${npmSpec}`;
     }
-    return clawhubSpec ? `npm${npmSpec}; ClawHub${clawhubSpec}` : `npm${npmSpec}; ClawHub`;
+    return clawhubSpec ? `npm${npmSpec} or ClawHub${clawhubSpec}` : `npm${npmSpec} or ClawHub`;
   }
   if (release?.publishToClawHub === true) {
     return `ClawHub${clawhubSpec || npmSpec}`;
@@ -444,7 +454,13 @@ function renderRelatedDocs(record: PluginRecord) {
 ${record.docs.map((link) => `- ${docLink(link)}`).join("\n")}`;
 }
 
-function extractManualReferenceSections(content: string) {
+function stripGeneratedNotice(value: string) {
+  const noticeStart = value.indexOf(GENERATED_REFERENCE_NOTICE);
+  return noticeStart === -1 ? value : value.slice(noticeStart + GENERATED_REFERENCE_NOTICE.length);
+}
+
+function extractManualReferenceSections(rawContent: string) {
+  const content = stripGeneratedNotice(rawContent);
   const markerStart = content.indexOf(MANUAL_SECTION_START);
   if (markerStart !== -1) {
     const contentStart = markerStart + MANUAL_SECTION_START.length;
@@ -454,7 +470,9 @@ function extractManualReferenceSections(content: string) {
     }
   }
 
-  const surfaceMatch = /\n## Surface\n\n[^\n]*(?:\n|$)/u.exec(content);
+  // The surface block is a list, so consume every non-blank line under the heading.
+  // A single-line pattern here would treat later surface bullets as manual text.
+  const surfaceMatch = /\n## Surface\n\n(?:[^\n]+\n)*/u.exec(content);
   if (!surfaceMatch?.index) {
     return "";
   }
@@ -483,6 +501,19 @@ ${manualSections}
 ${MANUAL_SECTION_END}`;
 }
 
+// Generated reference titles carry a "reference" suffix so they never collide with a
+// hand-written plugin guide title such as "Beam plugin" in docs/plugins/<id>.md.
+function referencePageTitle(record: PluginRecord) {
+  return `${record.name} plugin reference`;
+}
+
+function renderSurface(surface: string[]) {
+  if (surface.length === 0) {
+    return "This plugin declares no channels, providers, commands, or contracts.";
+  }
+  return surface.map((part) => `- ${part}`).join("\n");
+}
+
 function renderReferencePage(record: PluginRecord, manualSections = "") {
   const relatedDocs = renderRelatedDocs(record);
   const manualBlock = renderManualReferenceSections(manualSections);
@@ -490,10 +521,10 @@ function renderReferencePage(record: PluginRecord, manualSections = "") {
 summary: "${record.description.replaceAll('"', '\\"')}"
 read_when:
   - You are installing, configuring, or auditing the ${record.id} plugin
-title: "${record.name} plugin"
+title: "${referencePageTitle(record)}"
 ---
 
-# ${record.name} plugin
+${GENERATED_REFERENCE_NOTICE}
 
 ${record.description}
 
@@ -504,7 +535,7 @@ ${record.description}
 
 ## Surface
 
-${record.surface}${manualBlock ? `\n\n${manualBlock}` : ""}${relatedDocs ? `\n\n${relatedDocs}` : ""}
+${renderSurface(record.surface)}${manualBlock ? `\n\n${manualBlock}` : ""}${relatedDocs ? `\n\n${relatedDocs}` : ""}
 `;
 }
 
@@ -518,18 +549,23 @@ read_when:
 title: "Plugin reference"
 ---
 
-# Plugin reference
+${GENERATED_NOTICE}
 
-This page is generated from top-level \`extensions/*/openclaw.plugin.json\`
-manifests. Package metadata enriches entries when \`package.json\` is present.
-Regenerate it with:
+This section holds one reference page for each OpenClaw plugin. Each page states
+the package, the install route, and the surface the plugin adds.
+
+Use [Plugin inventory](/plugins/plugin-inventory) to browse all ${referenceCount}
+generated plugin reference pages by distribution, package, and description.
+
+## How this page is built
+
+OpenClaw generates this page from the top-level
+\`extensions/*/openclaw.plugin.json\` manifests. Package metadata enriches
+entries when \`package.json\` is present. Regenerate the page with:
 
 \`\`\`bash
 pnpm plugins:inventory:gen
 \`\`\`
-
-Use [Plugin inventory](/plugins/plugin-inventory) to browse all ${referenceCount}
-generated plugin reference pages by distribution, package, and description.
 `;
 }
 
@@ -690,15 +726,12 @@ read_when:
 title: "Plugin inventory"
 ---
 
-# Plugin inventory
+${GENERATED_NOTICE}
 
-This page is generated from top-level \`extensions/*/openclaw.plugin.json\`
-manifests and the root npm package \`files\` exclusions. Optional \`package.json\`
-metadata enriches package and distribution details. Regenerate it with:
-
-\`\`\`bash
-pnpm plugins:inventory:gen
-\`\`\`
+This page lists every OpenClaw plugin with its package, install route, and
+description. Operators use it to find a plugin and to see whether that plugin
+needs a separate install. Maintainers use it to check bundled plugin metadata
+and release automation.
 
 ## Definitions
 
@@ -750,6 +783,17 @@ ${renderInventoryList(groups.external)}
 ${groups.source.length} plugins
 
 ${renderInventoryList(groups.source)}
+
+## How this page is built
+
+OpenClaw generates this page from the top-level
+\`extensions/*/openclaw.plugin.json\` manifests and the root npm package
+\`files\` exclusions. Optional \`package.json\` metadata enriches package and
+distribution details. Regenerate the page with:
+
+\`\`\`bash
+pnpm plugins:inventory:gen
+\`\`\`
 `;
 }
 

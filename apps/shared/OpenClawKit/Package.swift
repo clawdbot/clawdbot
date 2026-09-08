@@ -1,4 +1,4 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 6.3
 
 import PackageDescription
 
@@ -65,6 +65,9 @@ let package = Package(
                 .product(name: "SwiftMath", package: "SwiftMath"),
             ],
             path: "Sources/OpenClawChatUI",
+            resources: [
+                .copy("Resources/Mermaid"),
+            ],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
             ]),
@@ -77,6 +80,7 @@ let package = Package(
                 .product(name: "GRDB", package: "GRDB.swift"),
             ],
             path: "Tests/OpenClawKitTests",
+            resources: [.copy("Fixtures")],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
                 .enableExperimentalFeature("SwiftTesting"),

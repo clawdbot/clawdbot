@@ -146,6 +146,26 @@ describe("extractMessagingToolSend", () => {
           source: "test",
         },
         {
+          pluginId: "canonical-target",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "canonical-target" }),
+            messaging: { normalizeTarget: (raw: string) => raw.trim().toLowerCase() },
+            actions: {
+              extractToolSend: ({ args }: { args: Record<string, unknown> }) => {
+                if (
+                  args.action !== "thread-reply" ||
+                  typeof args.channelId !== "string" ||
+                  typeof args.threadId !== "string"
+                ) {
+                  return null;
+                }
+                return { to: `thread:${args.channelId}/${args.threadId}` };
+              },
+            },
+          },
+          source: "test",
+        },
+        {
           pluginId: "mattermost",
           plugin: {
             ...createChannelTestPluginBase({ id: "mattermost" }),
@@ -243,6 +263,38 @@ describe("extractMessagingToolSend", () => {
     expect(result?.tool).toBe("message");
     expect(result?.provider).toBe("telegram");
     expect(result?.to).toBe("telegram:123");
+  });
+
+  it("uses the provider-canonical target for shared message actions", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "thread-reply",
+      provider: "canonical-target",
+      channelId: "Room-A",
+      threadId: "Thread-1",
+      message: "done",
+    });
+
+    expect(result).toMatchObject({
+      tool: "message",
+      provider: "canonical-target",
+      to: "thread:room-a/thread-1",
+      threadId: "Thread-1",
+    });
+  });
+
+  it("keeps existing Mattermost send target extraction unchanged", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "send",
+      provider: "mattermost",
+      to: "channel:123",
+      message: "done",
+    });
+
+    expect(result).toMatchObject({
+      tool: "message",
+      provider: "mattermost",
+      to: "channel:123",
+    });
   });
 
   it("prefers provider when both provider and channel are set", () => {

@@ -1,5 +1,5 @@
+import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
 // Mattermost plugin module implements monitor slash behavior.
-import { resolveGatewayPort } from "openclaw/plugin-sdk/core";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import {

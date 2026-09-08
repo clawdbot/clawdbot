@@ -12,6 +12,7 @@ import { validateConfigObject } from "../config/validation.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { maybeRepairCodexRoutes } from "./doctor/shared/codex-route-warnings.js";
+import { applyLegacyDoctorMigrations } from "./doctor/shared/legacy-config-compat.js";
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./doctor/shared/legacy-config-migrations.js";
 import { collectBlockedLegacyOpenAICodexProviderPlan } from "./doctor/shared/legacy-config-migrations.runtime.models.js";
@@ -237,33 +238,33 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
   });
 
-  it("removes null workspace values from agents.list entries", () => {
+  it("removes null workspace values from agents.entries", () => {
     const res = normalizeCompatibilityConfigValues({
       agents: {
-        list: [
-          { id: "main", workspace: null as unknown as string },
-          { id: "beta", workspace: "/beta" },
-          { id: "gamma" },
-        ],
+        entries: {
+          main: { workspace: null as unknown as string },
+          beta: { workspace: "/beta" },
+          gamma: {},
+        },
       },
     });
 
-    expect(res.config.agents?.list).toEqual([
-      { id: "main" },
-      { id: "beta", workspace: "/beta" },
-      { id: "gamma" },
-    ]);
-    expect(res.changes).toContain("Removed null workspace value from agents.list entry.");
+    expect(res.config.agents?.entries).toEqual({
+      main: {},
+      beta: { workspace: "/beta" },
+      gamma: {},
+    });
+    expect(res.changes).toContain("Removed null workspace value from agents.entries entry.");
   });
 
-  it("does not alter agents.list when no workspace is null", () => {
+  it("does not alter agents.entries when no workspace is null", () => {
     const res = normalizeCompatibilityConfigValues({
       agents: {
-        list: [{ id: "main", workspace: "/main" }, { id: "beta" }],
+        entries: { main: { workspace: "/main" }, beta: {} },
       },
     });
 
-    expect(res.config.agents?.list).toEqual([{ id: "main", workspace: "/main" }, { id: "beta" }]);
+    expect(res.config.agents?.entries).toEqual({ main: { workspace: "/main" }, beta: {} });
     expect(res.changes.some((change) => change.includes("workspace"))).toBe(false);
   });
 
@@ -277,26 +278,25 @@ describe("normalizeCompatibilityConfigValues", () => {
               activeHours: { start: "99:99", end: "17:00" },
             },
           },
-          list: [
-            {
-              id: "ops",
+          entries: {
+            ops: {
               heartbeat: {
                 prompt: "Check alerts",
                 activeHours: { start: "09:00", end: "not-a-time" },
               },
             },
-          ],
+          },
         },
       }),
     );
 
     expect(res.config.agents?.defaults?.heartbeat).toEqual({ every: "30m" });
-    expect(res.config.agents?.list?.[0]?.heartbeat).toEqual({ prompt: "Check alerts" });
+    expect(res.config.agents?.entries?.ops?.heartbeat).toEqual({ prompt: "Check alerts" });
     expect(res.changes).toContain(
       "Removed invalid agents.defaults.heartbeat.activeHours; heartbeats will use unrestricted hours until it is reconfigured.",
     );
     expect(res.changes).toContain(
-      "Removed invalid agents.list[0].heartbeat.activeHours; heartbeats will use unrestricted hours until it is reconfigured.",
+      "Removed invalid agents.entries.ops.heartbeat.activeHours; heartbeats will use unrestricted hours until it is reconfigured.",
     );
     expect(validateConfigObject(res.config).ok).toBe(true);
   });
@@ -308,6 +308,9 @@ describe("normalizeCompatibilityConfigValues", () => {
           heartbeat: {
             activeHours: { start: "09:00", end: "24:00", timezone: "user" },
           },
+        },
+        entries: {
+          ops: { heartbeat: { activeHours: { start: "22:00", end: "06:00" } } },
         },
       },
     });
@@ -1487,6 +1490,191 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
   });
 
+  it("migrates legacy Claude CLI refs in agent entries", () => {
+    const res = normalizeCompatibilityConfigValues(
+      legacyConfig({
+        agents: {
+          entries: {
+            main: {
+              description: "Primary agent",
+              model: {
+                primary: "claude-cli/claude-opus-4-7",
+                fallbacks: ["claude-cli/claude-sonnet-4-6", "openai/gpt-5.5"],
+              },
+              models: {
+                "claude-cli/claude-opus-4-7": { alias: "Legacy Opus" },
+                "anthropic/claude-opus-4-7": {
+                  alias: "Canonical Opus",
+                  agentRuntime: { id: "openclaw" },
+                },
+                "claude-cli/claude-sonnet-4-6": { alias: "Sonnet" },
+              },
+              modelPolicy: {
+                allow: ["claude-cli/claude-opus-4-7", "claude-cli/claude-sonnet-4-6"],
+              },
+            },
+            worker: { model: "openai/gpt-5.5" },
+          },
+        },
+      }),
+    );
+
+    expect(res.config.agents?.entries).toStrictEqual({
+      main: {
+        description: "Primary agent",
+        model: {
+          primary: "anthropic/claude-opus-4-7",
+          fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
+        },
+        models: {
+          "anthropic/claude-opus-4-7": {
+            alias: "Canonical Opus",
+            agentRuntime: { id: "openclaw" },
+          },
+          "anthropic/claude-sonnet-4-6": {
+            alias: "Sonnet",
+            agentRuntime: { id: "claude-cli" },
+          },
+        },
+        modelPolicy: {
+          allow: ["anthropic/claude-opus-4-7", "anthropic/claude-sonnet-4-6"],
+        },
+      },
+      worker: { model: "openai/gpt-5.5" },
+    });
+    expect(res.changes).toEqual([
+      "Moved agents.entries.main.model legacy runtime primary refs to canonical provider refs and selected claude-cli runtime.",
+      "Moved agents.entries.main.models legacy runtime keys to canonical provider keys.",
+      "Moved agents.entries.main.modelPolicy.allow legacy runtime refs to canonical provider refs.",
+    ]);
+  });
+
+  it("migrates legacy Claude CLI model maps and allowlists when the primary is canonical", () => {
+    const res = normalizeCompatibilityConfigValues(
+      legacyConfig({
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-7" },
+            models: {
+              "claude-cli/claude-opus-4-7": { alias: "Opus" },
+              "claude-cli/claude-sonnet-4-6": {},
+            },
+            modelPolicy: {
+              allow: ["claude-cli/claude-opus-4-7", "claude-cli/claude-sonnet-4-6"],
+            },
+          },
+        },
+      }),
+    );
+
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "anthropic/claude-opus-4-7": {
+        alias: "Opus",
+        agentRuntime: { id: "claude-cli" },
+      },
+      "anthropic/claude-sonnet-4-6": {
+        agentRuntime: { id: "claude-cli" },
+      },
+    });
+    expect(res.config.agents?.defaults?.modelPolicy).toEqual({
+      allow: ["anthropic/claude-opus-4-7", "anthropic/claude-sonnet-4-6"],
+    });
+    expect(res.changes).toContain(
+      "Moved agents.defaults.models legacy runtime keys to canonical provider keys.",
+    );
+    expect(res.changes).toContain(
+      "Moved agents.defaults.modelPolicy.allow legacy runtime refs to canonical provider refs.",
+    );
+  });
+
+  it("preserves runtime policy for allowlist-only legacy refs", () => {
+    const res = normalizeCompatibilityConfigValues(
+      legacyConfig({
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-7" },
+            modelPolicy: { allow: ["claude-cli/claude-sonnet-4-6"] },
+          },
+        },
+      }),
+    );
+
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "anthropic/claude-sonnet-4-6": {
+        agentRuntime: { id: "claude-cli" },
+      },
+    });
+    expect(res.config.agents?.defaults?.modelPolicy).toEqual({
+      allow: ["anthropic/claude-sonnet-4-6"],
+    });
+  });
+
+  it("preserves selected legacy keys outside the migrated allowlist runtime", () => {
+    const res = normalizeCompatibilityConfigValues(
+      legacyConfig({
+        agents: {
+          defaults: {
+            model: { primary: "google-gemini-cli/gemini-3-pro-preview" },
+            models: {
+              "claude-cli/claude-sonnet-4-6": { alias: "Claude CLI" },
+              "google-gemini-cli/gemini-3-pro-preview": { alias: "Gemini CLI" },
+            },
+            modelPolicy: {
+              allow: ["claude-cli/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"],
+            },
+          },
+        },
+      }),
+    );
+
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "anthropic/claude-sonnet-4-6": {
+        alias: "Claude CLI",
+        agentRuntime: { id: "claude-cli" },
+      },
+      "google-gemini-cli/gemini-3-pro-preview": { alias: "Gemini CLI" },
+      "google/gemini-3.1-pro-preview": {
+        alias: "Gemini CLI",
+        agentRuntime: { id: "google-gemini-cli" },
+      },
+    });
+    expect(res.config.agents?.defaults?.modelPolicy).toEqual({
+      allow: ["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"],
+    });
+  });
+
+  it("canonicalizes a seeded legacy Claude CLI allowlist in one doctor pass", () => {
+    // Reporter path (#124952): the doctor spec migration copies an unmarked legacy
+    // model map into modelPolicy.allow first, so the normalizer must rewrite the
+    // allowlist and the model map in the same pass, not on a later run.
+    const seeded = applyLegacyDoctorMigrations({
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-7" },
+          models: {
+            "claude-cli/claude-opus-4-7": {},
+            "claude-cli/claude-sonnet-4-6": {},
+          },
+        },
+      },
+    });
+    expect(seeded.next?.agents).toMatchObject({
+      defaults: {
+        modelPolicy: { allow: ["claude-cli/claude-opus-4-7", "claude-cli/claude-sonnet-4-6"] },
+      },
+    });
+
+    const res = normalizeCompatibilityConfigValues(legacyConfig(seeded.next));
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+      "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
+    });
+    expect(res.config.agents?.defaults?.modelPolicy).toEqual({
+      allow: ["anthropic/claude-opus-4-7", "anthropic/claude-sonnet-4-6"],
+    });
+    expect(normalizeCompatibilityConfigValues(res.config).changes).toEqual([]);
+  });
+
   it("preserves legacy whole-agent Claude CLI intent for canonical Anthropic defaults", () => {
     const res = normalizeCompatibilityConfigValues(
       legacyConfig({
@@ -2065,6 +2253,130 @@ describe("normalizeCompatibilityConfigValues", () => {
 
     expect(res.config).toEqual(input);
     expect(res.changes).toStrictEqual([]);
+  });
+
+  it.each([
+    { label: "model context cap", provider: {}, model: {} },
+    { label: "provider output budget", provider: { maxTokens: 8192 }, model: {} },
+    {
+      label: "overridden model API",
+      provider: { maxTokens: 8192 },
+      model: { api: "openai-completions" },
+    },
+    {
+      label: "explicit provider num_ctx",
+      provider: { maxTokens: 8192, params: { num_ctx: 16_384 } },
+      model: {},
+    },
+    {
+      label: "explicit model num_ctx",
+      provider: { maxTokens: 8192 },
+      model: { params: { num_ctx: 16_384 } },
+    },
+  ])("preserves current Ollama contextTokens with $label", ({ provider, model }) => {
+    const input = legacyConfig({
+      models: {
+        providers: {
+          localOllama: {
+            baseUrl: "http://localhost:11434",
+            api: "ollama",
+            ...provider,
+            models: [ollamaModel({ contextWindow: 262_144, contextTokens: 32_768, ...model })],
+          },
+        },
+      },
+    });
+    const expected = structuredClone(input);
+    const result = normalizeCompatibilityConfigValues(input);
+
+    expect(result.config).toEqual(expected);
+    expect(result.changes).toEqual([]);
+    const repeated = normalizeCompatibilityConfigValues(result.config);
+    expect(repeated.config).toEqual(expected);
+    expect(repeated.changes).toEqual([]);
+  });
+
+  it.each(["ollama", "openai-completions"] as const)(
+    "migrates legacy Ollama siblings without pinning a current %s model",
+    (api) => {
+      const result = normalizeCompatibilityConfigValues(
+        legacyConfig({
+          models: {
+            providers: {
+              localOllama: {
+                baseUrl: "http://localhost:11434",
+                api: "ollama",
+                maxTokens: 8192,
+                models: [
+                  ollamaModel({
+                    id: "current",
+                    api,
+                    contextWindow: 262_144,
+                    contextTokens: 32_768,
+                    params: { temperature: 0.2 },
+                  }),
+                  ollamaModel({ id: "legacy", contextWindow: 65_536 }),
+                  ollamaModel({
+                    id: "legacy-inherited",
+                    contextWindow: undefined,
+                    maxTokens: undefined,
+                  }),
+                  ollamaModel({
+                    id: "compatible",
+                    api: "openai-completions",
+                    params: { temperature: 0.1 },
+                  }),
+                ],
+              },
+            },
+          },
+        }),
+      );
+      const provider = result.config.models?.providers?.localOllama;
+      expect(provider?.params).toBeUndefined();
+      expect(provider?.models?.[0]).toMatchObject({
+        id: "current",
+        api,
+        contextWindow: 262_144,
+        contextTokens: 32_768,
+        params: { temperature: 0.2 },
+      });
+      expect(provider?.models?.[0]?.params).not.toHaveProperty("num_ctx");
+      expect(provider?.models?.[1]?.params).toEqual({ num_ctx: 65_536 });
+      expect(provider?.models?.[2]?.params).toEqual({ num_ctx: 8192 });
+      expect(provider?.models?.[3]?.params).toEqual({ temperature: 0.1 });
+      const repeated = normalizeCompatibilityConfigValues(result.config);
+      expect(repeated.config).toEqual(result.config);
+      expect(repeated.changes).toEqual([]);
+    },
+  );
+
+  it("keeps retired provider contextTokens usable without adding an Ollama num_ctx pin", () => {
+    const result = normalizeCompatibilityConfigValues(
+      legacyConfig({
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://localhost:11434",
+              api: "ollama",
+              contextTokens: 32_768,
+              contextWindow: 262_144,
+              maxTokens: 8192,
+              models: [ollamaModel({ contextWindow: undefined })],
+            },
+          },
+        },
+      }),
+    );
+    const provider = result.config.models?.providers?.ollama;
+    expect(provider).not.toHaveProperty("contextTokens");
+    expect(provider).not.toHaveProperty("contextWindow");
+    expect(provider?.params).toBeUndefined();
+    expect(provider?.models?.[0]).toMatchObject({ contextTokens: 32_768, contextWindow: 262_144 });
+    expect(provider?.models?.[0]?.params).toBeUndefined();
+    const repeated = normalizeCompatibilityConfigValues(result.config);
+    expect(repeated.config).toEqual(result.config);
+    expect(repeated.changes).toEqual([]);
   });
 
   it("sets native Ollama params.num_ctx from explicit model contextWindow budgets", () => {

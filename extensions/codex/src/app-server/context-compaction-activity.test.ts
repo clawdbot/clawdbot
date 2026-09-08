@@ -55,6 +55,7 @@ describe("persistCodexContextCompactionActivity", () => {
         display: true,
         excludeFromContext: true,
         idempotencyKey: "codex-context-compaction:thread-1:turn-1:compact-1",
+        __openclaw: { runId: "run-1", itemId: "compact-1" },
       },
     });
     expect(publishUpdate).toHaveBeenCalledOnce();

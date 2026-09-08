@@ -1,11 +1,6 @@
 // Memory Core API module exposes the plugin public contract.
 export { getMemorySearchManager } from "./src/memory/index.js";
 export { memoryRuntime } from "./src/runtime-provider.js";
-export {
-  DEFAULT_LOCAL_MODEL,
-  getBuiltinMemoryEmbeddingProviderDoctorMetadata,
-  listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata,
-} from "./src/memory/provider-adapters.js";
 export { createEmbeddingProvider } from "./src/memory/embeddings.js";
 export {
   resolveMemoryCacheSummary,
@@ -22,7 +17,6 @@ export {
   removeGroundedShortTermCandidates,
   repairShortTermPromotionArtifacts,
 } from "./src/short-term-promotion.js";
-export type { BuiltinMemoryEmbeddingProviderDoctorMetadata } from "./src/memory/provider-adapters.js";
 export type {
   DreamingArtifactsAuditSummary,
   RepairDreamingArtifactsResult,

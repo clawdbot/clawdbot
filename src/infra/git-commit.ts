@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isMissingPathError } from "./errors.js";
 import { readFileWindowFullySync } from "./file-read.js";
@@ -24,6 +25,16 @@ const formatCommit = (value?: string | null) => {
   }
   return normalizeLowercaseStringOrEmpty(match[0].slice(0, 7));
 };
+
+export function gitCommitPrefixesMatch(left: string, right: string): boolean {
+  const normalizedLeft = normalizeLowercaseStringOrEmpty(left);
+  const normalizedRight = normalizeLowercaseStringOrEmpty(right);
+  return (
+    normalizedLeft.length >= 7 &&
+    normalizedRight.length >= 7 &&
+    (normalizedLeft.startsWith(normalizedRight) || normalizedRight.startsWith(normalizedLeft))
+  );
+}
 
 const cachedGitCommitBySearchDir = new Map<string, string | null>();
 const GIT_COMMIT_CACHE_LIMIT = 256;
@@ -184,27 +195,54 @@ const readCommitFromPackageJson = () => {
   }
 };
 
-const readCommitFromBuildInfo = () => {
+const readCommitProbe = (
+  moduleUrl: string,
+  candidates: readonly string[],
+  field: "commit" | "head",
+): string | null | undefined => {
   try {
-    const require = createRequire(import.meta.url);
-    const candidates = ["../build-info.json", "./build-info.json"];
     for (const candidate of candidates) {
+      const filePath = fileURLToPath(new URL(candidate, moduleUrl));
+      let raw: string;
       try {
-        const info = require(candidate) as {
-          commit?: string | null;
-        };
-        const formatted = formatCommit(info.commit ?? null);
-        if (formatted) {
-          return formatted;
+        raw = safeReadFilePrefix(filePath, 1024);
+      } catch (error) {
+        if (isMissingPathError(error)) {
+          continue;
         }
+        return null;
+      }
+      try {
+        const value = asNullableRecord(JSON.parse(raw))?.[field];
+        return typeof value === "string" ? formatCommit(value) : null;
       } catch {
-        // ignore missing candidate
+        return null;
       }
     }
-    return null;
   } catch {
-    return null;
+    // Invalid module URL means no loaded build metadata is available.
   }
+  return undefined;
+};
+
+const readCommitFromBuildInfo = (moduleUrl = import.meta.url) => {
+  return readCommitProbe(moduleUrl, ["../build-info.json", "./build-info.json"], "commit") ?? null;
+};
+
+const readLoadedCommit = (moduleUrl: string): string | null | undefined => {
+  const buildStamp = readCommitProbe(moduleUrl, ["../.buildstamp", "./.buildstamp"], "head");
+  const runtimeStamp = readCommitProbe(
+    moduleUrl,
+    ["../.runtime-postbuildstamp", "./.runtime-postbuildstamp"],
+    "head",
+  );
+  if (buildStamp !== undefined || runtimeStamp !== undefined) {
+    if (buildStamp || runtimeStamp) {
+      return buildStamp && buildStamp === runtimeStamp ? buildStamp : null;
+    }
+    return readCommitFromBuildInfo(moduleUrl);
+  }
+  return readCommitProbe(moduleUrl, ["../build-info.json", "./build-info.json"], "commit");
 };
 
 export const resolveCommitHash = (
@@ -258,3 +296,14 @@ export const resolveCommitHash = (
     return cacheGitCommit(searchDir, null);
   }
 };
+
+/** Resolve the commit that produced the loaded artifact, not the checkout's current revision. */
+export function resolveLoadedCommitHash(
+  options: { env?: NodeJS.ProcessEnv; moduleUrl?: string } = {},
+): string | null {
+  const moduleUrl = options.moduleUrl ?? import.meta.url;
+  const loaded = readLoadedCommit(moduleUrl);
+  return loaded === undefined
+    ? resolveCommitHash({ moduleUrl, ...(options.env ? { env: options.env } : {}) })
+    : loaded;
+}

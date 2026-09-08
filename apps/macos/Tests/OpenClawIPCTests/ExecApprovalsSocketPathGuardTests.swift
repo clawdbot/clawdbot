@@ -68,10 +68,8 @@ struct ExecApprovalsSocketPathGuardTests {
 
     @Test
     func `harden parent accepts current directory components`() throws {
-        let root = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-socket-dot-\(UUID().uuidString)", isDirectory: true)
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager().removeItem(at: root) }
-        try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
 
         try ExecApprovalsSocketPathGuard.hardenParentDirectory(
             for: "\(root.path)/./approvals.sock")
@@ -79,14 +77,16 @@ struct ExecApprovalsSocketPathGuardTests {
 
     @Test
     func `harden parent validates directories hidden behind nested symlinks`() throws {
-        let root = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-socket-nested-link-\(UUID().uuidString)", isDirectory: true)
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         let victim = root.appendingPathComponent("victim", isDirectory: true)
         let unsafe = root.appendingPathComponent("unsafe", isDirectory: true)
         let redirect = unsafe.appendingPathComponent("redirect", isDirectory: true)
         let outer = root.appendingPathComponent("outer", isDirectory: true)
         defer { try? FileManager().removeItem(at: root) }
-        try FileManager().createDirectory(at: victim, withIntermediateDirectories: true)
+        try FileManager().createDirectory(
+            at: victim,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700])
         try FileManager().createDirectory(at: unsafe, withIntermediateDirectories: true)
         try FileManager().setAttributes([.posixPermissions: 0o777], ofItemAtPath: unsafe.path)
         try FileManager().createSymbolicLink(at: redirect, withDestinationURL: victim)
@@ -266,22 +266,65 @@ struct ExecApprovalsSocketPathGuardTests {
 
     @Test
     func `socket lease blocks replacement until current owner releases`() async throws {
-        let root = URL(fileURLWithPath: "/tmp", isDirectory: true)
-            .appendingPathComponent("ocsl-\(UUID().uuidString.prefix(12))", isDirectory: true)
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager().removeItem(at: root) }
-        try FileManager().createDirectory(
-            at: root,
-            withIntermediateDirectories: false,
-            attributes: [.posixPermissions: 0o700])
-        let socketPath = root.appendingPathComponent("exec-approvals.sock").path
-        #expect(socketPath.utf8.count < MemoryLayout.size(ofValue: sockaddr_un().sun_path))
+        let socketPath = root.appendingPathComponent("exec.sock").path
+        let started = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        let released = Task.detached { for await _ in release.stream {} }
+        defer { release.continuation.finish() }
+        let first = ExecApprovalsSocketTestSupport.makeServer(socketPath: socketPath) { _ in
+            // Hold admitted work through cancellation so stop must retain its lease until drain.
+            started.continuation.yield()
+            await released.value
+            return .allowOnce
+        }
+        let replacement = ExecApprovalsSocketTestSupport.makeServer(socketPath: socketPath)
+        var request: Task<ExecApprovalDecision?, Never>?
+        do {
+            try #require(await first.start())
+            let firstIdentity = try #require(try ExecApprovalsSocketPathGuard.socketIdentity(at: socketPath))
+            #expect(await !replacement.start())
+            request = Task {
+                await ExecApprovalsSocketTestSupport.requestDecision(socketPath: socketPath, timeoutMs: 1000)
+            }
+            let admitted = await withTaskGroup(of: Bool.self) { group in
+                group.addTask {
+                    var iterator = started.stream.makeAsyncIterator()
+                    return await iterator.next() != nil
+                }
+                group.addTask {
+                    try? await Task.sleep(for: .seconds(1))
+                    return false
+                }
+                defer { group.cancelAll() }
+                return await group.next() ?? false
+            }
+            try #require(admitted)
 
-        let result = await ExecApprovalsPromptServer._testSocketLeaseHandoff(socketPath: socketPath)
+            let drain = first.stop()
+            #expect(!first.isListening)
+            #expect(try ExecApprovalsSocketPathGuard.pathKind(at: socketPath) == .missing)
+            #expect(await !replacement.start())
+            release.continuation.finish()
+            await drain.value
 
-        #expect(result.replacementBlockedWhileOwned)
-        #expect(result.replacementStartedAfterRelease)
-        #expect(result.replacementHasDistinctIdentity)
-        #expect(result.replacementPreserved)
+            #expect(await replacement.start())
+            let replacementIdentity = try #require(try ExecApprovalsSocketPathGuard.socketIdentity(at: socketPath))
+            #expect(firstIdentity != replacementIdentity)
+            await first.stop().value
+            #expect(replacement.isListening)
+            #expect(try ExecApprovalsSocketPathGuard.socketIdentity(at: socketPath) == replacementIdentity)
+        } catch {
+            release.continuation.finish()
+            await first.stop().value
+            await replacement.stop().value
+            _ = await request?.value
+            throw error
+        }
+        await first.stop().value
+        await replacement.stop().value
+        _ = await request?.value
     }
 
     @Test

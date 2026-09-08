@@ -113,7 +113,7 @@ describe("readBoundedCodexRemoteWorkspaceFile", () => {
       maxBytes: expected.byteLength,
     });
 
-    expect(Buffer.from(result.dataBase64, "base64")).toEqual(expected);
+    expect(Buffer.from(result.dataBase64, "base64").equals(expected)).toBe(true);
     expect(client.request).toHaveBeenCalledTimes(2);
     expect(client.request.mock.calls[0]?.[1].command).toEqual([
       "node",

@@ -313,13 +313,16 @@ export async function hydrateViewer(): Promise<void> {
   for (const { host, payload } of cards) {
     try {
       const diff = new FileDiff(createRenderOptions(payload));
-      diff.hydrate({
+      const hydration = {
         fileContainer: host,
         prerenderedHTML: payload.prerenderedHTML,
         fileDiff: payload.fileDiff,
-        oldFile: payload.oldFile,
-        newFile: payload.newFile,
-      });
+      };
+      diff.hydrate(
+        payload.oldFile && payload.newFile
+          ? { ...hydration, oldFile: payload.oldFile, newFile: payload.newFile }
+          : hydration,
+      );
       const controller = { payload, diff };
       applyState(controller);
       controllers.push(controller);

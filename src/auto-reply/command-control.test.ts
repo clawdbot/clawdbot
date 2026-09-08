@@ -13,6 +13,7 @@ import {
 import { listChatCommands } from "./commands-registry.js";
 import { parseActivationCommand } from "./group-activation.js";
 import { markInboundContextLabel } from "./reply/inbound-context-marker.js";
+import { resolveAuthorizedSessionResetCommand } from "./reply/session-reset-command.js";
 import { parseSendPolicyCommand } from "./send-policy.js";
 import type { MsgContext } from "./templating.js";
 import { installDiscordRegistryHooks } from "./test-helpers/command-auth-registry-fixture.js";
@@ -379,6 +380,13 @@ describe("resolveCommandAuthorization", () => {
       expectedOwner: true,
     },
     {
+      name: "leaves retired channel-qualified owner migration to Doctor",
+      owner: "discord:user:123456789012345678",
+      provider: "discord",
+      expectedProvider: "discord",
+      expectedOwner: false,
+    },
+    {
       name: "does not apply channel-prefixed owner wildcards to mismatched providers",
       owner: "telegram:*",
       provider: "discord",
@@ -402,6 +410,16 @@ describe("resolveCommandAuthorization", () => {
 
     expect(auth.providerId).toBe(expectedProvider);
     expect(auth.senderIsOwner).toBe(expectedOwner);
+  });
+
+  it("preserves third-party native owner identities outside the bundled Doctor migration", () => {
+    registerAllowFromPlugins(createAllowFromPlugin("custom-chat", () => []));
+    const auth = resolveCommandAuthorization({
+      ctx: { Provider: "custom-chat", SenderId: "user:123" },
+      cfg: { commands: { ownerAllowFrom: ["custom-chat:user:123"] } },
+      commandAuthorized: true,
+    });
+    expect(auth.senderIsOwner).toBe(true);
   });
 
   it("preserves external channel command auth in mixed webchat contexts", () => {
@@ -807,17 +825,27 @@ describe("resolveCommandAuthorization", () => {
         );
         const channelId = validTelegram ? "telegram" : failingProvider;
         const channelConfig = channelMode === "configured" ? { allowFrom: ["123"] } : {};
-        const auth = resolveCommandAuthorization({
-          ctx: { SenderId: "123" } as MsgContext,
+        const params = {
+          ctx: { SenderId: "123", commandText: "/reset", rawText: "/reset" } as MsgContext,
           cfg: {
             commands: { allowFrom: { [allowKey]: ["123"] } },
             channels: { [channelId]: channelConfig },
           } as OpenClawConfig,
           commandAuthorized,
+        };
+        const auth = resolveCommandAuthorization(params);
+        const reset = resolveAuthorizedSessionResetCommand({
+          ...params,
+          agentId: "main",
+          isGroup: false,
         });
 
         expect(auth.providerId).toBe(expectedProvider);
         expect(auth.isAuthorizedSender).toBe(expectedAuthorized);
+        expect(reset.resetAuthorized).toBe(expectedAuthorized);
+        expect(reset.resetCommand.matchedResetTriggerLower).toBe(
+          expectedAuthorized ? "/reset" : undefined,
+        );
       },
     );
 

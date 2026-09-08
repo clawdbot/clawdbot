@@ -2,6 +2,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import * as uuid from "../../lib/uuid.ts";
+import { QUICK_ACTIONS_QUESTION } from "../../test-helpers/custodian-quick-actions.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext, mountPage } from "./custodian-page.test-harness.ts";
 
@@ -16,7 +18,7 @@ function rejectAfterSend(
 
 describe("custodian page nudges", () => {
   beforeEach(() => {
-    vi.spyOn(crypto, "randomUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
+    vi.spyOn(uuid, "generateUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
   });
 
   afterEach(() => {
@@ -463,12 +465,20 @@ describe("custodian page nudges", () => {
     expect(page.querySelector(".custodian__nudge")).toBeNull();
   });
 
-  it("sends a real message when an event nudge is clicked", async () => {
-    const request = vi.fn().mockResolvedValue({
-      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
-      reply: "Everything is healthy.",
-      action: "none",
-    });
+  it("replaces greeting quick actions with a real message when an event nudge is clicked", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "Everything is healthy.",
+        action: "none",
+        question: QUICK_ACTIONS_QUESTION,
+      })
+      .mockResolvedValue({
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "Inspecting the channel failure.",
+        action: "none",
+      });
     const { context, emitGatewayEvent } = createContext(request);
     const { page } = await mountPage(context, { onboarding: false });
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());

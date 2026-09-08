@@ -47,7 +47,9 @@ async function runReasoningProgressDraft(
   });
 
   const ctx = await createAutomaticDraftContext({
-    discordConfig: { streaming: { mode: "progress", progress } },
+    discordConfig: {
+      streaming: { mode: "progress", progress: { toolProgress: true, ...progress } },
+    },
   });
   await runProcessDiscordMessage(ctx);
   return draftStream;
@@ -73,6 +75,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
         streaming: {
           mode: "progress",
           progress: {
+            toolProgress: true,
             label: "Clawing...",
           },
         },
@@ -83,6 +86,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
 
     expect(draftStream.update).toHaveBeenCalledWith(
       "Clawing...\n\n🩹 1 modified; extensions/discord/src/monitor/message-handler.draft-preview.ts",
+      { complete: true },
     );
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
     expect(updates.join("\n")).not.toContain("Apply Patch");
@@ -109,6 +113,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
         streaming: {
           mode: "progress",
           progress: {
+            toolProgress: true,
             label: "Clawing...",
           },
         },
@@ -119,6 +124,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
 
     expect(draftStream.update).toHaveBeenCalledWith(
       "Clawing...\n\n🛠️ Exec\n🧠 _Reading the event projector_",
+      { complete: true },
     );
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
     expect(updates.join("\n")).not.toContain("Reasoning");
@@ -145,6 +151,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
         streaming: {
           mode: "progress",
           progress: {
+            toolProgress: true,
             label: "Clawing...",
           },
         },
@@ -153,7 +160,9 @@ describe("processDiscordMessage draft streaming reasoning", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith("Clawing...\n\n🛠️ Exec\n• done");
+    expect(draftStream.update).toHaveBeenCalledWith("Clawing...\n\n🛠️ Exec\n• done", {
+      complete: true,
+    });
     expect(draftStream.update.mock.calls.map((call) => call[0]).join("\n")).not.toContain(
       "Private planning",
     );
@@ -169,6 +178,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
 
     expect(draftStream.update).toHaveBeenCalledWith(
       "Clawing...\n\n🛠️ Exec\n🧠 _Considering plugin installation!_",
+      { complete: true },
     );
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
     expect(updates.join("\n")).not.toContain("• _!_");
@@ -179,6 +189,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
 
     expect(draftStream.update).toHaveBeenCalledWith(
       "Clawing...\n\n🛠️ Exec\n🧠 _Thinking through the install plan_",
+      { complete: true },
     );
   });
 
@@ -187,6 +198,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
 
     expect(draftStream.update).toHaveBeenCalledWith(
       "Clawing...\n\n🛠️ Exec\n🧠 _Thinking: compare install paths_",
+      { complete: true },
     );
   });
 
@@ -195,6 +207,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
 
     expect(draftStream.update).toHaveBeenCalledWith(
       "Clawing...\n\n🛠️ Exec\n🧠 _Reasoning: compare install paths_",
+      { complete: true },
     );
   });
 
@@ -203,6 +216,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
 
     expect(draftStream.update).toHaveBeenCalledWith(
       "Clawing...\n\n🛠️ Exec\n🧠 _compare install paths_",
+      { complete: true },
     );
   });
 
@@ -211,6 +225,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
 
     expect(draftStream.update).toHaveBeenCalledWith(
       "Clawing...\n\n🛠️ Exec\n🧠 _compare install paths_",
+      { complete: true },
     );
   });
 
@@ -219,6 +234,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
 
     expect(draftStream.update).toHaveBeenCalledWith(
       "Clawing...\n\n🛠️ Exec\n🧠 _Thinking through the plan_",
+      { complete: true },
     );
   });
 
@@ -227,6 +243,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
 
     expect(draftStream.update).toHaveBeenCalledWith(
       "Clawing...\n\n🛠️ Exec\n🧠 _I was Thinking about the plan_",
+      { complete: true },
     );
   });
 
@@ -235,6 +252,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
 
     expect(draftStream.update).toHaveBeenCalledWith(
       "Clawing...\n\n🛠️ Exec\n🧠 _I was Thinking... through the plan_",
+      { complete: true },
     );
   });
 
@@ -246,6 +264,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
 
     expect(draftStream.update).toHaveBeenCalledWith(
       "Clawing...\n\n🛠️ Exec\n🧠 _I was Reasoning: through edge cases_",
+      { complete: true },
     );
   });
 
@@ -296,6 +315,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
         streaming: {
           mode: "progress",
           progress: {
+            toolProgress: true,
             label: "Shelling",
           },
         },
@@ -304,7 +324,9 @@ describe("processDiscordMessage draft streaming reasoning", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n🧩 First\n🧩 Second");
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n🧩 First\n🧩 Second", {
+      complete: true,
+    });
     expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
   });
 

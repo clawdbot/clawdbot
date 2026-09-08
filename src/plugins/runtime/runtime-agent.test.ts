@@ -108,6 +108,7 @@ describe("plugin runtime session creation", () => {
         cfg: {},
         key,
         label: "Native Codex thread",
+        displayName: "  Native display title  ",
         initialEntry: {
           agentHarnessId: "codex",
           modelSelectionLocked: true,
@@ -116,6 +117,11 @@ describe("plugin runtime session creation", () => {
         afterCreate: async (initialized) => {
           callbackSessionId = initialized.sessionId;
           expect(initialized.entry.initializationPending).toBe(true);
+          expect(initialized.entry.displayName).toBe("Native display title");
+          expect(runtime.session.getSessionEntry({ sessionKey: key })?.displayName).toBe(
+            "Native display title",
+          );
+          initialized.entry.displayName = "Callback clone cannot rename the session";
           return { pluginExtensions: finalPluginExtensions };
         },
       });
@@ -133,6 +139,7 @@ describe("plugin runtime session creation", () => {
           delivery: { kind: "none" },
           modelSelectionLocked: true,
           label: "Native Codex thread",
+          displayName: "Native display title",
           pluginExtensions: {
             codex: {
               supervision: {
@@ -159,6 +166,7 @@ describe("plugin runtime session creation", () => {
         runtime.session.createSessionEntry({
           cfg: {},
           key,
+          displayName: "Do not replace the stored title",
           initialEntry: { agentHarnessId: "codex" },
         }),
       ).rejects.toThrow("trusted initial session state requires a new session");
@@ -168,49 +176,7 @@ describe("plugin runtime session creation", () => {
     });
   });
 
-  it("creates a plugin-owned locked CLI session with a seeded fork binding", async () => {
-    await withOpenClawTestState({ label: "plugin-runtime-cli-session-create" }, async () => {
-      const runtime = createRuntimeAgent();
-      const key = "agent:main:catalog-adopt:claude:source";
-      const created = await runtime.session.createSessionEntry({
-        cfg: {},
-        key,
-        execNode: "node-a",
-        execCwd: "/work/on-node",
-        initialEntry: {
-          cliBackendId: "claude-cli",
-          model: "claude-opus-4-8",
-          modelSelectionLocked: true,
-          pluginOwnerId: "anthropic",
-          cliSessionBinding: {
-            sessionId: "claude-source",
-            forceReuse: true,
-            forkNextResume: true,
-          },
-        },
-      });
-      expect(created.entry).toMatchObject({
-        createdVia: "plugin",
-        createdActor: { type: "system", id: "anthropic" },
-        createdAt: expect.any(Number),
-        pluginOwnerId: "anthropic",
-        providerOverride: "claude-cli",
-        modelOverride: "claude-opus-4-8",
-        modelOverrideRouteResolution: "resolved",
-        modelSelectionLocked: true,
-        execHost: "node",
-        execNode: "node-a",
-        execCwd: "/work/on-node",
-        cliSessionBindings: {
-          "claude-cli": {
-            sessionId: "claude-source",
-            forceReuse: true,
-            forkNextResume: true,
-          },
-        },
-      });
-    });
-  });
+  // Plugin-owned CLI fork creation with colors lives in runtime-agent.session-color.test.ts.
 
   it("rolls back the exact created entry and transcript when initialization fails", async () => {
     await withOpenClawTestState({ label: "plugin-runtime-session-create-rollback" }, async () => {
@@ -220,11 +186,13 @@ describe("plugin runtime session creation", () => {
         runtime.session.createSessionEntry({
           cfg: {},
           key,
+          displayName: "Failed title snapshot",
           initialEntry: {
             agentHarnessId: "codex",
             modelSelectionLocked: true,
           },
-          afterCreate: async () => {
+          afterCreate: async (created) => {
+            expect(created.entry.displayName).toBe("Failed title snapshot");
             throw new Error("native binding failed");
           },
         }),
@@ -233,6 +201,15 @@ describe("plugin runtime session creation", () => {
       expect(runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" })).toBe(
         undefined,
       );
+      const retried = await runtime.session.createSessionEntry({
+        cfg: {},
+        key,
+        displayName: "Retry title snapshot",
+        initialEntry: { agentHarnessId: "codex", modelSelectionLocked: true },
+        afterCreate: async () => ({ pluginExtensions: {} }),
+      });
+      expect(retried.entry.displayName).toBe("Retry title snapshot");
+      expect(retried.entry.initializationPending).toBeUndefined();
     });
   });
 
@@ -553,7 +530,10 @@ describe("plugin runtime session creation", () => {
     });
   });
 
-  it("recovers an exact persisted initializer and returns its finalized generation", async () => {
+  it.each([
+    { label: "Operator label", displayName: "Original title snapshot" },
+    { label: "Older automatically promoted label", displayName: undefined },
+  ])("recovers an exact initializer without replacing $label or its title", async (naming) => {
     await withOpenClawTestState(
       { label: "plugin-runtime-session-create-recovery" },
       async (state) => {
@@ -577,6 +557,7 @@ describe("plugin runtime session creation", () => {
           storePath,
           sessionKey: key,
           entry: {
+            ...naming,
             sessionId,
             sessionFile,
             updatedAt: Date.now(),
@@ -593,6 +574,8 @@ describe("plugin runtime session creation", () => {
         const recovered = await runtime.session.createSessionEntry({
           cfg: {},
           key,
+          label: "Replacement label must be ignored",
+          displayName: "Renamed upstream title must be ignored",
           spawnedCwd: "/workspace/project",
           sessionRoot: "/workspace",
           permissionMode: "guarded",
@@ -614,6 +597,8 @@ describe("plugin runtime session creation", () => {
         });
 
         expect(recovered.sessionId).toBe(sessionId);
+        expect(recovered.entry.label).toBe(naming.label);
+        expect(recovered.entry.displayName).toBe(naming.displayName);
         expect(recovered.entry.initializationPending).toBeUndefined();
         expect(recovered.entry.pluginExtensions).toEqual({
           codex: { supervision: { sourceThreadId: "source-1", modelLocked: true } },
@@ -794,47 +779,67 @@ describe("plugin runtime session creation", () => {
     );
   });
 
-  it("preserves a created entry claimed before finalization", async () => {
-    await withOpenClawTestState(
-      { label: "plugin-runtime-session-create-rollback-race" },
-      async () => {
-        const runtime = createRuntimeAgent();
-        const key = "agent:main:dashboard:codex-binding-race";
-        let sessionId: string | undefined;
+  it.each(["label", "displayName"] as const)(
+    "preserves a concurrent %s change before finalization",
+    async (field) => {
+      await withOpenClawTestState(
+        { label: "plugin-runtime-session-create-rollback-race" },
+        async () => {
+          const runtime = createRuntimeAgent();
+          const key = "agent:main:dashboard:codex-binding-race";
+          let sessionId: string | undefined;
 
-        await expect(
-          runtime.session.createSessionEntry({
-            cfg: {},
-            key,
-            initialEntry: {
-              agentHarnessId: "codex",
-              modelSelectionLocked: true,
-            },
-            afterCreate: async (created) => {
-              sessionId = created.sessionId;
-              await runtime.session.patchSessionEntry({
-                sessionKey: created.key,
-                update: () => ({ label: "claimed concurrently" }),
-              });
-              return {
-                pluginExtensions: {
-                  codex: { supervision: { modelLocked: true } },
-                },
-              };
-            },
-          }),
-        ).rejects.toThrow("guarded rollback did not complete");
+          await expect(
+            runtime.session.createSessionEntry({
+              cfg: {},
+              key,
+              initialEntry: {
+                agentHarnessId: "codex",
+                modelSelectionLocked: true,
+              },
+              afterCreate: async (created) => {
+                sessionId = created.sessionId;
+                await runtime.session.patchSessionEntry({
+                  sessionKey: created.key,
+                  update: () => ({ [field]: "claimed concurrently" }),
+                });
+                return {
+                  pluginExtensions: {
+                    codex: { supervision: { modelLocked: true } },
+                  },
+                };
+              },
+            }),
+          ).rejects.toThrow("guarded rollback did not complete");
 
-        expect(
-          runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
-        ).toMatchObject({
-          sessionId,
-          label: "claimed concurrently",
-          agentHarnessId: "codex",
-          modelSelectionLocked: true,
-        });
-      },
-    );
+          expect(
+            runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
+          ).toMatchObject({
+            sessionId,
+            [field]: "claimed concurrently",
+            agentHarnessId: "codex",
+            modelSelectionLocked: true,
+          });
+        },
+      );
+    },
+  );
+
+  it("rejects title mutation in the pluginExtensions-only final patch", async () => {
+    await withOpenClawTestState({ label: "plugin-runtime-title-final-patch" }, async () => {
+      const runtime = createRuntimeAgent();
+      const key = "agent:main:dashboard:title-final-patch";
+      await expect(
+        runtime.session.createSessionEntry({
+          cfg: {},
+          key,
+          displayName: "Initial title",
+          initialEntry: { agentHarnessId: "codex" },
+          afterCreate: async () => ({ pluginExtensions: {}, displayName: "Invalid replacement" }),
+        }),
+      ).rejects.toThrow("session creation final patch may only contain pluginExtensions");
+      expect(runtime.session.getSessionEntry({ sessionKey: key })).toBeUndefined();
+    });
   });
 
   it("rejects an empty harness initializer without leaving a session entry", async () => {
@@ -961,6 +966,34 @@ describe("plugin runtime session work admission", () => {
     await mutation;
 
     await expect(work).rejects.toThrow(`Session "${sessionKey}" is archived`);
+  });
+
+  it("rejects a session replaced while work waits for lifecycle admission", async () => {
+    const runtime = createRuntimeAgent();
+    const mutationStarted = createDeferred();
+    const releaseMutation = createDeferred();
+    const mutation = runExclusiveSessionLifecycleMutation({
+      scope: storePath,
+      identities: [sessionKey, sessionId],
+      prepare: async () => {
+        mutationStarted.resolve();
+        await releaseMutation.promise;
+      },
+      run: async () => {
+        await runtime.session.upsertSessionEntry({
+          storePath,
+          sessionKey,
+          entry: { sessionId: "replacement-session", updatedAt: Date.now() },
+        });
+      },
+    });
+    await mutationStarted.promise;
+
+    const work = runtime.session.runWithWorkAdmission({ storePath, sessionKey }, async () => {});
+    releaseMutation.resolve();
+    await mutation;
+
+    await expect(work).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
   });
 
   it("admits fresh work and protects session creation inside the callback", async () => {

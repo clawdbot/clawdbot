@@ -1,6 +1,10 @@
 /** Parses inline reply directives such as media, reply targets, audio, and silence. */
+import { trySafeFileURLToPath } from "../../infra/local-file-access.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
-import { parseInlineDirectives } from "../../utils/directive-tags.js";
+import {
+  parseInlineDirectives,
+  stripInlineDirectiveTagsForDelivery,
+} from "../../utils/directive-tags.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../tokens.js";
 
 /** Parsed outbound reply directives and media extracted from model text. */
@@ -33,29 +37,28 @@ export function parseReplyDirectives(
   });
   let text = split.text ?? "";
 
-  const replyParsed = parseInlineDirectives(text, {
-    currentMessageId: options.currentMessageId,
-    stripAudioTag: false,
-    stripReplyTags: true,
-  });
+  const replyParsed = text.includes("[[")
+    ? parseInlineDirectives(text, {
+        currentMessageId: options.currentMessageId,
+        stripAudioTag: false,
+      })
+    : undefined;
 
-  if (replyParsed.hasReplyTag) {
-    text = replyParsed.text;
-  }
+  text = stripInlineDirectiveTagsForDelivery(
+    replyParsed?.hasReplyTag ? replyParsed.text : text,
+  ).text;
 
   const silentToken = options.silentToken ?? SILENT_REPLY_TOKEN;
   const isSilent = isSilentReplyPayloadText(text, silentToken);
-  if (isSilent) {
-    // Silent payloads must not leak the control token into channel delivery.
-    text = "";
-  }
 
   return {
-    text,
-    mediaUrls: split.mediaUrls,
-    replyToId: replyParsed.replyToId,
-    replyToCurrent: replyParsed.replyToCurrent || undefined,
-    replyToTag: replyParsed.hasReplyTag,
+    // Silent payloads must not leak the control token into channel delivery.
+    text: isSilent ? "" : text,
+    // Keep native path conversion outside the browser-shared parser and before reply policy.
+    mediaUrls: split.mediaUrls?.map((source) => trySafeFileURLToPath(source) ?? source),
+    replyToId: replyParsed?.replyToId,
+    replyToCurrent: replyParsed?.replyToCurrent || undefined,
+    replyToTag: replyParsed?.hasReplyTag ?? false,
     audioAsVoice: split.audioAsVoice,
     isSilent,
   };

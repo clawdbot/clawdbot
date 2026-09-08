@@ -1,6 +1,7 @@
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { mergeRestartRecoveryTerminalRunIds } from "../../config/sessions/restart-recovery-state.js";
 import { retryAsync } from "../../infra/retry.js";
+import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
 import {
   buildMainSessionRecoveryClearPatch,
   type MainRecoveryStateFields,
@@ -61,6 +62,15 @@ function lifecyclePhase(event: MainRecoveryLifecycleEvent): "start" | "end" | "e
   return phase === "start" || phase === "end" || phase === "error" ? phase : null;
 }
 
+function isRestartCancellation(event: MainRecoveryLifecycleEvent): boolean {
+  const phase = lifecyclePhase(event);
+  if (phase !== "end" && phase !== "error") {
+    return false;
+  }
+  const outcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase, data: event.data });
+  return outcome.reason === "cancelled" && outcome.stopReason === "restart";
+}
+
 export function isMainSessionRecoveryLifecycleEvent(params: {
   entry?: Partial<Pick<SessionEntry, "restartRecoveryRuns">> | null;
   event: MainRecoveryLifecycleEvent;
@@ -68,7 +78,7 @@ export function isMainSessionRecoveryLifecycleEvent(params: {
   const runId = params.event.runId?.trim();
   const lifecycleGeneration = params.event.lifecycleGeneration?.trim();
   const phase = lifecyclePhase(params.event);
-  const interrupted = params.event.data?.stopReason === "restart";
+  const interrupted = isRestartCancellation(params.event);
   const matchesFence = Boolean(
     runId &&
     lifecycleGeneration &&
@@ -151,7 +161,7 @@ export function projectMainSessionRecoveryLifecycle(params: {
   }
   const phase = lifecyclePhase(params.event);
   const settlesRecovery =
-    (phase === "end" || phase === "error") && params.event.data?.stopReason !== "restart";
+    (phase === "end" || phase === "error") && !isRestartCancellation(params.event);
   const patch = { ...params.snapshotPatch };
   const runId = params.event.runId?.trim();
   const lifecycleGeneration = params.event.lifecycleGeneration?.trim();
@@ -198,7 +208,9 @@ export function projectMainSessionRecoveryLifecycle(params: {
     if (
       params.entry?.abortedLastRun === true &&
       !foreground.claimId &&
-      !foreground.hasCurrentOwner
+      !foreground.hasCurrentOwner &&
+      buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase, data: params.event.data }).reason !==
+        "hard_timeout"
     ) {
       // The restart marker won the session transaction before this normal terminal.
       // Retire the old fence, but only a fresh owner may settle the handoff itself.

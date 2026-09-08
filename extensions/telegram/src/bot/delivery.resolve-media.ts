@@ -467,7 +467,7 @@ export async function resolveMedia(params: {
   trustedLocalFileRoots?: readonly string[];
   dangerouslyAllowPrivateNetwork?: boolean;
   abortSignal?: AbortSignal;
-}): Promise<(TelegramResolvedMedia & { path: string }) | null> {
+}): Promise<(TelegramResolvedMedia & { path: string; fileName?: string }) | null> {
   const {
     ctx,
     maxBytes,
@@ -528,6 +528,7 @@ export async function resolveMedia(params: {
     path: saved.path,
     size: saved.size,
     contentType: saved.contentType,
+    ...(metadata.fileName ? { fileName: metadata.fileName } : {}),
     kind,
     fileUniqueId: m.file_unique_id,
     savedAt: Date.now(),

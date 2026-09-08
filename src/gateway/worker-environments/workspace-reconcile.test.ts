@@ -480,10 +480,13 @@ describe("worker workspace reconciliation", () => {
     });
 
     expect(cleanupRef).toBe(cleanupWorkerWorkspaceResultRef(stagedResultRef));
-    await deleteWorkerWorkspaceResultCleanupRefs({
+    const retainedRefs = new Set<string>();
+    const cleanup = deleteWorkerWorkspaceResultCleanupRefs({
       root: local,
-      retainedRefs: new Set([cleanupRef]),
+      retainedRefs: () => retainedRefs,
     });
+    retainedRefs.add(cleanupRef);
+    await cleanup;
     await expect(
       hasWorkerWorkspaceResultRef({ root: local, stagedResultRef: cleanupRef }),
     ).resolves.toBe(true);

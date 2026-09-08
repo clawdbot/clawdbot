@@ -1,5 +1,7 @@
 /** Shared daemon runtime status types and systemd cgroup hygiene helpers. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 
 /** systemd supervision fields used to spot unhealthy or given-up gateway service state. */
 type GatewayServiceSystemdRuntime = {
@@ -25,9 +27,13 @@ export type GatewayServiceRuntime = {
   lastRunResult?: string;
   lastRunTime?: string;
   detail?: string;
+  /** Bounded platform detail for classifiers/debug JSON; never render as the primary status. */
+  inspectionFailure?: {
+    code: "service-runtime-inspection-failed";
+    detail: string;
+  };
   cachedLabel?: boolean;
   missingUnit?: boolean;
-  missingSupervision?: boolean;
   missingGuiSession?: boolean;
   /** Same-label system-domain owner or an ownership probe that failed closed. */
   systemLaunchDaemon?: {
@@ -37,6 +43,24 @@ export type GatewayServiceRuntime = {
   };
   systemd?: GatewayServiceSystemdRuntime;
 };
+
+const SERVICE_RUNTIME_INSPECTION_ERROR_MAX_CHARS = 500;
+const SERVICE_RUNTIME_INSPECTION_FAILED_DETAIL = "service runtime inspection failed";
+
+/** Keeps native probe failures bounded and diagnostic-only for status presentation owners. */
+export function createServiceRuntimeInspectionFailure(error: unknown): GatewayServiceRuntime {
+  const rawDetail = error instanceof Error ? error.message : String(error);
+  return {
+    status: "unknown",
+    detail: SERVICE_RUNTIME_INSPECTION_FAILED_DETAIL,
+    inspectionFailure: {
+      code: "service-runtime-inspection-failed",
+      detail:
+        truncateUtf16Safe(sanitizeForLog(rawDetail), SERVICE_RUNTIME_INSPECTION_ERROR_MAX_CHARS) ||
+        "unknown error",
+    },
+  };
+}
 
 const SYSTEMD_TASKS_CURRENT_WARNING_THRESHOLD = 200;
 const SYSTEMD_MEMORY_CURRENT_WARNING_BYTES = 2 * 1024 * 1024 * 1024;

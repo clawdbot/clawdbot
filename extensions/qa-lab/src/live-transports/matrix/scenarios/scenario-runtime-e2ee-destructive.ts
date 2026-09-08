@@ -1089,6 +1089,12 @@ export async function runMatrixQaE2eeSyncStateLossCryptoIntactScenario(
       context,
       "matrix-e2ee-sync-state-loss-crypto-intact",
     );
+    // Cached client readiness does not imply that this newly created room has synced.
+    await driver.waitForJoinedMember({
+      roomId,
+      timeoutMs: context.timeoutMs,
+      userId: account.userId,
+    });
     const token = buildMatrixQaToken("MATRIX_QA_E2EE_SYNC_LOSS");
     const driverStartSince = await driver.prime();
     const rawStartSince = await rawDriver.primeRoom();

@@ -6,13 +6,14 @@ const mocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScope: vi.fn(),
   resolveCommandConfigWithSecrets: vi.fn(),
   getStatusCommandSecretTargetIds: vi.fn(),
-  readBestEffortConfigSnapshot: vi.fn(),
+  readCommandConfigSnapshot: vi.fn(),
   resolveGatewayPort: vi.fn(),
   resolveOsSummary: vi.fn(),
   createStatusScanCoreBootstrap: vi.fn(),
   callGateway: vi.fn(),
   collectChannelStatusIssues: vi.fn(),
   buildChannelsTable: vi.fn(),
+  applyLoggingConfig: vi.fn(),
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
@@ -27,13 +28,20 @@ vi.mock("../cli/command-secret-targets.js", () => ({
   getStatusCommandSecretTargetIds: mocks.getStatusCommandSecretTargetIds,
 }));
 
+vi.mock("../cli/command-config-snapshot.js", () => ({
+  readCommandConfigSnapshot: mocks.readCommandConfigSnapshot,
+}));
+
 vi.mock("../config/config.js", () => ({
-  readBestEffortConfigSnapshot: mocks.readBestEffortConfigSnapshot,
   resolveGatewayPort: mocks.resolveGatewayPort,
 }));
 
 vi.mock("../infra/os-summary.js", () => ({
   resolveOsSummary: mocks.resolveOsSummary,
+}));
+
+vi.mock("../logging/logger.js", () => ({
+  applyLoggingConfig: mocks.applyLoggingConfig,
 }));
 
 vi.mock("./status.scan.bootstrap-shared.js", () => ({
@@ -90,10 +98,14 @@ describe("collectStatusScanOverview", () => {
 
     mocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(true);
     mocks.getStatusCommandSecretTargetIds.mockReturnValue([]);
-    mocks.readBestEffortConfigSnapshot.mockResolvedValue({
-      config: { session: {} },
-      sourceConfig: { session: { raw: true } },
-      configDiagnostics: null,
+    mocks.readCommandConfigSnapshot.mockResolvedValue({
+      snapshot: {
+        path: "/tmp/openclaw.json",
+        exists: true,
+        valid: true,
+        runtimeConfig: { session: {} },
+        sourceConfig: { session: { raw: true } },
+      },
     });
     mocks.resolveCommandConfigWithSecrets.mockResolvedValue({
       resolvedConfig: { session: {} },
@@ -132,7 +144,17 @@ describe("collectStatusScanOverview", () => {
     });
     mocks.callGateway.mockImplementation(async ({ method }: { method?: string }) =>
       method === "status"
-        ? { degradedSecretOwners: [], degradedPlugins: [] }
+        ? {
+            secretEgressProxy: {
+              state: "degraded",
+              caExpiresAt: "2036-09-01T00:00:00.000Z",
+              failedCertificates: 1,
+              message: "Check OpenSSL, then retry.",
+            },
+            degradedSecretOwners: [],
+            degradedPlugins: [],
+            startupMigrationWarning: "Retained legacy state; run openclaw doctor --fix.",
+          }
         : { channelAccounts: {} },
     );
     mocks.collectChannelStatusIssues.mockReturnValue([{ channel: "quietchat", message: "boom" }]);
@@ -147,10 +169,10 @@ describe("collectStatusScanOverview", () => {
       useGatewayCallOverridesForChannelsStatus: true,
     });
 
-    expect(mocks.readBestEffortConfigSnapshot).toHaveBeenCalledWith({
-      observe: false,
-      skipPluginValidation: undefined,
-    });
+    expect(result.runtimeDegradation?.secretEgressProxy?.message).toBe(
+      "Check OpenSSL, then retry.",
+    );
+    expect(mocks.readCommandConfigSnapshot).toHaveBeenCalledOnce();
     expect(mocks.callGateway).toHaveBeenCalledTimes(2);
     const channelsRequest = gatewayRequest("channels.status");
     expect(channelsRequest?.url).toBe("ws://127.0.0.1:18789");
@@ -162,6 +184,9 @@ describe("collectStatusScanOverview", () => {
     expect(channelTableCall?.[1]?.showSecrets).toBe(false);
     expect(channelTableCall?.[1]?.sourceConfig).toStrictEqual({ session: { raw: true } });
     expect(result.channelIssues).toEqual([{ channel: "quietchat", message: "boom" }]);
+    expect(result.runtimeDegradation?.startupMigrationWarning).toBe(
+      "Retained legacy state; run openclaw doctor --fix.",
+    );
   });
 
   it("can keep channel overview on metadata-only status paths", async () => {

@@ -117,10 +117,17 @@ describe("vitest process group helpers", () => {
   it("formats bounded process-group diagnostics without command arguments", () => {
     expect(
       parseVitestProcessGroupMembers(
-        [" 116 1 116 Z node", " 117 1 116 Sl claude", " 118 1 999 S unrelated"].join("\n"),
+        [
+          " 116 1 116 Z node",
+          " 117 1 116 Sl ci.internal.example:8443",
+          " 118 1 116 S SECRET_TOKEN",
+          " 119 1 999 S unrelated",
+        ].join("\n"),
         116,
       ),
-    ).toBe("pid=116 ppid=1 state=Z comm=node; pid=117 ppid=1 state=Sl comm=claude");
+    ).toBe(
+      "pid=116 ppid=1 state=Z comm=node; pid=117 ppid=1 state=Sl comm=other; pid=118 ppid=1 state=S comm=other",
+    );
   });
 
   it.each(["rw", "rw,hidepid=0", "rw,hidepid=off"])(
@@ -278,10 +285,10 @@ describe("vitest process group helpers", () => {
     await rejected;
   });
 
-  it("sorts and bounds sanitized Linux process-group diagnostics", async () => {
+  it("sorts and bounds classified Linux process-group diagnostics", async () => {
     vi.useFakeTimers();
     const pids = Array.from({ length: 22 }, (_, index) => String(4200 + index)).toReversed();
-    const comm = `bad\n\t${"x".repeat(100)}`;
+    const comm = "ci.internal.example:8443";
     mockLinuxProc(
       pids,
       Object.fromEntries(pids.map((pid) => [pid, procStat(Number(pid), "S", 1, 4200, comm)])),
@@ -297,7 +304,8 @@ describe("vitest process group helpers", () => {
     expect(message.indexOf("pid=4200")).toBeLessThan(message.indexOf("pid=4201"));
     expect(message).toContain("pid=4219");
     expect(message).not.toContain("pid=4220");
-    expect(message).toContain(`comm=bad ${"x".repeat(76)}`);
+    expect(message).toContain("comm=other");
+    expect(message).not.toContain("internal.example");
     expect(message).not.toContain("\n");
   });
 
@@ -345,7 +353,7 @@ describe("vitest process group helpers", () => {
   it.each([
     ["Windows", { detached: true, platform: "win32" as const }],
     ["non-detached POSIX", { detached: false, platform: "darwin" as const }],
-  ])("keeps %s completion on direct-child exit", async (_label, params) => {
+  ])("joins %s child exit and pipes without claiming a group join", async (_label, params) => {
     const child = Object.assign(new EventEmitter(), { pid: 4200 });
     const kill = vi.fn(() => true as const);
     const completion = createVitestProcessCompletion({
@@ -355,12 +363,18 @@ describe("vitest process group helpers", () => {
     });
 
     child.emit("exit", 0, null);
-
+    let completed = false;
+    void completion.then(() => {
+      completed = true;
+    });
+    await Promise.resolve();
+    expect(completed).toBe(false);
+    child.emit("close", 0, null);
     await expect(completion).resolves.toEqual({ code: 0, signal: null });
     expect(kill).not.toHaveBeenCalled();
   });
 
-  it("installs and removes process cleanup listeners", () => {
+  it("retains the first parent signal while installing and removing cleanup listeners", () => {
     const listeners = new Map<string, Set<() => void>>();
     const fakeProcess = {
       on(event: string, handler: () => void) {
@@ -373,27 +387,32 @@ describe("vitest process group helpers", () => {
       },
     };
     const kill = vi.fn();
-    const onSignal = vi.fn();
-    const teardown = installVitestProcessGroupCleanup({
+    const cleanup = installVitestProcessGroupCleanup({
       child: { pid: 4200 },
       processObject: fakeProcess as unknown as NodeJS.Process,
       platform: "darwin",
       kill,
-      onSignal,
     });
 
     expectListenerCount(listeners, "SIGINT", 1);
     expectListenerCount(listeners, "SIGTERM", 1);
     expectListenerCount(listeners, "exit", 1);
+    expect(cleanup.getForwardedSignal()).toBeUndefined();
 
+    getListenerSet(listeners, "exit").values().next().value!();
+    expect(kill).toHaveBeenNthCalledWith(1, -4200, "SIGTERM");
+    expect(cleanup.getForwardedSignal()).toBeUndefined();
     getListenerSet(listeners, "SIGTERM").values().next().value!();
-    expect(onSignal).toHaveBeenCalledWith("SIGTERM");
-    expect(kill).toHaveBeenCalledWith(-4200, "SIGTERM");
+    getListenerSet(listeners, "SIGINT").values().next().value!();
+    expect(kill).toHaveBeenNthCalledWith(2, -4200, "SIGTERM");
+    expect(kill).toHaveBeenNthCalledWith(3, -4200, "SIGINT");
+    expect(cleanup.getForwardedSignal()).toBe("SIGTERM");
 
-    teardown();
+    cleanup.teardown();
     expectListenerCount(listeners, "SIGINT", 0);
     expectListenerCount(listeners, "SIGTERM", 0);
     expectListenerCount(listeners, "exit", 0);
+    expect(cleanup.getForwardedSignal()).toBe("SIGTERM");
   });
 
   it("can force-kill process groups after forwarded parent signals", async () => {
@@ -409,7 +428,7 @@ describe("vitest process group helpers", () => {
       },
     };
     const kill = vi.fn();
-    const teardown = installVitestProcessGroupCleanup({
+    const cleanup = installVitestProcessGroupCleanup({
       child: { pid: 4200 },
       forceSignal: "SIGKILL",
       processObject: fakeProcess as unknown as NodeJS.Process,
@@ -423,7 +442,7 @@ describe("vitest process group helpers", () => {
     expect(kill).toHaveBeenNthCalledWith(1, -4200, "SIGTERM");
     expect(kill).toHaveBeenNthCalledWith(2, -4200, "SIGKILL");
 
-    teardown();
+    cleanup.teardown();
   });
 
   it("raises process listener limits for highly parallel cleanup handlers", () => {
@@ -448,7 +467,7 @@ describe("vitest process group helpers", () => {
       },
     };
 
-    const teardowns = Array.from({ length: 12 }, (_, index) =>
+    const cleanups = Array.from({ length: 12 }, (_, index) =>
       installVitestProcessGroupCleanup({
         child: { pid: 4200 + index },
         processObject: fakeProcess as unknown as NodeJS.Process,
@@ -460,8 +479,8 @@ describe("vitest process group helpers", () => {
     expect(maxListeners).toBeGreaterThan(10);
     expect(fakeProcess.setMaxListeners).toHaveBeenCalled();
 
-    for (const teardown of teardowns) {
-      teardown();
+    for (const cleanup of cleanups) {
+      cleanup.teardown();
     }
     expectListenerCount(listeners, "SIGINT", 0);
     expectListenerCount(listeners, "SIGTERM", 0);

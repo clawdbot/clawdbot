@@ -3,9 +3,13 @@ import type { messagingApi } from "@line/bot-sdk";
 import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import {
+  normalizeMessagePresentation,
+  renderMessagePresentationFallbackText,
+  renderPresentationForDelivery,
   resolveMessagePresentationButtonAction,
   resolveMessagePresentationOptionAction,
   type MessagePresentation,
+  type MessagePresentationBlock,
   type MessagePresentationButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -16,15 +20,15 @@ import {
 import { Type } from "typebox";
 import { hasLineCredentials } from "./account-helpers.js";
 import { resolveLineAccount } from "./accounts.js";
-import { messageAction, postbackAction, uriAction, type Action } from "./actions.js";
+import { messageAction, postbackAction, type Action } from "./actions.js";
+import { createActionCard } from "./flex-templates/basic-cards.js";
 import {
-  createActionCard,
-  createAgendaCard,
   createAppleTvRemoteCard,
   createDeviceControlCard,
-  createEventCard,
   createMediaPlayerCard,
-} from "./flex-templates.js";
+} from "./flex-templates/media-control-cards.js";
+import { fitsLineFlexBubble } from "./flex-templates/message.js";
+import { createAgendaCard, createEventCard } from "./flex-templates/schedule-cards.js";
 import type { LineQuickReplyItem, LineRichCard } from "./types.js";
 
 const nonempty = () => Type.String({ minLength: 1 });
@@ -115,6 +119,9 @@ export const lineMessageActions: ChannelMessageActionAdapter = {
   prepareSendPayload: ({ payload }) => payload,
 };
 
+// LINE's 13-item quick-reply budget is shared by every select in one message.
+const LINE_QUICK_REPLY_LIMIT = 13;
+
 export const LINE_PRESENTATION_CAPABILITIES = {
   supported: true,
   buttons: true,
@@ -122,79 +129,133 @@ export const LINE_PRESENTATION_CAPABILITIES = {
   context: true,
   limits: {
     actions: { maxActions: 4, maxActionsPerRow: 1, maxRows: 4, maxLabelLength: 40 },
-    selects: { maxOptions: 13, maxLabelLength: 20, maxValueBytes: 300 },
+    // Native action encoding bounds labels; clipping here also loses plain-text
+    // placeholders and option names that overflow the shared quick-reply row.
+    selects: { maxOptions: LINE_QUICK_REPLY_LIMIT, maxValueBytes: 300 },
     text: { markdownDialect: "plain" },
   },
 } satisfies NonNullable<ChannelOutboundAdapter["presentationCapabilities"]>;
 
 function toLineAction(button: MessagePresentationButton): Action | undefined {
   const normalized = resolveMessagePresentationButtonAction(button);
+  const { label } = button;
   if (normalized?.type === "command") {
-    return messageAction(button.label, normalized.command);
+    return { type: "message", label, text: normalized.command };
   }
   if (normalized?.type === "callback") {
-    return postbackAction(button.label, normalized.value, button.label);
+    return { type: "postback", label, data: normalized.value, displayText: label };
   }
   if (normalized?.type === "url") {
-    return uriAction(button.label, normalized.url);
+    return { type: "uri", label, uri: normalized.url };
   }
   if (normalized?.type === "web-app" && normalized.url) {
-    return uriAction(button.label, normalized.url);
+    return { type: "uri", label, uri: normalized.url };
   }
   return undefined;
 }
 
-export function renderLinePresentation(
-  payload: ReplyPayload,
-  presentation: MessagePresentation,
-): ReplyPayload | null {
-  const buttons = presentation.blocks.flatMap((block) =>
-    block.type === "buttons" ? block.buttons : [],
+export function renderLinePresentation(payload: ReplyPayload, presentation: MessagePresentation) {
+  const hasCard = presentation.blocks.some(
+    (block) => block.type === "buttons" && block.buttons.length > 0,
   );
-  const buttonActions = buttons.map(toLineAction);
-  const options = presentation.blocks.flatMap((block) =>
-    block.type === "select" ? block.options : [],
-  );
-  const quickReplyItems = options.flatMap<LineQuickReplyItem>((option) => {
-    const action = resolveMessagePresentationOptionAction(option);
-    return action?.type === "command" || action?.type === "callback"
-      ? [{ label: option.label, action }]
-      : [];
-  });
-  if (
-    (buttons.length > 0 && buttonActions.some((action) => !action)) ||
-    quickReplyItems.length !== options.length ||
-    (buttons.length === 0 && options.length === 0)
-  ) {
+  const buttons: Array<{ label: string; action: Action }> = [];
+  const quickReplyItems: LineQuickReplyItem[] = [];
+  const carriedBlocks: MessagePresentationBlock[] = [];
+  const cardBody: string[] = [];
+  for (const block of presentation.blocks) {
+    if (block.type === "buttons") {
+      for (const button of block.buttons) {
+        const action = toLineAction(button);
+        if (!action) {
+          return null;
+        }
+        buttons.push({ label: button.label, action });
+      }
+    } else if (block.type === "select") {
+      const overflow: typeof block.options = [];
+      for (const option of block.options) {
+        const action = resolveMessagePresentationOptionAction(option);
+        if (!action) {
+          return null;
+        }
+        if (quickReplyItems.length < LINE_QUICK_REPLY_LIMIT) {
+          quickReplyItems.push({ label: option.label, action });
+        } else {
+          overflow.push(option);
+        }
+      }
+      // Keep each prompt beside its own overflow; an empty select would lose its
+      // placeholder in the fallback renderer even though its chips still need it.
+      if (overflow.length > 0) {
+        carriedBlocks.push({ ...block, options: overflow });
+      } else if (block.placeholder) {
+        carriedBlocks.push({ type: "context", text: block.placeholder });
+      }
+    } else if (!hasCard) {
+      carriedBlocks.push(block);
+    } else if (block.type === "text" || block.type === "context") {
+      cardBody.push(block.text);
+    }
+  }
+  if (buttons.length === 0 && quickReplyItems.length === 0) {
     return null;
   }
 
   const lineData = isRecord(payload.channelData?.line) ? payload.channelData.line : {};
-  const text = presentation.blocks
-    .flatMap((block) => (block.type === "text" || block.type === "context" ? [block.text] : []))
-    .join("\n");
   const title = presentation.title || "Choose an option";
-  const flexMessage =
-    buttonActions.length > 0
-      ? {
-          altText: title,
-          contents: createActionCard(
-            title,
-            text || "Choose an option.",
-            buttons.map((button, index) => ({
-              label: button.label,
-              action: buttonActions[index]!,
-            })),
-          ),
-        }
-      : undefined;
+  const flexMessage = hasCard
+    ? {
+        altText: title,
+        contents: createActionCard(title, cardBody.join("\n") || "Choose an option.", buttons),
+      }
+    : undefined;
+  if (flexMessage && !fitsLineFlexBubble(flexMessage.contents)) {
+    return null;
+  }
+  const text = renderMessagePresentationFallbackText({
+    text: payload.text,
+    presentation: { title: hasCard ? undefined : presentation.title, blocks: carriedBlocks },
+  });
   return {
     ...payload,
+    ...(text ? { text } : {}),
     channelData: {
       ...payload.channelData,
-      line: { ...lineData, ...(flexMessage ? { flexMessage } : {}), quickReplyItems },
+      line: {
+        ...lineData,
+        ...(flexMessage ? { flexMessage } : {}),
+        quickReplyItems,
+      },
     },
   };
+}
+
+/**
+ * Resolve a reply's portable presentation into LINE-native controls.
+ *
+ * Core runs the presentation renderer inside the outbound send pipeline only, so
+ * replies the plugin delivers itself reach delivery with the controls still
+ * portable. Preparing them here keeps both LINE delivery paths on one rendering.
+ */
+export async function prepareLineReplyPayload(payload: ReplyPayload): Promise<ReplyPayload> {
+  if (!normalizeMessagePresentation(payload.presentation)) {
+    return payload;
+  }
+  const usesFallbackText =
+    payload.presentationTextMode === "fallback" && Boolean(payload.text?.trim());
+  return renderPresentationForDelivery(
+    {
+      presentationCapabilities: LINE_PRESENTATION_CAPABILITIES,
+      renderPresentation: (adapted) => {
+        const rendered = renderLinePresentation(adapted, adapted.presentation);
+        // Quick replies have no Flex body to replace the author's fallback prose.
+        return rendered && usesFallbackText && rendered.channelData.line.flexMessage === undefined
+          ? { ...rendered, text: payload.text }
+          : rendered;
+      },
+    },
+    { ...payload, presentationTextMode: usesFallbackText ? "fallback" : undefined },
+  );
 }
 
 const toSlug = (value: string): string =>
@@ -278,7 +339,7 @@ export function renderLineCard(card: LineRichCard): { altText: string; contents:
 
 export function createLineQuickReply(items: LineQuickReplyItem[]): messagingApi.QuickReply {
   return {
-    items: items.slice(0, 13).map((item) => ({
+    items: items.slice(0, LINE_QUICK_REPLY_LIMIT).map((item) => ({
       type: "action",
       action:
         item.action.type === "command"

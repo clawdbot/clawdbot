@@ -19,21 +19,24 @@ export async function executePluginInstall(
   if (validationError) {
     throw new Error(validationError);
   }
+  const { runPluginInstallCommand } = await import("../cli/plugins-install-command.js");
   const result = await applyPersistentOperation({
     auditOperation: "plugin.install",
     operation,
     runtime,
     opts,
     run: async (ctx) => {
-      await ctx.commit(async () => {
-        const { runPluginInstallCommand } = await import("../cli/plugins-install-command.js");
-        await runPluginInstallCommand({
+      await ctx.commit(() =>
+        runPluginInstallCommand({
           raw: operation.spec,
           opts: {},
           runtime: createNoExitRuntime(ctx.runtime),
           allowInstallPolicyWarningPrompt: false,
-        });
-      });
+          ...(ctx.assertPersistentApply
+            ? { beforePersistentApply: ctx.assertPersistentApply }
+            : {}),
+        }),
+      );
       return { summary: `Installed plugin ${operation.spec}`, details: { spec: operation.spec } };
     },
   });

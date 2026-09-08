@@ -1,6 +1,6 @@
 {
   "id": "deepgram",
-  "icon": "https://cdn.simpleicons.org/deepgram",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
   },

@@ -16,19 +16,22 @@ struct SwiftUIRenderSmokeTests {
         return window
     }
 
-    @Test @MainActor func `settings pro tab builds in light and dark mode`() {
+    @Test @MainActor func `settings hub fallback builds in light and dark mode`() {
+        var windows: [UIWindow] = []
+        defer { windows.forEach { $0.isHidden = true } }
+
         for scheme in [ColorScheme.light, ColorScheme.dark] {
             let appModel = NodeAppModel()
             let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
-            let root = SettingsProTab()
+            let root = SettingsHubScreen(navigationPath: .constant([]))
                 .environment(AppAppearanceModel())
                 .environment(appModel)
                 .environment(appModel.voiceWake)
                 .environment(gatewayController)
                 .preferredColorScheme(scheme)
 
-            _ = Self.host(root)
+            windows.append(Self.host(root))
         }
     }
 
@@ -38,34 +41,17 @@ struct SwiftUIRenderSmokeTests {
                 let appModel = NodeAppModel()
                 let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
-                let root = SettingsProTab(directRoute: .about)
-                    .environment(AppAppearanceModel())
-                    .environment(appModel)
-                    .environment(appModel.voiceWake)
-                    .environment(gatewayController)
-                    .environment(\.dynamicTypeSize, typeSize)
-                    .preferredColorScheme(scheme)
+                let root = NavigationStack {
+                    SettingsProTab(directRoute: .about)
+                }
+                .environment(AppAppearanceModel())
+                .environment(appModel)
+                .environment(appModel.voiceWake)
+                .environment(gatewayController)
+                .environment(\.dynamicTypeSize, typeSize)
+                .preferredColorScheme(scheme)
 
                 _ = Self.host(root, size: CGSize(width: 320, height: 852))
-            }
-        }
-    }
-
-    @Test @MainActor func `settings Privacy destination builds across appearance and type size`() {
-        for scheme in [ColorScheme.light, ColorScheme.dark] {
-            for typeSize in [DynamicTypeSize.large, .accessibility2] {
-                let appModel = NodeAppModel()
-                let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
-
-                let root = SettingsProTab(directRoute: .privacy)
-                    .environment(AppAppearanceModel())
-                    .environment(appModel)
-                    .environment(appModel.voiceWake)
-                    .environment(gatewayController)
-                    .preferredColorScheme(scheme)
-                    .environment(\.dynamicTypeSize, typeSize)
-
-                _ = Self.host(root, size: CGSize(width: 393, height: 852))
             }
         }
     }
@@ -78,67 +64,16 @@ struct SwiftUIRenderSmokeTests {
             let appModel = NodeAppModel()
             let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
-            let root = SettingsProTab(directRoute: .licenses)
-                .environment(AppAppearanceModel())
-                .environment(appModel)
-                .environment(appModel.voiceWake)
-                .environment(gatewayController)
-                .preferredColorScheme(scheme)
+            let root = NavigationStack {
+                SettingsProTab(directRoute: .licenses)
+            }
+            .environment(AppAppearanceModel())
+            .environment(appModel)
+            .environment(appModel.voiceWake)
+            .environment(gatewayController)
+            .preferredColorScheme(scheme)
 
             windows.append(Self.host(root, size: CGSize(width: 393, height: 852)))
-        }
-    }
-
-    @Test @MainActor func `settings OpenClaw destination builds access gate across appearance and type size`() {
-        var windows: [UIWindow] = []
-        defer { windows.forEach { $0.isHidden = true } }
-
-        for scheme in [ColorScheme.light, ColorScheme.dark] {
-            for typeSize in [DynamicTypeSize.large, .accessibility2] {
-                let appModel = NodeAppModel()
-                let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
-                let root = SettingsProTab(directRoute: .systemAgent)
-                    .environment(AppAppearanceModel())
-                    .environment(appModel)
-                    .environment(appModel.voiceWake)
-                    .environment(gatewayController)
-                    .environment(\.dynamicTypeSize, typeSize)
-                    .preferredColorScheme(scheme)
-
-                windows.append(Self.host(root, size: CGSize(width: 393, height: 852)))
-            }
-        }
-    }
-
-    @Test @MainActor func `settings pro tab appearance row builds for all preferences`() throws {
-        for preference in AppAppearancePreference.allCases {
-            let suiteName = "OpenClawTests.appearance.\(preference.rawValue).\(UUID().uuidString)"
-            let defaults = try #require(UserDefaults(suiteName: suiteName))
-            defer { defaults.removePersistentDomain(forName: suiteName) }
-            defaults.set(preference.rawValue, forKey: AppAppearancePreference.storageKey)
-
-            let appModel = NodeAppModel()
-            let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
-
-            let root = SettingsProTab()
-                .defaultAppStorage(defaults)
-                .environment(AppAppearanceModel(userDefaults: defaults))
-                .environment(appModel)
-                .environment(appModel.voiceWake)
-                .environment(gatewayController)
-
-            _ = Self.host(root)
-        }
-    }
-
-    @Test @MainActor func `hosted push relay disclosure builds A view hierarchy`() {
-        for typeSize in [DynamicTypeSize.large, .accessibility5] {
-            let root = HostedPushRelayDisclosureSheet(
-                message: "Enabling this sends delivery data through OpenClaw's hosted push relay.",
-                onContinue: {})
-                .environment(\.dynamicTypeSize, typeSize)
-
-            _ = Self.host(root, size: CGSize(width: 402, height: 450))
         }
     }
 
@@ -443,5 +378,4 @@ struct SwiftUIRenderSmokeTests {
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
     }
-
 }

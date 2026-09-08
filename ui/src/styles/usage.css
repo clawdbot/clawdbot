@@ -314,9 +314,10 @@
   min-height: 96px;
   border-radius: var(--radius-lg);
   border: 1px solid var(--border);
-  background: linear-gradient(90deg, var(--bg-muted) 20%, var(--bg-hover) 50%, var(--bg-muted) 80%);
-  background-size: 200% 100%;
-  animation: usage-shimmer 1.35s ease-in-out infinite;
+}
+
+.usage-skeleton-block::after {
+  animation-duration: 1.35s;
 }
 
 .usage-skeleton-block--tall {
@@ -333,33 +334,10 @@
 
 .usage-presets,
 .usage-date-range,
-.chart-toggle,
 .usage-query-actions {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-}
-
-.chart-toggle {
-  padding: 3px;
-  background: var(--bg-muted);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  gap: 2px;
-}
-
-.chart-toggle .toggle-btn {
-  border: none;
-  border-radius: calc(var(--radius-md) - 3px);
-  background: transparent;
-  min-height: 28px;
-  padding: 4px 12px;
-  font-size: 12px;
-}
-
-.chart-toggle .toggle-btn:hover:not(.active) {
-  background: var(--bg-hover);
-  color: var(--text);
 }
 
 .usage-date-range {
@@ -449,21 +427,12 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Toggle-btn active state layers on .btn for segmented controls */
-.usage-pin-btn.active,
-.chart-toggle .toggle-btn.active {
+.usage-pin-btn.active {
   border-color: var(--accent);
   background: var(--primary);
   color: var(--primary-foreground);
   font-weight: 600;
   box-shadow: 0 1px 3px color-mix(in srgb, var(--accent) 20%, transparent);
-}
-
-.chart-toggle .toggle-btn.active {
-  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
-  background: var(--accent-subtle);
-  color: var(--accent);
-  font-weight: 600;
 }
 
 .usage-query-section {
@@ -1981,15 +1950,5 @@
 @keyframes usage-spin {
   to {
     transform: rotate(360deg);
-  }
-}
-
-@keyframes usage-shimmer {
-  0% {
-    background-position: 100% 0;
-  }
-
-  100% {
-    background-position: -100% 0;
   }
 }

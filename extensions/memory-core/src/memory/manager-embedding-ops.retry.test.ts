@@ -11,13 +11,13 @@ type EmbeddingQueryRetryHarness = {
 };
 
 function createEmbeddingQueryRetryHarness(
-  embedQuery: EmbeddingProvider["embedQuery"],
+  embedQuery: EmbeddingProvider["embed"],
   timeoutMs = 60_000,
 ): EmbeddingQueryRetryHarness {
   const provider: EmbeddingProvider = {
     id: "test-provider",
     model: "test-embedding-model",
-    embedQuery,
+    embed: embedQuery,
     embedBatch: async () => [],
   };
 
@@ -31,6 +31,22 @@ function createEmbeddingQueryRetryHarness(
   }) as EmbeddingQueryRetryHarness;
 }
 
+function createEmbeddingBatchRetryHarness(embedBatch: EmbeddingProvider["embedBatch"]) {
+  const manager = Object.assign(
+    createEmbeddingQueryRetryHarness(async () => []),
+    {
+      waitForEmbeddingRetry: vi.fn(async () => {}),
+    },
+  ) as EmbeddingQueryRetryHarness & {
+    embedBatchWithRetry: (
+      inputs: Parameters<EmbeddingProvider["embedBatch"]>[0],
+    ) => Promise<number[][]>;
+    waitForEmbeddingRetry: ReturnType<typeof vi.fn>;
+  };
+  manager.provider.embedBatch = embedBatch;
+  return manager;
+}
+
 describe("memory embedding query retry cancellation", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -41,7 +57,7 @@ describe("memory embedding query retry cancellation", () => {
     const controller = new AbortController();
     const abortReason = new Error("memory search was cancelled");
     const embedQuery = vi
-      .fn<EmbeddingProvider["embedQuery"]>()
+      .fn<EmbeddingProvider["embed"]>()
       .mockRejectedValue(new Error("TypeError: fetch failed"));
     const manager = createEmbeddingQueryRetryHarness(embedQuery);
 
@@ -64,7 +80,7 @@ describe("memory embedding query retry cancellation", () => {
 
   it("never starts a provider request for an already-cancelled search", async () => {
     const abortReason = new Error("memory search was cancelled");
-    const embedQuery = vi.fn<EmbeddingProvider["embedQuery"]>();
+    const embedQuery = vi.fn<EmbeddingProvider["embed"]>();
     const manager = createEmbeddingQueryRetryHarness(embedQuery);
 
     await expect(
@@ -81,7 +97,7 @@ describe("memory embedding query retry cancellation", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     const operationSignals: AbortSignal[] = [];
-    const embedQuery = vi.fn<EmbeddingProvider["embedQuery"]>(async (_text, options) => {
+    const embedQuery = vi.fn<EmbeddingProvider["embed"]>(async (_input, options) => {
       if (options?.signal) {
         operationSignals.push(options.signal);
       }
@@ -107,5 +123,98 @@ describe("memory embedding query retry cancellation", () => {
       true,
     );
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe.each(["text", "structured"])("memory embedding batch retry boundary (%s)", (kind) => {
+  const batchInputs = (texts: string[]) =>
+    kind === "text" ? texts : texts.map((text) => ({ text }));
+  it.each([
+    [
+      "explicit maximum and actual input counts",
+      (count: number) =>
+        `Embeddings API input limit exceeded: max 10, got ${count}. Request id: fixture-000597000`,
+    ],
+    ["an explicit maximum input length", () => "embeddings max input length is 10"],
+    [
+      "a DashScope-style per-request row cap",
+      () =>
+        '{"error":{"message":"<400> InternalError.Algo.InvalidParameter: Value error, batch size is invalid, it should not be larger than 10.: input.contents","type":"InvalidParameter","code":"InvalidParameter"}}',
+    ],
+  ])(
+    "splits provider errors with %s without retrying oversized requests",
+    async (_label, error) => {
+      const items = Array.from({ length: 33 }, (_, index) => `item-${index}`);
+      const embedBatch = vi.fn<EmbeddingProvider["embedBatch"]>(async (inputs) => {
+        const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
+        if (texts.length > 10) {
+          throw new Error(`openai-compatible embeddings failed: HTTP 400: ${error(texts.length)}`);
+        }
+        return texts.map((text) => [Number.parseInt(text.slice(5), 10)]);
+      });
+      const manager = createEmbeddingBatchRetryHarness(embedBatch);
+
+      await expect(manager.embedBatchWithRetry(batchInputs(items))).resolves.toEqual(
+        items.map((_, index) => [index]),
+      );
+      expect(embedBatch.mock.calls.map(([texts]) => texts.length)).toEqual([
+        33, 17, 9, 8, 16, 8, 8,
+      ]);
+      expect(manager.waitForEmbeddingRetry).not.toHaveBeenCalled();
+      expect(manager.markLocalEmbeddingProviderDegraded).not.toHaveBeenCalled();
+    },
+  );
+
+  it("sends a batch under the provider row cap in one request", async () => {
+    const items = Array.from({ length: 10 }, (_, index) => `item-${index}`);
+    const embedBatch = vi.fn<EmbeddingProvider["embedBatch"]>(async (inputs) => {
+      const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
+      if (texts.length > 10) {
+        throw new Error(
+          'openai-compatible embeddings failed: HTTP 400: {"error":{"message":"<400> InternalError.Algo.InvalidParameter: Value error, batch size is invalid, it should not be larger than 10.: input.contents","type":"InvalidParameter","code":"InvalidParameter"}}',
+        );
+      }
+      return texts.map((text) => [Number.parseInt(text.slice(5), 10)]);
+    });
+    const manager = createEmbeddingBatchRetryHarness(embedBatch);
+
+    await expect(manager.embedBatchWithRetry(batchInputs(items))).resolves.toEqual(
+      items.map((_, index) => [index]),
+    );
+    expect(embedBatch).toHaveBeenCalledOnce();
+    expect(embedBatch.mock.calls[0]?.[0]).toHaveLength(10);
+    expect(manager.waitForEmbeddingRetry).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "generic validation errors containing request-id digits",
+      message:
+        '{"error":{"code":"InvalidParameter","message":"The parameter input specified in the request is not valid. Request id: fixture-000597000","param":"input"}}',
+      items: ["one", "two"],
+    },
+    {
+      label: "a nonnumeric row cap containing request-id digits",
+      message: "batch size is invalid, it should not be larger than unknown; request id 12345",
+      items: ["one", "two"],
+    },
+    {
+      label: "a numeric row cap rejecting a single item",
+      message: "batch size is invalid, it should not be larger than 10",
+      items: ["one"],
+    },
+  ])("does not retry or split $label", async ({ message, items }) => {
+    const embedBatch = vi.fn(async () => {
+      throw new Error(`openai-compatible embeddings failed: HTTP 400: ${message}`);
+    });
+    const manager = createEmbeddingBatchRetryHarness(embedBatch);
+
+    await expect(manager.embedBatchWithRetry(batchInputs(items))).rejects.toMatchObject({
+      code: "MEMORY_EMBEDDING_OPERATION_FAILED",
+      operation: kind === "text" ? "batch" : "structured-batch",
+    });
+    expect(embedBatch).toHaveBeenCalledOnce();
+    expect(manager.waitForEmbeddingRetry).not.toHaveBeenCalled();
+    expect(manager.markLocalEmbeddingProviderDegraded).toHaveBeenCalledOnce();
   });
 });

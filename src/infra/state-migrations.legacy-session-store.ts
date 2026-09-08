@@ -16,15 +16,11 @@ import {
   applyFileBackedSessionStoreMaintenance,
   type SessionMaintenanceApplyReport,
 } from "../config/sessions/store-maintenance-operations.js";
+import { planSessionEntryMaintenance } from "../config/sessions/store-maintenance-plan.js";
 import { collectSessionMaintenancePreserveKeysForStore } from "../config/sessions/store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
 import {
-  archiveStaleDashboardEntries,
-  capEntryCount,
-  pruneStaleEntries,
-  pruneStaleModelRunEntries,
-  shouldRunModelRunPrune,
-  shouldRunSessionEntryMaintenance,
+  countUnarchivedSessionEntries,
   type ResolvedSessionMaintenanceConfig,
   type SessionMaintenanceWarning,
 } from "../config/sessions/store-maintenance.js";
@@ -45,6 +41,7 @@ import {
   resolveAgentHarnessSessionStoreTransitionError,
 } from "../sessions/agent-harness-session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { migrateLegacySessionCreator } from "../state/creator-namespace-migration.js";
 import {
   deliveryContextFromChannelRoute,
   isCanonicalSessionDeliveryState,
@@ -239,7 +236,9 @@ function normalizeLegacySessionStore(store: Record<string, SessionEntry>): void 
       normalizePluginExtensionSlotKeys(
         normalizePluginExtensions(
           normalizeRestartRecoveryFields(
-            normalizeLegacySessionEntryDelivery(modelSelectionLocked ? shaped : runtimeFields),
+            normalizeLegacySessionEntryDelivery(
+              migrateLegacySessionCreator(modelSelectionLocked ? shaped : runtimeFields),
+            ),
           ),
         ),
       ),
@@ -263,42 +262,21 @@ export function loadLegacySessionStore(
   normalizeLegacySessionStore(sessionStore);
   if (options.runMaintenance) {
     const maintenance = options.maintenanceConfig ?? resolveMaintenanceConfig();
-    const beforeCount = Object.keys(sessionStore).length;
+    const beforeCount = countUnarchivedSessionEntries(sessionStore);
     if (maintenance.mode === "enforce") {
       const preserveSessionKeys = collectSessionMaintenancePreserveKeysForStore({
         storePath,
         store: sessionStore,
       });
-      archiveStaleDashboardEntries(sessionStore, maintenance.archiveDashboardAfterMs, {
-        log: false,
+      planSessionEntryMaintenance({
+        profile: "legacy-read",
+        maintenance,
+        initialUnarchivedCount: beforeCount,
         preserveKeys: preserveSessionKeys,
+        log: false,
+        readAgeCandidates: () => sessionStore,
+        readCapCandidates: () => ({ store: sessionStore, maxEntries: maintenance.maxEntries }),
       });
-      if (shouldRunModelRunPrune({ maintenance, entryCount: beforeCount })) {
-        pruneStaleModelRunEntries(sessionStore, maintenance.modelRunPruneAfterMs, {
-          log: false,
-          preserveKeys: preserveSessionKeys,
-          preserveRecentMs: maintenance.preserveRecentMs,
-        });
-      }
-      if (Object.keys(sessionStore).length > maintenance.maxEntries) {
-        pruneStaleEntries(sessionStore, maintenance.pruneAfterMs, {
-          log: false,
-          preserveKeys: preserveSessionKeys,
-          preserveRecentMs: maintenance.preserveRecentMs,
-        });
-        if (
-          shouldRunSessionEntryMaintenance({
-            entryCount: Object.keys(sessionStore).length,
-            maxEntries: maintenance.maxEntries,
-          })
-        ) {
-          capEntryCount(sessionStore, maintenance.maxEntries, {
-            log: false,
-            preserveKeys: preserveSessionKeys,
-            preserveRecentMs: maintenance.preserveRecentMs,
-          });
-        }
-      }
     }
   }
   return sessionStore;

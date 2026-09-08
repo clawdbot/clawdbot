@@ -1,0 +1,250 @@
+name: Mobile release authority
+description: Authorize, revalidate, and record exact mobile beta release targets.
+
+inputs:
+  operation:
+    description: Bounded action operation (authorize, revalidate, or record).
+    required: true
+  platform:
+    description: Mobile store platform (ios or android).
+    required: true
+  workflow-path:
+    description: Canonical consumer workflow path.
+    required: true
+  workflow-full-ref:
+    description: Canonical consumer workflow ref on main.
+    required: true
+  workflow-sha:
+    description: Exact trusted consumer workflow SHA.
+    required: true
+  target-ref:
+    description: Canonical mobile release branch (release/YYYY.M.PATCH-mobile).
+    required: true
+  target-sha:
+    description: Exact release target SHA.
+    required: true
+  authority-run-id:
+    description: Original upload workflow run ID.
+    required: true
+  actor:
+    description: Original release actor for initial authorization.
+    required: false
+    default: ""
+  triggering-actor:
+    description: Original release triggering actor for initial authorization.
+    required: false
+    default: ""
+  recovery:
+    description: Whether this is a protected record-only recovery dispatch.
+    required: false
+    default: "false"
+  release-ref-private-key:
+    description: GitHub App private key consumed only after record validation.
+    required: false
+    default: ""
+
+outputs:
+  actor:
+    description: Authorized actor.
+    value: ${{ steps.authorize.outputs.actor }}
+  approved:
+    description: Whether the requested release authority is valid.
+    value: ${{ steps.authorize.outputs.approved }}
+  artifact-digest:
+    description: Authority receipt artifact digest.
+    value: ${{ steps.upload-receipt.outputs.artifact-digest }}
+  artifact-id:
+    description: Authority receipt artifact ID.
+    value: ${{ steps.upload-receipt.outputs.artifact-id }}
+  artifact-name:
+    description: Authority receipt artifact name.
+    value: ${{ steps.authorize.outputs.artifact_name }}
+  build-timestamp:
+    description: Authorized build timestamp.
+    value: ${{ steps.authorize.outputs.build_timestamp }}
+  gateway-version:
+    description: Authorized mobile gateway version.
+    value: ${{ steps.authorize.outputs.gateway_version || steps.revalidate.outputs.gateway_version }}
+  receipt-digest:
+    description: Canonical authority receipt SHA-256 digest.
+    value: ${{ steps.authorize.outputs.receipt_digest || steps.revalidate.outputs.receipt_digest }}
+  release-ref:
+    description: Recorded immutable mobile release ref.
+    value: ${{ steps.record.outputs.release_ref }}
+  release-sha:
+    description: Recorded immutable mobile release SHA.
+    value: ${{ steps.record.outputs.release_sha }}
+  run-id:
+    description: Authority run ID.
+    value: ${{ steps.authorize.outputs.run_id }}
+  target-ref:
+    description: Authorized target ref.
+    value: ${{ steps.authorize.outputs.target_ref }}
+  target-sha:
+    description: Authorized target SHA.
+    value: ${{ steps.authorize.outputs.target_sha }}
+  triggering-actor:
+    description: Authorized triggering actor.
+    value: ${{ steps.authorize.outputs.triggering_actor }}
+
+runs:
+  using: composite
+  steps:
+    - name: Bind bounded release authority inputs
+      shell: bash
+      env:
+        MOBILE_ACTION_PATH: ${{ github.action_path }}
+        RAW_ACTOR: ${{ inputs.actor }}
+        RAW_AUTHORITY_RUN_ID: ${{ inputs.authority-run-id }}
+        RAW_OPERATION: ${{ inputs.operation }}
+        RAW_PLATFORM: ${{ inputs.platform }}
+        RAW_RECOVERY: ${{ inputs.recovery }}
+        RAW_TARGET_REF: ${{ inputs.target-ref }}
+        RAW_TARGET_SHA: ${{ inputs.target-sha }}
+        RAW_TRIGGERING_ACTOR: ${{ inputs.triggering-actor }}
+        RAW_WORKFLOW_FULL_REF: ${{ inputs.workflow-full-ref }}
+        RAW_WORKFLOW_PATH: ${{ inputs.workflow-path }}
+        RAW_WORKFLOW_SHA: ${{ inputs.workflow-sha }}
+      run: |
+        set -euo pipefail
+        node --input-type=module <<'NODE'
+        import fs from "node:fs";
+
+        const names = [
+          "ACTOR",
+          "AUTHORITY_RUN_ID",
+          "OPERATION",
+          "PLATFORM",
+          "RECOVERY",
+          "TARGET_REF",
+          "TARGET_SHA",
+          "TRIGGERING_ACTOR",
+          "WORKFLOW_FULL_REF",
+          "WORKFLOW_PATH",
+          "WORKFLOW_SHA",
+        ];
+        const lines = [`MOBILE_ACTION_PATH=${process.env.MOBILE_ACTION_PATH}`];
+        for (const name of names) {
+          const value = process.env[`RAW_${name}`] ?? "";
+          if (value.length > 500 || /[\r\n]/u.test(value)) {
+            throw new Error(`Invalid bounded mobile release input: ${name}`);
+          }
+          lines.push(`MOBILE_${name}=${value}`);
+        }
+        fs.appendFileSync(process.env.GITHUB_ENV, `${lines.join("\n")}\n`);
+        NODE
+
+    - name: Authorize exact release branch head
+      id: authorize
+      if: inputs.operation == 'authorize'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: node --experimental-strip-types "$MOBILE_ACTION_PATH/authority.mjs" authorize
+
+    - name: Attest release authority receipt
+      if: inputs.operation == 'authorize'
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+      with:
+        subject-path: ${{ runner.temp }}/mobile-release-ref-${{ inputs.platform }}/receipt.json
+
+    - name: Upload release authority receipt
+      id: upload-receipt
+      if: inputs.operation == 'authorize'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        name: ${{ steps.authorize.outputs.artifact_name }}
+        path: ${{ runner.temp }}/mobile-release-ref-${{ inputs.platform }}/receipt.json
+        if-no-files-found: error
+        retention-days: 30
+
+    - name: Resolve exact release artifacts
+      id: artifacts
+      if: inputs.operation == 'revalidate' || inputs.operation == 'record'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: node --experimental-strip-types "$MOBILE_ACTION_PATH/authority.mjs" resolve-artifacts
+
+    - name: Reset downloaded authority receipt
+      if: inputs.operation == 'revalidate' || inputs.operation == 'record'
+      shell: bash
+      run: rm -rf "${RUNNER_TEMP}/mobile-release-ref-${MOBILE_PLATFORM}"
+
+    - name: Download exact authority receipt
+      if: inputs.operation == 'revalidate' || inputs.operation == 'record'
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      with:
+        artifact-ids: ${{ steps.artifacts.outputs.receipt_id }}
+        path: ${{ runner.temp }}/mobile-release-ref-${{ inputs.platform }}
+        run-id: ${{ inputs.authority-run-id }}
+        github-token: ${{ github.token }}
+
+    - name: Reset downloaded release intent
+      if: inputs.operation == 'record'
+      shell: bash
+      run: rm -rf "${RUNNER_TEMP}/mobile-release-intent-${MOBILE_PLATFORM}"
+
+    - name: Download exact release intent
+      if: inputs.operation == 'record'
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      with:
+        artifact-ids: ${{ steps.artifacts.outputs.intent_id }}
+        path: ${{ runner.temp }}/mobile-release-intent-${{ inputs.platform }}
+        run-id: ${{ inputs.authority-run-id }}
+        github-token: ${{ github.token }}
+
+    - name: Bind resolved artifact metadata
+      if: inputs.operation == 'revalidate' || inputs.operation == 'record'
+      shell: bash
+      env:
+        INTENT_DIGEST: ${{ steps.artifacts.outputs.intent_digest }}
+        INTENT_ID: ${{ steps.artifacts.outputs.intent_id }}
+        INTENT_NAME: ${{ steps.artifacts.outputs.intent_name }}
+        RECEIPT_DIGEST: ${{ steps.artifacts.outputs.receipt_digest }}
+        RECEIPT_ID: ${{ steps.artifacts.outputs.receipt_id }}
+        RECEIPT_NAME: ${{ steps.artifacts.outputs.receipt_name }}
+      run: |
+        {
+          echo "MOBILE_RECEIPT_ARTIFACT_DIGEST=${RECEIPT_DIGEST}"
+          echo "MOBILE_RECEIPT_ARTIFACT_ID=${RECEIPT_ID}"
+          echo "MOBILE_RECEIPT_ARTIFACT_NAME=${RECEIPT_NAME}"
+          echo "MOBILE_INTENT_ARTIFACT_DIGEST=${INTENT_DIGEST}"
+          echo "MOBILE_INTENT_ARTIFACT_ID=${INTENT_ID}"
+          echo "MOBILE_INTENT_ARTIFACT_NAME=${INTENT_NAME}"
+        } >> "$GITHUB_ENV"
+
+    - name: Revalidate release authority
+      id: revalidate
+      if: inputs.operation == 'revalidate'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: node --experimental-strip-types "$MOBILE_ACTION_PATH/authority.mjs" revalidate
+
+    - name: Validate immutable release ref intent
+      if: inputs.operation == 'record'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: node --experimental-strip-types "$MOBILE_ACTION_PATH/authority.mjs" validate-record
+
+    - name: Create mobile release ref token
+      id: mobile-release-ref-token
+      if: inputs.operation == 'record'
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+      with:
+        app-id: "2729701"
+        private-key: ${{ inputs.release-ref-private-key }}
+        owner: openclaw
+        repositories: openclaw
+        permission-contents: write
+
+    - name: Record immutable mobile release ref
+      id: record
+      if: inputs.operation == 'record'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        MOBILE_RELEASE_REF_TOKEN: ${{ steps.mobile-release-ref-token.outputs.token }}
+      run: node --experimental-strip-types "$MOBILE_ACTION_PATH/authority.mjs" record

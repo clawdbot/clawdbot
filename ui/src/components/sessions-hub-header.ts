@@ -11,7 +11,9 @@ type SessionsHubHeaderProps = {
 
 export function renderSessionsHubHeader(props: SessionsHubHeaderProps): TemplateResult {
   return html`
-    <section class="content-header content-header--page hub-page-header sessions-hub-header">
+    <section
+      class="content-header content-header--settings content-header--page hub-page-header sessions-hub-header"
+    >
       <div class="hub-page-header__title">
         <div class="page-title">${props.title}</div>
         ${props.subtitle ? html`<div class="page-subtitle">${props.subtitle}</div>` : nothing}

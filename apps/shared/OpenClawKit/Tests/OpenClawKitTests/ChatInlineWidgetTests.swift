@@ -3,6 +3,11 @@ import OpenClawKit
 import Testing
 @testable import OpenClawChatUI
 
+#if os(macOS) && canImport(WebKit)
+import AppKit
+import WebKit
+#endif
+
 struct ChatInlineWidgetTests {
     @Test func `sanitizes widget export filenames`() {
         #expect(ChatInlineWidgetExport.filename(title: "  Sales / Q3\\Summary\u{0007}  ") ==
@@ -215,6 +220,111 @@ struct ChatInlineWidgetTests {
     }
 
     #if canImport(WebKit) && (os(iOS) || os(macOS))
+    #if os(macOS)
+    @Test @MainActor func `invalidated widget snapshots cannot publish a late completion`() throws {
+        let fixture = try ChatInlineWidgetSnapshotFixture()
+        fixture.capture(fixture.request())
+
+        fixture.owner.invalidate()
+        try fixture.complete()
+
+        #expect(fixture.outcomes.isEmpty)
+    }
+
+    @Test @MainActor func `widget snapshots reject a changed document or generation before capture`() throws {
+        let fixture = try ChatInlineWidgetSnapshotFixture()
+        let replacement = try OpenClawChatWidgetResource(
+            url: #require(URL(string: "https://gateway.example/replacement")))
+        let changedPin = OpenClawChatWidgetResource(
+            url: fixture.resource.url,
+            tlsFingerprintSHA256: String(repeating: "ab", count: 32))
+
+        fixture.capture(fixture.request(), resource: replacement)
+        fixture.capture(fixture.request(), resource: changedPin)
+        fixture.capture(fixture.request(generation: UUID()))
+
+        #expect(fixture.webView.completions.isEmpty)
+        #expect(fixture.outcomes.isEmpty)
+    }
+
+    @Test @MainActor func `widget snapshot completions cannot outlive document or TLS replacements`() throws {
+        let oldURL = try #require(URL(string: "https://gateway.example/old"))
+        let newURL = try #require(URL(string: "https://gateway.example/replacement"))
+        let replacements = [
+            OpenClawChatWidgetResource(url: newURL),
+            OpenClawChatWidgetResource(url: oldURL, tlsFingerprintSHA256: String(repeating: "ab", count: 32)),
+        ]
+
+        for replacement in replacements {
+            let fixture = try ChatInlineWidgetSnapshotFixture()
+            fixture.capture(fixture.request())
+            fixture.capture(nil, resource: replacement)
+
+            try fixture.complete()
+
+            #expect(fixture.outcomes.isEmpty)
+        }
+    }
+
+    @Test @MainActor func `widget snapshot completions cannot outlive a reset generation`() throws {
+        let fixture = try ChatInlineWidgetSnapshotFixture()
+        fixture.capture(fixture.request())
+        fixture.capture(nil, generation: UUID())
+
+        try fixture.complete()
+
+        #expect(fixture.outcomes.isEmpty)
+    }
+
+    @Test @MainActor func `widget snapshot completions cannot migrate to a replacement WebView`() throws {
+        let fixture = try ChatInlineWidgetSnapshotFixture()
+        let replacement = ChatInlineWidgetDeferredSnapshotWebView(
+            frame: .zero,
+            configuration: WKWebViewConfiguration())
+        fixture.capture(fixture.request())
+        fixture.capture(nil, from: replacement)
+
+        try fixture.complete()
+
+        #expect(fixture.outcomes.isEmpty)
+    }
+
+    @Test @MainActor func `newer widget snapshots supersede older asynchronous completions`() throws {
+        let fixture = try ChatInlineWidgetSnapshotFixture()
+        let first = fixture.request(action: .copy)
+        let second = fixture.request(action: .save)
+        fixture.capture(first)
+        fixture.capture(second)
+
+        try fixture.complete(at: 0)
+        #expect(fixture.outcomes.isEmpty)
+
+        try fixture.complete(at: 1)
+        guard case let .success(request, _) = try #require(fixture.outcomes.first) else {
+            Issue.record("The current widget snapshot did not produce an image")
+            return
+        }
+        #expect(request == second)
+    }
+
+    @Test @MainActor func `current widget snapshots publish one image for the exact document`() throws {
+        let fixture = try ChatInlineWidgetSnapshotFixture()
+        let request = fixture.request()
+        fixture.capture(request)
+        fixture.capture(request)
+
+        #expect(fixture.webView.completions.count == 1)
+        try fixture.complete()
+
+        guard case let .success(completed, _) = try #require(fixture.outcomes.first) else {
+            Issue.record("The current widget snapshot did not produce an image")
+            return
+        }
+        #expect(completed == request)
+        #expect(fixture.outcomes.count == 1)
+    }
+    #endif
+
     @Test func `bounds WebKit content process recovery per document`() {
         var recovery = ChatInlineWidgetContentProcessRecovery()
 
@@ -235,6 +345,70 @@ struct ChatInlineWidgetTests {
     }
     #endif
 }
+
+#if os(macOS) && canImport(WebKit)
+@MainActor
+private final class ChatInlineWidgetSnapshotFixture {
+    let resource: OpenClawChatWidgetResource
+    let generation = UUID()
+    let webView = ChatInlineWidgetDeferredSnapshotWebView(
+        frame: .zero,
+        configuration: WKWebViewConfiguration())
+    let owner = ChatInlineWidgetSnapshotCapture()
+    var outcomes: [ChatInlineWidgetSnapshotOutcome] = []
+
+    init() throws {
+        self.resource = try OpenClawChatWidgetResource(
+            url: #require(URL(string: "https://gateway.example/old")))
+    }
+
+    func request(
+        action: ChatInlineWidgetSnapshotRequest.Action = .copy,
+        generation: UUID? = nil,
+        resource: OpenClawChatWidgetResource? = nil) -> ChatInlineWidgetSnapshotRequest
+    {
+        ChatInlineWidgetSnapshotRequest(
+            action: action,
+            generation: generation ?? self.generation,
+            resource: resource ?? self.resource)
+    }
+
+    func capture(
+        _ request: ChatInlineWidgetSnapshotRequest?,
+        from webView: WKWebView? = nil,
+        generation: UUID? = nil,
+        resource: OpenClawChatWidgetResource? = nil)
+    {
+        self.owner.capture(
+            request,
+            from: webView ?? self.webView,
+            generation: generation ?? self.generation,
+            resource: resource ?? self.resource)
+        { [weak self] outcome in
+            self?.outcomes.append(outcome)
+        }
+    }
+
+    func complete(at index: Int = 0) throws {
+        let completion = try #require(self.webView.completions.indices.contains(index)
+            ? self.webView.completions[index]
+            : nil)
+        completion(NSImage(size: NSSize(width: 1, height: 1)), nil)
+    }
+}
+
+@MainActor
+private final class ChatInlineWidgetDeferredSnapshotWebView: WKWebView {
+    var completions: [@MainActor (NSImage?, (any Error)?) -> Void] = []
+
+    override func takeSnapshot(
+        with _: WKSnapshotConfiguration?,
+        completionHandler: @escaping @MainActor (NSImage?, (any Error)?) -> Void)
+    {
+        self.completions.append(completionHandler)
+    }
+}
+#endif
 
 private actor ChatWidgetOperatorRouteRefreshProbe {
     private var route: GatewayCanvasHostRoute

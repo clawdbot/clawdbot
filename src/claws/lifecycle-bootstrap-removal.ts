@@ -39,6 +39,7 @@ export function planClawBootstrapRemoval(
 
 export async function removeClawBootstrap(
   record: ClawStatusRecord,
+  assertCurrent: () => void,
 ): Promise<RemovedWorkspaceFile | undefined> {
   if (!record.install.bootstrap) {
     return undefined;
@@ -51,6 +52,7 @@ export async function removeClawBootstrap(
         contentDigest: record.install.bootstrap.contentDigest,
         state: "unchanged",
       },
+      assertCurrent,
       MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
     );
   }

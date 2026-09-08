@@ -2,11 +2,10 @@
   "id": "discord",
   "doctorContract": {
     "configRepair": true,
-    "stateMigrations": true
+    "stateMigrations": [{ "id": "discord-legacy-state" }]
   },
   "name": "Discord",
   "description": "OpenClaw Discord channel plugin for channels, DMs, commands, and app events.",
-  "icon": "https://cdn.simpleicons.org/discord",
   "skills": [
     "./skills"
   ],
@@ -20,6 +19,16 @@
     "transcriptSourceProviders": [
       "discord-voice"
     ]
+  },
+  "transcriptSources": {
+    "discord-voice": {
+      "name": "Discord Voice",
+      "autoStart": {
+        "accountId": "optional",
+        "guildId": "required",
+        "channelId": "required"
+      }
+    }
   },
   "configSchema": {
     "type": "object",

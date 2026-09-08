@@ -14,6 +14,7 @@ import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CoreConfig, MatrixRoomConfig } from "../../types.js";
+import { resolveMatrixReplyToEventId } from "../relations.js";
 import type { MatrixClient } from "../sdk.js";
 import { resolveMatrixAckReactionConfig } from "./ack-config.js";
 import { resolveMatrixAllowListMatch } from "./allowlist.js";
@@ -25,7 +26,7 @@ import type { HistoryEntry } from "./room-history.js";
 import type { resolveMatrixInboundRoute } from "./route.js";
 import type { PluginRuntime, RuntimeEnv } from "./runtime-api.js";
 import { createMatrixThreadContextResolver } from "./thread-context.js";
-import { resolveMatrixReplyToEventId, resolveMatrixThreadRouting } from "./threads.js";
+import { resolveMatrixThreadRouting } from "./threads.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 
 type MatrixInboundRoute = ReturnType<typeof resolveMatrixInboundRoute>["route"];
@@ -163,13 +164,11 @@ export async function resolveMatrixInboundContext(config: {
   let threadContext = threadRootId
     ? await resolveThreadContext({ roomId, threadRootId })
     : undefined;
-  let threadContextBlockedByPolicy = false;
   if (
     threadContext?.senderId &&
     !shouldIncludeRoomContextSender("thread", threadContext.senderId)
   ) {
     logVerboseMessage(`matrix: drop thread root context (mode=${contextVisibilityMode})`);
-    threadContextBlockedByPolicy = true;
     threadContext = undefined;
   }
   let replyContext: Awaited<ReturnType<typeof resolveReplyContext>> | undefined;
@@ -179,8 +178,6 @@ export async function resolveMatrixInboundContext(config: {
       replyToSender: threadContext.senderLabel,
       replyToSenderId: threadContext.senderId,
     };
-  } else if (replyToEventId && replyToEventId === threadRootId && threadContextBlockedByPolicy) {
-    replyContext = await resolveReplyContext({ roomId, eventId: replyToEventId });
   } else {
     replyContext = replyToEventId
       ? await resolveReplyContext({ roomId, eventId: replyToEventId })
@@ -293,6 +290,8 @@ export async function resolveMatrixInboundContext(config: {
       dmScope: _route.dmScope,
       accountId: _route.accountId,
       routeSessionKey: _route.sessionKey,
+      parentSessionKey:
+        threadTarget && _route.matchedBy !== "binding.channel" ? _route.mainSessionKey : undefined,
     },
     reply: {
       to: `room:${roomId}`,

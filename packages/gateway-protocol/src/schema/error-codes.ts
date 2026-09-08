@@ -17,6 +17,7 @@ export {
   type ErrorCode,
   type GatewayErrorDetails,
   type McpAppViewExpiredErrorDetails,
+  type OutboundDeliveryQueuedErrorDetails,
   type MissingScopeErrorDetails,
   type SkillProposalRevisionChangedErrorDetails,
   type UserPrefsLimitExceededErrorDetails,
@@ -24,6 +25,9 @@ export {
   type ProjectCloneFailureCause,
   type UnknownAgentIdErrorDetails,
   type WizardNotFoundErrorDetails,
+  type SetupAdmissionBusyErrorDetails,
+  type GitHubPublicationSelectionRejectedErrorDetails,
+  readGitHubPublicationSelectionRejectedError,
   readCronJobNotFoundError,
   isMcpAppViewExpiredError,
   readMissingScopeError,
@@ -48,6 +52,10 @@ export const McpAppViewExpiredErrorDetailsSchema = closedObject({
   code: Type.Literal(GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED),
 });
 
+export const OutboundDeliveryQueuedErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED),
+});
+
 export const UserPrefsLimitExceededErrorDetailsSchema = closedObject({
   code: Type.Literal(GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED),
   limit: Type.Integer({ minimum: 1 }),
@@ -57,6 +65,15 @@ export const UserPrefsLimitExceededErrorDetailsSchema = closedObject({
 export const UnknownAgentIdErrorDetailsSchema = closedObject({
   code: Type.Literal(GatewayErrorDetailCodes.UNKNOWN_AGENT_ID),
   agentId: NonEmptyString,
+});
+
+export const SetupAdmissionBusyErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.SETUP_ADMISSION_BUSY),
+});
+
+export const GitHubPublicationSelectionRejectedErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.GITHUB_PUBLICATION_SELECTION_REJECTED),
+  idempotencyKey: NonEmptyString,
 });
 
 export const WizardNotFoundErrorDetailsSchema = closedObject({
@@ -83,11 +100,14 @@ export const GatewayErrorDetailsSchema = Type.Union([
   CronJobNotFoundErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
   McpAppViewExpiredErrorDetailsSchema,
+  OutboundDeliveryQueuedErrorDetailsSchema,
   UserPrefsLimitExceededErrorDetailsSchema,
   SkillProposalRevisionChangedErrorDetailsSchema,
   ProjectCloneErrorDetailsSchema,
   UnknownAgentIdErrorDetailsSchema,
   WizardNotFoundErrorDetailsSchema,
+  SetupAdmissionBusyErrorDetailsSchema,
+  GitHubPublicationSelectionRejectedErrorDetailsSchema,
 ]);
 
 /** Builds the canonical gateway error payload while preserving optional retry metadata. */

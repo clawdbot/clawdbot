@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { trimToUndefined } from "../gateway/credentials.js";
 import { resolveRequiredConfiguredSecretRefInputString } from "../gateway/resolve-configured-secret-input-string.js";
-import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
+import { inspectGatewayTlsCertificate } from "../infra/tls/gateway.js";
 import { renderQrTerminal } from "../media/qr-terminal.ts";
 import { resolvePairingSetupFromConfig, encodePairingSetupCode } from "../pairing/setup-code.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -225,8 +225,8 @@ export function registerQrCli(program: Command) {
               timeoutMs: runOpts.timeoutMs,
             }),
           loadLocalTlsFingerprint: async () => {
-            const tls = await loadGatewayTlsRuntime(cfg.gateway?.tls);
-            return tls.enabled ? tls.fingerprintSha256 : undefined;
+            const certificate = await inspectGatewayTlsCertificate(cfg.gateway?.tls);
+            return certificate.ok ? certificate.value.fingerprintSha256 : undefined;
           },
         });
 
@@ -235,14 +235,6 @@ export function registerQrCli(program: Command) {
         }
 
         const setupCode = encodePairingSetupCode(resolved.payload);
-
-        if (opts.setupCodeOnly) {
-          if (resolved.accessDowngraded) {
-            defaultRuntime.error(theme.warn(LIMITED_TRANSPORT_WARNING));
-          }
-          defaultRuntime.log(setupCode);
-          return;
-        }
 
         if (opts.json) {
           defaultRuntime.writeJson({
@@ -254,6 +246,14 @@ export function registerQrCli(program: Command) {
             access: resolved.access,
             ...(resolved.accessDowngraded ? { accessDowngraded: true } : {}),
           });
+          return;
+        }
+
+        if (opts.setupCodeOnly) {
+          if (resolved.accessDowngraded) {
+            defaultRuntime.error(theme.warn(LIMITED_TRANSPORT_WARNING));
+          }
+          defaultRuntime.log(setupCode);
           return;
         }
 

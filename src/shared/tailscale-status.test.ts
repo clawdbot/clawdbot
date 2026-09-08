@@ -1,6 +1,7 @@
 // Tailscale status tests cover status parsing and validation.
 import { describe, expect, it, vi } from "vitest";
 import {
+  extractTailscaleServeGatewayUrls,
   inspectTailscaleServeGatewayUrlsWithRunner,
   resolveTailnetHostWithRunner,
   resolveTailscalePublishedHost,
@@ -84,22 +85,24 @@ describe("shared/tailscale-status", () => {
   });
 
   it("returns null for non-zero exits, blank output, or invalid json", async () => {
-    const run = vi
-      .fn()
-      .mockResolvedValueOnce({ code: null, stdout: "boom" })
-      .mockResolvedValueOnce({ code: 1, stdout: "boom" })
-      .mockResolvedValueOnce({ code: 0, stdout: "   " });
-
-    await expect(resolveTailnetHostWithRunner(run)).resolves.toBeNull();
-
-    const invalid = vi.fn().mockResolvedValue({
-      code: 0,
-      stdout: "not-json",
-    });
-    await expect(resolveTailnetHostWithRunner(invalid)).resolves.toBeNull();
+    for (const result of [
+      { code: null, stdout: "boom" },
+      { code: 1, stdout: "boom" },
+      { code: 0, stdout: "   " },
+      { code: 0, stdout: "not-json" },
+    ]) {
+      const run = vi.fn().mockResolvedValue(result);
+      await expect(resolveTailnetHostWithRunner(run)).resolves.toBeNull();
+    }
   });
 
-  it("finds persistent HTTPS Serve routes that proxy the gateway root", async () => {
+  it.each([
+    "http://127.0.0.1:18789",
+    "https://localhost:18789",
+    "https+insecure://[::1]:18789/api",
+    "localhost:18789",
+    "18789",
+  ])("discovers the shipped SDK proxy form %s without granting ownership", async (proxy) => {
     const run = vi.fn().mockResolvedValue({
       code: 0,
       stdout: JSON.stringify({
@@ -109,7 +112,7 @@ describe("shared/tailscale-status", () => {
             Handlers: { "/": { Proxy: "http://127.0.0.1:8096" } },
           },
           "mac.tail.ts.net:8443": {
-            Handlers: { "/": { Proxy: "http://127.0.0.1:18789" } },
+            Handlers: { "/": { Proxy: proxy } },
           },
         },
       }),
@@ -171,6 +174,48 @@ describe("shared/tailscale-status", () => {
 
     await expect(resolveTailscaleServeGatewayUrlsWithRunner(18789, run)).resolves.toEqual([]);
   });
+
+  it.each([
+    [443, "http://127.0.0.1:18789", true],
+    [8443, "http://localhost:18789/", true],
+    [8443, "http://127.0.0.1:8096", false],
+    [443, "https://127.0.0.1:18789", false],
+    [443, "http://127.0.0.1:18789/api", false],
+    [443, "http://127.0.0.1:18789/?other", false],
+    [443, "http://192.0.2.1:18789", false],
+  ])("recognizes only an own root on HTTPS port %s targeting %s", (httpsPort, proxy, owned) => {
+    const host = `fixture.tail.ts.net:${httpsPort}`;
+    const raw = JSON.stringify({
+      TCP: { [httpsPort]: { HTTPS: true } },
+      Web: { [host]: { Handlers: { "/": { Proxy: proxy } } } },
+      AllowFunnel: { [host]: true },
+    });
+    expect(extractTailscaleServeGatewayUrls(raw, 18789, true)).toEqual(
+      owned ? [`wss://fixture.tail.ts.net${httpsPort === 443 ? "" : `:${httpsPort}`}`] : [],
+    );
+  });
+
+  it.each([
+    [443, 443, false],
+    [8443, 8443, false],
+    [443, 8443, true],
+  ])(
+    "requires HTTPS port %s to be exclusive across hostnames (sibling port %s)",
+    (port, siblingPort, owned) => {
+      const url = `wss://old.tail.ts.net${port === 443 ? "" : `:${port}`}`;
+      const raw = JSON.stringify({
+        TCP: { [port]: { HTTPS: true }, [siblingPort]: { HTTPS: true } },
+        Web: {
+          [`old.tail.ts.net:${port}`]: { Handlers: { "/": { Proxy: "http://127.0.0.1:18789" } } },
+          [`current.tail.ts.net:${siblingPort}`]: {
+            Handlers: { "/": { Proxy: "http://127.0.0.1:8096" } },
+          },
+        },
+      });
+      expect(extractTailscaleServeGatewayUrls(raw, 18789, true)).toEqual(owned ? [url] : []);
+      expect(extractTailscaleServeGatewayUrls(raw, 18789)).toEqual([url]);
+    },
+  );
 
   it("distinguishes malformed Serve status from an empty valid configuration", async () => {
     const malformed = vi.fn().mockResolvedValue({ code: 0, stdout: "not-json" });

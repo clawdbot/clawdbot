@@ -1,5 +1,5 @@
 // Manages private npm package roots for plugin install flows.
-import type { Stats } from "node:fs";
+import { constants as fsConstants, type Dirent, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,7 +9,7 @@ import { parse as parseYaml } from "yaml";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { hasErrnoCode } from "./errors.js";
 import type { NpmSpecResolution } from "./install-source-utils.js";
-import { readJson, readJsonIfExists, writeJson } from "./json-files.js";
+import { JsonFileReadError, readJson, readJsonIfExists, writeJson } from "./json-files.js";
 import type { ParsedRegistryNpmSpec } from "./npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
@@ -35,12 +35,6 @@ type ManagedNpmRootOpenClawMetadata = {
   managedOverrides?: string[];
   managedPeerDependencies?: string[];
   [key: string]: unknown;
-};
-
-/** Snapshot of root dependencies that were inserted only for peer satisfaction. */
-export type ManagedNpmRootPeerDependencySnapshot = {
-  dependencies: Record<string, string>;
-  managedPeerDependencies: string[];
 };
 
 /** Installed dependency metadata read from a managed root lockfile. */
@@ -180,26 +174,21 @@ function isPnpmParentChildOverrideSelector(key: string): boolean {
   return /[^ |@]>/u.test(key);
 }
 
-export type ManagedNpmOverrideOmissions = {
-  npmAliases?: boolean;
-  pnpmParentChildSelectors?: boolean;
-};
-
 function filterUnsupportedManagedNpmRootOverrides(
   value: unknown,
-  omissions: ManagedNpmOverrideOmissions,
+  omitNpmAliases = false,
 ): Record<string, unknown> {
   const overrides = readOverrideRecord(value);
   const filtered: Record<string, unknown> = {};
   for (const [key, raw] of Object.entries(overrides)) {
     if (
-      (omissions.pnpmParentChildSelectors && isPnpmParentChildOverrideSelector(key)) ||
-      (omissions.npmAliases && isUnsupportedManagedNpmOverride(raw))
+      isPnpmParentChildOverrideSelector(key) ||
+      (omitNpmAliases && isUnsupportedManagedNpmOverride(raw))
     ) {
       continue;
     }
     if (isRecord(raw)) {
-      const nested = filterUnsupportedManagedNpmRootOverrides(raw, omissions);
+      const nested = filterUnsupportedManagedNpmRootOverrides(raw, omitNpmAliases);
       if (Object.keys(nested).length > 0) {
         filtered[key] = nested;
       }
@@ -210,8 +199,7 @@ function filterUnsupportedManagedNpmRootOverrides(
   return filtered;
 }
 
-// Object override rules only change the package's own root edge via their "." entry;
-// child-only rules never conflict with a root direct dependency.
+// For bare package-name keys, object rules override the package itself only via ".".
 function readRootOverrideSpec(value: unknown): string | undefined {
   if (typeof value === "string") {
     return value;
@@ -318,7 +306,9 @@ export async function readOpenClawManagedNpmRootOverrides(params?: {
       return {};
     }
     const hostManifest = manifest as HostPackageManifest;
-    const overrides = await readHostWorkspaceOverrides(packageRoot);
+    const overrides = filterUnsupportedManagedNpmRootOverrides(
+      await readHostWorkspaceOverrides(packageRoot),
+    );
     return Object.fromEntries(
       Object.entries(overrides).map(([key, value]) => [
         key,
@@ -344,15 +334,16 @@ export async function upsertManagedNpmRootDependency(params: {
   packageName: string;
   dependencySpec: string;
   managedOverrides?: Record<string, unknown>;
-  overrideOmissions?: ManagedNpmOverrideOmissions;
+  omitNpmAliasOverrides?: boolean;
 }): Promise<void> {
   await fs.mkdir(params.npmRoot, { recursive: true });
   const manifestPath = path.join(params.npmRoot, "package.json");
   const manifest = await readManagedNpmRootManifest(manifestPath);
   const dependencies = readDependencyRecord(manifest.dependencies);
-  const managedOverrides = params.overrideOmissions
-    ? filterUnsupportedManagedNpmRootOverrides(params.managedOverrides, params.overrideOmissions)
-    : readOverrideRecord(params.managedOverrides);
+  const managedOverrides = filterUnsupportedManagedNpmRootOverrides(
+    params.managedOverrides,
+    params.omitNpmAliasOverrides,
+  );
   const nextDependencies = {
     ...dependencies,
     [params.packageName]: params.dependencySpec,
@@ -530,7 +521,75 @@ type MissingRequiredPlatformPackage = {
   packagePath: string;
 };
 
-/** Lists explicitly required current-platform packages that npm recorded but did not materialize. */
+async function isRequiredPlatformPackageComplete(params: {
+  packagePath: string;
+  lockPackages: Record<string, unknown>;
+}): Promise<boolean> {
+  let manifest: unknown;
+  try {
+    manifest = await readJsonIfExists(path.join(params.packagePath, "package.json"));
+  } catch (error) {
+    if (error instanceof JsonFileReadError && error.reason === "parse") {
+      return false;
+    }
+    throw error;
+  }
+  if (!isRecord(manifest)) {
+    return false;
+  }
+  const packageName = readOptionalString(manifest.name);
+  if (!packageName || !isSafePackageName(packageName)) {
+    return false;
+  }
+  if (!Array.isArray(manifest.files) || !manifest.files.includes("vendor")) {
+    return true;
+  }
+
+  const executableName = packageName.split("/").at(-1);
+  const ownsNativeExecutable = Object.entries(params.lockPackages).some(
+    ([location, entry]) =>
+      readLockPackageLocationName(location) === packageName &&
+      isRecord(entry) &&
+      (typeof entry.bin === "string" ||
+        (isRecord(entry.bin) && typeof entry.bin[executableName ?? ""] === "string")),
+  );
+  if (!executableName || !ownsNativeExecutable) {
+    return true;
+  }
+
+  let vendorEntries: Dirent[];
+  try {
+    vendorEntries = await fs.readdir(path.join(params.packagePath, "vendor"), {
+      withFileTypes: true,
+    });
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return false;
+    }
+    throw error;
+  }
+  const executableFilename =
+    process.platform === "win32" ? `${executableName}.exe` : executableName;
+  for (const target of vendorEntries) {
+    if (!target.isDirectory()) {
+      continue;
+    }
+    try {
+      await fs.access(
+        path.join(params.packagePath, "vendor", target.name, "bin", executableFilename),
+        fsConstants.X_OK,
+      );
+      return true;
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "EACCES")) {
+        throw error;
+      }
+    }
+  }
+  return false;
+}
+
+/** Lists explicitly required current-platform packages that npm left missing or incomplete. */
 export async function listMissingRequiredPlatformPackages(params: {
   npmRoot: string;
   requiredPackageNames: ReadonlySet<string> | readonly string[];
@@ -559,7 +618,12 @@ export async function listMissingRequiredPlatformPackages(params: {
     if (!name || !requiredPackageNames.has(name) || !isSafePackageName(name) || !packagePath) {
       continue;
     }
-    if (!(await pathExists(packagePath))) {
+    if (
+      !(await isRequiredPlatformPackageComplete({
+        packagePath,
+        lockPackages: parsed.packages,
+      }))
+    ) {
       missing.push({ name, packagePath });
     }
   }
@@ -736,11 +800,12 @@ function createManagedNpmPeerPlanArgs(params?: {
 
 async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
   npmRoot: string;
+  manifest: ManagedNpmRootManifest;
   runCommand?: ManagedNpmRootRunCommand;
   timeoutMs?: number;
   signal?: AbortSignal;
 }): Promise<Record<string, string>> {
-  const manifest = await readManagedNpmRootManifest(path.join(params.npmRoot, "package.json"));
+  const manifest = params.manifest;
   const dependencies = readDependencyRecord(manifest.dependencies);
   const previousManagedPeerDependencies = readManagedPeerDependencyKeys(manifest.openclaw);
   const fallbackPeerPins = collectExistingManagedPeerDependencyPins(
@@ -819,79 +884,11 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
   }
 }
 
-/** Snapshot managed peer dependencies before a risky install/update operation. */
-export async function readManagedNpmRootPeerDependencySnapshot(params: {
-  npmRoot: string;
-}): Promise<ManagedNpmRootPeerDependencySnapshot> {
-  const manifest = await readManagedNpmRootManifest(path.join(params.npmRoot, "package.json"));
-  const dependencies = readDependencyRecord(manifest.dependencies);
-  const managedPeerDependencies = readManagedPeerDependencyKeys(manifest.openclaw).toSorted();
-  const dependencySnapshot: Record<string, string> = {};
-  for (const packageName of managedPeerDependencies) {
-    const dependencySpec = dependencies[packageName];
-    if (dependencySpec) {
-      dependencySnapshot[packageName] = dependencySpec;
-    }
-  }
-  return {
-    dependencies: dependencySnapshot,
-    managedPeerDependencies,
-  };
-}
-
-/** Restore a previously captured managed peer dependency snapshot. */
-export async function restoreManagedNpmRootPeerDependencySnapshot(params: {
-  npmRoot: string;
-  snapshot: ManagedNpmRootPeerDependencySnapshot;
-}): Promise<void> {
-  const manifestPath = path.join(params.npmRoot, "package.json");
-  const manifest = await readManagedNpmRootManifest(manifestPath);
-  const dependencies = readDependencyRecord(manifest.dependencies);
-  for (const packageName of readManagedPeerDependencyKeys(manifest.openclaw)) {
-    delete dependencies[packageName];
-  }
-  Object.assign(dependencies, params.snapshot.dependencies);
-  const overrides = readOverrideRecord(manifest.overrides);
-  const currentManagedOverrideKeys = readManagedOverrideKeys(manifest.openclaw);
-  // Restored pins predate the overrides currently in the manifest; realign them so a
-  // rollback never persists a root npm rejects with EOVERRIDE.
-  reconcileManagedNpmRootOverrideConflicts({
-    dependencies,
-    overrides,
-    managedDependencyNames: new Set(params.snapshot.managedPeerDependencies),
-    managedOverrideNames: new Set(currentManagedOverrideKeys),
-  });
-  const managedOverrideKeys = currentManagedOverrideKeys
-    .filter((key) => Object.hasOwn(overrides, key))
-    .toSorted();
-  const openclawMetadata = buildManagedOpenClawMetadata({
-    current: manifest.openclaw,
-    managedOverrideKeys,
-    managedPeerDependencyKeys: params.snapshot.managedPeerDependencies.toSorted(),
-  });
-  const next: ManagedNpmRootManifest = {
-    ...manifest,
-    private: true,
-    dependencies,
-  };
-  if (Object.keys(overrides).length > 0) {
-    next.overrides = overrides;
-  } else {
-    delete next.overrides;
-  }
-  if (openclawMetadata) {
-    next.openclaw = openclawMetadata;
-  } else {
-    delete next.openclaw;
-  }
-  await writeJson(manifestPath, next, { trailingNewline: true });
-}
-
 /** Sync package.json with peer dependency pins resolved from npm's lock plan. */
 export async function syncManagedNpmRootPeerDependencies(params: {
   npmRoot: string;
   managedOverrides?: Record<string, unknown>;
-  overrideOmissions?: ManagedNpmOverrideOmissions;
+  omitNpmAliasOverrides?: boolean;
   runCommand?: ManagedNpmRootRunCommand;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -901,8 +898,21 @@ export async function syncManagedNpmRootPeerDependencies(params: {
   const dependencies = readDependencyRecord(manifest.dependencies);
   const previousManagedPeerDependencies = readManagedPeerDependencyKeys(manifest.openclaw);
   const previousManagedPeerDependencySet = new Set(previousManagedPeerDependencies);
+  const managedOverrides = filterUnsupportedManagedNpmRootOverrides(
+    params.managedOverrides,
+    params.omitNpmAliasOverrides,
+  );
+  const plannedOverrides = applyManagedNpmRootOverrides({
+    manifest,
+    managedOverrides,
+    dependencies: { ...dependencies },
+    managedDependencyNames: previousManagedPeerDependencySet,
+  }).overrides;
+  // Plan against the incoming overrides. Retired selectors in the stored manifest
+  // otherwise make npm fail and silently preserve stale managed peer pins.
   const peerPins = await collectNpmResolvedManagedNpmRootPeerDependencyPins({
     npmRoot: params.npmRoot,
+    manifest: { ...manifest, overrides: plannedOverrides },
     runCommand: params.runCommand,
     timeoutMs: params.timeoutMs,
     signal: params.signal,
@@ -929,9 +939,6 @@ export async function syncManagedNpmRootPeerDependencies(params: {
     }
   }
 
-  const managedOverrides = params.overrideOmissions
-    ? filterUnsupportedManagedNpmRootOverrides(params.managedOverrides, params.overrideOmissions)
-    : readOverrideRecord(params.managedOverrides);
   // Also catches the plan-failure fallback (stale pins reused) and alias overrides whose
   // lock-resolved version can never string-match the override spec.
   const { overrides, managedOverrideKeys } = applyManagedNpmRootOverrides({
@@ -1229,23 +1236,4 @@ export async function readManagedNpmRootInstalledDependency(params: {
   };
 }
 
-/** Remove a dependency from the managed root manifest. */
-export async function removeManagedNpmRootDependency(params: {
-  npmRoot: string;
-  packageName: string;
-}): Promise<void> {
-  const manifestPath = path.join(params.npmRoot, "package.json");
-  const manifest = await readManagedNpmRootManifest(manifestPath);
-  const dependencies = readDependencyRecord(manifest.dependencies);
-  if (!(params.packageName in dependencies)) {
-    return;
-  }
-  const { [params.packageName]: _removed, ...nextDependencies } = dependencies;
-  const next: ManagedNpmRootManifest = {
-    ...manifest,
-    private: true,
-    dependencies: nextDependencies,
-  };
-  await writeJson(manifestPath, next, { trailingNewline: true });
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

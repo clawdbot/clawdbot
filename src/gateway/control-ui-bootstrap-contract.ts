@@ -12,6 +12,23 @@ export const CONTROL_UI_BASE_PATH_ATTRIBUTE = "data-openclaw-control-ui-base-pat
 /** Marks whether the served document CSP permits the terminal WASM runtime. */
 export const CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE = "data-openclaw-terminal-enabled";
 
+export const CONTROL_UI_ENVIRONMENT_ATTRIBUTE = "data-openclaw-environment";
+export const CONTROL_UI_ENVIRONMENT_COLORS = [
+  "teal",
+  "amber",
+  "purple",
+  "coral",
+  "pink",
+  "blue",
+  "green",
+  "red",
+  "gray",
+] as const;
+export type ControlUiEnvironment = {
+  label: string;
+  color: (typeof CONTROL_UI_ENVIRONMENT_COLORS)[number];
+};
+
 /** Sandbox policy for assistant-provided embed surfaces inside Control UI. */
 export type ControlUiEmbedSandboxMode = "strict" | "scripts" | "trusted";
 
@@ -40,11 +57,13 @@ export type ControlUiBootstrapConfig = {
    * gateways running unreleased branch code.
    */
   devGitBranch?: string;
-  localMediaPreviewRoots?: string[];
   embedSandbox?: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   automaticallyFetchFavicons?: boolean;
   seamColor?: string;
+  environment?: ControlUiEnvironment;
+  /** Whether this Gateway's served UI may show the Discord community invitation. */
+  communityInvite?: boolean;
   /**
    * Whether the operator terminal surface is enabled (`gateway.terminal.enabled`).
    * The Control UI hides the terminal entirely when false so a disabled kill
@@ -53,5 +72,7 @@ export type ControlUiBootstrapConfig = {
   terminalEnabled?: boolean;
   /** Whether the Labs-gated CLI agents model-picker group is enabled. */
   cliAgentsEnabled?: boolean;
+  /** Only explicit no-auth Gateways permit native asset loading without scoped cookies. */
+  pluginAssetsRequireAuth?: boolean;
   pluginFrameGrants?: ControlUiPluginFrameGrantAck[];
 };

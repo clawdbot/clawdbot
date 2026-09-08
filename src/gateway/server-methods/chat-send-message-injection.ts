@@ -1,5 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
+import { buildInboundMediaNoteProjection } from "../../auto-reply/media-note.js";
 import { emitInboundMessageAuditTerminal } from "../../auto-reply/reply/dispatch-from-config.audit.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { hasInboundAudio } from "../../auto-reply/reply/inbound-media.js";
@@ -14,12 +16,16 @@ import {
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-tool-authority.js";
 import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { logMessageProcessed, logMessageReceived } from "../../logging/diagnostic.js";
+import type { InboundDocumentContext } from "../../media-understanding/file-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
-import { broadcastChatFinal } from "./chat-broadcast.js";
+import type { ChatImageContent } from "../chat-attachments.js";
+import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import { buildChatSendReplyInjectionText } from "./chat-send-reply-context.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
@@ -31,8 +37,10 @@ export function createChatSendMessageInjectionStarter(params: {
   target: ReplyMessageInjectionTarget | undefined;
   request: Pick<NormalizedChatSendRequest, "p" | "rawMessage" | "supportsTaskSuggestions">;
   session: Pick<PreparedChatSendSession, "cfg" | "entry">;
+  admittedSessionSettings?: Readonly<Pick<SessionEntry, "permissionMode" | "toolOverrides">>;
   turn: ReturnType<typeof prepareChatSendUserTurn>;
   imageOrder: ReplyBackendQueueMessageOptions["imageOrder"];
+  documentContext?: ({ status: "rendered" } & InboundDocumentContext) | { status: "failed" };
   userTurnTranscriptRecorder: NonNullable<
     ReplyBackendQueueMessageOptions["userTurnTranscriptRecorder"]
   >;
@@ -50,7 +58,32 @@ export function createChatSendMessageInjectionStarter(params: {
       sessionEntry: entry,
       inlineMode: p.queueMode,
     });
-    const text = ctx.BodyForAgent ?? ctx.Body ?? rawMessage;
+    const baseText = ctx.BodyForAgent ?? ctx.Body ?? rawMessage;
+    const rendered =
+      params.documentContext?.status === "rendered" ? params.documentContext : undefined;
+    const documentContext = rendered?.text.trim();
+    let text = baseText;
+    if (documentContext || params.documentContext?.status === "failed") {
+      text = [buildInboundMediaNoteProjection(ctx).text, baseText.trim(), documentContext]
+        .filter(Boolean)
+        .join("\n\n");
+    }
+    const documentImages = rendered?.images ?? [];
+    const injectionImages: ChatImageContent[] | undefined =
+      documentImages.length > 0
+        ? [
+            ...(replyOptionImages ?? []),
+            // Extracted page images follow the prepared inbound images, the
+            // same inline-then-extracted ordering reply dispatch produces; each
+            // keeps its attachment index as ordering provenance.
+            ...documentImages.map((image): ChatImageContent => ({
+              type: "image",
+              data: image.data,
+              mimeType: image.mimeType,
+              sourceIndex: image.attachmentIndex,
+            })),
+          ]
+        : replyOptionImages;
     const authorization = resolveCommandAuthorization({
       ctx,
       cfg,
@@ -66,11 +99,15 @@ export function createChatSendMessageInjectionStarter(params: {
         isInboundUserMessage: true,
         toolAuthorityOverlay: resolveInboundReplyToolAuthorityOverlay({
           ctx,
-          sessionEntry: entry,
+          sessionEntry: {
+            spawnedBy: entry?.spawnedBy,
+            permissionMode: params.admittedSessionSettings?.permissionMode,
+            toolOverrides: params.admittedSessionSettings?.toolOverrides,
+          },
           senderIsOwner: authorization.senderIsOwner,
           disableTools: false,
         }),
-        ...(replyOptionImages?.length ? { images: replyOptionImages } : {}),
+        ...(injectionImages?.length ? { images: injectionImages } : {}),
         ...(params.imageOrder?.length ? { imageOrder: params.imageOrder } : {}),
         ...(replyOptionMedia?.length ? { media: replyOptionMedia } : {}),
         waitForTranscriptCommit: true,
@@ -133,6 +170,7 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
   if (finalization.status === "rejected") {
     return false;
   }
+  recordAcceptedSessionParticipantInput(ctx, { agentId, sessionKey, storePath });
   const channel = normalizeLowercaseStringOrEmpty(
     finalizedCtx.Surface ?? finalizedCtx.Provider ?? "unknown",
   );
@@ -142,7 +180,14 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
     finalizedCtx.MessageSid ??
     finalizedCtx.MessageSidFirst ??
     finalizedCtx.MessageSidLast;
-  const steerAborted = finalization.aborted;
+  const indeterminate =
+    finalization.status === "indeterminate" ? finalization.outcome.errorMessage : undefined;
+  const steerAborted = finalization.status === "accepted" && finalization.aborted;
+  const outcomeReason = indeterminate
+    ? "question_response_indeterminate"
+    : steerAborted
+      ? "reply_operation_aborted"
+      : "active_run_injected";
   if (steerAborted) {
     context.logGateway.warn(
       `active run ${finalization.targetRunId ?? "unknown"} accepted chat steering without transcript confirmation; aborted exact target without replay`,
@@ -164,8 +209,8 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
       sessionId: entry?.sessionId,
       sessionKey,
       durationMs: Math.max(0, Date.now() - params.startedAt),
-      outcome: steerAborted ? "skipped" : "completed",
-      reason: steerAborted ? "reply_operation_aborted" : "active_run_injected",
+      outcome: indeterminate ? "error" : steerAborted ? "skipped" : "completed",
+      reason: outcomeReason,
     });
   }
   emitMessageReceivedHooks({
@@ -183,9 +228,11 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
     ctx: finalizedCtx,
     observedRunId: clientRunId,
     startedAt: params.startedAt,
-    terminal: steerAborted
-      ? { outcome: "skipped", options: { reason: "reply_operation_aborted" } }
-      : { outcome: "completed", options: { reason: "active_run_injected" } },
+    terminal: indeterminate
+      ? { outcome: "error", options: { reason: outcomeReason, error: indeterminate } }
+      : steerAborted
+        ? { outcome: "skipped", options: { reason: outcomeReason } }
+        : { outcome: "completed", options: { reason: outcomeReason } },
   });
   const updatedAt = Date.now();
   if (entry) {
@@ -203,11 +250,26 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
       key: `chat:${clientRunId}`,
       entry: {
         ts: Date.now(),
-        ok: true,
-        payload: { runId: clientRunId, status: "ok" as const },
+        ok: !indeterminate,
+        payload: {
+          runId: clientRunId,
+          status: indeterminate ? "error" : "ok",
+          ...(indeterminate ? { summary: indeterminate } : {}),
+        },
+        ...(indeterminate ? { error: errorShape(ErrorCodes.UNAVAILABLE, indeterminate) } : {}),
       },
     });
-    broadcastChatFinal({ context, runId: clientRunId, sessionKey, agentId });
+    if (indeterminate) {
+      broadcastChatError({
+        context,
+        runId: clientRunId,
+        sessionKey,
+        agentId,
+        errorMessage: indeterminate,
+      });
+    } else {
+      broadcastChatFinal({ context, runId: clientRunId, sessionKey, agentId });
+    }
   }
   return true;
 }

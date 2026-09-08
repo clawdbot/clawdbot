@@ -30,8 +30,7 @@ import { hasConnectedTalkNode } from "./server-talk-nodes.js";
 export function createGatewayNodeSessionRuntime(params: {
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   listRegisteredNodePluginToolCommands?: NodeRegistryOptions["listRegisteredNodePluginToolCommands"];
-  nodePluginToolsEnabled?: boolean;
-  nodeSkillsEnabled?: boolean;
+  getConfig?: NodeRegistryOptions["getConfig"];
   onRunnerStateChanged?: (nodeId: string, change: NodeRunnerStateChange) => void;
   resolveCurrentPairingState?: NodeRegistryOptions["resolveCurrentPairingState"];
   isPairingStateCurrent?: NodeRegistryOptions["isPairingStateCurrent"];
@@ -45,8 +44,7 @@ export function createGatewayNodeSessionRuntime(params: {
     () =>
       new NodeRegistry({
         listRegisteredNodePluginToolCommands: params.listRegisteredNodePluginToolCommands,
-        nodePluginToolsEnabled: params.nodePluginToolsEnabled,
-        nodeSkillsEnabled: params.nodeSkillsEnabled,
+        getConfig: params.getConfig,
         resolveCurrentPairingState:
           params.resolveCurrentPairingState ?? resolveCurrentPairedDeviceNodeBinding,
         isPairingStateCurrent: params.isPairingStateCurrent ?? isPairedDeviceNodeBindingCurrent,

@@ -251,8 +251,8 @@ describe("toWikiPageSummary", () => {
       ].join("\n"),
     });
     const unsafeLocalSource = toWikiPageSummary({
-      absolutePath: "/tmp/wiki/sources/unsafe-alpha.md",
-      relativePath: "sources/unsafe-alpha.md",
+      absolutePath: "/tmp/wiki/sources/unsafe-local-alpha.md",
+      relativePath: "sources/unsafe-local-alpha.md",
       raw: [
         "# Unsafe Local Import: alpha.md",
         "",

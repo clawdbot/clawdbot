@@ -1,3 +1,5 @@
+import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-reply-skip-reason.js";
+
 type CronCompletionRunStatus = "ok" | "error" | "skipped";
 
 type CronCompletionDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
@@ -9,22 +11,15 @@ type CronCompletionJob = {
   };
 };
 
-/** Whole-run completion after execution and any explicitly required delivery settle. */
+/** Whole-run completion after execution and its admitted delivery policy settle. */
 export type CronCompletionStatus = "succeeded" | "failed" | "unknown";
-
-/** Required delivery is an explicit admitted policy, never an inferred default. */
-function isCronDeliveryRequired(job: CronCompletionJob): boolean {
-  return (
-    job.delivery?.bestEffort === false &&
-    (job.delivery.mode === "announce" || job.delivery.mode === "webhook")
-  );
-}
 
 /** Resolves authored completion from an admitted job, or legacy completion from stored facts. */
 export function resolveCronCompletionStatus(params: {
   status?: CronCompletionRunStatus;
   delivered?: boolean;
   deliveryStatus?: CronCompletionDeliveryStatus;
+  deliverySuppressionReason?: NormalizeReplySkipReason;
   requiredDelivery?: boolean;
 }): CronCompletionStatus {
   if (params.status === "error" || params.status === "skipped") {
@@ -40,10 +35,12 @@ export function resolveCronCompletionStatus(params: {
       ? "succeeded"
       : "unknown";
   }
-  if (!params.requiredDelivery) {
-    return "succeeded";
-  }
-  if (params.deliveryStatus === "delivered") {
+  // Intentional silence completes execution without claiming recipient delivery.
+  if (
+    !params.requiredDelivery ||
+    params.deliveryStatus === "delivered" ||
+    (params.deliveryStatus === "not-delivered" && params.deliverySuppressionReason !== undefined)
+  ) {
     return "succeeded";
   }
   return params.deliveryStatus === "not-delivered" ? "failed" : "unknown";
@@ -54,10 +51,12 @@ export function resolveAdmittedCronCompletionStatus(
   job: CronCompletionJob,
   status: CronCompletionRunStatus,
   deliveryStatus: CronCompletionDeliveryStatus,
+  deliverySuppressionReason?: NormalizeReplySkipReason,
 ): CronCompletionStatus {
   return resolveCronCompletionStatus({
     status,
     deliveryStatus,
-    requiredDelivery: isCronDeliveryRequired(job),
+    deliverySuppressionReason,
+    requiredDelivery: job.delivery?.bestEffort !== true && deliveryStatus !== "not-requested",
   });
 }

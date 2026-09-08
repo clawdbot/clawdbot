@@ -214,6 +214,23 @@ describe("ChatSessionCompanionThreads", () => {
     expect(threads.view("two").exchanges[0]?.answer).toBe("Answer for two");
   });
 
+  it("records hydration until the authoritative companion state settles", async () => {
+    let resolveLoad!: (value: { exchanges: [] }) => void;
+    const threads = new ChatSessionCompanionThreads();
+    const pending = threads.hydrate(
+      "one",
+      () =>
+        new Promise((resolve) => {
+          resolveLoad = resolve;
+        }),
+    );
+
+    expect(threads.view("one").loading).toBe(true);
+    resolveLoad({ exchanges: [] });
+    await pending;
+    expect(threads.view("one").loading).toBe(false);
+  });
+
   it("keeps matching bare session keys isolated by agent", () => {
     const threads = new ChatSessionCompanionThreads();
     threads.setDraft("global", "main draft", "main");
@@ -481,6 +498,7 @@ describe("ChatSessionRailElement", () => {
             ts: 300_000,
           },
         ],
+        loading: false,
         pendingQuestion: null,
         failedQuestion: null,
         hint: null,
@@ -501,6 +519,7 @@ describe("ChatSessionRailElement", () => {
       onSubmit,
       companion: {
         exchanges: [],
+        loading: false,
         pendingQuestion: "What changed?",
         failedQuestion: null,
         hint: null,
@@ -511,6 +530,7 @@ describe("ChatSessionRailElement", () => {
 
     element.companion = {
       exchanges: [],
+      loading: false,
       pendingQuestion: null,
       failedQuestion: "What changed?",
       hint: "history-unavailable",
@@ -530,6 +550,7 @@ describe("ChatSessionRailElement", () => {
       activeRunId: null,
       companion: {
         exchanges: [{ question: "Q", answer: "A", ts: 1 }],
+        loading: false,
         pendingQuestion: null,
         failedQuestion: null,
         hint: null,
@@ -551,6 +572,24 @@ describe("ChatSessionRailElement", () => {
     element.digest = digest("on-track");
     await element.updateComplete;
     expect(element.querySelector(".chat-session-rail__status--critical")).toBeNull();
+  });
+
+  it("shows the shared chat skeleton instead of the empty state during hydration", async () => {
+    const element = await mount({
+      companion: {
+        exchanges: [],
+        loading: true,
+        pendingQuestion: null,
+        failedQuestion: null,
+        hint: null,
+        draft: "",
+      },
+    });
+
+    const skeleton = element.querySelector("openclaw-panel-loading-skeleton");
+    await skeleton?.updateComplete;
+    expect(skeleton?.getAttribute("data-panel-skeleton")).toBe("chat");
+    expect(element.querySelector("openclaw-panel-empty-state")).toBeNull();
   });
 
   it("collapses on Escape", async () => {
@@ -644,6 +683,7 @@ describe("ChatSessionRailElement", () => {
     const element = await mount({
       companion: {
         exchanges: [{ question: "What changed?", answer: "The rail toggle.", ts: 300_000 }],
+        loading: false,
         pendingQuestion: null,
         failedQuestion: null,
         hint: null,
@@ -665,6 +705,7 @@ describe("ChatSessionRailElement", () => {
       activeRunId: null,
       companion: {
         exchanges: [],
+        loading: false,
         pendingQuestion: null,
         failedQuestion: null,
         hint: null,

@@ -7,7 +7,7 @@ import {
 } from "openclaw/plugin-sdk/outbound-media";
 import { resolveQaChannelAccount } from "./accounts.js";
 import { buildQaTarget, resolveQaTargetThread, sendQaBusMessage } from "./bus-client.js";
-import type { QaBusAttachment } from "./protocol.js";
+import type { QaBusAttachment, QaBusToolCall } from "./protocol.js";
 import type { CoreConfig } from "./types.js";
 
 type QaChannelTextSendParams = {
@@ -19,6 +19,7 @@ type QaChannelTextSendParams = {
   threadId?: string | number | null;
   replyToId?: string | number | null;
   attachments?: QaBusAttachment[];
+  toolCalls?: QaBusToolCall[];
 };
 
 type QaChannelMediaAccessParams = {
@@ -46,6 +47,7 @@ export async function sendQaChannelText(params: QaChannelTextSendParams) {
     threadId: resolved.threadId,
     replyToId: params.replyToId == null ? undefined : String(params.replyToId),
     ...(params.attachments?.length ? { attachments: params.attachments } : {}),
+    ...(params.toolCalls?.length ? { toolCalls: params.toolCalls } : {}),
   });
   return {
     to: params.to,
@@ -60,9 +62,11 @@ export async function sendQaChannelMediaBatch(
   if (params.mediaUrls.length === 0) {
     throw new Error("QA channel media batch requires at least one media URL");
   }
+  const { mediaMaxBytes: maxBytes } = resolveQaChannelAccount(params);
   const attachments: QaBusAttachment[] = await Promise.all(
     params.mediaUrls.map(async (mediaUrl) => {
       const media = await loadOutboundMediaFromUrl(mediaUrl, {
+        maxBytes,
         mediaAccess: params.mediaAccess,
         mediaLocalRoots: params.mediaLocalRoots,
         mediaReadFile: params.mediaReadFile,

@@ -22,13 +22,13 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../../../routing/session-key.js";
+import { resolveActiveEmbeddedRunSessionId } from "../../embedded-agent-runner/active-run-projections.js";
 import type { EmbeddedAgentQueueMessageOptions } from "../../embedded-agent-runner/run-state.js";
 import {
   formatEmbeddedAgentQueueFailureSummary,
   isEmbeddedAgentRunActive,
-  isEmbeddedRunAbandoned,
   queueEmbeddedAgentMessageWithOutcomeAsync,
-  resolveActiveEmbeddedRunSessionId,
+  resolveEmbeddedRunAbandonment,
   type EmbeddedAgentQueueMessageOutcome,
 } from "../../embedded-agent-runner/runs.js";
 import { dispatchGatewayMethodInProcess } from "./subagent-announce.runtime.js";
@@ -55,7 +55,10 @@ export type SubagentAnnounceDeliveryDeps = {
     sessionId?: string;
     isActive: boolean;
   };
-  isRequesterSessionAbandoned: (requesterSessionKey: string, sessionId?: string) => boolean;
+  resolveRequesterSessionAbandonment: (
+    requesterSessionKey: string,
+    sessionId?: string,
+  ) => ReturnType<typeof resolveEmbeddedRunAbandonment>;
   loadSessionEntry: typeof loadSessionEntry;
   loadRequesterSessionEntry: typeof loadRequesterSessionEntry;
   queueEmbeddedAgentMessageWithOutcome: (
@@ -70,6 +73,8 @@ type RequesterSessionEntryResult = {
   cfg: ReturnType<typeof getRuntimeConfig>;
   entry: ReturnType<typeof loadSessionEntry>;
   canonicalKey: string;
+  agentId?: string;
+  storePath?: string;
 };
 
 export function tryResolveSubagentRequesterAgentId(
@@ -124,7 +129,7 @@ function loadDefaultRequesterSessionEntry(
     agentId,
     clone: false,
   });
-  return { cfg, entry, canonicalKey };
+  return { cfg, entry, canonicalKey, agentId, storePath };
 }
 
 const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
@@ -155,8 +160,8 @@ const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
       isActive: Boolean(sessionId && isEmbeddedAgentRunActive(sessionId)),
     };
   },
-  isRequesterSessionAbandoned: (requesterSessionKey, sessionId) =>
-    isEmbeddedRunAbandoned({ sessionKey: requesterSessionKey, sessionId }),
+  resolveRequesterSessionAbandonment: (requesterSessionKey, sessionId) =>
+    resolveEmbeddedRunAbandonment({ sessionKey: requesterSessionKey, sessionId }),
   loadSessionEntry: (...args) => loadSessionEntry(...args),
   loadRequesterSessionEntry: loadDefaultRequesterSessionEntry,
   queueEmbeddedAgentMessageWithOutcome: (...args) =>
@@ -207,11 +212,14 @@ export function getSubagentRequesterSessionActivity(
   );
 }
 
-export function isSubagentRequesterSessionAbandoned(
+export function resolveSubagentRequesterSessionAbandonment(
   requesterSessionKey: string,
   sessionId?: string,
 ) {
-  return subagentAnnounceDeliveryDeps.isRequesterSessionAbandoned(requesterSessionKey, sessionId);
+  return subagentAnnounceDeliveryDeps.resolveRequesterSessionAbandonment(
+    requesterSessionKey,
+    sessionId,
+  );
 }
 
 export function loadRequesterSessionEntry(

@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import { loadCliDotEnv } from "../cli/dotenv.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
@@ -15,14 +16,6 @@ const loggerMocks = vi.hoisted(() => ({
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: vi.fn(() => loggerMocks),
 }));
-
-function requireFirstWarnCall(): [unknown, unknown] {
-  const [call] = loggerMocks.warn.mock.calls;
-  if (!call) {
-    throw new Error("expected logger warning");
-  }
-  return call as [unknown, unknown];
-}
 
 const CREDENTIAL_AND_GATEWAY_ENV_KEYS = [
   "ANTHROPIC_API_KEY",
@@ -53,6 +46,8 @@ const BUNDLED_TRUST_ROOT_ENV_KEYS = BUNDLED_TRUST_ROOT_ENV_LINES.map(
 );
 
 const WINDOWS_SHELL_TRUST_ROOT_ENV_KEYS = [
+  "AppData",
+  "APPDATA",
   "ComSpec",
   "COMSPEC",
   "LocalAppData",
@@ -242,7 +237,10 @@ describe("loadDotEnv", () => {
         expect(process.env.FOO).toBe("from-global");
         expect(process.env.BAR).toBe("from-gateway");
         expect(loggerMocks.warn).toHaveBeenCalledOnce();
-        const [message, metadata] = requireFirstWarnCall();
+        const [message, metadata] = expectDefined(
+          loggerMocks.warn.mock.calls[0],
+          "logger warning call",
+        );
         expect(String(message)).toContain("Conflicting values in");
         expect(String((metadata as { ignoredPath?: unknown } | undefined)?.ignoredPath)).toContain(
           "gateway.env",
@@ -515,6 +513,8 @@ describe("loadDotEnv", () => {
         await writeEnvFile(
           path.join(cwdDir, ".env"),
           [
+            "AppData=.\\evil-app-data",
+            "APPDATA=.\\evil-app-data-upper",
             "ComSpec=.\\evil-comspec",
             "COMSPEC=.\\evil-comspec-upper",
             "LocalAppData=.\\evil-local-app-data",

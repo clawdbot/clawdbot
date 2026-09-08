@@ -4,8 +4,15 @@ import path from "node:path";
 import { detectMime } from "openclaw/plugin-sdk/media-mime";
 import { root } from "openclaw/plugin-sdk/security-runtime";
 import {
+  fileIdentity,
+  matchesFileIdentity,
+  readPathBinding,
+  type PathBinding,
+} from "../shared/path-binding.js";
+import {
   classifyFsSafeReadError,
   readAbsolutePath,
+  rejectCanonicalPathChange,
   resolveCanonicalReadPath,
 } from "./path-errors.js";
 
@@ -18,6 +25,8 @@ type FileFetchParams = {
   maxBytes?: unknown;
   followSymlinks?: unknown;
   preflightOnly?: unknown;
+  expectedCanonicalPath?: unknown;
+  expectedBinding?: unknown;
 };
 
 type FileFetchOk = {
@@ -28,6 +37,7 @@ type FileFetchOk = {
   base64: string;
   sha256: string;
   preflightOnly?: boolean;
+  binding: PathBinding;
 };
 
 type FileFetchErrCode =
@@ -38,6 +48,7 @@ type FileFetchErrCode =
   | "FILE_TOO_LARGE"
   | "PATH_TRAVERSAL"
   | "SYMLINK_REDIRECT"
+  | "CANONICAL_PATH_CHANGED"
   | "READ_ERROR";
 
 type FileFetchErr = {
@@ -145,7 +156,28 @@ export async function handleFileFetch(params: FileFetchParams): Promise<FileFetc
   }
 
   try {
+    const canonicalPathChange = rejectCanonicalPathChange(
+      params.expectedCanonicalPath,
+      opened.realPath,
+    );
+    if (canonicalPathChange) {
+      return canonicalPathChange;
+    }
     const stats = opened.stat;
+    const identityStats = await opened.handle.stat({ bigint: true });
+    const identity = fileIdentity(identityStats);
+    const expectedBinding = readPathBinding(params.expectedBinding);
+    if (
+      (params.expectedBinding !== undefined && expectedBinding?.kind !== "existing") ||
+      (expectedBinding?.kind === "existing" && !matchesFileIdentity(identityStats, expectedBinding))
+    ) {
+      return {
+        ok: false,
+        code: "CANONICAL_PATH_CHANGED",
+        message: "filesystem identity differs from the authorized target",
+        canonicalPath: opened.realPath,
+      };
+    }
     if (stats.size > maxBytes) {
       return {
         ok: false,
@@ -164,6 +196,7 @@ export async function handleFileFetch(params: FileFetchParams): Promise<FileFetc
         base64: "",
         sha256: "",
         preflightOnly: true,
+        binding: { kind: "existing", ...identity },
       };
     }
 
@@ -188,6 +221,7 @@ export async function handleFileFetch(params: FileFetchParams): Promise<FileFetc
       mimeType,
       base64,
       sha256,
+      binding: { kind: "existing", ...identity },
     };
   } catch (err) {
     const code = classifyFsError(err);

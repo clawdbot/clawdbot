@@ -1,7 +1,16 @@
 // Verifies harness ownership, payload availability, and run-owned registry lookup.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatForLog } from "../../gateway/ws-log.js";
+import * as installedManifests from "../../plugins/manifest-registry-installed.js";
+import { restorePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { createPluginRecord } from "../../plugins/status.test-helpers.js";
+import { prepareOwnedPluginLoadContext } from "../prepared-model-runtime.plugin-context.js";
 import {
   createAgentRuntimeMetadataPluginIdScope,
   resolveAgentRuntimePluginLoadPlan,
@@ -42,6 +51,24 @@ function installedProviderRecord(
     },
     compat: [],
   };
+}
+
+function attachPreparedPluginFacts(
+  pluginRegistry: ReturnType<typeof createEmptyPluginRegistry>,
+  config: OpenClawConfig,
+  manifestRegistry: ReturnType<typeof makeRegistry>,
+) {
+  prepareOwnedPluginLoadContext(
+    {
+      config,
+      workspaceDir: "/tmp/workspace",
+      loadRuntimePlugins: true,
+      runtimePluginSelections: [],
+    },
+    {},
+    pluginRegistry,
+    createPluginMetadataSnapshot({ config, manifestRegistry }),
+  );
 }
 
 vi.mock("../../plugins/providers.js", () => ({
@@ -91,18 +118,322 @@ describe("harness runtime plugins", () => {
     expect(pluginRegistry.agentHarnesses).toHaveLength(1);
   });
 
-  it("explains how to recover when the selected harness registration is missing", async () => {
+  it.each([
+    { name: "runtime override", selection: { agentHarnessRuntimeOverride: "codex" } },
+    { name: "session pin", selection: { agentHarnessId: "codex" } },
+    {
+      name: "model policy",
+      selection: {
+        config: {
+          agents: {
+            defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } },
+          },
+        },
+      },
+    },
+  ])("keeps a missing explicit Codex $name fatal with remediation", async ({ selection }) => {
+    const pluginRegistry = createEmptyPluginRegistry();
+    attachPreparedPluginFacts(pluginRegistry, {}, makeRegistry([]));
+
+    const error = await ensureSelectedAgentHarnessPlugin({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      ...selection,
+      workspaceDir: "/tmp/workspace",
+      pluginRegistry,
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(
+      "(reason=owner-plugin-not-activatable, ownerPluginId=codex)",
+    );
+    expect((error as Error).message).toContain(
+      'Owner plugin "codex" is absent from this prepared plugin generation.',
+    );
+    expect((error as Error).message).toContain('Run "openclaw doctor --fix"');
+  });
+
+  it("reports a manifest owner's restrictive allowlist blocker", async () => {
+    const pluginRegistry = createEmptyPluginRegistry();
+    const config = { plugins: { allow: ["telegram"] } } satisfies OpenClawConfig;
+    attachPreparedPluginFacts(
+      pluginRegistry,
+      config,
+      makeRegistry([
+        {
+          id: "custom-owner",
+          channels: [],
+          activation: { onAgentHarnesses: ["custom-harness"] },
+        },
+      ]),
+    );
+
+    const error = await ensureSelectedAgentHarnessPlugin({
+      provider: "custom-provider",
+      modelId: "custom-model",
+      agentHarnessRuntimeOverride: "custom-harness",
+      workspaceDir: "/tmp/workspace",
+      pluginRegistry,
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("ownerPluginId=custom-owner");
+    expect((error as Error).message).toContain(
+      'Owner plugin "custom-owner" is not activatable (not in allowlist)',
+    );
+  });
+
+  it("reports global plugin disablement before a selected Codex owner's absence", async () => {
+    const pluginRegistry = createEmptyPluginRegistry();
+    const config = { plugins: { enabled: false } } satisfies OpenClawConfig;
+    attachPreparedPluginFacts(pluginRegistry, config, makeRegistry([]));
+
+    const error = await ensureSelectedAgentHarnessPlugin({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      agentHarnessRuntimeOverride: "codex",
+      workspaceDir: "/tmp/workspace",
+      pluginRegistry,
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("ownerPluginId=codex");
+    expect((error as Error).message).toContain(
+      'Owner plugin "codex" is not activatable (plugins disabled)',
+    );
+    expect((error as Error).message).not.toContain("absent from this prepared plugin generation");
+    // The first chat error uses the Gateway's bounded formatter, before the full reply arrives.
+    expect(formatForLog((error as Error).message)).toContain('Run "openclaw doctor --fix"');
+  });
+
+  it.each([
+    {
+      name: "global disablement",
+      plugins: { enabled: false },
+      expectedReason: "plugins disabled",
+    },
+    {
+      name: "a restrictive allowlist",
+      plugins: { allow: ["telegram"] },
+      expectedReason: "not in allowlist",
+    },
+    {
+      name: "a denylist",
+      plugins: { deny: ["codex"] },
+      expectedReason: "blocked by denylist",
+    },
+    {
+      name: "an explicitly disabled owner",
+      plugins: { entries: { codex: { enabled: false } } },
+      expectedReason: "disabled in config",
+    },
+  ] satisfies Array<{
+    name: string;
+    plugins: NonNullable<OpenClawConfig["plugins"]>;
+    expectedReason: string;
+  }>)("reports $name without a prepared registry context", async ({ plugins, expectedReason }) => {
+    const error = await ensureSelectedAgentHarnessPlugin({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      config: { plugins },
+      agentHarnessRuntimeOverride: "codex",
+      workspaceDir: "/tmp/workspace",
+      pluginRegistry: undefined,
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(expectedReason);
+    expect((error as Error).message).not.toContain("absent from this prepared plugin generation");
+  });
+
+  it.each([1, 3])(
+    "reports a missing activatable owner as degraded with %i blocked sibling owners",
+    async (blockedCount) => {
+      const config = {
+        plugins: { allow: ["ready-owner"], entries: { "ready-owner": { enabled: true } } },
+      } satisfies OpenClawConfig;
+      const pluginRegistry = createEmptyPluginRegistry();
+      attachPreparedPluginFacts(
+        pluginRegistry,
+        config,
+        makeRegistry(
+          [
+            ...Array.from({ length: blockedCount }, (_, index) => `blocked-owner-${index}`),
+            "ready-owner",
+          ].map((id) => ({
+            id,
+            channels: [],
+            origin: "bundled" as const,
+            activation: { onAgentHarnesses: ["custom-harness"] },
+          })),
+        ),
+      );
+
+      const error = await ensureSelectedAgentHarnessPlugin({
+        provider: "custom-provider",
+        modelId: "custom-model",
+        config,
+        agentHarnessRuntimeOverride: "custom-harness",
+        workspaceDir: "/tmp/workspace",
+        pluginRegistry,
+      }).catch((cause: unknown) => cause);
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain("reason=owner-plugin-degraded");
+      expect((error as Error).message).toContain(
+        'Owner plugin "blocked-owner-0" is not activatable',
+      );
+      expect((error as Error).message).toContain("ownerPluginIds=");
+    },
+  );
+
+  it("reports the prepared owner's loader failure before activation policy", async () => {
+    const pluginRegistry = createEmptyPluginRegistry();
+    const config = { plugins: { allow: ["telegram"] } } satisfies OpenClawConfig;
+    attachPreparedPluginFacts(
+      pluginRegistry,
+      config,
+      makeRegistry([
+        {
+          id: "custom-owner",
+          channels: [],
+          activation: { onAgentHarnesses: ["custom-harness"] },
+        },
+      ]),
+    );
+    pluginRegistry.plugins.push(
+      createPluginRecord({
+        id: "custom-owner",
+        status: "error",
+        failurePhase: "register",
+        error: "registration exploded",
+      }),
+    );
+
+    const error = await ensureSelectedAgentHarnessPlugin({
+      provider: "custom-provider",
+      modelId: "custom-model",
+      agentHarnessRuntimeOverride: "custom-harness",
+      workspaceDir: "/tmp/workspace",
+      pluginRegistry,
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(
+      "(reason=owner-plugin-degraded, ownerPluginId=custom-owner)",
+    );
+    expect((error as Error).message).toContain(
+      'Owner plugin "custom-owner" failed during register.',
+    );
+    expect((error as Error).message).toContain(
+      'Run "openclaw plugins inspect custom-owner --runtime --json"',
+    );
+    expect((error as Error).message).not.toContain("not in allowlist");
+    expect((error as Error).message).not.toContain("registration exploded");
+    expect(formatForLog((error as Error).message)).toContain(
+      'Run "openclaw plugins inspect custom-owner --runtime --json"',
+    );
+  });
+
+  it("reports a loaded owner that omitted the selected harness registration", async () => {
+    const pluginRegistry = createEmptyPluginRegistry();
+    const config = { plugins: { allow: ["telegram"] } } satisfies OpenClawConfig;
+    attachPreparedPluginFacts(
+      pluginRegistry,
+      config,
+      makeRegistry([
+        {
+          id: "custom-owner",
+          channels: [],
+          activation: { onAgentHarnesses: ["custom-harness"] },
+        },
+      ]),
+    );
+    pluginRegistry.plugins.push(createPluginRecord({ id: "custom-owner", status: "loaded" }));
+
+    const error = await ensureSelectedAgentHarnessPlugin({
+      provider: "custom-provider",
+      modelId: "custom-model",
+      agentHarnessRuntimeOverride: "custom-harness",
+      workspaceDir: "/tmp/workspace",
+      pluginRegistry,
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(
+      "(reason=owner-plugin-degraded, ownerPluginId=custom-owner)",
+    );
+    expect((error as Error).message).toContain(
+      'Owner plugin "custom-owner" loaded but did not register agent harness "custom-harness".',
+    );
+    expect((error as Error).message).not.toContain("not in allowlist");
+    expect(formatForLog((error as Error).message)).toContain(
+      'Run "openclaw plugins inspect custom-owner --runtime --json"',
+    );
+  });
+
+  it.each(["config", "bundled", "platform"] as const)(
+    "reports an activated %s owner missing from the prepared registry as degraded",
+    async (mode) => {
+      const pluginRegistry = createEmptyPluginRegistry();
+      const manifestRegistry = makeRegistry([
+        {
+          id: "custom-owner",
+          channels: [],
+          activation: { onAgentHarnesses: ["custom-harness"] },
+        },
+      ]);
+      const owner = manifestRegistry.plugins[0]!;
+      owner.origin = mode === "config" ? "config" : "bundled";
+      owner.enabledByDefault = mode === "bundled";
+      owner.enabledByDefaultOnPlatforms = mode === "platform" ? [process.platform] : undefined;
+      attachPreparedPluginFacts(pluginRegistry, {}, manifestRegistry);
+
+      const error = await ensureSelectedAgentHarnessPlugin({
+        provider: "custom-provider",
+        modelId: "custom-model",
+        agentHarnessRuntimeOverride: "custom-harness",
+        workspaceDir: "/tmp/workspace",
+        pluginRegistry,
+      }).catch((cause: unknown) => cause);
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain(
+        "(reason=owner-plugin-degraded, ownerPluginId=custom-owner)",
+      );
+      expect((error as Error).message).toContain("The owner plugin did not register.");
+    },
+  );
+
+  it("gives an unknown harness without owner metadata a stable reason", async () => {
+    const error = await ensureSelectedAgentHarnessPlugin({
+      provider: "custom-provider",
+      modelId: "custom-model",
+      agentHarnessRuntimeOverride: "unknown-harness",
+      workspaceDir: "/tmp/workspace",
+      pluginRegistry: undefined,
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("(reason=owner-plugin-not-activatable)");
+    expect((error as Error).message).toContain(
+      "Enable or reinstall the plugin that provides this runtime",
+    );
+  });
+
+  it("keeps the built-in OpenClaw harness independent from plugin registration", async () => {
+    const pluginRegistry = createEmptyPluginRegistry();
+    attachPreparedPluginFacts(pluginRegistry, { plugins: { enabled: false } }, makeRegistry([]));
+
     await expect(
       ensureSelectedAgentHarnessPlugin({
         provider: "openai",
         modelId: "gpt-5.5",
-        agentHarnessRuntimeOverride: "codex",
+        agentHarnessRuntimeOverride: "openclaw",
         workspaceDir: "/tmp/workspace",
-        pluginRegistry: createEmptyPluginRegistry(),
+        pluginRegistry,
       }),
-    ).rejects.toThrow(
-      'Agent harness runtime "codex" is unavailable because its plugin registration is missing from this prepared run. Enable or reinstall the plugin that provides this runtime, restart the Gateway, then retry.',
-    );
+    ).resolves.toBeUndefined();
   });
 
   it("force-activates a default-disabled harness owner selected for a run", () => {
@@ -303,6 +634,47 @@ describe("harness runtime plugins", () => {
       }
     },
   );
+
+  it("reuses prepared memory aliases while applying current activation policy", () => {
+    const config: OpenClawConfig = { plugins: { slots: { memory: "fixture-memory" } } };
+    const snapshot = createPluginMetadataSnapshot({
+      config,
+      manifestRegistry: makeRegistry([
+        { id: "fixture-memory", channels: [], providers: ["memory-alias"] },
+      ]),
+    });
+    snapshot.index.plugins = [
+      {
+        ...installedProviderRecord("fixture-memory"),
+        origin: "config",
+        rootDir: "/fake/fixture-memory",
+        manifestPath: "/fake/fixture-memory/openclaw.plugin.json",
+        manifestHash: "fixture",
+        enabled: true,
+        enabledByDefault: true,
+        startup: { sidecar: false, memory: true, agentHarnesses: [] },
+      },
+    ];
+    const metadataSnapshot = restorePluginMetadataSnapshot(snapshot);
+    const rebuildManifests = vi
+      .spyOn(installedManifests, "loadPluginManifestRegistryForInstalledIndex")
+      .mockReturnValue(metadataSnapshot.manifestRegistry);
+    try {
+      for (const enabled of [true, false, true]) {
+        config.plugins!.entries = { "memory-alias": { enabled } };
+        const plan = resolveAgentRuntimePluginLoadPlan({
+          config,
+          metadataSnapshot,
+          workspaceDir: "/tmp/agent-workspace",
+          selections: [],
+        });
+        expect(plan.pluginIds ?? []).toEqual(enabled ? ["fixture-memory"] : []);
+      }
+      expect(rebuildManifests).not.toHaveBeenCalled();
+    } finally {
+      rebuildManifests.mockRestore();
+    }
+  });
 
   it("keeps standalone activation unrestricted when no complete startup base exists", () => {
     const plan = resolveAgentRuntimePluginLoadPlan({

@@ -96,6 +96,7 @@ async function reconcileAgentPatchedSessionModel(params: {
         authProfileOverride: marker.prevAuthProfileOverride,
         authProfileOverrideSource: marker.prevAuthProfileOverrideSource,
         authProfileOverrideCompactionCount: marker.prevAuthProfileOverrideCompactionCount,
+        contextWindow: marker.prevContextWindow,
         thinkingLevel: marker.prevThinkingLevel,
         modelFallback: undefined,
         liveModelSwitchPending: undefined,
@@ -165,6 +166,10 @@ export function createAgentPatchedSessionModelRunGuard(params: {
   let failure: { error?: unknown; reason?: FailoverReason } = {};
   let reconciled = false;
   const captureFailure = (error: unknown, reason?: string) => {
+    // Only the patch captured when this guard was created can be reconciled.
+    if (markerTs === undefined) {
+      return false;
+    }
     const classifiedReason = reason
       ? (reason as FailoverReason)
       : resolveFailoverReasonFromError(error);

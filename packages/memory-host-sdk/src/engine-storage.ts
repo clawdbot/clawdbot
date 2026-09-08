@@ -37,12 +37,21 @@ export {
   type MemoryReadResult,
 } from "./host/read-file-shared.js";
 export { resolveMemoryBackendConfig } from "./host/backend-config.js";
-export { resolveMemorySearchStaleness } from "./host/types.js";
+export {
+  formatMemoryIndexRebuildGuidance,
+  isAutomaticMemoryEntryEligible,
+  isMemoryOriginEligibleForAutomaticInjection,
+  resolveMemoryIndexIdentityDiagnostic,
+  resolveMemoryIndexIdentityReason,
+  resolveMemorySearchStaleness,
+} from "./host/types.js";
 export type { ResolvedMemoryBackendConfig } from "./host/backend-config.js";
 export type {
   MemoryEmbeddingProbeResult,
   MemoryEntryProvenance,
   MemoryExtraPath,
+  MemoryIndexIdentityDiagnostic,
+  MemoryIndexIdentityState,
   MemoryOriginClass,
   MemoryProviderStatus,
   MemorySearchManager,
@@ -63,6 +72,7 @@ export {
   ensureMemoryPathFtsTriggers,
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_CHUNKS_TABLE,
+  MEMORY_INDEX_DERIVED_TABLES,
   MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
   MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
   MEMORY_INDEX_FTS_TABLE,

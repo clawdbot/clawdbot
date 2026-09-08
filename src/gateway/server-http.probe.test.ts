@@ -110,53 +110,57 @@ describe("startup plugin HTTP routing", () => {
         },
         run: async (server) => {
           const htmlCases = [
-            {
-              name: "browser",
-              accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            },
-            { name: "bare curl", accept: "*/*" },
-            { name: "missing header", accept: undefined },
-            { name: "empty header", accept: "" },
-            { name: "rejected HTML with wildcard", accept: "text/html;q=0, */*" },
-            { name: "nonzero HTML quality", accept: "text/html;q=0.5" },
-            { name: "text wildcard", accept: "text/*" },
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "*/*",
+            undefined,
+            "",
+            "text/html;q=0.5",
+            "text/*",
+            "application/xhtml+xml;q=0, text/*",
+            "application/xhtml+xml",
+            "text/html;profile=alternate;q=0, */*;q=1",
+            "text/html;charset=utf-16;q=0, text/html;q=1",
+            'text/html;note="x; q=0; y", */*',
           ];
           const nonHtmlCases = [
-            { name: "JSON", accept: "application/json" },
-            { name: "event stream", accept: "text/event-stream" },
-            { name: "zero-quality HTML", accept: "text/html;q=0" },
-            { name: "zero-quality wildcard", accept: "*/*;q=0" },
-            { name: "mixed-case zero quality", accept: "text/html;Q=0" },
-            { name: "zero-quality text wildcard", accept: "text/*;q=0" },
+            "application/json",
+            "text/event-stream",
+            "text/html;q=0",
+            "text/html;q=0, */*",
+            "text/html;q=0, text/*",
+            "text/html;profile=alternate;q=1, */*;q=0",
+            "text/html;charset=utf-8;q=0, text/html;q=1",
+            "text/html;q=0, text/*;charset=utf-8;q=1",
+            "*/*;q=0",
+            "text/html;Q=0",
+            "text/*;q=0",
           ];
           for (const ready of [false, true]) {
             sidecarsReady = ready;
-            for (const testCase of htmlCases) {
+            for (const accept of htmlCases) {
               const { res, getBody } = await sendGatewayRequest(server, {
                 path: "/unclaimed-spa-route",
                 method: "GET",
-                headers: testCase.accept === undefined ? undefined : { accept: testCase.accept },
+                headers: accept === undefined ? undefined : { accept },
               });
 
-              expect(res.statusCode, `${testCase.name} ready=${ready}`).toBe(200);
-              expect(getBody(), `${testCase.name} ready=${ready}`).toContain("spa fallback");
+              expect(res.statusCode, `${accept} ready=${ready}`).toBe(200);
+              expect(getBody(), `${accept} ready=${ready}`).toContain("spa fallback");
             }
 
-            for (const testCase of nonHtmlCases) {
+            for (const accept of nonHtmlCases) {
               const response = createResponse();
               await dispatchRequest(
                 server,
                 createRequest({
                   path: "/unclaimed-spa-route",
                   method: "GET",
-                  headers: { accept: testCase.accept },
+                  headers: { accept },
                 }),
                 response.res,
               );
 
-              expect(response.res.statusCode, `${testCase.name} ready=${ready}`).toBe(
-                ready ? 404 : 503,
-              );
+              expect(response.res.statusCode, `${accept} ready=${ready}`).toBe(ready ? 404 : 503);
               expect(response.setHeader).toHaveBeenCalledWith(
                 "Content-Type",
                 "text/plain; charset=utf-8",

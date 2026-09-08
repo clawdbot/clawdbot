@@ -35,6 +35,22 @@ describe("shared toast", () => {
     expect(host.querySelector(".app-toast__message")?.textContent).toBe("Second");
   });
 
+  it("keeps queued outcomes behind an unrelated replacement toast", async () => {
+    const host = await mountHost();
+
+    showToast({ message: "First completion", fifo: true });
+    showToast({ message: "Second completion", fifo: true });
+    await host.updateComplete;
+    expect(host.querySelector(".app-toast__message")?.textContent).toBe("First completion");
+
+    showToast({ message: "Critical observer notice" });
+    await host.updateComplete;
+    expect(host.querySelector(".app-toast__message")?.textContent).toBe("Critical observer notice");
+    host.querySelector<HTMLButtonElement>(".app-toast__dismiss")?.click();
+    await host.updateComplete;
+    expect(host.querySelector(".app-toast__message")?.textContent).toBe("Second completion");
+  });
+
   it("uses the active modal's toast layer before the app layer", async () => {
     const appHost = await mountHost();
     const modal = document.createElement("openclaw-modal-dialog");
@@ -73,26 +89,38 @@ describe("shared toast", () => {
   it("auto-dismisses after the configured duration", async () => {
     vi.useFakeTimers();
     const host = await mountHost();
+    const anchor = document.createElement("div");
+    document.body.append(anchor);
+    vi.spyOn(anchor, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 100, 100));
 
-    showToast({ message: "Temporary", durationMs: 50 });
+    showToast({ anchor, message: "Temporary", durationMs: 50 });
     await host.updateComplete;
     await vi.advanceTimersByTimeAsync(50);
+    await host.updateComplete;
+
+    expect(host.querySelector('.app-toast[data-active="false"]')).not.toBeNull();
+
+    await vi.runAllTimersAsync();
     await host.updateComplete;
 
     expect(host.querySelector(".app-toast")).toBeNull();
   });
 
-  it("runs its action once and dismisses", async () => {
+  it("preserves the dismissal reason when an exiting toast is replaced", async () => {
+    vi.useFakeTimers();
     const host = await mountHost();
-    const onAction = vi.fn();
-    showToast({ message: "Archived", actionLabel: "Undo", onAction });
-    await host.updateComplete;
+    const anchor = document.createElement("div");
+    document.body.append(anchor);
+    vi.spyOn(anchor, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 100, 100));
+    const reasons: string[] = [];
 
-    host.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
+    showToast({ anchor, message: "First", onDismiss: (reason) => reasons.push(reason) });
     await host.updateComplete;
+    host.querySelector<HTMLButtonElement>(".app-toast__dismiss")?.click();
+    await host.updateComplete;
+    showToast({ message: "Second" });
 
-    expect(onAction).toHaveBeenCalledOnce();
-    expect(host.querySelector(".app-toast")).toBeNull();
+    expect(reasons).toEqual(["dismiss"]);
   });
 
   it("reports why a toast is replaced, dismissed, acted on, or disconnected", async () => {
@@ -109,11 +137,13 @@ describe("shared toast", () => {
     await host.updateComplete;
     host.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
     await host.updateComplete;
+    expect(host.querySelector(".app-toast")).toBeNull();
 
     showToast({ message: "Third", onDismiss: (reason) => reasons.push(reason) });
     await host.updateComplete;
     host.querySelector<HTMLButtonElement>(".app-toast__dismiss")?.click();
     await host.updateComplete;
+    expect(host.querySelector(".app-toast")).toBeNull();
 
     showToast({ message: "Fourth", onDismiss: (reason) => reasons.push(reason) });
     host.remove();

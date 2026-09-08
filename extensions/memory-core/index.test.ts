@@ -53,12 +53,6 @@ function hostRuntimeWithConfig(current: () => OpenClawConfig) {
   });
 }
 
-const promptSources = {
-  files: "MEMORY.md, USER.md, Markdown files recursively under memory/",
-  search:
-    "MEMORY.md, USER.md, Markdown files recursively under memory/, indexed session transcripts",
-};
-
 function registerMemoryCoreRuntime(): MemoryPluginRuntime {
   let runtime: MemoryPluginRuntime | undefined;
   plugin.register(
@@ -114,21 +108,42 @@ function captureMemoryModelContract(initialConfig: OpenClawConfig) {
 }
 
 describe("buildPromptSection", () => {
-  it("returns empty when no memory tools are available", () => {
+  it("prepares explicitly owned memory tools without resolving unrelated legacy defaults", () => {
+    let unrelatedDefaultReads = 0;
+    const config: OpenClawConfig = {
+      agents: {
+        list: [
+          { id: "main" },
+          {
+            id: "unrelated",
+            get default() {
+              unrelatedDefaultReads += 1;
+              return false;
+            },
+          },
+        ],
+      },
+    };
+    const { search, get, promptBuilder } = captureMemoryModelContract(config);
+    expect(search.description).toContain("MEMORY.md");
+    expect(get.description).toContain("MEMORY.md");
     expect(
-      buildMemoryPromptSection({ availableTools: new Set(), sources: promptSources }),
-    ).toStrictEqual([]);
+      promptBuilder({ availableTools: new Set(["memory_search", "memory_get"]), agentId: "main" }),
+    ).toContain("## Memory Recall");
+    expect(unrelatedDefaultReads).toBe(0);
+  });
+
+  it("returns empty when no memory tools are available", () => {
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toStrictEqual([]);
   });
 
   it("describes the two-step flow when both memory tools are available", () => {
     const result = buildMemoryPromptSection({
       availableTools: new Set(["memory_search", "memory_get"]),
-      sources: promptSources,
     });
     expect(result[0]).toBe("## Memory Recall");
     expect(result[1]).toContain("run memory_search");
     expect(result[1]).toContain("then use memory_get");
-    expect(result[1]).toContain("indexed session transcripts");
     expect(result).toContain(
       "Citations: include Source: <path#line> when it helps the user verify memory snippets.",
     );
@@ -138,18 +153,15 @@ describe("buildPromptSection", () => {
   it("limits the guidance to memory_search when only search is available", () => {
     const result = buildMemoryPromptSection({
       availableTools: new Set(["memory_search"]),
-      sources: promptSources,
     });
     expect(result[0]).toBe("## Memory Recall");
     expect(result[1]).toContain("run memory_search");
-    expect(result[1]).toContain("indexed session transcripts");
     expect(result[1]).not.toContain("then use memory_get");
   });
 
   it("limits the guidance to memory_get when only get is available", () => {
     const result = buildMemoryPromptSection({
       availableTools: new Set(["memory_get"]),
-      sources: promptSources,
     });
     expect(result[0]).toBe("## Memory Recall");
     expect(result[1]).toContain("run memory_get");
@@ -160,7 +172,6 @@ describe("buildPromptSection", () => {
     const result = buildMemoryPromptSection({
       availableTools: new Set(["memory_search"]),
       citationsMode: "off",
-      sources: promptSources,
     });
     expect(result).toContain(
       "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks.",
@@ -208,7 +219,7 @@ describe("buildPromptSection", () => {
     expect(lazy.get.parameters).toStrictEqual(eagerGet.parameters);
     expect(lazy.search.description).toBe(eagerSearch.description);
     expect(lazy.get.description).toBe(eagerGet.description);
-    for (const text of [lazy.search.description, lazy.get.description, prompt]) {
+    for (const text of [lazy.search.description, lazy.get.description]) {
       expect(text).toContain("MEMORY.md, USER.md");
       expect(text).toContain("recursively under memory/");
       expect(text.includes("configured extra paths")).toBe(sourceCase.extraPaths.length > 0);
@@ -217,16 +228,14 @@ describe("buildPromptSection", () => {
     expect(lazy.search.description.includes("indexed session transcripts")).toBe(
       sourceCase.sessions,
     );
-    expect(prompt.includes("indexed session transcripts")).toBe(sourceCase.sessions);
     expect(lazy.get.description).not.toContain("indexed session transcripts");
     expect(lazy.search.description).toContain("Corpus outcomes cover each requested corpus");
     expect(lazy.search.description).toContain("results are partial");
     expect(lazy.get.description).toContain("status=ok");
     expect(lazy.get.description).toContain("status=not_found");
     expect(lazy.get.description).toContain("results are partial");
-    expect(prompt).toContain("status=ok");
-    expect(prompt).toContain("status=not_found");
-    expect(prompt).toContain("results are partial");
+    expect(prompt).toContain("Report partial, unavailable, or stale recall");
+    expect(prompt).toContain("warning and action guidance");
   });
 });
 
@@ -346,11 +355,14 @@ describe("memory-core plugin runtime registration", () => {
 
     const ownerTool = intentFactory({ config: {}, senderIsOwner: true }) as {
       name?: string;
+      description?: string;
       parameters?: {
         properties?: Record<string, { default?: string }>;
       };
     };
     expect(ownerTool).toMatchObject({ name: "intent" });
+    expect(ownerTool.description).toContain("Use scheduled tasks for time-based reminders");
+    expect(ownerTool.description).not.toMatch(/\b(?:cron|automations)\b/u);
     expect(ownerTool.parameters?.properties?.scope?.default).toBe("channel");
     expect(ownerTool.parameters?.properties?.senderScope?.default).toBe("sender");
     expect(warn).toHaveBeenCalledTimes(1);

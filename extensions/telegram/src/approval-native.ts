@@ -1,7 +1,6 @@
 // Telegram plugin module implements approval native behavior.
 import { createApproverRestrictedNativeApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
-import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
@@ -9,6 +8,7 @@ import {
 import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
+  SystemAgentApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
 import {
@@ -28,7 +28,7 @@ import {
 import { parseTelegramThreadId } from "./outbound-params.js";
 import { normalizeTelegramChatId, parseTelegramTarget } from "./targets.js";
 
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
 type TelegramOriginTarget = { to: string; threadId?: number };
 
 function resolveTurnSourceTelegramOriginTarget(
@@ -43,9 +43,13 @@ function resolveTurnSourceTelegramOriginTarget(
   }
   const rawThreadId =
     request.request.turnSourceThreadId ?? parsedTurnSourceTarget?.messageThreadId ?? undefined;
+  const directMessagesTopicId = parsedTurnSourceTarget?.directMessagesTopicId;
   return {
-    to: turnSourceTo,
-    threadId: parseTelegramThreadId(rawThreadId),
+    to:
+      directMessagesTopicId == null
+        ? turnSourceTo
+        : `${turnSourceTo}:direct-topic:${directMessagesTopicId}`,
+    threadId: directMessagesTopicId == null ? parseTelegramThreadId(rawThreadId) : undefined,
   };
 }
 
@@ -114,7 +118,8 @@ const telegramNativeApprovalCapability = createApproverRestrictedNativeApprovalC
   resolveApproverDmTargets: resolveTelegramApproverDmTargets,
   notifyOriginWhenDmOnly: true,
   nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
-    eventKinds: ["exec", "plugin"],
+    capabilityBoundary: true,
+    eventKinds: ["exec", "plugin", "system-agent"],
     isConfigured: ({ cfg, accountId }) =>
       isTelegramExecApprovalClientEnabled({
         cfg,
@@ -126,9 +131,7 @@ const telegramNativeApprovalCapability = createApproverRestrictedNativeApprovalC
         accountId,
         request,
       }),
-    load: async () =>
-      (await import("./approval-handler.runtime.js"))
-        .telegramApprovalNativeRuntime as unknown as ChannelApprovalNativeRuntimeAdapter,
+    load: async () => (await import("./approval-handler.runtime.js")).telegramApprovalNativeRuntime,
   }),
 });
 

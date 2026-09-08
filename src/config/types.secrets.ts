@@ -383,6 +383,7 @@ export type SecretProviderConfig =
 export type SecretsConfig = {
   egressProxy?: {
     enabled?: boolean;
+    allowedHosts?: string[];
     bypassHosts?: string[];
   };
   providers?: Record<string, SecretProviderConfig>;

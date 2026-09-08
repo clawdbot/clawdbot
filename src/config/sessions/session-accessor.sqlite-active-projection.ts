@@ -1,3 +1,4 @@
+import type { TranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -5,13 +6,17 @@ import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
+import type {
+  SessionTranscriptReadScope,
+  TranscriptEvent,
+} from "./session-accessor.sqlite-contract.js";
 import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
+import { hasUnclassifiedSessionTranscriptEvents } from "./session-transcript-projection-rebuild.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 
 type ActiveTranscriptDatabase = Pick<
@@ -29,6 +34,13 @@ export type CurrentTranscriptProjection = {
   state: SessionTranscriptProjectionState;
 };
 
+export type SessionTranscriptMessageEvent = {
+  event: TranscriptEvent;
+  eventSeq: number;
+  seq: number;
+  displayPosition?: TranscriptDisplayPosition;
+};
+
 const EMPTY_PROJECTION_STATE: SessionTranscriptProjectionState = {
   activeEventCount: 0,
   activeMessageCount: 0,
@@ -39,6 +51,36 @@ const EMPTY_PROJECTION_STATE: SessionTranscriptProjectionState = {
 
 export function getActiveTranscriptKysely(database: OpenClawAgentDatabase) {
   return getNodeSqliteKysely<ActiveTranscriptDatabase>(database.db);
+}
+
+export function parseActiveTranscriptMessageRow(row: {
+  event_seq: number;
+  event_json: string;
+  message_position: number | null;
+}): SessionTranscriptMessageEvent {
+  if (row.message_position === null) {
+    throw new Error("Active transcript message row is missing its message position");
+  }
+  return {
+    // SAFETY: The active projection indexes serialized TranscriptEvent rows.
+    event: JSON.parse(row.event_json) as TranscriptEvent,
+    eventSeq: row.event_seq,
+    // Gateway cursors use the visible-message ordinal, matching the JSONL index.
+    // Raw event seq includes headers/control rows and would make pages overlap.
+    seq: row.message_position + 1,
+  };
+}
+
+export function readTranscriptProjectionGeneration(
+  projection: CurrentTranscriptProjection,
+): string | undefined {
+  return executeSqliteQueryTakeFirstSync(
+    projection.database.db,
+    getActiveTranscriptKysely(projection.database)
+      .selectFrom("transcript_rewrite_watermarks")
+      .select("generation")
+      .where("session_id", "=", projection.resolved.sessionId),
+  )?.generation;
 }
 
 function readProjectionSnapshot(
@@ -101,7 +143,8 @@ export function withCurrentProjectionSnapshot<T>(
       if (
         snapshot.state &&
         !snapshot.state.needsRebuild &&
-        snapshot.state.indexedSeq === snapshot.latestSeq
+        snapshot.state.indexedSeq === snapshot.latestSeq &&
+        !hasUnclassifiedSessionTranscriptEvents(database.db, resolved.sessionId)
       ) {
         return {
           kind: "value" as const,

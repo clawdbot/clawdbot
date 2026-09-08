@@ -1,7 +1,7 @@
 import {
   findLlamacppGbnfSchemaViolations,
   normalizeToolParameterSchema,
-} from "@openclaw/ai/internal/openai";
+} from "@openclaw/ai/internal/tool-schema";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 // Cron tool schema tests cover the provider-facing parameter shape and runtime
 // validation compatibility for cron jobs.
@@ -109,6 +109,26 @@ describe("createCronToolSchema", () => {
   it("does not ship a separate patch object schema (#121606)", () => {
     expect(schemaRecord.properties).not.toHaveProperty("patch");
   });
+
+  it.each([undefined, "", " \t ", "agent:main:telegram:direct:alice", " agent:main:main "])(
+    "advertises job retargeting only without session scope (%j)",
+    (agentSessionKey) => {
+      const toolSchema = createCronTool({ agentSessionKey, agentId: "main" }).parameters;
+      for (const projected of [
+        toolSchema,
+        normalizeToolParameterSchema(toolSchema, { modelProvider: "gemini" }),
+        normalizeToolParameterSchema(toolSchema, {
+          modelCompat: { toolSchemaProfile: "llamacpp" },
+        }),
+      ]) {
+        const record = projected as unknown as Record<string, unknown>;
+        expect(keysAt(record, "job").includes("agentId")).toBe(!agentSessionKey?.trim());
+        expect(propertyAt(record, "agentId")).toMatchObject({ type: "string" });
+        expect(propertyAt(record, "agentId")?.description).toContain("list");
+        expect(propertyAt(record, "agentId")?.description).toContain("wake");
+      }
+    },
+  );
 
   it("exposes next_check with its relative duration parameter", () => {
     expect(Value.Check(schema, { action: "next_check", in: "15m" })).toBe(true);

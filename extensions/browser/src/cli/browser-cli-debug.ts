@@ -13,10 +13,6 @@ import {
 } from "./browser-cli-shared.js";
 import { defaultRuntime, shortenHomePath } from "./core-api.js";
 
-const BROWSER_DEBUG_TIMEOUT_MS = 20000;
-
-type BrowserRequestParams = Parameters<typeof callBrowserRequest>[1];
-
 type DebugContext = {
   parent: BrowserParentOpts;
   profile?: string;
@@ -34,13 +30,6 @@ async function withDebugContext(
       profile: parent.browserProfile,
     }),
   );
-}
-
-async function callDebugRequest<T>(
-  parent: BrowserParentOpts,
-  params: BrowserRequestParams,
-): Promise<T> {
-  return callBrowserRequest<T>(parent, params, { timeoutMs: BROWSER_DEBUG_TIMEOUT_MS });
 }
 
 function resolveDebugQuery(params: {
@@ -69,7 +58,7 @@ export function registerBrowserDebugCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (ref: string, opts, cmd) => {
       await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
-        const result = await callDebugRequest(parent, {
+        const result = await callBrowserRequest(parent, {
           method: "POST",
           path: "/highlight",
           query: resolveProfileQuery(profile),
@@ -92,7 +81,7 @@ export function registerBrowserDebugCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
       await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
-        const result = await callDebugRequest<{
+        const result = await callBrowserRequest<{
           errors: Array<{ timestamp: string; name?: string; message: string }>;
         }>(parent, {
           method: "GET",
@@ -126,7 +115,7 @@ export function registerBrowserDebugCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
       await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
-        const result = await callDebugRequest<{
+        const result = await callBrowserRequest<{
           requests: Array<{
             timestamp: string;
             method: string;
@@ -176,7 +165,7 @@ export function registerBrowserDebugCommands(
     .option("--sources", "Include sources (bigger traces)", false)
     .action(async (opts, cmd) => {
       await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
-        const result = await callDebugRequest(parent, {
+        const result = await callBrowserRequest(parent, {
           method: "POST",
           path: "/trace/start",
           query: resolveProfileQuery(profile),
@@ -204,7 +193,7 @@ export function registerBrowserDebugCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
       await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
-        const result = await callDebugRequest<{ path: string }>(parent, {
+        const result = await callBrowserRequest<{ path: string }>(parent, {
           method: "POST",
           path: "/trace/stop",
           query: resolveProfileQuery(profile),

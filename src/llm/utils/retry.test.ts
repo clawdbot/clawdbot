@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { failoverClassificationCorpus } from "../../agents/failover/failover-classification.corpus.cases.test-support.js";
 import { failoverRetryExpectations } from "../../agents/failover/failover-retry.expected.test-support.js";
-import { PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE, type AssistantMessage } from "../types.js";
+import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
+import {
+  PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
+  PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
+  type AssistantMessage,
+} from "../types.js";
 import { isRetryableAssistantError } from "./retry.js";
 
 function errorMessage(message: string): AssistantMessage {
@@ -11,14 +16,7 @@ function errorMessage(message: string): AssistantMessage {
     api: "test-api",
     provider: "test-provider",
     model: "test-model",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "error",
     errorMessage: message,
     timestamp: 1,
@@ -46,13 +44,52 @@ describe("isRetryableAssistantError", () => {
     },
   );
 
-  it("does not retry an ambiguous post-dispatch provider outcome", () => {
+  it.each([PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE, PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE])(
+    "does not retry replay-unsafe provider outcome %s",
+    (errorCode) => {
+      expect(
+        isRetryableAssistantError({
+          ...errorMessage("The WebSocket closed after dispatch"),
+          errorCode,
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it("does not retry a structured provider refusal with transient-looking text", () => {
     expect(
       isRetryableAssistantError({
-        ...errorMessage("The WebSocket closed after dispatch"),
-        errorCode: PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
+        ...errorMessage("HTTP 503 temporary provider response"),
+        diagnostics: [
+          {
+            type: "provider_refusal",
+            timestamp: 0,
+            details: { provider: "anthropic", category: "cyber" },
+          },
+        ],
       }),
     ).toBe(false);
+  });
+
+  it.each([
+    { errorCode: "ERR_WEBSOCKET_NON_RETRYABLE_CLOSE", expected: false },
+    { errorCode: "ERR_WEBSOCKET_TRANSPORT", expected: true },
+  ])("honors structured WebSocket retry disposition $errorCode", ({ errorCode, expected }) => {
+    expect(
+      isRetryableAssistantError({
+        ...errorMessage("WebSocket closed: policy reason included ECONNRESET"),
+        errorCode,
+      }),
+    ).toBe(expected);
+  });
+
+  it("retries an incomplete terminal stream that retained visible partial text", () => {
+    expect(
+      isRetryableAssistantError({
+        ...errorMessage("Bedrock stream ended before messageStop"),
+        content: [{ type: "text", text: "I have" }],
+      }),
+    ).toBe(true);
   });
 
   it("retries a structured transient Undici error", () => {

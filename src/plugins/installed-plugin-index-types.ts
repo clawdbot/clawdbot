@@ -1,13 +1,13 @@
 /** Type contract for the generated installed plugin index persisted on disk. */
-import type { OpenClawConfig } from "../config/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { PluginCompatCode } from "./compat/registry.js";
-import type { PluginCandidate, PluginDiscoveryResult } from "./discovery.js";
-import type { PluginInstallSourceInfo } from "./install-source-info.js";
+import type { PluginCandidate, PluginDiscoveryResult } from "./discovery.types.js";
+import type { PluginInstallSourceInfo } from "./install-source-info.types.js";
 import type { InstalledPluginFileSignature } from "./installed-plugin-index-hash.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
+import type { PluginManifestRecord } from "./manifest-registry.types.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
-import type { OpenClawPackageBuild, PluginPackageChannel } from "./manifest.js";
+import type { OpenClawPackageBuild, PluginPackageChannel } from "./package-manifest.types.js";
 
 /** Schema version for installed plugin index files. */
 export const INSTALLED_PLUGIN_INDEX_VERSION = 1;
@@ -90,6 +90,10 @@ export type InstalledPluginInstallRecordInfo = Pick<
   | "marketplaceName"
   | "marketplaceSource"
   | "marketplacePlugin"
+  | "acceptedSurface"
+  | "acceptedSurfaceHash"
+  | "acceptedSurfaceAt"
+  | "acceptedSurfaceIntegrity"
 >;
 
 export type InstalledPluginPackageChannelInfo = PluginPackageChannel;
@@ -156,6 +160,34 @@ export type InstalledPluginIndex = {
   diagnostics: readonly PluginDiagnostic[];
 };
 
+export type InstalledPluginIndexScopeLookup = {
+  addAgentHarnessOwners: (target: Set<string>, ids: readonly string[]) => void;
+  addChannelContributionOwners: (target: Set<string>, ids: readonly string[]) => void;
+  addDirectChannelOwners: (target: Set<string>, ids: readonly string[]) => void;
+  addDirectProviderOwners: (target: Set<string>, ids: readonly string[]) => void;
+  addProviderContributionOwners: (target: Set<string>, ids: readonly string[]) => void;
+  addShorthandModelOwners: (target: Set<string>, modelIds: readonly string[]) => void;
+  canResolveDirectProviderIds: (
+    providerIds: readonly string[],
+    scopePluginIds: ReadonlySet<string>,
+  ) => boolean;
+  hasChannelContributionOwners: (ids: readonly string[]) => boolean;
+  hasAgentHarnessOwners: (ids: readonly string[]) => boolean;
+  hasCompleteConfigPathActivationMetadata: () => boolean;
+  hasDirectChannelOwners: (ids: readonly string[]) => boolean;
+  hasInstalledPluginIds: (ids: Iterable<string>) => boolean;
+  hasProviderContributionOwners: (ids: readonly string[]) => boolean;
+  hasShorthandModelOwners: (modelIds: readonly string[]) => boolean;
+  normalizePluginId: (pluginId: string) => string;
+};
+
+/** In-memory projections owned by one immutable installed-index cache generation. */
+export type InstalledPluginIndexFacts = {
+  fingerprint?: string;
+  scopeLookup?: InstalledPluginIndexScopeLookup;
+  installRecords?: Record<string, PluginInstallRecord>;
+};
+
 export type LoadInstalledPluginIndexParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -167,6 +199,7 @@ export type LoadInstalledPluginIndexParams = {
   diagnostics?: PluginDiagnostic[];
   discovery?: PluginDiscoveryResult;
   now?: () => Date;
+  artifactPreservingReadOnly?: boolean;
 };
 
 export type RefreshInstalledPluginIndexParams = LoadInstalledPluginIndexParams & {

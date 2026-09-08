@@ -2,7 +2,11 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { expect, it } from "vitest";
-import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import {
+  createChatFlowE2eSuite,
+  installMockGateway,
+  requireString,
+} from "./chat-flow.test-support.ts";
 
 type ManifestRequest = {
   authorized: boolean;
@@ -136,11 +140,17 @@ suite.define(() => {
       // CDP uses Chromium's PWA manifest loader; page.fetch cannot prove link credentials.
       const session = await context.newCDPSession(page);
       const manifest = await session.send("Page.getAppManifest");
+      const buildId = requireString(
+        await page.locator("html").getAttribute("data-openclaw-control-ui-build-id"),
+        "bundled public asset build id",
+      );
+      const manifestUrl = new URL("manifest.webmanifest", proxy.baseUrl);
+      manifestUrl.searchParams.set("v", buildId);
 
       expect(proxy.manifestRequests.length).toBeGreaterThan(0);
       expect(proxy.manifestRequests.filter((request) => !request.authorized)).toEqual([]);
       expect(proxy.manifestRequests.every((request) => request.status === 200)).toBe(true);
-      expect(manifest.url).toBe(new URL("manifest.webmanifest", proxy.baseUrl).href);
+      expect(manifest.url).toBe(manifestUrl.href);
       expect(manifest.errors).toEqual([]);
       expect(JSON.parse(manifest.data ?? "null")).toEqual(
         expect.objectContaining({ display: "standalone", name: "OpenClaw Control" }),
@@ -152,7 +162,7 @@ suite.define(() => {
         })),
       ).toEqual({
         crossOrigin: "use-credentials",
-        href: new URL("manifest.webmanifest", proxy.baseUrl).href,
+        href: manifestUrl.href,
       });
     } finally {
       await suite.closeBrowserContext(context);

@@ -2,6 +2,7 @@
  * Brave Search request normalization and result mapping. It validates Brave
  * country/language params and converts LLM-context responses into web results.
  */
+import { resolveSiteName } from "openclaw/plugin-sdk/provider-web-search";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -16,7 +17,7 @@ type BraveLlmContextResult = { url: string; title: string; snippets: string[] };
 /** Brave LLM Context API response subset used by OpenClaw. */
 export type BraveLlmContextResponse = {
   grounding: { generic?: BraveLlmContextResult[] };
-  sources?: { url?: string; hostname?: string; date?: string }[];
+  sources?: Record<string, { age?: string[] }>;
 };
 
 const BRAVE_COUNTRY_CODES = new Set([
@@ -213,21 +214,10 @@ export function normalizeBraveLanguageParams(params: { search_lang?: string; ui_
   return { search_lang, ui_lang };
 }
 
-function resolveSiteName(url: string | undefined): string | undefined {
-  if (!url) {
-    return undefined;
-  }
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return undefined;
-  }
-}
-
 /** Map Brave LLM Context API grounding results into web-search result rows. */
 export function mapBraveLlmContextResults(
   data: BraveLlmContextResponse,
-): { url: string; title: string; snippets: string[]; siteName?: string }[] {
+): { url: string; title: string; snippets: string[]; siteName?: string; published?: string }[] {
   const genericResults = Array.isArray(data.grounding?.generic) ? data.grounding.generic : [];
   return genericResults.map((entry) => ({
     url: entry.url ?? "",
@@ -236,5 +226,9 @@ export function mapBraveLlmContextResults(
       (snippet) => typeof snippet === "string" && snippet.length > 0,
     ),
     siteName: resolveSiteName(entry.url) || undefined,
+    // Brave's fixed age slots contain timestamp (3), date (1), and relative age (2).
+    // Only the absolute forms belong in published; never infer a date from recency.
+    published:
+      data.sources?.[entry.url]?.age?.[3] || data.sources?.[entry.url]?.age?.[1] || undefined,
   }));
 }

@@ -4,7 +4,9 @@ import { defineConfig, type ViteUserConfig } from "vitest/config";
 import {
   intersectIncludePatterns,
   loadPatternListFromEnv,
+  matchesVitestGlob,
   narrowIncludePatternsForCli,
+  relativizeScopedPatterns,
 } from "./vitest.pattern-file.ts";
 import {
   nonIsolatedRunnerPath,
@@ -16,28 +18,6 @@ import { getUnitFastTestFilesForIncludePatterns } from "./vitest.unit-fast-paths
 
 function normalizePathPattern(value: string): string {
   return value.replaceAll("\\", "/");
-}
-
-function relativizeScopedPattern(value: string, dir: string): string {
-  const normalizedValue = normalizePathPattern(value);
-  const normalizedDir = normalizePathPattern(dir).replace(/\/+$/u, "");
-  if (!normalizedDir) {
-    return normalizedValue;
-  }
-  if (normalizedValue === normalizedDir) {
-    return ".";
-  }
-  const prefix = `${normalizedDir}/`;
-  return normalizedValue.startsWith(prefix)
-    ? normalizedValue.slice(prefix.length)
-    : normalizedValue;
-}
-
-function relativizeScopedPatterns(values: string[], dir?: string): string[] {
-  if (!dir) {
-    return values.map(normalizePathPattern);
-  }
-  return values.map((value) => relativizeScopedPattern(value, dir));
 }
 
 function globRoot(pattern: string): string | null {
@@ -67,7 +47,7 @@ function includePatternIsFullyExcluded(includePattern: string, excludePattern: s
   const exclude = normalizePathPattern(excludePattern);
   return (
     include === exclude ||
-    path.matchesGlob(include, exclude) ||
+    matchesVitestGlob(include, exclude) ||
     directoryPatternCoversInclude(exclude, include)
   );
 }
@@ -84,12 +64,6 @@ export function shouldPassWithNoTestsForCliIncludes(
       includePatternIsFullyExcluded(includePattern, excludePattern),
     ),
   );
-}
-
-export function resolveVitestIsolation(
-  _env: Record<string, string | undefined> = process.env,
-): boolean {
-  return false;
 }
 
 const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
@@ -142,6 +116,7 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "extension-zalo",
     "extensions",
     "gateway",
+    "gateway-methods-isolated",
     "hooks",
     "infra",
     "logging",
@@ -249,7 +224,7 @@ export function createScopedVitestConfig(
     ? relativizeScopedPatterns(includeFromEnv, scopedDir)
     : includeFromEnv;
   const scopedCliInclude = cliInclude ? relativizeScopedPatterns(cliInclude, scopedDir) : null;
-  const isolate = options?.isolate ?? resolveVitestIsolation(options?.env);
+  const isolate = options?.isolate ?? false;
   const setupFiles = [
     ...new Set([
       ...(baseTest.setupFiles ?? []),

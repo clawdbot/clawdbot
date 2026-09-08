@@ -9,12 +9,12 @@ openclaw_node_version_matches() {
   case "$requested" in
     *x)
       [[ "${actual%%.*}" == "${requested%%.*}" ]] || return 1
-      if [[ "${requested%%.*}" == "22" ]]; then
-        openclaw_node_version_at_least "$actual" "22.22.3"
-      elif [[ "${requested%%.*}" == "24" ]]; then
-        openclaw_node_version_at_least "$actual" "24.15.0"
-      elif [[ "${requested%%.*}" == "25" ]]; then
-        openclaw_node_version_at_least "$actual" "25.9.0"
+      if [[ "${requested%%.*}" == "24" ]]; then
+        openclaw_node_version_at_least "$actual" "24.16.0"
+      elif [[ "${requested%%.*}" == "26" ]]; then
+        openclaw_node_version_at_least "$actual" "26.1.0"
+      else
+        (( ${requested%%.*} > 26 ))
       fi
       ;;
     *.*.*)

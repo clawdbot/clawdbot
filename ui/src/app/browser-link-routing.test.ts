@@ -59,7 +59,7 @@ afterEach(() => {
 });
 
 describe("Control UI browser link routing", () => {
-  it("preserves existing browser behavior by default", () => {
+  it("preserves existing browser behavior by default", async () => {
     startBrowserLinkRouting(false);
     const event = mouseEvent("click");
 
@@ -68,7 +68,7 @@ describe("Control UI browser link routing", () => {
     expect(event.defaultPrevented).toBe(false);
   });
 
-  it("routes primary, modified, middle, and new-window links to new browser-panel tabs", () => {
+  it("routes primary, modified, middle, and new-window links to new browser-panel tabs", async () => {
     const urls: string[] = [];
     collectBrowserRequests(urls);
     startBrowserLinkRouting();
@@ -94,7 +94,7 @@ describe("Control UI browser link routing", () => {
     ]);
   });
 
-  it("preserves link handlers that cancel navigation", () => {
+  it("preserves link handlers that cancel navigation", async () => {
     const urls: string[] = [];
     collectBrowserRequests(urls);
     startBrowserLinkRouting();
@@ -108,35 +108,42 @@ describe("Control UI browser link routing", () => {
     expect(urls).toEqual([]);
   });
 
-  it("preserves host behavior when the browser panel is unavailable", () => {
-    startBrowserLinkRouting(false);
-    const event = mouseEvent("click");
+  it.each([false, true])(
+    "native links take precedence when the remote preference is %s",
+    async (enabled) => {
+      const postMessage = vi.fn();
+      Object.defineProperty(window, "webkit", {
+        configurable: true,
+        value: {
+          messageHandlers: {
+            openclawLink: { postMessage },
+            openclawBrowser: { postMessage: vi.fn() },
+          },
+        },
+      });
+      const requests: unknown[] = [];
+      const listener = (event: Event) => requests.push((event as CustomEvent).detail);
+      window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, listener);
+      stopCollectingBrowserRequests = () =>
+        window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, listener);
+      startBrowserLinkRouting(enabled);
+      const event = mouseEvent("click");
 
-    appendLink("https://example.com/report").dispatchEvent(event);
+      appendLink("https://example.com/report").dispatchEvent(event);
 
-    expect(event.defaultPrevented).toBe(false);
-  });
+      expect(event.defaultPrevented).toBe(true);
+      expect(postMessage).not.toHaveBeenCalled();
+      expect(requests).toEqual([
+        {
+          open: true,
+          url: "https://example.com/report",
+          native: true,
+        },
+      ]);
+    },
+  );
 
-  it("falls through to existing app routing when the Control UI panel is unavailable", () => {
-    const postMessage = vi.fn();
-    Object.defineProperty(window, "webkit", {
-      configurable: true,
-      value: { messageHandlers: { openclawLink: { postMessage } } },
-    });
-    startBrowserLinkRouting(false);
-    const event = mouseEvent("click");
-
-    appendLink("https://example.com/report").dispatchEvent(event);
-
-    expect(event.defaultPrevented).toBe(true);
-    expect(postMessage).toHaveBeenCalledWith({
-      type: "open-link",
-      url: "https://example.com/report",
-      target: "inline",
-    });
-  });
-
-  it("ignores local, download, file, non-web, Shift/Alt, and right-click targets", () => {
+  it("ignores local, download, file, non-web, Shift/Alt, and right-click targets", async () => {
     const urls: string[] = [];
     collectBrowserRequests(urls);
     startBrowserLinkRouting();

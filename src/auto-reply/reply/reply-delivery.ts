@@ -1,7 +1,7 @@
 /** Normalizes reply directives and delivers block replies through streaming or direct paths. */
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
-import { copyReplyPayloadMetadata, isReplyPayloadStatusNotice } from "../reply-payload.js";
+import { copyReplyPayloadMetadata, isReplyPayloadTerminalContent } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { BlockReplyContext, ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -76,8 +76,8 @@ async function sendDirectBlockReply(params: {
   const deliveryIndex = params.directlySentBlockPayloads.length;
   params.directlySentBlockPayloads.push(undefined);
   await params.onBlockReply(params.payload);
-  params.directlySentBlockKeys.add(createBlockReplyContentKey(params.trackingPayload));
-  if (!isReplyPayloadStatusNotice(params.trackingPayload)) {
+  if (isReplyPayloadTerminalContent(params.trackingPayload)) {
+    params.directlySentBlockKeys.add(createBlockReplyContentKey(params.trackingPayload));
     params.directlySentBlockPayloads[deliveryIndex] = params.trackingPayload;
   }
 }

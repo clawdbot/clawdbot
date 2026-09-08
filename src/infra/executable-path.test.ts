@@ -94,6 +94,34 @@ describe("executable path helpers", () => {
     });
   });
 
+  it.each([".EXE;.CMD;", ";.EXE;.CMD", ".EXE;;.CMD", ".EXE; ;.CMD", "", ";;"])(
+    "keeps extensionless lookup explicit with PATHEXT %j",
+    async (pathext) => {
+      await withMockedPlatform("win32", async () => {
+        await withTestDir({ prefix: "openclaw-exec-path-" }, async (binDir) => {
+          const barePath = path.join(binDir, "runner");
+          const commandPath = path.join(binDir, "runner.cmd");
+          const env = { PATHEXT: pathext };
+          await fs.writeFile(barePath, "bare file\n");
+
+          expect(
+            resolveExecutableFromPathEnv("runner", binDir, env, { includeExtensionless: false }),
+          ).toBeUndefined();
+          expect(
+            resolveExecutableFromPathEnv("runner", binDir, env, { includeExtensionless: true }),
+          ).toBe(barePath);
+
+          await fs.writeFile(commandPath, "@echo off\n");
+          expect(
+            resolveExecutableFromPathEnv("runner.cmd", binDir, env, {
+              includeExtensionless: false,
+            }),
+          ).toBe(commandPath);
+        });
+      });
+    },
+  );
+
   it("slides PATH hit and miss expiry for steady pollers", async () => {
     await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
       const binDir = path.join(base, "bin");

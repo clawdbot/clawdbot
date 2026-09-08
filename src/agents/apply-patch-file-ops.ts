@@ -10,6 +10,8 @@ import {
   FsSafeError,
   root as fsRoot,
 } from "../infra/fs-safe.js";
+import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
+import { writeHostFile } from "./host-file-write.js";
 import {
   type MemoryWriteProvenanceObserver,
   withMemoryWriteProvenance,
@@ -24,6 +26,7 @@ export type SandboxApplyPatchConfig = {
 };
 
 export type ApplyPatchFileOptions = {
+  signal?: AbortSignal;
   cwd: string;
   /** Containment boundary when relative paths resolve from a nested cwd. */
   root?: string;
@@ -57,7 +60,8 @@ export async function createPatchTarget(params: {
   }
 }
 
-export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOps {
+export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promise<PatchFileOps> {
+  const assertCurrent = captureAgentToolSourceExecutionGuard(options.signal);
   if (options.sandbox) {
     const { root, bridge } = options.sandbox;
     return withPatchMemoryWriteProvenance({
@@ -67,17 +71,32 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
           const buf = await bridge.readFile({ filePath, cwd: root });
           return decodeUtf8File(buf, filePath);
         },
-        writeFile: (filePath, content) => bridge.writeFile({ filePath, cwd: root, data: content }),
+        writeFile: (filePath, content) => {
+          assertCurrent();
+          return bridge.writeFile({ filePath, cwd: root, data: content, signal: options.signal });
+        },
         createFileExclusive: (filePath, content) => {
           if (!bridge.createFileExclusive) {
             throw new Error(
               "Sandbox filesystem bridge does not support atomic file creation; refusing to overwrite an existing path.",
             );
           }
-          return bridge.createFileExclusive({ filePath, cwd: root, data: content });
+          assertCurrent();
+          return bridge.createFileExclusive({
+            filePath,
+            cwd: root,
+            data: content,
+            signal: options.signal,
+          });
         },
-        remove: (filePath) => bridge.remove({ filePath, cwd: root, force: false }),
-        mkdirp: (dir) => bridge.mkdirp({ filePath: dir, cwd: root }),
+        remove: (filePath) => {
+          assertCurrent();
+          return bridge.remove({ filePath, cwd: root, force: false, signal: options.signal });
+        },
+        mkdirp: (dir) => {
+          assertCurrent();
+          return bridge.mkdirp({ filePath: dir, cwd: root, signal: options.signal });
+        },
       },
     });
   }
@@ -88,10 +107,11 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
       operations: {
         readFile: async (filePath) => decodeUtf8File(await fs.readFile(filePath), filePath),
         writeFile: async (filePath, content) => {
-          await fs.writeFile(filePath, content, "utf8");
+          await writeHostFile(filePath, content, options.signal);
         },
         createFileExclusive: async (filePath, content) => {
           try {
+            assertCurrent();
             await fs.writeFile(filePath, content, { encoding: "utf8", flag: "wx" });
             return "created";
           } catch (error) {
@@ -101,8 +121,12 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
             throw error;
           }
         },
-        remove: (filePath) => fs.rm(filePath),
+        remove: (filePath) => {
+          assertCurrent();
+          return fs.rm(filePath);
+        },
         mkdirp: async (dir) => {
+          assertCurrent();
           await fs.mkdir(dir, { recursive: true });
         },
       },
@@ -110,7 +134,7 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
   }
 
   const containmentRoot = options.root ?? options.cwd;
-  const rootPromise = fsRoot(containmentRoot);
+  const root = await fsRoot(containmentRoot);
   // Mirror the read path: canonicalize contained symlink parents so a patch
   // that reads through a directory alias can also mutate through it. Escaping
   // aliases still fail the containment check against the canonical root.
@@ -147,12 +171,14 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
       },
       writeFile: async (filePath, content) => {
         const relative = await toCanonicalMutationRelative(filePath);
-        await (await rootPromise).write(relative, content, { encoding: "utf8" });
+        assertCurrent();
+        await root.write(relative, content, { encoding: "utf8" });
       },
       createFileExclusive: async (filePath, content) => {
         const relative = await toCanonicalMutationRelative(filePath);
         try {
-          await (await rootPromise).create(relative, content, { encoding: "utf8" });
+          assertCurrent();
+          await root.create(relative, content, { encoding: "utf8" });
           return "created";
         } catch (error) {
           // fs-safe opens an existing destination before its O_EXCL commit. A final
@@ -169,11 +195,12 @@ export function resolvePatchFileOps(options: ApplyPatchFileOptions): PatchFileOp
       },
       remove: async (filePath) => {
         const relative = await toCanonicalMutationRelative(filePath);
-        await (await rootPromise).remove(relative);
+        assertCurrent();
+        await root.remove(relative);
       },
       mkdirp: async (dir) => {
         const relative = await toCanonicalMutationRelative(dir, { allowRoot: true });
-        const root = await rootPromise;
+        assertCurrent();
         if (relative === "" || relative === ".") {
           await root.ensureRoot();
           return;
@@ -190,18 +217,19 @@ function withPatchMemoryWriteProvenance(params: {
   operations: PatchFileOps;
   observer: MemoryWriteProvenanceObserver | undefined;
 }): PatchFileOps {
-  const operations = withMemoryWriteProvenance(params.operations, params.observer);
-  if (!params.observer) {
+  const observer = params.observer;
+  const operations = withMemoryWriteProvenance(params.operations, observer);
+  if (!observer) {
     return operations;
   }
   return {
     ...operations,
     createFileExclusive: async (filePath, content) => {
-      if (!params.observer?.classifies(filePath)) {
+      if (!(await observer.classifies(filePath))) {
         return params.operations.createFileExclusive(filePath, content);
       }
       try {
-        await params.observer.write({
+        await observer.write({
           absolutePath: filePath,
           contentBefore: "",
           contentAfter: content,

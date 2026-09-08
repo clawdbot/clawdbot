@@ -2,6 +2,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 
 const { requestPreparedCompactionMock } = vi.hoisted(() => ({
   requestPreparedCompactionMock: vi.fn(),
@@ -12,6 +13,7 @@ vi.mock("@openclaw/ai/transports", async (importOriginal) => ({
   requestPreparedOpenAIResponsesCompaction: requestPreparedCompactionMock,
 }));
 
+import { testing } from "../openai-transport-stream.test-support.js";
 import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 
 const model = {
@@ -36,14 +38,7 @@ function createSession() {
     api: "openai-responses",
     provider: "xai",
     model: "grok-4.5",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop",
     timestamp: 2,
   });
@@ -75,57 +70,86 @@ beforeEach(() => {
   requestPreparedCompactionMock.mockReset();
   requestPreparedCompactionMock.mockResolvedValue({
     item: { type: "compaction", id: "cmp_test", encrypted_content: "opaque" },
+    output: [
+      { type: "message", role: "user", content: [{ type: "input_text", text: "remember copper" }] },
+      { type: "compaction", id: "cmp_test", encrypted_content: "opaque" },
+    ],
     historyMode: "retained-users",
     usage: { input_tokens: 1_000, output_tokens: 200, dropped_message_count: 1 },
     model,
-    replayMetadata: {
-      v: 1,
-      source: "openai-responses",
-      provider: "xai",
-      api: "openai-responses",
-      model: "grok-4.5",
-      baseUrlHash: "test-base-url",
-    },
+    replayMetadata: testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
+      sessionId: "session-1",
+    }),
   });
 });
 
 describe("attemptServerEndpointCompaction", () => {
-  it("persists a summaryless checkpoint through the SessionManager rewrite owner", async () => {
-    const { session, result } = attempt();
+  it.each([false, true])(
+    "reports a committed rewrite without fallback when observer throws=%s",
+    async (throws) => {
+      let committedOwner: ReturnType<SessionManager["getLeafEntry"]>;
+      const observerError = new Error("committed observer failed");
+      const onCompactionCommitted = vi.fn(() => {
+        committedOwner = session.sessionManager.getLeafEntry();
+        if (throws) {
+          throw observerError;
+        }
+      });
+      const request = { trigger: "manual" as const, onCompactionCommitted };
+      const { session, result } = attempt(request);
 
-    await expect(result).resolves.toMatchObject({
-      item: { type: "compaction", id: "cmp_test", encrypted_content: "opaque" },
-      usage: { input_tokens: 1_000, output_tokens: 200, dropped_message_count: 1 },
-    });
-    const owner = session.sessionManager
-      .getBranch()
-      .findLast((entry) => entry.type === "message" && entry.message.role === "assistant");
-    if (!owner || owner.type !== "message" || owner.message.role !== "assistant") {
-      throw new Error("expected persisted assistant checkpoint owner");
-    }
-    expect(owner.message.content).toEqual([{ type: "text", text: "remembered" }]);
-    expect(owner.message.providerReplay).toMatchObject({
-      type: "openai-responses-retained-compaction",
-      id: "cmp_test",
-      data: "opaque",
-    });
-    expect(owner.message.providerReplay).not.toHaveProperty("replayIndex");
-  });
+      if (throws) {
+        await expect(result).rejects.toBe(observerError);
+      } else {
+        await expect(result).resolves.toMatchObject({
+          item: { type: "compaction", id: "cmp_test", encrypted_content: "opaque" },
+          usage: { input_tokens: 1_000, output_tokens: 200, dropped_message_count: 1 },
+        });
+      }
+      const owner = session.sessionManager
+        .getBranch()
+        .findLast((entry) => entry.type === "message" && entry.message.role === "assistant");
+      if (!owner || owner.type !== "message" || owner.message.role !== "assistant") {
+        throw new Error("expected persisted assistant checkpoint owner");
+      }
+      expect(owner.message.content).toEqual([{ type: "text", text: "remembered" }]);
+      expect(owner.message.providerReplay).toMatchObject({
+        type: "openai-responses-retained-compaction",
+        id: "cmp_test",
+        data: "opaque",
+        compactedWindow: {
+          state: "ready",
+          output: JSON.stringify([
+            {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_text", text: "remember copper" }],
+            },
+            { type: "compaction", id: "cmp_test", encrypted_content: "opaque" },
+          ]),
+        },
+      });
+      expect(owner.message.providerReplay).not.toHaveProperty("replayIndex");
+      expect(onCompactionCommitted).toHaveBeenCalledExactlyOnceWith();
+      expect(committedOwner).toMatchObject({
+        id: owner.id,
+        message: {
+          providerReplay: { type: "openai-responses-retained-compaction", data: "opaque" },
+        },
+      });
+    },
+  );
 
   it("marks a checkpoint-only response at the assistant content boundary", async () => {
     requestPreparedCompactionMock.mockResolvedValueOnce({
       item: { type: "compaction", id: "cmp_test", encrypted_content: "opaque" },
+      output: [{ type: "compaction", id: "cmp_test", encrypted_content: "opaque" }],
       historyMode: "compacted-prefix",
       usage: { input_tokens: 1_000, output_tokens: 200 },
       model,
-      replayMetadata: {
-        v: 1,
-        source: "openai-responses",
-        provider: "xai",
-        api: "openai-responses",
-        model: "grok-4.5",
-        baseUrlHash: "test-base-url",
-      },
+      replayMetadata: testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
+        sessionId: "session-1",
+      }),
     });
     const { session, result } = attempt();
 
@@ -168,6 +192,31 @@ describe("attemptServerEndpointCompaction", () => {
 
     await expect(result).resolves.toBeUndefined();
     expect(requestAborted).toBe(true);
+  });
+
+  it("leaves the durable transcript intact when policy would redact the canonical window", async () => {
+    const session = createSession();
+    const before = structuredClone(session.sessionManager.getBranch());
+    const onUsage = vi.fn();
+    const onCompactionCommitted = vi.fn();
+    const request = {
+      sessionManager: session.sessionManager,
+      context: { systemPrompt: "system", messages: session.messages },
+      config: { logging: { redactPatterns: ["remember copper"] } },
+      onUsage,
+      onCompactionCommitted,
+    };
+    const { result } = attempt(request);
+
+    await expect(result).resolves.toBeUndefined();
+    expect(onUsage).toHaveBeenCalledOnce();
+    expect(onUsage).toHaveBeenCalledWith({
+      input_tokens: 1_000,
+      output_tokens: 200,
+      dropped_message_count: 1,
+    });
+    expect(session.sessionManager.getBranch()).toEqual(before);
+    expect(onCompactionCommitted).not.toHaveBeenCalled();
   });
 
   it("does not call the endpoint during overflow recovery", async () => {

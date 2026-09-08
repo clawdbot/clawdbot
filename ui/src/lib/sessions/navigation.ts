@@ -8,18 +8,17 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { isCronSessionKey } from "../session-display.ts";
 import { parseCatalogSessionKey } from "./catalog-key.ts";
 import {
-  areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
   isSessionKeyTiedToAgent,
   isSubagentSessionKey,
   normalizeAgentId,
-  normalizeSessionKeyForUiComparison,
   parseAgentSessionKey,
-  resolveUiConfiguredMainKey,
+  readSessionDefaults,
   resolveUiDefaultAgentId,
-  resolveUiGlobalAliasAgentId,
+  resolveUiConversationIdentity,
   resolveUiKnownSelectedGlobalAgentId,
   resolveUiSelectedGlobalAgentId,
+  uiConversationMatches,
   uiSessionRowMatchesSelectedChat,
 } from "./session-key.ts";
 export type SessionArchivedFilter = "active" | "archived" | "all";
@@ -63,23 +62,6 @@ export type SessionScopeHostWithKey = SessionScopeHost & {
 
 export type SessionRefreshTarget = { sessionKey: string; agentId?: string };
 
-type SessionDefaults = {
-  defaultAgentId?: string | null;
-  mainKey?: string | null;
-  mainSessionKey?: string | null;
-};
-
-function readSessionDefaults(
-  host: Pick<SessionNavigationInput, "hello">,
-): SessionDefaults | undefined {
-  const snapshot = host.hello?.snapshot;
-  if (!snapshot || typeof snapshot !== "object" || !("sessionDefaults" in snapshot)) {
-    return undefined;
-  }
-  const defaults = snapshot.sessionDefaults;
-  return defaults && typeof defaults === "object" ? (defaults as SessionDefaults) : undefined;
-}
-
 export function resolveSessionKey(
   sessionKey: string | undefined | null,
   hello: GatewayHelloOk | null | undefined,
@@ -107,19 +89,16 @@ export function scopedAgentIdForSession(
   host: SessionScopeHost,
   sessionKey: string | undefined | null,
 ): string | undefined {
-  return isUiGlobalSessionKey(sessionKey)
-    ? resolveUiKnownSelectedGlobalAgentId(host)
-    : (resolveUiGlobalAliasAgentId(host, sessionKey) ?? undefined);
+  const identity = resolveUiConversationIdentity(host, normalizeOptionalString(sessionKey) ?? "");
+  return identity.sessionKey === "global" ? identity.agentId : undefined;
 }
 
 export function scopedAgentParamsForSession(
   host: SessionScopeHost,
   sessionKey: string,
 ): { agentId?: string } {
-  const agentId = isUiGlobalSessionKey(sessionKey)
-    ? resolveUiKnownSelectedGlobalAgentId(host)
-    : resolveUiGlobalAliasAgentId(host, sessionKey);
-  return agentId ? { agentId: normalizeAgentId(agentId) } : {};
+  const agentId = scopedAgentIdForSession(host, sessionKey);
+  return agentId ? { agentId } : {};
 }
 
 export function scopedAgentListParamsForSession(
@@ -153,60 +132,7 @@ export function visibleSessionMatches(
   sessionKey: string,
   agentId: string | undefined,
 ): boolean {
-  const selectedGlobalAgentId = isUiGlobalSessionKey(host.sessionKey)
-    ? resolveUiKnownSelectedGlobalAgentId(host)
-    : undefined;
-  const current = canonicalVisibleSessionIdentity(host, host.sessionKey, selectedGlobalAgentId);
-  const candidate = canonicalVisibleSessionIdentity(host, sessionKey, agentId);
-  return (
-    current !== null &&
-    candidate !== null &&
-    current.conversationKey === candidate.conversationKey &&
-    current.ownerAgentId === candidate.ownerAgentId
-  );
-}
-
-type VisibleSessionIdentity = {
-  conversationKey: string;
-  ownerAgentId: string;
-};
-
-function canonicalVisibleSessionIdentity(
-  host: SessionScopeHost,
-  sessionKey: string,
-  agentId: string | undefined,
-): VisibleSessionIdentity | null {
-  const normalizedKey = normalizeLowercaseStringOrEmpty(sessionKey);
-  if (!normalizedKey) {
-    return null;
-  }
-
-  const parsed = parseAgentSessionKey(sessionKey);
-  const qualifiedAliasAgentId = resolveUiGlobalAliasAgentId(host, sessionKey);
-  const isRawGlobal = isUiGlobalSessionKey(sessionKey);
-  const isBareMainAlias =
-    !parsed && (normalizedKey === "main" || normalizedKey === resolveUiConfiguredMainKey(host));
-  const isGlobalConversation = isRawGlobal || isBareMainAlias || qualifiedAliasAgentId !== null;
-  const explicitOwner = normalizeOptionalString(agentId);
-  const normalizedExplicitOwner = explicitOwner ? normalizeAgentId(explicitOwner) : undefined;
-  const routeOwner = parsed
-    ? normalizeAgentId(parsed.agentId)
-    : isRawGlobal
-      ? (normalizedExplicitOwner ?? resolveUiDefaultAgentId(host))
-      : resolveUiDefaultAgentId(host);
-
-  // Every route except raw global carries its owner in the key/default alias.
-  // Reject contradictory metadata instead of letting it join another outbox.
-  if (!isRawGlobal && normalizedExplicitOwner && normalizedExplicitOwner !== routeOwner) {
-    return null;
-  }
-
-  return {
-    conversationKey: isGlobalConversation
-      ? "global"
-      : normalizeSessionKeyForUiComparison(sessionKey),
-    ownerAgentId: routeOwner,
-  };
+  return uiConversationMatches(host, host.sessionKey, sessionKey, agentId);
 }
 
 export function filterSessionRows(
@@ -338,12 +264,13 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
   });
   const selectedAgentId = parseAgentSessionKey(currentSessionKey)?.agentId ?? defaultAgentId;
   const shouldFilterByAgent = currentSessionKey.toLowerCase() !== "unknown";
-  const resultScopeMatches =
-    normalizeOptionalString(input.resultAgentId) !== undefined &&
-    normalizeAgentId(input.resultAgentId) === normalizeAgentId(selectedAgentId);
   const matchesCurrentSession = (row: GatewaySessionRow) =>
-    areUiSessionKeysEquivalent(row.key, currentSessionKey) ||
-    (resultScopeMatches && uiSessionRowMatchesSelectedChat(input, row.key, currentSessionKey));
+    uiSessionRowMatchesSelectedChat(
+      input,
+      row.key,
+      currentSessionKey,
+      row.agentId ?? (isUiGlobalSessionKey(row.key) ? input.resultAgentId : undefined),
+    );
   const selectedSession =
     input.result?.sessions.find(matchesCurrentSession) ??
     (input.activeSession && matchesCurrentSession(input.activeSession)
@@ -373,8 +300,8 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
   let activeRow = visibleSessions.find(matchesCurrentSession);
   if (!activeRow && activeSession && input.archivedFilter !== "archived") {
     // Deep-linked and archived sessions still need a visible selected row.
-    activeRow = sortedSessions.find(matchesCurrentSession) ?? activeSession;
-    visibleSessions = [activeRow, ...visibleSessions.filter((row) => row !== activeRow)];
+    activeRow = activeSession;
+    visibleSessions = [activeRow, ...visibleSessions];
   }
   return {
     currentSessionKey,

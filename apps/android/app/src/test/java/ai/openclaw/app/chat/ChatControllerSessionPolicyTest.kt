@@ -169,6 +169,160 @@ class ChatControllerSessionPolicyTest {
   }
 
   @Test
+  fun partialContextUpdatePreservesLatestRunUsage() {
+    val existing =
+      ChatSessionEntry(
+        key = "agent:main:phone",
+        updatedAtMs = 1L,
+        inputTokens = 109_800L,
+        totalTokens = 109_800L,
+        totalTokensFresh = true,
+        contextTokens = 272_000L,
+        estimatedCostUsd = 0.063,
+        outputTokens = 1_240L,
+      )
+    val compacted =
+      ChatSessionEntry(
+        key = "agent:main:phone",
+        updatedAtMs = 2L,
+        totalTokens = 24_700L,
+        totalTokensFresh = true,
+        contextTokens = 272_000L,
+      )
+
+    val merged = mergeChatSessionEntry(existing, compacted)
+
+    assertEquals(24_700L, merged.totalTokens)
+    assertEquals(true, merged.totalTokensFresh)
+    assertEquals(109_800L, merged.inputTokens)
+    assertEquals(1_240L, merged.outputTokens)
+    assertEquals(0.063, merged.estimatedCostUsd)
+  }
+
+  @Test
+  fun sessionSnapshotReplacesCumulativeUsageAtomically() {
+    val existing =
+      ChatSessionEntry(
+        key = "agent:main:phone",
+        updatedAtMs = 1L,
+        inputTokens = 10_000L,
+        outputTokens = 500L,
+        estimatedCostUsd = 0.04,
+      )
+    val terminal =
+      ChatSessionEntry(
+        key = "agent:main:phone",
+        updatedAtMs = 2L,
+        status = "done",
+        inputTokens = 18_420L,
+        outputTokens = 840L,
+        estimatedCostUsd = 0.063,
+      )
+
+    val merged = mergeChatSessionEntry(existing, terminal)
+
+    assertEquals(18_420L, merged.inputTokens)
+    assertEquals(840L, merged.outputTokens)
+    assertEquals(0.063, merged.estimatedCostUsd)
+    assertTrue(merged.hasSessionUsageMetadata)
+  }
+
+  @Test
+  fun partialSessionUpdateWithoutUsagePreservesKnownTotals() {
+    val existing =
+      ChatSessionEntry(
+        key = "agent:main:phone",
+        updatedAtMs = 1L,
+        inputTokens = 10_000L,
+        outputTokens = 500L,
+        estimatedCostUsd = 0.04,
+      )
+    val terminal =
+      ChatSessionEntry(
+        key = "agent:main:phone",
+        updatedAtMs = 2L,
+        status = "done",
+      )
+
+    val merged = mergeChatSessionEntry(existing, terminal)
+
+    assertEquals(10_000L, merged.inputTokens)
+    assertEquals(500L, merged.outputTokens)
+    assertEquals(0.04, merged.estimatedCostUsd)
+    assertTrue(merged.hasSessionUsageMetadata)
+  }
+
+  @Test
+  fun authoritativeTotalResetClearsOmittedUsageBreakdown() {
+    val existing =
+      ChatSessionEntry(
+        key = "agent:main:phone",
+        updatedAtMs = 1L,
+        inputTokens = 10_000L,
+        outputTokens = 500L,
+        totalTokens = 10_500L,
+        totalTokensFresh = true,
+        estimatedCostUsd = 0.04,
+      )
+    val resets =
+      listOf(
+        ChatSessionEntry(
+          key = existing.key,
+          updatedAtMs = 2L,
+          totalTokens = 0L,
+          totalTokensFresh = false,
+        ),
+        ChatSessionEntry(
+          key = existing.key,
+          updatedAtMs = 3L,
+          totalTokens = null,
+          hasTotalTokensMetadata = true,
+          hasContextUsageMetadata = true,
+        ),
+      )
+
+    for (reset in resets) {
+      val merged = mergeChatSessionEntry(existing, reset)
+
+      assertEquals(null, merged.inputTokens)
+      assertEquals(null, merged.outputTokens)
+      assertEquals(null, merged.estimatedCostUsd)
+    }
+  }
+
+  @Test
+  fun authoritativeSettingsSnapshotClearsMissingOverridesWhilePartialEventPreservesThem() {
+    val existing =
+      ChatSessionEntry(
+        key = "agent:main:phone",
+        updatedAtMs = 1L,
+        permissionMode = ChatPermissionMode.Guarded,
+        fastMode = ChatFastMode.On,
+        effectiveFastMode = ChatFastMode.On,
+      )
+    val inherited =
+      ChatSessionEntry(
+        key = existing.key,
+        updatedAtMs = 2L,
+        effectiveFastMode = ChatFastMode.On,
+      )
+
+    val partial = mergeChatSessionEntry(existing, inherited)
+    val authoritative =
+      mergeChatSessionEntry(
+        existing = existing,
+        next = inherited,
+        authoritativeSessionSettings = true,
+      )
+
+    assertEquals(ChatPermissionMode.Guarded, partial.permissionMode)
+    assertEquals(ChatFastMode.On, partial.fastMode)
+    assertEquals(null, authoritative.permissionMode)
+    assertEquals(null, authoritative.fastMode)
+    assertEquals(ChatFastMode.On, authoritative.effectiveFastMode)
+  }
+
+  @Test
   fun sessionMergePreservesMissingSessionListMetadata() {
     val existing =
       ChatSessionEntry(
@@ -181,6 +335,7 @@ class ChatControllerSessionPolicyTest {
         archived = false,
         unread = true,
         lastReadAt = 10L,
+        markedUnreadAt = 15L,
         lastActivityAt = 20L,
       )
     val next = ChatSessionEntry(key = "agent:main:phone", updatedAtMs = 2L)
@@ -193,6 +348,7 @@ class ChatControllerSessionPolicyTest {
     assertEquals(false, merged.archived)
     assertEquals(true, merged.unread)
     assertEquals(10L, merged.lastReadAt)
+    assertEquals(15L, merged.markedUnreadAt)
     assertEquals(20L, merged.lastActivityAt)
   }
 
@@ -236,7 +392,7 @@ class ChatControllerSessionPolicyTest {
   }
 
   @Test
-  fun sessionMergeReplacesRunMetadataAsOneSnapshot() {
+  fun sessionMergeReplacesRunMetadataWithoutClearingSessionUsage() {
     val existing =
       ChatSessionEntry(
         key = "agent:main:phone",
@@ -262,7 +418,7 @@ class ChatControllerSessionPolicyTest {
     assertEquals(300L, merged.startedAt)
     assertEquals(null, merged.endedAt)
     assertEquals(null, merged.runtimeMs)
-    assertEquals(null, merged.outputTokens)
+    assertEquals(12L, merged.outputTokens)
   }
 
   @Test

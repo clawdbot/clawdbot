@@ -816,6 +816,54 @@ describe("memory hybrid helpers", () => {
     expect(merged[0]?.textScore).toBeCloseTo(1);
   });
 
+  it.each([null, 0.5, -0.5])(
+    "preserves LIKE lexical ties and public confidence with vector score %s",
+    async (vectorScore) => {
+      const keyword = [
+        { id: "aaa", rankingScore: 0.2 },
+        { id: "zzz", rankingScore: 0.8 },
+      ].map(({ id, rankingScore }) => ({
+        id,
+        path: `memory/${id}.md`,
+        startLine: 1,
+        endLine: 1,
+        source: "memory",
+        snippet: `${id} substring overlap`,
+        textScore: 0,
+        hasBodyMatch: true,
+        rankingScore,
+        pathScore: 0,
+        exactPathSpecificity: 0 as const,
+      }));
+      const merged = await mergeHybridResults({
+        vectorWeight: 0.7,
+        textWeight: 0.3,
+        vector: vectorScore === null ? [] : keyword.map((entry) => ({ ...entry, vectorScore })),
+        keyword,
+      });
+
+      // LIKE strength breaks tied confidence without turning recall into a scored match.
+      expect(merged.map((entry) => entry.path)).toEqual(["memory/zzz.md", "memory/aaa.md"]);
+      expect(merged).toEqual([
+        expect.objectContaining({
+          score: (vectorScore ?? 0) * 0.7,
+          vectorScore: vectorScore ?? 0,
+          textScore: 0,
+        }),
+        expect.objectContaining({
+          score: (vectorScore ?? 0) * 0.7,
+          vectorScore: vectorScore ?? 0,
+          textScore: 0,
+        }),
+      ]);
+      expect(merged.every((entry) => !("lexicalRank" in entry) && !("rankingScore" in entry))).toBe(
+        true,
+      );
+      const selected = selectHybridSearchResults({ merged, keyword, maxResults: 2, minScore: 0 });
+      expect(selected).toEqual(vectorScore !== null && vectorScore < 0 ? [] : merged);
+    },
+  );
+
   const vectorResult = (id: string, path: string, vectorScore: number) => ({
     id,
     path,

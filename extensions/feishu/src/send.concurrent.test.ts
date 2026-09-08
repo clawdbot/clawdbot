@@ -1,11 +1,4 @@
-/**
- * Concurrent Feishu message send stress tests.
- *
- * Verifies that sendMessageFeishu behaves correctly under concurrent load,
- * including the rate-limit error code (230020) the Feishu API returns when
- * the per-chat request frequency is too high. Related: issue #70879.
- */
-
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 
@@ -16,7 +9,12 @@ const {
   mockConvertMarkdownTables,
   mockResolveMarkdownTableMode,
 } = vi.hoisted(() => ({
-  mockClientCreate: vi.fn(),
+  mockClientCreate: vi.fn<
+    (params: { data: { receive_id: string } }) => Promise<{
+      code: number;
+      data: { message_id: string };
+    }>
+  >(),
   mockCreateFeishuClient: vi.fn(),
   mockResolveFeishuAccount: vi.fn(),
   mockConvertMarkdownTables: vi.fn((text: string) => text),
@@ -48,25 +46,28 @@ vi.mock("./runtime.js", () => ({
 
 let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
 
-const MOCK_CFG = {} as ClawdbotConfig;
+const cfg = {} as ClawdbotConfig;
 
-/** Build a successful send response. */
 function okResponse(messageId: string) {
   return { code: 0, data: { message_id: messageId } };
 }
 
-/**
- * Build an AxiosError-shaped object for a Feishu rate-limit HTTP 400 response.
- * Mirrors what @larksuiteoapi/node-sdk throws when the server returns code 230020.
- */
-function axiosRateLimitError(code = 230020) {
+function expectedSendResult(messageId: string, chatId: string) {
+  return expect.objectContaining({
+    messageId,
+    chatId,
+    receipt: expect.objectContaining({
+      primaryPlatformMessageId: messageId,
+      platformMessageIds: [messageId],
+    }),
+  });
+}
+
+function rateLimitError() {
   return Object.assign(new Error("Request failed with status code 400"), {
     response: {
       status: 400,
-      data: {
-        code,
-        msg: "This operation triggers the frequency limit, ext=chat rate limit",
-      },
+      data: { code: 230020, msg: "This operation triggers the frequency limit" },
     },
   });
 }
@@ -81,6 +82,7 @@ afterAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockClientCreate.mockReset();
   mockResolveFeishuAccount.mockReturnValue({ accountId: "default", configured: true });
   mockResolveMarkdownTableMode.mockReturnValue("preserve");
   mockConvertMarkdownTables.mockImplementation((text: string) => text);
@@ -89,200 +91,117 @@ beforeEach(() => {
   });
 });
 
-describe("Concurrent Feishu sends — happy path", () => {
-  it("all concurrent sends succeed when API responds without errors", async () => {
-    const CONCURRENCY = 10;
-    let n = 0;
-    mockClientCreate.mockImplementation(() => Promise.resolve(okResponse(`om_happy_${n++}`)));
-
-    const results = await Promise.all(
-      Array.from({ length: CONCURRENCY }, (_, i) =>
-        sendMessageFeishu({ cfg: MOCK_CFG, to: `oc_chat_${i}`, text: `Message ${i}` }),
-      ),
-    );
-
-    expect(results).toHaveLength(CONCURRENCY);
-    for (const result of results) {
-      expect(result.messageId).toBeTruthy();
-      expect(result.receipt).toBeDefined();
-    }
-    expect(mockClientCreate).toHaveBeenCalledTimes(CONCURRENCY);
-  });
-
-  it("sends 20 messages concurrently and all resolve independently", async () => {
-    const CONCURRENCY = 20;
-    let n = 0;
-    mockClientCreate.mockImplementation(() => Promise.resolve(okResponse(`om_concurrent_${n++}`)));
-
-    const results = await Promise.all(
-      Array.from({ length: CONCURRENCY }, (_, i) =>
-        sendMessageFeishu({ cfg: MOCK_CFG, to: "oc_stress", text: `stress-${i}` }),
-      ),
-    );
-
-    expect(results).toHaveLength(CONCURRENCY);
-    expect(mockClientCreate).toHaveBeenCalledTimes(CONCURRENCY);
-
-    // All message IDs should be unique
-    const messageIds = results.map((r) => r.messageId);
-    expect(new Set(messageIds).size).toBe(CONCURRENCY);
-  });
+afterEach(() => {
+  vi.useRealTimers();
 });
 
-describe("Concurrent Feishu sends — rate-limit behavior (code 230020)", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("throws on rate-limit code 230020 after exhausting retries", async () => {
-    vi.useFakeTimers();
-    mockClientCreate.mockRejectedValue(axiosRateLimitError(230020));
-
-    // Promise.allSettled attaches a rejection handler synchronously, so when
-    // vi.runAllTimersAsync advances timers and fires the rejection, it is
-    // already handled. Using expect().rejects.toThrow() would defer the
-    // attachment via Promise.resolve().then(), causing an unhandled-rejection
-    // warning before the handler is registered.
-    const settled = Promise.allSettled([
-      sendMessageFeishu({ cfg: MOCK_CFG, to: "oc_rl", text: "rate limited" }),
-    ]);
-    await vi.runAllTimersAsync();
-    const [result] = await settled;
-
-    expect(result.status).toBe("rejected");
-    // 1 initial attempt + 2 retries = 3 total calls
-    expect(mockClientCreate).toHaveBeenCalledTimes(3);
-  });
-
-  it("some concurrent sends fail with rate-limit while others succeed", async () => {
-    vi.useFakeTimers();
-    const HALF = 4;
-    let n = 0;
-
-    // Distinguish sends by receive_id: targets containing "fail" always rate-limit.
-    mockClientCreate.mockImplementation((params: { data?: { receive_id?: string } }) => {
-      const target = params?.data?.receive_id ?? "";
-      if (target.includes("fail")) {
-        return Promise.reject(axiosRateLimitError());
+describe("concurrent Feishu sends", () => {
+  it.each([
+    { scope: "one target", targets: ["oc_shared", "oc_shared", "oc_shared"] },
+    { scope: "distinct targets", targets: ["oc_alpha", "oc_beta", "oc_gamma"] },
+  ])(
+    "keeps sends to $scope independent when responses arrive out of order",
+    async ({ targets }) => {
+      const requests = targets.map((to, index) => ({
+        to,
+        messageId: `om_concurrent_${index}`,
+        response: createDeferred<ReturnType<typeof okResponse>>(),
+        started: createDeferred<void>(),
+      }));
+      for (const request of requests) {
+        mockClientCreate.mockImplementationOnce(() => {
+          request.started.resolve();
+          return request.response.promise;
+        });
       }
-      return Promise.resolve(okResponse(`om_ok_${n++}`));
+      const completionOrder: string[] = [];
+      const sends = requests.map((request, index) => ({
+        ...request,
+        sending: sendMessageFeishu({ cfg, to: request.to, text: `message ${index}` }).then(
+          (result) => {
+            completionOrder.push(result.messageId);
+            return result;
+          },
+        ),
+      }));
+      const settled = Promise.allSettled(sends.map((send) => send.sending));
+
+      try {
+        await Promise.all(requests.map((request) => request.started.promise));
+        expect(mockClientCreate.mock.calls.map(([params]) => params.data.receive_id)).toEqual(
+          targets,
+        );
+        expect(completionOrder).toEqual([]);
+
+        const expectedOrder: string[] = [];
+        for (const send of sends.toReversed()) {
+          send.response.resolve(okResponse(send.messageId));
+          await expect(send.sending).resolves.toEqual(expectedSendResult(send.messageId, send.to));
+          expectedOrder.push(send.messageId);
+          expect(completionOrder).toEqual(expectedOrder);
+        }
+        expect(mockClientCreate).toHaveBeenCalledTimes(targets.length);
+      } finally {
+        for (const send of sends) {
+          send.response.resolve(okResponse(send.messageId));
+        }
+        await settled;
+      }
+    },
+  );
+
+  it("keeps successful, recovering, and exhausted sends independent", async () => {
+    vi.useFakeTimers();
+    const attempts = new Map<string, number>();
+    const started = createDeferred<void>();
+    mockClientCreate.mockImplementation(async ({ data: { receive_id: to } }) => {
+      const attempt = (attempts.get(to) ?? 0) + 1;
+      attempts.set(to, attempt);
+      if (attempts.size === 3) {
+        started.resolve();
+      }
+      if (to === "oc_exhausted" || (to === "oc_recovering" && attempt === 1)) {
+        throw rateLimitError();
+      }
+      return okResponse(`om_${to}`);
     });
 
-    const settled = Promise.allSettled([
-      ...Array.from({ length: HALF }, (_, i) =>
-        sendMessageFeishu({ cfg: MOCK_CFG, to: `oc_fail_${i}`, text: `fail-${i}` }),
-      ),
-      ...Array.from({ length: HALF }, (_, i) =>
-        sendMessageFeishu({ cfg: MOCK_CFG, to: `oc_ok_${i}`, text: `ok-${i}` }),
-      ),
-    ]);
+    const exhausted = sendMessageFeishu({ cfg, to: "oc_exhausted", text: "exhausted" });
+    const recovering = sendMessageFeishu({ cfg, to: "oc_recovering", text: "recovering" });
+    const successful = sendMessageFeishu({ cfg, to: "oc_successful", text: "successful" });
+    // Attach rejection handlers before advancing the retry clock.
+    const settled = Promise.allSettled([exhausted, recovering, successful]);
 
-    await vi.runAllTimersAsync();
-    const results = await settled;
+    try {
+      await started.promise;
+      expect(attempts).toEqual(
+        new Map([
+          ["oc_exhausted", 1],
+          ["oc_recovering", 1],
+          ["oc_successful", 1],
+        ]),
+      );
+      await expect(successful).resolves.toEqual(
+        expectedSendResult("om_oc_successful", "oc_successful"),
+      );
 
-    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(HALF);
-    expect(results.filter((r) => r.status === "rejected")).toHaveLength(HALF);
-    // Rate-limited sends: HALF × 3 calls (1 + 2 retries); successful sends: HALF × 1 call
-    expect(mockClientCreate).toHaveBeenCalledTimes(HALF * 3 + HALF);
-  });
-
-  it("all concurrent sends fail gracefully when API consistently rate-limits", async () => {
-    vi.useFakeTimers();
-    const CONCURRENCY = 5;
-    mockClientCreate.mockRejectedValue(axiosRateLimitError(230020));
-
-    const settled = Promise.allSettled(
-      Array.from({ length: CONCURRENCY }, (_, i) =>
-        sendMessageFeishu({ cfg: MOCK_CFG, to: "oc_all_fail", text: `msg-${i}` }),
-      ),
-    );
-
-    await vi.runAllTimersAsync();
-    const results = await settled;
-
-    expect(results.every((r) => r.status === "rejected")).toBe(true);
-    // Each send retries twice: CONCURRENCY × 3 total calls
-    expect(mockClientCreate).toHaveBeenCalledTimes(CONCURRENCY * 3);
-  });
-
-  it("recovers when API rate-limits once then succeeds", async () => {
-    vi.useFakeTimers();
-    let n = 0;
-    mockClientCreate
-      .mockRejectedValueOnce(axiosRateLimitError(230020))
-      .mockImplementation(() => Promise.resolve(okResponse(`om_recovered_${n++}`)));
-
-    const sendPromise = sendMessageFeishu({ cfg: MOCK_CFG, to: "oc_recover", text: "recover" });
-    await vi.runAllTimersAsync();
-
-    const result = await sendPromise;
-    expect(result.messageId).toMatch(/^om_recovered_/);
-    // 1 rate-limited call + 1 successful retry
-    expect(mockClientCreate).toHaveBeenCalledTimes(2);
-  });
-
-  it("rate-limit error message surfaces feishu_code for caller detection", async () => {
-    vi.useFakeTimers();
-    mockClientCreate.mockRejectedValue(axiosRateLimitError(230020));
-
-    // Same pattern: allSettled attaches the handler synchronously before timers advance.
-    const settled = Promise.allSettled([
-      sendMessageFeishu({
-        cfg: MOCK_CFG,
-        to: "oc_err_msg",
-        text: "check error message",
-      }),
-    ]);
-    await vi.runAllTimersAsync();
-    const [result] = await settled;
-
-    expect(result.status).toBe("rejected");
-    const error = result.status === "rejected" ? result.reason : null;
-    expect(error).toBeInstanceOf(Error);
-    // Error message must carry feishu_code so retry/circuit-breaker logic upstream can identify it
-    expect((error as Error).message).toMatch(/230020/);
-  });
-});
-
-describe("Concurrent Feishu sends — timing and ordering", () => {
-  it("concurrent sends complete faster than sequential would (all fire in parallel)", async () => {
-    const CONCURRENCY = 5;
-    const SIMULATED_DELAY_MS = 20;
-    let n = 0;
-
-    mockClientCreate.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          setTimeout(() => resolve(okResponse(`om_timed_${n++}`)), SIMULATED_DELAY_MS);
-        }),
-    );
-
-    const start = Date.now();
-    const results = await Promise.all(
-      Array.from({ length: CONCURRENCY }, (_, i) =>
-        sendMessageFeishu({ cfg: MOCK_CFG, to: `oc_timed_${i}`, text: `msg ${i}` }),
-      ),
-    );
-    const elapsed = Date.now() - start;
-
-    expect(results).toHaveLength(CONCURRENCY);
-    // Concurrent: should complete in roughly 1x delay, not CONCURRENCY * delay
-    expect(elapsed).toBeLessThan(SIMULATED_DELAY_MS * CONCURRENCY);
-  });
-
-  it("sends to multiple distinct targets resolve independently", async () => {
-    const targets = ["oc_alpha", "oc_beta", "oc_gamma"];
-    let n = 0;
-    mockClientCreate.mockImplementation(() => Promise.resolve(okResponse(`om_target_${n++}`)));
-
-    const results = await Promise.all(
-      targets.map((to) => sendMessageFeishu({ cfg: MOCK_CFG, to, text: "hello" })),
-    );
-
-    expect(results).toHaveLength(targets.length);
-    for (const result of results) {
-      expect(result.messageId).toBeTruthy();
+      await vi.runAllTimersAsync();
+      await expect(exhausted).rejects.toThrow(/^Feishu send failed:.*"feishu_code":230020/u);
+      expect(attempts).toEqual(
+        new Map([
+          ["oc_exhausted", 3],
+          ["oc_recovering", 2],
+          ["oc_successful", 1],
+        ]),
+      );
+      expect(await settled).toEqual([
+        { status: "rejected", reason: expect.any(Error) },
+        { status: "fulfilled", value: expectedSendResult("om_oc_recovering", "oc_recovering") },
+        { status: "fulfilled", value: expectedSendResult("om_oc_successful", "oc_successful") },
+      ]);
+    } finally {
+      await vi.runAllTimersAsync();
+      await settled;
     }
-    expect(mockClientCreate).toHaveBeenCalledTimes(targets.length);
   });
 });

@@ -2,6 +2,10 @@
 import { isGatewayTransportError } from "../gateway/transport-error.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
+import {
+  UpdateSchemaRefusalError,
+  type UpdateSchemaRefusalDatabase,
+} from "../state/openclaw-update-schema-refusal.js";
 import { formatCliCommand } from "./command-format.js";
 
 type FormatCliFailureOptions = {
@@ -16,11 +20,27 @@ type CliFailureDebugOptions = Pick<FormatCliFailureOptions, "argv" | "env">;
 
 export type CliJsonFailure = {
   ok: false;
+  runId?: string;
+  origin?: "gateway";
   error: {
     type: "cli_error";
     message: string;
+    code?: string;
+    databases?: readonly UpdateSchemaRefusalDatabase[];
+    updaterVersion?: string;
+    targetVersion?: string;
+    commands?: readonly string[];
   };
 };
+
+const gatewayRunFailures = new WeakMap<Error, { runId: string; origin: "gateway" }>();
+
+/** Agent dispatch supplies observed Gateway IDs; error identity and human output stay intact. */
+export function recordCliGatewayRunFailure(error: unknown, runId: string | undefined): void {
+  if (error instanceof Error && runId) {
+    gatewayRunFailures.set(error, { runId, origin: "gateway" });
+  }
+}
 
 export class ExpectedCliError extends Error {
   readonly humanOutput: string;
@@ -92,9 +112,19 @@ export function formatCliJsonFailure(
     : formatCliOperatorError(error, options);
   return {
     ok: false,
+    ...(error instanceof Error ? gatewayRunFailures.get(error) : undefined),
     error: {
       type: "cli_error",
       message,
+      ...(error instanceof UpdateSchemaRefusalError
+        ? {
+            code: error.code,
+            databases: error.databases,
+            updaterVersion: error.updaterVersion,
+            targetVersion: error.targetVersion,
+            commands: error.commands,
+          }
+        : {}),
     },
   };
 }

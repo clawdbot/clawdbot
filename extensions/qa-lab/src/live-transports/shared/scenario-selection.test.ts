@@ -24,13 +24,10 @@ vi.mock("../../profile-planning.js", async (importOriginal) => {
 
 import { scenarioDeclaresQaChannel } from "../../profile-planning.js";
 import { readQaScenarioPack } from "../../scenario-catalog.js";
-import { resolveDiscordQaScenarioIds } from "../discord/scenario-selection.js";
-import { resolveSlackQaScenarioIds } from "../slack/scenario-selection.js";
 import {
   listTelegramQaScenarios,
   resolveTelegramQaScenarioIds,
 } from "../telegram/scenario-selection.js";
-import { resolveWhatsAppQaScenarioIds } from "../whatsapp/scenario-selection.js";
 import {
   resolveCatalogLiveTransportQaScenarioIds,
   resolveLiveTransportQaScenarioIds,
@@ -64,17 +61,32 @@ describe("live transport QA scenario selection", () => {
     {
       channelId: "discord",
       select: (scenarioIds?: readonly string[]) =>
-        resolveDiscordQaScenarioIds({ ...MOCK_LANE, scenarioIds }),
+        resolveLiveTransportQaScenarioIds({
+          ...MOCK_LANE,
+          channelId: "discord",
+          scenarioIds,
+          supportsModuleFlows: true,
+        }),
     },
     {
       channelId: "slack",
       select: (scenarioIds?: readonly string[]) =>
-        resolveSlackQaScenarioIds({ ...MOCK_LANE, scenarioIds }),
+        resolveLiveTransportQaScenarioIds({
+          ...MOCK_LANE,
+          channelId: "slack",
+          scenarioIds,
+          supportsModuleFlows: true,
+        }),
     },
     {
       channelId: "whatsapp",
       select: (scenarioIds?: readonly string[]) =>
-        resolveWhatsAppQaScenarioIds({ ...MOCK_LANE, scenarioIds }),
+        resolveLiveTransportQaScenarioIds({
+          ...MOCK_LANE,
+          channelId: "whatsapp",
+          scenarioIds,
+          supportsModuleFlows: true,
+        }),
     },
   ] as const)(
     "keeps explicit and implicit singleton eligibility aligned for $channelId",

@@ -2,8 +2,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { publishActiveSessionLineage } from "../../components/app-sidebar-child-session-data.ts";
-import { createSessionCapability } from "./index.ts";
-import { createGatewayHarness, sessionsResult } from "./session-capability.test-support.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+  sessionsResult,
+} from "./session-capability.test-support.ts";
 
 const key = "agent:main:device-session";
 
@@ -31,10 +34,51 @@ function capabilityWithList(result: ReturnType<typeof sessionsResult>) {
     return result;
   });
   const client = { request } as unknown as GatewayBrowserClient;
-  return createSessionCapability(createGatewayHarness(client).gateway);
+  return createTestSessionCapability(createGatewayHarness(client).gateway);
 }
 
 describe("supplemental session reconciliation", () => {
+  it("publishes an owner change but not unchanged lineage rows and defaults", async () => {
+    const canonical = {
+      key,
+      kind: "direct" as const,
+      sessionId: "session-device",
+      updatedAt: 10,
+    };
+    const sessions = capabilityWithList(sessionsResult([canonical], 10));
+    try {
+      await sessions.refresh({ force: true });
+      const published = vi.fn();
+      sessions.subscribe(published);
+      const result = sessions.state.result;
+      sessions.reconcile(canonical, result?.defaults, { resultAgentId: "main" });
+      expect(sessions.state.result).toBe(result);
+      expect(sessions.state.agentId).toBe("main");
+      expect(published).toHaveBeenCalledOnce();
+      published.mockClear();
+      const owner = {
+        activeSessionLineageRoot: null,
+        activeSessionLineageSelectedRow: null,
+        childSessionRowsByParent: {},
+        context: { sessions },
+        sessionsResult: sessions.state.result,
+      };
+
+      publishActiveSessionLineage(
+        owner,
+        key,
+        { rowsByParent: {}, topmostRow: canonical, lookupFailed: false },
+        sessions.canonicalListRevision,
+      );
+
+      expect(owner.activeSessionLineageSelectedRow).toEqual(canonical);
+      expect(sessions.state.result?.sessions).toEqual([canonical]);
+      expect(published).not.toHaveBeenCalled();
+    } finally {
+      sessions.dispose();
+    }
+  });
+
   it("preserves a matching canonical row when history started before its list", async () => {
     const sessions = capabilityWithList(
       sessionsResult(
@@ -53,6 +97,8 @@ describe("supplemental session reconciliation", () => {
     const sourceCanonicalListRevision = sessions.canonicalListRevision;
 
     await sessions.refresh({ force: true });
+    const published = vi.fn();
+    sessions.subscribe(published);
     sessions.reconcile(
       {
         key,
@@ -73,6 +119,7 @@ describe("supplemental session reconciliation", () => {
       model: "gpt-5.6-luna",
       contextTokens: 128_000,
     });
+    expect(published).toHaveBeenCalledOnce();
     sessions.dispose();
   });
 

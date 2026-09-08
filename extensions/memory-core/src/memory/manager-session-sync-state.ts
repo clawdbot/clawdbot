@@ -1,4 +1,10 @@
 // Memory Core plugin module implements manager session sync state behavior.
+import {
+  isCronRunSessionKey,
+  isDreamingNarrativeSessionStoreKey,
+  type SessionFileEntry,
+  type SessionTranscriptCorpusEntry,
+} from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import type { MemorySourceFileStateRow } from "./manager-source-state.js";
 
 export type MemorySessionStartupFileState = {
@@ -7,6 +13,29 @@ export type MemorySessionStartupFileState = {
   mtimeMs: number;
   size: number;
 };
+
+export function isMemorySessionIndexable(
+  entry: Pick<
+    SessionTranscriptCorpusEntry,
+    "generatedByDreamingNarrative" | "generatedByCronRun" | "sessionKind"
+  > &
+    Partial<Pick<SessionFileEntry, "lineProvenance">>,
+  archivedSessionKey?: string,
+): boolean {
+  return !(
+    entry.generatedByDreamingNarrative ||
+    entry.generatedByCronRun ||
+    entry.sessionKind === "cron" ||
+    entry.sessionKind === "heartbeat" ||
+    (archivedSessionKey !== undefined &&
+      (isDreamingNarrativeSessionStoreKey(archivedSessionKey) ||
+        isCronRunSessionKey(archivedSessionKey) ||
+        archivedSessionKey.endsWith(":heartbeat"))) ||
+    (entry.lineProvenance !== undefined &&
+      entry.lineProvenance.length > 0 &&
+      entry.lineProvenance.every((line) => line.originClass === "system"))
+  );
+}
 
 export function resolveMemorySessionStartupState(params: {
   files: MemorySessionStartupFileState[];

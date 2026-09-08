@@ -3,9 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { createGatewayDispatchStartupTrace } from "./startup-trace.js";
 
 function readTimelineEvents(timelinePath: string): Record<string, unknown>[] {
+  flushDiagnosticsTimeline();
   return fs
     .readFileSync(timelinePath, "utf8")
     .trim()
@@ -15,6 +17,7 @@ function readTimelineEvents(timelinePath: string): Record<string, unknown>[] {
 
 describe("CLI startup trace", () => {
   afterEach(() => {
+    flushDiagnosticsTimeline();
     vi.unstubAllEnvs();
   });
 

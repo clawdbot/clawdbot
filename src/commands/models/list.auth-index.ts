@@ -1,5 +1,6 @@
-import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 /** Auth availability index for `openclaw models list` rows. */
+import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import {
   createModelAuthAvailabilityResolver,
   type ModelAuthAvailabilityEvaluation,
@@ -20,6 +21,7 @@ export type ModelListAuthIndex = {
 type CreateModelListAuthIndexParams = {
   cfg: OpenClawConfig;
   authStore: AuthProfileStore;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -27,6 +29,7 @@ type CreateModelListAuthIndexParams = {
   metadataSnapshot: PluginMetadataSnapshot;
   externalCliProviderIds?: readonly string[];
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
+  preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
 };
 
 function listValidatedSyntheticAuthProviderRefs(params: {
@@ -51,6 +54,7 @@ export function createModelListAuthIndex(
   const env = params.env ?? process.env;
   const resolver = createModelAuthAvailabilityResolver({
     cfg: params.cfg,
+    agentId: params.agentId,
     authStore: params.authStore,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
@@ -58,6 +62,7 @@ export function createModelListAuthIndex(
     metadataSnapshot: params.metadataSnapshot,
     externalCliProviderIds: params.externalCliProviderIds,
     routeResolverFactory: params.routeResolverFactory,
+    preparedRuntimeAuthModes: params.preparedRuntimeAuthModes,
     syntheticAuthProviderRefs:
       params.syntheticAuthProviderRefs ??
       listValidatedSyntheticAuthProviderRefs({
@@ -66,6 +71,6 @@ export function createModelListAuthIndex(
   });
   return {
     providerDiscoveryProviderIds: resolver.providerDiscoveryProviderIds,
-    evaluateModelAuth: (provider, ref) => resolver.evaluateModelAuth(provider, ref),
+    evaluateModelAuth: resolver.evaluateRuntimeModelAuth,
   };
 }

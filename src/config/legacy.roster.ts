@@ -1,10 +1,14 @@
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readAgentRosterProperty } from "../agents/agent-scope-config.js";
 import {
   retainLegacyDefaultAgentId,
   tryGetLegacyDefaultAgentId,
 } from "./legacy.default-agent-owner.js";
-import { materializeLegacyDefaultAgentRoles } from "./legacy.default-agent-roles.js";
+import {
+  materializeLegacyDefaultAgentRoles,
+  resolveLegacyFirstAgentWorkspacePin,
+} from "./legacy.default-agent-roles.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 type MigrationResult = {
@@ -15,9 +19,72 @@ type MigrationResult = {
   retainedLegacyDefaultAgentId?: string;
 };
 
+/** Keeps Doctor's allocated identities tied to their original authored list positions. */
+export function projectLegacyAgentRosterEntries(list: unknown[]) {
+  const entries: { sourceIndex: number; id: string; config: Record<string, unknown> }[] = [];
+  const diagnostics: string[] = [];
+  const ids = new Set<string>();
+  for (const [sourceIndex, value] of list.entries()) {
+    if (!isRecord(value)) {
+      diagnostics.push(`Removed malformed agents.list[${sourceIndex}] entry.`);
+      continue;
+    }
+    const rawId = typeof value.id === "string" && value.id.trim() ? value.id.trim() : "agent";
+    const requestedId = normalizeAgentId(rawId);
+    if (requestedId !== rawId) {
+      diagnostics.push(`Normalized agents.list id "${rawId}" → agents.entries.${requestedId}.`);
+    }
+    let id = requestedId;
+    let suffix = 2;
+    while (ids.has(id)) {
+      id = `${requestedId}-${suffix}`;
+      suffix += 1;
+    }
+    const { id: _id, ...config } = value;
+    entries.push({ sourceIndex, id, config });
+    ids.add(id);
+    if (id !== requestedId) {
+      diagnostics.push(`Moved duplicate agents.list id "${requestedId}" to agents.entries.${id}.`);
+    }
+  }
+  return { entries, diagnostics };
+}
+
+/** Converts a valid legacy roster without applying ownership or runtime migrations. */
+export function parseLegacyAgentRoster(
+  value: unknown,
+): { entries: Record<string, Record<string, unknown>>; order: string[] } | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const ids = new Set<string>();
+  const entries: [string, Record<string, unknown>][] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return undefined;
+    }
+    const { id, ...config } = entry as Record<string, unknown>;
+    if (typeof id !== "string" || id.trim() !== id || !id) {
+      return undefined;
+    }
+    const normalizedId = normalizeAgentId(id);
+    if (normalizedId !== id || ids.has(normalizedId)) {
+      return undefined;
+    }
+    ids.add(id);
+    entries.push([id, config]);
+  }
+  return { entries: Object.fromEntries(entries), order: [...ids] };
+}
+
 export function migratePersistedImplicitMainRoster(
   raw: unknown,
-  options: { materializeWorkspace?: boolean } = {},
+  options: {
+    materializeWorkspace?: boolean;
+    materializeRoles?: boolean;
+    env?: NodeJS.ProcessEnv;
+    homedir?: () => string;
+  } = {},
 ): MigrationResult {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return { config: raw, changed: false, diagnostics: [] };
@@ -34,40 +101,16 @@ export function migratePersistedImplicitMainRoster(
       ? (root.agents as Record<string, unknown>)
       : {};
   let convertedLegacyList = false;
-  let legacyRosterOrder: string[] | undefined;
+  let legacyRoster: ReturnType<typeof parseLegacyAgentRoster>;
   let rosterProperty = readAgentRosterProperty({ ...root, agents });
   if (rosterProperty?.kind === "list") {
-    if (!Array.isArray(rosterProperty.value)) {
+    const roster = parseLegacyAgentRoster(rosterProperty.value);
+    if (!roster) {
       return { config: raw, changed: false, diagnostics: [] };
     }
-    const legacyList = rosterProperty.value;
-    if (legacyList.some((value) => !value || typeof value !== "object" || Array.isArray(value))) {
-      return { config: raw, changed: false, diagnostics: [] };
-    }
-    const legacyIds = new Set<string>();
-    const legacyOrder: string[] = [];
-    for (const value of legacyList) {
-      const entry = value as Record<string, unknown>;
-      if (typeof entry.id !== "string" || entry.id.trim() !== entry.id || !entry.id) {
-        return { config: raw, changed: false, diagnostics: [] };
-      }
-      const normalizedId = normalizeAgentId(entry.id);
-      if (normalizedId !== entry.id || legacyIds.has(normalizedId)) {
-        return { config: raw, changed: false, diagnostics: [] };
-      }
-      legacyIds.add(normalizedId);
-      legacyOrder.push(entry.id);
-    }
-    legacyRosterOrder = legacyOrder;
-    const entries = Object.fromEntries(
-      legacyList.map((value) => {
-        const entry = value as Record<string, unknown>;
-        const { id, ...config } = entry;
-        return [id as string, config];
-      }),
-    );
+    legacyRoster = roster;
     const { list: _list, ...rest } = agents;
-    agents = { ...rest, entries };
+    agents = { ...rest, entries: roster.entries };
     convertedLegacyList = true;
     rosterProperty = readAgentRosterProperty({ ...root, agents });
   }
@@ -97,7 +140,7 @@ export function migratePersistedImplicitMainRoster(
   }
   const roster = entries as Record<string, unknown>;
   const validIds =
-    legacyRosterOrder ??
+    legacyRoster?.order ??
     Object.entries(roster).flatMap(([id, entry]) =>
       entry && typeof entry === "object" && !Array.isArray(entry) ? [id] : [],
     );
@@ -123,7 +166,24 @@ export function migratePersistedImplicitMainRoster(
   let insertedPaths: string[][] = [];
   const diagnostics = convertedLegacyList ? ["Moved agents.list to keyed agents.entries."] : [];
   let changed = convertedLegacyList;
-  if (legacyDefaultAgentId) {
+  if (legacyRoster && !legacyDefaultAgentId) {
+    const firstId = legacyRoster.order[0]!;
+    const entry = legacyRoster.entries[firstId]!;
+    const workspace = resolveLegacyFirstAgentWorkspacePin(
+      agents,
+      legacyRoster.order.map((id) => legacyRoster.entries[id]!),
+      options,
+    );
+    if (workspace !== undefined) {
+      nextRoot = {
+        ...nextRoot,
+        agents: { ...agents, entries: { ...roster, [firstId]: { ...entry, workspace } } },
+      };
+      insertedPaths.push(["agents", "entries", firstId, "workspace"]);
+      diagnostics.push("Preserved the first legacy agent's existing workspace.");
+    }
+  }
+  if (legacyDefaultAgentId && options.materializeRoles !== false) {
     const materialized = materializeLegacyDefaultAgentRoles(
       nextRoot as OpenClawConfig,
       legacyDefaultAgentId,

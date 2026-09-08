@@ -3,23 +3,28 @@ import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 import { hasNonEmptyString as replayToolCallNonEmptyString } from "../../../../packages/normalization-core/src/string-coerce.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
-  downgradeOpenAIReasoningBlocks,
   normalizeOpenAIResponsesToolCallIds,
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../../embedded-agent-helpers.js";
+import { mergeConsecutiveUserMessages } from "../../embedded-agent-helpers/turns.js";
 import type { AgentMessage, StreamFn } from "../../runtime/index.js";
 import {
   sanitizeToolUseResultPairing,
   sanitizeToolUseResultPairingForModel,
 } from "../../session-transcript-repair.js";
+import { isThinkingLikeBlock } from "../../thinking-block.js";
 import {
   extractToolCallsFromAssistant,
   extractToolResultIds,
+  hasToolCallInput,
   sanitizeToolCallIdsForCloudCodeAssist,
   type ToolCallIdMode,
 } from "../../tool-call-id.js";
-import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
+import {
+  shouldAllowProviderOwnedThinkingReplay,
+  shouldMergeConsecutiveUserTurns,
+} from "../../transcript-policy.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
 import { isRunnerToolCallBlockType } from "./attempt-tool-call-block-type.js";
 import { resolveToolCallName } from "./attempt-tool-call-name-resolution.js";
@@ -47,14 +52,6 @@ type AnthropicToolResultContentBlock = {
   tool_call_id?: unknown;
 };
 
-function isThinkingLikeReplayBlock(block: unknown): boolean {
-  if (!block || typeof block !== "object") {
-    return false;
-  }
-  const type = (block as { type?: unknown }).type;
-  return type === "thinking" || type === "redacted_thinking";
-}
-
 function isReplaySafeThinkingTurn(content: unknown[], allowedToolNames?: Set<string>): boolean {
   const seenToolCallIds = new Set<string>();
   for (const block of content) {
@@ -63,7 +60,7 @@ function isReplaySafeThinkingTurn(content: unknown[], allowedToolNames?: Set<str
     }
     const replayBlock = block;
     const toolCallId = typeof replayBlock.id === "string" ? replayBlock.id.trim() : "";
-    if (!replayToolCallHasInput(replayBlock) || !toolCallId || seenToolCallIds.has(toolCallId)) {
+    if (!hasToolCallInput(replayBlock) || !toolCallId || seenToolCallIds.has(toolCallId)) {
       return false;
     }
     seenToolCallIds.add(toolCallId);
@@ -81,13 +78,6 @@ function isReplayToolCallBlock(block: unknown): block is ReplayToolCallBlock {
     return false;
   }
   return isRunnerToolCallBlockType((block as { type?: unknown }).type);
-}
-
-function replayToolCallHasInput(block: ReplayToolCallBlock): boolean {
-  const hasInput = "input" in block ? block.input !== undefined && block.input !== null : false;
-  const hasArguments =
-    "arguments" in block ? block.arguments !== undefined && block.arguments !== null : false;
-  return hasInput || hasArguments;
 }
 
 function collectFollowingToolResults(
@@ -164,7 +154,7 @@ function sanitizeReplayToolCallInputs(
     }
     if (
       allowProviderOwnedThinkingReplay &&
-      message.content.some((block) => isThinkingLikeReplayBlock(block)) &&
+      message.content.some((block) => isThinkingLikeBlock(block)) &&
       message.content.some((block) => isReplayToolCallBlock(block))
     ) {
       const replaySafeToolCalls = extractToolCallsFromAssistant(message);
@@ -201,7 +191,7 @@ function sanitizeReplayToolCallInputs(
       }
       const replayBlock = block as ReplayToolCallBlock;
 
-      if (!replayToolCallHasInput(replayBlock) || !replayToolCallNonEmptyString(replayBlock.id)) {
+      if (!hasToolCallInput(replayBlock) || !replayToolCallNonEmptyString(replayBlock.id)) {
         changed = true;
         messageChanged = true;
         continue;
@@ -274,7 +264,7 @@ function isSignedThinkingReplayAssistantSpan(message: AgentMessage | undefined):
     return false;
   }
   return (
-    content.some((block) => isThinkingLikeReplayBlock(block)) &&
+    content.some((block) => isThinkingLikeBlock(block)) &&
     content.some((block) => isReplayToolCallBlock(block))
   );
 }
@@ -433,9 +423,7 @@ export function sanitizeReplayToolCallIdsForStream(params: {
 /** Downgrades OpenAI Responses replay turns into the stream format expected by runtime callers. */
 export function sanitizeOpenAIResponsesReplayForStream(messages: AgentMessage[]): AgentMessage[] {
   const repaired = sanitizeToolUseResultPairingForModel(messages, true);
-  return downgradeOpenAIFunctionCallReasoningPairs(
-    normalizeOpenAIResponsesToolCallIds(downgradeOpenAIReasoningBlocks(repaired)),
-  );
+  return downgradeOpenAIFunctionCallReasoningPairs(normalizeOpenAIResponsesToolCallIds(repaired));
 }
 
 /**
@@ -449,7 +437,11 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
   allowedToolNames?: Set<string>,
   transcriptPolicy?: Pick<
     TranscriptPolicy,
-    "validateGeminiTurns" | "validateAnthropicTurns" | "preserveSignatures" | "dropThinkingBlocks"
+    | "validateGeminiTurns"
+    | "validateAnthropicTurns"
+    | "preserveSignatures"
+    | "dropThinkingBlocks"
+    | "appendOnlyRuntimeContext"
   >,
   provider?: string | null,
 ): StreamFn {
@@ -458,8 +450,9 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
     if (!Array.isArray(messages)) {
       return baseFn(model, context, options);
     }
+    const modelApi = (model as { api?: unknown })?.api as string | null | undefined;
     const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
-      modelApi: (model as { api?: unknown })?.api as string | null | undefined,
+      modelApi,
       provider,
       policy: {
         validateAnthropicTurns: transcriptPolicy?.validateAnthropicTurns === true,
@@ -493,10 +486,13 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       nextMessages = stripTrailingAssistantPrefillTurns(nextMessages);
       strippedTrailingAssistantPrefill ||= nextMessages !== beforeStrip;
     }
+    // Appended Bedrock users need merging without revalidating unchanged signed tools.
     if (nextMessages === messages) {
-      return baseFn(model, context, options);
-    }
-    if (
+      if (modelApi !== "bedrock-converse-stream") {
+        return baseFn(model, context, options);
+      }
+      nextMessages = mergeConsecutiveUserMessages(nextMessages);
+    } else if (
       sanitized.droppedAssistantMessages > 0 ||
       transcriptPolicy?.validateAnthropicTurns ||
       strippedTrailingAssistantPrefill
@@ -505,13 +501,14 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
         nextMessages = validateGeminiTurns(nextMessages);
       }
       if (transcriptPolicy?.validateAnthropicTurns) {
-        nextMessages = validateAnthropicTurns(nextMessages);
+        nextMessages = validateAnthropicTurns(nextMessages, {
+          mergeConsecutiveUserTurns: shouldMergeConsecutiveUserTurns(transcriptPolicy, modelApi),
+        });
       }
     }
-    const nextContext: typeof context = {
-      ...context,
-      messages: nextMessages as typeof context.messages,
-    };
-    return baseFn(model, nextContext, options);
+    if (nextMessages === messages) {
+      return baseFn(model, context, options);
+    }
+    return baseFn(model, { ...context, messages: nextMessages as typeof messages }, options);
   };
 }

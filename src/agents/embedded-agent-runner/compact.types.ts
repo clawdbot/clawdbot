@@ -20,7 +20,10 @@ import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/typ
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
 
-export type CompactEmbeddedAgentSessionParams = {
+export type CompactEmbeddedAgentSessionParams = Pick<
+  import("./run/params.js").RunEmbeddedAgentParams,
+  "requireWorkspaceOnly" | "requireWritableSandbox"
+> & {
   /** Explicit session owner captured before fallback agent resolution. */
   contextEngineAgentId?: string;
   sessionId: string;
@@ -32,12 +35,18 @@ export type CompactEmbeddedAgentSessionParams = {
   agentId?: string;
   /** Session key used only for runtime policy/sandbox resolution. Defaults to sessionKey. */
   sandboxSessionKey?: string;
+  /** Owner captured with the sandbox policy before execution identity changes. */
+  sandboxAgentId?: string;
   messageChannel?: string;
   messageProvider?: string;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
+  /** Dashboard authoring retained only within the admitted recovery run. */
+  pinnedWidgetAuthoring?: boolean;
   chatType?: ChatType;
   agentAccountId?: string;
+  /** Raw peer observed by the inbound routing owner, before identity linking. */
+  conversationRoutePeerId?: string;
   conversationToolPolicy?: GroupToolPolicyConfig;
   currentChannelId?: string;
   currentThreadTs?: string;
@@ -77,6 +86,8 @@ export type CompactEmbeddedAgentSessionParams = {
   bootstrapWorkspaceDir?: string;
   /** Optional task working directory; workspaceDir remains the agent bootstrap workspace. */
   cwd?: string;
+  permissionMode?: SessionEntry["permissionMode"];
+  sessionRoot?: string;
   agentDir?: string;
   config?: OpenClawConfig;
   toolOverrides?: SessionToolOverrides;
@@ -94,7 +105,7 @@ export type CompactEmbeddedAgentSessionParams = {
   contextTokenBudget?: number;
   /** Optional caller-resolved runtime context for harness-owned context-engine compaction. */
   contextEngineRuntimeContext?: ContextEngineRuntimeContext;
-  /** Session-pinned embedded harness id. Prevents compaction hot-switching. */
+  /** Transcript/runtime hint; durable native ownership is resolved from the session entry. */
   agentHarnessId?: string;
   /** Resumable native CLI session targeted by an explicit manual compaction. */
   cliSessionId?: string;
@@ -102,7 +113,7 @@ export type CompactEmbeddedAgentSessionParams = {
   cliSessionBinding?: CliSessionBinding;
   /** Owning session facts required for placement and runtime preparation. */
   sessionEntry?: SessionEntry;
-  /** Prevent compaction from changing the persisted session runtime or model. */
+  /** Keep the concrete model fixed; native runtime ownership is a separate session fact. */
   modelSelectionLocked?: boolean;
   /** OpenClaw-owned runtime policy prepared for this compaction path. */
   runtimePlan?: AgentRuntimePlan;
@@ -110,7 +121,7 @@ export type CompactEmbeddedAgentSessionParams = {
   runtimeAuthPlan?: AgentRuntimeAuthPlan;
   thinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
-  execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node" | "nodeCwd">;
+  execOverrides?: Pick<ExecToolDefaults, "host" | "mode" | "security" | "ask" | "node" | "nodeCwd">;
   bashElevated?: ExecElevatedDefaults;
   customInstructions?: string;
   tokenBudget?: number;
@@ -136,6 +147,8 @@ export type CompactEmbeddedAgentSessionParams = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   ownerNumbers?: string[];
   abortSignal?: AbortSignal;
+  /** @internal Refreshes the host watchdog when delegated native compaction makes progress. */
+  compactionTimeoutReset?: () => void;
   onCompactionHookMessages?: (payload: {
     phase: "before" | "after";
     messages: string[];

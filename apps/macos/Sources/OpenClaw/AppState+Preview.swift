@@ -7,7 +7,6 @@ extension AppState {
         state.launchAtLogin = true
         state.onboardingSeen = true
         state.debugPaneEnabled = true
-        state.nativeSettingsPanesEnabled = true
         state.swabbleEnabled = true
         state.swabbleTriggerWords = ["Claude", "Computer", "Jarvis"]
         state.voiceWakeTriggerChime = .system(name: "Glass")
@@ -20,6 +19,7 @@ extension AppState {
         state.voiceWakeAdditionalLocaleIDs = ["en-US", "de-DE"]
         state.voicePushToTalkEnabled = false
         state.talkEnabled = false
+        state.talkRealtimeRelayEnabled = false
         state.talkPhaseSoundsEnabled = true
         state.talkShiftToStopEnabled = true
         state.iconOverride = .system

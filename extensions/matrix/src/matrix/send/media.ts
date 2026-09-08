@@ -17,8 +17,6 @@ import type {
   MatrixRelation,
 } from "./types.js";
 
-const getCore = () => getMatrixRuntime();
-
 function buildMatrixMediaInfo(params: {
   size: number;
   mimetype?: string;
@@ -172,7 +170,7 @@ export async function prepareImageInfo(params: {
   client: MatrixClient;
   roomId: string;
 }): Promise<DimensionalFileInfo | undefined> {
-  const meta = await getCore()
+  const meta = await getMatrixRuntime()
     .media.getImageMetadata(params.buffer)
     .catch(() => null);
   if (!meta) {
@@ -182,13 +180,13 @@ export async function prepareImageInfo(params: {
   const maxDim = Math.max(meta.width, meta.height);
   if (maxDim > THUMBNAIL_MAX_SIDE) {
     try {
-      const thumbBuffer = await getCore().media.resizeToJpeg({
+      const thumbBuffer = await getMatrixRuntime().media.resizeToJpeg({
         buffer: params.buffer,
         maxSide: THUMBNAIL_MAX_SIDE,
         quality: THUMBNAIL_QUALITY,
         withoutEnlargement: true,
       });
-      const thumbMeta = await getCore()
+      const thumbMeta = await getMatrixRuntime()
         .media.getImageMetadata(thumbBuffer)
         .catch(() => null);
       const result = await uploadMediaWithEncryption(params.client, params.roomId, thumbBuffer, {

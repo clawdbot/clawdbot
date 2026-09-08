@@ -1,5 +1,6 @@
 // Google Meet tests cover oauth plugin behavior.
 import { createServer, type Server } from "node:http";
+import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildGoogleMeetAuthUrl,
@@ -231,6 +232,9 @@ describe("Google Meet OAuth", () => {
   });
 
   it("propagates non-listener callback failures without manual fallback", async () => {
+    // Test the SDK rejection without requiring the fixed callback port to be free.
+    const timeoutError = new Error("OAuth callback timeout");
+    vi.spyOn(providerAuthRuntime, "waitForLocalOAuthCallback").mockRejectedValueOnce(timeoutError);
     const promptInput = vi.fn(async () => "unused");
     await expect(
       waitForGoogleMeetAuthCode({
@@ -241,7 +245,7 @@ describe("Google Meet OAuth", () => {
         promptInput,
         writeLine: () => {},
       }),
-    ).rejects.toThrow(/timeout/i);
+    ).rejects.toBe(timeoutError);
     expect(promptInput).not.toHaveBeenCalled();
   });
 });

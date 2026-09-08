@@ -5,14 +5,14 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import type {
-  SessionTranscriptTurnWriteContext,
+  SessionTranscriptWriteScope,
   TranscriptMessageAppendResult,
 } from "./session-accessor.sqlite-contract.js";
+import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
 import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-transcript-store.js";
 
 // Append results are public SDK contracts. Keep commit-only cursor metadata
 // attached to their object lifetime without changing the returned message shape.
@@ -77,7 +77,7 @@ export function rememberCommittedTranscriptMessageSequencesInTransaction(
 
 /** Resolves final cursors while an ordinary turn still owns its writer transaction. */
 export function rememberCommittedTranscriptMessageSequences(
-  scope: SessionTranscriptTurnWriteContext,
+  scope: SessionTranscriptWriteScope,
   messages: readonly TranscriptMessageAppendResult<unknown>[],
 ): void {
   if (messages.length === 0 || !scope.agentId || !scope.sessionId || !scope.sessionKey) {
@@ -85,6 +85,7 @@ export function rememberCommittedTranscriptMessageSequences(
   }
   const resolved = resolveSqliteTranscriptScope({
     agentId: scope.agentId,
+    ...(scope.env ? { env: scope.env } : {}),
     sessionId: scope.sessionId,
     sessionKey: scope.sessionKey,
     ...(scope.storePath ? { storePath: scope.storePath } : {}),

@@ -1,4 +1,5 @@
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveConfiguredModelPolicyAllow } from "../../agents/model-selection-shared.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import {
@@ -6,6 +7,7 @@ import {
   normalizeThinkingCatalogProviders,
 } from "../../agents/thinking-runtime.js";
 import { normalizeThinkLevel, type ThinkLevel } from "../../auto-reply/thinking.js";
+import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 /** Resolves provider/model precedence for isolated cron runs. */
 import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -53,6 +55,7 @@ type ResolveCronModelSelectionResult =
       provider: string;
       model: string;
       modelSource: CronModelSelectionSource;
+      configuredProfileId?: string;
       cfgWithAgentDefaults: OpenClawConfig;
       owner: ResolvedPublishedModelCatalogOwner;
     }
@@ -161,6 +164,7 @@ export async function resolveCronThinkingSelection(params: {
     immutableThinkLevel ??
     resolveConfiguredThinkingDefault({
       cfg: params.cfg,
+      agentId: params.owner.agentId,
       provider: params.provider,
       model: params.model,
     });
@@ -204,15 +208,27 @@ export async function resolveCronModelSelection(
     config: owner.config,
     agentConfigOverride: ownerAgentConfigOverride,
   });
-  const catalog = owner.modelCatalog.entries;
   const resolvedDefault = resolveConfiguredModelRef({
     cfg: cfgWithAgentDefaults,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    manifestPlugins: owner.metadataSnapshot,
   });
+  // Overrides keep the owner's agent policy; flattened defaults only select the default model.
+  const selectionParams = {
+    cfg: owner.config,
+    catalog: owner.modelCatalog.entries,
+    defaultProvider: resolvedDefault.provider,
+    defaultModel: resolvedDefault.model,
+    agentId: ownerAgentId,
+    manifestPlugins: owner.metadataSnapshot,
+  };
   let provider = resolvedDefault.provider;
   let model = resolvedDefault.model;
   let modelSource: CronModelSelectionSource = "default";
+  let configuredProfileId = splitTrailingAuthProfile(
+    resolveAgentModelPrimaryValue(cfgWithAgentDefaults.agents?.defaults?.model) ?? "",
+  ).profile;
 
   const subagentModelConfigSelection = resolveSubagentModelConfigSelectionResult({
     cfg: owner.config,
@@ -226,17 +242,14 @@ export async function resolveCronModelSelection(
     // Subagent/agent model config is advisory here: invalid refs fall back to
     // defaults so an agent config typo does not prevent unrelated cron runs.
     const resolvedSubagent = resolveAllowedModelRefCore({
-      cfg: owner.config,
-      catalog,
+      ...selectionParams,
       raw: subagentModelRaw,
-      defaultProvider: resolvedDefault.provider,
-      defaultModel: resolvedDefault.model,
-      agentId: ownerAgentId,
     });
     if (!("error" in resolvedSubagent)) {
       provider = resolvedSubagent.ref.provider;
       model = resolvedSubagent.ref.model;
       modelSource = subagentModelSource;
+      configuredProfileId = splitTrailingAuthProfile(subagentModelRaw).profile;
     }
   }
 
@@ -245,24 +258,24 @@ export async function resolveCronModelSelection(
     ? resolveHooksGmailModel({
         cfg: owner.config,
         defaultProvider: DEFAULT_PROVIDER,
+        manifestPlugins: owner.metadataSnapshot,
       })
     : null;
   if (hooksGmailModelRef) {
     // Gmail hook models are specialized defaults: apply them only when the
     // configured ref is allowed, otherwise keep the broader cron default.
     const status = getModelRefStatus({
-      cfg: owner.config,
-      catalog,
+      ...selectionParams,
       ref: hooksGmailModelRef,
-      defaultProvider: resolvedDefault.provider,
-      defaultModel: resolvedDefault.model,
-      agentId: ownerAgentId,
     });
     if (status.allowed) {
       provider = hooksGmailModelRef.provider;
       model = hooksGmailModelRef.model;
       hooksGmailModelApplied = true;
       modelSource = "hook";
+      configuredProfileId = splitTrailingAuthProfile(
+        owner.config.hooks?.gmail?.model ?? "",
+      ).profile;
     }
   }
 
@@ -272,12 +285,8 @@ export async function resolveCronModelSelection(
     // Payload model overrides are explicit cron config, so reject disallowed
     // refs instead of silently falling back to defaults.
     const resolvedOverride = resolveAllowedModelRefCore({
-      cfg: owner.config,
-      catalog,
+      ...selectionParams,
       raw: modelOverride,
-      defaultProvider: resolvedDefault.provider,
-      defaultModel: resolvedDefault.model,
-      agentId: ownerAgentId,
     });
     if ("error" in resolvedOverride) {
       return {
@@ -293,6 +302,7 @@ export async function resolveCronModelSelection(
     provider = resolvedOverride.ref.provider;
     model = resolvedOverride.ref.model;
     modelSource = "payload";
+    configuredProfileId = splitTrailingAuthProfile(modelOverride).profile;
   }
 
   if (!modelOverride && !hooksGmailModelApplied) {
@@ -303,17 +313,14 @@ export async function resolveCronModelSelection(
       const sessionProviderOverride =
         params.sessionEntry.providerOverride?.trim() || resolvedDefault.provider;
       const resolvedSessionOverride = resolveAllowedModelRefCore({
-        cfg: owner.config,
-        catalog,
+        ...selectionParams,
         raw: `${sessionProviderOverride}/${sessionModelOverride}`,
-        defaultProvider: resolvedDefault.provider,
-        defaultModel: resolvedDefault.model,
-        agentId: ownerAgentId,
       });
       if (!("error" in resolvedSessionOverride)) {
         provider = resolvedSessionOverride.ref.provider;
         model = resolvedSessionOverride.ref.model;
         modelSource = "session";
+        configuredProfileId = undefined;
       }
     }
   }
@@ -323,6 +330,7 @@ export async function resolveCronModelSelection(
     provider,
     model,
     modelSource,
+    ...(configuredProfileId ? { configuredProfileId } : {}),
     cfgWithAgentDefaults,
     owner,
   };

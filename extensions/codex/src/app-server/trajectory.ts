@@ -28,7 +28,14 @@ export function createCodexTrajectoryRecorder(
   const trajectory = params.trajectory;
 
   return {
-    recordEvent: trajectory.recordEvent,
+    recordEvent: (type, data) => {
+      try {
+        trajectory.recordEvent(type, data);
+      } catch {
+        // Host authority can close before transport callbacks finish during shutdown.
+        // Optional diagnostics must not interrupt the owning run lifecycle.
+      }
+    },
     flush: trajectory.flush,
   };
 }
@@ -72,6 +79,7 @@ export function recordCodexTrajectoryCompletion(
     yieldDetected: params.yieldDetected ?? false,
     aborted: terminal.aborted,
     promptError: normalizeCodexTrajectoryError(terminal.promptError),
+    ...(terminal.settlementWarning ? { settlementWarning: terminal.settlementWarning } : {}),
     usage: params.result.attemptUsage,
     assistantTexts: params.result.assistantTexts,
     messagesSnapshot: params.result.messagesSnapshot,

@@ -9,6 +9,8 @@ import {
   resolveClosestResolution,
   resolveClosestSize,
   resolveMediaProviderRequestTimeoutMs,
+  resolveReferenceImageCapabilityError,
+  runMediaGenerationCandidates,
   throwCapabilityGenerationFailure,
 } from "./runtime-shared.js";
 
@@ -28,6 +30,28 @@ function parseModelRef(raw?: string) {
 }
 
 describe("media-generation runtime shared candidates", () => {
+  it.each([
+    [0, undefined, undefined],
+    [1, { enabled: false }, "provider/model does not support reference-image edit inputs"],
+    [
+      2,
+      { enabled: true, maxInputImages: 1 },
+      "provider/model supports at most 1 reference image, 2 requested",
+    ],
+    [11, { enabled: true }, "provider/model supports at most 10 reference images, 11 requested"],
+  ] as const)(
+    "validates finite reference-image capability for %s inputs",
+    (inputImageCount, edit, error) => {
+      expect(
+        resolveReferenceImageCapabilityError({
+          candidateRef: "provider/model",
+          inputImageCount,
+          edit,
+        }),
+      ).toBe(error);
+    },
+  );
+
   it("appends auth-backed provider defaults after explicit refs by default", () => {
     const cfg = {
       agents: {
@@ -157,7 +181,7 @@ describe("media-generation runtime shared candidates", () => {
         agents: {
           defaults: {
             model: {
-              primary: "openai/gpt-5.5",
+              primary: "media-alias/gpt-5.5",
             },
           },
         },
@@ -172,7 +196,7 @@ describe("media-generation runtime shared candidates", () => {
         },
         {
           id: "openai",
-          aliases: ["openai"],
+          aliases: ["media-alias"],
           defaultModel: "gpt-image-2",
           isConfigured: () => true,
         },
@@ -291,6 +315,108 @@ describe("media-generation runtime shared candidates", () => {
 
     expect(candidates[0]).toEqual({ provider: "google", model: "lyria-3-pro-preview" });
   });
+});
+
+describe("media-generation candidate lifecycle", () => {
+  it("preserves missing, skipped, and failed attempts before the first usable result", async () => {
+    const calls: string[] = [];
+    const result = await runMediaGenerationCandidates({
+      candidates: ["missing", "skipped", "failed", "success", "unused"].map((provider) => ({
+        provider,
+        model: "model",
+      })),
+      capability: "image",
+      includeSkipFailureDetails: true,
+      getProvider(id) {
+        calls.push(`lookup:${id}`);
+        return id === "missing" ? undefined : { id };
+      },
+      prepareCandidate(candidate) {
+        if (candidate.provider === "skipped") {
+          return "reference inputs unsupported";
+        }
+        return async (attempts) => {
+          calls.push(`generate:${candidate.provider}`);
+          if (candidate.provider === "failed") {
+            throw new Error("generation failed");
+          }
+          return { model: "selected-model", attempts };
+        };
+      },
+    });
+
+    expect(result.model).toBe("selected-model");
+    expect(result.attempts).toStrictEqual([
+      {
+        provider: "missing",
+        model: "model",
+        error: "No image-generation provider registered for missing",
+      },
+      {
+        provider: "skipped",
+        model: "model",
+        error: "reference inputs unsupported",
+        reason: undefined,
+        status: undefined,
+        code: undefined,
+      },
+      {
+        provider: "failed",
+        model: "model",
+        error: "generation failed",
+        reason: undefined,
+        status: undefined,
+        code: undefined,
+      },
+    ]);
+    expect(calls).toEqual([
+      "lookup:missing",
+      "lookup:skipped",
+      "lookup:failed",
+      "generate:failed",
+      "lookup:success",
+      "generate:success",
+    ]);
+  });
+
+  it.each(["lookup", "prepare", "async prepare"])(
+    "propagates %s failures without submitting a fallback",
+    async (stage) => {
+      const error = new Error("provider registry unavailable");
+      const lookedUp: string[] = [];
+      let executions = 0;
+      const result = runMediaGenerationCandidates({
+        candidates: [
+          { provider: "primary", model: "model" },
+          { provider: "fallback", model: "model" },
+        ],
+        capability: "video",
+        getProvider(id) {
+          lookedUp.push(id);
+          if (stage === "lookup") {
+            throw error;
+          }
+          return { id };
+        },
+        prepareCandidate() {
+          if (stage === "prepare") {
+            throw error;
+          }
+          if (stage === "async prepare") {
+            return Promise.reject(error);
+          }
+          return async () => {
+            executions += 1;
+            return "unexpected generation";
+          };
+        },
+      });
+
+      await expect(result).rejects.toBe(error);
+      expect(lookedUp).toEqual(["primary"]);
+      expect(executions).toBe(0);
+    },
+  );
 });
 
 describe("media-generation runtime shared normalization", () => {

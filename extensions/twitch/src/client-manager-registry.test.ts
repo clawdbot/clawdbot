@@ -6,7 +6,7 @@ import {
   getOrCreateClientManager,
   removeClientManager,
 } from "./client-manager-registry.js";
-import { sendMessageTwitchInternal } from "./send.js";
+import { twitchOutbound } from "./outbound.js";
 import { BASE_TWITCH_TEST_ACCOUNT, makeTwitchTestConfig } from "./test-fixtures.js";
 import type { ChannelLogSink, TwitchAccountConfig } from "./types.js";
 
@@ -108,33 +108,30 @@ describe("client manager registry", () => {
     const removal = removeClientManager("default");
 
     try {
-      const whileRetiring = await sendMessageTwitchInternal(
-        "#testchannel",
-        "while retiring",
-        config,
-        "default",
-        false,
+      await expect(
+        twitchOutbound.sendText!({
+          to: "#testchannel",
+          text: "while retiring",
+          cfg: config,
+          accountId: "default",
+        }),
+      ).rejects.toThrow(
+        "Client manager not found for account: default. Please start the Twitch gateway first.",
       );
-
-      expect(whileRetiring).toMatchObject({
-        ok: false,
-        error:
-          "Client manager not found for account: default. Please start the Twitch gateway first.",
-      });
       expect(reconnect).not.toHaveBeenCalled();
       expect(first.transport.say).not.toHaveBeenCalled();
 
       const replacement = getOrCreateClientManager("default", makeLogger());
       const { transport } = attachFakeTransport(replacement);
-      const afterRestart = await sendMessageTwitchInternal(
-        "#testchannel",
-        "after restart",
-        config,
-        "default",
-        false,
-      );
+      const afterRestart = await twitchOutbound.sendText!({
+        to: "#testchannel",
+        text: "after restart",
+        cfg: config,
+        accountId: "default",
+      });
 
-      expect(afterRestart.ok).toBe(true);
+      expect(afterRestart.messageId).toEqual(expect.any(String));
+      expect(afterRestart.receipt?.platformMessageIds).toEqual([afterRestart.messageId]);
       expect(transport.say).toHaveBeenCalledWith("testchannel", "after restart");
 
       cleanup.resolve();

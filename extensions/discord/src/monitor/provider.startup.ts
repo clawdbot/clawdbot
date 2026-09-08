@@ -26,6 +26,7 @@ import {
   waitForDiscordGatewayPluginRegistration,
 } from "./gateway-plugin.js";
 import { createDiscordGatewaySupervisor } from "./gateway-supervisor.js";
+import { DiscordGuildJoinIntroductionListener } from "./listeners.guild-join.js";
 import {
   DiscordMessageListener,
   DiscordPresenceGuildCreateListener,
@@ -39,6 +40,7 @@ import {
   DiscordThreadUpdateListener,
   registerDiscordListener,
 } from "./listeners.js";
+import type { DiscordLivePolicyReader } from "./live-policy.js";
 import { resolveDiscordPresenceUpdate } from "./presence.js";
 
 type DiscordAutoPresenceController = ReturnType<typeof createDiscordAutoPresenceController>;
@@ -232,6 +234,7 @@ export async function fetchDiscordBotIdentity(params: {
 }
 
 export function registerDiscordMonitorListeners(params: {
+  readPolicy?: DiscordLivePolicyReader;
   cfg: OpenClawConfig;
   client: Pick<Client, "listeners">;
   accountId: string;
@@ -257,33 +260,44 @@ export function registerDiscordMonitorListeners(params: {
     params.client.listeners,
     new DiscordMessageListener(params.messageHandler, params.logger, params.trackInboundEvent),
   );
-
-  if (shouldRegisterDiscordReactionListeners(params)) {
-    const reactionListenerOptions: ConstructorParameters<typeof DiscordReactionListener>[0] = {
+  registerDiscordListener(
+    params.client.listeners,
+    new DiscordGuildJoinIntroductionListener({
+      readPolicy: params.readPolicy,
       cfg: params.cfg,
       accountId: params.accountId,
-      runtime: params.runtime,
       botUserId: params.botUserId,
-      dmEnabled: params.dmEnabled,
-      groupDmEnabled: params.groupDmEnabled,
-      groupDmChannels: params.groupDmChannels ?? [],
-      dmPolicy: params.dmPolicy,
-      allowFrom: params.allowFrom ?? [],
       groupPolicy: params.groupPolicy,
-      allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig),
       guildEntries: params.guildEntries,
       logger: params.logger,
-      onEvent: params.trackInboundEvent,
-    };
-    registerDiscordListener(
-      params.client.listeners,
-      new DiscordReactionListener(reactionListenerOptions),
-    );
-    registerDiscordListener(
-      params.client.listeners,
-      new DiscordReactionRemoveListener(reactionListenerOptions),
-    );
-  }
+    }),
+  );
+
+  const reactionListenerOptions: ConstructorParameters<typeof DiscordReactionListener>[0] = {
+    readPolicy: params.readPolicy,
+    cfg: params.cfg,
+    accountId: params.accountId,
+    runtime: params.runtime,
+    botUserId: params.botUserId,
+    dmEnabled: params.dmEnabled,
+    groupDmEnabled: params.groupDmEnabled,
+    groupDmChannels: params.groupDmChannels ?? [],
+    dmPolicy: params.dmPolicy,
+    allowFrom: params.allowFrom ?? [],
+    groupPolicy: params.groupPolicy,
+    allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig),
+    guildEntries: params.guildEntries,
+    logger: params.logger,
+    onEvent: params.trackInboundEvent,
+  };
+  registerDiscordListener(
+    params.client.listeners,
+    new DiscordReactionListener(reactionListenerOptions),
+  );
+  registerDiscordListener(
+    params.client.listeners,
+    new DiscordReactionRemoveListener(reactionListenerOptions),
+  );
   registerDiscordListener(
     params.client.listeners,
     new DiscordThreadUpdateListener(params.cfg, params.logger),
@@ -295,6 +309,7 @@ export function registerDiscordMonitorListeners(params: {
 
   if (params.discordConfig.intents?.presence) {
     const presenceListener = new DiscordPresenceListener({
+      readPolicy: params.readPolicy,
       cfg: params.cfg,
       logger: params.logger,
       accountId: params.accountId,
@@ -316,23 +331,4 @@ export function registerDiscordMonitorListeners(params: {
     );
     params.runtime.log?.("discord: GuildPresences intent enabled — presence listener registered");
   }
-}
-
-function shouldRegisterDiscordReactionListeners(params: {
-  dmEnabled: boolean;
-  groupDmEnabled: boolean;
-  groupPolicy: "open" | "allowlist" | "disabled";
-  guildEntries?: Record<string, DiscordGuildEntryResolved>;
-}): boolean {
-  if (params.dmEnabled || params.groupDmEnabled) {
-    return true;
-  }
-  if (params.groupPolicy === "disabled") {
-    return false;
-  }
-  const guildEntries = Object.values(params.guildEntries ?? {});
-  if (guildEntries.length === 0) {
-    return true;
-  }
-  return guildEntries.some((entry) => entry.reactionNotifications !== "off");
 }

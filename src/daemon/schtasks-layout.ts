@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { hasErrnoCode } from "../infra/errno.js";
 import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
 import {
   decodeWindowsLauncherScript,
@@ -12,11 +13,14 @@ import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
 import { resolveGatewayWindowsTaskName } from "./constants.js";
 import { resolveGatewayTaskScriptPath } from "./paths.js";
+import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceEnv,
+  GatewayServiceReadOptions,
   GatewayServiceRenderArgs,
 } from "./service-types.js";
+import { WINDOWS_TASK_SUPERVISOR_FLAG } from "./windows-task-supervisor-contract.js";
 
 export function resolveTaskName(env: GatewayServiceEnv): string {
   const override = env.OPENCLAW_WINDOWS_TASK_NAME?.trim();
@@ -24,6 +28,14 @@ export function resolveTaskName(env: GatewayServiceEnv): string {
     return override;
   }
   return resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
+}
+
+// Keeps the service gateway's stdin off the (possibly hidden) console so TTY
+// heuristics fail closed for permission prompts (#112173).
+const STDIN_NUL_REDIRECT = "< NUL";
+
+function stripStdinNulRedirect(commandLine: string): string {
+  return commandLine.replace(/\s*<\s*NUL\s*$/i, "");
 }
 
 export function shouldFallbackToStartupEntry(params: { code: number; detail: string }): boolean {
@@ -148,6 +160,10 @@ export function buildScheduledTaskXml(params: {
     <RunOnlyIfIdle>false</RunOnlyIfIdle>
     <WakeToRun>false</WakeToRun>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <RestartOnFailure>
+      <Interval>PT1M</Interval>
+      <Count>3</Count>
+    </RestartOnFailure>
     <Priority>7</Priority>
   </Settings>
   <Actions Context="Author">
@@ -186,17 +202,6 @@ export function resolveTaskUser(env: GatewayServiceEnv): string | null {
   return username;
 }
 
-export function resolveSchtasksCreateUser(
-  env: GatewayServiceEnv,
-  taskUser: string | null,
-): string | null {
-  // Workgroup tasks stay XML user-scoped, but omit /RU so schtasks binds the caller.
-  if (normalizeLowercaseStringOrEmpty(env.USERDOMAIN) === "workgroup") {
-    return null;
-  }
-  return taskUser;
-}
-
 export function shouldUseHiddenWindowsTaskLauncher(env: GatewayServiceEnv): boolean {
   const value = normalizeLowercaseStringOrEmpty(env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER);
   return value === "1" || value === "true" || value === "yes";
@@ -212,6 +217,7 @@ export function resolveTaskLauncherScriptPath(env: GatewayServiceEnv, scriptPath
 
 export async function readScheduledTaskCommand(
   env: GatewayServiceEnv,
+  options?: GatewayServiceReadOptions,
 ): Promise<GatewayServiceCommandConfig | null> {
   const scriptPath = resolveTaskScriptPath(env);
   try {
@@ -229,7 +235,13 @@ export async function readScheduledTaskCommand(
         continue;
       }
       if (lower.startsWith("set ")) {
-        const assignment = parseCmdSetAssignment(line.slice(4));
+        const assignment = parseCmdSetAssignment(
+          rawLine.trimStart().slice(4),
+          options?.requireEffective,
+        );
+        if (!assignment && options?.requireEffective) {
+          throw new Error("Invalid Scheduled Task environment assignment");
+        }
         if (assignment) {
           // Generated cmd launchers inline service env before the final command.
           environment[assignment.key] = assignment.value;
@@ -240,15 +252,25 @@ export async function readScheduledTaskCommand(
         workingDirectory = line.slice("cd /d ".length).trim().replace(/^"|"$/g, "");
         continue;
       }
-      commandLine = line;
+      // Generated launchers redirect stdin so a hidden service console never
+      // presents as interactive (#112173); the redirection is not an argument.
+      commandLine = stripStdinNulRedirect(line);
       break;
     }
     if (!commandLine) {
-      return null;
+      throw new Error("Missing Scheduled Task command");
+    }
+    const programArguments = parseCmdScriptCommandLine(commandLine).filter(
+      (argument) => argument !== WINDOWS_TASK_SUPERVISOR_FLAG,
+    );
+    if (options?.requireEffective && programArguments.length === 0) {
+      throw new Error("Missing Scheduled Task command");
     }
     const hasEnvironment = Object.keys(environment).length > 0;
     return {
-      programArguments: parseCmdScriptCommandLine(commandLine),
+      // The task-only outer process owns the Job Object; diagnostics and lifecycle
+      // controls must compare against its inner Gateway child, which omits this flag.
+      programArguments,
       ...(workingDirectory ? { workingDirectory } : {}),
       ...(hasEnvironment ? { environment } : {}),
       ...(hasEnvironment
@@ -260,9 +282,40 @@ export async function readScheduledTaskCommand(
         : {}),
       sourcePath: scriptPath,
     };
-  } catch {
-    return null;
+  } catch (error) {
+    if (!options?.requireEffective) {
+      return null;
+    }
+    if (
+      hasErrnoCode(error, "ENOENT") &&
+      (await isScheduledTaskDefinitionAbsent(env, options.timeoutMs).catch(() => false))
+    ) {
+      return null;
+    }
   }
+  // Native failures can contain raw service credentials; expose only the closed diagnostic.
+  throw new Error("Effective Scheduled Task service command could not be inspected.");
+}
+
+async function isScheduledTaskDefinitionAbsent(
+  env: GatewayServiceEnv,
+  timeoutMs?: number,
+): Promise<boolean> {
+  // A missing script can still belong to a registered task or Startup login item.
+  if (probeScheduledTaskExists(resolveTaskName(env), timeoutMs) !== false) {
+    return false;
+  }
+  for (const pathname of [resolveTaskScriptPath(env), ...resolveStartupEntryPaths(env)]) {
+    try {
+      await fs.lstat(pathname);
+      return false;
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT")) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 export function buildTaskScript({
@@ -282,13 +335,29 @@ export function buildTaskScript({
   }
   if (environment) {
     for (const [key, value] of Object.entries(environment)) {
-      if (!value || key.toUpperCase() === "PATH") {
+      // `set "NODE_OPTIONS="` clears inherited flags before the Node command runs.
+      if (
+        value === undefined ||
+        (!value && key.toUpperCase() !== "NODE_OPTIONS") ||
+        key.toUpperCase() === "PATH"
+      ) {
         continue;
       }
       lines.push(renderCmdSetAssignment(key, value));
     }
   }
-  lines.push(programArguments.map(quoteCmdScriptArg).join(" "));
+  // Redirect stdin from NUL: a Scheduled Task console (even hidden via the
+  // VBS launcher) still hands the gateway real console handles, so
+  // `process.stdin.isTTY` reports true and interactive permission prompts
+  // block forever on a console no one can see (#112173). With stdin at NUL
+  // the gateway and its workers correctly take non-interactive paths.
+  const commandArguments =
+    environment?.OPENCLAW_SERVICE_KIND === "gateway"
+      ? [...programArguments, WINDOWS_TASK_SUPERVISOR_FLAG]
+      : programArguments;
+  lines.push(
+    `${commandArguments.map((argument) => quoteCmdScriptArg(argument)).join(" ")} ${STDIN_NUL_REDIRECT}`,
+  );
   return `${lines.join("\r\n")}\r\n`;
 }
 
@@ -330,7 +399,7 @@ export function buildHiddenLauncherScript(params: {
     lines.push(`' ${trimmedDescription}`);
   }
   lines.push(
-    `CreateObject("WScript.Shell").Run ${quoteVbsRunCommand(params.scriptPath)}, 0, False`,
+    `WScript.Quit CreateObject("WScript.Shell").Run(${quoteVbsRunCommand(params.scriptPath)}, 0, True)`,
   );
   return `${lines.join("\r\n")}\r\n`;
 }

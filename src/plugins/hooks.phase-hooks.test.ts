@@ -4,7 +4,8 @@ import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/
 import { readToolAllowlistIntersection } from "../agents/tool-policy.js";
 import { createHookRunner } from "./hooks.js";
 import { addStaticTestHooks } from "./hooks.test-fixtures.js";
-import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import type { PluginRegistry } from "./registry.js";
 import type {
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildResult,

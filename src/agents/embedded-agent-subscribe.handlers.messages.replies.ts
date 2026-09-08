@@ -12,18 +12,8 @@ export function hasReplyDirectiveMetadata(
 ): boolean {
   return Boolean(
     parsed &&
-    ((parsed.mediaUrls?.length ?? 0) > 0 ||
-      parsed.audioAsVoice ||
-      parsed.replyToId ||
-      parsed.replyToTag ||
-      parsed.replyToCurrent),
+    (parsed.audioAsVoice || parsed.replyToId || parsed.replyToTag || parsed.replyToCurrent),
   );
-}
-
-function hasReplyDirectiveMetadataResult(
-  parsed: ReplyDirectiveParseResult | null | undefined,
-): parsed is ReplyDirectiveParseResult {
-  return hasReplyDirectiveMetadata(parsed);
 }
 
 export function mergeReplyDirectiveResults(
@@ -36,10 +26,8 @@ export function mergeReplyDirectiveResults(
   if (!second) {
     return first;
   }
-  const mediaUrls = uniqueStrings([...(first.mediaUrls ?? []), ...(second.mediaUrls ?? [])]);
   return {
     text: `${first.text ?? ""}${second.text ?? ""}`,
-    mediaUrls: mediaUrls.length ? mediaUrls : undefined,
     replyToId: second.replyToId ?? first.replyToId,
     replyToCurrent: first.replyToCurrent || second.replyToCurrent,
     replyToTag: first.replyToTag || second.replyToTag,
@@ -160,22 +148,39 @@ export function consumePendingToolMediaIntoReply(
   return mergedPayload;
 }
 
-/** Consumes queued tool media as a standalone reply payload. */
-export function consumePendingToolMediaReply(
+/** Restores reserved tool media after its outbound delivery was rejected. */
+export function restorePendingToolMediaReply(
   state: Pick<
     EmbeddedAgentSubscribeState,
     | "pendingToolMediaUrls"
     | "pendingToolMediaAttachments"
     | "pendingToolMediaTrustByUrl"
     | "pendingToolAudioAsVoice"
+    | "pendingToolMediaDeliveryFailed"
   >,
-): BlockReplyPayload | null {
-  const payload = readPendingToolMediaReply(state);
-  if (!payload) {
-    return null;
+  payload: BlockReplyPayload,
+): void {
+  const pendingUrls = state.pendingToolMediaUrls;
+  const pendingAttachments = state.pendingToolMediaAttachments ?? [];
+  const restoredUrls = payload.mediaUrls ?? [];
+  const restoredAttachments = payload.attachments ?? [];
+  const seen = new Set(restoredUrls);
+  state.pendingToolMediaUrls = [...restoredUrls, ...pendingUrls.filter((url) => !seen.has(url))];
+  state.pendingToolMediaAttachments = [
+    ...restoredUrls.map((_, index) => restoredAttachments[index] ?? {}),
+    ...pendingUrls.flatMap((url, index) =>
+      seen.has(url) ? [] : [pendingAttachments[index] ?? {}],
+    ),
+  ];
+  for (const [index, url] of restoredUrls.entries()) {
+    if (payload.trustedLocalMedia || restoredAttachments[index]?.trustedLocalMedia) {
+      state.pendingToolMediaTrustByUrl.set(url, true);
+    } else if (!state.pendingToolMediaTrustByUrl.has(url)) {
+      state.pendingToolMediaTrustByUrl.set(url, false);
+    }
   }
-  clearPendingToolMedia(state);
-  return payload;
+  state.pendingToolAudioAsVoice ||= payload.audioAsVoice === true;
+  state.pendingToolMediaDeliveryFailed = true;
 }
 
 /** Reads queued tool media without clearing it. */
@@ -207,17 +212,13 @@ export function recordPendingAssistantReplyDirectives(
   state: Pick<EmbeddedAgentSubscribeState, "pendingAssistantReplyDirectives">,
   parsed: ReplyDirectiveParseResult | null | undefined,
 ) {
-  if (!hasReplyDirectiveMetadataResult(parsed)) {
+  if (!parsed || !hasReplyDirectiveMetadata(parsed)) {
     return;
   }
   const current = state.pendingAssistantReplyDirectives;
-  const mediaUrls = Array.from(
-    new Set([...(current?.mediaUrls ?? []), ...(parsed.mediaUrls ?? [])]),
-  );
   state.pendingAssistantReplyDirectives = {
-    mediaUrls: mediaUrls.length ? mediaUrls : undefined,
-    audioAsVoice: current?.audioAsVoice || parsed?.audioAsVoice || undefined,
-    replyToId: parsed?.replyToId ?? current?.replyToId,
+    audioAsVoice: current?.audioAsVoice || parsed.audioAsVoice || undefined,
+    replyToId: parsed.replyToId ?? current?.replyToId,
     replyToTag: current?.replyToTag || parsed.replyToTag || undefined,
     replyToCurrent: current?.replyToCurrent || parsed.replyToCurrent || undefined,
   };
@@ -232,13 +233,9 @@ export function consumePendingAssistantReplyDirectivesIntoReply(
     return payload;
   }
   const pending = state.pendingAssistantReplyDirectives;
-  const mediaUrls = Array.from(
-    new Set([...(payload.mediaUrls ?? []), ...(pending.mediaUrls ?? [])]),
-  );
   state.pendingAssistantReplyDirectives = undefined;
   return {
     ...payload,
-    mediaUrls: mediaUrls.length ? mediaUrls : undefined,
     audioAsVoice: payload.audioAsVoice || pending.audioAsVoice || undefined,
     replyToId: payload.replyToId ?? pending.replyToId,
     replyToTag: Boolean(payload.replyToTag || pending.replyToTag) || undefined,
@@ -256,4 +253,12 @@ export function hasAssistantVisibleReply(params: {
   return resolveSendableOutboundReplyParts(params).hasContent || Boolean(params.audioAsVoice);
 }
 
-/** Builds normalized stream payload data for assistant visible output. */
+/** Exact tool-owned media that the managed WebChat pipeline may hide from display text. */
+export function resolveManagedStreamMediaUrls(
+  state: Pick<EmbeddedAgentSubscribeState, "pendingToolMediaTrustByUrl">,
+  mediaUrls: readonly string[],
+): string[] {
+  return uniqueStrings(
+    mediaUrls.filter((url) => state.pendingToolMediaTrustByUrl.get(url.trim()) === true),
+  );
+}

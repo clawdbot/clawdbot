@@ -13,8 +13,6 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
@@ -31,29 +29,14 @@ internal data class SystemNotifyRequest(
 
 /** Notification posting seam used by production Android and unit tests. */
 internal interface SystemNotificationPoster {
-  fun isAuthorized(): Boolean
-
   fun post(request: SystemNotifyRequest)
 }
 
 private class AndroidSystemNotificationPoster(
   private val appContext: Context,
 ) : SystemNotificationPoster {
-  /** Checks both Android 13 runtime permission and app-level notification enablement. */
-  override fun isAuthorized(): Boolean {
-    if (Build.VERSION.SDK_INT >= 33) {
-      val granted =
-        ContextCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) ==
-          PackageManager.PERMISSION_GRANTED
-      if (!granted) return false
-    }
-    return NotificationManagerCompat.from(appContext).areNotificationsEnabled()
-  }
-
   /** Posts through a priority-specific channel so Android's immutable channel importance is respected. */
   override fun post(request: SystemNotifyRequest) {
-    val channelId = ensureChannel(request.priority)
-    val notification = buildSystemNotification(appContext, channelId, request)
     if (
       Build.VERSION.SDK_INT >= 33 &&
       ContextCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) !=
@@ -61,6 +44,11 @@ private class AndroidSystemNotificationPoster(
     ) {
       throw SecurityException("notifications permission missing")
     }
+    if (!NotificationManagerCompat.from(appContext).areNotificationsEnabled()) {
+      throw SecurityException("notifications disabled")
+    }
+    val channelId = ensureChannel(request.priority)
+    val notification = buildSystemNotification(appContext, channelId, request)
     NotificationManagerCompat.from(appContext).notify((System.currentTimeMillis() and 0x7FFFFFFF).toInt(), notification)
   }
 
@@ -70,20 +58,29 @@ private class AndroidSystemNotificationPoster(
     // to stable channel ids instead of mutating one shared channel.
     val (suffix, importance, name) =
       when (normalizedPriority) {
-        "passive" ->
+        "passive" -> {
           Triple("passive", NotificationManager.IMPORTANCE_LOW, nativeString("OpenClaw Passive"))
-        "timesensitive" ->
+        }
+
+        "timesensitive" -> {
           Triple(
             "timesensitive",
             NotificationManager.IMPORTANCE_HIGH,
             nativeString("OpenClaw Time Sensitive"),
           )
-        else ->
+        }
+
+        else -> {
           Triple("active", NotificationManager.IMPORTANCE_DEFAULT, nativeString("OpenClaw Active"))
+        }
       }
     val channelId = "$NOTIFICATION_CHANNEL_BASE_ID.$suffix"
     val manager = appContext.getSystemService(NotificationManager::class.java)
     val existing = manager.getNotificationChannel(channelId)
+    // notify() silently drops blocked channels; report the user's existing choice before posting.
+    if (existing?.importance == NotificationManager.IMPORTANCE_NONE) {
+      throw SecurityException("notification channel disabled")
+    }
     if (existing == null) {
       manager.createNotificationChannel(NotificationChannel(channelId, name, importance))
     }
@@ -121,7 +118,7 @@ internal fun buildSystemNotification(
     .build()
 
 /** Handles system-level node.invoke commands implemented by Android services. */
-class SystemHandler private constructor(
+class SystemHandler internal constructor(
   private val poster: SystemNotificationPoster,
 ) {
   constructor(appContext: Context) : this(poster = AndroidSystemNotificationPoster(appContext))
@@ -140,19 +137,13 @@ class SystemHandler private constructor(
         message = "INVALID_REQUEST: empty notification",
       )
     }
-    if (!poster.isAuthorized()) {
-      return GatewaySession.InvokeResult.error(
-        code = "NOT_AUTHORIZED",
-        message = "NOT_AUTHORIZED: notifications",
-      )
-    }
     return try {
       poster.post(params)
       GatewaySession.InvokeResult.ok(null)
     } catch (_: SecurityException) {
       GatewaySession.InvokeResult.error(
         code = "NOT_AUTHORIZED",
-        message = "NOT_AUTHORIZED: notifications",
+        message = "NOT_AUTHORIZED: enable OpenClaw notifications and the selected priority in Android Settings",
       )
     } catch (err: Throwable) {
       GatewaySession.InvokeResult.error(
@@ -163,7 +154,7 @@ class SystemHandler private constructor(
   }
 
   private fun parseNotifyRequest(paramsJson: String?): SystemNotifyRequest? {
-    val params = parseParamsObject(paramsJson) ?: return null
+    val params = parseJsonParamsObject(paramsJson) ?: return null
     // title/body are required by the gateway contract; optional fields only
     // influence Android channel/silence behavior.
     val rawTitle =
@@ -182,19 +173,5 @@ class SystemHandler private constructor(
       sound = sound?.trim()?.ifEmpty { null },
       priority = priority?.trim()?.ifEmpty { null },
     )
-  }
-
-  private fun parseParamsObject(paramsJson: String?): JsonObject? {
-    if (paramsJson.isNullOrBlank()) return null
-    return try {
-      Json.parseToJsonElement(paramsJson).asObjectOrNull()
-    } catch (_: Throwable) {
-      null
-    }
-  }
-
-  companion object {
-    /** Creates a handler with a fake poster for parser and authorization tests. */
-    internal fun forTesting(poster: SystemNotificationPoster): SystemHandler = SystemHandler(poster)
   }
 }

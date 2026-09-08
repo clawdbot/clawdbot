@@ -5,7 +5,7 @@ read_when:
   - You're doing first-run setup with the onboarding wizard
   - You want to set the default workspace path
   - You need the baseline-only setup flag for scripts
-title: "Setup"
+title: "Setup CLI"
 ---
 
 # `openclaw setup`
@@ -37,10 +37,17 @@ Guided inference detection runs on the Gateway host on macOS or Linux. The CLI
 and macOS app call the same Gateway-owned detector, which checks configured
 models, supported CLI logins, API-key environment variables, and already
 installed Ollama or LM Studio models. Local models are never downloaded by this
-automatic pass. Detected local runtimes are auto-tested after CLI and API-key
-candidates; when several local models are available, OpenClaw prefers the
-strongest tool-calling instruct family. The selected candidate must answer a
-real completion before its provider and model configuration is saved.
+discovery pass. Both CLI onboarding and the macOS app wait for you to choose a
+connection before testing it. A failed or cancelled attempt never selects another
+provider automatically. A selected candidate must answer a real completion before
+its provider and model configuration is saved.
+
+Initial Claude Code and Codex detection checks executable versions without
+running auth-status commands or starting an app server. Readable Codex
+credentials are reported as stored evidence; the active login remains
+unverified during detection. Stored credentials do not
+receive verified-subscription priority over environment API keys.
+
 Pi and OpenCode CLIs may also be reported for context when they cannot serve as
 the reusable inference route for guided setup. Gemini CLI and Antigravity are
 not offered as detected setup routes.
@@ -56,6 +63,11 @@ terminal hatch as `openclaw onboard --tui`. See [Onboard](/cli/onboard) and
 [CLI automation](/start/wizard-cli-automation) for the full flag reference and
 non-interactive examples. `openclaw onboard --modern` remains a compatibility
 entry for the same inference-gated OpenClaw assistant.
+
+Local onboarding generates a Gateway secret in token mode by default, without
+asking you to choose token or password. Existing password-mode configs are
+preserved. Use `--gateway-auth password` or `--gateway-password <value>` to
+choose a password explicitly; Tailscale Funnel still requires password mode.
 
 <Note>
 `openclaw setup` is for mutable config installs. In Nix mode (`OPENCLAW_NIX_MODE=1`) OpenClaw refuses setup writes because the config file is managed by Nix. Use the first-party [nix-openclaw Quick Start](https://github.com/openclaw/nix-openclaw#quick-start) or the equivalent source config for another Nix package.
@@ -91,7 +103,9 @@ In interactive onboarding, `--remote-url`, `--remote-token`, and
 `--remote-password` prefill the remote Gateway step and take precedence over
 stored remote values for that run. Pass either a token or a password, not both.
 Changing the URL does not reuse stored credentials unless you also provide a new
-token or password. The credential remains masked and uses the wizard's selected
+token or password. The interactive step asks for one **Gateway secret** and
+stores it as `gateway.remote.token`; either field is accepted by the Gateway.
+The credential remains masked and uses the wizard's selected
 plaintext or SecretRef storage mode. `--gateway-token`, `--gateway-token-ref-env`,
 and `--gateway-password` configure a local Gateway and are not valid in remote
 mode. For remote token SecretRefs, set `OPENCLAW_GATEWAY_TOKEN` and use

@@ -8,6 +8,7 @@ import {
   createCodexRuntimePlanFixture,
   createParams as createSharedParams,
   runCodexAppServerAttempt as runSharedCodexAppServerAttempt,
+  seedRunSessionOwnerForTest,
   setupRunAttemptTestHooks,
   tempDir,
   threadStartResult,
@@ -71,6 +72,13 @@ function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAtt
   return params;
 }
 
+function createChatgptAccessToken(accountId: string): string {
+  const payload = Buffer.from(
+    JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } }),
+  ).toString("base64url");
+  return `e30.${payload}.test-signature`;
+}
+
 function setPreparedOpenAIRoute(
   params: EmbeddedRunAttemptParams,
   authRequirement: "api-key" | "subscription",
@@ -106,8 +114,14 @@ const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
 });
 const APP_SERVER_START_WAIT = { interval: 1, timeout: 5_000 } as const;
 
-function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppServerBinding>) {
+async function writeCodexAppServerBinding(
+  ...args: Parameters<typeof writeRawCodexAppServerBinding>
+) {
   const [sessionFile, binding, lookup] = args;
+  await seedRunSessionOwnerForTest(
+    AUTH_PROFILE_RUNTIME_CONTRACT.sessionId,
+    AUTH_PROFILE_RUNTIME_CONTRACT.sessionKey,
+  );
   return writeRawCodexAppServerBinding(
     sessionFile,
     {
@@ -118,12 +132,21 @@ function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppS
   );
 }
 
-function createCodexAuthProfileHarness(params: { startMethod: "thread/start" | "thread/resume" }) {
+function createCodexAuthProfileHarness(params: {
+  startMethod: "thread/start" | "thread/resume";
+  persistedThreads?: string[];
+}) {
   const seenAuthProfileIds: Array<string | undefined> = [];
   const seenAgentDirs: Array<string | undefined> = [];
   const seenClientOptions: CodexAppServerClientOptions[] = [];
   const harness = createAppServerHarness(
     async (method) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === params.startMethod) {
         return threadStartResult("thread-auth-contract", { cwd: "" });
       }
@@ -133,6 +156,7 @@ function createCodexAuthProfileHarness(params: { startMethod: "thread/start" | "
       throw new Error(`unexpected method: ${method}`);
     },
     {
+      persistedThreads: params.persistedThreads,
       onStart(authProfileId, agentDir, options) {
         seenAuthProfileIds.push(authProfileId);
         seenAgentDirs.push(agentDir);
@@ -191,7 +215,10 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
   });
 
   it("reuses a bound OpenAI Codex auth profile when resume params omit authProfileId", async () => {
-    const harness = createCodexAuthProfileHarness({ startMethod: "thread/resume" });
+    const harness = createCodexAuthProfileHarness({
+      startMethod: "thread/resume",
+      persistedThreads: ["thread-auth-contract"],
+    });
     const sessionFile = path.join(tmpDir, "session.jsonl");
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-auth-contract",
@@ -216,7 +243,10 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
   });
 
   it("prefers an explicit runtime auth profile over a stale persisted binding", async () => {
-    const harness = createCodexAuthProfileHarness({ startMethod: "thread/resume" });
+    const harness = createCodexAuthProfileHarness({
+      startMethod: "thread/resume",
+      persistedThreads: ["thread-auth-contract"],
+    });
     const sessionFile = path.join(tmpDir, "session.jsonl");
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-auth-contract",
@@ -294,9 +324,10 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
         "openai:chatgpt": {
           type: "oauth" as const,
           provider: "openai",
-          access: "subscription-token",
+          access: createChatgptAccessToken("account-oauth"),
           refresh: "refresh-token",
           expires: Date.now() + 60 * 60_000,
+          accountId: "account-oauth",
         },
       },
     };
@@ -313,6 +344,12 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
         kind: "profile",
         profileId: "openai:chatgpt",
         store: authProfileStore,
+        snapshot: {
+          loginParams: {
+            type: "chatgptAuthTokens",
+            chatgptAccountId: "account-oauth",
+          },
+        },
       },
     });
     expect(harness.seenClientOptions[0]).not.toHaveProperty("authProfileId");
@@ -331,7 +368,7 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
         "openai:token": {
           type: "token" as const,
           provider: "openai",
-          token: "prepared-subscription-token",
+          token: createChatgptAccessToken("account-token"),
         },
       },
     };
@@ -348,6 +385,12 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
         kind: "profile",
         profileId: "openai:token",
         store: authProfileStore,
+        snapshot: {
+          loginParams: {
+            type: "chatgptAuthTokens",
+            chatgptAccountId: "account-token",
+          },
+        },
       },
     });
     await harness.waitForMethod("turn/start");

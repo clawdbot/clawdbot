@@ -1,0 +1,146 @@
+title: Telegram Markdown parser fidelity
+
+scenario:
+  id: telegram-markdown-parser-fidelity
+  surface: channels
+  coverage:
+    primary:
+      - telegram.conversation-routing-and-delivery
+  objective: Preserve code whitespace, unclosed link labels, and IPv6 destinations through Gateway sends and the Telegram plugin.
+  successCriteria:
+    - Each synthetic Gateway send produces exactly one accepted Telegram HTML payload.
+    - Code spans and table cells retain their significant spaces.
+    - Unclosed labels retain inline code and IPv6 links retain their host brackets.
+    - Plain-text fallback cannot satisfy the exact HTML and parse_mode assertions.
+  docsRefs:
+    - docs/concepts/markdown-formatting.md
+    - docs/concepts/qa-e2e-automation.md
+    - docs/channels/telegram.md
+  codeRefs:
+    - packages/markdown-core/src/ir.ts
+    - extensions/telegram/src/format.ts
+    - extensions/telegram/src/telegram-text-delivery.ts
+    - extensions/qa-lab/src/crabline-transport.ts
+  execution:
+    kind: flow
+    channel: telegram
+    retryCount: 0
+    timeoutMs: 180000
+    suiteIsolation: isolated
+    isolationReason: Each run owns its Telegram provider recorder and Gateway send receipts.
+    summary: Exercise four operator-send formatting cases against Crabline; this is transport-emulated delivery, not live Telegram.
+    config:
+      requiredProviderMode: mock-openai
+      requiredChannelDriver: crabline
+      conversationId: "-1001234567890"
+      fixtures:
+        - id: all-space-code
+          marker: MD-CODE
+          markdown: "MD-CODE `   ` END"
+          html: "MD-CODE <code>   </code> END"
+        - id: unclosed-link-label
+          marker: MD-LABEL
+          markdown: "MD-LABEL [foo `bar` baz`"
+          html: "MD-LABEL [foo <code>bar</code> baz`"
+        - id: ipv6-link
+          marker: MD-LINK
+          markdown: "[MD-LINK](http://[2001:db8::1]:1896/a[b]?x=[y])"
+          html: '<a href="http://[2001:db8::1]:1896/a%5Bb%5D?x=%5By%5D">MD-LINK</a>'
+        - id: table-code-leading-space
+          marker: MD-TABLE
+          markdown: |-
+            MD-TABLE
+
+            | Value |
+            | --- |
+            | ` lead` |
+          html: |-
+            MD-TABLE
+
+            <pre><code>| Value |
+            | ----- |
+            |  lead |
+            </code></pre>
+
+flow:
+  steps:
+    - name: preserves four exact Markdown payloads through Gateway send
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode && transport.id === 'crabline' && transport.requiredPluginIds.includes('telegram')"
+            message: this scenario requires mock-openai and the Crabline Telegram transport
+        - assert:
+            expr: "env.cfg.channels?.telegram?.richMessages !== true && env.cfg.channels?.telegram?.accounts?.[transport.accountId]?.richMessages !== true"
+            message: this scenario requires the default Telegram HTML formatter
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - set: delivery
+          value:
+            expr: "transport.buildAgentDelivery({ target: `group:${config.conversationId}` })"
+        - set: recorderPath
+          value:
+            expr: "path.join(env.outputDir, 'artifacts', 'crabline', 'telegram-provider-server.jsonl')"
+        - call: randomUUID
+          saveAs: runId
+        - set: proofs
+          value: []
+        - forEach:
+            items: { ref: config.fixtures }
+            item: fixture
+            actions:
+              - set: startIndex
+                value:
+                  expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+              - set: recorderStart
+                value:
+                  expr: |
+                    (await fs.readFile(recorderPath, 'utf8')).split('\n').filter(Boolean).length
+              - call: env.gateway.call
+                saveAs: receipt
+                args:
+                  - send
+                  - channel: telegram
+                    accountId: { ref: transport.accountId }
+                    to: { ref: delivery.to }
+                    message: { ref: fixture.markdown }
+                    idempotencyKey:
+                      expr: "`${runId}:${fixture.id}`"
+                  - timeoutMs: 30000
+              - assert:
+                  expr: "Number.isSafeInteger(Number(receipt.messageId)) && Number(receipt.messageId) > 0"
+                  message: Gateway send must return an accepted Telegram message ID
+              - waitForOutbound:
+                  conversation:
+                    id: { ref: config.conversationId }
+                    kind: group
+                  sinceIndex: { ref: startIndex }
+                  textIncludes: { ref: fixture.marker }
+                  timeoutMs: 30000
+                saveAs: outbound
+              - set: wire
+                value:
+                  expr: |
+                    (await fs.readFile(recorderPath, 'utf8')).split('\n').filter(Boolean).slice(recorderStart).map((line) => JSON.parse(line)).filter((event) =>
+                      event.type === 'api' && event.accepted === true && event.path === '/bot<redacted>/sendMessage' &&
+                      String(event.body.chat_id) === config.conversationId && event.body.text.includes(fixture.marker))
+              - set: proofs
+                value:
+                  expr: |
+                    proofs.concat([{
+                      case: fixture.id,
+                      messageId: String(receipt.messageId),
+                      expectedHtml: fixture.html,
+                      outboundHtml: outbound.text,
+                      acceptedPayloads: wire.map((event) => ({ text: event.body.text, parseMode: event.body.parse_mode }))
+                    }])
+        - assert:
+            expr: |
+              proofs.length === config.fixtures.length && proofs.every((proof) =>
+                proof.acceptedPayloads.length === 1 && proof.outboundHtml === proof.expectedHtml &&
+                proof.acceptedPayloads[0].text === proof.expectedHtml && proof.acceptedPayloads[0].parseMode === 'HTML')
+            message:
+              expr: "JSON.stringify({ operation: 'Gateway send', cases: proofs })"
+      detailsExpr: "JSON.stringify({ transport: 'Crabline Telegram', operation: 'Gateway send', modelInvocation: false, cases: proofs })"

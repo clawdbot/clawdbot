@@ -67,13 +67,28 @@ export function isAgentHarnessSessionKeyOwnedBy(
 type AgentHarnessSessionStoreEntry = {
   agentHarnessId?: unknown;
   modelSelectionLocked?: unknown;
+  pluginOwnerId?: unknown;
   sessionId?: unknown;
 };
+
+/** A trusted plugin owner outranks the harness observed during its last turn. */
+export function resolveSessionPinnedHarnessId(
+  entry?: AgentHarnessSessionStoreEntry,
+): string | undefined {
+  return entry?.modelSelectionLocked === true && !normalizeOptionalString(entry.pluginOwnerId)
+    ? normalizeOptionalAgentRuntimeId(entry.agentHarnessId)
+    : undefined;
+}
 
 function sessionLockOwnerMatches(
   previous: AgentHarnessSessionStoreEntry,
   next: AgentHarnessSessionStoreEntry,
 ): boolean {
+  const previousPluginOwner = normalizeOptionalString(previous.pluginOwnerId);
+  const nextPluginOwner = normalizeOptionalString(next.pluginOwnerId);
+  if (previousPluginOwner || nextPluginOwner) {
+    return previousPluginOwner === nextPluginOwner;
+  }
   const previousOwner = normalizeOptionalString(previous.agentHarnessId)?.toLowerCase();
   const nextOwner = normalizeOptionalString(next.agentHarnessId)?.toLowerCase();
   return (
@@ -185,11 +200,7 @@ export function resolveAgentHarnessSessionIdMismatchError(
   entry: AgentHarnessSessionStoreEntry | undefined,
   requestedSessionId: unknown,
 ): string | undefined {
-  if (
-    !entry ||
-    entry.modelSelectionLocked !== true ||
-    !normalizeOptionalAgentRuntimeId(entry.agentHarnessId)
-  ) {
+  if (!entry || !resolveSessionPinnedHarnessId(entry)) {
     return undefined;
   }
   const requested = normalizeOptionalString(requestedSessionId);
@@ -209,16 +220,20 @@ export function resolveAgentHarnessSessionStoreEntryError(
   if (entry.modelSelectionLocked !== true) {
     return undefined;
   }
+  const reservedKey = isAgentHarnessSessionKey(sessionKey);
+  if (normalizeOptionalString(entry.pluginOwnerId)) {
+    return reservedKey ? AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE : undefined;
+  }
   const rawHarnessId = normalizeOptionalString(entry.agentHarnessId)?.toLowerCase();
   const hasCanonicalHarnessOwner =
     Boolean(rawHarnessId) && rawHarnessId === normalizeOptionalAgentRuntimeId(rawHarnessId);
   if (
     !normalizeOptionalString(entry.sessionId) &&
-    (isAgentHarnessSessionKey(sessionKey) || entry.agentHarnessId !== undefined)
+    (reservedKey || entry.agentHarnessId !== undefined)
   ) {
     return AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE;
   }
-  if (isAgentHarnessSessionKey(sessionKey)) {
+  if (reservedKey) {
     return hasCanonicalHarnessOwner &&
       isAgentHarnessSessionKeyOwnedBy(sessionKey, entry.agentHarnessId)
       ? undefined
@@ -243,8 +258,7 @@ export function isValidAgentHarnessSessionStoreEntry(
 ): boolean {
   return (
     entry.modelSelectionLocked === true &&
-    (isAgentHarnessSessionKey(sessionKey) ||
-      normalizeOptionalAgentRuntimeId(entry.agentHarnessId) !== undefined) &&
+    (isAgentHarnessSessionKey(sessionKey) || resolveSessionPinnedHarnessId(entry) !== undefined) &&
     resolveAgentHarnessSessionStoreEntryError(sessionKey, entry) === undefined
   );
 }

@@ -15,10 +15,12 @@ export type BoardPinMcpAppInput = BoardPinPlacement & { viewId: string };
 
 export type BoardProvider = {
   readonly sessionKey: string;
+  readonly appViewGeneration: number;
   readonly canMutate: boolean;
   readonly canGrant: boolean;
   readonly canPinWidgets: boolean;
   readonly canPinMcpApps: boolean;
+  readonly hasLoadedSnapshot: boolean;
   readonly loadError$: BoardSnapshotSignal<string | null>;
   readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
   applyOps(ops: BoardOp[]): Promise<void>;

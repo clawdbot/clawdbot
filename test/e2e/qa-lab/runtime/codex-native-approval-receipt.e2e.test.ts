@@ -219,7 +219,6 @@ describe("Codex native approval receipt", () => {
                     command: process.execPath,
                     args: [fixture],
                     requestTimeoutMs: REQUEST_TIMEOUT_MS,
-                    turnCompletionIdleTimeoutMs: REQUEST_TIMEOUT_MS,
                   },
                 },
               },

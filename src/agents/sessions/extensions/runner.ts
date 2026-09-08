@@ -7,6 +7,7 @@ import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion"
 import type { ImageContent, Model } from "../../../llm/types.js";
 import { interactiveAgentTheme as theme, type Theme } from "../../modes/interactive/theme/theme.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { isToolResultError } from "../../tool-result-error.js";
 import type { ResourceDiagnostic } from "../diagnostics.js";
 import type { KeybindingsConfig } from "../keybindings.js";
 import type { ModelRegistry } from "../model-registry.js";
@@ -595,78 +596,42 @@ export class ExtensionRunner {
    * Context values are resolved at call time, so changes via bindCore/bindUI are reflected.
    */
   createContext(): ExtensionContext {
-    const assertActive = () => this.assertActive();
+    const requireActiveRunner = () => {
+      this.assertActive();
+      return this;
+    };
+    // Model selection snapshots its getter; all other context values stay live.
     const getModel = this.getModel;
-    const getUiContext = () => this.uiContext;
-    const hasUiContext = () => this.hasUI();
-    const getCwd = () => this.cwd;
-    const getSessionManager = () => this.sessionManager;
-    const getModelRegistry = () => this.modelRegistry;
-    const isIdle = () => this.isIdleFn();
-    const getSignal = () => this.getSignalFn();
-    const abort = () => this.abortFn();
-    const hasPendingMessages = () => this.hasPendingMessagesFn();
-    const shutdown = () => this.shutdownHandler();
-    const getContextUsage = () => this.getContextUsageFn();
-    const compact = (options?: CompactOptions) => this.compactFn(options);
-    const getSystemPrompt = () => this.getSystemPromptFn();
     return {
       get ui() {
-        assertActive();
-        return getUiContext();
+        return requireActiveRunner().uiContext;
       },
       get hasUI() {
-        assertActive();
-        return hasUiContext();
+        return requireActiveRunner().hasUI();
       },
       get cwd() {
-        assertActive();
-        return getCwd();
+        return requireActiveRunner().cwd;
       },
       get sessionManager() {
-        assertActive();
-        return getSessionManager();
+        return requireActiveRunner().sessionManager;
       },
       get modelRegistry() {
-        assertActive();
-        return getModelRegistry();
+        return requireActiveRunner().modelRegistry;
       },
       get model() {
-        assertActive();
+        requireActiveRunner();
         return getModel();
       },
-      isIdle: () => {
-        assertActive();
-        return isIdle();
-      },
+      isIdle: () => requireActiveRunner().isIdleFn(),
       get signal() {
-        assertActive();
-        return getSignal();
+        return requireActiveRunner().getSignalFn();
       },
-      abort: () => {
-        assertActive();
-        abort();
-      },
-      hasPendingMessages: () => {
-        assertActive();
-        return hasPendingMessages();
-      },
-      shutdown: () => {
-        assertActive();
-        shutdown();
-      },
-      getContextUsage: () => {
-        assertActive();
-        return getContextUsage();
-      },
-      compact: (options) => {
-        assertActive();
-        compact(options);
-      },
-      getSystemPrompt: () => {
-        assertActive();
-        return getSystemPrompt();
-      },
+      abort: () => requireActiveRunner().abortFn(),
+      hasPendingMessages: () => requireActiveRunner().hasPendingMessagesFn(),
+      shutdown: () => requireActiveRunner().shutdownHandler(),
+      getContextUsage: () => requireActiveRunner().getContextUsageFn(),
+      compact: (options) => requireActiveRunner().compactFn(options),
+      getSystemPrompt: () => requireActiveRunner().getSystemPromptFn(),
     };
   }
 
@@ -714,134 +679,102 @@ export class ExtensionRunner {
     );
   }
 
-  async emit<TEvent extends RunnerEmitEvent>(event: TEvent): Promise<RunnerEmitResult<TEvent>> {
-    const ctx = this.createContext();
-    let result: SessionBeforeEventResult | undefined;
-
+  private async dispatchHandlers<TResult>(
+    eventType: Exclude<ExtensionEvent["type"], "tool_call">,
+    invoke: (
+      handler: NonNullable<ReturnType<Extension["handlers"]["get"]>>[number],
+      ctx: ExtensionContext,
+      extensionPath: string,
+    ) => Promise<TResult | undefined>,
+    ctx?: ExtensionContext,
+  ): Promise<TResult | undefined> {
+    let handlerContext = ctx;
     for (const ext of this.extensions) {
-      const handlers = ext.handlers.get(event.type);
-      if (!handlers || handlers.length === 0) {
-        continue;
-      }
-
-      for (const handler of handlers) {
+      for (const handler of ext.handlers.get(eventType) ?? []) {
+        // Context construction is a runner fault, not an isolated handler failure.
+        handlerContext ??= this.createContext();
         try {
-          const handlerResult = await handler(event, ctx);
-
-          if (this.isSessionBeforeEvent(event) && handlerResult) {
-            result = handlerResult as SessionBeforeEventResult;
-            if (result.cancel) {
-              return result as RunnerEmitResult<TEvent>;
-            }
+          const result = await invoke(handler, handlerContext, ext.path);
+          if (result !== undefined) {
+            return result;
           }
         } catch (err) {
-          const message = coerceErrorMessage(err);
-          const stack = err instanceof Error ? err.stack : undefined;
           this.emitError({
             extensionPath: ext.path,
-            event: event.type,
-            error: message,
-            stack,
+            event: eventType,
+            error: coerceErrorMessage(err),
+            stack: err instanceof Error ? err.stack : undefined,
           });
         }
       }
     }
+    return undefined;
+  }
 
-    return result as RunnerEmitResult<TEvent>;
+  async emit<TEvent extends RunnerEmitEvent>(event: TEvent): Promise<RunnerEmitResult<TEvent>> {
+    let result: SessionBeforeEventResult | undefined;
+
+    const cancelled = await this.dispatchHandlers(event.type, async (handler, ctx) => {
+      const handlerResult = await handler(event, ctx);
+      if (this.isSessionBeforeEvent(event) && handlerResult) {
+        result = handlerResult as SessionBeforeEventResult;
+        if (result.cancel) {
+          return result;
+        }
+      }
+      return undefined;
+    });
+
+    return (cancelled ?? result) as RunnerEmitResult<TEvent>;
   }
 
   async emitMessageEnd(event: MessageEndEvent): Promise<AgentMessage | undefined> {
-    const ctx = this.createContext();
     let currentMessage = event.message;
     let modified = false;
 
-    for (const ext of this.extensions) {
-      const handlers = ext.handlers.get("message_end");
-      if (!handlers || handlers.length === 0) {
-        continue;
-      }
-
-      for (const handler of handlers) {
-        try {
-          const currentEvent: MessageEndEvent = { ...event, message: currentMessage };
-          const handlerResult = (await handler(currentEvent, ctx)) as
-            | MessageEndEventResult
-            | undefined;
-          if (!handlerResult?.message) {
-            continue;
-          }
-
-          if (handlerResult.message.role !== currentMessage.role) {
-            this.emitError({
-              extensionPath: ext.path,
-              event: "message_end",
-              error: "message_end handlers must return a message with the same role",
-            });
-            continue;
-          }
-
+    await this.dispatchHandlers("message_end", async (handler, ctx, extensionPath) => {
+      const currentEvent: MessageEndEvent = { ...event, message: currentMessage };
+      const handlerResult = (await handler(currentEvent, ctx)) as MessageEndEventResult | undefined;
+      if (handlerResult?.message) {
+        if (handlerResult.message.role !== currentMessage.role) {
+          this.emitError({
+            extensionPath,
+            event: "message_end",
+            error: "message_end handlers must return a message with the same role",
+          });
+        } else {
           currentMessage = handlerResult.message;
           modified = true;
-        } catch (err) {
-          const message = coerceErrorMessage(err);
-          const stack = err instanceof Error ? err.stack : undefined;
-          this.emitError({
-            extensionPath: ext.path,
-            event: "message_end",
-            error: message,
-            stack,
-          });
         }
       }
-    }
+    });
 
     return modified ? currentMessage : undefined;
   }
 
   async emitToolResult(event: ToolResultEvent): Promise<ToolResultEventResult | undefined> {
-    const ctx = this.createContext();
     const currentEvent: ToolResultEvent = { ...event };
     let modified = false;
 
-    for (const ext of this.extensions) {
-      const handlers = ext.handlers.get("tool_result");
-      if (!handlers || handlers.length === 0) {
-        continue;
+    await this.dispatchHandlers("tool_result", async (handler, ctx) => {
+      const handlerResult = (await handler(currentEvent, ctx)) as ToolResultEventResult | undefined;
+      if (handlerResult?.content !== undefined) {
+        currentEvent.content = handlerResult.content;
+        modified = true;
       }
-
-      for (const handler of handlers) {
-        try {
-          const handlerResult = (await handler(currentEvent, ctx)) as
-            | ToolResultEventResult
-            | undefined;
-          if (!handlerResult) {
-            continue;
-          }
-
-          if (handlerResult.content !== undefined) {
-            currentEvent.content = handlerResult.content;
-            modified = true;
-          }
-          if (handlerResult.details !== undefined) {
-            currentEvent.details = handlerResult.details;
-            modified = true;
-          }
-          if (handlerResult.isError !== undefined) {
-            currentEvent.isError = handlerResult.isError;
-            modified = true;
-          }
-        } catch (err) {
-          const message = coerceErrorMessage(err);
-          const stack = err instanceof Error ? err.stack : undefined;
-          this.emitError({
-            extensionPath: ext.path,
-            event: "tool_result",
-            error: message,
-            stack,
-          });
-        }
+      if (handlerResult?.details !== undefined) {
+        currentEvent.details = handlerResult.details;
+        modified = true;
       }
-    }
+      if (handlerResult?.isError !== undefined || isToolResultError(handlerResult)) {
+        currentEvent.isError = handlerResult?.isError ?? true;
+        modified = true;
+      }
+      if (handlerResult?.terminate !== undefined) {
+        currentEvent.terminate = handlerResult.terminate;
+        modified = true;
+      }
+    });
 
     if (!modified) {
       return undefined;
@@ -851,11 +784,12 @@ export class ExtensionRunner {
       content: currentEvent.content,
       details: currentEvent.details,
       isError: currentEvent.isError,
+      terminate: currentEvent.terminate,
     };
   }
 
   async emitToolCall(event: ToolCallEvent): Promise<ToolCallEventResult | undefined> {
-    const ctx = this.createContext();
+    let ctx: ExtensionContext | undefined;
     let result: ToolCallEventResult | undefined;
 
     for (const ext of this.extensions) {
@@ -865,6 +799,7 @@ export class ExtensionRunner {
       }
 
       for (const handler of handlers) {
+        ctx ??= this.createContext();
         const handlerResult = await handler(event, ctx);
 
         if (handlerResult) {
@@ -880,34 +815,10 @@ export class ExtensionRunner {
   }
 
   async emitUserBash(event: UserBashEvent): Promise<UserBashEventResult | undefined> {
-    const ctx = this.createContext();
-
-    for (const ext of this.extensions) {
-      const handlers = ext.handlers.get("user_bash");
-      if (!handlers || handlers.length === 0) {
-        continue;
-      }
-
-      for (const handler of handlers) {
-        try {
-          const handlerResult = await handler(event, ctx);
-          if (handlerResult) {
-            return handlerResult as UserBashEventResult;
-          }
-        } catch (err) {
-          const message = coerceErrorMessage(err);
-          const stack = err instanceof Error ? err.stack : undefined;
-          this.emitError({
-            extensionPath: ext.path,
-            event: "user_bash",
-            error: message,
-            stack,
-          });
-        }
-      }
-    }
-
-    return undefined;
+    return await this.dispatchHandlers("user_bash", async (handler, ctx) => {
+      const handlerResult = await handler(event, ctx);
+      return handlerResult ? (handlerResult as UserBashEventResult) : undefined;
+    });
   }
 
   async emitContext(messages: AgentMessage[]): Promise<AgentMessage[]> {
@@ -917,71 +828,32 @@ export class ExtensionRunner {
     if (!this.hasHandlers("context")) {
       return messages;
     }
-    const ctx = this.createContext();
     let currentMessages = structuredClone(messages);
 
-    for (const ext of this.extensions) {
-      const handlers = ext.handlers.get("context");
-      if (!handlers || handlers.length === 0) {
-        continue;
+    await this.dispatchHandlers("context", async (handler, ctx) => {
+      const event: ContextEvent = { type: "context", messages: currentMessages };
+      const handlerResult = (await handler(event, ctx)) as ContextEventResult | undefined;
+      if (handlerResult?.messages) {
+        currentMessages = handlerResult.messages;
       }
-
-      for (const handler of handlers) {
-        try {
-          const event: ContextEvent = { type: "context", messages: currentMessages };
-          const handlerResult = await handler(event, ctx);
-
-          if (handlerResult && (handlerResult as ContextEventResult).messages) {
-            currentMessages = (handlerResult as ContextEventResult).messages!;
-          }
-        } catch (err) {
-          const message = coerceErrorMessage(err);
-          const stack = err instanceof Error ? err.stack : undefined;
-          this.emitError({
-            extensionPath: ext.path,
-            event: "context",
-            error: message,
-            stack,
-          });
-        }
-      }
-    }
+    });
 
     return currentMessages;
   }
 
   async emitBeforeProviderRequest(payload: unknown): Promise<unknown> {
-    const ctx = this.createContext();
     let currentPayload = payload;
 
-    for (const ext of this.extensions) {
-      const handlers = ext.handlers.get("before_provider_request");
-      if (!handlers || handlers.length === 0) {
-        continue;
+    await this.dispatchHandlers("before_provider_request", async (handler, ctx) => {
+      const event: BeforeProviderRequestEvent = {
+        type: "before_provider_request",
+        payload: currentPayload,
+      };
+      const handlerResult = await handler(event, ctx);
+      if (handlerResult !== undefined) {
+        currentPayload = handlerResult;
       }
-
-      for (const handler of handlers) {
-        try {
-          const event: BeforeProviderRequestEvent = {
-            type: "before_provider_request",
-            payload: currentPayload,
-          };
-          const handlerResult = await handler(event, ctx);
-          if (handlerResult !== undefined) {
-            currentPayload = handlerResult;
-          }
-        } catch (err) {
-          const message = coerceErrorMessage(err);
-          const stack = err instanceof Error ? err.stack : undefined;
-          this.emitError({
-            extensionPath: ext.path,
-            event: "before_provider_request",
-            error: message,
-            stack,
-          });
-        }
-      }
-    }
+    });
 
     return currentPayload;
   }
@@ -1004,45 +876,29 @@ export class ExtensionRunner {
     const messages: NonNullable<BeforeAgentStartEventResult["message"]>[] = [];
     let systemPromptModified = false;
 
-    for (const ext of this.extensions) {
-      const handlers = ext.handlers.get("before_agent_start");
-      if (!handlers || handlers.length === 0) {
-        continue;
-      }
-
-      for (const handler of handlers) {
-        try {
-          const event: BeforeAgentStartEvent = {
-            type: "before_agent_start",
-            prompt,
-            images,
-            systemPrompt: currentSystemPrompt,
-            systemPromptOptions,
-          };
-          const handlerResult = await handler(event, ctx);
-
-          if (handlerResult) {
-            const result = handlerResult as BeforeAgentStartEventResult;
-            if (result.message) {
-              messages.push(result.message);
-            }
-            if (result.systemPrompt !== undefined) {
-              currentSystemPrompt = result.systemPrompt;
-              systemPromptModified = true;
-            }
-          }
-        } catch (err) {
-          const message = coerceErrorMessage(err);
-          const stack = err instanceof Error ? err.stack : undefined;
-          this.emitError({
-            extensionPath: ext.path,
-            event: "before_agent_start",
-            error: message,
-            stack,
-          });
+    await this.dispatchHandlers(
+      "before_agent_start",
+      async (handler, handlerCtx) => {
+        const event: BeforeAgentStartEvent = {
+          type: "before_agent_start",
+          prompt,
+          images,
+          systemPrompt: currentSystemPrompt,
+          systemPromptOptions,
+        };
+        const handlerResult = (await handler(event, handlerCtx)) as
+          | BeforeAgentStartEventResult
+          | undefined;
+        if (handlerResult?.message) {
+          messages.push(handlerResult.message);
         }
-      }
-    }
+        if (handlerResult?.systemPrompt !== undefined) {
+          currentSystemPrompt = handlerResult.systemPrompt;
+          systemPromptModified = true;
+        }
+      },
+      ctx,
+    );
 
     if (messages.length > 0 || systemPromptModified) {
       return {
@@ -1062,50 +918,24 @@ export class ExtensionRunner {
     promptPaths: Array<{ path: string; extensionPath: string }>;
     themePaths: Array<{ path: string; extensionPath: string }>;
   }> {
-    const ctx = this.createContext();
     const skillPaths: Array<{ path: string; extensionPath: string }> = [];
     const promptPaths: Array<{ path: string; extensionPath: string }> = [];
     const themePaths: Array<{ path: string; extensionPath: string }> = [];
 
-    for (const ext of this.extensions) {
-      const handlers = ext.handlers.get("resources_discover");
-      if (!handlers || handlers.length === 0) {
-        continue;
-      }
+    await this.dispatchHandlers("resources_discover", async (handler, ctx, extensionPath) => {
+      const event: ResourcesDiscoverEvent = { type: "resources_discover", cwd, reason };
+      const result = (await handler(event, ctx)) as ResourcesDiscoverResult | undefined;
 
-      for (const handler of handlers) {
-        try {
-          const event: ResourcesDiscoverEvent = { type: "resources_discover", cwd, reason };
-          const handlerResult = await handler(event, ctx);
-          const result = handlerResult as ResourcesDiscoverResult | undefined;
-
-          if (result?.skillPaths?.length) {
-            skillPaths.push(
-              ...result.skillPaths.map((path) => ({ path, extensionPath: ext.path })),
-            );
-          }
-          if (result?.promptPaths?.length) {
-            promptPaths.push(
-              ...result.promptPaths.map((path) => ({ path, extensionPath: ext.path })),
-            );
-          }
-          if (result?.themePaths?.length) {
-            themePaths.push(
-              ...result.themePaths.map((path) => ({ path, extensionPath: ext.path })),
-            );
-          }
-        } catch (err) {
-          const message = coerceErrorMessage(err);
-          const stack = err instanceof Error ? err.stack : undefined;
-          this.emitError({
-            extensionPath: ext.path,
-            event: "resources_discover",
-            error: message,
-            stack,
-          });
-        }
+      if (result?.skillPaths?.length) {
+        skillPaths.push(...result.skillPaths.map((path) => ({ path, extensionPath })));
       }
-    }
+      if (result?.promptPaths?.length) {
+        promptPaths.push(...result.promptPaths.map((path) => ({ path, extensionPath })));
+      }
+      if (result?.themePaths?.length) {
+        themePaths.push(...result.themePaths.map((path) => ({ path, extensionPath })));
+      }
+    });
 
     return { skillPaths, promptPaths, themePaths };
   }
@@ -1116,36 +946,28 @@ export class ExtensionRunner {
     images: ImageContent[] | undefined,
     source: InputSource,
   ): Promise<InputEventResult> {
-    const ctx = this.createContext();
     let currentText = text;
     let currentImages = images;
 
-    for (const ext of this.extensions) {
-      for (const handler of ext.handlers.get("input") ?? []) {
-        try {
-          const event: InputEvent = {
-            type: "input",
-            text: currentText,
-            images: currentImages,
-            source,
-          };
-          const result = (await handler(event, ctx)) as InputEventResult | undefined;
-          if (result?.action === "handled") {
-            return result;
-          }
-          if (result?.action === "transform") {
-            currentText = result.text;
-            currentImages = result.images ?? currentImages;
-          }
-        } catch (err) {
-          this.emitError({
-            extensionPath: ext.path,
-            event: "input",
-            error: coerceErrorMessage(err),
-            stack: err instanceof Error ? err.stack : undefined,
-          });
-        }
+    const handled = await this.dispatchHandlers("input", async (handler, ctx) => {
+      const event: InputEvent = {
+        type: "input",
+        text: currentText,
+        images: currentImages,
+        source,
+      };
+      const result = (await handler(event, ctx)) as InputEventResult | undefined;
+      if (result?.action === "handled") {
+        return result;
       }
+      if (result?.action === "transform") {
+        currentText = result.text;
+        currentImages = result.images ?? currentImages;
+      }
+      return undefined;
+    });
+    if (handled) {
+      return handled;
     }
     return currentText !== text || currentImages !== images
       ? { action: "transform", text: currentText, images: currentImages }

@@ -8,12 +8,13 @@ import { getRuntimeConfig } from "../../../config/config.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveSessionStorePathCore,
-  type SessionEntry,
+  type InternalSessionEntry as SessionEntry,
 } from "../../../config/sessions.js";
 import {
   listSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
 } from "../../../config/sessions/session-accessor.js";
+import { normalizeStoreSessionKey } from "../../../config/sessions/store-entry.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SubagentRunOutcome } from "../announce/subagent-announce-output.js";
 import {
@@ -69,20 +70,6 @@ function freshSessionStartedAt(
   return notBeforeMs === undefined || startedAt >= notBeforeMs ? startedAt : undefined;
 }
 
-function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: string) {
-  const direct = store[sessionKey];
-  if (direct) {
-    return direct;
-  }
-  const normalized = sessionKey.trim().toLowerCase();
-  for (const [key, entry] of Object.entries(store)) {
-    if (key.trim().toLowerCase() === normalized) {
-      return entry;
-    }
-  }
-  return undefined;
-}
-
 /** Load a child session entry using the agent-specific session store path. */
 export function loadSubagentSessionEntry(params: {
   childSessionKey: string;
@@ -99,14 +86,13 @@ export function loadSubagentSessionEntry(params: {
   let store = params.storeCache?.get(storePath);
   if (!store) {
     store = Object.fromEntries(
-      listSessionEntriesReadOnly({ storePath, clone: false }).map(({ sessionKey, entry }) => [
-        sessionKey,
-        entry,
-      ]),
+      listSessionEntriesReadOnly({ storePath, clone: false, projection: "list" }).map(
+        ({ sessionKey, entry }) => [sessionKey, entry],
+      ),
     );
     params.storeCache?.set(storePath, store);
   }
-  return findSessionEntryByKey(store, key);
+  return store[key] ?? store[normalizeStoreSessionKey(key)];
 }
 
 /** Resolve a child session entry without depending on the file-backed store shape. */
@@ -153,6 +139,7 @@ export function resolveSubagentRunOrphanReason(params: {
     if (
       params.includeStaleUnended === true &&
       sessionEntry.abortedLastRun !== true &&
+      params.entry.execution.status !== "interrupted" &&
       isStaleUnendedSubagentRun(params.entry, params.now)
     ) {
       return "stale-unended-run";

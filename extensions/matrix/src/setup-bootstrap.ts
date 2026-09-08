@@ -1,9 +1,9 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 // Matrix plugin module implements setup bootstrap behavior.
 import { hasExplicitMatrixAccountConfig } from "./matrix/account-config.js";
 import { resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import { bootstrapMatrixVerification } from "./matrix/actions/verification.js";
-import type { RuntimeEnv } from "./runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
 type MatrixSetupVerificationBootstrapResult = {

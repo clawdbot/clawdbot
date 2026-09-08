@@ -1,4 +1,4 @@
-// Imported by dispatch-from-config.test.ts to keep its mocked suite in one Vitest module graph.
+// Imported by a dispatch-from-config entrypoint to keep its mocked suite in one Vitest module graph.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAgentHarness } from "../../agents/harness/registry.js";
 import {
@@ -214,6 +214,49 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.queuedFinal).toBe(false);
     expect(dispatcher.sendBlockReply).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    { name: "permits", sendPolicy: "allow", delivered: true, context: {} },
+    { name: "rejects", sendPolicy: "deny", delivered: false, context: {} },
+    {
+      name: "rejects ambient room events for",
+      sendPolicy: "allow",
+      delivered: false,
+      context: { ChatType: "group", InboundEventKind: "room_event" } as const,
+    },
+  ])(
+    "$name authorized durable harness updates in message-tool-only turns",
+    async ({ sendPolicy, delivered, context }) => {
+      setNoAbort();
+      sessionStoreMocks.currentEntry = { sessionId: "s1", updatedAt: 0, sendPolicy };
+      const dispatcher = createDispatcher();
+      const payload = setReplyPayloadMetadata(
+        { text: "Background agent update." },
+        { deliverDespiteSourceReplySuppression: true },
+      );
+      const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+        await requireBlockReplyHandler(opts?.onBlockReply)(payload, {
+          deliveryIntentId: "block-reply:v1:codex-app-server:thread-1:turn-1:async-update",
+        });
+        return [];
+      });
+
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          ChatType: "direct",
+          SessionKey: "test:async-harness-update",
+          ...context,
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver,
+        replyOptions: { sourceReplyDeliveryMode: "message_tool_only" },
+      });
+
+      expect(dispatcher.sendBlockReply).toHaveBeenCalledTimes(delivered ? 1 : 0);
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps hook-cancelled marked blocks out of delivery and queued callbacks", async () => {
     setNoAbort();

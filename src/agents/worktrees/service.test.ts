@@ -4,7 +4,18 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
+import * as commandRunner from "../../process/exec-runner.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   deleteRegistryWorktree,
@@ -15,15 +26,29 @@ import {
   getRegistryWorktreeProvisionedState,
   listRegistryWorktrees,
 } from "./registry.js";
-import {
-  IDLE_GC_MS,
-  ManagedWorktreeService,
-  resolveWorktreeCleanupLimits,
-  SNAPSHOT_RETENTION_MS,
-} from "./service.js";
+import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
 import { materializeManagedWorktreeFixture } from "./service.test-support.js";
 
 const execFileAsync = promisify(execFile);
+
+function expectCheckoutTimeouts(
+  commandSpy: MockInstance<typeof commandRunner.runCommandWithTimeout>,
+  checkoutBases: string[],
+) {
+  const gitCommands = commandSpy.mock.calls
+    .filter(([argv]) => argv[0] === "git")
+    .map(([argv, options]) => ({
+      checkout: argv[3] === "worktree" && argv[4] === "add",
+      base: argv.at(-1),
+      timeoutMs: typeof options === "number" ? options : options.timeoutMs,
+    }));
+  expect(gitCommands.filter((command) => command.checkout)).toEqual(
+    checkoutBases.map((base) => ({ checkout: true, base, timeoutMs: 300_000 })),
+  );
+  expect(
+    new Set(gitCommands.filter((command) => !command.checkout).map((command) => command.timeoutMs)),
+  ).toEqual(new Set([120_000]));
+}
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
@@ -103,12 +128,6 @@ describe("ManagedWorktreeService", () => {
     });
   }
 
-  const materializeRunOwnedFixture = (
-    name: string,
-    ownerKind: "session" | "workboard",
-    ownerId?: string,
-  ) => materializeDownstreamFixture(name, { ownerKind, ownerId });
-
   beforeAll(async () => {
     const tempRoot = await fs.realpath(os.tmpdir());
     templateRoot = await fs.mkdtemp(path.join(tempRoot, "openclaw-managed-worktrees-template-"));
@@ -140,6 +159,7 @@ describe("ManagedWorktreeService", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     for (const record of listRegistryWorktrees(env)) {
       finalizeWorktreeRemovalRows(env, record.id);
       deleteRegistryWorktree(env, record.id);
@@ -149,6 +169,7 @@ describe("ManagedWorktreeService", () => {
 
   it("creates from origin HEAD and returns the existing live named worktree", async () => {
     await addRemote(root, repo);
+    const commandSpy = vi.spyOn(commandRunner, "runCommandWithTimeout");
     const created = await service.create({ repoRoot: repo, name: "remote-task" });
     const repeated = await service.create({ repoRoot: repo, name: "remote-task" });
 
@@ -157,6 +178,7 @@ describe("ManagedWorktreeService", () => {
     expect(created.path).toContain(path.join("worktrees", created.repoFingerprint, "remote-task"));
     expect(await git(created.path, "branch", "--show-current")).toBe(created.branch);
     expect(repeated).toEqual(created);
+    expectCheckoutTimeouts(commandSpy, ["origin/main"]);
   });
 
   it("reads registry records without retiring a temporarily unavailable worktree", async () => {
@@ -420,21 +442,61 @@ describe("ManagedWorktreeService", () => {
     expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
   });
 
-  it("retries worktree add from local HEAD when the resolved remote base is stale", async () => {
-    await addRemote(root, repo);
-    const blob = await git(repo, "rev-parse", "HEAD:README.md");
-    const tooLongForCheckout = "x".repeat(300);
-    const tree = await gitWithInput(
-      repo,
-      ["mktree"],
-      `100644 blob ${blob}\t${tooLongForCheckout}\n`,
-    );
-    const remoteCommit = await git(repo, "commit-tree", tree, "-p", "HEAD", "-m", "bad remote");
-    await git(repo, "push", "--force", "origin", `${remoteCommit}:refs/heads/main`);
-    const created = await service.create({ repoRoot: repo, name: "stale-remote" });
-    expect(created.baseRef).toBe("HEAD");
-    expect(await git(created.path, "rev-parse", "HEAD")).toBe(await git(repo, "rev-parse", "HEAD"));
-  });
+  it.each(["active", "aborted", "closed"] as const)(
+    "handles stale remote checkout with %s admission",
+    async (admission) => {
+      await addRemote(root, repo);
+      const blob = await git(repo, "rev-parse", "HEAD:README.md");
+      const tooLongForCheckout = "x".repeat(300);
+      const tree = await gitWithInput(
+        repo,
+        ["mktree"],
+        `100644 blob ${blob}\t${tooLongForCheckout}\n`,
+      );
+      const remoteCommit = await git(repo, "commit-tree", tree, "-p", "HEAD", "-m", "bad remote");
+      await git(repo, "push", "--force", "origin", `${remoteCommit}:refs/heads/main`);
+      const runCommand = commandRunner.runCommandWithTimeout;
+      const commandSpy = vi.spyOn(commandRunner, "runCommandWithTimeout");
+      const controller = new AbortController();
+      const closed = new Error("admission closed");
+      let authorityClosed = false;
+      commandSpy.mockImplementation(async (...args) => {
+        const result = await runCommand(...args);
+        if (args[0][3] === "worktree" && args[0][4] === "add" && result.code !== 0) {
+          if (admission === "aborted") {
+            controller.abort(closed);
+          }
+          authorityClosed = admission === "closed";
+        }
+        return result;
+      });
+      const creation = service.create({
+        repoRoot: repo,
+        name: "stale-remote",
+        signal: controller.signal,
+        commitGuard: () => {
+          if (authorityClosed) {
+            throw closed;
+          }
+        },
+      });
+      if (admission !== "active") {
+        await expect(creation).rejects.toMatchObject(
+          admission === "aborted" ? { code: "OPENCLAW_STATE_LEASE_ABORTED" } : closed,
+        );
+        expectCheckoutTimeouts(commandSpy, ["origin/main"]);
+        expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("stale-remote");
+        expect(await git(repo, "branch", "--list", "openclaw/stale-remote")).toBe("");
+        return;
+      }
+      const created = await creation;
+      expect(created.baseRef).toBe("HEAD");
+      expect(await git(created.path, "rev-parse", "HEAD")).toBe(
+        await git(repo, "rev-parse", "HEAD"),
+      );
+      expectCheckoutTimeouts(commandSpy, ["origin/main", "HEAD"]);
+    },
+  );
 
   it("preserves a pre-existing branch when a managed name collides", async () => {
     await addRemote(root, repo);
@@ -452,7 +514,8 @@ describe("ManagedWorktreeService", () => {
     await fs.writeFile(path.join(repo, ".gitignore"), "cache/\nlinked\nlinked-dir/\n");
     await fs.writeFile(path.join(repo, ".worktreeinclude"), "cache/*.txt\nlinked\nlinked-dir/**\n");
     await fs.mkdir(path.join(repo, "cache"));
-    await fs.writeFile(path.join(repo, "cache", "keep.txt"), "keep\n", { mode: 0o744 });
+    await fs.writeFile(path.join(repo, "cache", "keep.txt"), "keep\n");
+    await fs.chmod(path.join(repo, "cache", "keep.txt"), 0o744);
     await fs.writeFile(path.join(repo, "cache", "skip.bin"), "skip\n");
     const outside = path.join(root, "outside.txt");
     await fs.writeFile(outside, "outside\n");
@@ -509,10 +572,16 @@ describe("ManagedWorktreeService", () => {
       '#!/bin/sh\nprintf "%s\\n%s\\n" "$OPENCLAW_SOURCE_TREE_PATH" "$OPENCLAW_WORKTREE_PATH" > setup-paths.txt\n',
       { mode: 0o755 },
     );
+    const commandSpy = vi.spyOn(commandRunner, "runCommandWithTimeout");
     const created = await service.create({ repoRoot: repo, name: "setup", baseRef: "HEAD" });
     expect(
       (await fs.readFile(path.join(created.path, "setup-paths.txt"), "utf8")).split("\n"),
     ).toEqual([repo, created.path, ""]);
+    expect(
+      commandSpy.mock.calls
+        .filter(([argv]) => argv[0] === script)
+        .map(([, options]) => (typeof options === "number" ? options : options.timeoutMs)),
+    ).toEqual([120_000]);
   });
 
   it("does not execute repository hooks or setup scripts when setup is disabled", async () => {
@@ -541,15 +610,34 @@ describe("ManagedWorktreeService", () => {
     await expect(fs.access(setupMarker)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("removes the worktree and branch when setup fails", async () => {
+  it("bounds failed setup diagnostics without losing the fatal detail or cleanup", async () => {
     await fs.mkdir(path.join(repo, ".openclaw"));
     const script = path.join(repo, ".openclaw", "worktree-setup.sh");
-    await fs.writeFile(script, "#!/bin/sh\necho setup-broke >&2\nexit 9\n", { mode: 0o755 });
-    await expect(
-      service.create({ repoRoot: repo, name: "broken-setup", baseRef: "HEAD" }),
-    ).rejects.toThrow("setup-broke");
+    const fatal = "fatal: setup dependency could not be resolved";
+    const progress = Array.from(
+      { length: 2_000 },
+      (_, index) => `Receiving objects: ${index}/2000\r`,
+    ).join("");
+    await fs.writeFile(
+      script,
+      `#!/bin/sh\nprintf '%s\\n' "$OPENCLAW_WORKTREE_PATH" > "$OPENCLAW_SOURCE_TREE_PATH/setup-path.txt"\nprintf '%s' '${progress}\n${"x".repeat(65_536)}${fatal}\n' >&2\nexit 23\n`,
+      { mode: 0o755 },
+    );
+    const failure: unknown = await service
+      .create({ repoRoot: repo, name: "broken-setup", baseRef: "HEAD" })
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    if (!(failure instanceof Error)) {
+      throw new Error("expected setup failure");
+    }
+    const worktreePath = (await fs.readFile(path.join(repo, "setup-path.txt"), "utf8")).trim();
+    await expect(fs.stat(worktreePath)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("broken-setup");
     expect(await git(repo, "branch", "--list", "openclaw/broken-setup")).toBe("");
+    expect(service.listRegistryRecords()).toEqual([]);
+    expect.soft(failure.message).toContain(fatal);
+    expect.soft(failure.message.length).toBeLessThanOrEqual(2_300);
+    expect.soft(/(?:exit|code|status)[^\n]*23/i.test(failure.message)).toBe(true);
   });
 
   it("restores tracked, untracked, and provisioned ignored files from the snapshot", async () => {
@@ -579,7 +667,9 @@ describe("ManagedWorktreeService", () => {
     await fs.writeFile(path.join(repo, "provisioned.env"), "new source value\n");
 
     now += IDLE_GC_MS + 1;
+    const commandSpy = vi.spyOn(commandRunner, "runCommandWithTimeout");
     const restored = await service.restore({ id: created.id });
+    expectCheckoutTimeouts(commandSpy, [removed.snapshotRef!]);
     expect(restored.removedAt).toBeUndefined();
     expect(restored.lastActiveAt).toBe(now);
     expect((await service.gc()).removed).toEqual([]);
@@ -873,266 +963,4 @@ describe("ManagedWorktreeService", () => {
       );
     },
   );
-
-  it("exempts manual worktrees and garbage collects idle run-owned worktrees", async () => {
-    const manual = await materializeDownstreamFixture("manual-idle");
-    const created = await materializeRunOwnedFixture("idle-dead", "workboard");
-    await git(repo, "worktree", "lock", "--reason", "openclaw pid=999999", created.path);
-    now += IDLE_GC_MS + 1;
-
-    const result = await service.gc();
-    expect(result.removed).toEqual([created.id]);
-    expect(getRegistryWorktree(env, created.id)?.snapshotRef).toBeTruthy();
-    expect(getRegistryWorktree(env, manual.id)?.removedAt).toBeUndefined();
-    expect(await fs.stat(manual.path)).toBeTruthy();
-  });
-
-  it("garbage collects modified provisioned files into the immutable snapshot", async () => {
-    await fs.writeFile(path.join(repo, ".gitignore"), ".env.local\n");
-    await fs.writeFile(path.join(repo, ".worktreeinclude"), ".env.local\n");
-    await git(repo, "add", ".gitignore", ".worktreeinclude");
-    await git(repo, "commit", "-m", "configure worktree provisioning");
-    await fs.writeFile(path.join(repo, ".env.local"), "value=old-source\n");
-
-    const created = await materializeDownstreamFixture("idle-rotated", {
-      ownerKind: "workboard",
-      provisionedPaths: [".env.local"],
-    });
-    await fs.rm(path.join(repo, ".worktreeinclude"));
-    await fs.writeFile(path.join(created.path, ".env.local"), "value=rotated-only-copy\n");
-    now += IDLE_GC_MS + 1;
-
-    expect((await service.gc()).removed).toEqual([created.id]);
-    await fs.writeFile(path.join(repo, ".env.local"), "value=newer-source\n");
-    const restored = await service.restore({ id: created.id });
-    expect(await fs.readFile(path.join(restored.path, ".env.local"), "utf8")).toBe(
-      "value=rotated-only-copy\n",
-    );
-  });
-
-  it("uses owner activity to protect only active idle session worktrees", async () => {
-    const active = await materializeRunOwnedFixture(
-      "active-session",
-      "session",
-      "agent:main:active",
-    );
-    const inactive = await materializeRunOwnedFixture(
-      "inactive-session",
-      "session",
-      "agent:main:inactive",
-    );
-    now += IDLE_GC_MS + 1;
-    const shouldProtectOwner = vi.fn(
-      (_ownerKind: string, ownerId: string) => ownerId === "agent:main:active",
-    );
-
-    const result = await service.gc({ shouldProtectOwner });
-
-    expect(result.removed).toEqual([inactive.id]);
-    expect(shouldProtectOwner).toHaveBeenCalledWith("session", "agent:main:active");
-    expect(shouldProtectOwner).toHaveBeenCalledWith("session", "agent:main:inactive");
-    expect(getRegistryWorktree(env, active.id)?.removedAt).toBeUndefined();
-    expect(getRegistryWorktree(env, inactive.id)?.removedAt).toBeDefined();
-  });
-
-  it("protects foreign locks during idle garbage collection", async () => {
-    const created = await materializeRunOwnedFixture("foreign-lock", "session");
-    await git(repo, "worktree", "lock", "--reason", "other-tool", created.path);
-    now += IDLE_GC_MS + 1;
-
-    expect((await service.gc()).removed).toEqual([]);
-    expect(await fs.stat(created.path)).toBeTruthy();
-  });
-
-  it("continues garbage collection after one worktree cannot be snapshotted", async () => {
-    const removable = await materializeRunOwnedFixture("removable", "workboard");
-    now += 1;
-    const nestedRecord = await materializeRunOwnedFixture("nested-idle", "workboard");
-    await initializeRepository(nestedRecord.path, gitTemplate, "nested");
-    now += IDLE_GC_MS + 1;
-
-    const result = await service.gc();
-
-    expect(result.removed).toEqual([removable.id]);
-    expect(getRegistryWorktree(env, nestedRecord.id)?.removedAt).toBeUndefined();
-    await expect(fs.stat(removable.path)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("continues garbage collection when one repository control path is missing", async () => {
-    const otherRepo = await initializeRepository(root, gitTemplate, "other-repo");
-    const removable = await materializeDownstreamFixture("other-removable", {
-      repoRoot: otherRepo,
-      ownerKind: "session",
-    });
-    now += 1;
-    const broken = await materializeDownstreamFixture("missing-control", {
-      ownerKind: "session",
-    });
-    await fs.rename(repo, path.join(root, "moved-repo"));
-    now += IDLE_GC_MS + 1;
-
-    const result = await service.gc();
-
-    expect(result.removed).toEqual([removable.id]);
-    expect(getRegistryWorktree(env, broken.id)?.removedAt).toBeUndefined();
-  });
-
-  it("deletes unregistered orphan debris but preserves git-listed worktrees", async () => {
-    const debris = path.join(env.OPENCLAW_STATE_DIR!, "worktrees", "orphan-fingerprint", "debris");
-    await fs.mkdir(debris, { recursive: true });
-    await fs.writeFile(path.join(debris, "file"), "debris");
-    const foreign = path.join(env.OPENCLAW_STATE_DIR!, "worktrees", "foreign-fingerprint", "live");
-    await fs.mkdir(path.dirname(foreign), { recursive: true });
-    await git(repo, "worktree", "add", "--detach", foreign, "HEAD");
-
-    const result = await service.gc();
-    expect(result.orphansDeleted).toBe(1);
-    await expect(fs.stat(debris)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(await fs.stat(foreign)).toBeTruthy();
-    await git(repo, "worktree", "remove", "--force", foreign);
-  });
-
-  it("evicts the least recently active run-owned worktrees over the count limit", async () => {
-    const manual = await materializeDownstreamFixture("manual-kept");
-    const oldest = await materializeRunOwnedFixture("count-oldest", "session", "agent:main:oldest");
-    now += 1;
-    const middle = await materializeRunOwnedFixture("count-middle", "workboard", "card-middle");
-    now += 1;
-    const newest = await materializeRunOwnedFixture("count-newest", "session", "agent:main:newest");
-
-    const result = await service.gc({ limits: { maxCount: 2 } });
-
-    expect(result.removed).toEqual([oldest.id, middle.id]);
-    expect(getRegistryWorktree(env, manual.id)?.removedAt).toBeUndefined();
-    expect(getRegistryWorktree(env, newest.id)?.removedAt).toBeUndefined();
-    expect(getRegistryWorktree(env, oldest.id)?.snapshotRef).toBeTruthy();
-    await expect(fs.stat(oldest.path)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("skips active owners during count-limit eviction", async () => {
-    const activeOldest = await materializeRunOwnedFixture(
-      "limit-active",
-      "session",
-      "agent:main:active",
-    );
-    now += 1;
-    const idle = await materializeRunOwnedFixture("limit-idle", "session", "agent:main:idle");
-    const shouldProtectOwner = vi.fn(
-      (_ownerKind: string, ownerId: string) => ownerId === "agent:main:active",
-    );
-
-    const result = await service.gc({ limits: { maxCount: 1 }, shouldProtectOwner });
-
-    expect(result.removed).toEqual([idle.id]);
-    expect(getRegistryWorktree(env, activeOldest.id)?.removedAt).toBeUndefined();
-  });
-
-  it("evicts oldest worktrees until total size fits the size limit", async () => {
-    const oldest = await materializeRunOwnedFixture(
-      "size-oldest",
-      "session",
-      "agent:main:size-old",
-    );
-    await fs.writeFile(path.join(oldest.path, "blob.bin"), Buffer.alloc(10_000));
-    now += 1;
-    const newest = await materializeRunOwnedFixture(
-      "size-newest",
-      "session",
-      "agent:main:size-new",
-    );
-
-    const result = await service.gc({ limits: { maxTotalSizeBytes: 6_000 } });
-
-    expect(result.removed).toEqual([oldest.id]);
-    expect(getRegistryWorktree(env, newest.id)?.removedAt).toBeUndefined();
-    expect(getRegistryWorktree(env, oldest.id)?.snapshotRef).toBeTruthy();
-  });
-
-  it("keeps unmeasurable worktrees out of size accounting instead of counting zero", async () => {
-    if (process.getuid?.() === 0) {
-      return; // chmod-based EACCES cannot be simulated as root
-    }
-    const unreadable = await materializeRunOwnedFixture(
-      "size-unreadable",
-      "session",
-      "agent:main:size-unreadable",
-    );
-    await fs.writeFile(path.join(unreadable.path, "blob.bin"), Buffer.alloc(10_000));
-    const locked = path.join(unreadable.path, "locked");
-    await fs.mkdir(locked);
-    await fs.chmod(locked, 0o000);
-    try {
-      const result = await service.gc({ limits: { maxTotalSizeBytes: 6_000 } });
-      // The failed measurement excludes the record from the size total, so the
-      // limit pass does not evict against a bogus zero-byte reading.
-      expect(result.removed).toEqual([]);
-      expect(getRegistryWorktree(env, unreadable.id)?.removedAt).toBeUndefined();
-    } finally {
-      await fs.chmod(locked, 0o755);
-    }
-  });
-
-  it("counts a competing removal instead of evicting an extra worktree", async () => {
-    const oldest = await materializeRunOwnedFixture(
-      "race-oldest",
-      "session",
-      "agent:main:race-old",
-    );
-    now += 1;
-    const middle = await materializeRunOwnedFixture(
-      "race-middle",
-      "session",
-      "agent:main:race-mid",
-    );
-    now += 1;
-    const newest = await materializeRunOwnedFixture(
-      "race-newest",
-      "session",
-      "agent:main:race-new",
-    );
-    const realRemove = service.remove.bind(service);
-    const removeSpy = vi
-      .spyOn(service, "remove")
-      .mockImplementationOnce(async (params: Parameters<typeof realRemove>[0]) => {
-        // Simulate a concurrent cleanup winning the removal claim first.
-        await realRemove({ ...params, reason: "concurrent-gc" });
-        throw new Error("removal already claimed");
-      });
-
-    const result = await service.gc({ limits: { maxCount: 2 } });
-
-    // The stale-count correction stops the pass at two live worktrees instead
-    // of evicting middle as well.
-    expect(result.removed).toEqual([]);
-    expect(getRegistryWorktree(env, oldest.id)?.removedAt).toBeDefined();
-    expect(getRegistryWorktree(env, middle.id)?.removedAt).toBeUndefined();
-    expect(getRegistryWorktree(env, newest.id)?.removedAt).toBeUndefined();
-    removeSpy.mockRestore();
-  });
-
-  it("leaves everything in place when limits are not exceeded", async () => {
-    const created = await materializeRunOwnedFixture("under-limit", "session", "agent:main:under");
-
-    const result = await service.gc({
-      limits: { maxCount: 5, maxTotalSizeBytes: 1024 ** 3 },
-    });
-
-    expect(result.removed).toEqual([]);
-    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
-  });
-
-  it("uses the fixed no-limit cleanup policy", () => {
-    expect(resolveWorktreeCleanupLimits()).toEqual({});
-  });
-
-  it("prunes expired snapshot refs and registry rows", async () => {
-    const created = await materializeDownstreamFixture("expired");
-    const removed = await service.remove({ id: created.id, reason: "retention" });
-    now += SNAPSHOT_RETENTION_MS + 1;
-
-    const result = await service.gc();
-    expect(result.snapshotsPruned).toBe(1);
-    expect(getRegistryWorktree(env, created.id)).toBeUndefined();
-    await expect(git(repo, "show-ref", "--verify", removed.snapshotRef!)).rejects.toThrow();
-  });
 });

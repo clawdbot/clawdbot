@@ -88,9 +88,6 @@ export function bindSessionNode(params: {
 }) {
   const canonicalEntry = projectCanonicalSessionEntryShape({ ...params.entry });
   const actor = params.entry.createdActor;
-  const legacyActorId = normalizeText(
-    (params.entry as SessionEntry & { createdBy?: { id?: unknown } }).createdBy?.id,
-  );
   return {
     session_key: params.sessionKey,
     current_session_id: params.entry.sessionId,
@@ -100,9 +97,8 @@ export function bindSessionNode(params: {
     status: normalizeStatus(params.entry.status),
     created_at: finiteSqliteNumber(params.entry.createdAt),
     created_via: normalizeSqliteCreatedVia(params.entry.createdVia),
-    created_actor_type:
-      normalizeSqliteCreatedActorType(actor?.type) ?? (legacyActorId ? "human" : null),
-    created_actor_id: normalizeText(actor?.id) ?? legacyActorId,
+    created_actor_type: normalizeSqliteCreatedActorType(actor?.type),
+    created_actor_id: normalizeText(actor?.id),
     project_id: normalizeText(params.entry.projectId),
     parent_session_key:
       normalizeText(params.entry.parentSessionKey) ?? normalizeText(params.entry.spawnedBy),

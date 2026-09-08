@@ -32,18 +32,6 @@ vi.mock("../config/config.js", () => ({
   loadConfig: () => sessionsConfigState.loadConfig(),
 }));
 
-vi.mock("../infra/state-migrations.js", async () => ({
-  ...(await vi.importActual<typeof import("../infra/state-migrations.js")>(
-    "../infra/state-migrations.js",
-  )),
-  autoMigrateLegacyState: vi.fn(async () => ({
-    migrated: false,
-    skipped: true,
-    changes: [],
-    warnings: [],
-  })),
-}));
-
 export function mockSessionsConfig() {
   // The shared config mock is hoisted above so tests can keep their
   // existing setup call without paying `importActual` cost or nested-mock

@@ -2,17 +2,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { readJson } from "./fixtures/common.mjs";
+import {
+  resolveOpenClawConfigPath as configPath,
+  resolveOpenClawStateDir as stateDir,
+} from "./openclaw-state-paths.mjs";
 import { readPluginInstallRecords } from "./plugin-index-sqlite.mjs";
 
-export { readJson };
-
-export function stateDir() {
-  return process.env.OPENCLAW_STATE_DIR || path.join(process.env.HOME, ".openclaw");
-}
-
-export function configPath() {
-  return process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir(), "openclaw.json");
-}
+export { configPath, readJson, stateDir };
 
 export function managedNpmRoot() {
   return path.join(stateDir(), "npm");

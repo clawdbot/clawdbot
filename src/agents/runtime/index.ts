@@ -16,7 +16,6 @@ export {
   openClawAgentCoreRuntime,
   prepareBranchEntries,
   prepareCompaction,
-  runAgentLoop,
   serializeConversation,
   shouldCompact,
   uuidv7,
@@ -30,7 +29,6 @@ export {
 export type {
   AfterToolCallContext,
   AfterToolCallResult,
-  AfterToolOutcomeContext,
   AgentEvent,
   AgentMessage,
   AgentOptions,
@@ -47,6 +45,7 @@ export type {
   CompactionPreparation,
   CompactionResult,
   CompactionSettings,
+  CompactionSummaryPrompt,
   ContextUsageEstimate,
   FileOperations,
   Result,

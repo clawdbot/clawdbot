@@ -10,7 +10,7 @@ type BrowserRelayProofKind = "server" | "client" | "accept";
 type BrowserRelayRole = "extension" | "cdp";
 type BrowserRelayTransport = "websocket" | "connection";
 type BrowserRelayMethod = "GET" | "SEQUENCE";
-type BrowserRelayFlow = "extension" | "cdp" | "json-list";
+type BrowserRelayFlow = "extension" | "cdp" | "json-list" | "owner";
 
 export type BrowserRelayProofFields = {
   keyId: string;

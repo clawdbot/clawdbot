@@ -127,6 +127,27 @@ describe("worktree run lease", () => {
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
   });
 
+  it("excludes runs and publishers for the lifetime of an exclusive publication lease", async () => {
+    const created = await createSessionWorktree();
+    const running = await acquireWorktreeRunLease(created.id, { env });
+    await expect(acquireWorktreeRunLease(created.id, { env, exclusive: true })).rejects.toThrow(
+      "in use",
+    );
+    await running.release();
+    const publication = await acquireWorktreeRunLease(created.id, { env, exclusive: true });
+    await expect(acquireWorktreeRunLease(created.id, { env })).rejects.toThrow("in use");
+    await expect(acquireWorktreeRunLease(created.id, { env, exclusive: true })).rejects.toThrow(
+      "in use",
+    );
+    expect(() =>
+      claimWorktreeRemoval(env, { worktreeId: created.id, token: "remove-during-publication" }),
+    ).toThrow();
+    await publication.release();
+    const nextRun = await acquireWorktreeRunLease(created.id, { env });
+    await nextRun.release();
+    expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
+  });
+
   it("resolves the worktree id for a nested workspace path with no session binding", async () => {
     const created = await createSessionWorktree();
     const nested = path.join(created.path, "workspace");

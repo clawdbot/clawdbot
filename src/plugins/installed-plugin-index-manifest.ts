@@ -1,7 +1,7 @@
 // Reads installed plugin manifests through index-owned paths.
-import fs from "node:fs";
 import type { InstalledPluginIndexRecord } from "./installed-plugin-index-types.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { pluginCacheExistsSync } from "./plugin-cache-files.js";
 
 type ManifestBackedRecord = Pick<
   PluginManifestRecord | InstalledPluginIndexRecord,
@@ -13,6 +13,6 @@ export function hasOptionalMissingPluginManifestFile(record: ManifestBackedRecor
   return (
     record.format === "bundle" &&
     record.bundleFormat === "claude" &&
-    !fs.existsSync(record.manifestPath)
+    !pluginCacheExistsSync(record.manifestPath)
   );
 }

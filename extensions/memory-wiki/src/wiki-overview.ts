@@ -1,8 +1,16 @@
 // Memory Wiki plugin module implements the memory wiki overview.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  loadMemoryWikiCompiledDashboards,
+  MEMORY_WIKI_DASHBOARD_ITEM_LIMIT,
+  type MemoryWikiOverviewCluster,
+  type MemoryWikiOverviewItem,
+  type MemoryWikiOverviewPageCounts,
+  type MemoryWikiOverviewStatus,
+} from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
-import { parseWikiMarkdown, type WikiPageKind } from "./markdown.js";
-import { readQueryableWikiPages } from "./query.js";
+import type { WikiPageKind, WikiPageSummary } from "./markdown.js";
 
 const OVERVIEW_KIND_ORDER: WikiPageKind[] = ["synthesis", "entity", "concept", "source", "report"];
 const PRIMARY_OVERVIEW_KINDS = new Set<WikiPageKind>(["synthesis", "entity", "concept"]);
@@ -14,52 +22,29 @@ const OVERVIEW_KIND_LABELS: Record<WikiPageKind, string> = {
   report: "Reports",
 };
 
-type MemoryWikiOverviewItem = {
-  pagePath: string;
-  title: string;
-  kind: WikiPageKind;
-  id?: string;
-  updatedAt?: string;
-  sourceType?: string;
-  claimCount: number;
-  questionCount: number;
-  contradictionCount: number;
-  claims: string[];
-  questions: string[];
-  contradictions: string[];
-  snippet?: string;
+const EMPTY_OVERVIEW_PAGE_COUNTS: MemoryWikiOverviewPageCounts = {
+  synthesis: 0,
+  entity: 0,
+  concept: 0,
+  source: 0,
+  report: 0,
 };
 
-type MemoryWikiOverviewCluster = {
-  key: WikiPageKind;
-  label: string;
-  itemCount: number;
-  claimCount: number;
-  questionCount: number;
-  contradictionCount: number;
-  updatedAt?: string;
-  items: MemoryWikiOverviewItem[];
-};
+function capOverviewText(value: string, maxChars = 240): string {
+  return truncateUtf16Safe(value.replace(/\s+/g, " ").trim(), maxChars);
+}
 
-type MemoryWikiOverviewPageCounts = Record<WikiPageKind, number>;
-
-type MemoryWikiOverviewStatus = {
-  totalItems: number;
-  totalPages: number;
-  pageCounts: MemoryWikiOverviewPageCounts;
-  totalClaims: number;
-  totalQuestions: number;
-  totalContradictions: number;
-  clusters: MemoryWikiOverviewCluster[];
-};
-
-function createEmptyOverviewPageCounts(): MemoryWikiOverviewPageCounts {
+function capOverviewItem(item: MemoryWikiOverviewItem): MemoryWikiOverviewItem {
   return {
-    synthesis: 0,
-    entity: 0,
-    concept: 0,
-    source: 0,
-    report: 0,
+    ...item,
+    title: capOverviewText(item.title, 240),
+    ...(item.id ? { id: capOverviewText(item.id, 240) } : {}),
+    ...(item.updatedAt ? { updatedAt: capOverviewText(item.updatedAt, 64) } : {}),
+    ...(item.sourceType ? { sourceType: capOverviewText(item.sourceType, 120) } : {}),
+    claims: item.claims.slice(0, 3).map((value) => capOverviewText(value)),
+    questions: item.questions.slice(0, 3).map((value) => capOverviewText(value)),
+    contradictions: item.contradictions.slice(0, 3).map((value) => capOverviewText(value)),
+    ...(item.snippet ? { snippet: capOverviewText(item.snippet, 700) } : {}),
   };
 }
 
@@ -96,35 +81,49 @@ function compareOverviewItems(left: MemoryWikiOverviewItem, right: MemoryWikiOve
 export async function listMemoryWikiOverview(
   config: ResolvedMemoryWikiConfig,
 ): Promise<MemoryWikiOverviewStatus> {
-  const pages = await readQueryableWikiPages(config.vault.path);
-  const pageCounts = pages.reduce<MemoryWikiOverviewPageCounts>((counts, page) => {
-    counts[page.kind] += 1;
-    return counts;
-  }, createEmptyOverviewPageCounts());
+  return (await loadMemoryWikiCompiledDashboards(config)).overview;
+}
+
+export function projectMemoryWikiOverviewItem(
+  page: WikiPageSummary,
+  body: string,
+): MemoryWikiOverviewItem {
+  const updatedAt = normalizeOptionalString(page.updatedAt);
+  const sourceType = normalizeOptionalString(page.sourceType);
+  const snippet = extractSnippet(body);
+  return Object.assign(
+    { pagePath: page.relativePath, title: page.title, kind: page.kind },
+    page.id ? { id: page.id } : {},
+    updatedAt ? { updatedAt } : {},
+    sourceType ? { sourceType } : {},
+    {
+      claimCount: page.claims.length,
+      questionCount: page.questions.length,
+      contradictionCount: page.contradictions.length,
+      claims: page.claims.map((claim) => claim.text).slice(0, 3),
+      questions: page.questions.slice(0, 3),
+      contradictions: page.contradictions.slice(0, 3),
+    },
+    snippet ? { snippet } : {},
+  );
+}
+
+export function buildMemoryWikiOverview(
+  pages: WikiPageSummary[],
+  projectedItems: MemoryWikiOverviewItem[],
+): MemoryWikiOverviewStatus {
+  const pageCounts = pages.reduce<MemoryWikiOverviewPageCounts>(
+    (counts, page) => {
+      counts[page.kind] += 1;
+      return counts;
+    },
+    { ...EMPTY_OVERVIEW_PAGE_COUNTS },
+  );
   const totalClaims = pages.reduce((sum, page) => sum + page.claims.length, 0);
   const totalQuestions = pages.reduce((sum, page) => sum + page.questions.length, 0);
   const totalContradictions = pages.reduce((sum, page) => sum + page.contradictions.length, 0);
-  const items = pages
-    .map((page) => {
-      const parsed = parseWikiMarkdown(page.raw);
-      const updatedAt = normalizeOptionalString(page.updatedAt);
-      const sourceType = normalizeOptionalString(page.sourceType);
-      return Object.assign(
-        { pagePath: page.relativePath, title: page.title, kind: page.kind },
-        page.id ? { id: page.id } : {},
-        updatedAt ? { updatedAt } : {},
-        sourceType ? { sourceType } : {},
-        {
-          claimCount: page.claims.length,
-          questionCount: page.questions.length,
-          contradictionCount: page.contradictions.length,
-          claims: page.claims.map((claim) => claim.text).slice(0, 3),
-          questions: page.questions.slice(0, 3),
-          contradictions: page.contradictions.slice(0, 3),
-        },
-        extractSnippet(parsed.body) ? { snippet: extractSnippet(parsed.body) } : {},
-      ) satisfies MemoryWikiOverviewItem;
-    })
+  const allItems = projectedItems
+    .map(capOverviewItem)
     .filter(
       (item) =>
         PRIMARY_OVERVIEW_KINDS.has(item.kind) ||
@@ -133,6 +132,7 @@ export async function listMemoryWikiOverview(
         item.contradictionCount > 0,
     )
     .toSorted(compareOverviewItems);
+  const items = allItems.slice(0, MEMORY_WIKI_DASHBOARD_ITEM_LIMIT);
 
   const clusters = OVERVIEW_KIND_ORDER.map((kind) => {
     const clusterItems = items.filter((item) => item.kind === kind);
@@ -154,12 +154,13 @@ export async function listMemoryWikiOverview(
   }).filter((entry): entry is MemoryWikiOverviewCluster => entry !== null);
 
   return {
-    totalItems: items.length,
+    totalItems: allItems.length,
     totalPages: pages.length,
     pageCounts,
     totalClaims,
     totalQuestions,
     totalContradictions,
     clusters,
+    truncated: items.length < allItems.length,
   };
 }

@@ -13,7 +13,8 @@ type ResolvedSkillEntry = NonNullable<SkillSnapshot["resolvedSkills"]>[number];
 
 const loadPluginManifestRegistry = vi.hoisted(() => vi.fn(() => ({ plugins: [] })));
 
-vi.mock("../infra/git-commit.js", () => ({
+vi.mock("../infra/git-commit.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/git-commit.js")>()),
   resolveCommitHash: () => "abcdef0",
 }));
 

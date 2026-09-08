@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core";
 import type { Insertable } from "kysely";
@@ -59,15 +58,12 @@ export function readStoredProposal(
 function proposalRowValues(params: {
   record: SkillProposalRecord;
   ownerAgentId: string | null;
-  workspaceDir: string;
-  claimReleasedTime: number | null;
 }): Insertable<SkillWorkshopDatabase["skill_workshop_proposals"]> {
   const { record } = params;
   return {
     proposal_id: record.id,
     record_json: JSON.stringify(record),
     owner_agent_id: params.ownerAgentId,
-    workspace_dir: path.resolve(params.workspaceDir),
     kind: record.kind,
     status: record.status,
     created_at: record.createdAt,
@@ -82,61 +78,33 @@ function proposalRowValues(params: {
     quarantined_at: record.quarantinedAt ?? null,
     stale_at: record.staleAt ?? null,
     status_reason: record.statusReason ?? null,
-    claim_released_time: params.claimReleasedTime,
   };
-}
-
-function replaceOriginRuns(
-  database: DatabaseSync,
-  record: SkillProposalRecord,
-  kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(database),
-): void {
-  executeSqliteQuerySync(
-    database,
-    kysely.deleteFrom("skill_workshop_proposal_origin_runs").where("proposal_id", "=", record.id),
-  );
-  record.originRunIds?.forEach((runId, position) => {
-    executeSqliteQuerySync(
-      database,
-      kysely.insertInto("skill_workshop_proposal_origin_runs").values({
-        proposal_id: record.id,
-        run_id: runId,
-        position,
-        mutation_count: record.originRunMutationCounts?.[runId] ?? 1,
-      }),
-    );
-  });
 }
 
 export function insertProposal(
   database: DatabaseSync,
-  params: { record: SkillProposalRecord; ownerAgentId: string | null; workspaceDir: string },
+  params: { record: SkillProposalRecord; ownerAgentId: string | null },
 ): void {
   const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(database);
   executeSqliteQuerySync(
     database,
-    kysely
-      .insertInto("skill_workshop_proposals")
-      .values(proposalRowValues({ ...params, claimReleasedTime: null })),
+    kysely.insertInto("skill_workshop_proposals").values(proposalRowValues(params)),
   );
-  replaceOriginRuns(database, params.record, kysely);
 }
 
 export function updateProposal(
   database: DatabaseSync,
   current: SkillProposalRow,
   record: SkillProposalRecord,
+  ownerAgentId?: string,
 ): void {
   const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(database);
   const { proposal_id: _proposalId, ...values } = proposalRowValues({
     record,
-    ownerAgentId: current.owner_agent_id,
-    workspaceDir: current.workspace_dir,
-    claimReleasedTime: current.claim_released_time,
+    ownerAgentId: ownerAgentId ?? current.owner_agent_id,
   });
   executeSqliteQuerySync(
     database,
     kysely.updateTable("skill_workshop_proposals").set(values).where("proposal_id", "=", record.id),
   );
-  replaceOriginRuns(database, record, kysely);
 }

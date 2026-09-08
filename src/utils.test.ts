@@ -134,7 +134,7 @@ describe("normalizeE164", () => {
 });
 
 describe("resolveConfigDir", () => {
-  it("prefers ~/.openclaw when legacy dir is missing", async () => {
+  it("resolves the default config directory", async () => {
     await withTestDir({ prefix: "openclaw-config-dir-" }, async (root) => {
       const newDir = path.join(root, ".openclaw");
       await fs.promises.mkdir(newDir, { recursive: true });
@@ -301,10 +301,5 @@ describe("resolveUserPath", () => {
   it("keeps blank paths blank", () => {
     expect(resolveUserPath("")).toBe("");
     expect(resolveUserPath("   ")).toBe("");
-  });
-
-  it("returns empty string for undefined/null input", () => {
-    expect(resolveUserPath(undefined as unknown as string)).toBe("");
-    expect(resolveUserPath(null as unknown as string)).toBe("");
   });
 });

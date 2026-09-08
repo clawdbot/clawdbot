@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { sleep } from "../../lib/sleep.mjs";
 import { run } from "./host-command.ts";
+import { runMacosHostCommand } from "./macos-exec.ts";
 import type { PhaseRunner } from "./phase-runner.ts";
 import { encodePowerShell, psSingleQuote } from "./powershell.ts";
 import type { CommandResult } from "./types.ts";
@@ -12,10 +13,15 @@ interface GuestExecOptions {
   timeoutMs?: number;
 }
 
+interface PosixGuestOptions extends GuestExecOptions {
+  env?: Record<string, string>;
+}
+
 interface WindowsBackgroundPowerShellOptions {
   append?: (chunk: string | Uint8Array) => void;
   beforeLaunchAttempt?: () => void;
   completedLogDrainGraceMs?: number;
+  env?: Record<string, string>;
   label: string;
   onLaunchRetry?: (message: string) => void;
   pollIntervalMs?: number;
@@ -41,6 +47,15 @@ function guestScriptName(extension: string): string {
 
 function posixSingleQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+function windowsProcessEnvScript(env: Record<string, string> = {}): string {
+  return Object.entries(env)
+    .map(
+      ([key, value]) =>
+        `Set-Item -LiteralPath ${psSingleQuote(`Env:${key}`)} -Value ${psSingleQuote(value)}`,
+    )
+    .join("\n");
 }
 
 function appendOutput(
@@ -100,11 +115,15 @@ function appendCommandResult(phases: PhaseRunner, result: CommandResult): void {
   phases.append(result.stderr);
 }
 
-function cleanupPosixGuestScript(phases: PhaseRunner, transportArgs: string[]): void {
+function cleanupPosixGuestScript(
+  phases: PhaseRunner,
+  transportArgs: string[],
+  runCommand: typeof run = run,
+): void {
   try {
     appendCommandResult(
       phases,
-      run("prlctl", transportArgs, {
+      runCommand("prlctl", transportArgs, {
         check: false,
         quiet: true,
         timeoutMs: POSIX_GUEST_SCRIPT_CLEANUP_TIMEOUT_MS,
@@ -387,6 +406,7 @@ function Add-OpenClawBackgroundLog {
 }
 try {
   & {
+${windowsProcessEnvScript(options.env)}
 ${options.script}
   } *>&1 | Add-OpenClawBackgroundLog
   Write-OpenClawUtf8File $exitPath '0'
@@ -709,14 +729,20 @@ Remove-Item -Path $runDir -Recurse -Force -ErrorAction SilentlyContinue`),
 export class LinuxGuest {
   private vmName: string;
   private phases: PhaseRunner;
+  private getEnv: () => Record<string, string>;
 
-  constructor(vmName: string, phases: PhaseRunner) {
+  constructor(vmName: string, phases: PhaseRunner, getEnv = () => ({})) {
     this.vmName = vmName;
     this.phases = phases;
+    this.getEnv = getEnv;
   }
 
-  exec(args: string[], options: GuestExecOptions = {}): string {
-    const result = run("prlctl", this.transportArgs(args), {
+  exec(args: string[], options: PosixGuestOptions = {}): string {
+    return this.run(args, options).stdout.trim();
+  }
+
+  run(args: string[], options: PosixGuestOptions = {}): CommandResult {
+    const result = run("prlctl", this.transportArgs(args, options.env), {
       check: false,
       input: options.input,
       quiet: true,
@@ -725,11 +751,17 @@ export class LinuxGuest {
     this.phases.append(result.stdout);
     this.phases.append(result.stderr);
     throwIfFailed("Linux guest command", result, options.check);
-    return result.stdout.trim();
+    return result;
   }
 
-  private transportArgs(args: string[]): string[] {
-    return ["exec", this.vmName, "/usr/bin/env", "HOME=/root", "OPENCLAW_ALLOW_ROOT=1", ...args];
+  private transportArgs(args: string[], env: Record<string, string> = {}): string[] {
+    const envArgs = Object.entries({
+      HOME: "/root",
+      OPENCLAW_ALLOW_ROOT: "1",
+      ...this.getEnv(),
+      ...env,
+    }).map(([key, value]) => `${key}=${value}`);
+    return ["exec", this.vmName, "/usr/bin/env", ...envArgs, ...args];
   }
 
   bash(script: string): string {
@@ -750,16 +782,13 @@ export class LinuxGuest {
   }
 }
 
-interface MacosGuestOptions extends GuestExecOptions {
-  env?: Record<string, string>;
-}
-
 type MacosGuestInput = {
   vmName: string;
   getUser: () => string;
   getTransport: () => "current-user" | "sudo";
   resolveDesktopHome: (user: string) => string;
   path: string;
+  getEnv?: () => Record<string, string>;
 };
 
 export class MacosGuest {
@@ -771,12 +800,12 @@ export class MacosGuest {
     this.phases = phases;
   }
 
-  exec(args: string[], options: MacosGuestOptions = {}): string {
+  exec(args: string[], options: PosixGuestOptions = {}): string {
     return this.run(args, options).stdout.trim();
   }
 
   private transportArgs(args: string[], env: Record<string, string> = {}): string[] {
-    const envArgs = Object.entries({ PATH: this.input.path, ...env }).map(
+    const envArgs = Object.entries({ PATH: this.input.path, ...this.input.getEnv?.(), ...env }).map(
       ([key, value]) => `${key}=${value}`,
     );
     const user = this.input.getUser();
@@ -798,8 +827,8 @@ export class MacosGuest {
       : ["exec", this.input.vmName, "--current-user", "/usr/bin/env", ...envArgs, ...args];
   }
 
-  run(args: string[], options: MacosGuestOptions = {}): CommandResult {
-    const result = run("prlctl", this.transportArgs(args, options.env), {
+  run(args: string[], options: PosixGuestOptions = {}): CommandResult {
+    const result = runMacosHostCommand("prlctl", this.transportArgs(args, options.env), {
       check: false,
       input: options.input,
       quiet: true,
@@ -820,7 +849,11 @@ export class MacosGuest {
       });
       return this.exec(["/bin/bash", scriptPath], { env });
     } finally {
-      cleanupPosixGuestScript(this.phases, this.transportArgs(["/bin/rm", "-f", scriptPath]));
+      cleanupPosixGuestScript(
+        this.phases,
+        this.transportArgs(["/bin/rm", "-f", scriptPath]),
+        runMacosHostCommand,
+      );
     }
   }
 
@@ -837,6 +870,7 @@ export class MacosGuest {
       label,
       script,
       timeoutMs: remainingTimeoutMs ?? timeoutMs ?? 30 * 60_000,
+      runCommand: runMacosHostCommand,
       transportArgs: (args) => this.transportArgs(args, env),
     });
   }
@@ -845,10 +879,12 @@ export class MacosGuest {
 export class WindowsGuest {
   private vmName: string;
   private phases: PhaseRunner;
+  private getEnv: () => Record<string, string>;
 
-  constructor(vmName: string, phases: PhaseRunner) {
+  constructor(vmName: string, phases: PhaseRunner, getEnv = () => ({})) {
     this.vmName = vmName;
     this.phases = phases;
+    this.getEnv = getEnv;
   }
 
   exec(args: string[], options: GuestExecOptions = {}): string {
@@ -886,7 +922,7 @@ export class WindowsGuest {
         encodePowerShell(writeScript),
       ],
       {
-        input: script,
+        input: `${windowsProcessEnvScript(this.getEnv())}\n${script}`,
         quiet: true,
         timeoutMs: this.phases.remainingTimeoutMs(120_000),
       },

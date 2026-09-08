@@ -1,8 +1,8 @@
-// This type-only leaf exists solely to keep lifecycle sibling modules from importing the controller.
-// Keeping the controller out of their dependency graph satisfies the architecture cycle gate.
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { callGateway as defaultCallGateway } from "../../../gateway/call.js";
+// This type-only leaf exists solely to keep lifecycle sibling modules from importing the controller.
+// Keeping the controller out of their dependency graph satisfies the architecture cycle gate.
 import type { DetachedTaskFindResult } from "../../../tasks/detached-task-runtime-contract.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -94,12 +94,13 @@ export interface SubagentLifecycleAnnounceCleanupContext
 export interface SubagentLifecycleWakeContext extends SubagentLifecycleCommonContext {
   deleteRequesterSettleWakeTimer(runId: string): void;
   getRequesterSettleWakeTimer(runId: string): ScheduledRequesterSettleWake | undefined;
-  hasScheduledRequesterSettleWakeRun(runId: string): boolean;
-  markRequesterSettleWakeRearm(runId: string): void;
-  markRequesterSettleWakeRunScheduled(runId: string): void;
+  hasScheduledRequesterSettleWakeRun(entry: SubagentRunRecord): boolean;
+  markRequesterSettleWakeRearm(entry: SubagentRunRecord): void;
+  markRequesterSettleWakeRunScheduled(entry: SubagentRunRecord): void;
+  runRequesterSettleWake(entry: SubagentRunRecord, run: () => Promise<unknown>): Promise<unknown>;
   setRequesterSettleWakeTimer(runId: string, value: ScheduledRequesterSettleWake): void;
-  takeRequesterSettleWakeRearm(runId: string): boolean;
-  unmarkRequesterSettleWakeRunScheduled(runId: string): void;
+  takeRequesterSettleWakeRearm(entry: SubagentRunRecord): boolean;
+  unmarkRequesterSettleWakeRunScheduled(entry: SubagentRunRecord): void;
 }
 
 export type CleanupBookkeepingParams = {
@@ -113,6 +114,7 @@ export type CleanupBookkeepingParams = {
 };
 
 export type ScheduledRequesterSettleWake = {
+  entry: SubagentRunRecord;
   timer: ReturnType<typeof setTimeout>;
   deadline: number;
   rearmGeneration?: number;

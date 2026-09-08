@@ -19,6 +19,7 @@ function runPreflight(
     includeCollectorFields?: boolean;
     launchPending?: boolean;
     cached?: boolean;
+    admissionPending?: boolean;
     completed?: boolean;
     ended?: boolean;
   },
@@ -54,13 +55,14 @@ function runPreflight(
     getRuntimeConfig: () =>
       options?.requesterOnlyEnabled
         ? {
+            tools: { swarm: false },
             agents: {
-              list: [{ id: "main", tools: { swarm: true } }, { id: "worker" }],
+              entries: { main: { tools: { swarm: true } }, worker: {} },
             },
           }
-        : options?.enabled
-          ? { tools: { swarm: true } }
-          : {},
+        : options?.enabled === undefined
+          ? {}
+          : { tools: { swarm: options.enabled } },
     dedupe: options?.cached
       ? new Map([
           [
@@ -68,7 +70,12 @@ function runPreflight(
             {
               ts: 1,
               ok: true,
-              payload: { status: "accepted", runId: "gateway-run", sessionKey },
+              payload: {
+                status: "accepted",
+                runId: "gateway-run",
+                sessionKey,
+                ...(options.admissionPending ? { reservationId: "pending" } : {}),
+              },
             },
           ],
         ])
@@ -138,6 +145,7 @@ describe("agent request Swarm preflight", () => {
 
   it("rejects collector flags while Swarm is disabled", () => {
     const { respond, result } = runPreflight(undefined, true, {
+      enabled: false,
       backend: true,
       register: true,
     });
@@ -169,16 +177,19 @@ describe("agent request Swarm preflight", () => {
     }
   });
 
-  it("accepts an enabled backend request for a registered collector", () => {
-    const { respond, result } = runPreflight({ type: "object" }, true, {
-      enabled: true,
-      backend: true,
-      register: true,
-    });
+  it.each([undefined, true])(
+    "accepts a registered backend collector with Swarm enabled=%s",
+    (enabled) => {
+      const { respond, result } = runPreflight({ type: "object" }, true, {
+        enabled,
+        backend: true,
+        register: true,
+      });
 
-    expect(result).toBeDefined();
-    expect(respond).not.toHaveBeenCalled();
-  });
+      expect(result).toBeDefined();
+      expect(respond).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects ordinary turns and mismatched launch identities for an active collector", () => {
     for (const options of [
@@ -285,6 +296,7 @@ describe("agent request Swarm preflight", () => {
 
   it("allows an exact cached collector replay after Swarm is disabled", async () => {
     const replayed = runPreflight({ type: "object" }, true, {
+      enabled: false,
       backend: true,
       register: true,
       launchPending: false,
@@ -298,6 +310,29 @@ describe("agent request Swarm preflight", () => {
       undefined,
       expect.objectContaining({ cached: true, runId: "gateway-run" }),
     );
+  });
+
+  it("marks a provisional cached replay as admission pending without exposing its reservation", async () => {
+    const replayed = runPreflight(undefined, true, {
+      backend: true,
+      register: true,
+      launchPending: false,
+      cached: true,
+      admissionPending: true,
+    });
+    expect(replayed.result).toBeDefined();
+    await replayed.replay();
+    expect(replayed.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId: "gateway-run",
+        status: "in_flight",
+        admissionPending: true,
+      }),
+      undefined,
+      expect.objectContaining({ cached: true, runId: "gateway-run" }),
+    );
+    expect(replayed.respond.mock.calls[0]?.[1]).not.toHaveProperty("reservationId");
   });
 
   it("rejects a terminal collector even when its pending launch flag remains set", () => {

@@ -11,9 +11,10 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import {
   QA_EVIDENCE_FILENAME,
-  startQaGatewayChild,
+  createQaGatewayChild,
   type QaEvidenceSummaryJson,
   type QaGatewayChildListeningContext,
+  type QaGatewayChild,
 } from "../../../../extensions/qa-lab/api.js";
 import {
   PROTOCOL_VERSION,
@@ -22,6 +23,7 @@ import {
 import { runGatewaySmoke } from "../../../../scripts/dev/gateway-smoke.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createMcpClientTempState } from "./mcp-client-temp-state.fixture.ts";
 import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.ts";
 
@@ -532,7 +534,7 @@ async function closeMcpClient(handle: McpClientHandle | undefined) {
   handle.cleanup();
 }
 
-async function approvePendingMcpPairing(gateway: Awaited<ReturnType<typeof startQaGatewayChild>>) {
+async function approvePendingMcpPairing(gateway: QaGatewayChild) {
   const pairing = (await gateway.call("device.pair.list", {})) as {
     pending?: Array<{ requestId?: string; role?: string }>;
   };
@@ -552,16 +554,18 @@ async function approvePendingMcpPairing(gateway: Awaited<ReturnType<typeof start
 }
 
 async function runGatewaySmokeProof(options: ProducerOptions): Promise<string> {
-  const gateway = await startQaGatewayChild({
-    repoRoot: options.repoRoot,
-    useRepoCli: true,
-    transportBaseUrl: "http://127.0.0.1",
-    controlUiEnabled: false,
-  });
-  const tempRoot = gateway.tempRoot;
+  const gatewayOwner = createQaGatewayChild();
+  let tempRoot: string | undefined;
   const keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1";
   let details = "";
   try {
+    const gateway = await gatewayOwner.start({
+      repoRoot: options.repoRoot,
+      useRepoCli: true,
+      transportBaseUrl: "http://127.0.0.1",
+      controlUiEnabled: false,
+    });
+    tempRoot = gateway.tempRoot;
     const stdout: string[] = [];
     const stderr: string[] = [];
     const exitCode = await runGatewaySmoke(
@@ -580,9 +584,9 @@ async function runGatewaySmokeProof(options: ProducerOptions): Promise<string> {
     }
     details = `real Gateway pid=${gateway.pid ?? "unknown"}; ${stdout.join("; ")}; health.ok=true`;
   } finally {
-    await gateway.stop();
+    await stopQaGatewayFixture(gatewayOwner);
   }
-  if (!keepTemp && existsSync(tempRoot)) {
+  if (!keepTemp && tempRoot && existsSync(tempRoot)) {
     throw new Error(`Gateway temp root was not cleaned up: ${tempRoot}`);
   }
   return details;
@@ -592,7 +596,8 @@ async function runMcpGatewayStartupRetryProof(options: ProducerOptions): Promise
   const fixture = await createFixturePlugin();
   let proxy: GatewayProxy | undefined;
   let mcp: McpClientHandle | undefined;
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
+  let gateway: QaGatewayChild | undefined;
   let beforeSpawnAt = 0;
   const keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1";
   let details = "";
@@ -611,7 +616,7 @@ async function runMcpGatewayStartupRetryProof(options: ProducerOptions): Promise
         repoRoot: options.repoRoot,
       });
     };
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
       useRepoCli: true,
       transportBaseUrl: "http://127.0.0.1",
@@ -686,7 +691,7 @@ async function runMcpGatewayStartupRetryProof(options: ProducerOptions): Promise
     await closeMcpClient(mcp);
     await proxy?.stop().catch(() => undefined);
     const tempRoot = gateway?.tempRoot;
-    await gateway?.stop().catch(() => undefined);
+    await stopQaGatewayFixture(gatewayOwner).catch(() => undefined);
     await fixture.cleanup();
     if (!keepTemp && tempRoot && existsSync(tempRoot) && !proofError) {
       proofError = new Error(`Gateway temp root was not cleaned up: ${tempRoot}`);

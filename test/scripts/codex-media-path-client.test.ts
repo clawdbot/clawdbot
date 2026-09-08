@@ -135,6 +135,31 @@ describe("codex media path limits", () => {
 });
 
 describe("codex media path fake app-server", () => {
+  it("advertises the managed Codex version across initialization and thread creation", async () => {
+    const requestLog = path.join(tempRoots.make("openclaw-codex-media-path-"), "requests.jsonl");
+    const version = JSON.parse(readFileSync("extensions/codex/package.json", "utf8")).dependencies[
+      "@openai/codex"
+    ];
+    const child = spawn(process.execPath, [fakeAppServerPath], {
+      env: { ...process.env, OPENCLAW_CODEX_MEDIA_PATH_APP_SERVER_LOG: requestLog },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    try {
+      const initialized = readStdoutLine(child);
+      child.stdin.write(jsonl({ id: "initialize", method: "initialize" }));
+      expect(JSON.parse(await initialized).result).toMatchObject({
+        serverInfo: { version },
+        userAgent: expect.stringContaining(`/${version} `),
+      });
+
+      const started = readStdoutLine(child);
+      child.stdin.write(jsonl({ id: "thread", method: "thread/start", params: {} }));
+      expect(JSON.parse(await started).result.thread.cliVersion).toBe(version);
+    } finally {
+      await stopChild(child);
+    }
+  });
+
   it("returns a structured error when request logging fails", async () => {
     const requestLogDirectory = tempRoots.make("openclaw-codex-media-path-");
     const child: ChildProcessWithoutNullStreams = spawn(process.execPath, [fakeAppServerPath], {

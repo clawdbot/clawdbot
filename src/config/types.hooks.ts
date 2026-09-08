@@ -25,6 +25,13 @@ export type HookMappingConfig = {
   sessionMode?: HookSessionMode;
   messageTemplate?: string;
   textTemplate?: string;
+  /**
+   * Fan the mapping out over a top-level payload array: one action per element,
+   * with templates/transforms seeing a payload whose array holds only that
+   * element. Example: the gmail preset uses `forEach: "messages"` so batched
+   * pushes dispatch one isolated run per email.
+   */
+  forEach?: string;
   deliver?: boolean;
   /** DANGEROUS: Disable external content safety wrapping for this hook. */
   allowUnsafeExternalContent?: boolean;

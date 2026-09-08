@@ -1,5 +1,10 @@
 // Cron runtime model thinking tests cover live metadata hydration for payload overrides.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  runFallbackModelAttempt,
+  runInitialModelFallbackAttempt,
+  type TestModelFallbackRunnerParams,
+} from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import {
   clearFastTestEnv,
@@ -70,6 +75,12 @@ describe("runCronIsolatedAgentTurn runtime model thinking", () => {
         isNewSession: true,
       }),
     );
+    runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => ({
+      result: await runInitialModelFallbackAttempt(params),
+      provider: params.provider,
+      model: params.model,
+      attempts: [],
+    }));
   });
 
   afterEach(() => {
@@ -93,12 +104,6 @@ describe("runCronIsolatedAgentTurn runtime model thinking", () => {
         level === "off" || catalog?.some((entry) => entry.reasoning === true) === true,
     );
     resolveSupportedThinkingLevelMock.mockReturnValue("off");
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => ({
-      result: await run(provider, model),
-      provider,
-      model,
-      attempts: [],
-    }));
 
     await runCronIsolatedAgentTurn({
       cfg: {
@@ -147,12 +152,6 @@ describe("runCronIsolatedAgentTurn runtime model thinking", () => {
       ref: { provider: "ollama", model: "minimax-m3:cloud" },
     });
     loadModelCatalogMock.mockResolvedValue([]);
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => ({
-      result: await run(provider, model),
-      provider,
-      model,
-      attempts: [],
-    }));
 
     await runCronIsolatedAgentTurn({
       cfg: {
@@ -195,12 +194,6 @@ describe("runCronIsolatedAgentTurn runtime model thinking", () => {
         ref: { provider: "ollama", model: "minimax-m3:cloud" },
       });
       loadModelCatalogMock.mockResolvedValue([]);
-      runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => ({
-        result: await run(provider, model),
-        provider,
-        model,
-        attempts: [],
-      }));
 
       await runCronIsolatedAgentTurn({
         cfg: {
@@ -233,61 +226,80 @@ describe("runCronIsolatedAgentTurn runtime model thinking", () => {
     },
   );
 
-  it("recomputes configured thinking defaults for each fallback candidate", async () => {
-    resolveAllowedModelRefMock.mockImplementation(({ raw }: { raw: string }) => {
-      const [provider, model] = raw.split("/");
-      return { ref: { provider, model } };
-    });
-    loadModelCatalogMock.mockResolvedValue([
-      { provider: "openai", id: "gpt-5.6-sol", reasoning: true },
-    ]);
-    resolveThinkingDefaultMock.mockReturnValue("medium");
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
-      await run(provider, model);
-      const result = await run("ollama", "minimax-m3:cloud");
-      return {
-        result,
-        provider: "ollama",
-        model: "minimax-m3:cloud",
-        attempts: [],
-      };
-    });
+  it.each(["shared", "agent"] as const)(
+    "recomputes %s thinking defaults for each fallback candidate",
+    async (scope) => {
+      resolveAllowedModelRefMock.mockImplementation(({ raw }: { raw: string }) => {
+        const [provider, model] = raw.split("/");
+        return { ref: { provider, model } };
+      });
+      loadModelCatalogMock.mockResolvedValue([
+        { provider: "openai", id: "gpt-5.6-sol", reasoning: true },
+      ]);
+      resolveThinkingDefaultMock.mockReturnValue("medium");
+      runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => {
+        await runInitialModelFallbackAttempt(params);
+        const result = await runFallbackModelAttempt(
+          params,
+          "ollama",
+          "minimax-m3:cloud",
+          "unknown",
+        );
+        return {
+          result,
+          provider: "ollama",
+          model: "minimax-m3:cloud",
+          attempts: [],
+        };
+      });
 
-    await runCronIsolatedAgentTurn({
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "openai/gpt-5.6-sol": {},
-              "ollama/minimax-m3:cloud": {
-                params: { thinking: "off" },
+      await runCronIsolatedAgentTurn({
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "openai/gpt-5.6-sol": {},
+                "ollama/minimax-m3:cloud": {
+                  params: { thinking: scope === "shared" ? "off" : "high" },
+                },
+              },
+            },
+            entries: {
+              main: {
+                models:
+                  scope === "agent"
+                    ? {
+                        "ollama/minimax-m3:cloud": { params: { thinking: "off" } },
+                      }
+                    : {},
               },
             },
           },
         },
-      },
-      deps: {} as never,
-      job: {
-        id: "fallback-thinking-default-job",
-        name: "Fallback Thinking Default Test",
-        schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
-        sessionTarget: "isolated",
-        payload: {
-          kind: "agentTurn",
-          message: "summarize",
-          model: "openai/gpt-5.6-sol",
-        },
-      } as never,
-      message: "summarize",
-      sessionKey: "cron:fallback-thinking-default",
-    });
+        deps: {} as never,
+        job: {
+          id: "fallback-thinking-default-job",
+          name: "Fallback Thinking Default Test",
+          schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+          sessionTarget: "isolated",
+          payload: {
+            kind: "agentTurn",
+            message: "summarize",
+            model: "openai/gpt-5.6-sol",
+          },
+        } as never,
+        message: "summarize",
+        sessionKey: "cron:fallback-thinking-default",
+        agentId: "main",
+      });
 
-    expect(runEmbeddedAgentMock.mock.calls.map((call) => call[0].thinkLevel)).toEqual([
-      "medium",
-      "off",
-    ]);
-    expect(loadModelCatalogMock).toHaveBeenCalledTimes(1);
-  });
+      expect(runEmbeddedAgentMock.mock.calls.map((call) => call[0].thinkLevel)).toEqual([
+        "medium",
+        "off",
+      ]);
+      expect(loadModelCatalogMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("hydrates runtime metadata for a reasoning-capable fallback candidate", async () => {
     resolveAllowedModelRefMock.mockImplementation(({ raw }: { raw: string }) => {
@@ -313,9 +325,9 @@ describe("runCronIsolatedAgentTurn runtime model thinking", () => {
           ? "medium"
           : "off",
     );
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
-      await run(provider, model);
-      const result = await run("ollama", "minimax-m3:cloud");
+    runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => {
+      await runInitialModelFallbackAttempt(params);
+      const result = await runFallbackModelAttempt(params, "ollama", "minimax-m3:cloud", "unknown");
       return {
         result,
         provider: "ollama",

@@ -1,4 +1,5 @@
 // Builds Node startup environment variables for subprocess launches.
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { type EnvMap, resolveAutoNodeExtraCaCerts } from "./node-extra-ca-certs.js";
 
 // Startup TLS environment defaults for child Node processes. macOS needs
@@ -23,7 +24,7 @@ export function resolveNodeStartupTlsEnvironment(
   const includeDarwinDefaults = params.includeDarwinDefaults ?? true;
 
   const nodeExtraCaCerts =
-    env.NODE_EXTRA_CA_CERTS ??
+    readNonBlankString(env.NODE_EXTRA_CA_CERTS) ??
     (platform === "darwin" && includeDarwinDefaults
       ? "/etc/ssl/cert.pem"
       : resolveAutoNodeExtraCaCerts({

@@ -61,6 +61,9 @@
     "properties": {}
   },
   "modelCatalog": {
+    "modelsDev": {
+      "gmi": "gmicloud"
+    },
     "aliases": {
       "gmi-cloud": {
         "provider": "gmi"
@@ -150,6 +153,9 @@
               "output": 2.5,
               "cacheRead": 0.03,
               "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
             }
           },
           {

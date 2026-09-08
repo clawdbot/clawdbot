@@ -14,10 +14,13 @@ import {
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
+import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { resolveAgentAvatarUrlFromSource } from "../agents/identity-avatar-file.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
+import { SESSION_PERMISSION_BY_EXEC_MODE } from "../agents/session-permission-exec-mode.js";
 import { insideGitCheckout } from "../agents/worktrees/git.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
@@ -26,20 +29,26 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
+import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
+import type { SessionEntryListScope } from "../config/sessions/session-accessor.js";
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveExecPolicyForMode } from "../infra/exec-approvals-core.js";
+import { loadExecApprovals } from "../infra/exec-approvals-store.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import { listAgentProvenance } from "../state/agent-provenance.js";
 import { listGatewayAgentsBasic } from "./agent-list.js";
 import type { GatewayAgentOwnership } from "./agent-list.js";
+import { resolveGatewayAssistantAvatar } from "./assistant-avatar.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import { resolveGatewayModelThinkingProfile } from "./session-utils-model.js";
 import {
+  type GatewaySessionStoreDiscoveryCache,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
-import type { GatewayAgentRow } from "./session-utils.types.js";
+import type { GatewayAgentRow, SessionListModelCatalog } from "./session-utils.types.js";
 import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
 
 /**
@@ -132,7 +141,12 @@ function readAcpMetaForDeletedAgentCheck(params: {
 
 function loadSessionEntryWithMode(
   sessionKey: string,
-  opts: { agentId?: string; clone?: boolean; includeStoreChildEntries?: boolean } | undefined,
+  opts:
+    | (Pick<SessionEntryListScope, "agentId" | "clone" | "projection"> & {
+        includeStoreChildEntries?: boolean;
+        targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
+      })
+    | undefined,
   readOnly: boolean,
 ) {
   const cfg = getRuntimeConfig();
@@ -140,18 +154,23 @@ function loadSessionEntryWithMode(
   const target = resolveGatewaySessionStoreTargetWithStore({
     cfg,
     key,
+    exactRead: true,
+    readOnly,
+    projection: opts?.projection,
+    targetDiscoveryCache: opts?.targetDiscoveryCache,
     ...(opts?.clone === false ? { clone: false } : {}),
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
-    ...(readOnly
-      ? {
-          exactRead: true,
-          readOnly: true,
-          ...(opts?.includeStoreChildEntries ? { includeStoreChildEntries: true } : {}),
-        }
-      : {}),
+    ...(opts?.includeStoreChildEntries ? { includeStoreChildEntries: true } : {}),
   });
   const storePath = target.storePath;
   const store = target.store;
+  if (!readOnly) {
+    for (const storeKey of target.storeKeys) {
+      if (isInternalSessionEffectsKey(storeKey)) {
+        delete store[storeKey];
+      }
+    }
+  }
   const canonicalMatch = resolveCanonicalSessionStoreMatchFromStoreKeys(store, target.storeKeys);
   const legacyKey = canonicalMatch?.key !== target.canonicalKey ? canonicalMatch?.key : undefined;
   const entry =
@@ -172,24 +191,27 @@ function loadSessionEntryWithMode(
 
 export function loadGatewaySessionEntry(
   sessionKey: string,
-  opts?: { agentId?: string; clone?: boolean },
+  opts?: Pick<SessionEntryListScope, "agentId" | "clone" | "projection">,
 ) {
   return loadSessionEntryWithMode(sessionKey, opts, false);
 }
 
 export function loadGatewaySessionEntryReadOnly(
   sessionKey: string,
-  opts?: { agentId?: string; clone?: boolean; includeStoreChildEntries?: boolean },
+  opts?: {
+    includeStoreChildEntries?: boolean;
+    targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
+  } & Pick<SessionEntryListScope, "agentId" | "clone" | "projection">,
 ) {
   return loadSessionEntryWithMode(sessionKey, opts, true);
 }
 
 /** Returns the one canonical entry and the exact persisted key that owns it. */
-export function resolveCanonicalSessionStoreMatchFromStoreKeys(
-  store: Record<string, SessionEntry>,
+export function resolveCanonicalSessionStoreMatchFromStoreKeys<TEntry extends SessionEntry>(
+  store: Record<string, TEntry>,
   storeKeys: string[],
-): { key: string; entry: SessionEntry } | undefined {
-  let selected: { key: string; entry: SessionEntry } | undefined;
+): { key: string; entry: TEntry } | undefined {
+  let selected: { key: string; entry: TEntry } | undefined;
   for (const key of storeKeys) {
     const entry = store[key];
     if (!entry) {
@@ -300,12 +322,27 @@ function resolveGatewayAgentModel(
   };
 }
 
+function resolvedPermissionLabel(
+  policy: Pick<ReturnType<typeof resolveExecDefaults>, "mode" | "security" | "ask">,
+): GatewayAgentRow["defaultPermissionMode"] {
+  const { mode } = policy;
+  const canonical = resolveExecPolicyForMode(mode);
+  // Display resolved posture, never authorization. Allowlist has no matching
+  // session mode; lossy security/ask pairs must also remain unlabeled.
+  return mode !== "allowlist" &&
+    policy.security === canonical.security &&
+    policy.ask === canonical.ask
+    ? SESSION_PERMISSION_BY_EXEC_MODE[mode]
+    : undefined;
+}
+
 export function listAgentsForGateway(
   cfg: OpenClawConfig,
   modelCatalog?: ModelCatalogEntry[],
   options?: {
-    modelCatalogByAgentId?: ReadonlyMap<string, ModelCatalogEntry[]>;
+    modelCatalogByAgentId?: SessionListModelCatalog;
     includeSystem?: boolean;
+    httpAvatarBasePath?: string;
   },
 ): {
   defaultId: string;
@@ -316,24 +353,33 @@ export function listAgentsForGateway(
   agents: GatewayAgentRow[];
 } {
   const basic = listGatewayAgentsBasic(cfg);
-  const configuredById = new Map<string, { identity?: GatewayAgentRow["identity"] }>();
+  const execApprovals = loadExecApprovals();
+  const identityById = new Map<string, GatewayAgentRow["identity"]>();
   for (const entry of listAgentEntries(cfg)) {
     if (!entry?.id) {
       continue;
     }
     const agentId = normalizeAgentId(entry.id);
     const avatar = normalizeOptionalString(entry.identity?.avatar);
-    const avatarUrl = resolveAgentAvatarUrlFromSource(cfg, agentId, avatar);
+    const httpAvatar =
+      avatar && options?.httpAvatarBasePath !== undefined
+        ? resolveGatewayAssistantAvatar({
+            cfg,
+            identity: { agentId, avatar },
+            httpBasePath: options.httpAvatarBasePath,
+          }).avatar
+        : undefined;
+    const avatarUrl = httpAvatar ?? resolveAgentAvatarUrlFromSource(cfg, agentId, avatar);
     const identity = entry.identity
       ? {
           name: normalizeOptionalString(entry.identity.name),
           theme: normalizeOptionalString(entry.identity.theme),
           emoji: normalizeOptionalString(entry.identity.emoji),
-          avatar,
+          avatar: httpAvatar ?? avatar,
           avatarUrl,
         }
       : undefined;
-    configuredById.set(agentId, { identity });
+    identityById.set(agentId, identity);
   }
   const roster = options?.includeSystem
     ? basic.agents
@@ -343,7 +389,13 @@ export function listAgentsForGateway(
   );
   const agents = roster.map((entry) => {
     const { id } = entry;
-    const meta = configuredById.get(id);
+    const execDefaults = resolveExecDefaults({ cfg, agentId: id, execApprovals });
+    // This label must never overstate permissiveness. When sandbox policy can vary
+    // by session, the effective policy is unknowable at agent scope: omit the label.
+    const defaultPermissionMode =
+      resolveSandboxConfigForAgent(cfg, id).mode === "off"
+        ? resolvedPermissionLabel(execDefaults)
+        : undefined;
     const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
     const model = resolveGatewayAgentModel(cfg, id, resolvedModel);
     const sessionKey = resolveAgentMainSessionKey({ cfg, agentId: id });
@@ -357,7 +409,17 @@ export function listAgentsForGateway(
         acpRuntime: false,
       }),
     );
-    const agentModelCatalog = options?.modelCatalogByAgentId?.get(id) ?? modelCatalog;
+    const hasAgentCatalog = options?.modelCatalogByAgentId?.has(id);
+    // Unconfigured system rows inherit the default catalog; keep its provider
+    // policy attached. A configured owner with no catalog must not inherit it.
+    const preparedCatalog = hasAgentCatalog
+      ? options?.modelCatalogByAgentId?.get(id)
+      : modelCatalog
+        ? undefined
+        : options?.modelCatalogByAgentId?.get(basic.defaultId);
+    const agentModelCatalog = hasAgentCatalog
+      ? preparedCatalog?.entries
+      : (modelCatalog ?? preparedCatalog?.entries);
     const thinkingProfile = resolveGatewayModelThinkingProfile({
       cfg,
       agentId: id,
@@ -365,6 +427,7 @@ export function listAgentsForGateway(
       model: resolvedModel.model,
       modelCatalog: agentModelCatalog,
       sessionKey,
+      providerPolicySource: preparedCatalog?.pluginRegistry,
     });
     const workspace = resolveAgentWorkspaceDir(cfg, id);
     // Must mirror the sessions.create worktree preflight: subdirectory workspaces inside a
@@ -375,7 +438,7 @@ export function listAgentsForGateway(
         id,
         ...(options?.includeSystem ? { kind: entry.kind } : {}),
         name: entry.name,
-        identity: meta?.identity,
+        identity: identityById.get(id),
         workspace,
         workspaceGit,
         agentRuntime,
@@ -385,6 +448,7 @@ export function listAgentsForGateway(
         thinkingDefault: thinkingProfile.thinkingDefault,
       },
       { model },
+      defaultPermissionMode ? { defaultPermissionMode } : {},
     );
     const provenance = provenanceById.get(id);
     return provenance
@@ -397,8 +461,8 @@ export function listAgentsForGateway(
   });
   return {
     defaultId: basic.defaultId,
-    ownership: basic.ownership!,
-    selectionRequired: basic.selectionRequired!,
+    ownership: basic.ownership,
+    selectionRequired: basic.selectionRequired,
     mainKey: basic.mainKey,
     scope: basic.scope,
     agents,

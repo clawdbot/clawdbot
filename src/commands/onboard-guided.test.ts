@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import { createWizardPrompter, trackWizardProgress } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
@@ -23,8 +23,10 @@ const ensureAuthProfileStore = vi.hoisted(() =>
   vi.fn(() => ({ version: 1 as const, profiles: {} })),
 );
 const detectAvailableSetupProviderIds = vi.hoisted(() => vi.fn());
+const launchTuiCli = vi.hoisted(() => vi.fn(async (_opts: unknown) => undefined));
 
 vi.mock("../../packages/terminal-core/src/restore.js", () => ({ restoreTerminalState }));
+vi.mock("../tui/tui-launch.js", () => ({ launchTuiCli }));
 
 vi.mock("./auth-choice-prompt.js", async (importActual) => ({
   ...(await importActual<typeof import("./auth-choice-prompt.js")>()),
@@ -271,7 +273,11 @@ describe("runGuidedOnboarding", () => {
     localOnboarding.begin.mockClear();
     localOnboarding.complete.mockClear();
     restoreTerminalState.mockClear();
-    promptAuthChoiceGrouped.mockReset();
+    promptAuthChoiceGrouped
+      .mockReset()
+      .mockImplementation(
+        async ({ additionalGroups }) => additionalGroups?.[0]?.options[0]?.value ?? "skip",
+      );
     ensureAuthProfileStore.mockClear();
     detectAvailableSetupProviderIds.mockReset();
     detectAvailableSetupProviderIds.mockResolvedValue(new Set(["ollama"]));
@@ -282,6 +288,7 @@ describe("runGuidedOnboarding", () => {
       issues: [],
       config: localOnboarding.persisted.config ?? {},
     }));
+    launchTuiCli.mockClear();
   });
 
   afterEach(() => {
@@ -343,6 +350,7 @@ describe("runGuidedOnboarding", () => {
     );
     expect(applySetup).toHaveBeenCalledWith(
       expect.objectContaining({ firstAgent: { name: "robby" } }),
+      { beforePersistentApply: expect.any(Function) },
     );
   });
 
@@ -408,6 +416,40 @@ describe("runGuidedOnboarding", () => {
     expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
   });
 
+  it("launches the guided terminal hatch through the running Gateway", async () => {
+    const prompter = createWizardPrompter();
+    const deps: GuidedOnboardingDeps = setupDeps({ prompter });
+    delete deps.launchHatchTui;
+
+    await runGuidedOnboarding(
+      { acceptRisk: true, workspace: "/tmp/work", tui: true },
+      makeRuntime(),
+      deps,
+    );
+
+    expect(launchTuiCli).toHaveBeenCalledOnce();
+    const options = launchTuiCli.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(options).toMatchObject({ deliver: false });
+    expect(options).not.toHaveProperty("local");
+  });
+
+  it("keeps the local terminal hatch for configured reruns", async () => {
+    localOnboarding.persisted.config = { gateway: {} };
+    const prompter = createWizardPrompter();
+    const deps: GuidedOnboardingDeps = setupDeps({ prompter });
+    delete deps.launchHatchTui;
+
+    await runGuidedOnboarding(
+      { acceptRisk: true, workspace: "/tmp/work", tui: true },
+      makeRuntime(),
+      deps,
+    );
+
+    expect(launchTuiCli).toHaveBeenCalledOnce();
+    expect(launchTuiCli).toHaveBeenCalledWith(expect.objectContaining({ local: true }));
+    expect(deps.applySetup).not.toHaveBeenCalled();
+  });
+
   it("uses --skip-ui to skip both browser and terminal handoffs", async () => {
     const prompter = createWizardPrompter();
     const deps = setupDeps({ prompter });
@@ -454,10 +496,29 @@ describe("runGuidedOnboarding", () => {
 
     expect(persistRiskAcknowledgement).toHaveBeenCalledWith({
       wizard: { securityAcknowledgedAt: expect.any(String) },
+      telemetry: { enabled: false, consentedAt: expect.any(String) },
     });
     expect(persistRiskAcknowledgement.mock.invocationCallOrder[0]).toBeLessThan(
       detect.mock.invocationCallOrder[0]!,
     );
+  });
+
+  it("persists explicit feature-stat consent with the guided onboarding acknowledgement", async () => {
+    const select = vi.fn(async ({ message }: { message: string }) =>
+      message === "Help make OpenClaw better?" ? true : "full",
+    ) as unknown as WizardPrompter["select"];
+    const prompter = createWizardPrompter({ select });
+
+    await runGuidedOnboarding(
+      { acceptRisk: true, workspace: "/tmp/work" },
+      makeRuntime(),
+      setupDeps({ prompter }),
+    );
+
+    expect(localOnboarding.persisted.config?.telemetry).toEqual({
+      enabled: true,
+      consentedAt: expect.any(String),
+    });
   });
 
   it("uses the configured workspace only as inference and OpenClaw context", async () => {
@@ -497,7 +558,7 @@ describe("runGuidedOnboarding", () => {
     expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/openclaw-workspace");
   });
 
-  it("live-tests an unverified CLI before automatic setup", async () => {
+  it("live-tests an unverified CLI only after its selection", async () => {
     const unverified = {
       ...candidate("claude-cli", "Claude Code"),
       detail: "installed",
@@ -574,7 +635,9 @@ describe("runGuidedOnboarding", () => {
 
   it("never replaces a configured model by fallthrough when its check fails", async () => {
     const existingModel = existingModelCandidate();
-    promptAuthChoiceGrouped.mockResolvedValueOnce("candidate:existing-model");
+    promptAuthChoiceGrouped
+      .mockResolvedValueOnce("candidate:existing-model")
+      .mockResolvedValueOnce("candidate:existing-model");
     const prompter = createWizardPrompter({
       confirm: vi.fn(async () => false),
     });
@@ -603,8 +666,7 @@ describe("runGuidedOnboarding", () => {
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
 
-    // Only the existing model was auto-tested; the other credentialed candidate
-    // must not run (and persist) without the user choosing it.
+    // Both attempts follow an explicit choice of the existing route.
     expect(activate).toHaveBeenCalledTimes(2);
     expect(activate.mock.calls.map(([call]) => call.kind)).toEqual([
       "existing-model",
@@ -616,11 +678,14 @@ describe("runGuidedOnboarding", () => {
     ]);
     const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
     expect(notes).toContain("kept unchanged");
-    expect(promptAuthChoiceGrouped).toHaveBeenCalledOnce();
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
     expect(deps.launchHatchTui).toHaveBeenCalledOnce();
   });
 
-  it("falls through after an auth failure and surfaces both outcomes", async () => {
+  it("changes provider only after another explicit choice and shows the failed result", async () => {
+    promptAuthChoiceGrouped
+      .mockResolvedValueOnce("candidate:claude-cli")
+      .mockResolvedValueOnce("candidate:codex-cli");
     const prompter = createWizardPrompter({
       confirm: vi.fn(async () => false),
     });
@@ -655,30 +720,38 @@ describe("runGuidedOnboarding", () => {
     expect(activate.mock.calls.map(([call]) => call.surface)).toEqual(["cli", "cli"]);
     const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
     expect(notes).toContain("Claude Code");
-    // Auto-ladder failures collect into one quiet summary instead of loud notes.
-    expect(notes).not.toContain("Authentication failed");
-    expect(notes).toContain("1 detected option(s) didn't respond");
+    expect(notes).toContain("Authentication failed");
+    expect(notes).toContain("login expired");
+    expect(promptAuthChoiceGrouped.mock.invocationCallOrder[1]).toBeLessThan(
+      activate.mock.invocationCallOrder[1]!,
+    );
     expect(notes).toContain("Gateway: running");
   });
 
-  it("surfaces an auto-attempted failure detail before offering manual retry", async () => {
-    promptAuthChoiceGrouped.mockResolvedValueOnce("candidate:codex-cli");
+  it("shows selected-provider failure details before an explicit retry", async () => {
+    promptAuthChoiceGrouped
+      .mockResolvedValueOnce("candidate:codex-cli")
+      .mockResolvedValueOnce("candidate:codex-cli");
     const prompter = createWizardPrompter({
       confirm: vi.fn(async () => false),
     });
+    const expectSettledProgress = trackWizardProgress(prompter);
     const activate = vi
-      .fn()
+      .fn<NonNullable<GuidedOnboardingDeps["activate"]>>()
       .mockResolvedValueOnce({
         ok: false,
         status: "unknown",
         error: "Codex runtime artifact cannot attest injected runtime environment: NODE_PATH",
       })
-      .mockResolvedValueOnce({
-        ok: true,
-        modelRef: "openai/gpt-5.4",
-        latencyMs: 700,
-        lines: ["Gateway: running"],
-      }) as GuidedOnboardingDeps["activate"];
+      .mockImplementationOnce(async ({ prompter: activationPrompter }) => {
+        activationPrompter!.progress("Testing your AI connection…").stop();
+        return {
+          ok: true,
+          modelRef: "openai/gpt-5.4",
+          latencyMs: 700,
+          lines: ["Gateway: running"],
+        };
+      });
     const deps = setupDeps({
       prompter,
       activate,
@@ -695,19 +768,21 @@ describe("runGuidedOnboarding", () => {
             options: [
               expect.objectContaining({
                 value: "candidate:codex-cli",
-                label: "Retry Codex (logged in)",
+                label: "Try Codex (logged in)",
               }),
             ],
           }),
         ],
       }),
     );
+    expect(activate).toHaveBeenNthCalledWith(1, expect.objectContaining({ prompter }));
+    expect(activate).toHaveBeenNthCalledWith(2, expect.objectContaining({ prompter }));
     expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
     const retryNotes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
-    expect(retryNotes).toContain("These didn't work just now:");
     expect(retryNotes).toContain(
       "Codex runtime artifact cannot attest injected runtime environment: NODE_PATH",
     );
+    expectSettledProgress();
   });
 
   it("accepts and verifies a manual provider key without displaying it", async () => {
@@ -724,12 +799,17 @@ describe("runGuidedOnboarding", () => {
       text: text as WizardPrompter["text"],
       confirm: vi.fn(async () => false),
     });
-    const activate = vi.fn(async () => ({
-      ok: true as const,
-      modelRef: "openai/gpt-5.5",
-      latencyMs: 500,
-      lines: ["Default model: openai/gpt-5.5"],
-    })) as GuidedOnboardingDeps["activate"];
+    const expectSettledProgress = trackWizardProgress(prompter);
+    const activate = vi.fn<NonNullable<GuidedOnboardingDeps["activate"]>>(async (params) => {
+      await params.prompter!.text({ message: "Provider credential", sensitive: true });
+      params.prompter!.progress("Testing your AI connection…").stop();
+      return {
+        ok: true as const,
+        modelRef: "openai/gpt-5.5",
+        latencyMs: 500,
+        lines: ["Default model: openai/gpt-5.5"],
+      };
+    });
     const deps = setupDeps({
       prompter,
       detect,
@@ -739,14 +819,11 @@ describe("runGuidedOnboarding", () => {
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
 
-    expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
-      expect.objectContaining({ allowedChoices: new Set(["apiKey"]) }),
-    );
     expect(activate).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "api-key",
+        kind: "provider-auth",
         authChoice: "apiKey",
-        apiKey: enteredValue,
+        prompter,
       }),
     );
     expect(text).toHaveBeenLastCalledWith(expect.objectContaining({ sensitive: true }));
@@ -755,6 +832,7 @@ describe("runGuidedOnboarding", () => {
       enteredValue,
     );
     expect(JSON.stringify([runtime.log, runtime.error])).not.toContain(enteredValue);
+    expectSettledProgress();
   });
 
   it("offers detected OAuth methods through the grouped provider picker", async () => {
@@ -798,7 +876,6 @@ describe("runGuidedOnboarding", () => {
         includeSkip: true,
         assistantVisibleOnly: false,
         workspaceDir: "/tmp/work",
-        allowedChoices: new Set(["openai"]),
       }),
     );
     expect(activate).toHaveBeenCalledWith(
@@ -845,12 +922,7 @@ describe("runGuidedOnboarding", () => {
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
 
-    expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowedChoices: new Set(["ollama"]),
-        detectedProviderIds: new Set(["ollama"]),
-      }),
-    );
+    expect(detectAvailableSetupProviderIds).not.toHaveBeenCalled();
     expect(activate).toHaveBeenCalledWith({
       kind: "provider-auth",
       authChoice: "ollama",
@@ -881,55 +953,21 @@ describe("runGuidedOnboarding", () => {
     expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
       expect.objectContaining({
         includeSkip: true,
-        detectedProviderIds: new Set(["ollama"]),
       }),
     );
     expect(deps.activate).not.toHaveBeenCalled();
     expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
     expect(deps.launchHatchTui).not.toHaveBeenCalled();
+    expect(deps.runBrowserHandoff).not.toHaveBeenCalled();
+    expect(deps.runSetupMemoryImportStep).not.toHaveBeenCalled();
+    expect(deps.applySetup).toHaveBeenCalledWith(
+      expect.objectContaining({ installDaemon: false, firstAgent: { name: "main" } }),
+      { beforePersistentApply: expect.any(Function) },
+    );
+    expect(localOnboarding.states.get("/tmp/openclaw.json")?.status).toBe("completed");
     expect(prompter.note).toHaveBeenCalledWith(
       expect.stringContaining("Add AI later"),
       "Next steps",
-    );
-  });
-
-  it("fails closed without opening an empty inference selector", async () => {
-    const select = vi.fn() as unknown as WizardPrompter["select"];
-    const prompter = createWizardPrompter({ select });
-    const deps = setupDeps({
-      prompter,
-      detect: vi.fn(async () =>
-        detection({
-          candidates: [],
-          manualProviders: [],
-          recommendedInstalls: [
-            {
-              id: "ollama",
-              label: "Ollama",
-              hint: "Run open models locally",
-              website: "https://ollama.com/download",
-              icon: "https://cdn.simpleicons.org/ollama",
-            },
-          ],
-        }),
-      ),
-    });
-    const runtime = makeRuntime();
-
-    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
-
-    expect(select).toHaveBeenCalledTimes(1);
-    expect(deps.activate).not.toHaveBeenCalled();
-    expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
-    expect(deps.launchHatchTui).not.toHaveBeenCalled();
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(prompter.note).toHaveBeenCalledWith(
-      "Ollama — Run open models locally\n  https://ollama.com/download",
-      "Recommended installs",
-    );
-    expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("No inference option is available yet"),
-      "AI access",
     );
   });
 
@@ -968,7 +1006,11 @@ describe("runGuidedOnboarding", () => {
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
 
-    expect(activate.mock.calls.map(([call]) => call.apiKey)).toEqual(["bad-key", "good-key"]);
+    expect(activate.mock.calls.map(([call]) => call.kind)).toEqual([
+      "provider-auth",
+      "provider-auth",
+    ]);
+    expect(text).not.toHaveBeenCalled();
     expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
     expect(runSystemAgentChat).not.toHaveBeenCalled();
     expect(deps.launchHatchTui).toHaveBeenCalledOnce();
@@ -989,6 +1031,7 @@ describe("runGuidedOnboarding", () => {
     expect(text).not.toHaveBeenCalled();
     expect(deps.applySetup).toHaveBeenCalledWith(
       expect.objectContaining({ workspace: "/tmp/work", surface: "cli", runtime }),
+      { beforePersistentApply: expect.any(Function) },
     );
     expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
     expect(runSystemAgentChat).not.toHaveBeenCalled();
@@ -999,7 +1042,7 @@ describe("runGuidedOnboarding", () => {
     const deps = setupDeps({ prompter });
     const runtime = makeRuntime();
 
-    await runGuidedOnboarding({}, runtime, deps);
+    await runGuidedOnboarding({ tui: true }, runtime, deps);
 
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(deps.detect).not.toHaveBeenCalled();

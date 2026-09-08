@@ -59,7 +59,24 @@ describe("slackSetupWizard.prepare", () => {
 
     expect(lines.join("\n")).not.toContain("Manifest (JSON):");
     expect(lines.join("\n")).not.toContain('"display_information"');
-    expect(lines).toContain("Manifest JSON follows as plain text for copy/paste.");
+    expect(lines).toContain("3) Socket Mode: enable it and create an app-level token (xapp-...)");
+  });
+
+  it("gives HTTP bot setup signing guidance without a Socket Mode manifest", async () => {
+    const plain = vi.fn<NonNullable<WizardPrompter["plain"]>>(async () => {});
+    const note = vi.fn(async () => {});
+
+    await runSetupWizardPrepare({
+      prepare: slackSetupWizard.prepare,
+      cfg: { channels: { slack: { mode: "http" } } } as OpenClawConfig,
+      prompter: createTestWizardPrompter({ plain, note }),
+    });
+
+    const instructions = requireFirstStringArg(note, "Slack HTTP setup instructions");
+    expect(instructions).toContain("Signing Secret");
+    expect(instructions).toContain("public HTTPS Request URL");
+    expect(note).toHaveBeenCalledWith(instructions, "Channel setup");
+    expect(plain).not.toHaveBeenCalled();
   });
 
   it("prints the manifest as plain JSON when Slack is not configured", async () => {
@@ -154,6 +171,8 @@ describe("slackSetupWizard.prepare", () => {
             "app_home_opened",
             "app_mention",
             "app_context_changed",
+            "agent_session_stopped",
+            "agent_session_title_changed",
             "channel_rename",
             "member_joined_channel",
             "member_left_channel",
@@ -250,6 +269,86 @@ describe("slackSetupWizard.prepare", () => {
     });
     expect(result.cfg.channels?.slack?.botToken).toBeUndefined();
     expect(result.cfg.channels?.slack?.appToken).toBeUndefined();
+  });
+
+  it("collects a signing secret instead of an app token for HTTP bot identity", async () => {
+    vi.stubEnv("SLACK_BOT_TOKEN", "");
+    vi.stubEnv("SLACK_APP_TOKEN", "");
+    const queued = createQueuedWizardPrompter({
+      selectValues: ["bot"],
+      textValues: ["test-bot-token", "test-signing-secret"],
+    });
+    const configure = createSetupWizardAdapter({
+      plugin: {
+        id: "slack",
+        meta: { label: "Slack" },
+        config: {
+          listAccountIds: () => ["default"],
+          defaultAccountId: () => "default",
+        },
+        setupContract: slackSetupContract,
+      } as never,
+      wizard: credentialOnlySlackSetupWizard,
+    }).configure;
+
+    const result = await runSetupWizardConfigure({
+      configure,
+      cfg: { channels: { slack: { mode: "http" } } } as OpenClawConfig,
+      prompter: queued.prompter,
+      options: { secretInputMode: "plaintext" as const },
+    });
+
+    expect(result.cfg.channels?.slack).toMatchObject({
+      enabled: true,
+      mode: "http",
+      botToken: "test-bot-token",
+      signingSecret: "test-signing-secret",
+    });
+    expect(result.cfg.channels?.slack?.appToken).toBeUndefined();
+    expect(
+      queued.text.mock.calls.map(([params]) => (params as { message: string }).message),
+    ).toEqual(["Enter Slack bot token (xoxb-...)", "Enter Slack signing secret"]);
+  });
+
+  it("does not use the Socket Mode environment shortcut for HTTP bot setup", async () => {
+    vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-env-test");
+    vi.stubEnv("SLACK_APP_TOKEN", "xapp-env-test");
+    const queued = createQueuedWizardPrompter({
+      selectValues: ["bot"],
+      confirmValues: [true],
+      textValues: ["test-signing-secret"],
+    });
+    const configure = createSetupWizardAdapter({
+      plugin: {
+        id: "slack",
+        meta: { label: "Slack" },
+        config: {
+          listAccountIds: () => ["default"],
+          defaultAccountId: () => "default",
+        },
+        setupContract: slackSetupContract,
+      } as never,
+      wizard: credentialOnlySlackSetupWizard,
+    }).configure;
+
+    const result = await runSetupWizardConfigure({
+      configure,
+      cfg: { channels: { slack: { mode: "http" } } } as OpenClawConfig,
+      prompter: queued.prompter,
+      options: { secretInputMode: "plaintext" as const },
+    });
+
+    expect(result.cfg.channels?.slack).toMatchObject({
+      enabled: true,
+      mode: "http",
+      signingSecret: "test-signing-secret",
+    });
+    expect(result.cfg.channels?.slack?.botToken).toBeUndefined();
+    expect(result.cfg.channels?.slack?.appToken).toBeUndefined();
+    expect(queued.confirm).toHaveBeenCalledTimes(1);
+    expect(
+      queued.text.mock.calls.map(([params]) => (params as { message: string }).message),
+    ).toEqual(["Enter Slack signing secret"]);
   });
 
   it("continues user setup after preserving a user-token SecretRef", async () => {

@@ -1,15 +1,14 @@
 import { BoardValidationError } from "../boards/board-layout.js";
-import type { BoardStore, BoardWidgetDocument } from "../boards/board-store.js";
+import type { BoardSessionTarget, BoardStore, BoardWidgetDocument } from "../boards/board-store.js";
 import { buildWidgetDocument } from "../canvas/wrap.js";
 import {
   resolveBoardWidgetContentKindByPluginKind,
   resolveBoardWidgetContentKindResourceUrls,
 } from "../plugins/board-widget-content-kinds.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { verifyBoardViewTicket } from "./board-view-ticket.js";
+import { requireBoardViewTicketAuthority, verifyBoardViewTicket } from "./board-view-ticket.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 
-type AuthorizedBoardWidgetView = {
-  sessionKey: string;
+type AuthorizedBoardWidgetView = BoardSessionTarget & {
   name: string;
   document: Extract<BoardWidgetDocument, { html: string }>;
 };
@@ -17,15 +16,17 @@ type AuthorizedBoardWidgetView = {
 export function resolveAuthorizedBoardWidgetView(
   store: BoardStore,
   ticket: string,
-  options: { nowMs?: number } = {},
+  options: { gatewayContext?: GatewayRequestContext; nowMs?: number } = {},
 ): AuthorizedBoardWidgetView {
   const claims = verifyBoardViewTicket(ticket, options);
   if (!claims) {
     throw new BoardValidationError("invalid_operation", "board widget view ticket is invalid");
   }
+  const authority = requireBoardViewTicketAuthority(claims, options.gatewayContext);
+  const session = { sessionKey: claims.sessionKey, agentId: claims.agentId };
   const document = claims.pluginFrame
-    ? store.readWidgetRegistered(claims.sessionKey, claims.name)
-    : store.readWidgetHtml(claims.sessionKey, claims.name);
+    ? store.readWidgetRegistered(session, claims.name)
+    : store.readWidgetHtml(session, claims.name);
   if (
     !document ||
     (document.grantState !== "none" && document.grantState !== "granted") ||
@@ -39,7 +40,7 @@ export function resolveAuthorizedBoardWidgetView(
       throw new BoardValidationError("invalid_operation", "board widget view ticket is stale");
     }
     const registration = resolveBoardWidgetContentKindByPluginKind(
-      getActivePluginRegistry(),
+      authority.pluginRegistry,
       document.pluginKind,
     );
     const resourceUrls = registration
@@ -73,10 +74,10 @@ export function resolveAuthorizedBoardWidgetView(
       ...(document.declared ? { declared: document.declared } : {}),
       resourceOrigins,
     };
-    return { sessionKey: claims.sessionKey, name: claims.name, document: composed };
+    return { ...session, name: claims.name, document: composed };
   }
   if (!("html" in document)) {
     throw new BoardValidationError("invalid_operation", "board widget view ticket is stale");
   }
-  return { sessionKey: claims.sessionKey, name: claims.name, document };
+  return { ...session, name: claims.name, document };
 }

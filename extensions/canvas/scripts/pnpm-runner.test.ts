@@ -1,5 +1,6 @@
 // Canvas tests cover pnpm runner plugin behavior.
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -8,9 +9,9 @@ import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 describe("canvas pnpm runner", () => {
   const posixIt = process.platform === "win32" ? it.skip : it;
 
-  it("executes native pnpm binaries from npm_execpath directly on non-Windows", () => {
+  it.each(["pnpm", "pnpm-native"])("executes native %s from npm_execpath directly", (basename) => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "canvas-pnpm-runner-"));
-    const npmExecPath = path.join(tempDir, "pnpm");
+    const npmExecPath = path.join(tempDir, basename);
     writeFileSync(npmExecPath, Buffer.from([0xcf, 0xfa, 0xed, 0xfe]));
     chmodSync(npmExecPath, 0o755);
 
@@ -130,4 +131,90 @@ describe("canvas pnpm runner", () => {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
+  posixIt("launches shell npm_execpath with its own interpreter and literal arguments", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "canvas-pnpm-shell-"));
+    const npmExecPath = path.join(tempDir, "pnpm");
+    writeFileSync(npmExecPath, "#!/bin/sh\nprintf '%s' \"$1\"\n");
+    chmodSync(npmExecPath, 0o755);
+    try {
+      const spec = resolvePnpmRunner({ npmExecPath, pnpmArgs: ["literal & argument"] });
+      const result = spawnSync(spec.command, spec.args, { encoding: "utf8", shell: spec.shell });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe("literal & argument");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it.runIf(process.platform === "win32")(
+    "launches native PATH entries and spaced cmd wrappers",
+    () => {
+      const tempDir = mkdtempSync(path.join(os.tmpdir(), "canvas pnpm windows "));
+      try {
+        const nativePath = path.join(tempDir, "pnpm.exe");
+        copyFileSync(process.execPath, nativePath);
+        const args = [
+          "--eval",
+          "process.stdout.write(JSON.stringify(process.argv.slice(1)))",
+          "space and & literal",
+        ];
+        const native = resolvePnpmRunner({
+          npmExecPath: "",
+          env: { PATH: tempDir },
+          pnpmArgs: args,
+        });
+        expect(native.command).toBe(nativePath);
+        const result = spawnSync(native.command, native.args, {
+          encoding: "utf8",
+          shell: native.shell,
+        });
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout)).toEqual(["space and & literal"]);
+        const cmdPath = path.join(tempDir, "pnpm.cmd");
+        writeFileSync(cmdPath, `@echo off\r\n"${process.execPath}" --version\r\n`);
+        const cmd = resolvePnpmRunner({ npmExecPath: cmdPath });
+        const cmdResult = spawnSync(cmd.command, cmd.args, {
+          encoding: "utf8",
+          shell: cmd.shell,
+          windowsVerbatimArguments: cmd.windowsVerbatimArguments,
+        });
+        expect(cmdResult.status, cmdResult.stderr).toBe(0);
+        expect(cmdResult.stdout.trim()).toBe(process.version);
+        expect(() =>
+          resolvePnpmRunner({ npmExecPath: cmdPath, pnpmArgs: ["unsafe&argument"] }),
+        ).toThrow(/unsafe/);
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform === "win32")(
+    "preserves literal arguments through spaced cmd wrappers",
+    () => {
+      const tempDir = mkdtempSync(path.join(os.tmpdir(), "canvas pnpm argv "));
+      try {
+        const capturePath = path.join(tempDir, "capture.cjs");
+        writeFileSync(
+          capturePath,
+          "process.stdout.write(JSON.stringify(process.argv.slice(2)));\n",
+        );
+        const cmdPath = path.join(tempDir, "pnpm.cmd");
+        writeFileSync(cmdPath, `@echo off\r\n"${process.execPath}" "${capturePath}" %*\r\n`);
+        const expected = ["", "left ^ right", "C:\\two words\\", 'say "hi"'];
+        const spec = resolvePnpmRunner({ npmExecPath: cmdPath, pnpmArgs: expected });
+
+        const result = spawnSync(spec.command, spec.args, {
+          encoding: "utf8",
+          shell: spec.shell,
+          windowsVerbatimArguments: spec.windowsVerbatimArguments,
+        });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout)).toEqual(expected);
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
 });

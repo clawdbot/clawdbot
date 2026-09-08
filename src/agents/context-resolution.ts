@@ -3,6 +3,7 @@ import {
   resolveClaudeSonnet5ModelIdentity,
   supportsClaude1MContext,
 } from "@openclaw/llm-core";
+import { stripSelfProviderModelPrefix } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -77,31 +78,22 @@ function resolveConfiguredProviderModel(
     providerEntries.find(
       ([providerId]) => normalizeProviderId(providerId) === normalizedProvider,
     )?.[1];
-  return providerConfig?.models?.find((entry) => {
-    const entryId = entry.id?.trim();
-    if (!entryId) {
-      return false;
+  const bareModel = stripSelfProviderModelPrefix(normalizedProvider, model);
+  const spellings = bareModel === model ? [model] : [model, bareModel];
+  for (const spelling of spellings) {
+    const match = providerConfig?.models?.find((entry) => {
+      const entryId = entry.id?.trim();
+      return (
+        entryId === spelling ||
+        (entryId !== undefined &&
+          stripSelfProviderModelPrefix(normalizedProvider, entryId) === spelling)
+      );
+    });
+    if (match) {
+      return match;
     }
-    if (entryId === model) {
-      return true;
-    }
-    const slash = entryId.indexOf("/");
-    return (
-      slash > 0 &&
-      normalizeProviderId(entryId.slice(0, slash)) === normalizedProvider &&
-      entryId.slice(slash + 1).trim() === model
-    );
-  });
-}
-
-function resolveProviderQualifiedModel(provider: string, model: string): string | undefined {
-  const slash = model.indexOf("/");
-  if (slash <= 0) {
-    return undefined;
   }
-  const prefixedProvider = normalizeProviderId(model.slice(0, slash));
-  const bareModel = model.slice(slash + 1).trim();
-  return prefixedProvider === normalizeProviderId(provider) && bareModel ? bareModel : undefined;
+  return undefined;
 }
 
 function resolveConfiguredRuntimeModel(
@@ -121,14 +113,7 @@ function resolveConfiguredRuntimeModel(
   ) {
     return undefined;
   }
-  const canonicalResult = resolveConfiguredProviderModel(cfg, canonicalProvider, model);
-  if (canonicalResult) {
-    return canonicalResult;
-  }
-  const canonicalModel = resolveProviderQualifiedModel(canonicalProvider, model);
-  return canonicalModel
-    ? resolveConfiguredProviderModel(cfg, canonicalProvider, canonicalModel)
-    : undefined;
+  return resolveConfiguredProviderModel(cfg, canonicalProvider, model);
 }
 
 function readAuthoredModelContextTokens(model: ConfigModelEntry | undefined): number | undefined {

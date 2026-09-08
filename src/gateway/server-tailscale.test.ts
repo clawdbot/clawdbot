@@ -24,8 +24,12 @@ vi.mock("../infra/tailscale.js", () => ({
   hasTailscaleFunnelRouteForPort: mocks.hasTailscaleFunnelRouteForPort,
 }));
 
-import { getMcpAppChannelOrigin, prepareMcpAppChannelOrigin } from "./mcp-app-channel-origin.js";
+import { resolveControlUiIdentity } from "./control-ui-identity.js";
 import { startGatewayTailscaleExposure as startGatewayTailscaleExposureBase } from "./server-tailscale.js";
+import {
+  getTailscalePublishedOrigin,
+  prepareTailscalePublishedOrigin,
+} from "./tailscale-published-origin.js";
 
 const MANAGED_BACKEND_PORT = 19_000;
 function startGatewayTailscaleExposure(
@@ -41,12 +45,12 @@ function createLogger() {
   return { info: vi.fn(), warn: vi.fn() };
 }
 
-function resetMcpAppChannelOrigin() {
-  prepareMcpAppChannelOrigin({ origin: "https://reset.test", reachability: "tailnet" })();
+function resetTailscalePublishedOrigin() {
+  prepareTailscalePublishedOrigin({ origin: "https://reset.test", mode: "serve" })();
 }
 
 afterEach(() => {
-  resetMcpAppChannelOrigin();
+  resetTailscalePublishedOrigin();
   for (const fn of Object.values(mocks)) {
     fn.mockReset();
   }
@@ -95,7 +99,12 @@ describe("startGatewayTailscaleExposure", () => {
       logTailscale,
     });
 
-    expect(mocks.claimTailscaleRoute).toHaveBeenCalledWith("serve", MANAGED_BACKEND_PORT);
+    expect(mocks.claimTailscaleRoute).toHaveBeenCalledWith(
+      "serve",
+      MANAGED_BACKEND_PORT,
+      18789,
+      expect.any(Function),
+    );
     expect(mocks.getTailnetHostnameAfterServe).toHaveBeenCalledOnce();
     expect(mocks.getTailnetHostname).not.toHaveBeenCalled();
     expect(mocks.hasTailscaleFunnelRouteForPort).not.toHaveBeenCalled();
@@ -142,7 +151,12 @@ describe("startGatewayTailscaleExposure", () => {
 
       await cleanup?.();
 
-      expect(mocks.claimTailscaleRoute).toHaveBeenCalledWith(mode, MANAGED_BACKEND_PORT);
+      expect(mocks.claimTailscaleRoute).toHaveBeenCalledWith(
+        mode,
+        MANAGED_BACKEND_PORT,
+        18789,
+        expect.any(Function),
+      );
       expect(mocks.stopRouteClaim).toHaveBeenCalledOnce();
     },
   );
@@ -197,7 +211,12 @@ describe("startGatewayTailscaleExposure", () => {
     });
 
     expect(mocks.hasTailscaleFunnelRouteForPort).toHaveBeenCalledWith(18789);
-    expect(mocks.claimTailscaleRoute).toHaveBeenCalledWith("serve", MANAGED_BACKEND_PORT);
+    expect(mocks.claimTailscaleRoute).toHaveBeenCalledWith(
+      "serve",
+      MANAGED_BACKEND_PORT,
+      18789,
+      expect.any(Function),
+    );
   });
 
   it("prepares one tailnet-only Serve origin for the Gateway lifecycle", async () => {
@@ -209,12 +228,21 @@ describe("startGatewayTailscaleExposure", () => {
       logTailscale: createLogger(),
     });
 
-    expect(getMcpAppChannelOrigin()).toEqual({
+    expect(getTailscalePublishedOrigin()).toMatchObject({
       origin: "https://node.tailnet.ts.net",
-      reachability: "tailnet",
+      mode: "serve",
     });
+    expect(resolveControlUiIdentity({}, { mode: "token", allowTailscale: true })?.url).toBe(
+      "https://node.tailnet.ts.net/",
+    );
     await cleanup?.();
-    expect(getMcpAppChannelOrigin()).toBeUndefined();
+    expect(getTailscalePublishedOrigin()).toBeUndefined();
+    expect(
+      resolveControlUiIdentity(
+        { gateway: { publicOrigin: "https://unrelated.test", tailscale: { mode: "serve" } } },
+        { mode: "token", allowTailscale: true },
+      ),
+    ).toBeUndefined();
   });
 
   it("clears the published origin and warns when the foreground claim exits", async () => {
@@ -240,7 +268,13 @@ describe("startGatewayTailscaleExposure", () => {
     await vi.waitFor(() => {
       expect(logTailscale.warn).toHaveBeenCalledWith(expect.stringContaining("claim exited"));
     });
-    expect(getMcpAppChannelOrigin()).toBeUndefined();
+    expect(getTailscalePublishedOrigin()).toBeUndefined();
+    expect(
+      resolveControlUiIdentity(
+        { gateway: { publicOrigin: "https://unrelated.test", tailscale: { mode: "serve" } } },
+        { mode: "token", allowTailscale: true },
+      ),
+    ).toBeUndefined();
   });
 
   it("does not publish an origin for an externally preserved Funnel", async () => {
@@ -255,11 +289,12 @@ describe("startGatewayTailscaleExposure", () => {
     });
 
     expect(cleanup).toBeNull();
-    expect(getMcpAppChannelOrigin()).toBeUndefined();
+    expect(getTailscalePublishedOrigin()).toBeUndefined();
   });
 
   it("never consults the Funnel route helper when running in funnel mode", async () => {
     const logTailscale = createLogger();
+    mocks.getTailnetHostname.mockResolvedValue("node.tailnet.ts.net");
 
     await startGatewayTailscaleExposure({
       tailscaleMode: "funnel",
@@ -269,6 +304,21 @@ describe("startGatewayTailscaleExposure", () => {
     });
 
     expect(mocks.hasTailscaleFunnelRouteForPort).not.toHaveBeenCalled();
-    expect(mocks.claimTailscaleRoute).toHaveBeenCalledWith("funnel", MANAGED_BACKEND_PORT);
+    expect(getTailscalePublishedOrigin()).toMatchObject({
+      origin: "https://node.tailnet.ts.net",
+      mode: "funnel",
+    });
+    expect(
+      resolveControlUiIdentity(
+        { gateway: { publicOrigin: "https://unrelated.test", tailscale: { mode: "serve" } } },
+        { mode: "token", allowTailscale: true },
+      ),
+    ).toBeUndefined();
+    expect(mocks.claimTailscaleRoute).toHaveBeenCalledWith(
+      "funnel",
+      MANAGED_BACKEND_PORT,
+      18789,
+      expect.any(Function),
+    );
   });
 });

@@ -15,6 +15,7 @@ import type {
 } from "./attempt-types.js";
 import { attachEventBridge } from "./event-bridge.js";
 export async function completeCopilotAttempt(params: {
+  acceptedSessionSpawns: NonNullable<AgentHarnessAttemptResult["acceptedSessionSpawns"]>;
   aborted: boolean;
   attemptStartedAt: number;
   bridge: ReturnType<typeof attachEventBridge> | undefined;
@@ -39,7 +40,6 @@ export async function completeCopilotAttempt(params: {
   resumeFailureRecovered: boolean;
   sdkSessionId: string | undefined;
   sentTurnStarted: boolean;
-  sessionIdUsed: string | undefined;
   settledFinalizationAssistantCompleted: boolean;
   settledToolFinalization: boolean;
   timedOut: boolean;
@@ -48,6 +48,7 @@ export async function completeCopilotAttempt(params: {
   yieldAcknowledgment?: string;
 }): Promise<AgentHarnessAttemptResult> {
   const {
+    acceptedSessionSpawns,
     aborted,
     attemptStartedAt,
     bridge,
@@ -68,7 +69,6 @@ export async function completeCopilotAttempt(params: {
     resumeFailureRecovered,
     sdkSessionId,
     sentTurnStarted,
-    sessionIdUsed,
     settledFinalizationAssistantCompleted,
     settledToolFinalization,
     timedOut,
@@ -95,6 +95,7 @@ export async function completeCopilotAttempt(params: {
           currentRunUserKey,
         ));
   const result = createResult(input, {
+    acceptedSessionSpawns,
     aborted,
     assistantTexts,
     codeModeEngaged,
@@ -129,7 +130,6 @@ export async function completeCopilotAttempt(params: {
     promptError,
     resumeFailureRecovered,
     sdkSessionId,
-    sessionIdUsed,
     timedOut,
     timedOutDuringCompaction,
     toolMetas: snap ? [...snap.toolMetas] : [],

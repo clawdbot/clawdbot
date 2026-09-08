@@ -698,9 +698,9 @@ describe("Workboard gateway lifecycle sync", () => {
 
     expect(claimed.card).toMatchObject({
       status: "running",
-      agentId: "workboard-dispatcher",
       metadata: { claim: { ownerId: "workboard-dispatcher" } },
     });
+    expect(claimed.card.agentId).toBeUndefined();
     await runSessionSweep({
       store,
       sessions: [

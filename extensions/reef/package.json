@@ -1,13 +1,13 @@
 {
   "name": "@openclaw/reef",
-  "version": "2026.8.1",
+  "version": "2026.9.2",
   "description": "OpenClaw Reef channel plugin — guarded end-to-end encrypted claw-to-claw messaging",
   "type": "module",
   "dependencies": {
-    "@noble/ciphers": "2.2.0",
-    "@noble/curves": "2.2.0",
-    "@noble/hashes": "2.2.0",
-    "ws": "8.21.1",
+    "@noble/ciphers": "2.4.0",
+    "@noble/curves": "2.4.0",
+    "@noble/hashes": "2.4.0",
+    "ws": "8.21.3",
     "zod": "4.4.3"
   },
   "openclaw": {

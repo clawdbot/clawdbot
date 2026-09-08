@@ -5,6 +5,8 @@ import {
   NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
   NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
   NODE_WORKER_DESKTOP_STREAM_COMMAND,
+  NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
+  NODE_WORKER_PORTAL_STREAM_COMMAND,
   NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
@@ -39,6 +41,7 @@ import type { NodeWorkerBundleInstallerControl } from "./node-worker-bundle-inst
 import { NodeWorkerCapacityExhaustedError } from "./node-worker-capacity.js";
 import {
   parseNodeWorkerCancelInput,
+  parseNodeWorkerEnvironmentStopInput,
   parseNodeWorkerLaunchInput,
   parseNodeWorkerLookupInput,
   projectNodeWorkerSupervisorReceipt,
@@ -46,6 +49,7 @@ import {
   type NodeWorkerSupervisorReceipt,
 } from "./node-worker-supervisor-contract.js";
 import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
+import { invokeNodeWorkerPortalStream } from "./portal-stream-command.js";
 
 type NodeWorkerSupervisorCommandResult =
   | { handled: false }
@@ -123,10 +127,12 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
     params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND ||
     params.command === NODE_WORKER_SUPERVISOR_STATUS_COMMAND ||
     params.command === NODE_WORKER_SUPERVISOR_CANCEL_COMMAND ||
+    params.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND ||
     params.command === NODE_WORKER_WORKSPACE_EXEC_COMMAND ||
     params.command === NODE_WORKER_WORKSPACE_RETAIN_COMMAND ||
     params.command === NODE_WORKER_DESKTOP_STREAM_COMMAND ||
-    params.command === NODE_WORKER_DESKTOP_LAUNCH_COMMAND;
+    params.command === NODE_WORKER_DESKTOP_LAUNCH_COMMAND ||
+    params.command === NODE_WORKER_PORTAL_STREAM_COMMAND;
   if (!recognized) {
     return { handled: false };
   }
@@ -245,6 +251,16 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
       });
       return { handled: true, ok: true, payload: null };
     }
+    if (params.command === NODE_WORKER_PORTAL_STREAM_COMMAND) {
+      await invokeNodeWorkerPortalStream({
+        paramsJSON: params.paramsJSON,
+        gatewayUrl: params.gatewayUrl,
+        gatewayTlsFingerprint: params.gatewayTlsFingerprint,
+        gatewayCloudflareAccess: params.gatewayCloudflareAccess,
+        signal: params.signal,
+      });
+      return { handled: true, ok: true, payload: null };
+    }
     if (params.command === NODE_WORKER_DESKTOP_LAUNCH_COMMAND) {
       return {
         handled: true,
@@ -254,6 +270,12 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
           signal: params.signal,
         }),
       };
+    }
+    if (params.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND) {
+      await params.supervisor!.stopEnvironment(
+        parseNodeWorkerEnvironmentStopInput(params.paramsJSON),
+      );
+      return { handled: true, ok: true, payload: null };
     }
     const receipt =
       params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND

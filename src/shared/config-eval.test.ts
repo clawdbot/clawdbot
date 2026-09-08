@@ -1,7 +1,7 @@
-// Config eval tests cover dynamic config loading and evaluation guards.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withTempDirSync } from "../test-helpers/temp-dir.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
   evaluateRuntimeEligibility,
@@ -9,21 +9,13 @@ import {
   isConfigPathTruthyWithDefaults,
 } from "./config-eval.js";
 
-const originalPath = process.env.PATH;
-const originalPathExt = process.env.PATHEXT;
-
 function setPlatform(platform: NodeJS.Platform): void {
   mockProcessPlatform(platform);
 }
 
 afterEach(() => {
   vi.restoreAllMocks();
-  process.env.PATH = originalPath;
-  if (originalPathExt === undefined) {
-    delete process.env.PATHEXT;
-  } else {
-    process.env.PATHEXT = originalPathExt;
-  }
+  vi.unstubAllEnvs();
 });
 
 describe("config-eval helpers", () => {
@@ -108,7 +100,7 @@ describe("config-eval helpers", () => {
 
   it("caches binary lookups until PATH changes", () => {
     setPlatform("linux");
-    process.env.PATH = ["/missing/bin", "/found/bin"].join(path.delimiter);
+    vi.stubEnv("PATH", ["/missing/bin", "/found/bin"].join(path.delimiter));
     const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation((candidate) => {
       if (String(candidate) === path.join("/found/bin", "tool")) {
         return undefined;
@@ -120,7 +112,7 @@ describe("config-eval helpers", () => {
     expect(hasBinary("tool")).toBe(true);
     expect(accessSpy).toHaveBeenCalledTimes(2);
 
-    process.env.PATH = "/other/bin";
+    vi.stubEnv("PATH", "/other/bin");
     accessSpy.mockClear();
     accessSpy.mockImplementation(() => {
       throw new Error("missing");
@@ -130,11 +122,11 @@ describe("config-eval helpers", () => {
     expect(accessSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("checks PATHEXT candidates on Windows", () => {
+  it("checks PATHEXT candidates and invalidates cached hits when PATHEXT changes", () => {
     setPlatform("win32");
     const toolsDir = path.join(path.sep, "tools");
-    process.env.PATH = toolsDir;
-    process.env.PATHEXT = ".EXE;.CMD";
+    vi.stubEnv("PATH", toolsDir);
+    vi.stubEnv("PATHEXT", ".EXE;.CMD");
     const plainCandidate = path.join(toolsDir, "tool");
     const exeCandidate = path.join(toolsDir, "tool.EXE");
     const cmdCandidate = path.join(toolsDir, "tool.CMD");
@@ -151,7 +143,36 @@ describe("config-eval helpers", () => {
       exeCandidate,
       cmdCandidate,
     ]);
+
+    vi.stubEnv("PATHEXT", ".EXE");
+    expect(hasBinary("tool")).toBe(false);
+    vi.stubEnv("PATHEXT", ".CMD");
+    expect(hasBinary("tool")).toBe(true);
   });
+
+  it.each([
+    { platform: "linux", suffix: "" },
+    { platform: "darwin", suffix: "" },
+    { platform: "win32", suffix: ".CMD" },
+  ] as const)(
+    "finds a newly installed binary on unchanged $platform PATH",
+    ({ platform, suffix }) => {
+      withTempDirSync({ prefix: "openclaw-binary-probe-" }, (binDir) => {
+        setPlatform(platform);
+        vi.stubEnv("PATH", binDir);
+        vi.stubEnv("PATHEXT", ".EXE;.CMD");
+        expect(hasBinary("fixture-tool")).toBe(false);
+
+        const executable = path.join(binDir, `fixture-tool${suffix}`);
+        fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n");
+        fs.chmodSync(executable, 0o755);
+
+        expect(process.env.PATH).toBe(binDir);
+        expect(process.env.PATHEXT).toBe(".EXE;.CMD");
+        expect(hasBinary("fixture-tool")).toBe(true);
+      });
+    },
+  );
 });
 
 describe("runtime requirements through eligibility", () => {
@@ -208,6 +229,7 @@ describe("evaluateRuntimeEligibility", () => {
   });
 
   it("accepts entries when remote platform satisfies OS requirements", () => {
+    setPlatform("darwin");
     const result = evaluateRuntimeEligibility({
       os: ["linux"],
       remotePlatforms: ["linux"],

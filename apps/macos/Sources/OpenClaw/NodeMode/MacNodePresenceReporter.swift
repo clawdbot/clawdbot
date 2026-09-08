@@ -30,7 +30,7 @@ final class MacNodePresenceReporter {
     }
 
     private static let eventName = "node.presence.activity"
-    private static let sampleInterval = Duration.seconds(2)
+    private static let sampleInterval: TimeInterval = 2
     private static let activeReportIntervalMs: Int64 = 15000
     private static let keepaliveIntervalMs: Int64 = 180_000
     private static let maximumIdleSeconds = 30 * 24 * 60 * 60
@@ -68,16 +68,21 @@ final class MacNodePresenceReporter {
         self.sender = sender
         self.clearer = clearer
         self.unsupportedClearHandler = onUnsupportedClear
-        self.generation &+= 1
         // Registration creates a fresh server-side node session. Starting disabled
         // therefore needs no clear and cannot turn a legacy reconnect into a loop.
-        self.clearPending = false
-        self.hasDeliveredActivity = false
-        self.unsupportedClearHandled = false
+        self.updateSamplingTask(reportImmediately: true)
+    }
+
+    private func updateSamplingTask(reportImmediately: Bool = false) {
+        guard self.sender != nil, self.reportingEnabled || self.clearPending else {
+            SimpleTaskSupport.stop(task: &self.task)
+            return
+        }
+        guard self.task == nil else { return }
         self.task = Task {
-            while !Task.isCancelled {
+            if reportImmediately { await self.reportCurrentState() }
+            while await SimpleTaskSupport.waitForNextOperation(interval: Self.sampleInterval) {
                 await self.reportCurrentState()
-                try? await Task.sleep(for: Self.sampleInterval)
             }
         }
     }
@@ -85,8 +90,7 @@ final class MacNodePresenceReporter {
     func stop() {
         self.generation &+= 1
         self.routeGeneration &+= 1
-        self.task?.cancel()
-        self.task = nil
+        SimpleTaskSupport.stop(task: &self.task)
         self.sender = nil
         self.clearer = nil
         self.unsupportedClearHandler = nil
@@ -97,6 +101,7 @@ final class MacNodePresenceReporter {
     }
 
     func setReportingEnabled(_ enabled: Bool) async {
+        defer { self.updateSamplingTask() }
         if self.reportingEnabled == enabled {
             if !enabled, self.clearPending {
                 await self.sendPendingClear()
@@ -166,6 +171,8 @@ final class MacNodePresenceReporter {
     }
 
     private func sendPendingClear() async {
+        // An in-flight sample may finish after opt-out; keep only its failed clear retry alive.
+        defer { self.updateSamplingTask() }
         guard self.clearPending,
               let clearer = self.clearer
         else { return }

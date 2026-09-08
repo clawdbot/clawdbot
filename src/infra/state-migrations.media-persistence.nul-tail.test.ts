@@ -38,12 +38,12 @@ afterEach(() => {
 });
 
 describe("legacy media persistence NUL-tail recovery", () => {
-  it("atomically removes a terminal NUL suffix from an otherwise valid archive", () => {
+  it("atomically removes a terminal NUL suffix from an otherwise valid archive", async () => {
     const valid = Buffer.from(`${JSON.stringify({ type: "event", id: "event-1" })}\n`);
     const { archivePath, env } = createArchiveFixture(Buffer.concat([valid, Buffer.alloc(284)]));
     let replacements = 0;
 
-    const result = migrateLegacyMediaPersistence({
+    const result = await migrateLegacyMediaPersistence({
       env,
       hooks: { beforeArchiveReplace: () => (replacements += 1) },
     });
@@ -75,11 +75,11 @@ describe("legacy media persistence NUL-tail recovery", () => {
       name: "a blank record",
       bytes: Buffer.from(`${JSON.stringify({ type: "event", id: "event-1" })}\n\n`),
     },
-  ])("rejects and preserves $name", ({ bytes }) => {
+  ])("rejects and preserves $name", async ({ bytes }) => {
     const { archivePath, env } = createArchiveFixture(bytes);
     let replacements = 0;
 
-    const result = migrateLegacyMediaPersistence({
+    const result = await migrateLegacyMediaPersistence({
       env,
       hooks: { beforeArchiveReplace: () => (replacements += 1) },
     });
@@ -96,12 +96,12 @@ describe("legacy media persistence NUL-tail recovery", () => {
       name: "a valid archive without a NUL tail",
       bytes: Buffer.from(`${JSON.stringify({ type: "event", id: "event-1" })}\n`),
     },
-  ])("does not rewrite $name", ({ bytes }) => {
+  ])("does not rewrite $name", async ({ bytes }) => {
     const { archivePath, env } = createArchiveFixture(bytes);
     const before = fs.lstatSync(archivePath);
     let replacements = 0;
 
-    const result = migrateLegacyMediaPersistence({
+    const result = await migrateLegacyMediaPersistence({
       env,
       hooks: { beforeArchiveReplace: () => (replacements += 1) },
     });

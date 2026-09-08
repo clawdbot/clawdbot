@@ -2,17 +2,21 @@ import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import type { DatabaseSync } from "node:sqlite";
+import { finished } from "node:stream/promises";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { createPrivateSqliteTempDirectory } from "../infra/sqlite-private-directory.js";
+import { quoteSqliteIdentifier as quoteIdentifier } from "../infra/sqlite-schema-sql.js";
 import { publishVerifiedSqliteFile } from "../infra/sqlite-snapshot.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { getOpenClawStateRuntimeSchema } from "../state/openclaw-state-schema-compatibility.js";
 import {
   AGENT_SECRET_TABLE_NAMES,
+  STATE_SECRET_CONFIG_STATE_KEY_PREFIXES,
   STATE_SECRET_TABLE_NAMES,
 } from "../state/secret-state-tables.js";
 import { hashSnapshotArtifact } from "./manifest.js";
@@ -38,6 +42,7 @@ export type GitBackupManifest = {
   identity: GitBackupIdentity;
   userVersion: number;
   excludedTables: string[];
+  excludedConfigStateKeyPrefixes: string[];
   tables: Record<string, { rows: number; sha256: string }>;
 };
 
@@ -53,6 +58,7 @@ export type GitBackupRestoreResult = {
   targetPath: string;
   tables: GitBackupTableResult[];
   excludedTables: string[];
+  excludedConfigStateKeyPrefixes: string[];
 };
 
 type SchemaEntry = {
@@ -62,21 +68,11 @@ type SchemaEntry = {
   sql: string;
 };
 
-type TableColumn = { name: string; pk: number };
-
-function quoteIdentifier(value: string): string {
-  return `"${value.replaceAll('"', '""')}"`;
-}
-
 function requireSafeTableName(value: string): string {
   if (!SAFE_TABLE_NAME.test(value)) {
     throw new Error(`Git backup table name is not filesystem-safe: ${value}`);
   }
   return value;
-}
-
-function sha256(value: string | Buffer): string {
-  return createHash("sha256").update(value).digest("hex");
 }
 
 function normalizeIdentity(identity: GitBackupIdentity): GitBackupIdentity {
@@ -121,6 +117,11 @@ function isVirtualShadow(name: string, virtualTables: readonly string[]): boolea
   );
 }
 
+// Bound table I/O by a batch plus the largest row, never by the complete table.
+const TABLE_BATCH_BYTES = 1024 * 1024;
+type TableColumn = { name: string; pk: number };
+type GitBackupTableDigest = { rows: number; sha256: string };
+
 function readTableColumns(database: DatabaseSync, table: string): TableColumn[] {
   return database
     .prepare(`PRAGMA table_info(${quoteIdentifier(table)})`)
@@ -155,7 +156,12 @@ function encodeSqliteValue(value: unknown): unknown {
   throw new Error(`Git backup cannot encode SQLite value type ${typeof value}.`);
 }
 
-function serializeTable(database: DatabaseSync, table: string): { content: string; rows: number } {
+async function serializeGitBackupTable(
+  database: DatabaseSync,
+  table: string,
+  outputPath?: string,
+  rowFilter?: (row: Record<string, unknown>) => boolean,
+): Promise<GitBackupTableDigest> {
   const columns = readTableColumns(database, table);
   if (columns.length === 0) {
     throw new Error(`Git backup table has no readable columns: ${table}`);
@@ -163,23 +169,60 @@ function serializeTable(database: DatabaseSync, table: string): { content: strin
   const primaryKey = columns
     .filter((column) => column.pk > 0)
     .toSorted((left, right) => left.pk - right.pk)
-    .map((column) => quoteIdentifier(column.name));
-  const orderBy = primaryKey.length > 0 ? primaryKey.join(", ") : "rowid";
+    .map((column) => `source.${quoteIdentifier(column.name)}`);
+  const orderBy = primaryKey.length > 0 ? primaryKey.join(", ") : "source.rowid";
+  // Escape TEXT before node:sqlite can truncate embedded NULs. Keep filtering
+  // on decoded values and sorting on source columns, not escaped result aliases.
+  const projection = columns.map(({ name }) => {
+    const column = quoteIdentifier(name);
+    return `CASE WHEN typeof(${column}) = 'text' THEN json_quote(${column}) ELSE ${column} END AS ${column}`;
+  });
   const statement = database.prepare(
-    `SELECT ${columns.map((column) => quoteIdentifier(column.name)).join(", ")}
-       FROM ${quoteIdentifier(table)} ORDER BY ${orderBy}`,
+    `SELECT ${projection.join(", ")}
+       FROM ${quoteIdentifier(table)} AS source ORDER BY ${orderBy}`,
   );
   statement.setReadBigInts(true);
-  const lines: string[] = [];
-  for (const rawRow of statement.iterate()) {
-    const source = rawRow as Record<string, unknown>;
-    const encoded: Record<string, unknown> = {};
-    for (const column of columns) {
-      encoded[column.name] = encodeSqliteValue(source[column.name]);
+  const output = outputPath ? await fs.open(outputPath, "wx", 0o600) : undefined;
+  const hash = createHash("sha256");
+  const pending: string[] = [];
+  let pendingBytes = 0;
+  let rows = 0;
+  const flush = async () => {
+    if (output && pending.length > 0) {
+      await output.writeFile(pending.join(""));
+      pending.length = 0;
+      pendingBytes = 0;
     }
-    lines.push(JSON.stringify(encoded));
+  };
+  try {
+    for (const rawRow of statement.iterate()) {
+      const source: Record<string, unknown> = {};
+      for (const [name, value] of Object.entries(rawRow)) {
+        source[name] = typeof value === "string" ? JSON.parse(value) : value;
+      }
+      if (rowFilter && !rowFilter(source)) {
+        continue;
+      }
+      const encoded: Record<string, unknown> = {};
+      for (const column of columns) {
+        encoded[column.name] = encodeSqliteValue(source[column.name]);
+      }
+      const line = `${JSON.stringify(encoded)}\n`;
+      hash.update(line);
+      rows += 1;
+      if (output) {
+        pending.push(line);
+        pendingBytes += Buffer.byteLength(line);
+        if (pendingBytes >= TABLE_BATCH_BYTES) {
+          await flush();
+        }
+      }
+    }
+    await flush();
+    return { rows, sha256: hash.digest("hex") };
+  } finally {
+    await output?.close();
   }
-  return { content: lines.length > 0 ? `${lines.join("\n")}\n` : "", rows: lines.length };
 }
 
 function schemaText(entries: SchemaEntry[], userVersion: number): string {
@@ -215,6 +258,12 @@ export async function dumpGitBackupDatabase(params: {
     // manifest.excludedTables documents redaction only; operational projection
     // tables are always omitted and converge on next gateway startup.
     const excludedTables = [...redacted].filter((table) => existingTables.has(table)).toSorted();
+    const excludedConfigStateKeyPrefixes =
+      identity.role === "global" &&
+      params.excludeSecrets === true &&
+      existingTables.has("config_machine_state")
+        ? [...STATE_SECRET_CONFIG_STATE_KEY_PREFIXES]
+        : [];
     const excluded = new Set([...excludedTables, ...GIT_BACKUP_PROJECTION_TABLES]);
     const includedSchema = entries.filter(
       (entry) => !excluded.has(entry.name) && !excluded.has(entry.tableName),
@@ -239,18 +288,30 @@ export async function dumpGitBackupDatabase(params: {
     await fs.mkdir(tablesPath, { recursive: true, mode: 0o700 });
     const tables: Record<string, { rows: number; sha256: string }> = {};
     for (const table of dataTables) {
-      const serialized = serializeTable(database, table);
-      await fs.writeFile(path.join(tablesPath, `${table}.jsonl`), serialized.content, {
-        encoding: "utf8",
-        mode: 0o600,
-      });
-      tables[table] = { rows: serialized.rows, sha256: sha256(serialized.content) };
+      const rowFilter =
+        table === "config_machine_state" && excludedConfigStateKeyPrefixes.length > 0
+          ? (row: Record<string, unknown>) => {
+              // Fail closed: a malformed state_key is dropped, never risked into a backup.
+              const stateKey = row.state_key;
+              return (
+                typeof stateKey === "string" &&
+                !excludedConfigStateKeyPrefixes.some((prefix) => stateKey.startsWith(prefix))
+              );
+            }
+          : undefined;
+      tables[table] = await serializeGitBackupTable(
+        database,
+        table,
+        path.join(tablesPath, `${table}.jsonl`),
+        rowFilter,
+      );
     }
     const manifest: GitBackupManifest = {
       schemaVersion: 1,
       identity,
       userVersion: userVersionRow.user_version,
       excludedTables,
+      excludedConfigStateKeyPrefixes,
       tables,
     };
     await fs.writeFile(
@@ -286,12 +347,18 @@ export function parseGitBackupManifest(value: string, source: string): GitBackup
     (manifest.identity.role !== "global" && manifest.identity.role !== "agent") ||
     !Number.isSafeInteger(manifest.userVersion) ||
     !Array.isArray(manifest.excludedTables) ||
+    (manifest.excludedConfigStateKeyPrefixes !== undefined &&
+      (!Array.isArray(manifest.excludedConfigStateKeyPrefixes) ||
+        manifest.excludedConfigStateKeyPrefixes.some((prefix) => typeof prefix !== "string"))) ||
     !manifest.tables ||
     typeof manifest.tables !== "object"
   ) {
     throw new Error(`Git backup manifest has unsupported fields: ${source}`);
   }
-  const validated = manifest as GitBackupManifest;
+  const validated = {
+    ...manifest,
+    excludedConfigStateKeyPrefixes: manifest.excludedConfigStateKeyPrefixes ?? [],
+  } as GitBackupManifest;
   normalizeIdentity(validated.identity);
   for (const [table, entry] of Object.entries(validated.tables)) {
     requireSafeTableName(table);
@@ -470,22 +537,63 @@ function validateRestoredOwner(
   buildSnapshotValidator(identity)(database, databasePath);
 }
 
-function loadTable(database: DatabaseSync, table: string, content: string): number {
+/** Load and hash one JSONL table without retaining the whole artifact. */
+async function loadGitBackupTable(
+  database: DatabaseSync,
+  table: string,
+  inputPath: string,
+): Promise<GitBackupTableDigest> {
   const columns = readTableColumns(database, table);
   const statement = database.prepare(
     `INSERT INTO ${quoteIdentifier(table)} (${columns.map((column) => quoteIdentifier(column.name)).join(", ")})
      VALUES (${columns.map(() => "?").join(", ")})`,
   );
+  const input = fsSync.createReadStream(inputPath);
+  const lines = createInterface({ input, crlfDelay: Infinity });
+  const hash = createHash("sha256");
+  input.on("data", (chunk: Buffer) => hash.update(chunk));
+  const pending: Array<ReturnType<typeof decodeSqliteValue>[]> = [];
+  let pendingBytes = 0;
   let rows = 0;
-  for (const line of content.split("\n")) {
-    if (!line) {
-      continue;
+  const flush = () => {
+    if (pending.length === 0) {
+      return;
     }
-    const parsed = JSON.parse(line) as Record<string, unknown>;
-    statement.run(...columns.map((column) => decodeSqliteValue(parsed[column.name])));
-    rows += 1;
+    // This database is private staging. Only verified publication exposes it;
+    // disk reads stay outside these bounded synchronous insert transactions.
+    database.exec("BEGIN IMMEDIATE;");
+    try {
+      for (const values of pending) {
+        statement.run(...values);
+      }
+      database.exec("COMMIT;");
+    } catch (error) {
+      database.exec("ROLLBACK;");
+      throw error;
+    }
+    pending.length = 0;
+    pendingBytes = 0;
+  };
+  try {
+    for await (const line of lines) {
+      if (!line) {
+        continue;
+      }
+      const parsed = JSON.parse(line) as Record<string, unknown>;
+      pending.push(columns.map((column) => decodeSqliteValue(parsed[column.name])));
+      pendingBytes += Buffer.byteLength(line);
+      rows += 1;
+      if (pendingBytes >= TABLE_BATCH_BYTES) {
+        flush();
+      }
+    }
+    flush();
+    return { rows, sha256: hash.digest("hex") };
+  } finally {
+    lines.close();
+    input.destroy();
+    await finished(input).catch(() => undefined);
   }
-  return rows;
 }
 
 /** Restore one materialized Git snapshot scope into a fresh SQLite file. */
@@ -540,26 +648,19 @@ export async function restoreGitBackupDirectory(params: {
     for (const statement of [...plainTables, ...indexes]) {
       database.exec(statement);
     }
-    database.exec("BEGIN IMMEDIATE;");
-    try {
-      for (const [table, expected] of Object.entries(manifest.tables)) {
-        requireSafeTableName(table);
-        const content = await fs.readFile(
-          path.join(params.sourcePath, GIT_BACKUP_TABLES, `${table}.jsonl`),
-          "utf8",
-        );
-        if (sha256(content) !== expected.sha256) {
-          throw new Error(`Git backup table hash mismatch: ${table}`);
-        }
-        const rows = loadTable(database, table, content);
-        if (rows !== expected.rows) {
-          throw new Error(`Git backup table row count mismatch: ${table}`);
-        }
+    for (const [table, expected] of Object.entries(manifest.tables)) {
+      requireSafeTableName(table);
+      const actual = await loadGitBackupTable(
+        database,
+        table,
+        path.join(params.sourcePath, GIT_BACKUP_TABLES, `${table}.jsonl`),
+      );
+      if (actual.sha256 !== expected.sha256) {
+        throw new Error(`Git backup table hash mismatch: ${table}`);
       }
-      database.exec("COMMIT;");
-    } catch (error) {
-      database.exec("ROLLBACK;");
-      throw error;
+      if (actual.rows !== expected.rows) {
+        throw new Error(`Git backup table row count mismatch: ${table}`);
+      }
     }
     for (const statement of virtual) {
       if (/\bUSING\s+vec0\b/iu.test(statement)) {
@@ -587,16 +688,15 @@ export async function restoreGitBackupDirectory(params: {
     // their canonical empty schemas before enforcing database ownership.
     convergeRestoredSchema(database, restoreIdentity);
     validateRestoredOwner(database, stagedPath, restoreIdentity);
-    const tables = Object.entries(manifest.tables).map(([table, expected]) => {
-      const actual = serializeTable(database, table);
-      const actualSha256 = sha256(actual.content);
-      return {
+    const tables: GitBackupTableResult[] = [];
+    for (const [table, expected] of Object.entries(manifest.tables)) {
+      const actual = await serializeGitBackupTable(database, table);
+      tables.push({
         table,
-        rows: actual.rows,
-        sha256: actualSha256,
-        ok: actual.rows === expected.rows && actualSha256 === expected.sha256,
-      };
-    });
+        ...actual,
+        ok: actual.rows === expected.rows && actual.sha256 === expected.sha256,
+      });
+    }
     if (tables.some((table) => !table.ok)) {
       throw new Error(`Restored Git backup does not match its table manifest: ${stagedPath}`);
     }
@@ -622,7 +722,14 @@ export async function restoreGitBackupDirectory(params: {
         guard.assertTargetMatchesExpectedContent(() => assertNoSqliteSidecarsSync(targetPath));
       },
     });
-    return { manifest, targetPath, tables, excludedTables: manifest.excludedTables };
+    return {
+      manifest,
+      targetPath,
+      tables,
+      excludedTables: manifest.excludedTables,
+      // Older backups predate prefix redaction; absent means nothing was omitted.
+      excludedConfigStateKeyPrefixes: manifest.excludedConfigStateKeyPrefixes ?? [],
+    };
   } catch (error) {
     if (database.isOpen) {
       database.close();

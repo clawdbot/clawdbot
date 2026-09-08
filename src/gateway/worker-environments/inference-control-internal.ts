@@ -6,7 +6,7 @@ export type WorkerInferenceSessionDrain = {
 
 type BeginWorkerInferenceSessionDrain = (sessionId: string) => WorkerInferenceSessionDrain;
 
-// Archive lifecycle needs a stronger control without widening the inferred public service shape.
+// Session lifecycle needs a stronger control without widening the inferred public service shape.
 // The weak registration follows the concrete service instance's lifetime.
 const sessionDrainByService = new WeakMap<object, BeginWorkerInferenceSessionDrain>();
 

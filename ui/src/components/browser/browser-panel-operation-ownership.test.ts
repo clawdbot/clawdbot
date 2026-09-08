@@ -14,7 +14,13 @@ describe("BrowserPanelOperationOwnership", () => {
     ownership.markNavigationCommitted(client, "tab-b");
 
     ownership.retainTabSnapshot(client, [
-      { id: "tab-a", targetId: "raw-a", title: "A", url: "https://a.example" },
+      {
+        kind: "remote" as const,
+        id: "tab-a",
+        targetId: "raw-a",
+        title: "A",
+        url: "https://a.example",
+      },
     ]);
     expect(ownership.hasUnreconciledNavigation(client, "tab-a")).toBe(true);
     expect(ownership.hasUnreconciledNavigation(client, "tab-b")).toBe(false);
@@ -30,13 +36,35 @@ describe("BrowserPanelOperationOwnership", () => {
   it("reconciles captured metadata without replacing an unchanged tab list", () => {
     const { client } = createBrowserClient(async () => ({}));
     const ownership = new BrowserPanelOperationOwnership(new TestBrowserPanelHost(client));
-    const tabs = [{ id: "tab-a", targetId: "raw-a", title: "A", url: "https://a.example" }];
+    const tabs = [
+      {
+        kind: "remote" as const,
+        id: "tab-a",
+        targetId: "raw-a",
+        title: "A",
+        url: "https://a.example",
+      },
+    ];
     const metrics = createBrowserPanelTestMetrics("https://b.example", "B").result;
 
     const reconciled = ownership.capturedTabs(tabs, "tab-a", metrics, metrics.url);
     expect(reconciled).toEqual([
-      { id: "tab-a", targetId: "raw-a", title: "B", url: "https://b.example" },
+      {
+        kind: "remote" as const,
+        id: "tab-a",
+        targetId: "raw-a",
+        title: "B",
+        url: "https://b.example",
+      },
     ]);
     expect(ownership.capturedTabs(reconciled, "tab-a", metrics, metrics.url)).toBe(reconciled);
+    expect(
+      ownership.capturedTabs(
+        [{ ...reconciled[0]!, urlUnavailableReason: "navigation_blocked" }],
+        "tab-a",
+        metrics,
+        metrics.url,
+      )[0]?.urlUnavailableReason,
+    ).toBeUndefined();
   });
 });

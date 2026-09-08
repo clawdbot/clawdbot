@@ -35,6 +35,7 @@ describe("native hook relay CLI import boundary", () => {
       "src/agents/harness/native-hook-relay-bridge-record.ts",
       "src/agents/harness/native-hook-relay-constants.ts",
       "src/agents/harness/native-hook-relay-response-codec.ts",
+      "src/state/openclaw-state-db-schema-version.ts",
     ]
       .map(readSource)
       .join("\n");
@@ -46,6 +47,7 @@ describe("native hook relay CLI import boundary", () => {
       "native-hook-relay-state.js",
       "native-hook-relay-store.js",
       "openclaw-state-db.js",
+      "openclaw-state-db-maintenance.js",
       "gateway/call.js",
     ]) {
       expect(clientGraph).not.toContain(forbiddenImport);

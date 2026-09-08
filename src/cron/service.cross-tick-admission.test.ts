@@ -1,8 +1,8 @@
 // Scheduled work must use free shared-admission slots across timer ticks (#119083).
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createCronRegressionState,
   createDueIsolatedJob,
-  noopLogger,
   setupCronRegressionFixtures,
 } from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -13,7 +13,6 @@ import {
 } from "../process/gateway-work-admission.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { stop } from "./service/ops-lifecycle.js";
-import { createCronServiceState } from "./service/state.js";
 import { onTimer } from "./service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
@@ -71,13 +70,9 @@ describe("cron service cross-tick bounded admission", () => {
         active -= 1;
       }
     });
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createCronRegressionState({
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
     state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 2;
@@ -157,13 +152,9 @@ describe("cron service cross-tick bounded admission", () => {
         active -= 1;
       }
     });
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createCronRegressionState({
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
     state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 2;
@@ -279,13 +270,9 @@ describe("cron service cross-tick bounded admission", () => {
         active -= 1;
       }
     });
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createCronRegressionState({
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => t0,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
     state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 2;
@@ -349,10 +336,8 @@ describe("cron service cross-tick bounded admission", () => {
       expect(job.id).toBe(pending.id);
       return { status: "ok" as const, summary: "pending done" };
     });
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createCronRegressionState({
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => {
         nowCalls += 1;
         // The third scheduler time read occurs after due-job collection and
@@ -367,23 +352,15 @@ describe("cron service cross-tick bounded admission", () => {
             });
             db.prepare(
               `UPDATE cron_jobs
-                  SET running_at_ms = ?,
-                      state_json = json_set(state_json, '$.runningAtMs', ?),
+                  SET state_json = json_set(state_json, '$.runningAtMs', ?),
                       updated_at = updated_at + 1
                 WHERE store_key = ? AND job_id = ?`,
-            ).run(
-              foreignStartedAtMs,
-              foreignStartedAtMs,
-              cronStoreKey(store.storePath),
-              conflicted.id,
-            );
+            ).run(foreignStartedAtMs, cronStoreKey(store.storePath), conflicted.id);
             return receipt;
           });
         }
         return t0;
       },
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
     state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1;
@@ -448,13 +425,9 @@ describe("cron service cross-tick bounded admission", () => {
         active -= 1;
       }
     });
-    const state = createCronServiceState({
-      cronEnabled: true,
+    const state = createCronRegressionState({
       storePath: store.storePath,
-      log: noopLogger,
       nowMs: () => Date.now(),
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
     });
     state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 2;

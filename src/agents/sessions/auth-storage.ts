@@ -36,8 +36,8 @@ import {
 import { loadPersistedAuthProfileState } from "../auth-profiles/state.js";
 import {
   loadAuthProfileStoreForSecretsRuntime,
-  saveAuthProfileStore,
-} from "../auth-profiles/store.js";
+  saveAuthProfileStoreWithPreparedOwner,
+} from "../auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { getAgentDir } from "../config.js";
 import {
@@ -275,7 +275,9 @@ function loadSqliteAuthStorageStore(
   if (inspection.status === "missing") {
     const stateInspection = inspectPersistedAuthProfileStateRaw(agentDir, database);
     if (stateInspection.status === "unreadable") {
-      throw new AuthProfileStoreUnreadableError(agentDir);
+      throw new AuthProfileStoreUnreadableError(
+        database?.path ?? resolveAuthProfileDatabasePath(agentDir),
+      );
     }
     return {
       version: AUTH_STORE_VERSION,
@@ -285,7 +287,9 @@ function loadSqliteAuthStorageStore(
   }
   const store = loadPersistedAuthProfileStore(agentDir, database ? { database } : undefined);
   if (inspection.status === "unreadable" || !store) {
-    throw new AuthProfileStoreUnreadableError(agentDir);
+    throw new AuthProfileStoreUnreadableError(
+      database?.path ?? resolveAuthProfileDatabasePath(agentDir),
+    );
   }
   return store;
 }
@@ -312,12 +316,12 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
     assertAuthProfileMigrationReady(this.agentDir);
     const snapshots = this.resolveMaterializedRuntimeStores();
     assertAuthProfileMigrationReady(this.agentDir);
-    return runAuthProfileWriteTransaction(this.agentDir, (database) => {
+    return runAuthProfileWriteTransaction(this.agentDir, (database, owner) => {
       const store = loadSqliteAuthStorageStore(this.agentDir, database);
       const materializedData = projectAuthoritativeAuthStorageData(store, snapshots);
       const { result, next } = fn(JSON.stringify(materializedData));
       if (next !== undefined) {
-        saveAuthProfileStore(
+        saveAuthProfileStoreWithPreparedOwner(
           applyAuthStorageData(store, JSON.parse(next) as AuthStorageData, materializedData),
           this.agentDir,
           {
@@ -326,6 +330,7 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
             syncExternalCli: false,
           },
           database,
+          owner,
         );
       }
       return result;
@@ -348,7 +353,7 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
           return result;
         }
         assertAuthProfileMigrationReady(this.agentDir);
-        runAuthProfileWriteTransaction(this.agentDir, (database) => {
+        runAuthProfileWriteTransaction(this.agentDir, (database, owner) => {
           const authoritative = loadSqliteAuthStorageStore(this.agentDir, database);
           if (!isDeepStrictEqual(authoritative.profiles, initialRaw.profiles)) {
             throw new AuthStoragePersistenceError(
@@ -356,7 +361,7 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
               undefined,
             );
           }
-          saveAuthProfileStore(
+          saveAuthProfileStoreWithPreparedOwner(
             applyAuthStorageData(authoritative, JSON.parse(next) as AuthStorageData, initialData),
             this.agentDir,
             {
@@ -365,6 +370,7 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
               syncExternalCli: false,
             },
             database,
+            owner,
           );
         });
         return result;
@@ -733,8 +739,9 @@ export class AuthStorage {
         }
 
         const refreshedCredential: OAuthCredential = {
-          type: "oauth",
+          ...cred,
           ...refreshed.newCredentials,
+          type: "oauth",
         };
         const merged: AuthStorageData = {
           ...currentData,

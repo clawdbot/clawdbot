@@ -2,6 +2,8 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
+import { createAcpTaskBackingDetailForTest } from "../../tasks/task-backing-authority.test-support.js";
+import { createRunningTaskRunCore } from "../../tasks/task-executor.js";
 import { createTaskRecord } from "../../tasks/task-registry.js";
 import { setDetachedTaskLifecycleRuntime } from "../../tasks/task-runtime.test-helpers.js";
 import {
@@ -35,6 +37,24 @@ function requireCreatedFlow<T>(flow: T | null): T {
     throw new Error("expected managed TaskFlow creation to succeed");
   }
   return flow;
+}
+
+function createCanonicalAcpTask(runId: string) {
+  const task = createRunningTaskRunCore({
+    runtime: "acp",
+    ownerKey: "agent:main:main",
+    scopeKind: "session",
+    childSessionKey: "agent:main:subagent:child",
+    runId,
+    task: "Canonical child",
+    startedAt: 10,
+    deliveryStatus: "pending",
+    detail: createAcpTaskBackingDetailForTest(`instance:${runId}`),
+  });
+  if (!task) {
+    throw new Error("expected canonical backing task creation to succeed");
+  }
+  return task;
 }
 
 describe("runtime tasks", () => {
@@ -74,6 +94,7 @@ describe("runtime tasks", () => {
         stateJson: { lane: "priority" },
       }),
     );
+    createCanonicalAcpTask("runtime-task-run");
     const child = legacyTaskFlow.runTask({
       flowId: created.flowId,
       runtime: "acp",
@@ -123,7 +144,7 @@ describe("runtime tasks", () => {
     expect(taskRun.title).toBe("Review PR 1");
     expect(taskRun.progressSummary).toBe("Inspecting");
     expect(taskRuns.findLatest()?.id).toBe(child.task.taskId);
-    expect(taskRuns.resolve("runtime-task-run")?.id).toBe(child.task.taskId);
+    expect(taskRuns.resolve(child.task.taskId)?.id).toBe(child.task.taskId);
     const summary = requireRecord(taskFlows.getTaskSummary(created.flowId));
     expect(summary.total).toBe(1);
     expect(summary.active).toBe(1);
@@ -159,6 +180,7 @@ describe("runtime tasks", () => {
         goal: "Cancel active task",
       }),
     );
+    createCanonicalAcpTask("runtime-task-cancel");
     const child = legacyTaskFlow.runTask({
       flowId: created.flowId,
       runtime: "acp",
@@ -180,8 +202,12 @@ describe("runtime tasks", () => {
 
     expect(runtimeTaskMocks.cancelSessionMock).toHaveBeenCalledWith({
       cfg: {},
+      agentId: "main",
       sessionKey: "agent:main:subagent:child",
       reason: "task-cancel",
+      expectedRunId: "runtime-task-cancel",
+      expectedInstanceId: "instance:runtime-task-cancel",
+      expectedOwnerKey: "agent:main:main",
     });
     expect(result.found).toBe(true);
     expect(result.cancelled).toBe(true);
@@ -208,6 +234,7 @@ describe("runtime tasks", () => {
         goal: "Cancel through runtime seam",
       }),
     );
+    createCanonicalAcpTask("runtime-task-cancel-seam");
     const child = legacyTaskFlow.runTask({
       flowId: created.flowId,
       runtime: "acp",
@@ -260,6 +287,7 @@ describe("runtime tasks", () => {
         goal: "Keep owner isolation",
       }),
     );
+    createCanonicalAcpTask("runtime-task-isolation");
     const child = legacyTaskFlow.runTask({
       flowId: created.flowId,
       runtime: "acp",
@@ -366,8 +394,10 @@ describe("runtime tasks", () => {
     expect(opsCancel.cancelled).toBe(true);
     expect(runtimeTaskMocks.cancelSessionMock).toHaveBeenCalledWith({
       cfg: {},
+      agentId: "ops",
       sessionKey: "agent:ops:acp:child",
       reason: "task-cancel",
+      expectedRunId: "ops-global-run",
     });
   });
 });

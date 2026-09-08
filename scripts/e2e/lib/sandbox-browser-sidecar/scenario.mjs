@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
@@ -26,7 +27,9 @@ const stateDir = path.join(root, "state");
 const workspaceDir = path.join(root, "workspace");
 const sandboxRoot = path.join(root, "sandboxes");
 const configPath = path.join(stateDir, "openclaw.json");
-const sessionKey = "agent:main:sandbox-browser-sidecar";
+const sessionKey = requireEnv("OPENCLAW_E2E_SESSION_KEY");
+const workspaceHash = createHash("sha256").update(workspaceDir).digest("hex").slice(0, 32);
+const scopeKey = `${sessionKey}:workspace:${workspaceHash}`;
 const browserToken = `sandbox-browser-sidecar-${process.pid}`;
 const marker = `OPENCLAW_SANDBOX_BROWSER_SIDECAR_${process.pid}`;
 const ownedContainerNames = new Set();
@@ -99,11 +102,19 @@ async function docker(args, options) {
 }
 
 async function listTaskContainers() {
-  const { stdout } = await docker(["ps", "-a", "--format", "{{.Names}}"]);
+  // Container names can shorten the configured prefix; the scope label stays exact.
+  const { stdout } = await docker([
+    "ps",
+    "-a",
+    "--filter",
+    `label=openclaw.sessionKey=${scopeKey}`,
+    "--format",
+    "{{.Names}}",
+  ]);
   return stdout
     .split(/\r?\n/u)
     .map((value) => value.trim())
-    .filter((name) => name.startsWith(sandboxPrefix) || name.startsWith(browserPrefix));
+    .filter(Boolean);
 }
 
 async function cleanupTaskResources() {
@@ -216,10 +227,17 @@ try {
     (entry) => entry.containerName === first.browser.containerName,
   );
   assert(browserEntry, "packaged sandbox list did not report the browser container");
-  assert.equal(browserEntry.sessionKey, sessionKey);
+  assert.equal(browserEntry.sessionKey, scopeKey);
   assert.equal(browserEntry.running, true);
 
-  await run("openclaw", ["sandbox", "recreate", "--browser", "--session", sessionKey, "--force"]);
+  await run("openclaw", [
+    "sandbox",
+    "recreate",
+    "--browser",
+    "--session",
+    browserEntry.sessionKey,
+    "--force",
+  ]);
   const remaining = await listTaskContainers();
   assert(
     !remaining.includes(first.browser.containerName),

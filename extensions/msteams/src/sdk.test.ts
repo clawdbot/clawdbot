@@ -74,19 +74,6 @@ describe("createMSTeamsApp", () => {
     expect(app.tokenManager).toBeDefined();
   });
 
-  it("creates app with secret credentials", async () => {
-    const creds: MSTeamsCredentials = {
-      type: "secret",
-
-      appId: "test-app-id",
-      appPassword: "test-secret",
-      tenantId: "test-tenant",
-    };
-
-    const app = await createMSTeamsApp(creds);
-    expect(app).toBeDefined();
-  });
-
   it("keeps private QA App options absent in production", async () => {
     const app = await createMSTeamsApp({
       type: "secret",
@@ -281,20 +268,6 @@ describe("createMSTeamsApp", () => {
       expect(error.message).toContain("Failed to read certificate file");
       expect(error.message).not.toContain(certificatePath);
     }
-  });
-
-  it("creates app with managed identity credentials", async () => {
-    const creds: MSTeamsFederatedCredentials = {
-      type: "federated",
-
-      appId: "test-app-id",
-      tenantId: "test-tenant",
-
-      useManagedIdentity: true,
-    };
-
-    const app = await createMSTeamsApp(creds);
-    expect(app).toBeDefined();
   });
 
   it("creates app with user-assigned managed identity", async () => {

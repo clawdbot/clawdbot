@@ -30,7 +30,7 @@ import {
   settleDiscordInteractionWithoutVisibleReply,
 } from "./native-command-reply.js";
 import { nativeCommandRuntime } from "./native-command.runtime.js";
-import type { DiscordConfig } from "./native-command.types.js";
+import type { DiscordConfig, DiscordDispatchReplyFromConfig } from "./native-command.types.js";
 
 type NativeCommandEffectiveRoute = {
   accountId: string;
@@ -55,6 +55,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
   preferFollowUp: boolean;
   responseEphemeral?: boolean;
   suppressReplies?: boolean;
+  dispatchReplyFromConfig?: DiscordDispatchReplyFromConfig;
   log: ReturnType<typeof createSubsystemLogger>;
   pluginCommandDispatch: PluginCommandCatalogDecision;
 }): Promise<DispatchDiscordNativeAgentReplyResult> {
@@ -72,12 +73,13 @@ export async function dispatchDiscordNativeAgentReply(params: {
       sessionKey: params.ctxPayload.SessionKey ?? params.effectiveRoute.sessionKey,
     },
     ctxPayload: params.ctxPayload,
+    dispatchReplyFromConfig: params.dispatchReplyFromConfig,
     delivery: {
       deliver: async (payload) => {
         if (params.suppressReplies) {
           return {
             visibleReplySent: false,
-            suppression: { reason: "no_visible_result" as const },
+            suppression: { reason: "channel_transform" as const },
           };
         }
         const payloadDelivered = await deliverDiscordInteractionReply({
@@ -109,7 +111,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
         if (
           params.suppressReplies &&
           info.kind === "final" &&
-          result?.suppression?.reason === "no_visible_result" &&
+          result?.suppression?.reason === "channel_transform" &&
           payload.text?.trim()
         ) {
           hiddenFinalReply = payload;
@@ -149,17 +151,18 @@ export async function dispatchDiscordNativeAgentReply(params: {
         typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : undefined,
     },
   });
-  const deliberateSilentTerminalReply =
-    turnResult.dispatched && turnResult.dispatchResult.deliberateSilentTerminalReply === true;
+  const shouldSettleWithoutVisibleReply =
+    params.suppressReplies ||
+    finalReplyOutcome === "suppressed" ||
+    (turnResult.dispatched &&
+      (turnResult.dispatchResult.deliberateSilentTerminalReply === true ||
+        turnResult.dispatchResult.deferredToActiveRun !== undefined));
   const dispatchResult = {
     dispatched: turnResult.dispatched,
     ...(hiddenFinalReply ? { hiddenFinalReply } : {}),
   };
 
-  if (
-    !didReply &&
-    (params.suppressReplies || finalReplyOutcome === "suppressed" || deliberateSilentTerminalReply)
-  ) {
+  if (!didReply && shouldSettleWithoutVisibleReply) {
     await settleDiscordInteractionWithoutVisibleReply(params.interaction);
     return dispatchResult;
   }

@@ -126,7 +126,7 @@ export async function agentsListCommand(
   opts: AgentsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const cfg = await requireValidConfig(runtime);
+  const cfg = await requireValidConfig(runtime, { adoptPluginMetadata: true });
   if (!cfg) {
     return;
   }

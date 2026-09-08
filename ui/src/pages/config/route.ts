@@ -3,9 +3,14 @@ import { definePage, redirect } from "@openclaw/uirouter";
 import { html, nothing } from "lit";
 import { pathForRoute, routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
 import type { ConfigPageId } from "./config-sections.ts";
-import { configRouteData, configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
-import { SETTINGS_SEARCH_TARGETS } from "./settings-targets.ts";
+import {
+  configRouteData,
+  configTargetIdFromHash,
+  SETTINGS_ROUTE_TARGETS,
+  type ConfigRouteData,
+} from "./route-data.ts";
 
 function loadConfigRoute(
   context: ApplicationContext,
@@ -44,8 +49,8 @@ const removedGeneralRedirectPage = definePage({
   loader: (context: ApplicationContext, { location }) => {
     const target =
       configTargetIdFromHash(location.hash) === "settings-general-model"
-        ? SETTINGS_SEARCH_TARGETS.modelBehavior
-        : SETTINGS_SEARCH_TARGETS.appearanceLanguage;
+        ? SETTINGS_ROUTE_TARGETS.modelBehavior
+        : SETTINGS_ROUTE_TARGETS.appearanceLanguage;
     return redirect({
       pathname: pathForRoute(target.routeId, context.basePath),
       search: "search" in target ? target.search : "",
@@ -57,6 +62,15 @@ const removedGeneralRedirectPage = definePage({
 });
 
 export const pages = [
+  definePage({
+    ...routePageSpec("settings"),
+    loader: (context: ApplicationContext, { location }) =>
+      isNativeEmbedHost()
+        ? undefined
+        : redirect({ ...location, pathname: pathForRoute("chat", context.basePath) }),
+    // The shell reuses its lazy settings navigation as the embedded list page.
+    component: async () => ({ render: () => nothing }),
+  }),
   removedGeneralRedirectPage,
   configPage("communications"),
   configPage("appearance"),

@@ -315,34 +315,6 @@ describe("audit gateway methods", () => {
     });
 
     await runAuditHandler("audit.run.inspect", {
-      runId: "run-1",
-      executionCursor: "1",
-      decisionCursor: "1",
-      decisionLimit: 25,
-    });
-    expect(inspectExecutionIdentityRun).toHaveBeenLastCalledWith({
-      runId: "run-1",
-      executionOffset: 1,
-      executionLimit: 50,
-      decisionCursor: "1",
-      decisionLimit: 25,
-    });
-
-    await runAuditHandler("audit.run.inspect", {
-      runId: "run-1",
-      executionCursor: "001",
-      decisionCursor: "001",
-      decisionLimit: 25,
-    });
-    expect(inspectExecutionIdentityRun).toHaveBeenLastCalledWith({
-      runId: "run-1",
-      executionOffset: 1,
-      executionLimit: 50,
-      decisionCursor: "001",
-      decisionLimit: 25,
-    });
-
-    await runAuditHandler("audit.run.inspect", {
       executionId: "execution-1",
       decisionCursor: "1",
       decisionLimit: 20,
@@ -502,6 +474,45 @@ describe("audit gateway methods", () => {
     expect(result).not.toHaveProperty("decisions");
     expect(JSON.stringify(result)).not.toContain('"decisions"');
   });
+
+  it.each(["1", "001"])(
+    "preserves mirrored numeric cursor %s for execution paging",
+    async (decisionCursor) => {
+      await runAuditHandler("audit.run.inspect", {
+        runId: "run-1",
+        executionCursor: decisionCursor,
+        decisionCursor,
+        decisionLimit: 25,
+      });
+
+      expect(inspectExecutionIdentityRun).toHaveBeenLastCalledWith({
+        runId: "run-1",
+        executionOffset: 1,
+        executionLimit: 50,
+        decisionCursor,
+        decisionLimit: 25,
+      });
+    },
+  );
+
+  it.each(["a:2000:42", "m:2000:42", "g:2000:42", "c:2000:42", "t:2000:42", "f:2000:42"])(
+    "treats mirrored owner decision cursor %s as decision-only",
+    async (decisionCursor) => {
+      await runAuditHandler("audit.run.inspect", {
+        runId: "run-1",
+        executionCursor: decisionCursor,
+        decisionCursor,
+        decisionLimit: 25,
+      });
+
+      expect(inspectExecutionIdentityRun).toHaveBeenLastCalledWith({
+        runId: "run-1",
+        executionLimit: 50,
+        decisionCursor,
+        decisionLimit: 25,
+      });
+    },
+  );
 
   it("rejects malformed run inspection before storage access", async () => {
     expect(

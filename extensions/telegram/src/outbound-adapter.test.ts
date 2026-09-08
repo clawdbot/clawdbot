@@ -111,10 +111,8 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({ channel: "telegram", messageId: "tg-media" });
   });
 
-  it("sends payload media in sequence and keeps buttons on the first message only", async () => {
-    sendMessageTelegramMock
-      .mockResolvedValueOnce({ messageId: "tg-1", chatId: "12345" })
-      .mockResolvedValueOnce({ messageId: "tg-2", chatId: "12345" });
+  it("passes the complete media payload and controls to the public send owner", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-2", chatId: "12345" });
     const mediaAccess = { localRoots: ["/tmp/media"], workspaceDir: "/tmp/media" };
 
     const result = await telegramOutbound.sendPayload!({
@@ -144,9 +142,9 @@ describe("telegramOutbound", () => {
       deps: { sendTelegram: sendMessageTelegramMock },
     });
 
-    expect(sendMessageTelegramMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageTelegramMock).toHaveBeenCalledTimes(1);
     const firstOptions = callOptionsAt(sendMessageTelegramMock, 0, "12345", "Approval required");
-    expect(firstOptions.mediaUrl).toBe("chart.png");
+    expect(firstOptions.mediaUrls).toEqual(["chart.png", "chart-2.png"]);
     expect(firstOptions.mediaAccess).toBe(mediaAccess);
     expect(firstOptions.mediaLocalRoots).toEqual(["/tmp/media"]);
     expect(firstOptions.quoteText).toBe("quoted");
@@ -161,27 +159,8 @@ describe("telegramOutbound", () => {
         nextPartIndex: 0,
         complete: true,
       },
-      finalPart: false,
-    });
-    const secondOptions = callOptionsAt(sendMessageTelegramMock, 1, "12345", "");
-    expect(secondOptions.mediaUrl).toBe("chart-2.png");
-    expect(secondOptions.mediaAccess).toBe(mediaAccess);
-    expect(secondOptions.mediaLocalRoots).toEqual(["/tmp/media"]);
-    expect(secondOptions.quoteText).toBe("quoted");
-    expect(secondOptions.buttons).toBeUndefined();
-    expect(secondOptions.promptContextProjectionPlan).toMatchObject({
-      cursor: {
-        source: {
-          transcriptMessageId: "assistant-media",
-        },
-        nextPartIndex: 0,
-        complete: true,
-      },
       finalPart: true,
     });
-    expect((firstOptions.promptContextProjectionPlan as { cursor: unknown }).cursor).toBe(
-      (secondOptions.promptContextProjectionPlan as { cursor: unknown }).cursor,
-    );
     expect(result).toEqual({
       channel: "telegram",
       messageId: "tg-2",
@@ -321,12 +300,16 @@ describe("telegramOutbound", () => {
 
   it("applies reaction-only payloads without sending empty Telegram text", async () => {
     reactMessageTelegramMock.mockResolvedValueOnce({ ok: true });
+    const controller = new AbortController();
+    const assertDirectAdapterHandoff = vi.fn();
 
     const result = await telegramOutbound.sendPayload!({
       cfg: {} as never,
       to: "12345",
       text: "",
       replyToId: "777",
+      signal: controller.signal,
+      assertDirectAdapterHandoff,
       payload: {
         channelData: {
           telegram: {
@@ -342,6 +325,8 @@ describe("telegramOutbound", () => {
       verbose: false,
       accountId: undefined,
       gatewayClientScopes: undefined,
+      signal: controller.signal,
+      assertPlatformSendAuthorized: assertDirectAdapterHandoff,
     });
     expect(sendMessageTelegramMock).not.toHaveBeenCalled();
     expect(result).toEqual({
@@ -350,6 +335,88 @@ describe("telegramOutbound", () => {
       target: { kind: "chat", id: "12345" },
     });
   });
+
+  it.each([
+    { name: "a nested reaction target", nestedReplyToId: "777" },
+    { name: "a numeric nested reaction target", nestedReplyToId: 777 },
+    {
+      name: "a nested reaction target instead of a different outer reply",
+      nestedReplyToId: "777",
+      outerReplyToId: "888",
+    },
+    {
+      name: "a nested reaction target without turning accompanying text into a reply",
+      nestedReplyToId: "777",
+      text: "Done",
+    },
+    {
+      name: "a nested reaction target while preserving a different text reply",
+      nestedReplyToId: "777",
+      outerReplyToId: "888",
+      text: "Done",
+    },
+  ])("honors $name", async ({ nestedReplyToId, outerReplyToId, text }) => {
+    reactMessageTelegramMock.mockResolvedValueOnce({ ok: true });
+    if (text) {
+      sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-text", chatId: "12345" });
+    }
+
+    const result = await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      ...(outerReplyToId ? { replyToId: outerReplyToId } : {}),
+      payload: {
+        ...(text ? { text } : {}),
+        channelData: {
+          telegram: {
+            reaction: { emoji: "🔥", replyToId: nestedReplyToId },
+          },
+        },
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(reactMessageTelegramMock).toHaveBeenCalledWith("12345", 777, "🔥", expect.any(Object));
+    if (text) {
+      expect(sendMessageTelegramMock).toHaveBeenCalledWith(
+        "12345",
+        text,
+        expect.objectContaining({
+          replyToMessageId: outerReplyToId ? Number(outerReplyToId) : undefined,
+        }),
+      );
+      expect(result.messageId).toBe("tg-text");
+    } else {
+      expect(sendMessageTelegramMock).not.toHaveBeenCalled();
+      expect(result.messageId).toBe("777");
+    }
+  });
+
+  it.each(["0", "-1", "12.5", "9007199254740992", "invalid"])(
+    "rejects invalid explicit nested reaction target %s without using the outer reply",
+    async (nestedReplyToId) => {
+      reactMessageTelegramMock.mockResolvedValueOnce({ ok: true });
+      sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-text", chatId: "12345" });
+
+      await expect(
+        telegramOutbound.sendPayload!({
+          cfg: {} as never,
+          to: "12345",
+          text: "",
+          replyToId: "888",
+          payload: {
+            text: "Done",
+            channelData: { telegram: { reaction: { emoji: "🔥", replyToId: nestedReplyToId } } },
+          },
+          deps: { sendTelegram: sendMessageTelegramMock },
+        }),
+      ).rejects.toThrow("Telegram reaction requires a reply target");
+
+      expect(reactMessageTelegramMock).not.toHaveBeenCalled();
+      expect(sendMessageTelegramMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("applies reaction payloads before sending visible text", async () => {
     reactMessageTelegramMock.mockResolvedValueOnce({ ok: true });
@@ -394,6 +461,33 @@ describe("telegramOutbound", () => {
         "Telegram send invocation",
       ),
     );
+  });
+
+  it("does not publish a reaction or album after cancellation during dispatch", async () => {
+    const abort = new AbortController();
+    const failure = new Error("turn canceled");
+    reactMessageTelegramMock.mockResolvedValueOnce({ ok: true });
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-photo", chatId: "12345" });
+    await expect(
+      telegramOutbound.sendPayload!({
+        cfg: {},
+        to: "12345",
+        text: "Photos",
+        replyToId: "777",
+        signal: abort.signal,
+        onPlatformSendDispatch: async () => {
+          abort.abort(failure);
+        },
+        payload: {
+          text: "Photos",
+          mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
+          channelData: { telegram: { reaction: { emoji: "✅" } } },
+        },
+        deps: { sendTelegram: sendMessageTelegramMock },
+      }),
+    ).rejects.toBe(failure);
+    expect(reactMessageTelegramMock).not.toHaveBeenCalled();
+    expect(sendMessageTelegramMock).not.toHaveBeenCalled();
   });
 
   it("rejects text plus reaction payloads without a reply target", async () => {
@@ -832,9 +926,7 @@ describe("telegramOutbound", () => {
       expect(options.silent).toBe(true);
     };
     const proveBatch = async () => {
-      sendMessageTelegramMock
-        .mockResolvedValueOnce({ messageId: "tg-batch-1", chatId: "12345" })
-        .mockResolvedValueOnce({ messageId: "tg-batch-2", chatId: "12345" });
+      sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-batch-2", chatId: "12345" });
       await telegramOutbound.sendPayload!({
         cfg: {} as never,
         to: "12345",
@@ -845,10 +937,8 @@ describe("telegramOutbound", () => {
         },
         deps: { sendTelegram: sendMessageTelegramMock },
       });
-      const firstOptions = callOptionsFromEnd(sendMessageTelegramMock, 2, "12345", "batch");
-      expect(firstOptions.mediaUrl).toBe("https://example.com/a.png");
-      const secondOptions = callOptionsFromEnd(sendMessageTelegramMock, 1, "12345", "");
-      expect(secondOptions.mediaUrl).toBe("https://example.com/b.png");
+      const options = callOptionsFromEnd(sendMessageTelegramMock, 1, "12345", "batch");
+      expect(options.mediaUrls).toEqual(["https://example.com/a.png", "https://example.com/b.png"]);
     };
 
     await verifyDurableFinalCapabilityProofs({

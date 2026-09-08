@@ -30,6 +30,7 @@ type VercelPricingShape = {
 
 type VercelGatewayModelShape = {
   id?: string;
+  type?: string;
   name?: string;
   context_window?: number;
   max_tokens?: number;
@@ -158,11 +159,13 @@ export function getStaticVercelAiGatewayModelCatalog(): ModelDefinitionConfig[] 
   return STATIC_VERCEL_AI_GATEWAY_MODEL_CATALOG.map(buildStaticModelDefinition);
 }
 
-function buildDiscoveredModelDefinition(
-  model: VercelGatewayModelShape,
-): ModelDefinitionConfig | null {
+function buildDiscoveredModelDefinition(value: unknown): ModelDefinitionConfig | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Vercel AI Gateway model list: malformed JSON response");
+  }
+  const model = value as VercelGatewayModelShape;
   const id = typeof model.id === "string" ? model.id.trim() : "";
-  if (!id) {
+  if (!id || (model.type !== undefined && model.type !== "language")) {
     return null;
   }
 
@@ -201,19 +204,11 @@ function buildDiscoveredModelDefinition(
   };
 }
 
-function asVercelGatewayModelShape(value: unknown): VercelGatewayModelShape {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("Vercel AI Gateway model list: malformed JSON response");
-  }
-  return value as VercelGatewayModelShape;
-}
-
-export async function discoverVercelAiGatewayModels(): Promise<ModelDefinitionConfig[]> {
-  if (process.env.VITEST || process.env.NODE_ENV === "test") {
-    return getStaticVercelAiGatewayModelCatalog();
-  }
-
+export async function discoverVercelAiGatewayModels(
+  options: { discoveryMode?: "strict" } = {},
+): Promise<ModelDefinitionConfig[]> {
   const provider = await buildLiveModelProviderConfig({
+    ...options,
     providerId: VERCEL_AI_GATEWAY_PROVIDER_ID,
     endpoint: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
     providerConfig: {
@@ -227,7 +222,6 @@ export async function discoverVercelAiGatewayModels(): Promise<ModelDefinitionCo
     fetchGuard: (params) => fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode(params)),
     projectRows: (rows) =>
       rows
-        .map(asVercelGatewayModelShape)
         .map(buildDiscoveredModelDefinition)
         .filter((entry): entry is ModelDefinitionConfig => entry !== null),
   });

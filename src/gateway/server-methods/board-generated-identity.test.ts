@@ -3,6 +3,7 @@ import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.entry.js";
+import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -13,11 +14,13 @@ import { createBoardHarness } from "./board.test-support.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
+  resetPluginRuntimeStateForTest();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
 });
 
 it("serializes in-flight generated-name collisions and reuses both names after reload", async () => {
+  resetPluginRuntimeStateForTest();
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-board-generated-race-") };
   const sessionKey = "agent:main:generated-race";
   const database = openOpenClawAgentDatabase({ agentId: "main", env });

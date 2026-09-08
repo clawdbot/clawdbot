@@ -195,8 +195,8 @@ export async function loadDiscordModelPickerData(
   cfg: OpenClawConfig,
   agentId?: string,
 ): Promise<ModelsProviderData> {
-  const { buildModelsProviderData } = await loadModelsProviderRuntime();
-  return buildModelsProviderData(cfg, agentId);
+  const { buildPreparedModelsProviderData } = await loadModelsProviderRuntime();
+  return buildPreparedModelsProviderData(cfg, agentId);
 }
 
 export function buildDiscordModelPickerCustomId(params: {

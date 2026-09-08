@@ -1,4 +1,5 @@
 // Cleans session-related shared state after tests.
+import { waitForSessionTranscriptIndexReconcilesInStateDir } from "../config/sessions/session-transcript-reconcile.js";
 import {
   clearSessionStoreCacheForTest,
   drainSessionStoreWriterQueuesForTest,
@@ -38,13 +39,19 @@ export async function cleanupSessionStateForTest(
   options: { stateDir?: string } = {},
 ): Promise<void> {
   await (sessionStoreWriterQueueDrainerForTests ?? drainSessionStoreWriterQueuesForTest)();
+  if (options.stateDir) {
+    // Writers can publish deferred reconciles as the initial drain settles.
+    // Finish those owners and their writes before closing fixture databases.
+    await waitForSessionTranscriptIndexReconcilesInStateDir(options.stateDir);
+    await (sessionStoreWriterQueueDrainerForTests ?? drainSessionStoreWriterQueuesForTest)();
+  }
   await (fileLockDrainerForTests ?? drainFileLockStateForTest)();
   clearSessionStoreCacheForTest();
   if (!options.stateDir) {
     return;
   }
-  // A queued writer can reopen both databases after an earlier close. Scope
-  // final handle cleanup to the fixture owner so unrelated tests stay live.
+  // Close agent handles before shared state: releasing their leases can reopen
+  // shared state. Unrelated fixtures keep their handles.
   for (const database of listOpenClawAgentDatabasesForTest()) {
     if (isPathInside(options.stateDir, database.path)) {
       closeOpenClawAgentDatabaseByPath(database.path);

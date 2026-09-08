@@ -36,7 +36,11 @@ import {
 import { rememberRecentOutboundMessage } from "./dedupe.js";
 import type { WhatsAppReadReceiptTarget } from "./durable-receive.js";
 import { extractText } from "./extract.js";
-import { attachEmitterListener, closeInboundMonitorSocket } from "./lifecycle.js";
+import {
+  attachEmitterListener,
+  closeInboundMonitorSocket,
+  type WhatsAppSocketListen,
+} from "./lifecycle.js";
 import { DisconnectReason } from "./runtime-api.js";
 import type { WebListenerCloseReason } from "./types.js";
 
@@ -410,16 +414,8 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     );
   };
 
-  const attachSockListener = (event: string, listener: (...args: unknown[]) => void) =>
-    attachEmitterListener(
-      sock.ev as unknown as {
-        on: (event: string, listener: (...args: unknown[]) => void) => void;
-        off?: (event: string, listener: (...args: unknown[]) => void) => void;
-        removeListener?: (event: string, listener: (...args: unknown[]) => void) => void;
-      },
-      event,
-      listener,
-    );
+  const attachSockListener: WhatsAppSocketListen = (event, listener) =>
+    attachEmitterListener(sock.ev, event, listener);
 
   const handleConnectionUpdate = (update: Partial<ConnectionState>) => {
     try {
@@ -445,10 +441,7 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
 
   let detachConnectionUpdate: (() => void) | undefined;
   const start = () => {
-    detachConnectionUpdate ??= attachSockListener(
-      "connection.update",
-      handleConnectionUpdate as unknown as (...args: unknown[]) => void,
-    );
+    detachConnectionUpdate ??= attachSockListener("connection.update", handleConnectionUpdate);
   };
   const stop = () => {
     detachConnectionUpdate?.();

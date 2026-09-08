@@ -32,7 +32,7 @@ class NotificationsHandlerTest {
             notifications = emptyList(),
           ),
         )
-      val handler = NotificationsHandler.forTesting(appContext = appContext(), stateProvider = provider)
+      val handler = NotificationsHandler(appContext = appContext(), stateProvider = provider)
 
       val result = handler.handleNotificationsList(null)
 
@@ -57,7 +57,7 @@ class NotificationsHandlerTest {
             notifications = listOf(sampleEntry("n1")),
           ),
         )
-      val handler = NotificationsHandler.forTesting(appContext = appContext(), stateProvider = provider)
+      val handler = NotificationsHandler(appContext = appContext(), stateProvider = provider)
 
       val result = handler.handleNotificationsList(null)
 
@@ -82,7 +82,7 @@ class NotificationsHandlerTest {
             notifications = listOf(sampleEntry("n2")),
           ),
         )
-      val handler = NotificationsHandler.forTesting(appContext = appContext(), stateProvider = provider)
+      val handler = NotificationsHandler(appContext = appContext(), stateProvider = provider)
 
       val result = handler.handleNotificationsList(null)
 
@@ -106,7 +106,7 @@ class NotificationsHandlerTest {
             notifications = listOf(sampleEntry("n2")),
           ),
         )
-      val handler = NotificationsHandler.forTesting(appContext = appContext(), stateProvider = provider)
+      val handler = NotificationsHandler(appContext = appContext(), stateProvider = provider)
 
       val result = handler.handleNotificationsActions("""{"key":"n2","action":"dismiss"}""")
 
@@ -131,7 +131,7 @@ class NotificationsHandlerTest {
             notifications = listOf(sampleEntry("n3")),
           ),
         )
-      val handler = NotificationsHandler.forTesting(appContext = appContext(), stateProvider = provider)
+      val handler = NotificationsHandler(appContext = appContext(), stateProvider = provider)
 
       val result = handler.handleNotificationsActions("""{"key":"n3","action":"reply"}""")
 
@@ -151,7 +151,7 @@ class NotificationsHandlerTest {
             notifications = listOf(sampleEntry("n3")),
           ),
         )
-      val handler = NotificationsHandler.forTesting(appContext = appContext(), stateProvider = provider)
+      val handler = NotificationsHandler(appContext = appContext(), stateProvider = provider)
 
       val result = handler.handleNotificationsActions("""{"action":"open"}""")
 
@@ -171,7 +171,7 @@ class NotificationsHandlerTest {
             notifications = listOf(sampleEntry("n3")),
           ),
         )
-      val handler = NotificationsHandler.forTesting(appContext = appContext(), stateProvider = provider)
+      val handler = NotificationsHandler(appContext = appContext(), stateProvider = provider)
 
       val result = handler.handleNotificationsActions("""{"key":"n3","action":"archive"}""")
 
@@ -198,7 +198,7 @@ class NotificationsHandlerTest {
               message = "NOTIFICATION_NOT_FOUND: notification key not found",
             )
         }
-      val handler = NotificationsHandler.forTesting(appContext = appContext(), stateProvider = provider)
+      val handler = NotificationsHandler(appContext = appContext(), stateProvider = provider)
 
       val result = handler.handleNotificationsActions("""{"key":"n4","action":"open"}""")
 
@@ -220,7 +220,7 @@ class NotificationsHandlerTest {
         ).also {
           it.actionResult = NotificationActionResult(ok = false)
         }
-      val handler = NotificationsHandler.forTesting(appContext = appContext(), stateProvider = provider)
+      val handler = NotificationsHandler(appContext = appContext(), stateProvider = provider)
 
       val result = handler.handleNotificationsActions("""{"key":"n4","action":"open"}""")
 
@@ -241,7 +241,7 @@ class NotificationsHandlerTest {
             notifications = listOf(sampleEntry("n5")),
           ),
         )
-      val handler = NotificationsHandler.forTesting(appContext = appContext(), stateProvider = provider)
+      val handler = NotificationsHandler(appContext = appContext(), stateProvider = provider)
 
       val result = handler.handleNotificationsActions("""{"key":"n5","action":"open"}""")
 

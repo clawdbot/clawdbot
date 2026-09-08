@@ -1,5 +1,5 @@
 // Covers channel account summary rendering.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { buildChannelSummary } from "./channel-summary.js";
 
@@ -87,9 +87,9 @@ function makeTelegramSummaryPlugin(params: {
   });
 
   return {
-    id: "telegram",
+    id: "linked-summary-fixture",
     meta: {
-      id: "telegram",
+      id: "linked-summary-fixture",
       label: "Telegram",
       selectionLabel: "Telegram",
       docsPath: "/channels/telegram",
@@ -99,7 +99,6 @@ function makeTelegramSummaryPlugin(params: {
     config: {
       listAccountIds: () => ["primary"],
       defaultAccountId: () => "primary",
-      inspectAccount: getAccount,
       resolveAccount: getAccount,
       isConfigured: isFixtureAccountConfigured,
       isEnabled: isFixtureAccountEnabled,
@@ -188,6 +187,33 @@ function makeFallbackSummaryPlugin(params: {
 }
 
 describe("buildChannelSummary", () => {
+  it("reports omitted inspector configuration as unknown", async () => {
+    const plugin = makeFallbackSummaryPlugin({ enabled: true, configured: true });
+    plugin.config.inspectAccount = () => ({ accountId: "default", enabled: true });
+
+    await expect(buildChannelSummary({}, { plugins: [plugin] })).resolves.toEqual([
+      "Fallback: configuration status unavailable",
+    ]);
+  });
+
+  it("renders summary-only inspectors without passing them to runtime hooks", async () => {
+    const runtimeOnly = vi.fn(() => {
+      throw new Error("runtime hook received an inspection summary");
+    });
+    const plugin = makeFallbackSummaryPlugin({ enabled: true, configured: true });
+    plugin.config.describeAccount = runtimeOnly;
+    plugin.config.isConfigured = runtimeOnly;
+    plugin.config.isEnabled = runtimeOnly;
+    plugin.config.resolveAccount = runtimeOnly;
+    plugin.status = { buildChannelSummary: runtimeOnly };
+
+    await expect(buildChannelSummary({}, { plugins: [plugin] })).resolves.toEqual([
+      "Fallback: configured",
+      "  - default",
+    ]);
+    expect(runtimeOnly).not.toHaveBeenCalled();
+  });
+
   it("preserves Slack HTTP signing-secret unavailable state from source config", async () => {
     const lines = await buildChannelSummary({ marker: "resolved", channels: {} } as never, {
       colorize: false,

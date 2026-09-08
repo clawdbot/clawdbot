@@ -2,10 +2,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
-import {
-  resolvePluginMetadataSnapshot,
-  type PluginMetadataSnapshot,
-} from "./plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
 
 type SetupCliBackendDescriptorEntry = {
@@ -22,74 +19,47 @@ type SetupCliBackendDescriptorLookupParams = {
   env?: NodeJS.ProcessEnv;
 };
 
-type SetupCliBackendDescriptorCache = {
-  configFingerprint: string;
-  entries: SetupCliBackendDescriptorEntry[];
-};
-
-let cachedSetupCliBackendDescriptors: SetupCliBackendDescriptorCache | undefined;
-function resolveMetadataSnapshotForSetupCliBackends(
+function resolveSetupCliBackendSnapshot(
   params: Omit<SetupCliBackendDescriptorLookupParams, "backend"> = {},
-): {
-  snapshot: PluginMetadataSnapshot;
-  cacheable: boolean;
-} {
+) {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
-  const snapshot = resolvePluginMetadataSnapshot({
+  return resolvePluginMetadataSnapshot({
     ...(params.config ? { config: params.config } : {}),
     env,
     ...(workspaceDir ? { workspaceDir } : {}),
     allowWorkspaceScopedCurrent: true,
   });
-  return {
-    snapshot,
-    cacheable: true,
-  };
-}
-
-function resolveSetupCliBackendDescriptors(
-  params: Omit<SetupCliBackendDescriptorLookupParams, "backend"> = {},
-): SetupCliBackendDescriptorEntry[] {
-  const { snapshot, cacheable } = resolveMetadataSnapshotForSetupCliBackends(params);
-  const configFingerprint = snapshot.configFingerprint;
-  if (
-    cacheable &&
-    configFingerprint &&
-    cachedSetupCliBackendDescriptors?.configFingerprint === configFingerprint
-  ) {
-    return cachedSetupCliBackendDescriptors.entries;
-  }
-  const entries = snapshot.plugins.flatMap((plugin) => {
-    if (!isInstalledPluginEnabled(snapshot.index, plugin.id)) {
-      return [];
-    }
-    return [...plugin.cliBackends, ...(plugin.setup?.cliBackends ?? [])].map(
-      (backendId) =>
-        ({
-          pluginId: plugin.id,
-          backend: { id: backendId },
-        }) satisfies SetupCliBackendDescriptorEntry,
-    );
-  });
-  if (cacheable && configFingerprint) {
-    cachedSetupCliBackendDescriptors = { configFingerprint, entries };
-  }
-  return entries;
 }
 
 export function resolvePluginSetupCliBackendDescriptor(
   params: SetupCliBackendDescriptorLookupParams,
-) {
+): SetupCliBackendDescriptorEntry | undefined {
   const normalized = normalizeProviderId(params.backend);
-  return resolveSetupCliBackendDescriptors(params).find(
-    (entry) => normalizeProviderId(entry.backend.id) === normalized,
+  const snapshot = resolveSetupCliBackendSnapshot(params);
+  // The immutable owner map preserves declaration order; only activation uses live policy.
+  const pluginId = snapshot.owners.cliBackends
+    .get(normalized)
+    ?.find((id) => isInstalledPluginEnabled(snapshot.index, id, params.config));
+  const plugin = pluginId ? snapshot.byPluginId.get(pluginId) : undefined;
+  if (!plugin) {
+    return undefined;
+  }
+  const backendId = [...plugin.cliBackends, ...(plugin.setup?.cliBackends ?? [])].find(
+    (id) => normalizeProviderId(id) === normalized,
   );
+  return backendId ? { pluginId: plugin.id, backend: { id: backendId } } : undefined;
 }
 
 /** Resolve enabled setup CLI backend ids from one metadata snapshot. */
 export function resolvePluginSetupCliBackendIds(
   params: Omit<SetupCliBackendDescriptorLookupParams, "backend"> = {},
 ): string[] {
-  return resolveSetupCliBackendDescriptors(params).map((entry) => entry.backend.id);
+  const snapshot = resolveSetupCliBackendSnapshot(params);
+  return snapshot.plugins.flatMap((plugin) => {
+    const ids = plugin.cliBackends.concat(plugin.setup?.cliBackends ?? []);
+    return ids.length > 0 && isInstalledPluginEnabled(snapshot.index, plugin.id, params.config)
+      ? ids
+      : [];
+  });
 }

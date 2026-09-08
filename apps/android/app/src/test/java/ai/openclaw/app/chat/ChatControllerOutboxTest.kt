@@ -10,8 +10,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -20,11 +23,15 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 import java.util.UUID
 
 private data class DeliveredSend(
@@ -34,6 +41,7 @@ private data class DeliveredSend(
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
 class ChatControllerOutboxTest {
   private val json = Json { ignoreUnknownKeys = true }
 
@@ -43,14 +51,14 @@ class ChatControllerOutboxTest {
     val release: CompletableDeferred<Unit>,
   )
 
-  /** In-memory stand-in for the Room outbox; Room persistence itself is covered by [RoomChatCommandOutboxTest]. */
-  private class FakeCommandOutbox(
+  /** Injects storage failures around the same Room owner used by the app. */
+  private class TestCommandOutbox(
+    scope: CoroutineScope,
     private val capacity: Int = OUTBOX_MAX_QUEUED,
-  ) : ChatCommandOutbox {
-    val rows = LinkedHashMap<String, ChatOutboxItem>()
-    val admittedIds = linkedSetOf<String>()
-    val attachmentBytes = mutableMapOf<String, List<ByteArray>>()
-    val gatewayIds = mutableMapOf<String, String>()
+    private val database: ClientStateDatabase = scope.createChatOutboxDatabase(),
+    private val store: ChatCommandOutbox = RoomChatCommandOutbox(database),
+  ) : ChatCommandOutbox by store {
+    private val gateways = linkedSetOf<String>()
     val deletedSessions = mutableListOf<String>()
     var recoveryGate: CompletableDeferred<Unit>? = null
     var recoveryFailure: Throwable? = null
@@ -62,22 +70,40 @@ class ChatControllerOutboxTest {
     var enqueueGate: CompletableDeferred<Unit>? = null
     var claimGate: CompletableDeferred<Unit>? = null
     var deleteFailure: Throwable? = null
-    var beforeDeleteIfQueued: (() -> Unit)? = null
+    var beforeDeleteIfQueued: (suspend () -> Unit)? = null
     var deleteOnFailedStatus = false
     var loadGate: LoadGate? = null
     var onStatusUpdated: ((ChatOutboxStatus) -> Unit)? = null
-    private var nextCreatedAt = 0L
 
-    fun seed(
+    suspend fun rows(): Map<String, ChatOutboxItem> = gateways.flatMap { store.load(it) }.associateBy { it.id }
+
+    suspend fun attachments(): List<OutboxAttachmentEntity> = database.outboxDao().allAttachments()
+
+    suspend fun seed(
       item: ChatOutboxItem,
       gatewayId: String = "gateway-test",
     ) {
-      rows[item.id] = item
-      gatewayIds[item.id] = gatewayId
-      nextCreatedAt = maxOf(nextCreatedAt, item.createdAtMs + 1)
+      gateways += gatewayId
+      database.outboxDao().insert(
+        OutboxCommandEntity(
+          id = item.id,
+          gatewayId = gatewayId,
+          sessionKey = item.sessionKey,
+          text = item.text,
+          thinkingLevel = item.thinkingLevel,
+          createdAtMs = item.createdAtMs,
+          status = item.status.dbValue,
+          retryCount = item.retryCount,
+          lastError = item.lastError,
+          gatedEpoch = item.gatedEpoch,
+          ownerAgentId = item.ownerAgentId,
+        ),
+      )
     }
 
     override suspend fun load(gatewayId: String): List<ChatOutboxItem> {
+      val snapshot = store.load(gatewayId)
+      // A completed database snapshot can resume after another caller changes the rows.
       loadGate?.let { gate ->
         if (gate.remainingLoads == 0) {
           loadGate = null
@@ -87,12 +113,8 @@ class ChatControllerOutboxTest {
           gate.remainingLoads -= 1
         }
       }
-      return rows.values
-        .filter { gatewayIds[it.id] == gatewayId }
-        .sortedWith(compareBy({ it.createdAtMs }, { it.id }))
+      return snapshot
     }
-
-    override suspend fun wasAdmitted(id: String): Boolean = id in rows || id in admittedIds
 
     override suspend fun enqueue(
       gatewayId: String,
@@ -106,67 +128,23 @@ class ChatControllerOutboxTest {
       idempotencyKey: String?,
     ): ChatOutboxEnqueueResult {
       enqueueGate?.await()
-      if (gatewayIds.values.count { it == gatewayId } >= capacity) return ChatOutboxEnqueueResult.QueueFull
-      val commandBytes = attachments.sumOf { it.bytes.size.toLong() }
-      if (!outboxCommandAttachmentsWithinByteLimits(attachments)) return ChatOutboxEnqueueResult.AttachmentsTooLarge
-      val queuedBytes = attachmentBytes.values.sumOf { list -> list.sumOf { it.size.toLong() } }
-      if (commandBytes > 0 && queuedBytes + commandBytes > OUTBOX_MAX_GATEWAY_ATTACHMENT_BYTES) {
-        return ChatOutboxEnqueueResult.StorageFull
-      }
-      val createdAt = maxOf(nowMs, nextCreatedAt)
-      nextCreatedAt = createdAt + 1
-      val id = idempotencyKey ?: UUID.randomUUID().toString()
-      if (idempotencyKey != null) admittedIds += id
-      val item =
-        ChatOutboxItem(
-          id = id,
-          sessionKey = sessionKey,
-          text = text,
-          thinkingLevel = thinkingLevel,
-          createdAtMs = createdAt,
-          status = ChatOutboxStatus.Queued,
-          retryCount = 0,
-          lastError = null,
-          gatedEpoch = gatedEpoch,
-          ownerAgentId = ownerAgentId,
-          attachments =
-            attachments.mapIndexed { index, payload ->
-              ChatOutboxAttachment(
-                id = "$id-$index",
-                type = payload.type,
-                mimeType = payload.mimeType,
-                fileName = payload.fileName,
-                durationMs = payload.durationMs,
-                byteLength = payload.bytes.size.toLong(),
-              )
-            },
-        )
-      rows[item.id] = item
-      attachmentBytes[item.id] = attachments.map { it.bytes }
-      gatewayIds[item.id] = gatewayId
-      return ChatOutboxEnqueueResult.Queued(item)
+      gateways += gatewayId
+      // Inject QueueFull with a small fixture; Room's actual capacity is covered by its suite.
+      if (capacity < OUTBOX_MAX_QUEUED && store.load(gatewayId).size >= capacity) return ChatOutboxEnqueueResult.QueueFull
+      return store.enqueue(gatewayId, sessionKey, text, thinkingLevel, nowMs, attachments, gatedEpoch, ownerAgentId, idempotencyKey)
     }
 
-    override suspend fun loadAttachments(id: String): List<LoadedOutboxAttachment> {
-      val item = rows[id] ?: return emptyList()
-      val bytes = attachmentBytes[id].orEmpty()
-      return item.attachments.mapIndexed { index, attachment ->
-        LoadedOutboxAttachment(attachment = attachment, bytes = bytes[index])
-      }
-    }
-
-    override suspend fun claimForSending(
+    override suspend fun claimForSendingIfAttempt(
       id: String,
+      expectedAttemptVersion: Int,
       retryCount: Int,
       lastError: String?,
     ): Int {
       claimGate?.await()
       sendingStatusUpdateFailure?.let { throw it }
-      val current = rows[id] ?: return 0
-      if (current.status != ChatOutboxStatus.Queued) return 0
-      rows[id] = current.copy(status = ChatOutboxStatus.Sending, retryCount = retryCount, lastError = lastError)
-      onStatusUpdated?.invoke(ChatOutboxStatus.Sending)
-      return 1
+      return store.claimForSendingIfAttempt(id, expectedAttemptVersion, retryCount, lastError).also {
+        if (it > 0) onStatusUpdated?.invoke(ChatOutboxStatus.Sending)
+      }
     }
 
     override suspend fun pinSessionKey(
@@ -174,97 +152,41 @@ class ChatControllerOutboxTest {
       sessionKey: String,
     ) {
       pinSessionKeyFailure?.let { throw it }
-      val current = rows[id] ?: return
-      rows[id] = current.copy(sessionKey = sessionKey)
+      store.pinSessionKey(id, sessionKey)
     }
 
-    override suspend fun confirmDelivered(ids: Set<String>): Int {
-      var removed = 0
-      for (id in ids) {
-        if (rows.remove(id) != null) {
-          attachmentBytes.remove(id)
-          gatewayIds.remove(id)
-          removed += 1
-        }
-      }
-      return removed
-    }
-
-    override suspend fun updateStatus(
+    override suspend fun updateStatusIfAttempt(
       id: String,
+      expectedAttemptVersion: Int,
       status: ChatOutboxStatus,
       retryCount: Int,
       lastError: String?,
+      expectedStatus: ChatOutboxStatus?,
     ): Int {
+      val current = rows()[id] ?: return 0
+      if (current.attemptVersion != expectedAttemptVersion || (expectedStatus != null && current.status != expectedStatus)) return 0
       if (status == ChatOutboxStatus.Failed && deleteOnFailedStatus) {
-        rows.remove(id)
-        gatewayIds.remove(id)
+        store.delete(id)
         return 0
       }
       if (status == ChatOutboxStatus.Failed) failedStatusUpdateFailure?.let { throw it }
       if (status == ChatOutboxStatus.Accepted) acceptedStatusUpdateFailure?.let { throw it }
       if (status == ChatOutboxStatus.Queued) queuedStatusUpdateFailure?.let { throw it }
       if (status == ChatOutboxStatus.Sending) sendingStatusUpdateFailure?.let { throw it }
-      val current = rows[id] ?: return 0
-      rows[id] = current.copy(status = status, retryCount = retryCount, lastError = lastError)
-      onStatusUpdated?.invoke(status)
-      return 1
-    }
-
-    override suspend fun requeueForRetry(
-      gatewayId: String,
-      id: String,
-      nowMs: Long,
-      gatedEpoch: Long?,
-      ownerAgentId: String?,
-    ): Int {
-      val current = rows[id] ?: return 0
-      if (gatewayIds[id] != gatewayId || current.status != ChatOutboxStatus.Failed) return 0
-      var createdAt = maxOf(nowMs, nextCreatedAt)
-      rows[id] =
-        current.copy(
-          status = ChatOutboxStatus.Queued,
-          retryCount = 0,
-          lastError = null,
-          createdAtMs = createdAt,
-          gatedEpoch = gatedEpoch,
-          ownerAgentId = current.ownerAgentId ?: ownerAgentId,
-        )
-      // Mirror the Room store: queued same-session successors follow the retried row.
-      val successors =
-        rows.values
-          .filter {
-            it.id != id &&
-              gatewayIds[it.id] == gatewayId &&
-              it.sessionKey == current.sessionKey &&
-              it.createdAtMs > current.createdAtMs &&
-              it.status == ChatOutboxStatus.Queued
-          }.sortedBy { it.createdAtMs }
-      for (successor in successors) {
-        createdAt += 1
-        rows[successor.id] = successor.copy(createdAtMs = createdAt)
+      return store.updateStatusIfAttempt(id, expectedAttemptVersion, status, retryCount, lastError, expectedStatus).also {
+        if (it > 0) onStatusUpdated?.invoke(status)
       }
-      nextCreatedAt = createdAt + 1
-      return 1
     }
 
     override suspend fun delete(id: String) {
       deleteFailure?.let { throw it }
-      rows.remove(id)
-      attachmentBytes.remove(id)
-      gatewayIds.remove(id)
+      store.delete(id)
     }
 
     override suspend fun deleteIfQueued(id: String): Boolean {
       deleteFailure?.let { throw it }
       beforeDeleteIfQueued?.invoke()
-      val current = rows[id] ?: return false
-      if (current.status != ChatOutboxStatus.Queued) return false
-      rows.remove(id)
-      attachmentBytes.remove(id)
-      gatewayIds.remove(id)
-      admittedIds.remove(id)
-      return true
+      return store.deleteIfQueued(id)
     }
 
     override suspend fun deleteForSession(
@@ -273,48 +195,13 @@ class ChatControllerOutboxTest {
       ownerAgentId: String,
     ) {
       deletedSessions += sessionKey
-      val ids =
-        rows.values
-          .filter { gatewayIds[it.id] == gatewayId && it.sessionKey == sessionKey && it.ownerAgentId == ownerAgentId }
-          .map { it.id }
-      ids.forEach {
-        rows.remove(it)
-        attachmentBytes.remove(it)
-        gatewayIds.remove(it)
-      }
-    }
-
-    override suspend fun clearGateway(gatewayId: String) {
-      val ids = gatewayIds.filterValues { it == gatewayId }.keys.toList()
-      ids.forEach {
-        rows.remove(it)
-        attachmentBytes.remove(it)
-        gatewayIds.remove(it)
-      }
+      store.deleteForSession(gatewayId, sessionKey, ownerAgentId)
     }
 
     override suspend fun failSendingAfterRestart() {
       recoveryGate?.await()
       recoveryFailure?.let { throw it }
-      for ((id, item) in rows) {
-        if (item.status == ChatOutboxStatus.Sending) {
-          rows[id] = item.copy(status = ChatOutboxStatus.Failed, lastError = OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
-        }
-      }
-    }
-
-    override suspend fun expireStale(
-      gatewayId: String,
-      nowMs: Long,
-    ) {
-      for ((id, item) in rows) {
-        if (gatewayIds[id] != gatewayId || item.createdAtMs > nowMs - OUTBOX_EXPIRY_MS) continue
-        if (item.status == ChatOutboxStatus.Queued) {
-          rows[id] = item.copy(status = ChatOutboxStatus.Failed, lastError = OUTBOX_EXPIRED_ERROR)
-        } else if (item.status == ChatOutboxStatus.Accepted) {
-          rows[id] = item.copy(status = ChatOutboxStatus.Failed, lastError = OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
-        }
-      }
+      store.failSendingAfterRestart()
     }
   }
 
@@ -342,9 +229,22 @@ class ChatControllerOutboxTest {
     val historyAgentIds = mutableListOf<String?>()
     var echoDeliveredSendsInHistory = true
     private val deliveredSends = mutableListOf<DeliveredSend>()
+    private val sessionSettings = mutableMapOf<Pair<String?, String?>, JsonObject>()
     var historyMessagesJson = "[]"
     val historyMessagesByAgent = mutableMapOf<String, String>()
     var metadataModelsJson = "[]"
+
+    fun captureRequestLease(gatewayScope: ChatCacheScope?): GatewaySession.RequestLease? {
+      if (!online) return null
+      return GatewaySession.RequestLease(
+        endpointStableId = gatewayScope?.gatewayId.orEmpty(),
+        isCurrentImpl = { online },
+      ) { method, paramsJson, _, withEnqueue ->
+        if (!online) throw GatewayRequestNotEnqueued("offline")
+        withEnqueue {}
+        request(method, paramsJson)
+      }
+    }
 
     suspend fun request(
       method: String,
@@ -382,6 +282,7 @@ class ChatControllerOutboxTest {
           }
           response
         }
+
         "chat.history" -> {
           val params =
             runCatching {
@@ -405,18 +306,42 @@ class ChatControllerOutboxTest {
             }
           val explicitJson = requestedAgentId?.let(historyMessagesByAgent::get) ?: historyMessagesJson
           val explicit = (json.parseToJsonElement(explicitJson) as JsonArray).map { it.toString() }
-          """{"sessionId":"session-1","messages":[${(explicit + echoed).joinToString(",")}]}"""
+          val sessionInfo =
+            buildJsonObject {
+              put("key", JsonPrimitive(requestedKey))
+              put("agentId", JsonPrimitive(requestedAgentId))
+              put("sessionId", JsonPrimitive("session-1"))
+              sessionSettings[requestedAgentId to requestedKey]?.forEach { (key, value) -> put(key, value) }
+            }
+          """{"sessionId":"session-1","sessionInfo":$sessionInfo,"messages":[${(explicit + echoed).joinToString(",")}]}"""
         }
-        "chat.metadata" -> """{"commands":[],"models":$metadataModelsJson}"""
+
+        "chat.metadata" -> {
+          """{"commands":[],"models":$metadataModelsJson}"""
+        }
+
         "sessions.patch" -> {
           settingsPatchStarted?.complete(Unit)
           settingsPatchGate?.await()
           if (settingsPatchFailures.isNotEmpty()) {
             settingsPatchFailures.removeAt(0)?.let { throw it }
           }
+          val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+          val owner = (params["agentId"] as? JsonPrimitive)?.content to (params["key"] as? JsonPrimitive)?.content
+          val settings = sessionSettings[owner].orEmpty().toMutableMap()
+          params["model"]?.let {
+            val model = (it as JsonPrimitive).contentOrNull
+            settings["modelProvider"] = JsonPrimitive(model?.substringBefore('/'))
+            settings["model"] = JsonPrimitive(model?.substringAfter('/'))
+          }
+          params["thinkingLevel"]?.let { settings["thinkingLevel"] = it }
+          sessionSettings[owner] = JsonObject(settings)
           "{}"
         }
-        else -> "{}"
+
+        else -> {
+          emptyChatGatewayResponse(method)
+        }
       }
     }
   }
@@ -430,6 +355,7 @@ class ChatControllerOutboxTest {
       scope = scope,
       json = json,
       requestGateway = gateway::request,
+      captureRequestLease = gateway::captureRequestLease,
       cacheScope = { ChatCacheScope(gatewayId = "gateway-test", connectionGeneration = 1L) },
       currentDefaultAgentId = { "main" },
       commandOutbox = outbox,
@@ -440,7 +366,7 @@ class ChatControllerOutboxTest {
     capacity: Int = OUTBOX_MAX_QUEUED,
   ) : CoroutineScope by testScope {
     val gateway = FakeGateway()
-    val outbox = FakeCommandOutbox(capacity)
+    val outbox = TestCommandOutbox(testScope, capacity)
 
     fun controller(
       scope: CoroutineScope = testScope,
@@ -452,13 +378,14 @@ class ChatControllerOutboxTest {
         scope = scope,
         json = json,
         requestGateway = gateway::request,
+        captureRequestLease = gateway::captureRequestLease,
         cacheScope = cacheScope,
         currentDefaultAgentId = currentDefaultAgentId,
         currentDefaultAgentRevision = currentDefaultAgentRevision,
         commandOutbox = outbox,
       )
 
-    fun seed(
+    suspend fun seed(
       id: String,
       text: String,
       createdAtMs: Long,
@@ -507,13 +434,15 @@ class ChatControllerOutboxTest {
       .single()
       .status
 
-  private fun FakeCommandOutbox.singleStatus(): ChatOutboxStatus =
-    rows.values
+  private suspend fun TestCommandOutbox.singleStatus(): ChatOutboxStatus =
+    rows()
+      .values
       .single()
       .status
 
-  private fun FakeCommandOutbox.statusFor(text: String): ChatOutboxStatus =
-    rows.values
+  private suspend fun TestCommandOutbox.statusFor(text: String): ChatOutboxStatus =
+    rows()
+      .values
       .first { it.text == text }
       .status
 
@@ -648,7 +577,7 @@ class ChatControllerOutboxTest {
     runTest {
       for (status in listOf("started", "in_flight", "ok")) {
         val gateway = FakeGateway()
-        val outbox = FakeCommandOutbox()
+        val outbox = TestCommandOutbox(this)
         val chat = controller(this, gateway, outbox)
         chat.load("main")
         advanceUntilIdle()
@@ -700,7 +629,7 @@ class ChatControllerOutboxTest {
       // The re-armed recovery sweep parks the interrupted head for review and the younger row
       // proceeds; the parked head no longer blocks the session.
       assertEquals(listOf("accepted", "younger"), gateway.sentMessages)
-      val parked = outbox.rows.values.first { it.text == "accepted" }
+      val parked = outbox.rows().values.first { it.text == "accepted" }
       assertEquals(ChatOutboxStatus.Failed, parked.status)
       assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, parked.lastError)
       assertEquals(ChatOutboxStatus.Accepted, outbox.statusFor("younger"))
@@ -739,6 +668,8 @@ class ChatControllerOutboxTest {
       // Drop health via a transport failure mid-flush: unlike a disconnect this keeps the
       // hydrated catalog, which is the state where the flush gate has data to act on.
       gateway.sendFailureBeforeDispatch = GatewayRequestNotEnqueued("gateway send failed")
+      runCurrent()
+      assertTrue(chat.outboxItems.value.any { it.id == "active" })
       chat.retryOutboxCommand("active")
       advanceUntilIdle()
       assertFalse(chat.healthOk.value)
@@ -752,8 +683,8 @@ class ChatControllerOutboxTest {
       // unknown-session row flushes first in createdAt order.
       assertEquals(listOf("unknown session", "active session"), gateway.sentMessages)
       assertEquals(listOf("medium", "off"), gateway.sentThinkingLevels)
-      assertFalse(outbox.rows.containsKey("active"))
-      assertEquals(ChatOutboxStatus.Accepted, outbox.rows.getValue("other").status)
+      assertFalse(outbox.rows().containsKey("active"))
+      assertEquals(ChatOutboxStatus.Accepted, outbox.rows().getValue("other").status)
     }
 
   @Test
@@ -790,8 +721,24 @@ class ChatControllerOutboxTest {
           .single()
           .id
 
+      val loadEntered = CompletableDeferred<Unit>()
+      val releaseLoad = CompletableDeferred<Unit>()
+      outbox.loadGate = LoadGate(remainingLoads = 0, entered = loadEntered, release = releaseLoad)
+      chat.onDisconnected("Offline")
+      runCurrent()
+      loadEntered.await()
+      try {
+        // Explicit invalidation also retires reads when the same endpoint/scope is still selected.
+        chat.onGatewayScopeChanging()
+        assertTrue(chat.outboxItems.value.isEmpty())
+        releaseLoad.complete(Unit)
+        advanceUntilIdle()
+        assertTrue("Retired publication repopulated a cleared Gateway", chat.outboxItems.value.isEmpty())
+      } finally {
+        releaseLoad.complete(Unit)
+      }
+
       activeScope = ChatCacheScope(gatewayId = "gateway-b", connectionGeneration = 2L)
-      chat.onGatewayScopeChanging()
       chat.onDisconnected("Offline")
       gateway.online = true
       chat.handleGatewayEvent("health", null)
@@ -823,7 +770,7 @@ class ChatControllerOutboxTest {
 
       for ((index, response) in responses.withIndex()) {
         val gateway = FakeGateway()
-        val outbox = FakeCommandOutbox()
+        val outbox = TestCommandOutbox(this)
         val chat = controller(this, gateway, outbox)
         chat.load("main")
         advanceUntilIdle()
@@ -931,7 +878,7 @@ class ChatControllerOutboxTest {
       assertFalse(chat.healthOk.value)
       assertEquals(
         listOf(ChatOutboxStatus.Queued, ChatOutboxStatus.Queued),
-        outbox.rows.values.map { it.status },
+        outbox.rows().values.map { it.status },
       )
 
       outbox.sendingStatusUpdateFailure = null
@@ -1214,7 +1161,7 @@ class ChatControllerOutboxTest {
 
       for ((index, response) in responses.withIndex()) {
         val gateway = FakeGateway()
-        val outbox = FakeCommandOutbox()
+        val outbox = TestCommandOutbox(this)
         val chat = controller(this, gateway, outbox)
         chat.load("main")
         advanceUntilIdle()
@@ -1295,11 +1242,79 @@ class ChatControllerOutboxTest {
       val queuedRow = chat.outboxItems.value.single()
       val id = queuedRow.id
 
-      chat.deleteOutboxCommand(id)
-      advanceUntilIdle()
+      val loadEntered = CompletableDeferred<Unit>()
+      val releaseLoad = CompletableDeferred<Unit>()
+      outbox.loadGate = LoadGate(remainingLoads = 0, entered = loadEntered, release = releaseLoad)
+      chat.onDisconnected("Offline")
+      runCurrent()
+      loadEntered.await()
+      val publications = mutableListOf<List<String>>()
+      val observer =
+        launch(UnconfinedTestDispatcher()) {
+          chat.outboxItems.collect { rows -> publications += rows.map { it.id } }
+        }
+      try {
+        chat.deleteOutboxCommand(id)
+        runCurrent()
+        assertTrue(outbox.rows().isEmpty())
+        assertTrue("Delete waited for an unrelated read", chat.outboxItems.value.isEmpty())
+        publications.clear()
+        releaseLoad.complete(Unit)
+        advanceUntilIdle()
 
-      assertTrue(chat.outboxItems.value.isEmpty())
-      assertTrue(outbox.rows.isEmpty())
+        assertTrue("Deleted input was republished: $publications", publications.none { id in it })
+        assertTrue(outbox.rows().isEmpty())
+      } finally {
+        releaseLoad.complete(Unit)
+        observer.cancel()
+      }
+    }
+
+  @Test
+  fun failedNewestOutboxLoadKeepsRowsUntilFreshRestoration() =
+    outboxTest {
+      seed("retained-row", "keep visible during storage failure", System.currentTimeMillis())
+      val chat = controller()
+      advanceUntilIdle()
+      val retainedRows = chat.outboxItems.value
+      assertEquals(listOf("retained-row"), retainedRows.map { it.id })
+      assertTrue(chat.outboxPresentationRestored.value)
+
+      val olderEntered = CompletableDeferred<Unit>()
+      val releaseOlder = CompletableDeferred<Unit>()
+      val newerEntered = CompletableDeferred<Unit>()
+      val releaseNewer = CompletableDeferred<Unit>()
+      outbox.loadGate = LoadGate(remainingLoads = 0, entered = olderEntered, release = releaseOlder)
+      try {
+        chat.onDisconnected("Offline")
+        runCurrent()
+        assertTrue("Older snapshot was not captured", olderEntered.isCompleted)
+        olderEntered.await()
+
+        outbox.loadGate = LoadGate(remainingLoads = 0, entered = newerEntered, release = releaseNewer)
+        chat.onDisconnected("Offline")
+        runCurrent()
+        assertTrue("Newer load waited for an unrelated read", newerEntered.isCompleted)
+        newerEntered.await()
+        releaseNewer.completeExceptionally(IllegalStateException("storage unavailable"))
+        runCurrent()
+        assertEquals(retainedRows, chat.outboxItems.value)
+        assertFalse(chat.outboxPresentationRestored.value)
+
+        releaseOlder.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(retainedRows, chat.outboxItems.value)
+        assertFalse("Older success masked the latest load failure", chat.outboxPresentationRestored.value)
+
+        chat.onDisconnected("Offline")
+        advanceUntilIdle()
+        assertEquals(retainedRows, chat.outboxItems.value)
+        assertTrue(chat.outboxPresentationRestored.value)
+        assertTrue(gateway.sentMessages.isEmpty())
+      } finally {
+        releaseOlder.complete(Unit)
+        releaseNewer.complete(Unit)
+      }
     }
 
   @Test
@@ -1329,7 +1344,7 @@ class ChatControllerOutboxTest {
       val accepted = chat.sendMessageAwaitAcceptance(message = "overflow", thinkingLevel = "off", attachments = emptyList())
 
       assertFalse(accepted)
-      assertEquals(1, outbox.rows.size)
+      assertEquals(1, outbox.rows().size)
       val errorText = chat.errorText.value.orEmpty()
       assertTrue(errorText.contains("full"))
     }
@@ -1378,8 +1393,8 @@ class ChatControllerOutboxTest {
 
       try {
         assertTrue(gateway.sentMessages.isEmpty())
-        assertEquals(ChatOutboxStatus.Sending, outbox.rows.getValue("interrupted").status)
-        assertEquals(ChatOutboxStatus.Queued, outbox.rows.getValue("queued").status)
+        assertEquals(ChatOutboxStatus.Sending, outbox.rows().getValue("interrupted").status)
+        assertEquals(ChatOutboxStatus.Queued, outbox.rows().getValue("queued").status)
       } finally {
         // Never strand the controller's child job if a pre-release assertion fails.
         recoveryGate.complete(Unit)
@@ -1387,9 +1402,9 @@ class ChatControllerOutboxTest {
       advanceUntilIdle()
 
       assertEquals(listOf("send after recovery"), gateway.sentMessages)
-      assertEquals(ChatOutboxStatus.Failed, outbox.rows.getValue("interrupted").status)
-      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, outbox.rows.getValue("interrupted").lastError)
-      assertFalse(outbox.rows.containsKey("queued"))
+      assertEquals(ChatOutboxStatus.Failed, outbox.rows().getValue("interrupted").status)
+      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, outbox.rows().getValue("interrupted").lastError)
+      assertFalse(outbox.rows().containsKey("queued"))
     }
 
   @Test
@@ -1407,17 +1422,17 @@ class ChatControllerOutboxTest {
 
       assertFalse(chat.healthOk.value)
       assertTrue(gateway.sentMessages.isEmpty())
-      assertEquals(ChatOutboxStatus.Sending, outbox.rows.getValue("interrupted").status)
-      assertEquals(ChatOutboxStatus.Queued, outbox.rows.getValue("queued").status)
+      assertEquals(ChatOutboxStatus.Sending, outbox.rows().getValue("interrupted").status)
+      assertEquals(ChatOutboxStatus.Queued, outbox.rows().getValue("queued").status)
 
       outbox.recoveryFailure = null
       chat.handleGatewayEvent("health", null)
       advanceUntilIdle()
 
-      assertEquals(ChatOutboxStatus.Failed, outbox.rows.getValue("interrupted").status)
-      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, outbox.rows.getValue("interrupted").lastError)
+      assertEquals(ChatOutboxStatus.Failed, outbox.rows().getValue("interrupted").status)
+      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, outbox.rows().getValue("interrupted").lastError)
       assertEquals(listOf("younger queued work"), gateway.sentMessages)
-      assertFalse(outbox.rows.containsKey("queued"))
+      assertFalse(outbox.rows().containsKey("queued"))
     }
 
   @Test
@@ -1549,7 +1564,7 @@ class ChatControllerOutboxTest {
       advanceUntilIdle()
       assertEquals(listOf(listOf("a.jpg", "note.m4a")), gateway.sentAttachmentFileNames)
       assertTrue(chat.outboxItems.value.isEmpty())
-      assertTrue(outbox.attachmentBytes.isEmpty())
+      assertTrue(outbox.attachments().isEmpty())
     }
 
   @Test
@@ -1594,13 +1609,13 @@ class ChatControllerOutboxTest {
       runCurrent()
 
       assertEquals(listOf(queuedId), gateway.sentIdempotencyKeys)
-      assertEquals(ChatOutboxStatus.Accepted, outbox.rows.getValue(queuedId).status)
+      assertEquals(ChatOutboxStatus.Accepted, outbox.rows().getValue(queuedId).status)
 
       // Canonical history catches up and retires the row.
       gateway.echoDeliveredSendsInHistory = true
       chat.refresh()
       advanceUntilIdle()
-      assertFalse(outbox.rows.containsKey(queuedId))
+      assertFalse(outbox.rows().containsKey(queuedId))
     }
 
   @Test
@@ -1619,7 +1634,7 @@ class ChatControllerOutboxTest {
       assertTrue(accepted)
       // The dispatch used the durable row id as its idempotency key, and the row survives the
       // started ACK: only canonical history proof may retire it.
-      val row = outbox.rows.values.single()
+      val row = outbox.rows().values.single()
       assertEquals(ChatOutboxStatus.Accepted, row.status)
       assertEquals(listOf(row.id), gateway.sentIdempotencyKeys)
       assertEquals(1, chat.messages.value.count { it.idempotencyKey == "${row.id}:user" })
@@ -1627,7 +1642,7 @@ class ChatControllerOutboxTest {
       gateway.echoDeliveredSendsInHistory = true
       chat.refresh()
       advanceUntilIdle()
-      assertTrue(outbox.rows.isEmpty())
+      assertTrue(outbox.rows().isEmpty())
       assertEquals(1, chat.messages.value.count { it.idempotencyKey == "${row.id}:user" })
     }
 
@@ -1683,7 +1698,7 @@ class ChatControllerOutboxTest {
       val restarted = controller()
       restarted.handleGatewayEvent("health", null)
       advanceUntilIdle()
-      assertTrue(outbox.rows.isEmpty())
+      assertTrue(outbox.rows().isEmpty())
       assertEquals(1, gateway.sentIdempotencyKeys.size)
     }
 
@@ -1729,7 +1744,9 @@ class ChatControllerOutboxTest {
       chat.sendMessageAwaitAcceptance(message = "pinned input", thinkingLevel = "off", attachments = emptyList())
       assertEquals(
         "main",
-        outbox.rows.values
+        outbox
+          .rows()
+          .values
           .single()
           .sessionKey,
       )
@@ -1742,7 +1759,7 @@ class ChatControllerOutboxTest {
       advanceUntilIdle()
       chat.handleGatewayEvent("health", null)
       advanceUntilIdle()
-      val parked = outbox.rows.values.single()
+      val parked = outbox.rows().values.single()
       assertEquals("agent:main:main", parked.sessionKey)
       assertEquals(ChatOutboxStatus.Failed, parked.status)
 
@@ -1771,7 +1788,7 @@ class ChatControllerOutboxTest {
       advanceUntilIdle()
 
       assertTrue(gateway.sentMessages.isEmpty())
-      val parked = outbox.rows.values.single()
+      val parked = outbox.rows().values.single()
       assertEquals(ChatOutboxStatus.Failed, parked.status)
       assertEquals(OUTBOX_OWNER_CHANGED_ERROR, parked.lastError)
     }
@@ -1786,7 +1803,7 @@ class ChatControllerOutboxTest {
 
       // A slash command captured offline is connection-gated to the epoch that captured it.
       chat.sendMessageAwaitAcceptance(message = "/clear", thinkingLevel = "off", attachments = emptyList())
-      val row = outbox.rows.values.single()
+      val row = outbox.rows().values.single()
       assertEquals(1L, row.gatedEpoch)
 
       // Reconnecting bumps the connection epoch, so the command parks instead of replaying.
@@ -1794,7 +1811,7 @@ class ChatControllerOutboxTest {
       gateway.online = true
       chat.handleGatewayEvent("health", null)
       advanceUntilIdle()
-      val parked = outbox.rows.values.single()
+      val parked = outbox.rows().values.single()
       assertEquals(ChatOutboxStatus.Failed, parked.status)
       assertEquals(OUTBOX_CONNECTION_CHANGED_ERROR, parked.lastError)
       assertTrue(gateway.sentMessages.isEmpty())
@@ -1831,7 +1848,7 @@ class ChatControllerOutboxTest {
 
       assertEquals(true, accepted)
       assertTrue(gateway.sentMessages.isEmpty())
-      val parked = outbox.rows.values.single()
+      val parked = outbox.rows().values.single()
       assertEquals(ChatOutboxStatus.Failed, parked.status)
       assertEquals(OUTBOX_CONNECTION_CHANGED_ERROR, parked.lastError)
     }
@@ -2022,7 +2039,9 @@ class ChatControllerOutboxTest {
       assertTrue(first.sendMessageAwaitAcceptance(message = "owned offline", thinkingLevel = "off", attachments = emptyList()))
       assertEquals(
         "main",
-        outbox.rows.values
+        outbox
+          .rows()
+          .values
           .single()
           .ownerAgentId,
       )
@@ -2050,13 +2069,15 @@ class ChatControllerOutboxTest {
       advanceUntilIdle()
 
       assertFalse(chat.sendMessageAwaitAcceptance(message = "unknown owner", thinkingLevel = "off", attachments = emptyList()))
-      assertTrue(outbox.rows.isEmpty())
+      assertTrue(outbox.rows().isEmpty())
 
       defaultAgentId = "work"
       assertTrue(chat.sendMessageAwaitAcceptance(message = "verified owner", thinkingLevel = "off", attachments = emptyList()))
       assertEquals(
         "work",
-        outbox.rows.values
+        outbox
+          .rows()
+          .values
           .single()
           .ownerAgentId,
       )
@@ -2081,7 +2102,9 @@ class ChatControllerOutboxTest {
 
       assertEquals(
         "work",
-        outbox.rows.values
+        outbox
+          .rows()
+          .values
           .single()
           .ownerAgentId,
       )
@@ -2153,7 +2176,7 @@ class ChatControllerOutboxTest {
 
       assertTrue("owner-b" in gateway.historyAgentIds)
       assertTrue("owner-a" in gateway.historyAgentIds)
-      assertEquals(ChatOutboxStatus.Failed, outbox.rows.getValue("owner-a-accepted").status)
+      assertEquals(ChatOutboxStatus.Failed, outbox.rows().getValue("owner-a-accepted").status)
     }
 
   @Test
@@ -2185,8 +2208,8 @@ class ChatControllerOutboxTest {
       advanceUntilIdle()
 
       assertTrue(gateway.sentMessages.isEmpty())
-      assertEquals(ChatOutboxStatus.Failed, outbox.rows.getValue(row.id).status)
-      assertNull(outbox.rows.getValue(row.id).ownerAgentId)
+      assertEquals(ChatOutboxStatus.Failed, outbox.rows().getValue(row.id).status)
+      assertNull(outbox.rows().getValue(row.id).ownerAgentId)
     }
 
   @Test
@@ -2265,7 +2288,7 @@ class ChatControllerOutboxTest {
 
       assertEquals(false, accepted)
       assertTrue(gateway.sentSessionKeys.isEmpty())
-      assertTrue(outbox.rows.isEmpty())
+      assertTrue(outbox.rows().isEmpty())
       assertTrue(chat.messages.value.none { message -> message.content.any { it.text == "old agent turn" } })
       assertEquals(0, chat.pendingRunCount.value)
     }
@@ -2300,8 +2323,8 @@ class ChatControllerOutboxTest {
       defaultAgentId = "other"
       defaultAgentRevision += 1
       outbox.beforeDeleteIfQueued = {
-        val row = outbox.rows.values.single()
-        outbox.rows[row.id] = row.copy(status = ChatOutboxStatus.Sending)
+        val row = outbox.rows().values.single()
+        outbox.claimForSendingIfAttempt(row.id, row.attemptVersion, row.retryCount, row.lastError)
       }
       outbox.enqueueGate?.complete(Unit)
       send.join()
@@ -2350,7 +2373,7 @@ class ChatControllerOutboxTest {
   @Test
   fun oldNotEnqueuedRequestDoesNotPoisonNewConnectionHealth() =
     runTest {
-      val outbox = FakeCommandOutbox()
+      val outbox = TestCommandOutbox(this)
       val sendStarted = CompletableDeferred<Unit>()
       val sendGate = CompletableDeferred<Unit>()
       var generation = 1L
@@ -2371,14 +2394,15 @@ class ChatControllerOutboxTest {
               val runId = (params["idempotencyKey"] as JsonPrimitive).content
               """{"runId":"$runId","status":"started"}"""
             } else {
-              "{}"
+              emptyChatGatewayResponse(method)
             }
           },
           cacheScope = { ChatCacheScope(gatewayId = "gateway-test", connectionGeneration = generation) },
           currentDefaultAgentId = { "main" },
           commandOutbox = outbox,
         )
-      chat.handleGatewayEvent("health", null)
+      chat.load("main")
+      runCurrent()
 
       val accepted =
         async {
@@ -2394,6 +2418,7 @@ class ChatControllerOutboxTest {
       sendGate.complete(Unit)
 
       assertTrue(accepted.await())
+      chat.outboxItems.first { it.singleOrNull()?.status == ChatOutboxStatus.Accepted }
       assertTrue(chat.healthOk.value)
       assertEquals(ChatOutboxStatus.Accepted, outbox.singleStatus())
       assertEquals(2, sendRequestCount)
@@ -2417,13 +2442,41 @@ class ChatControllerOutboxTest {
       assertTrue(accepted)
       assertEquals(ChatOutboxStatus.Accepted, outbox.singleStatus())
 
+      chat.handleGatewayEvent(
+        "chat",
+        buildJsonObject {
+          put("sessionKey", JsonPrimitive(chat.sessionKey.value))
+          put("runId", JsonPrimitive("gw-run-777"))
+          put("state", JsonPrimitive("delta"))
+          put(
+            "message",
+            buildJsonObject {
+              put("role", JsonPrimitive("assistant"))
+              put(
+                "content",
+                JsonArray(
+                  listOf(
+                    buildJsonObject {
+                      put("type", JsonPrimitive("text"))
+                      put("text", JsonPrimitive("Original run is still working."))
+                    },
+                  ),
+                ),
+              )
+            },
+          )
+        }.toString(),
+      )
+      assertEquals("Original run is still working.", chat.streamingAssistantText.value)
+
       // A follow-up send must see the accepted head as live-owned: it dispatches directly,
-      // and the reconciliation sweep must not park the head while its run is in flight.
+      // without erasing the running turn or parking its durable row.
       val followUp = chat.sendMessageAwaitAcceptance(message = "second", thinkingLevel = "off", attachments = emptyList())
       advanceTimeBy(10_000)
       assertTrue(followUp)
       assertEquals(listOf("slow turn", "second"), gateway.sentMessages)
-      assertTrue(outbox.rows.values.none { it.status == ChatOutboxStatus.Failed })
+      assertEquals("Original run is still working.", chat.streamingAssistantText.value)
+      assertTrue(outbox.rows().values.none { it.status == ChatOutboxStatus.Failed })
     }
 
   @Test
@@ -2451,7 +2504,7 @@ class ChatControllerOutboxTest {
       chat.handleGatewayEvent("chat", chatTerminalPayload("main", "gw-run-9", seq = 1, state = "final", assistantText = "done"))
       advanceTimeBy(130_000)
       assertEquals(0, chat.pendingRunCount.value)
-      assertTrue(outbox.rows.isEmpty())
+      assertTrue(outbox.rows().isEmpty())
       assertNull(chat.errorText.value)
     }
 
@@ -2471,7 +2524,7 @@ class ChatControllerOutboxTest {
       chat.handleGatewayEvent("health", null)
       advanceUntilIdle()
       assertTrue(gateway.sentMessages.isEmpty())
-      assertEquals(ChatOutboxStatus.Queued, outbox.rows.getValue("alias-row").status)
+      assertEquals(ChatOutboxStatus.Queued, outbox.rows().getValue("alias-row").status)
       assertFalse(chat.healthOk.value)
 
       // Storage recovers; the next health transition pins and delivers exactly once.
@@ -2479,7 +2532,7 @@ class ChatControllerOutboxTest {
       chat.handleGatewayEvent("health", null)
       advanceUntilIdle()
       assertEquals(listOf("agent:main:main"), gateway.sentSessionKeys)
-      assertTrue(outbox.rows.values.none { it.sessionKey == "main" })
+      assertTrue(outbox.rows().values.none { it.sessionKey == "main" })
     }
 
   @Test
@@ -2497,14 +2550,14 @@ class ChatControllerOutboxTest {
       gateway.online = true
       chat.handleGatewayEvent("health", null)
       advanceUntilIdle()
-      assertEquals(ChatOutboxStatus.Accepted, outbox.rows.getValue("orphan-row").status)
+      assertEquals(ChatOutboxStatus.Accepted, outbox.rows().getValue("orphan-row").status)
       assertFalse(chat.healthOk.value)
 
       // Storage recovers; the next pass parks the orphan for manual review.
       outbox.failedStatusUpdateFailure = null
       chat.handleGatewayEvent("health", null)
       advanceUntilIdle()
-      val parked = outbox.rows.getValue("orphan-row")
+      val parked = outbox.rows().getValue("orphan-row")
       assertEquals(ChatOutboxStatus.Failed, parked.status)
       assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, parked.lastError)
     }
@@ -2524,14 +2577,14 @@ class ChatControllerOutboxTest {
       chat.handleGatewayEvent("health", null)
       advanceUntilIdle()
       assertFalse(chat.healthOk.value)
-      assertEquals(ChatOutboxStatus.Queued, outbox.rows.getValue("stale-command").status)
+      assertEquals(ChatOutboxStatus.Queued, outbox.rows().getValue("stale-command").status)
       assertTrue(gateway.sentMessages.isEmpty())
 
       // Storage recovers; the next health transition parks the stale command for review.
       outbox.failedStatusUpdateFailure = null
       chat.handleGatewayEvent("health", null)
       advanceUntilIdle()
-      val parked = outbox.rows.getValue("stale-command")
+      val parked = outbox.rows().getValue("stale-command")
       assertEquals(ChatOutboxStatus.Failed, parked.status)
       assertEquals(OUTBOX_CONNECTION_CHANGED_ERROR, parked.lastError)
       assertTrue(gateway.sentMessages.isEmpty())
@@ -2572,12 +2625,12 @@ class ChatControllerOutboxTest {
       // once reconciliation parked it for review, the released successor followed. Full virtual
       // idle also reaches both hidden runs' proof deadlines, so their accepted rows park too.
       assertEquals(listOf("independent session", "blocked successor"), gateway.sentMessages)
-      assertEquals(ChatOutboxStatus.Failed, outbox.rows.getValue("ambiguous-a").status)
-      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, outbox.rows.getValue("ambiguous-a").lastError)
-      assertEquals(ChatOutboxStatus.Failed, outbox.rows.getValue("queued-a").status)
-      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, outbox.rows.getValue("queued-a").lastError)
-      assertEquals(ChatOutboxStatus.Failed, outbox.rows.getValue("queued-b").status)
-      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, outbox.rows.getValue("queued-b").lastError)
+      assertEquals(ChatOutboxStatus.Failed, outbox.rows().getValue("ambiguous-a").status)
+      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, outbox.rows().getValue("ambiguous-a").lastError)
+      assertEquals(ChatOutboxStatus.Failed, outbox.rows().getValue("queued-a").status)
+      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, outbox.rows().getValue("queued-a").lastError)
+      assertEquals(ChatOutboxStatus.Failed, outbox.rows().getValue("queued-b").status)
+      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, outbox.rows().getValue("queued-b").lastError)
     }
 
   @Test
@@ -2596,38 +2649,79 @@ class ChatControllerOutboxTest {
 
       // Run ownership expires without proof; the row surfaces for manual review.
       advanceUntilIdle()
-      val parked = outbox.rows.values.single()
+      val parked = outbox.rows().values.single()
       assertEquals(ChatOutboxStatus.Failed, parked.status)
       assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, parked.lastError)
     }
 
   @Test
-  fun callerCancellationAfterTheClaimDoesNotStrandTheDirectSend() =
-    outboxTest {
-      val chat = controller()
-      gateway.online = true
-      chat.load("main")
-      advanceUntilIdle()
+  fun callerCancellationAfterTheClaimDoesNotStrandTheDirectSend() {
+    for (suspendedAt in listOf("response wait", "own publication", "unrelated publication")) {
+      outboxTest {
+        val blockOwnPublication = suspendedAt == "own publication"
+        val blockOtherPublication = suspendedAt == "unrelated publication"
+        if (blockOtherPublication) {
+          seed("unrelated-failed", "discard me", System.currentTimeMillis(), status = ChatOutboxStatus.Failed)
+        }
+        val chat = controller()
+        gateway.online = true
+        chat.load("main")
+        advanceUntilIdle()
 
-      // The UI scope dies (screen leaves composition) while the dispatch is suspended on the
-      // gateway response; the controller-owned dispatch must still settle the claimed row.
-      val gate = CompletableDeferred<Unit>()
-      gateway.sendGate = gate
-      val callerJob = SupervisorJob()
-      val caller = CoroutineScope(coroutineContext + callerJob)
-      caller.launch {
-        chat.sendMessageAwaitAcceptance(message = "survives caller death", thinkingLevel = "off", attachments = emptyList())
+        val releaseClaim = CompletableDeferred<Unit>()
+        if (blockOtherPublication) outbox.claimGate = releaseClaim
+        val publicationEntered = CompletableDeferred<Unit>()
+        val releasePublication = CompletableDeferred<Unit>()
+        if (blockOwnPublication) {
+          outbox.onStatusUpdated = { status ->
+            if (status == ChatOutboxStatus.Sending) {
+              outbox.loadGate = LoadGate(remainingLoads = 0, entered = publicationEntered, release = releasePublication)
+            }
+          }
+        }
+        val releaseResponse = CompletableDeferred<Unit>()
+        gateway.sendGate = releaseResponse
+        val message = "survives $suspendedAt"
+        val callerJob = SupervisorJob()
+        val caller = CoroutineScope(coroutineContext + callerJob)
+        caller.launch {
+          chat.sendMessageAwaitAcceptance(message = message, thinkingLevel = "off", attachments = emptyList())
+        }
+        try {
+          runCurrent()
+          if (blockOtherPublication) {
+            assertEquals(ChatOutboxStatus.Queued, outbox.statusFor(message))
+            outbox.loadGate = LoadGate(remainingLoads = 0, entered = publicationEntered, release = releasePublication)
+            chat.deleteOutboxCommand("unrelated-failed")
+            runCurrent()
+            publicationEntered.await()
+            releaseClaim.complete(Unit)
+            runCurrent()
+          }
+          if (blockOwnPublication) publicationEntered.await()
+          assertEquals(ChatOutboxStatus.Sending, outbox.statusFor(message))
+          if (blockOtherPublication) {
+            assertEquals("Unrelated publication delayed a claimed send", listOf(message), gateway.sentMessages)
+          }
+          callerJob.cancel()
+          runCurrent()
+
+          // Keep held reads blocked so their later flush cannot hide a lost dispatch handoff.
+          assertEquals(listOf(message), gateway.sentMessages)
+        } finally {
+          callerJob.cancel()
+          releaseClaim.complete(Unit)
+          releasePublication.complete(Unit)
+          releaseResponse.complete(Unit)
+        }
+        advanceUntilIdle()
+
+        // The controller-owned dispatch settles despite losing its UI caller.
+        assertEquals(listOf(message), gateway.sentMessages)
+        assertTrue(outbox.rows().isEmpty())
       }
-      runCurrent()
-      assertEquals(ChatOutboxStatus.Sending, outbox.singleStatus())
-      callerJob.cancel()
-      gate.complete(Unit)
-      advanceUntilIdle()
-
-      // Delivered exactly once and retired by canonical history proof; nothing stranded.
-      assertEquals(listOf("survives caller death"), gateway.sentMessages)
-      assertTrue(outbox.rows.isEmpty())
     }
+  }
 
   @Test
   fun directSendClaimFailureHandsDeliveryToTheFlushLane() =
@@ -2652,7 +2746,7 @@ class ChatControllerOutboxTest {
       chat.handleGatewayEvent("health", null)
       advanceUntilIdle()
       assertEquals(listOf("owned by flush"), gateway.sentMessages)
-      assertTrue(outbox.rows.isEmpty())
+      assertTrue(outbox.rows().isEmpty())
     }
 
   @Test
@@ -2677,7 +2771,7 @@ class ChatControllerOutboxTest {
       chat.handleGatewayEvent("health", null)
       advanceTimeBy(5_000)
       runCurrent()
-      val parked = outbox.rows.values.single()
+      val parked = outbox.rows().values.single()
       assertEquals(ChatOutboxStatus.Failed, parked.status)
       assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, parked.lastError)
     }
@@ -2696,7 +2790,7 @@ class ChatControllerOutboxTest {
       gateway.sendFailureBeforeDispatch = GatewayRequestNotEnqueued("gateway send failed")
       val accepted = chat.sendMessageAwaitAcceptance(message = "survives direct drop", thinkingLevel = "off", attachments = emptyList())
       assertTrue(accepted)
-      val row = outbox.rows.values.single()
+      val row = outbox.rows().values.single()
       assertEquals(ChatOutboxStatus.Queued, row.status)
       assertFalse(chat.healthOk.value)
       assertTrue(gateway.sentMessages.isEmpty())
@@ -2705,7 +2799,7 @@ class ChatControllerOutboxTest {
       chat.handleGatewayEvent("health", null)
       advanceUntilIdle()
       assertEquals(listOf("survives direct drop"), gateway.sentMessages)
-      assertTrue(outbox.rows.isEmpty())
+      assertTrue(outbox.rows().isEmpty())
     }
 
   @Test
@@ -2725,14 +2819,14 @@ class ChatControllerOutboxTest {
         // The row is journaled but must not be claimed 'sending' while the unscoped recovery
         // sweep is pending, or the sweep would park this live dispatch as unconfirmed.
         assertTrue(gateway.sentMessages.isEmpty())
-        val row = outbox.rows.values.single()
+        val row = outbox.rows().values.single()
         assertEquals(ChatOutboxStatus.Queued, row.status)
       } finally {
         recoveryGate.complete(Unit)
       }
       advanceUntilIdle()
       assertEquals(listOf("waits for recovery"), gateway.sentMessages)
-      assertTrue(outbox.rows.isEmpty())
+      assertTrue(outbox.rows().isEmpty())
     }
 
   @Test
@@ -2749,7 +2843,7 @@ class ChatControllerOutboxTest {
       // The dispatch outcome is unknown, so the journaled row parks for review and owns the
       // input; a false return would restore a duplicate draft into the composer.
       assertTrue(accepted)
-      val parked = outbox.rows.values.single()
+      val parked = outbox.rows().values.single()
       assertEquals(ChatOutboxStatus.Failed, parked.status)
       assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, parked.lastError)
       assertEquals(1, gateway.sentMessages.size)
@@ -2772,8 +2866,8 @@ class ChatControllerOutboxTest {
 
       // Confirming the head must restart the drain so the released successor actually sends.
       assertEquals(listOf("blocked successor"), gateway.sentMessages)
-      assertFalse(outbox.rows.containsKey("head"))
-      assertFalse(outbox.rows.containsKey("tail"))
+      assertFalse(outbox.rows().containsKey("head"))
+      assertFalse(outbox.rows().containsKey("tail"))
     }
 
   @Test
@@ -2801,6 +2895,6 @@ class ChatControllerOutboxTest {
       advanceUntilIdle()
 
       assertEquals(listOf("ambiguous head", "younger successor"), gateway.sentMessages)
-      assertTrue(outbox.rows.isEmpty())
+      assertTrue(outbox.rows().isEmpty())
     }
 }

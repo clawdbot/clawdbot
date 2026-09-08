@@ -586,6 +586,7 @@ describe("dreaming controller", () => {
       sourceType: "chatgpt",
       totalItems: 1,
       totalClusters: 1,
+      truncated: false,
       clusters: [],
     };
     state.wikiImportInsightsError = "unknown method: wiki.importInsights";
@@ -617,6 +618,7 @@ describe("dreaming controller", () => {
       sourceType: "chatgpt",
       totalItems: 1,
       totalClusters: 1,
+      truncated: false,
       clusters: [],
     };
     state.wikiImportInsightsError = "unknown method: wiki.importInsights";
@@ -794,6 +796,7 @@ describe("dreaming controller", () => {
     state.wikiOverview = {
       totalItems: 1,
       totalPages: 1,
+      truncated: false,
       pageCounts: {
         synthesis: 1,
         entity: 0,
@@ -834,6 +837,7 @@ describe("dreaming controller", () => {
     state.wikiOverview = {
       totalItems: 1,
       totalPages: 1,
+      truncated: false,
       pageCounts: {
         synthesis: 1,
         entity: 0,

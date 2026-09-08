@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { isBunRuntime } from "../daemon/runtime-binary.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
+import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 
 const requireFromHere = createRequire(import.meta.url);
@@ -19,59 +21,51 @@ export type OpenClawCliInvocation = Readonly<{
   command: string;
   args: string[];
   cwd: string;
+  env?: Record<string, string>;
 }>;
 
-/** Keep child CLI launches on the parent's loader/runtime flags without inheriting its debugger. */
-export function filterOpenClawChildExecArgv(execArgv: readonly string[]): string[] {
+function resolveTsxImport(packageRoot: string): string {
+  return pathToFileURL(requireFromHere.resolve("tsx", { paths: [packageRoot] })).href;
+}
+
+/** Keep parent runtime flags, pin its known TSX preload, and leave debugger ownership behind. */
+export function filterOpenClawChildExecArgv(
+  execArgv: readonly string[],
+  sourceRoot?: string,
+): string[] {
   const filtered: string[] = [];
   for (let index = 0; index < execArgv.length; index += 1) {
     const arg = execArgv[index] ?? "";
-    if (
-      arg === "--inspect" ||
-      arg.startsWith("--inspect=") ||
-      arg === "--inspect-brk" ||
-      arg.startsWith("--inspect-brk=") ||
-      arg === "--inspect-wait" ||
-      arg.startsWith("--inspect-wait=")
-    ) {
+    if (/^--inspect(?:-brk|-wait|-port)?(?:=|$)/.test(arg)) {
       const next = execArgv[index + 1];
       if (!arg.includes("=") && typeof next === "string" && !next.startsWith("-")) {
         index += 1;
       }
       continue;
     }
-    if (arg === "--inspect-port") {
-      const next = execArgv[index + 1];
-      if (typeof next === "string" && !next.startsWith("-")) {
-        index += 1;
-      }
-      continue;
-    }
-    if (arg.startsWith("--inspect-port=")) {
-      continue;
-    }
-    filtered.push(arg);
+    // Node resolves bare preloads from the child cwd. Pin only our known TSX
+    // spelling; unrelated parent import hooks retain their own semantics.
+    const bareTsx = arg === "tsx" && execArgv[index - 1] === "--import";
+    filtered.push(
+      sourceRoot && (bareTsx || arg === "--import=tsx")
+        ? `${bareTsx ? "" : "--import="}${resolveTsxImport(sourceRoot)}`
+        : arg,
+    );
   }
   return filtered;
-}
-
-function resolveTrustedTsxLoader(packageRoot: string): string | null {
-  try {
-    return requireFromHere.resolve("tsx", { paths: [packageRoot] });
-  } catch {
-    return null;
-  }
 }
 
 function buildPackageRootCliArgs(packageRoot: string, execPath: string): string[] {
   const sourceEntry = path.join(packageRoot, "src", "entry.ts");
   if (fs.existsSync(sourceEntry)) {
-    const tsxLoader = resolveTrustedTsxLoader(packageRoot);
-    return isBunRuntime(execPath)
-      ? [sourceEntry]
-      : tsxLoader
-        ? ["--import", tsxLoader, sourceEntry]
-        : [path.join(packageRoot, "openclaw.mjs")];
+    try {
+      return filterOpenClawChildExecArgv(
+        resolveRuntimeWorkerArgv(pathToFileURL(sourceEntry), execPath),
+        packageRoot,
+      );
+    } catch {
+      // A checkout without TSX can still use its built package launcher.
+    }
   }
   return [path.join(packageRoot, "openclaw.mjs")];
 }
@@ -87,7 +81,6 @@ export function resolveCurrentOpenClawCliInvocation(
   } = {},
 ): OpenClawCliInvocation {
   const execPath = options.execPath ?? process.execPath;
-  const execArgv = filterOpenClawChildExecArgv(options.execArgv ?? process.execArgv);
   const entry = (options.argv1 ?? process.argv[1])?.trim();
   const cwd = options.cwd ?? tryProcessCwd();
   const entryPackageRoot = entry ? resolveOpenClawPackageRootSync({ argv1: entry }) : null;
@@ -100,8 +93,9 @@ export function resolveCurrentOpenClawCliInvocation(
     });
   const invocationCwd =
     packageRoot ?? cwd ?? (entry ? path.dirname(path.resolve(entry)) : path.dirname(execPath));
+  const sourceEntry = packageRoot ? path.join(packageRoot, "src", "entry.ts") : undefined;
 
-  if (
+  const currentEntry =
     entry &&
     entry !== execPath &&
     entryPackageRoot &&
@@ -109,19 +103,33 @@ export function resolveCurrentOpenClawCliInvocation(
       OPENCLAW_PACKAGE_ENTRY_PATHS.has(
         path.relative(path.resolve(entryPackageRoot), path.resolve(entry)),
       ))
-  ) {
-    return { command: execPath, args: [...execArgv, entry, ...args], cwd: invocationCwd };
-  }
-  if (packageRoot) {
-    return {
-      command: execPath,
-      args: [...buildPackageRootCliArgs(packageRoot, execPath), ...args],
-      cwd: invocationCwd,
-    };
-  }
+      ? entry
+      : undefined;
+  const cliArgs = currentEntry
+    ? [
+        ...filterOpenClawChildExecArgv(
+          options.execArgv ?? process.execArgv,
+          currentEntry === sourceEntry && !isBunRuntime(execPath)
+            ? (packageRoot ?? undefined)
+            : undefined,
+        ),
+        currentEntry,
+      ]
+    : packageRoot
+      ? buildPackageRootCliArgs(packageRoot, execPath)
+      : entry && entry !== execPath
+        ? [entry]
+        : [];
+  // TSX resolves workspace aliases from cwd unless the source invocation carries
+  // its own config. Callers may preserve their workspace cwd without rediscovery.
+  const env =
+    packageRoot && !isBunRuntime(execPath) && cliArgs.at(-1) === sourceEntry
+      ? { TSX_TSCONFIG_PATH: path.join(packageRoot, "tsconfig.json") }
+      : undefined;
   return {
     command: execPath,
-    args: [...(entry && entry !== execPath ? [entry] : []), ...args],
+    args: [...cliArgs, ...args],
     cwd: invocationCwd,
+    ...(env ? { env } : {}),
   };
 }

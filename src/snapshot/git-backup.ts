@@ -1,12 +1,19 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { canonicalPathFromExistingAncestor, isPathInside } from "../infra/fs-safe.js";
 import {
+  GIT_TIMEOUT_MS,
   executeGitCommand as runGit,
+  normalizeGitPathForFilesystem,
   requireGitCommand as requireGit,
-  requireGitCommandBuffer as requireGitBuffer,
+  requireGitCommandOutput,
 } from "../infra/git-exec.js";
+import { formatCommandOutput, formatCommandResult } from "../process/command-error.js";
+import { spawnCommand } from "../process/exec-spawn.js";
+import { BACKUP_RUN_ERROR_MAX_LENGTH } from "../state/backup-run-records.contract.js";
 import {
   GIT_BACKUP_MANIFEST,
   GIT_BACKUP_SCHEMA,
@@ -23,7 +30,6 @@ import { ensurePrivateSnapshotRepositoryRoot } from "./local-repository.js";
 import { createOpenClawSnapshotCopy } from "./openclaw-snapshot-copy.js";
 import type { SnapshotDatabaseRef } from "./snapshot-provider.js";
 
-const GIT_BACKUP_MATERIALIZE_MAX_BYTES = 1024 * 1024 * 1024;
 const GIT_BACKUP_DIAGNOSTIC_MAX_LENGTH = 500;
 const GIT_BACKUP_NON_BACKUP_HISTORY_WARNING =
   "repository history contains non-backup commits; use a dedicated backup repository";
@@ -37,14 +43,79 @@ type GitBackupCreateResult = {
   manifests: GitBackupManifest[];
 };
 
+function redactGitBackupText(value: string): string {
+  return value
+    .split("\n")
+    .map((line) => redactSensitiveUrlLikeString(line))
+    .join("\n");
+}
+
 function sanitizeGitBackupDiagnostic(value: string): string {
-  return value.replace(/:\/\/[^@\s]+@/gu, "://***@").slice(0, GIT_BACKUP_DIAGNOSTIC_MAX_LENGTH);
+  return truncateUtf16Safe(redactGitBackupText(value), GIT_BACKUP_DIAGNOSTIC_MAX_LENGTH);
+}
+
+function formatGitBackupCommandResult(
+  command: string,
+  result: Awaited<ReturnType<typeof runGit>>,
+): string {
+  const redacted = {
+    ...result,
+    stderr: redactGitBackupText(result.stderr),
+    stdout: redactGitBackupText(result.stdout),
+  };
+  const header = formatCommandResult(command, { ...redacted, stderr: "", stdout: "" });
+  const streams = (["stderr", "stdout"] as const).flatMap((stream) => {
+    const output = formatCommandOutput(redacted[stream]);
+    return output ? [{ stream, output }] : [];
+  });
+  const fixedLength =
+    header.length + streams.reduce((total, { stream }) => total + 1 + `${stream}: `.length, 0);
+  if (streams.length === 0 || fixedLength >= BACKUP_RUN_ERROR_MAX_LENGTH) {
+    return truncateUtf16Safe(header, BACKUP_RUN_ERROR_MAX_LENGTH);
+  }
+  const outputBudget = BACKUP_RUN_ERROR_MAX_LENGTH - fixedLength;
+  const lengths = streams.map(({ output }) => output.length);
+  const first = Math.min(
+    lengths[0] ?? 0,
+    Math.max(Math.ceil(outputBudget / 2), outputBudget - (lengths[1] ?? 0)),
+  );
+  const allocations = [first, Math.min(lengths[1] ?? 0, outputBudget - first)];
+  const fit = (output: string, maxLength: number): string => {
+    if (output.length <= maxLength) {
+      return output;
+    }
+    if (maxLength <= 1) {
+      return truncateUtf16Safe("…", maxLength);
+    }
+    const source = output.startsWith("…\n") ? output.slice(2) : output;
+    return `…\n${sliceUtf16Safe(source, Math.max(0, source.length - (maxLength - 2)))}`;
+  };
+  return [
+    header,
+    ...streams.map(
+      ({ stream, output }, index) => `${stream}: ${fit(output, allocations[index] ?? 0)}`,
+    ),
+  ].join("\n");
+}
+
+function gitBackupRepositoryPrivacyRemediation(repositoryPath: string, cause: unknown): string {
+  if (process.platform === "win32") {
+    const detail =
+      cause instanceof Error && cause.message
+        ? ` ${sanitizeGitBackupDiagnostic(cause.message)}`
+        : "";
+    return (
+      `${detail} Remove non-user ACL grants from ${repositoryPath} or choose a private local directory. ` +
+      "Do not use a shared or synced folder for SQLite backups."
+    );
+  }
+  return `Fix its ownership and run chmod 700 ${repositoryPath}.`;
 }
 
 async function assertGitRepository(repositoryPath: string, env?: NodeJS.ProcessEnv): Promise<void> {
   const topLevel = await requireGit(repositoryPath, ["rev-parse", "--show-toplevel"], { env });
   const [canonicalTopLevel, canonicalRepository] = await Promise.all([
-    fs.realpath(topLevel),
+    fs.realpath(normalizeGitPathForFilesystem(topLevel)),
     fs.realpath(repositoryPath),
   ]);
   if (canonicalTopLevel !== canonicalRepository) {
@@ -77,7 +148,7 @@ export async function initializeGitBackupRepository(params: {
     await ensurePrivateSnapshotRepositoryRoot(repositoryPath);
   } catch (error) {
     throw new Error(
-      `Git backup repository must be owned by the current user and not writable by other users: ${repositoryPath}. Fix its ownership and run chmod 700 ${repositoryPath}.`,
+      `Git backup repository must be owned by the current user and not writable by other users: ${repositoryPath}. ${gitBackupRepositoryPrivacyRemediation(repositoryPath, error)}`,
       { cause: error },
     );
   }
@@ -298,9 +369,7 @@ export async function createGitBackup(params: {
       if (pushedResult.code === 0) {
         pushed = true;
       } else {
-        pushWarning = sanitizeGitBackupDiagnostic(
-          (pushedResult.stderr || pushedResult.stdout).trim() || "git push failed",
-        );
+        pushWarning = formatGitBackupCommandResult("git push", pushedResult);
       }
     }
   }
@@ -356,15 +425,16 @@ async function materializeGitBackupRef(params: {
       const relative = file.slice(scope.length + 1);
       const destination = path.join(outputPath, relative);
       await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
-      // Table dumps can be tens of megabytes on real agent databases; the
-      // 1MB exec default would truncate them into a hash-mismatch failure.
-      await fs.writeFile(
-        destination,
-        await requireGitBuffer(repositoryPath, ["show", `${commit}:${file}`], {
-          maxOutputBytes: GIT_BACKUP_MATERIALIZE_MAX_BYTES,
-        }),
-        { mode: 0o600 },
-      );
+      await fs.writeFile(destination, "", { flag: "wx", mode: 0o600 });
+      // Git owns decoding the blob; pipe its bytes into private staging rather
+      // than collecting another complete table in the parent process.
+      await spawnCommand(["git", "-C", repositoryPath, "show", `${commit}:${file}`], {
+        stdin: "ignore",
+        stdout: { file: destination },
+        buffer: { stdout: false },
+        maxBuffer: { stderr: 1024 * 1024 },
+        timeout: GIT_TIMEOUT_MS,
+      });
     }
     return {
       commit,
@@ -423,18 +493,34 @@ export async function readGitBackupLog(params: {
   limit: number;
 }): Promise<Array<{ commit: string; date: string; message: string }>> {
   await assertGitRepository(params.repositoryPath);
+  const symbolicHead = await runGit(params.repositoryPath, ["symbolic-ref", "--quiet", "HEAD"]);
+  if (symbolicHead.code === 0) {
+    const headRef = symbolicHead.stdout.trim();
+    const headExists = await runGit(params.repositoryPath, [
+      "show-ref",
+      "--verify",
+      "--quiet",
+      headRef,
+    ]);
+    if (headExists.code === 1 && headRef.startsWith("refs/heads/")) {
+      return [];
+    }
+    if (headExists.code !== 0) {
+      throw new Error(formatGitBackupCommandResult("git show-ref HEAD", headExists));
+    }
+  } else if (symbolicHead.code !== 1) {
+    throw new Error(formatGitBackupCommandResult("git symbolic-ref HEAD", symbolicHead));
+  }
   const result = await runGit(params.repositoryPath, [
     "log",
     `--max-count=${params.limit}`,
     "--pretty=format:%H%x09%cI%x09%s",
   ]);
-  if (result.code !== 0) {
-    if (result.stderr.includes("does not have any commits yet")) {
-      return [];
-    }
-    throw new Error((result.stderr || result.stdout).trim());
-  }
-  return result.stdout
+  return requireGitCommandOutput(
+    "git log",
+    result,
+    (command, failure) => new Error(formatGitBackupCommandResult(command, failure)),
+  )
     .split("\n")
     .filter(Boolean)
     .map((line) => {

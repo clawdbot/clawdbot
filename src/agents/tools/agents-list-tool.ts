@@ -3,7 +3,7 @@
  *
  * Lists configured or allowed agent ids plus model/runtime metadata for subagent spawn decisions.
  */
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveModelAgentRuntimeMetadata } from "../agent-runtime-metadata.js";
@@ -55,24 +55,7 @@ const AgentsListOutputSchema = Type.Object(
   { additionalProperties: false },
 );
 
-type AgentListEntry = {
-  id: string;
-  name?: string;
-  configured: boolean;
-  model?: string;
-  agentRuntime?: {
-    id: string;
-    source:
-      | "env"
-      | "agent"
-      | "defaults"
-      | "model"
-      | "provider"
-      | "implicit"
-      | "session"
-      | "session-key";
-  };
-};
+type AgentListEntry = Static<typeof AgentsListOutputSchema>["agents"][number];
 
 export function createAgentsListTool(opts?: {
   agentSessionKey?: string;

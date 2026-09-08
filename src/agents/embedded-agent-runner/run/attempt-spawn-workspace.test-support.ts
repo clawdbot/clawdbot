@@ -22,13 +22,17 @@ import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
 import type { Model } from "../../../llm/types.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
-import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
+import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../../embedded-agent-messaging.types.js";
+import { buildToolLifecycleErrorResult } from "../../embedded-agent-tool-results.js";
 import type { AgentMessage, StreamFn } from "../../runtime/index.js";
+import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
+import { agentSessionSetPromptPreparation } from "../../sessions/agent-session-prompting.js";
+import type { CreateAgentSessionOptions } from "../../sessions/index.js";
 import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
@@ -64,8 +68,14 @@ function normalizeMockProviderId(providerId?: string): string {
 }
 
 type SessionManagerMocks = {
+  getSessionTarget: Mock<() => undefined>;
+  getAppendParentId: Mock<() => string | null>;
+  getHeader: UnknownMock;
+  getLeafId: Mock<() => string | null>;
   getLeafEntry: UnknownMock;
   getEntry: UnknownMock;
+  getEntries: UnknownMock;
+  getBranch: UnknownMock;
   getBoundaryCount: UnknownMock;
   branch: UnknownMock;
   resetLeaf: UnknownMock;
@@ -73,6 +83,7 @@ type SessionManagerMocks = {
   appendThinkingLevelChange: UnknownMock;
   appendModelChange: UnknownMock;
   appendCustomEntry: UnknownMock;
+  appendMessage: UnknownMock;
   appendSessionInfo: UnknownMock;
   appendLabelChange: UnknownMock;
   flushPendingPersistence: UnknownMock;
@@ -84,7 +95,7 @@ type SessionManagerMocks = {
 };
 type AttemptSpawnWorkspaceHoisted = {
   spawnSubagentDirectMock: UnknownMock;
-  createAgentSessionMock: UnknownMock;
+  createAgentSessionMock: Mock<(options: CreateAgentSessionOptions) => unknown>;
   applyExtraParamsToAgentMock: UnknownMock;
   sessionManagerOpenMock: UnknownMock;
   defaultResourceLoaderInitMock: UnknownMock;
@@ -92,7 +103,6 @@ type AttemptSpawnWorkspaceHoisted = {
   ensureGlobalUndiciEnvProxyDispatcherMock: UnknownMock;
   ensureGlobalUndiciDispatcherStreamTimeoutsMock: UnknownMock;
   ensureGlobalUndiciStreamTimeoutsMock: UnknownMock;
-  buildEmbeddedMessageActionDiscoveryInputMock: UnknownMock;
   createOpenClawCodingToolsMock: UnknownMock;
   subscribeEmbeddedAgentSessionMock: Mock<SubscribeEmbeddedAgentSessionFn>;
   installToolResultContextGuardMock: UnknownMock;
@@ -111,7 +121,7 @@ type AttemptSpawnWorkspaceHoisted = {
   runContextEngineMaintenanceMock: AsyncContextEngineMaintenanceMock;
   detectAndLoadPromptImagesMock: AsyncUnknownMock;
   getHistoryLimitFromSessionKeyMock: Mock<
-    (sessionKey: string | undefined, config: unknown) => number | undefined
+    (sessionKey: string | undefined, config: unknown, route?: unknown) => number | undefined
   >;
   limitHistoryTurnsMock: Mock<<T>(messages: T, limit: number | undefined) => T>;
   preemptiveCompactionCalls: Parameters<ShouldPreemptivelyCompactBeforePromptFn>[0][];
@@ -131,9 +141,43 @@ function createSubscriptionMock(): SubscriptionMock {
     getLastAssistantTextMessageIndex: () => undefined,
     getLatestMcpAppChannelView: () => undefined,
     getLatestMcpConnectAction: () => undefined,
-    toolMetas: [] as Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>,
-    runToolLifecycle: async <T>(toolParams: { execute: () => Promise<T> }) =>
-      await toolParams.execute(),
+    toolMetas: [] as SubscriptionMock["toolMetas"],
+    runToolLifecycle: async <T>(toolParams: {
+      args: unknown;
+      replaySafe?: boolean;
+      execute: (onImplementationStart: () => void) => Promise<T>;
+      onTerminal?: (terminal: {
+        result: unknown;
+        isError: boolean;
+        executedArguments: unknown;
+        effectReceipt: {
+          state: "read_completed" | "failed_no_effect" | "mutation_committed" | "uncertain";
+        };
+      }) => void | Promise<void>;
+    }) => {
+      try {
+        const result = await toolParams.execute(() => undefined);
+        await toolParams.onTerminal?.({
+          result,
+          isError: false,
+          executedArguments: structuredClone(toolParams.args),
+          effectReceipt: {
+            state: toolParams.replaySafe ? "read_completed" : "mutation_committed",
+          },
+        });
+        return result;
+      } catch (error) {
+        await toolParams.onTerminal?.({
+          result: buildToolLifecycleErrorResult(error),
+          isError: true,
+          executedArguments: structuredClone(toolParams.args),
+          effectReceipt: {
+            state: toolParams.replaySafe ? "failed_no_effect" : "uncertain",
+          },
+        });
+        throw error;
+      }
+    },
     unsubscribe: () => {},
     setTerminalLifecycleMeta: () => {},
     waitForCompactionRetry: async () => {},
@@ -144,8 +188,10 @@ function createSubscriptionMock(): SubscriptionMock {
     getMessagingToolSentMediaUrls: () => [] as string[],
     getMessagingToolSentTargets: () => [] as MessagingToolSend[],
     getMessagingToolSourceReplyPayloads: () => [] as MessagingToolSourceReplyPayload[],
+    getSourceReplyDelivered: () => undefined,
     getHeartbeatToolResponse: () => undefined,
     getPendingToolMediaReply: () => null,
+    getToolAutoDeliveryMediaUrls: () => [] as string[],
     hasToolMediaBlockReply: () => false,
     getVisibleBlockReplyCount: () => 0,
     getSuccessfulCronAdds: () => 0,
@@ -171,7 +217,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   // Hoisted mocks must exist before the runner module graph is imported, because
   // runEmbeddedAttempt captures these dependencies at module load.
   const spawnSubagentDirectMock = vi.fn();
-  const createAgentSessionMock = vi.fn();
+  const createAgentSessionMock = vi.fn<(options: CreateAgentSessionOptions) => unknown>();
   const applyExtraParamsToAgentMock = vi.fn();
   const sessionManagerOpenMock = vi.fn();
   const defaultResourceLoaderInitMock = vi.fn();
@@ -179,7 +225,6 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const ensureGlobalUndiciEnvProxyDispatcherMock = vi.fn();
   const ensureGlobalUndiciDispatcherStreamTimeoutsMock = vi.fn();
   const ensureGlobalUndiciStreamTimeoutsMock = vi.fn();
-  const buildEmbeddedMessageActionDiscoveryInputMock = vi.fn((params: unknown) => params);
   const createOpenClawCodingToolsMock = vi.fn(() => []);
   const installToolResultContextGuardMock = vi.fn(() => () => {});
   const installContextEngineLoopHookMock = vi.fn(() => () => {});
@@ -223,7 +268,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     skippedCount: 0,
   }));
   const getHistoryLimitFromSessionKeyMock = vi.fn<
-    (sessionKey: string | undefined, config: unknown) => number | undefined
+    (sessionKey: string | undefined, config: unknown, route?: unknown) => number | undefined
   >(() => undefined);
   const limitHistoryTurnsMock = vi.fn<<T>(messages: T, limit: number | undefined) => T>(
     (messages) => messages,
@@ -234,8 +279,14 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const embeddedSystemPromptInputs: unknown[] = [];
   const trajectoryEvents: CapturedTrajectoryEvent[] = [];
   const sessionManager = {
+    getSessionTarget: vi.fn(() => undefined),
+    getAppendParentId: vi.fn<() => string | null>(() => null),
+    getHeader: vi.fn(() => ({ version: 3 })),
+    getLeafId: vi.fn<() => string | null>(() => null),
     getLeafEntry: vi.fn(() => null),
     getEntry: vi.fn(() => undefined),
+    getEntries: vi.fn(() => []),
+    getBranch: vi.fn(() => []),
     getBoundaryCount: vi.fn(() => 0),
     branch: vi.fn(),
     resetLeaf: vi.fn(),
@@ -243,6 +294,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     appendThinkingLevelChange: vi.fn(),
     appendModelChange: vi.fn(),
     appendCustomEntry: vi.fn(),
+    appendMessage: vi.fn(),
     appendSessionInfo: vi.fn(),
     appendLabelChange: vi.fn(),
     flushPendingPersistence: vi.fn(),
@@ -262,7 +314,6 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     ensureGlobalUndiciEnvProxyDispatcherMock,
     ensureGlobalUndiciDispatcherStreamTimeoutsMock,
     ensureGlobalUndiciStreamTimeoutsMock,
-    buildEmbeddedMessageActionDiscoveryInputMock,
     createOpenClawCodingToolsMock,
     subscribeEmbeddedAgentSessionMock,
     installToolResultContextGuardMock,
@@ -295,25 +346,28 @@ export function getHoisted(): AttemptSpawnWorkspaceHoisted {
   return hoisted;
 }
 
+const emptyPluginIndex: PluginMetadataSnapshot["index"] = {
+  version: 1,
+  hostContractVersion: "test",
+  compatRegistryVersion: "test",
+  migrationVersion: 1,
+  policyHash: "",
+  generatedAtMs: 1,
+  installRecords: {},
+  plugins: [],
+  diagnostics: [],
+};
 const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
   policyHash: "",
-  index: {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "",
-    generatedAtMs: 1,
-    installRecords: {},
-    plugins: [],
-    diagnostics: [],
-  },
+  index: emptyPluginIndex,
+  registryIndex: emptyPluginIndex,
   registryDiagnostics: [],
   manifestRegistry: { plugins: [], diagnostics: [] },
   plugins: [],
   diagnostics: [],
   byPluginId: new Map(),
   normalizePluginId: (pluginId: string) => pluginId,
+  declaredProviderOwners: new Map(),
   owners: {
     channels: new Map(),
     channelConfigs: new Map(),
@@ -323,6 +377,7 @@ const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
     setupProviders: new Map(),
     commandAliases: new Map(),
     contracts: new Map(),
+    modelIdNormalizationPolicies: new Map(),
   },
   metrics: {
     registrySnapshotMs: 0,
@@ -341,14 +396,19 @@ vi.mock("../../../plugins/plugin-metadata-snapshot.js", () => ({
   resolvePluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
 
-vi.mock("../../../plugins/provider-hook-runtime.js", () => ({
-  ensureProviderRuntimePluginHandle: (params: Record<string, unknown>) =>
-    params.runtimeHandle ?? params,
-  prepareProviderExtraParams: () => undefined,
-  resolveProviderExtraParamsForTransport: () => undefined,
-  resolveProviderRuntimePluginHandle: (params: Record<string, unknown>) => params,
-  wrapProviderStreamFn: () => undefined,
-}));
+vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => {
+  const { getModelProviderRuntimePluginHandle } =
+    await importOriginal<typeof import("../../../plugins/provider-hook-runtime.js")>();
+  return {
+    getModelProviderRuntimePluginHandle,
+    ensureProviderRuntimePluginHandle: (params: Record<string, unknown>) =>
+      params.runtimeHandle ?? params,
+    prepareProviderExtraParams: () => undefined,
+    resolveProviderExtraParamsForTransport: () => undefined,
+    resolveProviderRuntimePluginHandle: (params: Record<string, unknown>) => params,
+    wrapProviderStreamFn: () => undefined,
+  };
+});
 
 vi.mock("../../../trajectory/metadata.js", () => ({
   buildTrajectoryArtifacts: (params: Record<string, unknown>) => params,
@@ -384,22 +444,25 @@ vi.mock("../../../trajectory/runtime.js", async () => {
   };
 });
 
-vi.mock("../../sessions/index.js", () => {
-  function AuthStorage() {}
-  class DefaultResourceLoader {
+vi.mock("../../sessions/resource-loader.js", () => ({
+  DefaultResourceLoader: class {
     constructor(...args: unknown[]) {
       hoisted.defaultResourceLoaderInitMock(...args);
     }
     async reload() {}
-  }
+  },
+}));
+
+vi.mock("../../sessions/index.js", () => {
+  function AuthStorage() {}
   function ModelRegistry() {}
   const estimateTokens = (value: unknown) =>
     Math.max(1, Math.ceil(JSON.stringify(value ?? "").length / 4));
 
   return {
     AuthStorage,
-    createAgentSession: (...args: unknown[]) => hoisted.createAgentSessionMock(...args),
-    DefaultResourceLoader,
+    createAgentSession: (options: CreateAgentSessionOptions = {}) =>
+      hoisted.createAgentSessionMock(options),
     estimateTokens,
     generateSummary: async () => "",
     ModelRegistry,
@@ -411,8 +474,8 @@ vi.mock("../../sessions/index.js", () => {
 });
 
 vi.mock("../../sessions/sdk.js", () => ({
-  createAgentSessionForEmbeddedRunner: (...args: unknown[]) =>
-    hoisted.createAgentSessionMock(...args),
+  createAgentSessionForEmbeddedRunner: (options: CreateAgentSessionOptions) =>
+    hoisted.createAgentSessionMock(options),
 }));
 
 vi.mock("../../subagents/spawn/subagent-spawn.js", () => ({
@@ -586,13 +649,6 @@ vi.mock("../wait-for-idle-before-flush.js", () => ({
     (hoisted.flushPendingToolResultsAfterIdleMock as (...args: unknown[]) => unknown)(...args),
 }));
 
-vi.mock("../runs.js", () => ({
-  setActiveEmbeddedRun: () => {},
-  clearActiveEmbeddedRun: () => {},
-  markActiveEmbeddedRunAbandoned: () => {},
-  updateActiveEmbeddedRunSnapshot: () => {},
-}));
-
 vi.mock("./images.js", () => ({
   detectAndLoadPromptImages: (...args: unknown[]) =>
     (hoisted.detectAndLoadPromptImagesMock as (...args: unknown[]) => unknown)(...args),
@@ -674,7 +730,7 @@ vi.mock("../../agent-tools.js", () => ({
 
 vi.mock("../../agent-bundle-mcp-tools.js", () => ({
   createBundleMcpToolRuntime: async () => undefined,
-  getOrCreateSessionMcpRuntime: async () => undefined,
+  acquireSessionMcpRuntime: async () => undefined,
   materializeBundleMcpToolsForRun: async () => undefined,
   retireSessionMcpRuntime: async () => true,
 }));
@@ -726,13 +782,6 @@ vi.mock("../../provider-stream.js", () => ({
   registerProviderStreamForModel: vi.fn(),
 }));
 
-vi.mock("../../owner-display.js", () => ({
-  resolveOwnerDisplaySetting: () => ({
-    ownerDisplay: undefined,
-    ownerDisplaySecret: undefined,
-  }),
-}));
-
 vi.mock("../../sandbox/runtime-status.js", () => ({
   resolveSandboxRuntimeStatus: () => ({
     agentId: "main",
@@ -744,19 +793,11 @@ vi.mock("../../sandbox/runtime-status.js", () => ({
   }),
 }));
 
-vi.mock("../../tool-call-id.js", async (importOriginal) => {
-  return await importOriginal<typeof import("../../tool-call-id.js")>();
-});
-
 vi.mock("../../tool-fs-policy.js", () => ({
   resolveSessionPermissionExecMode: (policy: { mode: string }) =>
     ({ "read-only": "deny", guarded: "ask", workspace: "auto", full: "full" })[policy.mode],
   resolveEffectiveToolFsWorkspaceOnly: () => false,
 }));
-
-vi.mock("../../tool-policy.js", async (importOriginal) => {
-  return await importOriginal<typeof import("../../tool-policy.js")>();
-});
 
 vi.mock("../../transcript-policy.js", () => ({
   resolveTranscriptPolicy: () => ({
@@ -834,8 +875,13 @@ vi.mock("../compaction-safety-timeout.js", () => ({
 }));
 
 vi.mock("../history.js", () => ({
-  getHistoryLimitFromSessionKey: (sessionKey: string | undefined, config: unknown) =>
-    hoisted.getHistoryLimitFromSessionKeyMock(sessionKey, config),
+  // Forward the account id too: dropping it here would hide whether the prompt
+  // path actually scopes the limit to the routed account.
+  getHistoryLimitFromSessionKey: (
+    sessionKey: string | undefined,
+    config: unknown,
+    route?: unknown,
+  ) => hoisted.getHistoryLimitFromSessionKeyMock(sessionKey, config, route),
   limitHistoryTurns: (messages: unknown, limit: number | undefined) =>
     hoisted.limitHistoryTurnsMock(messages, limit),
 }));
@@ -848,11 +894,6 @@ vi.mock("../logger.js", () => ({
     error: () => {},
     isEnabled: () => false,
   },
-}));
-
-vi.mock("../message-action-discovery-input.js", () => ({
-  buildEmbeddedMessageActionDiscoveryInput: (...args: unknown[]) =>
-    hoisted.buildEmbeddedMessageActionDiscoveryInputMock(...args),
 }));
 
 vi.mock("../model.js", () => ({
@@ -870,13 +911,6 @@ vi.mock("../thinking.js", async (importOriginal) => {
     ...actual,
     dropReasoningFromHistory: <T>(messages: T) => messages,
     dropThinkingBlocks: <T>(messages: T) => messages,
-  };
-});
-
-vi.mock("../tool-name-allowlist.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../tool-name-allowlist.js")>();
-  return {
-    ...actual,
   };
 });
 
@@ -931,6 +965,7 @@ vi.mock("./history-image-prune.js", () => ({
 
 type MutableSession = {
   sessionId: string;
+  sessionManager?: CreateAgentSessionOptions["sessionManager"];
   messages: unknown[];
   isCompacting: boolean;
   isStreaming: boolean;
@@ -967,6 +1002,10 @@ type MutableSession = {
   abort: () => Promise<void>;
   dispose: () => void;
   steer: (text: string) => Promise<void>;
+  [agentSessionSetContextReplacementHook]: (
+    callback: ((tokensAfter: number) => void) | undefined,
+  ) => void;
+  [agentSessionSetPromptPreparation]: (prepare: (() => Promise<void>) | undefined) => void;
 };
 
 type SessionPromptOverride = (
@@ -1028,9 +1067,6 @@ export function resetEmbeddedAttemptHarness(
   hoisted.ensureGlobalUndiciEnvProxyDispatcherMock.mockReset();
   hoisted.ensureGlobalUndiciDispatcherStreamTimeoutsMock.mockReset();
   hoisted.ensureGlobalUndiciStreamTimeoutsMock.mockReset();
-  hoisted.buildEmbeddedMessageActionDiscoveryInputMock
-    .mockReset()
-    .mockImplementation((paramsLocal) => paramsLocal);
   hoisted.createOpenClawCodingToolsMock.mockReset().mockImplementation((...args: unknown[]) => {
     const options = args[0] as
       | {
@@ -1092,8 +1128,14 @@ export function resetEmbeddedAttemptHarness(
   hoisted.systemPromptTexts.length = 0;
   hoisted.embeddedSystemPromptInputs.length = 0;
   hoisted.trajectoryEvents.length = 0;
+  hoisted.sessionManager.getSessionTarget.mockReset().mockReturnValue(undefined);
+  hoisted.sessionManager.getAppendParentId.mockReset().mockReturnValue(null);
+  hoisted.sessionManager.getHeader.mockReset().mockReturnValue({ version: 3 });
+  hoisted.sessionManager.getLeafId.mockReset().mockReturnValue(null);
   hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
   hoisted.sessionManager.getEntry.mockReset().mockReturnValue(undefined);
+  hoisted.sessionManager.getEntries.mockReset().mockReturnValue([]);
+  hoisted.sessionManager.getBranch.mockReset().mockReturnValue([]);
   hoisted.sessionManager.getBoundaryCount.mockReset().mockReturnValue(0);
   hoisted.sessionManager.branch.mockReset();
   hoisted.sessionManager.resetLeaf.mockReset();
@@ -1104,6 +1146,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.sessionManager.appendThinkingLevelChange.mockReset();
   hoisted.sessionManager.appendModelChange.mockReset();
   hoisted.sessionManager.appendCustomEntry.mockReset();
+  hoisted.sessionManager.appendMessage.mockReset();
   hoisted.sessionManager.appendSessionInfo.mockReset();
   hoisted.sessionManager.appendLabelChange.mockReset();
   hoisted.sessionManager.flushPendingPersistence.mockReset();
@@ -1131,6 +1174,8 @@ export function createDefaultEmbeddedSession(params?: {
   ) => Promise<void>;
 }): MutableSession {
   let activeToolNames: string[] = [];
+  let promptPreparation: (() => Promise<void>) | undefined;
+  let promptPreparationInstalled = false;
   let pendingPrompt:
     | {
         prompt: string;
@@ -1217,8 +1262,31 @@ export function createDefaultEmbeddedSession(params?: {
       session.messages = [...session.messages, { role: "custom", timestamp: 1, ...message }];
     },
     abort: async () => {},
-    dispose: () => {},
+    dispose: () => {
+      promptPreparation = undefined;
+    },
     steer: async () => {},
+    [agentSessionSetContextReplacementHook]: () => {},
+    [agentSessionSetPromptPreparation]: (prepare) => {
+      promptPreparation = prepare;
+      if (promptPreparationInstalled) {
+        return;
+      }
+      promptPreparationInstalled = true;
+      // Cases can replace prompt with a real Agent bridge before runner setup.
+      // Wrap the composed entrypoint so every fake model-start honors the host hook.
+      const prompt = session.prompt;
+      session.prompt = async (...args) => {
+        const currentPreparation = promptPreparation;
+        if (currentPreparation) {
+          await currentPreparation();
+          if (currentPreparation !== promptPreparation) {
+            throw new Error("Session prompt preparation is stale after replacement or disposal.");
+          }
+        }
+        return prompt(...args);
+      };
+    },
   };
 
   return session;
@@ -1341,13 +1409,15 @@ export async function createContextEngineAttemptRunner(params: {
   const modelRegistry = {};
   initializeModelRegistryRuntime(modelRegistry);
   const modelRuntime = getModelRegistryRuntime(modelRegistry).llmRuntime;
-  hoisted.createAgentSessionMock.mockImplementation(async () => {
+  hoisted.createAgentSessionMock.mockImplementation(async (options) => {
     const session =
       params.createSession?.() ??
       createDefaultEmbeddedSession({
         initialMessages: seedMessages,
         prompt: params.sessionPrompt,
       });
+    // Nested tool observations append through the same manager the runner prepared.
+    session.sessionManager = options.sessionManager;
     if (session.agent.streamFn) {
       bindStreamLlmRuntime(session.agent.streamFn, modelRuntime);
     }
@@ -1414,12 +1484,19 @@ export async function createContextEngineAttemptRunner(params: {
       },
       ...params.attemptOverrides,
     };
-    return await (
-      await loadRunEmbeddedAttempt()
-    )({
-      ...attempt,
-      admittedRunContext: createTestAdmittedRunContext(attempt.runId),
-    });
+    const admission = prepareSystemAgentRunAdmission(
+      attempt.config ?? {},
+      attempt.runId,
+      attempt.agentId ?? "main",
+      "embedded-attempt-test",
+    );
+    try {
+      return await (
+        await loadRunEmbeddedAttempt()
+      )({ ...attempt, admittedRunContext: await admission.admit("embedded") });
+    } finally {
+      admission.close();
+    }
   } finally {
     if (previousTrajectoryEnv === undefined) {
       delete process.env.OPENCLAW_TRAJECTORY;

@@ -2,10 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolvePluginNpmProjectDir } from "../plugins/install-paths.js";
-import {
-  readPersistedInstalledPluginIndex,
-  writePersistedInstalledPluginIndex,
-} from "../plugins/installed-plugin-index-store.js";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
+import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
 import { maybeRepairStaleManagedNpmBundledPlugins } from "./doctor-plugin-registry.js";
 

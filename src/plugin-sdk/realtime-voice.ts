@@ -3,11 +3,15 @@ export type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 export type {
   OpenAICompatibleRealtimeAudioFormat,
   RealtimeVoiceAudioFormat,
+  RealtimeVoiceAudioChunkMetadata,
+  RealtimeVoicePlaybackItem,
   RealtimeVoiceAgentConsultRunner,
   RealtimeVoiceBargeInOptions,
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCallbacks,
   RealtimeVoiceBridgeEvent,
+  RealtimeVoiceCloseDisposition,
+  RealtimeVoiceCloseOptions,
   RealtimeVoiceBrowserSession,
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceGatewayControl,
@@ -155,6 +159,7 @@ export {
 export {
   buildRealtimeVoiceAgentCancelProviderResult,
   buildRealtimeVoiceAgentControlSpeechMessage,
+  buildRealtimeVoiceAgentErrorProviderResult,
   classifyRealtimeVoiceAgentControlText,
   controlRealtimeVoiceAgentRun,
   normalizeRealtimeVoiceAgentControlMode,

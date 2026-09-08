@@ -11,12 +11,12 @@
  * @module @openclaw/oc-path/parse
  */
 
-import MarkdownIt from "markdown-it";
+import MarkdownIt, { type MarkdownIt as MarkdownItParser } from "markdown-it";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { AstBlock, AstItem, Diagnostic, FrontmatterEntry, ParseResult } from "./ast.js";
 import { slugify } from "./slug.js";
 
-type Token = ReturnType<MarkdownIt["parse"]>[number];
+type Token = ReturnType<MarkdownItParser["parse"]>[number];
 
 const FENCE = "---";
 const BOM = "﻿";

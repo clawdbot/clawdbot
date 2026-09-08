@@ -4,6 +4,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { requireOptionArgument } from "./lib/arg-utils.mts";
 
 const ROOT = process.cwd();
 const GLOSSARY_PATH = path.join(ROOT, "docs", ".i18n", "glossary.zh-CN.json");
@@ -20,24 +21,16 @@ type TermMatch = {
   term: string;
 };
 
-function readRefOptionValue(argv: string[], index: number, optionName: string) {
-  const value = argv[index + 1];
-  if (value === undefined || value === "" || value.startsWith("-")) {
-    throw new Error(`${optionName} requires a value`);
-  }
-  return value;
-}
-
 export function parseArgs(argv: string[]) {
   const args = { base: "", head: "" };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === "--base") {
-      args.base = readRefOptionValue(argv, i, "--base");
+      args.base = requireOptionArgument(argv, i, "--base");
       i += 1;
       continue;
     }
     if (argv[i] === "--head") {
-      args.head = readRefOptionValue(argv, i, "--head");
+      args.head = requireOptionArgument(argv, i, "--head");
       i += 1;
     }
   }

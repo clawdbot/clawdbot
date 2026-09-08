@@ -79,6 +79,9 @@ vi.doMock("../../../src/agents/embedded-agent-runner/runs.js", () => ({
       : undefined,
   queueEmbeddedAgentMessageWithOutcome: (sessionId: string, text: string, options?: unknown) =>
     embeddedAgentMocks.queueEmbeddedAgentMessageWithOutcome(sessionId, text, options),
+}));
+
+vi.doMock("../../../src/agents/embedded-agent-runner/active-run-projections.js", () => ({
   resolveActiveEmbeddedRunSessionId: (...args: unknown[]) =>
     embeddedAgentMocks.resolveActiveEmbeddedRunSessionId(...args),
 }));
@@ -88,7 +91,6 @@ const providerUsageMocks = vi.hoisted(() => ({
     updatedAt: 0,
     providers: [],
   }),
-  formatUsageSummaryLine: vi.fn().mockReturnValue("📊 Usage: Claude 80% left"),
   formatUsageWindowSummary: vi.fn().mockReturnValue("Claude 80% left"),
   resolveUsageProviderId: vi.fn((provider: string) => provider.split("/")[0]),
 }));
@@ -336,12 +338,12 @@ export function makeCfg(home: string): OpenClawConfig {
 }
 
 async function loadGetReplyFromConfig() {
-  return (await import("../../../src/auto-reply/reply.js")).getReplyFromConfig;
+  return (await import("../../../src/auto-reply/reply/get-reply.js")).getReplyFromConfig;
 }
 
 export function installTriggerHandlingReplyHarness(
   setGetReplyFromConfig: (
-    getReplyFromConfig: typeof import("../../../src/auto-reply/reply.js").getReplyFromConfig,
+    getReplyFromConfig: typeof import("../../../src/auto-reply/reply/get-reply.js").getReplyFromConfig,
   ) => void,
 ): void {
   beforeAll(async () => {
@@ -360,7 +362,7 @@ export function requireSessionStorePath(cfg: { session?: { store?: string } }): 
 
 export async function expectInlineCommandHandledAndStripped(params: {
   home: string;
-  getReplyFromConfig: typeof import("../../../src/auto-reply/reply.js").getReplyFromConfig;
+  getReplyFromConfig: typeof import("../../../src/auto-reply/reply/get-reply.js").getReplyFromConfig;
   body: string;
   stripToken: string;
   blockReplyContains: string;
@@ -394,7 +396,7 @@ export async function expectInlineCommandHandledAndStripped(params: {
 export async function expectBareNewOrResetAcknowledged(params: {
   home: string;
   body: "/new" | "/reset";
-  getReplyFromConfig: typeof import("../../../src/auto-reply/reply.js").getReplyFromConfig;
+  getReplyFromConfig: typeof import("../../../src/auto-reply/reply/get-reply.js").getReplyFromConfig;
 }) {
   const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
   runEmbeddedAgentMock.mockClear();

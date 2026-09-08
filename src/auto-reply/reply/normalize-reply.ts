@@ -20,16 +20,18 @@ import {
   stripSilentToken,
 } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
+import type {
+  NormalizeReplyOutcome as PayloadNormalizationOutcome,
+  NormalizeReplySkipReason,
+} from "./normalize-reply-skip-reason.js";
 import {
   resolveResponsePrefixTemplate,
   type ResponsePrefixContext,
 } from "./response-prefix-template.js";
 
-export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat" | "channel_transform";
+export type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
 
-export type NormalizeReplyOutcome<T = ReplyPayload> =
-  | { kind: "deliver"; payload: T }
-  | { kind: "suppress"; reason: NormalizeReplySkipReason };
+export type NormalizeReplyOutcome<T = ReplyPayload> = PayloadNormalizationOutcome<T>;
 
 const channelReplyTransformOwners = new WeakMap<
   (payload: ReplyPayload) => ReplyPayload | null,
@@ -57,6 +59,7 @@ type NormalizeReplyOptions = {
   onHeartbeatStrip?: () => void;
   silentToken?: string;
   transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
+  conversationContext?: string;
   onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
 
@@ -84,56 +87,62 @@ export function normalizeReplyPayloadOutcome(
     return suppress("empty");
   }
 
-  const silentToken = opts.silentToken ?? SILENT_REPLY_TOKEN;
   let text = payload.text ?? undefined;
-  if (text && isSilentReplyPayloadText(text, silentToken)) {
-    if (!hasContent("")) {
-      return suppress("silent");
-    }
-    text = "";
-  }
-  // Strip NO_REPLY from mixed-content messages (e.g. "😄 NO_REPLY") so the
-  // token never leaks to end users.  If stripping leaves nothing, treat it as
-  // silent just like the exact-match path above.  (#30916, #30955)
-  if (text && !isSilentReplyText(text, silentToken)) {
-    const hasLeadingSilentToken = startsWithSilentToken(text, silentToken);
-    if (hasLeadingSilentToken) {
-      text = stripLeadingSilentToken(text, silentToken);
-    }
-    if (hasLeadingSilentToken || text.toLowerCase().includes(silentToken.toLowerCase())) {
-      text = stripSilentToken(text, silentToken);
-      if (!hasContent(text)) {
+  // Monitoring already applied its configured acknowledgment and error-text policy.
+  if (!getReplyPayloadMetadata(payload)?.heartbeatReply) {
+    const silentToken = opts.silentToken ?? SILENT_REPLY_TOKEN;
+    if (text && isSilentReplyPayloadText(text, silentToken)) {
+      if (!hasContent("")) {
         return suppress("silent");
       }
+      text = "";
     }
-  }
-  if (text && !trimmed) {
-    // Keep empty text when media exists so media-only replies still send.
-    text = "";
-  }
-
-  if (text?.includes(HEARTBEAT_TOKEN)) {
-    const stripped = stripHeartbeatToken(text, { mode: "message" });
-    if (stripped.didStrip) {
-      opts.onHeartbeatStrip?.();
+    // Strip NO_REPLY from mixed-content messages (e.g. "😄 NO_REPLY") so the
+    // token never leaks to end users.  If stripping leaves nothing, treat it as
+    // silent just like the exact-match path above.  (#30916, #30955)
+    if (text && !isSilentReplyText(text, silentToken)) {
+      const hasLeadingSilentToken = startsWithSilentToken(text, silentToken);
+      if (hasLeadingSilentToken) {
+        text = stripLeadingSilentToken(text, silentToken);
+      }
+      if (hasLeadingSilentToken || text.toLowerCase().includes(silentToken.toLowerCase())) {
+        text = stripSilentToken(text, silentToken);
+        if (!hasContent(text)) {
+          return suppress("silent");
+        }
+      }
     }
-    if (stripped.shouldSkip && !hasContent(stripped.text)) {
-      return suppress("heartbeat");
+    if (text && !trimmed) {
+      // Keep empty text when media exists so media-only replies still send.
+      text = "";
     }
-    text = stripped.text;
-  }
 
-  if (text && isInternalFormattingArtifact(text) && !hasContent("")) {
-    return suppress("silent");
-  }
+    if (text?.includes(HEARTBEAT_TOKEN)) {
+      const stripped = stripHeartbeatToken(text, { mode: "message" });
+      if (stripped.didStrip) {
+        opts.onHeartbeatStrip?.();
+      }
+      if (stripped.shouldSkip && !hasContent(stripped.text)) {
+        return suppress("heartbeat");
+      }
+      text = stripped.text;
+    }
 
-  if (text) {
-    text = payload.isError
-      ? renderUserFacingText(text, { errorContext: true })
-      : sanitizeUserFacingText(text);
-  }
-  if (!hasContent(text)) {
-    return suppress("empty");
+    if (text && isInternalFormattingArtifact(text) && !hasContent("")) {
+      return suppress("silent");
+    }
+
+    if (text) {
+      text = payload.isError
+        ? renderUserFacingText(text, {
+            errorContext: true,
+            conversationContext: opts.conversationContext,
+          })
+        : sanitizeUserFacingText(text, { conversationContext: opts.conversationContext });
+    }
+    if (!hasContent(text)) {
+      return suppress("empty");
+    }
   }
 
   let enrichedPayload: ReplyPayload = copyReplyPayloadMetadata(payload, { ...payload, text });

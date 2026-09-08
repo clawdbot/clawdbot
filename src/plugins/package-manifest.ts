@@ -1,122 +1,13 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
-import type { ChannelSetupMetadata } from "../channels/plugins/setup-contract.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
-import { isRecord } from "../utils.js";
-import type { PluginManifestChannelCommandDefaults } from "./manifest-types.js";
+import type {
+  OpenClawPackageManifest,
+  PackageExtensionResolution,
+  PackageManifest,
+} from "./package-manifest.types.js";
 
-/** package.json OpenClaw metadata used for plugin setup and catalog discovery. */
-type PluginPackageChannelApprovalFlag = "native";
-
-export type PluginPackageChannel = {
-  id?: string;
-  label?: string;
-  selectionLabel?: string;
-  detailLabel?: string;
-  docsPath?: string;
-  docsLabel?: string;
-  blurb?: string;
-  order?: number;
-  aliases?: readonly string[];
-  preferOver?: readonly string[];
-  systemImage?: string;
-  selectionDocsPrefix?: string;
-  selectionDocsOmitLabel?: boolean;
-  selectionExtras?: readonly string[];
-  markdownCapable?: boolean;
-  /** Closed manifest flags for approval behavior available before the channel runtime loads. */
-  approvalFlags?: readonly PluginPackageChannelApprovalFlag[];
-  exposure?: {
-    configured?: boolean;
-    setup?: boolean;
-    docs?: boolean;
-  };
-  quickstartAllowFrom?: boolean;
-  forceAccountBinding?: boolean;
-  preferSessionLookupForAnnounceTarget?: boolean;
-  commands?: PluginManifestChannelCommandDefaults;
-  configuredState?: {
-    specifier?: string;
-    exportName?: string;
-    env?: {
-      allOf?: readonly string[];
-      anyOf?: readonly string[];
-    };
-  };
-  persistedAuthState?: {
-    specifier?: string;
-    exportName?: string;
-  };
-  doctorCapabilities?: PluginPackageChannelDoctorCapabilities;
-  /** Typed, serializable setup fields available before plugin runtime load. */
-  setup?: ChannelSetupMetadata;
-  /** @deprecated Use setup.fields. */
-  cliAddOptions?: readonly PluginPackageChannelCliOption[];
-};
-
-export type PluginPackageChannelDoctorCapabilities = {
-  dmAllowFromMode?: "topOnly" | "topOrNested" | "nestedOnly";
-  /** Whether dmPolicy="open" requires an explicit "*" in allowFrom. Defaults to true. */
-  openDmRequiresAllowFromWildcard?: boolean;
-  groupModel?: "sender" | "route" | "hybrid";
-  groupAllowFromFallbackToAllowFrom?: boolean;
-  warnOnEmptyGroupSenderAllowlist?: boolean;
-};
-
-export type PluginPackageChannelCliOption = {
-  flags: string;
-  negatedFlags?: string;
-  description: string;
-  defaultValue?: boolean | string;
-  valueType?: "int" | "list";
-};
-
-export type PluginPackageInstall = {
-  clawhubSpec?: string;
-  npmSpec?: string;
-  localPath?: string;
-  defaultChoice?: "clawhub" | "npm" | "local";
-  minHostVersion?: string;
-  expectedIntegrity?: string;
-  allowInvalidConfigRecovery?: boolean;
-  requiredPlatformPackages?: string[];
-};
-
-type OpenClawPackageSetupFeatures = {
-  configPromotion?: boolean;
-  /**
-   * @deprecated Declare doctorContract.stateMigrations in openclaw.plugin.json instead.
-   * Removal plan: remove the setup-entry adapter after the 2027.1 external-plugin migration window.
-   */
-  legacyStateMigrations?: boolean;
-  legacySessionSurfaces?: boolean;
-};
-
-type OpenClawPackageCompat = {
-  pluginApi?: string;
-  minGatewayVersion?: string;
-};
-
-export type OpenClawPackageBuild = {
-  bundledDist?: boolean;
-  openclawVersion?: string;
-  pluginSdkVersion?: string;
-};
-
-export type OpenClawPackageManifest = {
-  extensions?: string[];
-  runtimeExtensions?: string[];
-  setupEntry?: string;
-  runtimeSetupEntry?: string;
-  setupFeatures?: OpenClawPackageSetupFeatures;
-  plugin?: {
-    id?: string;
-    label?: string;
-  };
-  channel?: PluginPackageChannel;
-  compat?: OpenClawPackageCompat;
-  install?: PluginPackageInstall;
-  build?: OpenClawPackageBuild;
-};
+export type * from "./package-manifest.types.js";
 
 export const DEFAULT_PLUGIN_ENTRY_CANDIDATES = [
   "index.ts",
@@ -125,22 +16,6 @@ export const DEFAULT_PLUGIN_ENTRY_CANDIDATES = [
   "index.cjs",
 ] as const;
 
-export type PackageExtensionResolution =
-  | { status: "ok"; entries: string[] }
-  | { status: "missing"; entries: [] }
-  | { status: "empty"; entries: [] }
-  | { status: "invalid"; entries: []; error: string };
-
-type ManifestKey = typeof MANIFEST_KEY;
-
-export type PackageManifest = {
-  name?: string;
-  version?: string;
-  description?: string;
-  dependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
-} & Partial<Record<ManifestKey, OpenClawPackageManifest>>;
-
 export function getPackageManifestMetadata(
   manifest: PackageManifest | undefined,
 ): OpenClawPackageManifest | undefined {
@@ -148,6 +23,20 @@ export function getPackageManifestMetadata(
     return undefined;
   }
   return manifest[MANIFEST_KEY];
+}
+
+/** Package authoring metadata names source; the runtime manifest names only built assets. */
+export function controlUiSource(packageManifest: Record<string, unknown>): string | undefined {
+  const source = isRecord(packageManifest.openclaw)
+    ? packageManifest.openclaw.controlUi
+    : undefined;
+  if (source === undefined) {
+    return undefined;
+  }
+  if (typeof source !== "string" || !source.trim()) {
+    throw new Error("package.json openclaw.controlUi must name a browser source entrypoint.");
+  }
+  return source;
 }
 
 export function resolvePackageExtensionEntries(

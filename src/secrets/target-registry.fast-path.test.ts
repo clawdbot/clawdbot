@@ -11,10 +11,10 @@ const { getSecretTargetRegistryMock } = vi.hoisted(() => ({
   getSecretTargetRegistryMock: vi.fn(),
 }));
 
-const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
-  loadBundledPluginPublicArtifactModuleSyncMock: vi.fn(
-    ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
-      if (dirName === "googlechat" && artifactBasename === "secret-contract-api.js") {
+const { loadBundledPublicArtifactMock } = vi.hoisted(() => ({
+  loadBundledPublicArtifactMock: vi.fn(
+    ({ artifactCandidates, dirName }: { artifactCandidates: string[]; dirName: string }) => {
+      if (dirName === "googlechat" && artifactCandidates[0] === "secret-contract-api.js") {
         return {
           secretTargetRegistryEntries: [
             {
@@ -31,7 +31,7 @@ const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
           ],
         };
       }
-      if (dirName === "telegram" && artifactBasename === "secret-contract-api.js") {
+      if (dirName === "telegram" && artifactCandidates[0] === "secret-contract-api.js") {
         return {
           secretTargetRegistryEntries: [
             {
@@ -49,9 +49,7 @@ const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
           ],
         };
       }
-      throw new Error(
-        `Unable to resolve bundled plugin public surface ${dirName}/${artifactBasename}`,
-      );
+      return null;
     },
   ),
 }));
@@ -61,7 +59,7 @@ vi.mock("../plugins/manifest-registry.js", () => ({
 }));
 
 vi.mock("../plugins/public-surface-loader.js", () => ({
-  loadBundledPluginPublicArtifactModuleSync: loadBundledPluginPublicArtifactModuleSyncMock,
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync: loadBundledPublicArtifactMock,
 }));
 
 vi.mock("./target-registry-data.js", async (importOriginal) => {
@@ -104,7 +102,7 @@ import {
 describe("secret target registry fast path", () => {
   beforeEach(() => {
     loadPluginManifestRegistryMock.mockClear();
-    loadBundledPluginPublicArtifactModuleSyncMock.mockClear();
+    loadBundledPublicArtifactMock.mockClear();
     getSecretTargetRegistryMock.mockClear();
   });
 
@@ -116,9 +114,9 @@ describe("secret target registry fast path", () => {
     }
     expect(target.entry.id).toBe("channels.googlechat.serviceAccount");
     expect(target.refPathSegments).toBeUndefined();
-    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
+    expect(loadBundledPublicArtifactMock).toHaveBeenCalledWith({
       dirName: "googlechat",
-      artifactBasename: "secret-contract-api.js",
+      artifactCandidates: ["secret-contract-api.js"],
     });
     expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
   });
@@ -133,7 +131,7 @@ describe("secret target registry fast path", () => {
     );
 
     expect(targets.map((target) => target.entry.id)).toEqual(["gateway.auth.token"]);
-    expect(loadBundledPluginPublicArtifactModuleSyncMock).not.toHaveBeenCalled();
+    expect(loadBundledPublicArtifactMock).not.toHaveBeenCalled();
     expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
   });
 

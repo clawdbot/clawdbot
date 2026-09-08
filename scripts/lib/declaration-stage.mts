@@ -1,0 +1,168 @@
+import fs from "node:fs";
+import path from "node:path";
+import ts from "typescript";
+import { executeTsdownBuildPlan, type prepareTsdownBuildExecution } from "../tsdown-build.mts";
+import {
+  listCacheFiles,
+  portableRelativePath,
+  publishArtifactFiles,
+} from "./build-artifact-cache.mts";
+import {
+  sanitizeBundlerHelperDtsExports,
+  sanitizeBundlerHelperDtsExportTree,
+} from "./sanitize-bundler-helper-dts-exports.mts";
+
+function declarationReferences(file: string, contents: string) {
+  const source = ts.createSourceFile(file, contents, ts.ScriptTarget.Latest);
+  const modules = source.typeReferenceDirectives.map((reference) => reference.fileName);
+  function visit(node: ts.Node) {
+    let specifier: ts.Node | undefined;
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+      specifier = node.moduleSpecifier;
+    } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference)
+    ) {
+      specifier = node.moduleReference.expression;
+    } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
+      specifier = node.argument.literal;
+    } else if (ts.isModuleDeclaration(node)) {
+      specifier = node.name;
+    }
+    if (specifier && ts.isStringLiteralLike(specifier)) {
+      modules.push(specifier.text);
+    }
+    ts.forEachChild(node, visit);
+  }
+  ts.forEachChild(source, visit);
+  // Parse declarations so comments cannot invent imports, and reference directives
+  // and import-equals declarations cannot hide missing staged dependencies.
+  return [
+    ...source.referencedFiles.map((reference) => reference.fileName),
+    ...modules
+      .filter((specifier) => specifier.startsWith("."))
+      .map((specifier) =>
+        /\.d\.[cm]?ts$/u.test(specifier)
+          ? specifier
+          : /\.[cm]?js$/u.test(specifier)
+            ? specifier.replace(/\.([cm]?)js$/u, ".d.$1ts")
+            : `${specifier}.d.ts`,
+      ),
+  ];
+}
+
+/** Publish a declaration subset only after its complete canonical build succeeds. */
+export async function publishStagedDeclarations(
+  plan: NonNullable<ReturnType<typeof prepareTsdownBuildExecution>>,
+  sources: { output: string; required: string[] }[],
+  staging: string,
+  dist: string,
+  required: string[],
+  previous: string[],
+  sealInputs?: () => void,
+) {
+  if (plan.invocations.length) {
+    const code = await executeTsdownBuildPlan(plan);
+    if (code !== 0) {
+      throw Object.assign(new Error(`Declaration build failed with exit ${code}`), {
+        exitCode: code,
+      });
+    }
+  }
+  for (const source of sources) {
+    const files = listCacheFiles(
+      source.output,
+      [{ path: ".", extensions: [".d.ts", ".d.mts", ".d.cts"] }],
+      fs,
+    );
+    const emitted = new Set(files.map((file) => portableRelativePath(source.output, file)));
+    for (const entry of source.required) {
+      if (!emitted.has(entry)) {
+        throw new Error(`Missing canonical declaration: ${entry}`);
+      }
+    }
+    for (const file of files) {
+      const relative = portableRelativePath(source.output, file);
+      const target = path.join(staging, relative);
+      const raw = fs.readFileSync(file, "utf8");
+      // Strip generated bundler helpers before staged bytes become the published
+      // declaration identity.
+      const bytes = Buffer.from(sanitizeBundlerHelperDtsExports(raw).sourceText, "utf8");
+      // Shared chunks may be identical across groups. A differing owner must
+      // fail before publication; last-writer-wins can corrupt nominal identity.
+      if (fs.existsSync(target)) {
+        if (!fs.readFileSync(target).equals(bytes)) {
+          throw new Error(`Conflicting canonical declaration owners: ${relative}`);
+        }
+        continue;
+      }
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, bytes, { flag: "wx" });
+    }
+  }
+  const files = listCacheFiles(
+    staging,
+    [{ path: ".", extensions: [".d.ts", ".d.mts", ".d.cts"] }],
+    fs,
+  ).map((file) => portableRelativePath(staging, file));
+  // Invocation-written stages never pass through the source-copy sanitizer above.
+  // Normalize every staged declaration before closure checks and publication.
+  for (const file of files) {
+    if (!file.endsWith(".d.ts") && !file.endsWith(".d.mts") && !file.endsWith(".d.cts")) {
+      continue;
+    }
+    const absolute = path.join(staging, file);
+    const current = fs.readFileSync(absolute, "utf8");
+    const sanitized = sanitizeBundlerHelperDtsExports(current).sourceText;
+    if (sanitized !== current) {
+      fs.writeFileSync(absolute, sanitized);
+    }
+  }
+  const emitted = new Set(files);
+  for (const entry of required) {
+    if (!emitted.has(entry)) {
+      throw new Error(`Missing canonical declaration: ${entry}`);
+    }
+  }
+  // Validate all staged relative edges before touching live declarations, including
+  // shared root chunks. The caller supplies only its owned previous inventory.
+  const dependencies = new Map<string, string[]>();
+  for (const file of files) {
+    const targets: string[] = [];
+    const contents = fs.readFileSync(path.join(staging, file), "utf8");
+    for (const declaration of declarationReferences(file, contents)) {
+      if (path.posix.isAbsolute(declaration) || path.win32.isAbsolute(declaration)) {
+        throw new Error(`Incomplete declaration closure: ${file} -> ${declaration}`);
+      }
+      const target = path.posix.normalize(path.posix.join(path.posix.dirname(file), declaration));
+      if (!emitted.has(target)) {
+        throw new Error(`Incomplete declaration closure: ${file} -> ${declaration}`);
+      }
+      targets.push(target);
+    }
+    dependencies.set(file, targets);
+  }
+  // Postorder makes dependencies visible before their importers. Mark before
+  // descending because declaration cycles are legal and the closure is validated.
+  const visited = new Set<string>();
+  const ordered: string[] = [];
+  function visit(file: string) {
+    if (visited.has(file)) {
+      return;
+    }
+    visited.add(file);
+    for (const dependency of dependencies.get(file) ?? []) {
+      visit(dependency);
+    }
+    ordered.push(file);
+  }
+  for (const file of files) {
+    visit(file);
+  }
+  sealInputs?.();
+  publishArtifactFiles(staging, dist, ordered, previous);
+  // Main tsdown also emits hashed root/extension .d.ts into dist/ without
+  // passing through the staging sanitizer above. Sweep the live tree so
+  // undeclared bundler helpers cannot reach the published package.
+  sanitizeBundlerHelperDtsExportTree(dist);
+}

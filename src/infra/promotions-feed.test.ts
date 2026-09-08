@@ -1,17 +1,13 @@
 // Covers the promotions feed cache: refresh cadence, 304 revalidation,
 // sequence monotonicity, notified markers, and claim provenance.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { updateConfigMachineState } from "../state/config-machine-state-write.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { useMockHttp } from "../test-utils/mock-http.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
   listLivePromotionEntries,
   markPromotionSlugsNotified,
@@ -167,17 +163,10 @@ describe("promotions feed state", () => {
       reply: { json: feedPayload({ sequence: 5 }), headers: { etag: '"v5"' } },
     });
     await maybeRefreshPromotionsFeed({ nowMs: NOW, fetchImpl: globalThis.fetch });
-    runOpenClawStateWriteTransaction(({ db }) => {
-      const kysely =
-        getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "clawhub_promotions_feed_state">>(db);
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .updateTable("clawhub_promotions_feed_state")
-          .set({ payload_json: "{invalid" })
-          .where("state_key", "=", "default"),
-      );
-    });
+    updateConfigMachineState<Record<string, unknown>>("clawhub.promotionsFeed", (current) => ({
+      ...current,
+      payloadJson: "{invalid",
+    }));
 
     const state = await maybeRefreshPromotionsFeed({
       nowMs: NOW + 60_000,

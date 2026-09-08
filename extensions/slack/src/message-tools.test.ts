@@ -207,6 +207,7 @@ describe("Slack message tools", () => {
       "send",
       "react",
       "reactions",
+      "conversation-open",
       "read",
       "edit",
       "delete",
@@ -221,6 +222,10 @@ describe("Slack message tools", () => {
     expect(discovery.capabilities).toEqual(["presentation"]);
     expect(Array.isArray(discovery.schema)).toBe(true);
     const schemas = Array.isArray(discovery.schema) ? discovery.schema : [];
+    expect(schemas.find((entry) => entry.actions?.includes("conversation-open"))).toMatchObject({
+      actions: ["conversation-open"],
+      visibility: "all-configured",
+    });
     for (const propertyName of ["forceDocument", "asDocument"]) {
       const entries = schemas.filter((entry) => propertyName in entry.properties);
       expect(entries.map((entry) => entry.actions)).toEqual([["send"], ["upload-file"]]);
@@ -273,6 +278,7 @@ describe("Slack message tools", () => {
       "send",
       "react",
       "reactions",
+      "conversation-open",
       "read",
       "edit",
       "delete",
@@ -301,6 +307,7 @@ describe("Slack message tools", () => {
       "send",
       "react",
       "reactions",
+      "conversation-open",
       "read",
       "edit",
       "delete",
@@ -357,6 +364,7 @@ describe("Slack message tools", () => {
       "send",
       "react",
       "reactions",
+      "conversation-open",
       "read",
       "edit",
       "delete",
@@ -407,23 +415,30 @@ describe("Slack message tools", () => {
     expect(alias.description).toMatch(/Alias for messageId/i);
   });
 
-  it("describes Slack shortcode and common glyph reaction inputs", () => {
-    const discovery = describeSlackMessageTool({
-      cfg: {
-        channels: {
-          slack: {
-            botToken: "xoxb-test",
+  it.each([true, false])(
+    "describes Slack custom emoji and advertises discovery only when enabled (%s)",
+    (emojiList) => {
+      const discovery = describeSlackMessageTool({
+        cfg: {
+          channels: {
+            slack: {
+              botToken: "xoxb-test",
+              actions: { emojiList },
+            },
           },
         },
-      },
-    });
+      });
 
-    const { schema, property } = requireSchemaProperty(discovery, "emoji");
+      const { schema, property } = requireSchemaProperty(discovery, "emoji");
 
-    expect(schema.actions).toEqual(["react", "reactions"]);
-    expect(property.description).toContain("white_check_mark");
-    expect(property.description).toContain("✅");
-  });
+      expect(schema.actions).toEqual(["react", "reactions"]);
+      expect(property.description).toContain("white_check_mark");
+      expect(property.description).toContain("✅");
+      expect(property.description).toContain("workspace custom emoji");
+      expect(property.description?.includes('action:"emoji-list"')).toBe(emojiList);
+      expect(discovery.actions?.includes("emoji-list")).toBe(emojiList);
+    },
+  );
 
   it("omits the react emoji schema when reactions are disabled", () => {
     const discovery = describeSlackMessageTool({

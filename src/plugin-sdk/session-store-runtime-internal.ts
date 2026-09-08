@@ -70,11 +70,20 @@ export function generationValidPrivateFieldsForSameSession(
     return undefined;
   }
   const state: Partial<InternalSessionEntry> = {
+    ...(existingEntry.cliHistoryBoundary
+      ? { cliHistoryBoundary: existingEntry.cliHistoryBoundary }
+      : {}),
     ...(existingEntry.activeWriterRunId !== undefined
       ? { activeWriterRunId: existingEntry.activeWriterRunId }
       : {}),
     ...(existingEntry.lifecycleRunId !== undefined
       ? { lifecycleRunId: existingEntry.lifecycleRunId }
+      : {}),
+    ...(existingEntry.pendingProjectGitUrl !== undefined
+      ? { pendingProjectGitUrl: existingEntry.pendingProjectGitUrl }
+      : {}),
+    ...(existingEntry.transcriptByteCompactionLatch
+      ? { transcriptByteCompactionLatch: existingEntry.transcriptByteCompactionLatch }
       : {}),
     ...(existingEntry.sessionDiffBaselineCapture
       ? { sessionDiffBaselineCapture: existingEntry.sessionDiffBaselineCapture }

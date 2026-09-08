@@ -10,10 +10,8 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  createGatewayMethodRegistry,
-  createPluginGatewayMethodDescriptor,
-} from "./methods/registry.js";
+import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
+import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
@@ -33,7 +31,8 @@ const getUserProfileDisplay = vi.hoisted(() =>
 const resolveUserProfileId = vi.hoisted(() => vi.fn());
 const setDisplayName = vi.hoisted(() => vi.fn());
 
-vi.mock("../state/user-profiles.js", () => ({
+vi.mock("../state/user-profiles.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/user-profiles.js")>()),
   ensureProfileForEmail,
   getUserProfileDisplay,
   getUserProfileListItem: vi.fn(),
@@ -294,14 +293,8 @@ describe("gateway method authorization", () => {
         },
       );
 
-      let continueHandler = () => {};
-      const handlerCanContinue = new Promise<void>((resolve) => {
-        continueHandler = resolve;
-      });
-      let markHandlerStarted = () => {};
-      const handlerStarted = new Promise<void>((resolve) => {
-        markHandlerStarted = resolve;
-      });
+      const handlerCanContinue = createDeferredCore();
+      const handlerStarted = createDeferredCore();
       const patchHandler = sessionMutationHandlers["sessions.patch"];
       if (!patchHandler) {
         throw new Error("sessions.patch handler is not registered");
@@ -343,27 +336,28 @@ describe("gateway method authorization", () => {
         } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
         extraHandlers: {
           "sessions.patch": async (options) => {
-            markHandlerStarted();
-            await handlerCanContinue;
+            handlerStarted.resolve();
+            await handlerCanContinue.promise;
             await patchHandler(options);
           },
         },
       });
 
-      await handlerStarted;
+      await handlerStarted.promise;
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
           sessionId: "session-draft-replacement",
           updatedAt: 2,
           visibility: "draft",
-          createdActor: { type: "human", id: "owner" },
+          createdVia: "operator",
+          createdActor: { type: "human", source: "profile", id: "owner" },
         },
       );
       await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
         visibility: "draft",
       }));
-      continueHandler();
+      handlerCanContinue.resolve();
       await request;
 
       expect(respond).toHaveBeenCalledWith(
@@ -390,7 +384,8 @@ describe("gateway method authorization", () => {
           sessionId: "session-lifecycle-authorization-target",
           updatedAt: 1,
           visibility: "read-only",
-          createdActor: { type: "human", id: "owner" },
+          createdVia: "operator",
+          createdActor: { type: "human", source: "profile", id: "owner" },
         },
       );
 
@@ -598,12 +593,10 @@ describe("sessions.patchMany orchestration", () => {
           { sessionId: `session-label-race-${index}`, updatedAt: 1 },
         );
       }
-      const guardOrder: string[] = [];
       const assertCurrent = vi.fn(() => {
         throw new Error("outer all-target guard must not be delegated");
       });
       const assertTargetCurrent = vi.fn(({ sessionKey }: { sessionKey: string }) => {
-        guardOrder.push(sessionKey);
         if (sessionKey === sessionKeys[0]) {
           throw new SessionMutationAuthorizationChangedError({
             code: "INVALID_REQUEST",
@@ -624,7 +617,9 @@ describe("sessions.patchMany orchestration", () => {
       } as never);
 
       expect(assertCurrent).not.toHaveBeenCalled();
-      expect(guardOrder).toEqual(sessionKeys);
+      expect([
+        ...new Set(assertTargetCurrent.mock.calls.map(([target]) => target.sessionKey)),
+      ]).toEqual(sessionKeys);
       expect(respond).toHaveBeenCalledWith(
         true,
         {
@@ -902,7 +897,9 @@ describe("sessions.patchMany orchestration", () => {
       } as never);
 
       expect(assertCurrent).not.toHaveBeenCalled();
-      expect(assertTargetCurrent).toHaveBeenCalledTimes(3);
+      expect([
+        ...new Set(assertTargetCurrent.mock.calls.map(([target]) => target.sessionKey)),
+      ]).toEqual([0, 1, 2].map((index) => `agent:main:race-${index}`));
       expect(respond).toHaveBeenCalledWith(
         true,
         {
@@ -935,10 +932,19 @@ describe("sessions.patchMany orchestration", () => {
 
   it("isolates archive preparation authorization per target and continues in input order", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      for (let index = 0; index < 3; index += 1) {
+      const targets = [0, 1, 2].map((index) => ({
+        key: `agent:main:archive-auth-${index}`,
+        expectedSessionId: `session-archive-auth-${index}`,
+        expectedLifecycleRevision: `revision-archive-auth-${index}`,
+      }));
+      for (const target of targets) {
         await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: `agent:main:archive-auth-${index}` },
-          { sessionId: `session-archive-auth-${index}`, updatedAt: 1 },
+          { agentId: "main", sessionKey: target.key },
+          {
+            sessionId: target.expectedSessionId,
+            lifecycleRevision: target.expectedLifecycleRevision,
+            updatedAt: 1,
+          },
         );
       }
       const respond = vi.fn();
@@ -955,13 +961,7 @@ describe("sessions.patchMany orchestration", () => {
       });
 
       await sessionMutationHandlers["sessions.patchMany"]!({
-        params: {
-          targets: [0, 1, 2].map((index) => ({
-            key: `agent:main:archive-auth-${index}`,
-            expectedSessionId: `session-archive-auth-${index}`,
-          })),
-          patch: { archived: true },
-        },
+        params: { targets, patch: { archived: true } },
         respond,
         context: context(),
         client: { connect: { scopes: ["operator.write"] } },
@@ -969,13 +969,9 @@ describe("sessions.patchMany orchestration", () => {
       } as never);
 
       expect(assertCurrent).not.toHaveBeenCalled();
-      expect(assertTargetCurrent.mock.calls.map(([target]) => target.sessionKey)).toEqual([
-        "agent:main:archive-auth-0",
-        "agent:main:archive-auth-1",
-        "agent:main:archive-auth-2",
-        "agent:main:archive-auth-0",
-        "agent:main:archive-auth-2",
-      ]);
+      expect([
+        ...new Set(assertTargetCurrent.mock.calls.map(([target]) => target.sessionKey)),
+      ]).toEqual(targets.map(({ key }) => key));
       expect(respond).toHaveBeenCalledWith(
         true,
         {
@@ -994,15 +990,18 @@ describe("sessions.patchMany orchestration", () => {
         },
         undefined,
       );
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:archive-auth-0" }),
-      ).toHaveProperty("archivedAt");
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:archive-auth-1" }),
-      ).not.toHaveProperty("archivedAt");
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:archive-auth-2" }),
-      ).toHaveProperty("archivedAt");
+      for (const [index, target] of targets.entries()) {
+        const entry = loadSessionEntry({ agentId: "main", sessionKey: target.key });
+        expect(entry).toMatchObject({
+          sessionId: target.expectedSessionId,
+          lifecycleRevision: target.expectedLifecycleRevision,
+        });
+        if (index === 1) {
+          expect(entry).not.toHaveProperty("archivedAt");
+        } else {
+          expect(entry).toHaveProperty("archivedAt");
+        }
+      }
     });
   });
 

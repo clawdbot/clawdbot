@@ -196,6 +196,42 @@ describe("meeting transcript Doctor migration", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "imports legacy notes whose portable encoded export name is oversized",
+    async () => {
+      const stateDir = tempDirs.make("openclaw-meeting-transcripts-doctor-");
+      const sessionId = "x".repeat(85) + ".";
+      await seedLegacySession({ stateDir, sessionId });
+      const detected = detectLegacyMeetingTranscripts({
+        stateDir,
+        doctorOnlyStateMigrations: true,
+      });
+      const result = await migrateLegacyMeetingTranscripts({
+        detected,
+        env: databaseEnv(stateDir),
+        stateDir,
+      });
+      expect(result.warnings).toEqual([]);
+      closeOpenClawStateDatabaseForTest();
+      const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
+        env: databaseEnv(stateDir),
+      });
+      const entry = await store.readSessionEntry(sessionId);
+      expect(entry?.session.sessionId).toBe(sessionId);
+      const artifacts = await store.materializeSessionArtifacts(entry!.selector, "all");
+      expect(Buffer.byteLength(path.basename(artifacts.sessionDir))).toBeLessThanOrEqual(255);
+      expect(await fs.readFile(artifacts.summaryPath, "utf8")).toBe(
+        "# Design review\n\nFirst line.\n",
+      );
+      expect((await store.readUtterancesForSession(entry!.session)).map((row) => row.text)).toEqual(
+        ["First line", "Second line"],
+      );
+      expect(
+        detectLegacyMeetingTranscripts({ stateDir, doctorOnlyStateMigrations: true }).hasLegacy,
+      ).toBe(false);
+    },
+  );
+
   it("imports shipped dot-only session layouts into reserved SQLite selectors", async () => {
     const stateDir = tempDirs.make("openclaw-meeting-transcripts-doctor-");
     for (const sessionId of [".", "..", "session"]) {

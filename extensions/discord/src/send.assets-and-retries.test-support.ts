@@ -100,7 +100,9 @@ export function registerSendAssetsAndRetriesTests(deps: SendAssetsAndRetriesDeps
         image: "data:image/png;base64,aW1n",
         roles: ["r1"],
       });
-      expect(loadWebMediaRaw).toHaveBeenCalledWith("file:///tmp/party.png", 256 * 1024);
+      expect(loadWebMediaRaw).toHaveBeenCalledWith("file:///tmp/party.png", {
+        maxBytes: 256 * 1024,
+      });
     });
   });
 
@@ -131,7 +133,9 @@ export function registerSendAssetsAndRetriesTests(deps: SendAssetsAndRetriesDeps
       expect(files).toHaveLength(1);
       expect(files[0]?.name).toBe("asset.png");
       expect(files[0]?.contentType).toBe("image/png");
-      expect(loadWebMediaRaw).toHaveBeenCalledWith("file:///tmp/wave.png", 512 * 1024);
+      expect(loadWebMediaRaw).toHaveBeenCalledWith("file:///tmp/wave.png", {
+        maxBytes: 512 * 1024,
+      });
     });
   });
 
@@ -182,6 +186,25 @@ export function registerSendAssetsAndRetriesTests(deps: SendAssetsAndRetriesDeps
         enforce_nonce: true,
       });
       expect(requestBody(postMock as unknown as MockCallSource).nonce).toMatch(/^[0-9a-f]{24}$/);
+    });
+
+    it.each([
+      { silent: true, flags: MessageFlags.SuppressEmbeds | MessageFlags.SuppressNotifications },
+      { silent: false, flags: MessageFlags.SuppressEmbeds },
+      { silent: undefined, flags: MessageFlags.SuppressEmbeds },
+    ])("preserves sticker notification flags for silent=$silent", async ({ silent, flags }) => {
+      const { rest, postMock } = makeDiscordRest();
+      postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
+
+      await sendStickerDiscord("channel:789", ["123"], {
+        cfg: discordTestConfig,
+        rest,
+        token: "t",
+        content: "https://example.com",
+        ...(silent === undefined ? {} : { silent }),
+      });
+
+      expect(requestBody(postMock as unknown as MockCallSource).flags).toBe(flags);
     });
 
     it("reuses a single nonce across a retried 502 for stickers", async () => {

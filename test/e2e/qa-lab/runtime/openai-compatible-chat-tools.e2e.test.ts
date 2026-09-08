@@ -1,23 +1,16 @@
 // OpenAI-compatible chat tools tests cover QA Lab HTTP tool-call evidence.
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
-import { createBoundedChildOutput } from "../../../helpers/bounded-child-output.js";
+import { runNodeScript } from "../../../helpers/run-node-script.js";
 import { cleanupTempDirs, makeTempDir } from "../../../helpers/temp-dir.js";
 
 const clientPath = path.resolve("scripts/e2e/lib/openai-chat-tools/client.mjs");
 const dockerRunnerPath = path.resolve("scripts/e2e/openai-chat-tools-docker.sh");
 const writeConfigPath = path.resolve("scripts/e2e/lib/openai-chat-tools/write-config.mjs");
-
-interface ClientResult {
-  error?: Error;
-  status: number | null;
-  stderr: string;
-  stdout: string;
-}
 
 async function listen(server: Server): Promise<number> {
   await new Promise<void>((resolve, reject) => {
@@ -34,52 +27,19 @@ async function listen(server: Server): Promise<number> {
   return address.port;
 }
 
-function runClient(
-  port: number | string,
-  env: Record<string, string> = {},
-  timeout = 5_000,
-): Promise<ClientResult> {
-  return new Promise((resolve) => {
-    const child = spawn(process.execPath, [clientPath], {
-      env: {
-        ...process.env,
-        MODEL_REF: "openai/gpt-5.4-mini",
-        OPENCLAW_GATEWAY_TOKEN: "test-token",
-        OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS: "1",
-        PORT: String(port),
-        ...env,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const stdout = createBoundedChildOutput();
-    const stderr = createBoundedChildOutput();
-    let timedOut = false;
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout.append(chunk);
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr.append(chunk);
-    });
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGKILL");
-    }, timeout);
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      resolve({ error, status: null, stderr: stderr.text(), stdout: stdout.text() });
-    });
-    child.on("exit", (status) => {
-      clearTimeout(timer);
-      resolve({
-        error: timedOut ? new Error(`client timed out after ${timeout}ms`) : undefined,
-        status,
-        stderr: stderr.text(),
-        stdout: stdout.text(),
-      });
-    });
-  });
+function runClient(port: number | string, env: Record<string, string> = {}, timeout = 5_000) {
+  return runNodeScript(
+    clientPath,
+    {
+      ...process.env,
+      MODEL_REF: "openai/gpt-5.4-mini",
+      OPENCLAW_GATEWAY_TOKEN: "test-token",
+      OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS: "1",
+      PORT: String(port),
+      ...env,
+    },
+    timeout,
+  );
 }
 
 function runWriteConfig(root: string, env: Record<string, string> = {}) {
@@ -138,7 +98,7 @@ describe("scripts/e2e/lib/openai-chat-tools/client.mjs", () => {
   let bodyReadTimeoutProbe: {
     elapsedMs: number;
     responseClosed: boolean;
-    result: ClientResult;
+    result: Awaited<ReturnType<typeof runClient>>;
   };
 
   beforeAll(async () => {

@@ -349,7 +349,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
   const pinned = await directSessionReq<{
     entry: { pinnedAt?: number };
   }>("sessions.patch", {
-    key: "agent:main:subagent:one",
+    key: "agent:main:discord:group:dev",
     pinned: true,
   });
   expect(pinned.ok).toBe(true);
@@ -359,16 +359,16 @@ test("lists and patches session store via sessions.* RPC", async () => {
     sessions: Array<{ key: string; pinned?: boolean }>;
   }>("sessions.list", {});
   expect(pinnedList.payload?.sessions[0]).toMatchObject({
-    key: "agent:main:subagent:one",
+    key: "agent:main:discord:group:dev",
     pinned: true,
   });
 
   const archived = await directSessionReq<{
     entry: { archivedAt?: number; pinnedAt?: number };
   }>("sessions.patch", {
-    key: "agent:main:subagent:one",
+    key: "agent:main:discord:group:dev",
     archived: true,
-    expectedSessionId: "sess-subagent",
+    expectedSessionId: "sess-group",
   });
   expect(archived.ok).toBe(true);
   expect(archived.payload?.entry.archivedAt).toEqual(expect.any(Number));
@@ -378,24 +378,24 @@ test("lists and patches session store via sessions.* RPC", async () => {
     sessions: Array<{ key: string }>;
   }>("sessions.list", {});
   expect(activeAfterArchive.payload?.sessions.map((session) => session.key)).not.toContain(
-    "agent:main:subagent:one",
+    "agent:main:discord:group:dev",
   );
   const archivedList = await directSessionReq<{
     sessions: Array<{ key: string; archived?: boolean }>;
   }>("sessions.list", { archived: true });
   expect(archivedList.payload?.sessions).toMatchObject([
-    { key: "agent:main:subagent:one", archived: true },
+    { key: "agent:main:discord:group:dev", archived: true },
   ]);
 
   const archivedSend = await directSessionReq("sessions.send", {
-    key: "agent:main:subagent:one",
+    key: "agent:main:discord:group:dev",
     message: "blocked while archived",
   });
   expect(archivedSend).toMatchObject({
     ok: false,
     error: {
       message:
-        'Session "agent:main:subagent:one" is archived. Restore it before starting new work.',
+        'Session "agent:main:discord:group:dev" is archived. Restore it before starting new work.',
     },
   });
 
@@ -406,7 +406,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
     payload: { runId: cachedArchivedRunId, status: "ok" },
   });
   const cachedArchivedSend = await directSessionReq("sessions.send", {
-    key: "agent:main:subagent:one",
+    key: "agent:main:discord:group:dev",
     message: "already completed before archive",
     idempotencyKey: cachedArchivedRunId,
   });
@@ -416,22 +416,22 @@ test("lists and patches session store via sessions.* RPC", async () => {
   });
 
   const archivedReset = await directSessionReq("sessions.reset", {
-    key: "agent:main:subagent:one",
+    key: "agent:main:discord:group:dev",
   });
   expect(archivedReset).toMatchObject({
     ok: false,
     error: {
       message:
-        'Session "agent:main:subagent:one" is archived. Restore it before starting new work.',
+        'Session "agent:main:discord:group:dev" is archived. Restore it before starting new work.',
     },
   });
 
   const restored = await directSessionReq<{
     entry: { archivedAt?: number };
   }>("sessions.patch", {
-    key: "agent:main:subagent:one",
+    key: "agent:main:discord:group:dev",
     archived: false,
-    expectedSessionId: "sess-subagent",
+    expectedSessionId: "sess-group",
   });
   expect(restored.ok).toBe(true);
   expect(restored.payload?.entry.archivedAt).toBeUndefined();
@@ -650,14 +650,13 @@ test("lists and patches session store via sessions.* RPC", async () => {
   const entryAfterReset = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
   expect(deliveryContextFromSession(entryAfterReset)?.accountId).toBe("work");
   expect(deliveryContextFromSession(entryAfterReset)?.threadId).toBe("1737500000.123456");
-  // Retained history stays in the same SQLite transcript behind the reset boundary.
   const resetTranscript = await loadTranscriptRows({
     sessionId: "sess-main",
     sessionKey: "agent:main:main",
     storePath,
   });
-  expect(resetTranscript).toHaveLength(4);
   expect(resetTranscript.at(-1)).toMatchObject({ type: "reset", reason: "reset" });
+  expect(resetTranscript.at(-1)).not.toHaveProperty("firstKeptEntryId");
 
   const badThinking = await directSessionReq("sessions.patch", {
     key: "agent:main:main",

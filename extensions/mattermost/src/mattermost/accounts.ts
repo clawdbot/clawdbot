@@ -146,8 +146,20 @@ export function resolveMattermostAccount(params: {
 export function inspectMattermostAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
-}): ResolvedMattermostAccount {
-  return resolveMattermostAccountWithMode({ ...params, mode: "inspect" });
+}) {
+  const account = resolveMattermostAccountWithMode({ ...params, mode: "inspect" });
+  return {
+    ...account,
+    configured: isMattermostConfigured(account),
+    dmPolicy: account.config.dmPolicy ?? "pairing",
+  };
+}
+
+export function isMattermostConfigured(account: ResolvedMattermostAccount): boolean {
+  const tokenConfigured = account.botTokenStatus
+    ? account.botTokenStatus !== "missing"
+    : Boolean(account.botToken);
+  return tokenConfigured && Boolean(account.baseUrl);
 }
 
 /**

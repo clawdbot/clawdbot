@@ -8,6 +8,10 @@ export const SessionsResolveParamsSchema = closedObject({
   key: Type.Optional(NonEmptyString),
   sessionId: Type.Optional(NonEmptyString),
   label: Type.Optional(SessionLabelString),
+  /** Discover a visible exact key first, then an optional display-name slug. */
+  reference: Type.Optional(
+    closedObject({ key: NonEmptyString, slug: Type.Optional(NonEmptyString) }),
+  ),
   /** Bare 8-32 character hexadecimal prefix of a session key's trailing UUID. */
   shortId: Type.Optional(NonEmptyString),
   /** Optional display-name slug used only to narrow ambiguous shortId matches. */
@@ -21,3 +25,21 @@ export const SessionsResolveParamsSchema = closedObject({
 });
 
 export type SessionsResolveParams = Static<typeof SessionsResolveParamsSchema>;
+
+export const SessionsResolveCandidateSchema = closedObject({
+  key: NonEmptyString,
+  agentId: NonEmptyString,
+  displayName: Type.Optional(Type.String()),
+  boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
+});
+
+export const SessionsResolveResultSchema = Type.Union([
+  closedObject({ ok: Type.Literal(true), ...SessionsResolveCandidateSchema.properties }),
+  closedObject({
+    ok: Type.Literal(false),
+    candidates: Type.Optional(Type.Array(SessionsResolveCandidateSchema, { maxItems: 10 })),
+  }),
+]);
+
+export type SessionsResolveCandidate = Static<typeof SessionsResolveCandidateSchema>;
+export type SessionsResolveResult = Static<typeof SessionsResolveResultSchema>;

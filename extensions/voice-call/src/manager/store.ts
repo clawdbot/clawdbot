@@ -67,10 +67,10 @@ function resolvePluginStateEnv(storePath: string): NodeJS.ProcessEnv {
 }
 
 /** Open the plugin state stores when the runtime is available. */
-function createCallRecordStateStores(storePath: string): CallRecordStateStores | null {
+function createCallRecordStateStores(storePath: string): CallRecordStateStores {
   const runtime = getOptionalVoiceCallStateRuntime();
   if (!runtime) {
-    return null;
+    throw new Error("Voice Call state runtime not initialized");
   }
   const env = resolvePluginStateEnv(storePath);
   return {
@@ -278,14 +278,29 @@ function pruneCallRecordEvents(stores: CallRecordStateStores): void {
 }
 
 /** Read and reassemble one chunked call record event. */
-function readCallRecordEvent(stores: CallRecordStateStores, eventKey: string): CallRecord | null {
-  const meta = stores.events.lookup(eventKey);
-  if (!meta) {
+function readCallRecordEvent(
+  stores: CallRecordStateStores,
+  eventKey: string,
+  meta: CallRecordEventMeta,
+): CallRecord | null {
+  if (
+    !Number.isSafeInteger(meta.chunkCount) ||
+    meta.chunkCount < 1 ||
+    meta.chunkCount > MAX_CHUNKS_PER_CALL_RECORD_EVENT
+  ) {
     return null;
   }
+  // Preserve compatibility with published hosts exposing point reads only.
+  const records = stores.chunks.lookupMany?.(
+    Array.from({ length: meta.chunkCount }, (_, index) => buildChunkKey(eventKey, index)),
+  );
   const chunks: Buffer[] = [];
   for (let index = 0; index < meta.chunkCount; index += 1) {
-    const chunk = stores.chunks.lookup(buildChunkKey(eventKey, index));
+    const result = records?.[index];
+    if (result && !result.ok) {
+      throw result.error;
+    }
+    const chunk = records ? result?.value : stores.chunks.lookup(buildChunkKey(eventKey, index));
     if (!chunk || chunk.index !== index) {
       return null;
     }
@@ -301,7 +316,7 @@ function readCallRecordEvents(stores: CallRecordStateStores): CallRecord[] {
     .entries()
     .toSorted((a, b) => a.createdAt - b.createdAt || a.key.localeCompare(b.key))
     .map((entry) => {
-      const call = readCallRecordEvent(stores, entry.key);
+      const call = readCallRecordEvent(stores, entry.key, entry.value);
       return call
         ? {
             call,
@@ -326,9 +341,6 @@ function readCallRecordEvents(stores: CallRecordStateStores): CallRecord[] {
 export function persistCallRecord(storePath: string, call: CallRecord): void {
   try {
     const stores = createCallRecordStateStores(storePath);
-    if (!stores) {
-      throw new Error("Voice Call state runtime not initialized");
-    }
     const order = nextCallRecordOrder();
     registerCallRecordEvent(stores, buildNewEventKey(order), call, order);
   } catch (err) {
@@ -397,16 +409,14 @@ function readCallHistoryFromStore(storePath: string): CallRecord[] {
   return [];
 }
 
-/** Find the newest retained snapshots matching each call identifier namespace. */
-export async function findCallMatchesInStore(
-  storePath: string,
-  callId: string,
-): Promise<{ byCallId?: CallRecord; byProviderCallId?: CallRecord }> {
-  const calls = readCallHistoryFromStore(storePath);
-  return {
-    byCallId: calls.findLast((call) => call.callId === callId),
-    byProviderCallId: calls.findLast((call) => call.providerCallId === callId),
-  };
+/** Resolve an internal ID or retained provider alias to its newest logical call snapshot. */
+export function findCallInStore(storePath: string, callId: string): CallRecord | undefined {
+  // Admission and status must distinguish unavailable history from an absent call.
+  const calls = readCallRecordEvents(createCallRecordStateStores(storePath));
+  const match =
+    calls.findLast((call) => call.callId === callId) ??
+    calls.findLast((call) => call.providerCallId === callId);
+  return match ? calls.findLast((call) => call.callId === match.callId) : undefined;
 }
 
 /** Return the newest persisted call history rows up to the requested limit. */

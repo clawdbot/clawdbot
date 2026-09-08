@@ -5,14 +5,15 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { ensureAuthProfileStore, loadAuthProfileStoreForRuntime } from "./auth-profiles/store.js";
+import {
+  ensureAuthProfileStore,
+  loadAuthProfileStoreForRuntime,
+} from "./auth-profiles/store-runtime.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
 import {
-  readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
   readGeminiCliCredentialsCached,
-  type ClaudeCliCredential,
   type CodexCliCredential,
   type GeminiCliCredential,
 } from "./cli-credentials.js";
@@ -29,7 +30,6 @@ import {
 import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 
 type CliAuthEpochDeps = {
-  readClaudeCliCredentialsCached: typeof readClaudeCliCredentialsCached;
   readCodexCliCredentialsCached: typeof readCodexCliCredentialsCached;
   readGeminiCliCredentialsCached: typeof readGeminiCliCredentialsCached;
   ensureAuthProfileStore: typeof ensureAuthProfileStore;
@@ -37,7 +37,6 @@ type CliAuthEpochDeps = {
 };
 
 const defaultCliAuthEpochDeps: CliAuthEpochDeps = {
-  readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
   readGeminiCliCredentialsCached,
   ensureAuthProfileStore,
@@ -97,25 +96,6 @@ function encodeOAuthIdentity(credential: {
     credential.projectId ?? null,
     credential.accountId ?? null,
   ]);
-}
-
-function encodeClaudeCredential(credential: ClaudeCliCredential): string {
-  if (credential.type === "api_key_helper") {
-    return JSON.stringify([credential.type, credential.provider, credential.helperHash]);
-  }
-  // Identity-only hashing for Claude CLI-managed credentials.
-  // The Claude CLI keychain rewrite is not atomic: a token rotation can
-  // briefly produce a partial read where `refreshToken` is missing, and the
-  // parser falls back to a token-shaped credential. With the previous
-  // token-inclusive hash, that transient race flipped the auth-epoch and
-  // forced a session reset on every rotation. Routing these branches through
-  // `encodeOAuthIdentity` collapses partial reads and rotations onto the same
-  // provider-keyed identity hash. Helper auth stays distinct because changing
-  // its configured command can switch accounts. Fixes #74312.
-  return encodeOAuthIdentity({
-    type: "oauth",
-    provider: credential.provider,
-  });
 }
 
 function encodeCodexCredential(credential: CodexCliCredential): string {
@@ -194,16 +174,6 @@ function encodeAuthProfileEpochPart(
 
 function getLocalCliCredentialFingerprint(provider: string): string | undefined {
   switch (provider) {
-    case "claude-cli": {
-      const credential = cliAuthEpochDeps.readClaudeCliCredentialsCached({
-        ttlMs: 5000,
-        allowKeychainPrompt: false,
-      });
-      // Keep true credential absence absent so logout/removal invalidates
-      // reusable sessions. The 5s credential cache still masks transient
-      // null reads immediately after a successful read.
-      return credential ? hashCliAuthEpochPart(encodeClaudeCredential(credential)) : undefined;
-    }
     case "codex-cli": {
       const credential = cliAuthEpochDeps.readCodexCliCredentialsCached({
         ttlMs: 5000,
@@ -224,15 +194,6 @@ function getLocalCliCredentialFingerprint(provider: string): string | undefined 
 
 function getLocalCliCredential(provider: string): AuthProfileCredential | undefined {
   switch (provider) {
-    case "claude-cli": {
-      const auth = cliAuthEpochDeps.readClaudeCliCredentialsCached({
-        ttlMs: 0,
-        allowKeychainPrompt: false,
-      });
-      // Helper auth has no persisted secret/profile shape; its opaque command
-      // fingerprint is already carried by getLocalCliCredentialFingerprint.
-      return auth?.type === "api_key_helper" ? undefined : (auth ?? undefined);
-    }
     case "codex-cli":
       return (
         cliAuthEpochDeps.readCodexCliCredentialsCached({

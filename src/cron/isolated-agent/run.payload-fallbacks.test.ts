@@ -1,17 +1,19 @@
 // Payload fallback tests cover fallback prompt payloads for isolated cron runs.
 import { describe, expect, it, vi } from "vitest";
+import {
+  runFallbackModelAttempt,
+  runInitialModelFallbackAttempt,
+  type TestModelFallbackRunnerParams,
+} from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
-  classifyEmbeddedAgentRunResultForModelFallbackMock,
   isCliProviderMock,
   loadRunCronIsolatedAgentTurn,
-  mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock,
   mockRunCronFallbackPassthrough,
   patchSessionEntryMock,
   resolveAgentConfigMock,
   resolveConfiguredModelRefMock,
-  resolveCliRuntimeExecutionProviderMock,
   resolveEffectiveAgentRuntimeMock,
   resolveAgentModelFallbacksOverrideMock,
   runCliAgentMock,
@@ -22,20 +24,13 @@ import {
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
 function requireModelFallbackRequest(): {
-  classifyResult?: (params: { provider: string; model: string; result: unknown }) => unknown;
   fallbacksOverride?: string[];
-  mergeExhaustedResult?: (params: { latestResult: unknown; preferredResult: unknown }) => unknown;
   provider?: string;
   model?: string;
 } {
   const request = runWithModelFallbackMock.mock.calls[0]?.[0] as
     | {
-        classifyResult?: (params: { provider: string; model: string; result: unknown }) => unknown;
         fallbacksOverride?: string[];
-        mergeExhaustedResult?: (params: {
-          latestResult: unknown;
-          preferredResult: unknown;
-        }) => unknown;
         provider?: string;
         model?: string;
       }
@@ -154,38 +149,6 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
     );
   });
 
-  it("classifies isolated cron results for model fallback", async () => {
-    const classification = { reason: "format", code: "empty_result" };
-    classifyEmbeddedAgentRunResultForModelFallbackMock.mockReturnValue(classification);
-
-    const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentParamsFixture({
-        job: makeIsolatedAgentJobFixture({
-          payload: { kind: "agentTurn", message: "test" },
-        }),
-      }),
-    );
-
-    expect(result.status).toBe("ok");
-    const fallbackRequest = requireModelFallbackRequest();
-    const embeddedResult = { payloads: [], meta: { agentMeta: {} } };
-    expect(
-      fallbackRequest.classifyResult?.({
-        provider: "anthropic",
-        model: "claude-sonnet-4-6",
-        result: embeddedResult,
-      }),
-    ).toBe(classification);
-    expect(classifyEmbeddedAgentRunResultForModelFallbackMock).toHaveBeenCalledWith({
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-      result: embeddedResult,
-    });
-    expect(fallbackRequest.mergeExhaustedResult).toBe(
-      mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock,
-    );
-  });
-
   it("marks only later candidates in one prompt as fallback runners", async () => {
     const onExecutionStarted = vi.fn();
     const onExecutionPhase = vi.fn();
@@ -197,9 +160,9 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
         meta: { agentMeta: {} },
       };
     });
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
-      await run(provider, model);
-      const result = await run("openai", "gpt-5");
+    runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => {
+      await runInitialModelFallbackAttempt(params);
+      const result = await runFallbackModelAttempt(params, "openai", "gpt-5", "unknown");
       return { result, provider: "openai", model: "gpt-5", attempts: [] };
     });
 
@@ -221,9 +184,6 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
 
   it("plans Anthropic fallbacks canonically while executing compatible attempts through Claude CLI", async () => {
     isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
-    resolveCliRuntimeExecutionProviderMock.mockImplementation(
-      ({ provider }: { provider: string }) => (provider === "anthropic" ? "claude-cli" : undefined),
-    );
     resolveConfiguredModelRefMock.mockReturnValue({
       provider: "anthropic",
       model: "claude-opus-4-6",
@@ -235,9 +195,14 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
         meta: { agentMeta: {} },
       };
     });
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
-      const firstResult = await run(provider, model);
-      const secondResult = await run("anthropic", "claude-sonnet-4-6");
+    runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => {
+      const firstResult = await runInitialModelFallbackAttempt(params);
+      const secondResult = await runFallbackModelAttempt(
+        params,
+        "anthropic",
+        "claude-sonnet-4-6",
+        "unknown",
+      );
       return {
         result: secondResult ?? firstResult,
         provider: "anthropic",
@@ -322,9 +287,9 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
       provider === "openai" ? "codex" : "openclaw",
     );
     runEmbeddedAgentMock.mockRejectedValueOnce(new Error("primary failed"));
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
-      await expect(run(provider, model)).rejects.toThrow("primary failed");
-      return await run("anthropic", "claude-sonnet-4-6");
+    runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => {
+      await expect(runInitialModelFallbackAttempt(params)).rejects.toThrow("primary failed");
+      return await runFallbackModelAttempt(params, "anthropic", "claude-sonnet-4-6", "unknown");
     });
 
     const result = await runCronIsolatedAgentTurn(

@@ -1,0 +1,288 @@
+name: Prepare Docker Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Intended immutable stable, extended-stable, or beta release tag
+        required: true
+        type: string
+      release_sha:
+        description: Final immutable Release SHA, including its changelog
+        required: true
+        type: string
+      image_tag_suffix:
+        description: Optional dated rebuild suffix for version-identified image tags
+        required: false
+        default: ""
+        type: string
+  workflow_call:
+    inputs:
+      tag:
+        description: Intended immutable stable, extended-stable, or beta release tag
+        required: true
+        type: string
+      release_sha:
+        description: Final immutable Release SHA, including its changelog
+        required: true
+        type: string
+      image_tag_suffix:
+        description: Optional dated rebuild suffix for version-identified image tags
+        required: false
+        default: ""
+        type: string
+    outputs:
+      version:
+        value: ${{ jobs.resolve.outputs.version }}
+      include_browser:
+        value: ${{ jobs.resolve.outputs.include_browser }}
+      prepared_run_id:
+        value: ${{ github.run_id }}
+      prepared_run_attempt:
+        value: ${{ github.run_attempt }}
+      prepared_artifact_name:
+        value: ${{ jobs.resolve.outputs.artifact_name }}
+      prepared_manifest_sha256:
+        value: ${{ jobs.seal.outputs.manifest_sha256 }}
+
+# Preparation is a separate authority boundary: callers need no publication
+# secrets, environment approval, registry-write permission, or alias lock.
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  resolve:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      include_browser: ${{ steps.identity.outputs.include_browser }}
+      built_at: ${{ steps.identity.outputs.built_at }}
+      artifact_name: ${{ steps.identity.outputs.artifact_name }}
+    steps:
+      - name: Checkout immutable source metadata
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.release_sha }}
+          path: source
+          fetch-depth: 1
+          sparse-checkout: |
+            package.json
+            Dockerfile
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Checkout trusted Docker tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: workflow-source
+          fetch-depth: 1
+          sparse-checkout: scripts
+          persist-credentials: false
+      - name: Resolve exact preparation identity
+        id: identity
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          IMAGE_TAG_SUFFIX: ${{ inputs.image_tag_suffix }}
+        run: |
+          set -euo pipefail
+          test "$(git -C source rev-parse HEAD)" = "${RELEASE_SHA}"
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { appendFileSync, readFileSync } from 'node:fs';
+          import { dockerReleaseArtifactName, validateDockerReleaseIdentity } from './workflow-source/scripts/docker-release-artifacts.mjs';
+          const env = process.env;
+          const policy = validateDockerReleaseIdentity({ tag: env.RELEASE_TAG, sourceSha: env.RELEASE_SHA, imageTagSuffix: env.IMAGE_TAG_SUFFIX, packageVersion: JSON.parse(readFileSync('source/package.json', 'utf8')).version });
+          if (policy.baseTag) {
+            execFileSync('git', ['-C', 'source', 'fetch', '--no-tags', '--depth=1', 'origin', `refs/tags/${policy.baseTag}:refs/tags/${policy.baseTag}`], { stdio: 'inherit' });
+            const baseSha = execFileSync('git', ['-C', 'source', 'rev-parse', `${policy.baseTag}^{commit}`], { encoding: 'utf8' }).trim();
+            if (baseSha !== env.RELEASE_SHA) throw new Error('Docker correction source must match its base release tag.');
+          }
+          const includeBrowser = /^ARG OPENCLAW_INSTALL_BROWSER/m.test(readFileSync('source/Dockerfile', 'utf8'));
+          appendFileSync(env.GITHUB_OUTPUT, `version=${policy.version}\ninclude_browser=${includeBrowser}\nbuilt_at=${new Date().toISOString()}\nartifact_name=${dockerReleaseArtifactName(env.RELEASE_SHA, env.GITHUB_RUN_ATTEMPT)}\n`);
+          NODE
+
+  # Native release builds and tag backfills stay on official hosted runners
+  # and Docker actions; changing this requires renewed backfill proof.
+  build:
+    name: Prepare Docker images (${{ matrix.architecture }})
+    needs: resolve
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - architecture: amd64
+            runner: ubuntu-24.04
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      IMAGE_TAG_SUFFIX: ${{ inputs.image_tag_suffix }}
+      BUILT_AT: ${{ needs.resolve.outputs.built_at }}
+      INCLUDE_BROWSER: ${{ needs.resolve.outputs.include_browser }}
+    steps:
+      - name: Checkout immutable build source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.release_sha }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Checkout trusted Docker tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: workflow-source
+          fetch-depth: 1
+          sparse-checkout: scripts
+          persist-credentials: false
+      - name: Install reviewed OCI transport
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y skopeo
+          # Ubuntu 24.04's 1.13.3 line includes distro security revisions.
+          # OCI --all --preserve-digests is the publication transport contract.
+          skopeo --version | grep -Fx 'skopeo version 1.13.3'
+          dpkg-query --show --showformat='${Package} ${Version}\n' skopeo
+      - name: Pre-pull BuildKit image
+        env:
+          BUILDKIT_IMAGE: moby/buildkit:buildx-stable-1
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4; do
+            if docker pull "${BUILDKIT_IMAGE}"; then break; fi
+            if [[ "${attempt}" == 4 ]]; then exit 1; fi
+            sleep "$((attempt * 10))"
+          done
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        with:
+          # Hosted VMs own local builder teardown; deleting its large volume here
+          # delays the dependent seal job after artifact uploads have finished.
+          cleanup: false
+      - name: Prepare OCI output directory
+        run: mkdir -p "${RUNNER_TEMP}/docker-release/oci"
+      # Both variants reuse this builder's local cache. Fresh provenance timestamps
+      # invalidate application layers across runs; remote transfers cost more than
+      # reusing the remaining runtime setup saves.
+      # Fast gzip keeps new layers compatible with the Skopeo smoke transport.
+      - name: Build default OCI image
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: source
+          platforms: linux/${{ matrix.architecture }}
+          outputs: type=oci,dest=${{ runner.temp }}/docker-release/oci/default,tar=false,compression=gzip,compression-level=1
+          build-args: |
+            GIT_COMMIT=${{ inputs.release_sha }}
+            OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve.outputs.built_at }}
+            OPENCLAW_DOCKER_BUILD_VERSION=${{ needs.resolve.outputs.version }}
+            OPENCLAW_EXTENSIONS=diagnostics-otel,codex
+          labels: |
+            org.opencontainers.image.revision=${{ inputs.release_sha }}
+            org.opencontainers.image.version=${{ needs.resolve.outputs.version }}
+            org.opencontainers.image.created=${{ needs.resolve.outputs.built_at }}
+          sbom: true
+          provenance: mode=max
+          push: false
+      - name: Build browser OCI image
+        if: ${{ needs.resolve.outputs.include_browser == 'true' }}
+        id: build-browser
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: source
+          platforms: linux/${{ matrix.architecture }}
+          outputs: type=oci,dest=${{ runner.temp }}/docker-release/oci/browser,tar=false,compression=gzip,compression-level=1
+          build-args: |
+            GIT_COMMIT=${{ inputs.release_sha }}
+            OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve.outputs.built_at }}
+            OPENCLAW_DOCKER_BUILD_VERSION=${{ needs.resolve.outputs.version }}
+            OPENCLAW_EXTENSIONS=diagnostics-otel,codex
+            OPENCLAW_INSTALL_BROWSER=1
+          labels: |
+            org.opencontainers.image.revision=${{ inputs.release_sha }}
+            org.opencontainers.image.version=${{ needs.resolve.outputs.version }}
+            org.opencontainers.image.created=${{ needs.resolve.outputs.built_at }}
+          sbom: true
+          provenance: mode=max
+          push: false
+      - name: Verify OCI bytes, attestations, and image smoke
+        env:
+          JOB_CONTEXT: ${{ toJSON(job) }}
+          ARCHITECTURE: ${{ matrix.architecture }}
+          DEFAULT_DIGEST: ${{ steps.build.outputs.digest }}
+          BROWSER_DIGEST: ${{ steps.build-browser.outputs.digest }}
+        run: |
+          set -euo pipefail
+          node workflow-source/scripts/docker-release-artifacts.mjs prepare \
+            --directory "${RUNNER_TEMP}/docker-release/oci" \
+            --architecture "${ARCHITECTURE}" \
+            --output "${RUNNER_TEMP}/docker-release/metadata/${ARCHITECTURE}.json"
+      - name: Upload immutable OCI payload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ needs.resolve.outputs.artifact_name }}-${{ matrix.architecture }}
+          path: ${{ runner.temp }}/docker-release/oci
+          compression-level: 0
+          if-no-files-found: error
+      - name: Upload architecture proof
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ needs.resolve.outputs.artifact_name }}-metadata-${{ matrix.architecture }}
+          path: ${{ runner.temp }}/docker-release/metadata/${{ matrix.architecture }}.json
+          if-no-files-found: error
+
+  seal:
+    name: Seal prepared Docker images
+    needs: [resolve, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      manifest_sha256: ${{ steps.manifest.outputs.manifest_sha256 }}
+    steps:
+      - name: Checkout trusted Docker tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: workflow-source
+          fetch-depth: 1
+          sparse-checkout: scripts
+          persist-credentials: false
+      - name: Download architecture proof
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: ${{ needs.resolve.outputs.artifact_name }}-metadata-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/docker-release/metadata
+      - name: Seal exact prepared image identities
+        id: manifest
+        env:
+          SEAL_CHECK_RUN_ID: ${{ job.check_run_id }}
+          JOB_CONTEXT: ${{ toJSON(job) }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          IMAGE_TAG_SUFFIX: ${{ inputs.image_tag_suffix }}
+          BUILT_AT: ${{ needs.resolve.outputs.built_at }}
+          INCLUDE_BROWSER: ${{ needs.resolve.outputs.include_browser }}
+        run: |
+          set -euo pipefail
+          node workflow-source/scripts/docker-release-artifacts.mjs seal \
+            --directory "${RUNNER_TEMP}/docker-release/metadata" \
+            --output "${RUNNER_TEMP}/docker-release/manifest.json"
+      - name: Upload immutable Docker preparation manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ needs.resolve.outputs.artifact_name }}
+          path: ${{ runner.temp }}/docker-release/manifest.json
+          if-no-files-found: error

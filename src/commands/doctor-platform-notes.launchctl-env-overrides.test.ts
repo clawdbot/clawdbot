@@ -1,15 +1,24 @@
 // Doctor launchctl environment tests cover macOS gateway platform warnings for env overrides.
 import fs from "node:fs";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
-const processMocks = vi.hoisted(() => ({
+const mocks = vi.hoisted(() => ({
   runExec: vi.fn(),
+  note: vi.fn(),
+  readCommand: vi.fn(),
+  findJobs: vi.fn(),
 }));
 
 vi.mock("../process/exec.js", () => ({
-  runExec: processMocks.runExec,
+  runExec: mocks.runExec,
 }));
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
+vi.mock("../daemon/service.js", () => ({
+  resolveGatewayService: () => ({ readCommand: mocks.readCommand }),
+}));
+vi.mock("../daemon/launchd.js", () => ({ findStaleOpenClawUpdateLaunchdJobs: mocks.findJobs }));
 
 import {
   collectMacGatewayPlatformWarnings,
@@ -17,85 +26,72 @@ import {
   noteMacStaleOpenClawUpdateLaunchdJobs,
 } from "./doctor-platform-notes.js";
 
-function requireNoteCall(noteFn: { mock: { calls: unknown[][] } }, index = 0): unknown[] {
-  const call = noteFn.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected note call ${index}`);
+const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+
+beforeEach(() => {
+  vi.resetAllMocks();
+  Object.defineProperty(process, "platform", { ...platformDescriptor, value: "darwin" });
+  vi.stubEnv("HOME", "/tmp/openclaw-doctor-host");
+  vi.stubEnv("OPENCLAW_STATE_DIR", "/tmp/openclaw-doctor-host-state");
+  vi.spyOn(fs, "existsSync").mockReturnValue(false);
+  mocks.runExec.mockResolvedValue({ stdout: "", stderr: "" });
+  mocks.readCommand.mockResolvedValue(null);
+  mocks.findJobs.mockResolvedValue([]);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  if (platformDescriptor) {
+    Object.defineProperty(process, "platform", platformDescriptor);
   }
-  return call;
-}
+});
 
 describe("noteMacLaunchctlGatewayEnvOverrides", () => {
-  beforeEach(() => {
-    processMocks.runExec.mockReset().mockResolvedValue({ stdout: "", stderr: "" });
-  });
-
-  it("collects clear unsetenv instructions for token override", async () => {
-    const noteFn = vi.fn();
-    const getenv = vi.fn(async (name: string) =>
-      name === "OPENCLAW_GATEWAY_TOKEN" ? "launchctl-token" : undefined,
-    );
-    const cfg = {
-      gateway: {
-        auth: {
-          token: "config-token",
-        },
-      },
-    } as OpenClawConfig;
-
-    await noteMacLaunchctlGatewayEnvOverrides(cfg, { platform: "darwin", getenv, noteFn });
-    const [warning] = requireNoteCall(noteFn);
-
-    expect(warning).toContain("Host-wide launchctl gateway auth overrides detected");
-    expect(warning).toContain("OPENCLAW_GATEWAY_TOKEN");
-    expect(warning).toContain("launchctl unsetenv OPENCLAW_GATEWAY_TOKEN");
-    expect(warning).not.toContain("OPENCLAW_GATEWAY_PASSWORD");
-  });
-
   it("prints clear unsetenv instructions for token override", async () => {
-    const noteFn = vi.fn();
-    const getenv = vi.fn(async (name: string) =>
-      name === "OPENCLAW_GATEWAY_TOKEN" ? "launchctl-token" : undefined,
-    );
-    const cfg = {
+    mocks.runExec.mockImplementation(async (_command, [, name]) => ({
+      stdout: name === "OPENCLAW_GATEWAY_TOKEN" ? " \tlaunchctl-token\n" : " \n",
+      stderr: "",
+    }));
+    const cfg: OpenClawConfig = {
       gateway: {
         auth: {
           token: "config-token",
         },
       },
-    } as OpenClawConfig;
+    };
 
-    await noteMacLaunchctlGatewayEnvOverrides(cfg, { platform: "darwin", getenv, noteFn });
+    await noteMacLaunchctlGatewayEnvOverrides(cfg);
 
-    expect(noteFn).toHaveBeenCalledTimes(1);
-    expect(getenv).toHaveBeenCalledTimes(2);
+    expect(mocks.note).toHaveBeenCalledTimes(1);
+    expect(mocks.runExec).toHaveBeenCalledTimes(2);
 
-    const [message, title] = requireNoteCall(noteFn);
+    const [message, title] = expectDefined<unknown[]>(mocks.note.mock.calls[0], "note call 0");
     expect(title).toBe("Gateway (macOS)");
     expect(message).toContain("Host-wide launchctl gateway auth overrides detected");
     expect(message).toContain("Current managed Gateway installs do not need these values");
     expect(message).toContain("OPENCLAW_GATEWAY_TOKEN");
     expect(message).toContain("launchctl unsetenv OPENCLAW_GATEWAY_TOKEN");
     expect(message).not.toContain("OPENCLAW_GATEWAY_PASSWORD");
+    expect(message).not.toContain("launchctl-token");
+    expect(message).not.toContain("config-token");
   });
 
   it("does nothing when config has no gateway credentials", async () => {
-    const noteFn = vi.fn();
-    const getenv = vi.fn(async () => "launchctl-token");
-    const cfg = {} as OpenClawConfig;
+    mocks.runExec.mockResolvedValue({ stdout: "launchctl-token", stderr: "" });
 
-    await noteMacLaunchctlGatewayEnvOverrides(cfg, { platform: "darwin", getenv, noteFn });
+    await noteMacLaunchctlGatewayEnvOverrides({});
 
-    expect(getenv).not.toHaveBeenCalled();
-    expect(noteFn).not.toHaveBeenCalled();
+    expect(mocks.runExec).not.toHaveBeenCalled();
+    expect(mocks.note).not.toHaveBeenCalled();
   });
 
   it("treats SecretRef-backed credentials as configured", async () => {
-    const noteFn = vi.fn();
-    const getenv = vi.fn(async (name: string) =>
-      name === "OPENCLAW_GATEWAY_PASSWORD" ? "launchctl-password" : undefined,
-    );
-    const cfg = {
+    mocks.runExec.mockImplementation(async (_command, [, name]) => ({
+      stdout: name === "OPENCLAW_GATEWAY_PASSWORD" ? " \tlaunchctl-password\n" : " \n",
+      stderr: "",
+    }));
+    const cfg: OpenClawConfig = {
       gateway: {
         auth: {
           password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
@@ -106,58 +102,59 @@ describe("noteMacLaunchctlGatewayEnvOverrides", () => {
           default: { source: "env" },
         },
       },
-    } as OpenClawConfig;
+    };
 
-    await noteMacLaunchctlGatewayEnvOverrides(cfg, { platform: "darwin", getenv, noteFn });
+    await noteMacLaunchctlGatewayEnvOverrides(cfg);
 
-    expect(noteFn).toHaveBeenCalledTimes(1);
-    const [message] = requireNoteCall(noteFn);
+    expect(mocks.note).toHaveBeenCalledTimes(1);
+    const [message] = expectDefined<unknown[]>(mocks.note.mock.calls[0], "note call 0");
     expect(message).toContain("OPENCLAW_GATEWAY_PASSWORD");
+    expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN");
+    expect(message).not.toContain("launchctl-password");
   });
 
   it("does nothing on non-darwin platforms", async () => {
-    const noteFn = vi.fn();
-    const getenv = vi.fn(async () => "launchctl-token");
-    const cfg = {
+    Object.defineProperty(process, "platform", { ...platformDescriptor, value: "linux" });
+    mocks.runExec.mockResolvedValue({ stdout: "launchctl-token", stderr: "" });
+    const cfg: OpenClawConfig = {
       gateway: {
         auth: {
           token: "config-token",
         },
       },
-    } as OpenClawConfig;
+    };
 
-    await noteMacLaunchctlGatewayEnvOverrides(cfg, { platform: "linux", getenv, noteFn });
+    await noteMacLaunchctlGatewayEnvOverrides(cfg);
 
-    expect(getenv).not.toHaveBeenCalled();
-    expect(noteFn).not.toHaveBeenCalled();
+    expect(mocks.runExec).not.toHaveBeenCalled();
+    expect(mocks.note).not.toHaveBeenCalled();
   });
 
   it("bounds launchctl getenv calls and ignores timeout failures", async () => {
-    const noteFn = vi.fn();
-    processMocks.runExec.mockRejectedValue(new Error("timed out"));
-    const cfg = {
+    mocks.runExec.mockRejectedValue(new Error("timed out"));
+    const cfg: OpenClawConfig = {
       gateway: {
         auth: {
           token: "config-token",
         },
       },
-    } as OpenClawConfig;
+    };
 
-    await noteMacLaunchctlGatewayEnvOverrides(cfg, { platform: "darwin", noteFn });
+    await noteMacLaunchctlGatewayEnvOverrides(cfg);
 
-    expect(processMocks.runExec).toHaveBeenNthCalledWith(
+    expect(mocks.runExec).toHaveBeenNthCalledWith(
       1,
       "/bin/launchctl",
       ["getenv", "OPENCLAW_GATEWAY_TOKEN"],
       { logOutput: false, timeoutMs: 5_000 },
     );
-    expect(processMocks.runExec).toHaveBeenNthCalledWith(
+    expect(mocks.runExec).toHaveBeenNthCalledWith(
       2,
       "/bin/launchctl",
       ["getenv", "OPENCLAW_GATEWAY_PASSWORD"],
       { logOutput: false, timeoutMs: 5_000 },
     );
-    expect(noteFn).not.toHaveBeenCalled();
+    expect(mocks.note).not.toHaveBeenCalled();
   });
 });
 
@@ -167,23 +164,17 @@ describe("noteMacStaleOpenClawUpdateLaunchdJobs", () => {
       OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
       OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.manual-update.gateway",
     };
-    const service = {
-      readCommand: vi.fn(async () => ({
-        programArguments: ["/bin/node", "cli", "gateway"],
-        environment: serviceEnv,
-      })),
-    };
-    const findJobs = vi.fn(async () => []);
-
-    await collectMacGatewayPlatformWarnings({} as OpenClawConfig, {
-      platform: "darwin",
-      service,
-      findJobs,
+    mocks.readCommand.mockResolvedValue({
+      programArguments: ["/bin/node", "cli", "gateway"],
+      environment: serviceEnv,
     });
 
-    expect(service.readCommand).toHaveBeenCalledTimes(1);
-    expect(findJobs).toHaveBeenCalledWith(
+    await collectMacGatewayPlatformWarnings({});
+
+    expect(mocks.readCommand).toHaveBeenCalledTimes(1);
+    expect(mocks.findJobs).toHaveBeenCalledWith(
       expect.objectContaining({
+        HOME: "/tmp/openclaw-doctor-host",
         OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
         OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.manual-update.gateway",
       }),
@@ -195,23 +186,17 @@ describe("noteMacStaleOpenClawUpdateLaunchdJobs", () => {
       OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
       OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.manual-update.gateway",
     };
-    const service = {
-      readCommand: vi.fn(async () => ({
-        programArguments: ["/bin/node", "cli", "doctor"],
-        environment: serviceEnv,
-      })),
-    };
-    const findJobs = vi.fn(async () => []);
-
-    await noteMacStaleOpenClawUpdateLaunchdJobs({
-      platform: "darwin",
-      service,
-      findJobs,
+    mocks.readCommand.mockResolvedValue({
+      programArguments: ["/bin/node", "cli", "doctor"],
+      environment: serviceEnv,
     });
 
-    expect(service.readCommand).toHaveBeenCalledTimes(1);
-    expect(findJobs).toHaveBeenCalledWith(
+    await noteMacStaleOpenClawUpdateLaunchdJobs();
+
+    expect(mocks.readCommand).toHaveBeenCalledTimes(1);
+    expect(mocks.findJobs).toHaveBeenCalledWith(
       expect.objectContaining({
+        HOME: "/tmp/openclaw-doctor-host",
         OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
         OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.manual-update.gateway",
       }),
@@ -219,11 +204,7 @@ describe("noteMacStaleOpenClawUpdateLaunchdJobs", () => {
   });
 
   it("prints stale updater job cleanup guidance on macOS", async () => {
-    const noteFn = vi.fn();
-    const service = {
-      readCommand: vi.fn(async () => null),
-    };
-    const findJobs = vi.fn(async () => [
+    mocks.findJobs.mockResolvedValue([
       {
         label: "ai.openclaw.update.2026.5.12",
         lastExitStatus: 127,
@@ -234,15 +215,10 @@ describe("noteMacStaleOpenClawUpdateLaunchdJobs", () => {
       },
     ]);
 
-    await noteMacStaleOpenClawUpdateLaunchdJobs({
-      platform: "darwin",
-      service,
-      findJobs,
-      noteFn,
-    });
+    await noteMacStaleOpenClawUpdateLaunchdJobs();
 
-    expect(findJobs).toHaveBeenCalledTimes(1);
-    const [message, title] = requireNoteCall(noteFn);
+    expect(mocks.findJobs).toHaveBeenCalledTimes(1);
+    const [message, title] = expectDefined<unknown[]>(mocks.note.mock.calls[0], "note call 0");
     expect(title).toBe("Gateway (macOS)");
     expect(message).toContain("Stale OpenClaw updater launchd job(s) detected");
     expect(message).toContain("ai.openclaw.update.2026.5.12");
@@ -252,54 +228,25 @@ describe("noteMacStaleOpenClawUpdateLaunchdJobs", () => {
   });
 
   it("does nothing when no stale updater jobs exist", async () => {
-    const noteFn = vi.fn();
-    const service = {
-      readCommand: vi.fn(async () => null),
-    };
-    const findJobs = vi.fn(async () => []);
+    await noteMacStaleOpenClawUpdateLaunchdJobs();
 
-    await noteMacStaleOpenClawUpdateLaunchdJobs({
-      platform: "darwin",
-      service,
-      findJobs,
-      noteFn,
-    });
-
-    expect(noteFn).not.toHaveBeenCalled();
+    expect(mocks.note).not.toHaveBeenCalled();
   });
 });
 
 describe("collectMacGatewayPlatformWarnings", () => {
   it("collects guidance when launch agent writes are disabled", async () => {
-    const exists = vi
-      .spyOn(fs, "existsSync")
-      .mockImplementation((candidate) => String(candidate).includes("disable-launchagent"));
-    try {
-      const warnings = await collectMacGatewayPlatformWarnings({} as OpenClawConfig, {
-        platform: "darwin",
-        service: { readCommand: vi.fn(async () => null) },
-        findJobs: vi.fn(async () => []),
-      });
+    vi.mocked(fs.existsSync).mockImplementation(
+      (candidate) => candidate === "/tmp/openclaw-doctor-host/.openclaw/disable-launchagent",
+    );
+    mocks.readCommand.mockResolvedValue({ environment: { HOME: "/tmp/openclaw-doctor-service" } });
+    const warnings = await collectMacGatewayPlatformWarnings({});
 
-      expect(warnings).toEqual([expect.stringContaining("LaunchAgent writes are disabled")]);
-      expect(warnings[0]).toContain("disable-launchagent");
-    } finally {
-      exists.mockRestore();
-    }
+    expect(warnings).toEqual([expect.stringContaining("LaunchAgent writes are disabled")]);
+    expect(warnings[0]).toContain("disable-launchagent");
   });
 
   it("does nothing when launch agent writes are not disabled", async () => {
-    const exists = vi.spyOn(fs, "existsSync").mockReturnValue(false);
-    try {
-      await expect(
-        collectMacGatewayPlatformWarnings({} as OpenClawConfig, {
-          platform: "darwin",
-          service: { readCommand: vi.fn(async () => null) },
-          findJobs: vi.fn(async () => []),
-        }),
-      ).resolves.toEqual([]);
-    } finally {
-      exists.mockRestore();
-    }
+    await expect(collectMacGatewayPlatformWarnings({})).resolves.toEqual([]);
   });
 });

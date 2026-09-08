@@ -12,6 +12,7 @@ import {
 } from "./bash-tools.exec-approval-followup-state.js";
 import {
   buildExecApprovalPendingToolResult,
+  buildHeadlessExecApprovalDeniedMessage,
   createExecApprovalRequestRoute,
   resolveExecApprovalWaitOutcome,
   resolveExecHostApprovalContext,
@@ -19,6 +20,7 @@ import {
 } from "./bash-tools.exec-host-shared.js";
 
 const mocks = vi.hoisted(() => ({
+  followupImports: 0,
   resolveExecApprovals: vi.fn(async () => ({
     defaults: {
       security: "allowlist",
@@ -39,6 +41,11 @@ const mocks = vi.hoisted(() => ({
   approvalRunAbortedError: new Error("approval owning run aborted"),
   resolveRegisteredExecApprovalDecision: vi.fn(async (): Promise<string | null> => "allow-once"),
 }));
+
+vi.mock("./bash-tools.exec-approval-followup.js", async (importOriginal) => {
+  mocks.followupImports += 1;
+  return importOriginal<typeof import("./bash-tools.exec-approval-followup.js")>();
+});
 
 vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../infra/exec-approvals.js")>();
@@ -103,6 +110,31 @@ describe("sendExecApprovalFollowupResult", () => {
         }
       | undefined;
   }
+
+  it("does not load delivery when importing shared approval helpers", () => {
+    expect(mocks.followupImports).toBe(0);
+  });
+
+  it("logs default delivery import failures through the deduplicated dispatch handler", async () => {
+    const loadDelivery = vi.fn(() => {
+      throw new Error("synthetic delivery import failure");
+    });
+    vi.doMock("./bash-tools.exec-approval-followup.js", loadDelivery);
+    try {
+      const target = { approvalId: "approval-import-failure" };
+      await sendExecApprovalFollowupResult(target, "Exec finished", { logWarn });
+      await sendExecApprovalFollowupResult(target, "Exec finished", { logWarn });
+
+      expect(loadDelivery).toHaveBeenCalled();
+      expect(logWarn).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(
+          "exec approval followup dispatch failed (id=approval-import-failure):",
+        ),
+      );
+    } finally {
+      vi.doUnmock("./bash-tools.exec-approval-followup.js");
+    }
+  });
 
   it("logs repeated followup dispatch failures once per approval id and error message", async () => {
     sendExecApprovalFollowup.mockRejectedValue(new Error("Channel is required"));
@@ -766,5 +798,37 @@ describe("buildExecApprovalPendingToolResult", () => {
     expect(text).not.toContain("/approve");
     expect(text).not.toContain("Pending command:");
     expect(text).not.toContain("Approver DMs were sent");
+  });
+});
+
+describe("buildHeadlessExecApprovalDeniedMessage", () => {
+  it("points gateway automation runs at card-capable approval clients, not the TUI", () => {
+    const text = buildHeadlessExecApprovalDeniedMessage({
+      trigger: "cron",
+      host: "gateway",
+      security: "allowlist",
+      ask: "on-miss",
+      askFallback: "deny",
+    });
+
+    expect(text).toContain("Automation runs cannot wait for interactive exec approval");
+    expect(text).toContain("Control UI or a macOS/iOS/Android app");
+    expect(text).toContain("standing grant");
+    expect(text).not.toContain("TUI,");
+    expect(text).not.toContain("terminal UI");
+  });
+
+  it("offers the interactive rerun surfaces for non-automation headless runs", () => {
+    const text = buildHeadlessExecApprovalDeniedMessage({
+      host: "node",
+      security: "allowlist",
+      ask: "on-miss",
+      askFallback: "deny",
+    });
+
+    expect(text).toContain("Headless runs cannot wait for interactive exec approval");
+    expect(text).toContain("rerun interactively");
+    expect(text).toContain("Control UI, TUI, or a chat channel with exec approvals");
+    expect(text).not.toContain("standing grant");
   });
 });

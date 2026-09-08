@@ -5,6 +5,28 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach } from "vitest";
 
+export function linkPnpmBootstrapShellTools(binDir: string): void {
+  // Omit package managers: absence must not depend on the host's installed tools.
+  for (const name of [
+    "bash",
+    "cp",
+    "date",
+    "dirname",
+    "env",
+    "grep",
+    "head",
+    "mkdir",
+    "mktemp",
+    "rm",
+  ]) {
+    const binary = ["/usr/bin", "/bin"].map((dir) => path.join(dir, name)).find(fs.existsSync);
+    if (!binary) {
+      throw new Error(`Missing system shell fixture tool: ${name}`);
+    }
+    fs.symlinkSync(binary, path.join(binDir, name));
+  }
+}
+
 export function writeNodeBackedJq(binDir: string): void {
   const jqPath = path.join(binDir, "jq");
   fs.writeFileSync(

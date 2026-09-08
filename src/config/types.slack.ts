@@ -129,6 +129,8 @@ export type SlackAccountConfig = Omit<
 > &
   ChannelBotInteractionConfig &
   ChannelReactionConfig<SlackReactionNotificationMode, never, string, true> & {
+    /** Post a room-specific introduction when joining a group. Default: true. */
+    joinIntro?: boolean;
     /** @deprecated Doctor-only legacy input. */
     identity?: "bot" | "user";
     /** @deprecated Doctor-only legacy input. */

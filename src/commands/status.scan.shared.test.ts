@@ -14,13 +14,22 @@ import {
   sendMinimalGatewayConnectChallenge,
   sendMinimalGatewayResponse,
 } from "../gateway/minimal-gateway.test-helpers.js";
+import { createUnreachableGatewayProbe } from "./gateway-status/test-support.js";
 import {
   buildTailscaleHttpsUrl,
-  resolveGatewayProbeSnapshot,
+  resolveGatewayProbeSnapshot as resolveGatewayProbeSnapshotOwner,
   resolveSharedMemoryStatusSnapshot,
 } from "./status.scan.shared.js";
 
 const tempDirs: string[] = [];
+const resolveGatewayProbeSnapshot = (
+  params: Omit<Parameters<typeof resolveGatewayProbeSnapshotOwner>[0], "configPath" | "env">,
+) =>
+  resolveGatewayProbeSnapshotOwner({
+    ...params,
+    configPath: "/tmp/openclaw.json",
+    env: process.env,
+  });
 
 afterEach(() => {
   cleanupTempDirs(tempDirs);
@@ -226,6 +235,7 @@ describe("resolveGatewayProbeSnapshot", () => {
       ok: false,
       url: "ws://127.0.0.1:18789",
       connectLatencyMs: 51,
+      gatewayReached: true,
       error: "missing scope: operator.read",
       close: null,
       auth: {
@@ -258,22 +268,9 @@ describe("resolveGatewayProbeSnapshot", () => {
       gatewayMode: "local",
       remoteUrlMissing: false,
     });
-    mocks.probeGateway.mockResolvedValue({
-      ok: false,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: null,
-      error: "timeout",
-      close: null,
-      auth: {
-        role: null,
-        scopes: [],
-        capability: "unknown",
-      },
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
-    });
+    mocks.probeGateway.mockResolvedValue(
+      createUnreachableGatewayProbe("ws://127.0.0.1:18789", "timeout"),
+    );
     mocks.callGateway.mockResolvedValue({ sessions: 1 });
 
     const result = await resolveGatewayProbeSnapshot({
@@ -300,28 +297,39 @@ describe("resolveGatewayProbeSnapshot", () => {
     expect(result.gatewayProbeAuthWarning).toBe("warn");
   });
 
+  it("does not use the local status RPC fallback for dotted localhost", async () => {
+    mocks.buildGatewayConnectionDetailsWithResolvers.mockReturnValue({
+      url: "ws://localhost.:18789",
+      urlSource: "local loopback",
+      message: "Gateway target: ws://localhost.:18789",
+    });
+    mocks.resolveGatewayProbeTarget.mockReturnValue({
+      mode: "local",
+      gatewayMode: "local",
+      remoteUrlMissing: false,
+    });
+    mocks.probeGateway.mockResolvedValue(
+      createUnreachableGatewayProbe("ws://localhost.:18789", "timeout"),
+    );
+
+    const result = await resolveGatewayProbeSnapshot({
+      cfg: {},
+      opts: {},
+    });
+
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(result.gatewayProbe?.ok).toBe(false);
+  });
+
   it("uses built-in probe defaults for the local status RPC fallback", async () => {
     mocks.resolveGatewayProbeTarget.mockReturnValue({
       mode: "local",
       gatewayMode: "local",
       remoteUrlMissing: false,
     });
-    mocks.probeGateway.mockResolvedValue({
-      ok: false,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: null,
-      error: "timeout",
-      close: null,
-      auth: {
-        role: null,
-        scopes: [],
-        capability: "unknown",
-      },
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
-    });
+    mocks.probeGateway.mockResolvedValue(
+      createUnreachableGatewayProbe("ws://127.0.0.1:18789", "timeout"),
+    );
     mocks.callGateway.mockResolvedValue({ sessions: 1 });
 
     await resolveGatewayProbeSnapshot({
@@ -345,22 +353,9 @@ describe("resolveGatewayProbeSnapshot", () => {
         gatewayMode: "local",
         remoteUrlMissing: false,
       });
-      mocks.probeGateway.mockResolvedValue({
-        ok: false,
-        url: "ws://127.0.0.1:18789",
-        connectLatencyMs: null,
-        error: "timeout",
-        close: null,
-        auth: {
-          role: null,
-          scopes: [],
-          capability: "unknown",
-        },
-        health: null,
-        status: null,
-        presence: null,
-        configSnapshot: null,
-      });
+      mocks.probeGateway.mockResolvedValue(
+        createUnreachableGatewayProbe("ws://127.0.0.1:18789", "timeout"),
+      );
       mocks.callGateway.mockResolvedValue({ sessions: 1 });
 
       await resolveGatewayProbeSnapshot({
@@ -501,22 +496,9 @@ describe("resolveGatewayProbeSnapshot", () => {
       gatewayMode: "remote",
       remoteUrlMissing: false,
     });
-    mocks.probeGateway.mockResolvedValue({
-      ok: false,
-      url: "wss://gateway.example/ws",
-      connectLatencyMs: null,
-      error: "timeout",
-      close: null,
-      auth: {
-        role: null,
-        scopes: [],
-        capability: "unknown",
-      },
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
-    });
+    mocks.probeGateway.mockResolvedValue(
+      createUnreachableGatewayProbe("wss://gateway.example/ws", "timeout"),
+    );
 
     const result = await resolveGatewayProbeSnapshot({
       cfg: { gateway: { mode: "remote", remote: { url: "wss://gateway.example/ws" } } },

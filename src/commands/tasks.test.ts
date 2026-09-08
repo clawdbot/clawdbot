@@ -31,6 +31,7 @@ import type {
 } from "../tasks/task-system-audit.types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createInMemoryTaskFlowRegistryStore } from "../test-utils/task-registry-store.js";
 import {
   tasksAuditCommand,
   tasksCancelCommand,
@@ -197,7 +198,7 @@ describe("tasks commands", () => {
         };
       };
 
-      expect(payload.summary.byCode.lost).toBe(1);
+      expect(payload.summary.byCode.stale_running).toBe(1);
       expect(payload.summary.taskFlows.byCode.stale_waiting).toBe(1);
       expect(payload.summary.taskFlows.byCode.missing_linked_tasks).toBe(1);
       expect(payload.summary.combined.total).toBe(3);
@@ -241,8 +242,8 @@ describe("tasks commands", () => {
       });
       configureTaskFlowRegistryRuntime({
         store: {
+          ...createInMemoryTaskFlowRegistryStore(),
           loadSnapshot,
-          saveSnapshot: () => {},
         },
       });
 
@@ -329,6 +330,14 @@ describe("tasks commands", () => {
 
   it.each([
     {
+      label: "CLI",
+      runtime: "cli",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:main",
+      runId: "run-cli-cancel",
+    },
+    {
       label: "Cron",
       runtime: "cron",
       ownerKey: "",
@@ -382,7 +391,7 @@ describe("tasks commands", () => {
         expect.objectContaining({
           method: "tasks.cancel",
           params: { taskId: task.taskId },
-          timeoutMs: 5_000,
+          timeoutMs: testCase.runtime === "cli" ? 15_000 : 5_000,
         }),
       );
       expect(runtime.log).toHaveBeenCalledWith(
@@ -393,53 +402,38 @@ describe("tasks commands", () => {
     });
   });
 
-  it.each(["gateway", "local"] as const)(
-    "sanitizes untrusted %s task cancellation output",
-    async (owner) => {
-      await withTaskCommandStateDir(async () => {
-        const unsafe = UNSAFE_TASK_TERMINAL_TEXT;
-        const gatewayOwned = owner === "gateway";
-        const task = createInspectableTask({
-          runtime: gatewayOwned ? "cron" : "cli",
-          ownerKey: gatewayOwned ? "" : "agent:main:main",
-          scopeKind: gatewayOwned ? "system" : "session",
-          runId: `run${unsafe}`,
-        });
-        if (gatewayOwned) {
-          mocks.callGateway.mockResolvedValueOnce({
-            found: true,
-            cancelled: true,
-            task: {
-              taskId: `${task.taskId}${unsafe}`,
-              runtime: `cron${unsafe}`,
-              runId: task.runId,
-            },
-          });
-        }
-        const runtime = createRuntime();
-        await tasksCancelCommand({ lookup: task.taskId }, runtime);
-        expect(runtime.log).toHaveBeenCalledWith(
-          expect.stringContaining(`Cancelled ${task.taskId}`),
-        );
-        expectSafeTaskOutput(runtime);
-        if (!gatewayOwned) {
-          expect(getTaskById(task.taskId)).toMatchObject({
-            status: "cancelled",
-            runId: `run${unsafe}`,
-          });
-          return;
-        }
-        mocks.callGateway.mockResolvedValueOnce({
-          found: true,
-          cancelled: false,
-          reason: `gateway refused${unsafe}`,
-        });
-        const failureRuntime = createRuntime();
-        await tasksCancelCommand({ lookup: task.taskId }, failureRuntime);
-        expectSafeTaskOutput(failureRuntime, "error");
+  it("sanitizes untrusted task cancellation output", async () => {
+    await withTaskCommandStateDir(async () => {
+      const unsafe = UNSAFE_TASK_TERMINAL_TEXT;
+      const task = createInspectableTask({
+        runtime: "cron",
+        ownerKey: "",
+        scopeKind: "system",
+        runId: `run${unsafe}`,
       });
-    },
-  );
+      mocks.callGateway.mockResolvedValueOnce({
+        found: true,
+        cancelled: true,
+        task: {
+          taskId: `${task.taskId}${unsafe}`,
+          runtime: `cron${unsafe}`,
+          runId: task.runId,
+        },
+      });
+      const runtime = createRuntime();
+      await tasksCancelCommand({ lookup: task.taskId }, runtime);
+      expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(`Cancelled ${task.taskId}`));
+      expectSafeTaskOutput(runtime);
+      mocks.callGateway.mockResolvedValueOnce({
+        found: true,
+        cancelled: false,
+        reason: `gateway refused${unsafe}`,
+      });
+      const failureRuntime = createRuntime();
+      await tasksCancelCommand({ lookup: task.taskId }, failureRuntime);
+      expectSafeTaskOutput(failureRuntime, "error");
+    });
+  });
 
   it.each([
     {
@@ -966,13 +960,11 @@ describe("tasks commands", () => {
         const loadSnapshot = vi.fn(() => {
           throw new Error("SQLITE_CORRUPT: task-flow maintenance restore failed");
         });
-        const saveSnapshot = vi.fn();
         const upsertFlow = vi.fn();
         const deleteFlow = vi.fn();
         configureTaskFlowRegistryRuntime({
           store: {
             loadSnapshot,
-            saveSnapshot,
             upsertFlow,
             deleteFlow,
           },
@@ -984,7 +976,6 @@ describe("tasks commands", () => {
         );
 
         expect(loadSnapshot).toHaveBeenCalledTimes(1);
-        expect(saveSnapshot).not.toHaveBeenCalled();
         expect(upsertFlow).not.toHaveBeenCalled();
         expect(deleteFlow).not.toHaveBeenCalled();
         expect(runtime.log).not.toHaveBeenCalled();

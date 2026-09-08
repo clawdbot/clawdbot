@@ -15,6 +15,7 @@ import type {
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import { normalizePollInput } from "openclaw/plugin-sdk/poll-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -65,10 +66,19 @@ function readMessageText(params: Record<string, unknown>): string | undefined {
   return readStringParam(params, "text") ?? readStringParam(params, "message");
 }
 
+function rejectRedactedIMessageTarget(value: string | undefined): string | undefined {
+  if (value === "***") {
+    throw new Error(
+      "iMessage action target is a redacted display value. Omit the target to use the current conversation.",
+    );
+  }
+  return value;
+}
+
 function resolveIMessageDeliveryTarget(args: Record<string, unknown>): string | undefined {
-  const chatGuid = readStringParam(args, "chatGuid");
+  const chatGuid = rejectRedactedIMessageTarget(readStringParam(args, "chatGuid"));
   const chatId = readPositiveIntegerParam(args, "chatId");
-  const chatIdentifier = readStringParam(args, "chatIdentifier");
+  const chatIdentifier = rejectRedactedIMessageTarget(readStringParam(args, "chatIdentifier"));
   const targets = [
     chatGuid ? `chat_guid:${chatGuid}` : undefined,
     chatId !== undefined ? `chat_id:${chatId}` : undefined,
@@ -89,6 +99,7 @@ function resolveIMessageActionTarget(params: {
     readStringParam(params.actionParams, "to") ??
     readStringParam(params.actionParams, "target") ??
     (params.currentChannelId?.trim() || undefined);
+  rejectRedactedIMessageTarget(rawTarget);
   return rawTarget ? parseIMessageTarget(rawTarget) : null;
 }
 
@@ -287,7 +298,11 @@ function decodeBase64Buffer(params: Record<string, unknown>, action: string): Ui
   if (!base64Buffer) {
     throw new Error(`iMessage ${action} requires buffer (base64) parameter.`);
   }
-  return Uint8Array.from(Buffer.from(base64Buffer, "base64"));
+  const canonical = canonicalizeBase64(base64Buffer.replaceAll("-", "+").replaceAll("_", "/"));
+  if (!canonical) {
+    throw new Error(`iMessage ${action} buffer must be valid base64.`);
+  }
+  return Uint8Array.from(Buffer.from(canonical, "base64"));
 }
 
 // Path-shaped attachment params the message-tool schema declares. We only
@@ -321,7 +336,7 @@ function extractReplyAttachment(
     return {
       spec: {
         kind: "buffer",
-        buffer: Uint8Array.from(Buffer.from(buffer, "base64")),
+        buffer: decodeBase64Buffer(params, "reply attachment"),
         filename,
       },
       sourceParam: "buffer",
@@ -755,7 +770,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     if (action === "sendAttachment" || action === "upload-file") {
       await assertPrivateApiEnabled();
       const filename = readStringParam(params, "filename", { required: true });
-      const asVoice = readBooleanParam(params, "asVoice") ?? readBooleanParam(params, "as_voice");
+      const asVoice = readBooleanParam(params, "asVoice");
       const resolvedChatGuid = await chatGuid();
       const result = await runtime.sendAttachment({
         chatGuid: resolvedChatGuid,

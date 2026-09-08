@@ -1,13 +1,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   isPathOwnedByAnotherRegisteredAgent,
   registerResolvedAgentDir,
   resolveRegisteredAgentIdForDir,
   unregisterResolvedAgentDir,
 } from "./agent-dir-registry.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("agent directory registry", () => {
   it("unregisters only the requested owner", () => {
@@ -82,6 +85,25 @@ describe("agent directory registry", () => {
     } finally {
       unregisterResolvedAgentDir({ agentId: "current", agentDir: linkedAgentDir });
       fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("matches tilde paths against the effective custom home", () => {
+    const root = tempDirs.make("openclaw-agent-dir-home-");
+    const customHome = path.join(root, "home");
+    const agentDir = path.join(customHome, "agents", "main", "agent");
+    const env = { HOME: customHome, OPENCLAW_HOME: customHome };
+    fs.mkdirSync(customHome, { recursive: true });
+
+    try {
+      registerResolvedAgentDir({
+        agentId: "main",
+        agentDir: "~/agents/main/agent",
+        env,
+      });
+      expect(resolveRegisteredAgentIdForDir(agentDir, env)).toBe("main");
+    } finally {
+      unregisterResolvedAgentDir({ agentId: "main", agentDir, env });
     }
   });
 });

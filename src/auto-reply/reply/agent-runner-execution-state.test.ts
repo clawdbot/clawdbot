@@ -8,28 +8,28 @@ import {
   createMockTypingSignaler,
   createFollowupRun,
   expectMockCallArgFields,
+  fallbackAttemptOptions,
+  initialFallbackAttemptOptions,
   createMinimalRunAgentTurnParams,
 } from "./agent-runner-execution.test-support.js";
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: session state", () => {
   it("restarts the active prompt when a live model switch is requested", async () => {
     let fallbackInvocation = 0;
-    state.runWithModelFallbackMock.mockImplementation(
-      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
-        const isInitialInvocation = fallbackInvocation++ === 0;
-        const provider = isInitialInvocation ? "anthropic" : "openai";
-        const model = isInitialInvocation ? "claude" : "gpt-5.4";
-        return {
-          result: await params.run(provider, model),
-          provider,
-          model,
-          attempts: [],
-        };
-      },
-    );
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const isInitialInvocation = fallbackInvocation++ === 0;
+      const provider = isInitialInvocation ? "anthropic" : "openai";
+      const model = isInitialInvocation ? "claude" : "gpt-5.4";
+      return {
+        result: await params.run(provider, model, initialFallbackAttemptOptions(params)),
+        provider,
+        model,
+        attempts: [],
+      };
+    });
     state.runEmbeddedAgentMock
       .mockImplementationOnce(async () => {
         throw new LiveSessionModelSwitchError({
@@ -90,17 +90,21 @@ describe("executeAgentTurn: session state", () => {
     // with the fallback model, causing LiveSessionModelSwitchError on every attempt.
     // The outer loop must be bounded to prevent a session death loop.
     let switchCallCount = 0;
-    state.runWithModelFallbackMock.mockImplementation(
-      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
-        switchCallCount++;
-        return {
-          result: await params.run("anthropic", "claude"),
-          provider: "anthropic",
-          model: "claude",
-          attempts: [],
-        };
-      },
-    );
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      switchCallCount++;
+      return {
+        result: await params.run(
+          "anthropic",
+          "claude",
+          switchCallCount === 1
+            ? initialFallbackAttemptOptions(params)
+            : fallbackAttemptOptions(params, "unknown"),
+        ),
+        provider: "anthropic",
+        model: "claude",
+        attempts: [],
+      };
+    });
     state.runEmbeddedAgentMock.mockImplementation(async () => {
       throw new LiveSessionModelSwitchError({
         provider: "openai",
@@ -142,26 +146,30 @@ describe("executeAgentTurn: session state", () => {
 
   it("propagates auth profile state on bounded live model switch retries (#58348)", async () => {
     let invocation = 0;
-    state.runWithModelFallbackMock.mockImplementation(
-      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
-        invocation++;
-        if (invocation <= 2) {
-          return {
-            result: await params.run("anthropic", "claude"),
-            provider: "anthropic",
-            model: "claude",
-            attempts: [],
-          };
-        }
-        // Third invocation succeeds with the switched model
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      invocation++;
+      if (invocation <= 2) {
         return {
-          result: await params.run("openai", "gpt-5.4"),
-          provider: "openai",
-          model: "gpt-5.4",
+          result: await params.run(
+            "anthropic",
+            "claude",
+            invocation === 1
+              ? initialFallbackAttemptOptions(params)
+              : fallbackAttemptOptions(params, "unknown"),
+          ),
+          provider: "anthropic",
+          model: "claude",
           attempts: [],
         };
-      },
-    );
+      }
+      // Third invocation succeeds with the switched model
+      return {
+        result: await params.run("openai", "gpt-5.4", initialFallbackAttemptOptions(params)),
+        provider: "openai",
+        model: "gpt-5.4",
+        attempts: [],
+      };
+    });
     state.runEmbeddedAgentMock
       .mockImplementationOnce(async () => {
         throw new LiveSessionModelSwitchError({
@@ -241,12 +249,12 @@ describe("executeAgentTurn: session state", () => {
   });
 
   it("does not roll back newer override changes after a failed fallback candidate", async () => {
-    state.runWithModelFallbackMock.mockImplementation(
-      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
-        await expect(params.run("openai", "gpt-5.4")).rejects.toThrow("fallback failed");
-        throw new Error("fallback failed");
-      },
-    );
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      await expect(
+        params.run("openai", "gpt-5.4", fallbackAttemptOptions(params, "unknown")),
+      ).rejects.toThrow("fallback failed");
+      throw new Error("fallback failed");
+    });
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -299,14 +307,12 @@ describe("executeAgentTurn: session state", () => {
   });
 
   it("keeps cross-provider fallback selection turn-local", async () => {
-    state.runWithModelFallbackMock.mockImplementation(
-      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-        result: await params.run("openai", "gpt-5.4"),
-        provider: "openai",
-        model: "gpt-5.4",
-        attempts: [],
-      }),
-    );
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
+      result: await params.run("openai", "gpt-5.4", fallbackAttemptOptions(params, "unknown")),
+      provider: "openai",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
     state.runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "ok" }],
       meta: {},
@@ -373,14 +379,12 @@ describe("executeAgentTurn: session state", () => {
     // was added later.  These legacy entries must still be protected from
     // fallback overwrite, matching the backward-compat treatment in
     // session-reset-service.
-    state.runWithModelFallbackMock.mockImplementation(
-      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-        result: await params.run("openai", "gpt-5.4"),
-        provider: "openai",
-        model: "gpt-5.4",
-        attempts: [],
-      }),
-    );
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
+      result: await params.run("openai", "gpt-5.4", fallbackAttemptOptions(params, "unknown")),
+      provider: "openai",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
     state.runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "ok" }],
       meta: {},
@@ -435,14 +439,12 @@ describe("executeAgentTurn: session state", () => {
   });
 
   it("does not replace a recovered auto override during fallback", async () => {
-    state.runWithModelFallbackMock.mockImplementation(
-      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-        result: await params.run("openai", "gpt-5.4"),
-        provider: "openai",
-        model: "gpt-5.4",
-        attempts: [],
-      }),
-    );
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
+      result: await params.run("openai", "gpt-5.4", fallbackAttemptOptions(params, "unknown")),
+      provider: "openai",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
     state.runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "ok" }],
       meta: {},
@@ -502,14 +504,12 @@ describe("executeAgentTurn: session state", () => {
     // Regression: fallback persistence overwrote user-initiated /models
     // selections.  When the user explicitly picked a model, the fallback
     // should NOT clobber it even when the primary model fails.
-    state.runWithModelFallbackMock.mockImplementation(
-      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-        result: await params.run("openai", "gpt-5.4"),
-        provider: "openai",
-        model: "gpt-5.4",
-        attempts: [],
-      }),
-    );
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
+      result: await params.run("openai", "gpt-5.4", fallbackAttemptOptions(params, "unknown")),
+      provider: "openai",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
     state.runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "ok" }],
       meta: {},
@@ -563,33 +563,22 @@ describe("executeAgentTurn: session state", () => {
     expect(sessionEntry.modelOverrideSource).toBe("user");
   });
 
-  it("latches assistant error stub suppression across main reply fallback candidates", async () => {
+  it("shares one deferred assistant error owner across main reply fallback candidates", async () => {
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      await params.run("anthropic", "claude-opus-4-7").catch(() => undefined);
-      await params.run("anthropic", "claude-opus-4-6").catch(() => undefined);
+      await params
+        .run("anthropic", "claude-opus-4-7", initialFallbackAttemptOptions(params))
+        .catch(() => undefined);
+      await params
+        .run("anthropic", "claude-opus-4-6", fallbackAttemptOptions(params, "unknown"))
+        .catch(() => undefined);
       return {
-        result: await params.run("openai", "gpt-5.4"),
+        result: await params.run("openai", "gpt-5.4", fallbackAttemptOptions(params, "unknown")),
         provider: "openai",
         model: "gpt-5.4",
         attempts: [],
       };
     });
-    state.runEmbeddedAgentMock.mockImplementationOnce(
-      async (args: {
-        onAssistantErrorMessagePersisted?: (message: {
-          role: "assistant";
-          content: string;
-          stopReason: "error";
-        }) => void;
-      }) => {
-        args.onAssistantErrorMessagePersisted?.({
-          role: "assistant",
-          content: "[assistant turn failed before producing content]",
-          stopReason: "error",
-        });
-        throw new Error("upstream 500");
-      },
-    );
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("upstream 500"));
     state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("upstream 500"));
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
@@ -600,23 +589,21 @@ describe("executeAgentTurn: session state", () => {
     await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(3);
-    expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "primary candidate", {
-      suppressAssistantErrorPersistence: false,
-    });
-    expectMockCallArgFields(state.runEmbeddedAgentMock, 1, "first fallback candidate", {
-      suppressAssistantErrorPersistence: true,
-    });
-    expectMockCallArgFields(state.runEmbeddedAgentMock, 2, "second fallback candidate", {
-      suppressAssistantErrorPersistence: true,
-    });
+    const owner = state.runEmbeddedAgentMock.mock.calls[0]?.[0].assistantErrorTranscript;
+    expect(owner).toMatchObject({ record: expect.any(Function), settle: expect.any(Function) });
+    for (const [args] of state.runEmbeddedAgentMock.mock.calls) {
+      expect(args.assistantErrorTranscript).toBe(owner);
+    }
   });
 
-  it("does not suppress the first embedded assistant error after a CLI fallback failure", async () => {
+  it("defers the first embedded assistant error after a CLI fallback failure", async () => {
     state.isCliProviderMock.mockImplementation((provider: unknown) => provider === "anthropic");
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      await params.run("anthropic", "claude-opus-4-7").catch(() => undefined);
+      await params
+        .run("anthropic", "claude-opus-4-7", initialFallbackAttemptOptions(params))
+        .catch(() => undefined);
       return {
-        result: await params.run("openai", "gpt-5.4"),
+        result: await params.run("openai", "gpt-5.4", fallbackAttemptOptions(params, "unknown")),
         provider: "openai",
         model: "gpt-5.4",
         attempts: [],
@@ -634,15 +621,20 @@ describe("executeAgentTurn: session state", () => {
     expect(state.runCliAgentMock).toHaveBeenCalledOnce();
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
     expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded fallback candidate", {
-      suppressAssistantErrorPersistence: false,
+      assistantErrorTranscript: expect.objectContaining({
+        record: expect.any(Function),
+        settle: expect.any(Function),
+      }),
     });
   });
 
   it("latches queued user message persistence across main reply fallback candidates", async () => {
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      await params.run("anthropic", "claude-opus-4-7").catch(() => undefined);
+      await params
+        .run("anthropic", "claude-opus-4-7", initialFallbackAttemptOptions(params))
+        .catch(() => undefined);
       return {
-        result: await params.run("openai", "gpt-5.4"),
+        result: await params.run("openai", "gpt-5.4", fallbackAttemptOptions(params, "unknown")),
         provider: "openai",
         model: "gpt-5.4",
         attempts: [],

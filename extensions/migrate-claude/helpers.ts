@@ -4,10 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import {
   markMigrationItemError,
+  markMigrationItemSkipped,
   MIGRATION_REASON_MISSING_SOURCE_OR_TARGET,
 } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
-import { appendRegularFile, pathExists } from "openclaw/plugin-sdk/security-runtime";
+import {
+  appendRegularFile,
+  pathExists,
+  readRegularFile,
+} from "openclaw/plugin-sdk/security-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export function resolveHomePath(input: string): string {
@@ -15,7 +20,7 @@ export function resolveHomePath(input: string): string {
   if (!trimmed) {
     return trimmed;
   }
-  return path.resolve(trimmed.replace(/^~(?=$|[\\/])/u, os.homedir()));
+  return path.resolve(trimmed.replace(/^~(?=$|[\\/])/u, () => os.homedir()));
 }
 
 export async function exists(filePath: string): Promise<boolean> {
@@ -38,26 +43,14 @@ export function sanitizeName(name: string): string {
     .replaceAll(/^-+|-+$/g, "");
 }
 
-export async function readText(filePath: string | undefined): Promise<string | undefined> {
-  if (!filePath) {
-    return undefined;
-  }
-  try {
-    return await fs.readFile(filePath, "utf8");
-  } catch {
-    return undefined;
-  }
-}
-
 export async function readJsonObject(
   filePath: string | undefined,
 ): Promise<Record<string, unknown>> {
-  const content = await readText(filePath);
-  if (!content) {
+  if (!filePath) {
     return {};
   }
   try {
-    const parsed = JSON.parse(content) as unknown;
+    const parsed = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
     return isRecord(parsed) ? parsed : {};
   } catch {
     return {};
@@ -82,11 +75,21 @@ export async function appendItem(item: MigrationItem): Promise<MigrationItem> {
       typeof item.details?.sourceLabel === "string"
         ? item.details.sourceLabel
         : path.basename(item.source);
-    const header = `\n\n<!-- Imported from Claude: ${label} -->\n\n`;
+    const body = content.trimEnd();
+    if (!body) {
+      return markMigrationItemSkipped(item, "source file is empty");
+    }
+    const importBlock = `\n\n<!-- Imported from Claude: ${label} -->\n\n${body}\n`;
+    const existing = (await pathExists(item.target))
+      ? (await readRegularFile({ filePath: item.target })).buffer.toString("utf8")
+      : "";
+    if (existing.includes(importBlock)) {
+      return markMigrationItemSkipped(item, "already imported from Claude");
+    }
     await fs.mkdir(path.dirname(item.target), { recursive: true });
     await appendRegularFile({
       filePath: item.target,
-      content: `${header}${content.trimEnd()}\n`,
+      content: importBlock,
       rejectSymlinkParents: true,
     });
     return { ...item, status: "migrated" };

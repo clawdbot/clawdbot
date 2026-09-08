@@ -48,12 +48,21 @@ describe("canonicalizeTelegramPresentationPayload", () => {
     });
   });
 
-  it("keeps control-only payloads deliverable without duplicating their labels", () => {
-    const result = canonicalizeTelegramPresentationPayload({
-      presentation: {
-        blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "retry" }] }],
+  it.each([
+    { richTables: false, text: undefined },
+    { richTables: false, text: "Retry the operation." },
+    { richTables: true, text: "Retry the operation." },
+  ])("keeps control-only payloads deliverable: %j", ({ richTables, text }) => {
+    const result = canonicalizeTelegramPresentationPayload(
+      {
+        text,
+        presentationTextMode: "fallback",
+        presentation: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "retry" }] }],
+        },
       },
-    });
+      { richTables },
+    );
 
     expect(result).toMatchObject({
       text: "Choose an option.",
@@ -64,6 +73,44 @@ describe("canonicalizeTelegramPresentationPayload", () => {
     expect(result.text).not.toContain("Retry");
     expect(result.presentation).toBeUndefined();
   });
+
+  it.each([false, true])(
+    "replaces marked choice text with native actions (richTables=%s)",
+    (richTables) => {
+      const result = canonicalizeTelegramPresentationPayload(
+        {
+          text: "Choose the next step.\n\nContinue: /continue\nReference: https://example.com/reference",
+          presentationTextMode: "fallback",
+          presentation: {
+            blocks: [
+              { type: "text", text: "Choose the next step." },
+              {
+                type: "buttons",
+                buttons: [
+                  { label: "Continue", action: { type: "command", command: "/continue" } },
+                  {
+                    label: "Reference",
+                    action: { type: "url", url: "https://example.com/reference" },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        { richTables },
+      );
+
+      expect(result.text).toBe("Choose the next step.");
+      expect(result.channelData?.telegram).toEqual({
+        buttons: [
+          [
+            { text: "Continue", callback_data: "tgcmd:/continue" },
+            { text: "Reference", url: "https://example.com/reference" },
+          ],
+        ],
+      });
+    },
+  );
 
   it("keeps native Telegram button-only payloads deliverable", () => {
     const buttons = [[{ text: "Retry", callback_data: "retry" }]];
@@ -127,12 +174,13 @@ describe("canonicalizeTelegramPresentationPayload", () => {
       | undefined;
     const rows = telegram?.buttons;
 
-    expect(rows?.map((row) => row.length)).toEqual([3, 1]);
+    expect(rows?.map((row) => row.length)).toEqual([1, 1, 1, 1]);
     expect(rows?.flatMap((row) => row.map((button) => button.callback_data))).toEqual(
       optionValues.map((_, optionIndex) => `tgq1:${questionId}:${optionIndex}`),
     );
-    expect(parseTelegramQuestionCallbackData(rows?.[1]?.[0]?.callback_data)).toEqual({
+    expect(parseTelegramQuestionCallbackData(rows?.[3]?.[0]?.callback_data)).toEqual({
       questionId,
+      intent: "select",
       optionIndex: 3,
     });
   });
@@ -158,16 +206,17 @@ describe("canonicalizeTelegramPresentationPayload", () => {
       | undefined;
     const rows = telegram?.buttons;
 
-    expect(rows?.map((row) => row.length)).toEqual([2, 2]);
+    expect(rows?.map((row) => row.length)).toEqual([1, 1, 1, 1]);
     expect(rows?.flatMap((row) => row.map((button) => button.callback_data))).toEqual([
       `tgq1:${questionId}:0`,
       `tgq1:${questionId}:0`,
       `tgq1:${questionId}:1`,
       `tgq1:${questionId}:2`,
     ]);
-    const callback = parseTelegramQuestionCallbackData(rows?.[1]?.[1]?.callback_data);
+    const callback = parseTelegramQuestionCallbackData(rows?.[3]?.[0]?.callback_data);
     expect(callback).toEqual({
       questionId,
+      intent: "select",
       optionIndex: 2,
     });
     if (!callback) {
@@ -196,7 +245,7 @@ describe("canonicalizeTelegramPresentationPayload", () => {
       questionId: "destination",
       optionValue: "C",
     });
-    expect(feedback).toHaveBeenCalledWith("Answer submitted.", true);
+    expect(feedback).toHaveBeenCalledWith("Answer submitted.", "terminal");
   });
 
   it.each([
@@ -355,6 +404,55 @@ describe("canonicalizeTelegramPresentationPayload", () => {
         text: "Open app:\n\n- Launch: https://example.com/app",
       },
     );
+  });
+
+  it.each(["buttons", "select"] as const)("keeps full fallback labels beside native %s", (type) => {
+    const nativeLabel =
+      "Continue with the selected workspace and its existing settings for production";
+    const fallbackLabel =
+      "Open the workspace with the complete deployment instructions for production";
+    const nativeControl = {
+      label: nativeLabel,
+      action: { type: "command" as const, command: "/continue" },
+    };
+    const result = canonicalizeTelegramPresentationPayload(
+      {
+        text: `${nativeLabel}: /continue\n${fallbackLabel}: https://example.com/app`,
+        presentationTextMode: "fallback",
+        presentation: {
+          blocks: [
+            type === "buttons"
+              ? {
+                  type,
+                  buttons: [
+                    nativeControl,
+                    {
+                      label: fallbackLabel,
+                      action: { type: "web-app", url: "https://example.com/app" },
+                    },
+                  ],
+                }
+              : {
+                  type,
+                  options: [
+                    nativeControl,
+                    {
+                      label: fallbackLabel,
+                      action: { type: "callback", value: "unavailable".repeat(8) },
+                    },
+                  ],
+                },
+          ],
+        },
+      },
+      { allowWebAppButtons: false },
+    );
+
+    expect(result.text).toContain(fallbackLabel);
+    expect(result.text).not.toContain(nativeLabel);
+    expect(result.channelData?.telegram).toEqual({
+      buttons: [[{ text: nativeLabel.slice(0, 64), callback_data: "tgcmd:/continue" }]],
+    });
   });
 
   it("falls back presentation controls when explicit Telegram buttons take precedence", () => {

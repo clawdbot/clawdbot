@@ -11,18 +11,98 @@ const cfg = {
 } satisfies OpenClawConfig;
 
 describe("resolveStoredCredentialReadOnlyAvailability", () => {
-  it("keeps an implicit store ref unknown until runtime resolution", () => {
+  it.each([
+    {
+      name: "present selected env",
+      selected: true,
+      env: { COLLISION_KEY: "synthetic-key" },
+      expected: true,
+    },
+    { name: "missing selected env", selected: true, env: {}, expected: undefined },
+    {
+      name: "non-default mismatch",
+      selected: false,
+      env: { COLLISION_KEY: "synthetic-key" },
+      expected: false,
+    },
+  ])("preserves availability for $name under a file collision", ({ selected, env, expected }) => {
     expect(
       resolveStoredCredentialReadOnlyAvailability({
         credential: {
           type: "api_key",
           provider: "test",
-          keyRef: { source: "store", provider: "default", id: "STORED_API_KEY" },
+          key: "retained-inline-key",
+          keyRef: { source: "env", provider: "selected", id: "COLLISION_KEY" },
         },
-        cfg: {},
-        env: {},
+        cfg: {
+          secrets: {
+            defaults: selected ? { env: "selected" } : undefined,
+            providers: { selected: { source: "file", path: "/unused" } },
+          },
+        },
+        env,
       }),
-    ).toBeUndefined();
+    ).toBe(expected);
+  });
+
+  describe.each(["api_key", "token"] as const)("%s store refs", (type) => {
+    it.each<{
+      name: string;
+      provider: string;
+      secrets?: OpenClawConfig["secrets"];
+      expected: boolean | undefined;
+    }>([
+      { name: "implicit default", provider: "default", expected: undefined },
+      {
+        name: "selected default without a declaration",
+        provider: "shared",
+        secrets: { defaults: { store: "shared" } },
+        expected: undefined,
+      },
+      ...(
+        [
+          { source: "file", path: "/tmp/unused-store-alias-fixture.json" },
+          { source: "env" },
+          { source: "exec", command: "/tmp/unused-store-alias-command" },
+        ] as const
+      ).map((provider) => ({
+        name: `selected default shadowing ${provider.source}`,
+        provider: "shared",
+        secrets: { defaults: { store: "shared" }, providers: { shared: provider } },
+        expected: undefined,
+      })),
+      {
+        name: "explicit matching non-default provider",
+        provider: "shared",
+        secrets: { providers: { shared: { source: "store" } } },
+        expected: undefined,
+      },
+      { name: "missing non-default provider", provider: "shared", expected: false },
+      {
+        name: "mismatched non-default provider",
+        provider: "shared",
+        secrets: { providers: { shared: { source: "file", path: "/tmp/unused.json" } } },
+        expected: false,
+      },
+      {
+        name: "old default after selecting another alias",
+        provider: "default",
+        secrets: { defaults: { store: "shared" } },
+        expected: false,
+      },
+    ])("classifies $name without resolving it", ({ provider, secrets, expected }) => {
+      const ref = { source: "store", provider, id: "STORED_API_KEY" } as const;
+      expect(
+        resolveStoredCredentialReadOnlyAvailability({
+          credential:
+            type === "api_key"
+              ? { type, provider: "test", key: "retained-inline", keyRef: ref }
+              : { type, provider: "test", token: "retained-inline", tokenRef: ref },
+          cfg: { secrets },
+          env: {},
+        }),
+      ).toBe(expected);
+    });
   });
 
   it("prefers explicit secret refs over retained inline values", () => {

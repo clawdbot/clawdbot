@@ -6,15 +6,17 @@ import type {
   ProviderAuthContext,
   ProviderAuthResult,
   ProviderCatalogContext,
+  ProviderCatalogResult,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   MINIMAX_OAUTH_MARKER,
   buildOauthProviderAuthResult,
+  isNonSecretApiKeyMarker,
 } from "openclaw/plugin-sdk/provider-auth";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { buildOpenAICompatibleLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { buildOpenAICompatibleLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   buildProviderReplayFamilyHooks,
@@ -139,32 +141,60 @@ async function resolveApiCatalog(ctx: ProviderCatalogContext) {
   if (!auth.apiKey) {
     return null;
   }
-  return {
-    provider: await buildOpenAICompatibleLiveModelProviderConfig({
-      providerId: API_PROVIDER_ID,
-      providerConfig: buildMinimaxProvider(ctx.env),
-      apiKey: auth.apiKey,
-      discoveryApiKey: auth.discoveryApiKey,
-      modelDiscovery: buildMinimaxModelDiscovery(),
-    }),
-  };
+  return await buildOpenAICompatibleLiveProviderCatalog({
+    discoveryMode: "strict",
+    providerId: API_PROVIDER_ID,
+    providerConfig: buildMinimaxProvider(ctx.env),
+    apiKey: auth.apiKey,
+    discoveryApiKey: auth.discoveryApiKey,
+    profileId: auth.profileId,
+    modelDiscovery: buildMinimaxModelDiscovery(),
+  });
 }
 
-async function resolvePortalCatalog(ctx: ProviderCatalogContext) {
+async function resolvePortalCatalog(ctx: ProviderCatalogContext): Promise<ProviderCatalogResult> {
   const explicitProvider = ctx.config.models?.providers?.[PORTAL_PROVIDER_ID];
   const apiKeyAuth = ctx.resolveProviderApiKey(PORTAL_PROVIDER_ID);
   const profileAuth = ctx.resolveProviderAuth(PORTAL_PROVIDER_ID, {
     oauthMarker: MINIMAX_OAUTH_MARKER,
   });
   const explicitApiKey = normalizeOptionalString(explicitProvider?.apiKey);
-  const apiKey = apiKeyAuth.apiKey ?? explicitApiKey ?? profileAuth.apiKey;
+  let auth: ReturnType<ProviderCatalogContext["resolveProviderApiKey" | "resolveProviderAuth"]> =
+    apiKeyAuth.apiKey !== undefined
+      ? apiKeyAuth
+      : explicitApiKey
+        ? { apiKey: explicitApiKey }
+        : profileAuth;
+  const { apiKey } = auth;
   if (!apiKey) {
     return null;
   }
+  if (!normalizeOptionalString(auth.discoveryApiKey) && isNonSecretApiKeyMarker(apiKey)) {
+    // Legacy callbacks may omit material; only matching selection facts can complete it.
+    if (
+      auth.profileId &&
+      profileAuth.source === "profile" &&
+      auth.profileId === profileAuth.profileId &&
+      apiKey === profileAuth.apiKey &&
+      (auth.mode === undefined || auth.mode === profileAuth.mode)
+    ) {
+      auth = profileAuth;
+    }
+    if (!normalizeOptionalString(auth.discoveryApiKey)) {
+      return {
+        providers: {},
+        outcomes: [
+          { provider: PORTAL_PROVIDER_ID, profileId: auth.profileId, status: "unavailable" },
+        ],
+      };
+    }
+  }
   const usesPortalBearerAuth =
     apiKeyAuth.apiKey === "MINIMAX_OAUTH_TOKEN" ||
-    (profileAuth.mode === "token" && profileAuth.apiKey === apiKey) ||
-    (!apiKeyAuth.apiKey && !explicitApiKey && profileAuth.mode === "oauth");
+    (apiKeyAuth.apiKey && apiKeyAuth.mode
+      ? apiKeyAuth.mode === "token" || apiKeyAuth.mode === "oauth"
+      : (profileAuth.mode === "token" && profileAuth.apiKey === apiKey) ||
+        (!apiKeyAuth.apiKey && !explicitApiKey && profileAuth.mode === "oauth"));
 
   const explicitBaseUrl = normalizeOptionalString(explicitProvider?.baseUrl);
 
@@ -172,17 +202,15 @@ async function resolvePortalCatalog(ctx: ProviderCatalogContext) {
     baseUrl: explicitBaseUrl || buildMinimaxPortalProvider(ctx.env).baseUrl,
     apiKey,
   });
-  return {
-    provider: await buildOpenAICompatibleLiveModelProviderConfig({
-      providerId: PORTAL_PROVIDER_ID,
-      providerConfig,
-      apiKey,
-      discoveryApiKey:
-        apiKeyAuth.discoveryApiKey ??
-        (usesPortalBearerAuth ? profileAuth.discoveryApiKey : undefined),
-      modelDiscovery: buildMinimaxModelDiscovery(usesPortalBearerAuth ? "oauth" : "api_key"),
-    }),
-  };
+  return await buildOpenAICompatibleLiveProviderCatalog({
+    discoveryMode: "strict",
+    providerId: PORTAL_PROVIDER_ID,
+    providerConfig,
+    apiKey,
+    discoveryApiKey: auth.discoveryApiKey,
+    profileId: auth.profileId,
+    modelDiscovery: buildMinimaxModelDiscovery(usesPortalBearerAuth ? "oauth" : "api_key"),
+  });
 }
 
 function createOAuthHandler(region: MiniMaxRegion) {

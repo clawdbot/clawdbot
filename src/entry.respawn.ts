@@ -1,6 +1,7 @@
 // Respawns the CLI with adjusted process flags when startup requires it.
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { resolveNodeStartupTlsEnvironment } from "./bootstrap/node-startup-env.js";
 import {
   isTerminalInteractiveRespawnArgv,
@@ -28,7 +29,7 @@ type CliRespawnPlan = {
 };
 
 type CliRespawnRuntime = RespawnChildRuntime & {
-  writeError: (message: string, error?: unknown) => void;
+  writeError: (message: string, error?: unknown) => void | Promise<void>;
 };
 
 function pathModuleForPlatform(platform: NodeJS.Platform): typeof path.posix {
@@ -98,6 +99,9 @@ export function buildCliRespawnPlan(
   }
 
   const childEnv: NodeJS.ProcessEnv = { ...env };
+  if (!readNonBlankString(childEnv.NODE_EXTRA_CA_CERTS)) {
+    delete childEnv.NODE_EXTRA_CA_CERTS;
+  }
   const childExecArgv = [...execArgv];
   let needsRespawn = false;
 
@@ -129,7 +133,7 @@ export function buildCliRespawnPlan(
   if (
     autoNodeExtraCaCerts &&
     !isTruthyEnvValue(env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]) &&
-    !env.NODE_EXTRA_CA_CERTS
+    !childEnv.NODE_EXTRA_CA_CERTS
   ) {
     childEnv.NODE_EXTRA_CA_CERTS = autoNodeExtraCaCerts;
     childEnv[OPENCLAW_NODE_EXTRA_CA_CERTS_READY] = "1";
@@ -176,7 +180,7 @@ export function runCliRespawnPlan(
     detachForProcessTree: plan.detachForProcessTree,
     runtime: resolvedRuntime,
     onError: (error) => {
-      resolvedRuntime.writeError(
+      return resolvedRuntime.writeError(
         "[openclaw] Failed to respawn CLI:",
         error instanceof Error ? (error.stack ?? error.message) : error,
       );

@@ -40,7 +40,7 @@ function readGeneratedSigning(): string {
   return readFileSync(fixtureLocalSigningFile, "utf8");
 }
 
-describe.sequential("scripts/ios-configure-signing.sh", () => {
+describe("scripts/ios-configure-signing.sh", { concurrent: false }, () => {
   beforeAll(() => {
     const fixtureRoot = makeTempDir(tempDirs, "openclaw-ios-configure-signing-");
     const scriptsDir = path.join(fixtureRoot, "scripts");

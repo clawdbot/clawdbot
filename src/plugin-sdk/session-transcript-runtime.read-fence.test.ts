@@ -1,7 +1,11 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  loadTranscriptEventsSync,
+  replaceTranscriptEventsSync,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import {
   runWithSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
@@ -67,6 +71,7 @@ describe("session transcript runtime read fence", () => {
     };
 
     const fenced = await runWithSessionTranscriptReadFence(receipt, async () => {
+      const syncEvents = loadTranscriptEventsSync(scope);
       const events = await readSessionTranscriptEvents(scope);
       const visible = await readVisibleSessionTranscriptMessageEntries(scope);
       const latest = await readLatestAssistantTextByIdentity(scope);
@@ -75,9 +80,10 @@ describe("session transcript runtime read fence", () => {
         maxBytes: 100_000,
         maxEvents: 100,
       });
-      return { events, latest, page, visible };
+      return { events, latest, page, syncEvents, visible };
     });
 
+    expect(fenced.syncEvents).toEqual(fenced.events);
     expect(
       fenced.events.flatMap((event) =>
         event &&
@@ -148,6 +154,11 @@ describe("session transcript runtime read fence", () => {
     ];
 
     for (const invalidReceipt of invalidReceipts) {
+      expect(() =>
+        runWithSessionTranscriptReadFence(invalidReceipt as unknown as typeof receipt, () =>
+          loadTranscriptEventsSync(scope),
+        ),
+      ).toThrow(SessionTranscriptReadFenceError);
       await expect(
         runWithSessionTranscriptReadFence(
           invalidReceipt as unknown as typeof receipt,
@@ -155,5 +166,12 @@ describe("session transcript runtime read fence", () => {
         ),
       ).rejects.toBeInstanceOf(SessionTranscriptReadFenceError);
     }
+
+    const events = loadTranscriptEventsSync(scope);
+    expect(replaceTranscriptEventsSync(scope, events)).toBe(true);
+    expect(() =>
+      runWithSessionTranscriptReadFence(receipt, () => loadTranscriptEventsSync(scope)),
+    ).toThrow(SessionTranscriptReadFenceError);
+    expect(loadTranscriptEventsSync(scope)).toEqual(events);
   });
 });

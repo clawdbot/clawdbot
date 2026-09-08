@@ -164,8 +164,8 @@ describe("meeting node host audio backend", () => {
     const prepareAudio = vi.fn(async () => ({
       backend: "pipewire-pulse" as const,
       deviceLabel: "OpenClaw Meeting Audio",
-      inputCommand: ["parec", "--node-default"],
-      outputCommand: ["pacat", "--node-default"],
+      inputCommand: ["parec", "--device", "input name", ""],
+      outputCommand: ["pacat", "--device", "output name", ""],
     }));
     const host = createHost({ prepareAudio });
 
@@ -192,12 +192,22 @@ describe("meeting node host audio backend", () => {
       },
       10_000,
     );
-    expect(childProcessMocks.spawn).toHaveBeenNthCalledWith(1, "pacat", ["--node-default"], {
-      stdio: ["pipe", "ignore", "pipe"],
-    });
-    expect(childProcessMocks.spawn).toHaveBeenNthCalledWith(2, "parec", ["--node-default"], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    expect(childProcessMocks.spawn).toHaveBeenNthCalledWith(
+      1,
+      "pacat",
+      ["--device", "output name", ""],
+      {
+        stdio: ["pipe", "ignore", "pipe"],
+      },
+    );
+    expect(childProcessMocks.spawn).toHaveBeenNthCalledWith(
+      2,
+      "parec",
+      ["--device", "input name", ""],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
     expect(started).toMatchObject({
       audioBackend: "pipewire-pulse",
       audioDeviceLabel: "OpenClaw Meeting Audio",
@@ -260,6 +270,25 @@ describe("meeting node host audio backend", () => {
       audioBackend: "pipewire-pulse",
       audioDeviceLabel: "OpenClaw Meeting Audio",
     });
+    expect(childProcessMocks.spawn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "input", inputCommand: [], outputCommand: ["play"] },
+    { name: "output", inputCommand: ["capture"], outputCommand: [] },
+  ])("rejects an empty $name command before spawning", async ({ inputCommand, outputCommand }) => {
+    const host = createHost({
+      prepareAudio: vi.fn(async () => ({
+        backend: "pipewire-pulse" as const,
+        deviceLabel: "OpenClaw Meeting Audio",
+        inputCommand,
+        outputCommand,
+      })),
+    });
+
+    await expect(invokeHost(host, { ...AUDIO_START_PARAMS, launch: false })).rejects.toThrow(
+      "audio command must not be empty",
+    );
     expect(childProcessMocks.spawn).not.toHaveBeenCalled();
   });
 });

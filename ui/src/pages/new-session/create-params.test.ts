@@ -32,6 +32,25 @@ describe("create-as-draft availability", () => {
 });
 
 describe("buildDraftSessionCreateParams", () => {
+  it("retains a cloud repository through the empty create without sending local checkout options", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "",
+        repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release" },
+        projectId: "old-clone",
+        worktree: true,
+        baseRef: "ignored-local-ref",
+        worktreeName: "ignored-local-name",
+        cwd: "/local/clone",
+        workspace: "/workspace",
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "",
+      repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release" },
+    });
+  });
   it("keeps plain chats minimal", () => {
     expect(
       buildDraftSessionCreateParams({
@@ -86,20 +105,44 @@ describe("buildDraftSessionCreateParams", () => {
     ).toEqual({ agentId: "main", message: "", attachments });
   });
 
-  it("includes selected model and thinking overrides for a plain session", () => {
+  it("includes selected model, context-window, thinking, and fast overrides for a plain session", () => {
     expect(
       buildDraftSessionCreateParams({
         agentId: "main",
         message: "use the selected model",
         model: "anthropic/claude-sonnet-4-6",
+        contextWindow: "200k",
         thinkingLevel: "high",
+        fastMode: true,
         worktree: false,
       }),
     ).toEqual({
       agentId: "main",
       message: "use the selected model",
       model: "anthropic/claude-sonnet-4-6",
+      contextWindow: "200k",
       thinkingLevel: "high",
+      fastMode: true,
+    });
+  });
+
+  it("includes selected capability overrides in the atomic create request", () => {
+    const toolOverrides = {
+      mcpServers: { github: false },
+      skills: { release: false },
+      webSearch: false,
+    };
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "use these capabilities",
+        toolOverrides,
+        worktree: false,
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "use these capabilities",
+      toolOverrides,
     });
   });
 
@@ -109,7 +152,9 @@ describe("buildDraftSessionCreateParams", () => {
         agentId: "main",
         message: "start coding",
         model: "openai/gpt-5.5",
+        contextWindow: "200k",
         thinkingLevel: "medium",
+        fastMode: true,
         worktree: false,
         catalogId: "claude",
       }),

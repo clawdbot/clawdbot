@@ -1,0 +1,18 @@
+(version 1)
+(allow default)
+(deny network*)
+(deny file-write*)
+(deny file-read* (subpath (param "ORIGINAL_HOME")))
+(allow file-read* (subpath (param "REPO")))
+(allow file-read* file-write* (subpath (param "ISOLATED_ROOT")))
+(allow file-write* (literal "/dev/null"))
+; A redirected HOME does not isolate daemon-backed preferences or Keychain IPC.
+(deny mach-lookup
+  (global-name "com.apple.cfprefsd.daemon")
+  (global-name "com.apple.cfprefsd.agent")
+  (local-name "com.apple.cfprefsd.agent")
+  (global-name "com.apple.SecurityServer")
+  (global-name "com.apple.securityd")
+  (global-name "com.apple.securityd.xpc"))
+(deny ipc-posix-shm-read* (ipc-posix-name-prefix "apple.cfprefs."))
+(deny file-read* file-write* (subpath "/Library/Keychains"))

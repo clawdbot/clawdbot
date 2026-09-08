@@ -2,19 +2,25 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readPositiveIntEnvWithEmptyFallback } from "../env-limits.mjs";
+import { resolveHomePath } from "../openclaw-state-paths.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
+import { hasExpectedPluginUninstallConfigState } from "../plugin-uninstall-assertions.mjs";
 
 const command = process.argv[2];
 const scratchRoot = process.env.KITCHEN_SINK_TMP_DIR || os.tmpdir();
 
 const LOG_SCAN_CHUNK_BYTES = 64 * 1024;
 const LOG_SCAN_FINDING_CONTEXT_CHARS = 2048;
-const LOG_SCAN_MAX_ENTRIES = readPositiveIntEnv("KITCHEN_SINK_LOG_SCAN_MAX_ENTRIES", 20_000);
+const LOG_SCAN_MAX_ENTRIES = readPositiveIntEnvWithEmptyFallback(
+  "KITCHEN_SINK_LOG_SCAN_MAX_ENTRIES",
+  20_000,
+);
 const LOG_SCAN_MAX_FILES = 5000;
 const LOG_SCAN_MAX_FINDINGS = 100;
 const LOG_SCAN_MAX_LINE_CHARS = 16 * 1024;
 const LOG_SCAN_SEGMENT_OVERLAP_CHARS = 256;
-const EXPECT_FAILURE_OUTPUT_MAX_BYTES = readPositiveIntEnv(
+const EXPECT_FAILURE_OUTPUT_MAX_BYTES = readPositiveIntEnvWithEmptyFallback(
   "KITCHEN_SINK_EXPECT_FAILURE_OUTPUT_MAX_BYTES",
   1024 * 1024,
 );
@@ -22,32 +28,6 @@ const EXPECT_FAILURE_OUTPUT_MAX_BYTES = readPositiveIntEnv(
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const scratchFile = (name) => path.join(scratchRoot, name);
 const normalizedPath = (filePath) => filePath.replaceAll("\\", "/");
-
-function readPositiveIntEnv(name, fallback) {
-  const raw = process.env[name];
-  if (raw === undefined || raw === "") {
-    return fallback;
-  }
-  const text = raw.trim();
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`${name} must be a positive integer; got: ${raw}`);
-  }
-  const parsed = Number(text);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new Error(`${name} must be a positive integer; got: ${raw}`);
-  }
-  return parsed;
-}
-
-function resolveHomePath(value) {
-  if (value === "~") {
-    return process.env.HOME;
-  }
-  if (value?.startsWith("~/") || value?.startsWith("~\\")) {
-    return path.join(process.env.HOME, value.slice(2));
-  }
-  return value;
-}
 
 function readTextFileBounded(file, maxBytes, label) {
   const stats = fs.statSync(file);
@@ -331,7 +311,7 @@ const requiredFullDiagnosticCanaries = new Set([
   "agent tool result middleware must be a function",
   "trusted tool policy registration requires id, description, and evaluate()",
   "plugin must declare contracts.tools for: kitchen-sink-tool",
-  'channel "kitchen-sink-channel-probe" registration missing required config helpers',
+  'channel "kitchen-sink-channel-probe" registration missing or invalid required capabilities.chatTypes',
   'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',
   "session scheduler job registration requires unique id, sessionKey, and kind",
 ]);
@@ -350,7 +330,7 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
     "trusted tool policy registration requires id, description, and evaluate()",
     "plugin must declare contracts.embeddingProviders for adapter: kitchen-sink-embedding-provider",
     "plugin must declare contracts.tools for: kitchen-sink-tool",
-    'channel "kitchen-sink-channel-probe" registration missing required config helpers',
+    'channel "kitchen-sink-channel-probe" registration missing or invalid required capabilities.chatTypes',
     'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',
     "memory prompt supplement registration missing builder",
     "model catalog provider registration missing provider",
@@ -361,14 +341,24 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
   const optionalErrorMessages = new Set([
     "agent event subscription registration requires id and handle",
   ]);
+  const frozenTargetErrorMessages = new Set();
+  if (process.env.OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT === "legacy") {
+    frozenTargetErrorMessages.add(
+      "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider",
+    );
+  }
   const allowedErrorMessages = new Set([...expectedErrorMessages, ...optionalErrorMessages]);
   if (!INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES.has(surfaceMode)) {
-    if (errorMessages.size > 0) {
-      throw new Error(
-        `unexpected kitchen-sink diagnostic errors: ${[...errorMessages].join(", ")}`,
-      );
+    const unexpected = [...errorMessages].filter(
+      (message) => !frozenTargetErrorMessages.has(message),
+    );
+    if (unexpected.length > 0) {
+      throw new Error(`unexpected kitchen-sink diagnostic errors: ${unexpected.join(", ")}`);
     }
     return;
+  }
+  for (const message of frozenTargetErrorMessages) {
+    allowedErrorMessages.add(message);
   }
   for (const message of errorMessages) {
     if (!allowedErrorMessages.has(message)) {
@@ -668,8 +658,8 @@ function assertRemoved() {
   }
 
   const { config } = readConfig();
-  if (config.plugins?.entries?.[pluginId]) {
-    throw new Error(`kitchen-sink config entry still present after uninstall: ${pluginId}`);
+  if (!hasExpectedPluginUninstallConfigState(config, pluginId)) {
+    throw new Error(`kitchen-sink exact disabled uninstall marker missing: ${pluginId}`);
   }
   if ((config.plugins?.allow || []).includes(pluginId)) {
     throw new Error(`kitchen-sink allowlist still contains ${pluginId}`);

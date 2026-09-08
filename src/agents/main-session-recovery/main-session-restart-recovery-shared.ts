@@ -1,18 +1,19 @@
 import path from "node:path";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../../config/paths.js";
 import {
   listConfiguredSessionStoreAgentIds,
   resolveSessionStorePathCore,
   type InternalSessionEntry as SessionEntry,
   resolveAllAgentSessionStoreTargetsSync,
+  type SessionStoreTarget,
 } from "../../config/sessions.js";
-import {
-  hasSessionEntriesByStatusReadOnly,
-  type SessionTranscriptTurnExpectedState,
-} from "../../config/sessions/session-accessor.js";
+import { hasSessionEntriesByStatusReadOnly } from "../../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
 import { resolveAgentSessionDirs } from "../session-dirs.js";
 
 export const mainSessionRecoveryLog = createSubsystemLogger("main-session-restart-recovery");
@@ -20,6 +21,7 @@ export const DEFAULT_RECOVERY_DELAY_MS = 5_000;
 export const MAX_RECOVERY_RETRIES = 3;
 export const RETRY_BACKOFF_MULTIPLIER = 2;
 export type ExpectedRestartRecoveryTarget = {
+  agentId?: string;
   canonicalSessionKey?: string;
   sessionId: string;
   sessionKey: string;
@@ -29,29 +31,12 @@ export type ExhaustedRestartRecoveryTarget = ExpectedRestartRecoveryTarget & {
   storePath: string;
 };
 
-export function buildRestartRecoveryExpectedState(
-  entry: SessionEntry,
-  mainRestartRecovery?: { cycleId: string; revision: number },
-): SessionTranscriptTurnExpectedState {
-  const expectedMainRestartRecovery = mainRestartRecovery ?? entry.mainRestartRecovery;
-  return {
-    abortedLastRun: entry.abortedLastRun,
-    mainRestartRecoveryCycleId: expectedMainRestartRecovery?.cycleId,
-    mainRestartRecoveryRevision: expectedMainRestartRecovery?.revision,
-    restartRecoveryBeforeAgentReplyState: entry.restartRecoveryBeforeAgentReplyState,
-    restartRecoveryDeliveryReceiptState: entry.restartRecoveryDeliveryReceiptState,
-    restartRecoveryDeliveryToolCallId: entry.restartRecoveryDeliveryToolCallId,
-    restartRecoveryDeliveryRequestFingerprint: entry.restartRecoveryDeliveryRequestFingerprint,
-    restartRecoveryDeliveryRunId: entry.restartRecoveryDeliveryRunId,
-    restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
-    restartRecoveryRequesterAccountId: entry.restartRecoveryRequesterAccountId,
-    restartRecoveryRequesterSenderId: entry.restartRecoveryRequesterSenderId,
-    restartRecoverySameChannelThreadRequired: entry.restartRecoverySameChannelThreadRequired,
-    restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
-    restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
-    restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
-    status: entry.status,
-  };
+export function resolveRestartRecoveryTerminalClientRunId(
+  entry: Pick<SessionEntry, "restartRecoveryDeliverySourceRunId" | "restartRecoverySourceIngress">,
+): string | undefined {
+  return entry.restartRecoverySourceIngress === "control-ui"
+    ? normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId)
+    : undefined;
 }
 
 export function normalizeStringSet(values: Iterable<string> | undefined): Set<string> {
@@ -79,11 +64,12 @@ export function hasCurrentProcessOwner(params: {
   return params.activeSessionIds.size === 0 && params.activeSessionKeys.has(params.sessionKey);
 }
 
-export async function resolveRestartRecoveryStorePaths(params: {
+export async function discoverRestartRecoveryStoreTargets(params: {
   cfg?: OpenClawConfig;
   stateDir?: string;
-}): Promise<string[]> {
-  const storePaths = new Set<string>();
+  statuses?: Parameters<typeof hasSessionEntriesByStatusReadOnly>[1];
+}): Promise<SessionStoreTarget[]> {
+  const storeTargets: SessionStoreTarget[] = [];
   const stateDir = params.stateDir ?? resolveStateDir(process.env);
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   if (params.cfg) {
@@ -105,16 +91,24 @@ export async function resolveRestartRecoveryStorePaths(params: {
       if (!configuredAgentIdSet.has(target.agentId) && !configuredStorePaths.has(storePath)) {
         continue;
       }
-      storePaths.add(storePath);
+      storeTargets.push({ ...target, storePath });
     }
   } else {
     for (const sessionsDir of await resolveAgentSessionDirs(stateDir)) {
-      storePaths.add(path.join(sessionsDir, "sessions.json"));
+      const storePath = path.join(sessionsDir, "sessions.json");
+      storeTargets.push({
+        agentId:
+          resolveSqliteTargetFromSessionStorePath(storePath).agentId ?? LEGACY_IMPLICIT_AGENT_ID,
+        storePath,
+      });
     }
   }
-  // Agent databases also hold auth and model-catalog state. Enter the writer
-  // lane only when the session owner proves that a running row may need repair.
-  return [...storePaths]
-    .filter((storePath) => hasSessionEntriesByStatusReadOnly({ env, storePath }, ["running"]))
-    .toSorted((a, b) => a.localeCompare(b));
+  return storeTargets
+    .filter(
+      (target) =>
+        !params.statuses || hasSessionEntriesByStatusReadOnly({ ...target, env }, params.statuses),
+    )
+    .toSorted(
+      (a, b) => a.storePath.localeCompare(b.storePath) || a.agentId.localeCompare(b.agentId),
+    );
 }

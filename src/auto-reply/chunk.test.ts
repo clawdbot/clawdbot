@@ -407,6 +407,36 @@ describe("resolveTextChunkLimit", () => {
 });
 
 describe("chunkMarkdownText", () => {
+  it.each(["length", "newline"] as const)(
+    "preserves indentation at fenced line boundaries in %s mode",
+    (mode) => {
+      for (const indent of ["    ", "\t", " \t "]) {
+        const body = `${indent}value = 1\n`.repeat(10);
+        const chunks = chunkMarkdownTextWithMode(`\`\`\`txt\n${body}\`\`\``, 34, mode);
+        expect(chunks.length).toBeGreaterThan(1);
+        expectFencesBalanced(chunks);
+        // Every split is at an existing line ending; retain it while removing fences.
+        expect
+          .soft(chunks.map((chunk) => chunk.slice(7, -3)).join(""), JSON.stringify(indent))
+          .toBe(body);
+        expect(chunks.every((chunk) => chunk.length <= 34)).toBe(true);
+      }
+    },
+  );
+
+  it.each(["length", "newline"] as const)(
+    "preserves spaces at hard fenced boundaries in %s mode",
+    (mode) => {
+      const body = "abc def ghi jkl mno";
+      const chunks = chunkMarkdownTextWithMode(`\`\`\`txt\n${body}\n\`\`\``, 14, mode);
+      expect(chunks.length).toBeGreaterThan(1);
+      expectFencesBalanced(chunks);
+      // Single-line chunks gain a newline only to close their transport fence.
+      expect(chunks.map((chunk) => chunk.slice(7, -4)).join("")).toBe(body);
+      expect(chunks.every((chunk) => chunk.length <= 14)).toBe(true);
+    },
+  );
+
   it.each([
     {
       name: "keeps fenced blocks intact when a safe break exists",
@@ -484,6 +514,73 @@ describe("chunkMarkdownText", () => {
         expectFenceParseOccursOnce(`\`\`\`txt\n${"line\n".repeat(600)}\`\`\``, 80);
       },
     },
+    {
+      name: "keeps chunks within the limit when a fence opening line exceeds it",
+      run: () => {
+        const payload = `token.${"A".repeat(4200)}`;
+        const chunks = chunkMarkdownText(`\`\`\`${payload}\n\`\`\``, 4000);
+        expect(chunks.length).toBeLessThanOrEqual(3);
+        for (const chunk of chunks) {
+          expect(chunk.length).toBeLessThanOrEqual(4000);
+        }
+        expect(chunks.join("").replaceAll("`", "").replaceAll("\n", "")).toBe(payload);
+        expectFencesBalanced(chunks.slice(1));
+      },
+    },
+    {
+      name: "reopens an oversized fence opening line with the bare marker",
+      run: () => {
+        const chunks = chunkMarkdownText(`\`\`\`${"A".repeat(4200)}\n\`\`\``, 2000);
+        expect(chunks.length).toBeLessThanOrEqual(4);
+        expect(requireChunk(chunks, 1).startsWith("```\n")).toBe(true);
+        for (const chunk of chunks) {
+          expect(chunk.length).toBeLessThanOrEqual(2000);
+        }
+        expectFencesBalanced(chunks.slice(1));
+      },
+    },
+    {
+      name: "keeps the full opening line when it fits the reopen budget",
+      run: () => {
+        const openLine = `\`\`\`language-${"A".repeat(1_488)}`;
+        const chunks = chunkMarkdownText(`${openLine}\n${"x".repeat(1_200)}\n\`\`\``, 2_000);
+        expect(chunks.length).toBeGreaterThan(1);
+        for (const chunk of chunks.slice(1)) {
+          expect(chunk.startsWith(`${openLine}\n`)).toBe(true);
+        }
+        expect(chunks.every((chunk) => chunk.length <= 2_000)).toBe(true);
+        expectFencesBalanced(chunks);
+      },
+    },
+    {
+      name: "keeps the hard limit when synthetic fence balancing cannot fit",
+      run: () => {
+        const text = `\`\`\`\n${"x".repeat(20)}\n\`\`\``;
+        for (const limit of [5, 6, 8]) {
+          const chunks = chunkMarkdownText(text, limit);
+          expect(
+            chunks.every((chunk) => chunk.length <= limit),
+            `limit ${limit}`,
+          ).toBe(true);
+          expect(chunks.length, `limit ${limit}`).toBeLessThanOrEqual(
+            Math.ceil(text.length / limit),
+          );
+          expect(chunks.join(""), `limit ${limit}`).toBe(text);
+        }
+      },
+    },
+    {
+      name: "does not emit a header-only fence at the reopen budget boundary",
+      run: () => {
+        const limit = 20;
+        const openLine = `\`\`\`${"x".repeat(limit - 8)}`;
+        const text = `${openLine}\nbody-content-long\n\`\`\``;
+        const chunks = chunkMarkdownText(text, limit);
+
+        expect(chunks.every((chunk) => chunk.length <= limit)).toBe(true);
+        expectNoEmptyFencedChunks(text, limit);
+      },
+    },
   ] as const)("$name", ({ run }) => {
     expectChunkSpecialCase(run);
   });
@@ -520,6 +617,68 @@ describe("chunkByNewline", () => {
       text: "Line one\n\n",
       limit: 1000,
       expected: ["Line one\n\n"],
+    },
+    {
+      name: "caps trailing blank lines to the final chunk's remaining space",
+      text: "x" + "\n".repeat(50),
+      limit: 10,
+      expected: ["x" + "\n".repeat(9)],
+    },
+    {
+      name: "does not append blank lines to a full chunk",
+      text: "abcdefghij\n\n",
+      limit: 10,
+      expected: ["abcdefghij"],
+    },
+    {
+      name: "counts astral text in UTF-16 units before appending blank lines",
+      text: "😀\n\n",
+      limit: 3,
+      expected: ["😀\n"],
+    },
+    {
+      name: "reserves a whole first code point after leading blank lines",
+      text: "\n😀",
+      limit: 2,
+      expected: ["😀"],
+    },
+    {
+      name: "reserves a whole first code point after interior blank lines",
+      text: "a\n\n😀",
+      limit: 2,
+      expected: ["a", "😀"],
+    },
+    {
+      name: "normalizes fractional limits for leading and trailing blank lines",
+      text: "\n😀\n\n",
+      limit: 2.9,
+      expected: ["😀"],
+    },
+    {
+      name: "keeps an indivisible code point without adding blank lines",
+      text: "😀\n\n",
+      limit: 1,
+      expected: ["😀"],
+    },
+    {
+      name: "keeps unsplit long lines without appending excess blank lines",
+      text: "abcdefghij\n\n",
+      limit: 3,
+      options: { splitLongLines: false },
+      expected: ["abcdefghij"],
+    },
+    {
+      name: "counts untrimmed text when bounding trailing blank lines",
+      text: "  x \n\n",
+      limit: 5,
+      options: { trimLines: false },
+      expected: ["  x \n"],
+    },
+    {
+      name: "preserves trailing blank lines when the limit is disabled",
+      text: "x\n\n",
+      limit: 0,
+      expected: ["x\n\n"],
     },
     {
       name: "keeps whitespace when trimLines is false",

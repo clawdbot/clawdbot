@@ -63,8 +63,7 @@ type McpLoopbackRequestAuth = {
   senderIsOwner: boolean;
   boundSessionKey?: string;
   boundAgentId?: string;
-  boundContext?: McpLoopbackRequestContext;
-  boundCaptureKey?: string;
+  boundClientGrant?: NonNullable<ReturnType<typeof resolveMcpLoopbackClientGrant>>;
   boundGrantToken?: string;
 };
 
@@ -143,8 +142,7 @@ function resolveMcpSender(params: {
   if (clientGrant) {
     return {
       senderIsOwner: clientGrant.context.senderIsOwner,
-      boundContext: clientGrant.context,
-      boundCaptureKey: clientGrant.captureKey,
+      boundClientGrant: clientGrant,
       boundGrantToken: grantToken,
     };
   }
@@ -281,14 +279,7 @@ export function validateMcpLoopbackRequest(params: {
     return null;
   }
 
-  return {
-    senderIsOwner: sender.senderIsOwner,
-    boundSessionKey: sender.boundSessionKey,
-    boundAgentId: sender.boundAgentId,
-    boundContext: sender.boundContext,
-    boundCaptureKey: sender.boundCaptureKey,
-    boundGrantToken: sender.boundGrantToken,
-  };
+  return sender;
 }
 
 export async function readMcpHttpBody(
@@ -398,8 +389,8 @@ export function resolveMcpCliCaptureKey(
   req: IncomingMessage,
   auth: McpLoopbackRequestAuth,
 ): string | undefined {
-  if (auth.boundContext || auth.boundSessionKey) {
-    return auth.boundCaptureKey;
+  if (auth.boundClientGrant || auth.boundSessionKey) {
+    return auth.boundClientGrant?.captureKey;
   }
   return normalizeOptionalString(getHeader(req, "x-openclaw-cli-capture-key"));
 }
@@ -416,11 +407,11 @@ export function resolveMcpRequestContext(
   cfg: OpenClawConfig,
   auth: McpLoopbackRequestAuth,
 ): McpRequestContext {
-  if (auth.boundContext) {
+  if (auth.boundClientGrant) {
     // Gateway-launched CLI clients receive an immutable context grant. The
     // child process can replay the token, but cannot scope-shop by rewriting
     // session, channel, capability, or ownership headers.
-    return structuredClone(auth.boundContext);
+    return structuredClone(auth.boundClientGrant.context);
   }
   // Grant-authenticated callers get only their server-bound session and optional
   // global-session agent owner; spoofable delivery/action headers stay reserved.

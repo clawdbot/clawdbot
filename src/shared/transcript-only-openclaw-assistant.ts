@@ -4,6 +4,7 @@
 export const OPENCLAW_TRANSCRIPT_ARTIFACT_API = "openclaw-transcript" as const;
 export const OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER = "openclaw" as const;
 export const OPENCLAW_DELIVERY_MIRROR_MODEL = "delivery-mirror" as const;
+export const CRON_DIRECT_DELIVERY_CONTEXT_KIND = "cron-direct-delivery-context" as const;
 const OPENCLAW_GATEWAY_INJECTED_MODEL = "gateway-injected" as const;
 
 const TRANSCRIPT_ONLY_OPENCLAW_ASSISTANT_MODELS = new Set<string>([
@@ -14,6 +15,7 @@ const OPENCLAW_DELIVERY_MIRROR_KINDS = new Set([
   "channel-final",
   "channel-final-suppressed",
   "message-tool-source-reply",
+  CRON_DIRECT_DELIVERY_CONTEXT_KIND,
 ]);
 
 function isOpenClawDeliveryMirrorMarker(value: unknown): boolean {
@@ -65,19 +67,6 @@ export function isOpenClawMessageToolMirrorAssistantMessage(message: unknown): b
   }
   const entry = message as { role?: unknown; openclawMessageToolMirror?: unknown };
   return entry.role === "assistant" && entry.openclawMessageToolMirror !== undefined;
-}
-
-export function isOpenClawInternalSourceReplyMirrorAssistantMessage(message: unknown): boolean {
-  if (!isOpenClawMessageToolMirrorAssistantMessage(message)) {
-    return false;
-  }
-  const marker = (message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror;
-  return (
-    Boolean(marker) &&
-    typeof marker === "object" &&
-    !Array.isArray(marker) &&
-    (marker as { sourceReplySink?: unknown }).sourceReplySink === "internal-ui"
-  );
 }
 
 export function isOpenClawDeliveryMirrorAssistantMessage(message: unknown): boolean {

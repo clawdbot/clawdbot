@@ -2,6 +2,7 @@
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
+  type ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 import {
   createConfigWithFallbacks,
@@ -112,7 +113,14 @@ describe("xai onboard", () => {
   });
 
   it("persists the provider-owned auto ref for OAuth setup", () => {
-    const cfg = applyXaiOAuthConfig({});
+    const provider: ModelProviderConfig = {
+      api: "openai-responses",
+      auth: "oauth",
+      baseUrl: "https://cli-chat-proxy.grok.com/v1",
+      models: [],
+    };
+    const cfg = applyXaiOAuthConfig({}, provider);
+    expect(cfg.models?.providers?.xai).toMatchObject(provider);
 
     expect(XAI_OAUTH_DEFAULT_MODEL_REF).toBe("xai/auto");
     expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe("xai/auto");

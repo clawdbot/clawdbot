@@ -17,7 +17,6 @@ import {
   requireApiKey,
 } from "./model-auth.js";
 import { normalizeProviderId, parseModelRef } from "./model-selection.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "./stream-message-shared.js";
 
 // Shared helpers for live prompt-cache regression tests. They resolve real
@@ -204,68 +203,55 @@ export async function resolveLiveDirectModelPool(params: {
   envVar: string;
   preferredModelIds: readonly string[];
 }): Promise<LiveResolvedModelPool> {
+  const { resolveModelAsync } = await import("./embedded-agent-runner/model.js");
   const cfg = getRuntimeConfig();
-  await ensureOpenClawModelsJson(cfg);
   const agentDir = resolveDefaultAgentDir(cfg);
   const authStorage = discoverAuthStorage(agentDir);
-  const models = discoverModels(authStorage, agentDir).getAll();
-  const candidates = models.filter(
-    (model) => normalizeProviderId(model.provider) === params.provider && model.api === params.api,
-  );
+  const modelRegistry = discoverModels(authStorage, agentDir, { config: cfg });
   const rawModel = process.env[params.envVar]?.trim();
   const parsed = rawModel ? parseModelRef(rawModel, params.provider) : null;
-  const requestedModelId =
-    parsed && normalizeProviderId(parsed.provider) === params.provider ? parsed.model : rawModel;
-  const selectModel = (): Model | undefined => {
-    if (parsed) {
-      return candidates.find(
-        (model) =>
-          normalizeProviderId(model.provider) === parsed.provider && model.id === parsed.model,
-      );
+  const modelIds = rawModel ? [parsed?.model ?? rawModel] : params.preferredModelIds;
+  let resolvedModel: Model | undefined;
+  if (!parsed || normalizeProviderId(parsed.provider) === params.provider) {
+    for (const modelId of modelIds) {
+      // Built-in metadata now belongs to provider catalogs, not the persisted registry.
+      // Preserve authored overrides without loading provider runtime hooks for metadata-only probes.
+      const { model } = await resolveModelAsync(params.provider, modelId, agentDir, cfg, {
+        authStorage,
+        modelRegistry,
+        allowBundledStaticCatalogFallback: true,
+        skipProviderRuntimeHooks: true,
+      });
+      if (model?.api === params.api && normalizeProviderId(model.provider) === params.provider) {
+        resolvedModel = model;
+        break;
+      }
     }
-    if (requestedModelId) {
-      return candidates.find((model) => model.id === requestedModelId);
+  }
+  if (!resolvedModel) {
+    const message = rawModel
+      ? `Model not found for ${params.provider}: ${rawModel}`
+      : `No ${params.provider} ${params.api} model available in registry or provider catalog.`;
+    if (rawModel) {
+      throw new Error(message);
     }
-    return params.preferredModelIds
-      .map((id) => candidates.find((model) => model.id === id))
-      .find(Boolean);
-  };
+    throw new LiveCachePrerequisiteSkip(params.provider, message);
+  }
   const liveKeys = collectProviderApiKeys(params.provider);
   if (liveKeys.length > 0) {
     // Explicit live env keys win because live regression lanes often inject
     // short-lived provider credentials outside profile storage.
-    const selectedModel = selectModel();
-    if (!selectedModel || selectedModel.api !== params.api) {
-      const message = requestedModelId
-        ? `Model not found for ${params.provider}: ${requestedModelId}`
-        : `No built-in ${params.provider} ${params.api} model available.`;
-      if (requestedModelId) {
-        throw new Error(message);
-      }
-      throw new LiveCachePrerequisiteSkip(params.provider, message);
-    }
-    logLiveCache(`resolved ${params.provider} model ${selectedModel.id} from live env key`);
+    logLiveCache(`resolved ${params.provider} model ${resolvedModel.id} from live env key`);
     return {
       apiKeys: liveKeys,
       fixture: {
-        model: selectedModel,
+        model: resolvedModel,
         apiKey: liveKeys[0] ?? "",
       },
     };
   }
 
   logLiveCache(`resolving ${params.provider} model from configured auth storage`);
-  const resolvedModel = selectModel();
-  if (!resolvedModel) {
-    const message = rawModel
-      ? `Model not found for ${params.provider}: ${rawModel}`
-      : `No ${params.provider} ${params.api} model available in registry.`;
-    if (rawModel) {
-      throw new Error(message);
-    }
-    throw new LiveCachePrerequisiteSkip(params.provider, message);
-  }
-
   let apiKey: string;
   try {
     apiKey = requireApiKey(

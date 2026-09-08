@@ -7,6 +7,7 @@ export const SESSION_MUTATION_TEST_METHODS = [
   "projects.add",
   "session.members.add",
   "session.members.list",
+  "session.members.listEvidence",
   "session.members.remove",
   "session.visibility.set",
   "sessions.assignOwner",

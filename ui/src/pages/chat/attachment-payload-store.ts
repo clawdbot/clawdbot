@@ -27,19 +27,12 @@ export function registerChatAttachmentPayload(params: {
   dataUrl: string;
   file: File;
 }): ChatAttachment {
-  const previous = payloads.get(params.attachment.id);
-  revokeObjectUrl(previous?.previewUrl);
-  const objectUrl = createObjectUrl(params.file);
-  const previewUrl = objectUrl ?? params.attachment.previewUrl;
+  releaseChatAttachmentPayload(params.attachment.id);
   payloads.set(params.attachment.id, {
     blob: params.file,
     dataUrl: params.dataUrl,
-    ...(previewUrl ? { previewUrl } : {}),
   });
-  return {
-    ...params.attachment,
-    ...(previewUrl ? { previewUrl } : {}),
-  };
+  return params.attachment;
 }
 
 export function getChatAttachmentDataUrl(attachment: ChatAttachment): string | null {
@@ -68,62 +61,34 @@ function blobFromDataUrl(dataUrl: string): Blob | null {
 }
 
 export function getChatAttachmentBlob(attachment: ChatAttachment): Blob | null {
-  const stored = payloads.get(attachment.id)?.blob;
-  if (stored) {
-    return stored;
+  const stored = payloads.get(attachment.id);
+  if (stored?.blob) {
+    return stored.blob;
   }
   const dataUrl = getChatAttachmentDataUrl(attachment);
-  return dataUrl ? blobFromDataUrl(dataUrl) : null;
+  if (!dataUrl) {
+    return null;
+  }
+  const blob = blobFromDataUrl(dataUrl);
+  if (blob) {
+    payloads.set(attachment.id, { ...stored, blob, dataUrl });
+  }
+  return blob;
 }
 
-function readBlobAsDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener("error", () => reject(reader.error ?? new Error("Blob read failed")), {
-      once: true,
-    });
-    reader.addEventListener(
-      "load",
-      () =>
-        typeof reader.result === "string"
-          ? resolve(reader.result)
-          : reject(new Error("Blob read returned no data")),
-      { once: true },
-    );
-    reader.readAsDataURL(blob);
-  });
-}
-
-export async function restoreChatAttachmentPayload(params: {
-  attachment: ChatAttachment;
-  blob: Blob;
-}): Promise<ChatAttachment> {
-  const blob =
-    params.blob.type === params.attachment.mimeType
-      ? params.blob
-      : params.blob.slice(0, params.blob.size, params.attachment.mimeType);
-  const dataUrl = await readBlobAsDataUrl(blob);
-  const file = new File([blob], params.attachment.fileName ?? "attachment", {
-    type: params.attachment.mimeType,
-  });
-  return registerChatAttachmentPayload({ attachment: params.attachment, dataUrl, file });
-}
-
-// Stored data URLs keep previews available when this browser cannot create object URLs.
+// Recovery prepares bytes without owning URLs. Allocate once when presented, so
+// stale reads cannot leak previews or replace a URL another pane still uses.
 export function getChatAttachmentPreviewUrl(attachment: ChatAttachment): string | null {
-  const storedPreview = payloads.get(attachment.id)?.previewUrl;
-  return attachment.previewUrl ?? storedPreview ?? getChatAttachmentDataUrl(attachment);
-}
-
-function cloneChatAttachmentMetadata(attachment: ChatAttachment): ChatAttachment {
-  const { dataUrl: _dataUrl, ...metadata } = attachment;
-  return metadata;
-}
-
-export function cloneChatAttachmentsMetadata(
-  attachments: readonly ChatAttachment[],
-): ChatAttachment[] {
-  return attachments.map(cloneChatAttachmentMetadata);
+  const preview = attachment.previewUrl ?? payloads.get(attachment.id)?.previewUrl;
+  if (preview) {
+    return preview;
+  }
+  const blob = getChatAttachmentBlob(attachment);
+  const objectUrl = blob && createObjectUrl(blob);
+  if (objectUrl) {
+    payloads.set(attachment.id, { ...payloads.get(attachment.id), previewUrl: objectUrl });
+  }
+  return objectUrl ?? getChatAttachmentDataUrl(attachment);
 }
 
 /** Gives another mounted composer payload ownership independent of the source. */

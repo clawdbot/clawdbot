@@ -229,6 +229,7 @@ describe("repairIMessageConversationAnchor", () => {
 
     const { imessageTo, ctxPayload } = await buildIMessageInboundContext({
       cfg: {} as never,
+      accountService: undefined,
       decision,
       message: repaired!,
       historyLimit: 0,
@@ -236,7 +237,7 @@ describe("repairIMessageConversationAnchor", () => {
     });
 
     expect(imessageTo).toBe("imessage:+15550000002");
-    expect(ctxPayload.To).toBe("imessage:+15550000002");
+    expect(ctxPayload.To).toBe("chat_id:42");
     expect(ctxPayload.To).not.toBe("imessage:+15550000001");
   });
 
@@ -293,6 +294,7 @@ describe("repairIMessageConversationAnchor", () => {
 
     const { imessageTo, ctxPayload } = await buildIMessageInboundContext({
       cfg: {} as never,
+      accountService: undefined,
       decision,
       message: repaired!,
       historyLimit: 0,
@@ -300,7 +302,7 @@ describe("repairIMessageConversationAnchor", () => {
     });
 
     expect(imessageTo).toBe("imessage:+15550000002");
-    expect(ctxPayload.To).toBe("imessage:+15550000002");
+    expect(ctxPayload.To).toBe("chat_id:42");
   });
 
   it("drops fail-closed when authoritative history says is_from_me=true", async () => {

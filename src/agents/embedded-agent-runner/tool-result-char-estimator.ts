@@ -13,6 +13,7 @@ import { estimateToolResultTextChars } from "./tool-result-text-budget.js";
 
 export const TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE = 2;
 const IMAGE_CHAR_ESTIMATE = 8_000;
+export const TOOL_IMAGE_CHARS = IMAGE_CHAR_ESTIMATE * TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
 
 export type MessageCharEstimateCache = WeakMap<AgentMessage, number>;
 
@@ -85,7 +86,7 @@ function estimateToolResultContentChars(content: unknown[]): number {
         minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
       });
     } else if (isImageBlock(block)) {
-      chars += IMAGE_CHAR_ESTIMATE * TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
+      chars += TOOL_IMAGE_CHARS;
     } else {
       chars += estimateUnknownChars(block) * TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
     }
@@ -105,7 +106,11 @@ export function getToolResultText(msg: AgentMessage): string {
 }
 
 function estimateMessageChars(msg: AgentMessage): number {
-  if (!msg || typeof msg !== "object") {
+  if (
+    !msg ||
+    typeof msg !== "object" ||
+    ("excludeFromContext" in msg && msg.excludeFromContext === true)
+  ) {
     return 0;
   }
 
@@ -161,9 +166,6 @@ function estimateMessageChars(msg: AgentMessage): number {
   const role: unknown = Reflect.get(msg, "role");
 
   if (role === "bashExecution") {
-    if (Reflect.get(msg, "excludeFromContext") === true) {
-      return 0;
-    }
     return bashExecutionToText(msg as Parameters<typeof bashExecutionToText>[0]).length;
   }
 

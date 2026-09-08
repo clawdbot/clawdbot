@@ -1,0 +1,12 @@
+.DS_Store
+dist/.boundary-tsc.tsbuildinfo
+**/*.map
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+**/*.spec.tsx
+**/*.test-helpers.ts
+**/*.test-harness.ts
+**/*.test-support.ts
+src/test-*.ts
+src/test-support/

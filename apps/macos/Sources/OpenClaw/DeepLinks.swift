@@ -78,6 +78,8 @@ final class DeepLinkHandler {
             await self.handleAgent(link: link, originalURL: url)
         case let .gateway(link):
             self.gatewaySetup(link)
+        case let .gatewayAdd(link):
+            GatewayBrowserOnboardingController.shared.present(link)
         }
     }
 

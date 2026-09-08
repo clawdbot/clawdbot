@@ -11,9 +11,15 @@ import type {
   Usage,
 } from "@openclaw/llm-core";
 import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  appendAssistantMessageDiagnostic,
+  createAssistantMessageDiagnostic,
+  projectDiagnosticValue,
+} from "../utils/diagnostics.js";
 import { createAssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { projectProviderError, type ProviderErrorProjection } from "../utils/provider-error.js";
+import { isTransientNetworkError } from "../utils/retryable-network-errors.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 
@@ -98,9 +104,18 @@ export function mergeTransportHeaders(
   ...headerSources: Array<Record<string, string> | undefined>
 ): Record<string, string> | undefined {
   const merged: Record<string, string> = {};
+  const namesByLowercase = new Map<string, string>();
   for (const headers of headerSources) {
-    if (headers) {
-      Object.assign(merged, headers);
+    for (const [name, value] of Object.entries(headers ?? {})) {
+      // HTTP header names are case-insensitive. Remove the earlier spelling so
+      // fetch cannot combine a protected replacement with its stale value.
+      const lowercaseName = name.toLowerCase();
+      const previousName = namesByLowercase.get(lowercaseName);
+      if (previousName && previousName !== name) {
+        delete merged[previousName];
+      }
+      merged[name] = value;
+      namesByLowercase.set(lowercaseName, name);
     }
   }
   return Object.keys(merged).length > 0 ? merged : undefined;
@@ -400,7 +415,7 @@ export function finalizeTransportStream(params: {
   stream.end();
 }
 
-/** @deprecated Use projectProviderError. v2026.7.2-beta.5 compatibility; remove after 2026.10. */
+/** Assign terminal fields and record silent transport failures before partial-call cleanup. */
 export function assignTransportErrorDetails(
   output: AssistantMessage,
   error: unknown,
@@ -408,6 +423,22 @@ export function assignTransportErrorDetails(
 ): ProviderErrorProjection {
   const projection = projectProviderError(error, signal);
   Object.assign(output, projection);
+  if (
+    projection.stopReason === "error" &&
+    output.content.length === 0 &&
+    isTransientNetworkError(projectDiagnosticValue(error)) &&
+    !output.diagnostics?.some((diagnostic) => diagnostic.type === "provider_transport_failure")
+  ) {
+    // Recovery consumes this fact, not error-text guesses. Reuse the bounded,
+    // redacted terminal message so diagnostics cannot expose the original throw.
+    appendAssistantMessageDiagnostic(
+      output,
+      createAssistantMessageDiagnostic("provider_transport_failure", projection.errorMessage, {
+        eventsEmitted: false,
+        phase: "before_message_stream_start",
+      }),
+    );
+  }
   return projection;
 }
 
@@ -419,8 +450,8 @@ export function failTransportStream(params: {
   cleanup?: () => void;
 }): void {
   const { stream, output, signal, error, cleanup } = params;
-  cleanup?.();
   const projection = assignTransportErrorDetails(output, error, signal);
+  cleanup?.();
   stream.push({ type: "error", reason: projection.stopReason, error: output });
   stream.end();
 }

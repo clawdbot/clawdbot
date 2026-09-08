@@ -61,6 +61,7 @@ describe("OpenClawSchema cloudWorkers config", () => {
       ["cloudWorkers.profiles.*", profile],
       ["cloudWorkers.profiles.*.provider", profile?.properties?.provider],
       ["cloudWorkers.profiles.*.install", profile?.properties?.install],
+      ["cloudWorkers.profiles.*.suspendAfter", profile?.properties?.suspendAfter],
       ["cloudWorkers.profiles.*.settings", profile?.properties?.settings],
     ] as const) {
       expect(schema?.title, path).toBe(CLOUD_WORKER_FIELD_LABELS[path]);
@@ -194,6 +195,27 @@ describe("OpenClawSchema cloudWorkers config", () => {
       },
     });
   });
+
+  it.each(["1m", "60s", "45m", "90m", "2h", "1h30m"])(
+    "accepts an idle suspend duration of at least one minute: %s",
+    (suspendAfter) => {
+      expect(
+        parseCloudWorkers({ profiles: { development: { provider: "qa-lab", suspendAfter } } }),
+      ).toStrictEqual({
+        profiles: { development: { provider: "qa-lab", install: "bundle", suspendAfter } },
+      });
+    },
+  );
+
+  it.each(["", "0m", "59s", "0.5m", "-1m", "60000", "forever", 60_000, null])(
+    "rejects an invalid or sub-minute idle suspend duration: %s",
+    (suspendAfter) => {
+      const result = OpenClawSchema.safeParse({
+        cloudWorkers: { profiles: { development: { provider: "qa-lab", suspendAfter } } },
+      });
+      expect(result.success).toBe(false);
+    },
+  );
 
   it.each([
     { profiles: { development: { provider: "" } } },

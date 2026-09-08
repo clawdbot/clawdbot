@@ -24,8 +24,8 @@ scenario:
     kind: flow
     summary: Force the packaged dist-runtime plugin tree and verify an enabled bundled plugin skill survives discovery.
     config:
-      pluginId: open-prose
-      expectedSkillName: prose
+      pluginId: diffs
+      expectedSkillName: diffs
 
 flow:
   steps:

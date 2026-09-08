@@ -1,11 +1,15 @@
+import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 // Zalouser plugin module implements tool behavior.
 import { stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { jsonResult as json, type AgentToolResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
+import { resolveZalouserAccountSync } from "./accounts.js";
 import { sendImageZalouser, sendLinkZalouser, sendMessageZalouser } from "./send.js";
 import { parseZalouserOutboundTarget } from "./session-route.js";
+import { normalizeZalouserCredentialProfile } from "./session-state.js";
+import type { ZalouserConfig } from "./types.js";
 import {
   checkZaloAuthenticated,
   getZaloUserInfo,
@@ -38,7 +42,30 @@ type ToolParams = {
   url?: string;
 };
 
-type ZalouserToolContext = Pick<OpenClawPluginToolContext, "deliveryContext">;
+type ZalouserToolContext = Pick<
+  OpenClawPluginToolContext,
+  "deliveryContext" | "config" | "runtimeConfig" | "getRuntimeConfig"
+>;
+
+function resolveToolMediaMaxBytes(profile: string | undefined, context?: ZalouserToolContext) {
+  const cfg = context?.getRuntimeConfig?.() ?? context?.runtimeConfig ?? context?.config ?? {};
+  const route = context?.deliveryContext;
+  if (route?.channel === "zalouser" && route.accountId) {
+    const account = resolveZalouserAccountSync({ cfg, accountId: route.accountId });
+    // Profiles are credentials, not account IDs; only the actual route can select an account cap.
+    if (
+      normalizeZalouserCredentialProfile(account.profile) ===
+      normalizeZalouserCredentialProfile(profile)
+    ) {
+      return account.mediaMaxBytes;
+    }
+  }
+  return resolveChannelMediaMaxBytes({
+    cfg,
+    // SAFETY: The plugin schema validates this open-world channel config section.
+    resolveChannelLimitMb: () => (cfg.channels?.zalouser as ZalouserConfig | undefined)?.mediaMaxMb,
+  });
+}
 
 function resolveAmbientZalouserTarget(context?: ZalouserToolContext): {
   threadId?: string;
@@ -113,6 +140,7 @@ async function executeZalouserTool(
         }
         const result = await sendImageZalouser(target.threadId, params.url, {
           profile: params.profile,
+          mediaMaxBytes: resolveToolMediaMaxBytes(params.profile, context),
           caption: params.message,
           isGroup: target.isGroup,
         });

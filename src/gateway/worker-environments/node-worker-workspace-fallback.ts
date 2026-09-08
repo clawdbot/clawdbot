@@ -1,31 +1,31 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
-import type { WorkerWorkspaceSyncRequest, WorkerWorkspaceSyncResult } from "./tunnel-contract.js";
-import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
+import {
+  createNodeWorkerRepositoryPreparation,
+  WORKER_REPOSITORY_GIT_ARGS,
+  type NodeWorkerRepositoryExec,
+  type NodeWorkerRepositoryOutcome,
+} from "./node-worker-repository-preparation.js";
+import type {
+  WorkerLocalWorkspaceSyncRequest,
+  WorkerWorkspaceSyncResult,
+} from "./tunnel-contract.js";
+import {
+  resolveWorkerWorkspaceGitAuthor,
+  validateWorkspaceSyncRequest,
+} from "./workspace-sync-helpers.js";
 
 const GIT_TIMEOUT_MS = 60_000;
 const COMMIT_PATTERN = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u;
-const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
-const GIT_NONINTERACTIVE_ARGS = ["-c", "credential.helper=", "-c", "core.askPass="];
 const workspaceSyncLog = createSubsystemLogger("gateway/worker-workspace");
 
-type WorkspaceExec = (params: {
-  argv: string[];
-  input?: string;
-  resetWorkspace?: boolean;
-  timeoutMs?: number;
-  transportRetry: "idempotent" | "never";
-}) => Promise<SpawnResult & { workspaceDir: string }>;
-
-type GitIdentity = { commit: string; origin: string; root: string };
+type GitIdentity = { commit: string; origin: string };
 type OriginFallbackReason =
-  | "clone-failed"
-  | "checkout-failed"
+  | Extract<NodeWorkerRepositoryOutcome, { kind: "failed" }>["reason"]
   | "inspection-failed"
-  | "manifest-capture-failed"
-  | "manifest-mismatch"
   | "not-git-workspace"
   | "not-repository-root"
   | "origin-unavailable"
@@ -37,7 +37,7 @@ type OriginInspection =
   | { kind: "fallback"; reason: OriginFallbackReason };
 
 type OriginSyncOutcome =
-  | { kind: "synced"; result: WorkerWorkspaceSyncResult }
+  | { kind: "synced"; seeded: boolean; result: WorkerWorkspaceSyncResult }
   | { kind: "fallback"; reason: OriginFallbackReason };
 
 export function recordNodeSyncPath(
@@ -50,14 +50,31 @@ export function recordNodeSyncPath(
     environmentId,
     sessionId,
     path: outcome.kind === "synced" ? "origin" : "gateway-push",
-    reason: outcome.kind === "synced" ? "published-origin" : outcome.reason,
+    reason:
+      outcome.kind === "synced"
+        ? outcome.seeded
+          ? "published-origin-seeded"
+          : "published-origin"
+        : outcome.reason,
     originAttemptMs: performance.now() - originStartedAt,
   });
 }
 
 async function localGit(root: string, args: string[]): Promise<string> {
+  // Inspection runs inside the Gateway process against a user checkout, so
+  // checkout-configured hook/fsmonitor commands must never execute here.
   const result = await runCommandWithTimeout(
-    ["git", ...GIT_NONINTERACTIVE_ARGS, "-C", root, ...args],
+    [
+      "git",
+      "-c",
+      `core.hooksPath=${os.devNull}`,
+      "-c",
+      "core.fsmonitor=false",
+      ...WORKER_REPOSITORY_GIT_ARGS,
+      "-C",
+      root,
+      ...args,
+    ],
     {
       timeoutMs: GIT_TIMEOUT_MS,
       maxOutputBytes: 256 * 1024,
@@ -143,86 +160,51 @@ async function inspectEligibleOrigin(localPath: string): Promise<OriginInspectio
     if (!COMMIT_PATTERN.test(commit) || !origin) {
       return { kind: "fallback", reason: "origin-unavailable" };
     }
-    return { kind: "eligible", identity: { commit, origin, root } };
+    return { kind: "eligible", identity: { commit, origin } };
   } catch {
     return { kind: "fallback", reason: "inspection-failed" };
   }
 }
 
-function succeeded(result: SpawnResult): boolean {
-  return result.termination === "exit" && result.code === 0;
-}
-
 /** Optional published-origin fast path; HTTPS transfer remains the canonical fallback. */
-export function createNodeWorkerWorkspaceFallback(exec: WorkspaceExec) {
+export function createNodeWorkerWorkspaceFallback(exec: NodeWorkerRepositoryExec) {
+  const repository = createNodeWorkerRepositoryPreparation(exec);
   return {
+    captureManifest: repository.captureManifest,
     async trySyncWorkspace(
-      request: WorkerWorkspaceSyncRequest,
+      request: WorkerLocalWorkspaceSyncRequest,
       expectedManifestRef: string,
     ): Promise<OriginSyncOutcome> {
+      validateWorkspaceSyncRequest(request);
       const inspection = await inspectEligibleOrigin(request.localPath);
       if (inspection.kind === "fallback") {
         return inspection;
       }
-      const { identity } = inspection;
-      const cloned = await exec({
-        argv: [
-          "git",
-          ...GIT_NONINTERACTIVE_ARGS,
-          "-c",
-          "init.templateDir=",
-          "clone",
-          "--filter=blob:none",
-          "--no-checkout",
-          "--",
-          identity.origin,
-          ".",
-        ],
-        resetWorkspace: true,
-        timeoutMs: GIT_TIMEOUT_MS,
-        transportRetry: "never",
-      });
-      if (!succeeded(cloned)) {
-        return { kind: "fallback", reason: "clone-failed" };
+      const prepared = await repository.prepareRepository(inspection.identity, expectedManifestRef);
+      return prepared.kind === "prepared"
+        ? {
+            kind: "synced",
+            seeded: prepared.seeded,
+            result: {
+              mode: "git",
+              remoteWorkspaceDir: prepared.result.remoteWorkspaceDir,
+              manifestRef: prepared.result.manifestRef,
+            },
+          }
+        : { kind: "fallback", reason: prepared.reason };
+    },
+    async finalizeSync(
+      request: WorkerLocalWorkspaceSyncRequest,
+      result: WorkerWorkspaceSyncResult,
+    ): Promise<WorkerWorkspaceSyncResult> {
+      if (result.mode === "plain") {
+        return result;
       }
-      const checkedOut = await exec({
-        argv: [
-          "git",
-          ...GIT_NONINTERACTIVE_ARGS,
-          "checkout",
-          "--detach",
-          "--force",
-          identity.commit,
-        ],
-        timeoutMs: GIT_TIMEOUT_MS,
-        transportRetry: "never",
-      });
-      if (!succeeded(checkedOut) || checkedOut.workspaceDir !== cloned.workspaceDir) {
-        return { kind: "fallback", reason: "checkout-failed" };
-      }
-      const captured = await exec({
-        argv: [
-          "node",
-          "-e",
-          REMOTE_WORKSPACE_MANIFEST_JS,
-          checkedOut.workspaceDir,
-          identity.commit,
-          "eligible",
-        ],
-        timeoutMs: GIT_TIMEOUT_MS,
-        transportRetry: "idempotent",
-      });
-      const manifestRef = captured.stdout.trim();
-      if (!succeeded(captured) || !MANIFEST_REF_PATTERN.test(manifestRef)) {
-        return { kind: "fallback", reason: "manifest-capture-failed" };
-      }
-      if (manifestRef !== expectedManifestRef) {
-        return { kind: "fallback", reason: "manifest-mismatch" };
-      }
-      return {
-        kind: "synced",
-        result: { mode: "git", remoteWorkspaceDir: checkedOut.workspaceDir, manifestRef },
-      };
+      const author = await resolveWorkerWorkspaceGitAuthor(request, async (argv) =>
+        runCommandWithTimeout(argv, { timeoutMs: GIT_TIMEOUT_MS, maxOutputBytes: 1024 }),
+      );
+      await repository.configureAuthor(result.remoteWorkspaceDir, author);
+      return result;
     },
   };
 }

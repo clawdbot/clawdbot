@@ -114,6 +114,35 @@ describe("matrix observed event normalization", () => {
     });
   });
 
+  it.each([
+    { name: "initial preview", content: { "org.matrix.msc4357.live": {} }, live: true },
+    {
+      name: "preview edit",
+      content: {
+        "m.relates_to": { rel_type: "m.replace", event_id: "$draft" },
+        "m.new_content": { body: "preview", "org.matrix.msc4357.live": {} },
+      },
+      live: true,
+    },
+    {
+      name: "final edit",
+      content: {
+        "org.matrix.msc4357.live": {},
+        "m.relates_to": { rel_type: "m.replace", event_id: "$draft" },
+        "m.new_content": { body: "final" },
+      },
+      live: undefined,
+    },
+    { name: "ordinary final chunk", content: {}, live: undefined },
+  ])("preserves the live marker only on $name", ({ content, live }) => {
+    const event = normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
+      event_id: "$event",
+      type: "m.room.message",
+      content: { body: "preview", msgtype: "m.text", ...content },
+    });
+    expect(event?.live).toBe(live);
+  });
+
   it("normalizes Matrix reaction events with target metadata", () => {
     expect(
       normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {

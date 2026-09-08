@@ -176,7 +176,6 @@ vi.mock("../agents/model-selection.js", () => {
         allowedKeys: refs,
         allowedCatalog: [],
         allowAny: policyRefs.length === 0,
-        automaticFallbackKeys: new Set<string>(),
       };
     }),
     createModelVisibilityPolicy: vi.fn(
@@ -210,7 +209,6 @@ vi.mock("../agents/model-selection.js", () => {
           hasProviderWildcards: wildcardModelKeys.size > 0,
           allowConfigPath: policy.configPath,
           allowRepairConfigPath: "agents.defaults.modelPolicy.allow",
-          automaticFallbackKeys: new Set<string>(),
           allowsKey,
           allows: ({ provider, model }: ModelRef) => allowsKey(modelKey(provider, model)),
           allowsByWildcard: ({ provider, model }: ModelRef) =>

@@ -3,7 +3,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
+import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
+import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
+import { ExpectedCliError } from "../cli/failure-output.js";
+import {
+  replaceSessionEntrySync,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -148,6 +155,128 @@ describe("sessionsTailCommand", () => {
     expect(output).not.toContain("SECRET");
   });
 
+  it.each<[string, TrajectoryEvent["data"], string]>([
+    ["provider failure", { stopReason: "error", aborted: false, timedOut: false }, "error"],
+    [
+      "tool turn without delivery",
+      { stopReason: "toolUse", terminalError: "non_deliverable_terminal_turn" },
+      "error",
+    ],
+    [
+      "empty terminal reply",
+      { stopReason: "stop", terminalError: "non_deliverable_terminal_turn" },
+      "error",
+    ],
+    ["assistant interruption", { stopReason: "aborted", aborted: false }, "aborted"],
+    ["prompt failure", { promptError: "sensitive failure detail" }, "error"],
+    [
+      "timeout with abort and failure",
+      { timedOut: true, aborted: true, promptError: "sensitive failure detail" },
+      "timeout",
+    ],
+    ["abort with failure", { aborted: true, promptError: "sensitive failure detail" }, "aborted"],
+    ["normal stop", { stopReason: "stop" }, "done"],
+    ["normal end turn", { stopReason: "end_turn" }, "done"],
+    ["delivered partial reply", { stopReason: "length" }, "done"],
+    ["unspecified completion", undefined, "done"],
+  ])("renders the recorded terminal outcome for %s", async (_name, data, expected) => {
+    const runtime = makeRuntime();
+    await writeSessionEntry();
+    await appendEvents([
+      makeEvent({
+        type: "model.completed",
+        ts: "2026-05-18T12:04:29.000Z",
+        provider: "openai",
+        modelId: "gpt-5.2",
+        data,
+      }),
+    ]);
+
+    await sessionsTailCommand({ agent: "main", store: storePath, sessionKey }, runtime);
+
+    expect(runtimeOutput(runtime)).toContain(`openai/gpt-5.2 ${expected}`);
+    expect(runtimeOutput(runtime)).not.toContain("sensitive failure detail");
+  });
+
+  it.each([
+    ["ASCII", "incident", "incident"],
+    ["CJK", "中文", "中文"],
+    ["combining accent", "e\u0301", "e\u0301"],
+    ["joined emoji", "👩🏽‍💻", "👩🏽‍💻"],
+    ["truncated emoji", `${"a".repeat(17)}👩🏽‍💻-incident`, `${"a".repeat(17)}…`],
+  ])("keeps progress columns aligned with %s session keys", async (_name, suffix, displayed) => {
+    const runtime = makeRuntime();
+    const key = `agent:main:${suffix}`;
+    await writeSessionEntry(key);
+    await appendEvents(
+      [
+        makeEvent({
+          type: "tool.result",
+          ts: "2026-05-18T12:04:21.000Z",
+          data: { name: "proof", success: true },
+        }),
+      ],
+      { key },
+    );
+
+    await sessionsTailCommand({ agent: "main", store: storePath, sessionKey: key }, runtime);
+
+    const line = runtimeOutput(runtime);
+    expect(line.split("\n")).toHaveLength(1);
+    expect(line).toContain(` agent:main:${displayed} `);
+    expect(line).toContain("tool.result");
+    expect(line.endsWith("proof ok")).toBe(true);
+    const previewOffset = line.indexOf("proof ok");
+    expect(visibleWidth(line.slice(0, previewOffset))).toBe(57);
+  });
+
+  it.each([
+    ["CSI inside", "a\u001b[31mb", "custom\u001b[31m", "ab", "custom"],
+    [
+      "OSC inside",
+      "a\u001b]8;;https://example.invalid/\u0007b",
+      "custom\u001b]8;;https://example.invalid/\u0007",
+      "ab",
+      "custom",
+    ],
+    [
+      "CSI beyond cutoff",
+      `${"a".repeat(30)}\u001b[31m`,
+      "custom.progress-long\u001b[31m",
+      `${"a".repeat(18)}…`,
+      "custom.progress…",
+    ],
+    [
+      "OSC beyond cutoff",
+      `${"a".repeat(30)}\u001b]8;;https://example.invalid/\u0007`,
+      "custom.progress-long\u001b]8;;https://example.invalid/\u0007",
+      `${"a".repeat(18)}…`,
+      "custom.progress…",
+    ],
+  ])(
+    "renders %s as plain progress labels",
+    async (_name, suffix, type, displayed, displayedType) => {
+      const runtime = makeRuntime();
+      const key = `agent:main:${suffix}`;
+      await writeSessionEntry(key);
+      await appendEvents(
+        [makeEvent({ type, ts: "2026-05-18T12:04:21.000Z", data: { name: "proof" } })],
+        { key },
+      );
+
+      await sessionsTailCommand({ agent: "main", store: storePath, sessionKey: key }, runtime);
+
+      const line = runtimeOutput(runtime);
+      expect(line.split("\n")).toHaveLength(1);
+      expect(line).not.toContain("\u001b");
+      expect(line).not.toContain("\u0007");
+      expect(line).toContain(` ${displayedType} `);
+      expect(line).toContain(` agent:main:${displayed} `);
+      expect(line.endsWith(" proof")).toBe(true);
+      expect(visibleWidth(line.slice(0, line.lastIndexOf(" proof") + 1))).toBe(57);
+    },
+  );
+
   it("honors the tail count before rendering existing trajectory events", async () => {
     const runtime = makeRuntime();
     await writeSessionEntry();
@@ -210,6 +339,90 @@ describe("sessionsTailCommand", () => {
     expect(output).not.toContain("No sessions found");
   });
 
+  it.each(["explicit", "running", "latest", "acp"])(
+    "selects %s sessions without decoding unrelated saved prompts",
+    async (selection) => {
+      const runtime = makeRuntime();
+      storePath = path.join(tmpDir, "state", "agents", "main", "agent", "openclaw-agent.sqlite");
+      replaceSessionEntrySync(
+        { sessionKey, storePath },
+        {
+          sessionId: "session-one",
+          updatedAt: 2,
+          status: selection === "running" ? "running" : "done",
+        },
+      );
+      if (selection === "acp") {
+        writeAcpSessionMetaForMigration({
+          sessionKey: buildAcpDatabaseSessionKey(sessionKey, "main"),
+          sessionId: "session-one",
+          now: () => 2,
+          meta: {
+            backend: "fixture",
+            agent: "main",
+            runtimeSessionName: "fixture",
+            mode: "persistent",
+            state: "running",
+            lastActivityAt: 2,
+          },
+        });
+      }
+      await appendEvents([
+        makeEvent({
+          type: "tool.result",
+          ts: "2026-05-18T12:04:21.000Z",
+          data: { name: "selected", success: true },
+        }),
+      ]);
+      for (let index = 0; index < 100; index += 1) {
+        replaceSessionEntrySync(
+          { sessionKey: `agent:main:unrelated:${index}`, storePath },
+          {
+            sessionId: `unrelated-${index}`,
+            status: "done",
+            updatedAt: selection === "acp" ? 3 : 1,
+            skillsSnapshot: {
+              prompt: `UNRELATED_TAIL_PAYLOAD_${"x".repeat(4096)}`,
+              skills: [],
+            },
+            systemPromptReport: {
+              source: "run",
+              generatedAt: 1,
+              workspaceDir: `UNRELATED_TAIL_PAYLOAD_${"y".repeat(4096)}`,
+              systemPrompt: { chars: 0, projectContextChars: 0, nonProjectContextChars: 0 },
+              injectedWorkspaceFiles: [],
+              skills: { promptChars: 0, entries: [] },
+              tools: { listChars: 0, schemaChars: 0, entries: [] },
+            },
+          },
+        );
+      }
+
+      const parse = vi.spyOn(JSON, "parse");
+      try {
+        await sessionsTailCommand(
+          {
+            agent: "main",
+            store: storePath,
+            sessionKey: selection === "explicit" ? sessionKey : undefined,
+            tail: "1",
+          },
+          runtime,
+        );
+
+        expect(
+          parse.mock.calls.filter(
+            ([value]) => typeof value === "string" && value.includes("UNRELATED_TAIL_PAYLOAD_"),
+          ),
+        ).toHaveLength(0);
+        expect(runtimeOutput(runtime)).toContain("selected ok");
+        expect(runtime.error).not.toHaveBeenCalled();
+      } finally {
+        parse.mockRestore();
+      }
+    },
+  );
+
   it("isolates trajectory rows by session id", async () => {
     const runtime = makeRuntime();
     await writeSessionEntry();
@@ -240,9 +453,14 @@ describe("sessionsTailCommand", () => {
     expect(output).not.toContain("stale ok");
   });
 
-  it("continues following when SQLite trajectory rows are appended", async () => {
+  it.each([
+    { signal: "SIGINT" as const, exitCode: 130 },
+    { signal: "SIGTERM" as const, exitCode: 143 },
+  ])("continues following until $signal and exits with $exitCode", async ({ signal, exitCode }) => {
     vi.useFakeTimers();
     const runtime = makeRuntime();
+    const sigintListeners = process.listenerCount("SIGINT");
+    const sigtermListeners = process.listenerCount("SIGTERM");
     await writeSessionEntry();
     appendSqliteTrajectoryRuntimeEvents({ agentId: "main", sessionId: "session-one", storePath }, [
       makeEvent({
@@ -275,13 +493,63 @@ describe("sessionsTailCommand", () => {
     try {
       await vi.advanceTimersByTimeAsync(1_000);
     } finally {
-      process.emit("SIGTERM", "SIGTERM");
+      process.emit(signal, signal);
       await run;
     }
 
     const output = runtimeOutput(runtime);
     expect(output).toContain("tool.result");
     expect(output).toContain("sqlite ok");
+    expect(runtime.exit).toHaveBeenCalledOnce();
+    expect(runtime.exit).toHaveBeenCalledWith(exitCode);
+    expect(process.listenerCount("SIGINT")).toBe(sigintListeners);
+    expect(process.listenerCount("SIGTERM")).toBe(sigtermListeners);
+  });
+
+  it("exits unsuccessfully when the followed trajectory store becomes unreadable", async () => {
+    vi.useFakeTimers();
+    const runtime = makeRuntime();
+    const sigintListeners = process.listenerCount("SIGINT");
+    const sigtermListeners = process.listenerCount("SIGTERM");
+    await writeSessionEntry();
+    await appendEvents([makeEvent({ type: "session.started", ts: "2026-05-18T12:04:17.000Z" })]);
+
+    const run = sessionsTailCommand(
+      { agent: "main", store: storePath, sessionKey, tail: "0", follow: true },
+      runtime,
+    );
+    closeOpenClawAgentDatabasesForTest();
+    fs.writeFileSync(storePath, "not a SQLite database");
+    try {
+      await vi.advanceTimersByTimeAsync(1_000);
+    } finally {
+      process.emit("SIGTERM", "SIGTERM");
+      await run;
+    }
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining(`Failed to read trajectory progress for ${sessionKey}`),
+    );
+    expect(vi.mocked(runtime.exit).mock.calls).toEqual([[1]]);
+    expect(process.listenerCount("SIGINT")).toBe(sigintListeners);
+    expect(process.listenerCount("SIGTERM")).toBe(sigtermListeners);
+  });
+
+  it.each([
+    { agent: "" },
+    { agent: "   " },
+    { agent: "", sessionKey },
+    { agent: "   ", sessionKey },
+  ])("rejects an explicit blank agent without inferring a store: %j", async (opts) => {
+    mocks.getRuntimeConfig.mockReturnValue({});
+    const runtime = makeRuntime();
+    const result = sessionsTailCommand(opts, runtime);
+
+    await expect(result).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(result).rejects.toMatchObject({ message: "--agent must not be blank" });
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("resolves the target store from a fully qualified non-default agent session key", async () => {

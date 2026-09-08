@@ -9,6 +9,7 @@ import {
   resolveCacheTtlMs,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { assertPluginCapabilitySecretAvailable } from "openclaw/plugin-sdk/secret-input-runtime";
 import {
   truncateSanitizedExternalContent,
   wrapExternalContent,
@@ -17,6 +18,7 @@ import {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_TAVILY_BASE_URL,
+  TAVILY_API_KEY_CONFIG_PATH,
   resolveTavilyApiKey,
   resolveTavilyBaseUrl,
   resolveTavilyExtractTimeoutSeconds,
@@ -83,6 +85,21 @@ function normalizeTavilyResultUrl(value: unknown): string | undefined {
   }
 }
 
+function normalizeTavilyPublishedDate(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length > 31) {
+    return undefined;
+  }
+  if (TAVILY_PUBLISHED_DATE_RE.test(value)) {
+    return value;
+  }
+  // Tavily news dates use RFC-style GMT. Exact round-tripping rejects prose,
+  // relative ages, and invalid calendar dates before emitting an unwrapped field.
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) && date.toUTCString() === value
+    ? date.toISOString()
+    : undefined;
+}
+
 function resolveEndpoint(baseUrl: string, pathname: string): string {
   const trimmed = baseUrl.trim();
   if (!trimmed) {
@@ -120,24 +137,17 @@ async function postTavilyJson(params: {
       ...(params.signal ? { signal: params.signal } : {}),
     },
     async (response) =>
-      readTavilyJsonResponse(response, params.errorLabel, {
+      readProviderJsonResponse<Record<string, unknown>>(response, params.errorLabel, {
         maxBytes: params.responseMaxBytes,
       }),
   );
-}
-
-async function readTavilyJsonResponse(
-  response: Response,
-  label: string,
-  opts?: { maxBytes?: number },
-): Promise<Record<string, unknown>> {
-  return await readProviderJsonResponse<Record<string, unknown>>(response, label, opts);
 }
 
 export async function runTavilySearch(
   params: TavilySearchParams,
 ): Promise<Record<string, unknown>> {
   params.signal?.throwIfAborted();
+  assertPluginCapabilitySecretAvailable(TAVILY_API_KEY_CONFIG_PATH);
   const apiKey = resolveTavilyApiKey(params.cfg);
   if (!apiKey) {
     throw new Error(
@@ -165,7 +175,11 @@ export async function runTavilySearch(
       excludeDomains: params.excludeDomains,
     }),
   );
-  const cached = readCache(SEARCH_CACHE, cacheKey);
+  const cacheTtlMs = resolveCacheTtlMs(
+    params.cfg?.tools?.web?.search?.cacheTtlMinutes,
+    DEFAULT_CACHE_TTL_MINUTES,
+  );
+  const cached = readCache(SEARCH_CACHE, cacheKey, cacheTtlMs);
   if (cached) {
     return { ...cached.value, cached: true };
   }
@@ -222,11 +236,7 @@ export async function runTavilySearch(
     if (!url) {
       return [];
     }
-    const published =
-      typeof entry.published_date === "string" &&
-      TAVILY_PUBLISHED_DATE_RE.test(entry.published_date)
-        ? entry.published_date
-        : undefined;
+    const published = normalizeTavilyPublishedDate(entry.published_date);
     return [
       {
         title: typeof entry.title === "string" ? wrapBoundedSearchContent(entry.title) : "",
@@ -258,12 +268,7 @@ export async function runTavilySearch(
     result.truncated = true;
   }
 
-  writeCache(
-    SEARCH_CACHE,
-    cacheKey,
-    result,
-    resolveCacheTtlMs(undefined, DEFAULT_CACHE_TTL_MINUTES),
-  );
+  writeCache(SEARCH_CACHE, cacheKey, result, cacheTtlMs);
   return result;
 }
 
@@ -271,6 +276,7 @@ export async function runTavilyExtract(
   params: TavilyExtractParams,
 ): Promise<Record<string, unknown>> {
   params.signal?.throwIfAborted();
+  assertPluginCapabilitySecretAvailable(TAVILY_API_KEY_CONFIG_PATH);
   const apiKey = resolveTavilyApiKey(params.cfg);
   if (!apiKey) {
     throw new Error(
@@ -410,8 +416,3 @@ export async function runTavilyExtract(
   );
   return result;
 }
-
-export const testing = {
-  readTavilyJsonResponse,
-  resolveEndpoint,
-};

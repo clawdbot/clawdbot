@@ -67,7 +67,11 @@ function classifyRest(rest: string): SessionClassification {
   if (normalized.startsWith("dreaming-narrative-")) {
     return "dreaming";
   }
-  if (normalized === "boot" || normalized.startsWith("internal-session-effects:")) {
+  if (
+    normalized === "boot" ||
+    normalized.startsWith("boot:") ||
+    normalized.startsWith("internal-session-effects:")
+  ) {
     return "system";
   }
   return "custom";
@@ -111,10 +115,6 @@ export function sessionClassificationForRow(
     classification = "heartbeat";
   } else if (isMain) {
     classification = "main";
-  } else if (entry?.spawnedBy) {
-    // Spawn ownership survives delivery-shaped keys; classify the child before
-    // route parsing so clients do not present background work as a chat.
-    classification = "subagent";
   } else if (isSubagentSessionKey(canonicalKey)) {
     classification = "subagent";
   } else if (isAcpSessionKey(canonicalKey)) {

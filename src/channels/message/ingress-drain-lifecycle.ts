@@ -12,6 +12,8 @@ export type ChannelIngressDispatchLifecycle = {
    * Claim remains held until adopted or abandoned.
    */
   onDeferred: () => void;
+  /** Deferred reply-lane admission is still waiting behind an active turn. */
+  onDeferredHeartbeat?: () => void;
   /**
    * Durable adoption finalization is in progress (e.g. settlement hold while
    * committing dedupe). Clears the pre-adoption stall watchdog so a timeout
@@ -36,6 +38,7 @@ export function bindIngressLifecycleToReplyOptions(lifecycle: ChannelIngressDisp
     admission: "exclusive";
     onAdopted: () => void | Promise<void>;
     onDeferred: () => void;
+    onDeferredHeartbeat?: () => void;
     onAbandoned: () => void | Promise<void>;
     abortSignal: AbortSignal;
   };
@@ -45,6 +48,7 @@ export function bindIngressLifecycleToReplyOptions(lifecycle: ChannelIngressDisp
       admission: "exclusive",
       onAdopted: lifecycle.onAdopted,
       onDeferred: lifecycle.onDeferred,
+      onDeferredHeartbeat: lifecycle.onDeferredHeartbeat,
       onAbandoned: lifecycle.onAbandoned,
       abortSignal: lifecycle.abortSignal,
     },

@@ -1,8 +1,14 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, expect, vi } from "vitest";
+import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { insertGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   type OpenClawStateDatabase,
@@ -10,6 +16,7 @@ import {
 import { createGitHubPublicationRuntime as createRuntime } from "./github-publication-runtime.js";
 import { createGitHubPublicationCoordinator as createCoordinator } from "./github-publication.js";
 import { REQUEST } from "./worker-environments/placement-dispatch-test-fixtures.js";
+import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 const mocks = vi.hoisted(() => ({
   matchesIdentity: vi.fn(),
@@ -40,6 +47,14 @@ vi.mock("../agents/github-tool-identity.js", async (importOriginal) => {
 
 vi.mock("./github-oauth-lifecycle.js", () => ({
   requestCurrentGitHubOAuthRefresh: mocks.refreshIdentity,
+  requestCurrentPersonalGitHubRefresh: mocks.refreshIdentity,
+}));
+
+// Git transport is synthetic in this harness; keep real SQLite lease exclusion.
+vi.mock("../agents/worktrees/git-lock.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/worktrees/git-lock.js")>()),
+  lockWorktreeForProcess: vi.fn(async () => undefined),
+  unlockWorktree: vi.fn(async () => undefined),
 }));
 
 vi.mock("../agents/git-coauthor-attribution.js", () => ({
@@ -150,6 +165,11 @@ export function seedLocalPublication(
       1_000,
       1_001,
     );
+  insertGitHubPublicationSessionLifecycle(database.db, {
+    publicationKind: "shared",
+    requestId: params.requestId,
+    lifecycleRevision: mocks.loadSession(SESSION_KEY).entry.lifecycleRevision ?? null,
+  });
 }
 
 export function publicationTranscriptMessages(events: unknown[], requestId: string) {
@@ -167,10 +187,66 @@ export let root: string;
 export let commands: string[][];
 export let commandCalls: Array<{ argv: string[]; input?: string }>;
 
+/** Publish and reset the same real SQLite owner while transport faults stay synthetic. */
+export async function persistPublicationTestSession(sessionKey = SESSION_KEY) {
+  setRuntimeConfigSnapshot({
+    agents: { list: [{ id: "main", default: true, workspace: path.join(root, "workspace") }] },
+    session: { store: path.join(root, "sessions.json") },
+  });
+  const { loadGatewaySessionEntryReadOnly } =
+    await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
+  const original = mocks.loadSession.getMockImplementation()!;
+  await upsertSessionEntryCore(
+    { agentId: "main", sessionKey, storePath: path.join(root, "sessions.json") },
+    { ...original(sessionKey).entry, updatedAt: Date.now(), lifecycleRevision: randomUUID() },
+  );
+  mocks.loadSession.mockImplementation(
+    (key: string, options: Parameters<typeof loadGatewaySessionEntryReadOnly>[1]) =>
+      key === sessionKey ? loadGatewaySessionEntryReadOnly(key, options) : original(key, options),
+  );
+  const read = () => loadGatewaySessionEntryReadOnly(sessionKey, { agentId: "main" }).entry!;
+  return {
+    read,
+    async reset(placements: WorkerSessionPlacementStore) {
+      const before = read();
+      const { performGatewaySessionReset } = await import("./session-reset-service.js");
+      const result = await performGatewaySessionReset({
+        key: sessionKey,
+        agentId: "main",
+        reason: "reset",
+        commandSource: "gateway",
+        workerPlacementContext: { workerSessionPlacementService: placements },
+      });
+      expect(result.ok, JSON.stringify(result)).toBe(true);
+      const after = read();
+      expect(after.sessionId).toBe(before.sessionId);
+      expect(after.lifecycleRevision).not.toBe(before.lifecycleRevision);
+      expect(after.repositoryWorkspaceId).toBe(before.repositoryWorkspaceId);
+      expect(after.worktree).toEqual(before.worktree);
+      return after;
+    },
+  };
+}
+
 export function installGitHubPublicationTestHarness(): void {
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-publication-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    const syntheticIndex = path.join(root, "synthetic-index");
+    await fs.writeFile(syntheticIndex, "synthetic Git transport index");
+    insertRegistryWorktree(process.env, {
+      id: "worktree-1",
+      name: "publication",
+      repoRoot: "/repo",
+      repoFingerprint: "fingerprint-1",
+      path: "/repo/worktree",
+      branch: BRANCH,
+      baseRef: "origin/main",
+      ownerKind: "session",
+      ownerId: SESSION_KEY,
+      createdAt: Date.now(),
+      lastActiveAt: Date.now(),
+    });
     commands = [];
     commandCalls = [];
     mocks.updateIndex
@@ -289,6 +365,9 @@ export function installGitHubPublicationTestHarness(): void {
         if (command.startsWith("git ls-tree -r -z --full-tree ")) {
           return commandResult();
         }
+        if (argv.includes("rev-parse") && argv.includes("--git-path") && argv.at(-1) === "index") {
+          return commandResult(syntheticIndex);
+        }
         if (command === "git rev-parse --git-path info/attributes") {
           return commandResult(path.join(root, "missing-info-attributes"));
         }
@@ -349,8 +428,139 @@ export function installGitHubPublicationTestHarness(): void {
   });
 
   afterEach(async () => {
+    clearRuntimeConfigSnapshot();
+    // Agent close releases leases through shared state; closing shared state first can
+    // reopen it during teardown and leave a Windows handle under the fixture root.
+    closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
     await fs.rm(root, { recursive: true, force: true });
   });
+}
+
+/** Real local Git/index with synthetic remote effects; no credential helper reaches a subprocess. */
+export async function createRealPublicationWorkspace(
+  interruptAt: "push" | "observe" | "index" | "create",
+) {
+  const { runCommandBuffered } =
+    await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
+  const { updateGitHubPublicationBranchAndIndex } = await vi.importActual<
+    typeof import("./github-publication-git-index.js")
+  >("./github-publication-git-index.js");
+  const cwd = path.join(root, "repository");
+  const home = path.join(root, "git-home");
+  await fs.mkdir(cwd);
+  await fs.mkdir(home);
+  const env = {
+    ...process.env,
+    HOME: home,
+    XDG_CONFIG_HOME: home,
+    GIT_CONFIG_GLOBAL: os.devNull,
+    GIT_CONFIG_SYSTEM: os.devNull,
+    GIT_AUTHOR_NAME: "Publication Test",
+    GIT_AUTHOR_EMAIL: "publication@example.test",
+    GIT_COMMITTER_NAME: "Publication Test",
+    GIT_COMMITTER_EMAIL: "publication@example.test",
+  };
+  const local = async (
+    argv: string[],
+    options?: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string },
+  ) =>
+    await runCommandBuffered(argv, {
+      cwd,
+      ...options,
+      env: {
+        ...env,
+        ...options?.env,
+        HOME: home,
+        XDG_CONFIG_HOME: home,
+        GIT_CONFIG_GLOBAL: os.devNull,
+        GIT_CONFIG_SYSTEM: os.devNull,
+        GIT_DIR: undefined,
+        GIT_WORK_TREE: undefined,
+        GH_TOKEN: undefined,
+        GITHUB_TOKEN: undefined,
+        GH_CONFIG_DIR: undefined,
+      },
+      timeoutMs: 10000,
+      maxOutputBytes: 256 * 1024,
+    });
+  const git = async (...args: string[]) => {
+    const result = await local(["git", ...args]);
+    if (result.code !== 0) {
+      throw new Error(result.stderr.toString("utf8"));
+    }
+    return result.stdout.toString("utf8").trim();
+  };
+  await git("init", "--initial-branch=main");
+  await fs.writeFile(path.join(cwd, "artifact.txt"), "base\n");
+  await git("add", "artifact.txt");
+  await git("commit", "-m", "base");
+  const baseHead = await git("rev-parse", "HEAD");
+  await git("checkout", "-b", BRANCH);
+  await fs.writeFile(path.join(cwd, "artifact.txt"), "staged\n");
+  await git("add", "artifact.txt");
+  await fs.writeFile(path.join(cwd, "artifact.txt"), "accepted\n");
+  const worktree = { ...mocks.findWorktree("session", SESSION_KEY), path: cwd, repoRoot: cwd };
+  mocks.findWorktree.mockReturnValue(worktree);
+  mocks.findWorktreeById.mockReturnValue(worktree);
+  const loaded = mocks.loadSession(SESSION_KEY);
+  mocks.loadSession.mockReturnValue({
+    ...loaded,
+    entry: { ...loaded.entry, worktree: { ...loaded.entry.worktree, repoRoot: cwd } },
+  });
+  mocks.resolveRepository.mockResolvedValue({
+    checkoutRoot: cwd,
+    repoRoot: cwd,
+    fingerprint: worktree.repoFingerprint,
+    originUrl: "git@github.com:openclaw/openclaw.git",
+  });
+  mocks.updateIndex.mockImplementation(updateGitHubPublicationBranchAndIndex);
+  const remote = mocks.runCommand.getMockImplementation()!;
+  let interrupted = false;
+  let remoteHead = "";
+  const effects: string[] = [];
+  mocks.runCommand.mockImplementation(
+    async (argv: string[], options?: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string }) => {
+      if (argv[0] === "gh") {
+        if (argv.some((arg) => arg.startsWith("repos/openclaw/openclaw/git/ref/heads/"))) {
+          return commandResult(JSON.stringify({ ref: "refs/heads/main", sha: baseHead }));
+        }
+        if (argv.includes("POST")) {
+          effects.push("pull_request");
+          if (!interrupted && interruptAt === "create") {
+            interrupted = true;
+            throw new Error("synthetic PR response lost");
+          }
+        }
+        return await remote(argv, options);
+      }
+      if (argv.includes("fetch")) {
+        return commandResult();
+      }
+      if (argv.includes("push")) {
+        effects.push("push");
+        remoteHead = await git("rev-parse", "HEAD");
+        if (!interrupted && interruptAt === "push") {
+          interrupted = true;
+          throw new Error("synthetic push response lost");
+        }
+        return commandResult();
+      }
+      if (argv.includes("ls-remote")) {
+        if (!interrupted && interruptAt === "observe" && remoteHead) {
+          interrupted = true;
+          throw new Error("synthetic remote observation unavailable");
+        }
+        return commandResult(remoteHead ? `${remoteHead}\trefs/heads/${BRANCH}\n` : "");
+      }
+      const result = await local(argv, options);
+      if (!interrupted && interruptAt === "index" && argv.includes("update-ref")) {
+        interrupted = true;
+        throw new Error("synthetic ref update response lost");
+      }
+      return result;
+    },
+  );
+  return { cwd, git, effects };
 }

@@ -98,7 +98,6 @@ describe("Telegram reaction presentation", () => {
     ["☃️", "☃"],
     ["❤️‍🔥", "❤‍🔥"],
     ["🤷‍♂️", "🤷‍♂"],
-    ["✅", "✅"],
     ["👍🏻", "👍🏻"],
   ])("sends %s using its Telegram wire representation %s", async (input, expected) => {
     botApi.setMessageReaction.mockResolvedValue(true);
@@ -107,6 +106,16 @@ describe("Telegram reaction presentation", () => {
 
     expect(botApi.setMessageReaction).toHaveBeenCalledWith(chatId, messageId, [
       { type: "emoji", emoji: expected },
+    ]);
+  });
+
+  it("sends discovered numeric custom emoji identifiers as native custom reactions", async () => {
+    botApi.setMessageReaction.mockResolvedValue(true);
+
+    await reactMessageTelegram(chatId, messageId, "5231419410191111111", opts);
+
+    expect(botApi.setMessageReaction).toHaveBeenCalledWith(chatId, messageId, [
+      { type: "custom_emoji", custom_emoji_id: "5231419410191111111" },
     ]);
   });
 

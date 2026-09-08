@@ -22,11 +22,7 @@ import {
 } from "./dispatcher-workspace.js";
 import { workboardSessionKeyForCard } from "./session-link.js";
 import { cardBoardId } from "./store-card-helpers.js";
-import {
-  DEFAULT_WORKBOARD_DISPATCH_OWNER,
-  workboardCardConsumesOwnerSlot,
-  workboardCardSlotOwner,
-} from "./store-constants.js";
+import { workboardCardConsumesOwnerSlot, workboardCardSlotOwner } from "./store-constants.js";
 import { WorkboardStore, type WorkboardDispatchResult } from "./store.js";
 import {
   assertCanonicalWorkboardRootAccess,
@@ -228,15 +224,6 @@ function sortReadyCards(a: WorkboardCard, b: WorkboardCard): number {
   );
 }
 
-function resolveDispatchOwner(card: WorkboardCard, now: number, ownerOverride?: string): string {
-  return (
-    ownerOverride ||
-    (cardHasActiveClaim(card, now) ? card.metadata?.claim?.ownerId : undefined) ||
-    card.agentId ||
-    DEFAULT_WORKBOARD_DISPATCH_OWNER
-  );
-}
-
 function selectStartableCards(
   cards: WorkboardCard[],
   limit: number,
@@ -261,7 +248,7 @@ function selectStartableCards(
   const selectedOwners = new Set<string>();
   const ordered = mode === "scheduled" ? candidates.toSorted(sortReadyCards) : candidates;
   for (const card of ordered) {
-    const owner = resolveDispatchOwner(card, now, ownerOverride);
+    const owner = ownerOverride || workboardCardSlotOwner(card, now);
     const rejection = cardIsArchived(card)
       ? "Card is archived; restore it before starting."
       : cardHasActiveClaim(card, now)
@@ -356,7 +343,7 @@ async function runWorkboardDispatch(
     startFailures.push(selection.rejection);
   }
   for (const card of selection.cards) {
-    const ownerId = resolveDispatchOwner(card, now, ownerOverride);
+    const ownerId = ownerOverride || workboardCardSlotOwner(card, now);
     if (acceptedStarts >= maxStarts || attemptedStarts >= maxAttempts) {
       break;
     }
@@ -484,7 +471,6 @@ async function runWorkboardDispatch(
       if (runCwd && !workspaceAccess.unrestricted) {
         await assertRestrictedWorkboardTarget({
           root: runCwd,
-          // Claim may populate agentId; keep the sessionKey target identity.
           agentId: card.agentId,
           sessionKey,
           modelProvider: params.options?.provider,

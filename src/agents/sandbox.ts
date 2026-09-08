@@ -41,6 +41,7 @@ export {
   createSshSandboxSessionFromConfigText,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
+  prepareSshSandboxExec,
   runSshSandboxCommand,
   shellEscape,
   uploadDirectoryToSshTarget,

@@ -37,6 +37,23 @@ export const log = {
 
 export type { OpenAICompletionsOptions } from "../provider-options.js";
 
+export function resolveOpenAIClientBaseUrl(
+  model: Pick<Model, "provider" | "baseUrl">,
+  baseUrl: string | undefined = model.baseUrl,
+): string | undefined {
+  if (baseUrl?.trim()) {
+    return baseUrl;
+  }
+  if (model.provider.trim().toLowerCase() === "openai") {
+    return undefined;
+  }
+  // The OpenAI SDK defaults a missing endpoint to api.openai.com. Only OpenAI may
+  // inherit that default; otherwise a third-party bearer token can cross providers.
+  throw new Error(
+    `Provider "${model.provider}" requires an explicit base URL before using an OpenAI-compatible API. Reload provider metadata or configure an endpoint.`,
+  );
+}
+
 export type OpenAICompletionsTextSource = "reasoning_detail" | "refusal";
 
 export type OpenAICompletionsContentDelta =
@@ -190,13 +207,17 @@ export function parseOpenAICompletionsUsage(
   rawUsage: NonNullable<ChatCompletionChunk["usage"]> & {
     cost?: unknown;
     prompt_cache_hit_tokens?: number;
+    prompt_tokens_details?: { cache_creation_input_tokens?: number };
   },
   model: Model,
   options?: { includeReasoningTokens?: boolean },
 ): MutableAssistantOutput["usage"] {
   const cacheRead =
     rawUsage.prompt_tokens_details?.cached_tokens ?? rawUsage.prompt_cache_hit_tokens ?? 0;
-  const cacheWrite = rawUsage.prompt_tokens_details?.cache_write_tokens || 0;
+  const cacheWrite =
+    rawUsage.prompt_tokens_details?.cache_write_tokens ??
+    rawUsage.prompt_tokens_details?.cache_creation_input_tokens ??
+    0;
   const input = Math.max(0, (rawUsage.prompt_tokens || 0) - cacheRead - cacheWrite);
   const output = rawUsage.completion_tokens || 0;
   const reasoningTokens = rawUsage.completion_tokens_details?.reasoning_tokens;

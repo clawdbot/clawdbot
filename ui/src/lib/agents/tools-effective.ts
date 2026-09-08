@@ -4,7 +4,6 @@ import type {
   ToolsEffectiveResult,
 } from "../../api/types.ts";
 import {
-  createChatModelOverride,
   normalizeChatModelOverrideValue,
   resolvePreferredServerChatModelValue,
 } from "../chat/model-ref.ts";
@@ -154,7 +153,7 @@ function resolveEffectiveToolsModelKey(
     return defaultModel;
   }
   if (cachedOverride) {
-    return normalizeChatModelOverrideValue(createChatModelOverride(cachedOverride), catalog);
+    return normalizeChatModelOverrideValue(cachedOverride, catalog);
   }
   const activeRow = state.sessionsResult?.sessions?.find((row) => row.key === resolvedSessionKey);
   if (activeRow?.model) {

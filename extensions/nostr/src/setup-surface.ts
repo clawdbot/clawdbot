@@ -17,7 +17,7 @@ import {
   setSetupChannelEnabled,
 } from "openclaw/plugin-sdk/setup";
 import { DEFAULT_RELAYS } from "./default-relays.js";
-import { getPublicKeyFromPrivate, normalizePubkey } from "./nostr-key-utils.js";
+import { normalizePubkey } from "./nostr-key-utils.js";
 import {
   buildNostrSetupPatch,
   createNostrSetupAdapter,
@@ -80,14 +80,6 @@ const nostrDmPolicy: ChannelSetupDmPolicy = createTopLevelChannelDmPolicy({
 
 export const nostrSetupAdapter = createNostrSetupAdapter({
   resolveAccountId: (cfg, accountId) => accountId?.trim() || resolveDefaultNostrAccountId(cfg),
-  validatePrivateKey: (privateKey) => {
-    try {
-      getPublicKeyFromPrivate(privateKey);
-      return true;
-    } catch {
-      return false;
-    }
-  },
 });
 export const nostrSetupContract = createNostrSetupContract(nostrSetupAdapter);
 

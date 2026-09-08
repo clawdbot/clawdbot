@@ -3,14 +3,14 @@ import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-t
 import { hasAvailableAuthForProvider } from "../../agents/model-auth.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { promptYesNo } from "../../cli/prompt.js";
-import { readConfigFileSnapshot, replaceConfigFile } from "../../config/config.js";
+import { readConfigFileSnapshotForWrite, replaceConfigFile } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ClawHubRequestError } from "../../infra/clawhub-client.js";
 import { fetchClawHubPromotion, type ClawHubPromotion } from "../../infra/clawhub-promotions.js";
 import { markPromotionSlugsNotified, recordPromotionClaim } from "../../infra/promotions-feed.js";
-import { enablePluginInConfig } from "../../plugins/enable.js";
+import { enablePluginWithCapabilityConsent } from "../../plugins/enable.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import { applyAuthChoiceLoadedPluginProvider } from "../../plugins/provider-auth-choice.js";
 import {
@@ -23,6 +23,7 @@ import {
 } from "../../plugins/provider-install-catalog.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
+import { createPluginCapabilityConsentPrompter } from "../../wizard/plugin-capability-consent.js";
 import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runtime-plugin-install.js";
 import { repairCopilotRuntimePluginInstallForModelSelection } from "../copilot-runtime-plugin-install.js";
 import { normalizeAlias } from "../models/alias-name.js";
@@ -206,26 +207,26 @@ function requirePromotionPlugins(
   );
 }
 
-type ConfigSnapshot = Awaited<ReturnType<typeof readConfigFileSnapshot>>;
-
-async function readValidConfigSnapshot(): Promise<ConfigSnapshot> {
-  const snapshot = await readConfigFileSnapshot();
+async function readValidConfigWriteSnapshot() {
+  const prepared = await readConfigFileSnapshotForWrite();
+  const { snapshot } = prepared;
   if (!snapshot.valid) {
     const issues = formatConfigIssueLines(snapshot.issues, "-").join("\n");
     throw new Error(`Invalid config at ${snapshot.path}\n${issues}`);
   }
-  return snapshot;
+  return prepared;
 }
 
 async function ensureProviderAuth(params: {
   promotion: ClawHubPromotion;
   provider: string;
   authChoice: ResolvedAuthChoice | undefined;
-  snapshot: ConfigSnapshot;
+  prepared: Awaited<ReturnType<typeof readValidConfigWriteSnapshot>>;
   opts: PromosClaimOptions;
   runtime: RuntimeEnv;
 }): Promise<void> {
-  const { promotion, provider, authChoice, snapshot, opts, runtime } = params;
+  const { promotion, provider, authChoice, prepared, opts, runtime } = params;
+  const { snapshot, writeOptions } = prepared;
   const catalogEntry = authChoice?.entry;
   const runtimeConfig = snapshot.runtimeConfig ?? snapshot.config;
   const apiKey = opts.apiKey?.trim();
@@ -271,7 +272,7 @@ async function ensureProviderAuth(params: {
   if (!applied || !authCompleted) {
     throw new Error(`Authentication for "${provider}" was not completed; nothing was changed.`);
   }
-  await replaceConfigFile({ nextConfig: applied.config, baseHash: snapshot.hash });
+  await replaceConfigFile({ sourceConfig: applied.config, baseHash: snapshot.hash, writeOptions });
 }
 
 function aliasTaken(models: Record<string, AgentModelEntryConfig>, alias: string): boolean {
@@ -301,7 +302,8 @@ export async function promosClaimCommand(
   for (const model of promotion.models) {
     resolvePromotionModelTarget(promotion, model.modelRef);
   }
-  const snapshot = await readValidConfigSnapshot();
+  const prepared = await readValidConfigWriteSnapshot();
+  const { snapshot } = prepared;
   const authChoice = resolveAuthChoice(
     promotion,
     provider,
@@ -309,7 +311,7 @@ export async function promosClaimCommand(
   );
   requirePromotionPlugins(promotion, authChoice);
 
-  await ensureProviderAuth({ promotion, provider, authChoice, snapshot, opts, runtime });
+  await ensureProviderAuth({ promotion, provider, authChoice, prepared, opts, runtime });
 
   const suggested = promotion.models.find((model) => model.suggestedDefault) ?? promotion.models[0];
   let makeDefault = Boolean(opts.setDefault && suggested);
@@ -325,14 +327,18 @@ export async function promosClaimCommand(
   const registered: string[] = [];
   const skippedAliases: string[] = [];
   const invalidAliases: string[] = [];
-  const updated = await updateConfig((cfg, context) => {
+  const updated = await updateConfig(async (cfg, context) => {
     let base = cfg;
     // The credential-reuse path skips the auth flow, which is where plugin
     // enablement normally happens. Enable (or refuse) the provider plugin here
     // so a claim never registers models the runtime cannot load under the
     // user's plugin policy. Idempotent when the auth flow already enabled it.
     if (authChoice) {
-      const enabled = enablePluginInConfig(base, authChoice.entry.pluginId);
+      const enabled = await enablePluginWithCapabilityConsent(base, authChoice.entry.pluginId, {
+        onCapabilityConsent: process.stdin.isTTY
+          ? createPluginCapabilityConsentPrompter(createClackPrompter())
+          : undefined,
+      });
       if (!enabled.enabled) {
         throw new Error(
           `The "${authChoice.entry.pluginId}" plugin is blocked by your plugin policy (${enabled.reason ?? "disabled"}); cannot claim this promotion.`,

@@ -1,7 +1,8 @@
+import type { ModelCatalogSuppression } from "@openclaw/model-catalog-core/model-catalog-types";
 import { vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
@@ -12,11 +13,12 @@ import { AuthStorage, ModelRegistry } from "../sessions/index.js";
 
 const GENERATION_MODEL_ID = "generation-model";
 const GENERATION_REQUEST_PROVIDER = "generation-alias";
-export const GENERATION_WORKSPACE_DIR = "/tmp/openclaw-model-generation-scope";
 
 type ImagePolicy = NonNullable<NonNullable<ProviderRuntimeModel["mediaInput"]>["image"]>;
 
 export function createModelGenerationFixture(params: {
+  agentDir: string;
+  workspaceDir: string;
   config: OpenClawConfig;
   createStores?: PreparedModelRuntimeSnapshot["createStores"];
   label: string;
@@ -29,7 +31,7 @@ export function createModelGenerationFixture(params: {
   runtimeImagePolicy?: ImagePolicy;
   runtimeAugment?: boolean;
   staticImagePolicy?: ImagePolicy;
-  suppress?: boolean;
+  suppression?: Omit<ModelCatalogSuppression, "provider" | "model">;
   withRegistry?: boolean;
 }) {
   const provider = params.provider ?? `generation-${params.label}`;
@@ -67,13 +69,15 @@ export function createModelGenerationFixture(params: {
           ],
         },
       },
-      ...(params.suppress ? { suppressions: [{ provider, model: modelId }] } : {}),
+      ...(params.suppression
+        ? { suppressions: [{ provider, model: modelId, ...params.suppression }] }
+        : {}),
     },
   } satisfies PluginManifestRecord;
   const metadataSnapshot = createPluginMetadataSnapshot({
     config: params.config,
     manifestRegistry: { plugins: [plugin], diagnostics: [] },
-    workspaceDir: GENERATION_WORKSPACE_DIR,
+    workspaceDir: params.workspaceDir,
   });
   const pluginRegistry = createEmptyPluginRegistry();
   const resolveDynamicModel = vi.fn(() => ({
@@ -107,10 +111,13 @@ export function createModelGenerationFixture(params: {
       return { authStorage, modelRegistry: ModelRegistry.inMemory(authStorage) };
     });
   const preparedModelRuntime = {
-    agentDir: "/tmp/openclaw-model-generation-agent",
-    workspaceDir: GENERATION_WORKSPACE_DIR,
+    catalogOwner: undefined,
+    agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
     activeProjectKeys: [],
     config: params.config,
+    observationConfig: params.config,
+    isCurrent: () => true,
     authModes: {},
     metadataSnapshot,
     ...(params.withRegistry === false ? {} : { pluginRegistry }),
@@ -138,13 +145,13 @@ export function publishCurrentModelGeneration(
 ): void {
   setCurrentPluginMetadataSnapshot(generation.metadataSnapshot, {
     config: generation.preparedModelRuntime.config,
-    workspaceDir: GENERATION_WORKSPACE_DIR,
+    workspaceDir: generation.preparedModelRuntime.workspaceDir,
   });
   setActivePluginRegistry(
     generation.pluginRegistry,
     `generation-${generation.provider}`,
     "default",
-    GENERATION_WORKSPACE_DIR,
+    generation.preparedModelRuntime.workspaceDir,
   );
 }
 

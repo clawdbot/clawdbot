@@ -5,6 +5,7 @@ import type {
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const LLAMA_CPP_PROVIDER_ID = "llama-cpp";
 export const LLAMA_CPP_PROVIDER_LABEL = "llama.cpp";
@@ -18,7 +19,6 @@ export function resolveLlamaCppSyntheticApiKey(): string {
 }
 
 export const DEFAULT_LLAMA_CPP_MODEL_ID = "gemma-4-e4b-it-q4_k_m";
-export const DEFAULT_LLAMA_CPP_MODEL_REF = `${LLAMA_CPP_PROVIDER_ID}/${DEFAULT_LLAMA_CPP_MODEL_ID}`;
 export const DEFAULT_LLAMA_CPP_MODEL_URI =
   "hf:unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf";
 export const DEFAULT_LLAMA_CPP_MODEL_REVISION = "bfc15c382204943c3a8fff0c750b94ae2364d7a3";
@@ -29,7 +29,7 @@ export const DEFAULT_LLAMA_CPP_MODEL_SHA256 =
   "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87";
 // The full OpenClaw agent system prompt alone is ~31K tokens, so 8K overflows on
 // the first turn. 64K leaves real headroom for history and tool output; Gemma 4
-// supports far more, and the 16 GiB offer floor already bounds weaker machines.
+// supports far more; the setup catalog budgets memory for this initial context.
 export const DEFAULT_LLAMA_CPP_CONTEXT_SIZE = 65536;
 
 export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL =
@@ -42,14 +42,6 @@ export const DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE =
 export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SIZE_BYTES = 328_577_056;
 export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SHA256 =
   "6fa0c02a9c302be6f977521d399b4de3a46310a4f2621ee0063747881b673f67";
-
-// 5 GB weights + KV cache + OS headroom. Below 16 GiB the default model
-// thrashes, so onboarding omits the download offer entirely.
-const LLAMA_CPP_DEFAULT_MODEL_RAM_FLOOR_BYTES = 16 * 1024 ** 3;
-
-export function meetsLlamaCppDefaultModelRamFloor(totalmemBytes = os.totalmem()): boolean {
-  return totalmemBytes >= LLAMA_CPP_DEFAULT_MODEL_RAM_FLOOR_BYTES;
-}
 
 export function resolveLlamaCppDataDir(): string {
   return path.join(resolveStateDir(), "tools", "llama.cpp");
@@ -64,6 +56,25 @@ export function resolveLlamaCppModelCacheDir(provider?: ModelProviderConfig): st
 
 export function resolveLegacyLlamaCppModelCacheDir(): string {
   return path.join(os.homedir(), ".node-llama-cpp", "models");
+}
+
+export function resolveLlamaCppEmbeddingModel(
+  local: { modelPath?: string; modelCacheDir?: string } = {},
+) {
+  const source = normalizeOptionalString(local.modelPath) ?? DEFAULT_LLAMA_CPP_EMBEDDING_MODEL;
+  const cacheDir = normalizeOptionalString(local.modelCacheDir) ?? resolveLlamaCppModelCacheDir();
+  const resolvedPath = /^(?:hf:|https?:\/\/)/iu.test(source)
+    ? undefined
+    : path.resolve(cacheDir, source);
+  return {
+    source,
+    cacheDir,
+    isDefault:
+      source === DEFAULT_LLAMA_CPP_EMBEDDING_MODEL ||
+      resolvedPath === path.resolve(cacheDir, DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE) ||
+      resolvedPath ===
+        path.resolve(resolveLegacyLlamaCppModelCacheDir(), DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE),
+  };
 }
 
 export function resolveHomePath(value: string): string {
@@ -128,19 +139,25 @@ function buildDefaultLlamaCppModel(): ModelDefinitionConfig {
 }
 
 export function buildLlamaCppProviderConfig(
-  existing?: ModelProviderConfig,
-  managed?: {
-    baseUrl: string;
-    command: string;
-    args: string[];
-    healthUrl: string;
-  },
+  params: {
+    existing?: ModelProviderConfig;
+    managed?: {
+      baseUrl: string;
+      command: string;
+      args: string[];
+      healthUrl: string;
+    };
+    modelInventory?: ModelDefinitionConfig[];
+  } = {},
 ): ModelProviderConfig {
+  const { existing, managed, modelInventory } = params;
   const defaultModel = buildDefaultLlamaCppModel();
   const configuredModels = existing?.models ?? [];
-  const models = configuredModels.some((model) => model.id === defaultModel.id)
-    ? configuredModels
-    : [...configuredModels, defaultModel];
+  const models =
+    modelInventory ??
+    (configuredModels.some((model) => model.id === defaultModel.id)
+      ? configuredModels
+      : [...configuredModels, defaultModel]);
   return {
     ...existing,
     baseUrl:

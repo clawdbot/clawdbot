@@ -14,7 +14,7 @@ Wake words are **one global list owned by the Gateway** — there are no per-nod
 
 ## Storage
 
-Wake words and routing rules live in the Gateway state database, `~/.openclaw/state/openclaw.sqlite` by default (override with `OPENCLAW_STATE_DIR`), tables `voicewake_triggers`, `voicewake_routing_config`, `voicewake_routing_routes`. Legacy `settings/voicewake.json` and `settings/voicewake-routing.json` are `openclaw doctor --fix` migration inputs only — runtime never reads them.
+Wake words and routing rules live in the Gateway state database, `~/.openclaw/state/openclaw.sqlite` by default (override with `OPENCLAW_STATE_DIR`), under the `config_machine_state` keys `voicewake.triggers` and `voicewake.routing`. Legacy `settings/voicewake.json` and `settings/voicewake-routing.json` are `openclaw doctor --fix` migration inputs only — runtime never reads them.
 
 ## Protocol
 

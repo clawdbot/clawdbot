@@ -17,6 +17,7 @@ import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-rep
 import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
+  SystemAgentApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -54,7 +55,7 @@ const DEFAULT_PROBE_TIMEOUT_MS = 5_000;
 // gap keeps a poll posted second from sorting above the approval it follows.
 const APPROVAL_POLL_ORDERING_DELAY_MS = 1_100;
 
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
 type IMessagePendingDelivery = {
   /** Prompt text carrying the tapback hint; used when no poll will be sent. */
   text: string;
@@ -486,7 +487,7 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
   true,
   IMessageFinalPayload
 >({
-  eventKinds: ["exec", "plugin"],
+  eventKinds: ["exec", "plugin", "system-agent"],
   availability: {
     isConfigured: ({ context }) => Boolean(context),
     shouldHandle: ({ context }) => Boolean(context),

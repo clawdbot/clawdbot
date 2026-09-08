@@ -1,3 +1,4 @@
+import { requireGitCommandOutput } from "../../infra/git-exec.js";
 import { commandError, requireGit, runGit } from "./git.js";
 
 type ResolvedWorktreeBase = {
@@ -9,6 +10,7 @@ type ResolvedWorktreeBase = {
 export async function resolveWorktreeBase(
   repoRoot: string,
   baseRef?: string,
+  signal?: AbortSignal,
 ): Promise<ResolvedWorktreeBase> {
   if (baseRef) {
     let gitOperand = baseRef;
@@ -25,10 +27,10 @@ export async function resolveWorktreeBase(
         "--end-of-options",
         baseRef,
       ]);
-      const fullRef = symbolic.stdout.trim();
-      if (symbolic.code !== 0) {
-        throw commandError("git rev-parse --symbolic-full-name --verify", symbolic);
-      }
+      const fullRef = requireGitCommandOutput(
+        "git rev-parse --symbolic-full-name --verify",
+        symbolic,
+      ).trim();
       if (fullRef) {
         if (!fullRef.startsWith("refs/") || fullRef.includes("\n")) {
           throw commandError("git rev-parse --symbolic-full-name --verify", symbolic);
@@ -48,15 +50,16 @@ export async function resolveWorktreeBase(
     }
     return { gitOperand, recordRef: baseRef, remote: false };
   }
-  const fetched = await runGit(repoRoot, ["fetch", "origin"]);
-  if (fetched.code === 0) {
+  const fetched = await runGit(repoRoot, ["fetch", "origin"], { signal });
+  signal?.throwIfAborted();
+  if (fetched.termination === "exit" && fetched.code === 0) {
     const remoteHead = await runGit(repoRoot, [
       "symbolic-ref",
       "--quiet",
       "--short",
       "refs/remotes/origin/HEAD",
     ]);
-    if (remoteHead.code === 0 && remoteHead.stdout.trim()) {
+    if (remoteHead.termination === "exit" && remoteHead.code === 0 && remoteHead.stdout.trim()) {
       const remoteRef = remoteHead.stdout.trim();
       return { gitOperand: remoteRef, recordRef: remoteRef, remote: true };
     }

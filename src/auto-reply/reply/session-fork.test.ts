@@ -2,12 +2,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -78,7 +79,7 @@ describe("forkSessionEntryFromParent", () => {
         sessionKey: "agent:main:subagent:child",
         storePath,
       }),
-    ).resolves.toEqual({ status: "failed" });
+    ).rejects.toThrow(MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
     expect(
       loadSessionEntry({ agentId: "main", sessionKey: "agent:main:subagent:child", storePath }),
     ).toBeUndefined();
@@ -96,7 +97,7 @@ describe("forkSessionEntryFromParent", () => {
     const sessionKey = "agent:main:subagent:child";
     const staleSessionKey = "agent:main:subagent:stale-child";
 
-    await replaceSessionEntry(
+    replaceSessionEntrySync(
       {
         agentId: "main",
         sessionKey: staleSessionKey,
@@ -164,6 +165,14 @@ describe("forkSessionEntryFromParent", () => {
           targetId: "active-answer",
         },
       ],
+    );
+    await vi.waitFor(
+      () => {
+        expect(loadSessionEntry({ agentId: "main", sessionKey: staleSessionKey, storePath })).toBe(
+          undefined,
+        );
+      },
+      { timeout: 5_000 },
     );
 
     const fallbackEntry: InternalSessionEntry = {

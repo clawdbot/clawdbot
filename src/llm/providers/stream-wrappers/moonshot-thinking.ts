@@ -3,7 +3,9 @@ import { asOptionalRecord as asPayloadRecord } from "@openclaw/normalization-cor
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { StreamFn } from "../../../agents/runtime/index.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
-import { streamSimple } from "../../stream.js";
+import { createLazyRuntimeModule } from "../../../shared/lazy-runtime.js";
+
+const loadDefaultStream = createLazyRuntimeModule(() => import("../../stream.js"));
 
 type MoonshotThinkingType = "enabled" | "disabled";
 type MoonshotThinkingKeep = "all";
@@ -143,7 +145,10 @@ export function createMoonshotThinkingWrapper(
   thinkingKeep?: MoonshotThinkingKeep,
   finalizePayload?: MoonshotPayloadFinalizer,
 ): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
+  // Catalog imports need only the policy. Resolve the default transport when a stream starts;
+  // an explicitly supplied stream keeps its synchronous invocation contract.
+  const underlying: StreamFn =
+    baseStreamFn ?? (async (...args) => (await loadDefaultStream()).streamSimple(...args));
   return function moonshotThinkingStream(model, context, options) {
     const modelId = model.id.trim().toLowerCase();
     const directMoonshotModel = normalizeOptionalLowercaseString(model.provider) === "moonshot";

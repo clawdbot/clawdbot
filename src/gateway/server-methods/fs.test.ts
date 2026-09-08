@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { FsListDirResult } from "../../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { fsHandlers } from "./fs.js";
 
@@ -34,6 +35,35 @@ function workspaceContext(workspace: string) {
 }
 
 describe("fs.listDir", () => {
+  it.each(["operator.admin", "operator.write"])(
+    "reopens the exact returned directory path with %s",
+    async (scope) => {
+      const root = fsSync.realpathSync(tempDirs.make("openclaw-fs-path-identity-"));
+      await fs.mkdir(path.join(root, "Project", "ordinary-child"), { recursive: true });
+      await fs.mkdir(path.join(root, "Project ", "spaced-child"), { recursive: true });
+      const context = workspaceContext(root);
+      const client = { connect: { scopes: [scope] } };
+      const [listed, initial] = expectDefined(
+        await call({ path: root }, context, client),
+        "parent directory listing",
+      );
+      expect(listed).toBe(true);
+      const selected = expectDefined(
+        (initial as FsListDirResult).entries.find((entry) => entry.name === "Project "),
+        "directory with a trailing space",
+      );
+      const [opened, result] = expectDefined(
+        await call({ path: selected.path }, context, client),
+        "selected directory listing",
+      );
+      expect(opened).toBe(true);
+      expect(result).toMatchObject({
+        path: selected.path,
+        entries: [{ name: "spaced-child", path: path.join(selected.path, "spaced-child") }],
+      });
+    },
+  );
+
   it("lists only directories, visible before hidden, in byte order", async () => {
     const root = tempDirs.make("openclaw-fs-listdir-");
     await fs.mkdir(path.join(root, "zeta"));

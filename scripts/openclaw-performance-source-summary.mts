@@ -6,6 +6,13 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { requireOptionArgument } from "./lib/arg-utils.mts";
+import {
+  assertCompatibleCliStartupMemoryMetrics,
+  cliStartupMemoryMetric,
+} from "./lib/cli-startup-memory-contract.mts";
+import { isStartupTraceDuration } from "./lib/gateway-startup-trace-ranking.js";
+import { collectSqliteQueryPlanEvidence } from "./lib/sqlite-query-plan-evidence.js";
 
 type JsonObject = { [key: string]: JsonValue };
 type JsonValue = boolean | number | string | null | JsonObject | JsonValue[];
@@ -45,12 +52,20 @@ function objectArray(value: JsonValue | undefined): JsonObject[] {
   return Array.isArray(value) ? value.filter(isJsonObject) : [];
 }
 
-function readOptionValue(argv: string[], index: number, optionName: string): string {
-  const value = argv[index + 1];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`${optionName} requires a value`);
+function stringArray(value: JsonValue | undefined): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
+}
+
+function hasControlCharacters(value: string): boolean {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+    if (codePoint !== undefined && (codePoint <= 31 || codePoint === 127)) {
+      return true;
+    }
   }
-  return value;
+  return false;
 }
 
 export function parseArgs(argv: string[]) {
@@ -62,7 +77,7 @@ export function parseArgs(argv: string[]) {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? "";
     const readValue = () => {
-      const value = readOptionValue(argv, index, arg);
+      const value = requireOptionArgument(argv, index, arg);
       index += 1;
       return value;
     };
@@ -118,8 +133,8 @@ function formatMs(value: unknown) {
   return finiteNumber(value) ? `${value.toFixed(1)}ms` : "n/a";
 }
 
-function formatMb(value: unknown) {
-  return finiteNumber(value) ? `${value.toFixed(1)}MB` : "n/a";
+function formatMb(value: unknown, unit: "MB" | "MiB" = "MB") {
+  return finiteNumber(value) ? `${value.toFixed(1)}${unit}` : "n/a";
 }
 
 function formatBytesAsMb(value: unknown) {
@@ -145,7 +160,7 @@ function percentDelta(before: unknown, after: unknown) {
   return ((after - before) / before) * 100;
 }
 
-function formatDeltaMb(before: unknown, after: unknown) {
+function formatDeltaMb(before: unknown, after: unknown, unit: "MB" | "MiB" = "MB") {
   if (typeof before !== "number" || typeof after !== "number") {
     return "n/a";
   }
@@ -153,7 +168,7 @@ function formatDeltaMb(before: unknown, after: unknown) {
   const percent = percentDelta(before, after);
   const sign = delta > 0 ? "+" : "";
   const percentText = percent == null ? "new" : `${percent > 0 ? "+" : ""}${percent.toFixed(1)}%`;
-  return `${sign}${formatMb(delta)} (${percentText})`;
+  return `${sign}${formatMb(delta, unit)} (${percentText})`;
 }
 
 function memoryRisk(before: unknown, after: unknown) {
@@ -288,6 +303,7 @@ function validateStartupArtifact(startup: JsonValue, filePath: string) {
 }
 
 function validateCliArtifact(cli: JsonValue, filePath: string) {
+  cliStartupMemoryMetric(valueAt(cli, "primary"));
   const cases = objectArray(valueAt(cli, "primary", "cases"));
   if (cases.length === 0) {
     throw new Error(`[source-performance] missing CLI startup cases: ${filePath}`);
@@ -326,7 +342,7 @@ function validateExtensionMemoryArtifact(extensionMemory: JsonValue, filePath: s
   }
 }
 
-function validateSqlitePerfArtifact(sqlitePerf: JsonValue, filePath: string) {
+function validateSqlitePerfCommon(sqlitePerf: JsonValue, filePath: string) {
   if (valueAt(sqlitePerf, "profile") !== "smoke") {
     throw new Error(`[source-performance] invalid SQLite perf profile: ${filePath}`);
   }
@@ -343,24 +359,133 @@ function validateSqlitePerfArtifact(sqlitePerf: JsonValue, filePath: string) {
   }
   const stateRows = valueAt(sqlitePerf, "rows", "stateRows");
   const agentRows = valueAt(sqlitePerf, "rows", "agentCacheEntries");
+  const totalMs = valueAt(sqlitePerf, "timingsMs", "total");
+  const stateWalBefore = valueAt(sqlitePerf, "walBytes", "stateBefore");
   const queries = objectArray(valueAt(sqlitePerf, "queries"));
   if (
     !isNonNegativeInteger(stateRows) ||
     stateRows <= 0 ||
     !isNonNegativeInteger(agentRows) ||
     agentRows <= 0 ||
-    !finiteNumber(valueAt(sqlitePerf, "timingsMs", "total")) ||
-    !finiteNumber(valueAt(sqlitePerf, "walBytes", "stateBefore")) ||
+    !finiteNumber(totalMs) ||
+    totalMs < 0 ||
+    !finiteNumber(stateWalBefore) ||
+    stateWalBefore < 0 ||
     valueAt(sqlitePerf, "walBytes", "stateAfter") !== 0 ||
     queries.length === 0
   ) {
     throw new Error(`[source-performance] incomplete SQLite perf metrics: ${filePath}`);
   }
+  return queries;
+}
+
+function isNormalizedStringArray(
+  value: JsonValue | undefined,
+  { allowEmpty = true, unique = false } = {},
+) {
+  if (!Array.isArray(value) || (!allowEmpty && value.length === 0)) {
+    return false;
+  }
+  const strings = value.filter((entry): entry is string => typeof entry === "string");
+  return (
+    strings.length === value.length &&
+    strings.every(
+      (entry) => entry.length > 0 && entry.trim() === entry && !hasControlCharacters(entry),
+    ) &&
+    (!unique || new Set(strings).size === strings.length)
+  );
+}
+
+function validateLegacySqlitePerfArtifact(sqlitePerf: JsonValue, filePath: string) {
+  const queries = validateSqlitePerfCommon(sqlitePerf, filePath);
   for (const entry of queries) {
     if (!finiteNumber(entry.p50Ms) || !finiteNumber(entry.p95Ms) || !finiteNumber(entry.rows)) {
       throw new Error(`[source-performance] incomplete SQLite query metrics: ${filePath}`);
     }
   }
+}
+
+function validateSqlitePerfV2Artifact(sqlitePerf: JsonValue, filePath: string) {
+  const queries = validateSqlitePerfCommon(sqlitePerf, filePath);
+  const rawQueries = valueAt(sqlitePerf, "queries");
+  const sqliteVersion = valueAt(sqlitePerf, "versions", "sqlite");
+  const stateSchemaVersion = valueAt(sqlitePerf, "versions", "stateSchema");
+  const agentSchemaVersion = valueAt(sqlitePerf, "versions", "agentSchema");
+  if (
+    typeof sqliteVersion !== "string" ||
+    sqliteVersion.length === 0 ||
+    sqliteVersion.trim() !== sqliteVersion ||
+    hasControlCharacters(sqliteVersion) ||
+    !isNonNegativeInteger(stateSchemaVersion) ||
+    stateSchemaVersion <= 0 ||
+    !isNonNegativeInteger(agentSchemaVersion) ||
+    agentSchemaVersion <= 0 ||
+    !Array.isArray(rawQueries) ||
+    rawQueries.length !== queries.length
+  ) {
+    throw new Error(`[source-performance] invalid SQLite run metadata: ${filePath}`);
+  }
+
+  const ids = new Set<string>();
+  for (const entry of queries) {
+    const id = entry.id;
+    if (
+      typeof id !== "string" ||
+      id.length === 0 ||
+      id.trim() !== id ||
+      hasControlCharacters(id) ||
+      ids.has(id)
+    ) {
+      throw new Error(`[source-performance] invalid SQLite scenario ID: ${filePath}`);
+    }
+    ids.add(id);
+
+    if (
+      (entry.database !== "state" && entry.database !== "agent") ||
+      typeof entry.sql !== "string" ||
+      entry.sql.trim().length === 0 ||
+      !isNonNegativeInteger(entry.rows) ||
+      !isNonNegativeInteger(entry.runs) ||
+      entry.runs <= 0 ||
+      !finiteNumber(entry.p50Ms) ||
+      entry.p50Ms < 0 ||
+      !finiteNumber(entry.p95Ms) ||
+      entry.p95Ms < entry.p50Ms
+    ) {
+      throw new Error(`[source-performance] invalid SQLite scenario metrics: ${filePath}`);
+    }
+
+    const plan = isJsonObject(entry.plan) ? entry.plan : undefined;
+    if (
+      !plan ||
+      !isNormalizedStringArray(plan.raw, { allowEmpty: false }) ||
+      !isNormalizedStringArray(plan.indexes, { unique: true }) ||
+      !isNormalizedStringArray(plan.fullTableScans) ||
+      !isNormalizedStringArray(plan.tempSorts)
+    ) {
+      throw new Error(`[source-performance] invalid SQLite scenario plan: ${filePath}`);
+    }
+    const expectedPlan = collectSqliteQueryPlanEvidence(plan.raw as string[]);
+    if (
+      JSON.stringify(plan.indexes) !== JSON.stringify(expectedPlan.indexes) ||
+      JSON.stringify(plan.fullTableScans) !== JSON.stringify(expectedPlan.fullTableScans) ||
+      JSON.stringify(plan.tempSorts) !== JSON.stringify(expectedPlan.tempSorts)
+    ) {
+      throw new Error(`[source-performance] invalid SQLite scenario plan: ${filePath}`);
+    }
+  }
+}
+
+function validateSqlitePerfArtifact(sqlitePerf: JsonValue, filePath: string) {
+  const schemaVersion = valueAt(sqlitePerf, "schemaVersion");
+  if (schemaVersion === undefined) {
+    validateLegacySqlitePerfArtifact(sqlitePerf, filePath);
+    return;
+  }
+  if (schemaVersion !== 2) {
+    throw new Error(`[source-performance] unsupported SQLite perf schema version: ${filePath}`);
+  }
+  validateSqlitePerfV2Artifact(sqlitePerf, filePath);
 }
 
 function validateGatewaySummaryArtifact(gatewaySummary: JsonValue, filePath: string) {
@@ -399,9 +524,9 @@ function loadSourceArtifacts(sourceDir: string | null, { required = false }: Req
     validateStartupArtifact(artifacts.startup, startupPath);
     validateCliArtifact(artifacts.cli, cliPath);
     validateExtensionMemoryArtifact(artifacts.extensionMemory, extensionMemoryPath);
-    if (artifacts.sqlitePerf) {
-      validateSqlitePerfArtifact(artifacts.sqlitePerf, sqlitePerfPath);
-    }
+  }
+  if (artifacts.sqlitePerf) {
+    validateSqlitePerfArtifact(artifacts.sqlitePerf, sqlitePerfPath);
   }
   return artifacts;
 }
@@ -443,14 +568,6 @@ function buildTraceRows(startup: JsonValue) {
   return rows;
 }
 
-function isStartupTraceDuration(name: string) {
-  if (name.endsWith(".total") || name.startsWith("memory.")) {
-    return false;
-  }
-  const metricName = name.slice(name.lastIndexOf(".") + 1);
-  return !metricName.endsWith("Count") && !metricName.endsWith("Mb");
-}
-
 function buildMockHelloRows(summaries: MockHelloEntry[]) {
   return summaries.map(({ id, summary }) => {
     const failed = valueAt(summary, "counts", "failed");
@@ -480,7 +597,7 @@ function buildCliRows(cli: JsonValue) {
     commandCase.name ?? commandCase.id ?? "unknown",
     formatMs(valueAt(commandCase, "summary", "durationMs", "p50")),
     formatMs(valueAt(commandCase, "summary", "durationMs", "p95")),
-    formatMb(valueAt(commandCase, "summary", "maxRssMb", "p95")),
+    formatMb(valueAt(commandCase, "summary", "maxRssMb", "p95"), "MiB"),
     formatExitSummary(valueAt(commandCase, "summary", "exitSummary")),
   ]);
 }
@@ -519,6 +636,13 @@ function buildStartupMemoryDeltaRows(current: JsonValue, baseline: JsonValue) {
 }
 
 function buildCliMemoryDeltaRows(current: JsonValue, baseline: JsonValue) {
+  if (!current || !baseline) {
+    return [];
+  }
+  assertCompatibleCliStartupMemoryMetrics(
+    valueAt(baseline, "primary"),
+    valueAt(current, "primary"),
+  );
   const baselineById = new Map(
     objectArray(valueAt(baseline, "primary", "cases")).map((entry) => [entry.id, entry]),
   );
@@ -533,9 +657,9 @@ function buildCliMemoryDeltaRows(current: JsonValue, baseline: JsonValue) {
       return [
         "cli",
         entry.id ?? "unknown",
-        formatMb(beforeRss),
-        formatMb(afterRss),
-        formatDeltaMb(beforeRss, afterRss),
+        formatMb(beforeRss, "MiB"),
+        formatMb(afterRss, "MiB"),
+        formatDeltaMb(beforeRss, afterRss, "MiB"),
         "n/a",
         memoryRisk(beforeRss, afterRss),
       ];
@@ -611,28 +735,96 @@ function buildExtensionMemoryContextRows(extensionMemory: JsonValue) {
   ];
 }
 
-function buildSqlitePerfRows(sqlitePerf: JsonValue) {
-  if (!sqlitePerf) {
+function sqliteArtifactFormat(sqlitePerf: JsonValue) {
+  return valueAt(sqlitePerf, "schemaVersion") === 2 ? "v2" : "legacy";
+}
+
+function buildSqliteRunRows(current: JsonValue, baseline: JsonValue) {
+  const rows: unknown[][] = [];
+  for (const [label, artifact] of [
+    ["current", current],
+    ["baseline", baseline],
+  ] as const) {
+    if (!artifact) {
+      continue;
+    }
+    rows.push([
+      label,
+      sqliteArtifactFormat(artifact),
+      valueAt(artifact, "profile") ?? "unknown",
+      valueAt(artifact, "versions", "sqlite") ?? "n/a",
+      valueAt(artifact, "versions", "stateSchema") ?? "n/a",
+      valueAt(artifact, "versions", "agentSchema") ?? "n/a",
+      valueAt(artifact, "rows", "stateRows") ?? "n/a",
+      valueAt(artifact, "rows", "agentCacheEntries") ?? "n/a",
+      valueAt(artifact, "integrity", "state") ?? "n/a",
+      formatBytesAsMb(valueAt(artifact, "walBytes", "stateBefore")),
+      formatBytesAsMb(valueAt(artifact, "walBytes", "stateAfter")),
+      formatMs(valueAt(artifact, "timingsMs", "total")),
+    ]);
+  }
+  return rows;
+}
+
+function formatPercentDelta(before: unknown, after: unknown) {
+  const delta = percentDelta(before, after);
+  if (delta == null) {
+    return "n/a";
+  }
+  return `${delta > 0 ? "+" : ""}${delta.toFixed(1)}%`;
+}
+
+function formatSqlitePlan(plan: JsonValue | undefined) {
+  if (!isJsonObject(plan)) {
+    return "not reported";
+  }
+  const indexes = stringArray(plan.indexes);
+  const fullTableScans = stringArray(plan.fullTableScans);
+  const tempSorts = stringArray(plan.tempSorts);
+  return [
+    `indexes: ${indexes.length > 0 ? indexes.join(", ") : "none"}`,
+    `full scans: ${fullTableScans.length > 0 ? fullTableScans.join(", ") : "none"}`,
+    `temp sorts: ${tempSorts.length > 0 ? tempSorts.join(", ") : "none"}`,
+  ].join("; ");
+}
+
+function buildSqliteScenarioRows(current: JsonValue, baseline: JsonValue) {
+  if (!current) {
     return [];
   }
-  const queryP95Values = objectArray(valueAt(sqlitePerf, "queries"))
-    .map((entry) => entry.p95Ms)
-    .filter(finiteNumber);
-  const maxQueryP95 = Math.max(...queryP95Values);
-  const stateRows = valueAt(sqlitePerf, "rows", "stateRows");
-  const agentRows = valueAt(sqlitePerf, "rows", "agentCacheEntries");
-  return [
-    [
-      valueAt(sqlitePerf, "profile") ?? "unknown",
-      isNonNegativeInteger(stateRows) ? stateRows : "n/a",
-      isNonNegativeInteger(agentRows) ? agentRows : "n/a",
-      valueAt(sqlitePerf, "integrity", "state") ?? "n/a",
-      formatBytesAsMb(valueAt(sqlitePerf, "walBytes", "stateBefore")),
-      formatBytesAsMb(valueAt(sqlitePerf, "walBytes", "stateAfter")),
-      formatMs(maxQueryP95),
-      formatMs(valueAt(sqlitePerf, "timingsMs", "total")),
-    ],
-  ];
+  const currentIsV2 = valueAt(current, "schemaVersion") === 2;
+  const baselineById =
+    valueAt(baseline, "schemaVersion") === 2
+      ? new Map(objectArray(valueAt(baseline, "queries")).map((entry) => [entry.id, entry]))
+      : new Map<JsonValue | undefined, JsonObject>();
+
+  return objectArray(valueAt(current, "queries")).map((entry, index) => {
+    const id = currentIsV2 ? entry.id : `legacy query ${index + 1}`;
+    const before = currentIsV2 ? baselineById.get(entry.id) : undefined;
+    const comparable =
+      before !== undefined &&
+      before.database === entry.database &&
+      before.sql === entry.sql &&
+      before.rows === entry.rows &&
+      before.runs === entry.runs;
+    return [
+      id ?? "unknown",
+      currentIsV2 ? (entry.database ?? "unknown") : "unknown",
+      entry.rows ?? "n/a",
+      currentIsV2 ? (entry.runs ?? "n/a") : "n/a",
+      formatMs(entry.p50Ms),
+      formatMs(entry.p95Ms),
+      before?.rows ?? "n/a",
+      before?.runs ?? "n/a",
+      formatMs(before?.p95Ms),
+      comparable
+        ? formatPercentDelta(before.p95Ms, entry.p95Ms)
+        : before
+          ? "n/a (workload differs)"
+          : "n/a",
+      formatSqlitePlan(entry.plan),
+    ];
+  });
 }
 
 function buildMemoryDeltaRows(current: SourceArtifacts, baseline: SourceArtifacts | null) {
@@ -746,6 +938,8 @@ export function buildMarkdown(sourceDir: string, baselineSourceDir: string | nul
     ),
     "## CLI Against Booted Gateway",
     "",
+    `RSS metric: ${cliStartupMemoryMetric(valueAt(current.cli, "primary"))}; values are MiB.`,
+    "",
     ...table(
       ["case", "command", "duration p50", "duration p95", "RSS p95", "exits"],
       buildCliRows(current.cli),
@@ -754,16 +948,36 @@ export function buildMarkdown(sourceDir: string, baselineSourceDir: string | nul
     "",
     ...table(
       [
+        "run",
+        "format",
         "profile",
+        "SQLite",
+        "state schema",
+        "agent schema",
         "state rows",
         "agent rows",
         "integrity",
         "WAL before",
         "WAL after",
-        "query p95 max",
         "total",
       ],
-      buildSqlitePerfRows(current.sqlitePerf),
+      buildSqliteRunRows(current.sqlitePerf, baseline?.sqlitePerf ?? null),
+    ),
+    ...table(
+      [
+        "scenario",
+        "database",
+        "rows",
+        "runs",
+        "p50",
+        "p95",
+        "baseline rows",
+        "baseline runs",
+        "baseline p95",
+        "delta",
+        "plan/index",
+      ],
+      buildSqliteScenarioRows(current.sqlitePerf, baseline?.sqlitePerf ?? null),
     ),
     "## Observations",
     "",

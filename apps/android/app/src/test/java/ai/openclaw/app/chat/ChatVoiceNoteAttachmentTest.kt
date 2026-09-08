@@ -13,9 +13,12 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 import java.nio.file.Files
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
 class ChatVoiceNoteAttachmentTest {
   @Test
   fun stagedVoiceNoteUsesAudioPayloadAndDurationInLocalEcho() =
@@ -29,6 +32,8 @@ class ChatVoiceNoteAttachmentTest {
       val chat =
         ChatController(
           scope = backgroundScope,
+          commandOutbox = backgroundScope.createChatCommandOutbox(),
+          cacheScope = { ChatCacheScope("gateway-test", 1L) },
           json = json,
           requestGateway = { method, paramsJson ->
             when (method) {
@@ -36,11 +41,14 @@ class ChatVoiceNoteAttachmentTest {
                 sentParams = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
                 """{"runId":"voice-run","status":"started"}"""
               }
-              else -> "{}"
+
+              else -> {
+                emptyChatGatewayResponse(method)
+              }
             }
           },
         )
-      chat.handleGatewayEvent("health", null)
+      chat.load("main")
       runCurrent()
 
       val accepted =

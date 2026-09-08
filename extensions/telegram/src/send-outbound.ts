@@ -40,23 +40,21 @@ type PreparedTelegramOutbound = {
 type PreparedTelegramOutboundWithMessageId<T> = PreparedTelegramOutbound &
   (T extends string | number ? { messageId: number } : { messageId?: undefined });
 
-export async function reportTelegramProviderDelivery(params: {
+export function buildTelegramProviderDeliveryResult(params: {
   message: TelegramOutboundPromptContextMessage;
   messageId: string | number;
   fallbackChatId: string | number;
   successfulSendThread?: TelegramThreadSpec;
   kind?: MessageReceiptPartKind;
   meta?: TelegramSendResult["meta"];
-  onPrepared?: (delivery: TelegramSendResult) => void;
-  onDeliveryResult?: TelegramSendOpts["onDeliveryResult"];
-}): Promise<TelegramSendResult> {
+}): TelegramSendResult {
   const messageId = String(params.messageId);
   const chatId = String(params.message.chat?.id ?? params.fallbackChatId);
   const providerThreadId = resolveTelegramProviderObservedThreadId({
     message: params.message,
     successfulSendThread: params.successfulSendThread,
   });
-  const delivery: TelegramSendResult = {
+  return {
     messageId,
     chatId,
     ...(providerThreadId !== undefined
@@ -70,6 +68,15 @@ export async function reportTelegramProviderDelivery(params: {
       : {}),
     ...(params.meta ? { meta: params.meta } : {}),
   };
+}
+
+export async function reportTelegramProviderDelivery(
+  params: Parameters<typeof buildTelegramProviderDeliveryResult>[0] & {
+    onPrepared?: (delivery: TelegramSendResult) => void;
+    onDeliveryResult?: TelegramSendOpts["onDeliveryResult"];
+  },
+): Promise<TelegramSendResult> {
+  const delivery = buildTelegramProviderDeliveryResult(params);
   params.onPrepared?.(delivery);
   await params.onDeliveryResult?.(delivery);
   try {
@@ -79,7 +86,7 @@ export async function reportTelegramProviderDelivery(params: {
     });
   } catch (error) {
     throw createChannelPartialDeliveryError(error, {
-      messageIds: [messageId],
+      messageIds: [delivery.messageId],
       ...(delivery.receipt ? { receipt: delivery.receipt } : {}),
       visibleReplySent: true,
     });
@@ -94,6 +101,7 @@ export async function prepareTelegramOutbound<T extends string | number | undefi
   messageIdInput?: T;
   thread?: {
     messageThreadId?: number;
+    directMessagesTopicId?: number;
     replyToMessageId?: number;
     replyQuoteText?: string;
     useReplyIdAsQuoteSource?: boolean;
@@ -116,7 +124,8 @@ export async function prepareTelegramOutbound<T extends string | number | undefi
   const threadSpec = params.thread
     ? resolveTelegramSendThreadSpec({
         targetMessageThreadId: target.messageThreadId,
-        targetDirectMessagesTopicId: target.directMessagesTopicId,
+        targetDirectMessagesTopicId:
+          params.thread.directMessagesTopicId ?? target.directMessagesTopicId,
         messageThreadId: params.thread.messageThreadId,
         chatType: target.chatType,
       })

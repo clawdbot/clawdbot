@@ -5,6 +5,7 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
+import { buildDeclaredProviderOwnerIndex } from "../plugins/provider-owner-index.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
@@ -84,26 +85,29 @@ export function createPluginMetadataSnapshot(params: {
   workspaceDir?: string;
 }): PluginMetadataSnapshot {
   const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
+  const index: PluginMetadataSnapshot["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash,
+    generatedAtMs: 1,
+    installRecords: {},
+    plugins: [],
+    diagnostics: [],
+  };
   return {
     policyHash,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash,
-      generatedAtMs: 1,
-      installRecords: {},
-      plugins: [],
-      diagnostics: [],
-    },
+    index,
+    registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: params.manifestRegistry,
     plugins: params.manifestRegistry.plugins,
     diagnostics: params.manifestRegistry.diagnostics,
     byPluginId: new Map(params.manifestRegistry.plugins.map((plugin) => [plugin.id, plugin])),
     normalizePluginId: (pluginId) => pluginId,
+    declaredProviderOwners: buildDeclaredProviderOwnerIndex(params.manifestRegistry.plugins),
     owners: {
       channels: new Map(),
       channelConfigs: new Map(),
@@ -113,6 +117,7 @@ export function createPluginMetadataSnapshot(params: {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
     metrics: {
       registrySnapshotMs: 0,

@@ -1,4 +1,7 @@
-import { formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  AgentHarnessPreflightError,
+  formatErrorMessage,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 
 export class CodexThreadStartRequestError extends Error {
   constructor(cause: unknown) {
@@ -14,18 +17,11 @@ export class CodexThreadBindingConflictError extends Error {
   }
 }
 
-export class CodexRestrictedToolSurfaceAttestationError extends Error {
-  constructor(cause: unknown) {
-    super("Codex restricted-tool-surface MCP attestation failed", { cause });
-    this.name = "CodexRestrictedToolSurfaceAttestationError";
-  }
-}
-
-export class CodexThreadBindingConflictAfterCleanupError extends CodexThreadBindingConflictError {}
-
-export class CodexAdoptedThreadActiveError extends Error {
-  constructor() {
-    super("Codex session became active in another runner; wait for it to finish before continuing");
+export class CodexAdoptedThreadActiveError extends AgentHarnessPreflightError {
+  constructor(
+    message = "Codex session became active in another runner; wait for it to finish before continuing",
+  ) {
+    super(message);
     this.name = "CodexAdoptedThreadActiveError";
   }
 }

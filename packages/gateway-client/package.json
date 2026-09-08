@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/gateway-client",
-  "version": "2026.8.1",
+  "version": "2026.9.2",
   "description": "Reference WebSocket client for the OpenClaw Gateway protocol",
   "keywords": [
     "client",
@@ -66,8 +66,8 @@
   },
   "dependencies": {
     "@openclaw/gateway-protocol": "workspace:*",
-    "ipaddr.js": "2.4.0",
-    "ws": "8.21.1"
+    "ipaddr.js": "2.5.0",
+    "ws": "8.21.3"
   },
   "devDependencies": {
     "@openclaw/normalization-core": "workspace:*"

@@ -33,14 +33,44 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
 
 let deliverReplies: typeof import("./replies.js").deliverReplies;
 let createSlackReplyDeliveryPlan: typeof import("./replies.js").createSlackReplyDeliveryPlan;
-let resolveDeliveredSlackReplyThreadTs: typeof import("./replies.js").resolveDeliveredSlackReplyThreadTs;
 let resolveSlackThreadTs: typeof import("./replies.js").resolveSlackThreadTs;
-import { deliverSlackSlashReplies } from "./replies.js";
+import { prepareSlackReply } from "../reply-blocks.js";
+import { deliverSlackSlashReplies, sanitizeSlackMonitorReplyPayload } from "./replies.js";
 
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 
+describe("sanitizeSlackMonitorReplyPayload", () => {
+  it.each([
+    { name: "drops reasoning", payload: { text: "private", isReasoning: true }, expected: null },
+    { name: "drops internal-only text", payload: { text: "⚠️ 🛠️ Exec failed: " }, expected: null },
+    {
+      name: "preserves visible prose",
+      payload: { text: "The directory is missing.\n⚠️ 🛠️ Exec failed: " },
+      expected: { text: "The directory is missing." },
+    },
+    {
+      name: "preserves media when internal text is removed",
+      payload: { text: "⚠️ 🛠️ Exec failed: ", mediaUrl: "https://example.com/a.png" },
+      expected: { text: undefined, mediaUrl: "https://example.com/a.png" },
+    },
+    {
+      name: "preserves structured content when internal text is removed",
+      payload: {
+        text: "⚠️ 🛠️ Exec failed: ",
+        channelData: { slack: { blocks: [{ type: "divider" }] } },
+      },
+      expected: {
+        text: undefined,
+        channelData: { slack: { blocks: [{ type: "divider" }] } },
+      },
+    },
+  ])("$name", ({ payload, expected }) => {
+    expect(sanitizeSlackMonitorReplyPayload(payload)).toEqual(expected);
+  });
+});
+
 function baseParams(overrides?: Record<string, unknown>) {
-  return {
+  const params = {
     cfg: SLACK_TEST_CFG,
     replies: [{ text: "hello" }],
     target: "C123",
@@ -50,9 +80,10 @@ function baseParams(overrides?: Record<string, unknown>) {
     replyToMode: "off" as const,
     ...overrides,
   };
+  return { ...params, replies: params.replies.map(prepareSlackReply) };
 }
 
-function largePortableTablePresentation() {
+function largePortableTablePresentation(rowLength = 110) {
   return {
     blocks: [
       {
@@ -60,7 +91,7 @@ function largePortableTablePresentation() {
         caption: "Large pipeline",
         headers: ["Account"],
         rows: Array.from({ length: 100 }, (_entry, index) => [
-          index === 0 ? "<@U123>" : `account-${String(index)} ${"x".repeat(110)}`,
+          index === 0 ? "<@U123>" : `account-${String(index)} ${"x".repeat(rowLength)}`,
         ]),
       },
     ],
@@ -75,7 +106,7 @@ function requireSendCall(index = 0) {
   return call;
 }
 
-function acceptedSlackSendResult(messageId: string, kind: "media" | "text" = "media") {
+function acceptedSlackSendResult(messageId: string, kind: "media" | "text" | "card" = "media") {
   return {
     messageId,
     channelId: "C123",
@@ -110,12 +141,8 @@ function readPlainSectionTexts(message: SlashTestMessage): string[] {
 
 describe("deliverReplies identity passthrough", () => {
   beforeAll(async () => {
-    ({
-      createSlackReplyDeliveryPlan,
-      deliverReplies,
-      resolveDeliveredSlackReplyThreadTs,
-      resolveSlackThreadTs,
-    } = await import("./replies.js"));
+    ({ createSlackReplyDeliveryPlan, deliverReplies, resolveSlackThreadTs } =
+      await import("./replies.js"));
   });
 
   beforeEach(() => {
@@ -135,6 +162,35 @@ describe("deliverReplies identity passthrough", () => {
     expect(options.identity).toBe(identity);
   });
 
+  it.each([
+    { name: "current reply", replyToCurrent: true, isCompactionNotice: false },
+    { name: "compaction notice", replyToCurrent: true, isCompactionNotice: true },
+    { name: "explicit target", replyToCurrent: false, isCompactionNotice: false },
+  ])(
+    "routes $name without mistaking a child for its thread root",
+    async ({ replyToCurrent, isCompactionNotice }) => {
+      sendMock.mockResolvedValue({ messageId: "1800000000.000003", channelId: "C123" });
+      await deliverReplies(
+        baseParams({
+          replies: [
+            {
+              text: "Thread reply",
+              replyToId: "1800000000.000002",
+              replyToCurrent,
+              isCompactionNotice,
+            },
+          ],
+          replyThreadTs: "1800000000.000001",
+          replyToMode: "all",
+        }),
+      );
+
+      expect(requireSendCall()[2].threadTs).toBe(
+        replyToCurrent ? "1800000000.000001" : "1800000000.000002",
+      );
+    },
+  );
+
   it("passes identity to sendMessageSlack for media replies", async () => {
     sendMock.mockResolvedValue(undefined);
     const identity = { username: "Bot", iconUrl: "https://example.com/icon.png" };
@@ -150,45 +206,57 @@ describe("deliverReplies identity passthrough", () => {
     expect(options.identity).toBe(identity);
   });
 
-  it("routes non-native portable tables through complete Slack-safe text delivery", async () => {
-    sendMock.mockResolvedValue({ messageId: "table-ts", channelId: "C123" });
+  it.each([
+    { rowLength: 110, textCalls: 1 },
+    { rowLength: 450, textCalls: 2 },
+  ])(
+    "delivers complete literal table text within the hard limit ($rowLength)",
+    async ({ rowLength, textCalls }) => {
+      sendMock.mockResolvedValue({ messageId: "table-ts", channelId: "C123" });
 
-    await deliverReplies(
-      baseParams({
-        textLimit: 8000,
-        replies: [
-          {
-            presentation: largePortableTablePresentation(),
-            interactive: {
-              blocks: [
-                {
-                  type: "buttons",
-                  buttons: [{ label: "Refresh", value: "refresh" }],
-                },
-              ],
+      await deliverReplies(
+        baseParams({
+          textLimit: 8000,
+          replies: [
+            {
+              presentation: largePortableTablePresentation(rowLength),
+              interactive: {
+                blocks: [
+                  {
+                    type: "buttons",
+                    buttons: [{ label: "Refresh", value: "refresh" }],
+                  },
+                ],
+              },
             },
-          },
-        ],
-      }),
-    );
+          ],
+        }),
+      );
 
-    expect(sendMock).toHaveBeenCalledTimes(2);
-    const [_textTarget, text, textOptions] = requireSendCall(0);
-    expect(text).toContain("- Account: <@U123>");
-    expect(text).toContain("- Account: account-99");
-    expect(text.length).toBeGreaterThan(8000);
-    expect(textOptions.textIsSlackPlainText).toBe(true);
-    expect(textOptions.blocks).toBeUndefined();
+      expect(sendMock).toHaveBeenCalledTimes(textCalls + 1);
+      const textSends = Array.from({ length: textCalls }, (_entry, index) =>
+        requireSendCall(index),
+      );
+      const text = textSends.map((call) => call[1]).join("");
+      expect(text).toContain("- Account: <@U123>");
+      expect(text).toContain("- Account: account-99");
+      expect(text.length).toBeGreaterThan(8000);
+      for (const [_target, chunk, options] of textSends) {
+        expect(chunk.length).toBeLessThanOrEqual(40_000);
+        expect(options.textIsSlackPlainText).toBe(true);
+        expect(options.blocks).toBeUndefined();
+      }
 
-    const [_blockTarget, blockText, blockOptions] = requireSendCall(1);
-    expect(blockText).toBe("");
-    expect(blockOptions.blocks).toEqual([
-      expect.objectContaining({
-        type: "actions",
-        elements: [expect.objectContaining({ type: "button", value: "refresh" })],
-      }),
-    ]);
-  });
+      const [_blockTarget, blockText, blockOptions] = requireSendCall(textCalls);
+      expect(blockText).toBe("");
+      expect(blockOptions.blocks).toEqual([
+        expect.objectContaining({
+          type: "actions",
+          elements: [expect.objectContaining({ type: "button", value: "refresh" })],
+        }),
+      ]);
+    },
+  );
 
   it("delivers media before native chart blocks with the same reply context", async () => {
     messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
@@ -204,36 +272,37 @@ describe("deliverReplies identity passthrough", () => {
     };
     const enterpriseCfg = { channels: { slack: {} } };
 
-    const result = await deliverReplies(
-      baseParams({
-        cfg: enterpriseCfg,
-        accountId: "work",
-        identity,
-        metadata,
-        eventScope,
-        mediaMaxBytes: 1024,
-        replyThreadTs: "thread-ts",
-        replies: [
-          {
-            text: "Revenue summary",
-            mediaUrl: "https://example.com/report.png",
-            presentation: {
-              blocks: [
-                {
-                  type: "chart",
-                  chartType: "pie",
-                  title: "Revenue mix",
-                  segments: [
-                    { label: "Product", value: 60 },
-                    { label: "Services", value: 40 },
-                  ],
-                },
-              ],
-            },
+    const params = baseParams({
+      cfg: enterpriseCfg,
+      accountId: "work",
+      identity,
+      metadata,
+      eventScope,
+      mediaMaxBytes: 1024,
+      replyThreadTs: "thread-ts",
+      replies: [
+        {
+          text: "Revenue summary",
+          mediaUrl: "https://example.com/report.png",
+          presentation: {
+            blocks: [
+              {
+                type: "chart",
+                chartType: "pie",
+                title: "Revenue mix",
+                segments: [
+                  { label: "Product", value: 60 },
+                  { label: "Services", value: 40 },
+                ],
+              },
+            ],
           },
-        ],
-      }),
-    );
+        },
+      ],
+    });
+    // Preview materialization must not consume the media caption or add it to the chart message.
+    params.replies[0]?.resolvePreview();
+    const result = await deliverReplies(params);
 
     expect(sendMock).toHaveBeenCalledTimes(2);
     expect(sendMock).toHaveBeenNthCalledWith(1, "C123", "Revenue summary", {
@@ -422,41 +491,6 @@ describe("deliverReplies identity passthrough", () => {
   });
 });
 
-describe("resolveDeliveredSlackReplyThreadTs", () => {
-  beforeAll(async () => {
-    ({ resolveDeliveredSlackReplyThreadTs } = await import("./replies.js"));
-  });
-
-  it("prefers explicit reply targets when reply tags are enabled", () => {
-    expect(
-      resolveDeliveredSlackReplyThreadTs({
-        replyToMode: "first",
-        payloadReplyToId: "explicit-thread",
-        replyThreadTs: "planned-thread",
-      }),
-    ).toBe("explicit-thread");
-  });
-
-  it("ignores explicit reply tags when replyToMode is off", () => {
-    expect(
-      resolveDeliveredSlackReplyThreadTs({
-        replyToMode: "off",
-        payloadReplyToId: "explicit-thread",
-        replyThreadTs: "planned-thread",
-      }),
-    ).toBe("planned-thread");
-  });
-
-  it("falls back to the planned reply thread when no explicit reply tag exists", () => {
-    expect(
-      resolveDeliveredSlackReplyThreadTs({
-        replyToMode: "batched",
-        replyThreadTs: "planned-thread",
-      }),
-    ).toBe("planned-thread");
-  });
-});
-
 describe("resolveSlackThreadTs fallback classification", () => {
   const threadTs = "1234567890.123456";
   const messageTs = "9999999999.999999";
@@ -576,6 +610,29 @@ describe("deliverSlackSlashReplies chunking", () => {
       blocks,
       mrkdwn: false,
       response_type: "in_channel",
+    });
+  });
+
+  it("delivers a valid field-rich section in one slash response", async () => {
+    const respond = vi.fn(async () => undefined);
+    const fields = ["Alpha", "Beta", "Gamma"].map((label) => ({
+      type: "plain_text",
+      text: label.padEnd(1_500, "."),
+    }));
+    const blocks = [{ type: "section", fields }];
+
+    await deliverSlackSlashReplies({
+      replies: [{ channelData: { slack: { blocks } } }],
+      respond,
+      ephemeral: true,
+      textLimit: 8000,
+    });
+
+    expect(respond).toHaveBeenCalledExactlyOnceWith({
+      blocks,
+      text: fields.map((field) => field.text).join("\n"),
+      mrkdwn: false,
+      response_type: "ephemeral",
     });
   });
 
@@ -1410,6 +1467,63 @@ describe("deliverReplies message_sent hook", () => {
     expect(sendMock).toHaveBeenCalledOnce();
   });
 
+  it("preserves accepted media and blocks when a later block projection fails", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    const failure = new Error("later block projection failed");
+    const params = baseParams({
+      replies: [
+        {
+          text: "Caption",
+          mediaUrl: "https://example.com/report.png",
+          channelData: {
+            slack: { blocks: Array.from({ length: 50 }, () => ({ type: "divider" })) },
+          },
+          presentation: { title: "Later block", blocks: [] },
+        },
+      ],
+    });
+    const lastSegment = params.replies[0]?.resolveDelivery().segments.at(-1);
+    expect(lastSegment?.kind).toBe("blocks");
+    if (lastSegment?.kind !== "blocks" || !lastSegment.blocks[0]) {
+      throw new Error("expected the later block segment");
+    }
+    Object.defineProperty(lastSegment.blocks[0], "text", {
+      get() {
+        throw failure;
+      },
+    });
+    for (const accepted of [
+      acceptedSlackSendResult("media-1"),
+      acceptedSlackSendResult("card-1", "card"),
+    ]) {
+      sendMock.mockImplementationOnce(async (_target, _text, options) => {
+        await options.onDeliveryResult?.(accepted);
+        return accepted;
+      });
+    }
+
+    const error = await deliverReplies(params).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      cause: failure,
+      deliveryResult: {
+        messageIds: ["media-1", "card-1"],
+        receipt: { platformMessageIds: ["media-1", "card-1"] },
+        visibleReplySent: true,
+      },
+    });
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        content: "Caption\n\nShared a Block Kit message",
+        success: false,
+        error: failure.message,
+      }),
+      expect.anything(),
+    );
+  });
+
   it("preserves an undispatched first-send failure without a partial wrapper", async () => {
     const failure = new PlatformMessageNotDispatchedError("first_upload_failed", {
       cause: new Error("upload connection refused"),
@@ -1463,7 +1577,7 @@ describe("deliverReplies message_sent hook", () => {
         await deliverReplies(
           baseParams({
             replies: [payload],
-            eventScope: { teamId: "T123", client: { chat: { postMessage } } },
+            eventScope: { teamId: "T123", client: {}, writeClient: { chat: { postMessage } } },
           }),
         ),
       onError,

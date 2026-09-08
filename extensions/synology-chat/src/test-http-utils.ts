@@ -12,7 +12,7 @@ function makeBaseReq(
   req.url = opts.url ?? "/webhook/synology";
   req.socket = { remoteAddress: "127.0.0.1" } as unknown as IncomingMessage["socket"];
   req.destroyed = false;
-  req.destroy = ((_: Error | undefined) => {
+  req.destroy = ((_error: Error | undefined) => {
     if (req.destroyed) {
       return req;
     }

@@ -6,6 +6,8 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as loggingConfigModule from "../logging/config.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
 import { redactTranscriptMessage } from "./transcript-redact.js";
 
@@ -71,6 +73,181 @@ const OPENAI_REASONING_REPLAY_METADATA = {
 } as const;
 
 describe("redactTranscriptMessage", () => {
+  it.each(["private-prefix", "person"])(
+    "drops human mention bindings when redacting %s without mutating source metadata",
+    (pattern) => {
+      const mentions = [{ profileId: "person", start: 15, end: 19 }];
+      const message = castAgentMessage({
+        role: "user",
+        content: "private-prefix @Ada",
+        timestamp: 1,
+        __openclaw: { humanMentions: mentions },
+      });
+      expect(redactTranscriptMessage(message, cfg("tools", []))).toBe(message);
+      const redacted = redactTranscriptMessage(message, cfg("tools", [pattern]));
+      expect(redacted).not.toHaveProperty("__openclaw.humanMentions");
+      expect(message).toHaveProperty("__openclaw.humanMentions", mentions);
+    },
+  );
+
+  it.each([
+    { type: "profile", id: "person" },
+    { type: "remote", pluginId: "chat", domain: "workspace", idKind: "user", id: "person" },
+    {
+      type: "observation",
+      pluginId: "chat",
+      accountId: "account",
+      senderKind: "human",
+      id: "person",
+    },
+  ])("sender provenance survives label redaction but not identity redaction: $type", (identity) => {
+    const message = castAgentMessage({
+      role: "user",
+      content: "private-label",
+      timestamp: 1,
+      __openclaw: { senderId: identity.id, senderIdentity: identity, senderName: "private-label" },
+    });
+    expect(redactTranscriptMessage(message, cfg("tools", []))).toBe(message);
+    const labelOnly = redactTranscriptMessage(message, cfg("tools", ["private-label"]));
+    expect(labelOnly).toMatchObject({
+      __openclaw: { senderIdentity: identity, senderId: "person" },
+    });
+    expect(JSON.stringify(labelOnly)).not.toContain("private-label");
+    const redacted = redactTranscriptMessage(message, cfg("tools", ["person"]));
+    expect(Reflect.get(redacted, "__openclaw")).not.toHaveProperty("senderIdentity");
+    expect(JSON.stringify(redacted)).not.toContain('"person"');
+    expect(Reflect.get(message, "__openclaw").senderIdentity).toBe(identity);
+  });
+
+  it.each([
+    { senderId: "private-raw-id", senderIdentity: { type: "profile", id: "person" } },
+    {
+      senderId: "person",
+      senderIdentity: {
+        type: "remote",
+        pluginId: "chat",
+        domain: "private-domain",
+        idKind: "user",
+        id: "person",
+      },
+    },
+    {
+      senderId: "person",
+      senderIdentity: {
+        type: "observation",
+        pluginId: "chat",
+        accountId: "private-account",
+        senderKind: "human",
+        id: "person",
+      },
+    },
+  ])(
+    "drops sender provenance when any qualified source fact or paired ID is redacted: %j",
+    (metadata) => {
+      const message = castAgentMessage({
+        role: "user",
+        content: "visible",
+        timestamp: 1,
+        __openclaw: metadata,
+      });
+      const redacted = redactTranscriptMessage(message, cfg("tools", ["private-[a-z-]+"]));
+      expect(Reflect.get(redacted, "__openclaw")).not.toHaveProperty("senderIdentity");
+      expect(JSON.stringify(redacted)).not.toContain("private-");
+      expect(Reflect.get(message, "__openclaw")).toBe(metadata);
+    },
+  );
+
+  it.each(["default", "custom", "registered"] as const)(
+    "preserves canonical tool correlation IDs while applying %s redaction to payloads",
+    (policy) => {
+      const ids =
+        policy === "default"
+          ? [
+              "call_lookup|fc-jztpgrWaMLTnokJk",
+              "call_lookup|fc-jztDifferentokJk",
+              "call_lookup:nested:1|fc-jztpgrWaMLTnokJk",
+            ]
+          : [
+              "call_lookup|opaque-first-identity",
+              "call_lookup|opaque-second-identity",
+              "call_lookup:nested:1|opaque-first-identity",
+            ];
+      const payload = {
+        id: ids[0],
+        role: "toolResult",
+        toolCallId: ids[1],
+        assistant: {
+          role: "assistant",
+          content: ids.map((id) => ({ type: "toolCall", id })),
+        },
+      };
+      const message = castAgentMessage({
+        role: "assistant",
+        content: ids.map((id) => ({ type: "toolCall", id, name: "lookup", arguments: payload })),
+      });
+      const config = cfg(
+        "tools",
+        policy === "custom" ? [String.raw`call_lookup[^\s"]+`] : undefined,
+      );
+      if (policy === "registered") {
+        ids.forEach(registerSecretValueForRedaction);
+      }
+      try {
+        const assistant = redactTranscriptMessage(message, config);
+        expect(assistant).toMatchObject({ content: ids.map((id) => ({ type: "toolCall", id })) });
+        const blocks = msgContent(assistant) as Array<{ arguments: unknown }>;
+        const results = ids.map((toolCallId) =>
+          redactTranscriptMessage(
+            castAgentMessage({
+              role: "toolResult",
+              toolCallId,
+              toolName: "lookup",
+              content: [{ type: "text", text: JSON.stringify(payload) }],
+              details: payload,
+              isError: false,
+              timestamp: 1,
+            }),
+            config,
+          ),
+        );
+        expect(results).toMatchObject(
+          ids.map((toolCallId) => ({ role: "toolResult", toolCallId })),
+        );
+        const userPayload = redactTranscriptMessage(
+          castAgentMessage({ role: "user", content: msgContent(message), toolCallId: ids[0] }),
+          config,
+        );
+        const noncanonical = [
+          {
+            role: "assistant",
+            id: ids[0],
+            content: [{ type: "text", id: ids[1], text: "visible" }],
+          },
+          { role: "assistant", content: [{ type: "toolCall", id: payload }] },
+          { role: "assistant", content: [msgContent(message)] },
+          { role: "toolResult", toolCallId: [ids[0]], content: [] },
+        ].map((value) => redactTranscriptMessage(castAgentMessage(value), config));
+        const redactedPayloads = JSON.stringify([
+          blocks.map((block) => block.arguments),
+          results.map((result) => {
+            expect(result.role).toBe("toolResult");
+            return result.role === "toolResult" ? [result.content, result.details] : [];
+          }),
+          userPayload,
+          noncanonical,
+        ]);
+        for (const id of ids) {
+          expect(redactedPayloads).not.toContain(id);
+        }
+        expect(msgContent(message)).toEqual(
+          ids.map((id) => ({ type: "toolCall", id, name: "lookup", arguments: payload })),
+        );
+      } finally {
+        resetSecretRedactionRegistryForTest();
+      }
+    },
+  );
+
   it("redacts text block matching default patterns (sk- token)", () => {
     const msg = textMessage("key is sk-abcdef1234567890xyz end");
     const result = redactTranscriptMessage(msg, cfg("tools"));
@@ -80,6 +257,59 @@ describe("redactTranscriptMessage", () => {
     ).text;
     expect(text).not.toContain("sk-abcdef1234567890xyz");
     expect(text).toContain("end");
+  });
+
+  it("preserves source assignments in tool results while redacting explicit credentials", () => {
+    const sourceLines = [
+      "        if let token = timeObserverToken {",
+      "        if let token=timeObserverToken {",
+      "        let token = ForwardingCancellableTokenReference",
+      "    token = get_bearer_token()",
+      '        token = "LibraryViewController.swift"',
+      "        secret = resolvedSecret",
+      "        password = getpass()",
+      '        credential = "fixture"',
+      "        jwt = decodedPayload",
+      "        let API_TOKEN = timeObserverToken",
+      "API_TOKEN = computeToken()",
+      "API_KEY: str = computeKey()",
+      "        register(timeObserverToken)",
+      "        struct.timeObserverToken",
+    ];
+    const apiKey = "sk-abcdef1234567890abcdef1234567890";
+    const envToken = "environment-token-value-1234567890";
+    const input = [...sourceLines, `"apiKey": "${apiKey}"`, `API_TOKEN=${envToken}`].join("\n");
+    const msg = castAgentMessage({
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "read",
+      content: [{ type: "text", text: input }],
+      isError: false,
+      timestamp: Date.now(),
+    });
+
+    const result = redactTranscriptMessage(msg, cfg("tools"));
+    const text = expectDefined(
+      (msgContent(result) as Array<{ text: string }>)[0],
+      "tool result text block",
+    ).text;
+
+    for (const sourceLine of sourceLines) {
+      expect(text).toContain(sourceLine);
+    }
+    expect(text).not.toContain(apiKey);
+    expect(text).toContain(envToken);
+  });
+
+  it("keeps broad assignment masking for non-tool transcript messages", () => {
+    const credential = "assistant-credential-value-127697";
+    const result = redactTranscriptMessage(textMessage(`password = ${credential}`), cfg("tools"));
+    const text = expectDefined(
+      (msgContent(result) as Array<{ text: string }>)[0],
+      "assistant text block",
+    ).text;
+
+    expect(text).not.toContain(credential);
   });
 
   it("keeps pagination cursors readable while still masking credential tool args (#104992)", () => {
@@ -238,6 +468,40 @@ describe("redactTranscriptMessage", () => {
   ] as const)(
     "preserves only validated %s OpenAI compaction replay state",
     (_name, type, replayIndex) => {
+      const compactedWindow = {
+        state: "ready",
+        output: JSON.stringify(
+          [
+            {
+              type: "message",
+              role: "developer",
+              content: [{ type: "input_text", text: "rules" }],
+            },
+            { type: "message", role: "system", content: [{ type: "input_text", text: "context" }] },
+            {
+              type: "message",
+              role: "user",
+              content: [
+                { type: "input_text", text: "retained request" },
+                {
+                  type: "input_image",
+                  detail: "auto",
+                  image_url: `data:image/png;base64,${IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING}`,
+                },
+                { type: "input_file", file_id: "file_document", filename: "document.pdf" },
+              ],
+            },
+            {
+              type: "compaction",
+              id: "cmp_1",
+              encrypted_content: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+              created_by: "responses",
+            },
+          ],
+          null,
+          2,
+        ),
+      };
       const msg = castAgentMessage({
         role: "assistant",
         api: "openclaw-openai-responses-transport",
@@ -256,6 +520,7 @@ describe("redactTranscriptMessage", () => {
           baseUrlHash: "ozhevd1smnk8s",
           sessionHash: "171dzdv17gum5g",
           authProfileHash: "oe8bkr3r8947",
+          compactedWindow,
           secret: "sk-abcdef1234567890xyz",
         },
       });
@@ -276,8 +541,83 @@ describe("redactTranscriptMessage", () => {
         baseUrlHash: "ozhevd1smnk8s",
         sessionHash: "171dzdv17gum5g",
         authProfileHash: "oe8bkr3r8947",
+        compactedWindow,
       });
       expect(JSON.stringify(result)).not.toContain("sk-abcdef1234567890xyz");
+    },
+  );
+
+  it.each([
+    ["plaintext secret", { type: "input_text", text: "sk-abcdef1234567890xyz" }, {}],
+    ["custom text rule", { type: "input_text", text: "retained-private" }, {}],
+    ["structured secret", { type: "input_text", text: "safe", apiKey: "plainsecretvalue123" }, {}],
+    [
+      "file reference",
+      { type: "input_file", file_url: "https://example.com/retained-private" },
+      {},
+    ],
+    [
+      "image normalization",
+      {
+        type: "input_image",
+        detail: "auto",
+        image_url: `data:image/jpeg;base64,${IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING}`,
+      },
+      {},
+    ],
+    [
+      "compaction metadata",
+      { type: "input_text", text: "safe" },
+      { created_by: "retained-private" },
+    ],
+    [
+      "mismatched opaque item",
+      { type: "input_text", text: "safe" },
+      { encrypted_content: "other-token" },
+    ],
+    ["malformed content", { type: "input_text", text: 42 }, {}],
+  ])(
+    "invalidates the whole canonical window for %s without erasing its replay barrier",
+    (_name, content, itemOverride) => {
+      const providerReplay = {
+        v: 1,
+        type: "openai-responses-retained-compaction",
+        id: "cmp_1",
+        data: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+        provider: "openai",
+        api: "openai-responses",
+        model: "gpt-5.6-luna",
+        baseUrlHash: "ozhevd1smnk8s",
+        sessionHash: "171dzdv17gum5g",
+        authProfileHash: "oe8bkr3r8947",
+        compactedWindow: {
+          state: "ready",
+          output: JSON.stringify([
+            { type: "message", role: "user", content: [content] },
+            {
+              type: "compaction",
+              id: "cmp_1",
+              encrypted_content: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+              ...itemOverride,
+            },
+          ]),
+        },
+      };
+      const message = castAgentMessage({
+        role: "assistant",
+        api: "openai-responses",
+        model: "gpt-5.6-luna",
+        provider: "openai",
+        content: [],
+        providerReplay,
+      });
+      const result = redactTranscriptMessage(message, cfg("tools", ["retained-private"]));
+      expect(result).toHaveProperty("providerReplay", {
+        ...providerReplay,
+        compactedWindow: { state: "refresh-required" },
+      });
+      expect(redactTranscriptMessage(result, cfg("tools"))).toEqual(result);
+      expect(message).toHaveProperty("providerReplay.compactedWindow.state", "ready");
     },
   );
 

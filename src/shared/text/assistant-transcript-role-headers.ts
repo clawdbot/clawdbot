@@ -9,6 +9,10 @@ type AssistantTranscriptRoleHeaderDetection = {
 export function detectAssistantTranscriptRoleHeaderText(
   text: string,
 ): AssistantTranscriptRoleHeaderDetection | null {
+  // Parsed headers need a bracket or angle delimiter, written literally or as an entity.
+  if (!text.includes("[") && !text.includes("<") && !text.includes("&")) {
+    return null;
+  }
   const annotation = markdownToIR(text, {
     assistantTranscriptRoleHeaders: true,
     enableSpoilers: true,

@@ -18,6 +18,7 @@ export type CuaScreenSize = {
 
 export type CuaLastFrame = {
   id: string;
+  referenceWidth: number;
   nativeWidth: number;
   nativeHeight: number;
   deliveredWidth: number;
@@ -358,29 +359,21 @@ export function clearDialogRef(state: CuaFrameState): void {
 export function issueFrame(
   state: CuaFrameState,
   geometry: CuaDesktopGeometry,
-  delivered: { width: number; height: number },
+  capture: { width: number; height: number; referenceWidth: number },
 ): string {
+  // Snapshot encoding bounds both dimensions before issuing the frame, so direct
+  // callers and the model receive the same bitmap without another coordinate projection.
   const digest = createHash("sha256")
-    .update(
-      JSON.stringify([
-        state.generation,
-        geometry.platform,
-        geometry.display,
-        geometry.screenWidth,
-        geometry.screenHeight,
-        geometry.scaleFactor,
-        geometry.screenshotWidth,
-        geometry.screenshotHeight,
-      ]),
-    )
+    .update(JSON.stringify([state.generation, geometry, capture]))
     .digest("hex");
   const id = `cua:v1:${digest}`;
   state.lastFrame = {
     id,
+    referenceWidth: capture.referenceWidth,
     nativeWidth: geometry.screenshotWidth,
     nativeHeight: geometry.screenshotHeight,
-    deliveredWidth: delivered.width,
-    deliveredHeight: delivered.height,
+    deliveredWidth: capture.width,
+    deliveredHeight: capture.height,
     geometry: {
       width: geometry.screenWidth,
       height: geometry.screenHeight,
@@ -398,6 +391,7 @@ export function verifyFrame(
   state: CuaFrameState,
   echoedId: string | undefined,
   currentScreenSize: CuaScreenSize,
+  refWidth: number | undefined,
 ): CuaLastFrame {
   const frame = state.lastFrame;
   if (!frame || !echoedId || echoedId !== frame.id) {
@@ -412,17 +406,11 @@ export function verifyFrame(
     state.lastFrame = undefined;
     throw staleFrame("the primary display geometry changed");
   }
-  return frame;
-}
-
-export function verifyReferenceWidth(
-  state: CuaFrameState,
-  frame: CuaLastFrame,
-  refWidth: number | undefined,
-): void {
-  if (refWidth === frame.deliveredWidth) {
-    return;
+  // Core echoes the requested cap; direct callers echo the returned bitmap width.
+  // Both identify the same bounded image. Other widths cannot authorize input.
+  if (refWidth !== frame.referenceWidth && refWidth !== frame.deliveredWidth) {
+    state.lastFrame = undefined;
+    throw staleFrame("the coordinate reference width changed");
   }
-  state.lastFrame = undefined;
-  throw staleFrame("the coordinate reference width changed");
+  return frame;
 }

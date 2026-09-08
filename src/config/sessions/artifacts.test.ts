@@ -90,6 +90,8 @@ describe("session artifact helpers", () => {
 
   it("classifies usage-counted transcript files", () => {
     expect(isUsageCountedSessionTranscriptFileName("abc.jsonl")).toBe(true);
+    expect(isUsageCountedSessionTranscriptFileName(".jsonl")).toBe(true);
+    expect(isUsageCountedSessionTranscriptFileName("keep.deleted.keep.jsonl")).toBe(true);
     expect(
       isUsageCountedSessionTranscriptFileName("abc.jsonl.reset.2026-01-01T00-00-00.000Z"),
     ).toBe(true);
@@ -101,6 +103,39 @@ describe("session artifact helpers", () => {
         `abc.jsonl.deleted.2026-01-01T00-00-00.000Z.${"a".repeat(32)}`,
       ),
     ).toBe(true);
+    expect(
+      isUsageCountedSessionTranscriptFileName("abc.jsonl.reset.2026-01-01T00-00-00.000Z.zst"),
+    ).toBe(true);
+    expect(
+      isUsageCountedSessionTranscriptFileName(
+        "abc.checkpoint.not-a-uuid.jsonl.deleted.2026-01-01T00-00-00.000Z",
+      ),
+    ).toBe(true);
+    expect(
+      isUsageCountedSessionTranscriptFileName(
+        "abc.trajectory.jsonl.deleted.2026-01-01T00-00-00.000Z",
+      ),
+    ).toBe(false);
+    expect(
+      isUsageCountedSessionTranscriptFileName(
+        "abc.trajectory.jsonl.reset.2026-01-01T00-00-00.000Z.zst",
+      ),
+    ).toBe(false);
+    for (const reason of ["reset", "deleted"] as const) {
+      expect(
+        isUsageCountedSessionTranscriptFileName(
+          `abc.checkpoint.11111111-1111-4111-8111-111111111111.jsonl.${reason}.2026-01-01T00-00-00.000Z.zst`,
+        ),
+      ).toBe(false);
+    }
+    expect(isUsageCountedSessionTranscriptFileName(".jsonl.reset.2026-01-01T00-00-00.000Z")).toBe(
+      false,
+    );
+    expect(
+      isUsageCountedSessionTranscriptFileName(
+        `abc.jsonl.deleted.2026-01-01T00-00-00.000Z.${"A".repeat(32)}`,
+      ),
+    ).toBe(false);
     expect(isUsageCountedSessionTranscriptFileName("abc.jsonl.bak.2026-01-01T00-00-00.000Z")).toBe(
       false,
     );
@@ -114,6 +149,10 @@ describe("session artifact helpers", () => {
 
   it("parses usage-counted session ids from file names", () => {
     expect(parseUsageCountedSessionIdFromFileName("abc.jsonl")).toBe("abc");
+    expect(parseUsageCountedSessionIdFromFileName(".jsonl")).toBe("");
+    expect(parseUsageCountedSessionIdFromFileName("keep.deleted.keep.jsonl")).toBe(
+      "keep.deleted.keep",
+    );
     expect(parseUsageCountedSessionIdFromFileName("abc.jsonl.reset.2026-01-01T00-00-00.000Z")).toBe(
       "abc",
     );
@@ -125,6 +164,14 @@ describe("session artifact helpers", () => {
         `abc.jsonl.deleted.2026-01-01T00-00-00.000Z.${"a".repeat(32)}`,
       ),
     ).toBe("abc");
+    expect(
+      parseUsageCountedSessionIdFromFileName("abc.jsonl.reset.2026-01-01T00-00-00.000Z.zst"),
+    ).toBe("abc");
+    expect(
+      parseUsageCountedSessionIdFromFileName(
+        "abc.checkpoint.not-a-uuid.jsonl.deleted.2026-01-01T00-00-00.000Z",
+      ),
+    ).toBe("abc.checkpoint.not-a-uuid");
     expect(parseUsageCountedSessionIdFromFileName("abc.jsonl.bak.2026-01-01T00-00-00.000Z")).toBe(
       null,
     );
@@ -134,6 +181,26 @@ describe("session artifact helpers", () => {
       ),
     ).toBeNull();
     expect(parseUsageCountedSessionIdFromFileName("abc.trajectory.jsonl")).toBeNull();
+    expect(
+      parseUsageCountedSessionIdFromFileName(
+        "abc.trajectory.jsonl.deleted.2026-01-01T00-00-00.000Z",
+      ),
+    ).toBeNull();
+    expect(
+      parseUsageCountedSessionIdFromFileName(
+        "abc.trajectory.jsonl.reset.2026-01-01T00-00-00.000Z.zst",
+      ),
+    ).toBeNull();
+    for (const reason of ["reset", "deleted"] as const) {
+      expect(
+        parseUsageCountedSessionIdFromFileName(
+          `abc.checkpoint.11111111-1111-4111-8111-111111111111.jsonl.${reason}.2026-01-01T00-00-00.000Z.zst`,
+        ),
+      ).toBeNull();
+    }
+    expect(
+      parseUsageCountedSessionIdFromFileName(".jsonl.reset.2026-01-01T00-00-00.000Z"),
+    ).toBeNull();
   });
 
   it("formats and parses archive timestamps", () => {

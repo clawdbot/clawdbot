@@ -1,7 +1,6 @@
 /** Normalizes live streamed tool-call names, ids, and unknown-tool loops. */
 import { randomUUID } from "node:crypto";
 import { stripCompactionReplayCheckpointInPlace } from "@openclaw/ai/transports";
-import { visitObjectContentBlocks } from "../../../shared/message-content-blocks.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { normalizeToolPolicyName } from "../../tool-policy.js";
 import { isRunnerToolCallBlockType } from "./attempt-tool-call-block-type.js";
@@ -14,35 +13,94 @@ type UnknownToolLoopGuardState = {
   count: number;
   countedMessages: WeakSet<object>;
 };
+type ToolCallMessageState =
+  | undefined
+  | { kind: "allowed" }
+  | { kind: "incomplete" }
+  | { kind: "malformed"; toolName: string }
+  | { kind: "unknown"; toolName: string };
 type AssistantStream = Awaited<ReturnType<StreamFn>>;
 
 function createStandaloneTextToolCallId(): string {
   return `call_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
 }
 
-function normalizeToolCallIdsInMessage(message: unknown, fallbackIdByContentIndex: string[]): void {
+function normalizeToolCallsInMessage(
+  message: unknown,
+  allowedToolNames: Set<string> | undefined,
+  fallbackIdByContentIndex: string[],
+): ToolCallMessageState {
   if (!message || typeof message !== "object") {
-    return;
+    return undefined;
   }
   const content = (message as { content?: unknown }).content;
   if (!Array.isArray(content)) {
-    return;
+    return undefined;
   }
 
-  const usedIds = new Set<string>();
+  // Collect every provider id before assigning fallbacks, including ids in later blocks.
+  let usedIds: Set<string> | undefined;
+  let unknownToolName: string | undefined;
+  let sawAllowedToolCall = false;
+  let sawIncompleteToolCall = false;
+  let sawBlankStringToolCall = false;
+  const hasAllowedToolNames = Boolean(allowedToolNames && allowedToolNames.size > 0);
   for (const block of content) {
     if (!block || typeof block !== "object") {
       continue;
     }
-    const typedBlock = block as { type?: unknown; id?: unknown };
-    if (!isRunnerToolCallBlockType(typedBlock.type) || typeof typedBlock.id !== "string") {
+    const typedBlock = block as { type?: unknown; name?: unknown; id?: unknown };
+    if (!isRunnerToolCallBlockType(typedBlock.type)) {
       continue;
     }
-    const trimmedId = typedBlock.id.trim();
-    if (!trimmedId) {
+    usedIds ??= new Set<string>();
+    const rawId = typeof typedBlock.id === "string" ? typedBlock.id : undefined;
+    if (typeof typedBlock.name === "string") {
+      const normalized = resolveToolCallName(typedBlock.name, allowedToolNames, rawId);
+      if (normalized !== null && normalized !== typedBlock.name) {
+        typedBlock.name = normalized;
+      }
+    } else {
+      const inferred = resolveToolCallName("", allowedToolNames, rawId);
+      if (inferred) {
+        typedBlock.name = inferred;
+      }
+    }
+    const trimmedId = rawId?.trim();
+    if (trimmedId) {
+      usedIds.add(trimmedId);
+    }
+
+    const rawBlockName = typedBlock.name;
+    const hasStringName = typeof rawBlockName === "string";
+    const rawName = hasStringName ? rawBlockName.trim() : "";
+    if (!rawName) {
+      if (hasStringName) {
+        sawBlankStringToolCall = true;
+      } else {
+        sawIncompleteToolCall = true;
+      }
       continue;
     }
-    usedIds.add(trimmedId);
+    if (!hasAllowedToolNames) {
+      continue;
+    }
+    // Resolution above returns the exact allowed spelling, including aliases.
+    if (hasStringName && allowedToolNames?.has(rawBlockName)) {
+      sawAllowedToolCall = true;
+      continue;
+    }
+    const normalizedUnknownToolName = normalizeToolPolicyName(rawName);
+    if (!unknownToolName) {
+      unknownToolName = normalizedUnknownToolName;
+      continue;
+    }
+    if (unknownToolName !== normalizedUnknownToolName) {
+      sawIncompleteToolCall = true;
+    }
+  }
+  if (!usedIds) {
+    return undefined;
   }
 
   const assignedIds = new Set<string>();
@@ -76,101 +134,11 @@ function normalizeToolCallIdsInMessage(message: unknown, fallbackIdByContentInde
     usedIds.add(fallbackId);
     assignedIds.add(fallbackId);
   }
-}
 
-function trimWhitespaceFromToolCallNamesInMessage(
-  message: unknown,
-  allowedToolNames: Set<string> | undefined,
-  fallbackIdByContentIndex: string[],
-): void {
-  visitObjectContentBlocks(message, (block) => {
-    const typedBlock = block as { type?: unknown; name?: unknown; id?: unknown };
-    if (!isRunnerToolCallBlockType(typedBlock.type)) {
-      return;
-    }
-    const rawId = typeof typedBlock.id === "string" ? typedBlock.id : undefined;
-    if (typeof typedBlock.name === "string") {
-      const normalized = resolveToolCallName(typedBlock.name, allowedToolNames, rawId);
-      if (normalized !== null && normalized !== typedBlock.name) {
-        typedBlock.name = normalized;
-      }
-      return;
-    }
-    const inferred = resolveToolCallName("", allowedToolNames, rawId);
-    if (inferred) {
-      typedBlock.name = inferred;
-    }
-  });
-  normalizeToolCallIdsInMessage(message, fallbackIdByContentIndex);
-}
-
-function classifyToolCallMessage(
-  message: unknown,
-  allowedToolNames?: Set<string>,
-):
-  | { kind: "none" }
-  | { kind: "allowed" }
-  | { kind: "incomplete" }
-  | { kind: "malformed"; toolName: string }
-  | { kind: "unknown"; toolName: string } {
-  if (!message || typeof message !== "object") {
-    return { kind: "none" };
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return { kind: "none" };
-  }
-
-  let unknownToolName: string | undefined;
-  let sawToolCall = false;
-  let sawAllowedToolCall = false;
-  let sawIncompleteToolCall = false;
-  let sawBlankStringToolCall = false;
-  const hasAllowedToolNames = Boolean(allowedToolNames && allowedToolNames.size > 0);
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const typedBlock = block as { type?: unknown; name?: unknown };
-    if (!isRunnerToolCallBlockType(typedBlock.type)) {
-      continue;
-    }
-    sawToolCall = true;
-    const rawBlockName = typedBlock.name;
-    const hasStringName = typeof rawBlockName === "string";
-    const rawName = hasStringName ? rawBlockName.trim() : "";
-    if (!rawName) {
-      if (hasStringName) {
-        sawBlankStringToolCall = true;
-      } else {
-        sawIncompleteToolCall = true;
-      }
-      continue;
-    }
-    if (!hasAllowedToolNames) {
-      continue;
-    }
-    if (resolveToolCallName(rawName, allowedToolNames, undefined, true)) {
-      sawAllowedToolCall = true;
-      continue;
-    }
-    const normalizedUnknownToolName = normalizeToolPolicyName(rawName);
-    if (!unknownToolName) {
-      unknownToolName = normalizedUnknownToolName;
-      continue;
-    }
-    if (unknownToolName !== normalizedUnknownToolName) {
-      sawIncompleteToolCall = true;
-    }
-  }
-
-  if (!sawToolCall) {
-    return { kind: "none" };
-  }
   if (!hasAllowedToolNames) {
     return sawBlankStringToolCall
       ? { kind: "malformed", toolName: BLANK_TOOL_CALL_NAME_DESCRIPTION }
-      : { kind: "none" };
+      : undefined;
   }
   if (sawAllowedToolCall) {
     return { kind: "allowed" };
@@ -199,9 +167,9 @@ function rewriteUnknownToolLoopMessage(message: unknown, toolName: string): void
 
 function guardUnknownToolLoopInMessage(
   message: unknown,
+  toolCallState: ToolCallMessageState,
   state: UnknownToolLoopGuardState,
   params: {
-    allowedToolNames?: Set<string>;
     threshold?: number;
     countAttempt: boolean;
     resetOnAllowedTool?: boolean;
@@ -209,15 +177,14 @@ function guardUnknownToolLoopInMessage(
     rewriteMalformedBlankToolName?: boolean;
   },
 ): boolean {
-  const toolCallState = classifyToolCallMessage(message, params.allowedToolNames);
-  if (toolCallState.kind === "allowed") {
+  if (toolCallState?.kind === "allowed") {
     if (params.resetOnAllowedTool === true) {
       state.lastUnknownToolName = undefined;
       state.count = 0;
     }
     return false;
   }
-  if (toolCallState.kind === "malformed") {
+  if (toolCallState?.kind === "malformed") {
     if (params.rewriteMalformedBlankToolName === true) {
       rewriteUnknownToolLoopMessage(message, toolCallState.toolName);
       return true;
@@ -232,7 +199,7 @@ function guardUnknownToolLoopInMessage(
   if (threshold === undefined || threshold <= 0) {
     return false;
   }
-  if (toolCallState.kind !== "unknown") {
+  if (toolCallState?.kind !== "unknown") {
     if (params.countAttempt && params.resetOnMissingUnknownTool !== false) {
       state.lastUnknownToolName = undefined;
       state.count = 0;
@@ -290,9 +257,12 @@ function wrapStreamTrimToolCallNames(
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     const message = await originalResult();
-    trimWhitespaceFromToolCallNamesInMessage(message, allowedToolNames, fallbackIdByContentIndex);
-    guardUnknownToolLoopInMessage(message, unknownToolGuardState, {
+    const toolCallState = normalizeToolCallsInMessage(
+      message,
       allowedToolNames,
+      fallbackIdByContentIndex,
+    );
+    guardUnknownToolLoopInMessage(message, toolCallState, unknownToolGuardState, {
       threshold: options?.unknownToolThreshold,
       countAttempt: !streamAttemptAlreadyCounted,
       resetOnAllowedTool: true,
@@ -302,12 +272,12 @@ function wrapStreamTrimToolCallNames(
   };
 
   wrapStreamObjectEvents(stream, (event) => {
-    trimWhitespaceFromToolCallNamesInMessage(
+    const partialState = normalizeToolCallsInMessage(
       event.partial,
       allowedToolNames,
       fallbackIdByContentIndex,
     );
-    trimWhitespaceFromToolCallNamesInMessage(
+    const messageState = normalizeToolCallsInMessage(
       event.message,
       allowedToolNames,
       fallbackIdByContentIndex,
@@ -315,9 +285,9 @@ function wrapStreamTrimToolCallNames(
     if (event.message && typeof event.message === "object") {
       const countedStreamAttempt = guardUnknownToolLoopInMessage(
         event.message,
+        messageState,
         unknownToolGuardState,
         {
-          allowedToolNames,
           threshold: options?.unknownToolThreshold,
           countAttempt: !streamAttemptAlreadyCounted,
           resetOnAllowedTool: true,
@@ -326,11 +296,13 @@ function wrapStreamTrimToolCallNames(
       );
       streamAttemptAlreadyCounted ||= countedStreamAttempt;
     }
-    guardUnknownToolLoopInMessage(event.partial, unknownToolGuardState, {
-      allowedToolNames,
-      threshold: options?.unknownToolThreshold,
-      countAttempt: false,
-    });
+    // The message guard already handles aliased partials and may replace their content.
+    if (event.partial !== event.message) {
+      guardUnknownToolLoopInMessage(event.partial, partialState, unknownToolGuardState, {
+        threshold: options?.unknownToolThreshold,
+        countAttempt: false,
+      });
+    }
   });
 
   return stream;

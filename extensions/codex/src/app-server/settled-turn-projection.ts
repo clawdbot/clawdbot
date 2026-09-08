@@ -1,41 +1,42 @@
 import { Buffer } from "node:buffer";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { CodexHistoryRejection } from "./history-rejection.js";
 import type { JsonValue } from "./protocol.js";
 import { readUpstreamUserText } from "./upstream-prompt-provenance.js";
 
 const MAX_RESPONSE_ITEMS = 200;
 const MAX_PROJECTION_BYTES = 512 * 1024;
 const MAX_TEXT_BYTES = 64 * 1024;
-const TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,128}$/u;
+// Projected names replay as function_call history items, which Codex
+// thread/inject_items deserializes as free-form strings (ResponseItem::FunctionCall).
+// Codex records MCP and connector calls under dotted namespaced ids
+// ("codex_apps.slack.slack_send"), so "." must stay projectable or any turn
+// that used such a tool can never finalize.
+const TOOL_NAME_PATTERN = /^[a-zA-Z0-9._-]{1,128}$/u;
 const TOOL_ERROR_STATUS_PREFIX = "[Tool result status: error]\n";
 
 type ProjectedToolReference = { id: string; name: string };
-type ProjectedMessageGroup = {
-  items: JsonValue[];
-  calls: ProjectedToolReference[];
-  results: ProjectedToolReference[];
-  bytes: number;
+type ProjectedResponseItem = {
+  item: JsonValue;
+  call?: ProjectedToolReference;
+  result?: ProjectedToolReference;
 };
 
-function readBoundedText(
-  value: unknown,
-  label: string,
-  maxBytes = MAX_TEXT_BYTES,
-): string | undefined {
+function readBoundedText(value: unknown, maxBytes = MAX_TEXT_BYTES): string | undefined {
   if (typeof value !== "string" || !value.trim()) {
     return undefined;
   }
   if (Buffer.byteLength(value, "utf8") > maxBytes) {
-    throw new Error(`Codex settled-turn projection found oversized ${label}`);
+    throw new CodexHistoryRejection("field_limit");
   }
   return value;
 }
 
-function requireBoundedText(value: unknown, label: string, maxBytes = MAX_TEXT_BYTES): string {
-  const text = readBoundedText(value, label, maxBytes);
+function requireBoundedText(value: unknown, maxBytes = MAX_TEXT_BYTES): string {
+  const text = readBoundedText(value, maxBytes);
   if (!text) {
-    throw new Error(`Codex settled-turn projection found empty ${label}`);
+    throw new CodexHistoryRejection("invalid_content");
   }
   return text;
 }
@@ -47,7 +48,7 @@ function responseItemBytes(item: JsonValue): number {
 function requireCallId(value: unknown): string {
   const callId = normalizeOptionalString(value);
   if (!callId || callId.length > 256) {
-    throw new Error("Codex settled-turn projection found an invalid tool call id");
+    throw new CodexHistoryRejection("invalid_content");
   }
   return callId;
 }
@@ -55,7 +56,7 @@ function requireCallId(value: unknown): string {
 function requireToolName(value: unknown): string {
   const name = normalizeOptionalString(value);
   if (!name || !TOOL_NAME_PATTERN.test(name)) {
-    throw new Error("Codex settled-turn projection found an invalid tool name");
+    throw new CodexHistoryRejection("invalid_content");
   }
   return name;
 }
@@ -66,121 +67,106 @@ function serializeToolArguments(value: unknown): string {
     try {
       parsed = JSON.parse(value);
     } catch {
-      throw new Error("Codex settled-turn projection found invalid JSON tool arguments");
+      throw new CodexHistoryRejection("invalid_content");
     }
     if (!isRecord(parsed)) {
-      throw new Error("Codex settled-turn projection requires object tool arguments");
+      throw new CodexHistoryRejection("invalid_content");
     }
-    return requireBoundedText(value, "tool arguments");
+    return requireBoundedText(value);
   }
   if (!isRecord(value)) {
-    throw new Error("Codex settled-turn projection requires object tool arguments");
+    throw new CodexHistoryRejection("invalid_content");
   }
   let serialized: string;
   try {
     serialized = JSON.stringify(value);
   } catch {
-    throw new Error("Codex settled-turn projection found unserializable tool arguments");
+    throw new CodexHistoryRejection("invalid_content");
   }
-  return requireBoundedText(serialized, "tool arguments");
+  return requireBoundedText(serialized);
 }
 
-function projectUserMessage(message: Extract<AgentMessage, { role: "user" }>): JsonValue[] {
+function projectUserMessage(message: Extract<AgentMessage, { role: "user" }>): JsonValue {
   const upstreamUserText = readUpstreamUserText(message);
-  if (upstreamUserText && typeof message.content === "string") {
-    return [
-      {
-        type: "message",
-        role: "user",
-        content: [
-          { type: "input_text", text: requireBoundedText(upstreamUserText, "upstream user text") },
-        ],
-      },
-    ];
-  }
   if (typeof message.content === "string") {
-    return [
-      {
-        type: "message",
-        role: "user",
-        content: [
-          { type: "input_text", text: requireBoundedText(message.content, "user message") },
-        ],
-      },
-    ];
+    const text = upstreamUserText
+      ? requireBoundedText(upstreamUserText, MAX_PROJECTION_BYTES)
+      : requireBoundedText(message.content);
+    return { type: "message", role: "user", content: [{ type: "input_text", text }] };
   }
   if (!Array.isArray(message.content)) {
-    throw new Error("Codex settled-turn projection found unsupported user content");
+    throw new CodexHistoryRejection("unsupported_content");
   }
   const content: JsonValue[] = [];
+  let bytes = responseItemBytes({ type: "message", role: "user", content });
   for (const value of message.content) {
     if (!isRecord(value)) {
-      throw new Error("Codex settled-turn projection found malformed user content");
+      throw new CodexHistoryRejection("invalid_content");
     }
-    if (value.type === "text") {
-      const text = readBoundedText(value.text, "user text");
-      if (text) {
-        content.push({ type: "input_text", text });
+    if (value.type !== "text") {
+      throw new CodexHistoryRejection(
+        value.type === "image" ? "unsupported_user_image" : "unsupported_content",
+      );
+    }
+    const text = readBoundedText(value.text);
+    if (text) {
+      const part = { type: "input_text", text };
+      bytes += responseItemBytes(part) + (content.length > 0 ? 1 : 0);
+      if (bytes > MAX_PROJECTION_BYTES) {
+        throw new CodexHistoryRejection("byte_limit");
       }
-      continue;
+      content.push(part);
     }
-    throw new Error(`Codex settled-turn projection does not support user content ${value.type}`);
   }
   if (content.length === 0) {
-    throw new Error("Codex settled-turn projection found an empty user message");
+    throw new CodexHistoryRejection("invalid_content");
   }
-  return [{ type: "message", role: "user", content }];
+  return { type: "message", role: "user", content };
 }
 
-function projectAssistantMessage(message: Extract<AgentMessage, { role: "assistant" }>): {
-  items: JsonValue[];
-  calls: ProjectedToolReference[];
-} {
+function* projectAssistantMessage(
+  message: Extract<AgentMessage, { role: "assistant" }>,
+): Generator<ProjectedResponseItem> {
   const values: unknown =
     typeof message.content === "string"
       ? [{ type: "text", text: message.content }]
       : message.content;
   if (!Array.isArray(values)) {
-    throw new Error("Codex settled-turn projection found unsupported assistant content");
+    throw new CodexHistoryRejection("unsupported_content");
   }
-  const items: JsonValue[] = [];
-  const calls: ProjectedToolReference[] = [];
   for (const value of values) {
     if (!isRecord(value)) {
-      throw new Error("Codex settled-turn projection found malformed assistant content");
+      throw new CodexHistoryRejection("invalid_content");
     }
     if (value.type === "text") {
-      const text = readBoundedText(value.text, "assistant text");
+      const text = readBoundedText(value.text);
       if (text) {
-        items.push({
-          type: "message",
-          role: "assistant",
-          content: [{ type: "output_text", text }],
-        });
+        yield {
+          item: { type: "message", role: "assistant", content: [{ type: "output_text", text }] },
+        };
       }
       continue;
     }
     if (value.type === "toolCall") {
       const id = requireCallId(value.id ?? value.toolCallId);
       const name = requireToolName(value.name ?? value.toolName);
-      calls.push({ id, name });
-      items.push({
-        type: "function_call",
-        call_id: id,
-        name,
-        arguments: serializeToolArguments(value.arguments ?? value.input),
-      });
+      yield {
+        call: { id, name },
+        item: {
+          type: "function_call",
+          call_id: id,
+          name,
+          arguments: serializeToolArguments(value.arguments ?? value.input),
+        },
+      };
       continue;
     }
     if (value.type === "thinking" || value.type === "reasoning") {
       // Private/non-visible reasoning is deliberately outside the application transcript.
       continue;
     }
-    throw new Error(
-      `Codex settled-turn projection does not support assistant content ${String(value.type)}`,
-    );
+    throw new CodexHistoryRejection("unsupported_content");
   }
-  return { items, calls };
 }
 
 function projectToolResult(message: Extract<AgentMessage, { role: "toolResult" }>): {
@@ -190,34 +176,42 @@ function projectToolResult(message: Extract<AgentMessage, { role: "toolResult" }
   const id = requireCallId(message.toolCallId);
   const name = requireToolName(message.toolName);
   if (!Array.isArray(message.content)) {
-    throw new Error("Codex settled-turn projection found unsupported tool result content");
+    throw new CodexHistoryRejection("unsupported_content");
   }
   const isErrorValue: unknown = message.isError;
   if (isErrorValue !== undefined && typeof isErrorValue !== "boolean") {
-    throw new Error("Codex settled-turn projection found invalid tool result status");
+    throw new CodexHistoryRejection("invalid_content");
   }
   const isError = isErrorValue === true;
   const parts: string[] = [];
+  let bytes = 0;
+  const appendText = (text: string) => {
+    bytes += Buffer.byteLength(text, "utf8") + (parts.length > 0 ? 1 : 0);
+    if (bytes > MAX_TEXT_BYTES) {
+      throw new CodexHistoryRejection("field_limit");
+    }
+    parts.push(text);
+  };
   for (const value of message.content) {
     if (!isRecord(value)) {
-      throw new Error("Codex settled-turn projection found malformed tool result content");
+      throw new CodexHistoryRejection("invalid_content");
     }
     if (value.type === "image") {
       const mimeType = normalizeOptionalString(value.mimeType) ?? "unknown type";
       // The finalizer selects by text capability. Preserve image evidence as
       // metadata without embedding an executable or oversized multimodal payload.
-      parts.push(`[Image tool result: ${mimeType}]`);
+      appendText(`[Image tool result: ${mimeType}]`);
       continue;
     }
     if (value.type !== "text" && value.type !== "toolResult") {
-      throw new Error("Codex settled-turn projection found malformed tool result content");
+      throw new CodexHistoryRejection("invalid_content");
     }
     const text =
       value.type === "text"
-        ? readBoundedText(value.text, "tool result text")
-        : readBoundedText(value.content ?? value.text, "tool result text");
+        ? readBoundedText(value.text)
+        : readBoundedText(value.content ?? value.text);
     if (text) {
-      parts.push(text);
+      appendText(text);
     }
   }
   const resultText =
@@ -227,7 +221,6 @@ function projectToolResult(message: Extract<AgentMessage, { role: "toolResult" }
   // the text boundary so the final answer cannot reinterpret errors as success.
   const output = requireBoundedText(
     isError ? `${TOOL_ERROR_STATUS_PREFIX}${resultText}` : resultText,
-    "tool result output",
     isError ? MAX_TEXT_BYTES + Buffer.byteLength(TOOL_ERROR_STATUS_PREFIX, "utf8") : MAX_TEXT_BYTES,
   );
   return {
@@ -236,81 +229,53 @@ function projectToolResult(message: Extract<AgentMessage, { role: "toolResult" }
   };
 }
 
-function projectMessage(message: AgentMessage): ProjectedMessageGroup | undefined {
-  let items: JsonValue[];
-  let calls: ProjectedToolReference[] = [];
-  let results: ProjectedToolReference[] = [];
+function* projectMessage(message: AgentMessage): Generator<ProjectedResponseItem> {
   if (message.role === "user") {
-    items = projectUserMessage(message);
+    yield { item: projectUserMessage(message) };
   } else if (message.role === "assistant") {
-    const projected = projectAssistantMessage(message);
-    items = projected.items;
-    calls = projected.calls;
+    yield* projectAssistantMessage(message);
   } else if (message.role === "toolResult") {
-    const projected = projectToolResult(message);
-    items = [projected.item];
-    results = [projected.result];
+    yield projectToolResult(message);
   } else {
-    throw new Error(`Codex settled-turn projection does not support role ${message.role}`);
+    throw new CodexHistoryRejection("unsupported_content");
   }
-  if (items.length === 0) {
-    return undefined;
-  }
-  return {
-    items,
-    calls,
-    results,
-    bytes: items.reduce<number>((total, item) => total + responseItemBytes(item), 0),
-  };
 }
 
-function validateExactlyPairedCalls(groups: readonly ProjectedMessageGroup[]): number {
-  const calls = new Map<string, { name: string; groupIndex: number }>();
+/** Consumes complete evidence or rejects at the existing limits, never truncating its history. */
+export function projectSettledCodexMessages(messages: Iterable<AgentMessage>): JsonValue[] {
+  const items: JsonValue[] = [];
+  const calls = new Map<string, string>();
   const results = new Set<string>();
-  let resultCount = 0;
-  for (const [groupIndex, group] of groups.entries()) {
-    for (const call of group.calls) {
-      if (calls.has(call.id)) {
-        throw new Error("Codex settled-turn projection found a duplicate tool call");
+  let bytes = 0;
+  for (const message of messages) {
+    for (const { item, call, result } of projectMessage(message)) {
+      if (call) {
+        if (calls.has(call.id)) {
+          throw new CodexHistoryRejection("invalid_pairing");
+        }
+        calls.set(call.id, call.name);
       }
-      calls.set(call.id, { name: call.name, groupIndex });
-    }
-    for (const result of group.results) {
-      const call = calls.get(result.id);
-      if (
-        !call ||
-        call.groupIndex >= groupIndex ||
-        call.name !== result.name ||
-        results.has(result.id)
-      ) {
-        throw new Error("Codex settled-turn projection found an ambiguous tool transcript");
+      if (result) {
+        if (calls.get(result.id) !== result.name || results.has(result.id)) {
+          throw new CodexHistoryRejection("invalid_pairing");
+        }
+        results.add(result.id);
       }
-      results.add(result.id);
-      resultCount += 1;
+      if (items.length === MAX_RESPONSE_ITEMS) {
+        throw new CodexHistoryRejection("item_limit");
+      }
+      bytes += responseItemBytes(item);
+      if (bytes > MAX_PROJECTION_BYTES) {
+        throw new CodexHistoryRejection("byte_limit");
+      }
+      items.push(item);
     }
   }
   if (calls.size !== results.size) {
-    throw new Error("Codex settled-turn projection found an incomplete tool transcript");
+    throw new CodexHistoryRejection("incomplete_pairing");
   }
-  return resultCount;
-}
-
-/** Projects the complete frozen transcript or rejects it without truncation or tail dropping. */
-export function projectSettledCodexMessages(messages: readonly AgentMessage[]): JsonValue[] {
-  const groups = messages.flatMap((message) => {
-    const projected = projectMessage(message);
-    return projected ? [projected] : [];
-  });
-  if (validateExactlyPairedCalls(groups) === 0) {
-    throw new Error("Codex settled-turn projection found no completed tool result");
-  }
-  const items = groups.flatMap((group) => group.items);
-  if (items.length > MAX_RESPONSE_ITEMS) {
-    throw new Error("Codex settled-turn projection exceeds the item limit");
-  }
-  const bytes = groups.reduce((total, group) => total + group.bytes, 0);
-  if (bytes > MAX_PROJECTION_BYTES) {
-    throw new Error("Codex settled-turn projection exceeds the byte limit");
+  if (results.size === 0) {
+    throw new CodexHistoryRejection("incomplete_pairing");
   }
   return items;
 }

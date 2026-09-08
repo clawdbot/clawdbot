@@ -8,7 +8,12 @@ import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { parseCronPacingBounds } from "../pacing.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import { assertSafeCronSessionTargetId } from "../session-target.js";
-import type { CronDelivery, CronJob, CronJobPatch } from "../types.js";
+import {
+  isSystemOwnedCronPayloadKind,
+  type CronDelivery,
+  type CronJob,
+  type CronJobPatch,
+} from "../types.js";
 import { normalizeHttpWebhookUrl } from "../webhook-url.js";
 
 function assertCronScriptSyntax(script: string, subject: "script payload" | "trigger script") {
@@ -43,7 +48,7 @@ export function assertSupportedJobSpec(
     job.sessionTarget === "main" &&
     job.payload.kind !== "systemEvent" &&
     job.payload.kind !== "script" &&
-    job.payload.kind !== "heartbeat"
+    !isSystemOwnedCronPayloadKind(job.payload.kind)
   ) {
     throw new Error('main cron jobs require payload.kind="systemEvent" or "script"');
   }
@@ -195,17 +200,26 @@ export function assertTimeScheduleSatisfiable(
 export function assertMainSessionAgentId(
   job: Pick<CronJob, "sessionTarget" | "agentId" | "payload">,
   defaultAgentId: string | undefined,
+  patch?: CronJobPatch,
 ) {
+  // A changed default must not strand stored jobs. Revalidate newly authored bindings and kinds.
+  if (
+    patch &&
+    !("agentId" in patch) &&
+    !("sessionTarget" in patch) &&
+    patch.payload?.kind === undefined
+  ) {
+    return;
+  }
   if (job.sessionTarget !== "main") {
     return;
   }
   if (!job.agentId) {
     return;
   }
-  // Script payloads run no agent turn; heartbeat monitors only poke the wake
-  // bus and the heartbeat runner resolves the owning agent's main session
-  // itself, so both are valid for non-default agents.
-  if (job.payload.kind === "script" || job.payload.kind === "heartbeat") {
+  // Script payloads run no agent turn; system-owned monitors invoke Gateway
+  // dependencies directly, so both are valid for non-default agents.
+  if (job.payload.kind === "script" || isSystemOwnedCronPayloadKind(job.payload.kind)) {
     return;
   }
   const normalized = normalizeAgentId(job.agentId);
@@ -303,7 +317,7 @@ export function cronPatchTouchesDeliveryResolution(patch: CronJobPatch): boolean
   );
 }
 
-export function hasConcreteFailureDestination(
+function hasConcreteFailureDestination(
   destination: CronDelivery["failureDestination"] | undefined,
 ): boolean {
   return Boolean(

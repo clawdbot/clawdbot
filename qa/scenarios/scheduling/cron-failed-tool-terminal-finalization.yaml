@@ -1,26 +1,28 @@
-title: Cron final reply after a failed terminal tool
+title: Cron final reply after a failed read
 
 scenario:
   id: cron-failed-tool-terminal-finalization
   surface: cron
   coverage:
-    primary: [agent-runtime.failure-recovery-empty-response-recovery]
-    secondary: [automation.isolated-cron-execution, channels.qa-channel-final-reply]
+    primary: [automation.isolated-cron-execution]
+    secondary:
+      - agent-runtime.failure-recovery-retry-policy
+      - channels.qa-channel-final-reply
   regressionRefs:
     - openclaw/openclaw#118274
   gatewayConfigPatch:
     tools:
       codeMode:
         enabled: true
-  objective: Verify an isolated announce cron finalizes one failed terminal tool honestly and delivers one visible reply.
+  objective: Verify an isolated announce cron reports one failed read honestly and delivers one visible reply.
   successCriteria:
     - The isolated cron run completes successfully after one failed Code Mode exec.
-    - One failure-honest finalization observes the exact failed call and exposes no tools.
+    - One failure-honest ordinary continuation observes the exact failed call.
     - The failed tool never replays and qa-channel receives exactly one final reply.
   codeRefs:
     - src/cron/isolated-agent/run-executor.ts
-    - src/agents/embedded-agent-runner/run/incomplete-turn-resolution.ts
-    - src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts
+    - packages/agent-core/src/agent-loop.ts
+    - src/agents/embedded-agent-runner/extensions.ts
     - extensions/qa-lab/src/providers/mock-openai/server.ts
   execution:
     kind: flow
@@ -28,19 +30,18 @@ scenario:
     isolationReason: Enables Code Mode and forces an isolated cron with exact delivery assertions.
     channel: qa-channel
     retryCount: 0
-    summary: Prove a real failed terminal Code Mode tool still produces one visible cron announcement.
+    summary: Prove a real failed Code Mode read still produces one visible cron announcement.
     config:
       requiredProviderMode: mock-openai
       channelId: qa-failed-cron
       promptSnippet: Failed tool terminal recovery QA check
       retryNeedle: The previous assistant turn completed its tool calls but did not produce a user-visible answer.
-      failureHonestyNeedle: If a tool failed, say so; never claim completion or success.
       expectedMarker: CRON-FAILED-TOOL-FINALIZED-OK
       expectedReply: "The requested file could not be read: ENOENT. CRON-FAILED-TOOL-FINALIZED-OK"
 
 flow:
   steps:
-    - name: forces an isolated cron containing one terminal tool failure
+    - name: forces an isolated cron containing one failed read
       actions:
         - assert:
             expr: "env.providerMode === config.requiredProviderMode"
@@ -102,7 +103,7 @@ flow:
             message:
               expr: "`expected one forced cron run, got ${JSON.stringify(runResponse)}`"
 
-    - name: proves one failed call, one honest finalization, and one delivery
+    - name: proves one failed call, one honest continuation, and one delivery
       actions:
         - call: waitForCronRunCompletion
           saveAs: completedRun
@@ -129,30 +130,30 @@ flow:
         - set: readPlans
           value:
             expr: "scenarioRequests.filter((request) => request.plannedToolName === 'read')"
-        - set: finalizations
+        - set: continuations
           value:
-            expr: "scenarioRequests.filter((request) => String(request.allInputText ?? '').includes(config.retryNeedle))"
+            expr: "scenarioRequests.filter((request) => request.toolOutputCallId === readPlans[0]?.plannedToolCallId)"
         - assert:
             expr: "readPlans.length === 1 && readPlans[0].plannedWireToolName === 'exec'"
             message:
               expr: "`expected one Code Mode read plan, got ${JSON.stringify(readPlans)}`"
         - assert:
-            expr: "finalizations.length === 1 && String(finalizations[0].allInputText ?? '').includes(config.failureHonestyNeedle)"
+            expr: "scenarioRequests.length === 2 && continuations.length === 1 && !String(continuations[0].allInputText ?? '').includes(config.retryNeedle)"
             message:
-              expr: "`expected one failure-honest cron finalization, got ${JSON.stringify(finalizations)}`"
-        - set: replayedExecCalls
+              expr: "`expected one failure-honest cron continuation, got ${JSON.stringify(continuations)}`"
+        - set: readExecCalls
           value:
-            expr: "(Array.isArray(finalizations[0].body?.input) ? finalizations[0].body.input : []).filter((item) => item?.type === 'function_call' && item.name === 'exec' && String(item.arguments ?? '').includes('qa-failed-terminal-missing-file.txt'))"
+            expr: "(Array.isArray(continuations[0].body?.input) ? continuations[0].body.input : []).filter((item) => item?.type === 'function_call' && item.name === 'exec' && String(item.arguments ?? '').includes('qa-failed-terminal-missing-file.txt'))"
         - set: failedExecOutputs
           value:
-            expr: "(Array.isArray(finalizations[0].body?.input) ? finalizations[0].body.input : []).filter((item) => item?.type === 'function_call_output' && item.call_id === replayedExecCalls[0]?.call_id && /ENOENT|no such file/i.test(typeof item.output === 'string' ? item.output : JSON.stringify(item.output ?? '')))"
+            expr: "(Array.isArray(continuations[0].body?.input) ? continuations[0].body.input : []).filter((item) => item?.type === 'function_call_output' && item.call_id === readExecCalls[0]?.call_id && /ENOENT|no such file/i.test(typeof item.output === 'string' ? item.output : JSON.stringify(item.output ?? '')))"
         - assert:
-            expr: "replayedExecCalls.length === 1 && failedExecOutputs.length === 1 && finalizations[0].toolOutputCallId === replayedExecCalls[0].call_id"
+            expr: "readExecCalls.length === 1 && failedExecOutputs.length === 1 && continuations[0].toolOutputCallId === readExecCalls[0].call_id"
             message:
-              expr: "`cron finalization did not preserve the normalized parent exec/result pairing: calls=${JSON.stringify(replayedExecCalls.map((item) => item.call_id))} outputs=${JSON.stringify(failedExecOutputs.map((item) => item.call_id))}`"
+              expr: "`cron continuation did not preserve the normalized parent exec/result pairing: calls=${JSON.stringify(readExecCalls.map((item) => item.call_id))} outputs=${JSON.stringify(failedExecOutputs.map((item) => item.call_id))}`"
         - assert:
-            expr: "!Array.isArray(finalizations[0].body?.tools) || finalizations[0].body.tools.length === 0"
-            message: cron finalization exposed a replayable model tool surface
+            expr: "['exec', 'wait'].every((name) => continuations[0].body?.tools?.some((tool) => tool.name === name))"
+            message: cron failed-read continuation lost its ordinary Code Mode tool surface
         - call: readSessionTranscriptSummary
           saveAs: transcript
           args:
@@ -166,11 +167,11 @@ flow:
           saveAs: deliveries
           args:
             - lambda:
-                expr: "(() => { const matches = state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.channelId); return matches.length > 0 ? matches : undefined; })()"
+                expr: "(() => { const matches = state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && !message.deleted && message.conversation.id === config.channelId); return matches.length > 0 ? matches : undefined; })()"
             - 10000
             - 100
         - assert:
             expr: "deliveries.length === 1 && deliveries[0].text.trim() === config.expectedReply"
             message:
               expr: "`expected exactly one failure-honest cron announcement, got ${JSON.stringify(deliveries)}`"
-      detailsExpr: "`${deliveries[0].text}; calls=${String(transcript.assistantToolCallCounts.exec)} failed=${String(transcript.completedToolCallCounts.exec)} finalizations=${String(finalizations.length)}`"
+      detailsExpr: "`${deliveries[0].text}; calls=${String(transcript.assistantToolCallCounts.exec)} failed=${String(transcript.completedToolCallCounts.exec)} continuations=${String(continuations.length)}`"

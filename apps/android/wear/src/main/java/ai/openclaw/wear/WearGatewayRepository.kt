@@ -539,8 +539,14 @@ private fun parseAgentPulseTasks(element: JsonElement?): WearAgentPulseTasks {
         recentAtLimit = source.requiredBoolean("recentAtLimit"),
       )
     }
-    "unavailable" -> WearAgentPulseTasks(state = WearAgentPulseTaskState.Unavailable)
-    else -> invalidAgentPulse()
+
+    "unavailable" -> {
+      WearAgentPulseTasks(state = WearAgentPulseTaskState.Unavailable)
+    }
+
+    else -> {
+      invalidAgentPulse()
+    }
   }
 }
 
@@ -561,12 +567,19 @@ private fun parseAgentPulseSwarm(element: JsonElement?): WearAgentPulseSwarm {
         morePhases = source.requiredBoolean("morePhases"),
       )
     }
+
     "idle" -> {
       if (source.string("scope") != "selected-session") invalidAgentPulse()
       WearAgentPulseSwarm(state = WearAgentPulseSwarmState.Idle)
     }
-    "unavailable" -> WearAgentPulseSwarm(state = WearAgentPulseSwarmState.Unavailable)
-    else -> invalidAgentPulse()
+
+    "unavailable" -> {
+      WearAgentPulseSwarm(state = WearAgentPulseSwarmState.Unavailable)
+    }
+
+    else -> {
+      invalidAgentPulse()
+    }
   }
 }
 
@@ -584,14 +597,24 @@ private fun parseAgentPulsePhase(element: JsonElement): WearAgentPulsePhase {
 private fun parseAgentPulseApprovals(element: JsonElement?): WearAgentPulseApprovals {
   val source = element as? JsonObject ?: invalidAgentPulse()
   return when (source.string("state")) {
-    "ready" ->
+    "ready" -> {
       WearAgentPulseApprovals(
         state = WearAgentPulseApprovalsState.Ready,
         pending = source.nonNegativeInt("pending"),
       )
-    "refreshing" -> WearAgentPulseApprovals(state = WearAgentPulseApprovalsState.Refreshing)
-    "unavailable" -> WearAgentPulseApprovals(state = WearAgentPulseApprovalsState.Unavailable)
-    else -> invalidAgentPulse()
+    }
+
+    "refreshing" -> {
+      WearAgentPulseApprovals(state = WearAgentPulseApprovalsState.Refreshing)
+    }
+
+    "unavailable" -> {
+      WearAgentPulseApprovals(state = WearAgentPulseApprovalsState.Unavailable)
+    }
+
+    else -> {
+      invalidAgentPulse()
+    }
   }
 }
 
@@ -662,8 +685,11 @@ internal fun parseChatMessage(element: JsonElement?): WearChatMessage? {
 
 private fun contentText(element: JsonElement?): String =
   when (element) {
-    is JsonPrimitive -> element.contentOrNull.orEmpty()
-    is JsonArray ->
+    is JsonPrimitive -> {
+      element.contentOrNull.orEmpty()
+    }
+
+    is JsonArray -> {
       element
         .mapNotNull { part ->
           when (part) {
@@ -673,7 +699,11 @@ private fun contentText(element: JsonElement?): String =
           }
         }.filter { it.isNotBlank() }
         .joinToString("\n")
-    else -> ""
+    }
+
+    else -> {
+      ""
+    }
   }
 
 private fun JsonElement.asObject(method: String): JsonObject = this as? JsonObject ?: throw WearProxyException("invalid_response", "$method returned invalid data")

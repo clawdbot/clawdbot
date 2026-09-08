@@ -34,6 +34,10 @@ import {
 } from "./bot.test-helpers.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import type { TelegramGetChat } from "./bot/types.js";
+import {
+  startTelegramCallbackQueryAnswer,
+  takeTelegramCallbackQueryAdmissionAnswer,
+} from "./callback-query-answer-state.js";
 import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
 import type { TelegramPollRegistryEntry } from "./poll-registry.js";
 import type { TelegramRuntime } from "./runtime.types.js";
@@ -816,6 +820,49 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     expect(answerCallbackQuerySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses the callback answer started at durable admission", async () => {
+    const bot = createTelegramBot({ token: "tok" });
+    const callbackId = "cbq-durable-admission-1";
+    await startTelegramCallbackQueryAnswer(bot, callbackId, true);
+
+    await runTelegramMiddlewareChain({
+      ctx: makeGenericCallbackContext({ id: callbackId, updateId: 403 }),
+      finalHandler: async () => {},
+    });
+
+    expect(answerCallbackQuerySpy).toHaveBeenCalledOnce();
+    expect(takeTelegramCallbackQueryAdmissionAnswer(bot, callbackId)).toBeUndefined();
+  });
+
+  it("re-answers a durable callback after bot restart loses admission state", async () => {
+    const callbackId = "cbq-restart-replay-1";
+    const stoppedBot = createTelegramBot({ token: "tok" });
+    await startTelegramCallbackQueryAnswer(stoppedBot, callbackId, true);
+    middlewareUseSpy.mockClear();
+    const restartedBot = createTelegramBot({ token: "tok" });
+    const pendingAnswer = createDeferred<true>();
+    answerCallbackQuerySpy.mockImplementationOnce(() => pendingAnswer.promise);
+    const ctx = makeGenericCallbackContext({ id: callbackId, updateId: 404 });
+
+    await withTelegramSpooledReplayUpdate(
+      requireRecord(ctx.update, "callback update"),
+      async () => {
+        await runTelegramMiddlewareChain({ ctx, finalHandler: async () => {} });
+      },
+    );
+
+    try {
+      const duplicate = startTelegramCallbackQueryAnswer(restartedBot, callbackId, false);
+      expect(duplicate).toBe(pendingAnswer.promise);
+      expect(answerCallbackQuerySpy).toHaveBeenCalledTimes(2);
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith(callbackId);
+    } finally {
+      pendingAnswer.resolve(true);
+      await pendingAnswer.promise;
+    }
+    expect(takeTelegramCallbackQueryAdmissionAnswer(restartedBot, callbackId)).toBeUndefined();
   });
 
   it("acknowledges question callbacks before their handler completes", async () => {
@@ -4953,7 +5000,7 @@ describe("createTelegramBot", () => {
     }
   });
   it("honors routed group activation from session store", async () => {
-    const storePath = "/tmp/openclaw-telegram-group-activation.json";
+    const storePath = path.join(createTelegramBotTestStateDir(), "group-activation.json");
     const routedGroupEntry = {
       sessionId: "agent:ops:telegram:group:123",
       updatedAt: 0,
@@ -5667,7 +5714,7 @@ describe("createTelegramBot", () => {
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
     const finalEditMessageText = editMessageTextSpy.mock.calls.at(-1)?.[2];
     expect(typeof finalEditMessageText === "string" ? finalEditMessageText : "").toContain(
-      "Session-only model selection. Runtime unchanged.",
+      "Session-only model selection. Runtime set to <b>codex</b> from configured policy.",
     );
     expect(
       editMessageTextSpy.mock.calls.some((call) =>

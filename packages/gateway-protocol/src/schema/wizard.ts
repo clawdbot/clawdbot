@@ -3,6 +3,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { SetupInferenceActivationRejectionSchema } from "./setup-inference.js";
 
 /** Runtime state reported for gateway-driven setup wizard sessions. */
 const WizardRunStatusSchema = Type.Union([
@@ -105,6 +106,17 @@ const WizardResultFields = {
   // Exact model prepared by provider-owned setup. Clients must still run the
   // live activation step before presenting the route as ready.
   preparedModelRef: Type.Optional(NonEmptyString),
+  // Successful terminal auth flows report the exact live-verified activation;
+  // provider sign-in or model preparation alone does not establish readiness.
+  modelActivation: Type.Optional(
+    closedObject({
+      modelRef: NonEmptyString,
+      gatewayRestartRequired: Type.Optional(Type.Literal(true)),
+    }),
+  ),
+  // Only a finalized activation rejection may release recovery. Generic terminal
+  // errors can follow committed writes; the top-level error retains their detail.
+  activationRejection: Type.Optional(SetupInferenceActivationRejectionSchema),
 };
 
 /** Result after advancing a wizard session. */

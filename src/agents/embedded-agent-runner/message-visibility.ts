@@ -9,6 +9,7 @@ import {
   SILENT_REPLY_TOKEN,
 } from "../../auto-reply/tokens.js";
 import { resolveAssistantMessagePhase } from "../../shared/chat-message-content.js";
+import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../delivery-evidence-values.js";
 
 type AgentPayloadLike = {
   text?: unknown;
@@ -29,10 +30,6 @@ type PayloadVisibilityOptions = {
   includeSilentReplyPayloads?: boolean;
   requireTerminalContent?: boolean;
 };
-
-function hasNonEmptyStringArray(value: unknown): boolean {
-  return Array.isArray(value) && value.some(hasNonEmptyString);
-}
 
 function collectStringValues(value: unknown, output: Set<string>) {
   if (typeof value === "string" && value.trim()) {
@@ -218,6 +215,14 @@ export function isIntermediateAssistantTranscriptMessage(message: unknown): bool
   const record = message as Record<string, unknown>;
   if (record.stopReason !== undefined && record.stopReason !== "stop") {
     return false;
+  }
+  const asyncDelivery = record.openclawAsyncDelivery;
+  if (asyncDelivery && typeof asyncDelivery === "object" && !Array.isArray(asyncDelivery)) {
+    // SAFETY: the object/non-array guard permits reading an optional itemId as unknown.
+    const itemId = (asyncDelivery as { itemId?: unknown }).itemId;
+    if (typeof itemId === "string" && itemId.trim().length > 0) {
+      return true;
+    }
   }
   const phase = resolveAssistantMessagePhase(message);
   if (phase !== undefined) {

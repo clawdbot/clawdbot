@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { ParsedAgentSessionKey } from "../routing/session-key.js";
+import { collectCronHistoryOverflowTaskIds } from "./cron-history-retention.js";
 import { getDetachedTaskLifecycleRuntime } from "./detached-task-runtime.js";
 import {
   CRON_HISTORY_KEEP_PER_JOB,
@@ -131,6 +132,13 @@ function createTaskRegistryMaintenanceHarness(params: {
     ensureTaskRegistryReady: () => {},
     getTaskById: (taskId: string) => currentTasks.get(taskId),
     listTaskRecords: () => Array.from(currentTasks.values()),
+    getTaskRegistryMaintenanceSnapshot: () => {
+      const snapshotTasks = Array.from(currentTasks.values());
+      return {
+        taskIds: snapshotTasks.map((task) => task.taskId),
+        cronHistoryOverflowTaskIds: collectCronHistoryOverflowTaskIds(snapshotTasks),
+      };
+    },
     markTaskLostById: (patch) => {
       const current = currentTasks.get(patch.taskId);
       if (!current) {
@@ -319,6 +327,8 @@ describe("task-registry maintenance issue #60299", () => {
       acpEntry: { sessionId: childSessionKey, updatedAt: Date.now() },
     });
 
+    expect(getInspectableActiveTaskRestartBlockers()).toEqual([]);
+    expectTaskStatus(currentTasks, task.taskId, "running");
     expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 1 });
     expectTaskStatus(currentTasks, task.taskId, "lost");
     expect(getInspectableActiveTaskRestartBlockers()).toHaveLength(0);
@@ -380,6 +390,7 @@ describe("task-registry maintenance issue #60299", () => {
     const activeRunning = makeStaleTask({
       taskId: "task-running-live",
       runtime: "cli",
+      taskKind: "exec",
       status: "running",
       createdAt: now,
       startedAt: now,
@@ -408,6 +419,7 @@ describe("task-registry maintenance issue #60299", () => {
     expect(blockers[0]?.taskId).toBe("task-running-live");
     expect(blockers[0]?.status).toBe("running");
     expect(blockers[0]?.runtime).toBe("cli");
+    expect(blockers[0]?.taskKind).toBe("exec");
     expect(blockers[0]?.runId).toBe("run-running-live");
   });
 
@@ -512,6 +524,8 @@ describe("task-registry maintenance issue #60299", () => {
       },
     });
 
+    expect(getInspectableActiveTaskRestartBlockers()).toEqual([]);
+    expectTaskStatus(currentTasks, task.taskId, "running");
     const reconciledTasks = reconcileInspectableTasks();
     expect(reconciledTasks).toHaveLength(1);
     expect(reconciledTasks[0]?.taskId).toBe(task.taskId);

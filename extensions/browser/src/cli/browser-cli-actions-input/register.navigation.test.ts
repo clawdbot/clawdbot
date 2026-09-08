@@ -37,6 +37,7 @@ const { registerBrowserNavigationCommands } = await import("./register.navigatio
 
 function createNavigationProgram(): Command {
   const { program, browser, parentOpts } = createBrowserProgram();
+  browser.option("--timeout <ms>", "Timeout in ms", "30000");
   registerBrowserNavigationCommands(browser, parentOpts);
   return program;
 }
@@ -48,43 +49,53 @@ describe("browser navigation commands", () => {
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
   });
 
-  it("sends navigate requests with the URL and target id", async () => {
-    const program = createNavigationProgram();
+  it.each(["30000", "60000"])(
+    "sends navigate requests with the URL, target id, and inherited %s ms timeout",
+    async (timeout) => {
+      const program = createNavigationProgram();
+      const parentArgs = timeout === "30000" ? [] : ["--timeout", timeout];
 
-    await program.parseAsync(
-      ["browser", "navigate", "https://example.test/page", "--target-id", "tab-1"],
-      { from: "user" },
-    );
+      await program.parseAsync(
+        ["browser", ...parentArgs, "navigate", "https://example.test/page", "--target-id", "tab-1"],
+        { from: "user" },
+      );
 
-    const request = mocks.callBrowserRequest.mock.calls.at(-1)?.[1] as
-      | { method?: string; path?: string; body?: Record<string, unknown> }
-      | undefined;
-    const options = mocks.callBrowserRequest.mock.calls.at(-1)?.[2] as
-      | { timeoutMs?: number }
-      | undefined;
-    expect(request).toMatchObject({
-      method: "POST",
-      path: "/navigate",
-      body: { url: "https://example.test/page", targetId: "tab-1" },
-    });
-    expect(options?.timeoutMs).toBe(20000);
-  });
+      const request = mocks.callBrowserRequest.mock.calls.at(-1)?.[1] as
+        | { method?: string; path?: string; body?: Record<string, unknown> }
+        | undefined;
+      expect(request).toMatchObject({
+        method: "POST",
+        path: "/navigate",
+        body: { url: "https://example.test/page", targetId: "tab-1" },
+      });
+      expect(mocks.callBrowserRequest).toHaveBeenLastCalledWith(
+        expect.objectContaining({ timeout }),
+        expect.objectContaining({ path: "/navigate" }),
+      );
+    },
+  );
 
   it("passes normalized resize dimensions and target id to the resize helper", async () => {
     const program = createNavigationProgram();
 
-    await program.parseAsync(["browser", "resize", "1024", "768", "--target-id", "tab-2"], {
-      from: "user",
-    });
+    await program.parseAsync(
+      ["browser", "--timeout", "60000", "resize", "1024", "768", "--target-id", "tab-2"],
+      {
+        from: "user",
+      },
+    );
 
     expect(mocks.runBrowserResizeWithOutput).toHaveBeenCalledWith(
       expect.objectContaining({
         width: 1024,
         height: 768,
         targetId: "tab-2",
-        timeoutMs: 20000,
+        parent: expect.objectContaining({ timeout: "60000" }),
         successMessage: "resized to 1024x768",
       }),
+    );
+    expect(mocks.runBrowserResizeWithOutput).not.toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: expect.any(Number) }),
     );
   });
 

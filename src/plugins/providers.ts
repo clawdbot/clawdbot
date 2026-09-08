@@ -6,7 +6,7 @@ import { compileSafeRegex } from "../security/safe-regex.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
-import type { PluginLoadOptions } from "./loader.js";
+import type { PluginLoadOptions } from "./loader-types.js";
 import {
   isActivatedManifestOwner,
   passesManifestOwnerBasePolicy,
@@ -127,7 +127,9 @@ function pluginOwnsProviderRef(plugin: PluginManifestRecord, normalizedProvider:
   return false;
 }
 
-function resolvesRuntimeModelCatalogAugment(plugin: PluginManifestRecord): boolean {
+export function manifestPluginResolvesRuntimeModelCatalogAugment(
+  plugin: PluginManifestRecord,
+): boolean {
   return (
     plugin.modelCatalog?.runtimeAugment === true ||
     (plugin.origin !== "bundled" && plugin.providers.length > 0)
@@ -165,6 +167,7 @@ function resolveEffectiveRegistryPluginActivation(params: {
   return resolveEffectivePluginActivationState({
     id: params.plugin.pluginId,
     origin: params.plugin.origin,
+    channelIds: params.plugin.contributions?.channels,
     config: params.normalizedConfig,
     rootConfig: params.rootConfig,
     enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin),
@@ -758,7 +761,7 @@ export function resolveCatalogHookProviderPluginIds(params: {
   );
   const runtimeAugmentPluginIds = new Set(
     manifestRegistry.plugins.flatMap((plugin) =>
-      resolvesRuntimeModelCatalogAugment(plugin) ? [plugin.id] : [],
+      manifestPluginResolvesRuntimeModelCatalogAugment(plugin) ? [plugin.id] : [],
     ),
   );
   const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);

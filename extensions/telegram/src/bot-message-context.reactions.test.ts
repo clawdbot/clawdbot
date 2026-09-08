@@ -225,6 +225,7 @@ describe("buildTelegramMessageContext reactions", () => {
           type: "private",
           available_reactions: [
             { type: "emoji", emoji: "👍" },
+            { type: "custom_emoji", custom_emoji_id: "5231419410191111111" },
             { type: "emoji", emoji: "❤" },
           ],
         },

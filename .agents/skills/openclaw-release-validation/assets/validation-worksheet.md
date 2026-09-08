@@ -1,52 +1,37 @@
 # OpenClaw release validation
 
-## Candidate
+## Run identity
 
-- Release:
-- Commit:
-- Release notes: {{RELEASE_NOTES_URL}}
-- Source version:
-- Source commit:
-- Shared issue:
+- Release train: {{RELEASE_TRAIN}}
+- Current beta: {{BETA_TAG}}
+- Beta commit: {{BETA_COMMIT}}
+- Tested target: origin/main
+- Tested main commit: {{MAIN_COMMIT}}
+- Test mode: {{TEST_MODE}}
+- Source version: {{SOURCE_VERSION}}
+- Source commit: {{SOURCE_COMMIT}}
+- Shared issue: {{ISSUE_URL}}
 - Upgrade result: pending
+- Terminal result: pending
 
 ## Upgrade findings
 
-Automatically populated by the agent with candidate OpenClaw problems observed
-while upgrading or starting the copied gateway.
+> Automatically populated by the agent with test-target OpenClaw problems
+> observed while updating or starting the selected test gateway. OCM, backup,
+> and local setup problems are not release findings.
 
 - None yet.
 
 ## Your changes in this release
 
-<!-- Campaign creator: enumerate every PR by the authenticated GitHub user included between the previous release tag and this candidate, then remove this comment. -->
+{{YOUR_CHANGES}}
 
-## Priority surfaces to test
+{{VALIDATION_GUIDANCE}}
 
-> [!NOTE]
-> Add findings to the empty **Testing notes** cell for each surface you test;
-> leave untouched cells empty. Those cells are the source for the final
-> release-analysis comment.
->
-> This surface catalog and its maturity labels are derived from the live
-> [OpenClaw maturity scorecard]({{SCORECARD_URL}}) and
-> [maturity taxonomy]({{TAXONOMY_URL}}). Priority reflects this release's change
-> volume, change size, impact scope, upgrade risk, and maturity expectations.
->
-> **Score bands:** Experimental 0–50%; Alpha 50–70%; Beta 70–80%; Stable
-> 80–95%; Clawesome 95–100%. Higher maturity means a stronger regression
-> expectation.
+## Additional surfaces tested
 
-> [!TIP]
-> Want help with a surface? Ask the agent to walk you through its manual test.
-> It will give you the action, command or URL, and pass condition, then record
-> your notes.
-
-<!-- Campaign creator: generate exactly five priority surface tables with empty Testing notes cells, then remove this comment. -->
-
-## Other surfaces to test
-
-<!-- Campaign creator: generate every remaining live scorecard surface as a table with an empty Testing notes cell, then remove this comment. -->
+> The agent adds a section here only when you test a scorecard surface that is
+> not already in the two priority lists.
 
 ## Final feedback
 

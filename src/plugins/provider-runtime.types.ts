@@ -164,7 +164,10 @@ export type ProviderResolveUsageAuthContext = {
     providerIds?: string[];
     envDirect?: Array<string | undefined>;
   }) => Promise<string[]>;
-  resolveOAuthToken: (params?: { provider?: string }) => Promise<ProviderUsageAuthToken | null>;
+  resolveOAuthToken: (params?: {
+    provider?: string;
+    excludeProfileIds?: string[];
+  }) => Promise<ProviderUsageAuthToken | null>;
 };
 
 export type ProviderUsageAuthToken = {

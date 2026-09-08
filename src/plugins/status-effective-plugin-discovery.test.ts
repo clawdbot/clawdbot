@@ -82,11 +82,13 @@ function countReport(params: { effectiveOnly: boolean; onlyPluginIds?: readonly 
 
 function countResolve(metadataSnapshot: PluginMetadataSnapshot): {
   rebuilds: number;
+  scans: number;
   ids: string[];
 } {
   counters.manifestRegistryRebuilds = 0;
+  counters.discoveryScans = 0;
   const ids = resolveEffectivePluginIds({ config, env: process.env, metadataSnapshot });
-  return { rebuilds: counters.manifestRegistryRebuilds, ids };
+  return { rebuilds: counters.manifestRegistryRebuilds, scans: counters.discoveryScans, ids };
 }
 
 beforeEach(() => {
@@ -107,6 +109,7 @@ afterAll(() => {
 
 it("does not re-derive discovery when reporting effective-only plugins", () => {
   const all = countReport({ effectiveOnly: false });
+  clearPluginMetadataLifecycleCaches();
   const effective = countReport({ effectiveOnly: true });
 
   // The effective-only filter still selects the configured channel owner.
@@ -121,8 +124,10 @@ it("does not re-derive discovery when reporting effective-only plugins", () => {
 // A supplied snapshot is an optimization, never an input to the answer.
 it("only reuses a snapshot that answers for the whole config", () => {
   const env = process.env;
+  const fullSnapshot = loadPluginMetadataSnapshot({ config, env });
+  clearPluginMetadataLifecycleCaches();
+  const full = countResolve(fullSnapshot);
   const withoutSnapshot = resolveEffectivePluginIds({ config, env });
-  const full = countResolve(loadPluginMetadataSnapshot({ config, env }));
   clearPluginMetadataLifecycleCaches();
   // `recordPluginInstallSource` asks for one plugin's effective state, which scopes the
   // snapshot to that plugin and truncates its manifest set to that plugin alone.
@@ -138,6 +143,7 @@ it("only reuses a snapshot that answers for the whole config", () => {
     full: withoutSnapshot,
     scoped: withoutSnapshot,
   });
+  expect(full.scans).toBe(0);
   // A whole-config snapshot is reused; a plugin-scoped one cannot stand in for it.
   expect({ fullReused: full.rebuilds === 0, scopedReused: scoped.rebuilds === 0 }).toEqual({
     fullReused: true,

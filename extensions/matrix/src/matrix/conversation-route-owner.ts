@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { parseAgentSessionKey, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveMatrixAccount } from "./accounts.js";
 import { resolveMatrixInboundRoute } from "./monitor/route.js";
 
@@ -34,10 +34,12 @@ export function resolveMatrixConversationRouteOwner(params: {
   if (!result.bindingOwnerAvailable) {
     return { kind: "unavailable" as const };
   }
-  if (result.runtimeBindingId && !parseAgentSessionKey(result.route.sessionKey)?.agentId) {
-    // Matrix's store cannot project plugin metadata. A non-agent runtime target therefore
-    // cannot authorize detached delivery through an inferred fallback owner.
-    return null;
+  if (result.pluginId) {
+    return {
+      kind: "plugin" as const,
+      pluginId: result.pluginId,
+      fallbackAgentId: result.route.agentId,
+    };
   }
   return { kind: "agent" as const, agentId: result.route.agentId };
 }

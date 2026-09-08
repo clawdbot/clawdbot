@@ -28,6 +28,14 @@ Context is _not the same thing_ as "memory": memory can be stored on disk and re
 
 See also: [Slash commands](/tools/slash-commands), [Token use & costs](/reference/token-use), [Compaction](/concepts/compaction).
 
+The Control UI context meter uses the last run's prompt budget when it still
+matches the selected model and effective context cap. This budget leaves room
+for the runtime's compaction reserve. Its label is **Prompt budget (last run)**:
+it is an estimate, and crossing it can trigger tool-result reduction or compaction.
+After a model or context-cap change, the meter shows **Context window** until a
+new run supplies a matching estimate. Stale token totals remain approximate and
+do not trigger the context warning.
+
 ## Example output
 
 Values vary by model, provider, tool policy, and what's in your workspace.
@@ -159,6 +167,18 @@ What persists across messages depends on the mechanism:
 - **Normal history** persists in the session transcript until compacted/pruned by policy.
 - **Compaction** persists a summary into the transcript and keeps recent messages intact.
 - **Pruning** drops old tool results from the _in-memory_ prompt to free context-window space, but does not rewrite the session transcript - the full history is still inspectable on disk.
+
+For embedded Responses requests, current request metadata stays after the user
+message or compaction checkpoint and before its tool calls. This lets supported transports reuse the
+previous response across tool rounds without dropping live context. A later user
+turn in an OpenAI Responses-family session preserves hidden runtime-context
+carriers append-only, so the previous turn, including tool calls and results,
+remains an unchanged cached prefix. Retained carriers count toward the context
+window until compaction, which does not split a user message from its carrier.
+Carriers contain only the delimited context body; interpretation guidance lives
+once in the stable system prompt.
+Other transports keep transient metadata at the request tail to preserve their cached
+history prefix when the next user turn removes it.
 
 Docs: [Session](/concepts/session), [Compaction](/concepts/compaction), [Session pruning](/concepts/session-pruning).
 

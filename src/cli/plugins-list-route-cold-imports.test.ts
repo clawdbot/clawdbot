@@ -18,9 +18,6 @@ const testState = vi.hoisted(() => ({
 vi.mock("./command-execution-startup.js", () => ({
   applyCliExecutionStartupPresentation: vi.fn(async () => {}),
   ensureCliExecutionBootstrap: vi.fn(async () => {}),
-  resolveCliExecutionStartupContext: vi.fn(() => ({
-    startupPolicy: { loadPlugins: false, suppressDoctorStdout: true },
-  })),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -46,6 +43,10 @@ vi.mock("./plugins-cli.js", () => {
 vi.mock("../plugins/loader-module-runtime.js", () => {
   testState.loadedModules.add("plugin-module-runtime");
   return {};
+});
+
+vi.mock("../plugins/capability-consent.js", () => {
+  throw new Error("metadata inventory must not load the capability consent mutation owner");
 });
 
 import { tryRouteCli } from "./route.js";

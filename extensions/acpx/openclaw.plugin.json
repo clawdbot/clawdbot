@@ -1,8 +1,27 @@
 {
   "id": "acpx",
+  "backupResources": [
+    {
+      "disposition": "regenerable",
+      "scope": "state",
+      "relativePath": "acpx/codex-home/tmp/arg0"
+    },
+    {
+      "disposition": "regenerable",
+      "scope": "state",
+      "relativePath": "acpx/codex-home/.tmp/plugins"
+    }
+  ],
   "doctorContract": {
     "configRepair": true,
-    "stateMigrations": true
+    "stateMigrations": [
+      { "id": "acpx-runtime-state-to-plugin-state" },
+      {
+        "id": "acpx-session-owner-resources",
+        "doctorOnly": true,
+        "phase": "after-session-repair"
+      }
+    ]
   },
   "activation": {
     "onStartup": true

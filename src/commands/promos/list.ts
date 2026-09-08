@@ -7,7 +7,7 @@ import { markPromotionSlugsNotified } from "../../infra/promotions-feed.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 
 function formatWindowEnd(promotion: ClawHubPromotion): string {
-  const daysLeft = Math.max(0, Math.ceil((promotion.endsAt - Date.now()) / 86_400_000));
+  const daysLeft = Math.max(0, Math.floor((promotion.endsAt - Date.now()) / 86_400_000));
   if (daysLeft === 0) {
     return "ends today";
   }

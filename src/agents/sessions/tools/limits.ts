@@ -4,6 +4,7 @@
  * Tail storage is byte-bounded but decoded as UTF-8, so truncation avoids
  * splitting multi-byte characters in display output.
  */
+import { Buffer } from "node:buffer";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf8Suffix } from "../../../utils/utf8-truncate.js";
 
@@ -15,12 +16,22 @@ export function normalizePositiveLimit(value: number | undefined, fallback: numb
 /** Default stderr tail retained for long-running session tools. */
 export const SESSION_TOOL_STDERR_TAIL_BYTES = 64 * 1024;
 
-/** Appends a chunk while retaining only the UTF-8-safe tail within maxBytes. */
+/** Retains a UTF-8-safe tail and counts bytes discarded by this append. */
 export function appendBoundedTextTail(
   current: string,
   chunk: string,
   maxBytes = SESSION_TOOL_STDERR_TAIL_BYTES,
-): string {
+): { tail: string; droppedBytes: number } {
   const effectiveMaxBytes = normalizePositiveLimit(maxBytes, SESSION_TOOL_STDERR_TAIL_BYTES);
-  return truncateUtf8Suffix(`${current}${chunk}`, effectiveMaxBytes);
+  const combined = `${current}${chunk}`;
+  const tail = truncateUtf8Suffix(combined, effectiveMaxBytes);
+  return { tail, droppedBytes: Buffer.byteLength(combined) - Buffer.byteLength(tail) };
+}
+
+/** Label lost stderr before the retained diagnostic so it cannot look complete. */
+export function formatStderrTail(tail: string, droppedBytes: number, fallback: string): string {
+  const diagnostic = tail.trim() || fallback;
+  return droppedBytes > 0
+    ? `[${droppedBytes} UTF-8 bytes of earlier stderr discarded at the ${SESSION_TOOL_STDERR_TAIL_BYTES}-byte retention cap]\n${diagnostic}`
+    : diagnostic;
 }

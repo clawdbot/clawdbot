@@ -3,6 +3,7 @@ import type { App } from "@slack/bolt";
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
+import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
 import type {
   OpenClawConfig,
   SlackReactionNotificationMode,
@@ -18,8 +19,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatSlackError } from "../errors.js";
 import { buildSlackChannelIdCandidates } from "../group-policy.js";
+import { renameSlackSession, setSlackSessionStatus } from "../session-status.js";
 import type { SlackMessageEvent } from "../types.js";
 import { createSlackAgentViewState } from "./agent-view-state.js";
 import { normalizeAllowList, normalizeAllowListLower, normalizeSlackSlug } from "./allow-list.js";
@@ -38,14 +41,12 @@ import { isSlackChannelAllowedByPolicy } from "./policy.js";
 import { isGovSlackClient } from "./slack-client-kind.js";
 import {
   type SlackSuggestedPromptsInput,
+  type SlackSuggestedPromptsOutcome,
   updateSlackSuggestedPrompts,
 } from "./suggested-prompts.js";
 import { createSlackSystemEventRouteResolver } from "./system-event-session.js";
 
-export {
-  buildSlackAssistantThreadMetadata,
-  parseSlackAssistantThreadMetadata,
-} from "./assistant-thread-context.js";
+export { buildSlackAssistantThreadMetadata } from "./assistant-thread-context.js";
 export type { SlackAssistantThreadContext } from "./assistant-thread-context.js";
 export { normalizeSlackChannelType, resolveSlackChatType } from "./channel-type.js";
 export { DEFAULT_SLACK_SUGGESTED_PROMPTS } from "./suggested-prompts.js";
@@ -84,6 +85,7 @@ export type SlackMonitorContext = {
   runtime: RuntimeEnv;
   channelRuntime?: ChannelRuntimeSurface;
   buildContext?: BuildChannelInboundContext;
+  dispatchReplyFromConfig?: ChannelInboundTurnPlan["dispatchReplyFromConfig"];
 
   botUserId: string;
   botId?: string;
@@ -116,7 +118,6 @@ export type SlackMonitorContext = {
   threadInheritParent: boolean;
   slashCommand: Required<import("openclaw/plugin-sdk/config-contracts").SlackSlashCommandConfig>;
   textLimit: number;
-  ackReactionScope: string;
   typingReaction: string;
   mediaMaxBytes: number;
 
@@ -152,13 +153,19 @@ export type SlackMonitorContext = {
   ) => SlackMessageEvent["channel_type"] | undefined;
   resolveUserName: (userId: string, eventScope?: SlackEventScope) => Promise<SlackUserInfo>;
   resolveUserAvatar: (userId: string, eventScope?: SlackEventScope) => string | undefined;
-  setSlackThreadStatus: (params: {
+  setSlackSessionStatus: (params: {
     channelId: string;
     threadTs?: string;
-    status: string;
-    loadingMessages?: string[];
+    status: "processing" | "active" | "suspended";
+    title?: string;
     eventScope?: SlackEventScope;
   }) => Promise<void>;
+  recordSlackSessionTitle: (params: {
+    channelId: string;
+    threadTs: string;
+    title: string;
+    eventScope?: SlackEventScope;
+  }) => void;
   getSlackAssistantThreadContext: (
     channelId: string | undefined,
     threadTs: string | undefined,
@@ -168,7 +175,9 @@ export type SlackMonitorContext = {
     context: Omit<SlackAssistantThreadContext, "updatedAt">,
     eventScope?: SlackEventScope,
   ) => void;
-  setSlackSuggestedPrompts: (params: SlackSuggestedPromptsInput) => Promise<boolean>;
+  setSlackSuggestedPrompts: (
+    params: SlackSuggestedPromptsInput,
+  ) => Promise<SlackSuggestedPromptsOutcome>;
   recordSlackAgentView: () => Promise<void>;
   isSlackAgentView: () => Promise<boolean>;
   recordSlackManagedViewThread: (channelId: string, threadTs: string) => Promise<void>;
@@ -212,7 +221,6 @@ export function createSlackMonitorContext(params: {
   threadInheritParent: SlackMonitorContext["threadInheritParent"];
   slashCommand: SlackMonitorContext["slashCommand"];
   textLimit: number;
-  ackReactionScope: string;
   typingReaction: string;
   mediaMaxBytes: number;
 }): SlackMonitorContext {
@@ -403,26 +411,49 @@ export function createSlackMonitorContext(params: {
     return undefined;
   };
 
-  const setSlackThreadStatus = async (p: {
-    channelId: string;
-    threadTs?: string;
-    status: string;
-    loadingMessages?: string[];
-    eventScope?: SlackEventScope;
-  }) => {
-    if (!p.threadTs) {
+  const sessionTitles = new Map<string, string>();
+  const recordSlackSessionTitle: SlackMonitorContext["recordSlackSessionTitle"] = (p) => {
+    writeLruMapEntry(
+      sessionTitles,
+      scopedKey(`${p.channelId}:${p.threadTs}`, p.eventScope),
+      truncateUtf16Safe(p.title, 200),
+      1024,
+    );
+  };
+  const updateSessionStatus: SlackMonitorContext["setSlackSessionStatus"] = async (p) => {
+    const key = scopedKey(`${p.channelId}:${p.threadTs}`, p.eventScope);
+    const previousTitle = readLruMapEntry(sessionTitles, key);
+    const client = p.eventScope?.client ?? params.app.client;
+    const updated = await setSlackSessionStatus({
+      ...p,
+      client,
+      token: params.botToken,
+      runtime: params.runtime,
+    });
+    if (!updated.ok || p.status !== "processing" || !p.threadTs || p.title === undefined) {
       return;
     }
-    try {
-      await (p.eventScope?.client ?? params.app.client).assistant.threads.setStatus({
-        token: params.botToken,
-        channel_id: p.channelId,
-        thread_ts: p.threadTs,
-        status: p.status,
-        ...(p.loadingMessages?.length ? { loading_messages: p.loadingMessages.slice(0, 10) } : {}),
-      });
-    } catch (err) {
-      logVerbose(`slack status update failed for channel ${p.channelId}: ${formatSlackError(err)}`);
+    const title = truncateUtf16Safe(p.title, 200);
+    // A user rename received while the status request was in flight wins.
+    if (readLruMapEntry(sessionTitles, key) !== previousTitle) {
+      return;
+    }
+    // setStatus only names newly created sessions. Rename existing sessions once
+    // per display-name change; inbound user renames update this same cache.
+    if (
+      updated.title === title ||
+      (previousTitle !== title &&
+        (await renameSlackSession({
+          client,
+          token: params.botToken,
+          channelId: p.channelId,
+          threadTs: p.threadTs,
+          title,
+        })))
+    ) {
+      if (readLruMapEntry(sessionTitles, key) === previousTitle) {
+        recordSlackSessionTitle({ ...p, threadTs: p.threadTs, title });
+      }
     }
   };
 
@@ -557,6 +588,7 @@ export function createSlackMonitorContext(params: {
     return false;
   };
 
+  const channelRuntime = params.channelRuntime as PluginRuntime["channel"] | undefined;
   const ctx: SlackMonitorContext = {
     cfg: params.cfg,
     accountId: params.accountId,
@@ -564,8 +596,8 @@ export function createSlackMonitorContext(params: {
     app: params.app,
     runtime: params.runtime,
     channelRuntime: params.channelRuntime,
-    buildContext: (params.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
-      .buildContext,
+    buildContext: channelRuntime?.inbound.buildContext,
+    dispatchReplyFromConfig: channelRuntime?.reply?.dispatchReplyFromConfig,
     botUserId: params.botUserId,
     botId: params.botId,
     identityHealth: params.identityHealth,
@@ -598,7 +630,6 @@ export function createSlackMonitorContext(params: {
     threadInheritParent: params.threadInheritParent,
     slashCommand: params.slashCommand,
     textLimit: params.textLimit,
-    ackReactionScope: params.ackReactionScope,
     typingReaction: params.typingReaction,
     mediaMaxBytes: params.mediaMaxBytes,
     logger,
@@ -610,7 +641,8 @@ export function createSlackMonitorContext(params: {
     recallSlackChannelType,
     resolveUserName,
     resolveUserAvatar,
-    setSlackThreadStatus,
+    setSlackSessionStatus: updateSessionStatus,
+    recordSlackSessionTitle,
     getSlackAssistantThreadContext: assistantThreadContextStore.get,
     saveSlackAssistantThreadContext: assistantThreadContextStore.save,
     setSlackSuggestedPrompts,

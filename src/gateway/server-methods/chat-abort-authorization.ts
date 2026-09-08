@@ -19,6 +19,7 @@ export type ChatAbortRequester = {
 };
 
 type PreRegisteredAgentDedupePayload = {
+  goalFingerprint?: unknown;
   agentId?: unknown;
   attemptId?: unknown;
   controlUiVisible?: unknown;
@@ -232,17 +233,25 @@ export function writePreRegisteredChatAbort(params: {
   params.context.chatRunState.getOrCreate(params.runId).abortMarker =
     createChatAbortMarker(endedAt);
   const pendingKey = pendingChatSendDedupeKey(params.runId);
+  const pendingEntry = params.context.dedupe.get(pendingKey);
   const pendingAttemptId = normalizeUnknownText(
-    (params.context.dedupe.get(pendingKey)?.payload as PreRegisteredAgentDedupePayload | undefined)
-      ?.attemptId,
+    (pendingEntry?.payload as PreRegisteredAgentDedupePayload | undefined)?.attemptId,
   );
-  if (!params.attemptId || pendingAttemptId === params.attemptId) {
+  const ownsPendingAttempt = !params.attemptId || pendingAttemptId === params.attemptId;
+  if (ownsPendingAttempt) {
     params.context.dedupe.delete(pendingKey);
   }
   setGatewayDedupeEntry({
     dedupe: params.context.dedupe,
     key: `chat:${params.runId}`,
-    entry: { ts: endedAt, ok: true, payload },
+    entry: {
+      ts: endedAt,
+      ok: true,
+      payload,
+      ...(ownsPendingAttempt && pendingEntry?.requestIdentity
+        ? { requestIdentity: pendingEntry.requestIdentity }
+        : {}),
+    },
   });
 }
 
@@ -263,6 +272,7 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
     ),
   );
   const authorizedByRunId = new Map<string, PreRegisteredAgentRun>();
+  const matchedRunIds = new Set<string>();
   let hasUnauthorizedRuns = false;
   let hasUnauthorizedProtectedRuns = false;
   let hasProtectedRuns = false;
@@ -305,6 +315,7 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
     ) {
       continue;
     }
+    matchedRunIds.add(run.runId);
     const requesterCanAbort = canRequesterAbortPreRegisteredRun(run.payload, params.requester);
     const isProtected =
       params.includeProtectedRuns !== true &&
@@ -327,6 +338,7 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
   }
   return {
     authorizedRuns: [...authorizedByRunId.values()],
+    matchedRunIds: [...matchedRunIds],
     hasUnauthorizedRuns,
     hasUnauthorizedProtectedRuns,
     hasProtectedRuns,

@@ -22,7 +22,9 @@ Hover over a visitor and it will tell you its name.
 
 Sometimes. That is the point.
 
-The lobster is a guest, not furniture. It wanders in when it feels like it, stays a while, and leaves. Some sessions it never shows up at all. There is exactly one situation where it always appears: **when your Gateway disconnects**, the lobster comes out and paces, visibly worried, until the connection is back. If the lobster looks stressed, check your Gateway.
+The lobster is a guest, not furniture. Half of session/page-load rolls skip scheduled visits entirely. Otherwise, the base first-arrival delay is 2–10 minutes, with 30–60-minute gaps between visits. Familiarity adjusts those timings: new visitors arrive after 2.6–13 minutes, while familiar ones arrive after 1.4–7 minutes and return after 24–48 minutes. Frequent dismissals can make a visitor wary, extending its return gaps by another 70%.
+
+Status visits keep their own schedule: **when your Gateway disconnects**, the lobster comes out and paces, visibly worried, until the connection is back. During runs lasting more than ten minutes, it settles in for a quiet vigil. The visits toggle and dismissals still take precedence.
 
 ## Things you can do
 

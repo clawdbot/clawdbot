@@ -89,7 +89,7 @@ function resolveOpenClawHome() {
     return resolveOsHome();
   }
   if (explicit === "~" || explicit.startsWith("~/") || explicit.startsWith("~\\")) {
-    return path.resolve(explicit.replace(/^~(?=$|[\\/])/u, resolveOsHome()));
+    return path.resolve(explicit.replace(/^~(?=$|[\\/])/u, () => resolveOsHome()));
   }
   return path.resolve(explicit);
 }
@@ -98,7 +98,7 @@ function resolveStateDir() {
   const override = process.env.OPENCLAW_STATE_DIR?.trim();
   if (override) {
     if (override === "~" || override.startsWith("~/") || override.startsWith("~\\")) {
-      return path.resolve(override.replace(/^~(?=$|[\\/])/u, resolveOpenClawHome()));
+      return path.resolve(override.replace(/^~(?=$|[\\/])/u, () => resolveOpenClawHome()));
     }
     return path.resolve(override);
   }

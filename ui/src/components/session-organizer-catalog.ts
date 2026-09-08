@@ -11,11 +11,18 @@ import type {
   SidebarSessionMutationScope,
 } from "./app-sidebar-session-types.ts";
 import { showConfirmDialog } from "./confirm-dialog.ts";
-import { requireSessionMutationAccess } from "./session-organizer-batch-mutations.ts";
+import {
+  requireSessionMutationAccess,
+  type SessionActionHost,
+} from "./session-organizer-batch-mutations.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
 
+export type SessionGroupActionHost = SessionActionHost & {
+  knownSessionGroups(): string[];
+};
+
 export async function rememberSessionGroup(
-  host: SessionOrganizerControllerHost,
+  host: SessionGroupActionHost,
   name: string,
   scope: SidebarSessionMutationScope,
 ): Promise<SidebarSessionMutationResult> {

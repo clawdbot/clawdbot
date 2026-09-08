@@ -32,6 +32,7 @@ export {
 export {
   buildEmbeddingBatchGroupOptions,
   runEmbeddingBatchGroups,
+  runEmbeddingBatches,
   type EmbeddingBatchExecutionParams,
 } from "./host/batch-runner.js";
 export {
@@ -39,6 +40,7 @@ export {
   resolveCompletedBatchResult,
   throwIfBatchCompletionError,
   throwIfBatchTerminalFailure,
+  waitForEmbeddingBatch,
   type BatchCompletionResult,
 } from "./host/batch-status.js";
 export { uploadBatchJsonlFile } from "./host/batch-upload.js";
@@ -57,6 +59,8 @@ export { sanitizeAndNormalizeEmbedding } from "./host/embedding-vectors.js";
 export { debugEmbeddingsLog } from "./host/embeddings-debug.js";
 export { normalizeEmbeddingModelWithPrefixes } from "./host/embeddings-model-normalize.js";
 export {
+  embeddingProviderOwnsDestination,
+  resolveEmbeddingEndpointUrl,
   resolveRemoteEmbeddingBearerClient,
   type RemoteEmbeddingProviderId,
 } from "./host/embeddings-remote-client.js";

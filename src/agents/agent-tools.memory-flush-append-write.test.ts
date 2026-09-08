@@ -6,6 +6,7 @@ import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { wrapToolMemoryFlushAppendOnlyWrite } from "./agent-tools.read.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { createWriteTool } from "./sessions/tools/index.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const RELATIVE_PATH = "memory/2026-08-08.md";
 
@@ -64,6 +65,53 @@ describe("wrapToolMemoryFlushAppendOnlyWrite output contract", () => {
     return (result as { details?: unknown }).details;
   }
 
+  it.each(["revoked", "replaced", "active"] as const)(
+    "checks %s source authority after provenance work before appending",
+    async (authority) => {
+      const absolute = path.join(root, RELATIVE_PATH);
+      await fs.mkdir(path.dirname(absolute), { recursive: true });
+      await fs.writeFile(absolute, "seed\n");
+      const originalClaim = {};
+      let claim: object | undefined = originalClaim;
+      let reachedCommit = false;
+      const wrapped = wrapToolMemoryFlushAppendOnlyWrite(baseWriteTool(), {
+        root,
+        relativePath: RELATIVE_PATH,
+        memoryWriteProvenance: {
+          classifies: async () => true,
+          write: async ({ commit }) => {
+            reachedCommit = true;
+            if (authority === "revoked") {
+              claim = undefined;
+            }
+            if (authority === "replaced") {
+              claim = {};
+            }
+            await commit();
+          },
+          clearAfterDelete: async () => {},
+        },
+      });
+      const pending = withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:memory-flush-authority",
+          receiptAuthority: () => claim === originalClaim,
+        },
+        () => wrapped.execute("source-append", { path: RELATIVE_PATH, content: "hello" }),
+      );
+      if (authority === "active") {
+        await expect(pending).resolves.toMatchObject({ details: { changed: true } });
+      } else {
+        await expect(pending).rejects.toThrow("authority is no longer active");
+      }
+      expect(reachedCommit).toBe(true);
+      expect(await fs.readFile(absolute, "utf8")).toBe(
+        authority === "active" ? "seed\nhello" : "seed\n",
+      );
+    },
+  );
+
   it("returns write-schema-conforming details when creating the memory file", async () => {
     const details = await runAppend();
     expect(details).toEqual({ changed: true });
@@ -79,6 +127,37 @@ describe("wrapToolMemoryFlushAppendOnlyWrite output contract", () => {
     expect(validateAgainstDeclaredSchema(details).ok).toBe(true);
     expect(await fs.readFile(absolute, "utf-8")).toBe("seed\nhello");
   });
+
+  it.each(["file", "ancestor", "absent"] as const)(
+    "rejects @memory paths instead of appending to their allowed sibling (literal: %s)",
+    async (literalState) => {
+      const allowedPath = path.join(root, RELATIVE_PATH);
+      const literalPath = path.join(root, `@${RELATIVE_PATH}`);
+      await fs.mkdir(path.dirname(allowedPath), { recursive: true });
+      await fs.writeFile(allowedPath, "allowed", "utf8");
+      if (literalState !== "absent") {
+        await fs.mkdir(path.dirname(literalPath), { recursive: true });
+      }
+      if (literalState === "file") {
+        await fs.writeFile(literalPath, "literal", "utf8");
+      }
+      const wrapped = wrapToolMemoryFlushAppendOnlyWrite(baseWriteTool(), {
+        root,
+        relativePath: RELATIVE_PATH,
+      });
+
+      await expect(
+        wrapped.execute("at-memory-flush", {
+          path: `@${RELATIVE_PATH}`,
+          content: "wrong journal",
+        }),
+      ).rejects.toThrow(/Memory flush writes are restricted/);
+      await expect(fs.readFile(allowedPath, "utf8")).resolves.toBe("allowed");
+      if (literalState === "file") {
+        await expect(fs.readFile(literalPath, "utf8")).resolves.toBe("literal");
+      }
+    },
+  );
 
   it("documents the pre-fix regression: append-only metadata violates the declared schema", () => {
     const validation = validateAgainstDeclaredSchema({ path: RELATIVE_PATH, appendOnly: true });

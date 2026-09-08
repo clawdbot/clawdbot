@@ -364,7 +364,10 @@ describe("release Telegram QA workflow", () => {
       "timeout-minutes": 210,
     });
     expect(caller?.environment).toBeUndefined();
-    expect(caller?.["continue-on-error"]).toBeUndefined();
+    expect(caller?.outputs?.conclusion).toBe(
+      "${{ steps.dispatch.outputs.conclusion || steps.dispatch.outcome }}",
+    );
+    expect(caller?.["continue-on-error"]).toBe(true);
 
     const trusted = job("trusted_identity");
     expect(trusted).toMatchObject({
@@ -948,6 +951,12 @@ describe("release Telegram QA workflow", () => {
     expect(createSut).toContain(
       '"$(stat -c \'%F:%a:%u:%g\' "$requested_config_path")" == "regular file:600:${SUT_UID}:${SUT_GID}"',
     );
+    expect(createSut).toContain('generation_dir="${RUNTIME_ROOT}/config-generations"');
+    expect(createSut).toContain('install -d -o root -g root -m 0700 "$generation_dir"');
+    expect(createSut).toContain('"regular file:600:0:0"');
+    expect(createSut).toContain('/usr/bin/setpriv --reuid="$SUT_UID" --regid="$SUT_GID"');
+    expect(createSut).toContain('export OPENCLAW_CONFIG_PATH="$projection_dir/openclaw.json"');
+    expect(createSut).toContain('"${OPENCLAW_STATE_DIR}/qa-runtime-config/openclaw.json") ;;');
   });
 
   it("does not defer Bash startup cleanup to the privileged launcher", () => {

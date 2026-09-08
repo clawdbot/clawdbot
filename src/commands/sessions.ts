@@ -3,13 +3,15 @@ import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-
  * Session listing command.
  *
  * It loads one or more agent session stores, enriches rows with model/runtime
- * metadata, and emits JSON or fixed-width terminal tables.
+ * metadata, and emits JSON or terminal tables.
  */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
@@ -20,6 +22,7 @@ import {
 } from "../agents/model-selection.js";
 import { resolveRuntimePolicySessionKey } from "../auto-reply/reply/runtime-policy-session-key.js";
 import { normalizeChatType } from "../channels/chat-type.js";
+import { ExpectedCliError } from "../cli/failure-output.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveFreshSessionTotalTokens, resolveSessionTotalTokens } from "../config/sessions.js";
 import { resolveProjectedSessionContextTokens } from "../config/sessions/context-token-provenance.js";
@@ -39,7 +42,7 @@ import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
 } from "../utils/delivery-context.shared.js";
-import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
+import { resolveCommandSessionStoreTargets } from "./session-store-targets.js";
 import {
   resolveSessionDisplayModelRef,
   resolveSessionDisplayDefaults,
@@ -49,9 +52,6 @@ import {
   formatSessionFlagsCell,
   formatSessionKeyCell,
   formatSessionModelCell,
-  SESSION_AGE_PAD,
-  SESSION_KEY_PAD,
-  SESSION_MODEL_PAD,
   type SessionDisplayRow,
   toSessionDisplayRow,
 } from "./sessions-table.js";
@@ -72,10 +72,8 @@ type SessionRow = SessionDisplayRow & {
   acpRuntime: boolean;
 };
 
-const AGENT_PAD = 10;
-const KIND_PAD = 11; // "spawn-child".length — longest kind label
-const RUNTIME_PAD = 18;
-const TOKENS_PAD = 20;
+type SessionCandidate = { agentId: string; entry: SessionEntry; sessionKey: string };
+
 const DEFAULT_SESSIONS_LIMIT = 100;
 const TOP_N_SELECTION_LIMIT = 200;
 const contextLookupRuntimeLoader = createLazyImportLoader(() => import("../agents/context.js"));
@@ -95,11 +93,14 @@ function applyAcpModelOverlayIfNeeded(
   return { provider: "acpx", model: `${agentId}-acp` };
 }
 
-function compareSessionRowsByUpdatedAt(a: SessionRow, b: SessionRow): number {
-  return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+function compareSessionRowsByUpdatedAt(a: SessionCandidate, b: SessionCandidate): number {
+  return (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0);
 }
 
-function selectNewestSessionRows(rows: SessionRow[], limit: number | undefined): SessionRow[] {
+function selectNewestSessionRows(
+  rows: SessionCandidate[],
+  limit: number | undefined,
+): SessionCandidate[] {
   if (limit === undefined) {
     return rows.toSorted(compareSessionRowsByUpdatedAt);
   }
@@ -108,7 +109,7 @@ function selectNewestSessionRows(rows: SessionRow[], limit: number | undefined):
   }
   // For small limits, keep only the top N rows without sorting the full store;
   // large limits use the simpler full sort above.
-  const selected: SessionRow[] = [];
+  const selected: SessionCandidate[] = [];
   for (const row of rows) {
     const insertAt = selected.findIndex(
       (candidate) => compareSessionRowsByUpdatedAt(row, candidate) < 0,
@@ -169,32 +170,30 @@ const formatTokensCell = (
   const ctxLabel = contextTokens ? formatKTokens(contextTokens) : "?";
   if (total === undefined) {
     const label = `unknown/${ctxLabel} (?%)`;
-    return rich ? theme.muted(label.padEnd(TOKENS_PAD)) : label.padEnd(TOKENS_PAD);
+    return rich ? theme.muted(label) : label;
   }
   const pct =
     contextTokens && freshTotal !== undefined
       ? Math.min(999, Math.round((freshTotal / contextTokens) * 100))
       : null;
   const label = `${formatKTokens(total)}/${ctxLabel} (${pct ?? "?"}%)`;
-  const padded = label.padEnd(TOKENS_PAD);
-  return colorByPct(padded, pct, rich);
+  return colorByPct(label, pct, rich);
 };
 
 const formatKindCell = (kind: SessionRow["kind"], rich: boolean) => {
-  const label = kind.padEnd(KIND_PAD);
   if (!rich) {
-    return label;
+    return kind;
   }
   if (kind === "group") {
-    return theme.accentBright(label);
+    return theme.accentBright(kind);
   }
   if (kind === "global") {
-    return theme.warn(label);
+    return theme.warn(kind);
   }
   if (kind === "direct") {
-    return theme.accent(label);
+    return theme.accent(kind);
   }
-  return theme.muted(label);
+  return theme.muted(kind);
 };
 
 function resolveSessionRuntimeLabel(params: {
@@ -213,11 +212,6 @@ function resolveSessionRuntimeLabel(params: {
     fallbackProvider: params.modelProvider,
     classifyCliProvider: params.classifyCliProvider,
   });
-}
-
-function formatRuntimeCell(runtimeLabel: string, rich: boolean): string {
-  const label = runtimeLabel.padEnd(RUNTIME_PAD);
-  return rich ? theme.info(label) : label;
 }
 
 function resolveSessionStoreDisplayPath(target: { agentId: string; storePath: string }): string {
@@ -323,65 +317,61 @@ export async function sessionsCommand(
     await contextLookupRuntimeLoader.load();
   const configContextTokens =
     lookupContextTokens(displayDefaults.model, { allowAsyncLoad: false }) ?? DEFAULT_CONTEXT_TOKENS;
-  const targets = resolveSessionStoreTargetsOrExit({
-    cfg,
-    opts: {
-      store: opts.store,
-      agent: opts.agent,
-      allAgents: opts.allAgents,
-    },
-    runtime,
-    json: opts.json,
-  });
-  if (!targets) {
-    return;
-  }
+  const targets = resolveCommandSessionStoreTargets({ cfg, opts });
 
   let activeMinutes: number | undefined;
   if (opts.active !== undefined) {
     const parsed = parseStrictPositiveInteger(opts.active);
     if (parsed === undefined) {
-      runtime.error("--active must be a positive number of minutes, for example --active 30.");
-      runtime.exit(1);
-      return;
+      const message = "--active must be a positive number of minutes, for example --active 30.";
+      throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
     }
     activeMinutes = parsed;
   }
 
   const limit = parseSessionsLimit(opts.limit);
   if (limit === null) {
-    runtime.error('--limit must be a positive integer or "all", for example --limit 25.');
-    runtime.exit(1);
-    return;
+    const message = '--limit must be a positive integer or "all", for example --limit 25.';
+    throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
   }
 
   const classifyCliProvider = prepareCliProviderClassifier(cfg);
   const activeSince = activeMinutes === undefined ? undefined : Date.now() - activeMinutes * 60_000;
-  const sessionEntries = targets.flatMap((target) => {
-    return listSessionEntriesReadOnly({ agentId: target.agentId, storePath: target.storePath })
+  const allEntries = targets.flatMap((target) => {
+    return listSessionEntriesReadOnly({
+      agentId: target.agentId,
+      storePath: target.storePath,
+      projection: "list",
+    })
       .filter(
         ({ entry }) =>
           activeSince === undefined ||
           (typeof entry.updatedAt === "number" && entry.updatedAt >= activeSince),
       )
-      .map(({ sessionKey, entry }) => {
-        const row = toSessionDisplayRow(sessionKey, entry);
-        const agentId = parseAgentSessionKey(row.key)?.agentId ?? target.agentId;
-        const acpSessionKey = resolveStoredSessionKeyForAgentStore({
-          cfg,
-          agentId,
-          sessionKey: row.key,
-        });
-        return { acpSessionKey, agentId, entry, row };
-      });
+      .map(({ sessionKey, entry }) => ({ agentId: target.agentId, entry, sessionKey }));
   });
+  const totalCount = allEntries.length;
+  const sessionEntries = selectNewestSessionRows(allEntries, limit).map(
+    ({ agentId: storeAgentId, entry, sessionKey }) => {
+      const row = toSessionDisplayRow(sessionKey, entry);
+      const agentId = parseAgentSessionKey(row.key)?.agentId ?? storeAgentId;
+      const acpSessionKey = resolveStoredSessionKeyForAgentStore({
+        cfg,
+        agentId,
+        sessionKey: row.key,
+      });
+      return { acpSessionKey, agentId, entry, row };
+    },
+  );
   const acpSessionMetaByEntry = readAcpSessionMetaBatch({
-    entries: sessionEntries.map(({ acpSessionKey, entry }) => ({
+    cfg,
+    entries: sessionEntries.map(({ acpSessionKey, agentId, entry }) => ({
       sessionKey: acpSessionKey,
+      agentId,
       entry,
     })),
   });
-  const allRows = sessionEntries.map(({ acpSessionKey, agentId, entry, row }) => {
+  const rows = sessionEntries.map(({ acpSessionKey, agentId, entry, row }) => {
     const acpMeta = acpSessionMetaByEntry.get(entry);
     const acpRuntime = acpMeta != null;
     // ACP rows need stored-key metadata before model/runtime resolution so
@@ -449,8 +439,6 @@ export async function sessionsCommand(
       }),
     });
   });
-  const totalCount = allRows.length;
-  const rows = selectNewestSessionRows(allRows, limit);
   const hasMore = rows.length < totalCount;
 
   if (opts.json) {
@@ -511,38 +499,36 @@ export async function sessionsCommand(
 
   const rich = isRich();
   const showAgentColumn = aggregateAgents || targets.length > 1;
-  const header = [
-    ...(showAgentColumn ? ["Agent".padEnd(AGENT_PAD)] : []),
-    "Kind".padEnd(KIND_PAD),
-    "Key".padEnd(SESSION_KEY_PAD),
-    "Age".padEnd(SESSION_AGE_PAD),
-    "Model".padEnd(SESSION_MODEL_PAD),
-    "Runtime".padEnd(RUNTIME_PAD),
-    "Tokens (ctx %)".padEnd(TOKENS_PAD),
-    "Flags",
-  ].join(" ");
-
-  runtime.log(rich ? theme.heading(header) : header);
-
-  for (const row of rows) {
-    const model = row.displayModelRef.model;
-    const contextTokens = row.contextTokens ?? configContextTokens;
-    const total = resolveSessionTotalTokens(row);
-    const freshTotal = resolveFreshSessionTotalTokens(row);
-
-    const line = [
-      ...(showAgentColumn
-        ? [rich ? theme.accentBright(row.agentId.padEnd(AGENT_PAD)) : row.agentId.padEnd(AGENT_PAD)]
-        : []),
-      formatKindCell(row.kind, rich),
-      formatSessionKeyCell(row.key, rich),
-      formatSessionAgeCell(row.updatedAt, rich),
-      formatSessionModelCell(model, rich),
-      formatRuntimeCell(row.runtimeLabel, rich),
-      formatTokensCell(total, freshTotal, contextTokens ?? null, rich),
-      formatSessionFlagsCell(row, rich),
-    ].join(" ");
-
-    runtime.log(line.trimEnd());
-  }
+  runtime.log(
+    renderTable({
+      width: getTerminalTableWidth(),
+      columns: [
+        ...(showAgentColumn ? [{ key: "agent", header: "Agent" }] : []),
+        { key: "kind", header: "Kind" },
+        { key: "key", header: "Key" },
+        { key: "age", header: "Age" },
+        { key: "model", header: "Model" },
+        { key: "runtime", header: "Runtime" },
+        { key: "tokens", header: "Tokens (ctx %)" },
+        { key: "flags", header: "Flags", flex: true },
+      ].map((column) =>
+        Object.assign(column, { header: colorize(rich, theme.heading, column.header) }),
+      ),
+      rows: rows.map((row) => ({
+        agent: colorize(rich, theme.accentBright, sanitizeTerminalText(row.agentId)),
+        kind: formatKindCell(row.kind, rich),
+        key: formatSessionKeyCell(row.key, rich),
+        age: formatSessionAgeCell(row.updatedAt, rich),
+        model: formatSessionModelCell(row.displayModelRef.model, rich),
+        runtime: colorize(rich, theme.info, sanitizeTerminalText(row.runtimeLabel)),
+        tokens: formatTokensCell(
+          resolveSessionTotalTokens(row),
+          resolveFreshSessionTotalTokens(row),
+          row.contextTokens ?? configContextTokens,
+          rich,
+        ),
+        flags: formatSessionFlagsCell(row, rich),
+      })),
+    }).trimEnd(),
+  );
 }

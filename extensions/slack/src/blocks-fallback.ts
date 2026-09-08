@@ -14,11 +14,13 @@ import {
   renderSlackDataVisualizationMrkdwnFallbackText,
 } from "./data-visualization.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
+import { renderSlackRichText } from "./rich-text.js";
 
 type SlackNativeDataFallbackFormat = "plain" | "mrkdwn-safe";
 
 type RenderSlackBlockFallbackOptions = {
   nativeDataFormat?: SlackNativeDataFallbackFormat;
+  nativeReferenceFormat?: SlackNativeDataFallbackFormat;
 };
 
 type SlackBlockLike = {
@@ -29,19 +31,6 @@ type SlackBlockLike = {
   elements?: unknown;
   fields?: unknown;
   accessory?: unknown;
-};
-
-type SlackRichTextElement = {
-  type?: unknown;
-  text?: unknown;
-  url?: unknown;
-  user_id?: unknown;
-  channel_id?: unknown;
-  usergroup_id?: unknown;
-  name?: unknown;
-  range?: unknown;
-  fallback?: unknown;
-  elements?: unknown;
 };
 
 const SLACK_SELECT_ELEMENT_TYPES = new Set([
@@ -79,65 +68,6 @@ function readTextValue(
   options: RenderSlackBlockFallbackOptions = {},
 ): string | undefined {
   return normalizeOptionalString(value) ?? readTextObject(value, options);
-}
-
-function renderSlackRichTextLeaf(element: SlackRichTextElement): string {
-  switch (element.type) {
-    case "text":
-      return typeof element.text === "string" ? escapeSlackMrkdwn(element.text) : "";
-    case "link":
-      return escapeSlackMrkdwn(
-        normalizeOptionalString(element.text) ?? normalizeOptionalString(element.url) ?? "",
-      );
-    case "user": {
-      const userId = normalizeOptionalString(element.user_id);
-      return userId ? escapeSlackMrkdwn(`<@${userId}>`) : "";
-    }
-    case "channel": {
-      const channelId = normalizeOptionalString(element.channel_id);
-      return channelId ? escapeSlackMrkdwn(`<#${channelId}>`) : "";
-    }
-    case "usergroup": {
-      const usergroupId = normalizeOptionalString(element.usergroup_id);
-      return usergroupId ? escapeSlackMrkdwn(`<!subteam^${usergroupId}>`) : "";
-    }
-    case "broadcast": {
-      const range = normalizeOptionalString(element.range);
-      return range ? escapeSlackMrkdwn(`<!${range}>`) : "";
-    }
-    case "emoji": {
-      const name = normalizeOptionalString(element.name);
-      return name ? `:${name}:` : "";
-    }
-    case "date":
-      return escapeSlackMrkdwn(normalizeOptionalString(element.fallback) ?? "");
-    default:
-      return "";
-  }
-}
-
-function renderSlackRichTextElement(value: unknown): string {
-  const element = asOptionalRecord(value) as SlackRichTextElement | undefined;
-  if (!element) {
-    return "";
-  }
-  switch (element.type) {
-    case "rich_text_section":
-    case "rich_text_preformatted":
-    case "rich_text_quote":
-      return renderSlackRichTextElements(element.elements, "");
-    case "rich_text_list":
-      return renderSlackRichTextElements(element.elements, "\n");
-    default:
-      return renderSlackRichTextLeaf(element);
-  }
-}
-
-function renderSlackRichTextElements(value: unknown, separator: string): string {
-  if (!Array.isArray(value)) {
-    return "";
-  }
-  return value.map(renderSlackRichTextElement).filter(Boolean).join(separator);
 }
 
 function readImageText(block: SlackBlockLike): string | undefined {
@@ -235,7 +165,15 @@ export function renderSlackBlockFallbackText(
   }
   switch (block.type) {
     case "rich_text":
-      return normalizeOptionalString(renderSlackRichTextElements(block.elements, "\n"));
+      // Inbound references must survive for name resolution; literal text stays escaped
+      // so token-shaped text cannot become a native mention. Outbound remains escaped.
+      return normalizeOptionalString(
+        renderSlackRichText(
+          block.elements,
+          options.nativeReferenceFormat === "plain" ? "native-reference" : "escaped",
+          "\n",
+        ),
+      );
     case "header":
       return readTextObject(block.text, options);
     case "section":

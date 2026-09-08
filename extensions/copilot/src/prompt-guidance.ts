@@ -1,10 +1,10 @@
 import {
+  buildCredentialSafetyPrompt,
   buildDelegationGuidanceSection,
   buildHarnessVisibleReplyGuidance,
   buildSkillWorkshopPromptSection,
   resolveMainSessionDelegationMode,
   SKILL_WORKSHOP_TOOL_NAME,
-  TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   normalizeUniqueStringEntries,
@@ -20,6 +20,7 @@ export function buildCopilotPromptGuidance(params: {
   attempt: AttemptParamsLike;
   callableToolNames: Iterable<string>;
   workspaceBootstrapInstructions?: string;
+  requireExplicitMessageTarget?: boolean;
 }): string | undefined {
   if (isRawCopilotModelRun(params.attempt)) {
     return undefined;
@@ -53,8 +54,11 @@ export function buildCopilotPromptGuidance(params: {
     buildHarnessVisibleReplyGuidance({
       sourceReplyDeliveryMode: params.attempt.sourceReplyDeliveryMode,
       messageToolAvailable: callableTools.has("message"),
+      requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     }),
-    TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
+    buildCredentialSafetyPrompt(
+      params.attempt.disableTools !== true && callableTools.has("secrets") ? "secrets" : undefined,
+    ),
     params.workspaceBootstrapInstructions?.trim(),
     extraSystemPrompt
       ? `${isMinimal ? "## Subagent Context" : "## Conversation Context"}\n${extraSystemPrompt}`

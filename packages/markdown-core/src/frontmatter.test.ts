@@ -94,6 +94,101 @@ description: Use anime style IMPORTANT: Must be kawaii
     expect(result.issues).toEqual([]);
   });
 
+  it("normalizes colon-rich free-form fields other than description", () => {
+    const content = `---
+name: sample-skill
+read_when: signals: user announcing a conversion task
+---`;
+    const result = parseFrontmatterBlockResult(content);
+
+    expect(result.frontmatter.read_when).toBe("signals: user announcing a conversion task");
+    expect(result.issues).toEqual([]);
+  });
+
+  it("normalizes multiple colon-rich pure-text fields in one block", () => {
+    const content = `---
+name: sample-skill
+read_when: signals: user announcing a conversion task
+summary: handles formats: pdf and docx
+---`;
+    const result = parseFrontmatterBlockResult(content);
+
+    expect(result.frontmatter.read_when).toBe("signals: user announcing a conversion task");
+    expect(result.frontmatter.summary).toBe("handles formats: pdf and docx");
+    expect(result.issues).toEqual([]);
+  });
+
+  it("keeps structured fields strict when a pure-text field is normalized", () => {
+    const result = parseFrontmatterBlockResult(`---
+name: sample-skill
+read_when: signals: user announcing a conversion task
+metadata: owner: value
+---`);
+
+    expect(result.issues[0]).toMatchObject({ code: "BLOCK_AS_IMPLICIT_KEY" });
+  });
+
+  it("preserves valid structured siblings when pure-text fields are normalized", () => {
+    const result = parseFrontmatterBlockResult(`---
+name: sample-skill
+read_when: signals: user announcing a conversion task
+metadata:
+  openclaw:
+    emoji: beaker
+---`);
+
+    expect(result.frontmatter.metadata).toBe('{"openclaw":{"emoji":"beaker"}}');
+    expect(result.issues).toEqual([]);
+  });
+
+  it("does not rewrite valid sibling values when recovering a malformed field", () => {
+    const content = `---
+name: sample-skill
+description: text # note
+read_when: signals: user announcing a conversion task
+---`;
+    const result = parseFrontmatterBlockResult(content);
+
+    expect(result.frontmatter.description).toBe("text");
+    expect(result.frontmatter.read_when).toBe("signals: user announcing a conversion task");
+    expect(result.issues).toEqual([]);
+  });
+
+  it("does not rewrite valid quoted sibling scalars with escape sequences", () => {
+    const content = `---
+name: sample-skill
+description: "line\\n: detail"
+read_when: signals: user announcing a conversion task
+---`;
+    const result = parseFrontmatterBlockResult(content);
+
+    expect(result.frontmatter.description).toBe("line\n: detail");
+    expect(result.frontmatter.read_when).toBe("signals: user announcing a conversion task");
+    expect(result.issues).toEqual([]);
+  });
+
+  it("recovers quoted freeform keys with colon-rich values", () => {
+    const content = `---
+name: sample-skill
+"description": signals: user announcing a conversion task
+---`;
+    const result = parseFrontmatterBlockResult(content);
+
+    expect(result.frontmatter.description).toBe("signals: user announcing a conversion task");
+    expect(result.issues).toEqual([]);
+  });
+
+  it("recovers single-quoted freeform keys with colon-rich values", () => {
+    const content = `---
+name: sample-skill
+'read_when': signals: user announcing a conversion task
+---`;
+    const result = parseFrontmatterBlockResult(content);
+
+    expect(result.frontmatter.read_when).toBe("signals: user announcing a conversion task");
+    expect(result.issues).toEqual([]);
+  });
+
   it("leaves valid YAML description semantics untouched", () => {
     expect(
       parseFrontmatterBlock(`---

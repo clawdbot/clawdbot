@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import * as preparedModelCatalog from "../../agents/prepared-model-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -79,6 +80,12 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [{ id: "claude-cli", modelProvider: "anthropic" }] as never,
+      resolvePluginSetupCliBackend: () => {
+        throw new Error("native command attempted synchronous CLI setup discovery");
+      },
+    });
     vi.spyOn(preparedModelCatalog, "loadPreparedModelCatalogSnapshot").mockResolvedValue({
       entries: [
         {
@@ -107,6 +114,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     body: string,
     config?: OpenClawConfig,
     response: { shouldContinue: boolean; reply?: { text: string } } = { shouldContinue: true },
+    preparedCatalog?: ModelCatalogSnapshot,
   ) {
     handleCommandsMock.mockResolvedValue(response);
     const commandName = body.slice(1).split(/\s+/, 1)[0] ?? "";
@@ -144,6 +152,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       agentCfg: config?.agents?.defaults,
       commandAuthorized: true,
       typing,
+      preparedModelCatalog: preparedCatalog,
     });
 
     return { result, typing, storePath: resolvedConfig.session?.store };
@@ -254,6 +263,42 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       expect(sessionEntry).toMatchObject({ agentRuntimeOverride: "codex" });
     },
   );
+
+  it("applies native model selections using the admitted catalog without rediscovery", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+    const storePath = path.join(tempDirs.make("openclaw-native-prepared-model-"), "sessions.json");
+    vi.mocked(preparedModelCatalog.loadPreparedModelCatalogSnapshot).mockRejectedValue(
+      new Error("native selection must not rediscover the prepared catalog"),
+    );
+    const { result } = await resolveNativeDirectiveCommand(
+      "/model ollama/picker-secondary -s",
+      { session: { store: storePath } },
+      { shouldContinue: true },
+      {
+        entries: [
+          {
+            provider: "ollama",
+            id: "picker-secondary",
+            name: "Picker secondary",
+            api: "ollama",
+            baseUrl: "http://127.0.0.1:11434",
+            reasoning: false,
+            contextWindow: 32768,
+          },
+        ],
+        routeVariants: [],
+      },
+    );
+
+    expect(result).toMatchObject({
+      handled: true,
+      reply: { text: expect.stringContaining("ollama/picker-secondary") },
+    });
+    expect(
+      loadExactSessionEntry({ sessionKey: "agent:main:telegram:123", storePath })?.entry,
+    ).toMatchObject({ providerOverride: "ollama", modelOverride: "picker-secondary" });
+    expect(preparedModelCatalog.loadPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
+  });
 
   it("marks native /compact terminal replies for delivery under message_tool_only (#90185)", async () => {
     const reply = {
@@ -429,15 +474,6 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         ("targetAgentId" in testCase ? testCase.targetAgentId : undefined) ?? "main";
       const resolvedModel = "resolvedModel" in testCase ? testCase.resolvedModel : undefined;
       const targetSessionKey = `agent:${targetAgentId}:main`;
-      if ("hasBoundCli" in testCase) {
-        cliBackendsTesting.setDepsForTest({
-          resolveRuntimeCliBackends: () =>
-            [{ id: "claude-cli", modelProvider: "anthropic" }] as never,
-          resolvePluginSetupCliBackend: () => {
-            throw new Error("approved bound CLI attempted synchronous setup discovery");
-          },
-        });
-      }
       const storePath = path.join(tempDirs.make("openclaw-native-source-"), "sessions.json");
       await replaceSessionEntry(
         { agentId: targetAgentId, sessionKey: targetSessionKey, storePath },
@@ -960,13 +996,15 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     } as SessionEntry);
     handleCommandsMock.mockImplementationOnce(async (params: { sessionEntry?: unknown }) => {
       const persisted = loadSessionEntry({ sessionKey, storePath });
-      expect(params.sessionEntry).toMatchObject({
+      const initialized = {
         sessionId: "session-1",
+        sessionStartedAt: 100,
         updatedAt: 100,
         lastInteractionAt: 100,
         channel: "telegram",
-      });
-      expect(persisted).toMatchObject(params.sessionEntry as object);
+      };
+      expect(params.sessionEntry).toMatchObject(initialized);
+      expect(persisted).toMatchObject(initialized);
       return { shouldContinue: false, reply: { text: "ok" } };
     });
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(100);

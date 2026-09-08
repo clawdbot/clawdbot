@@ -15,10 +15,11 @@ provider or agent runtime in three different ways.
 
 <Tabs>
   <Tab title="Built-in provider (github-copilot)">
-    Use the native device-login flow to obtain and store a GitHub token. When
-    OpenClaw runs, it validates Copilot access and resolves the account-specific
-    Copilot API endpoint. This is the **default** and simplest path because it does
-    not require VS Code.
+    Use the native device-login flow to obtain a GitHub token. By default,
+    OpenClaw puts the token in its protected local secret store and saves only a
+    `tokenRef` in the auth profile. When OpenClaw runs, it validates Copilot access
+    and resolves the account-specific Copilot API endpoint. This is the **default**
+    and simplest path because it does not require VS Code.
 
     <Steps>
       <Step title="Run the login command">
@@ -169,6 +170,36 @@ in against public `github.com`), so routing stays correct even after the
 environment variable is unset.
 </Note>
 
+### Tenant request identity
+
+OpenClaw uses the `copilot-developer-cli` request identity by default, including
+for data-residency tenants. First confirm that your enterprise permits Copilot
+CLI and the selected model. A `*.ghe.com` hostname does not imply a different
+integration policy.
+
+If your tenant administrator or GitHub support requires a different identity,
+use the existing provider header setting:
+
+```json5
+{
+  models: {
+    providers: {
+      "github-copilot": {
+        params: { githubDomain: "your-org.ghe.com" },
+        headers: { "Copilot-Integration-Id": "vscode-chat" },
+      },
+    },
+  },
+}
+```
+
+The provider identity applies to model selection during setup, live model
+discovery, inference, and embeddings. Header names are case-insensitive; `request.headers` takes precedence
+over provider `headers`. Embedding-specific `memory.search.remote.headers` still
+takes precedence for embedding discovery and requests. Unrelated provider headers
+are not forwarded to the catalog or embedding endpoints. Changing the identity
+does not grant access to models or clients disabled by your organization's policy.
+
 ## Optional flags
 
 | Command                                                                | Flag            | Description                                          |
@@ -200,7 +231,7 @@ You can also omit `--auth-choice`; passing `--github-copilot-token` infers the
 GitHub Copilot provider auth choice. If the flag is omitted, onboarding falls
 back to `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, then `GITHUB_TOKEN`. Use
 `--secret-input-mode ref` with `COPILOT_GITHUB_TOKEN` set to store an env-backed
-`tokenRef` instead of plaintext in `auth-profiles.json`.
+`tokenRef` instead of plaintext in the auth profile store.
 
 Fresh non-interactive setup validates the token before saving it. When setup
 must choose a default, it also checks the live Copilot model catalog. OpenClaw
@@ -237,10 +268,10 @@ configured default model is never replaced.
     (e.g. 400k for the gpt-5.x series, 1M for the internal
     `claude-opus-*-1m` variants).
 
-    The bundled static catalog stays as the visible fallback when discovery
-    is disabled, the user has no GitHub auth profile, runtime authentication
-    fails, or the `/models` HTTPS call errors. To opt out and rely entirely
-    on the static manifest catalog (offline / air-gapped scenarios):
+    Failed refreshes report the failure and retain the last successful inventory,
+    or bundled models before the first success. A successful empty response clears
+    discovered models. Disabled discovery or missing credentials makes no live
+    request. To use only bundled models (offline / air-gapped scenarios):
 
     ```json5
     {
@@ -259,8 +290,20 @@ configured default model is never replaced.
   <Accordion title="Transport selection">
     Claude model IDs use the Anthropic Messages transport automatically.
     Gemini models use the OpenAI Chat Completions transport; GPT and o-series
-    models keep the OpenAI Responses transport. OpenClaw selects the correct
-    transport based on the model ref.
+    models keep the OpenAI Responses transport. The bundled static catalog
+    includes these transports and request compatibility settings, so Gemini
+    keeps using Chat Completions when live discovery is disabled or unavailable.
+  </Accordion>
+
+  <Accordion title="Thinking levels">
+    Use `/think xhigh` or `/think max` when the selected model exposes that
+    level. Copilot's live catalog determines the supported efforts for your
+    account, and OpenClaw preserves those efforts in Responses requests.
+    When a Responses model starts its native effort range at `low`, `minimal`
+    maps to `low` instead of sending an unsupported value.
+    Explicit live limits take precedence over the bundled catalog. Gemini's
+    Chat Completions transport does not expose `max`.
+    See [Thinking levels](/tools/thinking) for session and per-message controls.
   </Accordion>
 
   <Accordion title="Request compatibility">
@@ -280,18 +323,35 @@ configured default model is never replaced.
     | 3        | `GITHUB_TOKEN`        | Standard GitHub token (lowest)   |
 
     When multiple variables are set, OpenClaw uses the highest-priority one.
-    The device-login flow (`openclaw models auth login-github-copilot`) stores
-    its token in the auth profile store and takes precedence over all environment
-    variables.
+    The device-login flow (`openclaw models auth login-github-copilot`) stores a
+    protected-store `tokenRef` in the auth profile and takes precedence over all
+    environment variables.
 
   </Accordion>
 
   <Accordion title="Token storage">
-    The login stores a GitHub token in the auth profile store (profile id
-    `github-copilot:github`). At runtime, OpenClaw validates Copilot access,
-    resolves the account-specific API endpoint, and uses the stored GitHub token
+    By default, device login stores the GitHub token in OpenClaw's protected local
+    secret store and writes only a `tokenRef` to the auth profile (profile id
+    `github-copilot:github`). The built-in store does not require a configured
+    external secret provider. If OpenClaw cannot write the store, login stops
+    before replacing the auth profile and reports that the state-directory or
+    database permissions need repair.
+
+    Interactive onboarding honors an explicit `--secret-input-mode plaintext`
+    choice for compatibility. That mode stores the token inline, reports the
+    choice, and remains visible to `openclaw secrets audit --check`.
+
+    The protected store is write-only through OpenClaw's user-facing secret APIs,
+    but it is not encrypted at rest; its SQLite file relies on state-directory
+    permissions. At runtime, OpenClaw resolves the reference, validates Copilot
+    access, resolves the account-specific API endpoint, and uses the GitHub token
     for Copilot requests. You do not need to manage runtime authentication
     manually.
+
+    Usage checks also use the selected profile's GitHub token. For OAuth profiles
+    that carry a tenant domain, usage follows that domain before the provider's
+    configured domain. `COPILOT_GITHUB_DOMAIN` still takes precedence.
+
   </Accordion>
 </AccordionGroup>
 
@@ -323,13 +383,16 @@ the Copilot API and picks the best one automatically.
 
 1. OpenClaw resolves your GitHub token (from env vars or auth profile).
 2. Validates Copilot access and resolves the account-specific API endpoint.
-3. Queries the Copilot `/models` endpoint to discover available embedding models.
+3. Queries the Copilot `/models` endpoint to discover available embedding models,
+   with a 10-second deadline that includes reading the response body.
 4. Picks the best model (preference order: `text-embedding-3-small`,
    `text-embedding-3-large`, `text-embedding-ada-002`).
 5. Sends embedding requests to the Copilot `/embeddings` endpoint.
 
-Model availability depends on your GitHub plan. If no embedding models are
-available, OpenClaw skips Copilot and tries the next provider.
+Model availability depends on your GitHub plan. If discovery fails or no
+embedding models are available, OpenClaw uses `memory.search.fallback` only
+when you explicitly configure another provider. Otherwise, setup reports the
+error instead of silently selecting a different provider.
 
 ## Related
 

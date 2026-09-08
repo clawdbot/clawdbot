@@ -18,17 +18,17 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { isMap, isScalar, isSeq, type Pair } from "yaml";
 import type { MdAst } from "./ast.js";
-import { setMdOcPath } from "./edit.js";
+import { rebuildMdRaw, setMdOcPath } from "./edit.js";
 import type { JsoncAst, JsoncEntry, JsoncValue } from "./jsonc/ast.js";
 import { insertJsoncOcPath, setJsoncOcPath } from "./jsonc/edit.js";
 import { resolveJsoncOcPath } from "./jsonc/resolve.js";
 import type { JsonlAst } from "./jsonl/ast.js";
 import { appendJsonlOcPath as appendJsonlLine, setJsonlOcPath } from "./jsonl/edit.js";
-import { emitJsonl } from "./jsonl/emit.js";
 import { resolveJsonlOcPath } from "./jsonl/resolve.js";
 import type { OcPath } from "./oc-path.js";
 import { formatOcPath, isPattern, OcPathError, parseArrayIndexSegment } from "./oc-path.js";
 import { resolveMdOcPath } from "./resolve.js";
+import { guardSentinel } from "./sentinel.js";
 import type { YamlAst } from "./yaml/ast.js";
 import { insertYamlOcPath, setYamlOcPath } from "./yaml/edit.js";
 import { resolveYamlOcPath } from "./yaml/resolve.js";
@@ -437,6 +437,7 @@ export function setOcPath(
   if (insertion !== null) {
     switch (ast.kind) {
       case "md":
+        guardSentinel(value, () => formatOcPath(path));
         return setMdInsertion(ast, insertion, value);
       case "jsonc":
         return setJsoncInsertion(ast, insertion, value);
@@ -843,44 +844,6 @@ function jsonToJsoncValue(v: unknown): JsoncValue | null {
   }
   // JSON.parse never produces undefined / function / symbol.
   throw new Error(`unsupported JSON value type: ${typeof v}`);
-}
-
-function rebuildMdRaw(ast: MdAst): MdAst {
-  const parts: string[] = [];
-  if (ast.frontmatter.length > 0) {
-    parts.push("---");
-    for (const fm of ast.frontmatter) {
-      parts.push(`${fm.key}: ${formatFrontmatterValue(fm.value)}`);
-    }
-    parts.push("---");
-  }
-  if (ast.preamble.length > 0) {
-    if (parts.length > 0) {
-      parts.push("");
-    }
-    parts.push(ast.preamble);
-  }
-  for (const block of ast.blocks) {
-    if (parts.length > 0) {
-      parts.push("");
-    }
-    parts.push(`## ${block.heading}`);
-    if (block.bodyText.length > 0) {
-      parts.push(block.bodyText);
-    }
-  }
-  void emitJsonl;
-  return { ...ast, raw: parts.join("\n") };
-}
-
-function formatFrontmatterValue(value: string): string {
-  if (value.length === 0) {
-    return '""';
-  }
-  if (/[:#&*?|<>=!%@`,[\]{}\r\n]/.test(value)) {
-    return JSON.stringify(value);
-  }
-  return value;
 }
 
 function slugifyHeading(s: string): string {

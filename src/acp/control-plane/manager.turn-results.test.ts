@@ -385,7 +385,7 @@ describe("AcpSessionManager turn results", () => {
           status: "failed" as const,
           error: {
             code: "ACP_TURN_FAILED",
-            message: "Codex ACP adapter exited before final output.",
+            message: "Codex ACP adapter timed out before final output.",
           },
         }),
         cancel: vi.fn(async () => {}),
@@ -439,7 +439,7 @@ describe("AcpSessionManager turn results", () => {
         }),
       ).rejects.toMatchObject({
         code: "ACP_TURN_FAILED",
-        message: "Codex ACP adapter exited before final output.",
+        message: "Codex ACP adapter timed out before final output.",
       });
 
       expect(runtimeState.runTurn).not.toHaveBeenCalled();
@@ -454,7 +454,9 @@ describe("AcpSessionManager turn results", () => {
         task: "Investigate and report back",
         status: "failed",
         progressSummary: "Vou mapear o fluxo real primeiro...",
-        error: "AcpRuntimeError [ACP_TURN_FAILED]: Codex ACP adapter exited before final output.",
+        terminalSummary: undefined,
+        error:
+          "AcpRuntimeError [ACP_TURN_FAILED]: Codex ACP adapter timed out before final output.",
       });
     });
   });
@@ -539,22 +541,24 @@ describe("AcpSessionManager turn results", () => {
     });
   });
 
-  it("keeps parented ACP turns successful when final output follows progress text", async () => {
+  it("classifies complete parented ACP output before truncating its progress summary", async () => {
     await withAcpManagerTaskStateDir(async () => {
       const runtimeState = createRuntime();
+      const completionChunks = [
+        "I'll run the unit tests against existing models and launch-argument hooks.",
+        "Targets are wired in. Next I'll run the unit tests on a booted simulator, then the UI smoke suite.",
+        "PinPoints now has a real XCTest unit-test target and a deterministic UI smoke suite. Product code was not changed.",
+      ];
       runtimeState.runtime.startTurn = vi.fn((input) => ({
         requestId: input.requestId,
         events: (async function* () {
-          yield {
-            type: "text_delta" as const,
-            stream: "output" as const,
-            text: "I'll inspect the repo now. ",
-          };
-          yield {
-            type: "text_delta" as const,
-            stream: "output" as const,
-            text: "The crash is a missing null check in src/foo.ts.",
-          };
+          for (const text of completionChunks) {
+            yield {
+              type: "text_delta" as const,
+              stream: "output" as const,
+              text,
+            };
+          }
         })(),
         result: Promise.resolve({
           status: "completed" as const,
@@ -577,7 +581,7 @@ describe("AcpSessionManager turn results", () => {
               sessionId: "child-1",
               updatedAt: Date.now(),
               spawnedBy: "agent:quant:telegram:quant:direct:822430204",
-              label: "Progress then final",
+              label: "Complete output",
             },
             acp: readySessionMeta(),
           };
@@ -602,19 +606,19 @@ describe("AcpSessionManager turn results", () => {
         sessionKey: "agent:codex:acp:child-1",
         text: "Inspect and report back",
         mode: "prompt",
-        requestId: "direct-parented-progress-then-final-run",
+        requestId: "direct-parented-complete-output-run",
       });
 
-      const record = requireTaskByRunId("direct-parented-progress-then-final-run");
+      const record = requireTaskByRunId("direct-parented-complete-output-run");
       expectRecordFields(record, {
         runtime: "acp",
         ownerKey: "agent:quant:telegram:quant:direct:822430204",
         scopeKind: "session",
         childSessionKey: "agent:codex:acp:child-1",
         status: "succeeded",
-        progressSummary:
-          "I'll inspect the repo now. The crash is a missing null check in src/foo.ts.",
       });
+      expect(record.progressSummary).toHaveLength(240);
+      expect(record.progressSummary).toMatch(/…$/);
       expect(record.terminalOutcome).toBeUndefined();
       expect(record.terminalSummary).toBeUndefined();
     });
@@ -774,13 +778,16 @@ describe("AcpSessionManager turn results", () => {
   it("marks completed parented ACP turns blocked when they only contain progress text", async () => {
     await withAcpManagerTaskStateDir(async () => {
       const runtimeState = createRuntime();
+      const progressOnly = "I'll inspect the repo, run the tests, and report back. "
+        .repeat(8)
+        .trim();
       runtimeState.runtime.startTurn = vi.fn((input) => ({
         requestId: input.requestId,
         events: (async function* () {
           yield {
             type: "text_delta" as const,
             stream: "output" as const,
-            text: "I'll inspect the repo now.",
+            text: progressOnly,
           };
         })(),
         result: Promise.resolve({
@@ -837,17 +844,94 @@ describe("AcpSessionManager turn results", () => {
       });
 
       expect(events).toEqual(["text_delta", "done"]);
-      expectRecordFields(requireTaskByRunId("direct-parented-progress-completed-run"), {
+      const record = requireTaskByRunId("direct-parented-progress-completed-run");
+      expectRecordFields(record, {
         runtime: "acp",
         ownerKey: "agent:quant:telegram:quant:direct:822430204",
         scopeKind: "session",
         childSessionKey: "agent:codex:acp:child-1",
         status: "succeeded",
-        progressSummary: "I'll inspect the repo now.",
         terminalOutcome: "blocked",
         terminalSummary:
           "Required completion ended with progress-only text, not a final deliverable.",
       });
+      expect(record.progressSummary).toHaveLength(240);
+      expect(record.progressSummary).toMatch(/…$/);
+    });
+  });
+
+  it.each([
+    {
+      label: "accepts exact-limit evidence when a surrogate pair spans deltas",
+      requestId: "direct-parented-completion-exact-limit-run",
+      suffix: "",
+      overflowed: false,
+    },
+    {
+      label: "blocks parented ACP completion evidence one byte over the verification limit",
+      requestId: "direct-parented-completion-overflow-run",
+      suffix: "x",
+      overflowed: true,
+    },
+  ])("$label", async ({ requestId, suffix, overflowed }) => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      const prefix = "Final report: ";
+      const filler = "x".repeat(100 * 1024 - Buffer.byteLength(prefix, "utf8") - 4);
+      runtimeState.runtime.startTurn = vi.fn((input) => ({
+        requestId: input.requestId,
+        events: (async function* () {
+          yield {
+            type: "text_delta" as const,
+            stream: "output" as const,
+            text: `${prefix}${filler}\ud83d`,
+          };
+          yield {
+            type: "text_delta" as const,
+            stream: "output" as const,
+            text: `\ude00${suffix}`,
+          };
+        })(),
+        result: Promise.resolve({
+          status: "completed" as const,
+          stopReason: "end_turn",
+        }),
+        cancel: vi.fn(async () => {}),
+        closeStream: vi.fn(async () => {}),
+      }));
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      mockParentedAcpSessionEntries({
+        childSessionKey: "agent:codex:acp:child-1",
+        parentSessionKey: "agent:main:main",
+      });
+
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:child-1",
+        text: "Produce a final report",
+        mode: "prompt",
+        requestId,
+      });
+
+      const record = requireTaskByRunId(requestId);
+      expectRecordFields(record, {
+        ownerKey: "agent:main:main",
+        childSessionKey: "agent:codex:acp:child-1",
+        status: "succeeded",
+      });
+      expect(record.terminalOutcome).toBe(overflowed ? "blocked" : undefined);
+      expect(record.terminalSummary).toBe(
+        overflowed
+          ? "Required completion output exceeded the 100 KB verification limit; inspect the child session for the final deliverable."
+          : undefined,
+      );
+      expect(record.progressSummary).toHaveLength(240);
+      expect(record.progressSummary).toMatch(/…$/);
     });
   });
 
@@ -1020,7 +1104,11 @@ describe("AcpSessionManager turn results", () => {
       runtimeState.runtime.startTurn = vi.fn((input) => ({
         requestId: input.requestId,
         events: (async function* () {
-          yield { type: "text_delta" as const, stream: "output" as const, text: "stopping" };
+          yield {
+            type: "text_delta" as const,
+            stream: "output" as const,
+            text: "I'll inspect the repo, run the tests, and report back.",
+          };
         })(),
         result: Promise.resolve({
           status: "cancelled" as const,
@@ -1055,11 +1143,15 @@ describe("AcpSessionManager turn results", () => {
       expect(closeStream).toHaveBeenCalledWith({ reason: "turn-result-cancelled" });
       expect(events.map((event) => event.type)).toEqual(["text_delta", "done"]);
       expect(events.at(-1)).toEqual({ type: "done", status: "cancelled" });
-      expectRecordFields(requireTaskByRunId("run-1"), {
+      const record = requireTaskByRunId("run-1");
+      expectRecordFields(record, {
         ownerKey: "agent:main:main",
         childSessionKey: "agent:codex:acp:child-1",
         status: "cancelled",
+        progressSummary: "I'll inspect the repo, run the tests, and report back.",
       });
+      expect(record.terminalOutcome).toBeUndefined();
+      expect(record.terminalSummary).toBeUndefined();
       const states = extractStatesFromUpserts();
       expect(states).toContain("running");
       expect(states).toContain("idle");
@@ -1067,8 +1159,12 @@ describe("AcpSessionManager turn results", () => {
     });
   });
 
-  it("fails immediately when startTurn events fail before terminal result settles", async () => {
+  it("cancels a failed startTurn event stream before surfacing its error", async () => {
     const runtimeState = createRuntime();
+    const result = createDeferred<{ status: "cancelled" }>();
+    const cancel = vi.fn(async () => {
+      result.resolve({ status: "cancelled" });
+    });
     const closeStream = vi.fn(async () => {});
     runtimeState.runtime.startTurn = vi.fn((input) => ({
       requestId: input.requestId,
@@ -1076,8 +1172,8 @@ describe("AcpSessionManager turn results", () => {
         yield { type: "text_delta" as const, stream: "output" as const, text: "partial" };
         throw new AcpRuntimeError("ACP_TURN_FAILED", "event stream disconnected");
       })(),
-      result: new Promise<never>(() => {}),
-      cancel: vi.fn(async () => {}),
+      result: result.promise,
+      cancel,
       closeStream,
     }));
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
@@ -1104,6 +1200,7 @@ describe("AcpSessionManager turn results", () => {
       code: "ACP_TURN_FAILED",
       message: "event stream disconnected",
     });
+    expect(cancel).toHaveBeenCalledOnce();
     expect(closeStream).toHaveBeenCalledWith({ reason: "turn-events-error" });
   });
 
@@ -1395,15 +1492,38 @@ describe("AcpSessionManager turn results", () => {
   }
 
   function expectFreshRetry(scenario: ReturnType<typeof setupStaleResumeScenario>) {
-    expect(scenario.runtimeState.prepareFreshSession).toHaveBeenCalledWith({
+    const pendingHandle = {
       sessionKey: scenario.sessionKey,
-    });
+      agentId: "claude",
+      backend: "acpx",
+      runtimeSessionName: `${scenario.sessionKey}:persistent:runtime`,
+      cwd: undefined,
+      acpxRecordId: undefined,
+    };
+    expect(scenario.runtimeState.prepareFreshSession.mock.calls).toEqual([
+      [
+        {
+          sessionKey: scenario.sessionKey,
+          agentId: "claude",
+          persistedHandle: { ...pendingHandle, backendSessionId: "acpx-sid-stale" },
+        },
+      ],
+      [
+        {
+          sessionKey: scenario.sessionKey,
+          agentId: "claude",
+          persistedHandle: pendingHandle,
+        },
+      ],
+    ]);
     expect(scenario.runtimeState.ensureSession).toHaveBeenCalledTimes(2);
     expectRecordFields(mockCallArg(scenario.runtimeState.ensureSession), {
       sessionKey: scenario.sessionKey,
+      agentId: "claude",
       resumeSessionId: "acpx-sid-stale",
     });
     expect(mockCallArg(scenario.runtimeState.ensureSession, 1).resumeSessionId).toBeUndefined();
+    expect(mockCallArg(scenario.runtimeState.ensureSession, 1).agentId).toBe("claude");
     expect(scenario.getMeta().identity?.acpxSessionId).toBe("acpx-sid-fresh");
     expect(scenario.getMeta().identity?.state).toBe("resolved");
     const states = extractStatesFromUpserts();

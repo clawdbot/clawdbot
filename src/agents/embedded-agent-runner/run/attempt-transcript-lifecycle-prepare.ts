@@ -1,8 +1,10 @@
 /** Prepares the admitted writer context and teardown tracker for one attempt. */
 import {
+  getOwnedSessionTranscriptInitialWriter,
   type OwnedSessionTranscriptWriteContext,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { resolveAgentRunSessionTarget } from "../../run-session-target.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
@@ -19,8 +21,9 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
     | "sessionFile"
     | "sessionId"
     | "sessionKey"
+    | "sessionManager"
     | "sessionTarget"
-  >;
+  > & { admittedRunContext?: EmbeddedRunAttemptParams["admittedRunContext"] };
   externalAbortController: {
     arm: () => void;
     throwIfFiredAfterPrepCleanup: () => Promise<void>;
@@ -32,6 +35,11 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
   withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
 }> {
   const { attempt, externalAbortController } = input;
+  const initialWriter = getOwnedSessionTranscriptInitialWriter({
+    sessionFile: attempt.sessionFile,
+    sessionKey: attempt.sessionKey,
+    sessionTarget: attempt.sessionManager?.getSessionTarget() ?? attempt.sessionTarget,
+  });
   const sessionTarget = await resolveAgentRunSessionTarget({
     agentId: attempt.sessionTarget?.agentId,
     config: attempt.config,
@@ -42,6 +50,7 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
     sessionTarget: attempt.sessionTarget,
   });
   await externalAbortController.throwIfFiredAfterPrepCleanup();
+  initialWriter?.assertActive();
 
   const transcriptLifecycle = createEmbeddedAttemptTranscriptLifecycle({
     runId: attempt.runId,
@@ -56,10 +65,18 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
       ? { expectedWriterRunId: attempt.sessionTarget.expectedWriterRunId }
       : {}),
   };
+  const assertAdmittedActive = attempt.admittedRunContext
+    ? resolveAdmittedRunActiveAssertion(attempt.admittedRunContext, attempt.abortSignal)
+    : undefined;
   const ownedTranscriptWriteContext: OwnedSessionTranscriptWriteContext = {
     sessionFile: attempt.sessionFile,
     sessionKey: attempt.sessionKey,
     sessionTarget: fencedSessionTarget,
+    ...(initialWriter ? { initialWriter } : {}),
+    assertCommitAllowed: () => {
+      attempt.abortSignal?.throwIfAborted();
+      assertAdmittedActive?.();
+    },
     withTranscriptWrite: (operation) => transcriptLifecycle.withTranscriptWrite(operation),
   };
   const withOwnedTranscriptWrite: WithOwnedTranscriptWrite = (operation) =>

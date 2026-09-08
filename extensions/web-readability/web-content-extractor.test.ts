@@ -74,4 +74,14 @@ describe("web readability extractor", () => {
     });
     expect(requireReadabilityResult(result).text).toContain("Main content starts here");
   });
+
+  it("rejects excessively nested HTML before extraction", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const result = await extractor.extract({
+      html: `${"<section>".repeat(3001)}${SAMPLE_HTML}${"</section>".repeat(3001)}`,
+      url: "https://example.com/article",
+      extractMode: "text",
+    });
+    expect(result).toBeNull();
+  });
 });

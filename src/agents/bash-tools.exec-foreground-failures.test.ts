@@ -21,7 +21,6 @@ const supervisorMock = vi.hoisted(() => ({
   spawn: vi.fn<ProcessSupervisor["spawn"]>(),
   cancel: vi.fn<ProcessSupervisor["cancel"]>(),
   cancelScope: vi.fn<ProcessSupervisor["cancelScope"]>(),
-  getRecord: vi.fn<ProcessSupervisor["getRecord"]>(),
 }));
 
 vi.mock("../process/supervisor/index.js", () => ({
@@ -57,6 +56,7 @@ function requireFailedDetails(
 
 function mockSpawn(exit: Partial<RunExit> = {}) {
   supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
+    activity: { resultSettled: true, lastOutputAtMs: Date.now() },
     runId: input.runId ?? "call",
     pid: 1234,
     startedAtMs: Date.now(),
@@ -160,7 +160,6 @@ describe("exec foreground failures", () => {
     supervisorMock.spawn.mockReset();
     supervisorMock.cancel.mockReset();
     supervisorMock.cancelScope.mockReset();
-    supervisorMock.getRecord.mockReset();
     resetProcessRegistryForTests();
   });
 
@@ -454,6 +453,11 @@ describe("exec foreground failures", () => {
         containerName: "sandbox-workdir-test",
         workspaceDir,
         containerWorkdir: "/workspace",
+        buildExecSpec: async ({ command, workdir }) => ({
+          argv: ["docker", "exec", "-w", workdir ?? "/workspace", "sandbox-workdir-test", command],
+          env: {},
+          stdinMode: "pipe-closed",
+        }),
       },
     });
 

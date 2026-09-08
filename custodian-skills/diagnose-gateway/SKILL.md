@@ -10,13 +10,15 @@ This playbook is read-only: no config writes, no service restarts, no `doctor --
 ## Gather
 
 ```
-openclaw doctor --non-interactive
+openclaw doctor --lint
 openclaw gateway status --deep
 openclaw config validate
 openclaw channels status
 openclaw models status
 openclaw channels logs --channel <id>
 ```
+
+`doctor --lint` is read-only and can exit `1` for findings: read the report and continue the remaining checks. Do not substitute ordinary `doctor` or `doctor --non-interactive`; they can copy legacy config and migrate state without `--fix`.
 
 On managed installs, bounded recent logs: `./scripts/clawlog.sh` (repo checkout) or the log path printed at gateway startup (`/tmp/openclaw/openclaw-<date>.log` by default).
 
@@ -32,7 +34,7 @@ Correlate timestamps and identify the first owner-boundary failure.
 
 ## Mutate
 
-Nothing. This skill changes no state.
+Nothing. Do not change config, migrate state, or alter services. Diagnostic commands may still produce incidental logs or cache bookkeeping.
 
 ## Repair
 
@@ -44,13 +46,13 @@ Repeat the smallest read-only probe that exposes the condition and record its ou
 
 ```
 openclaw gateway status --deep
-openclaw channels status --deep
+openclaw channels status --probe
 ```
 
 If access, logs, or the gateway are unavailable, report that exact blocker rather than declaring a cause.
 
 ## Report
 
-Findings in causal order with evidence for each; current gateway/config/SecretRef/channel/port state; one recommended next skill or operator action. State explicitly that nothing was changed.
+Findings in causal order with evidence for each; current gateway/config/SecretRef/channel/port state; one recommended next skill or operator action. State explicitly that no config/service repairs or state migrations were performed.
 
 Further reference: https://docs.openclaw.ai/gateway/troubleshooting

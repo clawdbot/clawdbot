@@ -61,13 +61,46 @@ describe("preemptive precheck counts bashExecution and summary turns", () => {
     expect(precheckTokens).toBeGreaterThanOrEqual(realProviderTokens);
   });
 
-  it("drops a bash turn excluded from context", () => {
-    const excluded = {
-      ...(bashExecMessage() as unknown as Record<string, unknown>),
-      excludeFromContext: true,
-    } as unknown as AgentMessage;
+  it.each([
+    {
+      role: "bashExecution",
+      message: { ...bashExecMessage(), excludeFromContext: true } as AgentMessage,
+    },
+    {
+      role: "custom",
+      message: {
+        role: "custom",
+        customType: "display-note",
+        content: BIG_OUTPUT,
+        display: true,
+        excludeFromContext: true,
+        timestamp: 1,
+      } satisfies AgentMessage,
+    },
+  ])("drops excluded $role turns from token pressure", ({ message }) => {
+    expect(estimateLlmBoundaryTokenPressure({ messages: [message], prompt: "" })).toBeLessThan(50);
+    expect(
+      shouldPreemptivelyCompactBeforePrompt({
+        messages: [message],
+        prompt: "continue",
+        contextTokenBudget: 128000,
+        reserveTokens: 16384,
+      }).route,
+    ).toBe("fits");
+  });
 
-    expect(estimateLlmBoundaryTokenPressure({ messages: [excluded], prompt: "" })).toBeLessThan(50);
+  it("counts undisplayed custom context when it remains model-visible", () => {
+    const runtimeContext = {
+      role: "custom",
+      customType: "openclaw-runtime-context",
+      content: BIG_OUTPUT,
+      display: false,
+      timestamp: 1,
+    } satisfies AgentMessage;
+
+    expect(
+      estimateLlmBoundaryTokenPressure({ messages: [runtimeContext], prompt: "" }),
+    ).toBeGreaterThan(50000);
   });
 
   it("routes an oversized bash transcript to compaction", () => {

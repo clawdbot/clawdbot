@@ -10,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import type { Static } from "typebox";
-import type { AnyAgentTool, OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
+import type { AnyAgentTool, OpenClawConfig, OpenClawPluginToolContext } from "../api.js";
 import type { DiffScreenshotter } from "./browser.runtime.js";
 import { resolveDiffImageRenderOptions } from "./config.js";
 import { DiffRenderInputError, renderDiffDocument } from "./render.js";
@@ -119,7 +119,7 @@ const DiffsToolSchema = Type.Object(
 type DiffsToolParams = Static<typeof DiffsToolSchema>;
 
 export function createDiffsTool(params: {
-  api: OpenClawPluginApi;
+  getConfig: () => OpenClawConfig;
   store: DiffArtifactStore;
   defaults: DiffToolDefaults;
   viewerBaseUrl?: string;
@@ -127,10 +127,10 @@ export function createDiffsTool(params: {
   screenshotter?: DiffScreenshotter;
   context?: OpenClawPluginToolContext;
 }): AnyAgentTool {
-  const loadScreenshotter = async () =>
+  const loadScreenshotter = async (config: OpenClawConfig) =>
     params.screenshotter ??
     new (await loadDiffsBrowserRuntime()).PlaywrightDiffScreenshotter({
-      config: params.api.config,
+      config,
     });
 
   return {
@@ -140,6 +140,7 @@ export function createDiffsTool(params: {
       "Create a read-only diff viewer from before/after text or a unified patch. Returns a gateway viewer URL for interactive viewing and can also render the same diff to a PNG or PDF.",
     parameters: DiffsToolSchema,
     execute: async (_toolCallId, rawParams) => {
+      const config = params.getConfig();
       const toolParams = asNonArrayRecord(rawParams) as DiffsToolParams;
       const rawRecord = toolParams as Record<string, unknown>;
       const artifactContext = buildArtifactContext(params.context);
@@ -197,7 +198,7 @@ export function createDiffsTool(params: {
       });
 
       if (isArtifactOnlyMode(mode)) {
-        const screenshotter = await loadScreenshotter();
+        const screenshotter = await loadScreenshotter(config);
         const artifactFile = await renderDiffArtifactFile({
           screenshotter,
           store: params.store,
@@ -245,7 +246,7 @@ export function createDiffsTool(params: {
       });
 
       const viewerUrl = buildViewerUrl({
-        config: params.api.config,
+        config,
         viewerPath: artifact.viewerPath,
         baseUrl: normalizeBaseUrl(toolParams.baseUrl),
         viewerBaseUrl: params.viewerBaseUrl,
@@ -277,7 +278,7 @@ export function createDiffsTool(params: {
       }
 
       try {
-        const screenshotter = await loadScreenshotter();
+        const screenshotter = await loadScreenshotter(config);
         const artifactFile = await renderDiffArtifactFile({
           screenshotter,
           store: params.store,

@@ -64,8 +64,8 @@ export function formatStrictJsonParseFailure(params: { value: string; cause: unk
   return [
     `Could not parse ${JSON.stringify(preview)} as JSON for --strict-json.`,
     `${cause}.`,
-    `Use valid JSON, for example ${formatInlineCliCommand(
-      "openclaw config set gateway.port 18789 --strict-json",
+    `Use valid JSON. For structured changes, use a JSON5 config patch object file with ${formatInlineCliCommand(
+      "openclaw config patch --file <path> --dry-run",
     )}.`,
     "For plain strings, omit --strict-json.",
   ].join(" ");

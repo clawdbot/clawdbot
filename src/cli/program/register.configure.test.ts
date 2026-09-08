@@ -22,7 +22,8 @@ vi.mock("../../commands/configure.commands.js", () => ({
   configureCommandFromSectionsArg: mocks.configureCommandFromSectionsArgMock,
 }));
 
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: mocks.runtime,
 }));
 

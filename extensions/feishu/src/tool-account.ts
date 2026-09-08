@@ -4,6 +4,7 @@ import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-resoluti
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import {
+  listEnabledFeishuAccounts,
   listFeishuAccountIds,
   resolveDefaultFeishuAccountId,
   resolveFeishuAccount,
@@ -128,8 +129,9 @@ export function createFeishuToolClient(params: {
 }
 
 export function resolveAnyEnabledFeishuToolsConfig(
-  accounts: ResolvedFeishuAccount[],
+  config: OpenClawPluginApi["config"],
 ): Required<FeishuToolsConfig> {
+  const accounts = listEnabledFeishuAccounts(config);
   const merged: Required<FeishuToolsConfig> = {
     doc: false,
     chat: false,

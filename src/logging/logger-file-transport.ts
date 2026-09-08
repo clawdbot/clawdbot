@@ -9,7 +9,10 @@ import { formatTimestamp } from "./timestamps.js";
 
 // Keep burst memory bounded while one equally bounded batch is in flight.
 const DEFAULT_MAX_QUEUED_RECORDS = 4_096;
+const MAX_APPEND_BATCH_BYTES = 64 * 1024;
 const MAX_ROTATED_LOG_FILES = 5;
+// A failing path stays armed until recovery; cap retained paths so target churn cannot leak memory.
+const MAX_TRACKED_APPEND_FAILURE_FILES = 64;
 
 type FileLogQueueEntry = {
   file: string;
@@ -28,7 +31,6 @@ let queue: FileLogQueueEntry[] = [];
 let queueStart = 0;
 let activeBatch: FileLogQueueEntry[] | null = null;
 let activeIndex = 0;
-let activeAppendInFlight = false;
 let droppedCount = 0;
 let droppedTarget: FileLogQueueEntry | null = null;
 let maxQueuedRecords = DEFAULT_MAX_QUEUED_RECORDS;
@@ -39,6 +41,8 @@ let processExiting = false;
 let processHooksInstalled = false;
 let appendFile: FileLogAppender = appendRegularFile;
 const warnedRotationFiles = new Map<string, number>();
+const warnedAppendFiles = new Set<string>();
+let appendFailureTrackingSaturated = false;
 
 function rotatedLogPath(file: string, index: number): string {
   const ext = path.extname(file);
@@ -103,16 +107,55 @@ function buildDroppedMarker(target: FileLogQueueEntry, count: number): FileLogQu
   };
 }
 
-function warnAboutRotationFailure(entry: FileLogQueueEntry): void {
+function writeFileTransportWarning(message: string, synchronous: boolean): boolean {
+  try {
+    const redactedMessage = redactSensitiveText(message);
+    const line = `${formatConsoleDiagnosticLine({ level: "warn", message: redactedMessage })}\n`;
+    if (synchronous) {
+      fs.writeSync(process.stderr.fd, line);
+    } else {
+      process.stderr.write(line);
+    }
+    return true;
+  } catch {
+    // Logging diagnostics must not stop the file queue.
+    return false;
+  }
+}
+
+function warnAboutRotationFailure(entry: FileLogQueueEntry, synchronous: boolean): void {
   if (warnedRotationFiles.get(entry.file) === entry.maxFileBytes) {
     return;
   }
   warnedRotationFiles.set(entry.file, entry.maxFileBytes);
   const message = `[openclaw] log file rotation failed; continuing writes file=${entry.file} maxFileBytes=${entry.maxFileBytes}`;
-  try {
-    process.stderr.write(`${formatConsoleDiagnosticLine({ level: "warn", message })}\n`);
-  } catch {
-    // Logging diagnostics must not stop the file queue.
+  writeFileTransportWarning(message, synchronous);
+}
+
+function warnAboutAppendFailure(entry: FileLogQueueEntry, synchronous: boolean): void {
+  if (warnedAppendFiles.has(entry.file)) {
+    return;
+  }
+  const saturated = warnedAppendFiles.size >= MAX_TRACKED_APPEND_FAILURE_FILES;
+  if (saturated && appendFailureTrackingSaturated) {
+    return;
+  }
+  const message = saturated
+    ? "[openclaw] log file append failure diagnostics saturated; suppressing new file targets"
+    : `[openclaw] log file append failed; records dropped; check that the path is a writable regular file; file=${entry.file}`;
+  if (!writeFileTransportWarning(message, synchronous)) {
+    return;
+  }
+  if (saturated) {
+    appendFailureTrackingSaturated = true;
+  } else {
+    warnedAppendFiles.add(entry.file);
+  }
+}
+
+function clearAppendFailure(entry: FileLogQueueEntry): void {
+  if (warnedAppendFiles.delete(entry.file)) {
+    appendFailureTrackingSaturated = false;
   }
 }
 
@@ -129,23 +172,51 @@ function claimQueuedEntries(): FileLogQueueEntry[] {
   return entries;
 }
 
-function rotateIfNeeded(entry: FileLogQueueEntry, cursor: FileCursor): void {
-  const payloadBytes = Buffer.byteLength(entry.payload, "utf8");
-  if (cursor.bytes === 0 || cursor.bytes + payloadBytes <= entry.maxFileBytes) {
-    return;
+function prepareWrite(
+  entry: FileLogQueueEntry,
+  cursor: FileCursor,
+  synchronous: boolean,
+  entries: FileLogQueueEntry[],
+  index: number,
+): { payload: string; payloadBytes: number; nextIndex: number } {
+  let payloadBytes = Buffer.byteLength(entry.payload, "utf8");
+  if (cursor.bytes > 0 && cursor.bytes + payloadBytes > entry.maxFileBytes) {
+    if (rotateLogFile(entry.file)) {
+      cursor.bytes = 0;
+      warnedRotationFiles.delete(entry.file);
+    } else {
+      warnAboutRotationFailure(entry, synchronous);
+    }
   }
-  if (rotateLogFile(entry.file)) {
-    cursor.bytes = 0;
-    warnedRotationFiles.delete(entry.file);
-  } else {
-    warnAboutRotationFailure(entry);
+  let nextIndex = index + 1;
+  // fs-safe's synchronous helper can short-write, so keep exit rescue per record.
+  if (synchronous) {
+    return { payload: entry.payload, payloadBytes, nextIndex };
   }
+  const payloads = [entry.payload];
+  // Rotate only between appends, preserving record boundaries and target changes.
+  // An oversized record remains one append; ordinary bursts share bounded secured I/O.
+  for (; nextIndex < entries.length; nextIndex += 1) {
+    const next = entries[nextIndex];
+    if (!next || next.file !== entry.file || next.maxFileBytes !== entry.maxFileBytes) {
+      break;
+    }
+    const nextBytes = Buffer.byteLength(next.payload, "utf8");
+    if (
+      payloadBytes + nextBytes > MAX_APPEND_BATCH_BYTES ||
+      cursor.bytes + payloadBytes + nextBytes > entry.maxFileBytes
+    ) {
+      break;
+    }
+    payloads.push(next.payload);
+    payloadBytes += nextBytes;
+  }
+  return { payload: payloads.join(""), payloadBytes, nextIndex };
 }
 
 async function writeEntries(entries: FileLogQueueEntry[], generation: number): Promise<void> {
   const cursors = new Map<string, FileCursor>();
-  let index = 0;
-  while (index < entries.length) {
+  for (let index = 0; index < entries.length;) {
     if (generation !== drainGeneration || processExiting) {
       return;
     }
@@ -161,26 +232,29 @@ async function writeEntries(entries: FileLogQueueEntry[], generation: number): P
       }
       cursors.set(entry.file, cursor);
     }
-    rotateIfNeeded(entry, cursor);
-    const payloadBytes = Buffer.byteLength(entry.payload, "utf8");
-    activeAppendInFlight = true;
+    const batch = prepareWrite(entry, cursor, false, entries, index);
+    // Forced drains must skip the whole issued append, which cannot be safely replayed.
+    activeIndex = batch.nextIndex;
     try {
-      await appendFile({ filePath: entry.file, content: entry.payload });
-      cursor.bytes += payloadBytes;
+      await appendFile({ filePath: entry.file, content: batch.payload });
+      cursor.bytes += batch.payloadBytes;
+      clearAppendFailure(entry);
     } catch {
       // Match the old best-effort transport: a failed append must not stop later records.
+      warnAboutAppendFailure(entry, false);
     } finally {
-      activeAppendInFlight = false;
+      // Drains share entries; release settled text even while a later append is still pending.
+      for (const written of entries.slice(index, batch.nextIndex)) {
+        written.payload = "";
+      }
+      index = batch.nextIndex;
     }
-    activeIndex = index + 1;
-    index += 1;
   }
 }
 
 function writeEntriesSync(entries: FileLogQueueEntry[]): void {
   const cursors = new Map<string, FileCursor>();
-  let index = 0;
-  while (index < entries.length) {
+  for (let index = 0; index < entries.length;) {
     const entry = entries[index];
     if (!entry) {
       return;
@@ -190,15 +264,17 @@ function writeEntriesSync(entries: FileLogQueueEntry[]): void {
       cursor = { bytes: getCurrentLogFileBytesSync(entry.file) };
       cursors.set(entry.file, cursor);
     }
-    rotateIfNeeded(entry, cursor);
-    const payloadBytes = Buffer.byteLength(entry.payload, "utf8");
+    const batch = prepareWrite(entry, cursor, true, entries, index);
     try {
-      appendRegularFileSync({ filePath: entry.file, content: entry.payload });
-      cursor.bytes += payloadBytes;
+      appendRegularFileSync({ filePath: entry.file, content: batch.payload });
+      cursor.bytes += batch.payloadBytes;
+      clearAppendFailure(entry);
     } catch {
       // Match the old best-effort transport: a failed append must not stop later records.
+      warnAboutAppendFailure(entry, true);
     }
-    index += 1;
+    entry.payload = "";
+    index = batch.nextIndex;
   }
 }
 
@@ -293,6 +369,8 @@ function enqueueFileLog(entry: FileLogQueueEntry): void {
   if (queue.length >= maxQueuedRecords) {
     const dropped = queue[queueStart];
     if (dropped) {
+      // The overflow marker retains this entry's metadata, so release its discarded text now.
+      dropped.payload = "";
       droppedTarget ??= dropped;
       droppedCount += 1;
     }
@@ -331,8 +409,7 @@ function drainFileLogQueueSync(): void {
   drainGeneration += 1;
   // An issued append cannot be cancelled or safely replayed. Graceful exits await it; forced
   // exits rescue the still-queued tail without risking duplicate or interleaved JSONL records.
-  const drainIndex = activeIndex + (activeAppendInFlight ? 1 : 0);
-  const entries = activeBatch ? activeBatch.slice(drainIndex) : [];
+  const entries = activeBatch ? activeBatch.slice(activeIndex) : [];
   activeBatch = null;
   activeIndex = 0;
   entries.push(...claimQueuedEntries());
@@ -354,6 +431,8 @@ function resetFileLogTransportForTests(): void {
   appendFile = appendRegularFile;
   maxQueuedRecords = DEFAULT_MAX_QUEUED_RECORDS;
   warnedRotationFiles.clear();
+  warnedAppendFiles.clear();
+  appendFailureTrackingSaturated = false;
 }
 
 export const fileLogTransport = {

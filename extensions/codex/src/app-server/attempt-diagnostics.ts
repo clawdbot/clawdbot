@@ -206,13 +206,12 @@ export function createCodexModelCallDiagnosticEmitter(params: {
 export function classifyCodexModelCallFailureKind(params: {
   error: unknown;
   timedOut: boolean;
-  turnCompletionIdleTimedOut: boolean;
   runAborted: boolean;
   abortReason: unknown;
   clientClosedAbort: boolean;
   formatError: (error: unknown) => string;
 }): CodexModelCallFailureKind | undefined {
-  if (params.timedOut || params.turnCompletionIdleTimedOut) {
+  if (params.timedOut) {
     return "timeout";
   }
   const errorMessage = params.error ? params.formatError(params.error).toLowerCase() : "";

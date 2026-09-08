@@ -1,3 +1,4 @@
+import type { PrepareAssistantTranscriptMessage } from "../config/sessions/transcript-assistant-delivery.js";
 /**
  * Session manager wrapper for tool-result transcript guards.
  *
@@ -20,12 +21,19 @@ import {
   type PersistedUserTurnMessage,
   type UserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
+import type { AssistantErrorTranscript } from "./assistant-error-transcript.js";
+import { isMidTurnPrecheckAssistantError } from "./embedded-agent-runner/run/midturn-precheck.js";
 import type { EmbeddedRunTrigger } from "./embedded-agent-runner/run/params.js";
 import { resolveLiveToolResultMaxChars } from "./embedded-agent-runner/tool-result-truncation.js";
+import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { projectAgentHarnessTranscriptMessageForDisplay } from "./harness/transcript-visibility.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import type { SessionManager } from "./sessions/index.js";
+import {
+  copyCodeModeSourceAppend,
+  type CodeModeSourceAppend,
+} from "./transcript-code-mode-source.js";
 import { redactTranscriptMessage } from "./transcript-redact.js";
 
 type GuardedSessionManager = SessionManager & {
@@ -36,7 +44,12 @@ type GuardedSessionManager = SessionManager & {
   /** Persist the next user message when an earlier canonical entry was removed. */
   clearNextUserMessagePersistenceSuppression?: () => void;
   /** Refresh the exact owning run when a caller reuses this guarded manager. */
-  setTranscriptRunId?: (runId: string | undefined) => void;
+  setTranscriptRunContext?: (
+    runId: string | undefined,
+    prepareAssistantTranscriptMessage: PrepareAssistantTranscriptMessage | undefined,
+    skipBeforeMessageWriteHooks: boolean | undefined,
+    assistantErrorTranscript: AssistantErrorTranscript | undefined,
+  ) => void;
 };
 
 /**
@@ -48,6 +61,7 @@ export function guardSessionManager(
   opts?: {
     agentId?: string;
     runId?: string;
+    prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
     sessionKey?: string;
     config?: OpenClawConfig;
     contextWindowTokens?: number;
@@ -60,7 +74,7 @@ export function guardSessionManager(
     preparedUserTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
     suppressNextUserMessagePersistence?: boolean;
     suppressTranscriptOnlyAssistantPersistence?: boolean;
-    suppressAssistantErrorPersistence?: boolean;
+    assistantErrorTranscript?: AssistantErrorTranscript;
     /** Finalization keeps core redaction but must not run plugin write hooks. */
     skipBeforeMessageWriteHooks?: boolean;
     onUserMessagePersisted?: (
@@ -82,48 +96,87 @@ export function guardSessionManager(
       append: () => string,
       validateAppend: (entryId: string, appendedText: string) => boolean,
     ) => string;
-    onAssistantErrorMessagePersisted?: (
-      message: Extract<AgentMessage, { role: "assistant" }>,
-    ) => void | Promise<void>;
   },
 ): GuardedSessionManager {
   const guardedSessionManager: GuardedSessionManager = sessionManager;
+  let prepareAssistantTranscriptMessage =
+    opts?.trigger === "memory" ? undefined : opts?.prepareAssistantTranscriptMessage;
+  let skipBeforeMessageWriteHooks = opts?.skipBeforeMessageWriteHooks;
   if (typeof guardedSessionManager.flushPendingToolResults === "function") {
-    guardedSessionManager.setTranscriptRunId?.(opts?.runId);
+    guardedSessionManager.setTranscriptRunContext?.(
+      opts?.runId,
+      prepareAssistantTranscriptMessage,
+      skipBeforeMessageWriteHooks,
+      opts?.assistantErrorTranscript,
+    );
     return guardedSessionManager;
   }
 
   const hookRunner = getGlobalHookRunner();
   let pendingPreparedUserTurnMessage = opts?.preparedUserTurnMessage;
+  const preparedUserReplayKey =
+    opts?.preparedUserTurnTranscriptRecorder?.getPersistedMessage?.()?.idempotencyKey ===
+    pendingPreparedUserTurnMessage?.idempotencyKey
+      ? pendingPreparedUserTurnMessage?.idempotencyKey
+      : undefined;
   let queuedUserTurnTranscriptRecorder: UserTurnTranscriptRecorder | undefined;
   const runtimeUserMessageByPersistedMessage = new WeakMap<
     AgentMessage,
     Extract<AgentMessage, { role: "user" }>
   >();
-  const beforeMessageWrite = (event: { message: AgentMessage }) => {
+  const beforeMessageWrite = (
+    event: { message: AgentMessage },
+    sourceAppend?: CodeModeSourceAppend,
+  ) => {
+    // Persisting a routing signal would force recovery to rewrite the whole archive to remove it.
+    if (isMidTurnPrecheckAssistantError(event.message)) {
+      return { block: true };
+    }
     const runtimeUserMessage = runtimeUserMessageByPersistedMessage.get(event.message);
     let message = event.message;
     let changed = false;
-    if (!opts?.skipBeforeMessageWriteHooks && hookRunner?.hasHooks("before_message_write")) {
-      const result = hookRunner.runBeforeMessageWrite(event, {
+    // Accepted source bytes already passed the plugin hook before ACK. Only
+    // core redaction and visibility still run when the native turn consumes them.
+    const skipUserWriteHook =
+      skipBeforeMessageWriteHooks ||
+      (message.role === "user" &&
+        queuedUserTurnTranscriptRecorder?.getPendingInputMessage?.() !== undefined);
+    if (
+      (!skipUserWriteHook && hookRunner?.hasHooks("before_message_write")) ||
+      prepareAssistantTranscriptMessage
+    ) {
+      const preparedMessage =
+        message.role === "user"
+          ? { ...message, __openclaw: { ...Reflect.get(message, "__openclaw") } }
+          : undefined;
+      if (preparedMessage?.["__openclaw"].humanMentions !== undefined) {
+        // Hooks may mutate text and spans in place; compare against the submitted selection.
+        preparedMessage.content = structuredClone(preparedMessage.content);
+        preparedMessage["__openclaw"].humanMentions = structuredClone(
+          preparedMessage["__openclaw"].humanMentions,
+        );
+      }
+      const next = runAgentHarnessBeforeMessageWriteHook({
+        message,
         agentId: opts?.agentId,
         sessionKey: opts?.sessionKey,
+        prepareAssistantTranscriptMessage,
+        skipBeforeMessageWriteHooks: skipUserWriteHook,
       });
-      if (result?.block) {
+      if (!next) {
         runtimeUserMessageByPersistedMessage.delete(event.message);
         queuedUserTurnTranscriptRecorder?.markBlocked();
         queuedUserTurnTranscriptRecorder = undefined;
-        return result;
+        return { block: true };
       }
-      if (result?.message) {
-        message = restorePreparedUserTurnOperationalMetaForRuntime({
-          runtimeMessage: result.message,
-          ...(event.message.role === "user" ? { preparedMessage: event.message } : {}),
-        });
-        changed = true;
-      }
+      message = restorePreparedUserTurnOperationalMetaForRuntime({
+        runtimeMessage: next,
+        preparedMessage,
+      });
+      changed = true;
     }
-    const redacted = redactTranscriptMessage(message, opts?.config);
+    copyCodeModeSourceAppend(event.message, message, sourceAppend);
+    const redacted = redactTranscriptMessage(message, opts?.config, sourceAppend);
     if (redacted !== message) {
       message = redacted;
       changed = true;
@@ -133,6 +186,7 @@ export function guardSessionManager(
       message,
     });
     if (projectedMessage !== message) {
+      copyCodeModeSourceAppend(message, projectedMessage, sourceAppend);
       message = projectedMessage;
       changed = true;
     }
@@ -181,6 +235,15 @@ export function guardSessionManager(
       queuedUserTurnTranscriptRecorder = undefined;
       const withProvenance = applyInputProvenanceToUserMessage(message, opts?.inputProvenance);
       const runtimeContext = takeRuntimeUserTurnTranscriptContext(message);
+      // Replay may reuse the current user without appending it. Its prepared
+      // metadata must not leak onto a later queued user, including staged steering.
+      if (
+        message.role === "user" &&
+        preparedUserReplayKey !== undefined &&
+        Reflect.get(runtimeContext?.message ?? message, "idempotencyKey") !== preparedUserReplayKey
+      ) {
+        pendingPreparedUserTurnMessage = undefined;
+      }
       const prepared = runtimeContext?.message ?? pendingPreparedUserTurnMessage;
       const recorder =
         runtimeContext?.recorder ??
@@ -219,21 +282,20 @@ export function guardSessionManager(
             contextWindowTokens: opts.contextWindowTokens,
           })
         : undefined,
-    suppressNextUserMessagePersistence: opts?.suppressNextUserMessagePersistence,
+    suppressNextUserMessagePersistence:
+      preparedUserReplayKey === undefined && opts?.suppressNextUserMessagePersistence,
     suppressTranscriptOnlyAssistantPersistence: opts?.suppressTranscriptOnlyAssistantPersistence,
-    suppressAssistantErrorPersistence: opts?.suppressAssistantErrorPersistence,
+    assistantErrorTranscript: opts?.assistantErrorTranscript,
     onMessagePersisted: opts?.onMessagePersisted,
     withCompactionPersistence: opts?.withCompactionPersistence,
     onUserMessagePersisted: async (message, persistence) => {
       const runtimeMessage = runtimeUserMessageByPersistedMessage.get(message);
       runtimeUserMessageByPersistedMessage.delete(message);
       const recorder = takeRuntimeUserTurnTranscriptRecorder(message);
-      if (persistence.anchor) {
-        recorder?.markRuntimePersisted(message, persistence.anchor);
-      } else {
-        recorder?.markRuntimePersisted(message);
-      }
-      await opts?.onUserMessagePersisted?.(message, runtimeMessage);
+      recorder?.markRuntimePersisted(persistence.persistedMessage, persistence.anchor, {
+        appended: persistence.appended,
+      });
+      await opts?.onUserMessagePersisted?.(persistence.persistedMessage, runtimeMessage);
     },
     onUserMessagePersistenceSuppressed: async (message) => {
       const runtimeMessage = runtimeUserMessageByPersistedMessage.get(message);
@@ -241,12 +303,15 @@ export function guardSessionManager(
       await opts?.onUserMessagePersistenceSuppressed?.(message, runtimeMessage);
     },
     onUserMessageBlocked: opts?.onUserMessageBlocked,
-    onAssistantErrorMessagePersisted: opts?.onAssistantErrorMessagePersisted,
   });
   guardedSessionManager.flushPendingToolResults = guard.flushPendingToolResults;
   guardedSessionManager.clearPendingToolResults = guard.clearPendingToolResults;
   guardedSessionManager.clearNextUserMessagePersistenceSuppression =
     guard.clearNextUserMessagePersistenceSuppression;
-  guardedSessionManager.setTranscriptRunId = guard.setTranscriptRunId;
+  guardedSessionManager.setTranscriptRunContext = (runId, prepare, skipHooks, errors) => {
+    guard.setTranscriptRunId(runId, errors);
+    prepareAssistantTranscriptMessage = prepare;
+    skipBeforeMessageWriteHooks = skipHooks;
+  };
   return guardedSessionManager;
 }

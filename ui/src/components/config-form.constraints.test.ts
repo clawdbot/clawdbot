@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   arrayInputConstraints,
   canApplyArrayCandidate,
+  canApplyObjectCandidate,
   configValuesEqual,
   defaultValue,
   isSupportedConfigValueValid,
@@ -17,6 +18,20 @@ import { coerceConfigFormNumberString, formatConfigFormNumber } from "./config-f
 import type { JsonSchema } from "./config-form.shared.ts";
 
 describe("config form schema constraints", () => {
+  it("rejects newly invalid keys without blocking repairs to existing invalid entries", () => {
+    const schema = {
+      type: "object",
+      propertyNames: { type: "string", pattern: "^[a-z]+$" },
+      additionalProperties: { type: "integer", minimum: 0 },
+    };
+    const current = { primary: -1 };
+    expect(canApplyObjectCandidate(schema, current, { "bad/key": -1 })).toBe(false);
+    expect(canApplyObjectCandidate(schema, current, { ...current, "bad/key": 1 })).toBe(false);
+    expect(canApplyObjectCandidate(schema, current, { ...current, backup: 1 })).toBe(true);
+    expect(canApplyObjectCandidate(schema, current, { primary: 1 })).toBe(true);
+    expect(canApplyObjectCandidate(schema, { "old/key": -1 }, { "old/key": 1 })).toBe(true);
+  });
+
   it("coerces only decimal and scientific config number spellings", () => {
     expect(coerceConfigFormNumberString("42.5", false)).toBe(42.5);
     expect(coerceConfigFormNumberString(".5e2", false)).toBe(50);

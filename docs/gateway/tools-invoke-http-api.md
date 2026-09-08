@@ -65,7 +65,7 @@ Fields:
 - `tool` / `name` (string, required): tool name to invoke. `name` takes precedence if both are sent.
 - `action` (string, optional): merged into `args.action` if the tool schema supports an `action` property and `args` did not already set one.
 - `args` (object, optional): tool-specific arguments.
-- `sessionKey` (string, optional): target session key. If omitted or `"main"`, the Gateway uses the configured main session key (honors `session.mainKey` and the default agent, or `global` in global session scope).
+- `sessionKey` (string, optional): target session key. If omitted or `"main"`, the Gateway resolves the agent's canonical main session (`agent:<agentId>:main`, or `global` in global session scope). Custom `session.mainKey` values are ignored.
 - `agentId` (string, optional): resolves the session key for that agent. Errors with `400` if it conflicts with an explicit `sessionKey` that already maps to a different agent.
 - `idempotencyKey` (string, optional): used to derive a stable tool-call id for the invocation.
 - `dryRun` (boolean, optional): reserved for future use; currently ignored.

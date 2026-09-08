@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnv } from "../../test-utils/env.js";
 import { formatCliCommand } from "../command-format.js";
@@ -93,7 +94,8 @@ vi.mock("../../infra/wsl.js", () => ({
   isWSLEnv: isWSLEnvMock,
 }));
 
-vi.mock("./shared.js", () => ({
+vi.mock("./shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared.js")>()),
   createCliStatusTextStyles: () => ({
     rich: false,
     label: (text: string) => text,
@@ -103,11 +105,7 @@ vi.mock("./shared.js", () => ({
     warnText: (text: string) => text,
     errorText: (text: string) => text,
   }),
-  filterDaemonEnv: () => ({}),
-  formatRuntimeStatus: () => "running (pid 8000)",
   resolveRuntimeStatusColor: () => "",
-  resolveDaemonContainerContext: () => null,
-  renderRuntimeHints: () => [],
   safeDaemonEnv: () => [],
 }));
 
@@ -138,6 +136,20 @@ describe("printDaemonStatus", () => {
       { version: "2026.5.6", buildId: "build-2026.5.6", connId: "conn-1" },
       { version: "2026.5.6", connId: "conn-1" },
     ];
+    const command: GatewayServiceCommandConfig = {
+      programArguments: ["node"],
+      environment: {
+        OPENCLAW_STATE_DIR: "/tmp",
+        OPENCLAW_GATEWAY_TOKEN: "effective-gateway-token",
+      },
+      managedDefinition: {
+        programArguments: ["node"],
+        environment: { OPENCLAW_GATEWAY_TOKEN: "managed-base-gateway-token" },
+      },
+      managedOverrides: { launcher: "command", environment: { keys: ["OPENCLAW_GATEWAY_TOKEN"] } },
+      definitionPaths: ["/etc/systemd/user/private-definition.conf"],
+      reloadPending: true,
+    };
     for (const server of servers) {
       printDaemonStatus(
         {
@@ -146,7 +158,7 @@ describe("printDaemonStatus", () => {
             loadState: { status: "loaded" },
             loadedText: "loaded",
             notLoadedText: "not loaded",
-            command: { programArguments: ["node"], environment: { OPENCLAW_STATE_DIR: "/tmp" } },
+            command,
           },
           rpc: { ok: true, server },
           extraServices: [],
@@ -160,6 +172,43 @@ describe("printDaemonStatus", () => {
         ([payload]) => (payload as { rpc?: { server?: unknown } }).rpc?.server,
       ),
     ).toEqual(servers);
+    for (const [payload] of runtime.writeJson.mock.calls) {
+      expect(payload).not.toHaveProperty("service.command.managedDefinition");
+      expect(payload).not.toHaveProperty("service.command.managedOverrides");
+      expect(payload).not.toHaveProperty("service.command.definitionPaths");
+      expect(payload).toHaveProperty("service.command.reloadPending", true);
+      expect(JSON.stringify(payload)).not.toContain("gateway-token");
+    }
+    expect(command.definitionPaths).toEqual(["/etc/systemd/user/private-definition.conf"]);
+    expect(command.environment?.OPENCLAW_GATEWAY_TOKEN).toBe("effective-gateway-token");
+    expect(command.managedDefinition).toBeDefined();
+    expect(command.managedOverrides).toBeDefined();
+  });
+
+  it("prints user-manager pending reload guidance after the service file", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "systemd",
+          loadState: { status: "loaded" },
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          command: {
+            programArguments: ["node"],
+            sourcePath: "/home/test/.config/systemd/user/openclaw.service",
+            reloadPending: true,
+          },
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    const lines = runtime.log.mock.calls.map(([line]) => line);
+    const serviceFileIndex = lines.findIndex((line) => line.startsWith("Service file:"));
+    expect(lines[serviceFileIndex + 1]).toBe(
+      "Systemd reload: pending (run systemctl --user daemon-reload)",
+    );
   });
 
   it("prints host desktop state and auth type", () => {
@@ -206,7 +255,7 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.log, "Host desktop: managed · failed: startxfce4 not installed");
   });
 
-  it("prints the applied Gateway heap limit and derivation", () => {
+  it("distinguishes configured controls, installer recommendation, and unmeasured runtime", () => {
     printDaemonStatus(
       {
         service: {
@@ -215,7 +264,8 @@ describe("printDaemonStatus", () => {
           loadedText: "loaded",
           notLoadedText: "not loaded",
           gatewayHeap: {
-            appliedMiB: 6144,
+            nodeOptions: "--max-old-space-size=6144",
+            execArgv: [],
             maxOldSpaceSizeMiB: 4096,
             availableMemoryMiB: 8192,
             memorySource: "constrained",
@@ -229,9 +279,13 @@ describe("printDaemonStatus", () => {
       { json: false },
     );
 
-    expectMockLineContains(runtime.log, "Gateway heap: 6144 MiB");
-    expectMockLineContains(runtime.log, "adaptive default 4096 MiB");
-    expectMockLineContains(runtime.log, "8192 MiB constrained memory");
+    expectMockLineContains(
+      runtime.log,
+      "Gateway heap: service NODE_OPTIONS: --max-old-space-size=6144",
+    );
+    expectMockLineContains(runtime.log, "installer recommendation: 4096 MiB old space");
+    expectMockLineContains(runtime.log, "8192 MiB constrained capacity");
+    expectMockLineContains(runtime.log, "runtime V8 ceiling: not measured");
   });
 
   it.skipIf(process.platform !== "win32")(
@@ -429,7 +483,7 @@ describe("printDaemonStatus", () => {
     expect(renderSystemdUnavailableHintsMock).toHaveBeenCalledWith({
       wsl: true,
       kind: "generic_unavailable",
-      container: false,
+      env: { WSL_DISTRO_NAME: "Ubuntu" },
     });
     expectMockLineContains(runtime.log, "Service: systemd (unknown)");
     expect(runtime.log.mock.calls.flat().join("\n")).not.toContain("Service: systemd (not loaded)");
@@ -564,7 +618,7 @@ describe("printDaemonStatus", () => {
     expect(errors).not.toContain("Gateway port 18789 is not listening");
   });
 
-  it("prints GUI-session wording before generic missing-supervision wording", () => {
+  it("prints GUI-session recovery guidance for the service profile", () => {
     printDaemonStatus(
       {
         service: {
@@ -574,10 +628,10 @@ describe("printDaemonStatus", () => {
           notLoadedText: "not loaded",
           runtime: {
             status: "unknown",
-            missingSupervision: true,
             missingGuiSession: true,
             detail: "Bootstrap failed: 125: Domain does not support specified action",
           },
+          command: { programArguments: [], environment: { OPENCLAW_PROFILE: "work" } },
         },
         extraServices: [],
       },
@@ -585,41 +639,73 @@ describe("printDaemonStatus", () => {
     );
 
     expectMockLineContains(runtime.error, "macOS has no usable GUI session");
-    const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
-    expect(errors).not.toContain("launchd has no loaded job");
+    expectMockLineContains(runtime.error, "logged-in macOS GUI session");
+    expectMockLineContains(runtime.error, "openclaw --profile work gateway restart");
   });
 
-  it("prints probe kind and capability separately", () => {
-    printDaemonStatus(
-      {
-        service: {
-          label: "LaunchAgent",
-          loadState: { status: "loaded" },
-          loadedText: "loaded",
-          notLoadedText: "not loaded",
-          runtime: { status: "running", pid: 8000 },
+  it.each([
+    {
+      kind: undefined,
+      capability: undefined,
+      probeLabel: "Connectivity probe:",
+      capabilityLine: undefined,
+    },
+    {
+      kind: "connect",
+      capability: "",
+      probeLabel: "Connectivity probe:",
+      capabilityLine: undefined,
+    },
+    {
+      kind: "connect",
+      capability: "write_capable",
+      probeLabel: "Connectivity probe:",
+      capabilityLine: "Capability: write-capable",
+    },
+    {
+      kind: "read",
+      capability: "read_only",
+      probeLabel: "Read probe:",
+      capabilityLine: "Capability: read-only",
+    },
+  ] as const)(
+    "prints probe kind $kind and capability $capability separately",
+    ({ kind, capability, probeLabel, capabilityLine }) => {
+      printDaemonStatus(
+        {
+          service: {
+            label: "LaunchAgent",
+            loadState: { status: "loaded" },
+            loadedText: "loaded",
+            notLoadedText: "not loaded",
+            runtime: { status: "running", pid: 8000 },
+          },
+          gateway: {
+            bindMode: "loopback",
+            bindHost: "127.0.0.1",
+            port: 18789,
+            portSource: "env/config",
+            probeUrl: "ws://127.0.0.1:18789",
+          },
+          rpc: {
+            ok: true,
+            kind,
+            capability,
+            url: "ws://127.0.0.1:18789",
+          },
+          extraServices: [],
         },
-        gateway: {
-          bindMode: "loopback",
-          bindHost: "127.0.0.1",
-          port: 18789,
-          portSource: "env/config",
-          probeUrl: "ws://127.0.0.1:18789",
-        },
-        rpc: {
-          ok: true,
-          kind: "connect",
-          capability: "write_capable",
-          url: "ws://127.0.0.1:18789",
-        },
-        extraServices: [],
-      },
-      { json: false },
-    );
+        { json: false },
+      );
 
-    expectMockLineContains(runtime.log, "Connectivity probe: ok");
-    expectMockLineContains(runtime.log, "Capability: write-capable");
-  });
+      expectMockLineContains(runtime.log, `${probeLabel} ok`);
+      expect(
+        runtime.log.mock.calls
+          .map(([line]) => line)
+          .filter((line) => line.startsWith("Capability:")),
+      ).toEqual(capabilityLine ? [capabilityLine] : []);
+    },
+  );
 
   it("prints the last gateway error when a running service fails the RPC probe", () => {
     printDaemonStatus(
@@ -1062,6 +1148,12 @@ describe("printDaemonStatus", () => {
               source: "npm",
               packageName: "@openclaw/brave-plugin",
               spec: "@openclaw/brave-plugin@2026.6.9",
+              targetResolution: {
+                status: "resolved",
+                packageName: "@openclaw/brave-plugin",
+                requestedTarget: "2026.6.10-beta.1",
+                version: "2026.6.10-beta.1",
+              },
             },
           ],
         },
@@ -1076,6 +1168,49 @@ describe("printDaemonStatus", () => {
       "openclaw plugins update @openclaw/brave-plugin@2026.6.10-beta.1",
     );
     expectMockLineContains(runtime.log, "openclaw gateway restart");
+  });
+
+  it("fails loudly without an install command when npm cannot resolve a pinned target", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loadState: { status: "loaded" },
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        pluginVersionDrift: {
+          gatewayVersion: "2026.7.1-2",
+          drifts: [
+            {
+              pluginId: "brave",
+              installedVersion: "2026.7.1-beta.2",
+              gatewayVersion: "2026.7.1-2",
+              source: "npm",
+              packageName: "@openclaw/brave-plugin",
+              spec: "@openclaw/brave-plugin@2026.7.1-beta.2",
+              targetResolution: {
+                status: "unresolved",
+                packageName: "@openclaw/brave-plugin",
+                requestedTarget: "2026.7.1",
+                error: "npm registry did not resolve @openclaw/brave-plugin@2026.7.1: HTTP 404",
+              },
+            },
+          ],
+        },
+        extraServices: [],
+      },
+      { json: false, deep: true },
+    );
+
+    expectMockLineContains(runtime.error, "Plugin repair target resolution failed");
+    expectMockLineContains(runtime.error, "HTTP 404");
+    const output = [runtime.log, runtime.error]
+      .flatMap((mock) => mock.mock.calls.map(([line]) => line))
+      .join("\n");
+    expect(output).not.toContain("openclaw plugins update");
+    expect(output).not.toContain("openclaw gateway restart");
   });
 
   it("does not print systemd user-service hints when a gateway responds", () => {
@@ -1218,16 +1353,50 @@ describe("printDaemonStatus", () => {
     expect(logged).not.toContain("Warm-up: launch agents");
   });
 
-  it("does not combine diagnostic-only service state with the active probe target", () => {
-    printDaemonStatus(
-      {
+  it.each(
+    (
+      [
+        {
+          serviceRuntime: { status: "running", pid: 8000 },
+          runtimeLabel: "running",
+          runtimeText: "running (pid 8000)",
+        },
+        { serviceRuntime: { status: "stopped" }, runtimeLabel: "stopped", runtimeText: "stopped" },
+        { serviceRuntime: { status: "unknown" }, runtimeLabel: "unknown", runtimeText: "unknown" },
+        { serviceRuntime: undefined, runtimeLabel: "absent", runtimeText: undefined },
+      ] as const
+    ).flatMap(({ serviceRuntime, runtimeLabel, runtimeText }) =>
+      (
+        [
+          {
+            targetRole: "diagnostic-only",
+            suffix: " (diagnostic only, not the probe target)",
+            rpcOk: false,
+          },
+          { targetRole: "target", suffix: "", rpcOk: true },
+          { targetRole: undefined, suffix: "", rpcOk: true },
+        ] as const
+      ).map(({ targetRole, suffix, rpcOk }) => ({
+        serviceRuntime,
+        runtimeLabel,
+        runtimeText,
+        targetRole,
+        suffix,
+        rpcOk,
+      })),
+    ),
+  )(
+    "projects $targetRole service state with $runtimeLabel runtime",
+    ({ serviceRuntime, runtimeText, targetRole, suffix, rpcOk }) => {
+      const status: DaemonStatus = {
         service: {
           label: "LaunchAgent",
+          loaded: true,
           loadState: { status: "loaded" },
           loadedText: "loaded",
           notLoadedText: "not loaded",
-          targetRole: "diagnostic-only",
-          runtime: { status: "running", pid: 8000 },
+          targetRole,
+          runtime: serviceRuntime,
         },
         gateway: {
           bindMode: "loopback",
@@ -1236,27 +1405,37 @@ describe("printDaemonStatus", () => {
           portSource: "env/config",
           probeUrl: "ws://127.0.0.1:18900",
         },
-        port: {
-          port: 18900,
-          status: "free",
-          listeners: [],
-          hints: [],
-        },
+        port: { port: 18900, status: "free", listeners: [], hints: [] },
         rpc: {
-          ok: false,
-          error: "connect ECONNREFUSED 127.0.0.1:18900",
+          ok: rpcOk,
+          error: rpcOk ? undefined : "connect ECONNREFUSED 127.0.0.1:18900",
           url: "ws://127.0.0.1:18900",
         },
         extraServices: [],
-      },
-      { json: false },
-    );
+      };
+      const expectedJson = structuredClone(status);
+      printDaemonStatusRuntime(status, { json: false });
 
-    expectMockLineContains(runtime.log, "Runtime: running");
-    const output = [...runtime.log.mock.calls, ...runtime.error.mock.calls].flat().join("\n");
-    expect(output).not.toContain("Warm-up: launch agents");
-    expect(output).not.toContain("service appears running");
-  });
+      const lines = runtime.log.mock.calls.map(([line]) => line);
+      expect(
+        lines.filter((line) => line.startsWith("Service:") || line.startsWith("Runtime:")),
+      ).toEqual([
+        `Service: LaunchAgent (loaded)${suffix}`,
+        ...(runtimeText === undefined ? [] : [`Runtime: ${runtimeText}${suffix}`]),
+      ]);
+      if (targetRole === "diagnostic-only") {
+        const output = [...lines, ...runtime.error.mock.calls.flat()].join("\n");
+        expect(output).not.toContain("Warm-up: launch agents");
+        expect(output).not.toContain("service appears running");
+      }
+      runtime.log.mockClear();
+      runtime.error.mockClear();
+      printDaemonStatusRuntime(status, { json: true });
+      expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(expectedJson);
+      expect(runtime.log).not.toHaveBeenCalled();
+      expect(runtime.error).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps the warm-up hint (not owns-port guidance) when healthy is reachability-only and a stale gateway PID is still held", () => {
     // inspectGatewayRestart can set healthy from reachability after ownership failed,

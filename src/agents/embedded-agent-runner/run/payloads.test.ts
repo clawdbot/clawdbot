@@ -562,12 +562,28 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
         mutatingAction: true,
       },
       runAborted: true,
+      runStopReason: "aborted",
     });
 
     expectSingleToolErrorPayload(payloads, {
       title: "Bash",
       absentDetail: "codex native tool blocked",
     });
+  });
+
+  it("renders an intentional Gateway restart as status", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "gateway_exec",
+        error: "OpenClaw dynamic tool call aborted.",
+        executionStarted: true,
+      },
+      runAborted: true,
+      runStopReason: "restart",
+      toolResultFormat: "markdown",
+    });
+
+    expect(payloads).toEqual([{ text: "Gateway restarting…" }]);
   });
 
   it("keeps timed-out cron exec failures compact when verbose mode is off", () => {
@@ -679,7 +695,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     }
   });
 
-  it("retains terminal heartbeat state when all failure copy is suppressed", () => {
+  it("retains terminal heartbeat state on the no-reply tool warning", () => {
     const payloads = buildPayloads({
       isHeartbeatTrigger: true,
       lastToolError: {
@@ -687,16 +703,18 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
         error: "cross-context messaging denied",
         mutatingAction: true,
       },
-      suppressToolErrorWarnings: true,
     });
 
-    expectSinglePayloadText(payloads, "HEARTBEAT_OK");
+    expectSingleToolErrorPayload(payloads, {
+      title: "Message",
+      absentDetail: "cross-context messaging denied",
+    });
     expect(getReplyPayloadMetadata(payloads[0] as object)?.heartbeatTerminalToolFailure).toEqual({
       toolName: "message",
     });
   });
 
-  it("adds an outbound terminal marker when suppressed failure copy leaves only reasoning", () => {
+  it("adds a tool warning when a heartbeat failure leaves only reasoning", () => {
     const payloads = buildPayloads({
       isHeartbeatTrigger: true,
       lastAssistant: {
@@ -711,12 +729,14 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       },
       reasoningLevel: "on",
       thinkingLevel: "high",
-      suppressToolErrorWarnings: true,
     });
 
     expect(payloads).toHaveLength(2);
     expect(payloads[0]).toMatchObject({ text: "Private reasoning only.", isReasoning: true });
-    expect(resolveHeartbeatReplyPayload(payloads)?.text).toBe("HEARTBEAT_OK");
+    expect(resolveHeartbeatReplyPayload(payloads)).toMatchObject({
+      text: "⚠️ Message failed",
+      isError: true,
+    });
     for (const payload of payloads) {
       expect(getReplyPayloadMetadata(payload)?.heartbeatTerminalToolFailure).toEqual({
         toolName: "message",
@@ -763,28 +783,6 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
 
     expectSinglePayloadText(payloads, "Message delivery was blocked.");
-  });
-
-  it("suppresses heartbeat failure copy without suppressing terminal failure state", () => {
-    const payloads = buildPayloads({
-      heartbeatToolResponse: {
-        outcome: "no_change",
-        notify: false,
-        summary: "Nothing needs attention.",
-      },
-      isHeartbeatTrigger: true,
-      lastToolError: {
-        toolName: "message",
-        error: "cross-context messaging denied",
-        mutatingAction: true,
-      },
-      suppressToolErrorWarnings: true,
-    });
-
-    expectSinglePayloadText(payloads, "HEARTBEAT_OK");
-    expect(getReplyPayloadMetadata(payloads[0] as object)?.heartbeatTerminalToolFailure).toEqual({
-      toolName: "message",
-    });
   });
 
   it("does not infer a terminal mutation from a mixed-action tool name", () => {
@@ -841,19 +839,6 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSingleToolErrorPayload(payloads, {
       title: "Exec",
       detail: "command failed",
-    });
-  });
-
-  it("preserves full-verbose tool error details with static suppression disabled", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "write", error: "permission denied" },
-      suppressToolErrorWarnings: false,
-      verboseLevel: "full",
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Write",
-      detail: "permission denied",
     });
   });
 

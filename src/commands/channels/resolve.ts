@@ -13,12 +13,11 @@ import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolu
 import { formatCliCommand } from "../../cli/command-format.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import { formatUnsupportedChannelActionMessage } from "../../cli/error-format.js";
-import { getRuntimeConfig, readConfigFileSnapshot } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { danger } from "../../globals.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
-import { persistResolvedChannelPluginConfig } from "./plugin-config-persistence.js";
 
 export type ChannelsResolveOptions = {
   agent?: string;
@@ -132,8 +131,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
     throw new Error("--agent must not be blank");
   }
   const agentId = requestedAgent ? resolveConfiguredAgentId(loadedRaw, requestedAgent) : undefined;
-  const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
-  let { effectiveConfig: cfg } = await resolveCommandConfigWithSecrets({
+  const { effectiveConfig: cfg } = await resolveCommandConfigWithSecrets({
     config: loadedRaw,
     commandName: "channels resolve",
     targetIds: getChannelsCommandSecretTargetIds(),
@@ -159,14 +157,6 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
       `Channel plugin "${resolvedExplicit.catalogEntry.id}" is not installed. Run ${formatCliCommand(`openclaw channels add --channel ${resolvedExplicit.catalogEntry.id}`)} first.`,
     );
   }
-  if (resolvedExplicit?.configChanged) {
-    cfg = await persistResolvedChannelPluginConfig({
-      resolved: resolvedExplicit,
-      baseHash: (await sourceSnapshotPromise)?.hash,
-      runtime,
-    });
-  }
-
   const selection = explicitChannel
     ? {
         channel: resolvedExplicit?.channelId,

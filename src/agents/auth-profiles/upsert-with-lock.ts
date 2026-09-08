@@ -11,8 +11,18 @@ import {
   writePersistedAuthProfileStateRaw,
 } from "./sqlite.js";
 import { buildPersistedAuthProfileState } from "./state.js";
-import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
+import {
+  saveAuthProfileStoreWithPreparedOwner,
+  updateAuthProfileStoreWithLock,
+} from "./store-runtime.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
+import { resetAuthProfileFailureState } from "./usage-state.js";
+
+function throwAuthProfileUpdateError(): never {
+  throw new Error(
+    "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
+  );
+}
 
 type PersistAuthProfileBatchParams = {
   profiles: readonly {
@@ -47,9 +57,9 @@ export async function persistAuthProfileBatch(
   const appliedProfiles = new Map<string, AuthProfileCredential>();
   let storeWasAbsent = false;
   let stateWasAbsent = false;
-  runAuthProfileWriteTransaction(
+  const preparedOwner = runAuthProfileWriteTransaction(
     params.agentDir,
-    (database) => {
+    (database, owner) => {
       storeWasAbsent =
         inspectPersistedAuthProfileStoreRaw(params.agentDir, database).status === "missing";
       stateWasAbsent =
@@ -76,13 +86,15 @@ export async function persistAuthProfileBatch(
         }
       }
       if (appliedProfiles.size > 0) {
-        saveAuthProfileStore(
+        saveAuthProfileStoreWithPreparedOwner(
           next,
           params.agentDir,
           { filterExternalAuthProfiles: false, syncExternalCli: false },
           database,
+          owner,
         );
       }
+      return owner;
     },
     { sharedStoreWrite: true, stateDir: params.stateDir },
   );
@@ -95,7 +107,10 @@ export async function persistAuthProfileBatch(
       }
       runAuthProfileWriteTransaction(
         params.agentDir,
-        (database) => {
+        (database, owner) => {
+          if (database.path !== preparedOwner.databasePath) {
+            throw new Error("auth profile batch rollback belongs to another owner");
+          }
           const current = loadPersistedAuthProfileStore(params.agentDir, { database });
           if (!current) {
             return;
@@ -137,11 +152,12 @@ export async function persistAuthProfileBatch(
               }
             }
           }
-          saveAuthProfileStore(
+          saveAuthProfileStoreWithPreparedOwner(
             current,
             params.agentDir,
             { filterExternalAuthProfiles: false, syncExternalCli: false },
             database,
+            owner,
           );
           if (storeWasAbsent && Object.keys(current.profiles).length === 0) {
             deletePersistedAuthProfileStoreRaw(params.agentDir, database);
@@ -150,20 +166,24 @@ export async function persistAuthProfileBatch(
             writePersistedAuthProfileStateRaw(null, params.agentDir, database);
           }
         },
-        { sharedStoreWrite: true, stateDir: params.stateDir },
+        { sharedStoreWrite: true, env: preparedOwner.env },
       );
       rolledBack = true;
     },
   };
 }
 
-/** Upserts an auth profile under the store lock, returning null on store write failure. */
-export async function upsertAuthProfileWithLock(params: {
+type AuthProfileUpsertParams = {
   profileId: string;
   credential: AuthProfileCredential;
   agentDir?: string;
   stateDir?: string;
-}): Promise<AuthProfileStore | null> {
+};
+
+async function upsertAuthProfileWithLockCore(
+  params: AuthProfileUpsertParams,
+  resetFailureState: boolean,
+): Promise<AuthProfileStore | null> {
   const credential = normalizeAuthProfileCredential(params.credential);
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
@@ -175,9 +195,20 @@ export async function upsertAuthProfileWithLock(params: {
     },
     updater: (store) => {
       store.profiles[params.profileId] = credential;
+      const existingStats = store.usageStats?.[params.profileId];
+      if (resetFailureState && existingStats) {
+        store.usageStats![params.profileId] = resetAuthProfileFailureState(existingStats);
+      }
       return true;
     },
   });
+}
+
+/** Upserts an auth profile under the store lock, returning null on store write failure. */
+export async function upsertAuthProfileWithLock(
+  params: AuthProfileUpsertParams,
+): Promise<AuthProfileStore | null> {
+  return await upsertAuthProfileWithLockCore(params, false);
 }
 
 /** Upserts an auth profile under the store lock, failing when the store cannot be written. */
@@ -186,8 +217,16 @@ export async function upsertAuthProfileWithLockOrThrow(
 ): Promise<void> {
   const updated = await upsertAuthProfileWithLock(params);
   if (!updated) {
-    throw new Error(
-      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
-    );
+    throwAuthProfileUpdateError();
+  }
+}
+
+/** Replaces one completed-login credential and clears only its existing failure state. */
+export async function upsertAuthProfileAfterLoginWithLockOrThrow(
+  params: AuthProfileUpsertParams,
+): Promise<void> {
+  const updated = await upsertAuthProfileWithLockCore(params, true);
+  if (!updated) {
+    throwAuthProfileUpdateError();
   }
 }

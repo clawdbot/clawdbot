@@ -25,12 +25,17 @@ enum WatchScreenshotMode {
         || WatchScreenshotMode.approvals
 }
 
+enum WatchDestination: Hashable {
+    case standaloneVoice
+}
+
 @main
 struct OpenClawWatchApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var inboxStore = WatchInboxStore(
         requestNotificationAuthorization: !WatchScreenshotMode.enabled)
     @State private var directNode = WatchDirectNode()
+    @State private var navigationPath: [WatchDestination] = []
     @State private var notificationDelegate = WatchNotificationPresentationDelegate()
     @State private var receiver: WatchConnectivityReceiver?
     @State private var execApprovalRefreshTask: Task<Void, Never>?
@@ -38,15 +43,17 @@ struct OpenClawWatchApp: App {
     var body: some Scene {
         WindowGroup {
             WatchInboxView(
+                navigationPath: self.navigationPathBinding,
                 store: self.inboxStore,
                 directNode: self.directNode,
                 onAction: { action in
-                    guard let receiver = self.receiver else { return }
-                    let draft = self.inboxStore.makeReplyDraft(action: action)
-                    self.inboxStore.markReplySending(actionLabel: action.label)
+                    guard let receiver = self.receiver,
+                          let command = self.inboxStore.makeQuickReplyCommand(action: action)
+                    else { return }
                     Task { @MainActor in
-                        let result = await receiver.sendReply(draft)
-                        self.inboxStore.markReplyResult(result, actionLabel: action.label)
+                        if await self.inboxStore.enqueueQuickReply(command) {
+                            receiver.replayChatDelivery()
+                        }
                     }
                 },
                 onExecApprovalDecision: { approvalId, gatewayStableID, decision in
@@ -84,8 +91,8 @@ struct OpenClawWatchApp: App {
                 onAppCommand: { command in
                     self.sendAppCommand(command)
                 },
-                onSendChatMessage: { text in
-                    self.sendChatMessage(text)
+                onSendChatMessage: { text, spokenReply in
+                    await self.sendChatMessage(text, spokenReply: spokenReply)
                 })
                 .task {
                     UNUserNotificationCenter.current().delegate = self.notificationDelegate
@@ -97,7 +104,7 @@ struct OpenClawWatchApp: App {
                     if self.receiver == nil {
                         let receiver = WatchConnectivityReceiver(
                             store: self.inboxStore,
-                            directNodeSetupHandler: { [weak directNode] setupCode, sentAtMs in
+                            directNodeSetupHandler: { [weak directNode = self.directNode] setupCode, sentAtMs in
                                 directNode?.configure(setupCode: setupCode, sentAtMs: sentAtMs)
                             })
                         receiver.activate()
@@ -108,61 +115,66 @@ struct OpenClawWatchApp: App {
                     }
                     self.refreshAppSnapshot()
                     self.refreshExecApprovalReview()
-                }
-                .onChange(of: self.scenePhase) { _, newPhase in
-                    switch newPhase {
-                    case .active:
-                        self.directNode.connectForForeground()
-                        self.refreshAppSnapshot()
-                        self.refreshExecApprovalReview()
-                    case .inactive, .background:
-                        self.directNode.disconnectForBackground()
-                    @unknown default:
-                        break
-                    }
+                    self.receiver?.replayChatDelivery()
                 }
         }
+        .onChange(of: self.scenePhase) { _, newPhase in
+            switch newPhase {
+            case .active:
+                self.directNode.connectForForeground()
+                self.refreshAppSnapshot()
+                self.refreshExecApprovalReview()
+                self.receiver?.replayChatDelivery()
+            case .inactive:
+                self.directNode.disconnectForBackground()
+            case .background:
+                self.directNode.voiceCall.sceneDidEnterBackground()
+                self.directNode.disconnectForBackground()
+            @unknown default:
+                break
+            }
+        }
+    }
+
+    private var navigationPathBinding: Binding<[WatchDestination]> {
+        Binding(
+            get: { self.navigationPath },
+            set: { path in
+                // Destination removal is an intentional exit; background visibility is not.
+                if self.navigationPath.contains(.standaloneVoice), !path.contains(.standaloneVoice) {
+                    self.directNode.voiceCall.end()
+                }
+                self.navigationPath = path
+            })
     }
 
     private func refreshAppSnapshot() {
         guard let receiver else { return }
-        self.inboxStore.markAppSnapshotRequestStarted()
+        let attemptID = self.inboxStore.markAppSnapshotRequestStarted()
         Task { @MainActor in
             let result = await receiver.requestAppSnapshot()
-            self.inboxStore.markAppSnapshotRequestResult(result)
+            self.inboxStore.markAppSnapshotRequestResult(result, attemptID: attemptID)
         }
     }
 
     private func sendAppCommand(_ command: WatchAppCommand) {
         guard let receiver else { return }
         let message = self.inboxStore.makeAppCommand(command)
-        self.inboxStore.markAppCommandSending(command)
+        let attemptID = self.inboxStore.markAppCommandSending(command)
         Task { @MainActor in
             let result = await receiver.sendAppCommand(message)
-            self.inboxStore.markAppCommandResult(result, command: command)
+            self.inboxStore.markAppCommandResult(result, command: command, attemptID: attemptID)
         }
     }
 
-    private func sendChatMessage(_ text: String) -> String? {
+    private func sendChatMessage(_ text: String, spokenReply: Bool) async -> String? {
         guard let receiver else { return nil }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        guard self.inboxStore.hasGatewayTaggedAppSnapshot else {
-            self.inboxStore.markAppCommandBlocked(
-                .sendChat,
-                reason: String(localized: "Refreshing iPhone state"))
+        guard let commandId = await self.inboxStore.enqueueChat(text: text, spokenReply: spokenReply) else {
             self.refreshAppSnapshot()
             return nil
         }
-        let message = self.inboxStore.makeAppCommand(.sendChat, text: trimmed)
-        self.inboxStore.markAppCommandSending(.sendChat)
-        Task { @MainActor in
-            let result = await receiver.sendAppCommand(message)
-            self.inboxStore.markAppCommandResult(result, command: .sendChat)
-            try? await Task.sleep(nanoseconds: 900_000_000)
-            self.refreshAppSnapshot()
-        }
-        return message.commandId
+        receiver.replayChatDelivery()
+        return commandId
     }
 
     private func refreshExecApprovalReview(force: Bool = false) {

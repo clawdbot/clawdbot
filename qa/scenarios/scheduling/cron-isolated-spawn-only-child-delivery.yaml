@@ -50,8 +50,8 @@ scenario:
           terminalNeedle: Empty response exhaustion QA check
           prompt: "Subagent direct fallback QA check: spawn one native subagent worker. The worker must finish with exactly QA-SUBAGENT-DIRECT-FALLBACK-OK. After the spawn is accepted, finish without assistant text. Empty response exhaustion QA check. Do not use ACP."
         - name: heartbeat-parent
-          terminalNeedle: Read HEARTBEAT.md if it exists
-          prompt: "Subagent direct fallback QA check: spawn one native subagent worker. The worker must finish with exactly QA-SUBAGENT-DIRECT-FALLBACK-OK. After the spawn is accepted, reply HEARTBEAT_OK. Do not use ACP.\nRead HEARTBEAT.md if it exists (workspace context). If nothing needs attention, reply HEARTBEAT_OK."
+          terminalNeedle: If nothing needs attention, reply NO_REPLY
+          prompt: "Subagent direct fallback QA check: spawn one native subagent worker. The worker must finish with exactly QA-SUBAGENT-DIRECT-FALLBACK-OK. After the spawn is accepted, reply NO_REPLY. Do not use ACP.\nIf nothing needs attention, reply NO_REPLY."
 
 flow:
   steps:
@@ -198,7 +198,7 @@ flow:
                   message:
                     expr: "`${parentCase.name}: expected exactly one child reply on qa-channel, saw ${deliveredReplies.length}: ${JSON.stringify(caseOutbound.map((message) => message.text))}`"
               - assert:
-                  expr: "caseOutbound.every((message) => !String(message.text ?? '').includes('HEARTBEAT_OK'))"
+                  expr: "caseOutbound.every((message) => !String(message.text ?? '').includes('NO_REPLY'))"
                   message:
                     expr: "`${parentCase.name}: parent heartbeat acknowledgment leaked to qa-channel: ${JSON.stringify(caseOutbound.map((message) => message.text))}`"
               - call: waitForCondition

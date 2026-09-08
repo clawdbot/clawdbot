@@ -4,25 +4,7 @@
  * Handles tool-based actions for Twitch, such as sending messages.
  */
 
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { resolveTwitchAccountContext } from "./config.js";
-import { twitchOutbound } from "./outbound.js";
-import type { ChannelMessageActionAdapter, ChannelMessageActionContext } from "./types.js";
-
-/**
- * Create a tool result with error content.
- */
-function errorResponse(error: string) {
-  return {
-    content: [
-      {
-        type: "text" as const,
-        text: JSON.stringify({ ok: false, error }),
-      },
-    ],
-    details: { ok: false },
-  };
-}
+import type { ChannelMessageActionAdapter } from "./types.js";
 
 /**
  * Read a string parameter from action arguments.
@@ -105,71 +87,5 @@ export const twitchMessageActions: ChannelMessageActionAdapter = {
     }
   },
 
-  /**
-   * Handle an action execution.
-   *
-   * Processes the "send" action to send messages to Twitch.
-   *
-   * @param ctx - Action context including action type, parameters, and config
-   * @returns Tool result with content or null if action not supported
-   *
-   * @example
-   * const result = await twitchMessageActions.handleAction!({
-   *   action: "send",
-   *   params: { message: "Hello Twitch!", to: "#mychannel" },
-   *   cfg: openclawConfig,
-   *   accountId: "default",
-   * });
-   */
-  handleAction: async (ctx: ChannelMessageActionContext) => {
-    if (ctx.action !== "send") {
-      return {
-        content: [{ type: "text" as const, text: "Unsupported action" }],
-        details: { ok: false, error: "Unsupported action" },
-      };
-    }
-
-    const message = readStringParam(ctx.params, "message", { required: true });
-    const to = readStringParam(ctx.params, "to", { required: false });
-    const accountId = ctx.accountId ?? resolveTwitchAccountContext(ctx.cfg).accountId;
-
-    const { account, availableAccountIds } = resolveTwitchAccountContext(ctx.cfg, accountId);
-    if (!account) {
-      return errorResponse(
-        `Account not found: ${accountId}. Available accounts: ${availableAccountIds.join(", ") || "none"}`,
-      );
-    }
-
-    // Use the channel from account config (or override with `to` parameter)
-    const targetChannel = to || account.channel;
-    if (!targetChannel) {
-      return errorResponse("No channel specified and no default channel in account config");
-    }
-
-    if (!twitchOutbound.sendText) {
-      return errorResponse("sendText not implemented");
-    }
-
-    try {
-      const result = await twitchOutbound.sendText({
-        cfg: ctx.cfg,
-        to: targetChannel,
-        text: message ?? "",
-        accountId,
-      });
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(result),
-          },
-        ],
-        details: { ok: true },
-      };
-    } catch (error) {
-      const errorMsg = formatErrorMessage(error);
-      return errorResponse(errorMsg);
-    }
-  },
+  // Core owns send execution so receipts, queue settlement, and mirrors agree.
 };

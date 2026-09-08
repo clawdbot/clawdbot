@@ -7,7 +7,6 @@ import {
   scoreTriggerMatch,
   resolveTriggerRecall,
   selectStrongTriggerMatches,
-  STRONG_TRIGGER_MATCH_SCORE,
 } from "./trigger-recall.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -29,6 +28,7 @@ function result(overrides: Partial<MemorySearchResult> = {}): MemorySearchResult
     snippet: "User prefers aisle seats and extra connection time.",
     source: "memory",
     triggers: "when booking a flight; seat preferences",
+    provenance: { originClass: "owner", sessionKind: "interactive", observedAt: 1 },
     ...overrides,
   };
 }
@@ -50,34 +50,51 @@ describe("active-memory trigger recall", () => {
     ).toBeLessThan(0.65);
     // Single-word concept triggers (the promotion writer's output) cap at
     // 0.85 * 0.8 = 0.68 with zero relevance; the 0.65 threshold must admit them.
-    expect(
-      scoreTriggerMatch("Project status", result({ score: 0, triggers: "project" })),
-    ).toBeCloseTo(0.68);
-    expect(
-      scoreTriggerMatch("Project status", result({ score: 0, triggers: "project" })),
-    ).toBeGreaterThanOrEqual(STRONG_TRIGGER_MATCH_SCORE);
+    const singleWordTrigger = result({ score: 0, triggers: "project" });
+    expect(scoreTriggerMatch("Project status", singleWordTrigger)).toBeCloseTo(0.68);
+    expect(selectStrongTriggerMatches("Project status", [singleWordTrigger])).toHaveLength(1);
   });
 
   it("limits automatic injection to curated or trusted-origin entries", () => {
     expect(isPromotedTrustedMemoryEntry(result())).toBe(true);
     expect(isPromotedTrustedMemoryEntry(result({ path: "USER.md" }))).toBe(true);
-    expect(isPromotedTrustedMemoryEntry(result({ path: "memory/2026-07-27.md" }))).toBe(false);
+    expect(isPromotedTrustedMemoryEntry(result({ provenance: undefined }))).toBe(false);
+    expect(
+      isPromotedTrustedMemoryEntry({
+        ...result({ path: "memory/2026-07-27.md" }),
+        provenance: undefined,
+      }),
+    ).toBe(false);
     expect(isPromotedTrustedMemoryEntry(result({ source: "sessions" }))).toBe(false);
     expect(
-      isPromotedTrustedMemoryEntry(result({ path: "memory/promoted.md", originClass: "owner" })),
+      isPromotedTrustedMemoryEntry(
+        result({
+          path: "memory/promoted.md",
+          provenance: { originClass: "agent", sessionKind: "interactive", observedAt: 1 },
+        }),
+      ),
     ).toBe(true);
 
     const matches = selectStrongTriggerMatches("when booking a flight", [
       result(),
       result({ path: "USER.md", startLine: 3 }),
-      result({ path: "memory/2026-07-27.md", startLine: 4 }),
+      result({ path: "memory/2026-07-27.md", startLine: 4, provenance: undefined }),
       result({ source: "sessions", path: "session.jsonl", startLine: 5 }),
     ]);
     expect(matches.map((entry) => entry.path)).toEqual(["MEMORY.md", "USER.md"]);
 
     const provenanceMatches = selectStrongTriggerMatches("when booking a flight", [
-      result({ path: "memory/untrusted.md", originClass: "untrusted", score: 1 }),
-      result({ path: "memory/owner.md", originClass: "owner", score: 1 }),
+      result({
+        path: "memory/untrusted.md",
+        provenance: { originClass: "untrusted", sessionKind: "interactive", observedAt: 1 },
+        score: 1,
+      }),
+      result({ path: "memory/missing.md", provenance: undefined, score: 1 }),
+      result({
+        path: "memory/owner.md",
+        provenance: { originClass: "owner", sessionKind: "interactive", observedAt: 1 },
+        score: 1,
+      }),
     ]);
     expect(provenanceMatches.map((entry) => entry.path)).toEqual(["memory/owner.md"]);
   });

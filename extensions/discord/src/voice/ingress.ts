@@ -1,5 +1,4 @@
 // Discord plugin module implements ingress behavior.
-import { agentCommandFromIngress } from "openclaw/plugin-sdk/agent-runtime";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveRealtimeBootstrapContextInstructions } from "openclaw/plugin-sdk/realtime-bootstrap-context";
 import { createSubsystemLogger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -7,6 +6,8 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { formatMention } from "../mentions.js";
 import { normalizeDiscordSlug } from "../monitor/allow-list.js";
 import { buildDiscordGroupSystemPrompt } from "../monitor/inbound-context.js";
+import type { DiscordLivePolicyReader } from "../monitor/live-policy.js";
+import { getDiscordRuntime } from "../runtime.js";
 import { authorizeDiscordVoiceIngress } from "./access.js";
 import type { VoiceSessionEntry } from "./session.js";
 import type { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
@@ -63,6 +64,7 @@ function summarizeAgentTurnPayloads(payloads: readonly unknown[]): string {
 }
 
 export async function resolveDiscordVoiceIngressContext(params: {
+  readPolicy?: DiscordLivePolicyReader;
   entry: VoiceSessionEntry;
   userId: string;
   cfg: OpenClawConfig;
@@ -78,6 +80,7 @@ export async function resolveDiscordVoiceIngressContext(params: {
   const speaker = await params.speakerContext.resolveContext(entry.guildId, userId);
   const speakerIdentity = await params.speakerContext.resolveIdentity(entry.guildId, userId);
   const access = await authorizeDiscordVoiceIngress({
+    readPolicy: params.readPolicy,
     cfg: params.cfg,
     discordConfig: params.discordConfig,
     guildName: entry.guildName,
@@ -105,6 +108,7 @@ export async function resolveDiscordVoiceIngressContext(params: {
 }
 
 export async function runDiscordVoiceAgentTurn(params: {
+  readPolicy?: DiscordLivePolicyReader;
   entry: VoiceSessionEntry;
   accountId: string;
   userId: string;
@@ -121,6 +125,7 @@ export async function runDiscordVoiceAgentTurn(params: {
   const context =
     params.context ??
     (await resolveDiscordVoiceIngressContext({
+      readPolicy: params.readPolicy,
       entry: params.entry,
       userId: params.userId,
       cfg: params.cfg,
@@ -133,7 +138,7 @@ export async function runDiscordVoiceAgentTurn(params: {
     return null;
   }
   const voiceModel = normalizeOptionalString(params.discordConfig.voice?.model);
-  const result = await agentCommandFromIngress(
+  const result = await getDiscordRuntime().agent.runCommandFromIngress(
     {
       message: params.message,
       sessionKey: params.entry.route.sessionKey,

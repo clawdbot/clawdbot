@@ -22,8 +22,12 @@ export type ResponsesTerminalUsagePayload = {
   output_tokens_details?: { reasoning_tokens?: number | null } | null;
 };
 
+function readReportedCount(value: number | null | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
 function readCount(value: number | null | undefined): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+  return readReportedCount(value) ?? 0;
 }
 
 /**
@@ -37,7 +41,9 @@ function readCount(value: number | null | undefined): number {
  */
 export function mapResponsesTerminalUsage(
   usage: ResponsesTerminalUsagePayload | undefined | null,
-): Pick<Usage, "input" | "output" | "cacheRead" | "cacheWrite" | "totalTokens"> | undefined {
+):
+  | Pick<Usage, "input" | "output" | "cacheRead" | "cacheWrite" | "contextUsage" | "totalTokens">
+  | undefined {
   if (!usage) {
     return undefined;
   }
@@ -47,7 +53,28 @@ export function mapResponsesTerminalUsage(
   const output = readCount(usage.output_tokens);
   const bucketTotal = input + output + cacheRead + cacheWrite;
   const totalTokens = Math.max(bucketTotal, readCount(usage.total_tokens));
-  return { input, output, cacheRead, cacheWrite, totalTokens };
+  const reportedInput = readReportedCount(usage.input_tokens);
+  const reportedOutput = readReportedCount(usage.output_tokens);
+  const reportedTotal = readReportedCount(usage.total_tokens);
+  const hasCoherentContext =
+    reportedInput !== undefined &&
+    (reportedOutput !== undefined ||
+      (reportedTotal !== undefined && reportedTotal >= reportedInput)) &&
+    cacheRead + cacheWrite <= reportedInput;
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    contextUsage: hasCoherentContext
+      ? {
+          state: "available",
+          promptTokens: reportedInput,
+          totalTokens: Math.max(totalTokens, reportedInput + (reportedOutput ?? 0)),
+        }
+      : { state: "unavailable" },
+    totalTokens,
+  };
 }
 
 /** Reasoning tokens are reported by the agent path only; the package path does not track them. */

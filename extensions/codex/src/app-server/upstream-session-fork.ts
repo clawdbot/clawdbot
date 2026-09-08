@@ -4,18 +4,15 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import {
-  deleteSessionUpstreamLink,
-  upsertSessionUpstreamLink,
-} from "openclaw/plugin-sdk/session-catalog";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isIncognitoSessionKey } from "../incognito-session.js";
 import type { CodexSessionCatalogControlFactory } from "../session-catalog-types.js";
 import { codexLastTerminalTurnId, codexUpstreamBaseline } from "../session-upstream-marker.js";
+import { forkCanonicalCodexSession } from "./canonical-session-fork.js";
 import { assertCodexThreadForkResponse } from "./protocol-validators.js";
-import type { CodexThread, CodexThreadForkResponse } from "./protocol.js";
+import type { CodexThread } from "./protocol.js";
 import { sessionBindingIdentity, type CodexAppServerBindingStore } from "./session-binding.js";
 import { createImportedCodexSession } from "./session-history-import.js";
+import { withCodexAppServerThreadMutation } from "./thread-ownership.js";
 import {
   listCodexUpstreamTurns,
   precheckCodexUpstreamForkBoundary,
@@ -29,10 +26,6 @@ function readConnectionFingerprint(ref: unknown): string | undefined {
   return typeof ref.connectionFingerprint === "string" && ref.connectionFingerprint.trim()
     ? ref.connectionFingerprint
     : undefined;
-}
-
-function normalizeTurnId(value: unknown): string | undefined {
-  return normalizeOptionalString(value);
 }
 
 export async function forkCodexUpstreamSession(
@@ -62,25 +55,38 @@ export async function forkCodexUpstreamSession(
       };
     }
     return await requestControl.withPinnedConnection(async (control) => {
-      const incognito = isIncognitoSessionKey(params.targetKey);
-      const clientId = control.clientId?.trim();
-      if (incognito && !clientId) {
-        throw new Error("Incognito Codex forks require the live pinned app-server client");
-      }
-      let linked = false;
-      let bindingIdentity: ReturnType<typeof sessionBindingIdentity> | undefined;
-      const compensateFork = async (forkedThreadId: string) => {
-        if (bindingIdentity) {
-          await options.bindingStore
-            .mutate(bindingIdentity, { kind: "clear", threadId: forkedThreadId })
-            .catch(() => undefined);
-        }
-        if (linked) {
-          deleteSessionUpstreamLink(params.targetKey, params.source.agentId);
-        }
-        await control.archiveThread(forkedThreadId).catch(() => undefined);
-      };
-      if (sourceFingerprint !== control.connectionFingerprint) {
+      const sourceBinding = options.bindingStore.read(
+        sessionBindingIdentity({ ...params.source, config: options.resolveConfig?.() }),
+      );
+      // Imported identities remain rooted at S; new canonical turns belong to C.
+      const supervised = sourceBinding?.connectionScope === "supervision";
+      const sourceThreadId = params.upstream.threadId;
+      let initializerOwnsFork = false;
+      const archiveFreshFork = async (forkedThreadId: string, assertCurrent?: () => void) =>
+        withCodexAppServerThreadMutation(forkedThreadId, async () => {
+          assertCurrent?.();
+          if (await options.bindingStore.hasOtherThreadOwner(forkedThreadId)) {
+            throw new Error("Codex fork cleanup refused: the native thread has another owner");
+          }
+          assertCurrent?.();
+          try {
+            await control.archiveThread(forkedThreadId, assertCurrent);
+            assertCurrent?.();
+          } catch (cause) {
+            control.retireConnection?.();
+            throw new Error(
+              "Codex fork cleanup could not be verified; inspect the retained native thread before retrying.",
+              { cause },
+            );
+          }
+        });
+      if (
+        sourceFingerprint !== control.connectionFingerprint ||
+        (supervised &&
+          (sourceBinding.supervisionSourceThreadId !== params.upstream.threadId ||
+            (sourceBinding.pendingSupervisionBranch?.connectionFingerprint ??
+              sourceBinding.appServerRuntimeFingerprint) !== sourceFingerprint))
+      ) {
         return {
           status: "failed",
           code: "upstream-unavailable",
@@ -90,13 +96,29 @@ export async function forkCodexUpstreamSession(
       }
       const resolved = await resolveCodexUpstreamForkBoundary({
         ...params.source,
-        threadId: params.upstream.threadId,
+        threadId: sourceThreadId,
+        canonicalThreadId:
+          supervised && !sourceBinding.pendingSupervisionBranch
+            ? sourceBinding.threadId
+            : undefined,
         control,
       });
       if (!resolved.ok) {
         return { status: "failed", code: resolved.code, message: resolved.message };
       }
-      const liveTurns = await listCodexUpstreamTurns(control, params.upstream.threadId);
+      if (resolved.canonical && sourceBinding) {
+        return await forkCanonicalCodexSession({
+          fork: params,
+          resolved: { ...resolved, canonical: resolved.canonical },
+          sourceBinding,
+          control,
+          bindingStore: options.bindingStore,
+          runtime: options.runtime,
+          harnessRuntimeId: options.harnessRuntimeId,
+          config: options.resolveConfig?.() ?? {},
+        });
+      }
+      const liveTurns = await listCodexUpstreamTurns(control, sourceThreadId);
       const precheck = precheckCodexUpstreamForkBoundary({
         boundary: resolved.boundary,
         turns: liveTurns,
@@ -106,63 +128,50 @@ export async function forkCodexUpstreamSession(
       }
       // beforeTurnId is experimental; the initialized shared client explicitly negotiates it.
       const rawResponse = await control.forkThread({
-        threadId: params.upstream.threadId,
+        threadId: sourceThreadId,
         beforeTurnId: resolved.boundary.beforeTurnId,
-        ...(incognito ? { ephemeral: true } : {}),
-        excludeTurns: !incognito,
+        ...(params.sandbox === "required" ? { sandbox: "workspace-write" as const } : {}),
+        excludeTurns: true,
       });
-      let response: CodexThreadForkResponse;
-      try {
-        response = assertCodexThreadForkResponse(rawResponse);
-      } catch (error) {
-        const orphanThreadId =
-          isRecord(rawResponse.thread) && typeof rawResponse.thread.id === "string"
-            ? rawResponse.thread.id.trim()
-            : "";
-        // A malformed response cannot be trusted to name a NEW thread; never archive an
-        // id that matches the source conversation.
-        if (orphanThreadId && orphanThreadId !== params.upstream.threadId) {
-          await control.archiveThread(orphanThreadId).catch(() => undefined);
-        }
-        throw error;
-      }
+      // Malformed responses do not establish ownership of any purported orphan id.
+      const response = assertCodexThreadForkResponse(rawResponse);
       const threadId = response.thread.id.trim();
       if (!threadId) {
         throw new Error("Codex thread/fork response did not include a thread id");
       }
       // A contract-violating response reusing the source id would bind (and later
       // archive) the original conversation; reject identity reuse outright.
-      if (threadId === params.upstream.threadId) {
+      if (threadId === sourceThreadId || threadId === sourceBinding?.threadId) {
         throw new Error("Codex thread/fork response reused the source thread id");
       }
       const forkedThreadId = threadId;
       try {
-        const connectionFingerprint = control.connectionFingerprint;
+        const connectionFingerprint = normalizeOptionalString(control.connectionFingerprint);
         if (!connectionFingerprint) {
           throw new Error("Codex fork connection did not include a fingerprint");
         }
-        const forkedTurns = incognito
-          ? (response.thread.turns ?? [])
-          : await listCodexUpstreamTurns(control, threadId);
-        const expectedLastTurnId = resolved.boundary.retainedMarker.turnId;
+        const forkedTurns = await listCodexUpstreamTurns(control, threadId);
+        const expectedLastTurnId = resolved.boundary.lastRetainedTurnId;
         const actualLastTurnId = forkedTurns.at(-1)?.id ?? null;
         // Boundary resolution already verified the source prefix; this read-back tail identity
         // detects app-server versions that ignored the exclusive beforeTurnId cut.
         if (actualLastTurnId !== expectedLastTurnId) {
-          await compensateFork(forkedThreadId);
-          return {
-            status: "failed",
-            code: "upstream-unavailable",
-            message:
-              "This Codex version does not support message-level forks. Update Codex, reconnect, and try again.",
-          };
+          throw new Error(
+            "This Codex version does not support message-level forks. Update Codex, reconnect, and try again.",
+          );
         }
         const forkedThread: CodexThread = { ...response.thread, turns: forkedTurns };
-        const throughTurnId = codexLastTerminalTurnId(forkedThread, normalizeTurnId) ?? null;
-        const marker = codexUpstreamBaseline(forkedThread, normalizeTurnId);
+        const throughTurnId =
+          codexLastTerminalTurnId(forkedThread, normalizeOptionalString) ?? null;
+        const marker = codexUpstreamBaseline(forkedThread, normalizeOptionalString);
         const config = options.resolveConfig?.() ?? {};
         const created = await createImportedCodexSession({
           runtime: options.runtime,
+          bindingStore: options.bindingStore,
+          prepareCleanup: () => {
+            initializerOwnsFork = true;
+            return (assertCurrent) => archiveFreshFork(forkedThreadId, assertCurrent);
+          },
           config,
           key: params.targetKey,
           agentId: params.source.agentId,
@@ -172,16 +181,10 @@ export async function forkCodexUpstreamSession(
             agentHarnessId: options.harnessRuntimeId,
             modelSelectionLocked: true,
           },
-          afterImport: async (entry) => {
-            bindingIdentity = sessionBindingIdentity({
-              agentId: entry.agentId,
-              sessionId: entry.sessionId,
-              sessionKey: entry.key,
-              config,
-            });
+          afterImport: async (entry, initialization) => {
             // Link BEFORE bind: a crash cannot expose a bound session to local-only
             // rewind/switch while its canonical upstream ownership is missing.
-            linked = upsertSessionUpstreamLink({
+            initialization.link({
               sessionKey: entry.key,
               agentId: entry.agentId,
               catalogId: params.upstream.catalogId,
@@ -191,23 +194,24 @@ export async function forkCodexUpstreamSession(
               upstreamRef: { connectionFingerprint, threadId },
               marker,
             });
-            if (!linked) {
-              throw new Error("Codex fork link could not be persisted");
-            }
-            const attached = await options.bindingStore.mutate(bindingIdentity, {
-              kind: "set",
-              binding: {
-                threadId,
-                ...(incognito && clientId ? { clientId } : {}),
-                cwd: forkedThread.cwd ?? "",
-                model: response.model,
-                modelProvider: response.modelProvider ?? undefined,
-                historyCoveredThrough: new Date().toISOString(),
+            await initialization.bind({
+              threadId,
+              connectionScope: "supervision",
+              supervisionSourceThreadId: threadId,
+              preserveNativeModel: true,
+              conversationSourceTransferComplete: true,
+              // The full harness applies tools/instructions and injects this verified
+              // stored snapshot before committing its canonical native thread.
+              pendingSupervisionBranch: {
+                sourceThreadId: threadId,
+                connectionFingerprint,
+                ...(throughTurnId ? { lastTurnId: throughTurnId } : {}),
               },
+              cwd: forkedThread.cwd ?? "",
+              model: response.model,
+              modelProvider: response.modelProvider ?? undefined,
+              historyCoveredThrough: new Date().toISOString(),
             });
-            if (!attached) {
-              throw new Error("Codex session binding changed before the fork could be attached");
-            }
             return { pluginExtensions: entry.entry.pluginExtensions };
           },
         });
@@ -216,24 +220,29 @@ export async function forkCodexUpstreamSession(
           key: created.key,
           ...(resolved.editorText !== undefined ? { editorText: resolved.editorText } : {}),
         };
-      } catch {
-        // thread/fork commits before local materialization. The guarded session initializer
-        // rolls back its row/transcript; this capability clears link/binding and archives the orphan.
-        await compensateFork(forkedThreadId);
+      } catch (error) {
+        // Once a host initializer captures the artifact, only its guarded rollback may clean it.
+        if (!initializerOwnsFork) {
+          await options.bindingStore.withThreadArchiveFence(() => archiveFreshFork(forkedThreadId));
+        }
         return {
           status: "failed",
           code: "upstream-unavailable",
           message:
-            "The Codex fork could not be verified or imported into a new session. Refresh sessions and try again.",
+            error instanceof Error
+              ? error.message
+              : "The Codex fork could not be imported. Refresh sessions and try again.",
         };
       }
     });
-  } catch {
+  } catch (error) {
     return {
       status: "failed",
       code: "upstream-unavailable",
       message:
-        "The Codex thread could not be forked. Check that Codex is available, then try again.",
+        error instanceof Error
+          ? error.message
+          : "The Codex thread could not be forked. Check that Codex is available, then try again.",
     };
   }
 }

@@ -9,6 +9,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { attachInitialGatewayLifetimeSidecars } from "./server-lifetime-sidecars.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
@@ -120,9 +121,16 @@ describe("gateway lifetime sidecars", () => {
     expect(reconcileGitHubPublications).toHaveBeenCalledTimes(2);
   });
 
-  test("attaches, starts, and stops the GitHub OAuth lifecycle with the Gateway", async () => {
+  test("attaches and retires authorization lifecycles with the Gateway", async () => {
     const sidecars: GatewayPostReadySidecarHandle[] = [];
-    const context: { getRuntimeConfig: ReturnType<typeof vi.fn>; githubOAuthService?: unknown } = {
+    const owner = createGatewaySidecarStopOwner({
+      getRegistered: () => sidecars,
+      setRegistered: (next) => sidecars.splice(0, sidecars.length, ...next),
+    });
+    const context: Pick<
+      GatewayRequestContext,
+      "getRuntimeConfig" | "githubOAuthService" | "modelAccountConnectService"
+    > = {
       getRuntimeConfig: vi.fn(() => ({})),
     };
     const warn = vi.fn();
@@ -144,11 +152,17 @@ describe("gateway lifetime sidecars", () => {
     expect(oauth.install).toHaveBeenCalledWith(context.githubOAuthService);
     expect(oauth.start).toHaveBeenCalledOnce();
     expect(context.githubOAuthService).toBeDefined();
+    expect(context.modelAccountConnectService).toBeDefined();
+    const modelAccounts = context.modelAccountConnectService;
 
-    await sidecars[0]?.stop();
+    await owner.stop();
     expect(oauth.uninstall).toHaveBeenCalledOnce();
     expect(oauth.stop).toHaveBeenCalledOnce();
     expect(context.githubOAuthService).toBeUndefined();
+    expect(context.modelAccountConnectService).toBeUndefined();
+    expect(() =>
+      modelAccounts?.status({ owner: "profile-1", assertCurrent: () => {} }, "stale-flow"),
+    ).toThrow("current authorized connection");
   });
 
   test.each([

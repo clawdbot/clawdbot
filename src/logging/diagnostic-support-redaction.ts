@@ -320,10 +320,13 @@ function redactContactIdentifiersForSupport(value: string): string {
 }
 
 function redactServiceIdentifiersForSupport(value: string): string {
+  // Saved support artifacts can pass through redaction again; preserve our exact path marker.
   return value
     .replace(MATRIX_USER_ID_RE, "<redacted-matrix-user>")
     .replace(MATRIX_ROOM_ID_RE, "<redacted-matrix-room>")
-    .replace(MATRIX_EVENT_ID_RE, "<redacted-matrix-event>");
+    .replace(MATRIX_EVENT_ID_RE, (eventId) =>
+      eventId === "$OPENCLAW_STATE_DIR" ? eventId : "<redacted-matrix-event>",
+    );
 }
 
 function redactLongIdentifiersForSupport(value: string): string {

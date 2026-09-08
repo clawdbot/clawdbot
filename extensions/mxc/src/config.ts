@@ -14,15 +14,6 @@ type MxcContainment = (typeof MXC_CONTAINMENTS)[number];
 
 type MxcNetworkMode = (typeof MXC_NETWORK_MODES)[number];
 
-type MxcPluginConfig = {
-  mxcBinaryPath?: string;
-  containment?: MxcContainment;
-  network?: MxcNetworkMode;
-  timeoutSeconds?: number;
-  debug?: boolean;
-  mxcPolicyPaths?: string[];
-};
-
 export type MxcConfig = {
   mxcBinaryPath?: string;
   containment: MxcContainment;
@@ -126,7 +117,7 @@ export function resolveConfig(value: unknown): MxcConfig {
     throw new Error(`Invalid mxc plugin config: ${message}`);
   }
 
-  const config = parsed.data as MxcPluginConfig;
+  const config = parsed.data;
   const resolved: MxcConfig = {
     mxcBinaryPath: config.mxcBinaryPath,
     containment: config.containment ?? DEFAULT_CONTAINMENT,

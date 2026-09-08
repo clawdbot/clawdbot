@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import { createRequire } from "node:module";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { describePackageManifestContract } from "../../plugin-sdk/test-helpers/package-manifest-contract.js";
 import { validatePackageExtensionEntriesForInstall } from "../package-entry-resolution.js";
@@ -26,22 +29,21 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     pluginLocalRuntimeDeps: ["@larksuiteoapi/node-sdk"],
     minHostVersionBaseline: "2026.3.22",
   },
-  { pluginId: "google" },
-  { pluginId: "google-meet" },
   {
     pluginId: "googlechat",
     pluginLocalRuntimeDeps: ["google-auth-library"],
     minHostVersionBaseline: "2026.3.22",
   },
+  {
+    pluginId: "imap",
+    pluginLocalRuntimeDeps: ["imapflow", "mailauth", "mailparser"],
+  },
   { pluginId: "irc", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "line", minHostVersionBaseline: "2026.3.22" },
-  { pluginId: "amazon-bedrock" },
-  { pluginId: "amazon-bedrock-mantle" },
   {
     pluginId: "diffs",
     pluginLocalRuntimeDeps: ["@pierre/diffs"],
   },
-  { pluginId: "file-transfer" },
   {
     pluginId: "matrix",
     pluginLocalRuntimeDeps: [
@@ -56,7 +58,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   { pluginId: "mattermost", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "memory-lancedb",
-    pluginLocalRuntimeDeps: ["@lancedb/lancedb", "apache-arrow"],
+    pluginLocalRuntimeDeps: ["apache-arrow"],
     minHostVersionBaseline: "2026.3.22",
   },
   {
@@ -70,10 +72,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     pluginLocalRuntimeDeps: ["nostr-tools"],
     minHostVersionBaseline: "2026.3.22",
   },
-  { pluginId: "openshell" },
-  { pluginId: "slack" },
   { pluginId: "synology-chat", minHostVersionBaseline: "2026.3.22" },
-  { pluginId: "telegram" },
   { pluginId: "tlon", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "tokenjuice", pluginLocalRuntimeDeps: ["tokenjuice"] },
   { pluginId: "twitch", minHostVersionBaseline: "2026.3.22" },
@@ -91,6 +90,31 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
 for (const params of packageManifestContractTests) {
   describePackageManifestContract(params);
 }
+
+it("bundles LanceDB JavaScript while installing matching native bindings per platform", () => {
+  const dependencyName = "@lancedb/lancedb";
+  const pluginPackagePath = path.resolve(process.cwd(), "extensions/memory-lancedb/package.json");
+  const pluginManifest = JSON.parse(
+    fs.readFileSync(pluginPackagePath, "utf8"),
+  ) as PackageManifest & {
+    devDependencies?: Record<string, string>;
+  };
+  const entry = createRequire(pluginPackagePath).resolve(dependencyName);
+  const lancedbManifest = JSON.parse(
+    fs.readFileSync(path.resolve(path.dirname(entry), "../package.json"), "utf8"),
+  ) as PackageManifest;
+  // LanceDB's loader and native ABI must stay at the same version on every supported platform.
+  const nativeBindings = Object.fromEntries(
+    Object.entries(lancedbManifest.optionalDependencies ?? {}).filter(([name]) =>
+      name.startsWith(`${dependencyName}-`),
+    ),
+  );
+
+  expect(Object.keys(nativeBindings).length).toBeGreaterThan(0);
+  expect(pluginManifest.dependencies?.[dependencyName]).toBeUndefined();
+  expect(pluginManifest.devDependencies?.[dependencyName]).toBe(lancedbManifest.version);
+  expect(pluginManifest.optionalDependencies).toEqual(nativeBindings);
+});
 
 describe("plugin package authoring metadata", () => {
   it("exposes the declared discovery and release entrypoints", () => {

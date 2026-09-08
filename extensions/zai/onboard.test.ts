@@ -48,7 +48,7 @@ describe("zai onboard", () => {
     });
   });
 
-  it("resolves GLM-5.3 through the selected Coding Plan or custom endpoint", async () => {
+  it("resolves GLM-5.3 models through the selected Coding Plan or custom endpoint", async () => {
     for (const [name, cfg, expectedBaseUrl] of [
       ["coding-cn", applyZaiConfig({}, { endpoint: "coding-cn" }), ZAI_CODING_CN_BASE_URL],
       [
@@ -82,7 +82,9 @@ describe("zai onboard", () => {
         );
         const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath);
         expect(registry.getError()).toBeUndefined();
-        expect(registry.find("zai", "glm-5.3")?.baseUrl).toBe(expectedBaseUrl);
+        for (const modelId of ["glm-5.3", "glm-5.3-flash"]) {
+          expect(registry.find("zai", modelId)?.baseUrl).toBe(expectedBaseUrl);
+        }
       } finally {
         await fs.rm(dir, { recursive: true, force: true });
       }

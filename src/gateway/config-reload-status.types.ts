@@ -7,3 +7,12 @@
 // after watcher re-creation fails past the retry budget, so operators/callers
 // can detect silent degradation instead of assuming reloads still fire.
 export type GatewayHotReloadStatus = "active" | "disabled";
+
+export type GatewayHotReloadApplicationStatus = "applied" | "applied-restart-required";
+
+/** Channel reload work currently waiting for active Gateway work to drain. */
+export type GatewayDeferredChannelReload = {
+  channel: string;
+  /** False when plugin publication committed before newly activated channels wait to start. */
+  publicationPending: boolean;
+};

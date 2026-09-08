@@ -2,21 +2,26 @@
 summary: "OpenClaw WhatsApp channel plugin for WhatsApp Web chats."
 read_when:
   - You are installing, configuring, or auditing the whatsapp plugin
-title: "WhatsApp plugin"
+title: "WhatsApp plugin reference"
 ---
 
-# WhatsApp plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 OpenClaw WhatsApp channel plugin for WhatsApp Web chats.
 
 ## Distribution
 
 - Package: `@openclaw/whatsapp`
-- Install route: ClawHub: `clawhub:@openclaw/whatsapp`; npm
+- Install route: npm or ClawHub: `clawhub:@openclaw/whatsapp`
 
 ## Surface
 
-channels: `whatsapp`; contracts: `tools`; skills
+- Channels: `whatsapp`
+- Contracts: `tools`
+- Skills
 
 ## Related docs
 

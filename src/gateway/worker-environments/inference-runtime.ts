@@ -11,13 +11,12 @@ import {
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
 import { applyExtraParamsToAgent } from "../../agents/embedded-agent-runner/extra-params.js";
 import { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "../../agents/embedded-agent-runner/run/attempt.model-diagnostic-events.js";
-import { resolveEmbeddedAgentStreamFn } from "../../agents/embedded-agent-runner/stream-resolution.js";
+import { resolveEmbeddedAgentStream } from "../../agents/embedded-agent-runner/stream-resolution.js";
 import { mapThinkingLevel } from "../../agents/embedded-agent-runner/utils.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
@@ -43,7 +42,7 @@ import {
   prepareSimpleCompletionModel,
   type PreparedSimpleCompletionModel,
 } from "../../agents/simple-completion-runtime.js";
-import { normalizeUsage, hasNonzeroUsage } from "../../agents/usage.js";
+import { normalizeUsage, hasObservedModelUsage } from "../../agents/usage.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
@@ -73,6 +72,7 @@ import {
 } from "./inference-terminal-message.js";
 import { createWorkerToolCallStream } from "./inference-tool-call-stream.js";
 import { resolveWorkerSessionTarget, type ResolvedWorkerSessionTarget } from "./session-target.js";
+import { boundedWorkerError } from "./worker-error.js";
 
 type WorkerInferenceStreamEvent = WorkerInferenceEventParams["event"];
 export type WorkerInferenceExecutor = import("./inference.js").WorkerInferenceExecutor;
@@ -105,7 +105,7 @@ type WorkerInferenceRuntimeDependencies = {
   resolveModel: typeof resolveModelAsync;
   prepareModel: typeof prepareSimpleCompletionModel;
   resolveProviderStream: typeof registerProviderStreamForModel;
-  resolveStream: typeof resolveEmbeddedAgentStreamFn;
+  resolveStream: typeof resolveEmbeddedAgentStream;
   applyStreamPolicy: typeof applyExtraParamsToAgent;
   wrapStream: typeof wrapStreamFnWithDiagnosticModelCallEvents;
   createTrace: typeof createDiagnosticTraceContextFromActiveScope;
@@ -267,7 +267,7 @@ function emitWorkerInferenceUsage(params: WorkerInferenceUsageParams): void {
     return;
   }
   const usage = normalizeUsage(params.usage);
-  if (!hasNonzeroUsage(usage)) {
+  if (!hasObservedModelUsage(usage)) {
     return;
   }
   const input = usage.input ?? 0;
@@ -276,14 +276,16 @@ function emitWorkerInferenceUsage(params: WorkerInferenceUsageParams): void {
   const cacheWrite = usage.cacheWrite ?? 0;
   const promptTokens = input + cacheRead + cacheWrite;
   const total = usage.total ?? promptTokens + output;
-  const costUsd = estimateUsageCost({
-    usage,
-    cost: resolveModelCostConfig({
-      provider: params.model.provider,
-      model: params.model.id,
-      config: params.config,
-    }),
-  });
+  const costUsd =
+    usage.cost?.total ??
+    estimateUsageCost({
+      usage,
+      cost: resolveModelCostConfig({
+        provider: params.model.provider,
+        model: params.model.id,
+        config: params.config,
+      }),
+    });
   emitTrustedDiagnosticEvent({
     type: "model.usage",
     trace: freezeDiagnosticTraceContext(params.trace),
@@ -314,23 +316,14 @@ function emitWorkerInferenceUsage(params: WorkerInferenceUsageParams): void {
 
 const DEFAULT_DEPENDENCIES: WorkerInferenceRuntimeDependencies = {
   now: Date.now,
-  resolveSessionTarget: (config, sessionId) => {
-    const target = resolveWorkerSessionTarget(config, sessionId);
-    if (!target) {
-      return undefined;
-    }
-    return {
-      ...target,
-      agentId: target.agentId ?? resolveDefaultAgentId(config),
-    };
-  },
+  resolveSessionTarget: resolveWorkerSessionTarget,
   acquireRuntimeLease: acquireAgentRunPreparedModelRuntime,
   resolveDefaultModel: resolveDefaultModelForAgent,
   resolveSessionAuthSelection,
   resolveModel: resolveModelAsync,
   prepareModel: prepareSimpleCompletionModel,
   resolveProviderStream: registerProviderStreamForModel,
-  resolveStream: resolveEmbeddedAgentStreamFn,
+  resolveStream: resolveEmbeddedAgentStream,
   applyStreamPolicy: applyExtraParamsToAgent,
   wrapStream: wrapStreamFnWithDiagnosticModelCallEvents,
   createTrace: createDiagnosticTraceContextFromActiveScope,
@@ -376,14 +369,14 @@ async function resolveApprovedModel(params: {
       const defaultModel = dependencies.resolveDefaultModel({
         cfg: lifecycleConfig,
         agentId: target.agentId,
-        manifestPlugins: manifestSnapshot.plugins,
+        manifestPlugins: manifestSnapshot,
         ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
       });
       const aliasIndex = buildModelAliasIndex({
         cfg: lifecycleConfig,
         agentId: target.agentId,
         defaultProvider: defaultModel.provider,
-        manifestPlugins: manifestSnapshot.plugins,
+        manifestPlugins: manifestSnapshot,
         ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
       });
       const resolved = resolveModelRefFromString({
@@ -392,7 +385,7 @@ async function resolveApprovedModel(params: {
         raw: rawRef,
         defaultProvider: defaultModel.provider,
         aliasIndex,
-        manifestPlugins: manifestSnapshot.plugins,
+        manifestPlugins: manifestSnapshot,
         ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
       });
       if (
@@ -410,7 +403,7 @@ async function resolveApprovedModel(params: {
         defaultProvider: defaultModel.provider,
         defaultModel: `${defaultModel.provider}/${defaultModel.model}`,
         agentId: target.agentId,
-        manifestPlugins: manifestSnapshot.plugins,
+        manifestPlugins: manifestSnapshot,
         ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
       });
       const resolvedKey = modelCatalogLogicalKey({
@@ -496,6 +489,7 @@ async function resolveApprovedModel(params: {
         ...(selectedProfileId ? { preferredProfile: selectedProfileId } : {}),
         ...(selectedProfileId ? { bindAuthOwner: true } : {}),
         allowMissingApiKeyModes: ["aws-sdk"],
+        allowBundledStaticCatalogFallback: true,
         modelResolver: dependencies.resolveModel,
         preparedModelRuntime: runtimeSnapshot,
         workspaceDir,
@@ -558,7 +552,11 @@ export function createWorkerInferenceExecutor(
     return await withPluginRuntimeGenerationScope(approved.runtimeSnapshot, async () => {
       try {
         if ("error" in approved.prepared) {
-          return inferenceError("provider-error");
+          return inferenceError(
+            "provider-error",
+            undefined,
+            boundedWorkerError(approved.prepared.error, 256),
+          );
         }
         // Keep logical identity separate from transport endpoint encoding.
         const modelIdentity: WorkerInferenceModelIdentity = {
@@ -585,18 +583,16 @@ export function createWorkerInferenceExecutor(
           workspaceDir: approved.workspaceDir,
         });
         const authValue = approved.prepared.auth.apiKey;
-        const streamAgent = {
-          streamFn: dependencies.resolveStream({
-            llmRuntime,
-            currentStreamFn: llmRuntime.streamSimple,
-            ...(providerStream ? { providerStreamFn: providerStream } : {}),
-            sessionId: request.sessionId,
-            signal,
-            model: providerModel,
-            resolvedApiKey: authValue,
-            authProfileId: approved.prepared.auth.profileId,
-          }),
-        };
+        const streamAgent = dependencies.resolveStream({
+          llmRuntime,
+          currentStreamFn: llmRuntime.streamSimple,
+          ...(providerStream ? { providerStreamFn: providerStream } : {}),
+          sessionId: request.sessionId,
+          signal,
+          model: providerModel,
+          resolvedApiKey: authValue,
+          authProfileId: approved.prepared.auth.profileId,
+        });
         const streamPolicyOptions: WorkerInferenceStartParams["options"] = {
           ...(request.options.temperature !== undefined
             ? { temperature: request.options.temperature }

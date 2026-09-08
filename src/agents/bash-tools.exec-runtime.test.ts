@@ -16,7 +16,17 @@ import {
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
+import { createAgentToolExecutionBudget } from "./agent-tool-source-execution-guard.js";
+import {
+  getFinishedSession,
+  acknowledgeNotifyOnExit,
+  waitForExecScope,
+} from "./bash-process-registry.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
+import {
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "./tools/gateway-caller-context.js";
 
 const requestHeartbeatMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventWithReceiptMock = vi.hoisted(() => vi.fn());
@@ -62,7 +72,7 @@ beforeAll(async () => {
 beforeEach(() => {
   resetGatewaySuspendCoordinatorForLifecycleRestart();
   resetProcessRegistryForTests();
-  requestHeartbeatMock.mockClear();
+  requestHeartbeatMock.mockReset();
   enqueueSystemEventWithReceiptMock.mockReset();
   enqueueSystemEventWithReceiptMock.mockReturnValue(vi.fn(() => true));
   supervisorMock.spawn.mockReset();
@@ -72,18 +82,35 @@ afterEach(() => {
   resetProcessRegistryForTests();
 });
 
+function createRunExit(overrides: Partial<RunExit> = {}): RunExit {
+  return {
+    reason: "exit",
+    exitCode: 0,
+    exitSignal: null,
+    durationMs: 1,
+    stdout: "",
+    stderr: "",
+    timedOut: false,
+    noOutputTimedOut: false,
+    ...overrides,
+  };
+}
+
 async function runExecWithExit(params: {
   exit: RunExit;
-  stdout?: string;
+  stdout?: string | string[];
   timeoutSec?: number | null;
   usePty?: boolean;
 }) {
   supervisorMock.spawn.mockImplementationOnce(
     async (input: { onStdout?: (chunk: string) => void }) => {
       if (params.stdout) {
-        input.onStdout?.(params.stdout);
+        for (const chunk of typeof params.stdout === "string" ? [params.stdout] : params.stdout) {
+          input.onStdout?.(chunk);
+        }
       }
       return {
+        activity: { resultSettled: true, lastOutputAtMs: Date.now() },
         runId: "run-exit",
         startedAtMs: Date.now(),
         pid: 123,
@@ -111,21 +138,13 @@ function runtimeManagedRun(input: SpawnInput, stdout = ""): ManagedRun {
     input.onStdout?.(stdout);
   }
   return {
+    activity: { resultSettled: true, lastOutputAtMs: Date.now() },
     runId: input.runId ?? "test-run",
     pid: 1234,
     startedAtMs: Date.now(),
     stdin: { write: vi.fn(), end: vi.fn(), destroy: vi.fn() },
     cancel: vi.fn(),
-    wait: vi.fn(async () => ({
-      reason: "exit" as const,
-      exitCode: 0,
-      exitSignal: null,
-      durationMs: 1,
-      stdout: "",
-      stderr: "",
-      timedOut: false,
-      noOutputTimedOut: false,
-    })),
+    wait: vi.fn(async () => createRunExit()),
   };
 }
 
@@ -167,6 +186,9 @@ function requireSystemEventCall(): [string, Record<string, unknown>] {
 describe("runExecProcess cursor tracking", () => {
   it.each([
     { raw: "hello world", expected: "unknown" },
+    { raw: ["\x1b[?1l\x1b", "[?1", "h"], expected: "application" },
+    { raw: ["\x1b[?1h\x1b[?", "1", "l"], expected: "normal" },
+    { raw: ["\x1b]0;\x1b[?1h", "\x07"], expected: "unknown" },
     { raw: "\x1b[?1h", expected: "application" },
     { raw: "\x1b[?1h\x1b[?1l", expected: "normal" },
     { raw: "\x1b[?1l\x1b[?1h", expected: "application" },
@@ -174,16 +196,7 @@ describe("runExecProcess cursor tracking", () => {
     const { run } = await runExecWithExit({
       stdout: raw,
       usePty: true,
-      exit: {
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 1,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      },
+      exit: createRunExit(),
     });
 
     expect(run.session.cursorKeyMode).toBe(expected);
@@ -191,6 +204,278 @@ describe("runExecProcess cursor tracking", () => {
 });
 
 describe("sandbox exec preparation failures", () => {
+  it.each(["preparation", "supervisor"] as const)(
+    "rechecks the admitting repair authority after deferred %s work",
+    async (boundary) => {
+      let current = true;
+      const controller = new AbortController();
+      const budget = createAgentToolExecutionBudget({
+        signal: controller.signal,
+        abort: (error) => controller.abort(error),
+        isCurrent: () => current,
+      });
+      const childEffect = vi.fn();
+      supervisorMock.spawn.mockImplementation(async (input: SpawnInput) => {
+        await Promise.resolve();
+        current = false;
+        input.assertCurrent?.();
+        childEffect();
+        return runtimeManagedRun(input);
+      });
+      await expect(
+        budget.run(() =>
+          runExecProcess({
+            command: "echo forbidden",
+            workdir: "/tmp",
+            env: {},
+            usePty: false,
+            warnings: [],
+            maxOutput: 1000,
+            pendingMaxOutput: 1000,
+            notifyOnExit: false,
+            timeoutSec: null,
+            beforeSpawn: async () => {
+              await Promise.resolve();
+              if (boundary === "preparation") {
+                current = false;
+              }
+              return undefined;
+            },
+          }),
+        ),
+      ).rejects.toThrow("execution scope is no longer active");
+      expect(childEffect).not.toHaveBeenCalled();
+      expect(supervisorMock.spawn).toHaveBeenCalledTimes(boundary === "preparation" ? 0 : 1);
+    },
+  );
+
+  it.each([
+    { mode: "child", usePty: false, cancelCheck: 1, expectedSpawns: 0 },
+    { mode: "PTY", usePty: true, cancelCheck: 1, expectedSpawns: 0 },
+    { mode: "PTY fallback", usePty: true, cancelCheck: 2, expectedSpawns: 1 },
+  ])(
+    "does not start $mode after cancellation during final admission",
+    async ({ usePty, cancelCheck, expectedSpawns }) => {
+      const controller = new AbortController();
+      let checks = 0;
+      supervisorMock.spawn.mockImplementation(async (input: SpawnInput) => {
+        if (input.mode === "pty") {
+          throw new Error("PTY unavailable");
+        }
+        return runtimeManagedRun(input);
+      });
+
+      await expect(
+        runExecProcess({
+          command: "echo should-not-run",
+          workdir: process.cwd(),
+          env: {},
+          usePty,
+          warnings: [],
+          maxOutput: 1000,
+          pendingMaxOutput: 1000,
+          notifyOnExit: false,
+          timeoutSec: null,
+          startupSignal: controller.signal,
+          beforeSpawn: async () => {
+            if (++checks === cancelCheck) {
+              controller.abort(new Error("cancelled during admission"));
+            }
+            return undefined;
+          },
+        }),
+      ).rejects.toThrow("cancelled during admission");
+
+      expect(supervisorMock.spawn.mock.calls.length).toBe(expectedSpawns);
+      expect(checks).toBe(cancelCheck);
+    },
+  );
+
+  it.each([
+    { mode: "child", usePty: false, loseAt: 1, authority: "revoked", spawns: 0 },
+    { mode: "PTY", usePty: true, loseAt: 1, authority: "replaced", spawns: 0 },
+    { mode: "PTY fallback", usePty: true, loseAt: 2, authority: "revoked", spawns: 1 },
+    { mode: "child construction", usePty: false, loseAt: -1, authority: "revoked", spawns: 1 },
+    { mode: "PTY construction", usePty: true, loseAt: -1, authority: "revoked", spawns: 1 },
+    { mode: "child control", usePty: false, loseAt: 0, authority: "active", spawns: 1 },
+    { mode: "PTY fallback control", usePty: true, loseAt: 0, authority: "active", spawns: 2 },
+  ])(
+    "checks $authority source authority before $mode admission without polling",
+    async ({ usePty, loseAt, authority, spawns }) => {
+      const originalClaim = {};
+      let currentClaim: object | undefined = originalClaim;
+      let checks = 0;
+      const generation = new AbortController();
+      const warnings: string[] = [];
+      supervisorMock.spawn.mockImplementation(async (input: SpawnInput) => {
+        // The real supervisor preserves this callback across queued construction.
+        await Promise.resolve();
+        if (loseAt === -1) {
+          currentClaim = undefined;
+        }
+        input.assertCurrent?.();
+        if (input.mode === "pty") {
+          throw new Error("PTY unavailable");
+        }
+        return runtimeManagedRun(input);
+      });
+      const pending = withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:source-exec-authority",
+          receiptAuthority: () => currentClaim === originalClaim,
+        },
+        () =>
+          runExecProcess({
+            command: "source-authority-command",
+            workdir: process.cwd(),
+            env: {},
+            usePty,
+            warnings,
+            maxOutput: 1000,
+            pendingMaxOutput: 1000,
+            notifyOnExit: false,
+            timeoutSec: null,
+            startupSignal: generation.signal,
+            beforeSpawn: async () => {
+              if (++checks === loseAt) {
+                currentClaim = authority === "replaced" ? {} : undefined;
+              }
+              return undefined;
+            },
+          }),
+      );
+      if (authority === "active") {
+        const handle = await pending;
+        await expect(handle.promise).resolves.toMatchObject({ status: "completed" });
+      } else {
+        await expect(pending).rejects.toThrow("authority is no longer active");
+      }
+      expect(generation.signal.aborted).toBe(false);
+      expect(supervisorMock.spawn).toHaveBeenCalledTimes(spawns);
+      expect(warnings).toEqual(
+        usePty && loseAt !== -1 && spawns > 0
+          ? [expect.stringContaining("retrying without PTY")]
+          : [],
+      );
+      expect(listRunningSessions()).toHaveLength(0);
+    },
+  );
+
+  it("keeps turn authority out of process lifetime while preserving foreground updates", async () => {
+    const exit = createDeferred<RunExit>();
+    const identity = {
+      agentId: "main",
+      sessionKey: "agent:main:exec-lifetime",
+      signedAgentRuntimeIdentityToken: "synthetic-turn-identity",
+    };
+    const spawnIdentity = vi.fn();
+    const updateIdentity = vi.fn();
+    const settledIdentity = vi.fn();
+    const beforeSpawn = vi.fn(async () => {
+      expect(getGatewayToolCallerIdentity()).toMatchObject(identity);
+      return undefined;
+    });
+    let stdout: SpawnInput["onStdout"];
+    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => {
+      spawnIdentity(getGatewayToolCallerIdentity());
+      stdout = input.onStdout;
+      stdout?.("foreground output\n");
+      return { ...runtimeManagedRun(input), wait: () => exit.promise };
+    });
+
+    const run = await withGatewayToolCallerIdentity(identity, () =>
+      runExecProcess({
+        command: "test-command",
+        workdir: "/tmp",
+        env: {},
+        usePty: false,
+        warnings: [],
+        maxOutput: 1000,
+        pendingMaxOutput: 1000,
+        notifyOnExit: false,
+        timeoutSec: null,
+        beforeSpawn,
+        onUpdate: () => updateIdentity(getGatewayToolCallerIdentity()),
+        onSettledBeforeNotify: () => settledIdentity(getGatewayToolCallerIdentity()),
+      }),
+    );
+    run.disableUpdates();
+    stdout?.("background output\n");
+    exit.resolve(createRunExit());
+    const outcome = await run.promise;
+
+    expect(beforeSpawn).toHaveBeenCalledOnce();
+    expect(updateIdentity).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(identity));
+    expect(outcome.aggregated).toBe("foreground output\nbackground output");
+    expect(spawnIdentity).toHaveBeenCalledExactlyOnceWith(undefined);
+    expect(settledIdentity).toHaveBeenCalledExactlyOnceWith(undefined);
+  });
+
+  it("runs the final authorization check after async preparation and before spawn", async () => {
+    const preparation =
+      createDeferred<Awaited<ReturnType<NonNullable<BashSandboxConfig["buildExecSpec"]>>>>();
+    const denied = new Error("approval directory changed");
+    const beforeSpawn = vi.fn(async () => {
+      throw denied;
+    });
+    const pending = runExecProcess({
+      command: "sandbox-command",
+      workdir: "/tmp",
+      env: {},
+      sandbox: {
+        containerName: "sandbox",
+        workspaceDir: "/workspace",
+        containerWorkdir: "/workspace",
+        buildExecSpec: async () => await preparation.promise,
+      },
+      usePty: false,
+      warnings: [],
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+      notifyOnExit: false,
+      timeoutSec: null,
+      beforeSpawn,
+    });
+
+    expect(beforeSpawn).not.toHaveBeenCalled();
+    preparation.resolve({
+      argv: ["sandbox-command"],
+      env: {},
+      stdinMode: "pipe-closed",
+    });
+    await expect(pending).rejects.toBe(denied);
+    expect(beforeSpawn).toHaveBeenCalledOnce();
+    expect(supervisorMock.spawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects a sandbox without a backend-owned exec specification", async () => {
+    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) =>
+      runtimeManagedRun(input),
+    );
+
+    await expect(
+      runExecProcess({
+        command: "sandbox-command",
+        workdir: "/tmp",
+        env: { EXAMPLE_VALUE: "synthetic-runtime-sandbox-value" },
+        sandbox: {
+          containerName: "sandbox",
+          workspaceDir: "/workspace",
+          containerWorkdir: "/workspace",
+        },
+        usePty: false,
+        warnings: [],
+        maxOutput: 1000,
+        pendingMaxOutput: 1000,
+        notifyOnExit: false,
+        timeoutSec: null,
+      }),
+    ).rejects.toThrow("sandbox backend does not provide buildExecSpec");
+
+    expect(supervisorMock.spawn).not.toHaveBeenCalled();
+  });
+
   it("settles the registered session once when buildExecSpec rejects", async () => {
     const registry = await import("./bash-process-registry.js");
     const sessionSlugs = await import("./session-slug.js");
@@ -296,18 +581,26 @@ describe("sandbox exec finalization suspension", () => {
       const finalizeExec = vi.fn<NonNullable<BashSandboxConfig["finalizeExec"]>>(
         async () => await finalization.promise,
       );
-      supervisorMock.spawn.mockImplementationOnce(
-        async (input: { onStdout?: (chunk: string) => void }) => {
-          input.onStdout?.("sandbox output\n");
-          return {
-            runId: "sandbox-run",
-            startedAtMs: Date.now(),
-            pid: 123,
-            wait: async () => await exit.promise,
-            cancel: vi.fn(),
-          };
-        },
-      );
+      let producer: SpawnInput | undefined;
+      supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => {
+        producer = input;
+        input.onStdout?.("sandbox output\n");
+        const activity = { resultSettled: false, lastOutputAtMs: Date.now() };
+        return {
+          activity,
+          runId: "sandbox-run",
+          startedAtMs: Date.now(),
+          pid: 123,
+          wait: async () => {
+            try {
+              return await exit.promise;
+            } finally {
+              activity.resultSettled = true;
+            }
+          },
+          cancel: vi.fn(),
+        };
+      });
 
       const run = await runExecProcess({
         command: "sandbox-command",
@@ -336,18 +629,18 @@ describe("sandbox exec finalization suspension", () => {
       markBackgrounded(run.session);
       expect(getActiveBackgroundExecSessionCount()).toBe(1);
 
-      exit.resolve({
-        reason: processTimesOut ? "overall-timeout" : "exit",
-        exitCode: processTimesOut ? null : 0,
-        exitSignal: processTimesOut ? "SIGKILL" : null,
-        durationMs: 1,
-        stdout: "",
-        stderr: "",
-        timedOut: processTimesOut,
-        noOutputTimedOut: false,
-      });
+      exit.resolve(
+        createRunExit({
+          reason: processTimesOut ? "overall-timeout" : "exit",
+          exitCode: processTimesOut ? null : 0,
+          exitSignal: processTimesOut ? "SIGKILL" : null,
+          timedOut: processTimesOut,
+        }),
+      );
       await vi.waitFor(() => expect(finalizeExec).toHaveBeenCalledOnce());
       expect(run.session.finalizing).toBe(true);
+      producer?.onStderr?.("during cleanup\n");
+      expect(getFinishedSession(run.session.id)).toBeUndefined();
 
       const busy = prepareSuspension(`before-finalize-${expectedFailureKind ?? "success"}`);
       expect(busy.status).toBe("busy");
@@ -379,6 +672,20 @@ describe("sandbox exec finalization suspension", () => {
       expect(requireSystemEventCall()[0]).toContain(
         expectedStatus === "failed" ? "Exec failed" : "Exec completed",
       );
+      expect(requireSystemEventCall()[0]).toContain("during cleanup");
+      const retained = getFinishedSession(run.session.id);
+      const outputBeforeLateCallback = {
+        aggregated: retained?.aggregated,
+        tail: retained?.tail,
+        totalOutputChars: retained?.totalOutputChars,
+        truncated: retained?.truncated,
+      };
+      expect(outputBeforeLateCallback.aggregated).toContain("sandbox output\nduring cleanup\n");
+      if (finalizeRejects && !processTimesOut) {
+        expect(outputBeforeLateCallback.aggregated).toContain("sandbox finalize failed");
+      }
+      producer?.onStdout?.("late output".repeat(1_000));
+      expect(getFinishedSession(run.session.id)).toMatchObject(outputBeforeLateCallback);
 
       const ready = prepareSuspension(`after-finalize-${expectedFailureKind ?? "success"}`);
       expect(ready.status).toBe("ready");
@@ -389,20 +696,168 @@ describe("sandbox exec finalization suspension", () => {
   );
 });
 
+describe("terminal execution-context release", () => {
+  it.each([
+    { path: "notify", trace: ["task", "enqueue", "wake"] },
+    { path: "quiet", trace: ["task"] },
+    { path: "unrouted", trace: ["task"] },
+    { path: "observed", trace: ["task"] },
+    { path: "task failure", trace: ["task", "task"] },
+    { path: "enqueue failure", trace: ["task", "enqueue", "task"] },
+    { path: "wake failure", trace: ["task", "enqueue", "wake", "task"] },
+  ])(
+    "releases routing after $path without changing notification order",
+    async ({ path, trace }) => {
+      const exit = createDeferred<RunExit>();
+      const observed: string[] = [];
+      const removal = vi.fn(() => true);
+      const deliveryContext = { channel: "telegram", to: "synthetic-chat" };
+      const failure = new Error("notification boundary failed");
+      enqueueSystemEventWithReceiptMock.mockImplementation((_text, options) => {
+        observed.push("enqueue");
+        expect(options.deliveryContext).toEqual(deliveryContext);
+        if (path === "enqueue failure") {
+          throw failure;
+        }
+        return removal;
+      });
+      requestHeartbeatMock.mockImplementation(() => {
+        observed.push("wake");
+        if (path === "wake failure") {
+          throw failure;
+        }
+      });
+      supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
+        ...runtimeManagedRun(input, path === "quiet" ? "" : "retained output\n"),
+        wait: () => exit.promise,
+      }));
+      const run = await runExecProcess({
+        command: "context-release",
+        workdir: "/tmp",
+        env: {},
+        usePty: false,
+        warnings: [],
+        maxOutput: 1_000,
+        pendingMaxOutput: 1_000,
+        scopeKey: "process-scope",
+        sessionKey: path === "unrouted" ? undefined : "agent:main:main",
+        agentId: "main",
+        eventRouting: { mainKey: "main", sessionScope: "per-sender" },
+        notifyDeliveryContext: deliveryContext,
+        notifyOnExit: true,
+        notifyOnExitEmptySuccess: false,
+        timeoutSec: null,
+        onSettledBeforeNotify: () => {
+          observed.push("task");
+          if (path === "task failure" && observed.length === 1) {
+            throw failure;
+          }
+        },
+      });
+      markBackgrounded(run.session);
+      if (path === "observed") {
+        acknowledgeNotifyOnExit(run.session);
+      }
+      exit.resolve(createRunExit());
+      const outcome = await run.promise;
+      expect(observed).toEqual(trace);
+      expect(outcome.status).toBe(path.endsWith("failure") ? "failed" : "completed");
+      const retained = getFinishedSession(run.session.id);
+      expect(retained).toMatchObject({ scopeKey: "process-scope", terminalStatus: "completed" });
+      for (const field of [
+        "sessionKey",
+        "agentId",
+        "eventRouting",
+        "notifyDeliveryContext",
+        "notifyOnExit",
+        "notifyOnExitEmptySuccess",
+        "stdin",
+      ] as const) {
+        expect(retained?.[field], field).toBeUndefined();
+      }
+      expect(retained?.notifyOnExitRemoval).toBe(trace.includes("wake") ? removal : undefined);
+      expect(removal).not.toHaveBeenCalled();
+    },
+  );
+});
+
+describe("exec settlement recovery", () => {
+  it.each([
+    { boundary: "task", trace: ["task:completed", "task:failed", "scope-released"] },
+    {
+      boundary: "enqueue",
+      trace: ["task:completed", "enqueue", "task:failed", "scope-released"],
+    },
+    {
+      boundary: "wake",
+      trace: ["task:completed", "enqueue", "wake", "task:failed", "scope-released"],
+    },
+  ])("retries $boundary failure before releasing the exec scope", async ({ boundary, trace }) => {
+    const exit = createDeferred<RunExit>();
+    const observed: string[] = [];
+    const identities: Array<ReturnType<typeof getGatewayToolCallerIdentity>> = [];
+    const failure = new Error("process settlement failed");
+    const scopeKey = `settlement-recovery:${boundary}`;
+    enqueueSystemEventWithReceiptMock.mockImplementation(() => {
+      observed.push("enqueue");
+      if (boundary === "enqueue") {
+        throw failure;
+      }
+      return vi.fn(() => true);
+    });
+    requestHeartbeatMock.mockImplementation(() => {
+      observed.push("wake");
+      if (boundary === "wake") {
+        throw failure;
+      }
+    });
+    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
+      ...runtimeManagedRun(input, "process output\n"),
+      wait: () => exit.promise,
+    }));
+    const run = await withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey: "agent:main:settlement-recovery" },
+      () =>
+        runExecProcess({
+          command: "settlement-recovery",
+          workdir: "/tmp",
+          env: {},
+          usePty: false,
+          warnings: [],
+          maxOutput: 1000,
+          pendingMaxOutput: 1000,
+          scopeKey,
+          sessionKey: "agent:main:settlement-recovery",
+          notifyOnExit: true,
+          timeoutSec: null,
+          onSettledBeforeNotify: (outcome) => {
+            observed.push(`task:${outcome.status}`);
+            identities.push(getGatewayToolCallerIdentity());
+            if (boundary === "task" && observed.length === 1) {
+              throw failure;
+            }
+          },
+        }),
+    );
+    markBackgrounded(run.session);
+    const joined = waitForExecScope(scopeKey).then(() => {
+      observed.push("scope-released");
+    });
+    exit.resolve(createRunExit());
+
+    const outcome = await run.promise;
+    await joined;
+    expect(outcome.status).toBe("failed");
+    expect(observed).toEqual(trace);
+    expect(identities).toEqual([undefined, undefined]);
+  });
+});
+
 describe("runExecProcess exit outcomes", () => {
   it("keeps non-zero normal exits in the completed path", async () => {
     const { outcome } = await runExecWithExit({
       stdout: "done",
-      exit: {
-        reason: "exit",
-        exitCode: 1,
-        exitSignal: null,
-        durationMs: 123,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      },
+      exit: createRunExit({ exitCode: 1, durationMs: 123 }),
       timeoutSec: 30,
     });
     expect(outcome.status).toBe("completed");
@@ -415,16 +870,13 @@ describe("runExecProcess exit outcomes", () => {
 
   it("classifies timed out exits with registered-background guidance", async () => {
     const { outcome } = await runExecWithExit({
-      exit: {
+      exit: createRunExit({
         reason: "overall-timeout",
         exitCode: null,
         exitSignal: "SIGKILL",
         durationMs: 123,
-        stdout: "",
-        stderr: "",
         timedOut: true,
-        noOutputTimedOut: false,
-      },
+      }),
       timeoutSec: 30,
     });
     expect(outcome.status).toBe("failed");
@@ -445,16 +897,7 @@ describe("runExecProcess exit outcomes", () => {
 
   it("classifies missing shell commands without timeout guidance", async () => {
     const { outcome } = await runExecWithExit({
-      exit: {
-        reason: "exit",
-        exitCode: 127,
-        exitSignal: null,
-        durationMs: 123,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      },
+      exit: createRunExit({ exitCode: 127, durationMs: 123 }),
       timeoutSec: 30,
     });
 

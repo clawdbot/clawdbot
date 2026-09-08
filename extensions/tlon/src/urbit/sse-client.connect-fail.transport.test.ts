@@ -103,7 +103,7 @@ describe("UrbitSSEClient connect-fail body cleanup", () => {
     }
   });
 
-  it("keeps a successful event stream live until its owner closes the client", async () => {
+  it("keeps a no-space event stream live until its owner closes the client", async () => {
     let resolveEvent: ((value: unknown) => void) | undefined;
     const delivered = new Promise<unknown>((resolve) => {
       resolveEvent = resolve;
@@ -118,7 +118,7 @@ describe("UrbitSSEClient connect-fail body cleanup", () => {
         streamSocket = request.socket;
         streamSocket.once("close", () => resolveStreamClosed?.());
         response.writeHead(200, { "Content-Type": "text/event-stream" });
-        response.write('id: 1\ndata: {"id":1,"json":{"message":"delivered"}}\n\n');
+        response.write('id:1\ndata:{"id":1,"json":{"message":"delivered"}}\n\n');
         return;
       }
       response.writeHead(200, { "Content-Type": "application/json" });

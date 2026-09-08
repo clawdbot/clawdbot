@@ -31,6 +31,7 @@ export type LogTailPayload = {
   lines: string[];
   truncated: boolean;
   reset: boolean;
+  skippedBytes?: number;
 };
 
 /** Redacted configured log tail with only parseable structured records. */
@@ -95,6 +96,7 @@ async function readLogSlice(params: {
       ? Math.max(0, Math.floor(params.cursor))
       : undefined;
   let reset = false;
+  let skippedBytes: number | undefined;
   let truncated = false;
   let start;
 
@@ -107,10 +109,13 @@ async function readLogSlice(params: {
     } else {
       start = cursor;
       if (size - start > maxBytes) {
-        // Cursor is valid but too stale; cap reads and tell the caller state was reset.
+        // Keep reset as the re-anchor signal for existing clients. The skipped byte count
+        // lets current clients distinguish this valid-cursor fast-forward from file shrink.
         reset = true;
         truncated = true;
-        start = Math.max(0, size - maxBytes);
+        const boundedStart = Math.max(0, size - maxBytes);
+        skippedBytes = boundedStart - start;
+        start = boundedStart;
       }
     }
   } else {
@@ -125,6 +130,7 @@ async function readLogSlice(params: {
       lines: [],
       truncated,
       reset,
+      skippedBytes,
     };
   }
 
@@ -142,12 +148,10 @@ async function readLogSlice(params: {
     const bytesRead = await readFileWindowFully(handle, buffer, start);
     const text = buffer.toString("utf8", 0, bytesRead);
     let lines = text.split("\n");
+    lines.pop();
     if (start > 0 && prefix !== "\n") {
       // Drop the first partial line when starting in the middle of a file.
-      lines = lines.slice(1);
-    }
-    if (lines.length > 0 && lines[lines.length - 1] === "") {
-      lines = lines.slice(0, -1);
+      lines.shift();
     }
     if (params.filter) {
       // Sparse consumers inspect the full byte-bounded window before the shared line cap.
@@ -158,7 +162,9 @@ async function readLogSlice(params: {
       lines = lines.slice(lines.length - limit);
     }
 
-    cursor = size;
+    // Keep an unterminated record pending so a later read can emit it whole.
+    const lastNewline = buffer.subarray(0, bytesRead).lastIndexOf(0x0a);
+    cursor = text.endsWith("\n") ? size : start + lastNewline + 1;
 
     return {
       cursor,
@@ -166,6 +172,7 @@ async function readLogSlice(params: {
       lines,
       truncated,
       reset,
+      skippedBytes,
     };
   } finally {
     await handle.close();

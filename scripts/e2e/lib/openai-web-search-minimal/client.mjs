@@ -5,7 +5,7 @@ import { readTcpPortEnv } from "../env-limits.mjs";
 
 async function loadCallGateway() {
   const candidates = readdirSync("/app/dist")
-    .filter((name) => /^call(?:\.runtime)?-[A-Za-z0-9_-]+\.js$/.test(name))
+    .filter((name) => /^call(?:\.runtime)?-[A-Za-z0-9_-]+\.m?js$/.test(name))
     .toSorted();
   for (const name of candidates) {
     const mod = await import(pathToFileURL(`/app/dist/${name}`).href);
@@ -177,9 +177,6 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
 }
 
 export const testing = {
-  DEFAULT_GATEWAY_SCHEMA_ERROR,
-  DEFAULT_RAW_SCHEMA_ERROR,
-  SUCCESS_MARKER,
   resolveGatewayPort,
   validateSuccessResult,
   validateRejectResult,

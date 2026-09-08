@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { FsSafeError, type Root } from "../../infra/fs-safe.js";
+import type { createStagedInputPathMatcher } from "../../media/staged-inputs.js";
 import { runCommandBuffered } from "../../process/exec.js";
 import { readWorkspaceFileSnapshotWithLimit } from "./workspace-actual-manifest.js";
 import {
@@ -12,6 +14,35 @@ const PATCH_TIMEOUT_MS = 10 * 60_000;
 
 export function localPath(root: string, relative: string): string {
   return path.join(root, ...relative.split("/"));
+}
+
+export async function removeEmptyWorkspaceDirectory(root: Root, entryPath: string): Promise<void> {
+  let children: string[];
+  try {
+    children = await root.list(entryPath);
+  } catch (error) {
+    if (error instanceof FsSafeError && ["not-found", "path-alias"].includes(error.code)) {
+      return;
+    }
+    throw error;
+  }
+  if (children.length > 0) {
+    // Conflicted descendants deliberately keep their containing directory
+    // even when the cloud result removed that directory.
+    return;
+  }
+  try {
+    await root.remove(entryPath);
+  } catch (error) {
+    if (error instanceof FsSafeError && ["not-found", "path-alias"].includes(error.code)) {
+      return;
+    }
+    const racedChildren = await root.list(entryPath).catch(() => undefined);
+    if (racedChildren?.length) {
+      return;
+    }
+    throw error;
+  }
 }
 
 type WorkspaceFileSnapshot =
@@ -125,23 +156,24 @@ export async function directoryContainsOnlyJournalPaths(
   directory: string,
   paths: ReadonlySet<string>,
   directories: ReadonlySet<string>,
+  isRetainedInput: ReturnType<typeof createStagedInputPathMatcher>,
 ): Promise<boolean> {
   for (const name of await fs.readdir(localPath(root, directory))) {
     const child = `${directory}/${name}`;
-    if (isDerivedWorkspacePath(child)) {
+    if (isDerivedWorkspacePath(child, await isRetainedInput(child))) {
       continue;
     }
     const stats = await fs.lstat(localPath(root, child));
     if (stats.isDirectory() && !stats.isSymbolicLink()) {
       if (
         !directories.has(child) &&
-        !(await directoryContainsOnlyDerivedWorkspaceEntries(root, child))
+        !(await directoryContainsOnlyDerivedWorkspaceEntries(root, child, isRetainedInput))
       ) {
         return false;
       }
       if (
         directories.has(child) &&
-        !(await directoryContainsOnlyJournalPaths(root, child, paths, directories))
+        !(await directoryContainsOnlyJournalPaths(root, child, paths, directories, isRetainedInput))
       ) {
         return false;
       }
@@ -155,12 +187,13 @@ export async function directoryContainsOnlyJournalPaths(
 export async function directoryContainsOnlyDerivedWorkspaceEntries(
   root: string,
   directory: string,
+  isRetainedInput: ReturnType<typeof createStagedInputPathMatcher>,
 ): Promise<boolean> {
   const names = await fs.readdir(localPath(root, directory));
   let foundDerivedEntry = false;
   for (const name of names) {
     const child = `${directory}/${name}`;
-    if (isDerivedWorkspacePath(child)) {
+    if (isDerivedWorkspacePath(child, await isRetainedInput(child))) {
       foundDerivedEntry = true;
       continue;
     }
@@ -168,7 +201,7 @@ export async function directoryContainsOnlyDerivedWorkspaceEntries(
     if (
       !stats.isDirectory() ||
       stats.isSymbolicLink() ||
-      !(await directoryContainsOnlyDerivedWorkspaceEntries(root, child))
+      !(await directoryContainsOnlyDerivedWorkspaceEntries(root, child, isRetainedInput))
     ) {
       return false;
     }

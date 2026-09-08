@@ -7,12 +7,17 @@ import {
 } from "./bundle-mcp-codex.js";
 
 const authMocks = vi.hoisted(() => ({
+  loadExecApprovalsReadOnly: vi.fn(),
   loadAuthProfileStoreForSecretsRuntime: vi.fn(),
   resolveApiKeyForProfile: vi.fn(),
   resolveMcpOAuthAccessToken: vi.fn(),
 }));
 
-vi.mock("../auth-profiles/store.js", () => ({
+vi.mock("../../infra/exec-approvals-store.js", () => ({
+  loadExecApprovalsReadOnly: authMocks.loadExecApprovalsReadOnly,
+}));
+
+vi.mock("../auth-profiles/store-runtime.js", () => ({
   loadAuthProfileStoreForSecretsRuntime: authMocks.loadAuthProfileStoreForSecretsRuntime,
 }));
 
@@ -26,10 +31,69 @@ vi.mock("../mcp-oauth.js", () => ({
 
 describe("buildCodexUserMcpServersThreadConfigPatch", () => {
   beforeEach(() => {
+    authMocks.loadExecApprovalsReadOnly.mockReset().mockReturnValue({ version: 1, agents: {} });
     authMocks.loadAuthProfileStoreForSecretsRuntime.mockReset();
     authMocks.resolveApiKeyForProfile.mockReset();
     authMocks.resolveMcpOAuthAccessToken.mockReset();
   });
+
+  it.each(["configured", "runtime"])(
+    "projects exact-agent durable grants with server policy precedence in %s preparation",
+    async (preparation) => {
+      const grants = ["auto", "unspecified", "prompt", "approve", "missing"].map((server) => ({
+        server,
+        tool: "write.raw_tool",
+        source: "allow-always",
+        addedAt: 1,
+      }));
+      authMocks.loadExecApprovalsReadOnly.mockReturnValue({
+        version: 1,
+        agents: {
+          main: { mcpTools: grants },
+          other: { mcpTools: [{ ...grants[0], tool: "other_tool" }] },
+          "*": { mcpTools: [{ ...grants[0], tool: "wildcard_tool" }] },
+        },
+      });
+      const cfg = {
+        mcp: {
+          servers: {
+            auto: { command: "mcp", codex: { defaultToolsApprovalMode: "auto" } },
+            unspecified: { command: "mcp", toolFilter: { exclude: ["write.raw_tool"] } },
+            prompt: { command: "mcp", codex: { defaultToolsApprovalMode: "prompt" } },
+            approve: { command: "mcp", codex: { defaultToolsApprovalMode: "approve" } },
+          },
+        },
+      } satisfies OpenClawConfig;
+      const prepare =
+        preparation === "runtime"
+          ? buildCodexUserMcpServersThreadConfigPatchForRuntime
+          : buildCodexUserMcpServersThreadConfigPatch;
+
+      const patch = await prepare(cfg, { agentId: "main" });
+
+      expect(patch?.mcp_servers.auto).toEqual({
+        command: "mcp",
+        default_tools_approval_mode: "auto",
+        tools: { "write.raw_tool": { approval_mode: "approve" } },
+      });
+      expect(patch?.mcp_servers.unspecified).toEqual({
+        command: "mcp",
+        disabled_tools: ["write.raw_tool"],
+        tools: { "write.raw_tool": { approval_mode: "approve" } },
+      });
+      expect(patch?.mcp_servers.prompt).toEqual({
+        command: "mcp",
+        default_tools_approval_mode: "prompt",
+      });
+      expect(patch?.mcp_servers.approve).toEqual({
+        command: "mcp",
+        default_tools_approval_mode: "approve",
+      });
+      expect(patch?.mcp_servers.missing).toBeUndefined();
+      expect(authMocks.loadExecApprovalsReadOnly).toHaveBeenCalledTimes(1);
+      expect((await prepare(cfg))?.mcp_servers.auto).not.toHaveProperty("tools");
+    },
+  );
 
   it("returns undefined when cfg has no mcp.servers (regression: #80814)", () => {
     expect(buildCodexUserMcpServersThreadConfigPatch(undefined)).toBeUndefined();

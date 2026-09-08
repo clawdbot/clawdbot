@@ -243,16 +243,23 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
       agents: { list: [{ id: "restricted", workspace: workspaceDir }] },
     };
 
+    const workspaceReadFile = vi.fn(async () => Buffer.from("private"));
     const deniedAccess = resolveAgentScopedOutboundMediaAccess({
       cfg,
       agentId: "restricted",
       messageProvider: "requestchat",
       requesterSenderId: "attacker",
       mediaSources: [workspaceFile],
+      workspaceMediaAccess: {
+        localRoots: [workspaceDir],
+        readFile: workspaceReadFile,
+        workspaceDir,
+      },
     });
     await expect(
       loadWebMediaRaw(workspaceFile, buildOutboundMediaLoadOptions({ mediaAccess: deniedAccess })),
     ).rejects.toThrow(/not under an allowed directory/i);
+    expect(workspaceReadFile).not.toHaveBeenCalled();
 
     const managedAccess = resolveAgentScopedOutboundMediaAccess({
       cfg,
@@ -266,6 +273,38 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
       buildOutboundMediaLoadOptions({ mediaAccess: managedAccess }),
     );
     expect(loaded.buffer.toString()).toBe("managed");
+  });
+
+  it("keeps approved temp media readable with a workspace reader in workspace-only mode", async () => {
+    const preferredTmpRoot = getDefaultMediaLocalRoots()[0];
+    if (!preferredTmpRoot) {
+      throw new Error("preferred temp media root is unavailable");
+    }
+    await fs.mkdir(preferredTmpRoot, { recursive: true });
+    const tempMediaDir = tempDirs.make("workspace-only-media-", preferredTmpRoot);
+    const workspaceDir = tempDirs.make("workspace-only-agent-");
+    const tempMediaPath = path.join(tempMediaDir, "generated.txt");
+    await fs.writeFile(tempMediaPath, "generated");
+    const workspaceReadFile = vi.fn(async () => Buffer.from("workspace"));
+    const access = resolveAgentScopedOutboundMediaAccess({
+      cfg: {
+        tools: { allow: ["read"], fs: { workspaceOnly: true } },
+      } as OpenClawConfig,
+      workspaceDir,
+      mediaSources: [tempMediaPath],
+      workspaceMediaAccess: {
+        localRoots: [workspaceDir],
+        readFile: workspaceReadFile,
+        workspaceDir,
+      },
+    });
+
+    const loaded = await loadWebMediaRaw(
+      tempMediaPath,
+      buildOutboundMediaLoadOptions({ mediaAccess: access }),
+    );
+    expect(loaded.buffer.toString()).toBe("generated");
+    expect(workspaceReadFile).not.toHaveBeenCalled();
   });
 
   it("honors plugin-owned group tool policy with channel metadata", () => {

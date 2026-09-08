@@ -1,15 +1,17 @@
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/index.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
-  OPENCLAW_STATE_SCHEMA_VERSION,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { getUserPreferences, setUserPreferences } from "./user-preferences.js";
+import { onUserProfilesChanged, readUserProfileVersion } from "./user-profile-events.js";
 import { migrateLegacyTailscaleProfileIdentities } from "./user-profiles-tailscale-migration.js";
 import {
   adoptTailscaleProfileAvatar,
@@ -19,21 +21,53 @@ import {
   getProfileAvatar,
   getUserProfileDisplay,
   getUserProfileListItem,
+  getUserProfileRole,
   linkEmail,
   listProfiles,
-  resolveUserProfileId,
   setAvatar,
   setDisplayName,
+  setUserProfileRole,
   syncGitHubIdentity,
 } from "./user-profiles.js";
 
-const statePaths: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  });
+});
+
+it("publishes profile changes only after the owning transaction commits", () => {
+  const options = stateOptions();
+  const profile = ensureProfileForEmail("publication@example.test", options);
+  const changed = vi.fn();
+  const stop = onUserProfilesChanged(changed);
+  const before = readUserProfileVersion();
+  try {
+    expect(() =>
+      runOpenClawStateWriteTransaction(() => {
+        setDisplayName(profile.id, "Rolled back", options);
+        expect(changed).not.toHaveBeenCalled();
+        throw new Error("rollback");
+      }, options),
+    ).toThrow("rollback");
+    expect(readUserProfileVersion()).toBe(before);
+    expect(getUserProfileDisplay(profile.id, options).displayName).not.toBe("Rolled back");
+    runOpenClawStateWriteTransaction(() => {
+      setDisplayName(profile.id, "Committed", options);
+      expect(changed).not.toHaveBeenCalled();
+    }, options);
+    expect(changed).toHaveBeenCalledOnce();
+    expect(readUserProfileVersion()).toBe(before + 1);
+  } finally {
+    stop();
+  }
+});
 
 function stateOptions() {
-  const directory = mkdtempSync(join(tmpdir(), "openclaw-user-profiles-"));
-  const path = join(directory, "openclaw.sqlite");
-  statePaths.push(path);
-  return { path };
+  const directory = tempDirs.make("openclaw-user-profiles-");
+  return { path: join(directory, "openclaw.sqlite") };
 }
 
 function fixtureImage(path: string): Buffer {
@@ -61,12 +95,17 @@ function syncTailscaleGitHubProfile(
     canonicalLogin: string;
     login: string;
     name?: string;
+    githubName?: string;
   },
   options: Parameters<typeof ensureProfileForTailscaleIdentity>[1],
 ) {
   return syncGitHubIdentity(
     {
-      identity: { accountId: params.accountId, login: params.canonicalLogin },
+      identity: {
+        accountId: params.accountId,
+        login: params.canonicalLogin,
+        name: params.githubName,
+      },
       authenticationAlias: { kind: "github-login", login: params.login },
       initialDisplayName: params.name,
     },
@@ -88,12 +127,23 @@ function syncEmailGitHubProfile(
   );
 }
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  closeOpenClawStateDatabaseForTest();
-});
-
 describe("user profiles", () => {
+  it.each([false, true])(
+    "display lookup leaves absent profile storage absent (database exists: %s)",
+    (databaseExists) => {
+      const options = stateOptions();
+      const database = databaseExists ? openOpenClawStateDatabase(options).db : undefined;
+      expect(() => getUserProfileDisplay("missing-profile", options)).toThrow(
+        "user profile not found",
+      );
+      if (database) {
+        expect(tableExists(database, "user_profiles")).toBe(false);
+      } else {
+        expect(existsSync(options.path)).toBe(false);
+      }
+    },
+  );
+
   it("lazily ensures and resolves lowercased email aliases idempotently", () => {
     const options = stateOptions();
     const database = openOpenClawStateDatabase(options).db;
@@ -101,7 +151,9 @@ describe("user profiles", () => {
     expect(tableExists(database, "user_profiles")).toBe(false);
     expect(tableExists(database, "user_profile_identities")).toBe(false);
 
+    const profileVersion = readUserProfileVersion();
     const first = ensureProfileForEmail("  Ada@Example.COM ", options);
+    expect(readUserProfileVersion()).toBe(profileVersion + 1);
     const second = ensureProfileForEmail("ada@example.com", options);
 
     expect(tableExists(openOpenClawStateDatabase(options).db, "user_profiles")).toBe(true);
@@ -111,9 +163,10 @@ describe("user profiles", () => {
     expect(
       openOpenClawStateDatabase(options).db.prepare("PRAGMA user_version").get()?.user_version,
     ).toBe(versionBefore);
-    expect(OPENCLAW_STATE_SCHEMA_VERSION).toBe(9);
+    expect(versionBefore).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
     expect(second).toEqual(first);
     expect(ensureProfileForEmail("ADA@example.com", options)).toEqual(first);
+    expect(readUserProfileVersion()).toBe(profileVersion + 1);
     expect(listProfiles(options)).toEqual([
       expect.objectContaining({ id: first.id, emails: ["ada@example.com"] }),
     ]);
@@ -122,6 +175,7 @@ describe("user profiles", () => {
   it("resolves provider identities without storing them as emails", () => {
     const options = stateOptions();
 
+    const profileVersion = readUserProfileVersion();
     const first = ensureProfileForTailscaleIdentity(
       { login: "Ada@GitHub", name: "Ada Lovelace" },
       options,
@@ -133,6 +187,7 @@ describe("user profiles", () => {
 
     expect(second.id).toBe(first.id);
     expect(second.displayName).toBe("Ada Lovelace");
+    expect(readUserProfileVersion()).toBe(profileVersion + 1);
     expect(listProfiles(options)).toEqual([
       expect.objectContaining({ id: first.id, emails: [], displayName: "Ada Lovelace" }),
     ]);
@@ -143,6 +198,25 @@ describe("user profiles", () => {
         )
         .all(),
     ).toEqual([{ provider: "github", subject: "login:ada", profile_id: first.id }]);
+  });
+
+  it("publishes a normalized provider subject without repeating an unchanged identity", () => {
+    const options = stateOptions();
+    const identity = { login: "ada@github" };
+    const profile = ensureProfileForTailscaleIdentity(identity, options);
+    const database = openOpenClawStateDatabase(options).db;
+    database
+      .prepare("UPDATE user_profile_identities SET subject = ? WHERE provider = ?")
+      .run("ada", "github");
+    const version = readUserProfileVersion();
+
+    expect(ensureProfileForTailscaleIdentity(identity, options)).toEqual(profile);
+    expect(readUserProfileVersion()).toBe(version + 1);
+    expect(database.prepare("SELECT subject FROM user_profile_identities").all()).toEqual([
+      { subject: "login:ada" },
+    ]);
+    expect(ensureProfileForTailscaleIdentity(identity, options)).toEqual(profile);
+    expect(readUserProfileVersion()).toBe(version + 1);
   });
 
   it("lazily adds canonical GitHub login storage without changing the schema version", () => {
@@ -165,6 +239,101 @@ describe("user profiles", () => {
     expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(versionBefore);
   });
 
+  it("lazily adds a downgrade-safe nullable role without changing the schema version", () => {
+    const options = stateOptions();
+    const database = openOpenClawStateDatabase(options).db;
+    database.exec(`
+      CREATE TABLE user_profiles (
+        id TEXT NOT NULL PRIMARY KEY,
+        display_name TEXT,
+        avatar BLOB,
+        avatar_mime TEXT,
+        avatar_sha256 TEXT,
+        merged_into TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+    `);
+    const versionBefore = database.prepare("PRAGMA user_version").get()?.user_version;
+    const profile = ensureProfileForEmail("ada@example.com", options);
+
+    expect(tableHasColumn(database, "user_profiles", "role")).toBe(false);
+    expect(getUserProfileListItem(profile.id, options)).not.toHaveProperty("role");
+    expect(getUserProfileDisplay(profile.id, options)).toMatchObject({
+      id: profile.id,
+      hasAvatar: false,
+    });
+    expect(listProfiles(options)[0]).not.toHaveProperty("role");
+    expect(tableHasColumn(database, "user_profiles", "role")).toBe(false);
+    expect(getUserProfileRole(profile.id, options)).toBeNull();
+    expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(versionBefore);
+    expect(database.prepare("PRAGMA table_info(user_profiles)").all()).toContainEqual(
+      expect.objectContaining({
+        name: "role",
+        type: "TEXT",
+        notnull: 0,
+        dflt_value: null,
+        pk: 0,
+      }),
+    );
+
+    setUserProfileRole(profile.id, "maintainer", options);
+    database
+      .prepare("UPDATE user_profiles SET display_name = ? WHERE id = ?")
+      .run("Older Reader", profile.id);
+    database
+      .prepare("INSERT INTO user_profiles (id, created_at, updated_at) VALUES (?, ?, ?)")
+      .run("older-profile", 1, 1);
+    closeOpenClawStateDatabaseForTest();
+
+    expect(getUserProfileRole(profile.id, options)).toBe("maintainer");
+    expect(getUserProfileRole("older-profile", options)).toBeNull();
+    expect(getUserProfileListItem(profile.id, options)).toMatchObject({
+      displayName: "Older Reader",
+      role: "maintainer",
+    });
+  });
+
+  it("assigns and clears roles on canonical profile heads without changing unassigned shapes", () => {
+    const options = stateOptions();
+    const source = ensureProfileForEmail("source@example.com", options);
+    const target = ensureProfileForEmail("target@example.com", options);
+
+    expect(getUserProfileListItem(target.id, options)).not.toHaveProperty("role");
+    expect(listProfiles(options).every((profile) => !("role" in profile))).toBe(true);
+
+    linkEmail("source@example.com", target.id, options);
+    const version = readUserProfileVersion();
+    expect(setUserProfileRole(source.id, "maintainer", options)).toMatchObject({
+      id: target.id,
+      role: "maintainer",
+    });
+    expect(readUserProfileVersion()).toBe(version + 1);
+    expect(getUserProfileRole(source.id, options)).toBe("maintainer");
+    expect(getUserProfileRole(target.id, options)).toBe("maintainer");
+    expect(listProfiles(options)).toContainEqual(
+      expect.objectContaining({ id: target.id, role: "maintainer" }),
+    );
+
+    const cleared = setUserProfileRole(source.id, null, options);
+    expect(readUserProfileVersion()).toBe(version + 2);
+    expect(cleared).toMatchObject({ id: target.id });
+    expect(cleared).not.toHaveProperty("role");
+    expect(getUserProfileRole(target.id, options)).toBeNull();
+    expect(listProfiles(options).every((profile) => !("role" in profile))).toBe(true);
+  });
+
+  it("rejects role access for a missing durable profile", () => {
+    const options = stateOptions();
+
+    expect(() => getUserProfileRole("missing-profile", options)).toThrow(
+      "user profile not found: missing-profile",
+    );
+    expect(() => setUserProfileRole("missing-profile", "guest", options)).toThrow(
+      "user profile not found: missing-profile",
+    );
+  });
+
   it("stores and refreshes verified GitHub identity beside the authenticated login alias", () => {
     const options = stateOptions();
     const profile = syncTailscaleGitHubProfile(
@@ -185,12 +354,14 @@ describe("user profiles", () => {
         avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
       },
     });
+    const version = readUserProfileVersion();
     expect(
       syncTailscaleGitHubProfile(
         { accountId: 583231, canonicalLogin: "Octo-Renamed", login: "583231" },
         options,
       ).githubIdentity,
     ).toMatchObject({ login: "Octo-Renamed" });
+    expect(readUserProfileVersion()).toBe(version + 1);
     expect(
       openOpenClawStateDatabase(options)
         .db.prepare(
@@ -235,6 +406,7 @@ describe("user profiles", () => {
         canonicalLogin: "octocat",
         login: "octocat",
         name: "Provider Renamed",
+        githubName: "GitHub Renamed",
       },
       options,
     );
@@ -315,21 +487,130 @@ describe("user profiles", () => {
     ]);
   });
 
-  it("does not create provisional profiles on repeated authenticated GitHub sync", () => {
+  it("preserves an adopted name and later custom edits across repeated GitHub sync", () => {
     const options = stateOptions();
     const first = syncTailscaleGitHubProfile(
-      { accountId: 10, canonicalLogin: "ada", login: "ada", name: "Ada" },
+      { accountId: 10, canonicalLogin: "ada", login: "ada", githubName: "Ada Lovelace" },
       options,
     );
     const second = syncTailscaleGitHubProfile(
-      { accountId: 10, canonicalLogin: "ada", login: "ada", name: "Changed Provider Name" },
+      { accountId: 10, canonicalLogin: "ada", login: "ada", githubName: "Changed GitHub Name" },
       options,
     );
 
     expect(second.id).toBe(first.id);
     expect(listProfiles(options)).toEqual([
-      expect.objectContaining({ id: first.id, displayName: "Ada", mergedInto: null }),
+      expect.objectContaining({ id: first.id, displayName: "Ada Lovelace", mergedInto: null }),
     ]);
+    setDisplayName(first.id, "User Chosen", options);
+    expect(
+      syncTailscaleGitHubProfile(
+        { accountId: 10, canonicalLogin: "ada", login: "ada", githubName: "Another GitHub Name" },
+        options,
+      ).displayName,
+    ).toBe("User Chosen");
+  });
+
+  it.each([
+    { saved: null, expected: "Ada Lovelace" },
+    { saved: "Ada", expected: "Ada Lovelace" },
+    { saved: "ada", expected: "ada" },
+    { saved: " Ada ", expected: " Ada " },
+    { saved: "Custom Ada", expected: "Custom Ada" },
+    { saved: "", expected: "" },
+    { saved: "old-login", expected: "old-login" },
+  ])(
+    "adopts GitHub names only for null or exact canonical login: $saved",
+    ({ saved, expected }) => {
+      const options = stateOptions();
+      const profile = syncTailscaleGitHubProfile(
+        { accountId: 10, canonicalLogin: "old-login", login: "old-login" },
+        options,
+      );
+      setDisplayName(profile.id, saved, options);
+      const updated = syncTailscaleGitHubProfile(
+        {
+          accountId: 10,
+          canonicalLogin: " Ada ",
+          login: "old-login",
+          githubName: "  Ada Lovelace  ",
+          name: "Provider Ada",
+        },
+        options,
+      );
+      expect(updated).toMatchObject({
+        id: profile.id,
+        displayName: expected,
+        githubIdentity: { login: "Ada" },
+      });
+      closeOpenClawStateDatabaseForTest();
+      expect(getUserProfileDisplay(profile.id, options).displayName).toBe(expected);
+    },
+  );
+
+  it.each([undefined, "", " \t "])(
+    "keeps null-only provider adoption without a GitHub name: %s",
+    (githubName) => {
+      const options = stateOptions();
+      const profile = syncTailscaleGitHubProfile(
+        { accountId: 10, canonicalLogin: "Ada", login: "ada" },
+        options,
+      );
+      const params = {
+        accountId: 10,
+        canonicalLogin: "Ada",
+        login: "ada",
+        githubName,
+        name: "Provider Ada",
+      };
+      expect(syncTailscaleGitHubProfile(params, options).displayName).toBe("Provider Ada");
+      setDisplayName(profile.id, "Ada", options);
+      expect(syncTailscaleGitHubProfile(params, options).displayName).toBe("Ada");
+    },
+  );
+
+  it.each([null, "Ada", "Target Custom"])(
+    "applies GitHub name adoption to the surviving merge head: %s",
+    (saved) => {
+      const options = stateOptions();
+      const target = syncTailscaleGitHubProfile(
+        { accountId: 10, canonicalLogin: "Ada", login: "ada" },
+        options,
+      );
+      setDisplayName(target.id, saved, options);
+      const source = ensureProfileForEmail("alias@example.com", options);
+      setDisplayName(source.id, "Source Custom", options);
+      const updated = syncGitHubIdentity(
+        {
+          identity: { accountId: 10, login: "Ada", name: "Ada Lovelace" },
+          authenticationAlias: { kind: "email", email: "alias@example.com" },
+        },
+        options,
+      );
+      expect(updated).toMatchObject({
+        id: target.id,
+        displayName: saved === "Target Custom" ? saved : "Ada Lovelace",
+      });
+      expect(getUserProfileDisplay(source.id, options)).toMatchObject({
+        id: target.id,
+        displayName: updated.displayName,
+      });
+      expect(ensureProfileForEmail("alias@example.com", options).id).toBe(target.id);
+    },
+  );
+
+  it("bounds GitHub display names to the existing profile limit", () => {
+    const options = stateOptions();
+    const profile = syncTailscaleGitHubProfile(
+      {
+        accountId: 10,
+        canonicalLogin: "Ada",
+        login: "ada",
+        githubName: `  ${"x".repeat(300)}  `,
+      },
+      options,
+    );
+    expect(profile.displayName).toBe("x".repeat(256));
   });
 
   it("moves a reused Cloudflare email without exposing the prior verified owner", () => {
@@ -462,85 +743,47 @@ describe("user profiles", () => {
       options,
     );
 
+    const version = readUserProfileVersion();
     expect(ensureProfileForEmail("person@gmail.com", options).id).toBe(profile.id);
+    expect(
+      ensureProfileForTailscaleIdentity(
+        { login: "Person@Gmail.COM", name: "Person Example" },
+        options,
+      ),
+    ).toEqual(profile);
+    expect(readUserProfileVersion()).toBe(version);
     expect(profile.displayName).toBe("Person Example");
     expect(listProfiles(options)).toEqual([
       expect.objectContaining({ id: profile.id, emails: ["person@gmail.com"] }),
     ]);
   });
 
-  it("adopts a Tailscale name only while the display-name slot is empty", () => {
-    const options = stateOptions();
-    const profile = ensureProfileForTailscaleIdentity(
-      { login: "ada@github", name: "Ada Provider" },
-      options,
-    );
+  it.each([null, "", " \t "])(
+    "adopts a Tailscale name only into an empty slot: %s",
+    (emptyName) => {
+      const options = stateOptions();
+      const profile = ensureProfileForTailscaleIdentity(
+        { login: "ada@github", name: "Ada Provider" },
+        options,
+      );
 
-    setDisplayName(profile.id, null, options);
-    expect(
-      ensureProfileForTailscaleIdentity({ login: "ada@github", name: "Ada Adopted" }, options),
-    ).toMatchObject({ displayName: "Ada Adopted" });
+      setDisplayName(profile.id, emptyName, options);
+      const version = readUserProfileVersion();
+      expect(
+        ensureProfileForTailscaleIdentity({ login: "ada@github", name: "Ada Adopted" }, options),
+      ).toMatchObject({ displayName: "Ada Adopted" });
+      expect(readUserProfileVersion()).toBe(version + 1);
 
-    setDisplayName(profile.id, "User Chosen", options);
-    expect(
-      ensureProfileForTailscaleIdentity({ login: "ada@github", name: "Provider Changed" }, options),
-    ).toMatchObject({ displayName: "User Chosen" });
-  });
-
-  it("moves aliases and leaves an aliasless source profile as a one-hop tombstone", () => {
-    const options = stateOptions();
-    const source = ensureProfileForEmail("source@example.com", options);
-    const target = ensureProfileForEmail("target@example.com", options);
-
-    const linked = linkEmail("source@example.com", target.id, options);
-
-    expect(ensureProfileForEmail("source@example.com", options).id).toBe(target.id);
-    expect(linked).toMatchObject({
-      id: target.id,
-      emails: ["source@example.com", "target@example.com"],
-      hasAvatar: false,
-    });
-    expect(listProfiles(options)).toContainEqual(
-      expect.objectContaining({ id: source.id, mergedInto: target.id, emails: [] }),
-    );
-  });
-
-  it("compresses tombstones so durable profile references resolve to the merge head", () => {
-    const options = stateOptions();
-    const a = ensureProfileForEmail("a@example.com", options);
-    const b = ensureProfileForEmail("b@example.com", options);
-    const c = ensureProfileForEmail("c@example.com", options);
-
-    linkEmail("a@example.com", b.id, options);
-    linkEmail("a@example.com", c.id, options);
-    linkEmail("b@example.com", c.id, options);
-
-    expect(setDisplayName(a.id, "Durable A", options)).toMatchObject({ id: c.id });
-    expect(resolveUserProfileId(a.id, options)).toBe(c.id);
-    expect(listProfiles(options)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: a.id, mergedInto: c.id }),
-        expect.objectContaining({ id: b.id, mergedInto: c.id }),
-      ]),
-    );
-  });
-
-  it("resolves a tombstoned link target to its head without forming a cycle", () => {
-    const options = stateOptions();
-    const a = ensureProfileForEmail("a@example.com", options);
-    const b = ensureProfileForEmail("b@example.com", options);
-
-    linkEmail("a@example.com", b.id, options);
-    linkEmail("a@example.com", a.id, options);
-
-    expect(ensureProfileForEmail("a@example.com", options).id).toBe(b.id);
-    expect(listProfiles(options)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: a.id, mergedInto: b.id }),
-        expect.objectContaining({ id: b.id, mergedInto: null }),
-      ]),
-    );
-  });
+      setDisplayName(profile.id, "User Chosen", options);
+      expect(
+        ensureProfileForTailscaleIdentity(
+          { login: "ada@github", name: "Provider Changed" },
+          options,
+        ),
+      ).toMatchObject({ displayName: "User Chosen" });
+      expect(readUserProfileVersion()).toBe(version + 2);
+    },
+  );
 
   it("updates display names", () => {
     const options = stateOptions();
@@ -581,11 +824,11 @@ describe("user profiles", () => {
     );
   });
 
-  it("bounds generated display names to the protocol limit", () => {
+  it("bounds generated display names to the protocol limit without splitting Unicode", () => {
     const options = stateOptions();
-    const profile = ensureProfileForEmail(`${"a".repeat(300)}@example.com`, options);
+    const profile = ensureProfileForEmail(`${"a".repeat(255)}😀@example.com`, options);
 
-    expect(profile.displayName).toHaveLength(256);
+    expect(profile.displayName).toBe("a".repeat(255));
   });
 
   it.each([
@@ -596,17 +839,20 @@ describe("user profiles", () => {
     const options = stateOptions();
     const bytes = fixtureImage(path);
 
-    const profile = await ensureTailscaleProfileWithAvatar(
-      {
-        login: `avatar-${mime.slice("image/".length)}@github`,
-        name: "Avatar User",
-        profilePic: "https://avatars.example.test/profile",
-      },
+    const initialProfile = ensureProfileForTailscaleIdentity(
+      { login: `avatar-${mime.slice("image/".length)}@github`, name: "Avatar User" },
+      options,
+    );
+    const version = readUserProfileVersion();
+    const profile = await adoptTailscaleProfileAvatar(
+      initialProfile.id,
+      "https://avatars.example.test/profile",
       options,
       { fetchImpl: imageFetch(bytes, mime) },
     );
 
     expect(profile.avatarMime).toBe(mime);
+    expect(readUserProfileVersion()).toBe(version + 1);
     const stored = getProfileAvatar(profile.id, options);
     expect(stored).toMatchObject({
       mime,
@@ -711,6 +957,7 @@ describe("user profiles", () => {
     const profileId = listProfiles(options)[0]?.id;
     expect(profileId).toBeTruthy();
     expect(setAvatar(profileId!, new Uint8Array([9, 8, 7]), "image/png", options).ok).toBe(true);
+    const version = readUserProfileVersion();
 
     resolveFetch?.(
       new Response(Uint8Array.from(fixtureImage("ui/public/favicon-32.png")).buffer, {
@@ -719,6 +966,7 @@ describe("user profiles", () => {
     );
     await pending;
 
+    expect(readUserProfileVersion()).toBe(version);
     expect(getProfileAvatar(profileId!, options)?.bytes).toEqual(new Uint8Array([9, 8, 7]));
   });
 
@@ -779,11 +1027,23 @@ describe("user profiles", () => {
     });
   });
 
-  it("stores an allowlisted avatar", () => {
+  it.each([
+    {
+      name: "empty",
+      bytes: [],
+      sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    },
+    {
+      name: "nonempty",
+      bytes: [1, 2, 3],
+      sha256: "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
+    },
+  ])("stores an allowlisted avatar with $name content", ({ bytes, sha256 }) => {
     const options = stateOptions();
     const profile = ensureProfileForEmail("ada@example.com", options);
+    const version = readUserProfileVersion();
 
-    expect(setAvatar(profile.id, new Uint8Array([1, 2, 3]), "image/png", options)).toEqual({
+    expect(setAvatar(profile.id, new Uint8Array(bytes), "image/png", options)).toEqual({
       ok: true,
       value: expect.objectContaining({
         id: profile.id,
@@ -792,18 +1052,28 @@ describe("user profiles", () => {
         hasAvatar: true,
       }),
     });
+    expect(readUserProfileVersion()).toBe(version + 1);
     expect(getProfileAvatar(profile.id, options)).toEqual({
-      bytes: new Uint8Array([1, 2, 3]),
+      bytes: new Uint8Array(bytes),
       mime: "image/png",
-      sha256: "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
+      sha256,
       updatedAt: expect.any(Number),
     });
     expect(listProfiles(options)).toEqual([
       expect.objectContaining({ id: profile.id, hasAvatar: true }),
     ]);
+    expect(getUserProfileDisplay(profile.id, options)).toEqual({
+      id: profile.id,
+      displayName: profile.displayName,
+      hasAvatar: true,
+      avatarRevision: `${sha256}-png`,
+    });
   });
 
-  it("keeps distinct avatar ETags when updates share a millisecond", () => {
+  it.each([
+    { change: "bytes", bytes: [2], mime: "image/png" },
+    { change: "MIME", bytes: [1], mime: "image/webp" },
+  ])("keeps distinct avatar ETags when $change changes within a millisecond", ({ bytes, mime }) => {
     const options = stateOptions();
     const profile = ensureProfileForEmail("ada@example.com", options);
     vi.spyOn(Date, "now").mockReturnValue(100);
@@ -811,7 +1081,7 @@ describe("user profiles", () => {
     expect(setAvatar(profile.id, new Uint8Array([1]), "image/png", options).ok).toBe(true);
     const first = getProfileAvatar(profile.id, options);
     const firstDisplay = getUserProfileDisplay(profile.id, options);
-    expect(setAvatar(profile.id, new Uint8Array([2]), "image/png", options).ok).toBe(true);
+    expect(setAvatar(profile.id, new Uint8Array(bytes), mime, options).ok).toBe(true);
     const second = getProfileAvatar(profile.id, options);
     const secondDisplay = getUserProfileDisplay(profile.id, options);
 
@@ -819,24 +1089,6 @@ describe("user profiles", () => {
     expect(firstDisplay.avatarRevision).not.toBe(secondDisplay.avatarRevision);
     expect(formatUserProfileAvatarEtag(first?.sha256 ?? "", first?.mime ?? "image/png")).not.toBe(
       formatUserProfileAvatarEtag(second?.sha256 ?? "", second?.mime ?? "image/png"),
-    );
-  });
-
-  it("keeps distinct avatar ETags when MIME changes with identical bytes", () => {
-    const options = stateOptions();
-    const profile = ensureProfileForEmail("ada@example.com", options);
-    const bytes = new Uint8Array([1, 2, 3]);
-
-    expect(setAvatar(profile.id, bytes, "image/png", options).ok).toBe(true);
-    const png = getProfileAvatar(profile.id, options);
-    const pngDisplay = getUserProfileDisplay(profile.id, options);
-    expect(setAvatar(profile.id, bytes, "image/webp", options).ok).toBe(true);
-    const webp = getProfileAvatar(profile.id, options);
-    const webpDisplay = getUserProfileDisplay(profile.id, options);
-
-    expect(pngDisplay.avatarRevision).not.toBe(webpDisplay.avatarRevision);
-    expect(formatUserProfileAvatarEtag(png?.sha256 ?? "", png?.mime ?? "image/png")).not.toBe(
-      formatUserProfileAvatarEtag(webp?.sha256 ?? "", webp?.mime ?? "image/png"),
     );
   });
 });

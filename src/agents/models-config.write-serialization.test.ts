@@ -59,31 +59,34 @@ installModelsConfigTestHooks();
 let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClawModelsJson;
 let planOpenClawModelsJsonSource: typeof import("./models-config.js").planOpenClawModelsJsonSource;
 let clearPluginMetadataLifecycleCaches: typeof import("../plugins/plugin-metadata-lifecycle.js").clearPluginMetadataLifecycleCaches;
-let setCurrentPluginMetadataSnapshot: typeof import("../plugins/current-plugin-metadata-snapshot.js").setCurrentPluginMetadataSnapshot;
+let setCurrentPluginMetadataSnapshot: typeof import("../plugins/current-plugin-metadata.test-support.js").setCurrentPluginMetadataSnapshot;
 
 function createPluginMetadataSnapshot(workspaceDir: string): PluginMetadataSnapshot {
   // Minimal process snapshot used to prove when metadata may be reused.
   const policyHash = resolveInstalledPluginIndexPolicyHash({});
+  const index: PluginMetadataSnapshot["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash,
+    generatedAtMs: 1,
+    installRecords: {},
+    plugins: [],
+    diagnostics: [],
+  };
   return {
     policyHash,
     workspaceDir,
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash,
-      generatedAtMs: 1,
-      installRecords: {},
-      plugins: [],
-      diagnostics: [],
-    },
+    index,
+    registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: { plugins: [], diagnostics: [] },
     plugins: [],
     diagnostics: [],
     byPluginId: new Map(),
     normalizePluginId: (pluginId) => pluginId,
+    declaredProviderOwners: new Map(),
     owners: {
       channels: new Map(),
       channelConfigs: new Map(),
@@ -93,6 +96,7 @@ function createPluginMetadataSnapshot(workspaceDir: string): PluginMetadataSnaps
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
     metrics: {
       registrySnapshotMs: 0,
@@ -168,7 +172,7 @@ beforeAll(async () => {
   ({ clearPluginMetadataLifecycleCaches } =
     await import("../plugins/plugin-metadata-lifecycle.js"));
   ({ setCurrentPluginMetadataSnapshot } =
-    await import("../plugins/current-plugin-metadata-snapshot.js"));
+    await import("../plugins/current-plugin-metadata.test-support.js"));
 });
 
 beforeEach(() => {

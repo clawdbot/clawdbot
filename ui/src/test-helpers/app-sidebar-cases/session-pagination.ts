@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   createGateway,
@@ -27,7 +28,7 @@ describe("AppSidebar gateway session pagination", () => {
       const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
       (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
         statusFilter;
-      sidebar.sessionData.resetForStatusFilter(statusFilter);
+      sidebar.sessionData.resetSessionList();
       await sidebar.sessionData.refreshSidebarSessions("main");
       harness.list.mockClear();
       harness.list.mockResolvedValue(changedResult);
@@ -56,11 +57,15 @@ describe("AppSidebar gateway session pagination", () => {
   it.each(["archived", "all"] as const)(
     "keeps every loaded %s sidebar page after another client's session event",
     async (statusFilter) => {
-      const keys = Array.from({ length: 120 }, (_, index) => `agent:main:session-${index}`);
+      const pageSize = SIDEBAR_SESSION_ROSTER_LIMIT;
+      const keys = Array.from(
+        { length: pageSize * 2 },
+        (_, index) => `agent:main:session-${index}`,
+      );
       const harness = createSessionsHarness("main", ["agent:main:canonical-active"]);
       harness.list.mockImplementation(async (options) => {
         const offset = options?.offset ?? 0;
-        const limit = options?.limit ?? 60;
+        const limit = options?.limit ?? pageSize;
         const sessions = createSessionState("main", keys.slice(offset, offset + limit)).result;
         if (!sessions) {
           throw new Error("expected a paginated filtered session result");
@@ -78,10 +83,10 @@ describe("AppSidebar gateway session pagination", () => {
       const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
       (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
         statusFilter;
-      sidebar.sessionData.resetForStatusFilter(statusFilter);
+      sidebar.sessionData.resetSessionList();
       await sidebar.sessionData.refreshSidebarSessions("main");
       await sidebar.sessionData.loadMoreSidebarSessions();
-      expect(sidebar.sessionData.sessionsResult?.sessions).toHaveLength(120);
+      expect(sidebar.sessionData.sessionsResult?.sessions).toHaveLength(pageSize * 2);
       harness.list.mockClear();
 
       gateway.publishEvent("sessions.changed", {
@@ -92,10 +97,14 @@ describe("AppSidebar gateway session pagination", () => {
 
       await waitForFast(() => {
         expect(harness.list).toHaveBeenCalledOnce();
-        expect(sidebar.sessionData.sessionsResult?.sessions).toHaveLength(120);
+        expect(sidebar.sessionData.sessionsResult?.sessions).toHaveLength(pageSize * 2);
       });
       expect(harness.list).toHaveBeenCalledWith(
-        expect.objectContaining({ agentId: "main", archivedFilter: statusFilter, limit: 120 }),
+        expect.objectContaining({
+          agentId: "main",
+          archivedFilter: statusFilter,
+          limit: pageSize * 2,
+        }),
       );
     },
   );
@@ -114,7 +123,7 @@ describe("AppSidebar gateway session pagination", () => {
       const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
       (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
         statusFilter;
-      sidebar.sessionData.resetForStatusFilter(statusFilter);
+      sidebar.sessionData.resetSessionList();
 
       const pendingRefresh = sidebar.sessionData.refreshSidebarSessions("main");
       const generation = sidebar.sessionData.sessionScopeGeneration;
@@ -157,7 +166,7 @@ describe("AppSidebar gateway session pagination", () => {
       );
       (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
         statusFilter;
-      sidebar.sessionData.resetForStatusFilter(statusFilter);
+      sidebar.sessionData.resetSessionList();
 
       const staleRefresh = sidebar.sessionData.refreshSidebarSessions("main");
       context.agentSelection.state.selectedId = "research";
@@ -197,7 +206,7 @@ describe("AppSidebar gateway session pagination", () => {
       const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
       (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
         statusFilter;
-      sidebar.sessionData.resetForStatusFilter(statusFilter);
+      sidebar.sessionData.resetSessionList();
 
       const staleRefresh = sidebar.sessionData.refreshSidebarSessions("main");
       gateway.publish({ phase: "reconnecting" });
@@ -244,7 +253,7 @@ describe("AppSidebar gateway session pagination", () => {
       );
       (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
         statusFilter;
-      sidebar.sessionData.resetForStatusFilter(statusFilter);
+      sidebar.sessionData.resetSessionList();
       await sidebar.sessionData.refreshSidebarSessions("main");
       harness.list.mockClear();
 
@@ -314,10 +323,18 @@ describe("AppSidebar gateway session pagination", () => {
 
     for (let page = 0; page < 5; page += 1) {
       const button = sidebar.querySelector<HTMLButtonElement>('button[aria-label="Show more"]');
-      expect(button).not.toBeNull();
-      button?.click();
+      if (!button) {
+        break;
+      }
+      button.click();
       await sidebar.updateComplete;
     }
+    const loadMore = sidebar.querySelector<HTMLButtonElement>(
+      'button[aria-label="Load more sessions"]',
+    );
+    expect(loadMore).not.toBeNull();
+    loadMore?.click();
+    await sidebar.updateComplete;
 
     await waitForFast(() => {
       expect(sidebar.querySelector('[data-session-key="agent:main:session-50"]')).not.toBeNull();
@@ -327,12 +344,12 @@ describe("AppSidebar gateway session pagination", () => {
         agentId: "main",
         archivedFilter: "active",
         offset: 50,
-        limit: 60,
+        limit: SIDEBAR_SESSION_ROSTER_LIMIT,
         append: true,
         force: true,
       }),
     );
-    expect(sidebar.querySelector('button[aria-label="Show more"]')).toBeNull();
+    expect(sidebar.querySelector('button[aria-label="Load more sessions"]')).toBeNull();
   });
 
   it("derives the active page offset when the Gateway omits its optional cursor", async () => {
@@ -431,7 +448,7 @@ describe("AppSidebar gateway session pagination", () => {
       );
       (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
         statusFilter;
-      sidebar.sessionData.resetForStatusFilter(statusFilter);
+      sidebar.sessionData.resetSessionList();
       await sidebar.sessionData.refreshSidebarSessions("main");
       harness.list.mockClear();
 
@@ -487,16 +504,24 @@ describe("AppSidebar gateway session pagination", () => {
           sessionsStatusFilter: "archived" | "all";
         }
       ).sessionsStatusFilter = statusFilter;
-      sidebar.sessionData.resetForStatusFilter(statusFilter);
+      sidebar.sessionData.resetSessionList();
       await sidebar.sessionData.refreshSidebarSessions("main");
       await sidebar.updateComplete;
 
       for (let page = 0; page < 6; page += 1) {
         const button = sidebar.querySelector<HTMLButtonElement>('button[aria-label="Show more"]');
-        expect(button).not.toBeNull();
-        button?.click();
+        if (!button) {
+          break;
+        }
+        button.click();
         await sidebar.updateComplete;
       }
+      const loadMore = sidebar.querySelector<HTMLButtonElement>(
+        'button[aria-label="Load more sessions"]',
+      );
+      expect(loadMore).not.toBeNull();
+      loadMore?.click();
+      await sidebar.updateComplete;
 
       await waitForFast(() => {
         expect(sidebar.querySelector('[data-session-key="agent:main:session-60"]')).not.toBeNull();
@@ -506,12 +531,12 @@ describe("AppSidebar gateway session pagination", () => {
           agentId: "main",
           archivedFilter: statusFilter,
           offset: 60,
-          limit: 60,
+          limit: SIDEBAR_SESSION_ROSTER_LIMIT,
         }),
       );
       expect(harness.refresh).not.toHaveBeenCalledWith(expect.objectContaining({ offset: 60 }));
       expect(harness.sessions.state.result?.sessions[0]?.key).toBe("agent:main:canonical-active");
-      expect(sidebar.querySelector('button[aria-label="Show more"]')).toBeNull();
+      expect(sidebar.querySelector('button[aria-label="Load more sessions"]')).toBeNull();
     },
   );
 });

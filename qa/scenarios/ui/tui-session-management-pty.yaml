@@ -26,10 +26,10 @@ scenario:
       tuiPtyCases:
         - coverageId: tui.session-lifecycle
           testFile: src/tui/tui-pty-local.e2e.test.ts
-          testNamePattern: ^TUI PTY real backends creates and adopts a fresh local session through a real PTY$
+          testNamePattern: ^TUI PTY real backends > creates and adopts a fresh local session through a real PTY$
         - coverageId: tui.history
           testFile: src/tui/tui-pty-local.e2e.test.ts
-          testNamePattern: ^TUI PTY real backends lists local session history through a real PTY$
+          testNamePattern: ^TUI PTY real backends > lists local session history through a real PTY$
         - coverageId: tui.resume
           testFile: src/tui/tui-pty-local.e2e.test.ts
-          testNamePattern: ^TUI PTY real backends with shared Gateway fixture restores the remembered Gateway session and history after a real TUI relaunch$
+          testNamePattern: ^TUI PTY real backends > with shared Gateway fixture > gates input while a real Gateway restores the remembered session and history$

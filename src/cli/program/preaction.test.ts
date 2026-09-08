@@ -58,10 +58,6 @@ vi.mock("../../logging/console.js", () => ({
   routeLogsToStderr: routeLogsToStderrMock,
 }));
 
-vi.mock("../cli-name.js", () => ({
-  resolveCliName: () => "openclaw",
-}));
-
 vi.mock("./config-guard.js", () => ({
   ensureConfigReady: ensureConfigReadyMock,
 }));
@@ -224,6 +220,8 @@ describe("registerPreActionHooks", () => {
       .action(() => {});
     programLocal.command("completion").action(() => {});
     programLocal.command("secrets").action(() => {});
+    const modelList = programLocal.command("models").command("aliases").command("list");
+    modelList.option("--plain").action(() => {});
     const skills = programLocal.command("skills");
     skills.option("--json").action(() => {});
     for (const skillCommand of ["list", "check"]) {
@@ -400,7 +398,7 @@ describe("registerPreActionHooks", () => {
     }
 
     expect(prepareGatewayRunBootstrapMock).toHaveBeenCalledWith({
-      opts: { force: true, reset: false },
+      opts: expect.objectContaining({ force: true, reset: false }),
       runtime: runtimeMock,
     });
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
@@ -424,7 +422,7 @@ describe("registerPreActionHooks", () => {
     const beforeStateMigrations = ensureConfigReadyMock.mock.calls[0]?.[0]?.beforeStateMigrations;
     await beforeStateMigrations?.();
     expect(recheckGatewayRunBootstrapMock).toHaveBeenCalledWith({
-      opts: { force: false, reset: false },
+      opts: expect.objectContaining({ force: false, reset: false }),
       runtime: runtimeMock,
     });
     expect(reloadTrustedGatewayRunEnvironmentMock).toHaveBeenCalledWith({
@@ -891,11 +889,32 @@ describe("registerPreActionHooks", () => {
     }
 
     expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
+    expect(emitCliBannerMock).not.toHaveBeenCalled();
     expect(observedMachineOutputStdoutIsTTY).toBe(false);
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       measure: expect.any(Function),
       commandPath: ["machine"],
+      suppressDoctorStdout: true,
+    });
+  });
+
+  it("keeps plain model output clean throughout Commander startup", async () => {
+    loggingState.forceConsoleToStderr = true;
+    loggingState.earlyConsoleRoutingRestore = false;
+
+    await runPreAction({
+      parseArgv: ["models", "aliases", "list"],
+      processArgv: ["node", "openclaw", "models", "aliases", "list", "--plain"],
+    });
+
+    expect(loggingState.forceConsoleToStderr).toBe(true);
+    expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
+    expect(emitCliBannerMock).not.toHaveBeenCalled();
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      measure: expect.any(Function),
+      commandPath: ["models", "aliases", "list"],
       suppressDoctorStdout: true,
     });
   });

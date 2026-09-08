@@ -3,7 +3,11 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as extraParamsTesting } from "./embedded-agent-runner/extra-params.test-support.js";
+import {
+  testing as extraParamsTesting,
+  type WrapProviderStreamFnParams,
+} from "./embedded-agent-runner/extra-params.test-support.js";
+import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 vi.mock("../plugins/provider-hook-runtime.js", () => ({
   clearProviderRuntimePluginCacheForTest: vi.fn(),
@@ -11,9 +15,8 @@ vi.mock("../plugins/provider-hook-runtime.js", () => ({
     buildHookProviderCacheKey: () => "test-provider-hook-cache-key",
     clearProviderRuntimePluginCacheForTest: vi.fn(),
   },
-  prepareProviderExtraParams: () => undefined,
-  resolveProviderExtraParamsForTransport: () => undefined,
-  wrapProviderStreamFn: (params: { context: { streamFn?: StreamFn } }) => params.context.streamFn,
+  ensureProviderRuntimePluginHandle: vi.fn(),
+  getModelProviderRuntimePluginHandle: () => undefined,
 }));
 
 const ANTHROPIC_DEFAULT_BETAS = [
@@ -21,7 +24,6 @@ const ANTHROPIC_DEFAULT_BETAS = [
   "interleaved-thinking-2025-05-14",
 ];
 const ANTHROPIC_CONTEXT_1M_BETA = "context-1m-2025-08-07";
-const ANTHROPIC_COMPACTION_BETA = "compact-2026-01-12";
 const ANTHROPIC_OAUTH_BETAS = ["oauth-2025-04-20", "claude-code-20250219"];
 
 const XAI_FAST_MODEL_IDS = new Map<string, string>([
@@ -221,54 +223,6 @@ function createAnthropicFastModeWrapper(baseStreamFn: StreamFn | undefined, fast
   return createAnthropicServiceTierWrapper(baseStreamFn, fastMode ? "auto" : "standard_only");
 }
 
-function createAnthropicCompactionWrapper(
-  baseStreamFn: StreamFn | undefined,
-  extraParams: Record<string, unknown> | undefined,
-) {
-  const underlying = baseStreamFn ?? (() => ({}) as ReturnType<StreamFn>);
-  return ((model, context, options) => {
-    if (
-      extraParams?.anthropicServerCompaction !== true ||
-      isAnthropicOauthApiKey(options?.apiKey) ||
-      !isDirectAnthropicModel(model)
-    ) {
-      return underlying(model, context, options);
-    }
-    const originalOnPayload = options?.onPayload;
-    const configuredThreshold =
-      typeof extraParams.anthropicCompactThreshold === "number"
-        ? Math.floor(extraParams.anthropicCompactThreshold)
-        : undefined;
-    const threshold = Math.max(
-      50_000,
-      configuredThreshold ?? Math.floor((model.contextWindow ?? 0) * 0.7),
-    );
-    return underlying(model, context, {
-      ...options,
-      headers: {
-        ...options?.headers,
-        "anthropic-beta": [options?.headers?.["anthropic-beta"], ANTHROPIC_COMPACTION_BETA]
-          .filter(Boolean)
-          .join(","),
-      },
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          const payloadObj = payload as Record<string, unknown>;
-          payloadObj.context_management ??= {
-            edits: [
-              {
-                type: "compact_20260112",
-                trigger: { type: "input_tokens", value: threshold },
-              },
-            ],
-          };
-        }
-        return originalOnPayload?.(payload, model);
-      },
-    });
-  }) as StreamFn;
-}
-
 import { isAnthropicFamilyCacheTtlEligible } from "../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
 import { createAnthropicToolPayloadCompatibilityWrapper } from "../llm/providers/stream-wrappers/anthropic-family-tool-payload-compat.js";
 import { createGoogleThinkingPayloadWrapper } from "../llm/providers/stream-wrappers/google.js";
@@ -295,10 +249,6 @@ import {
   resolvePreparedExtraParams,
 } from "./embedded-agent-runner/extra-params.js";
 import { log } from "./embedded-agent-runner/logger.js";
-
-type WrapProviderStreamFnParams = Parameters<
-  typeof import("../plugins/provider-hook-runtime.js").wrapProviderStreamFn
->[0];
 
 function installFullProviderRuntimeDepsForTest() {
   // Install a test-only provider runtime that composes the same wrapper families
@@ -385,9 +335,6 @@ function installFullProviderRuntimeDepsForTest() {
         const fastMode = resolveAnthropicFastMode(params.context.extraParams);
         if (fastMode !== undefined) {
           streamFn = createAnthropicFastModeWrapper(streamFn, fastMode);
-        }
-        if (params.context.extraParams?.anthropicServerCompaction === true) {
-          streamFn = createAnthropicCompactionWrapper(streamFn, params.context.extraParams);
         }
         return streamFn;
       }
@@ -909,14 +856,7 @@ describe("applyExtraParamsToAgent", () => {
       api: "openai-completions",
       provider: "opencode",
       model: "xiaomi/mimo-v2-pro",
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createZeroUsageFixture(),
       stopReason: "stop",
       timestamp: 1,
     } as const;
@@ -1365,18 +1305,18 @@ describe("applyExtraParamsToAgent", () => {
 
   it("flattens pure text OpenAI completions message arrays for string-only compat models", () => {
     const payload = runResponsesPayloadMutationCase({
-      applyProvider: "inferrs",
-      applyModelId: "google/gemma-4-E2B-it",
+      applyProvider: "llmman",
+      applyModelId: "gemma4",
       model: {
         api: "openai-completions",
-        provider: "inferrs",
-        id: "google/gemma-4-E2B-it",
-        name: "Gemma 4 E2B (inferrs)",
-        baseUrl: "http://127.0.0.1:8080/v1",
+        provider: "llmman",
+        id: "gemma4",
+        name: "Gemma 4 (llmman)",
+        baseUrl: "http://127.0.0.1:17434/v1",
         reasoning: false,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 131072,
+        contextWindow: 65536,
         maxTokens: 4096,
         compat: {
           requiresStringContent: true,
@@ -1972,18 +1912,6 @@ describe("applyExtraParamsToAgent", () => {
       expected: "websocket",
     },
     {
-      name: "passes configured websocket transport through stream options for openai gpt-5.4",
-      cfg: buildModelConfig("openai/gpt-5.4", { transport: "websocket" }),
-      modelId: "gpt-5.4",
-      model: {
-        api: "openai-chatgpt-responses",
-        provider: "openai",
-        id: "gpt-5.4",
-      } as Model<"openai-chatgpt-responses">,
-      options: {},
-      expected: "websocket",
-    },
-    {
       name: "defaults Codex transport to auto (WebSocket-first)",
       cfg: undefined,
       modelId: "gpt-5.4",
@@ -2294,7 +2222,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(hookContext?.workspaceDir).toBe("/tmp/workspace");
   });
 
-  it("keys prepared extra-param memoization by resolved model transport inputs", () => {
+  it("prepares extra params from each model's transport inputs", () => {
     const resolveProviderExtraParamsForTransport = vi.fn((params) => ({
       patch: {
         transportFamily: params.context.model?.api,
@@ -2367,7 +2295,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(differentModelHeadersParams.baseUrl).toBe("https://api-two.example/v1");
     expect(differentModelHeadersParams.headerAuth).toBe("two");
     expect(repeatedResponsesParams.transportFamily).toBe("openai-responses");
-    expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledTimes(3);
+    expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledTimes(4);
   });
 
   it("passes explicit settings transport to transport extra-param hooks", () => {
@@ -3164,19 +3092,6 @@ describe("applyExtraParamsToAgent", () => {
       expectedModelId: "MiniMax-M2.7-highspeed",
     },
     {
-      name: "maps MiniMax M2.7 /fast to the matching highspeed model",
-      applyProvider: "minimax",
-      applyModelId: "MiniMax-M2.7",
-      fastMode: true,
-      model: {
-        api: "anthropic-messages",
-        provider: "minimax",
-        id: "MiniMax-M2.7",
-        baseUrl: "https://api.minimax.io/anthropic",
-      } as Model<"anthropic-messages">,
-      expectedModelId: "MiniMax-M2.7-highspeed",
-    },
-    {
       name: "keeps explicit MiniMax highspeed models unchanged when /fast is off",
       applyProvider: "minimax-portal",
       applyModelId: "MiniMax-M2.7-highspeed",
@@ -3282,50 +3197,6 @@ describe("applyExtraParamsToAgent", () => {
     });
 
     expect(payload.service_tier).toBe(expected);
-  });
-
-  it("injects configured Anthropic server compaction through the provider runtime", () => {
-    const cfg = buildModelConfig("anthropic/claude-sonnet-4-5", {
-      anthropicServerCompaction: true,
-      anthropicCompactThreshold: 120_000,
-    });
-    const payload = runAnthropicServiceTierCase({ cfg });
-    const headers = runAnthropicHeaderCase({
-      cfg,
-      modelId: "claude-sonnet-4-5",
-      options: { apiKey: "sk-ant-api03-test-key" },
-    });
-
-    expect(payload.context_management).toEqual({
-      edits: [
-        {
-          type: "compact_20260112",
-          trigger: { type: "input_tokens", value: 120_000 },
-        },
-      ],
-    });
-    expect(headers?.["anthropic-beta"]).toContain(ANTHROPIC_COMPACTION_BETA);
-  });
-
-  it.each([
-    {
-      name: "is omitted",
-      extraParamsOverride: {},
-    },
-    {
-      name: "uses OAuth auth",
-      extraParamsOverride: { anthropicServerCompaction: true },
-      options: { apiKey: "sk-ant-oat-test-token" },
-    },
-    {
-      name: "uses a proxy endpoint",
-      extraParamsOverride: { anthropicServerCompaction: true },
-      baseUrl: "https://proxy.example.test/v1",
-    },
-  ])("does not inject Anthropic server compaction when the opt-in $name", (params) => {
-    const payload = runAnthropicServiceTierCase(params);
-
-    expect(payload).not.toHaveProperty("context_management");
   });
 
   it.each([

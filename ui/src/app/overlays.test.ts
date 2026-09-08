@@ -1,7 +1,8 @@
 // @vitest-environment node
 // Control UI tests cover application-owned overlay races.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { i18n } from "../i18n/index.ts";
+import { createUpdateRunFixture as updateRunFixture } from "../test-helpers/update-run.ts";
+import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import {
   approval,
@@ -27,39 +28,37 @@ vi.mock("../build-info.ts", () => ({
             ? identity.buildId.trim() !== "test"
             : identity.version?.trim() && identity.version.trim() !== "1.0.0",
         ),
-  reloadControlUiIfStale: vi.fn(),
 }));
 vi.mock("../lib/toast.ts", () => ({ showToast: vi.fn() }));
-const HANDOFF_POLL_MS = 1_000;
-const RESTART_VERIFICATION_TIMEOUT_MS = 10_000;
-const UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
-
-function installUpdateTranslations() {
-  const translations: Record<string, string> = {
-    "updates.coalescedRestart":
-      "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",
-    "updates.status": "Update {status}: {reason}. {guidance}",
-    "updates.failureReasons.managedServiceHandoffAlreadyRunning":
-      "Another managed update is already running. Wait for it to complete, then refresh update status.",
-    "updates.verificationFailedWithVersions":
-      "Update installed but running version did not change — restart may have been blocked. Expected v{expectedVersion}, running v{actualVersion}.",
-    "updates.verificationFailedWithIdentity":
-      "Update finished, but the running install does not match the expected revision. Expected {expected}, running {actual}.",
-    "common.unknown": "Unknown",
-    "updates.outcomeUnknown":
-      "The update request may have been accepted, but the Gateway did not report a final result after reconnect. Run `openclaw update status` before retrying.",
-  };
-  return vi.spyOn(i18n, "t").mockImplementation((key, params) => {
-    const template = translations[key] ?? key;
-    return template.replace(/\{(\w+)\}/g, (_match, name: string) => params?.[name] ?? `{${name}}`);
-  });
-}
-
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
 describe("Control UI refresh nudge", () => {
+  it("runs automatic connection refreshes through the bootstrap coordinator", async () => {
+    const request = vi.fn<RequestFn>((method) =>
+      Promise.resolve(method === "exec.approval.list" ? [] : {}),
+    );
+    const coordinator = {
+      reset: vi.fn(),
+      run: vi.fn(async (_key: string, task: () => Promise<unknown>) => {
+        await task();
+      }),
+      synchronize: vi.fn(),
+    } satisfies ConnectionBootstrapCoordinator;
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway, {
+      connectionBootstrap: coordinator,
+    });
+
+    harness.update({ client: client(request), phase: "connected" });
+    await flushMicrotasks();
+
+    expect(coordinator.run).toHaveBeenCalledWith("approvals", expect.any(Function));
+    expect(coordinator.run).toHaveBeenCalledWith("update-run", expect.any(Function));
+    overlays.dispose();
+  });
+
   it("flags a terminal build rejection without requiring a hello", () => {
     const gatewayClient = client(async () => []);
     const harness = createGatewayHarness(null, false);
@@ -563,6 +562,37 @@ describe("application approval overlays", () => {
     overlays.dispose();
   });
 
+  it("keeps a projected approval's resolve failure visible", async () => {
+    let resolveAttempts = 0;
+    const request = vi.fn<RequestFn>((method) => {
+      if (method !== "exec.approval.resolve") {
+        return Promise.resolve([]);
+      }
+      resolveAttempts += 1;
+      return resolveAttempts === 1
+        ? Promise.reject(new Error("gateway unavailable"))
+        : Promise.resolve({ ok: true });
+    });
+    const harness = createGatewayHarness(client(request));
+    const overlays = createApplicationOverlays(harness.gateway);
+    const projectedApproval = {
+      ...approval("approval-projected", 1_000),
+      kind: "exec" as const,
+    };
+
+    await overlays.decideApproval("allow-once", projectedApproval.id, projectedApproval);
+
+    expect(overlays.snapshot.approvalErrors.get(projectedApproval.id)).toBe(
+      "Approval failed: gateway unavailable",
+    );
+    expect(overlays.snapshot.approvalBusy).toBe(false);
+
+    await overlays.decideApproval("allow-once", projectedApproval.id, projectedApproval);
+
+    expect(overlays.snapshot.approvalErrors.has(projectedApproval.id)).toBe(false);
+    overlays.dispose();
+  });
+
   it("surfaces a connection error when a rendered approval races a disconnect", async () => {
     const request = vi.fn<RequestFn>((method) =>
       Promise.resolve(method.endsWith(".list") ? [] : { ok: true }),
@@ -588,7 +618,7 @@ describe("application approval overlays", () => {
     const secondResolve = deferred();
     let resolveCalls = 0;
     const request = vi.fn<RequestFn>((method) => {
-      if (method.endsWith(".list")) {
+      if (method !== "exec.approval.resolve") {
         return Promise.resolve([]);
       }
       resolveCalls += 1;
@@ -621,7 +651,7 @@ describe("application approval overlays", () => {
     const firstResolve = deferred();
     let resolveCalls = 0;
     const request = vi.fn<RequestFn>((method) => {
-      if (method.endsWith(".list")) {
+      if (method !== "exec.approval.resolve") {
         return Promise.resolve([]);
       }
       resolveCalls += 1;
@@ -757,7 +787,7 @@ describe("application update overlays", () => {
 
     await overlays.runUpdate();
 
-    expect(request).not.toHaveBeenCalledWith("update.run", {});
+    expect(request.mock.calls.filter(([method]) => method === "update.run")).toEqual([]);
     expect(drainConfigWrites).not.toHaveBeenCalled();
     expect(overlays.snapshot.updateRunning).toBe(false);
     overlays.dispose();
@@ -771,10 +801,13 @@ describe("application update overlays", () => {
     });
     const harness = createGatewayHarness(client(request));
     let updateRunningWhenDrained = false;
+    harness.update({ sessionKey: "agent:main:originating-chat" });
     const overlays = createApplicationOverlays(harness.gateway, {
+      getActiveSessionKey: () => harness.gateway.snapshot.sessionKey,
       drainConfigWrites: async () => {
         order.push("drain");
         updateRunningWhenDrained = overlays.snapshot.updateRunning;
+        harness.update({ sessionKey: "agent:main:another-chat" });
         await Promise.resolve();
       },
     });
@@ -787,198 +820,47 @@ describe("application update overlays", () => {
     ]);
     // Suspension publishes first so no NEW write can start while draining.
     expect(updateRunningWhenDrained).toBe(true);
-  });
-
-  it("surfaces a coalesced restart while reconnect verification remains active", async () => {
-    installUpdateTranslations();
-    const request = vi.fn<RequestFn>().mockResolvedValue({
-      ok: true,
-      restart: { coalesced: true },
-      result: { status: "ok", after: { version: "2.0.0" } },
-    });
-    const harness = createGatewayHarness(client(request));
-    const overlays = createApplicationOverlays(harness.gateway);
-
-    await overlays.runUpdate();
-
-    expect(request).toHaveBeenCalledWith("update.run", {});
-    expect(overlays.snapshot.updateStatusBanner).toEqual({
-      tone: "info",
-      text: "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",
-    });
-    expect(overlays.snapshot.updateRunning).toBe(false);
-    expect(overlays.snapshot.updateReconciliationPending).toBe(true);
+    expect(
+      request.mock.calls.filter(([method]) => method === "update.run").map(([, params]) => params),
+    ).toEqual([{ sessionKey: "agent:main:originating-chat" }]);
     overlays.dispose();
   });
 
-  it("keeps reconciliation pending after a managed-service handoff starts", async () => {
-    const request = vi.fn<RequestFn>().mockResolvedValue({
-      ok: true,
-      handoff: { status: "started" },
-      result: {
-        status: "skipped",
-        reason: "managed-service-handoff-started",
-        after: { version: "2.0.0" },
-      },
-    });
-    const harness = createGatewayHarness(client(request));
-    const overlays = createApplicationOverlays(harness.gateway);
-
-    await overlays.runUpdate();
-
-    expect(overlays.snapshot.updateRunning).toBe(false);
-    expect(overlays.snapshot.updateReconciliationPending).toBe(true);
-    overlays.dispose();
-  });
-
-  it("reports a concurrent managed update as rejected", async () => {
-    installUpdateTranslations();
-    const request = vi.fn<RequestFn>().mockResolvedValue({
-      ok: false,
-      handoff: { status: "already-running" },
-      result: {
-        status: "skipped",
-        reason: "managed-service-handoff-already-running",
-      },
-    });
-    const harness = createGatewayHarness(client(request));
-    const overlays = createApplicationOverlays(harness.gateway);
-
-    await overlays.runUpdate();
-
-    expect(overlays.snapshot.updateReconciliationPending).toBe(false);
-    expect(overlays.snapshot.updateStatusBanner).toEqual({
-      tone: "warn",
-      text: "Update skipped: managed-service-handoff-already-running. Another managed update is already running. Wait for it to complete, then refresh update status.",
-    });
-    overlays.dispose();
-  });
-
-  it("promotes restart health polling to the managed handoff budget", async () => {
-    vi.useFakeTimers();
-    let statusRequests = 0;
-    const request = vi.fn<RequestFn>((method) => {
-      if (method.endsWith(".list")) {
-        return Promise.resolve([]);
-      }
+  it.each([
+    { name: "no active chat", activeSessionKey: undefined, options: undefined },
+    { name: "active chat", activeSessionKey: "agent:main:active", options: undefined },
+    {
+      name: "explicit chat override",
+      activeSessionKey: "agent:main:active",
+      options: { sessionKey: "agent:main:requested" },
+    },
+  ])("routes $name to the admitted update run", async ({ activeSessionKey, options }) => {
+    const run = updateRunFixture();
+    const request = vi.fn<RequestFn>(async (method) => {
       if (method === "update.run") {
-        return Promise.resolve({
-          ok: true,
-          result: { status: "ok", after: { version: "2.0.0" } },
-        });
+        return { ok: true, runId: run.runId };
       }
-      if (method === "update.status") {
-        statusRequests += 1;
-        return Promise.resolve(
-          statusRequests <= 11
-            ? {
-                sentinel: {
-                  kind: "update",
-                  status: "skipped",
-                  stats: { reason: "restart-health-pending" },
-                },
-              }
-            : {
-                sentinel: {
-                  kind: "update",
-                  status: "ok",
-                  stats: { after: { version: "2.0.0" } },
-                },
-              },
-        );
+      if (method === "update.runs.get") {
+        return { run };
       }
-      return Promise.resolve({});
+      return {};
     });
-    const gatewayClient = client(request);
-    const harness = createGatewayHarness(gatewayClient);
-    const overlays = createApplicationOverlays(harness.gateway);
-
-    try {
-      await overlays.runUpdate();
-      harness.update({ phase: "stopped" });
-      harness.update({ phase: "connected" });
-      await flushMicrotasks();
-      expect(statusRequests).toBe(1);
-
-      harness.update({ sessionKey: "agent:main:next" });
-      await vi.advanceTimersByTimeAsync(RESTART_VERIFICATION_TIMEOUT_MS);
-      await flushMicrotasks();
-
-      expect(statusRequests).toBe(11);
-      expect(overlays.snapshot.updateReconciliationPending).toBe(true);
-
-      await vi.advanceTimersByTimeAsync(HANDOFF_POLL_MS);
-      await flushMicrotasks();
-
-      expect(statusRequests).toBe(12);
-      expect(overlays.snapshot.updateStatusBanner).toBeNull();
-      expect(overlays.snapshot.updateReconciliationPending).toBe(false);
-    } finally {
-      overlays.dispose();
-      vi.useRealTimers();
-    }
-  });
-
-  it("falls back to updateAvailable.latestVersion for post-handoff version verification", async () => {
-    installUpdateTranslations();
-    let statusRequests = 0;
-    const request = vi.fn<RequestFn>((method) => {
-      if (method.endsWith(".list")) {
-        return Promise.resolve([]);
-      }
-      if (method === "update.run") {
-        return Promise.resolve({
-          ok: true,
-          handoff: { status: "started" },
-          result: {
-            status: "skipped",
-            reason: UPDATE_HANDOFF_STARTED_REASON,
-          },
-        });
-      }
-      if (method === "update.status") {
-        statusRequests += 1;
-        return Promise.resolve({
-          sentinel: {
-            kind: "update",
-            status: "ok",
-            stats: { after: { version: "1.0.0" } },
-          },
-        });
-      }
-      return Promise.resolve({});
+    const harness = createGatewayHarness(client(request));
+    const overlays = createApplicationOverlays(harness.gateway, {
+      getActiveSessionKey: () => activeSessionKey,
     });
-    const gatewayClient = client(request);
-    const harness = createGatewayHarness(gatewayClient);
-    const overlays = createApplicationOverlays(harness.gateway);
-
     try {
-      harness.update({
-        hello: {
-          server: { version: "1.0.0" },
-          snapshot: {
-            updateAvailable: {
-              currentVersion: "1.0.0",
-              latestVersion: "2.0.0",
-              channel: "stable",
-            },
-          },
-        } as ApplicationGatewaySnapshot["hello"],
-      });
-
-      await overlays.runUpdate();
-      expect(overlays.snapshot.updateReconciliationPending).toBe(true);
-      expect(overlays.snapshot.updateStatusBanner).toBeNull();
-
-      harness.update({ phase: "stopped" });
-      harness.update({ phase: "connected" });
-      await flushMicrotasks();
-      expect(statusRequests).toBe(1);
-      expect(overlays.snapshot.updateReconciliationPending).toBe(false);
-      expect(overlays.snapshot.updateStatusBanner).toEqual({
-        tone: "danger",
-        text: expect.stringContaining("Expected v2.0.0, running v1.0.0"),
-      });
+      await overlays.runUpdate(options);
+      const sessionKey = options?.sessionKey ?? activeSessionKey;
+      expect(
+        request.mock.calls
+          .filter(([method]) => method === "update.run")
+          .map(([, params]) => params),
+      ).toEqual([sessionKey ? { sessionKey } : {}]);
+      expect(overlays.snapshot.updateRun).toEqual(run);
+      expect(overlays.snapshot.updateRunning || overlays.snapshot.updateReconciliationPending).toBe(
+        true,
+      );
     } finally {
       overlays.dispose();
     }

@@ -1,3 +1,4 @@
+import { withLegacySessionParticipantsSchema } from "./openclaw-agent-participants-migration.js";
 import { AGENT_SCHEMA_WITHOUT_PROGRESS_CARD_SQL } from "./openclaw-agent-progress-card-schema.js";
 
 const SHARING_SCHEMA_START = "CREATE TABLE IF NOT EXISTS session_members (";
@@ -27,4 +28,6 @@ export const AGENT_V14_SESSION_SHARING_SCHEMA_SQL = sessionSharingSchema.sharing
 );
 export const AGENT_V14_ADDITIVE_SCHEMA_SQL =
   sessionSharingSchema.sharing.slice(sessionSuggestionsStart);
-export const AGENT_V14_CORE_SCHEMA_SQL = sessionSharingSchema.withoutSharing;
+export const AGENT_V14_CORE_SCHEMA_SQL = withLegacySessionParticipantsSchema(
+  sessionSharingSchema.withoutSharing,
+);

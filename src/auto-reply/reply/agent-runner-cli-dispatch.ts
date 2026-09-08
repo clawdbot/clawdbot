@@ -3,7 +3,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
-import { clearCliSession, getCliSessionBinding } from "../../agents/cli-session.js";
 import type { MediaImageLayout } from "../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import { extractToolResultText } from "../../agents/embedded-agent-tool-results.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent.js";
@@ -20,10 +19,9 @@ import {
 } from "../../agents/run-termination.js";
 import { inferToolMetaFromArgsCore, isCommandBearingToolCall } from "../../agents/tool-display.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
-import type { SessionEntry } from "../../config/sessions.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { AgentEventPayload } from "../../infra/agent-events.js";
 import { emitAgentEvent, withAgentRunLifecycleGeneration } from "../../infra/agent-events.js";
+import { isAgentPlanProgressToolName } from "../../session-cards/progress-card-channel-summary.js";
 import { FAST_MODE_AUTO_PROGRESS_KIND, type ReplyPayload } from "../reply-payload.js";
 import { formatToolAggregate } from "../tool-meta.js";
 import type { GetReplyOptions } from "../types.js";
@@ -223,44 +221,6 @@ export function keepCliSessionBindingOnlyWhenReused(params: {
   };
 }
 
-export async function clearCliSessionBindingForRun(params: {
-  provider: string;
-  expectedSessionId?: string;
-  sessionKey?: string;
-  sessionStore?: Record<string, SessionEntry>;
-  storePath?: string;
-  activeSessionEntry?: SessionEntry;
-}): Promise<void> {
-  const updatedAt = Date.now();
-  const clearEntry = (entry: SessionEntry | undefined) => {
-    if (!entry) {
-      return;
-    }
-    // A later turn may already have adopted a replacement session; only the
-    // failed run that still owns this binding may clear it.
-    if (
-      params.expectedSessionId &&
-      getCliSessionBinding(entry, params.provider)?.sessionId !== params.expectedSessionId
-    ) {
-      return;
-    }
-    clearCliSession(entry, params.provider);
-    entry.updatedAt = updatedAt;
-  };
-  clearEntry(params.activeSessionEntry);
-  clearEntry(params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
-  if (!params.storePath || !params.sessionKey) {
-    return;
-  }
-  await updateSessionEntry(
-    { storePath: params.storePath, sessionKey: params.sessionKey },
-    (entry) => {
-      clearEntry(entry);
-      return entry;
-    },
-  );
-}
-
 function createToolEventBridge(params: {
   runId: string;
   suppressed?: boolean;
@@ -311,12 +271,13 @@ export function createCliToolSummaryTracker(params: {
   shouldEmitToolOutput: () => boolean;
   deliver: (payload: { text: string; isError?: boolean }) => Promise<void> | void;
 }) {
-  const toolByCallId = new Map<string, { meta?: string; commandBearing: boolean }>();
+  const toolByCallId = new Map<string, { name: string; meta?: string; commandBearing: boolean }>();
   return {
     noteToolEvent: async (payload: CliToolEventPayload): Promise<boolean> => {
       if (payload.phase === "start") {
         if (payload.toolCallId && payload.name) {
           toolByCallId.set(payload.toolCallId, {
+            name: payload.name,
             meta: inferToolMetaFromArgsCore(payload.name, payload.args, {
               detailMode: params.detailMode ?? "explain",
             }),
@@ -329,15 +290,19 @@ export function createCliToolSummaryTracker(params: {
         return false;
       }
       const storedTool = payload.toolCallId ? toolByCallId.get(payload.toolCallId) : undefined;
+      const toolName = payload.name ?? storedTool?.name;
       const meta =
         params.commandDetailsVisible || !storedTool?.commandBearing ? storedTool?.meta : undefined;
       if (payload.toolCallId) {
         toolByCallId.delete(payload.toolCallId);
       }
+      if (payload.isError !== true && isAgentPlanProgressToolName(toolName)) {
+        return false;
+      }
       if (!params.shouldEmitToolResult()) {
         return storedTool?.commandBearing === true;
       }
-      const aggregate = formatToolAggregate(payload.name, meta ? [meta] : undefined, {
+      const aggregate = formatToolAggregate(toolName, meta ? [meta] : undefined, {
         markdown: true,
       });
       let text = aggregate;
@@ -442,6 +407,8 @@ type RunCliAgentWithLifecycleParams = {
   onAssistantText?: (text: string) => Promise<boolean | void>;
   onReasoningText?: (payload: ReasoningTextPayload) => Promise<void>;
   onReasoningProgress?: (payload: ReasoningProgressPayload) => Promise<void>;
+  onCompactionStart?: GetReplyOptions["onCompactionStart"];
+  onCompactionEnd?: GetReplyOptions["onCompactionEnd"];
   onToolEvent?: (payload: CliToolEventPayload) => Promise<void>;
   onCommentaryText?: (payload: CommentaryTextPayload) => Promise<void>;
   onPlanUpdate?: GetReplyOptions["onPlanUpdate"];
@@ -580,6 +547,31 @@ async function runCliAgentWithLifecycleInternal(
     deliver: params.onReasoningProgress,
     startOrder: progressStartOrder,
   });
+  const compactionBridge = createAgentEventBridge<
+    { phase: "start" } | { completed: boolean; phase: "end" }
+  >({
+    runId: params.runId,
+    suppressed: params.suppressAssistantBridge,
+    startOrder: progressStartOrder,
+    deliver: async (event) => {
+      if (event.phase === "start") {
+        await params.onCompactionStart?.();
+      } else {
+        await params.onCompactionEnd?.({ completed: event.completed });
+      }
+    },
+    read: (evt) => {
+      if (evt.stream !== "compaction") {
+        return undefined;
+      }
+      if (evt.data.phase === "start") {
+        return { phase: "start" };
+      }
+      return evt.data.phase === "end"
+        ? { phase: "end", completed: evt.data.completed === true }
+        : undefined;
+    },
+  });
   const toolBridge = createToolEventBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
@@ -608,6 +600,7 @@ async function runCliAgentWithLifecycleInternal(
     assistantBridge,
     reasoningBridge,
     reasoningProgressBridge,
+    compactionBridge,
     toolBridge,
     commentaryBridge,
     planBridge,

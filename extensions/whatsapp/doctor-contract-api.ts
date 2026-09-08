@@ -2,7 +2,7 @@
 import { definePluginDoctorMigrationFromPlans } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { detectWhatsAppLegacyStateMigrations } from "./src/state-migrations.js";
 
-export { legacyConfigRules, normalizeCompatibilityConfig } from "./src/doctor-contract.js";
+export { legacyConfigRules, normalizeCompatibilityConfig } from "./config-doctor-api.js";
 
 export const stateMigrations = [
   definePluginDoctorMigrationFromPlans({

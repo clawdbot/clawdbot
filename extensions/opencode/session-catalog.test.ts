@@ -269,6 +269,7 @@ function captureOpenCodeContinuationCatalog() {
       pluginOwnerId: "opencode",
       initializationPending: true as const,
       ...(params.label ? { label: params.label } : {}),
+      ...(params.displayName ? { displayName: params.displayName } : {}),
       ...(params.spawnedCwd ? { spawnedCwd: params.spawnedCwd } : {}),
       pluginExtensions: params.initialEntry.pluginExtensions,
     };
@@ -362,7 +363,15 @@ if (args[0] === "--pure" && args[1] === "db" && args.includes("--format") && arg
   process.exitCode = 2;
 }
 `;
-  await fs.writeFile(executable, script);
+  // Flush and close the executable before exec: a still-open write handle makes
+  // the immediately following spawn fail with ETXTBSY under parallel CI shards.
+  const executableHandle = await fs.open(executable, "w");
+  try {
+    await executableHandle.writeFile(script);
+    await executableHandle.sync();
+  } finally {
+    await executableHandle.close();
+  }
   if (process.platform === "win32") {
     await fs.writeFile(path.join(directory, "opencode.js"), script);
     // This exact direct-forwarder shape is parsed into a Node entrypoint;
@@ -400,6 +409,52 @@ afterEach(async () => {
 const itWithCli = it.runIf(process.platform !== "win32");
 
 describe("OpenCode session catalog", () => {
+  itWithCli.each(["runtime", "request"] as const)(
+    "discovers paired nodes only for selected hosts through the %s node runtime",
+    async (discovery) => {
+      await installFakeOpenCode();
+      const nodes = [pairedNode([OPENCODE_SESSIONS_LIST_COMMAND])];
+      const invoke = vi.fn().mockResolvedValue(pairedNodeSessionPage(pairedNodeSession()));
+      const { listNodes: runtimeListNodes, provider } = capturePairedNodeCatalog(nodes, invoke);
+      const requestListNodes = vi.fn().mockResolvedValue({ nodes });
+      const options = discovery === "request" ? { listNodes: requestListNodes } : {};
+      for (const hostIds of [["gateway"], [], ["unknown"]]) {
+        const hosts = await provider!.list({ ...options, hostIds });
+        expect(hosts.map((host) => host.hostId)).toEqual(
+          hostIds[0] === "gateway" ? ["gateway"] : [],
+        );
+        if (hostIds[0] === "gateway") {
+          expect(hosts[0]?.sessions[0]?.threadId).toBe("ses_test");
+        }
+        expect(runtimeListNodes).not.toHaveBeenCalled();
+        expect(requestListNodes).not.toHaveBeenCalled();
+        expect(invoke).not.toHaveBeenCalled();
+      }
+
+      for (const hostIds of [undefined, ["gateway", "node:node-1"], ["node:node-1"]]) {
+        const hosts = await provider!.list({ ...options, ...(hostIds ? { hostIds } : {}) });
+        expect(hosts.map((host) => host.hostId)).toEqual(
+          hostIds?.length === 1 ? ["node:node-1"] : ["gateway", "node:node-1"],
+        );
+        expect(hosts.at(-1)?.sessions[0]?.threadId).toBe("ses_remote");
+      }
+      const hostIds = ["gateway", "node:node-1"];
+      const hosts = await provider!.list({
+        ...options,
+        hostIds,
+        onHost: () => {
+          hostIds.length = 0;
+        },
+      });
+      expect(hosts.map((host) => host.hostId)).toEqual(["gateway", "node:node-1"]);
+      expect(discovery === "request" ? requestListNodes : runtimeListNodes).toHaveBeenCalledTimes(
+        4,
+      );
+      expect(discovery === "request" ? runtimeListNodes : requestListNodes).not.toHaveBeenCalled();
+      expect(invoke).toHaveBeenCalledTimes(4);
+    },
+  );
+
   itWithCli("lists and reads sessions through the official CLI JSON surfaces", async () => {
     await installFakeOpenCode();
     const listed = await listLocalOpenCodeSessionPage({ limit: 20 });
@@ -414,20 +469,20 @@ describe("OpenCode session catalog", () => {
 
     const transcript = await readTestTranscript({ limit: 20 });
     expect(transcript.items.map((item) => [item.type, item.text])).toEqual([
-      ["userMessage", "hello"],
-      ["reasoning", "thinking"],
-      ["agentMessage", "hi"],
-      ["toolCall", 'bash\n{"command":"pwd"}'],
       ["toolResult", "/workspace"],
+      ["toolCall", 'bash\n{"command":"pwd"}'],
+      ["agentMessage", "hi"],
+      ["reasoning", "thinking"],
+      ["userMessage", "hello"],
     ]);
     const itemIds = transcript.items.flatMap((item) => (item.id ? [item.id] : []));
     expect(new Set(itemIds).size).toBe(itemIds.length);
 
     const latest = await readTestTranscript({ limit: 2 });
-    expect(latest.items.map((item) => item.type)).toEqual(["toolCall", "toolResult"]);
+    expect(latest.items.map((item) => item.type)).toEqual(["toolResult", "toolCall"]);
     expect(latest.nextCursor).toBeTruthy();
     const older = await readTestTranscript({ limit: 2, cursor: latest.nextCursor });
-    expect(older.items.map((item) => item.type)).toEqual(["reasoning", "agentMessage"]);
+    expect(older.items.map((item) => item.type)).toEqual(["agentMessage", "reasoning"]);
     const nonEmitted = Buffer.from(JSON.stringify({ offset: 2, extra: true }), "utf8").toString(
       "base64url",
     );
@@ -583,9 +638,10 @@ describe("OpenCode session catalog", () => {
       },
     });
     expect(createSessionEntry).toHaveBeenCalledTimes(1);
+    expect(createSessionEntry.mock.calls[0]?.[0]).not.toHaveProperty("label");
     expect(createSessionEntry).toHaveBeenCalledWith(
       expect.objectContaining({
-        label: "Catalog session",
+        displayName: "Catalog session",
         spawnedCwd: "/workspace",
         initialEntry: {
           acpBackendId: "acpx",

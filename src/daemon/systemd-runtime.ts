@@ -26,6 +26,7 @@ import { findInstalledSystemdGatewayScope } from "./systemd-scope.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
 
 type SystemdServiceInfo = {
+  loadState?: string;
   activeState?: string;
   subState?: string;
   mainPid?: number;
@@ -43,6 +44,10 @@ type SystemdServiceInfo = {
 function parseSystemdShow(output: string): SystemdServiceInfo {
   const entries = parseKeyValueOutput(output, "=");
   const info: SystemdServiceInfo = {};
+  const loadState = entries.loadstate;
+  if (loadState) {
+    info.loadState = loadState;
+  }
   const activeState = entries.activestate;
   if (activeState) {
     info.activeState = activeState;
@@ -126,7 +131,7 @@ export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Prom
     return true;
   }
   const detail = readSystemctlDetail(res);
-  if (!isSystemctlMissing(detail) && isSystemdUnitNotEnabled(detail)) {
+  if (res.termination === "exit" && !isSystemctlMissing(res) && isSystemdUnitNotEnabled(detail)) {
     return false;
   }
   throw new Error(`systemctl is-enabled unavailable: ${detail || "unknown error"}`.trim());
@@ -154,7 +159,7 @@ export async function readSystemdServiceRuntime(
     unitName,
     "--no-page",
     "--property",
-    "Id,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
+    "Id,LoadState,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
   ];
   const res =
     installed?.scope === "system"
@@ -162,7 +167,7 @@ export async function readSystemdServiceRuntime(
       : await execSystemctlUser(env, showArgs, timeoutMs);
   if (res.code !== 0) {
     const detail = (res.stderr || res.stdout).trim();
-    const missing = !installed && isSystemdUnitMissingDetail(detail);
+    const missing = res.termination === "exit" && !installed && isSystemdUnitMissingDetail(detail);
     return {
       status: missing ? "stopped" : "unknown",
       ...(!missing && detail ? { detail } : {}),
@@ -171,9 +176,22 @@ export async function readSystemdServiceRuntime(
   }
   const parsed = parseSystemdShow(res.stdout || "");
   const activeState = normalizeLowercaseStringOrEmpty(parsed.activeState);
-  const status = activeState === "active" ? "running" : activeState ? "stopped" : "unknown";
+  // Restart and shutdown transitions can still own or respawn the process.
+  // Only terminal native states establish that offline maintenance is safe.
+  const status =
+    activeState === "active"
+      ? "running"
+      : activeState === "inactive" || activeState === "failed"
+        ? "stopped"
+        : "unknown";
   return {
     status,
+    // `systemctl show` succeeds for absent units. Preserve stopped status for
+    // staged definitions, but only affirm absence when no definition exists.
+    ...(normalizeLowercaseStringOrEmpty(parsed.loadState) === "not-found" &&
+    activeState === "inactive"
+      ? { missingUnit: !installed }
+      : {}),
     state: parsed.activeState,
     subState: parsed.subState,
     pid: parsed.mainPid,

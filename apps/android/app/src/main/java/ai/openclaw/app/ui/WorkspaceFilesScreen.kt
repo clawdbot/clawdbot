@@ -14,6 +14,7 @@ import android.content.Context
 import android.content.Intent
 import android.text.format.Formatter
 import android.util.Base64
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -33,7 +34,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -369,14 +369,19 @@ private fun WorkspaceFilePreview(
       }
 
       when {
-        loading ->
+        loading -> {
           Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
             CircularProgressIndicator(modifier = Modifier.size(22.dp))
           }
-        errorText != null ->
+        }
+
+        errorText != null -> {
           ClawEmptyState(title = nativeString("No preview"), body = errorText.orEmpty())
-        file != null ->
+        }
+
+        file != null -> {
           WorkspaceFileContent(file = file ?: return@Column)
+        }
       }
     }
   }
@@ -387,28 +392,33 @@ private fun WorkspaceFileContent(file: GatewayWorkspaceFile) {
   if (file.isBase64 && file.mimeType.startsWith("image/")) {
     val imageState = rememberBase64ImageState(file.content)
     when {
-      imageState.image != null ->
+      imageState.image != null -> {
         Image(
           bitmap = imageState.image,
           contentDescription = file.name,
           modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
         )
-      imageState.failed -> ClawEmptyState(title = nativeString("No preview"), body = nativeString("This image could not be decoded."))
-      else -> CircularProgressIndicator(modifier = Modifier.size(22.dp))
+      }
+
+      imageState.failed -> {
+        ClawEmptyState(title = nativeString("No preview"), body = nativeString("This image could not be decoded."))
+      }
+
+      else -> {
+        CircularProgressIndicator(modifier = Modifier.size(22.dp))
+      }
     }
   } else {
     // Reuse the chat renderer's code block so previews highlight and cap
     // exactly like fenced code in the transcript.
-    SelectionContainer {
-      Column(
-        modifier =
-          Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(bottom = 12.dp),
-      ) {
-        ChatCodeBlock(code = file.content, language = workspaceLanguageHint(file.name))
-      }
+    Column(
+      modifier =
+        Modifier
+          .fillMaxSize()
+          .verticalScroll(rememberScrollState())
+          .padding(bottom = 12.dp),
+    ) {
+      ChatCodeBlock(code = file.content, language = workspaceLanguageHint(file.name))
     }
   }
 }
@@ -423,23 +433,24 @@ private fun shareWorkspaceFile(
 ) {
   // A FileProvider grant can outlive the share sheet. Unique directories keep
   // a later same-basename export from replacing bytes behind an older grant.
-  val directory = File(context.cacheDir, "workspace-files/${UUID.randomUUID()}").apply { mkdirs() }
-  // Server names are plain basenames; keep the guard so a hostile gateway
-  // cannot steer the temp write outside the export directory.
-  val safeName = file.name.substringAfterLast('/').ifEmpty { "file" }
-  val target = File(directory, safeName)
-  if (file.isBase64) {
-    val bytes = runCatching { Base64.decode(file.content, Base64.DEFAULT) }.getOrNull() ?: return
-    target.writeBytes(bytes)
-  } else {
-    target.writeText(file.content)
+  val directory = File(context.cacheDir, "workspace-files/${UUID.randomUUID()}")
+  try {
+    directory.mkdirs()
+    // Server names are plain basenames; keep the guard so a hostile gateway
+    // cannot steer the temp write outside the export directory.
+    val target = File(directory, file.name.substringAfterLast('/').ifEmpty { "file" })
+    target.writeBytes(if (file.isBase64) Base64.decode(file.content, Base64.DEFAULT) else file.content.toByteArray())
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", target)
+    val send =
+      Intent(Intent.ACTION_SEND).apply {
+        type = file.mimeType.ifEmpty { "application/octet-stream" }
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+      }
+    context.startActivity(Intent.createChooser(send, file.name))
+  } catch (_: Exception) {
+    // Only this unpublished attempt is disposable; older URI grants still own their files.
+    runCatching { directory.deleteRecursively() }
+    Toast.makeText(context, nativeString("Could not share file"), Toast.LENGTH_SHORT).show()
   }
-  val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", target)
-  val send =
-    Intent(Intent.ACTION_SEND).apply {
-      type = file.mimeType.ifEmpty { "application/octet-stream" }
-      putExtra(Intent.EXTRA_STREAM, uri)
-      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    }
-  context.startActivity(Intent.createChooser(send, file.name))
 }

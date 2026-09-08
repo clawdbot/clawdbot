@@ -19,6 +19,9 @@ describe("exec approvals protocol validators", () => {
       version: 1 as const,
       agents: {
         main: {
+          mcpTools: [
+            { server: "project.docs", tool: "write_note", source: "allow-always", addedAt: 123 },
+          ],
           allowlist: [
             {
               id: "entry-1",

@@ -8,6 +8,14 @@ import { callGatewayTool } from "./tools/gateway.js";
 
 type NodeInvokeFailure =
   | {
+      reason: "policy-denied";
+      retrySafe: false;
+      code: "SYSTEM_RUN_DENIED";
+      message: string;
+      nodeCommandDispatched?: boolean;
+      requestSent?: boolean;
+    }
+  | {
       reason: "not-dispatched";
       retrySafe: true;
       code: "NOT_CONNECTED";
@@ -43,6 +51,9 @@ function classifyNodeInvokeFailure(error: unknown): NodeInvokeFailure {
   const requestSent =
     typeof errorRecord?.requestSent === "boolean" ? errorRecord.requestSent : undefined;
 
+  if (code === "SYSTEM_RUN_DENIED") {
+    return { reason: "policy-denied", retrySafe: false, code, message };
+  }
   if (code === "NOT_CONNECTED" && nodeCommandDispatched === false) {
     return {
       reason: "not-dispatched",
@@ -74,10 +85,15 @@ function formatNodeInvokeFailureText(params: {
           `Node command outcome is unknown for ${params.nodeId}.`,
           "The command may have executed. Do not rerun it automatically.",
         ]
-      : [
-          `Node command was not dispatched to ${params.nodeId}.`,
-          "It can be retried after the node reconnects.",
-        ];
+      : params.failure.reason === "policy-denied"
+        ? [
+            `Node command was denied before execution on ${params.nodeId}.`,
+            "Resolve the reported refusal before retrying.",
+          ]
+        : [
+            `Node command was not dispatched to ${params.nodeId}.`,
+            "It can be retried after the node reconnects.",
+          ];
   return [
     ...summary,
     "",
@@ -97,7 +113,9 @@ export function formatNodeInvokeFailureFollowup(params: {
   const prefix =
     params.failure.reason === "outcome-unknown"
       ? `Exec outcome unknown (node=${params.nodeId} id=${params.approvalId}, outcome-unknown)`
-      : `Exec not dispatched (node=${params.nodeId} id=${params.approvalId}, not-dispatched)`;
+      : params.failure.reason === "policy-denied"
+        ? `Exec denied (node=${params.nodeId} id=${params.approvalId}, policy-denied)`
+        : `Exec not dispatched (node=${params.nodeId} id=${params.approvalId}, not-dispatched)`;
   return `${prefix}\n${formatNodeInvokeFailureText(params)}`;
 }
 

@@ -1,6 +1,8 @@
 import { vi } from "vitest";
 
-vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async () => {
+vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/exec-approvals-runtime")>();
   const nodeFs = await import("node:fs");
   const nodePath = await import("node:path");
   const displayPath = () => {
@@ -10,6 +12,7 @@ vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async () => {
       : "~/.openclaw/state/openclaw.sqlite#exec_approvals_config";
   };
   return {
+    ...actual,
     resolveExecApprovalsDisplayPath: displayPath,
     readExecApprovalsSnapshot: () => {
       const fixtureRoot =

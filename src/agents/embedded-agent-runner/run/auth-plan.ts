@@ -1,4 +1,7 @@
-import { resolveProviderAuthProfileId } from "../../../plugins/provider-runtime.js";
+import {
+  providerOwnsDynamicModelPreparation,
+  resolveProviderAuthProfileId,
+} from "../../../plugins/provider-runtime.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "../../auth-profiles/external-cli-auth-selection.js";
 import type { AgentHarness } from "../../harness/types.js";
@@ -8,15 +11,18 @@ import {
 } from "../../model-auth.js";
 import { OPENAI_PROVIDER_ID } from "../../openai-routing.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
+import { buildAgentRuntimeAuthPlan } from "../../runtime-plan/auth.js";
 import {
   createPreparedRuntimeModelMaterializer,
   providerUsesCredentialScopedModelMetadata,
 } from "../../runtime-plan/credential-scoped-model.js";
 import {
   prepareAgentRuntimeAuth,
+  type PreparedAgentRuntimeAuth,
   type PreparedAgentRuntimeAuthAttempt,
 } from "../../runtime-plan/prepare-auth.js";
 import { resolveModelAsync } from "../model.js";
+import type { PreparedNativeSessionRuntime } from "./model-setup.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 
 type ModelResolution = Awaited<ReturnType<typeof resolveModelAsync>>;
@@ -24,23 +30,18 @@ type RuntimeModel = NonNullable<ModelResolution["model"]>;
 
 function loadEmbeddedRunAuthProfileStore(params: {
   agentDir: string;
+  profileId?: string;
   config: RunEmbeddedAgentParams["config"];
   externalCliProviderIds: Iterable<string>;
 }): AuthProfileStore {
   // Provider pins own ambient overlays at this loader seam. Genuinely stored profiles and
   // explicit bindings remain available for the cross-class contracts in prepare-auth.test.ts.
   return ensureAuthProfileStore(params.agentDir, {
+    profileId: params.profileId,
     config: params.config,
     externalCliProviderIds: params.externalCliProviderIds,
     allowKeychainPrompt: false,
   });
-}
-
-// Test-only seam access mirrors external-auth.ts; the config-threading regression
-// must stay provable without composing a full embedded runner.
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.embeddedRunAuthPlanTestApi")] =
-    { loadEmbeddedRunAuthProfileStore };
 }
 
 export async function prepareEmbeddedRunAuthPlan(params: {
@@ -52,6 +53,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   workspaceDir: string;
   requestStreamTransportOverrides?: "present";
   nativeModelOwned: boolean;
+  nativeSessionRuntime?: PreparedNativeSessionRuntime;
   authStorage: ModelResolution["authStorage"];
   modelRegistry: ModelResolution["modelRegistry"];
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
@@ -93,6 +95,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   let noExternalAuthStore: AuthProfileStore | undefined;
   if (!initialPluginHarnessOwnsTransport && !externalCliAuthScope.providerIds) {
     noExternalAuthStore = ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
+      profileId: runParams.authProfileId,
       allowKeychainPrompt: false,
     });
     externalCliAuthScope = resolveExternalCliAuthOverlayScopeFromSelection({
@@ -111,21 +114,25 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   const attemptAuthProfileStore = usesOpenAIAuthRouting
     ? loadEmbeddedRunAuthProfileStore({
         agentDir: params.agentDir,
+        profileId: runParams.authProfileId,
         config: runParams.config,
         externalCliProviderIds: [OPENAI_PROVIDER_ID],
       })
     : initialPluginHarnessOwnsTransport
       ? ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
+          profileId: runParams.authProfileId,
           allowKeychainPrompt: false,
         })
       : externalCliAuthScope.providerIds
         ? loadEmbeddedRunAuthProfileStore({
             agentDir: params.agentDir,
+            profileId: runParams.authProfileId,
             config: runParams.config,
             externalCliProviderIds: externalCliAuthScope.providerIds,
           })
         : (noExternalAuthStore ??
           ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
+            profileId: runParams.authProfileId,
             allowKeychainPrompt: false,
           }));
   params.markStage?.("store");
@@ -136,8 +143,22 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     externalCliAuthScope.ignoreAutoPreferredProfile && !lockedProfileId
       ? undefined
       : requestedProfileId;
-  const createAuthPreparation = () => {
+  const createAuthPreparation = (): PreparedAgentRuntimeAuth => {
     const harness = params.getAgentHarness();
+    if (params.nativeSessionRuntime?.auth === "native") {
+      // Only the binding-owned connection bypasses host credentials and routes;
+      // preserving a native model alone still uses the normal auth planner below.
+      const plan = buildAgentRuntimeAuthPlan({
+        provider: params.provider,
+        modelId: params.modelId,
+        harnessId: harness.id,
+        allowHarnessAuthProfileForwarding: false,
+        metadataSnapshot: params.preparedModelRuntime?.metadataSnapshot,
+        config: runParams.config,
+        workspaceDir: params.workspaceDir,
+      });
+      return { plan, attempts: [{ kind: "implicit", plan }] };
+    }
     return prepareAgentRuntimeAuth({
       provider: params.provider,
       modelId: params.modelId,
@@ -174,15 +195,24 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
   });
+  const providerOwnsDynamicModelRefresh = providerOwnsDynamicModelPreparation({
+    provider: params.provider,
+    config: runParams.config,
+    workspaceDir: params.workspaceDir,
+  });
   const { materialize: materializeAuthPlan, materializeUncached: materializeAuthPlanUncached } =
     createPreparedRuntimeModelMaterializer({
       provider: params.provider,
       modelId: params.modelId,
       config: runParams.config,
+      workspaceDir: params.workspaceDir,
+      metadataSnapshot: params.preparedModelRuntime?.metadataSnapshot,
       getModel: params.getRuntimeModel,
       nativeModelOwned: params.nativeModelOwned,
       requestedProfileId: runParams.authProfileId,
       providerUsesProfileScopedModelMetadata,
+      providerOwnsDynamicModelRefresh,
+      generationRouteModelMemo: params.preparedModelRuntime?.routeModelResolutionMemo,
       resolveModel: ({ config, authProfileId, authProfileMode }) =>
         resolveModelAsync(params.provider, params.modelId, params.agentDir, config, {
           authStorage: params.authStorage,

@@ -8,6 +8,7 @@ import {
   WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { isWorkerTranscriptFrameWithinBudget } from "../../packages/gateway-protocol/src/worker-transcript-budget.js";
 import { redactAgentDiagnosticPayload } from "../agents/diagnostic-redaction.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AssistantMessage, ProviderReplayState } from "../llm/types.js";
@@ -90,8 +91,10 @@ function projectWorkerDiagnostic(diagnostic: NonNullable<AssistantMessage["diagn
   };
 }
 
-function workerTranscriptMessageFrameBytes(message: WorkerTranscriptMessage): number | undefined {
-  const frame: WorkerTranscriptCommitRequestFrame = {
+function workerTranscriptMessageFrame(
+  message: WorkerTranscriptMessage,
+): WorkerTranscriptCommitRequestFrame {
+  return {
     type: "req",
     id: SIZE_FRAME_ID,
     method: "worker.transcript.commit",
@@ -102,8 +105,11 @@ function workerTranscriptMessageFrameBytes(message: WorkerTranscriptMessage): nu
       messages: [message],
     },
   };
+}
+
+function workerTranscriptMessageFrameBytes(message: WorkerTranscriptMessage): number | undefined {
   try {
-    return Buffer.byteLength(JSON.stringify(frame), "utf8");
+    return Buffer.byteLength(JSON.stringify(workerTranscriptMessageFrame(message)), "utf8");
   } catch {
     return undefined;
   }
@@ -248,6 +254,5 @@ export function toWorkerTranscriptMessage(
 }
 
 export function isWorkerTranscriptMessageFrameSafe(message: WorkerTranscriptMessage): boolean {
-  const frameBytes = workerTranscriptMessageFrameBytes(message);
-  return frameBytes !== undefined && frameBytes <= WORKER_PROTOCOL_MAX_PAYLOAD_BYTES;
+  return isWorkerTranscriptFrameWithinBudget(workerTranscriptMessageFrame(message));
 }

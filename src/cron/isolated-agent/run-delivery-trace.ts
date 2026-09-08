@@ -120,7 +120,7 @@ export function buildCronDeliveryTrace(params: {
   resolvedDelivery: ResolvedCronDeliveryTarget;
   sourceDeliveryOutcome: SourceDeliveryOutcome;
   fallbackUsed: boolean;
-  delivered: boolean;
+  delivered?: boolean;
 }): CronDeliveryTrace {
   // Trace both intended and resolved targets so run logs can explain fallback
   // delivery without leaking provider-specific raw routing internals.
@@ -274,16 +274,10 @@ export async function resolveCronDeliveryContext(params: {
   }
   const { resolveDeliveryTarget } = await loadCronDeliveryRuntime();
   const resolvedDelivery = await resolveDeliveryTarget(params.cfg, params.agentId, {
-    channel: deliveryPlan.channel ?? "last",
-    to: deliveryPlan.to,
-    threadId: deliveryPlan.threadId,
-    accountId: deliveryPlan.accountId,
-    // Resolve the job's own session identity (sessionTarget takes precedence over sessionKey, the
-    // same as delivery preview) so a session-scoped cron is not misread as keyless by the #91613
-    // keyless-inherited refusal inside resolveDeliveryTarget. The refusal itself now lives in the
-    // resolver (returns ok:false), so the delivery dispatch !ok gate, the failure-notification
-    // path, and the delivery preview all honor it uniformly (the dispatch gate refuses the send and
-    // never enqueues, so a restart has nothing to replay; the agent turn still runs before that).
+    ...deliveryPlan,
+    sessionTarget: params.job.payload.kind === "agentTurn" ? params.job.sessionTarget : undefined,
+    // Match preview's sessionTarget precedence: custom jobs resolve their own
+    // delivery session rather than the creator's last conversation.
     sessionKey: resolveCronDeliverySessionKey(params.job),
   });
   return {

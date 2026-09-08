@@ -1,4 +1,4 @@
-import type { IMessageActivityInput } from "@microsoft/teams.api/dist/activities/message/message.js";
+import type { IMessageActivityInput } from "@microsoft/teams.api";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Msteams plugin module implements sdk proactive behavior.
 import { normalizeBotFrameworkServiceUrl } from "./bot-framework-service-url.js";
@@ -64,21 +64,13 @@ type MSTeamsProactiveOptions = {
   serviceUrlBoundary?: MSTeamsSdkCloudOptions;
 };
 
-const loadMSTeamsApiClient = createLazyRuntimeModule(() =>
-  import("@microsoft/teams.api").then((api) => ({ Client: api.Client })),
-);
-
-const loadMSTeamsQuoteModule = createLazyRuntimeModule(() =>
-  import("@microsoft/teams.api/dist/activities/message/message.js").then((message) => ({
-    MessageActivityInput: message.MessageActivityInput,
-  })),
-);
+const loadMSTeamsApiModule = createLazyRuntimeModule(() => import("@microsoft/teams.api"));
 
 async function quoteMSTeamsActivity(
   activity: MSTeamsActivityLike,
   messageId: string,
 ): Promise<unknown> {
-  const { MessageActivityInput } = await loadMSTeamsQuoteModule();
+  const { MessageActivityInput } = await loadMSTeamsApiModule();
   if (typeof activity === "string") {
     return new MessageActivityInput(activity).prependQuote(messageId);
   }
@@ -203,7 +195,7 @@ async function getApiClientForReference(
     return api;
   }
 
-  const { Client } = await loadMSTeamsApiClient();
+  const { Client } = await loadMSTeamsApiModule();
   return new Client(ref.serviceUrl, httpClient) as unknown as MSTeamsApiClient;
 }
 

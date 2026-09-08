@@ -89,6 +89,8 @@ export type AgentConfig = {
   /** Optional human-authored agent description. */
   description?: string;
   workspace?: string;
+  /** Working directory for agent reply runs; overrides agents.defaults.cwd. */
+  cwd?: string;
   agentDir?: string;
   model?: AgentModelConfig;
   /** Optional per-agent model for short internal tasks such as generated session titles. */

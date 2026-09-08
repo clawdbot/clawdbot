@@ -4,11 +4,15 @@ import { expect, it } from "vitest";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
   installMockGateway,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
 import { installDesktopClientFake } from "./desktop-rfb-test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -25,7 +29,7 @@ const ONE_PIXEL_PNG = Buffer.from(
 );
 
 type ColdOpenOutcome = {
-  outcome: "content" | "generic-empty";
+  outcome: "loading" | "content" | "generic-empty";
   emptyStateOffersAction: boolean;
 };
 
@@ -43,8 +47,6 @@ const offeredSlotLabels = [
 type OfferedSlotLabel = (typeof offeredSlotLabels)[number];
 
 const actionlessEmptyStateAllowlist = new Set<OfferedSlotLabel>([
-  // Review: no git checkout, nothing to diff.
-  "Review",
   // Tasks: no background tasks, nothing to inspect.
   "Tasks",
   // Discussion: no external URL, nothing to open.
@@ -132,7 +134,9 @@ function populatedColdOpenScenario(): ControlUiMockGatewayScenario {
         ],
       },
       "environments.list": {
-        environments: [{ id: "gateway", type: "local", status: "available", desktop: true }],
+        environments: [
+          { id: "worker-desktop-1", type: "worker", status: "available", desktop: true },
+        ],
       },
       "session.discussion.info": {
         embedUrl: "https://discussion.example/embed/thread/session",
@@ -231,10 +235,11 @@ async function openColdSidebar(page: Page, scenario = coldOpenScenario()) {
   await waitForControlUiGatewayReady(page);
   await gateway.waitForRequest("session.discussion.info");
   await gateway.waitForRequest("sessions.companion.state");
-  await gateway.waitForRequest("sessions.files.list");
+  expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
   await page.getByRole("button", { name: "Side panel", exact: true }).first().click();
   const choices = page.locator(".side-panel-empty__type");
   await choices.first().waitFor();
+  expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
   return choices;
 }
 
@@ -252,8 +257,8 @@ async function seedHiddenBoardSlot(page: Page) {
                 {
                   id: "side-panel-column",
                   side: "right",
-                  panels: [{ id: "chat", slot: "chat" }],
-                  activePanelId: "chat",
+                  panels: [{ id: "dashboard", slot: "dashboard" }],
+                  activePanelId: "dashboard",
                   height: 360,
                   width: 480,
                 },
@@ -351,6 +356,9 @@ async function readColdOpenOutcome(page: Page): Promise<ColdOpenOutcome> {
   const activePanel = page.locator(".side-panel__panel:not([hidden])");
   await activePanel.waitFor();
   await activePanel.locator(":scope > *").first().waitFor();
+  if ((await activePanel.locator("openclaw-panel-loading-skeleton").count()) > 0) {
+    return { outcome: "loading", emptyStateOffersAction: false };
+  }
   const emptyState = activePanel.locator("openclaw-panel-empty-state").first();
   const genericEmptyState = (await emptyState.count()) > 0;
   return {
@@ -359,11 +367,6 @@ async function readColdOpenOutcome(page: Page): Promise<ColdOpenOutcome> {
       genericEmptyState &&
       (await activePanel.locator('[slot="action"], a[href], button:not([disabled])').count()) > 0,
   };
-}
-
-async function offeredLabels(page: Page, scenario: ControlUiMockGatewayScenario) {
-  const choices = await openColdSidebar(page, scenario);
-  return choices.locator(".side-panel-type-option__label").allTextContents();
 }
 
 async function readSlotColdOpenOutcome(
@@ -375,18 +378,34 @@ async function readSlotColdOpenOutcome(
   try {
     const page = await context.newPage();
     const choices = await openColdSidebar(page, scenario);
-    await choices.filter({ hasText: label }).click();
+    expect(
+      await choices.locator(".side-panel-type-option__label").allTextContents(),
+      `${label} cold-open offered slots`,
+    ).toEqual(offeredSlotLabels);
+    const held =
+      label === "Discussion"
+        ? await holdModuleResponse(page, /\/assets\/session-discussion-panel-[^/]+\.js$/u)
+        : null;
+    try {
+      await choices.filter({ hasText: label }).click();
+      if (held) {
+        await held.request;
+        expect(await readColdOpenOutcome(page)).toEqual({
+          outcome: "loading",
+          emptyStateOffersAction: false,
+        });
+      }
+    } finally {
+      held?.release();
+    }
     if (expectedOutcome) {
       await expect
         .poll(() => readColdOpenOutcome(page), { message: `${label} cold-open outcome` })
         .toMatchObject({ outcome: expectedOutcome });
     } else {
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) => {
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-          }),
-      );
+      await expect
+        .poll(() => readColdOpenOutcome(page), { message: `${label} finished cold-open` })
+        .not.toMatchObject({ outcome: "loading" });
     }
     return await readColdOpenOutcome(page);
   } finally {
@@ -404,15 +423,22 @@ suite.define(() => {
         ...coldOpenScenario(),
         sessionKey: HIDDEN_BOARD_SESSION_KEY,
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, HIDDEN_BOARD_SESSION_KEY));
       await waitForControlUiGatewayReady(page);
 
       const panel = page.locator(".sidebar-region__right-runtime .side-panel");
-      await panel.locator(".side-panel-empty--selector").waitFor();
-      expect(await panel.locator("wa-tab").count()).toBe(0);
+      const selector = panel.locator(".side-panel-empty--selector");
+      const toggle = page.locator(".chat-side-panel-toggle");
+      await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("false");
 
-      await panel.getByRole("button", { name: "Close", exact: true }).click();
-      await expect.poll(() => panel.count()).toBe(0);
+      await toggle.click();
+      await selector.waitFor();
+      expect(await panel.locator("wa-tab").count()).toBe(0);
+      expect(await page.locator(".chat-panel-swap").isVisible()).toBe(false);
+
+      await toggle.click();
+      await selector.waitFor({ state: "hidden" });
+      expect(await toggle.getAttribute("aria-expanded")).toBe("false");
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -527,7 +553,7 @@ suite.define(() => {
       const page = await context.newPage();
       await seedRetainedDesktopSlot(page);
       const gateway = await installMockGateway(page, retainedDesktopScenario());
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, RETAINED_DESKTOP_SESSION_KEY));
       await waitForControlUiGatewayReady(page);
 
       const desktop = page.locator("openclaw-desktop-panel");
@@ -564,7 +590,7 @@ suite.define(() => {
     try {
       const page = await context.newPage();
       const gateway = await installMockGateway(page, retainedDesktopScenario());
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, RETAINED_DESKTOP_SESSION_KEY));
       await waitForControlUiGatewayReady(page);
       await openChatSidePanelType(page, "Desktop");
 
@@ -627,10 +653,32 @@ suite.define(() => {
 
     await choices.filter({ hasText: "Side chat" }).click();
     const contentActions = page.locator(".side-panel__action-group--content");
-    const companionMenu = contentActions.locator("wa-dropdown.chat-session-rail__menu");
-    await companionMenu.waitFor();
-    expect(await companionMenu.count()).toBe(1);
-    expect(await contentActions.locator(":scope > button").count()).toBe(0);
+    const clearAction = contentActions.getByRole("button", {
+      name: "Clear side chat",
+      exact: true,
+    });
+    await clearAction.waitFor();
+    expect(await clearAction.locator('path[d^="M3 6h18M19 6v14"]').count()).toBe(1);
+    expect(await contentActions.locator("wa-dropdown").count()).toBe(0);
+    const restingColor = await clearAction.evaluate((button) => getComputedStyle(button).color);
+    for (const action of [
+      page.locator(".chat-pane__header").getByRole("button", { name: "Focus", exact: true }),
+      page
+        .locator('[data-region-header="side"]')
+        .getByRole("button", { name: "Close", exact: true }),
+    ]) {
+      expect(await action.evaluate((button) => getComputedStyle(button).color)).toBe(restingColor);
+    }
+    const clearTooltip = clearAction.locator("..");
+    await clearAction.hover();
+    await expect
+      .poll(() =>
+        clearTooltip.locator("wa-tooltip").evaluate((tooltip) => Reflect.get(tooltip, "open")),
+      )
+      .toBe(true);
+    expect(await clearTooltip.locator("wa-tooltip .tooltip-content").textContent()).toContain(
+      "Clear side chat",
+    );
 
     const tab = page.locator(".side-panel__header .tabstrip-tab[active]");
     for (const direction of ["ltr", "rtl"] as const) {
@@ -721,17 +769,6 @@ suite.define(() => {
   });
 
   it("renders content for every offered slot with backing data", async () => {
-    const probeContext = await suite.newBrowserContext({ serviceWorkers: "block" });
-    try {
-      const offered = await offeredLabels(
-        await probeContext.newPage(),
-        populatedColdOpenScenario(),
-      );
-      expect(offered).toEqual(offeredSlotLabels);
-    } finally {
-      await suite.closeBrowserContext(probeContext);
-    }
-
     for (const label of offeredSlotLabels) {
       expect(
         await readSlotColdOpenOutcome(label, populatedColdOpenScenario(), "content"),
@@ -741,14 +778,6 @@ suite.define(() => {
   });
 
   it("keeps generic empty states actionable or explicitly allowlisted", async () => {
-    const probeContext = await suite.newBrowserContext({ serviceWorkers: "block" });
-    try {
-      const offered = await offeredLabels(await probeContext.newPage(), coldOpenScenario());
-      expect(offered).toEqual(offeredSlotLabels);
-    } finally {
-      await suite.closeBrowserContext(probeContext);
-    }
-
     const observedActionlessEmptyStates: OfferedSlotLabel[] = [];
     for (const label of offeredSlotLabels) {
       const outcome = await readSlotColdOpenOutcome(label, coldOpenScenario());

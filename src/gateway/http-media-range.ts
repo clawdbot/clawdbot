@@ -1,4 +1,5 @@
 // Pure helpers for HTTP Accept media-range parsing.
+import { splitHttpHeaderValue } from "./http-header-value.js";
 
 const HTTP_TOKEN_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u;
 const HTTP_QVALUE_PATTERN = /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/u;
@@ -6,45 +7,6 @@ const HTTP_OPTIONAL_WHITESPACE_PATTERN = /^[\t ]+|[\t ]+$/gu;
 
 function trimHttpOptionalWhitespace(value: string): string {
   return value.replace(HTTP_OPTIONAL_WHITESPACE_PATTERN, "");
-}
-
-function splitOutsideQuotedStrings(value: string, delimiter: string): string[] | null {
-  const parts: string[] = [];
-  let start = 0;
-  let quoted = false;
-  let escaped = false;
-
-  for (let index = 0; index < value.length; index += 1) {
-    const character = value[index];
-    if (quoted) {
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (character === "\\") {
-        escaped = true;
-        continue;
-      }
-      if (character === '"') {
-        quoted = false;
-      }
-      continue;
-    }
-    if (character === '"') {
-      quoted = true;
-      continue;
-    }
-    if (character === delimiter) {
-      parts.push(value.slice(start, index));
-      start = index + 1;
-    }
-  }
-
-  if (quoted || escaped) {
-    return null;
-  }
-  parts.push(value.slice(start));
-  return parts;
 }
 
 function parseParameterValue(value: string): string | null {
@@ -87,7 +49,7 @@ type ParsedMediaType = {
 };
 
 function parseMediaType(value: string, allowQuality: boolean): ParsedMediaType | null {
-  const segments = splitOutsideQuotedStrings(value, ";");
+  const segments = splitHttpHeaderValue(value, ";", "quoted-string");
   if (!segments) {
     return null;
   }
@@ -145,8 +107,17 @@ function parseMediaType(value: string, allowQuality: boolean): ParsedMediaType |
   return { type, subtype, parameters, quality };
 }
 
-function matchesRepresentation(range: ParsedMediaType, representation: ParsedMediaType): boolean {
-  if (range.type !== representation.type || range.subtype !== representation.subtype) {
+function matchesRepresentation(
+  range: ParsedMediaType,
+  representation: ParsedMediaType,
+  allowWildcards: boolean,
+): boolean {
+  const exact = range.type === representation.type && range.subtype === representation.subtype;
+  const wildcard =
+    allowWildcards &&
+    range.subtype === "*" &&
+    (range.type === "*" || range.type === representation.type);
+  if (!exact && !wildcard) {
     return false;
   }
   for (const [name, value] of range.parameters) {
@@ -157,13 +128,11 @@ function matchesRepresentation(range: ParsedMediaType, representation: ParsedMed
   return true;
 }
 
-/**
- * Checks for an explicit, positive-quality media range in an Accept field.
- * Wildcards intentionally do not opt callers into long-lived streaming responses.
- */
-export function hasExplicitAcceptableMediaRange(
+/** Checks the quality of the most specific range matching the offered representation. */
+export function acceptsMediaType(
   accept: string | undefined,
   expectedRepresentation: string,
+  allowWildcards = true,
 ): boolean {
   if (!accept) {
     return false;
@@ -173,27 +142,38 @@ export function hasExplicitAcceptableMediaRange(
     return false;
   }
 
-  const ranges = splitOutsideQuotedStrings(accept, ",");
+  const ranges = splitHttpHeaderValue(accept, ",", "quoted-string");
   if (!ranges) {
     return false;
   }
-  let bestSpecificity = -1;
-  let bestExplicitQuality = 0;
+  let bestMediaSpecificity = -1;
+  let bestParameterSpecificity = -1;
+  let bestQuality = 0;
   for (const range of ranges) {
-    if (!trimHttpOptionalWhitespace(range)) {
-      continue;
-    }
     const parsedRange = parseMediaType(range, true);
-    if (!parsedRange || !matchesRepresentation(parsedRange, representation)) {
+    if (!parsedRange || !matchesRepresentation(parsedRange, representation, allowWildcards)) {
       continue;
     }
-    const specificity = parsedRange.parameters.size;
-    if (specificity > bestSpecificity) {
-      bestSpecificity = specificity;
-      bestExplicitQuality = parsedRange.quality;
-    } else if (specificity === bestSpecificity) {
-      bestExplicitQuality = Math.max(bestExplicitQuality, parsedRange.quality);
+    // Exact types outrank parameterized wildcards; parameters only break type ties.
+    const mediaSpecificity = parsedRange.type === "*" ? 0 : parsedRange.subtype === "*" ? 1 : 2;
+    const parameterSpecificity = parsedRange.parameters.size;
+    const comparison =
+      mediaSpecificity - bestMediaSpecificity || parameterSpecificity - bestParameterSpecificity;
+    if (comparison > 0) {
+      bestMediaSpecificity = mediaSpecificity;
+      bestParameterSpecificity = parameterSpecificity;
+      bestQuality = parsedRange.quality;
+    } else if (comparison === 0) {
+      bestQuality = Math.max(bestQuality, parsedRange.quality);
     }
   }
-  return bestSpecificity >= 0 && bestExplicitQuality > 0;
+  return bestQuality > 0;
+}
+
+/** Wildcards cannot opt callers into long-lived streaming responses. */
+export function hasExplicitAcceptableMediaRange(
+  accept: string | undefined,
+  expectedRepresentation: string,
+): boolean {
+  return acceptsMediaType(accept, expectedRepresentation, false);
 }

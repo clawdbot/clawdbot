@@ -20,7 +20,6 @@ describe("SystemAgentChatEngine wizard", () => {
     let enabled: boolean | undefined;
     const engine = new SystemAgentChatEngine({
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
       runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
         enabled = await prompter.confirm({
@@ -47,7 +46,6 @@ describe("SystemAgentChatEngine wizard", () => {
 
     const defaultEngine = new SystemAgentChatEngine({
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
       runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
         await prompter.confirm({ message: "Continue?" });
@@ -68,7 +66,6 @@ describe("SystemAgentChatEngine wizard", () => {
     const runs: unknown[] = [];
     const engine = new SystemAgentChatEngine({
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
       runChannelSetupWizard: async (_channel, prompter) => {
         runs.push(
@@ -108,7 +105,6 @@ describe("SystemAgentChatEngine wizard", () => {
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
       runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
         await prompter.note("Before entering the token, open the provider console.");
@@ -129,7 +125,6 @@ describe("SystemAgentChatEngine wizard", () => {
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
       runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
         await prompter.text({ message: "Bot label" });
@@ -149,7 +144,6 @@ describe("SystemAgentChatEngine wizard", () => {
     const engine = new SystemAgentChatEngine({
       surface: "cli",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
       runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
         await prompter.text({ message: "Bot token", sensitive: true });
@@ -187,7 +181,6 @@ describe("SystemAgentChatEngine wizard", () => {
     const engine = new SystemAgentChatEngine({
       surface: "cli",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
       runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
         await prompter.text({ message: "Bot token", sensitive: true });
@@ -208,7 +201,6 @@ describe("SystemAgentChatEngine wizard", () => {
   it("routes inference setup out of both CLI and gateway sessions", async () => {
     const common = {
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
     };
     const cli = new SystemAgentChatEngine({ ...common, surface: "cli" });
@@ -236,7 +228,6 @@ describe("SystemAgentChatEngine wizard", () => {
     useTempStateDir();
     const engine = new SystemAgentChatEngine({
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
       runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
         await prompter.text({
@@ -261,7 +252,6 @@ describe("SystemAgentChatEngine wizard", () => {
     useTempStateDir();
     const engine = new SystemAgentChatEngine({
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
       runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
         await prompter.note("Open the linked-devices screen.", "Step 1");
@@ -291,7 +281,6 @@ describe("SystemAgentChatEngine wizard", () => {
     useTempStateDir();
     const engine = new SystemAgentChatEngine({
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
       runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
         await prompter.text({ message: "Bot token" });
@@ -310,7 +299,6 @@ describe("SystemAgentChatEngine wizard", () => {
     useTempStateDir();
     const engine = new SystemAgentChatEngine({
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
       runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
         await prompter.text({ message: "Bot token" });
@@ -344,7 +332,7 @@ describe("SystemAgentChatEngine wizard", () => {
     const laterApproval = await engine.handle("yes");
 
     expect(cancelled.text).toContain("cancelled");
-    expect(engine.hasPendingProposal()).toBe(false);
+    expect(engine.getPendingOperatorProposal()).toBeNull();
     expect(runConfigSet).not.toHaveBeenCalled();
     expect(runAgentTurn.mock.calls.at(-1)?.[0]?.approvalArmed).toBe(false);
     expect(laterApproval.text).toContain("No pending change");
@@ -389,7 +377,6 @@ describe("SystemAgentChatEngine wizard", () => {
       new SystemAgentChatEngine({
         surface: "gateway",
         runAgentTurn: async () => null,
-        planWithAssistant: async () => null,
         deps: { loadOverview: fakeOverviewLoader() },
         runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
           await prompter.text({
@@ -416,7 +403,6 @@ describe("SystemAgentChatEngine wizard", () => {
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => ({ text: "*click* Everything looks healthy." }),
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
       runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
         await prompter.text({ message: "Bot token" });
@@ -440,7 +426,6 @@ describe("SystemAgentChatEngine wizard", () => {
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
       runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
         selected = await prompter.select({
@@ -466,7 +451,6 @@ describe("SystemAgentChatEngine wizard", () => {
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
       runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
         await prompter.text({ message: "Bot token" });
@@ -507,7 +491,6 @@ describe("SystemAgentChatEngine wizard", () => {
       surface: "gateway",
       verifiedInference,
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: {
         readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
         loadOverview: fakeOverviewLoader(),
@@ -531,7 +514,6 @@ describe("SystemAgentChatEngine wizard", () => {
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
       runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
         await prompter.text({ message: "Bot token" });
@@ -553,7 +535,6 @@ describe("SystemAgentChatEngine wizard", () => {
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
       runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
         await prompter.text({ message: "Bot token" });
@@ -576,7 +557,6 @@ describe("SystemAgentChatEngine wizard", () => {
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
       runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
         await prompter.text({ message: "Bot token", sensitive: true });
@@ -597,7 +577,6 @@ describe("SystemAgentChatEngine wizard", () => {
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
       runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
         selected = await prompter.select({

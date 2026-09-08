@@ -1,6 +1,7 @@
 /** Starts, stops, and inspects plugin service registrations. */
 import { STATE_DIR } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getGatewayProcessInstanceId } from "../gateway/process-instance.js";
 import type { GatewayPluginEventBroadcastFn } from "../gateway/server-broadcast-types.js";
 import {
   emitTrustedDiagnosticEventWithPrivateData,
@@ -15,11 +16,17 @@ import {
 } from "../logging/diagnostic-stability.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { resolveRuntimeServiceBuildId } from "../version.js";
+import {
+  createPluginRuntimeCapabilityLease,
+  type PluginRuntimeCapabilityLease,
+} from "./capability-lease.js";
 import { subscribePluginSessionsChanged } from "./gateway-events.js";
 import { isPluginJsonValue, type PluginJsonValue } from "./host-hook-json.js";
 import { withPluginHttpRouteRegistry } from "./http-registry.js";
 import type { PluginServiceRegistration } from "./registry-types.js";
 import type { PluginRegistry } from "./registry.js";
+import { createPluginServiceCronGetter, type PluginServiceCronHost } from "./service-cron.js";
 import { createPluginServiceHealthGeneration } from "./service-health.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type { OpenClawPluginServiceContext, PluginLogger } from "./types.js";
@@ -27,52 +34,13 @@ import type { OpenClawPluginServiceContext, PluginLogger } from "./types.js";
 const log = createSubsystemLogger("plugins");
 export const PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS = 5_000;
 
-class PluginServiceReplacementTimeoutError extends Error {}
+class PluginServiceStopTimeoutError extends Error {}
 
 type TrustedExporterInternalDiagnostics = NonNullable<
   OpenClawPluginServiceContext["internalDiagnostics"]
 > & {
   reportExporterHealth: (update: DiagnosticExporterHealthUpdate) => void;
 };
-
-function createPluginServiceCapabilityLease() {
-  let active = true;
-  const cleanups = new Set<() => void>();
-  const assertActive = (capability: string) => {
-    if (!active) {
-      throw new Error(`plugin service ${capability} is no longer active`);
-    }
-  };
-  const retain = (cleanup: () => void): (() => void) => {
-    if (!active) {
-      cleanup();
-      assertActive("capability lease");
-    }
-    const release = () => {
-      if (cleanups.delete(release)) {
-        cleanup();
-      }
-    };
-    cleanups.add(release);
-    return release;
-  };
-  return {
-    isActive: () => active,
-    assertActive,
-    retain,
-    revoke: () => {
-      if (!active) {
-        return;
-      }
-      active = false;
-      for (const cleanup of cleanups) {
-        cleanup();
-      }
-    },
-  };
-}
-
-type PluginServiceCapabilityLease = ReturnType<typeof createPluginServiceCapabilityLease>;
 
 function createPluginLogger(): PluginLogger {
   return {
@@ -90,7 +58,8 @@ function createServiceContext(params: {
   service: PluginServiceRegistration;
   serviceHealth: NonNullable<OpenClawPluginServiceContext["serviceHealth"]>;
   gatewayEvents?: OpenClawPluginServiceContext["gatewayEvents"];
-  lease: PluginServiceCapabilityLease;
+  getCron?: OpenClawPluginServiceContext["getCron"];
+  lease: PluginRuntimeCapabilityLease;
 }): OpenClawPluginServiceContext {
   const isDiagnosticsExporter =
     params.service?.pluginId === params.service?.service.id &&
@@ -103,16 +72,24 @@ function createServiceContext(params: {
   const internalDiagnostics: TrustedExporterInternalDiagnostics | undefined =
     grantsInternalDiagnostics
       ? {
+          getRuntimeIdentity: () => {
+            params.lease.assertActive("runtime diagnostic identity");
+            const buildId = resolveRuntimeServiceBuildId();
+            return {
+              processInstanceId: getGatewayProcessInstanceId(),
+              ...(buildId ? { buildId } : {}),
+            };
+          },
           emit: (event, privateData) => {
             params.lease.assertActive("internal diagnostic emitter");
             emitTrustedDiagnosticEventWithPrivateData(event, privateData);
           },
-          onEvent: (listener) => {
+          onEvent: (listener, filter) => {
             params.lease.assertActive("internal diagnostic listener");
             const trustedListener = isOtelExporter
               ? markTrustedOtelDiagnosticListener(listener)
               : listener;
-            return params.lease.retain(onTrustedInternalDiagnosticEvent(trustedListener));
+            return params.lease.retain(onTrustedInternalDiagnosticEvent(trustedListener, filter));
           },
           registerTracePropagationBridge: (bridge) => {
             params.lease.assertActive("diagnostic trace propagation bridge");
@@ -132,6 +109,7 @@ function createServiceContext(params: {
     stateDir: STATE_DIR,
     logger: createPluginLogger(),
     serviceHealth: params.serviceHealth,
+    ...(params.getCron ? { getCron: params.getCron } : {}),
     ...(params.gatewayEvents ? { gatewayEvents: params.gatewayEvents } : {}),
     ...(params.startupTrace
       ? {
@@ -148,7 +126,7 @@ function createServiceContext(params: {
 function createScopedGatewayEvents(params: {
   pluginId: string;
   broadcast?: GatewayPluginEventBroadcastFn;
-  lease: PluginServiceCapabilityLease;
+  lease: PluginRuntimeCapabilityLease;
 }): {
   gatewayEvents?: OpenClawPluginServiceContext["gatewayEvents"];
 } {
@@ -211,6 +189,7 @@ function createScopedPluginServiceStartupTrace(
 }
 
 export type PluginServicesHandle = {
+  reload: (config: OpenClawConfig, serviceIds: ReadonlySet<string>) => Promise<void>;
   stop: (options?: { strict: true; deadlineAtMs: number }) => Promise<void>;
 };
 
@@ -225,60 +204,82 @@ export async function startPluginServices(params: {
   workspaceDir?: string;
   startupTrace?: PluginServiceStartupTrace;
   broadcastPluginEvent?: GatewayPluginEventBroadcastFn;
+  getCronService?: () => PluginServiceCronHost | null | undefined;
+  oneShotStopTimeouts?: { eventDrainMs: number; serviceStopMs: number };
   onHandle?: (handle: PluginServicesHandle) => void;
 }): Promise<PluginServicesHandle> {
   const healthGeneration = createPluginServiceHealthGeneration(params.registry);
-  const running: Array<{
+  // Failed starts can still own pending cleanup; retain every issued service.
+  const ownedServices: Array<{
     id: string;
     pluginId: string;
     diagnosticsExporter: boolean;
+    registration: PluginServiceRegistration;
+    stopping: boolean;
     stop?: () => void | Promise<void>;
-    lease: PluginServiceCapabilityLease;
+    cleanup?: Promise<void>;
+    startup?: Promise<void>;
+    lease: PluginRuntimeCapabilityLease;
   }> = [];
   const runBeforeDeadline = async (
     run: () => void | Promise<void>,
-    deadline: number,
+    deadline: number | undefined,
     label: string,
     owner?: string,
   ): Promise<void> => {
     const operation = Promise.resolve(run());
+    if (deadline === undefined) {
+      return operation;
+    }
     const remaining = deadline - Date.now();
     const timeoutError = () =>
-      new PluginServiceReplacementTimeoutError(
-        `${label} timed out after ${PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS}ms${owner ? ` (${owner})` : ""}`,
+      new PluginServiceStopTimeoutError(
+        `${label} timed out after ${Math.max(0, remaining)}ms${owner ? ` (${owner})` : ""}`,
       );
-    if (remaining <= 0) {
-      await Promise.race([operation, Promise.reject(timeoutError())]);
-      return;
-    }
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
         operation,
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(timeoutError()), remaining);
-          timer.unref?.();
-        }),
+        remaining <= 0
+          ? Promise.reject(timeoutError())
+          : new Promise<never>((_, reject) => {
+              timer = setTimeout(() => reject(timeoutError()), remaining);
+              timer.unref?.();
+            }),
       ]);
     } finally {
       clearTimeout(timer);
     }
   };
   const stopService = async (
-    entry: (typeof running)[number],
+    entry: (typeof ownedServices)[number],
     failures?: unknown[],
     deadline?: number,
+    beforeStop?: Promise<void>,
   ) => {
+    entry.stopping = true;
     try {
-      if (entry.stop) {
-        const cleanup = () =>
-          withPluginHttpRouteRegistry(params.registry, () => entry.stop?.(), entry.lease);
-        if (deadline === undefined) {
-          await cleanup();
-        } else {
-          await runBeforeDeadline(cleanup, deadline, "plugin service stop");
+      const cleanup = () => {
+        if (entry.cleanup) {
+          return entry.cleanup;
         }
-      }
+        try {
+          // Deadlines bound observers; raw startup still owns the one final cleanup.
+          const ready = beforeStop ? beforeStop.then(() => entry.startup) : entry.startup;
+          const invokeStop = () =>
+            withPluginHttpRouteRegistry(params.registry, () => entry.stop?.(), entry.lease);
+          return (entry.cleanup = ready ? ready.then(invokeStop) : Promise.resolve(invokeStop()));
+        } catch (error) {
+          const failure = createDeferredCore();
+          failure.reject(error);
+          return (entry.cleanup = failure.promise);
+        }
+      };
+      await runBeforeDeadline(
+        cleanup,
+        deadline,
+        entry.startup ? "plugin service startup settlement" : "plugin service stop",
+      );
     } catch (err) {
       log.warn(`plugin service stop failed (${entry.id}): ${String(err)}`);
       failures?.push(
@@ -286,7 +287,7 @@ export async function startPluginServices(params: {
           ? err
           : new Error(
               `plugin service stop failed (plugin=${entry.pluginId}, service=${entry.id}): ${
-                err instanceof PluginServiceReplacementTimeoutError
+                err instanceof PluginServiceStopTimeoutError
                   ? err.message
                   : `rejected: ${String(err)}`
               }`,
@@ -297,155 +298,213 @@ export async function startPluginServices(params: {
       entry.lease.revoke();
     }
   };
-  const startupSettled = createDeferredCore();
-  void startupSettled.promise.catch(() => {});
+  const stopServices = async (
+    entries: typeof ownedServices,
+    failures: unknown[],
+    strict: boolean,
+    deadline?: number,
+  ) => {
+    for (const entry of entries) {
+      entry.stopping = true;
+    }
+    const reversed = entries.toReversed();
+    const oneShotTimeouts = deadline === undefined ? params.oneShotStopTimeouts : undefined;
+    // One-shot registries are already scoped; every cleanup follows the drain, without changing grants.
+    const afterDrain = oneShotTimeouts
+      ? reversed
+      : reversed.filter((entry) => entry.diagnosticsExporter);
+    const producers = oneShotTimeouts ? [] : reversed.filter((entry) => !entry.diagnosticsExporter);
+    for (const entry of producers) {
+      await stopService(entry, strict ? failures : undefined, deadline);
+    }
+    let exporterReady: Promise<void> | undefined;
+    if (afterDrain.length > 0) {
+      const owners = afterDrain
+        .map((entry) => `plugin=${entry.pluginId}, service=${entry.id}`)
+        .join("; ");
+      // Exporters follow actual producer cleanup, even after a caller stops waiting.
+      const draining = Promise.allSettled([
+        ...afterDrain.map((entry) => entry.startup),
+        ...producers.map((entry) => entry.cleanup),
+      ]).then(() =>
+        runBeforeDeadline(
+          waitForDiagnosticEventsDrained,
+          oneShotTimeouts ? Date.now() + oneShotTimeouts.eventDrainMs : deadline,
+          "plugin diagnostic event drain",
+          owners,
+        ),
+      );
+      // A bounded drain failure cannot discard the exporter's final stop.
+      exporterReady = draining.catch(() => {});
+      try {
+        await runBeforeDeadline(() => draining, deadline, "plugin diagnostic event drain", owners);
+      } catch (error) {
+        if (!strict && !oneShotTimeouts) {
+          throw error;
+        }
+        failures.push(error);
+      }
+    }
+    // Fresh one-shot flush budgets start after drain; absolute replacement deadlines span all phases.
+    const stopDeadline = oneShotTimeouts ? Date.now() + oneShotTimeouts.serviceStopMs : deadline;
+    for (const entry of afterDrain) {
+      await stopService(entry, failures, stopDeadline, exporterReady);
+    }
+  };
   let stopRequested = false;
-  let stopPromise: Promise<void> | undefined;
+  let reloadTail = Promise.resolve();
   const handle: PluginServicesHandle = {
+    reload: (config, serviceIds) => {
+      const reloading = reloadTail.then(async () => {
+        await startupSettled;
+        if (stopRequested) {
+          throw new Error("Plugin services are stopping");
+        }
+        const selected = ownedServices.filter((entry) => serviceIds.has(entry.id));
+        const deadline = Date.now() + PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS;
+        const failures: unknown[] = [];
+        await stopServices(selected, failures, true, deadline);
+        if (failures.length > 0) {
+          throw new AggregateError(failures, "plugin service reload cleanup failed");
+        }
+        for (const entry of selected) {
+          if (stopRequested) {
+            return;
+          }
+          await startService(entry.registration, config, true, ownedServices.indexOf(entry));
+        }
+      });
+      reloadTail = reloading.catch(() => {});
+      return reloading;
+    },
     stop: (options) => {
       stopRequested = true;
-      // Store the shared promise before plugin cleanup runs so shutdown cannot start twice.
-      if (!stopPromise) {
-        const strict = options?.strict === true;
-        const deadline = strict ? options.deadlineAtMs : undefined;
-        stopPromise = Promise.resolve().then(async () => {
-          const failures: unknown[] = [];
-          if (deadline === undefined) {
-            await startupSettled.promise.catch(() => {});
-          } else {
-            try {
-              const starting = running.at(-1);
-              await runBeforeDeadline(
-                () => startupSettled.promise.catch(() => {}),
-                deadline,
-                "plugin service startup settlement",
-                starting ? `plugin=${starting.pluginId}, service=${starting.id}` : undefined,
-              );
-            } catch (error) {
-              failures.push(error);
-              // Startup may resume after replacement timed out; its issued capabilities die now.
-              for (const entry of running) {
-                entry.lease.revoke();
-              }
-            }
-          }
-          const reversed = running.toReversed();
-          const diagnosticsExporters = reversed.filter((entry) => entry.diagnosticsExporter);
-          const exporterFailures = strict ? failures : [];
-          const stopServices = async (services: typeof reversed, collected?: unknown[]) => {
-            for (const entry of services) {
-              await stopService(entry, collected, deadline);
-            }
-          };
-          await stopServices(
-            reversed.filter((entry) => !entry.diagnosticsExporter),
-            strict ? failures : undefined,
+      const strict = options?.strict === true;
+      const deadline = strict ? options.deadlineAtMs : undefined;
+      // Each caller observes the retained cleanup under its own deadline policy.
+      const stopPromise = Promise.resolve().then(async () => {
+        const failures: unknown[] = [];
+        await stopServices(ownedServices, failures, strict, deadline);
+        if (!strict && failures.length === 1) {
+          throw failures[0];
+        }
+        if (failures.length > 0) {
+          throw new AggregateError(
+            failures,
+            strict
+              ? "plugin service replacement cleanup failed"
+              : "multiple diagnostics exporters failed to stop",
           );
-          if (diagnosticsExporters.length > 0) {
-            // Producers stop first; this barrier preserves their queued tail before exporters detach.
-            if (deadline === undefined) {
-              await waitForDiagnosticEventsDrained();
-            } else {
-              try {
-                await runBeforeDeadline(
-                  waitForDiagnosticEventsDrained,
-                  deadline,
-                  "plugin diagnostic event drain",
-                  diagnosticsExporters
-                    .map((entry) => `plugin=${entry.pluginId}, service=${entry.id}`)
-                    .join("; "),
-                );
-              } catch (error) {
-                failures.push(error);
-              }
-            }
-          }
-          // Ordinary plugin cleanup stays warn-and-continue. Trusted diagnostics
-          // exporter failures propagate because they can mean telemetry was lost.
-          await stopServices(diagnosticsExporters, exporterFailures);
-          if (strict && failures.length > 0) {
-            throw new AggregateError(failures, "plugin service replacement cleanup failed");
-          }
-          if (exporterFailures.length === 1) {
-            throw exporterFailures[0];
-          }
-          if (exporterFailures.length > 1) {
-            throw new AggregateError(
-              exporterFailures,
-              "multiple diagnostics exporters failed to stop",
-            );
-          }
-        });
-        void stopPromise.then(healthGeneration.retire, healthGeneration.retire);
-      }
+        }
+      });
+      void stopPromise.then(healthGeneration.retire, healthGeneration.retire);
       return stopPromise;
     },
   };
   params.onHandle?.(handle);
 
-  try {
+  const startService = async (
+    entry: PluginServiceRegistration,
+    config: OpenClawConfig,
+    strict = false,
+    index = ownedServices.length,
+  ): Promise<boolean> => {
+    const service = entry.service;
+    const traceName = createPluginServiceTraceName(entry);
+    const lease = createPluginRuntimeCapabilityLease("plugin service");
+    const scopedGatewayEvents = createScopedGatewayEvents({
+      pluginId: entry.pluginId,
+      broadcast: params.broadcastPluginEvent,
+      lease,
+    });
+    const serviceHealth = healthGeneration.createReporter(entry);
+    lease.retain(serviceHealth.revoke);
+    serviceHealth.health.clearFailure();
+    const serviceContext = createServiceContext({
+      config,
+      startupTrace: params.startupTrace,
+      workspaceDir: params.workspaceDir,
+      service: entry,
+      serviceHealth: serviceHealth.health,
+      gatewayEvents: scopedGatewayEvents.gatewayEvents,
+      ...(params.getCronService
+        ? {
+            getCron: createPluginServiceCronGetter({
+              getCron: params.getCronService,
+              lease,
+              isStopping: () => stopRequested || ownedService.stopping,
+            }),
+          }
+        : {}),
+      lease,
+    });
+    const ownedService: (typeof ownedServices)[number] = {
+      id: service.id,
+      registration: entry,
+      stopping: false,
+      pluginId: entry.pluginId,
+      diagnosticsExporter: serviceContext.internalDiagnostics !== undefined,
+      stop: service.stop ? () => service.stop?.(serviceContext) : undefined,
+      lease,
+    };
+    // Publish before startup yields; preserve the registration's slot across failed reloads.
+    ownedServices.splice(index, 1, ownedService);
+    try {
+      const invokeStart = async () => {
+        const settled = createDeferredCore();
+        ownedService.startup = settled.promise;
+        try {
+          await withPluginHttpRouteRegistry(
+            params.registry,
+            () => service.start(serviceContext),
+            lease,
+          );
+        } finally {
+          // Settlement excludes failed-start rollback, which waits for this raw work.
+          ownedService.startup = undefined;
+          settled.resolve();
+        }
+      };
+      await (params.startupTrace
+        ? params.startupTrace.measure(traceName, invokeStart)
+        : invokeStart());
+      return true;
+    } catch (err) {
+      serviceContext.serviceHealth?.reportFailure(err);
+      const error = err as Error;
+      log.error(
+        `plugin service failed (${service.id}, plugin=${entry.pluginId}, root=${entry.rootDir ?? "unknown"}): ${error?.message ?? String(err)}`,
+      );
+      // A failed start can already own resources; revoke events only after its cleanup runs.
+      // Bound the cleanup: callers await startPluginServices without a timeout, so a hung
+      // stop here would wedge plugin reload/startup forever.
+      await stopService(
+        ownedService,
+        undefined,
+        Date.now() + PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
+      );
+      if (strict) {
+        throw err;
+      }
+      return false;
+    }
+  };
+  const startupSettled = (async () => {
     let failedCount = 0;
     for (const entry of params.registry.services) {
       if (stopRequested) {
         break;
       }
-      const service = entry.service;
-      const traceName = createPluginServiceTraceName(entry);
-      const lease = createPluginServiceCapabilityLease();
-      const scopedGatewayEvents = createScopedGatewayEvents({
-        pluginId: entry.pluginId,
-        broadcast: params.broadcastPluginEvent,
-        lease,
-      });
-      const serviceHealth = healthGeneration.createReporter(entry);
-      lease.retain(serviceHealth.revoke);
-      const serviceContext = createServiceContext({
-        config: params.config,
-        startupTrace: params.startupTrace,
-        workspaceDir: params.workspaceDir,
-        service: entry,
-        serviceHealth: serviceHealth.health,
-        gatewayEvents: scopedGatewayEvents.gatewayEvents,
-        lease,
-      });
-      const runningService = {
-        id: service.id,
-        pluginId: entry.pluginId,
-        diagnosticsExporter: serviceContext.internalDiagnostics !== undefined,
-        stop: service.stop ? () => service.stop?.(serviceContext) : undefined,
-        lease,
-      };
-      // Own capabilities before startup yields so a bounded replacement can revoke stale work.
-      running.push(runningService);
-      try {
-        const startService = () =>
-          withPluginHttpRouteRegistry(params.registry, () => service.start(serviceContext), lease);
-        if (params.startupTrace) {
-          await params.startupTrace.measure(traceName, startService);
-        } else {
-          await startService();
-        }
-      } catch (err) {
-        running.splice(running.indexOf(runningService), 1);
+      if (!(await startService(entry, params.config))) {
         failedCount += 1;
-        serviceContext.serviceHealth?.reportFailure(err);
-        const error = err as Error;
-        log.error(
-          `plugin service failed (${service.id}, plugin=${entry.pluginId}, root=${entry.rootDir ?? "unknown"}): ${error?.message ?? String(err)}`,
-        );
-        // A failed start can already own resources; revoke events only after its cleanup runs.
-        await stopService(runningService);
       }
     }
     params.startupTrace?.detail?.("sidecars.plugin-services.summary", [
       ["serviceCount", params.registry.services.length],
-      ["startedCount", running.length],
+      ["startedCount", ownedServices.length - failedCount],
       ["failedCount", failedCount],
     ]);
-    startupSettled.resolve();
-    return handle;
-  } catch (error) {
-    startupSettled.reject(error);
-    throw error;
-  }
+  })();
+  await startupSettled;
+  return handle;
 }

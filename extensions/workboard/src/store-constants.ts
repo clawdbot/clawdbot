@@ -14,7 +14,6 @@ export const MAX_CARD_LINKS = 50;
 export const MAX_CARD_PROOF = 40;
 export const MAX_CARD_ARTIFACTS = 40;
 export const MAX_CARD_ATTACHMENTS = 20;
-export const MAX_ATTACHMENT_ENTRIES = MAX_CARDS * (MAX_CARD_ATTACHMENTS + 1);
 export const MAX_CARD_WORKER_LOGS = 40;
 export const MAX_ATTACHMENT_BYTES = 256 * 1024;
 export const MAX_CARD_DIAGNOSTICS = 12;
@@ -46,8 +45,17 @@ export function workboardCardConsumesOwnerSlot(card: WorkboardCard, now: number)
   );
 }
 
-export function workboardCardSlotOwner(card: WorkboardCard): string {
-  return card.metadata?.claim?.ownerId ?? card.agentId ?? DEFAULT_WORKBOARD_DISPATCH_OWNER;
+export function workboardCardSlotOwner(card: WorkboardCard, now?: number): string {
+  const claim = card.metadata?.claim;
+  // Ready candidates pass now to ignore expired claims. Occupied slots omit it
+  // so the claim owner keeps its slot through the heartbeat-reclaim grace period.
+  return (
+    (claim && (now === undefined || isFutureDateTimestampMs(claim.expiresAt, { nowMs: now }))
+      ? claim.ownerId
+      : undefined) ||
+    card.agentId ||
+    DEFAULT_WORKBOARD_DISPATCH_OWNER
+  );
 }
 
 export function secondsToDurationMs(seconds: number): number {

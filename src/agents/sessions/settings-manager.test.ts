@@ -26,6 +26,19 @@ class InspectableSettingsStorage implements SettingsStorage {
 }
 
 describe("SettingsManager scoped persistence", () => {
+  it("loads settings from a backend that supplies the pure read contract", () => {
+    const manager = SettingsManager.fromStorage({
+      readSettingsScope: (scope) => JSON.stringify({ theme: scope }),
+      withLock: () => {
+        throw new Error("This backend only supports pure reads");
+      },
+    });
+    expect(manager.drainErrors()).toEqual([]);
+    expect(manager.getGlobalSettings()).toEqual({ theme: "global" });
+    expect(manager.getProjectSettings()).toEqual({ theme: "project" });
+    expect(manager.getTheme()).toBe("project");
+  });
+
   it("preserves external sibling changes while writing global and project scopes", async () => {
     const storage = new InspectableSettingsStorage();
     storage.set("global", {
@@ -139,19 +152,18 @@ describe("SettingsManager runtime overrides", () => {
   it("recursively merges provider retry overrides and replaces arrays", () => {
     const settingsManager = SettingsManager.inMemory({
       retry: {
-        provider: { timeoutMs: 30_000, maxRetries: 2, maxRetryDelayMs: 60_000 },
+        provider: { timeoutMs: 30_000, maxRetryDelayMs: 60_000 },
       },
       packages: ["npm:@openclaw/base"],
     });
 
     settingsManager.applyOverrides({
-      retry: { provider: { maxRetries: 5 } },
+      retry: { provider: { timeoutMs: 45_000 } },
       packages: ["npm:@openclaw/override"],
     });
 
     expect(settingsManager.getProviderRetrySettings()).toEqual({
-      timeoutMs: 30_000,
-      maxRetries: 5,
+      timeoutMs: 45_000,
       maxRetryDelayMs: 60_000,
     });
     expect(settingsManager.getPackages()).toEqual(["npm:@openclaw/override"]);

@@ -8,6 +8,21 @@ if (!MatrixConfigSchema) {
 }
 
 describe("MatrixConfigSchema SecretInput", () => {
+  it("preserves root and account join-introduction overrides without materializing defaults", () => {
+    const result = MatrixConfigSchema.safeParse({
+      joinIntro: false,
+      accounts: { work: { joinIntro: true, customField: 1 }, inherited: {} },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toMatchObject({
+        joinIntro: false,
+        accounts: { work: { joinIntro: true, customField: 1 }, inherited: {} },
+      });
+      expect(result.data).not.toHaveProperty("accounts.inherited.joinIntro");
+    }
+  });
+
   it("accepts SecretRef accessToken at top-level", () => {
     const result = MatrixConfigSchema.safeParse({
       homeserver: "https://matrix.example.org",

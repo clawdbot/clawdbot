@@ -125,32 +125,25 @@ describe("createQaSmokeCiPart", () => {
     const primaryScenarioIds = parts.map(
       (part) => part.runs.find((run) => run.slug === "primary")?.scenario_ids ?? [],
     );
-    const scenarioIdsByPart = parts.map((part) => part.runs.flatMap((run) => run.scenario_ids));
-    const partCosts = scenarioIdsByPart.map((ids) =>
-      ids.reduce(
-        (cost, scenarioId) => cost + estimateScenarioCost(scenarioById.get(scenarioId)),
-        0,
-      ),
+    const scenarioCostsByPart = primaryScenarioIds.map((ids) =>
+      ids.map((scenarioId) => estimateScenarioCost(scenarioById.get(scenarioId))),
     );
-    const unitCostPartCosts = scenarioIdsByPart.flatMap((ids, index) =>
-      ids.every((scenarioId) => estimateScenarioCost(scenarioById.get(scenarioId)) === 1)
-        ? [expectDefined(partCosts[index], "unit-cost QA smoke part")]
-        : [],
+    // The separate Matrix run reserves three flow-cost points during packing.
+    const partCosts = scenarioCostsByPart.map(
+      (costs, index) =>
+        costs.reduce((total, cost) => total + cost, 0) +
+        (parts[index]?.runs.some((run) => run.slug === "matrix") ? 3 : 0),
     );
-    const heaviestUnitCostPart = expectDefined(
-      unitCostPartCosts.toSorted((left, right) => right - left)[0],
-      "heaviest unit-cost QA smoke part",
-    );
-    const lightestUnitCostPart = expectDefined(
-      unitCostPartCosts.toSorted((left, right) => left - right)[0],
-      "lightest unit-cost QA smoke part",
-    );
-    expect(unitCostPartCosts.length).toBeGreaterThan(1);
-    expect(heaviestUnitCostPart - lightestUnitCostPart).toBeLessThanOrEqual(1);
+    const lightestPartCost = Math.min(...partCosts);
+    for (const [index, scenarioCosts] of scenarioCostsByPart.entries()) {
+      // Mixed-cost parts must stay within one indivisible scenario of the lightest part.
+      const partCost = expectDefined(partCosts[index], "QA smoke part cost");
+      expect(partCost - lightestPartCost).toBeLessThanOrEqual(Math.min(...scenarioCosts));
+    }
     expect(primaryScenarioIds.every((ids) => ids.length > 0)).toBe(true);
   });
 
-  it("keeps real Gateway-hosted proof outside the Crabline smoke profile", () => {
+  it("keeps real Gateway-hosted proof outside the Crabline channel-driver profile", () => {
     const coverageId = "control-ui.gateway-hosted-ui-control";
     const smokeSelection = resolveQaProfileScenarios({
       profile: "smoke-ci",

@@ -116,6 +116,61 @@ describe("evaluateChannelHealth", () => {
     });
   });
 
+  it.each([
+    {
+      name: "starting lifecycle",
+      account: runningAccount({ connected: false, lifecycle: "starting", lastStartAt: 101_000 }),
+      expected: { healthy: false, reason: "disconnected" },
+    },
+    {
+      name: "recovering lifecycle",
+      account: runningAccount({ connected: false, lifecycle: "recovering", lastStartAt: 101_000 }),
+      expected: { healthy: false, reason: "disconnected" },
+    },
+    {
+      name: "unrecorded lifecycle",
+      account: runningAccount({ connected: false, lastStartAt: 101_000 }),
+      expected: { healthy: false, reason: "disconnected" },
+    },
+    {
+      name: "disconnected active run",
+      account: activeRunAccount(101_000, { lastStartAt: 0, activeRunStartedAt: 101_000 }),
+      expected: { healthy: false, reason: "disconnected" },
+    },
+    {
+      name: "activity inherited before a future lifecycle",
+      account: runningAccount({
+        connected: false,
+        lifecycle: "starting",
+        lastStartAt: 101_000,
+        busy: true,
+        lastRunActivityAt: 99_000,
+      }),
+      expected: { healthy: false, reason: "disconnected" },
+    },
+    {
+      name: "disconnect inherited before a future lifecycle",
+      account: runningAccount({
+        connected: false,
+        lifecycle: "recovering",
+        lastStartAt: 101_000,
+        lastDisconnect: { at: 99_000, error: "socket closed" },
+      }),
+      expected: { healthy: false, reason: "disconnected" },
+    },
+    {
+      name: "stale transport inherited before a future lifecycle",
+      account: connectedAccount({
+        lifecycle: "ready",
+        lastStartAt: 101_000,
+        lastTransportActivityAt: 0,
+      }),
+      expected: { healthy: false, reason: "stale-socket" },
+    },
+  ])("does not trust future activity for $name", ({ account, expected }) => {
+    expect(evaluateHealth(account)).toEqual(expected);
+  });
+
   it("lets recorded ready bypass wall-clock startup grace", () => {
     expect(
       evaluateHealth(runningAccount({ connected: false, lifecycle: "ready", lastStartAt: 99_999 })),
@@ -151,6 +206,12 @@ describe("evaluateChannelHealth", () => {
       name: "ignores a disconnect from the previous lifecycle",
       lastStartAt: 80_000,
       lastDisconnect: { at: 79_000, error: "socket closed" },
+      expected: { healthy: false, reason: "disconnected" },
+    },
+    {
+      name: "ignores a disconnect dated after the current clock",
+      lastStartAt: 0,
+      lastDisconnect: { at: 101_000, error: "socket closed" },
       expected: { healthy: false, reason: "disconnected" },
     },
   ] as const)("$name", ({ lastStartAt, lastDisconnect, expected }) => {

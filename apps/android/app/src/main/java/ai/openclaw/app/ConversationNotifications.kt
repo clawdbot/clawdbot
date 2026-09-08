@@ -287,12 +287,14 @@ internal suspend fun routeConversationNotificationTarget(
   activeGatewayStableId: () -> String?,
   switchGateway: suspend (String) -> Boolean,
   awaitGatewayReady: suspend (String) -> Boolean = { true },
+  isCurrent: () -> Boolean = { true },
   switchSession: (sessionKey: String, agentId: String) -> Unit,
 ): Boolean {
+  if (!isCurrent()) return false
   if (activeGatewayStableId() != target.gatewayStableId && !switchGateway(target.gatewayStableId)) {
     return false
   }
-  if (!awaitGatewayReady(target.gatewayStableId)) {
+  if (!isCurrent() || !awaitGatewayReady(target.gatewayStableId) || !isCurrent()) {
     return false
   }
   switchSession(target.sessionKey, target.agentId)

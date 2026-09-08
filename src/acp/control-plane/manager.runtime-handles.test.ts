@@ -1,4 +1,4 @@
-/** Tests ACP runtime handle caching, reuse, re-ensure, and eviction behavior. */
+/** Tests ACP runtime handle caching, reuse, re-ensure, and lifecycle cleanup. */
 import { describe, expect, it, vi } from "vitest";
 import {
   AcpRuntimeError,
@@ -42,7 +42,7 @@ describe("AcpSessionManager runtime handles", () => {
     };
   }
 
-  it("reuses runtime session handles for repeat turns in the same manager process", async () => {
+  it("reuses runtime session handles after idle time in the same manager process", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
       id: "acpx",
@@ -63,18 +63,28 @@ describe("AcpSessionManager runtime handles", () => {
       mode: "prompt",
       requestId: "r1",
     });
-    await manager.runTurn({
-      provenance: "system",
-      cfg: baseCfg,
-      sessionKey: "agent:codex:acp:session-1",
-      text: "second",
-      mode: "prompt",
-      requestId: "r2",
-    });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 30 * 24 * 60 * 60 * 1_000);
+    try {
+      await manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "second",
+        mode: "prompt",
+        requestId: "r2",
+      });
+    } finally {
+      clock.mockRestore();
+    }
 
     expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
     expect(runtimeState.close).not.toHaveBeenCalled();
+    expect(manager.getObservabilitySnapshot().runtimeCache).toStrictEqual({
+      activeSessions: 1,
+      idleTtlMs: 0,
+      evictedTotal: 0,
+    });
   });
 
   it("disposes every retained runtime handle", async () => {
@@ -773,42 +783,78 @@ describe("AcpSessionManager runtime handles", () => {
     });
   });
 
-  it("passes persisted model runtime options into ensureSession after restart", async () => {
-    const runtimeState = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    const sessionKey = "agent:codex:acp:binding:demo-binding:default:model-restart";
-    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
-      return {
-        sessionKey: key,
-        storeSessionKey: key,
-        acp: {
-          ...readySessionMeta(),
-          runtimeOptions: {
-            model: "openai/gpt-5.4",
+  it.each([
+    { agent: "codex", model: "openai/gpt-5.4", supportsModel: true },
+    { agent: "claude", model: "anthropic/claude-sonnet-4-6", supportsModel: true },
+    { agent: "opencode", model: "inherited/default", supportsModel: false },
+  ])(
+    "preserves legacy $agent model state across status and turn restart",
+    async ({ agent, model, supportsModel }) => {
+      const runtimeState = createRuntime();
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      const sessionKey = `agent:${agent}:acp:binding:demo-binding:default:model-restart`;
+      const persisted = installPersistedSession(sessionKey, readySessionMeta({ agent }));
+      runtimeState.ensureSession.mockImplementation(async (input) => {
+        if (!supportsModel && input.modelExplicit) {
+          throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "Backend has no model capability");
+        }
+        // The shipped fallback returned no appliedModel, so initialization retained the request.
+        return {
+          sessionKey: input.sessionKey,
+          backend: "acpx",
+          runtimeSessionName: "legacy-runtime",
+          backendSessionId: "legacy-session",
+        };
+      });
+      if (!supportsModel) {
+        runtimeState.setConfigOption.mockRejectedValue(
+          new AcpRuntimeError("ACP_BACKEND_UNSUPPORTED_CONTROL", "Model replay is unsupported"),
+        );
+      }
+      const original = new AcpSessionManager();
+      await original.initializeSession({
+        cfg: baseCfg,
+        sessionKey,
+        agent,
+        mode: "persistent",
+        runtimeOptions: { model },
+        modelExplicit: supportsModel,
+      });
+      expect(persisted.currentMeta.runtimeOptions?.model).toBe(model);
+
+      for (const [index, manager] of [original, new AcpSessionManager()].entries()) {
+        await expect(manager.getSessionStatus({ cfg: baseCfg, sessionKey })).resolves.toMatchObject(
+          {
+            runtimeOptions: { model },
           },
-        },
-      };
-    });
+        );
+        const turn = manager.runTurn({
+          provenance: "system",
+          cfg: baseCfg,
+          sessionKey,
+          text: "Use the selected model",
+          mode: "prompt",
+          requestId: `model-replay-${index}`,
+        });
+        if (supportsModel) {
+          await turn;
+        } else {
+          await expect(turn).rejects.toMatchObject({ code: "ACP_BACKEND_UNSUPPORTED_CONTROL" });
+        }
+      }
 
-    const manager = new AcpSessionManager();
-    await manager.runTurn({
-      provenance: "system",
-      cfg: baseCfg,
-      sessionKey,
-      text: "after restart",
-      mode: "prompt",
-      requestId: "r-binding-restart-model",
-    });
-
-    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
-      sessionKey,
-      model: "openai/gpt-5.4",
-    });
-  });
+      expect(runtimeState.runTurn).toHaveBeenCalledTimes(supportsModel ? 2 : 0);
+      expect(runtimeState.setConfigOption).toHaveBeenCalledTimes(2);
+      expectRecordFields(mockCallArg(runtimeState.setConfigOption, 1), {
+        key: "model",
+        value: model,
+      });
+      expect(persisted.currentMeta.runtimeOptions?.model).toBe(model);
+    },
+  );
 
   it("passes persisted thinking runtime options into ensureSession after restart", async () => {
     const runtimeState = createRuntime();

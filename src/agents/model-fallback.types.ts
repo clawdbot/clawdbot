@@ -28,3 +28,11 @@ export type FallbackAttempt = {
   status?: number;
   code?: string;
 };
+
+/** Original route plus the outer fallback stage that admitted one real attempt. */
+export type ModelFallbackAttemptProvenance = {
+  requestedProvider: string;
+  requestedModel: string;
+  stage: "initial" | "fallback";
+  fallbackReason?: FailoverReason;
+};

@@ -371,7 +371,8 @@ export async function executeKimiWebSearchProviderTool(
   const model = resolveKimiModel(kimiConfig);
   const baseUrl = resolveKimiBaseUrl(kimiConfig, ctx.config);
   const cacheKey = buildSearchCacheKey(["kimi", query, baseUrl, model]);
-  const cached = readCachedSearchPayload(cacheKey);
+  const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
+  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
     return cached;
   }
@@ -412,7 +413,7 @@ export async function executeKimiWebSearchProviderTool(
     content: wrapWebContent(result.content),
     citations: result.citations,
   };
-  writeCachedSearchPayload(cacheKey, payload, resolveSearchCacheTtlMs(searchConfig));
+  writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
   return payload;
 }
 
@@ -498,11 +499,3 @@ export async function runKimiSearchProviderSetup(
   setProviderWebSearchPluginConfigValue(next, "moonshot", "model", model);
   return next;
 }
-
-export const testing = {
-  resolveKimiApiKey,
-  resolveKimiModel,
-  resolveKimiBaseUrl,
-  extractKimiCitations,
-  extractKimiToolResultContent,
-} as const;

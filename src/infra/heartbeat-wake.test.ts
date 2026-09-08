@@ -9,6 +9,7 @@ import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   requestHeartbeat,
+  requestHeartbeatAndWait,
   setHeartbeatWakeHandler as setRuntimeHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
 
@@ -231,7 +232,6 @@ describe("heartbeat-wake", () => {
       const scheduled = wake("interval", {
         agentId: "main",
         scheduledEveryMs: 5 * 60_000,
-        scheduledAnchorMs: 42_000,
         coalesceMs: 100,
       });
       const task = {
@@ -255,7 +255,6 @@ describe("heartbeat-wake", () => {
         reason: "heartbeat-task:job-inbox",
         agentId: "main",
         scheduledEveryMs: 5 * 60_000,
-        scheduledAnchorMs: 42_000,
         tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check inbox" }],
       });
     },
@@ -849,7 +848,7 @@ describe("heartbeat-wake", () => {
     setHeartbeatWakeHandler(handlerA);
 
     // Trigger the handler — it starts running but never finishes
-    requestHeartbeat(wake("interval", { coalesceMs: 0 }));
+    const recovered = requestHeartbeatAndWait(wake("interval", { coalesceMs: 0 }));
     await vi.advanceTimersByTimeAsync(1);
     expect(handlerA).toHaveBeenCalledTimes(1);
 
@@ -863,6 +862,7 @@ describe("heartbeat-wake", () => {
     requestHeartbeat(wake("interval", { agentId: "ready", coalesceMs: 0 }));
     await vi.advanceTimersByTimeAsync(1);
     expect(handlerB.mock.calls.map(([request]) => request.agentId)).toEqual([undefined, "ready"]);
+    await expect(recovered).resolves.toEqual({ status: "ran", durationMs: 1 });
 
     // Clean up the hanging promise
     resolveHang!();

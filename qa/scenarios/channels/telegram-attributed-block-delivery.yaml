@@ -1,0 +1,143 @@
+title: Telegram attributed HTML block delivery
+
+scenario:
+  id: telegram-attributed-block-delivery
+  surface: channels
+  coverage:
+    primary:
+      - channels.outbound-group-reply
+  objective: Preserve attributed HTML block boundaries and literal code in Telegram message-tool replies while recording auxiliary progress.
+  gatewayConfigPatch:
+    messages:
+      groupChat:
+        visibleReplies: message_tool
+  successCriteria:
+    - The mock provider calls message(action=send) with the complete HTML and literal code.
+    - Default Telegram delivery sends one payload reply with block boundaries and the correct surviving code; auxiliary progress remains recorded.
+    - Each group turn settles with exactly one durably recorded successful message-tool result.
+  docsRefs:
+    - docs/channels/telegram.md
+    - docs/channels/groups.md
+  codeRefs:
+    - src/infra/outbound/sanitize-text.ts
+    - extensions/telegram/src/outbound-adapter.ts
+    - extensions/telegram/src/telegram-text-delivery.ts
+  execution:
+    kind: flow
+    retryCount: 0
+    channel: telegram
+    suiteIsolation: isolated
+    isolationReason: The message-tool-only group policy and per-case session counts belong to this delivery proof.
+    summary: Drive attributed block and hidden-code payloads through the Gateway, mock provider, and Telegram Bot API recorder.
+    config:
+      requiredProviderMode: mock-openai
+      requiredChannelDriver: crabline
+      senderId: "100001"
+      replyPrefix: before
+      cases:
+        - name: attributed paragraph
+          conversationId: "-1001234567891"
+          text: 'before<p title="a>b">inside</p>after `<p class="literal">code</p>`'
+          expected: "before\ninside\nafter <code>&lt;p class=\"literal\"&gt;code&lt;/p&gt;</code>"
+        - name: attributed division
+          conversationId: "-1001234567892"
+          text: 'before<div title=''a>b''>inside</div>after `<p class="literal">code</p>`'
+          expected: "before\ninside\nafter <code>&lt;p class=\"literal\"&gt;code&lt;/p&gt;</code>"
+        - name: consumed hidden code before visible code
+          conversationId: "-1001234567893"
+          text: 'before<a href="`hidden`">click</a> then `visible`'
+          expected: "beforeclick then <code>visible</code>"
+        - name: consumed code between visible spans
+          conversationId: "-1001234567894"
+          text: 'before `first` <a href="`hidden`">click</a> then `last`'
+          expected: "before <code>first</code> click then <code>last</code>"
+
+flow:
+  steps:
+    - name: delivers sanitized HTML and surviving code through the default Telegram transport
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode && transport.id === config.requiredChannelDriver"
+            message: this delivery proof requires the mock provider and Crabline transport
+        - assert:
+            expr: "env.cfg.channels?.telegram?.richMessages !== true && env.cfg.channels?.telegram?.accounts?.[transport.accountId]?.richMessages !== true"
+            message: this scenario must exercise the default non-rich Telegram path
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - set: proofs
+          value: []
+        - forEach:
+            items: { ref: config.cases }
+            item: fixture
+            actions:
+              - set: delivery
+                value:
+                  expr: "transport.buildAgentDelivery({ target: `group:${fixture.conversationId}` })"
+              - set: sessionKey
+                value:
+                  expr: "buildAgentSessionKey({ agentId: 'qa', channel: delivery.channel, accountId: transport.accountId, peer: { kind: 'group', id: delivery.replyTo }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
+              - set: requestCursorBefore
+                value:
+                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+              - sendInbound:
+                  conversation:
+                    id: { ref: fixture.conversationId }
+                    kind: group
+                    title: QA HTML Block Delivery
+                  senderId: { ref: config.senderId }
+                  senderName: QA Delivery Operator
+                  text:
+                    expr: "`@openclaw qa group visible reply tool check. Reply exactly: ${fixture.text}`"
+              - call: waitForCondition
+                saveAs: toolRequest
+                args:
+                  - lambda:
+                      async: true
+                      params: []
+                      expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).find((request) => request.plannedToolName === 'message' && request.plannedToolArgs?.action === 'send' && request.plannedToolArgs?.message === fixture.text)"
+                  - 45000
+              - assert:
+                  expr: toolRequest.plannedToolArgs.message === fixture.text
+                  message: the provider must pass the entire payload, including literal backticks, to the message tool
+              - call: waitForOutboundMessage
+                saveAs: outbound
+                args:
+                  - ref: state
+                  - lambda:
+                      params: [candidate]
+                      expr: "candidate.direction === 'outbound' && candidate.conversation.id === fixture.conversationId && candidate.conversation.kind === 'group' && !candidate.threadId && candidate.text.startsWith(config.replyPrefix)"
+                  - 45000
+              - assert:
+                  expr: outbound.text === fixture.expected
+                  message:
+                    expr: "`expected ${JSON.stringify(fixture.expected)}, received ${JSON.stringify(outbound.text)}`"
+              - call: waitForCondition
+                args:
+                  - lambda:
+                      async: true
+                      params: []
+                      expr: "env.gateway.call('sessions.list', {}, { timeoutMs: 30000 }).then((result) => result.sessions?.find((session) => session.key === sessionKey && session.hasActiveRun === false))"
+                  - 45000
+                  - 100
+              - call: readSessionTranscriptSummary
+                saveAs: transcriptSummary
+                args: [{ ref: env }, { ref: sessionKey }]
+              - assert:
+                  expr: transcriptSummary.successfulToolCallCounts.message === 1
+                  message: the group turn must record one successful message-tool result
+              - set: replies
+                value:
+                  expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === fixture.conversationId)"
+              - set: payloadReplies
+                value:
+                  expr: "replies.filter((message) => message.text.startsWith(config.replyPrefix))"
+              - assert:
+                  expr: payloadReplies.length === 1
+                  message: the group turn must deliver exactly one payload reply
+              - set: proofs
+                value:
+                  expr: "proofs.concat([{ case: fixture.name, sessionKey, providerToolText: toolRequest.plannedToolArgs.message, botApiText: outbound.text, payloadReplies: payloadReplies.length, auxiliaryChannelEvents: replies.filter((message) => !message.text.startsWith(config.replyPrefix)).map((message) => ({ id: message.id, text: message.text, deleted: message.deleted === true })), successfulMessageTools: transcriptSummary.successfulToolCallCounts.message }])"
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', transport: 'Crabline Telegram Bot API', richMessages: 'default', replyCorrelation: 'stable input prefix', cases: proofs })"

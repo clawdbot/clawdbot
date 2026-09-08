@@ -1,4 +1,6 @@
+import { clearTaskRegistrySqliteForTests } from "../test-utils/task-registry-sqlite.js";
 import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
+import type { TaskRegistryDeliveryRuntime } from "./task-registry-state.js";
 import { createTaskRecord as createTaskRecordOrNull } from "./task-registry.js";
 import type { TaskEventRecord, TaskRecord } from "./task-registry.types.js";
 
@@ -36,17 +38,12 @@ export function createAcpTaskRecord(
   });
 }
 
-type TaskRegistryDeliveryRuntime = Pick<
-  typeof import("./task-registry-delivery-runtime.js"),
-  "sendMessage"
->;
-
 type TaskRegistryTestApi = {
   maybeDeliverTaskStateChangeUpdate(
     taskId: string,
     latestEvent?: TaskEventRecord,
   ): Promise<TaskRecord | null>;
-  resetTaskRegistryForTests(opts?: { persist?: boolean }): void;
+  resetTaskRegistryForTests(): void;
   resetTaskRegistryDeliveryRuntimeForTests(): void;
   setTaskRegistryDeliveryRuntimeForTests(runtime: TaskRegistryDeliveryRuntime): void;
   resetTaskRegistryControlRuntimeForTests(): void;
@@ -71,7 +68,10 @@ export async function maybeDeliverTaskStateChangeUpdate(
 }
 
 export function resetTaskRegistryForTests(opts?: { persist?: boolean }): void {
-  getTestApi().resetTaskRegistryForTests(opts);
+  getTestApi().resetTaskRegistryForTests();
+  if (opts?.persist !== false) {
+    clearTaskRegistrySqliteForTests("task");
+  }
 }
 
 export function resetTaskRegistryDeliveryRuntimeForTests(): void {

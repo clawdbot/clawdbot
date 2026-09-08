@@ -1,11 +1,9 @@
 // Bundles MCP metadata exposed by plugins for package output.
-import fs from "node:fs";
 import path from "node:path";
 import { isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { isRecord } from "../utils.js";
 import {
@@ -25,6 +23,7 @@ import { encodePluginInstallDirName } from "./install-paths.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
+import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
 
 export type BundleMcpServerConfig = Record<string, unknown>;
 
@@ -80,13 +79,12 @@ function resolveBundleMcpConfigPaths(params: {
   bundleFormat: PluginBundleFormat;
 }): string[] {
   if (params.bundleFormat === "agent") {
-    return fs.existsSync(path.join(params.rootDir, "mcp.json")) ? ["mcp.json"] : [];
+    return pluginCacheExistsSync(path.join(params.rootDir, "mcp.json")) ? ["mcp.json"] : [];
   }
   const declared = normalizeBundlePathList(params.raw.mcpServers);
-  const defaults = fs.existsSync(path.join(params.rootDir, ".mcp.json")) ? [".mcp.json"] : [];
-  if (params.bundleFormat === "claude") {
-    return mergeBundlePathLists(defaults, declared);
-  }
+  const defaults = pluginCacheExistsSync(path.join(params.rootDir, ".mcp.json"))
+    ? [".mcp.json"]
+    : [];
   return mergeBundlePathLists(defaults, declared);
 }
 
@@ -393,41 +391,39 @@ function loadBundleFileBackedMcpConfig(params: {
 } {
   const rootDir =
     params.bundleFormat === "agent"
-      ? fs.realpathSync(params.rootDir)
+      ? // SAFETY: The required Agent Plugins manifest already established this canonical root.
+        pluginCacheRealpathSync(params.rootDir)!
       : normalizeBundlePath(params.rootDir);
   const absolutePath = path.resolve(rootDir, params.relativePath);
-  const result = readRootJsonObjectSync({
+  const result = readBundleJsonObject({
     rootDir,
     relativePath: params.relativePath,
-    boundaryLabel: "plugin root",
-    rejectHardlinks: true,
+    onOpenFailure: (failure) =>
+      resolveBundleJsonOpenFailure({
+        failure,
+        relativePath: params.relativePath,
+        allowMissing: params.bundleFormat !== "agent",
+      }),
   });
   if (!result.ok) {
-    if (result.reason === "open") {
-      return {
-        config: { mcpServers: {}, prepareDataDirsByServer: {} },
-        diagnostics:
-          result.failure.reason === "path"
-            ? params.bundleFormat === "agent"
-              ? [`unable to read ${params.relativePath}: path`]
-              : []
-            : [`unable to read ${params.relativePath}: ${result.failure.reason}`],
-      };
-    }
     return {
       config: { mcpServers: {}, prepareDataDirsByServer: {} },
-      diagnostics: [`unable to read ${params.relativePath}: ${result.error}`],
+      diagnostics: [
+        result.reason === "open"
+          ? result.error
+          : `unable to read ${params.relativePath}: ${result.error}`,
+      ],
     };
   }
   const agentLoaded =
     params.bundleFormat === "agent"
       ? extractAgentMcpServerMap({
-          raw: result.value,
+          raw: result.raw,
           pluginId: params.pluginId,
           rootDir,
         })
       : undefined;
-  const servers = agentLoaded?.servers ?? extractMcpServerMap(result.value);
+  const servers = agentLoaded?.servers ?? extractMcpServerMap(result.raw);
   const baseDir = normalizeBundlePath(path.dirname(absolutePath));
   return {
     config: {
@@ -456,29 +452,7 @@ function loadBundleFileBackedMcpConfig(params: {
   };
 }
 
-function loadBundleInlineMcpConfig(params: {
-  raw: Record<string, unknown>;
-  baseDir: string;
-}): BundleMcpRuntimeConfig {
-  if (!isRecord(params.raw.mcpServers)) {
-    return { mcpServers: {}, prepareDataDirsByServer: {} };
-  }
-  const baseDir = normalizeBundlePath(params.baseDir);
-  const servers = extractMcpServerMap(params.raw.mcpServers);
-  return {
-    mcpServers: Object.fromEntries(
-      Object.entries(servers).map(([serverName, server]) => [
-        serverName,
-        absolutizeBundleMcpServer({ rootDir: baseDir, baseDir, server }),
-      ]),
-    ),
-    prepareDataDirsByServer: Object.fromEntries(
-      Object.keys(servers).map((serverName) => [serverName, null]),
-    ),
-  };
-}
-
-function loadNativePluginMcpConfig(params: {
+function loadRootRelativeMcpConfig(params: {
   rootDir: string;
   mcpServers: Record<string, BundleMcpServerConfig>;
 }): { config: BundleMcpRuntimeConfig; diagnostics: string[] } {
@@ -543,10 +517,10 @@ function loadBundleMcpConfig(params: {
   if (params.bundleFormat !== "agent") {
     merged = applyMergePatch(
       merged,
-      loadBundleInlineMcpConfig({
-        raw: manifestLoaded.raw,
-        baseDir: params.rootDir,
-      }),
+      loadRootRelativeMcpConfig({
+        rootDir: params.rootDir,
+        mcpServers: extractMcpServerMap(manifestLoaded.raw.mcpServers),
+      }).config,
     ) as BundleMcpRuntimeConfig;
   }
 
@@ -565,7 +539,7 @@ export function inspectNativePluginMcpRuntimeSupport(params: {
   rootDir: string;
   mcpServers: Record<string, BundleMcpServerConfig>;
 }): BundleMcpRuntimeSupport {
-  return inspectMcpServerRuntimeSupport(loadNativePluginMcpConfig(params));
+  return inspectMcpServerRuntimeSupport(loadRootRelativeMcpConfig(params));
 }
 
 function inspectMcpServerRuntimeSupport(loaded: {
@@ -613,7 +587,7 @@ export function loadEnabledBundleMcpConfig(params: {
     loadBundleConfig: loadBundleMcpConfig,
     loadNativePluginConfig: ({ record }) =>
       record.mcpServers
-        ? loadNativePluginMcpConfig({
+        ? loadRootRelativeMcpConfig({
             rootDir: record.rootDir,
             mcpServers: record.mcpServers,
           })

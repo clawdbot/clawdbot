@@ -6,7 +6,10 @@ description: Regenerate OpenClaw release changelog sections from git history bef
 # OpenClaw Changelog Update
 
 Use this for changelog rewrites and GitHub release-note source text. For regular
-beta/stable, run it after the Code SHA passes Full Release Validation. For
+beta/stable, prepare complete notes before final-source qualification when
+possible; Code SHA may then also be Release SHA. Editorial work may overlap
+Code validation. If notes change afterward, a genuine CHANGELOG-only descendant
+may use the existing product-evidence reuse policy. For
 extended-stable, run it before final exact-head validation and tagging. Do not
 rerun it for tooling retries, resumed publication, or promotion.
 Use it with `release-openclaw-maintainer`; this skill owns changelog content,
@@ -27,8 +30,11 @@ every human `Thanks @...` attribution.
   the target; a newer but divergent tag is not a valid history boundary. Use
   an explicit shipped/main-closeout SHA only when it is also reachable from the
   target.
-- Target ref: the exact green Code SHA. The changelog commit created from this
-  input becomes the Release SHA.
+- Target ref: the exact product-complete history being documented. Its
+  contribution-record target must be an ancestor of the final release target;
+  it need not name a not-yet-created changelog commit. Include any later fixes
+  before finalizing notes. Final notes may be committed before qualification,
+  or afterward as a CHANGELOG-only descendant of a green Code SHA.
 - Canonical main ref: current `origin/main`, fetched before verification. Release
   notes cite the original merged main PR when the same work is carried by a
   backport. A release-branch PR is used only while no forward-port exists on
@@ -36,15 +42,16 @@ every human `Thanks @...` attribution.
 
 ## Workflow
 
-1. Confirm the release branch is at the fully validated Code SHA:
+1. Confirm the release branch and exact history target:
    - `git fetch --tags origin`
    - confirm clean `git status -sb`
-   - record `git rev-parse HEAD` as the Code SHA
-   - record the successful Full Release Validation run id and attempt
-   - stop if any product/version/backport change is still pending
+   - record `git rev-parse HEAD` as the history target
+   - record the Full Release Validation run id and attempt when qualification already exists
+   - finish pending product/version/backport changes before freezing final source; refresh the inventory for actual changes
 2. Audit history, including direct commits:
-   - `git log --first-parent --date=iso-strict --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
-   - `git log --first-parent --grep='(#' --date=short --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
+   - `git log --topo-order --date=iso-strict --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
+   - `git log --topo-order --grep='(#' --date=short --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
+   - Include every commit reachable from the target but not the base, including merged side branches. Resolve PR associations before deduplicating and subtracting shipped records; retain the existing revert exclusions.
    - also inspect `--since='24 hours ago'` when main moved during the release.
 3. Generate the complete contribution record and editorial manifest before
    writing grouped prose:
@@ -167,13 +174,17 @@ every human `Thanks @...` attribution.
      prose but are never rendered as a public `#### Direct commits` dump. Add
      direct-commit credit to a grouped bullet only when it shares an explicit
      closing issue reference or at least two distinctive subject terms
-   - the verifier rejects `docs`, `test`, `refactor`, `ci`, `build`, `chore`,
-     and `style` PRs in Highlights, Changes, or Fixes. Keep those internal
-     contributions in the complete PR record, but do not give them editorial
-     release-note space
-   - classify internal-only work from conventional prefixes and clear title
-     signals such as `QA`, `test`, `docs`, `refactor`, `lint`, or `CI`; an
-     untyped title is not automatically editorial
+   - the verifier rejects ordinary `docs`, `test`, `refactor`, `ci`, `build`,
+     `chore`, and `style` PRs in Highlights, Changes, or Fixes. An explicit
+     Conventional Commits `!` marker makes any type editorial-eligible; include
+     its verified user-facing breaking change and migration guidance with the
+     original PR ref and credit. Keep other internal contributions only in the
+     complete PR record
+   - classify conventional titles from their declared type and scope, not
+     incidental words such as `doc` or `build` in their descriptions. For
+     untyped titles, retain internal-work signals such as `QA`, `test`, `docs`,
+     `refactor`, `lint`, or `CI`; eligibility never replaces the source audit
+     that establishes a user-visible outcome
    - do not add GHSA references, advisory IDs, or security advisory slugs to
      changelog entries or GitHub release-note text unless explicitly requested
    - never thank bots, `@claude`, `@codex`, `@openclaw`, `@clawsweeper`, or `@steipete`
@@ -254,18 +265,20 @@ every human `Thanks @...` attribution.
   the immutable attached release evidence; never compact a fitting full
   contribution record just to preserve the optional tail
 - `pnpm release:candidate` performs this deterministic render check from the
-  exact tag before it dispatches Full Release Validation, including when local
+  exact target before it dispatches Full Release Validation, including when local
   generated checks are explicitly skipped
 - `git diff --check`
 - for docs/changelog-only changes, no broad tests are required
 - stage `CHANGELOG.md` and commit with `git commit -m "docs(changelog): refresh YYYY.M.PATCH notes"`
-- record the new commit as the Release SHA and require
-  `git diff --name-only <code-sha>..<release-sha>` to print only
-  `CHANGELOG.md`
 - push the release branch without rebasing it onto moving `main`
-- dispatch SHA-pinned Full Release Validation for the Release SHA with evidence
-  reuse enabled. It must select `changelog-only-release-v1`; any other changed
-  path returns the release to the Code SHA validation loop
+- when all fixes and final notes are committed before fresh full qualification,
+  record that commit as both Code SHA and Release SHA; use the same successful
+  full parent/attempt and its exact publication bytes for both roles
+- only when notes change after Code qualification, require
+  `git diff --name-only <code-sha>..<release-sha>` to print exactly
+  `CHANGELOG.md` before optionally using `changelog-only-release-v1`. That path
+  retains green Code proof and qualifies new Release SHA package bytes. Any
+  other changed path requires fresh product qualification
 
 ## Extended-Stable Variant
 

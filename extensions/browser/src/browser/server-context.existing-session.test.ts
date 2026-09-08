@@ -17,8 +17,37 @@ afterAll(() => {
 
 const chromeMcpMock = vi.hoisted(() => ({
   closeChromeMcpSession: vi.fn(async () => true),
-  countChromeMcpTabs: vi.fn(async () => 1),
-  ensureChromeMcpAvailable: vi.fn(async () => {}),
+  countChromeMcpTabs: vi.fn(
+    async (
+      _profileName: string,
+      _profile: unknown,
+      _options?: { ephemeral?: boolean; signal?: AbortSignal },
+    ) => 1,
+  ),
+  ensureChromeMcpAvailable: vi.fn(
+    async (
+      profileName: string,
+      profile: unknown,
+      options?: {
+        signal?: AbortSignal;
+        pageProbe?: { onResult: (tabCount: number | null) => void };
+      },
+    ) => {
+      if (!options?.pageProbe) {
+        return;
+      }
+      try {
+        options.pageProbe.onResult(
+          await chromeMcpMock.countChromeMcpTabs(profileName, profile, {
+            ephemeral: true,
+            signal: options.signal,
+          }),
+        );
+      } catch {
+        options.pageProbe.onResult(null);
+      }
+    },
+  ),
   focusChromeMcpTab: vi.fn(async () => {}),
   listChromeMcpTabs: vi.fn(async () => [
     { targetId: "7", title: "", url: "https://example.com", type: "page" },
@@ -185,7 +214,6 @@ describe("browser server-context existing-session profile", () => {
     const state = makeState();
     const ctx = createBrowserRouteContext({ getState: () => state });
 
-    vi.mocked(chromeMcp.ensureChromeMcpAvailable).mockResolvedValueOnce();
     vi.mocked(chromeMcp.countChromeMcpTabs).mockRejectedValueOnce(new Error("No page selected"));
 
     const profiles = await ctx.listProfiles();
@@ -208,6 +236,7 @@ describe("browser server-context existing-session profile", () => {
       ephemeral: true,
       timeoutMs: 300,
       signal: expect.any(AbortSignal),
+      pageProbe: { onResult: expect.any(Function) },
     });
     const [, countedProfile, countOptions] =
       (

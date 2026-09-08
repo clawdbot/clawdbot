@@ -2,35 +2,18 @@
 
 import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
-import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { SessionListOptions, SessionListSnapshot } from "../../lib/sessions/index.ts";
-import { page, type SessionsRouteData } from "./route.ts";
-
-const result: SessionsListResult = {
-  ts: 1,
-  path: "",
-  count: 0,
-  defaults: { modelProvider: null, model: null, contextTokens: null },
-  sessions: [],
-};
+import type { SessionListOptions } from "../../lib/sessions/index.ts";
+import { page, sessionsPageListQuery, type SessionsRouteData } from "./route.ts";
 
 async function loadSessionsRoute(options: {
   search: string;
   scopeId: string | null;
   expectedQuery: SessionListOptions;
 }) {
-  let snapshot: SessionListSnapshot = {
-    result: null,
-    agentId: null,
-    loading: false,
-    error: null,
-  };
   const list = vi.fn();
-  const listSnapshot = vi.fn(() => snapshot);
-  const refreshList = vi.fn(async () => {
-    snapshot = { result, agentId: options.scopeId, loading: false, error: null };
-  });
+  const listSnapshot = vi.fn();
+  const refreshList = vi.fn();
   const context = {
     gateway: { snapshot: { phase: "connected", client: {} } },
     sessions: { list, listSnapshot, refreshList },
@@ -48,10 +31,22 @@ async function loadSessionsRoute(options: {
 
   const data = (await page.loader?.(context, loaderOptions)) as SessionsRouteData;
 
-  expect(refreshList).toHaveBeenCalledWith({ ...options.expectedQuery, force: true });
-  expect(listSnapshot).toHaveBeenLastCalledWith(options.expectedQuery);
+  expect(refreshList).not.toHaveBeenCalled();
+  expect(listSnapshot).not.toHaveBeenCalled();
   expect(list).not.toHaveBeenCalled();
-  expect(data).toMatchObject({ result, loading: false, error: null });
+  expect(data).toEqual({
+    expandedSessionKey: options.expectedQuery.search ?? null,
+    statusFilter: options.expectedQuery.archivedFilter,
+  });
+  expect(
+    sessionsPageListQuery(context, {
+      statusFilter: data.statusFilter,
+      deepLinkSessionKey: data.expandedSessionKey,
+      includeGlobal: true,
+      includeUnknown: false,
+      limit: 50,
+    }),
+  ).toEqual(options.expectedQuery);
 }
 
 describe("sessions route", () => {
@@ -112,7 +107,7 @@ describe("sessions route", () => {
         agentId: "research",
       },
     },
-  ])("loads the managed $name without a raw list", async (testCase) => {
+  ])("prepares the $name without issuing outside the page owner", async (testCase) => {
     await loadSessionsRoute(testCase);
   });
 });

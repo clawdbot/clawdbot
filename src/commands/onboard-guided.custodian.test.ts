@@ -1,323 +1,123 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
-import { resetLogger } from "../logging/logger.js";
-import { loggingState } from "../logging/state.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
-import { WizardCancelledError, type WizardPrompter } from "../wizard/prompts.js";
-import {
-  runGuidedOnboarding as runGuidedOnboardingImpl,
-  type GuidedOnboardingDeps,
-} from "./onboard-guided.js";
-
-const runGuidedOnboarding = (...[opts, ...rest]: Parameters<typeof runGuidedOnboardingImpl>) =>
-  runGuidedOnboardingImpl({ agentName: "main", ...opts }, ...rest);
-
-const restoreTerminalState = vi.hoisted(() => vi.fn());
-const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn());
-const ensureAuthProfileStore = vi.hoisted(() =>
-  vi.fn(() => ({ version: 1 as const, profiles: {} })),
-);
-const detectAvailableSetupProviderIds = vi.hoisted(() => vi.fn());
-
-vi.mock("../../packages/terminal-core/src/restore.js", () => ({ restoreTerminalState }));
-
-vi.mock("./auth-choice-prompt.js", () => ({
-  promptAuthChoiceGrouped,
-}));
-
-vi.mock("../agents/auth-profiles.runtime.js", () => ({ ensureAuthProfileStore }));
-vi.mock("../plugins/provider-setup-availability.js", () => ({
-  detectAvailableSetupProviderIds,
-}));
-
-vi.mock("./onboard-interactive-runner.js", async (importActual) => {
-  const actual = await importActual<typeof import("./onboard-interactive-runner.js")>();
-  return { ...actual, hasInteractiveOnboardingTty: () => true };
-});
-
-const readConfigFileSnapshot = vi.hoisted(() =>
-  vi.fn(async () => ({
-    exists: false,
-    valid: true,
-    path: "/tmp/openclaw.json",
-    issues: [] as Array<{ path?: string; message: string }>,
-    config: {},
-  })),
-);
-const localOnboarding = vi.hoisted(() => {
-  const states = new Map<string, LocalOnboardingState>();
-  const persisted = { config: undefined as OpenClawConfig | undefined };
-  return {
-    states,
-    persisted,
-    read: vi.fn((configPath: string) => states.get(configPath)),
-    readForConfig: vi.fn((configPath: string, config: OpenClawConfig) => {
-      const state = states.get(configPath);
-      return state?.securityAcknowledgedAt === config.wizard?.securityAcknowledgedAt
-        ? state
-        : undefined;
-    }),
-    begin: vi.fn(
-      (params: {
-        configPath: string;
-        workspace: string;
-        securityAcknowledgedAt: string;
-        replace?: boolean;
-        expectedRunId?: string;
-        runId: string;
-      }) => {
-        const existing = states.get(params.configPath);
-        if (existing && (!params.replace || existing.runId !== params.expectedRunId)) {
-          return existing;
-        }
-        const pending: LocalOnboardingState = {
-          version: 1,
-          status: "pending",
-          runId: params.runId,
-          configPath: params.configPath,
-          workspace: params.workspace,
-          securityAcknowledgedAt: params.securityAcknowledgedAt,
-          startedAtMs: 1,
-        };
-        states.set(params.configPath, pending);
-        persisted.config = {
-          ...persisted.config,
-          agents: {
-            ...persisted.config?.agents,
-            defaults: { ...persisted.config?.agents?.defaults, workspace: pending.workspace },
-          },
-          wizard: {
-            ...persisted.config?.wizard,
-            securityAcknowledgedAt: pending.securityAcknowledgedAt,
-          },
-        };
-        return pending;
-      },
-    ),
-    complete: vi.fn((params: { configPath: string; runId: string }) => {
-      const current = states.get(params.configPath);
-      if (current?.status !== "pending" || current.runId !== params.runId) {
-        return false;
-      }
-      states.set(params.configPath, { ...current, status: "completed", completedAtMs: 2 });
-      return true;
-    }),
-  };
-});
-const withConfigMutationExclusive = vi.hoisted(() =>
-  vi.fn(
-    async (effect: (config: OpenClawConfig) => Promise<unknown>) =>
-      await effect(localOnboarding.persisted.config ?? {}),
-  ),
-);
-
-const logPathTracker = createSuiteLogPathTracker("openclaw-guided-onboard-log-");
-
-vi.mock("../config/config.js", () => ({ readConfigFileSnapshot, withConfigMutationExclusive }));
-vi.mock("../state/local-onboarding-state.js", () => ({
-  readLocalOnboardingState: localOnboarding.read,
-  readLocalOnboardingStateForConfig: localOnboarding.readForConfig,
-  beginLocalOnboarding: localOnboarding.begin,
-  completeLocalOnboarding: localOnboarding.complete,
-}));
-vi.mock("./onboard-agent.js", () => ({
-  ensureOnboardingAgent: async ({ config }: { config: OpenClawConfig }) => ({
-    config: {
-      ...config,
-      agents: { ...config.agents, list: [{ id: "main", default: true }] },
-    },
-    agentId: "main",
-    bootstrapPending: true,
-  }),
-  validateFirstOnboardingAgentName: () => undefined,
-}));
-
-vi.mock("./onboard-helpers.js", () => ({
-  DEFAULT_WORKSPACE: "/tmp/openclaw-workspace",
-  printWizardHeader: vi.fn(),
-}));
-
-function makeRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn() as unknown as RuntimeEnv["exit"],
-  };
-}
-
-function candidate(kind: "claude-cli" | "codex-cli", label: string) {
-  return {
-    kind,
-    label,
-    detail: "logged in",
-    modelRef: kind === "claude-cli" ? "claude-cli/opus" : "openai/gpt-5.5",
-    recommended: false,
-    credentials: true,
-  } as const;
-}
-
-function existingModelCandidate() {
-  return {
-    kind: "existing-model",
-    label: "Current model",
-    detail: "acme/workspace-model — already configured",
-    modelRef: "acme/workspace-model",
-    recommended: false,
-    credentials: true,
-  } as const;
-}
-
-function detection(
-  overrides: Partial<Awaited<ReturnType<NonNullable<GuidedOnboardingDeps["detect"]>>>> = {},
-) {
-  return {
-    candidates: [candidate("claude-cli", "Claude Code")],
-    unavailableCandidates: [],
-    manualProviders: [],
-    authOptions: [],
-    recommendedInstalls: [],
-    workspace: "/tmp/openclaw-workspace",
-    setupComplete: false,
-    ...overrides,
-  };
-}
-
-function setupApplyResult() {
-  return {
-    configPath: "/tmp/openclaw.json",
-    configHashBefore: null,
-    configHashAfter: null,
-    bootstrapPending: false,
-    workspaceReady: true,
-    gateway: { status: "ready" as const, action: "installed" as const },
-    lines: [],
-  };
-}
-
-function pendingLocalSetup(params: {
-  runId: string;
-  workspace: string;
-  securityAcknowledgedAt?: string;
-}): LocalOnboardingState {
-  const pending: LocalOnboardingState = {
-    version: 1,
-    status: "pending",
-    configPath: "/tmp/openclaw.json",
-    runId: params.runId,
-    workspace: params.workspace,
-    securityAcknowledgedAt: params.securityAcknowledgedAt ?? "2026-01-01T00:00:00.000Z",
-    startedAtMs: 1,
-  };
-  localOnboarding.states.set(pending.configPath, pending);
-  return pending;
-}
-
-function setupDeps(params: {
-  prompter: WizardPrompter;
-  detect?: GuidedOnboardingDeps["detect"];
-  activate?: GuidedOnboardingDeps["activate"];
-  runSystemAgentChat?: GuidedOnboardingDeps["runSystemAgentChat"];
-  persistRiskAcknowledgement?: GuidedOnboardingDeps["persistRiskAcknowledgement"];
-  runSetupMemoryImportStep?: GuidedOnboardingDeps["runSetupMemoryImportStep"];
-  runAppRecommendations?: GuidedOnboardingDeps["runAppRecommendations"];
-  runBrowserHandoff?: GuidedOnboardingDeps["runBrowserHandoff"];
-  applySetup?: GuidedOnboardingDeps["applySetup"];
-  handoffMode?: GuidedOnboardingDeps["handoffMode"];
-}) {
-  const runSystemAgentChat = vi.fn<NonNullable<GuidedOnboardingDeps["runSystemAgentChat"]>>(
-    params.runSystemAgentChat ?? (async () => {}),
-  );
-  const runSetupMemoryImportStep = vi.fn<
-    NonNullable<GuidedOnboardingDeps["runSetupMemoryImportStep"]>
-  >(params.runSetupMemoryImportStep ?? (async () => ({ status: "skipped", providers: [] })));
-  return {
-    createPrompter: () => params.prompter,
-    persistAccessMode: vi.fn(async () => undefined),
-    applySetup: params.applySetup ?? vi.fn(async () => setupApplyResult()),
-    launchHatchTui: vi.fn(async () => undefined),
-    listManualOptions: vi.fn(async () => ({
-      manualProviders: [],
-      authOptions: [],
-      workspace: "/tmp/openclaw-workspace",
-      setupComplete: false,
-    })),
-    detect: params.detect ?? vi.fn(async () => detection()),
-    activate:
-      params.activate ??
-      vi.fn<NonNullable<GuidedOnboardingDeps["activate"]>>(async (activation) => {
-        activation.onCommitStarted?.(localOnboarding.persisted.config ?? {});
-        return {
-          ok: true as const,
-          modelRef: "claude-cli/opus",
-          latencyMs: 1250,
-          lines: ["Workspace: /tmp/work", "Gateway: running"],
-        };
-      }),
-    persistRiskAcknowledgement:
-      params.persistRiskAcknowledgement ??
-      vi.fn(async (config: OpenClawConfig) => {
-        localOnboarding.persisted.config = config;
-        return config.wizard?.securityAcknowledgedAt;
-      }),
-    runSetupMemoryImportStep,
-    runAppRecommendations:
-      params.runAppRecommendations ??
-      vi.fn(async ({ config }) => ({ config, commitResult: vi.fn() })),
-    runBrowserHandoff:
-      params.runBrowserHandoff ??
-      (vi.fn(async () => ({
-        handedOff: false as const,
-        reason: "timeout" as const,
-      })) as GuidedOnboardingDeps["runBrowserHandoff"]),
-    runSystemAgentChat,
-    platform: "linux",
-    ...(params.handoffMode ? { handoffMode: params.handoffMode } : {}),
-  } satisfies GuidedOnboardingDeps;
-}
+import { WizardCancelledError } from "../wizard/prompts.js";
+import { setupGuidedCustodianTestSuite } from "./onboard-guided.custodian.test-support.js";
+import type { GuidedOnboardingDeps } from "./onboard-guided.js";
 
 describe("runGuidedOnboarding custodian flow", () => {
-  beforeAll(async () => {
-    await logPathTracker.setup();
-  });
+  const {
+    candidate,
+    detection,
+    existingModelCandidate,
+    ensureAuthProfileStore,
+    localOnboarding,
+    makeRuntime,
+    pendingLocalSetup,
+    promptAuthChoiceGrouped,
+    readConfigFileSnapshot,
+    runGuidedOnboarding,
+    setupApplyResult,
+    setupDeps,
+    withConfigMutationExclusive,
+  } = setupGuidedCustodianTestSuite();
 
-  beforeEach(() => {
-    localOnboarding.states.clear();
-    localOnboarding.persisted.config = undefined;
-    localOnboarding.read.mockClear();
-    localOnboarding.readForConfig.mockClear();
-    localOnboarding.begin.mockClear();
-    localOnboarding.complete.mockClear();
-    withConfigMutationExclusive
-      .mockReset()
-      .mockImplementation(async (effect) => await effect(localOnboarding.persisted.config ?? {}));
-    restoreTerminalState.mockClear();
-    promptAuthChoiceGrouped.mockReset();
-    ensureAuthProfileStore.mockClear();
-    detectAvailableSetupProviderIds.mockReset();
-    detectAvailableSetupProviderIds.mockResolvedValue(new Set());
-    readConfigFileSnapshot.mockReset();
-    readConfigFileSnapshot.mockImplementation(async () => {
-      return {
-        exists: localOnboarding.persisted.config !== undefined,
-        valid: true,
-        path: "/tmp/openclaw.json",
-        issues: [],
-        config: localOnboarding.persisted.config ?? {},
+  it.each(["quick", "custom"] as const)(
+    "waits for an explicit detected-provider choice in the %s lane",
+    async (lane) => {
+      const prompter = createWizardPrompter({}, { selectValues: [lane, "full"] });
+      let selected = false;
+      const activate = vi.fn<NonNullable<GuidedOnboardingDeps["activate"]>>(async (params) => {
+        expect(selected).toBe(true);
+        params.onCommitStarted?.(localOnboarding.persisted.config ?? {});
+        return { ok: true, modelRef: "fixture/selected", latencyMs: 1, lines: [] };
+      });
+      const deps = {
+        ...setupDeps({
+          prompter,
+          activate,
+          detect: async () =>
+            detection({
+              candidates: [
+                { ...candidate("claude-cli", "Demo first"), modelRef: "fixture/first" },
+                { ...candidate("codex-cli", "Demo selected"), modelRef: "fixture/selected" },
+              ],
+            }),
+        }),
+        runForegroundGateway: vi.fn(async () => {}),
       };
-    });
-  });
+      promptAuthChoiceGrouped.mockImplementationOnce(async () => {
+        expect(activate).not.toHaveBeenCalled();
+        expect(ensureAuthProfileStore).not.toHaveBeenCalled();
+        expect(localOnboarding.begin).not.toHaveBeenCalled();
+        expect(deps.applySetup).not.toHaveBeenCalled();
+        selected = true;
+        return "candidate:codex-cli";
+      });
 
-  afterEach(() => {
-    loggingState.rawConsole = null;
-    resetLogger();
-  });
+      await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
 
-  afterAll(async () => {
-    await logPathTracker.cleanup();
-  });
+      expect(promptAuthChoiceGrouped).toHaveBeenCalledOnce();
+      expect(activate).toHaveBeenCalledOnce();
+      expect(activate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "codex-cli",
+          modelRef: "fixture/selected",
+          prompter,
+        }),
+      );
+    },
+  );
+
+  it.each(["reject", "cancel"] as const)(
+    "preserves the configured route after the selected provider returns %s",
+    async (outcome) => {
+      localOnboarding.persisted.config = {
+        gateway: { mode: "local" },
+        agents: { defaults: { model: "fixture/original" } },
+      };
+      const prompter = createWizardPrompter();
+      const activate = vi.fn<NonNullable<GuidedOnboardingDeps["activate"]>>(async () => {
+        if (outcome === "cancel") {
+          throw new WizardCancelledError();
+        }
+        return { ok: false, status: "auth", error: "Synthetic provider rejection" };
+      });
+      const deps = setupDeps({
+        prompter,
+        activate,
+        detect: async () =>
+          detection({
+            setupComplete: true,
+            candidates: [
+              { ...existingModelCandidate(), modelRef: "fixture/original" },
+              { ...candidate("codex-cli", "Demo alternative"), modelRef: "fixture/alternative" },
+            ],
+          }),
+      });
+      promptAuthChoiceGrouped
+        .mockResolvedValueOnce("candidate:existing-model")
+        .mockImplementationOnce(async () => {
+          expect(activate).toHaveBeenCalledOnce();
+          return "skip";
+        });
+
+      await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+
+      expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(outcome === "cancel" ? 1 : 2);
+      expect(activate).toHaveBeenCalledOnce();
+      expect(activate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "existing-model",
+          modelRef: "fixture/original",
+        }),
+      );
+      expect(localOnboarding.persisted.config?.agents?.defaults?.model).toBe("fixture/original");
+      expect(deps.applySetup).not.toHaveBeenCalled();
+      expect(deps.launchHatchTui).not.toHaveBeenCalled();
+      expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
+    },
+  );
 
   it("records setup ownership at inference commit and completes before optional imports", async () => {
     const prompter = createWizardPrompter();
@@ -347,6 +147,53 @@ describe("runGuidedOnboarding custodian flow", () => {
     expect(localOnboarding.complete.mock.invocationCallOrder[0]).toBeLessThan(
       runSetupMemoryImportStep.mock.invocationCallOrder[0]!,
     );
+  });
+
+  it("keeps the pending owner's approved workspace after inference materializes a roster", async () => {
+    const applySetup = vi.fn(async () => setupApplyResult());
+    const deps = setupDeps({ prompter: createWizardPrompter(), applySetup });
+
+    await runGuidedOnboarding(
+      { acceptRisk: true, workspace: "/tmp/approved-workspace" },
+      makeRuntime(),
+      deps,
+    );
+
+    expect(localOnboarding.states.get("/tmp/openclaw.json")).toMatchObject({
+      status: "completed",
+      workspace: "/tmp/approved-workspace",
+    });
+    expect(applySetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspace: "/tmp/approved-workspace",
+        allowWorkspaceChange: true,
+        assertCommitPreconditions: expect.any(Function),
+      }),
+      { beforePersistentApply: expect.any(Function) },
+    );
+  });
+
+  it.each([
+    ["enables default hooks", {}, true],
+    ["preserves --skip-hooks", { skipHooks: true }, undefined],
+  ] as const)("%s in the persisted setup config", async (_label, opts, expectedEnabled) => {
+    const applySetup = vi.fn<NonNullable<GuidedOnboardingDeps["applySetup"]>>(async (params) => {
+      const sourceConfig = localOnboarding.persisted.config ?? {};
+      localOnboarding.persisted.config =
+        params.finalizeConfig?.(sourceConfig, sourceConfig) ?? sourceConfig;
+      return setupApplyResult();
+    });
+    const deps = setupDeps({ prompter: createWizardPrompter(), applySetup });
+
+    await runGuidedOnboarding(
+      { acceptRisk: true, workspace: "/tmp/work", ...opts },
+      makeRuntime(),
+      deps,
+    );
+
+    expect(
+      localOnboarding.persisted.config?.hooks?.internal?.entries?.["session-memory"]?.enabled,
+    ).toBe(expectedEnabled);
   });
 
   it("resumes an interrupted gateway install using its approved workspace", async () => {
@@ -399,6 +246,7 @@ describe("runGuidedOnboarding custodian flow", () => {
 
     expect(retry.applySetup).toHaveBeenCalledWith(
       expect.objectContaining({ workspace: "/tmp/approved-workspace", resume: true }),
+      { beforePersistentApply: expect.any(Function) },
     );
     expect(localOnboarding.states.get("/tmp/openclaw.json")).toMatchObject({
       status: "completed",
@@ -827,7 +675,9 @@ describe("runGuidedOnboarding custodian flow", () => {
 
   it("routes guarded mode straight to manual config without any scanning", async () => {
     promptAuthChoiceGrouped.mockResolvedValueOnce("skip");
-    const prompter = createWizardPrompter(undefined, { selectValues: ["guarded", "manual"] });
+    const prompter = createWizardPrompter(undefined, {
+      selectValues: ["custom", "guarded", "manual"],
+    });
     const deps = {
       ...setupDeps({ prompter }),
       listManualOptions: vi.fn(async () => ({
@@ -851,7 +701,7 @@ describe("runGuidedOnboarding custodian flow", () => {
     promptAuthChoiceGrouped.mockResolvedValueOnce("openai-api-key");
     const prompter = createWizardPrompter(
       { text: vi.fn(async () => "manual-key") },
-      { selectValues: ["guarded", "manual"] },
+      { selectValues: ["custom", "guarded", "manual"] },
     );
     const deps = {
       ...setupDeps({ prompter }),
@@ -882,7 +732,9 @@ describe("runGuidedOnboarding custodian flow", () => {
   });
 
   it("scans in guarded mode only after the look-around consent", async () => {
-    const prompter = createWizardPrompter(undefined, { selectValues: ["guarded", "look"] });
+    const prompter = createWizardPrompter(undefined, {
+      selectValues: ["custom", "guarded", "look"],
+    });
     const deps = setupDeps({ prompter });
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
@@ -918,7 +770,7 @@ describe("runGuidedOnboarding custodian flow", () => {
     localOnboarding.persisted.config = {
       wizard: { accessMode: "full", securityAcknowledgedAt: "2026-01-01T00:00:00.000Z" },
     };
-    const prompter = createWizardPrompter(undefined, { selectValues: ["full"] });
+    const prompter = createWizardPrompter(undefined, { selectValues: ["custom", "full"] });
     const deps = setupDeps({ prompter });
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
@@ -927,40 +779,33 @@ describe("runGuidedOnboarding custodian flow", () => {
     expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
   });
 
-  it("keeps the working route when other options are explored and skipped", async () => {
+  it("skips the picker without verifying or replacing a configured route", async () => {
+    localOnboarding.persisted.config = {
+      gateway: { mode: "local" },
+      agents: { defaults: { model: "fixture/original" } },
+    };
     promptAuthChoiceGrouped.mockResolvedValueOnce("skip");
-    const prompter = createWizardPrompter(undefined, { selectValues: ["full", "other"] });
+    const prompter = createWizardPrompter();
     const deps = setupDeps({
       prompter,
-      detect: vi.fn(async () =>
+      detect: async () =>
         detection({
-          candidates: [candidate("claude-cli", "Claude Code"), candidate("codex-cli", "Codex")],
+          setupComplete: true,
+          candidates: [existingModelCandidate(), candidate("codex-cli", "Codex")],
         }),
-      ),
     });
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
 
     expect(promptAuthChoiceGrouped).toHaveBeenCalledOnce();
-    expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
-      expect.objectContaining({
-        additionalGroups: [
-          expect.objectContaining({
-            label: "Detected on this machine",
-            hint: "Claude Code, Codex",
-            methodMessage: "Use which detected AI?",
-          }),
-        ],
-      }),
-    );
-    const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
-    expect(notes).toContain("Keeping the working AI you already have.");
-    expect(notes).not.toContain("Add AI later");
-    expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
+    expect(deps.activate).not.toHaveBeenCalled();
+    expect(deps.applySetup).not.toHaveBeenCalled();
+    expect(localOnboarding.persisted.config?.agents?.defaults?.model).toBe("fixture/original");
+    expect(deps.launchHatchTui).not.toHaveBeenCalled();
   });
 
-  it("names the configured model in the recommended route confirmation", async () => {
-    const prompter = createWizardPrompter(undefined, { selectValues: ["full", "use"] });
+  it("names the configured model in the explicit candidate picker", async () => {
+    const prompter = createWizardPrompter(undefined, { selectValues: ["custom", "full", "use"] });
     const deps = setupDeps({
       prompter,
       detect: vi.fn(async () => detection({ candidates: [existingModelCandidate()] })),
@@ -974,16 +819,18 @@ describe("runGuidedOnboarding custodian flow", () => {
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
 
-    expect(prompter.select).toHaveBeenNthCalledWith(
-      2,
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: "Use Current model (acme/workspace-model)?",
-        options: expect.arrayContaining([
+        additionalGroups: [
           expect.objectContaining({
-            value: "use",
-            label: "Continue with Current model (acme/workspace-model) — recommended",
+            options: [
+              expect.objectContaining({
+                value: "candidate:existing-model",
+                label: expect.stringContaining("acme/workspace-model"),
+              }),
+            ],
           }),
-        ]),
+        ],
       }),
     );
   });
@@ -1042,6 +889,9 @@ describe("runGuidedOnboarding custodian flow", () => {
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
 
+    expect(prompter.select).not.toHaveBeenCalledWith(
+      expect.objectContaining({ initialValue: "quick" }),
+    );
     expect(deps.applySetup).not.toHaveBeenCalled();
     // Configured reruns hatch the persisted default workspace, not the probe context.
     expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/openclaw-workspace");

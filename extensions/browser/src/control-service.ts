@@ -31,7 +31,7 @@ async function startBrowserControlServiceUnlocked(): Promise<BrowserServerState 
   if (!isDefaultBrowserPluginEnabled(browserCfg)) {
     return null;
   }
-  let resolved = resolveBrowserConfig(browserCfg.browser, browserCfg);
+  const resolved = resolveBrowserConfig(browserCfg.browser, browserCfg);
   if (!resolved.enabled) {
     return null;
   }
@@ -52,8 +52,6 @@ async function startBrowserControlServiceUnlocked(): Promise<BrowserServerState 
   if (hasExtensionProfiles) {
     const { ensureExtensionRelayToken } = await import("./browser/extension-relay/relay-auth.js");
     await ensureExtensionRelayToken();
-    const refreshed = loadBrowserConfigForRuntimeRefresh();
-    resolved = resolveBrowserConfig(refreshed.browser, refreshed);
   }
 
   const state = await ensureBrowserControlRuntime({
@@ -99,6 +97,8 @@ export async function stopBrowserControlService(): Promise<void> {
     const { disposeGatewayExtensionRelay } =
       await import("./browser/extension-relay/gateway-relay-route.js");
     disposeGatewayExtensionRelay();
+    const { stopBrowserScreencasts } = await import("./browser/screencast/session.js");
+    await stopBrowserScreencasts();
   }
 }
 

@@ -1,6 +1,7 @@
 import type { Event, Filter, Relay } from "nostr-tools";
+import { isNewerBuzzRevision } from "./event-order.js";
 import { connectAuthenticatedBuzzRelaySession, parseBuzzAuthTag } from "./relay-auth.js";
-import { openBuzzRelaySubscription } from "./relay-subscription.js";
+import { queryBuzzRelaySnapshot } from "./relay-subscription.js";
 import { BUZZ_ROOM_MEMBERSHIP_KIND, parseBuzzRoomMembershipEvent } from "./room-membership.js";
 import { BUZZ_CHANNEL_ID_PATTERN } from "./target.js";
 import { decodeBuzzPrivateKey, resolveBuzzPublicKey } from "./types.js";
@@ -25,64 +26,19 @@ async function queryRelay(params: {
   signal?: AbortSignal;
 }): Promise<Event[]> {
   params.signal?.throwIfAborted();
-  return await new Promise<Event[]>((resolve, reject) => {
-    const events: Event[] = [];
-    const state: {
-      settled: boolean;
-      receivedEose: boolean;
-      timeout?: ReturnType<typeof setTimeout>;
-      subscription?: ReturnType<Relay["prepareSubscription"]>;
-    } = { settled: false, receivedEose: false };
-    const finish = (error?: unknown) => {
-      if (state.settled) {
-        return;
-      }
-      state.settled = true;
-      if (state.timeout) {
-        clearTimeout(state.timeout);
-      }
-      params.signal?.removeEventListener("abort", onAbort);
-      if (state.receivedEose) {
-        state.subscription?.close("query complete");
-      }
-      if (error !== undefined) {
-        reject(
-          error instanceof Error ? error : new Error("Buzz room query failed", { cause: error }),
-        );
-      } else {
-        resolve(events);
-      }
-    };
-    const onAbort = () => finish(params.signal?.reason ?? new Error("Buzz room query aborted"));
-    params.signal?.addEventListener("abort", onAbort, { once: true });
-    state.timeout = setTimeout(() => {
-      finish(new Error("Timed out querying Buzz room membership"));
-      params.relay.close();
-    }, params.timeoutMs);
-    try {
-      state.subscription = openBuzzRelaySubscription(params.relay, [params.filter], {
-        onevent: (event) => events.push(event),
-        oneose: () => {
-          state.receivedEose = true;
-          if (state.settled) {
-            state.subscription?.close("query complete");
-          } else {
-            finish();
-          }
-        },
-        onclose: (reason) => {
-          if (reason !== "query complete") {
-            finish(new Error(`Buzz room query closed: ${reason}`));
-          }
-        },
-      });
-    } catch (error) {
-      finish(error);
-      return;
-    }
-    if (state.settled && state.receivedEose) {
-      state.subscription.close("query complete");
-    }
+  const events: Event[] = [];
+  return await queryBuzzRelaySnapshot({
+    relay: params.relay,
+    filters: [params.filter],
+    signal: params.signal,
+    timeoutMs: params.timeoutMs,
+    timeoutMessage: "Timed out querying Buzz room membership",
+    abortMessage: "Buzz room query aborted",
+    failureMessage: "Buzz room query failed",
+    closeReason: "query complete",
+    closeMessage: (reason) => `Buzz room query closed: ${reason}`,
+    onEvent: (event) => events.push(event),
+    result: () => events,
   });
 }
 
@@ -138,9 +94,10 @@ export async function discoverBuzzRoomsOnRelay(params: {
       event.pubkey.toLowerCase() !== params.relayPublicKey ||
       !roomId ||
       !roomIds.includes(roomId) ||
-      (current &&
-        (current.created_at > event.created_at ||
-          (current.created_at === event.created_at && current.id <= event.id)))
+      !isNewerBuzzRevision(
+        { createdAt: event.created_at, eventId: event.id },
+        current ? { createdAt: current.created_at, eventId: current.id } : undefined,
+      )
     ) {
       continue;
     }

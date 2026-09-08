@@ -40,6 +40,7 @@ export type TranscriptDigest = { eventCount: number; rollingHash: string };
 
 export type PhysicalStore = {
   databaseAgentId: string;
+  ownerStorePath: string;
   path: string;
 };
 

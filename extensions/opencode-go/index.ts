@@ -1,4 +1,6 @@
 // Opencode Go plugin entrypoint registers its OpenClaw integration.
+import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { resolveFirstProviderCatalogAuth } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { opencodeGoMediaUnderstandingProvider } from "./media-understanding-provider.js";
@@ -14,21 +16,9 @@ import {
   resolveOpencodeGoStarterModel,
 } from "./provider-catalog.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
-import { createOpencodeGoWrapper } from "./stream.js";
+import { createOpencodeGoAttributionWrapper, createOpencodeGoWrapper } from "./stream.js";
 
 const PROVIDER_ID = "opencode-go";
-type OpencodeGoCatalogAuth = { apiKey?: string; discoveryApiKey?: string };
-
-function resolveOpencodeGoCatalogAuth(
-  resolveProviderApiKey: (providerId: string) => OpencodeGoCatalogAuth,
-): OpencodeGoCatalogAuth | undefined {
-  const own = resolveProviderApiKey(PROVIDER_ID);
-  if (own.apiKey || own.discoveryApiKey) {
-    return own;
-  }
-  const shared = resolveProviderApiKey("opencode");
-  return shared.apiKey || shared.discoveryApiKey ? shared : undefined;
-}
 
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
@@ -95,7 +85,13 @@ export default defineSingleProviderPluginEntry({
     catalog: {
       order: "simple",
       run: async (ctx) => {
-        const auth = resolveOpencodeGoCatalogAuth(ctx.resolveProviderApiKey);
+        if (ctx.providerIds !== undefined && !ctx.providerIds.includes(PROVIDER_ID)) {
+          return null;
+        }
+        const auth = resolveFirstProviderCatalogAuth(ctx.resolveProviderApiKey, [
+          PROVIDER_ID,
+          "opencode",
+        ]);
         if (!auth) {
           return null;
         }
@@ -104,18 +100,24 @@ export default defineSingleProviderPluginEntry({
             provider: buildStaticOpencodeGoProviderConfig(auth.apiKey),
           };
         }
-        return {
-          provider: await buildOpencodeGoLiveProviderConfig({
-            apiKey: auth.apiKey ?? auth.discoveryApiKey,
-            discoveryApiKey: auth.discoveryApiKey,
+        return await runLiveProviderCatalog({
+          providerId: PROVIDER_ID,
+          profileId: auth.profileId,
+          run: async () => ({
+            provider: await buildOpencodeGoLiveProviderConfig({
+              apiKey: auth.apiKey ?? auth.discoveryApiKey,
+              discoveryApiKey: auth.discoveryApiKey,
+            }),
           }),
-        };
+        });
       },
     },
     augmentModelCatalog: () => listOpencodeGoModelCatalogEntries(),
     ...buildProviderReplayFamilyHooks({ family: "passthrough-gemini" }),
     resolveThinkingProfile,
     wrapStreamFn: (ctx) => createOpencodeGoWrapper(ctx.streamFn, ctx.thinkingLevel),
+    wrapSimpleCompletionStreamFn: (ctx) =>
+      createOpencodeGoAttributionWrapper(ctx.streamFn, ctx.sourceApi),
     isModernModelRef: () => true,
   },
   register(api) {

@@ -1,12 +1,18 @@
 /** Session-scoped embedded LSP runtime and tool materialization for agent bundles. */
-import type { ChildProcess } from "node:child_process";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
+import { toErrorObject } from "../infra/errors.js";
 import { logDebug, logWarn } from "../logger.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { setPluginToolMeta } from "../plugins/tools.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import {
+  closeOwnedStdioProcess,
+  OwnedStdioCleanupError,
+  type OwnedStdioProcess,
+} from "../process/owned-stdio.js";
 import { createPendingRequestRegistry } from "../shared/pending-request-registry.js";
+import { settlesWithin } from "../shared/settle-within.js";
 import {
   defaultBundleLspRuntimeDependencies,
   type BundleLspRuntimeDependencies,
@@ -15,6 +21,7 @@ import {
   resolveStdioMcpServerLaunchConfig,
   describeStdioMcpServerLaunchConfig,
 } from "./mcp-stdio.js";
+import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -22,15 +29,15 @@ import type { AnyAgentTool } from "./tools/common.js";
 
 type LspSession = {
   serverName: string;
-  process: ChildProcess;
+  process: OwnedStdioProcess;
   requestId: number;
   pendingRequests: ReturnType<typeof createPendingRequestRegistry<number, unknown, undefined>>;
   buffer: Buffer;
   initialized: boolean;
   capabilities: LspServerCapabilities;
   disposed: boolean;
-  // Cleanup must use the same process owner that spawned this session.
-  killProcessTree: BundleLspRuntimeDependencies["killProcessTree"];
+  forceClose: boolean;
+  disposal?: Promise<void>;
   // Preserve a terminal process/transport failure so later requests reject immediately
   // instead of waiting for the per-request timeout.
   failure?: Error;
@@ -62,18 +69,7 @@ const LSP_SHUTDOWN_GRACE_MS = 500;
 const LSP_PROCESS_TREE_KILL_GRACE_MS = 1_000;
 const activeBundleLspSessions = new Set<LspSession>();
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    const timeout = setTimeout(resolve, Math.max(1, ms));
-    timeout.unref?.();
-  });
-}
-
-function createLspSession(
-  serverName: string,
-  child: ChildProcess,
-  killProcessTree: BundleLspRuntimeDependencies["killProcessTree"],
-): LspSession {
+function createLspSession(serverName: string, child: OwnedStdioProcess): LspSession {
   return {
     serverName,
     process: child,
@@ -83,7 +79,7 @@ function createLspSession(
     initialized: false,
     capabilities: {},
     disposed: false,
-    killProcessTree,
+    forceClose: false,
   };
 }
 
@@ -109,33 +105,30 @@ function lspProcessExitError(
 }
 
 function attachLspProcessHandlers(session: LspSession): void {
-  session.process.on("error", (error) => {
-    failLspSession(session, error);
+  session.process.onError((error, source) => {
+    if (source === "stderr") {
+      logWarn(`bundle-lsp:${session.serverName}: stderr failed: ${String(error)}`);
+    } else {
+      session.forceClose = true;
+      failLspSession(session, error);
+    }
   });
-  session.process.on("exit", (code, signal) => {
+  session.process.onExit((code, signal) => {
     // Block new requests immediately, but let stdout drain any final response before close.
     rememberLspFailure(session, lspProcessExitError(session, code, signal));
   });
-  session.process.on("close", (code, signal) => {
-    failLspSession(session, lspProcessExitError(session, code, signal));
-  });
-  session.process.stdout?.on("data", (chunk: Buffer | string) =>
-    handleIncomingData(session, chunk),
+  void session.process.wait().then(
+    ({ code, signal }) => failLspSession(session, lspProcessExitError(session, code, signal)),
+    (error: unknown) => failLspSession(session, toErrorObject(error, "LSP process failed")),
   );
-  session.process.stdout?.on("error", (error) => {
-    failLspSession(session, error);
-  });
-  session.process.stdin?.on("error", (error) => {
-    failLspSession(session, error);
-  });
-  session.process.stderr?.setEncoding("utf-8");
-  session.process.stderr?.on("data", (chunk: string) => {
+  session.process.onStdout(
+    () => {},
+    (chunk) => handleIncomingData(session, chunk),
+  );
+  session.process.onStderr((chunk) => {
     for (const line of chunk.split(/\r?\n/).filter(Boolean)) {
       logDebug(`bundle-lsp:${session.serverName}: ${line.trim()}`);
     }
-  });
-  session.process.stderr?.on("error", (error) => {
-    logWarn(`bundle-lsp:${session.serverName}: stderr failed: ${String(error)}`);
   });
 }
 
@@ -247,12 +240,20 @@ function lspAbortError(signal?: AbortSignal): Error {
     : createAbortError("LSP request aborted", { cause: signal?.reason });
 }
 
+function lspSessionDisposedError(): Error {
+  return new Error("LSP session disposed");
+}
+
 function sendRequest(
   session: LspSession,
   method: string,
   params?: unknown,
   signal?: AbortSignal,
 ): Promise<unknown> {
+  // Disposal closes tool requests before the child finishes its shutdown handshake.
+  if (session.disposed && method !== "shutdown") {
+    return Promise.reject(lspSessionDisposedError());
+  }
   if (session.failure) {
     return Promise.reject(session.failure);
   }
@@ -269,7 +270,6 @@ function sendRequest(
     try {
       session.process.stdin?.write(
         encodeLspMessage({ jsonrpc: "2.0", method: "$/cancelRequest", params: { id } }),
-        "utf-8",
       );
     } catch {
       // Best-effort notification; the local tool promise must still settle.
@@ -289,7 +289,7 @@ function sendRequest(
   const message = { jsonrpc: "2.0", id, method, params };
   try {
     const encoded = encodeLspMessage(message);
-    session.process.stdin?.write(encoded, "utf-8");
+    session.process.stdin?.write(encoded);
   } catch (error) {
     // Preserve Promise-executor behavior for synchronous stream failures; timeout owns cleanup.
     pending.reject(error);
@@ -331,8 +331,9 @@ function handleIncomingData(session: LspSession, chunk: Buffer | string) {
     }
   }
   if (!parsed.ok) {
+    session.forceClose = true;
     failLspSession(session, parsed.error);
-    terminateLspProcessTree(session);
+    void disposeSession(session).catch(() => {});
   }
 }
 
@@ -353,53 +354,57 @@ async function initializeSession(session: LspSession): Promise<LspServerCapabili
   // Send initialized notification
   session.process.stdin?.write(
     encodeLspMessage({ jsonrpc: "2.0", method: "initialized", params: {} }),
-    "utf-8",
   );
 
   session.initialized = true;
   return result?.capabilities ?? {};
 }
 
-function hasLspProcessExited(child: ChildProcess): boolean {
-  return child.exitCode !== null || child.signalCode !== null;
-}
-
-function terminateLspProcessTree(session: LspSession): void {
-  const pid = session.process.pid;
-  if (pid && !hasLspProcessExited(session.process)) {
-    session.killProcessTree(pid, { graceMs: LSP_PROCESS_TREE_KILL_GRACE_MS, detached: true });
-    return;
-  }
-  if (!hasLspProcessExited(session.process)) {
-    session.process.kill("SIGTERM");
-  }
-}
-
-async function disposeSession(session: LspSession) {
-  if (session.disposed) {
-    return;
+function disposeSession(session: LspSession): Promise<void> {
+  if (session.disposal) {
+    return session.disposal;
   }
   session.disposed = true;
-  activeBundleLspSessions.delete(session);
-
-  if (session.initialized) {
-    try {
-      const shutdown = sendRequest(session, "shutdown").catch(() => undefined);
-      await Promise.race([shutdown, delay(LSP_SHUTDOWN_GRACE_MS)]);
-      session.process.stdin?.write(
-        encodeLspMessage({ jsonrpc: "2.0", method: "exit", params: null }),
-        "utf-8",
-      );
-    } catch {
-      // best-effort
+  // Release abort listeners before shutdown forbids cancellation notifications.
+  session.pendingRequests.rejectAll(lspSessionDisposedError());
+  session.disposal = (async () => {
+    if (session.initialized && !session.failure) {
+      try {
+        const shutdown = sendRequest(session, "shutdown").catch(() => undefined);
+        await settlesWithin(shutdown, LSP_SHUTDOWN_GRACE_MS);
+        session.process.stdin?.write(
+          encodeLspMessage({ jsonrpc: "2.0", method: "exit", params: null }),
+        );
+      } catch {
+        // Protocol shutdown is advisory; the process owner still joins physical cleanup.
+      }
     }
-  }
-  session.pendingRequests.rejectAll(new Error("LSP session disposed"));
-  terminateLspProcessTree(session);
+    session.pendingRequests.rejectAll(lspSessionDisposedError());
+    try {
+      await closeOwnedStdioProcess(session.process, {
+        graceMs: LSP_PROCESS_TREE_KILL_GRACE_MS,
+        force: session.forceClose,
+      });
+    } catch (error) {
+      recordAgentCleanupFailure();
+      logWarn(
+        `bundle-lsp:${session.serverName}: process cleanup could not confirm descendant shutdown; inspect this server before retrying automatic recovery.`,
+      );
+      throw error;
+    } finally {
+      activeBundleLspSessions.delete(session);
+    }
+  })();
+  return session.disposal;
 }
 
 async function disposeSessions(sessions: Iterable<LspSession>): Promise<void> {
-  await Promise.allSettled(Array.from(sessions, (session) => disposeSession(session)));
+  const results = await Promise.allSettled(
+    Array.from(sessions, (session) => disposeSession(session)),
+  );
+  if (results.some((result) => result.status === "rejected")) {
+    recordAgentCleanupFailure();
+  }
 }
 
 function createLspPositionTool(params: {
@@ -568,11 +573,7 @@ export async function createBundleLspToolRuntime(params: {
       let session: LspSession | undefined;
 
       try {
-        session = createLspSession(
-          serverName,
-          dependencies.spawnServerProcess(launchConfig),
-          dependencies.killProcessTree,
-        );
+        session = createLspSession(serverName, await dependencies.spawnServerProcess(launchConfig));
         registerActiveLspSession(session);
         attachLspProcessHandlers(session);
 
@@ -605,7 +606,9 @@ export async function createBundleLspToolRuntime(params: {
         );
       } catch (error) {
         if (session) {
-          await disposeSession(session);
+          await disposeSessions([session]);
+        } else if (error instanceof OwnedStdioCleanupError) {
+          recordAgentCleanupFailure();
         }
         logWarn(
           `bundle-lsp: failed to start server "${serverName}" (${describeStdioMcpServerLaunchConfig(launchConfig)}): ${String(error)}`,
@@ -619,9 +622,7 @@ export async function createBundleLspToolRuntime(params: {
         serverName: s.serverName,
         capabilities: s.capabilities,
       })),
-      dispose: async () => {
-        await disposeSessions(sessions);
-      },
+      dispose: () => disposeSessions(sessions),
     };
   } catch (error) {
     await disposeSessions(sessions);

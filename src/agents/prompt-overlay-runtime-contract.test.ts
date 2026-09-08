@@ -31,11 +31,23 @@ describe("GPT-5 prompt overlay runtime contract", () => {
     );
   });
 
-  it("adds heartbeat philosophy only for heartbeat-triggered GPT-5 turns", () => {
+  it("does not automatically add heartbeat philosophy to scheduled GPT-5 turns", () => {
     const contribution = resolveGpt5SystemPromptContribution({
       providerId: OPENAI_CONTRACT_PROVIDER_ID,
       modelId: GPT5_CONTRACT_MODEL_ID,
       trigger: "heartbeat",
+    });
+
+    expect(contribution?.sectionOverrides?.interaction_style).not.toContain(
+      "Heartbeat = useful proactive progress",
+    );
+  });
+
+  it("preserves explicit heartbeat guidance for existing plugin SDK consumers", () => {
+    const contribution = resolveGpt5SystemPromptContribution({
+      providerId: OPENAI_CONTRACT_PROVIDER_ID,
+      modelId: GPT5_CONTRACT_MODEL_ID,
+      includeHeartbeatGuidance: true,
     });
 
     expect(contribution?.sectionOverrides?.interaction_style).toContain(

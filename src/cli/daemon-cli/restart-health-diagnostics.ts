@@ -25,6 +25,12 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
       `Gateway version mismatch: expected ${snapshot.versionMismatch.expected}, running gateway reported ${actual}.`,
     );
   }
+  if (snapshot.buildIdMismatch) {
+    const actual = snapshot.buildIdMismatch.actual ?? "unavailable";
+    lines.push(
+      `Gateway build mismatch: expected ${snapshot.buildIdMismatch.expected}, running gateway reported ${actual}.`,
+    );
+  }
   if (snapshot.activatedPluginErrors?.length) {
     lines.push("Activated plugin load errors:");
     for (const plugin of snapshot.activatedPluginErrors) {
@@ -50,6 +56,32 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
   }
   lines.push(...renderPortUsageDiagnostics(snapshot));
   return lines;
+}
+
+export function formatGatewayRestartFailure(params: {
+  health: GatewayRestartSnapshot;
+  port: number;
+  defaultTimeoutSeconds: number;
+}): { statusLine: string; failMessage: string } {
+  if (params.health.waitOutcome === "stopped-free") {
+    const elapsedSeconds = Math.max(1, Math.round((params.health.elapsedMs ?? 0) / 1000));
+    return {
+      statusLine: `Gateway restart failed after ${elapsedSeconds}s: service stayed stopped and port ${params.port} stayed free.`,
+      failMessage: `Gateway restart failed after ${elapsedSeconds}s: service stayed stopped and health checks never came up.`,
+    };
+  }
+  const timeoutSeconds = Math.max(
+    1,
+    Math.round(
+      params.health.elapsedMs === undefined
+        ? params.defaultTimeoutSeconds
+        : params.health.elapsedMs / 1000,
+    ),
+  );
+  return {
+    statusLine: `Timed out after ${timeoutSeconds}s waiting for gateway port ${params.port} to become healthy.`,
+    failMessage: `Gateway restart timed out after ${timeoutSeconds}s waiting for health checks.`,
+  };
 }
 
 export function renderGatewayPortHealthDiagnostics(snapshot: GatewayPortHealthSnapshot): string[] {

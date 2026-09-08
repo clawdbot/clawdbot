@@ -28,15 +28,6 @@ struct RemotePortTunnelTests {
         #expect(!options.contains { $0.hasPrefix("UpdateHostKeys=") })
     }
 
-    @Test func `drain stderr does not crash when handle closed`() {
-        let pipe = Pipe()
-        let handle = pipe.fileHandleForReading
-        try? handle.close()
-
-        let drained = RemotePortTunnel._testDrainStderr(handle)
-        #expect(drained.isEmpty)
-    }
-
     @Test func `port is free detects I pv4 listener`() {
         var fd = socket(AF_INET, SOCK_STREAM, 0)
         #expect(fd >= 0)

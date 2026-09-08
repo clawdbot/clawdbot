@@ -1,3 +1,5 @@
+import { WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE } from "@openclaw/ai/diagnostics";
+import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
 import { classifyFailoverSignal } from "../../agents/failover/classify.js";
 import {
   extractFailoverHttpStatus,
@@ -10,16 +12,23 @@ import {
   type AssistantMessage,
 } from "../types.js";
 
-const REPLAY_UNSAFE_ASSISTANT_ERROR_CODES = new Set([
+const TERMINAL_ASSISTANT_ERROR_CODES = new Set([
   PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
   PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
+  WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE,
 ]);
 
-/** True when replaying the failed assistant request could duplicate unknown provider output. */
-export function isReplayUnsafeAssistantError(
-  message: Pick<AssistantMessage, "errorCode"> | null | undefined,
+/**
+ * Preserve structured terminal outcomes before text classification.
+ * Replay must not duplicate output or override refusals and permanent transport failures.
+ */
+export function isTerminalAssistantError(
+  message: Pick<AssistantMessage, "diagnostics" | "errorCode"> | null | undefined,
 ): boolean {
-  return Boolean(message?.errorCode && REPLAY_UNSAFE_ASSISTANT_ERROR_CODES.has(message.errorCode));
+  return (
+    Boolean(message?.errorCode && TERMINAL_ASSISTANT_ERROR_CODES.has(message.errorCode)) ||
+    isProviderRefusalAssistantError(message)
+  );
 }
 
 /** Classify transient provider/transport failures for outer retry policy. */
@@ -27,7 +36,7 @@ export function isRetryableAssistantError(message: AssistantMessage): boolean {
   if (
     message.stopReason !== "error" ||
     !message.errorMessage ||
-    isReplayUnsafeAssistantError(message)
+    isTerminalAssistantError(message)
   ) {
     return false;
   }

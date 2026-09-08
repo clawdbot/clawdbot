@@ -143,6 +143,9 @@ run_logged_print_heartbeat() {
       terminate_heartbeat_command
       wait "$command_pid" 2>/dev/null || true
     fi
+    if [ "$cleanup_status" -ne 0 ]; then
+      docker_e2e_print_log "$log_file" || true
+    fi
     rm -f "$log_file"
     restore_heartbeat_traps
     if [ "$cleanup_status" -ge 128 ]; then

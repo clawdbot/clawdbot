@@ -14,57 +14,67 @@ vi.mock("../cron/delivery.js", async (importOriginal) => {
   };
 });
 
-import { sendGatewayCronFailureAlert } from "./server-cron-notifications.js";
+import { sendGatewayCronFailureAlert as sendGatewayCronFailureAlertBase } from "./server-cron-notifications.js";
+
+const sendGatewayCronFailureAlert = (
+  params: Omit<Parameters<typeof sendGatewayCronFailureAlertBase>[0], "onDeliverySettled">,
+) =>
+  sendGatewayCronFailureAlertBase({
+    ...params,
+    onDeliverySettled: async () => {},
+  });
 
 describe("sendGatewayCronFailureAlert presentation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.sendCronAnnouncePayloadStrict.mockResolvedValue(undefined);
+    mocks.sendCronAnnouncePayloadStrict.mockResolvedValue({
+      status: "sent",
+      results: [],
+      receipt: {
+        primaryPlatformMessageId: undefined,
+        platformMessageIds: [],
+        parts: [],
+        sentAt: 0,
+      },
+    });
   });
 
-  it("adds the run start time without dropping presentation", async () => {
-    const job = makeCronJob({
-      delivery: {
-        mode: "announce",
-        channel: "telegram",
-        to: "channel:ops",
+  it.each([
+    {
+      name: "without a public origin",
+      gateway: undefined,
+      expectedText: "cron failed\nRun started: 2026-01-15 10:30 EST",
+    },
+    {
+      name: "with a public origin",
+      gateway: {
+        publicOrigin: "https://gateway.example",
+        controlUi: { basePath: "/control" },
       },
-    });
-
-    await sendGatewayCronFailureAlert({
-      deps: {} as CliDeps,
-      logger: { warn: vi.fn() },
-      resolveCronAgent: () => ({
-        agentId: "main",
-        cfg: { agents: { defaults: { userTimezone: "America/New_York" } } },
-      }),
-      job,
-      payload: {
-        text: "cron failed",
-        presentation: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [
-                {
-                  label: "Log in to Codex",
-                  action: { type: "command", command: "/login codex" },
-                },
-              ],
-            },
-          ],
+      expectedText:
+        "cron failed\nRun started: 2026-01-15 10:30 EST\nInspect: https://gateway.example/control/automations?job=job-1&run=cron%3Ajob-1%3A1768491000000",
+    },
+  ])(
+    "composes failure alert details $name without dropping presentation",
+    async ({ gateway, expectedText }) => {
+      const job = makeCronJob({
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "channel:ops",
         },
-      },
-      runAtMs: Date.parse("2026-01-15T15:30:00.000Z"),
-      channel: "telegram",
-      to: "channel:ops",
-      mode: "announce",
-    });
+      });
 
-    expect(mocks.sendCronAnnouncePayloadStrict).toHaveBeenCalledWith(
-      expect.objectContaining({
+      await sendGatewayCronFailureAlert({
+        deps: {} as CliDeps,
+        logger: { warn: vi.fn() },
+        resolveCronAgent: () => ({
+          agentId: "main",
+          cfg: { agents: { defaults: { userTimezone: "America/New_York" } }, gateway },
+        }),
+        job,
         payload: {
-          text: "cron failed\nRun started: 2026-01-15 10:30 EST",
+          text: "cron failed",
           presentation: {
             blocks: [
               {
@@ -79,7 +89,32 @@ describe("sendGatewayCronFailureAlert presentation", () => {
             ],
           },
         },
-      }),
-    );
-  });
+        runAtMs: Date.parse("2026-01-15T15:30:00.000Z"),
+        channel: "telegram",
+        to: "channel:ops",
+        mode: "announce",
+      });
+
+      expect(mocks.sendCronAnnouncePayloadStrict).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload: {
+            text: expectedText,
+            presentation: {
+              blocks: [
+                {
+                  type: "buttons",
+                  buttons: [
+                    {
+                      label: "Log in to Codex",
+                      action: { type: "command", command: "/login codex" },
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        }),
+      );
+    },
+  );
 });

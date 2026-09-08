@@ -25,8 +25,43 @@ describe("printModelTable", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
-  it("prints effective and native context values when a runtime cap differs", () => {
+  it("writes populated plain model rows directly to stdout", () => {
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+      writeStdout: vi.fn(),
+      writeJson: vi.fn(),
+    };
+    const rows: ModelRow[] = [
+      {
+        key: "anthropic/claude-sonnet-4-6",
+        name: "Claude Sonnet",
+        input: "text",
+        contextWindow: 200_000,
+        local: false,
+        available: true,
+        tags: [],
+        missing: false,
+      },
+    ];
+
+    printModelTable(rows, runtime, { plain: true });
+
+    expect(runtime.writeStdout).toHaveBeenCalledExactlyOnceWith("anthropic/claude-sonnet-4-6");
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  it("prints context caps with sanitized tags in their original order", () => {
     const runtime = { log: vi.fn(), error: vi.fn() };
+    const tags = [
+      "\u001b[31mdefault\u001b[0m",
+      "fallback#2",
+      "img-fallback#1",
+      "alias:a\tb",
+      "unknown",
+      "default",
+    ];
     const rows: ModelRow[] = [
       {
         key: "openai/gpt-5.5",
@@ -36,7 +71,7 @@ describe("printModelTable", () => {
         contextTokens: 272_000,
         local: false,
         available: true,
-        tags: [],
+        tags,
         missing: false,
       },
     ];
@@ -46,7 +81,17 @@ describe("printModelTable", () => {
     // Decimal windows render in decimal K: 272000 -> "272k", 400000 -> "400k".
     expect(runtime.log.mock.calls).toEqual([
       ["Model                                      Input      Ctx         Local Auth  Tags"],
-      ["openai/gpt-5.5                             text+image 272k/400k   no    yes   "],
+      [
+        "openai/gpt-5.5                             text+image 272k/400k   no    yes   default,fallback#2,img-fallback#1,alias:a\\tb,unknown,default",
+      ],
+    ]);
+    expect(rows[0]?.tags).toEqual([
+      "\u001b[31mdefault\u001b[0m",
+      "fallback#2",
+      "img-fallback#1",
+      "alias:a\tb",
+      "unknown",
+      "default",
     ]);
   });
 

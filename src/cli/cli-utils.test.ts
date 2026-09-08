@@ -1,7 +1,7 @@
 // CLI utility tests cover shared command helpers, option parsing, and output formatting.
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
-import { defaultRuntime } from "../runtime.js";
+import { defaultRuntime, ExitError } from "../runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { registerDnsCli } from "./dns-cli.js";
 import {
@@ -40,6 +40,33 @@ describe("waitForever", () => {
 });
 
 describe("runCommandWithRuntime", () => {
+  it.each(
+    [0, 1, 2].flatMap((code) =>
+      [false, true].map((customErrorHandler) => ({ code, customErrorHandler })),
+    ),
+  )(
+    "preserves completed exit $code with custom error handler $customErrorHandler",
+    async ({ code, customErrorHandler }) => {
+      const runtime = { error: vi.fn(), exit: vi.fn() };
+      const onError = vi.fn();
+      const outcome = new ExitError(code);
+
+      await expect(
+        runCommandWithRuntime(
+          runtime,
+          async () => {
+            throw outcome;
+          },
+          customErrorHandler ? onError : undefined,
+        ),
+      ).rejects.toBe(outcome);
+
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(onError).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps cause chains and error codes behind debug intent", async () => {
     const messages: string[] = [];
     const exits: number[] = [];
@@ -113,8 +140,15 @@ describe("shouldSkipRespawnForArgv", () => {
     { argv: ["node", "openclaw", "gateway"] },
     { argv: ["node", "openclaw", "gateway", "--port", "14720", "--bind", "loopback"] },
     { argv: ["node", "openclaw", "gateway", "run", "--port=14720", "--bind", "loopback"] },
+    { argv: ["node", "openclaw", "gateway", "status"] },
+    { argv: ["node", "openclaw", "--", "gateway", "run"] },
+    { argv: ["node", "openclaw", "gateway", "--", "status"] },
+    { argv: ["node", "openclaw", "gateway", "--token", "test-token", "status"] },
     {
       argv: ["node", "openclaw", "--profile", "server", "gateway", "run", "--allow-unconfigured"],
+    },
+    {
+      argv: ["node", "openclaw", "--profile", "server", "gateway", "status", "--json"],
     },
   ] as const)("skips respawn for argv %j", ({ argv }) => {
     expect(shouldSkipRespawnForArgv([...argv]), argv.join(" ")).toBe(true);
@@ -122,7 +156,6 @@ describe("shouldSkipRespawnForArgv", () => {
 
   it.each([
     { argv: ["node", "openclaw", "status"] },
-    { argv: ["node", "openclaw", "gateway", "status"] },
     { argv: ["node", "openclaw", "gateway", "call", "health"] },
   ] as const)("keeps respawn path for argv %j", ({ argv }) => {
     expect(shouldSkipRespawnForArgv([...argv]), argv.join(" ")).toBe(false);
@@ -144,6 +177,7 @@ describe("shouldSkipStartupEnvironmentRespawnForArgv", () => {
     { argv: ["node", "openclaw", "hooks", "relay", "--relay-id", "relay-1"] },
     { argv: ["node", "openclaw", "gateway"] },
     { argv: ["node", "openclaw", "gateway", "run", "--port=14720"] },
+    { argv: ["node", "openclaw", "--", "gateway", "run"] },
   ] as const)("skips startup env respawn for argv %j", ({ argv }) => {
     expect(shouldSkipStartupEnvironmentRespawnForArgv([...argv]), argv.join(" ")).toBe(true);
   });
@@ -153,6 +187,8 @@ describe("shouldSkipStartupEnvironmentRespawnForArgv", () => {
     { argv: ["node", "openclaw", "terminal"] },
     { argv: ["node", "openclaw", "chat"] },
     { argv: ["node", "openclaw", "status"] },
+    { argv: ["node", "openclaw", "gateway", "--", "status"] },
+    { argv: ["node", "openclaw", "--", "gateway", "run", "--force"] },
   ] as const)("allows startup env respawn for argv %j", ({ argv }) => {
     expect(shouldSkipStartupEnvironmentRespawnForArgv([...argv]), argv.join(" ")).toBe(false);
   });

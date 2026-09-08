@@ -9,6 +9,7 @@ import ai.openclaw.app.gateway.QuestionGetResult
 import ai.openclaw.app.gateway.QuestionListResult
 import ai.openclaw.app.gateway.QuestionOption
 import ai.openclaw.app.gateway.QuestionRecord
+import ai.openclaw.app.gateway.QuestionSecretStore
 import ai.openclaw.app.ui.chat.questionCountdown
 import ai.openclaw.app.ui.chat.terminalQuestionAnswer
 import kotlinx.coroutines.CompletableDeferred
@@ -18,14 +19,18 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
 class ChatQuestionTest {
   private val json = chatControllerTestJson
   private val ChatController.onlyQuestion: ChatQuestionPrompt
@@ -51,6 +56,66 @@ class ChatQuestionTest {
 
     assertEquals(mapOf("meal" to listOf("Pizza", "Tacos", "Salad")), draft.answers(listOf(question)))
   }
+
+  @Test
+  fun secretDraftPreservesBytesWhileNormalAnswersTrim() {
+    for (isSecret in listOf(false, true)) {
+      val textQuestion = question.copy(options = emptyList(), isSecret = isSecret)
+      for (value in listOf(" synthetic-value \t\n", "   ", "")) {
+        val normalized = if (isSecret) value else value.trim()
+        val expected = if (normalized.isEmpty()) null else mapOf("meal" to listOf(normalized))
+        assertEquals(expected, ChatQuestionDraft().setOther(textQuestion, value).answers(listOf(textQuestion)))
+      }
+    }
+  }
+
+  @Test
+  fun credentialSubmissionSendsEditedHostsAndRetainsOnlyStoredMarker() =
+    runTest {
+      val secret = question.copy(options = emptyList(), isSecret = true, secretStore = QuestionSecretStore("TASK_TOKEN", "secret", listOf("api.example.test")))
+      val pending = record().copy(questions = listOf(secret))
+      for (hosts in listOf(null, "uploads.example.test,\n api.example.test", "")) {
+        var request: String? = null
+        val controller =
+          createScriptedChatController {
+            respond("question.list", json.encodeToString(QuestionListResult(listOf(pending))))
+            respond("question.resolve") { params ->
+              request = params
+              """{"status":"answered","answers":{"answers":{"meal":["stored"]}}}"""
+            }
+          }
+        controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
+        runCurrent()
+        controller.updateQuestionDraft(controller.onlyQuestion) {
+          it.setOther(secret, "  synthetic-value  ").copy(secretStoreAllowedHostsText = hosts)
+        }
+        controller.resolveQuestion(controller.onlyQuestion, checkNotNull(controller.onlyQuestion.draft.answers(pending.questions)))
+        runCurrent()
+        val params = json.parseToJsonElement(checkNotNull(request)).jsonObject
+        val expectedHosts =
+          when (hosts) {
+            null -> listOf("api.example.test")
+            "" -> emptyList()
+            else -> listOf("uploads.example.test", "api.example.test")
+          }
+        assertEquals(expectedHosts, params.getValue("secretStoreAllowedHosts").jsonArray.map { it.jsonPrimitive.content })
+        assertEquals(
+          "  synthetic-value  ",
+          params
+            .getValue("answers")
+            .jsonObject
+            .getValue("answers")
+            .jsonObject
+            .getValue("meal")
+            .jsonArray
+            .single()
+            .jsonPrimitive.content,
+        )
+        assertEquals(QuestionAnswers(mapOf("meal" to listOf("stored"))), controller.onlyQuestion.record.answers)
+        assertEquals(ChatQuestionDraft(), controller.onlyQuestion.draft)
+        assertEquals("Answered", terminalQuestionAnswer(controller.onlyQuestion, secret, ChatQuestionStatus.Answered))
+      }
+    }
 
   @Test
   fun statusDistinguishesLocalRemoteAndExpiry() {
@@ -210,7 +275,7 @@ class ChatQuestionTest {
       val pending = record(expiresAtMs = Long.MAX_VALUE)
       val controller =
         createScriptedChatController {
-          respond("question.list", json.encodeToString(QuestionListResult(listOf(pending.copy(createdAtMs = 2_000)))))
+          respond("question.list", json.encodeToString(QuestionListResult(listOf(pending))))
           respond("question.resolve") {
             resolveStarted.complete(Unit)
             resolveResponse.await()
@@ -218,7 +283,7 @@ class ChatQuestionTest {
         }
 
       controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
-      controller.resolveQuestion(pending.id, mapOf("meal" to listOf("Pizza")))
+      controller.resolveQuestion(controller.onlyQuestion, mapOf("meal" to listOf("Pizza")))
       runCurrent()
       resolveStarted.await()
       controller.handleGatewayEvent("health", null)
@@ -226,8 +291,9 @@ class ChatQuestionTest {
 
       assertEquals(ChatQuestionStatus.Submitting, controller.onlyQuestion.status(nowMs = 3_000))
       assertFalse(controller.onlyQuestion.answeredLocally)
-      resolveResponse.complete("{}")
+      resolveResponse.complete("""{"status":"answered","answers":{"answers":{"meal":["Pizza"]}}}""")
       advanceUntilIdle()
+      assertEquals(ChatQuestionStatus.Answered, controller.onlyQuestion.status())
     }
 
   @Test
@@ -436,13 +502,18 @@ class ChatQuestionTest {
                 .content
             getCalls[id] = getCalls.getOrDefault(id, 0) + 1
             when (id) {
-              recoveredPending.id ->
+              recoveredPending.id -> {
                 json.encodeToString(
                   QuestionGetResult(
                     if (getCalls.getValue(id) == 1) recoveredPending else recoveredAnswered,
                   ),
                 )
-              newlyMissingPending.id -> json.encodeToString(QuestionGetResult(newlyMissingAnswered))
+              }
+
+              newlyMissingPending.id -> {
+                json.encodeToString(QuestionGetResult(newlyMissingAnswered))
+              }
+
               failingPending.id -> {
                 if (getCalls.getValue(id) == 1) {
                   fallbackFailed = true
@@ -450,7 +521,10 @@ class ChatQuestionTest {
                 }
                 json.encodeToString(QuestionGetResult(failingAnswered))
               }
-              else -> error("unexpected question id")
+
+              else -> {
+                error("unexpected question id")
+              }
             }
           }
         }
@@ -516,7 +590,7 @@ class ChatQuestionTest {
             }
             json.encodeToString(QuestionGetResult(recovered))
           }
-          respond("question.resolve", "{}")
+          respond("question.resolve", """{"status":"cancelled"}""")
         }
 
       controller.handleGatewayEvent("question.requested", json.encodeToString(recovering))
@@ -533,7 +607,7 @@ class ChatQuestionTest {
       finalGetStarted.await()
       assertEquals(4, getCalls)
 
-      controller.skipQuestion(unrelated.id)
+      controller.skipQuestion(controller.questions.value.single { it.record.id == unrelated.id })
       runCurrent()
       releaseFinalGet.complete(Unit)
       runCurrent()
@@ -564,7 +638,7 @@ class ChatQuestionTest {
             if (getCalls < 5) error("temporary question.get failure")
             json.encodeToString(QuestionGetResult(recovered))
           }
-          respond("question.resolve", "{}")
+          respond("question.resolve", """{"status":"cancelled"}""")
         }
 
       controller.handleGatewayEvent("question.requested", json.encodeToString(recovering))
@@ -576,7 +650,7 @@ class ChatQuestionTest {
       runCurrent()
       assertEquals(3, getCalls)
 
-      controller.skipQuestion(unrelated.id)
+      controller.skipQuestion(controller.questions.value.single { it.record.id == unrelated.id })
       runCurrent()
       advanceTimeBy(4_000)
       runCurrent()
@@ -661,12 +735,14 @@ class ChatQuestionTest {
   fun missingQuestionNotFoundHasUnknownTerminalOutcome() =
     runTest {
       val pending = record(expiresAtMs = Long.MAX_VALUE)
+      val releaseLookup = CompletableDeferred<Unit>()
       var getCalls = 0
       val controller =
         createScriptedChatController {
           respond("question.list", json.encodeToString(QuestionListResult(emptyList())))
           respond("question.get") {
             getCalls += 1
+            releaseLookup.await()
             throw GatewayRequestRejected(
               GatewaySession.ErrorShape(
                 code = "INVALID_REQUEST",
@@ -684,9 +760,16 @@ class ChatQuestionTest {
         }
 
       controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
+      runCurrent()
+      val rendered = controller.onlyQuestion
+      controller.updateQuestionDraft(rendered) { it.setOther(question, "Unsent answer") }
+      releaseLookup.complete(Unit)
       advanceUntilIdle()
 
       assertEquals(ChatQuestionStatus.Unavailable, controller.onlyQuestion.status())
+      assertEquals(ChatQuestionDraft(), controller.onlyQuestion.draft)
+      controller.updateQuestionDraft(rendered) { it.setOther(question, "Stale input") }
+      assertEquals(ChatQuestionDraft(), controller.onlyQuestion.draft)
 
       controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
       controller.handleGatewayEvent("health", null)
@@ -706,12 +789,12 @@ class ChatQuestionTest {
           respond("question.list", json.encodeToString(QuestionListResult(listOf(pending))))
           respond("question.resolve") { params ->
             resolveParams = params
-            "{}"
+            """{"status":"cancelled"}"""
           }
         }
 
       controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
-      controller.skipQuestion(pending.id)
+      controller.skipQuestion(controller.onlyQuestion)
       advanceUntilIdle()
 
       val params = json.parseToJsonElement(checkNotNull(resolveParams)).jsonObject
@@ -732,12 +815,12 @@ class ChatQuestionTest {
           respond("question.resolve") {
             resolveStarted.complete(Unit)
             releaseResolve.await()
-            "{}"
+            """{"status":"cancelled"}"""
           }
         }
 
       controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
-      controller.skipQuestion(pending.id)
+      controller.skipQuestion(controller.onlyQuestion)
       runCurrent()
       resolveStarted.await()
 
@@ -769,21 +852,257 @@ class ChatQuestionTest {
             resolveParams.add(checkNotNull(params))
             requestStarted.complete(Unit)
             releaseRequest.await()
-            "{}"
+            """{"status":"answered","answers":{"answers":{"meal":["Pizza"]}}}"""
           }
         }
 
       controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
-      controller.resolveQuestion(pending.id, mapOf("meal" to listOf("Pizza")))
+      val rendered = controller.onlyQuestion
+      controller.resolveQuestion(rendered, mapOf("meal" to listOf("Pizza")))
       runCurrent()
       requestStarted.await()
-      controller.skipQuestion(pending.id)
+      controller.skipQuestion(rendered)
       releaseRequest.complete(Unit)
       advanceUntilIdle()
 
       assertEquals(1, resolveParams.size)
       assertFalse("cancel" in resolveParams.single())
       assertEquals(ChatQuestionStatus.Answered, controller.onlyQuestion.status())
+    }
+
+  @Test
+  fun pendingDraftEditsComposeAndSurviveRefreshAndSessionNavigation() =
+    runTest {
+      val pending = record()
+      val listResponse = CompletableDeferred<String>()
+      val controller =
+        createScriptedChatController {
+          respond("question.list") { listResponse.await() }
+        }
+      controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
+      runCurrent()
+      val rendered = controller.onlyQuestion
+      controller.updateQuestionDraft(rendered) { it.toggle(question, "Pizza") }
+      controller.updateQuestionDraft(rendered) { it.setOther(question, "Salad") }
+      controller.switchSession("agent:main:other")
+      controller.switchSession("agent:main:main")
+      listResponse.complete(json.encodeToString(QuestionListResult(listOf(pending, record(id = "second")))))
+      runCurrent()
+
+      val retained = controller.questions.value.single { it.record.id == pending.id }
+      assertEquals(mapOf("meal" to listOf("Pizza", "Salad")), retained.draft.answers(pending.questions))
+      assertEquals(2, controller.questions.value.size)
+    }
+
+  @Test
+  fun replacedQuestionRejectsOldDraftEvenWhenOriginalDefinitionReturns() =
+    runTest {
+      val pending = record()
+      val replacements =
+        listOf(
+          pending.copy(questions = listOf(question.copy(question = "Choose lunch"))),
+          pending.copy(agentId = "other"),
+          pending.copy(sessionKey = "agent:main:other"),
+          pending.copy(runId = "other-run"),
+          pending.copy(createdAtMs = 2_000),
+          pending.copy(expiresAtMs = Long.MAX_VALUE - 1),
+        )
+      for (replacement in replacements) {
+        var listed = pending
+        val controller =
+          createScriptedChatController {
+            respond("question.list") { json.encodeToString(QuestionListResult(listOf(listed))) }
+          }
+        controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
+        runCurrent()
+        val rendered = controller.onlyQuestion
+        controller.updateQuestionDraft(rendered) { it.setOther(question, "Original draft") }
+        listed = replacement
+        controller.handleGatewayEvent("question.requested", json.encodeToString(replacement))
+        runCurrent()
+        assertEquals(ChatQuestionDraft(), controller.onlyQuestion.draft)
+
+        listed = pending
+        controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
+        runCurrent()
+        controller.updateQuestionDraft(rendered) { it.setOther(question, "Stale input") }
+        assertEquals(ChatQuestionDraft(), controller.onlyQuestion.draft)
+        controller.updateQuestionDraft(controller.onlyQuestion) { it.setOther(question, "Current input") }
+        assertEquals(mapOf("meal" to listOf("Current input")), controller.onlyQuestion.draft.answers(pending.questions))
+        controller.onGatewayScopeChanging()
+      }
+    }
+
+  @Test
+  fun gatewayRetirementDropsDraftAndRejectsOldInputAfterIdenticalQuestionReload() =
+    runTest {
+      val pending = record()
+      val controller =
+        createScriptedChatController {
+          respond("question.list", json.encodeToString(QuestionListResult(listOf(pending))))
+        }
+      controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
+      runCurrent()
+      val rendered = controller.onlyQuestion
+      controller.updateQuestionDraft(rendered) { it.setOther(question, "Draft on old gateway") }
+      controller.onGatewayScopeChanging()
+      assertTrue(controller.questions.value.isEmpty())
+      controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
+      runCurrent()
+      controller.updateQuestionDraft(rendered) { it.setOther(question, "Stale input") }
+      assertEquals(ChatQuestionDraft(), controller.onlyQuestion.draft)
+    }
+
+  @Test
+  fun terminalQuestionClearsSecretDraftAndRejectsRetainedInputCallbacks() =
+    runTest {
+      val secret = question.copy(options = emptyList(), multiSelect = false, isSecret = true, secretStore = QuestionSecretStore("TASK_TOKEN", "secret"))
+      val pending = record().copy(questions = listOf(secret), runId = "task-secret-run")
+      for (terminal in listOf("answered", "cancelled", "expired")) {
+        var listed = listOf(pending)
+        val controller =
+          createScriptedChatController {
+            respond("question.list") { json.encodeToString(QuestionListResult(listed)) }
+          }
+        controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
+        runCurrent()
+        val rendered = controller.onlyQuestion
+        controller.updateQuestionDraft(rendered) { it.setOther(secret, "task-only-secret-value") }
+        assertTrue(
+          controller.onlyQuestion.draft.otherText
+            .isNotEmpty(),
+        )
+        listed = emptyList()
+        val outcome = if (terminal == "answered") ",\"answers\":{\"answers\":{\"meal\":[\"stored\"]}}" else ""
+        controller.handleGatewayEvent("question.resolved", """{"id":"ask_123","status":"$terminal"$outcome}""")
+        runCurrent()
+        assertEquals(ChatQuestionDraft(), controller.onlyQuestion.draft)
+        controller.updateQuestionDraft(rendered) { it.setOther(secret, "Stale input") }
+        assertEquals(ChatQuestionDraft(), controller.onlyQuestion.draft)
+      }
+    }
+
+  @Test
+  fun failedQuestionSubmissionPreservesDraftAndBlocksEditsDuringSubmission() =
+    runTest {
+      val pending = record()
+      val response = CompletableDeferred<String>()
+      val controller =
+        createScriptedChatController {
+          respond("question.list", json.encodeToString(QuestionListResult(listOf(pending))))
+          respond("question.resolve") { response.await() }
+        }
+      controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
+      runCurrent()
+      val rendered = controller.onlyQuestion
+      controller.updateQuestionDraft(rendered) { it.setOther(question, "Try again") }
+      controller.resolveQuestion(controller.onlyQuestion, checkNotNull(controller.onlyQuestion.draft.answers(pending.questions)))
+      runCurrent()
+      controller.updateQuestionDraft(rendered) { it.setOther(question, "Cannot edit while submitting") }
+      response.completeExceptionally(IllegalStateException("Gateway unavailable"))
+      runCurrent()
+
+      assertEquals(ChatQuestionStatus.Pending, controller.onlyQuestion.status())
+      assertEquals("Gateway unavailable", controller.onlyQuestion.errorText)
+      assertEquals(mapOf("meal" to listOf("Try again")), controller.onlyQuestion.draft.answers(pending.questions))
+    }
+
+  @Test
+  fun replacedQuestionDoesNotInheritAnOlderSubmissionClaim() =
+    runTest {
+      val pending = record()
+      val response = CompletableDeferred<String>()
+      var listed = pending
+      val controller =
+        createScriptedChatController {
+          respond("question.list") { json.encodeToString(QuestionListResult(listOf(listed))) }
+          respond("question.resolve") { response.await() }
+        }
+      controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
+      runCurrent()
+      controller.updateQuestionDraft(controller.onlyQuestion) { it.setOther(question, "Original answer") }
+      controller.resolveQuestion(controller.onlyQuestion, mapOf("meal" to listOf("Original answer")))
+      runCurrent()
+      assertEquals(ChatQuestionStatus.Submitting, controller.onlyQuestion.status())
+
+      listed = pending.copy(questions = listOf(question.copy(question = "Choose lunch")))
+      controller.handleGatewayEvent("question.requested", json.encodeToString(listed))
+      runCurrent()
+      val replacement = controller.onlyQuestion
+      response.complete("""{"status":"answered","answers":{"answers":{"meal":["Original answer"]}}}""")
+      runCurrent()
+
+      assertEquals(ChatQuestionStatus.Pending, replacement.status())
+      assertEquals(ChatQuestionDraft(), replacement.draft)
+      assertEquals(replacement, controller.onlyQuestion)
+    }
+
+  @Test
+  fun retiredQuestionResolutionCannotMutateReloadedQuestionWithSameId() =
+    runTest {
+      for (fails in listOf(false, true)) {
+        val pending = record()
+        val response = CompletableDeferred<String>()
+        val controller =
+          createScriptedChatController {
+            respond("question.list", json.encodeToString(QuestionListResult(listOf(pending))))
+            respond("question.resolve") { response.await() }
+          }
+        controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
+        runCurrent()
+        controller.resolveQuestion(controller.onlyQuestion, mapOf("meal" to listOf("Pizza")))
+        runCurrent()
+        assertEquals(ChatQuestionStatus.Submitting, controller.onlyQuestion.status())
+        controller.onGatewayScopeChanging()
+        controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
+        runCurrent()
+        val replacement = controller.onlyQuestion
+        if (fails) {
+          response.completeExceptionally(IllegalStateException("Retired request failed"))
+        } else {
+          response.complete("""{"status":"answered","answers":{"answers":{"meal":["Pizza"]}}}""")
+        }
+        runCurrent()
+        assertEquals(replacement, controller.onlyQuestion)
+      }
+    }
+
+  @Test
+  fun secretResolutionResponsePreservesAuthoritativeAnswerAfterResolvedEvent() =
+    runTest {
+      val secret = question.copy(options = emptyList(), multiSelect = false, isSecret = true, secretStore = QuestionSecretStore("TASK_TOKEN", "secret"))
+      val pending = record().copy(questions = listOf(secret), runId = "task-secret-run")
+      val stored = QuestionAnswers(mapOf("meal" to listOf("stored")))
+      val resolveStarted = CompletableDeferred<Unit>()
+      val resolveResponse = CompletableDeferred<String>()
+      var listed = listOf(pending)
+      val controller =
+        createScriptedChatController {
+          respond("question.list") { json.encodeToString(QuestionListResult(listed)) }
+          respond("question.resolve") {
+            resolveStarted.complete(Unit)
+            resolveResponse.await()
+          }
+        }
+
+      controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
+      runCurrent()
+      controller.resolveQuestion(controller.onlyQuestion, mapOf("meal" to listOf("task-only-secret-value")))
+      runCurrent()
+      resolveStarted.await()
+      listed = emptyList()
+      controller.handleGatewayEvent(
+        "question.resolved",
+        """{"id":"ask_123","status":"answered","answers":{"answers":{"meal":["stored"]}}}""",
+      )
+      runCurrent()
+      assertEquals(stored, controller.onlyQuestion.record.answers)
+
+      resolveResponse.complete("""{"status":"answered","answers":{"answers":{"meal":["stored"]}}}""")
+      advanceUntilIdle()
+
+      assertEquals(ChatQuestionStatus.Answered, controller.onlyQuestion.status())
+      assertEquals(stored, controller.onlyQuestion.record.answers)
     }
 
   @Test
@@ -817,13 +1136,13 @@ class ChatQuestionTest {
           respond("question.resolve") {
             resolveStarted.complete(Unit)
             releaseResolve.await()
-            "{}"
+            """{"status":"answered","answers":{"answers":{"meal":["Pizza"]}}}"""
           }
         }
 
       controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
       runCurrent()
-      controller.resolveQuestion(pending.id, mapOf("meal" to listOf("Pizza")))
+      controller.resolveQuestion(controller.onlyQuestion, mapOf("meal" to listOf("Pizza")))
       runCurrent()
       resolveStarted.await()
       controller.handleGatewayEvent("health", null)

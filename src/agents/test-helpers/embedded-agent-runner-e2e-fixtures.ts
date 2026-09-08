@@ -119,6 +119,9 @@ export function makeEmbeddedRunnerAttempt(
     assistantTexts: [],
     toolMetas,
     lastAssistant: undefined,
+    // The harness backfills omitted provenance; explicit undefined in overrides
+    // still represents an attempt that produced no response.
+    currentAttemptAssistant: overrides.lastAssistant,
     replayMetadata:
       overrides.replayMetadata ??
       buildAttemptReplayMetadata({

@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { dispatchWidgetPrompt } from "../../components/mcp-app-security.ts";
+import { openExternalUrlSafe } from "../open-external-url.ts";
 
 type BoardWidgetBridgeRequest = {
   type: "openclaw:widget-bridge-request";
@@ -19,6 +20,10 @@ const STATE_PAYLOAD_MAX_BYTES = 8 * 1024;
 const STATE_COALESCE_WINDOW_MS = 5_000;
 const STATE_RATE_WINDOW_MS = 60_000;
 const STATE_RATE_MAX_ATTEMPTS = 12;
+
+function openWidgetUrl(url: string): boolean {
+  return openExternalUrlSafe(url) !== null;
+}
 
 export function isBoardWidgetBridgeRequest(value: unknown): value is BoardWidgetBridgeRequest {
   if (!value || typeof value !== "object") {
@@ -58,6 +63,7 @@ export class BoardWidgetBridgeController {
   private readonly confirmPrompt: (text: string) => boolean;
   private readonly dispatchPrompt: PromptDispatcher;
   private readonly now: () => number;
+  private readonly openUrl: (url: string) => boolean;
   private readonly recentStatePayloads = new Map<string, number>();
   private readonly pendingStates = new Map<string, Promise<unknown>>();
   private stateAttemptTimes: number[] = [];
@@ -70,6 +76,7 @@ export class BoardWidgetBridgeController {
     confirmPrompt: (text: string) => boolean;
     dispatchPrompt?: PromptDispatcher;
     now?: () => number;
+    openUrl?: (url: string) => boolean;
   }) {
     this.frame = options.frame;
     this.ticket = options.ticket;
@@ -78,6 +85,7 @@ export class BoardWidgetBridgeController {
     this.confirmPrompt = options.confirmPrompt;
     this.dispatchPrompt = options.dispatchPrompt ?? dispatchWidgetPrompt;
     this.now = options.now ?? Date.now;
+    this.openUrl = options.openUrl ?? openWidgetUrl;
   }
 
   updateIdentity(frame: HTMLIFrameElement, ticket: string): void {
@@ -136,6 +144,22 @@ export class BoardWidgetBridgeController {
     }
     const params = assertWidgetRequestRecord(request.params);
     switch (request.method) {
+      // Opening a link the user clicked is navigation, not a granted capability,
+      // so this stays outside the tool-grant checks. Opening goes through the
+      // Control UI's openExternalUrlSafe owner, which applies noopener/noreferrer
+      // regardless of the `rel` a widget wrote. The absolute-http(s) gate here is
+      // deliberately narrower than that shared policy: widget-supplied links must
+      // not reach `blob:`, which the general external-link path allows.
+      case "host.open": {
+        const url = requiredString(params, "url");
+        if (!/^https?:\/\//i.test(url)) {
+          throw new Error("widget link url is invalid");
+        }
+        if (!this.openUrl(url)) {
+          throw new Error("widget link could not be opened");
+        }
+        return { ok: true };
+      }
       case "prompt.send": {
         if (options.promptUserActivated !== true) {
           throw new Error("widget prompt requires active user interaction");

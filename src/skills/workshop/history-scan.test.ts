@@ -16,10 +16,6 @@ import {
   resolveSkillHistoryScanHasMore,
 } from "./history-scan-progress.js";
 import { buildSkillHistoryScanPrompt } from "./history-scan-prompt.js";
-import {
-  resolveSkillHistoryScanReviewOutcome,
-  resolveSkillHistoryScanRunFailure,
-} from "./history-scan-review-outcome.js";
 import { getSkillHistoryScanStatus, type SkillHistoryScanResult } from "./history-scan-state.js";
 import {
   formatSkillHistoryScanTranscript,
@@ -29,6 +25,10 @@ import {
 import { collectSkillHistoryScanBatch } from "./history-scan-transcript.js";
 import { runSkillHistoryScan } from "./history-scan.js";
 import { resolveSkillWorkshopProjectionBudgets } from "./model-context-budget.js";
+import {
+  resolveSkillHistoryScanReviewOutcome,
+  assertSkillReviewRunSucceeded,
+} from "./review-outcome.js";
 
 function summary(sessionKey: string, overrides: Partial<SessionEntrySummary["entry"]> = {}) {
   return {
@@ -106,11 +106,7 @@ describe("Skill Workshop history scan", () => {
     expect(prompt).not.toContain("credential-like-private-instance");
     expect(prompt).toContain("NOTHING_TO_LEARN");
 
-    const checkpointedPrompt = buildSkillHistoryScanPrompt({
-      requireCompletion: true,
-      sessions: [],
-    });
-    expect(checkpointedPrompt).toContain("action=complete as your final tool call");
+    expect(prompt).toContain("action=complete as your final tool call");
   });
 
   it("recognizes wrapped legacy hook turns without excluding tool output", () => {
@@ -365,15 +361,7 @@ describe("Skill Workshop history scan", () => {
     ).toBe(false);
   });
 
-  it("rejects run failures but permits bounded failed mutation attempts", () => {
-    expect(() =>
-      resolveSkillHistoryScanReviewOutcome({
-        ideasFound: 1,
-        proposalMutationBudgetRemaining: 2,
-        successfulMutations: 1,
-        runError: new Error("late failure"),
-      }),
-    ).toThrow("late failure");
+  it("rejects failed mutations and inconsistent proposal accounting", () => {
     expect(
       resolveSkillHistoryScanReviewOutcome({
         ideasFound: 1,
@@ -425,17 +413,17 @@ describe("Skill Workshop history scan", () => {
   });
 
   it("treats run-level terminal metadata as a scan failure", () => {
-    expect(
-      resolveSkillHistoryScanRunFailure({
+    expect(() =>
+      assertSkillReviewRunSucceeded({
         meta: {
           durationMs: 1,
           error: { kind: "retry_limit", message: "model retries exhausted" },
         },
       }),
-    ).toEqual(new Error("model retries exhausted"));
-    expect(
-      resolveSkillHistoryScanRunFailure({ meta: { durationMs: 1 }, payloads: [{ text: "done" }] }),
-    ).toBeUndefined();
+    ).toThrow("model retries exhausted");
+    expect(() =>
+      assertSkillReviewRunSucceeded({ meta: { durationMs: 1 }, payloads: [{ text: "done" }] }),
+    ).not.toThrow();
   });
 
   it("aborts a batch without considering a transcript that cannot be read", async () => {

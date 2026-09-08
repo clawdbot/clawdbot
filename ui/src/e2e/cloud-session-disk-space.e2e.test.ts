@@ -1,8 +1,10 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import type { SessionPlacementDiskSpace } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -12,9 +14,12 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const sessionKey = "agent:main:disk-monitor";
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const artifactDir = path.resolve(
-  process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim() || ".artifacts/control-ui-e2e/cloud-disk",
-);
+let artifactDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    artifactDir = createControlUiE2eArtifactDir("cloud-disk");
+  }
+});
 const viewport = { height: 900, width: 1280 };
 const gibibyte = 1024 ** 3;
 const mebibyte = 1024 ** 2;
@@ -100,11 +105,10 @@ suite.define(() => {
       if (!captureUiProof) {
         return;
       }
-      await page.screenshot({
-        animations: "disabled",
-        fullPage: true,
-        path: path.join(artifactDir, name),
-      });
+      await writeFile(
+        path.join(artifactDir, name),
+        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [cloudBadge]),
+      );
     };
     const sidebarRow = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
     const cloudBadge = sidebarRow.locator(".session-row-badge--cloud");
@@ -120,7 +124,7 @@ suite.define(() => {
     };
     const refresh = async (diskSpace: SessionPlacementDiskSpace): Promise<void> => {
       const requestCount = (await gateway.getRequests("sessions.list")).length;
-      await gateway.setMethodResponse("sessions.list", sessionsList(diskSpace));
+      await gateway.setSessionsListResponse(sessionsList(diskSpace));
       await gateway.emitGatewayEvent("sessions.changed", {
         reason: "worker-disk-space",
         sessionKey,

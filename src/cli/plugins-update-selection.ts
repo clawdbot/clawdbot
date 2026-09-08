@@ -88,7 +88,7 @@ export function resolveHookPackUpdateSelection(params: {
   }
 
   const parsedSpec = parseRegistryNpmSpec(params.rawId);
-  if (!parsedSpec || parsedSpec.selectorKind === "none") {
+  if (!parsedSpec) {
     return { hookIds: [] };
   }
 

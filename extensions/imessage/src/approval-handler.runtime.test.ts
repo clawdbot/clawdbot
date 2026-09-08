@@ -457,6 +457,13 @@ describe("imessageApprovalNativeRuntime", () => {
           messageId: PROMPT_GUID,
           ...(poll ? { poll } : {}),
         },
+        request: {
+          id: "approval-1",
+          request: { command: "echo hi" },
+          createdAtMs: 0,
+          expiresAtMs: 60_000,
+        },
+        approvalKind: "exec",
         payload: { text },
         phase: "resolved",
       });

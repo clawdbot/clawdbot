@@ -103,33 +103,36 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
     return entry;
   };
 
-  it("should NOT reset session when Provider is 'heartbeat'", async () => {
-    // Setup: Create a session entry that is "stale" (older than idle timeout)
-    const now = Date.now();
-    const staleTime = now - 10 * 60 * 1000; // 10 minutes ago (exceeds 5min idle timeout)
+  it.each(["heartbeat", "cron", "exec"] as const)(
+    "does not reset a stale session for an internal %s turn",
+    async (source) => {
+      // Setup: Create a session entry that is "stale" (older than idle timeout)
+      const now = Date.now();
+      const staleTime = now - 10 * 60 * 1000; // 10 minutes ago (exceeds 5min idle timeout)
 
-    await saveExistingSession("original-session-id-12345", staleTime);
+      await saveExistingSession("original-session-id-12345", staleTime);
 
-    const cfg = createBaseConfig();
-    const ctx = createBaseCtx({
-      Provider: "heartbeat", // Heartbeat provider should NOT trigger reset
-      Body: "HEARTBEAT_OK",
-    });
+      const cfg = createBaseConfig();
+      const ctx = createBaseCtx({
+        InternalTurnSource: source,
+        Body: "HEARTBEAT_OK",
+      });
 
-    const result = await initSessionState({
-      ctx,
-      cfg,
-      commandAuthorized: true,
-    });
+      const result = await initSessionState({
+        ctx,
+        cfg,
+        commandAuthorized: true,
+      });
 
-    // Assert: Session should NOT be reset (same sessionId)
-    expect(result.isNewSession).toBe(false);
-    expect(result.resetTriggered).toBe(false);
-    expect(result.sessionId).toBe("original-session-id-12345");
-    expect(result.sessionEntry.sessionId).toBe("original-session-id-12345");
-  });
+      // Assert: Session should NOT be reset (same sessionId)
+      expect(result.isNewSession).toBe(false);
+      expect(result.resetTriggered).toBe(false);
+      expect(result.sessionId).toBe("original-session-id-12345");
+      expect(result.sessionEntry.sessionId).toBe("original-session-id-12345");
+    },
+  );
 
-  it("should reset session when Provider is NOT 'heartbeat' and session is stale", async () => {
+  it("resets a stale session for a user turn", async () => {
     // Setup: Create a session entry that is "stale" (older than idle timeout)
     const now = Date.now();
     const staleTime = now - 10 * 60 * 1000; // 10 minutes ago (exceeds 5min idle timeout)
@@ -154,7 +157,7 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
     expect(result.sessionId).toBe("original-session-id-12345");
   });
 
-  it("should preserve session when Provider is 'heartbeat' even with daily reset mode", async () => {
+  it("preserves the session for an internal heartbeat with daily reset mode", async () => {
     // Setup: Create a session entry from yesterday (would trigger daily reset)
     const now = Date.now();
     const yesterday = now - 25 * 60 * 60 * 1000; // 25 hours ago
@@ -168,7 +171,7 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
     };
 
     const ctx = createBaseCtx({
-      Provider: "heartbeat",
+      InternalTurnSource: "heartbeat",
       Body: "HEARTBEAT_OK",
     });
 
@@ -200,7 +203,7 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
 
     const heartbeatResult = await initSessionState({
       ctx: createBaseCtx({
-        Provider: "heartbeat",
+        InternalTurnSource: "heartbeat",
         Body: "HEARTBEAT_OK",
       }),
       cfg,
@@ -224,53 +227,5 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
 
     expect(userResult.isNewSession).toBe(true);
     expect(userResult.sessionId).toBe("daily-session-id");
-  });
-
-  it("should handle cron-event provider same as heartbeat (no reset)", async () => {
-    // Setup: Create a stale session
-    const now = Date.now();
-    const staleTime = now - 10 * 60 * 1000;
-
-    await saveExistingSession("cron-session-id-abcde", staleTime);
-
-    const cfg = createBaseConfig();
-    const ctx = createBaseCtx({
-      Provider: "cron-event", // Cron events should also NOT trigger reset
-      Body: "cron job output",
-    });
-
-    const result = await initSessionState({
-      ctx,
-      cfg,
-      commandAuthorized: true,
-    });
-
-    // Assert: Session should NOT be reset for cron events either
-    expect(result.isNewSession).toBe(false);
-    expect(result.sessionId).toBe("cron-session-id-abcde");
-  });
-
-  it("should handle exec-event provider same as heartbeat (no reset)", async () => {
-    // Setup: Create a stale session
-    const now = Date.now();
-    const staleTime = now - 10 * 60 * 1000;
-
-    await saveExistingSession("exec-session-id-fghij", staleTime);
-
-    const cfg = createBaseConfig();
-    const ctx = createBaseCtx({
-      Provider: "exec-event", // Exec events should also NOT trigger reset
-      Body: "exec completion",
-    });
-
-    const result = await initSessionState({
-      ctx,
-      cfg,
-      commandAuthorized: true,
-    });
-
-    // Assert: Session should NOT be reset for exec events either
-    expect(result.isNewSession).toBe(false);
-    expect(result.sessionId).toBe("exec-session-id-fghij");
   });
 });

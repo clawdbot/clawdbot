@@ -21,6 +21,7 @@ import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { CliSessionBindingFacts } from "../cli-runner/types.js";
 import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-context.js";
+import type { RuntimeContextFragment } from "../internal-runtime-context.js";
 import type { MainSessionRecoveryOwnerLease } from "../main-session-recovery/main-session-recovery-store.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
@@ -127,6 +128,8 @@ export type AgentCommandOpts = {
   toolsAllowIsDefault?: boolean;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
+  /** Host-authorized dashboard authoring without an originating inline renderer. */
+  pinnedWidgetAuthoring?: boolean;
   /** Preserve the originating run's message-tool policy across internal continuation turns. */
   requireExplicitMessageTarget?: boolean;
   cliSessionBindingFacts?: CliSessionBindingFacts;
@@ -138,6 +141,8 @@ export type AgentCommandOpts = {
   deliveryTargetMode?: ChannelOutboundTargetMode;
   bestEffortDeliver?: boolean;
   abortSignal?: AbortSignal;
+  /** Private source-owner fence; cancellation alone does not establish current authority. */
+  assertSourceCurrent?: () => void;
   lane?: string;
   runId?: string;
   /** Immutable gateway lifecycle ownership captured when this run was admitted. */
@@ -152,6 +157,7 @@ export type AgentCommandOpts = {
   /** Run kind hint for bootstrap context behavior. */
   bootstrapContextRunKind?: BootstrapContextRunKind;
   internalEvents?: AgentInternalEvent[];
+  runtimeContextFragments?: RuntimeContextFragment[];
   inputProvenance?: InputProvenance;
   /** Internal runs can execute against a session without updating visible status/model/usage. */
   sessionEffects?: "visible" | "internal";
@@ -168,6 +174,8 @@ export type AgentCommandOpts = {
   /** Restrict this reconstructed run to restart-safe tools. */
   forceRestartSafeTools?: boolean;
   forceCodeModeTools?: boolean;
+  /** Invocation-owned Code Mode activation; limits still come from config. */
+  codeModeOverride?: boolean | "auto";
   /** Host-owned exact media set for a scoped automatic recovery delivery. */
   internalDeliveryMediaUrls?: string[];
   internalDeliverySuppressText?: boolean;
@@ -203,12 +211,17 @@ export type AgentCommandOpts = {
   >;
   /** Gateway-owned exact operational instance shared with its abort controller. */
   operationalRunInstance?: import("../admitted-run-context.js").OperationalRunInstanceRef;
+  skillLibraryAuthoring?: import("../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
   /** Gateway-minted exact-run capability for late Codex creator-authority capture. */
   cronCreatorAuthorityCapability?: CronCreatorAuthorityCapability;
   /** Private exact-instance binding hook invoked after delegated authority admission. */
   onAdmittedRunContext?: (
     context: import("../admitted-run-context.js").AdmittedRunContext,
   ) => void | Promise<void>;
+  /** Private owner binding hook invoked only after exact admission has resolved. */
+  onPostAdmittedRunContext?: (
+    context: import("../admitted-run-context.js").AdmittedRunContext,
+  ) => void;
   /** Called when the actual run model is selected, including fallback retries. */
   onActiveModelSelected?: (ctx: { provider: string; model: string }) => void | Promise<void>;
   /** Called when every candidate in the run's model fallback chain failed. */
@@ -232,17 +245,22 @@ export type AgentCommandOpts = {
 /** Restricted option surface for external ingress callsites. */
 export type AgentCommandIngressOpts = Omit<
   AgentCommandOpts,
+  | "runtimeContextFragments"
   | "senderIsOwner"
   | "allowModelOverride"
   | "mainRestartRecoveryOwnerLease"
   | "mainRestartRecoveryAdmitted"
   | "mainRestartRecoveryAttempt"
+  | "pinnedWidgetAuthoring"
   | "executionIdentityAdmission"
   | "operationalRunInstance"
+  | "assertSourceCurrent"
+  | "skillLibraryAuthoring"
   | "cronCreatorAuthorityCapability"
   | "onAdmittedRunContext"
+  | "onPostAdmittedRunContext"
 > & {
-  /** Trusted sender identity bit for command/channel-action auth; defaults false for ingress. */
+  /** @deprecated Public ingress ignores owner claims; use the host-injected channel runtime. */
   senderIsOwner?: boolean;
   /** Ingress callsites must always pass explicit model-override authorization state. */
   allowModelOverride: boolean;
@@ -252,11 +270,15 @@ export type AgentCommandIngressOpts = Omit<
 export type AgentCommandGatewayIngressOpts = AgentCommandIngressOpts &
   Pick<
     AgentCommandOpts,
+    | "runtimeContextFragments"
     | "mainRestartRecoveryOwnerLease"
     | "mainRestartRecoveryAdmitted"
     | "mainRestartRecoveryAttempt"
+    | "pinnedWidgetAuthoring"
     | "executionIdentityAdmission"
     | "operationalRunInstance"
+    | "skillLibraryAuthoring"
     | "cronCreatorAuthorityCapability"
     | "onAdmittedRunContext"
+    | "onPostAdmittedRunContext"
   >;

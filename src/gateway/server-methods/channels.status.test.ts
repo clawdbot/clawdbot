@@ -3,7 +3,12 @@
  */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelStatusIssue } from "../../channels/plugins/types.public.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createPluginRecord } from "../../plugins/status.test-fixtures.js";
+import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { requireGatewayRecord } from "../test-helpers.assertions.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -18,6 +23,7 @@ type ChannelTestPlugin = {
   status?: {
     probeAccount?: (params?: unknown) => unknown;
     buildChannelSummary?: () => unknown;
+    collectStatusIssues?: () => ChannelStatusIssue[];
   };
 };
 
@@ -25,8 +31,10 @@ const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
   applyPluginAutoEnable: vi.fn(),
   listChannelPlugins: vi.fn(),
+  normalizeChannelId: vi.fn<(value: string) => string | null>((value) => value),
+  listReadOnlyChannelPluginsForConfig: vi.fn(),
   buildChannelUiCatalog: vi.fn(),
-  resolveChannelAccountSnapshot: vi.fn(),
+  buildChannelAccountSnapshotFromAccount: vi.fn(),
   getChannelActivity: vi.fn(),
 }));
 
@@ -47,7 +55,11 @@ vi.mock("../../channels/plugins/index.js", () => ({
   listChannelPlugins: mocks.listChannelPlugins,
   getLoadedChannelPlugin: vi.fn(),
   getChannelPlugin: vi.fn(),
-  normalizeChannelId: (value: string) => value,
+  normalizeChannelId: mocks.normalizeChannelId,
+}));
+
+vi.mock("../../channels/plugins/read-only.js", () => ({
+  listReadOnlyChannelPluginsForConfig: mocks.listReadOnlyChannelPluginsForConfig,
 }));
 
 vi.mock("../../channels/plugins/catalog.js", () => ({
@@ -55,7 +67,7 @@ vi.mock("../../channels/plugins/catalog.js", () => ({
 }));
 
 vi.mock("../../channels/plugins/status.js", () => ({
-  resolveChannelAccountSnapshot: mocks.resolveChannelAccountSnapshot,
+  buildChannelAccountSnapshotFromAccount: mocks.buildChannelAccountSnapshotFromAccount,
 }));
 
 vi.mock("../../infra/channel-activity.js", () => ({
@@ -90,6 +102,7 @@ function createChannelPlugin(
     id?: string;
     probeAccount?: (params?: unknown) => unknown;
     buildChannelSummary?: () => unknown;
+    collectStatusIssues?: () => ChannelStatusIssue[];
   } = {},
 ): ChannelTestPlugin {
   return {
@@ -100,12 +113,15 @@ function createChannelPlugin(
       isEnabled: () => true,
       isConfigured: async (_account, cfg) => Boolean(cfg.autoEnabled),
     },
-    ...(params.probeAccount || params.buildChannelSummary
+    ...(params.probeAccount || params.buildChannelSummary || params.collectStatusIssues
       ? {
           status: {
             ...(params.probeAccount ? { probeAccount: params.probeAccount } : {}),
             ...(params.buildChannelSummary
               ? { buildChannelSummary: params.buildChannelSummary }
+              : {}),
+            ...(params.collectStatusIssues
+              ? { collectStatusIssues: params.collectStatusIssues }
               : {}),
           },
         }
@@ -171,8 +187,15 @@ function requireRespondPayload(respond: ReturnType<typeof vi.fn>): Record<string
 }
 
 describe("channelsHandlers channels.status", () => {
+  afterEach(() => {
+    setActiveDegradedSecretOwners([]);
+    setActivePluginRegistry(createTestRegistry([]));
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.normalizeChannelId.mockImplementation((value: string) => value);
+    mocks.listReadOnlyChannelPluginsForConfig.mockImplementation(() => mocks.listChannelPlugins());
     mocks.getRuntimeConfig.mockReturnValue({});
     mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
     mocks.buildChannelUiCatalog.mockReturnValue({
@@ -182,7 +205,7 @@ describe("channelsHandlers channels.status", () => {
       systemImages: { whatsapp: undefined },
       entries: { whatsapp: { id: "whatsapp" } },
     });
-    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
+    mocks.buildChannelAccountSnapshotFromAccount.mockResolvedValue({
       accountId: "default",
       configured: true,
     });
@@ -203,7 +226,7 @@ describe("channelsHandlers channels.status", () => {
       config: {},
     });
     const snapshotArgs = requireGatewayRecord(
-      requireFirstCallArg(mocks.resolveChannelAccountSnapshot),
+      requireFirstCallArg(mocks.buildChannelAccountSnapshotFromAccount),
       "snapshot args",
     );
     expect(snapshotArgs.cfg).toBe(autoEnabledConfig);
@@ -211,6 +234,83 @@ describe("channelsHandlers channels.status", () => {
     const channels = requireGatewayRecord(payload.channels, "channels payload");
     const whatsapp = requireGatewayRecord(channels.whatsapp, "whatsapp channel");
     expect(whatsapp.configured).toBe(true);
+  });
+
+  it("reports policy and deferred publication without changing healthy transport status", async () => {
+    const policyIssue: ChannelStatusIssue = {
+      channel: "guildchat",
+      accountId: "default",
+      kind: "config",
+      message: "No groups are allowed.",
+      fix: "Add an allowed group.",
+    };
+    configureAutoEnabledChannels([
+      createChannelPlugin({ id: "guildchat", collectStatusIssues: () => [policyIssue] }),
+      createChannelPlugin({ id: "sibling" }),
+    ]);
+    mocks.buildChannelAccountSnapshotFromAccount.mockResolvedValue({
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      running: true,
+      connected: true,
+      lastError: null,
+    });
+    const options = createOptions({});
+    options.context.getDeferredChannelReloads = () => [
+      { channel: "guildchat", publicationPending: true },
+      { channel: "unselected", publicationPending: true },
+    ];
+
+    const payload = await runChannelsStatus({ channel: "guildchat" }, { context: options.context });
+
+    expect(payload.statusIssues).toEqual([
+      policyIssue,
+      expect.objectContaining({
+        channel: "guildchat",
+        kind: "config",
+        message: expect.stringContaining("previous configuration is still in use"),
+        fix: expect.stringContaining("Stopping and starting the channel does not apply"),
+      }),
+    ]);
+    expect(firstChannelAccount(payload, "guildchat")).toMatchObject({
+      running: true,
+      connected: true,
+      lastError: null,
+    });
+    expect(payload.partial).toBeUndefined();
+    expect(payload.warnings).toBeUndefined();
+  });
+
+  it("clears deferred diagnostics and distinguishes work after publication", async () => {
+    const options = createOptions({});
+    options.context.getDeferredChannelReloads = () => [
+      { channel: "whatsapp", publicationPending: false },
+    ];
+    const payload = await runChannelsStatus({}, { context: options.context });
+    expect(payload.statusIssues).toEqual([
+      expect.objectContaining({
+        message: "Channel reload is deferred while active work finishes.",
+      }),
+    ]);
+    options.context.getDeferredChannelReloads = () => [];
+    expect((await runChannelsStatus({}, { context: options.context })).statusIssues).toEqual([]);
+  });
+
+  it("retains account status when a plugin diagnostic collector fails", async () => {
+    configureAutoEnabledChannels([
+      createChannelPlugin({
+        collectStatusIssues: () => {
+          throw new Error("diagnostic unavailable");
+        },
+      }),
+    ]);
+    const payload = await runChannelsStatus({});
+    expect(firstChannelAccount(payload, "whatsapp").configured).toBe(true);
+    expect(payload.partial).toBe(true);
+    expect(payload.warnings).toContain(
+      "whatsapp status diagnostics failed: Error: diagnostic unavailable",
+    );
   });
 
   it("redacts base URL credentials returned by channel summary hooks", async () => {
@@ -234,6 +334,136 @@ describe("channelsHandlers channels.status", () => {
     const whatsapp = requireGatewayRecord(channels.whatsapp, "whatsapp channel");
     expect(whatsapp.baseUrl).toBe("https://chat.example.test/?token=***");
   });
+
+  it.each(["cold", "stale"] as const)(
+    "reports a %s secret owner without losing healthy sibling accounts",
+    async (degradationState) => {
+      const probeAccount = vi.fn(async () => ({ ok: true }));
+      const buildChannelSummary = vi.fn(() => ({ configured: true, running: true }));
+      const degraded = createChannelPlugin({ id: "degraded", probeAccount, buildChannelSummary });
+      const resolveAccount = vi.fn(() => {
+        if (degradationState === "cold") {
+          throw new Error("unresolved operational credential");
+        }
+        return {};
+      });
+      degraded.config.resolveAccount = resolveAccount;
+      const healthyProbe = vi.fn(async () => ({ ok: true }));
+      configureAutoEnabledChannels([
+        degraded,
+        createChannelPlugin({ id: "healthy", probeAccount: healthyProbe }),
+      ]);
+      setActiveDegradedSecretOwners([
+        {
+          ownerKind: "account",
+          ownerId: "degraded:default",
+          state: "unavailable",
+          degradationState,
+          paths: ["channels.degraded.token"],
+          refKeys: ["env:default:PRIVATE_TOKEN_REFERENCE"],
+          reason: "secret reference was not found",
+        },
+      ]);
+
+      const payload = await runChannelsStatus({ probe: true, timeoutMs: 1000 });
+
+      expect(payload.partial).toBeUndefined();
+      expect(firstChannelAccount(payload, "healthy").configured).toBe(true);
+      expect(healthyProbe).toHaveBeenCalledOnce();
+      if (degradationState === "cold") {
+        expect(firstChannelAccount(payload, "degraded")).toMatchObject({
+          accountId: "default",
+          enabled: true,
+          configured: true,
+          running: false,
+          lifecycle: "blocked",
+          lastError: expect.stringContaining("configured but unavailable"),
+        });
+        expect(requireGatewayRecord(payload.channels, "channels").degraded).toMatchObject({
+          configured: true,
+          lastError: expect.stringContaining("configured but unavailable"),
+        });
+        expect(resolveAccount).not.toHaveBeenCalled();
+        expect(probeAccount).not.toHaveBeenCalled();
+        expect(buildChannelSummary).not.toHaveBeenCalled();
+      } else {
+        expect(resolveAccount).toHaveBeenCalledOnce();
+        expect(probeAccount).toHaveBeenCalledOnce();
+        expect(buildChannelSummary).toHaveBeenCalledOnce();
+      }
+      expect(JSON.stringify(payload)).not.toContain("PRIVATE_TOKEN_REFERENCE");
+    },
+  );
+
+  it.each(["load", "register", "validation"] as const)(
+    "keeps a channel visible after its plugin fails during %s",
+    async (failurePhase) => {
+      const credential = "synthetic-loader-credential-that-must-not-escape";
+      const failedProbe = vi.fn();
+      const failed = createChannelPlugin({ id: "broken-channel", probeAccount: failedProbe });
+      const healthyProbe = vi.fn(async () => ({ ok: true }));
+      const healthy = createChannelPlugin({ id: "healthy", probeAccount: healthyProbe });
+      configureAutoEnabledChannels([healthy]);
+      failed.config.listAccountIds = () => ["default", "disabled"];
+      mocks.applyPluginAutoEnable.mockReturnValue({
+        config: {
+          autoEnabled: true,
+          logging: { redactSensitive: "off", redactPatterns: ["never-match-custom"] },
+          channels: { "broken-channel": { accounts: { Disabled: { enabled: false } } } },
+        },
+        changes: [],
+      });
+      mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([failed, healthy]);
+      setActivePluginRegistry({
+        ...createTestRegistry([]),
+        plugins: [
+          createPluginRecord({
+            id: "broken-owner",
+            enabled: true,
+            status: "error",
+            failurePhase,
+            channelIds: ["broken-channel"],
+            error: `missing SDK export; Authorization: Bearer ${credential}\n${"context ".repeat(300)}`,
+          }),
+        ],
+      });
+
+      const payload = await runChannelsStatus({ probe: true, timeoutMs: 1000 });
+
+      expect(JSON.stringify(payload)).not.toContain(credential);
+      const lastError = firstChannelAccount(payload, "broken-channel").lastError;
+      expect(String(lastError).length).toBeLessThan(1200);
+      expect(lastError).toContain("run openclaw doctor");
+      expect(firstChannelAccount(payload, "broken-channel")).toMatchObject({
+        configured: true,
+        running: false,
+        lifecycle: "blocked",
+        lastError: expect.stringContaining("missing SDK export"),
+      });
+      expect(requireGatewayRecord(payload.channels, "channels")["broken-channel"]).toMatchObject({
+        configured: true,
+        lastError: expect.stringContaining("missing SDK export"),
+      });
+      const accounts = requireGatewayRecord(payload.channelAccounts, "accounts")["broken-channel"];
+      expect(accounts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            accountId: "disabled",
+            enabled: false,
+            lastError: expect.stringContaining("missing SDK export"),
+          }),
+        ]),
+      );
+      expect(failedProbe).not.toHaveBeenCalled();
+      expect(healthyProbe).toHaveBeenCalledOnce();
+      mocks.normalizeChannelId.mockReturnValueOnce(null);
+      const filtered = await runChannelsStatus({ channel: "broken-channel", probe: false });
+      expect(firstChannelAccount(filtered, "broken-channel").lifecycle).toBe("blocked");
+      expect(requireGatewayRecord(filtered.channelAccounts, "accounts")).not.toHaveProperty(
+        "healthy",
+      );
+    },
+  );
 
   it("caps probe timeout before passing it to channel plugins", async () => {
     const autoEnabledConfig = { autoEnabled: true };
@@ -339,11 +569,13 @@ describe("channelsHandlers channels.status", () => {
       throw new Error("probe failed");
     });
     mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
-    mocks.resolveChannelAccountSnapshot.mockImplementation(async ({ accountId, probe }) => ({
-      accountId,
-      configured: true,
-      probe,
-    }));
+    mocks.buildChannelAccountSnapshotFromAccount.mockImplementation(
+      async ({ accountId, probe }) => ({
+        accountId,
+        configured: true,
+        probe,
+      }),
+    );
     mocks.listChannelPlugins.mockReturnValue([createChannelPlugin({ probeAccount })]);
 
     const payload = await runChannelsStatus({ probe: true, timeoutMs: 1000 });
@@ -358,7 +590,7 @@ describe("channelsHandlers channels.status", () => {
   });
 
   it("marks account snapshot failures partial", async () => {
-    mocks.resolveChannelAccountSnapshot.mockRejectedValue(new Error("snapshot failed"));
+    mocks.buildChannelAccountSnapshotFromAccount.mockRejectedValue(new Error("snapshot failed"));
 
     const payload = await runChannelsStatus({ probe: false, timeoutMs: 1000 });
 
@@ -402,11 +634,13 @@ describe("channelsHandlers channels.status", () => {
         createChannelPlugin({ id: "hanging", probeAccount: hangingProbe }),
         createChannelPlugin({ id: "healthy", probeAccount: healthyProbe }),
       ]);
-      mocks.resolveChannelAccountSnapshot.mockImplementation(async ({ accountId, probe }) => ({
-        accountId,
-        configured: true,
-        probe,
-      }));
+      mocks.buildChannelAccountSnapshotFromAccount.mockImplementation(
+        async ({ accountId, probe }) => ({
+          accountId,
+          configured: true,
+          probe,
+        }),
+      );
       const respond = vi.fn();
       const run = expectDefined(
         channelsHandlers["channels.status"],
@@ -437,7 +671,7 @@ describe("channelsHandlers channels.status", () => {
   it("falls back to account-derived channel summaries when summary building fails", async () => {
     const autoEnabledConfig = { autoEnabled: true };
     mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
-    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
+    mocks.buildChannelAccountSnapshotFromAccount.mockResolvedValue({
       accountId: "default",
       configured: true,
     });
@@ -462,7 +696,7 @@ describe("channelsHandlers channels.status", () => {
 
   it("annotates terminal-disconnect accounts with terminal-disconnect health state", async () => {
     mocks.applyPluginAutoEnable.mockReturnValue({ config: { autoEnabled: true }, changes: [] });
-    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
+    mocks.buildChannelAccountSnapshotFromAccount.mockResolvedValue({
       accountId: "default",
       enabled: true,
       configured: true,
@@ -494,7 +728,7 @@ describe("channelsHandlers channels.status", () => {
   it("annotates unhealthy channel snapshots and includes event-loop health", async () => {
     const now = Date.now();
     mocks.applyPluginAutoEnable.mockReturnValue({ config: { autoEnabled: true }, changes: [] });
-    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
+    mocks.buildChannelAccountSnapshotFromAccount.mockResolvedValue({
       accountId: "default",
       enabled: true,
       configured: true,
@@ -543,7 +777,7 @@ describe("channelsHandlers channels.status", () => {
 
   it("preserves channel-authored health state when shared health is healthy", async () => {
     mocks.applyPluginAutoEnable.mockReturnValue({ config: { autoEnabled: true }, changes: [] });
-    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
+    mocks.buildChannelAccountSnapshotFromAccount.mockResolvedValue({
       accountId: "default",
       enabled: true,
       configured: true,
@@ -559,7 +793,7 @@ describe("channelsHandlers channels.status", () => {
 
   it("preserves channel-authored conflict when recorded blocked lifecycle is unhealthy", async () => {
     mocks.applyPluginAutoEnable.mockReturnValue({ config: { autoEnabled: true }, changes: [] });
-    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
+    mocks.buildChannelAccountSnapshotFromAccount.mockResolvedValue({
       accountId: "default",
       enabled: true,
       configured: true,
@@ -583,7 +817,7 @@ describe("channelsHandlers channels.status", () => {
 
   it("derives blocked health from recorded lifecycle", async () => {
     mocks.applyPluginAutoEnable.mockReturnValue({ config: { autoEnabled: true }, changes: [] });
-    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
+    mocks.buildChannelAccountSnapshotFromAccount.mockResolvedValue({
       accountId: "default",
       enabled: true,
       configured: true,

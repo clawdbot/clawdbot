@@ -37,13 +37,11 @@ export type {
   BrowserDeleteProfileResult,
   BrowserDoctorCheck,
   BrowserDoctorReport,
-  BrowserImportProfileResult,
   BrowserResetProfileResult,
   BrowserStatus,
   BrowserTab,
   BrowserTransport,
   ProfileStatus,
-  SystemProfileInfo,
   SnapshotResult,
 } from "./browser/client.js";
 export type { BrowserExecutable } from "./browser/chrome.executables.js";
@@ -55,17 +53,10 @@ export {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./browser/constants.js";
-export {
-  parseBrowserMajorVersion,
-  readBrowserVersion,
-  resolveGoogleChromeExecutableForPlatform,
-} from "./browser/chrome.executables.js";
+export { parseBrowserMajorVersion, readBrowserVersion } from "./browser/chrome.executable-probe.js";
+export { resolveGoogleChromeExecutableForPlatform } from "./browser/chrome.executables.js";
 export { redactCdpUrl } from "./browser/cdp.helpers.js";
-export {
-  DEFAULT_UPLOAD_DIR,
-  resolveExistingPathsWithinRoot,
-  resolveExistingUploadPaths,
-} from "./browser/paths.js";
+export { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "./browser/paths.js";
 export { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
 export {
   isBrowserHostLocalRoute,

@@ -10,9 +10,13 @@ import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/src/evidence-summary.js";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/src/gateway-child.js";
+import {
+  createQaGatewayChild,
+  type QaGatewayChild,
+} from "../../../../extensions/qa-lab/src/gateway-child.js";
 import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
 import { getFreePort } from "../../../../src/test-utils/ports.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
 
 const FIXTURE_PLUGIN_ID = "qa-voice-call-runtime";
@@ -218,10 +222,11 @@ async function runVoiceCallProof(options: ProducerOptions): Promise<string> {
   const fixture = createFixturePlugin(options.repoRoot, fixtureRoot);
   const mock = await startQaMockOpenAiServer();
   const servePort = await getFreePort();
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
+  let gateway: QaGatewayChild | undefined;
   let mediaStream: WebSocket | undefined;
   try {
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
@@ -427,7 +432,7 @@ async function runVoiceCallProof(options: ProducerOptions): Promise<string> {
     if (mediaStream && mediaStream.readyState < WebSocket.CLOSING) {
       mediaStream.close();
     }
-    await gateway?.stop().catch(() => undefined);
+    await stopQaGatewayFixture(gatewayOwner).catch(() => undefined);
     await mock.stop();
     await fs.rm(fixtureRoot, { force: true, recursive: true });
   }

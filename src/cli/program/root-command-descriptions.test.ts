@@ -5,8 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cliCommandCatalog } from "../command-catalog.js";
 import { isReservedNonPluginCommandRoot } from "../command-registration-policy.js";
 import { collectShellCompletionCommandTree } from "../completion-command-tree.js";
-import { formatCliJsonFailure } from "../failure-output.js";
-import { runCliWithExitFinalization } from "../one-shot-exit.js";
 import { getCoreCliCommandNames, registerCoreCliByName } from "./command-registry-core.js";
 import { createProgramContext } from "./context.js";
 import { getCoreCliCommandDescriptors } from "./core-command-descriptors.js";
@@ -50,6 +48,7 @@ const JSON_NOT_APPLICABLE = {
       "system",
       "system heartbeat",
       "promos",
+      "telemetry",
       "infer",
       "infer model",
       "infer model auth",
@@ -61,6 +60,7 @@ const JSON_NOT_APPLICABLE = {
       "infer embedding",
       "approvals",
       "approvals allowlist",
+      "approvals grants",
       "exec-policy",
       "nodes",
       "nodes camera",
@@ -146,6 +146,8 @@ const JSON_NOT_APPLICABLE = {
       "uninstall",
       "backup enable",
       "backup disable",
+      "telemetry on",
+      "telemetry off",
       "config set",
       "mcp add",
       "mcp set",
@@ -223,7 +225,7 @@ async function registerAllBuiltInCommands(): Promise<Command> {
   const argv = ["node", "openclaw", "completion"];
 
   for (const name of getCoreCliCommandNames()) {
-    await registerCoreCliByName(program, ctx, name, argv);
+    await registerCoreCliByName(program, ctx, name);
   }
   for (const entry of getSubCliEntriesCore()) {
     await registerSubCliByName(program, entry.name, argv, { purpose: "completion" });
@@ -249,7 +251,7 @@ function requiredCommandArgs(command: Command): string[] {
     if (!argument.required) {
       return [];
     }
-    return argument.variadic ? ["guard-value"] : ["guard-value"];
+    return ["guard-value"];
   });
   for (const option of command.options) {
     if (!option.mandatory) {
@@ -423,38 +425,23 @@ describe("root command descriptions", () => {
     ).toEqual([]);
   });
 
-  it("routes every registered JSON command failure through the canonical envelope", async () => {
+  it("accepts declared JSON output options through the registered command parsers", async () => {
     const program = await registerAllBuiltInCommands();
     const contexts = collectShellCompletionCommandTree(program).descendants.filter((context) => {
       const path = context.pathVariants[0]?.join(" ") ?? "";
-      return supportsJsonOutput(path, context.command);
+      return supportsJsonOutput(path, context.command) && hasOwnJsonOption(context.command);
     });
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
     expect(contexts.length).toBeGreaterThan(0);
     for (const context of contexts) {
       const path = context.pathVariants[0]?.join(" ") ?? "";
       const failure = new Error(`synthetic failure for ${path}`);
-      const payloads: unknown[] = [];
       context.command.action(async () => {
         throw failure;
       });
-      const args = requiredCommandArgs(context.command);
-      if (hasOwnJsonOption(context.command)) {
-        args.push("--json");
-      }
+      const args = [...requiredCommandArgs(context.command), "--json"];
 
-      await runCliWithExitFinalization({
-        runtime,
-        run: async () => {
-          await context.command.parseAsync(args, { from: "user" });
-        },
-        onError: (error) => {
-          payloads.push(formatCliJsonFailure(error));
-        },
-      });
-
-      expect(payloads, path).toEqual([formatCliJsonFailure(failure)]);
+      await expect(context.command.parseAsync(args, { from: "user" }), path).rejects.toBe(failure);
     }
   });
 });

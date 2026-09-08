@@ -1,3 +1,4 @@
+import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import {
   clearSessionPlacementRecovery,
@@ -6,6 +7,7 @@ import {
   promoteSessionPlacementRecovery,
   type SessionPlacementCreateParams,
   type SessionPlacementRecovery,
+  type SessionPlacementPendingRecovery,
   type SessionPlacementTarget,
   writeSessionPlacementRecovery,
 } from "../../lib/sessions/session-placement-recovery.ts";
@@ -22,32 +24,17 @@ export function resolveSubmissionOutcomeReason(params: {
     : "placement-interrupted";
 }
 
-export function resolveScope(
-  snapshot: {
-    client: { recoveryScope?: string; recoveryScopeReady?: boolean } | null;
-    connected: boolean;
-  },
-  current: string,
-  firstBind: boolean,
-): { next: string; changed: boolean } {
-  // Retain the verified scope until replacement auth arrives; a different scope invalidates it.
-  const next =
-    snapshot.connected && snapshot.client?.recoveryScopeReady
-      ? (snapshot.client.recoveryScope ?? "")
-      : current;
-  return { next, changed: !firstBind && snapshot.connected && current !== next };
-}
-
 export class PendingSessionPlacementRecoveryState {
   sessionKey = "";
   messageId = "";
   message = "";
+  mentions: readonly HumanMention[] | undefined;
   attachments: unknown[] | undefined;
   target: SessionPlacementTarget | null = null;
   agentId = "";
   gatewayUrl = "";
   recoveryScope = "";
-  phase: SessionPlacementRecovery["phase"] = "dispatching";
+  phase: SessionPlacementPendingRecovery["phase"] = "dispatching";
   createParams: SessionPlacementCreateParams | undefined;
   retryAllowed = false;
   restored = false;
@@ -55,20 +42,16 @@ export class PendingSessionPlacementRecoveryState {
 
   clear() {
     if (this.persistent) {
-      clearSessionPlacementRecovery(this.gatewayUrl, this.recoveryScope, this.sessionKey);
+      clearSessionPlacementRecovery(
+        this.gatewayUrl,
+        this.recoveryScope,
+        this.sessionKey,
+        this.messageId,
+      );
     }
     this.reset();
   }
 
-  clearFor(gatewayUrl: string, recoveryScope: string, sessionKey: string) {
-    clearSessionPlacementRecovery(gatewayUrl, recoveryScope, sessionKey);
-    if (this.owns(gatewayUrl, recoveryScope, sessionKey)) {
-      this.reset();
-    }
-  }
-
-  // Concurrent same-key replacement pages may double-clear recovery; that rare multi-tab flow is
-  // accepted in favor of ownership based only on gateway URL, recovery scope, and session key.
   owns(gatewayUrl: string, recoveryScope: string, sessionKey: string): boolean {
     return (
       this.gatewayUrl === gatewayUrl &&
@@ -81,6 +64,7 @@ export class PendingSessionPlacementRecoveryState {
     this.sessionKey = "";
     this.messageId = "";
     this.message = "";
+    this.mentions = undefined;
     this.attachments = undefined;
     this.target = null;
     this.agentId = "";
@@ -97,7 +81,7 @@ export class PendingSessionPlacementRecoveryState {
     const recovery = listSessionPlacementRecoveries(gatewayUrl, recoveryScope).find(
       (candidate) => candidate.phase === "creating",
     );
-    if (!recovery) {
+    if (!recovery || recovery.phase !== "creating") {
       return null;
     }
     this.apply(recovery, true, true);
@@ -112,6 +96,7 @@ export class PendingSessionPlacementRecoveryState {
     agentId: string;
     target: SessionPlacementTarget;
     message: string;
+    mentions?: readonly HumanMention[];
     attachments?: unknown[];
     gatewayUrl: string;
     recoveryScope: string;
@@ -135,6 +120,9 @@ export class PendingSessionPlacementRecoveryState {
       sessionKey,
       messageId: generateUUID(),
       message: params.message,
+      ...(params.mentions?.length
+        ? { mentions: params.mentions.map((mention) => ({ ...mention })) }
+        : {}),
       attachments: params.attachments,
       target: params.target,
       agentId: params.agentId,
@@ -167,7 +155,7 @@ export class PendingSessionPlacementRecoveryState {
 
   private snapshot(
     sessionKey: string,
-    phase: SessionPlacementRecovery["phase"],
+    phase: SessionPlacementPendingRecovery["phase"],
   ): SessionPlacementRecovery | null {
     if (
       !this.sessionKey ||
@@ -182,6 +170,9 @@ export class PendingSessionPlacementRecoveryState {
       sessionKey,
       messageId: this.messageId,
       message: this.message,
+      ...(this.mentions?.length
+        ? { mentions: this.mentions.map((mention) => ({ ...mention })) }
+        : {}),
       attachments: this.attachments ? [...this.attachments] : undefined,
       target: { ...this.target },
       agentId: this.agentId,
@@ -194,10 +185,11 @@ export class PendingSessionPlacementRecoveryState {
     };
   }
 
-  private apply(recovery: SessionPlacementRecovery, restored: boolean, persistent: boolean) {
+  private apply(recovery: SessionPlacementPendingRecovery, restored: boolean, persistent: boolean) {
     this.sessionKey = recovery.sessionKey;
     this.messageId = recovery.messageId;
     this.message = recovery.message;
+    this.mentions = recovery.mentions;
     this.attachments = recovery.attachments;
     this.target = { ...recovery.target };
     this.agentId = recovery.agentId;

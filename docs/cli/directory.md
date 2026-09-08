@@ -19,12 +19,14 @@ Results are meant to be pasted into other commands, especially `openclaw message
 - `--json`: output JSON
 
 Default output renders IDs and names in a table. Empty list results name the channel and account
-that were queried; JSON list output uses an empty array (`[]`). Failures exit nonzero and use an
-`{ "error": "..." }` object in JSON mode.
+that were queried; JSON list output uses an empty array (`[]`). Failures exit nonzero and use the
+canonical `{ "ok": false, "error": { "type": "cli_error", "message": "..." } }` envelope in
+JSON mode.
 
 ## Notes
 
 - For many channels, results are config-backed (allowlists / configured groups) rather than a live provider directory.
+- Before a live lookup, OpenClaw resolves configured SecretRefs only for the selected channel and account. Resolved credentials remain runtime-only; plugin installation and auto-enable writes preserve the authored references without persisting runtime defaults.
 - WhatsApp group listing is live. Gateway lookups reuse its owned connection; a standalone command opens the linked session only when no other process owns that account and otherwise reports that live groups are unavailable.
 - An already-installed channel plugin can lack directory support. In that case the command reports the unsupported operation; it does not try to reinstall or upgrade the plugin to add support.
 

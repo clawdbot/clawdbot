@@ -1,10 +1,11 @@
 // Resolves the first channel that can report linked/unlinked auth state for status summaries.
 // Channel-specific linking logic stays inside plugin status hooks.
 
-import { resolveDefaultChannelAccountContext } from "../channels/account-context.js";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveInspectedChannelAccount } from "../channels/account-inspection.js";
+import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 type LinkChannelContext = {
@@ -25,28 +26,27 @@ export async function resolveLinkChannelContext(
     activationSourceConfig: sourceConfig,
     includeSetupFallbackPlugins: false,
   })) {
-    const { defaultAccountId, account, enabled, configured } =
-      await resolveDefaultChannelAccountContext(plugin, cfg, {
-        mode: "read_only",
-        commandName: "status",
-      });
-    const snapshot = plugin.config.describeAccount
-      ? plugin.config.describeAccount(account, cfg)
-      : ({
-          // Fallback snapshot keeps older/simple plugins visible in status.
-          accountId: defaultAccountId,
-          enabled,
-          configured,
-        } as ChannelAccountSnapshot);
-    const summary = plugin.status?.buildChannelSummary
-      ? await plugin.status.buildChannelSummary({
-          account,
-          cfg,
-          defaultAccountId,
-          snapshot,
-        })
-      : undefined;
-    const summaryRecord = summary;
+    const defaultAccountId = resolveChannelDefaultAccountId({ plugin, cfg });
+    const context = await resolveInspectedChannelAccount({
+      plugin,
+      cfg,
+      sourceConfig,
+      accountId: defaultAccountId,
+    });
+    if (context.kind === "unavailable") {
+      continue;
+    }
+    const { account, snapshot } = context;
+    const summary =
+      context.kind === "resolved" && plugin.status?.buildChannelSummary
+        ? await plugin.status.buildChannelSummary({
+            account,
+            cfg,
+            defaultAccountId,
+            snapshot,
+          })
+        : snapshot;
+    const summaryRecord = asNullableRecord(summary);
     const linked =
       summaryRecord && typeof summaryRecord.linked === "boolean" ? summaryRecord.linked : null;
     if (linked === null) {

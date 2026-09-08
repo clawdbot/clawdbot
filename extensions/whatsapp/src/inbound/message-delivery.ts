@@ -1,13 +1,9 @@
 // Whatsapp plugin module owns inbound message admission and delivery.
 import { createHash } from "node:crypto";
-import type {
-  AnyMessageContent,
-  MiscMessageGenerationOptions,
-  proto,
-  WAMessage,
-  WASocket,
-} from "baileys";
+import type { AnyMessageContent, MiscMessageGenerationOptions, WAMessage, WASocket } from "baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
+import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { defaultRuntime, createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -16,7 +12,6 @@ import { resolveComparableIdentity } from "../identity.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
 import { maybeResolveWhatsAppQuestionReaction } from "../question-reactions.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
-import type { OpenClawConfig } from "../runtime-api.js";
 import { formatError } from "../session.js";
 import { requireWhatsAppInboundAdmission } from "./admission.js";
 import {
@@ -27,7 +22,6 @@ import {
   type WhatsAppIngressLifecycle,
   type WhatsAppReadReceiptTarget,
 } from "./durable-receive.js";
-import { extractMentionedJids } from "./extract.js";
 import type { WhatsAppGroupMetadataCacheOwner } from "./group-metadata-cache.js";
 import {
   createWhatsAppInboundMessageDebouncer,
@@ -192,7 +186,12 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     await maybeMarkInboundAsRead(target);
   };
   const messageDebouncer = createWhatsAppInboundMessageDebouncer({
-    debounceMs: options.debounceMs,
+    resolveDebounceMs: () =>
+      resolveInboundDebounceMs({
+        cfg: options.loadConfig?.() ?? options.cfg,
+        channel: "whatsapp",
+        overrideMs: options.debounceMs,
+      }),
     onMessage: options.onMessage,
     shouldDebounce: options.shouldDebounce,
     markRead: maybeMarkInboundAsRead,
@@ -270,7 +269,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       return normalizeWhatsAppSendResult(result, "media");
     };
     const timestamp = inbound.messageTimestampMs;
-    const mentionedJids = extractMentionedJids(msg.message as proto.IMessage | undefined);
+    const mentionedJids = enriched.mentionedJids;
     const senderName = msg.pushName ?? undefined;
 
     inboundLogger.info(
@@ -428,6 +427,22 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     if (context.skipRecentOutboundEcho === true) {
       return "completed";
     }
+    // Reactions do not normalize into chat messages. Resolve them while the drain
+    // owns the claim so transient failures remain replayable.
+    if (
+      await maybeResolveWhatsAppApprovalReaction({
+        cfg: options.loadConfig?.() ?? options.cfg,
+        accountId: options.accountId,
+        msg,
+        selfJid: self.jid,
+        selfLid: self.lid,
+        resolveInboundJid,
+        resolveReactionTargetJids,
+        logVerboseMessage: (message) => logWhatsAppVerbose(options.verbose, message),
+      })
+    ) {
+      return "completed";
+    }
     const prepared = await preparation;
     if (prepared === null) {
       return "completed";
@@ -498,8 +513,9 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
 
       const receiveOrder = nextReceiveOrder++;
-      if (
-        await maybeResolveWhatsAppApprovalReaction({
+      let approvalReactionResolved = false;
+      try {
+        approvalReactionResolved = await maybeResolveWhatsAppApprovalReaction({
           cfg: options.loadConfig?.() ?? options.cfg,
           accountId: options.accountId,
           msg,
@@ -508,8 +524,15 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
           resolveInboundJid,
           resolveReactionTargetJids,
           logVerboseMessage: (message) => logWhatsAppVerbose(options.verbose, message),
-        })
-      ) {
+        });
+      } catch (error) {
+        // Admit this reaction for durable replay without aborting its batch siblings.
+        inboundLogger.warn(
+          { error: formatError(error) },
+          "whatsapp approval reaction resolution failed; admitting reaction for durable replay",
+        );
+      }
+      if (approvalReactionResolved) {
         continue;
       }
 

@@ -6,7 +6,13 @@ import {
 } from "@openclaw/llm-core";
 import { WebSocketError } from "openai/resources/responses/internal-base.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../../../../src/config/plugin-auto-enable.test-helpers.js";
 import { isRetryableAssistantError } from "../../../../src/llm/utils/retry.js";
+import { createEmptyPluginRegistry } from "../../../../src/plugins/registry-empty.js";
+import { withPluginRuntimeGenerationScope } from "../../../../src/plugins/runtime/generation-scope.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import {
@@ -811,8 +817,10 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     );
 
     const terminalFacts = {
+      provider: "openai",
       stopReason: "error",
       errorMessage: "server_error: 503 temporary provider response",
+      errorCode: "server_error",
       responseId: "resp_failed",
       responseModel: "gpt-5.6-luna-2026-08-01",
       usage: {
@@ -828,8 +836,38 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     expect(sse).toMatchObject(terminalFacts);
     expect(websocket.usage.cost.total).toBeCloseTo(0.000401, 10);
     expect(sse.usage.cost.total).toBeCloseTo(0.000401, 10);
-    expect(isRetryableAssistantError(websocket)).toBe(true);
-    expect(isRetryableAssistantError(sse)).toBe(true);
+    const classifyFailoverReason = vi.fn(() => undefined);
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.providers.push({
+      pluginId: "openai",
+      source: "test",
+      provider: { id: "openai", label: "OpenAI fixture", auth: [], classifyFailoverReason },
+    });
+    // Agent runs prepare a provider owner before retry classification. Keep that boundary
+    // here so the transport fixture exercises core retry policy without plugin discovery.
+    withPluginRuntimeGenerationScope(
+      {
+        metadataSnapshot: createPluginMetadataSnapshot({
+          manifestRegistry: makeRegistry([{ id: "openai", channels: [], providers: ["openai"] }]),
+        }),
+        pluginRegistry,
+      },
+      () => {
+        expect(isRetryableAssistantError(websocket)).toBe(true);
+        expect(isRetryableAssistantError(sse)).toBe(true);
+      },
+    );
+    const expectedProviderSignal = {
+      provider: "openai",
+      code: "server_error",
+      errorMessage: terminalFacts.errorMessage,
+      errorType: undefined,
+      status: undefined,
+    };
+    expect(classifyFailoverReason.mock.calls).toEqual([
+      [expectedProviderSignal],
+      [expectedProviderSignal],
+    ]);
 
     const next = await run(
       { messages: [userMessage("next", 3)], tools: [] },

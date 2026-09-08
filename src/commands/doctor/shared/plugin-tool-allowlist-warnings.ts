@@ -142,7 +142,7 @@ function collectConfiguredMcpServerNames(cfg: OpenClawConfig): string[] {
     return [];
   }
   return Object.entries(servers)
-    .filter(([, value]) => hasRecord(value))
+    .filter(([, value]) => hasRecord(value) && value.enabled !== false)
     .map(([name]) => name.trim())
     .filter(Boolean)
     .toSorted((left, right) => left.localeCompare(right));

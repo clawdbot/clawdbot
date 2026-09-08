@@ -17,7 +17,13 @@ import {
   registerGetReplyRuntimeOverrides,
 } from "./get-reply.test-fixtures.js";
 import "./get-reply.test-runtime-mocks.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { bindPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
+import {
+  REPLY_OPERATION_RUN_STATE,
+  type ReplyOperationRunState,
+} from "./reply-operation-run-state.js";
+import { SessionResetCleanupError } from "./session-reset-cleanup.js";
 
 type CaptureSessionDiffBaseline =
   (typeof import("../../sessions/session-diff.js"))["captureSessionDiffBaseline"];
@@ -29,6 +35,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../sessions/session-diff.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../sessions/session-diff.js")>()),
   captureSessionDiffBaseline: mocks.captureSessionDiffBaseline,
+}));
+vi.mock("./commands.runtime.js", () => ({
+  handleCommands: vi.fn(async () => ({ shouldContinue: true })),
 }));
 registerGetReplyRuntimeOverrides(mocks);
 
@@ -193,6 +202,18 @@ describe("getReplyFromConfig configOverride", () => {
     );
   });
 
+  it("reports reset cleanup failure without starting the reply", async () => {
+    const message = "Reset did not complete. Inspect remaining tasks and retry /reset.";
+    mocks.initSessionState.mockRejectedValueOnce(new SessionResetCleanupError(message));
+    const runState: ReplyOperationRunState = {};
+    const opts: InternalGetReplyOptions = { [REPLY_OPERATION_RUN_STATE]: runState };
+    await expect(getReplyFromConfig(buildGetReplyCtx(), opts, {})).resolves.toEqual({
+      text: message,
+    });
+    expect(runState.preRunRejection).toBe("session-directive-rejected");
+    expect(runPreparedReplyMock).not.toHaveBeenCalled();
+  });
+
   it("rethrows baseline work-start invalidation before reply execution", async () => {
     const { ctx } = await prepareBaselineClaimSession("invalidated-get-reply");
     mocks.captureSessionDiffBaseline.mockRejectedValueOnce(
@@ -252,25 +273,44 @@ describe("getReplyFromConfig configOverride", () => {
     );
   });
 
-  it("uses one request-scoped prepared runtime through the raw Plugin SDK resolver", async () => {
-    const preparedRuntime = createPreparedDispatchRuntime();
-    vi.mocked(loadConfigMock).mockImplementation(() => {
-      throw new Error("getRuntimeConfig should not be called for a prepared Gateway dispatch");
-    });
+  it.each([false, true])(
+    "uses the admitted catalog through the SDK resolver (native=%s)",
+    async (native) => {
+      const preparedRuntime = createPreparedDispatchRuntime();
+      vi.mocked(loadConfigMock).mockImplementation(() => {
+        throw new Error("getRuntimeConfig should not be called for a prepared Gateway dispatch");
+      });
 
-    await bindPreparedReplyDispatchRuntime(preparedRuntime, getReplyFromConfig)(buildGetReplyCtx());
+      await bindPreparedReplyDispatchRuntime(
+        preparedRuntime,
+        getReplyFromConfig,
+      )(
+        buildGetReplyCtx(
+          native
+            ? {
+                Body: "/model ollama/picker-secondary -s",
+                RawBody: "/model ollama/picker-secondary -s",
+                CommandBody: "/model ollama/picker-secondary -s",
+                CommandSource: "native",
+                CommandAuthorized: true,
+                CommandTargetSessionKey: "agent:main:telegram:123",
+              }
+            : {},
+        ),
+      );
 
-    expect(loadConfigMock).not.toHaveBeenCalled();
-    expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
-    expect(mocks.resolveReplyDirectives).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "main",
-        agentDir: "/tmp/prepared-model-owner",
-        workspaceDir: "/tmp/prepared-model-workspace",
-        preparedModelCatalog: preparedRuntime.modelCatalog,
-      }),
-    );
-  });
+      expect(loadConfigMock).not.toHaveBeenCalled();
+      expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
+      expect(mocks.resolveReplyDirectives).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "main",
+          agentDir: "/tmp/prepared-model-owner",
+          workspaceDir: "/tmp/prepared-model-workspace",
+          preparedModelCatalog: preparedRuntime.modelCatalog,
+        }),
+      );
+    },
+  );
 
   it("rejects a prepared dispatch runtime that crosses the admitted session agent", async () => {
     const preparedRuntime = createPreparedDispatchRuntime({

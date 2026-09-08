@@ -1,6 +1,4 @@
 /** Tests provider discovery normalization, grouping, and manifest contribution handling. */
-import fs from "node:fs";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.js";
 import {
@@ -9,7 +7,6 @@ import {
   runProviderCatalog,
   runProviderStaticCatalog,
 } from "./provider-discovery.js";
-import * as providerDiscoveryModule from "./provider-discovery.js";
 import type { ProviderCatalogOrder, ProviderPlugin } from "./types.js";
 
 function makeProvider(params: {
@@ -92,25 +89,6 @@ type NormalizePluginDiscoveryResultCase = {
   expected: Record<string, unknown>;
 };
 
-describe("resolveInstalledPluginProviderContributionIds", () => {
-  it("keeps current production callers off the ambiguous runtime-discovery alias", () => {
-    const callerPaths = [
-      "src/agents/models-config.providers.implicit.ts",
-      "src/commands/models/list.row-sources.ts",
-    ];
-
-    for (const callerPath of callerPaths) {
-      expect(fs.readFileSync(path.join(process.cwd(), callerPath), "utf-8")).not.toContain(
-        "resolvePluginDiscoveryProviders",
-      );
-    }
-  });
-
-  it("does not keep exporting the ambiguous runtime-discovery alias", () => {
-    expect(Object.keys(providerDiscoveryModule)).not.toContain("resolvePluginDiscoveryProviders");
-  });
-});
-
 describe("groupPluginDiscoveryProvidersByOrder", () => {
   it.each([
     {
@@ -135,10 +113,37 @@ describe("groupPluginDiscoveryProvidersByOrder", () => {
 });
 
 describe("runProviderCatalog", () => {
+  it("passes the selected provider identities into the catalog hook", async () => {
+    let providerIds: readonly string[] | undefined;
+    const provider: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      auth: [],
+      catalog: {
+        run: async (ctx) => {
+          providerIds = ctx.providerIds;
+          return null;
+        },
+      },
+    };
+
+    await runProviderCatalog({
+      provider,
+      providerIds: ["azure-openai"],
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+    });
+
+    expect(providerIds).toEqual(["azure-openai"]);
+  });
+
   it("carries explicit provider-owned catalog outcomes across an async hook", async () => {
     const outcomes: Array<{
       provider: string;
       profileId?: string;
+      rejectionScope?: "catalog";
       status: "ready" | "auth-rejected" | "unavailable";
     }> = [];
     const provider: ProviderPlugin = {
@@ -154,6 +159,7 @@ describe("runProviderCatalog", () => {
               {
                 provider: "openai",
                 profileId: "openai:chatgpt",
+                rejectionScope: "catalog",
                 status: "auth-rejected",
               },
             ],
@@ -174,9 +180,99 @@ describe("runProviderCatalog", () => {
     });
 
     expect(outcomes).toEqual([
-      { provider: "openai", profileId: "openai:chatgpt", status: "auth-rejected" },
+      {
+        provider: "openai",
+        profileId: "openai:chatgpt",
+        rejectionScope: "catalog",
+        status: "auth-rejected",
+      },
     ]);
   });
+
+  it("preserves provider-owned profile outcomes after multiple auth probes", async () => {
+    const outcomes: Array<{ profileId?: string; status: string }> = [];
+    const provider: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      auth: [],
+      catalog: {
+        run: async (ctx) => {
+          ctx.resolveProviderAuth("openai");
+          ctx.resolveProviderAuth("openai");
+          return {
+            providers: {},
+            outcomes: [
+              {
+                provider: "openai",
+                profileId: "openai:profile-b",
+                status: "ready",
+              },
+            ],
+          };
+        },
+      },
+    };
+    let authCall = 0;
+
+    await runProviderCatalog({
+      provider,
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+      resolveProviderAuth: () => {
+        authCall += 1;
+        return {
+          apiKey: `selected-key-${authCall}`,
+          mode: "api_key",
+          profileId: `openai:profile-${authCall === 1 ? "a" : "b"}`,
+          source: "profile",
+        };
+      },
+      reportCatalogOutcome: (outcome) => outcomes.push(outcome),
+    });
+
+    expect(outcomes).toEqual([
+      { provider: "openai", profileId: "openai:profile-b", status: "ready" },
+    ]);
+  });
+
+  it.each([
+    { providerIds: ["OPENAI"], expected: ["openai"] },
+    { providerIds: ["azure-openai"], expected: ["azure-openai"] },
+    { providerIds: [], expected: [] },
+  ])(
+    "emits outcomes only for selected provider identities: $providerIds",
+    async ({ providerIds, expected }) => {
+      const outcomes: string[] = [];
+      const provider: ProviderPlugin = {
+        id: "openai",
+        label: "OpenAI",
+        auth: [],
+        catalog: {
+          run: async () => ({
+            providers: {},
+            outcomes: [
+              { provider: "openai", profileId: "openai:private", status: "auth-rejected" },
+              { provider: "azure-openai", profileId: "azure-openai:selected", status: "ready" },
+              { provider: "unrelated", status: "unavailable" },
+            ],
+          }),
+        },
+      };
+
+      await runProviderCatalog({
+        provider,
+        providerIds,
+        config: {},
+        env: {},
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+        reportCatalogOutcome: (outcome) => outcomes.push(outcome.provider),
+      });
+
+      expect(outcomes).toEqual(expected);
+    },
+  );
 });
 
 describe("normalizePluginDiscoveryResult", () => {

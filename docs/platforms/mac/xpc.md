@@ -7,7 +7,7 @@ title: "macOS IPC"
 
 # OpenClaw macOS IPC architecture
 
-A local Unix socket connects the node host service to the macOS app for exec approvals and `system.run`. An `openclaw-mac` debug CLI (`apps/macos/Sources/OpenClawMacCLI`) exists for discovery/connect checks; agent actions still flow through the Gateway WebSocket and `node.invoke`. The node-backed `computer.act` path runs embedded Peekaboo automation in-process; standalone Peekaboo clients use PeekabooBridge.
+A local Unix socket connects the node host service to the macOS app for exec approvals and `system.run`. The bundled `openclaw-mac` CLI uses a separate local control socket to inspect and configure primary and saved Gateway connections. Agent actions still flow through the Gateway WebSocket and `node.invoke`. The node-backed `computer.act` path runs embedded Peekaboo automation in-process; standalone Peekaboo clients use PeekabooBridge.
 
 ## Goals
 
@@ -29,6 +29,8 @@ A local Unix socket connects the node host service to the macOS app for exec app
 - A headless node host service connects to the Gateway WebSocket.
 - `system.run` requests are forwarded to the macOS app over a local Unix socket (`ExecApprovalsSocket.swift`).
 - The app performs the exec in UI context, prompts if needed, and returns output.
+- The socket owns the request lifetime. Node cancellation or a socket deadline closes the response reader, cancelling the native prompt or command and its process group. Stopping the app's exec server also cancels and drains active requests before releasing its socket lease.
+- Clients still half-close their **write** side after sending one JSONL request. That normal request EOF does not cancel execution; the response reader remains open until the result arrives.
 
 Diagram (SCI):
 
@@ -38,6 +40,65 @@ Agent -> Gateway -> Node Service (WS)
                       v
                   Mac App (UI + TCC + system.run)
 ```
+
+### App control socket
+
+`openclaw-mac` sends one JSONL request and receives one JSONL response per
+Unix-domain connection. The running app starts and stops this listener with
+its exec-approvals lifecycle owner. The shared listener owns the socket path
+lease, guarded filesystem cleanup, connection framing, and shutdown drainage.
+It exposes only these operations:
+
+| Operation           | Result and effect                                                                                                                   |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `status`            | Primary connection, saved Gateways, and app version/build/profile.                                                                  |
+| `primary.set`       | Set local mode, SSH transport, or direct transport through the app's native connection owners; return the resulting primary status. |
+| `primary.clear`     | Return the primary connection to its unconfigured state; return primary status.                                                     |
+| `gateway.list`      | List saved Gateways and their connection status.                                                                                    |
+| `gateway.add`       | Validate and connect through the Gateways tab's sign-in coordinator; return the saved Gateway and identity when present.            |
+| `gateway.remove`    | Resolve an ID/name and use the profile store's Remove path, including credential and dashboard-data cleanup.                        |
+| `gateway.reconnect` | Repeat browser sign-in for browser profiles or reconnect the saved token/password connection.                                       |
+
+Requests identify the operation with an `operation` string. Primary SSH
+settings include `sshTarget`, optional ports, `identityPath`, and
+`hostKeyPolicy` (`strict` or `openssh`); direct settings include `url` and an
+optional `tlsFingerprint`. Credential-bearing operations accept `token` or
+`password` inside the authenticated request; the CLI reads these from files
+or stdin. Saved-Gateway requests use `name`, `url`, and `browser`, or
+`idOrName` for removal/reconnection. Matching tries an exact ID first, then a
+unique case-insensitive name. Ambiguity is an error with candidate names/IDs.
+
+The default profile uses `~/.openclaw/mac-control.sock` and
+`~/.openclaw/mac-control.token`. Named profiles use the corresponding
+`~/.openclaw-<name>/` directory. These paths follow
+`AppProfile.stateDirectoryURL`, independently of config/state environment
+overrides. The app owns token creation. The token must be a regular,
+user-owned file with mode `0600`; missing or unsafe credentials reject
+requests. Clients must have the app's peer UID (`getpeereid`). The JSON
+envelope carries a nonce, millisecond timestamp, encoded request, and
+HMAC-SHA256 over the nonce, timestamp, and exact request bytes. Requests have a
+15-second authentication TTL; a successfully authenticated browser sign-in
+may remain open for the coordinator's bounded 300-second operation.
+
+Socket responses use `{ok:true,result:...}` or
+`{ok:false,error:{code,message}}`. The CLI's `--json` success output unwraps
+`result`. `status` contains:
+
+- `primary`: mode, nullable transport, URL, optional SSH target/remote port,
+  tunnel state/local port, and connection state/version/error.
+- `gateways`: ID, name, URL, authentication kind (`token`, `password`, or
+  `browser`), optional Cloudflare Access identity subject/expiry, and
+  connection state/error.
+- `app`: version, build, and profile.
+
+Responses never include tokens, passwords, browser-session credentials, or
+Keychain contents. Saved-Gateway mutations execute inside the signed app,
+where the profile store owns Keychain access, connection retirement,
+dashboard cookies, and device-token cleanup. The CLI never writes the
+saved-Gateway registry.
+
+See [remote control](/platforms/mac/remote#macos-app-setup) for shell examples,
+profile selection, safe credential input, and background app launch.
 
 ### PeekabooBridge (UI automation)
 

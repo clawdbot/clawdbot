@@ -48,38 +48,33 @@ function resolveLlmTaskModelRef(params: {
   api: OpenClawPluginApi;
   provider?: string;
   rawModel?: string;
+  preserveProvider?: boolean;
 }): { provider?: string; model?: string } {
   const defaultProvider =
     normalizeOptionalString(params.provider) ??
     normalizeOptionalString(params.api.runtime.agent.defaults.provider);
   const rawModel = normalizeOptionalString(params.rawModel);
+  const selectedModelRef = {
+    provider: params.provider,
+    model: stripDuplicateProviderPrefix(params.provider, rawModel),
+  };
   if (!rawModel || !defaultProvider) {
-    return {
-      provider: params.provider,
-      model: stripDuplicateProviderPrefix(params.provider, rawModel),
-    };
+    return selectedModelRef;
   }
 
   const cfg = params.api.config;
-  const aliasIndex = cfg
-    ? buildModelAliasIndex({
-        cfg,
-        defaultProvider,
-      })
-    : undefined;
+  const aliasIndex = cfg ? buildModelAliasIndex({ cfg, defaultProvider }) : undefined;
   const resolved = resolveModelRefFromString({
     cfg,
     raw: rawModel,
     defaultProvider,
     aliasIndex,
   });
-  if (!resolved) {
-    return {
-      provider: params.provider,
-      model: stripDuplicateProviderPrefix(params.provider, rawModel),
-    };
+  // Selected providers own nested model IDs, but configured aliases still own their target.
+  if (params.preserveProvider && !resolved?.alias) {
+    return selectedModelRef;
   }
-  return resolved.ref;
+  return resolved?.ref ?? selectedModelRef;
 }
 
 type PluginCfg = {
@@ -164,12 +159,12 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       const hasModelOverride = Boolean(
         requestProvider || configuredProvider || requestModel || configuredModel,
       );
-      const { provider: resolvedProvider, model } = resolveLlmTaskModelRef({
+      const { provider, model } = resolveLlmTaskModelRef({
         api,
         provider: requestedProvider,
         rawModel,
+        preserveProvider: Boolean(requestProvider || (!requestModel && configuredProvider)),
       });
-      const provider = resolvedProvider;
 
       const authProfileId =
         (typeof params.authProfileId === "string" && params.authProfileId.trim()) ||

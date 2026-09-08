@@ -1,52 +1,32 @@
-import type { SessionsCreateResult } from "../../../../packages/gateway-protocol/src/index.js";
+import { normalizeOptionalString as stringValue } from "@openclaw/normalization-core/string-coerce";
+import type {
+  SessionsCreateParams,
+  SessionsCreateResult,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
 export type SessionCreateOutcome = {
   key: string;
+  entry?: Readonly<Record<string, unknown>>;
   initialRun:
     | { status: "idle" }
-    | { status: "started"; runId?: string; messageSeq?: number }
+    | { status: "started"; runId?: string }
     | { status: "rejected"; error: string };
 };
 
-export type SessionCreateParams = {
-  key?: string;
-  agentId?: string;
-  catalogId?: string;
+export type SessionCreateParams = SessionsCreateParams & {
   currentSessionKey?: string;
-  parentSessionKey?: string;
-  fork?: boolean;
-  forkFrom?: "last-completed";
-  succeedsParent?: boolean;
-  label?: string;
-  category?: string;
-  model?: string;
-  thinkingLevel?: string;
-  incognito?: boolean;
-  worktree?: boolean;
-  /** Base ref for the managed worktree branch; requires worktree. */
-  worktreeBaseRef?: string;
-  /** Worktree name (branch becomes openclaw/<name>); requires worktree. */
-  worktreeName?: string;
-  /** Bind session exec to host=node with this node id (operator.admin). */
-  execNode?: string;
-  /** Absolute source checkout for the worktree (operator.admin). */
-  cwd?: string;
-  /** First message; the gateway creates the session and starts the run in one call. */
-  message?: string;
-  /** Attachments for the first message, using the chat.send wire format. */
-  attachments?: unknown[];
-  task?: string;
 };
 
 export function resolveSessionCreateParams(sessionKey = "", agentId?: string) {
   const normalizedSessionKey = sessionKey.trim();
+  const normalizedAgentId = agentId?.trim();
   const parentSessionKey =
     normalizedSessionKey && normalizedSessionKey.toLowerCase() !== "unknown"
       ? normalizedSessionKey
       : undefined;
   return {
-    ...(agentId?.trim() ? { agentId: agentId.trim() } : {}),
+    ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
     ...(parentSessionKey
       ? { parentSessionKey, emitCommandHooks: true, succeedsParent: false }
       : {}),
@@ -55,37 +35,26 @@ export function resolveSessionCreateParams(sessionKey = "", agentId?: string) {
 
 export async function requestSessionCreate(
   client: Pick<GatewayBrowserClient, "request">,
-  params: Omit<SessionCreateParams, "currentSessionKey"> & { emitCommandHooks?: boolean } = {},
+  params: Omit<SessionCreateParams, "currentSessionKey"> = {},
 ): Promise<SessionCreateOutcome> {
   const result = await client.request<SessionsCreateResult>("sessions.create", params);
-  const key = typeof result?.key === "string" ? result.key.trim() : "";
+  const key = stringValue(result?.key) ?? "";
   if (!key) {
     throw new Error("sessions.create returned no key");
   }
-  if (result.runStarted === true) {
-    const runId = typeof result.runId === "string" ? result.runId.trim() : "";
-    const messageSeq = result.messageSeq;
-    return {
-      key,
-      initialRun: {
-        status: "started",
-        ...(runId ? { runId } : {}),
-        ...(typeof messageSeq === "number" && Number.isSafeInteger(messageSeq) && messageSeq > 0
-          ? { messageSeq }
-          : {}),
-      },
+  let initialRun: SessionCreateOutcome["initialRun"] = { status: "idle" };
+  if (result.runStarted) {
+    const runId = stringValue(result.runId) ?? "";
+    initialRun = {
+      status: "started",
+      ...(runId ? { runId } : {}),
+    };
+  } else if (result.runError !== undefined) {
+    const message = stringValue(result.runError?.message) ?? "";
+    initialRun = {
+      status: "rejected",
+      error: message || "The session was created, but its first message could not be sent.",
     };
   }
-  if (result.runError !== undefined) {
-    const message =
-      typeof result.runError?.message === "string" ? result.runError.message.trim() : "";
-    return {
-      key,
-      initialRun: {
-        status: "rejected",
-        error: message || "The session was created, but its first message could not be sent.",
-      },
-    };
-  }
-  return { key, initialRun: { status: "idle" } };
+  return { key, entry: result.entry, initialRun };
 }

@@ -372,8 +372,9 @@ export function createWorkerInferenceManager(options: {
       return;
     }
     entry.launched = true;
-    const operation = runWithGatewayIndependentRootWorkContinuation(() =>
-      executeEntry(entry),
+    const operation = runWithGatewayIndependentRootWorkContinuation(
+      () => executeEntry(entry),
+      "worker:dispatch",
     ).catch(() => {
       finish(entry, terminalError(entry.abortReason ?? "provider-error"));
     });

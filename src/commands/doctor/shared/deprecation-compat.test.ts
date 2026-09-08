@@ -46,10 +46,17 @@ describe("doctor deprecation compatibility inventory", () => {
     }
   });
 
-  it("keeps dated deprecation metadata in chronological order", () => {
-    const records = listDoctorDeprecationCompatRecords().filter(
-      (record) => record.status === "deprecated" || record.status === "removal-pending",
-    );
+  it("keeps original and renewed deprecation windows in chronological order", () => {
+    const records = listDoctorDeprecationCompatRecords();
+    const renewedRecords = records.filter((record) => record.renewedAt !== undefined);
+
+    expect(renewedRecords).toHaveLength(44);
+    expect(
+      renewedRecords.some(
+        (record) => record.code === "doctor-webchat-channel-config" && record.status === "removed",
+      ),
+    ).toBe(true);
+
     for (const record of records) {
       expect(record.introduced, record.code).toMatch(datePattern);
       expect(record.deprecated, record.code).toMatch(datePattern);
@@ -61,7 +68,24 @@ describe("doctor deprecation compatibility inventory", () => {
       expect(record.introduced <= record.deprecated, record.code).toBe(true);
       expect(record.deprecated <= record.warningStarts, record.code).toBe(true);
       expect(record.warningStarts <= record.removeAfter, record.code).toBe(true);
-      expect(record.removeAfter <= addUtcMonths(record.warningStarts, 3), record.code).toBe(true);
+
+      if (record.renewedAt === undefined && record.previousRemoveAfter === undefined) {
+        expect(record.removeAfter <= addUtcMonths(record.warningStarts, 3), record.code).toBe(true);
+        continue;
+      }
+      if (!record.renewedAt || !record.previousRemoveAfter) {
+        throw new Error(`${record.code} has incomplete renewal metadata`);
+      }
+
+      expect(record.previousRemoveAfter, record.code).toMatch(datePattern);
+      expect(record.renewedAt, record.code).toMatch(datePattern);
+      expect(record.previousRemoveAfter <= addUtcMonths(record.warningStarts, 3), record.code).toBe(
+        true,
+      );
+      expect(record.warningStarts <= record.renewedAt, record.code).toBe(true);
+      expect(record.previousRemoveAfter <= record.removeAfter, record.code).toBe(true);
+      expect(record.renewedAt <= record.removeAfter, record.code).toBe(true);
+      expect(record.removeAfter <= addUtcMonths(record.renewedAt, 3), record.code).toBe(true);
     }
   });
 

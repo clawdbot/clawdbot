@@ -9,6 +9,14 @@ import type { LogbookCardDraft } from "./types.js";
 
 const DAY = "2026-07-03";
 
+function queryPlanDetails(database: DatabaseSync, sql: string): string[] {
+  return (
+    database.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as Array<{
+      detail: string;
+    }>
+  ).map((row) => row.detail);
+}
+
 function draft(overrides: Partial<LogbookCardDraft> = {}): LogbookCardDraft {
   const base = new Date(`${DAY}T10:00:00`).getTime();
   return {
@@ -99,6 +107,107 @@ describe("LogbookStore", () => {
       );
     } finally {
       database.close();
+    }
+  });
+
+  it.each([
+    {
+      operation: "batch frame reads",
+      sql: "SELECT id FROM frames WHERE batch_id = 1 ORDER BY captured_at_ms ASC",
+      expectedIndex: "idx_logbook_frames_batch",
+      scannedTable: "frames",
+      ordered: true,
+    },
+    {
+      operation: "observation replacement",
+      sql: "DELETE FROM observations WHERE batch_id = 1",
+      expectedIndex: "idx_logbook_observations_batch",
+      scannedTable: "observations",
+      ordered: false,
+    },
+    {
+      operation: "frame pruning foreign-key maintenance",
+      sql: "DELETE FROM frames WHERE id = 1",
+      expectedIndex: "idx_logbook_cards_keyframe",
+      scannedTable: "cards",
+      ordered: false,
+    },
+    {
+      operation: "latest frame reads",
+      sql: "SELECT id FROM frames ORDER BY captured_at_ms DESC LIMIT 1",
+      expectedIndex: "idx_logbook_frames_captured_at",
+      scannedTable: "frames",
+      ordered: true,
+    },
+    {
+      operation: "frame range reads",
+      sql: "SELECT id FROM frames WHERE captured_at_ms >= 1 AND captured_at_ms < 2 ORDER BY captured_at_ms ASC",
+      expectedIndex: "idx_logbook_frames_captured_at",
+      scannedTable: "frames",
+      ordered: true,
+    },
+  ])(
+    "uses the supporting index for $operation",
+    ({ sql, expectedIndex, scannedTable, ordered }) => {
+      const database = new DatabaseSync(path.join(dir, "logbook.sqlite"), { readOnly: true });
+      try {
+        const plan = queryPlanDetails(database, sql);
+        expect(plan).toEqual(expect.arrayContaining([expect.stringContaining(expectedIndex)]));
+        expect(
+          plan.some(
+            (detail) => detail.startsWith(`SCAN ${scannedTable}`) && !detail.includes(" USING "),
+          ),
+        ).toBe(false);
+        if (ordered) {
+          expect(plan).not.toEqual(
+            expect.arrayContaining([expect.stringContaining("USE TEMP B-TREE FOR ORDER BY")]),
+          );
+        }
+      } finally {
+        database.close();
+      }
+    },
+  );
+
+  it("restores missing schema-1 indexes on reopen without changing the version", () => {
+    store.close();
+    const databasePath = path.join(dir, "logbook.sqlite");
+    const database = new DatabaseSync(databasePath);
+    database.exec(`
+      DROP INDEX IF EXISTS idx_logbook_frames_captured_at;
+      DROP INDEX IF EXISTS idx_logbook_frames_batch;
+      DROP INDEX IF EXISTS idx_logbook_observations_batch;
+      DROP INDEX IF EXISTS idx_logbook_cards_keyframe;
+    `);
+    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
+    database.close();
+
+    store = new LogbookStore(dir);
+
+    const reopened = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      const indexes = reopened
+        .prepare(
+          `SELECT name FROM sqlite_schema
+           WHERE type = 'index'
+             AND name IN (
+               'idx_logbook_frames_batch',
+               'idx_logbook_frames_captured_at',
+               'idx_logbook_observations_batch',
+               'idx_logbook_cards_keyframe'
+             )
+           ORDER BY name`,
+        )
+        .all();
+      expect(indexes).toEqual([
+        { name: "idx_logbook_cards_keyframe" },
+        { name: "idx_logbook_frames_batch" },
+        { name: "idx_logbook_frames_captured_at" },
+        { name: "idx_logbook_observations_batch" },
+      ]);
+      expect(reopened.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
+    } finally {
+      reopened.close();
     }
   });
 
@@ -198,6 +307,14 @@ describe("LogbookStore", () => {
       draft({ startMs: base, endMs: base + 30 * 60_000, title: "Early" }),
       draft({ startMs: base + 60 * 60_000, endMs: base + 90 * 60_000, title: "Mid" }),
     ]);
+    expect(
+      store.cardsForDay(DAY, { startMs: base + 30 * 60_000, endMs: base + 60 * 60_000 }),
+    ).toEqual([]);
+    expect(
+      store
+        .cardsForDay(DAY, { startMs: base + 50 * 60_000, endMs: base + 2 * 60 * 60_000 })
+        .map((card) => card.title),
+    ).toEqual(["Mid"]);
     // Revise only the window covering "Mid"; "Early" must survive untouched.
     store.replaceCardsInWindow(DAY, base + 50 * 60_000, base + 2 * 60 * 60_000, [
       draft({ startMs: base + 55 * 60_000, endMs: base + 95 * 60_000, title: "Mid revised" }),
@@ -212,16 +329,40 @@ describe("LogbookStore", () => {
       draft({
         distractions: [{ startMs: base + 5 * 60_000, endMs: base + 10 * 60_000, title: "Twitter" }],
       }),
+      draft({ title: "Review", category: "review", appPrimary: undefined, appSecondary: "" }),
     ]);
+    const database = new DatabaseSync(path.join(dir, "logbook.sqlite"));
+    try {
+      database.prepare("UPDATE cards SET distractions = ? WHERE title = ?").run("{", "Review");
+    } finally {
+      database.close();
+    }
     const cards = store.cardsForDay(DAY);
+    expect(cards.map((card) => card.title)).toEqual(["Card", "Review"]);
+    expect(cards[1]).toMatchObject({
+      appPrimary: undefined,
+      appSecondary: "",
+      keyframeId: undefined,
+      distractions: [],
+    });
     expect(expectDefined(cards[0], "stored logbook card").distractions).toEqual([
       { startMs: base + 5 * 60_000, endMs: base + 10 * 60_000, title: "Twitter" },
     ]);
-    const stats = store.dayStats(DAY);
-    expect(stats.trackedMs).toBe(30 * 60_000);
+    const stats = store.timelineForDay(DAY).stats;
+    expect(stats.trackedMs).toBe(60 * 60_000);
     expect(stats.distractionMs).toBe(5 * 60_000);
-    expect(stats.categories[0]).toEqual({ category: "coding", ms: 30 * 60_000 });
+    expect(stats.categories).toEqual([
+      { category: "coding", ms: 30 * 60_000 },
+      { category: "review", ms: 30 * 60_000 },
+    ]);
     expect(expectDefined(stats.apps[0], "logbook app statistic").domain).toBe("github.com");
+    expect(store.countCardsForDay(DAY)).toBe(cards.length);
+    expect(store.countCardsForDay("2026-07-04")).toBe(0);
+    expect(store.timelineForDay("2026-07-04")).toEqual({
+      day: "2026-07-04",
+      cards: [],
+      stats: { trackedMs: 0, distractionMs: 0, categories: [], apps: [] },
+    });
   });
 
   it("prunes old frame rows and files but keeps recent ones", () => {

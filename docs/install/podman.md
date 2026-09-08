@@ -98,8 +98,6 @@ Podman reuses the same `agents.defaults.sandbox.docker.*` container settings as 
 
 See [Sandboxing](/gateway/sandboxing#podman-backend) for the config example and image-build command.
 
-<a id="podman-and-tailscale"></a>
-
 ## Podman and Tailscale
 
 For HTTPS or remote browser access, follow the main Tailscale docs.
@@ -145,7 +143,7 @@ The generated Quadlet service keeps a fixed, hardened default shape: `127.0.0.1`
 - **Token file:** `~/.openclaw/.env`
 - **Launch helper:** `./scripts/run-openclaw-podman.sh`
 
-The launch script and Quadlet bind-mount host state into the container: `OPENCLAW_CONFIG_DIR` -> `/home/node/.openclaw`, `OPENCLAW_WORKSPACE_DIR` -> `/home/node/.openclaw/workspace`. By default those are host directories, not anonymous container state, so `openclaw.json`, per-agent `auth-profiles.json`, channel/provider state, sessions, and workspace survive container replacement. Setup also seeds `gateway.controlUi.allowedOrigins` for `127.0.0.1` and `localhost` on the published gateway port so the local dashboard works with the container's non-loopback bind.
+The launch script and Quadlet bind-mount host state into the container: `OPENCLAW_CONFIG_DIR` -> `/home/node/.openclaw`, `OPENCLAW_WORKSPACE_DIR` -> `/home/node/.openclaw/workspace`. By default those are host directories, not anonymous container state, so `openclaw.json`, shared and per-agent SQLite auth stores, channel/provider state, sessions, and workspace survive container replacement. Setup also seeds `gateway.controlUi.allowedOrigins` for `127.0.0.1` and `localhost` on the published gateway port so the local dashboard works with the container's non-loopback bind.
 
 Useful env vars for the manual launcher (persist these in `~/.openclaw/.env`; the launcher reads that file before finalizing container/image defaults):
 

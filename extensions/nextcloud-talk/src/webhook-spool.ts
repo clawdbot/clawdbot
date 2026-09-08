@@ -4,6 +4,7 @@ import {
   type ChannelIngressQueue,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolvePersistentDedupePluginStateNamespace } from "openclaw/plugin-sdk/persistent-dedupe";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -28,6 +29,15 @@ import {
 } from "./webhook-spool-state.js";
 
 const NEXTCLOUD_TALK_INGRESS_POLL_INTERVAL_MS = 500;
+
+function describeIgnoredWebhookEvent(rawEvent: string): string {
+  // Admission already parsed ignored envelopes; this read selects bounded log fields only.
+  const envelope = parseRawObject(rawEvent);
+  const type = typeof envelope.type === "string" ? envelope.type : "unknown";
+  const object = isRecord(envelope.object) ? envelope.object : null;
+  const objectType = typeof object?.type === "string" ? object.type : "unknown";
+  return `type=${type} objectType=${objectType}`;
+}
 
 const NextcloudTalkWebhookPayloadSchema: z.ZodType<NextcloudTalkWebhookPayload> = z.object({
   type: z.enum(["Create", "Update", "Delete"]),
@@ -213,7 +223,15 @@ export function createNextcloudTalkWebhookSpool(options: {
       const receiveTask = (async () => {
         await startAfterMigration;
         const result = await monitor.admit(rawEvent);
-        return result.kind === "ignored" ? "ignored" : "accepted";
+        if (result.kind === "ignored") {
+          // These events are acknowledged without a durable row. Keep that intentional
+          // non-outcome visible without inventing message content for the agent.
+          options.runtime.log?.(
+            `nextcloud-talk: ignored non-message webhook event (${describeIgnoredWebhookEvent(rawEvent)})`,
+          );
+          return "ignored";
+        }
+        return "accepted";
       })();
       inFlightReceives.add(receiveTask);
       void receiveTask.then(

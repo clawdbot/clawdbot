@@ -68,7 +68,7 @@ Per-capability (`image`/`audio`/`video`) keys:
 | `echoTranscript` | `boolean` | `false`                                | Audio only: echo the transcript before agent processing              |
 | `echoFormat`     | `string`  | `'📝 "{transcript}"'`                  | Audio only: format for the echoed transcript                         |
 
-Prompts, limits, language hints, request overrides, and provider options can be set as capability defaults or overridden on individual `tools.media.models[]` entries. Capability defaults also cover auto-detected providers when no explicit model is configured.
+Prompts, limits, language hints, request overrides, and provider options can be set as capability defaults or overridden on individual `tools.media.models[]` entries. Capability defaults also cover auto-detected providers when no explicit model is configured. A model list selects which entries run; it does not hide other enabled providers from provider discovery.
 
 ### Model entries
 
@@ -216,7 +216,7 @@ Set `capabilities` on a `models[]` entry to restrict it to specific media types.
 | `groq`, `xai`, `deepgram`, `senseaudio`                                  | audio                 |
 | Any `models.providers.<id>.models[]` catalog with an image-capable model | image                 |
 
-For CLI entries, set `capabilities` explicitly to avoid surprising matches; if omitted, the entry is eligible for every capability list it appears in.
+CLI entries require explicit `capabilities`; entries without valid capability tags are skipped. Provider entries without valid explicit tags use their registered capability metadata.
 
 ## Provider support matrix
 
@@ -265,11 +265,11 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
 - Files rejected by an operator-configured `allowedMimes` list get `[Attachment type not allowed: <mime>]` instead, so the prompt never claims support the active configuration disables.
 - Read failures get `[Attachment could not be read]`.
 - URL attachments get `[Attachment skipped: URL file sources are disabled]` when URL file sources are disabled.
-- A file with no extractable text gets `[No extractable text]`.
+- A file with no extractable text, including an empty local text file, gets `[No extractable text]` and does not consume the skip-marker budget.
 - At most five skip markers render per message; further skipped attachments collapse into one reason-neutral `[<n> more attachments skipped]` summary so junk attachments cannot grow the prompt without bound. File and image, audio, or video markers share this five-marker budget.
 - If a PDF falls back to rendered page images, OpenClaw forwards those images to vision-capable reply models and keeps the placeholder `[PDF content rendered to images]` in the file block.
 - Image, audio, and video decisions record one closed disposition for every attachment candidate: handled, handed to native vision, not selected after the attachment limit, disabled, missing a model, denied by chat scope, or failed.
-- Unhandled media gets a bounded model-visible marker. Images handed to native vision and media turns owned by another harness do not add markers.
+- Unhandled media gets a bounded model-visible marker. Images handed to native vision do not add markers. When a native harness owns the turn and OpenClaw runs only audio preprocessing, failed or skipped audio still gets a marker; image, video, and document inputs remain owned by the harness. Too-small audio keeps its placeholder transcript without a duplicate marker.
 
 ## Config examples
 

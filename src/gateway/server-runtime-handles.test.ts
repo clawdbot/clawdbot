@@ -30,10 +30,5 @@ describe("createGatewayServerMutableState", () => {
     await vi.advanceTimersByTimeAsync(0);
     const restartedState = createGatewayServerMutableState();
     await expect(restartedState.stopMediaCleanup()).resolves.toBe("drained");
-    for (const runtimeState of [state, restartedState]) {
-      clearInterval(runtimeState.tickInterval);
-      clearInterval(runtimeState.healthInterval);
-      clearInterval(runtimeState.dedupeCleanup);
-    }
   });
 });

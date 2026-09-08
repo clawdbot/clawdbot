@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
-import { buildControlUiCatalogSessionUrl } from "openclaw/plugin-sdk/session-catalog-runtime";
+import { buildControlUiCatalogSharePath } from "openclaw/plugin-sdk/session-catalog-runtime";
 import {
   beginWebhookRequestPipelineOrReject,
   createFixedWindowRateLimiter,
@@ -8,7 +8,7 @@ import {
   readJsonWebhookBodyOrReject,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import type { BeamStore } from "./store.js";
-import { BEAM_HOST_ID, BEAM_MAX_BODY_BYTES, parseBeamUpload } from "./types.js";
+import { BEAM_MAX_BODY_BYTES, BEAM_SESSION_SHARE_ROUTE, parseBeamUpload } from "./types.js";
 
 function sendJson(res: ServerResponse, status: number, value: unknown): void {
   res.statusCode = status;
@@ -17,14 +17,10 @@ function sendJson(res: ServerResponse, status: number, value: unknown): void {
   res.end(JSON.stringify(value));
 }
 
-function firstHeader(req: IncomingMessage, name: string): string | undefined {
-  const value = req.headers[name];
-  return (Array.isArray(value) ? value[0] : value)?.trim() || undefined;
-}
-
 type BeamRequestClient = {
   clientIp: string;
   scopes: readonly string[];
+  profileId?: string;
 };
 
 function currentRequestClient(req: IncomingMessage): BeamRequestClient {
@@ -32,6 +28,7 @@ function currentRequestClient(req: IncomingMessage): BeamRequestClient {
   return {
     clientIp: client?.clientIp ?? req.socket.remoteAddress ?? "unknown",
     scopes: client?.connect?.scopes ?? [],
+    profileId: client?.authenticatedUserProfile?.profileId,
   };
 }
 
@@ -39,11 +36,27 @@ function canPublish(scopes: readonly string[]): boolean {
   return scopes.includes("operator.write") || scopes.includes("operator.admin");
 }
 
+function beamTimestampEpochNanoseconds(value: string): bigint {
+  const match = /\.(\d{1,9})(?=Z|[+-]\d{2}:\d{2}$)/.exec(value);
+  const fraction = (match?.[1] ?? "").padEnd(9, "0");
+  // Date.parse drops accepted fractional precision after milliseconds.
+  const millisecondTimestamp = match
+    ? `${value.slice(0, match.index)}.${fraction.slice(0, 3)}${value.slice(match.index + match[0].length)}`
+    : value;
+  return BigInt(Date.parse(millisecondTimestamp)) * 1_000_000n + BigInt(fraction.slice(3));
+}
+
+function compareBeamTimestamps(left: string, right: string): number {
+  const leftNanoseconds = beamTimestampEpochNanoseconds(left);
+  const rightNanoseconds = beamTimestampEpochNanoseconds(right);
+  return leftNanoseconds < rightNanoseconds ? -1 : leftNanoseconds > rightNanoseconds ? 1 : 0;
+}
+
 export function createBeamRequestHandler(params: {
   store: BeamStore;
   now?: () => number;
   resolveClient?: (req: IncomingMessage) => BeamRequestClient;
-  resolveControlUiTarget: () => { agentId: string; basePath?: string };
+  resolveControlUiBasePath: () => string | undefined;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
   const rateLimiter = createFixedWindowRateLimiter({
     windowMs: 60_000,
@@ -76,11 +89,6 @@ export function createBeamRequestHandler(params: {
     }
 
     try {
-      const contentLength = Number(firstHeader(req, "content-length"));
-      if (Number.isFinite(contentLength) && contentLength > BEAM_MAX_BODY_BYTES) {
-        sendJson(res, 413, { ok: false, error: "Payload Too Large" });
-        return true;
-      }
       const body = await readJsonWebhookBodyOrReject({
         req,
         res,
@@ -98,21 +106,33 @@ export function createBeamRequestHandler(params: {
         return true;
       }
       const receivedAt = params.now?.() ?? Date.now();
-      const existing = await params.store.get(parsed.value.beamId);
-      await params.store.put({
-        ...parsed.value,
-        createdAt: existing?.createdAt ?? receivedAt,
-        receivedAt,
+      await params.store.update(parsed.value.beamId, (existing) => {
+        const revisionOrder = existing
+          ? compareBeamTimestamps(parsed.value.updatedAt, existing.updatedAt)
+          : 1;
+        // Completion is monotonic within one source revision; a newer revision may reopen it.
+        if (
+          revisionOrder < 0 ||
+          (revisionOrder === 0 && existing?.completed && !parsed.value.completed)
+        ) {
+          return undefined;
+        }
+        return {
+          ...parsed.value,
+          // An anonymous replacement must not inherit a previous publisher's identity.
+          ...(client.profileId ? { uploaderProfileId: client.profileId } : {}),
+          createdAt: existing?.createdAt ?? receivedAt,
+          receivedAt,
+        };
       });
       sendJson(res, 200, {
         ok: true,
         beamId: parsed.value.beamId,
-        url: buildControlUiCatalogSessionUrl({
-          namespace: "chat",
-          ...params.resolveControlUiTarget(),
-          catalog: "beam",
-          host: BEAM_HOST_ID,
-          thread: parsed.value.beamId,
+        url: buildControlUiCatalogSharePath({
+          shareRoute: BEAM_SESSION_SHARE_ROUTE,
+          threadId: parsed.value.beamId,
+          displayName: parsed.value.title,
+          basePath: params.resolveControlUiBasePath(),
         }),
       });
       return true;

@@ -4,7 +4,7 @@ import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-or
  * Interactive remote gateway onboarding.
  *
  * It can discover gateways, validate remote WebSocket security, and store
- * remote token/password auth as plaintext or secret references.
+ * a remote Gateway secret as plaintext or a secret reference.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
@@ -17,7 +17,6 @@ import {
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import { resolveSecretInputModeForEnvSelection } from "../plugins/provider-auth-mode.js";
 import { promptSecretRefForSetup } from "../plugins/provider-auth-ref.js";
-import { maskApiKey } from "../security/secret-mask.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { detectBinary } from "./onboard-helpers.js";
@@ -56,12 +55,13 @@ export function validateGatewayWebSocketUrl(value: string): string | undefined {
 export async function promptRemoteGatewayConfig(
   cfg: OpenClawConfig,
   prompter: WizardPrompter,
-  options?: { secretInputMode?: SecretInputMode; edgeAuthOriginUrl?: string },
+  options?: { secretInputMode?: SecretInputMode; remoteOriginUrl?: string },
 ): Promise<OpenClawConfig> {
   let selectedBeacon: GatewayBonjourBeacon | null = null;
   let suggestedUrl = cfg.gateway?.remote?.url ?? DEFAULT_GATEWAY_URL;
-  let discoveryTlsFingerprint: string | undefined;
-  let trustedDiscoveryUrl: string | undefined;
+  let discoveryRemote:
+    | { url: string; transport: "direct" | "ssh"; tlsFingerprint?: string }
+    | undefined;
 
   const hasBonjourTool = (await detectBinary("dns-sd")) || (await detectBinary("avahi-browse"));
   const wantsDiscover = hasBonjourTool
@@ -138,10 +138,11 @@ export async function promptRemoteGatewayConfig(
           initialValue: false,
         });
         if (trusted) {
-          // Only pin discovery TLS when the user accepts the discovered endpoint;
-          // manual edits later clear the pin to avoid trusting a different host.
-          discoveryTlsFingerprint = fingerprint;
-          trustedDiscoveryUrl = suggestedUrl;
+          discoveryRemote = {
+            url: suggestedUrl,
+            transport: "direct",
+            ...(fingerprint ? { tlsFingerprint: fingerprint } : {}),
+          };
           await prompter.note(
             [
               t("wizard.remote.directDefaultsTls"),
@@ -157,6 +158,7 @@ export async function promptRemoteGatewayConfig(
         }
       } else {
         suggestedUrl = DEFAULT_GATEWAY_URL;
+        discoveryRemote = { url: suggestedUrl, transport: "ssh" };
         await prompter.note(
           [
             "Start a tunnel before using the CLI:",
@@ -175,33 +177,31 @@ export async function promptRemoteGatewayConfig(
     validate: (value) => validateGatewayWebSocketUrl(value),
   });
   const url = ensureWsUrl(urlInput);
-  const pinnedDiscoveryFingerprint =
-    discoveryTlsFingerprint && url === trustedDiscoveryUrl ? discoveryTlsFingerprint : undefined;
+  // Discovery choices belong only to the accepted URL, never a subsequent manual edit.
+  const selectedDiscovery = discoveryRemote?.url === url ? discoveryRemote : undefined;
 
-  const authChoice = await prompter.select({
-    message: t("wizard.remote.auth"),
-    options: [
-      { value: "token", label: t("common.tokenRecommended") },
-      { value: "password", label: t("common.password") },
-      { value: "off", label: t("common.noAuth") },
-    ],
+  // A saved secret belongs to the selected endpoint, not a newly entered URL or tunnel.
+  const existingSecret =
+    (!cfg.gateway?.remote?.url || url === cfg.gateway.remote.url.trim()) &&
+    selectedDiscovery?.transport !== "ssh"
+      ? (cfg.gateway?.remote?.token ?? cfg.gateway?.remote?.password)
+      : undefined;
+  let token: SecretInput | undefined;
+  const selectedMode = await resolveSecretInputModeForEnvSelection({
+    prompter,
+    explicitMode: options?.secretInputMode,
+    copy: {
+      modeMessage: t("wizard.gateway.remoteTokenMode"),
+      plaintextLabel: t("wizard.remote.plaintextTokenLabel"),
+      plaintextHint: t("wizard.remote.plaintextTokenHint"),
+    },
   });
-
-  let token: SecretInput | undefined = cfg.gateway?.remote?.token;
-  let password: SecretInput | undefined = cfg.gateway?.remote?.password;
-  if (authChoice === "token") {
-    const selectedMode = await resolveSecretInputModeForEnvSelection({
-      prompter,
-      explicitMode: options?.secretInputMode,
-      copy: {
-        modeMessage: t("wizard.gateway.remoteTokenMode"),
-        plaintextLabel: t("wizard.remote.plaintextTokenLabel"),
-        plaintextHint: t("wizard.remote.plaintextTokenHint"),
-      },
+  if (selectedMode === "ref") {
+    const noSecret = await prompter.confirm({
+      message: t("wizard.remote.noSecretConfirm"),
+      initialValue: false,
     });
-    if (selectedMode === "ref") {
-      // Remote token refs use gateway-specific env var hints but still flow
-      // through the shared setup secret-ref contract.
+    if (!noSecret) {
       const resolved = await promptSecretRefForSetup({
         provider: "gateway-remote-token",
         config: cfg,
@@ -213,81 +213,45 @@ export async function promptRemoteGatewayConfig(
         },
       });
       token = resolved.ref;
-    } else {
-      const existingToken = typeof token === "string" ? token : undefined;
-      if (
-        existingToken &&
-        (await prompter.confirm({
-          message: t("wizard.gateway.existingTokenConfirm", { token: maskApiKey(existingToken) }),
-          initialValue: true,
-        }))
-      ) {
-        token = existingToken;
-      } else {
-        token = (
-          await prompter.text({
-            message: t("wizard.remote.tokenPrompt"),
-            validate: (value) => (value?.trim() ? undefined : t("common.required")),
-            sensitive: true,
-          })
-        ).trim();
-      }
     }
-    password = undefined;
-  } else if (authChoice === "password") {
-    const selectedMode = await resolveSecretInputModeForEnvSelection({
-      prompter,
-      explicitMode: options?.secretInputMode,
-      copy: {
-        modeMessage: t("wizard.gateway.remotePasswordMode"),
-        plaintextLabel: t("wizard.remote.plaintextPasswordLabel"),
-        plaintextHint: t("wizard.remote.plaintextPasswordHint"),
-      },
-    });
-    if (selectedMode === "ref") {
-      // Password refs mirror token refs so remote auth can stay out of config
-      // even when password mode is selected.
-      const resolved = await promptSecretRefForSetup({
-        provider: "gateway-remote-password",
-        config: cfg,
-        prompter,
-        preferredEnvVar: "OPENCLAW_GATEWAY_PASSWORD",
-        copy: {
-          sourceMessage: t("wizard.remote.gatewayPasswordStoredMessage"),
-          envVarPlaceholder: "OPENCLAW_GATEWAY_PASSWORD",
-        },
-      });
-      password = resolved.ref;
-    } else {
-      const existingPassword = typeof password === "string" ? password : undefined;
-      if (
-        existingPassword &&
-        (await prompter.confirm({
-          message: t("wizard.gateway.existingPasswordConfirm", {
-            password: maskApiKey(existingPassword),
-          }),
-          initialValue: true,
-        }))
-      ) {
-        password = existingPassword;
-      } else {
-        password = (
-          await prompter.text({
-            message: t("wizard.remote.passwordPrompt"),
-            validate: (value) => (value?.trim() ? undefined : t("common.required")),
-            sensitive: true,
-          })
-        ).trim();
-      }
-    }
-    token = undefined;
   } else {
-    token = undefined;
-    password = undefined;
+    while (true) {
+      const input = (
+        await prompter.text({
+          message: t("wizard.remote.tokenPrompt"),
+          placeholder: t("wizard.remote.secretPlaceholder"),
+          sensitive: true,
+        })
+      ).trim();
+      if (input) {
+        token = input;
+        break;
+      }
+      if (
+        existingSecret &&
+        (await prompter.confirm({
+          message: t("wizard.remote.keepSecretConfirm"),
+          initialValue: true,
+        }))
+      ) {
+        token = existingSecret;
+        break;
+      }
+      if (
+        await prompter.confirm({
+          message: t("wizard.remote.noSecretConfirm"),
+          initialValue: false,
+        })
+      ) {
+        break;
+      }
+    }
   }
-  const edgeAuthOriginUrl = options?.edgeAuthOriginUrl ?? cfg.gateway?.remote?.url;
+  // An explicitly absent origin means onboarding had no saved endpoint before URL seeding.
+  const remoteOriginUrl =
+    options && "remoteOriginUrl" in options ? options.remoteOriginUrl : cfg.gateway?.remote?.url;
   const edgeAuth =
-    edgeAuthOriginUrl && gatewayOriginScope(url) === gatewayOriginScope(edgeAuthOriginUrl)
+    remoteOriginUrl && gatewayOriginScope(url) === gatewayOriginScope(remoteOriginUrl)
       ? cfg.gateway?.remote?.edgeAuth
       : undefined;
 
@@ -297,11 +261,15 @@ export async function promptRemoteGatewayConfig(
       ...cfg.gateway,
       mode: "remote",
       remote: {
+        // A newly suggested manual tunnel can reach another host behind the same loopback URL.
+        ...(url === remoteOriginUrl?.trim() && selectedDiscovery?.transport !== "ssh"
+          ? cfg.gateway?.remote
+          : {}),
         url,
-        ...(edgeAuth !== undefined ? { edgeAuth } : {}),
-        ...(token !== undefined ? { token } : {}),
-        ...(password !== undefined ? { password } : {}),
-        ...(pinnedDiscoveryFingerprint ? { tlsFingerprint: pinnedDiscoveryFingerprint } : {}),
+        edgeAuth,
+        token,
+        password: undefined,
+        ...(selectedDiscovery?.transport === "direct" ? selectedDiscovery : {}),
       },
     },
   };

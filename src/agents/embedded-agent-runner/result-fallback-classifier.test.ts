@@ -4,6 +4,11 @@ import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../failover/user-copy.js";
 import { runWithModelFallback } from "../model-fallback-runner.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./result-fallback-classifier.js";
 
+const supplementalSpeechPayload = {
+  mediaUrl: "file:///tmp/answer.mp3",
+  ttsSupplement: { spokenText: "answer", visibleTextAlreadyDelivered: true },
+};
+
 describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
   it("does not fallback when sessions_spawn accepted a child session", () => {
     // Accepted child sessions mean the turn made progress even if the parent did
@@ -128,7 +133,23 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
-  it("advances to the configured fallback after a generic external runner failure", async () => {
+  it.each([
+    {
+      name: "a generic external runner failure",
+      payload: { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT },
+      code: "generic_external_run_failure",
+    },
+    {
+      name: "a transient status notice without a final reply",
+      payload: { text: "Still working", isStatusNotice: true },
+      code: "empty_result",
+    },
+    {
+      name: "supplemental speech without a final reply",
+      payload: supplementalSpeechPayload,
+      code: "empty_result",
+    },
+  ])("advances to the configured fallback after $name", async ({ payload, code }) => {
     const runs: Array<{ provider: string; model: string }> = [];
     const result = await runWithModelFallback({
       cfg: undefined,
@@ -140,7 +161,7 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
         runs.push({ provider, model });
         return runs.length === 1
           ? {
-              payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
+              payloads: [payload],
               meta: { durationMs: 1 },
             }
           : { payloads: [{ text: "fallback ok" }], meta: { durationMs: 1 } };
@@ -162,9 +183,11 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
       provider: "external",
       model: "primary",
       reason: "format",
-      code: "generic_external_run_failure",
-      error: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      code,
     });
+    if (code === "generic_external_run_failure") {
+      expect(result.attempts[0]?.error).toBe(GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
+    }
   });
 
   it("classifies Codex subscription usage-limit payloads as rate-limit fallback", () => {
@@ -443,6 +466,30 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     {
       name: "commentary-only",
       payloads: [{ isCommentary: true, text: "progress only" }],
+      code: "empty_result",
+      suffix: "without a visible assistant reply",
+    },
+    {
+      name: "compaction-notice-only",
+      payloads: [{ isCompactionNotice: true, text: "Compacting context" }],
+      code: "empty_result",
+      suffix: "without a visible assistant reply",
+    },
+    {
+      name: "fallback-notice-only",
+      payloads: [{ isFallbackNotice: true, text: "Switching providers" }],
+      code: "empty_result",
+      suffix: "without a visible assistant reply",
+    },
+    {
+      name: "status-notice-only",
+      payloads: [{ isStatusNotice: true, text: "Still working" }],
+      code: "empty_result",
+      suffix: "without a visible assistant reply",
+    },
+    {
+      name: "supplemental-speech-only",
+      payloads: [supplementalSpeechPayload],
       code: "empty_result",
       suffix: "without a visible assistant reply",
     },

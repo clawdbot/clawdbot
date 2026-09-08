@@ -7,9 +7,11 @@ import {
   getSlackHandlers,
   getSlackTestState,
   resetSlackTestState,
+  runSlackHandlerWithDispatch,
   startSlackMonitor as startSlackMonitorUntracked,
   stopSlackMonitor,
 } from "../monitor.test-helpers.js";
+import { getSlackRuntime, setSlackRuntime } from "../runtime.js";
 
 const { monitorSlackProvider } = await import("./provider.js");
 
@@ -42,6 +44,132 @@ afterAll(() => {
 });
 
 describe("auth.test event identity recovery", () => {
+  it("learns the app id from the first signed HTTP event and keeps it process-stable", async () => {
+    resetSlackTestState({
+      channels: {
+        slack: {
+          mode: "http",
+          signingSecret: "test-signing-secret",
+          groupPolicy: "open",
+          requireMention: true,
+        },
+      },
+    });
+    const register = vi.fn(async () => undefined);
+    const lookup = vi.fn(async () => undefined);
+    const runtime = getSlackRuntime();
+    setSlackRuntime({
+      ...runtime,
+      state: { ...runtime.state, openKeyedStore: vi.fn(() => ({ register, lookup })) },
+    } as never);
+    const client = getSlackClient();
+    client.auth.test.mockResolvedValue({
+      user_id: "bot-user",
+      bot_id: "bot-id",
+      team_id: "T_TEST",
+      is_enterprise_install: false,
+    });
+    client.conversations.info.mockResolvedValueOnce({
+      channel: { name: "general", is_channel: true },
+    });
+    const { replyMock, sendMock } = getSlackTestState();
+    replyMock.mockResolvedValue({ text: "app identity learned" });
+    const monitor = startSlackMonitor(monitorSlackProvider);
+    const handler = await getSlackHandlerOrThrow("message");
+    const context = {
+      botUserId: "bot-user",
+      botId: "bot-id",
+      teamId: "T_TEST",
+      isEnterpriseInstall: false,
+    };
+    const event = {
+      type: "message",
+      user: "U_OTHER",
+      text: "<@bot-user> status",
+      ts: "1700000100.000001",
+      channel: "C12345678",
+      channel_type: "channel",
+    };
+
+    await handler({ event, context, body: { api_app_id: "A_HTTP", team_id: "T_TEST" } });
+    await vi.waitFor(() => expect(sendMock).toHaveBeenCalledTimes(1));
+
+    await runSlackHandlerWithDispatch(handler, {
+      event: { ...event, ts: "1700000100.000002" },
+      context,
+      body: { api_app_id: "A_OTHER", team_id: "T_TEST" },
+    });
+    expect.soft(sendMock).toHaveBeenCalledTimes(1);
+
+    const agentHandler = await getSlackHandlerOrThrow("app_context_changed");
+    await agentHandler({
+      event: { type: "app_context_changed", user: "U_OTHER", context: { entities: [] } },
+      context,
+      body: { api_app_id: "A_HTTP", team_id: "T_TEST" },
+    });
+    expect(register).toHaveBeenCalledWith(
+      JSON.stringify(["workspace", "default", "T_TEST", "A_HTTP"]),
+      { experience: "agent", observedAt: expect.any(Number) },
+    );
+    await stopSlackMonitor(monitor);
+  });
+
+  it("keeps the app-token app id when a signed event carries another", async () => {
+    const appToken = "xapp-1-A0TOKEN-1-secret";
+    resetSlackTestState({
+      channels: {
+        slack: { mode: "socket", appToken, groupPolicy: "open", requireMention: true },
+      },
+    });
+    const client = getSlackClient();
+    client.auth.test.mockResolvedValue({
+      user_id: "bot-user",
+      bot_id: "bot-id",
+      team_id: "T_TEST",
+      is_enterprise_install: false,
+    });
+    client.conversations.info.mockResolvedValueOnce({
+      channel: { name: "general", is_channel: true },
+    });
+    const { replyMock, sendMock, appStartMock } = getSlackTestState();
+    replyMock.mockResolvedValue({ text: "app token identity preserved" });
+    const started = new Promise<void>((resolve) => {
+      appStartMock.mockImplementationOnce(async () => resolve());
+    });
+    const monitor = startSlackMonitor(monitorSlackProvider, { appToken });
+    await started;
+    const handler = await getSlackHandlerOrThrow("message");
+    const context = {
+      botUserId: "bot-user",
+      botId: "bot-id",
+      teamId: "T_TEST",
+      isEnterpriseInstall: false,
+    };
+    const event = {
+      type: "message",
+      user: "U_OTHER",
+      text: "<@bot-user> status",
+      ts: "1700000300.000001",
+      channel: "C12345678",
+      channel_type: "channel",
+    };
+
+    await runSlackHandlerWithDispatch(handler, {
+      event,
+      context,
+      body: { api_app_id: "A_OTHER", team_id: "T_TEST" },
+    });
+    expect(sendMock).not.toHaveBeenCalled();
+
+    await runSlackHandlerWithDispatch(handler, {
+      event: { ...event, ts: "1700000300.000002" },
+      context,
+      body: { api_app_id: "A0TOKEN", team_id: "T_TEST" },
+    });
+    await vi.waitFor(() => expect(sendMock).toHaveBeenCalledTimes(1));
+    await stopSlackMonitor(monitor);
+  });
+
   it("does not adopt Enterprise identity from Bolt event context", async () => {
     resetSlackTestState({
       channels: {
@@ -137,7 +265,7 @@ describe("auth.test event identity recovery", () => {
         teamId: "T12345678",
         isEnterpriseInstall: false,
       },
-      body: {},
+      body: { api_app_id: "A_RECOVERED" },
     });
 
     expect(setStatus).toHaveBeenCalledWith({
@@ -150,6 +278,25 @@ describe("auth.test event identity recovery", () => {
     });
     expect(getSlackHandlers().has("reaction_added")).toBe(true);
     await vi.waitFor(() => expect(sendMock).toHaveBeenCalledTimes(1));
+
+    await runSlackHandlerWithDispatch(handler, {
+      event: {
+        type: "message",
+        user: "U_OTHER",
+        text: "<@URECOVERED> status",
+        ts: "999999.124",
+        channel: "C12345678",
+        channel_type: "channel",
+      },
+      context: {
+        botUserId: "URECOVERED",
+        botId: "BRECOVERED",
+        teamId: "T12345678",
+        isEnterpriseInstall: false,
+      },
+      body: { api_app_id: "A_OTHER" },
+    });
+    expect(sendMock).toHaveBeenCalledTimes(1);
     await stopSlackMonitor(monitor);
   });
 });

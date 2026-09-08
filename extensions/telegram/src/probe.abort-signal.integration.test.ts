@@ -2,6 +2,8 @@
 // fires during either an active request or retry backoff.
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as runtimeEnv from "openclaw/plugin-sdk/runtime-env";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { probeTelegram } from "./probe.js";
 
@@ -74,14 +76,17 @@ describe("probeTelegram startup retry loop honors abortSignal", () => {
     const previousRequestCount = requestCount;
     const previousConnectionCount = connectionCount;
 
-    // Abort once the first connection has been torn down and the probe is
-    // sleeping before its retry. This must happen before the retry delay
-    // would naturally elapse (timeoutMs/5, capped at 1000ms).
-    server.once("connection", () => {
-      setTimeout(() => abortController.abort(), 50);
+    const backoffStarted = createDeferred<{ sleep: Promise<void> }>();
+    const realSleepWithAbort = runtimeEnv.sleepWithAbort;
+    const sleepSpy = vi.spyOn(runtimeEnv, "sleepWithAbort").mockImplementation((...args) => {
+      // The real sleep registers its abort listener synchronously. A TCP connection
+      // alone does not prove the request failed or that retry backoff has started.
+      const sleep = realSleepWithAbort(...args);
+      backoffStarted.resolve({ sleep });
+      return sleep;
     });
 
-    const result = await probeTelegram("abort-test-token", 10_000, {
+    const probePromise = probeTelegram("abort-test-token", 10_000, {
       apiRoot,
       includeWebhookInfo: false,
       abortSignal: abortController.signal,
@@ -90,9 +95,28 @@ describe("probeTelegram startup retry loop honors abortSignal", () => {
       network: { autoSelectFamily: false, dnsResultOrder: "verbatim" },
     });
 
-    expect(result.ok).toBe(false);
-    expect(requestCount).toBe(previousRequestCount + 1);
-    expect(connectionCount).toBe(previousConnectionCount + 1);
+    try {
+      const { sleep } = await Promise.race([
+        backoffStarted.promise,
+        probePromise.then(() => {
+          throw new Error("Probe completed before entering retry backoff");
+        }),
+      ]);
+      abortController.abort();
+      await expect(sleep).rejects.toMatchObject({
+        name: "AbortError",
+        cause: abortController.signal.reason,
+      });
+      const result = await probePromise;
+
+      expect(result.ok).toBe(false);
+      expect(requestCount).toBe(previousRequestCount + 1);
+      expect(connectionCount).toBe(previousConnectionCount + 1);
+    } finally {
+      abortController.abort();
+      sleepSpy.mockRestore();
+      await probePromise;
+    }
   });
 
   it("aborts a stalled in-flight getMe request", async () => {

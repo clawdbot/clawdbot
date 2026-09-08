@@ -70,15 +70,9 @@ interface GatewayModelEntry {
   supported_parameters?: string[];
 }
 
-function toPricePerMillion(perToken: string | undefined): number {
-  if (!perToken) {
-    return 0;
-  }
+function toPricePerMillion(perToken: string | undefined, fallback = 0): number {
   const num = Number(perToken);
-  if (!Number.isFinite(num) || num < 0) {
-    return 0;
-  }
-  return num * 1_000_000;
+  return Number.isFinite(num) && num >= 0 ? num * 1_000_000 : fallback;
 }
 
 function parseModality(entry: GatewayModelEntry): Array<"text" | "image"> {
@@ -101,14 +95,15 @@ function parseReasoning(entry: GatewayModelEntry): boolean {
 }
 
 function toModelDefinition(entry: GatewayModelEntry): ModelDefinitionConfig {
+  const fallbackCost = entry.id === KILOCODE_DEFAULT_MODEL_ID ? KILOCODE_DEFAULT_COST : undefined;
   return {
     id: entry.id,
     name: entry.name || entry.id,
     reasoning: parseReasoning(entry),
     input: parseModality(entry),
     cost: {
-      input: toPricePerMillion(entry.pricing.prompt),
-      output: toPricePerMillion(entry.pricing.completion),
+      input: toPricePerMillion(entry.pricing.prompt, fallbackCost?.input),
+      output: toPricePerMillion(entry.pricing.completion, fallbackCost?.output),
       cacheRead: toPricePerMillion(entry.pricing.input_cache_read),
       cacheWrite: toPricePerMillion(entry.pricing.input_cache_write),
     },
@@ -187,7 +182,7 @@ function projectKilocodeModels(rows: readonly unknown[]): ModelDefinitionConfig[
       // A malformed row must not hide a later valid row with the same id.
     }
   }
-  for (const staticModel of buildStaticCatalog()) {
+  for (const staticModel of models.length > 0 ? buildStaticCatalog() : []) {
     if (!discoveredIds.has(staticModel.id)) {
       models.unshift(staticModel);
     }
@@ -195,8 +190,11 @@ function projectKilocodeModels(rows: readonly unknown[]): ModelDefinitionConfig[
   return models;
 }
 
-export async function discoverKilocodeModels(): Promise<ModelDefinitionConfig[]> {
+export async function discoverKilocodeModels(
+  options: { discoveryMode?: "strict" } = {},
+): Promise<ModelDefinitionConfig[]> {
   const provider = await buildLiveModelProviderConfig({
+    ...options,
     providerId: "kilocode",
     endpoint: KILOCODE_MODELS_URL,
     providerConfig: { baseUrl: KILOCODE_BASE_URL, api: "openai-completions" },

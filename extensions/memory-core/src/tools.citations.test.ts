@@ -665,7 +665,7 @@ describe("memory tools", () => {
     }
   });
 
-  it("records an unregistered requested wiki corpus without hiding memory results", async () => {
+  it("records an unregistered optional wiki corpus without warning or hiding memory results", async () => {
     const tool = createMemorySearchToolOrThrow();
     const result = await tool.execute("call_all_without_wiki", {
       query: "alpha",
@@ -678,8 +678,8 @@ describe("memory tools", () => {
         { corpus: "memory", outcome: "ok" },
         { corpus: "wiki", outcome: "not-registered" },
       ],
-      warning: expect.stringContaining("Wiki corpus is not registered"),
     });
+    expect(result.details).not.toHaveProperty("warning");
   });
 
   it("surfaces a memory-corpus warning when corpus=all hits a returned manager error", async () => {

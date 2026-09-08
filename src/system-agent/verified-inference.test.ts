@@ -10,19 +10,29 @@ import {
   fingerprintResolvedProviderAuth,
 } from "../agents/execution-auth-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginOrigin } from "../plugins/types.js";
-import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
-import { resolvePersistentApplyInference } from "./setup-inference.js";
+import { resolveSystemAgentConfiguredRouteFromConfig as resolveSystemAgentConfiguredRouteFromConfigImpl } from "./inference-route.js";
+import { resolvePersistentApplyInference as resolvePersistentApplyInferenceImpl } from "./setup-inference.js";
 import {
   installSystemAgentClaudeCliBackendTestFixture,
-  installSystemAgentPluginMetadataTestSnapshot,
+  createSystemAgentPluginMetadataTestSnapshot,
   type SystemAgentPluginMetadataTestSnapshot,
 } from "./system-agent.test-helpers.js";
 import {
-  createSystemAgentVerifiedInferenceBinding,
-  resolveSystemAgentVerifiedInferenceRoute,
+  createSystemAgentVerifiedInferenceBinding as createSystemAgentVerifiedInferenceBindingImpl,
+  resolveSystemAgentVerifiedInferenceRoute as resolveSystemAgentVerifiedInferenceRouteImpl,
   type SystemAgentVerifiedInferenceDeps,
 } from "./verified-inference.js";
+import {
+  config,
+  profileAuth,
+  profileStore,
+  requireFingerprint,
+  cliRuntimeArtifactAuth,
+  cliRuntimeArtifactDeps,
+  codexRuntimeArtifactAuth,
+  pluginArtifactDeps,
+  pluginRecord,
+} from "./verified-inference.test-support.js";
 
 const pluginRegistryState = vi.hoisted(() => ({
   providerOwnerIds: ["provider-owner"],
@@ -82,53 +92,36 @@ const profile = {
 
 const runtime = { log: () => {}, error: () => {}, exit: () => {} } as never;
 let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
+
+const resolveSystemAgentConfiguredRouteFromConfig: typeof resolveSystemAgentConfiguredRouteFromConfigImpl =
+  (...args) =>
+    pluginMetadataSnapshot!.run(
+      () => resolveSystemAgentConfiguredRouteFromConfigImpl(...args),
+      args[0],
+    );
+
+const resolvePersistentApplyInference: typeof resolvePersistentApplyInferenceImpl = (...args) =>
+  pluginMetadataSnapshot!.run(() => resolvePersistentApplyInferenceImpl(...args));
+
+const createSystemAgentVerifiedInferenceBinding: typeof createSystemAgentVerifiedInferenceBindingImpl =
+  (...args) =>
+    pluginMetadataSnapshot!.run(() => createSystemAgentVerifiedInferenceBindingImpl(...args));
+
+const resolveSystemAgentVerifiedInferenceRoute: typeof resolveSystemAgentVerifiedInferenceRouteImpl =
+  (...args) =>
+    pluginMetadataSnapshot!.run(() => resolveSystemAgentVerifiedInferenceRouteImpl(...args));
 let restoreCliBackendFixture: (() => void) | undefined;
 
 beforeAll(() => {
-  pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot(config());
+  pluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot(config());
   restoreCliBackendFixture = installSystemAgentClaudeCliBackendTestFixture();
 });
 
 afterAll(() => {
   restoreCliBackendFixture?.();
-  pluginMetadataSnapshot?.restore();
 });
 
-type TestPluginRecord = {
-  pluginId: string;
-  origin: PluginOrigin;
-  rootDir: string;
-  manifestPath: string;
-  manifestHash: string;
-  source: string;
-  packageName: string;
-  packageVersion: string;
-  installRecordHash?: string;
-  packageJson: { path: string; hash: string };
-};
-
-function pluginRecord(
-  pluginId: string,
-  overrides: Partial<TestPluginRecord> = {},
-): TestPluginRecord {
-  const rootDir = `/plugins/${pluginId}`;
-  return {
-    pluginId,
-    origin: "global",
-    rootDir,
-    manifestPath: `${rootDir}/openclaw.plugin.json`,
-    manifestHash: `${pluginId}-manifest-v1`,
-    source: `${rootDir}/index.js`,
-    packageName: `@openclaw/${pluginId}`,
-    packageVersion: "1.0.0",
-    installRecordHash: `${pluginId}-install-v1`,
-    packageJson: { path: `${rootDir}/package.json`, hash: `${pluginId}-package-v1` },
-    ...overrides,
-  };
-}
-
 beforeEach(() => {
-  pluginMetadataSnapshot?.rebindForCurrentEnv();
   pluginRegistryState.providerOwnerIds = ["provider-owner"];
   pluginRegistryState.records = [pluginRecord("provider-owner"), pluginRecord("codex")];
   harnessRuntimeArtifactState.id = "codex-app-server";
@@ -159,55 +152,6 @@ function authDeps(apiKey = "verified-key") {
       },
     ),
   };
-}
-
-function pluginArtifactDeps() {
-  return {
-    fingerprintPluginRuntimeArtifact: (record: { pluginId: string }) =>
-      `${record.pluginId}-runtime-v1`,
-  };
-}
-
-function cliRuntimeArtifactDeps(fingerprint = "claude-cli-artifact-v1") {
-  return {
-    resolveCliRuntimeArtifactFingerprint: vi.fn(async () => fingerprint),
-  };
-}
-
-const cliRuntimeArtifactAuth = {
-  runtimeArtifactFingerprint: "claude-cli-artifact-v1",
-  runtimeArtifactId: "claude-cli",
-} as const;
-
-const codexRuntimeArtifactAuth = {
-  runtimeArtifactFingerprint: "codex-runtime-v1",
-  runtimeArtifactId: "codex-app-server",
-} as const;
-
-function config(model = "openai/gpt-5.5@openai:verified"): OpenClawConfig {
-  return {
-    agents: { defaults: { model } },
-    auth: {
-      profiles: {
-        "openai:verified": { provider: "openai", mode: "api_key" },
-      },
-    },
-  };
-}
-
-function profileAuth(profileId: string, apiKey: string) {
-  return { apiKey, profileId, source: `profile:${profileId}`, mode: "api-key" as const };
-}
-
-function profileStore(profileId: string, credential: object) {
-  return vi.fn(() => ({ version: 1, profiles: { [profileId]: credential } })) as never;
-}
-
-function requireFingerprint(value: string | undefined): string {
-  if (!value) {
-    throw new Error("missing test auth fingerprint");
-  }
-  return value;
 }
 
 async function bindingFor(
@@ -546,6 +490,58 @@ describe("verified OpenClaw inference binding", () => {
       }),
     ).resolves.toBeNull();
   });
+
+  it.each(["cli", "embedded"] as const)(
+    "keeps a verified %s owner when first-agent setup materializes the same credential directory",
+    async (runner) => {
+      const baseConfig = config(
+        runner === "cli" ? "claude-cli/claude-opus-5" : "openai/gpt-5.5@openai:verified",
+      );
+      baseConfig.agents = { ...baseConfig.agents, entries: { main: {} } };
+      const deps = {
+        ...authDeps(),
+        ...pluginArtifactDeps(),
+        ...cliRuntimeArtifactDeps(),
+        resolveCliRuntimeOwnerFingerprint: vi.fn(async () => "opaque-cli-owner"),
+      };
+      const binding =
+        runner === "cli"
+          ? await createBinding(
+              await requireRoute(baseConfig, "cli"),
+              {
+                runtimeOwnerFingerprint: "opaque-cli-owner",
+                runtimeOwnerKind: "cli-runtime",
+                runtimeOwnerId: "claude-cli",
+                ...cliRuntimeArtifactAuth,
+              },
+              deps,
+            )
+          : await bindingFor(baseConfig, deps);
+      const materialized = {
+        ...baseConfig,
+        agents: {
+          ...baseConfig.agents,
+          entries: {
+            main: {
+              name: "main",
+              workspace: "/tmp/first-run-workspace",
+              agentDir: binding.execution.agentDir,
+            },
+          },
+        },
+      } satisfies OpenClawConfig;
+
+      await expect(revalidate(binding, materialized, deps)).resolves.toBe(binding.execution);
+
+      const moved = structuredClone(materialized);
+      moved.agents.entries.main.agentDir = path.join(binding.execution.agentDir, "replacement");
+      await expect(revalidate(binding, moved, deps)).resolves.toBeNull();
+
+      deps.resolveCliRuntimeArtifactFingerprint.mockResolvedValue("replacement-cli-artifact");
+      harnessRuntimeArtifactState.fingerprint = "replacement-harness-artifact";
+      await expect(revalidate(binding, materialized, deps)).resolves.toBeNull();
+    },
+  );
 
   it("invalidates a strict CLI binding when its forwarded SecretRef changes", async () => {
     const profileId = "claude-cli:work";

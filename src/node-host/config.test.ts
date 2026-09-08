@@ -1,124 +1,90 @@
-import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
+import { createBoundedChildOutput } from "../../test/helpers/bounded-child-output.js";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+  readConfigMachineState,
+  readConfigMachineStateWithMetadata,
+} from "../state/config-machine-state.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { nodeHostConfigRuntimeEntrypoint } from "./config-runtime.test-support.js";
 import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
-import { configureNodeHost, loadNodeHostConfig, type NodeHostConfig } from "./config.js";
+  configureNodeHost,
+  loadNodeHostConfig,
+  NODE_HOST_CONFIG_KEY,
+  type NodeHostConfig,
+} from "./config.js";
 
 const fixtureDigest = ["fixture", "digest"].join("-");
-
-function readStoredToken(env: NodeJS.ProcessEnv): string | null | undefined {
-  const database = openOpenClawStateDatabase({ env });
-  return executeSqliteQueryTakeFirstSync(
-    database.db,
-    getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "node_host_config">>(database.db)
-      .selectFrom("node_host_config")
-      .select("token")
-      .where("config_key", "=", "current"),
-  )?.token;
-}
+const fixture = createFixtureLifetime();
 
 async function runConcurrentImplicitConfigures(
   stateDir: string,
+  signal: AbortSignal,
 ): Promise<[NodeHostConfig, NodeHostConfig]> {
-  const startPath = path.join(stateDir, "configure-start");
-  const moduleUrl = new URL("./config.ts", import.meta.url).href;
-  const workerSource = `
-    import fs from "node:fs";
-    const { configureNodeHost } = await import(process.env.OPENCLAW_NODE_HOST_CONFIG_MODULE);
-    fs.writeFileSync(process.env.OPENCLAW_NODE_HOST_READY_PATH, "ready");
-    const deadline = Date.now() + 15_000;
-    while (!fs.existsSync(process.env.OPENCLAW_NODE_HOST_START_PATH)) {
-      if (Date.now() >= deadline) {
-        throw new Error("timed out waiting for concurrent node-host configure start");
-      }
-      await new Promise((resolve) => setTimeout(resolve, 2));
-    }
-    const config = await configureNodeHost({
-      candidateNodeId: process.env.OPENCLAW_NODE_HOST_CANDIDATE,
-      fallbackDisplayName: "node",
-      gateway: {},
-      env: { ...process.env, OPENCLAW_STATE_DIR: process.env.OPENCLAW_NODE_HOST_STATE_DIR },
-      nowMs: Number(process.env.OPENCLAW_NODE_HOST_NOW_MS),
-    });
-    console.log(JSON.stringify(config));
-  `;
+  const workerUrl = resolveRuntimeWorkerUrl(nodeHostConfigRuntimeEntrypoint);
+  const cancellation = new AbortController();
+  const childSignal = AbortSignal.any([signal, cancellation.signal]);
   const workers = ["candidate-a", "candidate-b"].map((candidate, index) => {
-    const readyPath = path.join(stateDir, `configure-ready-${index}`);
-    const child = spawn(
-      process.execPath,
-      ["--import", "tsx", "--input-type=module", "-e", workerSource],
-      {
-        env: {
-          ...process.env,
-          OPENCLAW_NODE_HOST_CANDIDATE: candidate,
-          OPENCLAW_NODE_HOST_CONFIG_MODULE: moduleUrl,
-          OPENCLAW_NODE_HOST_NOW_MS: String(index + 1),
-          OPENCLAW_NODE_HOST_READY_PATH: readyPath,
-          OPENCLAW_NODE_HOST_START_PATH: startPath,
-          OPENCLAW_NODE_HOST_STATE_DIR: stateDir,
+    const ready = createDeferred<ChildProcess>();
+    const stderr = createBoundedChildOutput();
+    let config: NodeHostConfig | undefined;
+    const outcome = fixture.track(
+      runManagedCommand({
+        bin: process.execPath,
+        args: [...resolveRuntimeWorkerArgv(workerUrl), candidate, String(index + 1)],
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        shell: false,
+        stdio: ["ignore", "ignore", "pipe", "ipc"],
+        signal: childSignal,
+        requireProcessTreeExit: process.platform !== "win32",
+        onReady(child) {
+          child.stderr!.on("data", stderr.append);
+          child.on("message", (message: "ready" | NodeHostConfig) => {
+            if (message === "ready") {
+              ready.resolve(child);
+            } else {
+              config = message;
+            }
+          });
         },
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => (stdout += String(chunk)));
-    child.stderr.on("data", (chunk) => (stderr += String(chunk)));
-    const outcome = new Promise<NodeHostConfig>((resolve, reject) => {
-      child.once("error", reject);
-      child.once("close", (code, signal) => {
+      }).then((code) => {
         if (code !== 0) {
-          reject(new Error(`configure worker failed (${String(code ?? signal)}): ${stderr}`));
-          return;
+          throw new Error(`configure worker failed (${code}): ${stderr.text()}`);
         }
-        const resultLine = stdout.trim().split("\n").at(-1);
-        if (!resultLine) {
-          reject(new Error("configure worker produced no result"));
-          return;
+        if (!config) {
+          throw new Error("configure worker produced no result");
         }
-        resolve(JSON.parse(resultLine) as NodeHostConfig);
-      });
-    });
-    return { child, outcome, readyPath };
+        return config;
+      }),
+    );
+    return {
+      ready: Promise.race([
+        ready.promise,
+        outcome.then(() => {
+          throw new Error("configure worker exited before the start barrier");
+        }),
+      ]),
+      outcome,
+    };
   });
 
   try {
-    const deadline = Date.now() + 15_000;
-    while (true) {
-      const ready = await Promise.all(
-        workers.map(async ({ readyPath }) =>
-          fs.access(readyPath).then(
-            () => true,
-            () => false,
-          ),
-        ),
-      );
-      if (ready.every(Boolean)) {
-        break;
-      }
-      if (workers.some(({ child }) => child.exitCode !== null || child.signalCode !== null)) {
-        break;
-      }
-      if (Date.now() >= deadline) {
-        throw new Error("timed out waiting for concurrent configure workers");
-      }
-      await new Promise((resolve) => {
-        setTimeout(resolve, 2);
-      });
+    // Both real processes must finish imports before either can choose its implicit id.
+    const children = await withTestTimeout(
+      Promise.all(workers.map(({ ready }) => ready)),
+      15_000,
+      "timed out waiting for concurrent configure workers",
+    );
+    for (const child of children) {
+      child.send("start");
     }
-    await fs.writeFile(startPath, "start");
     const outcomes = await Promise.all(workers.map(({ outcome }) => outcome));
     const first = outcomes[0];
     const second = outcomes[1];
@@ -127,24 +93,19 @@ async function runConcurrentImplicitConfigures(
     }
     return [first, second];
   } finally {
-    for (const { child } of workers) {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill();
-      }
-    }
+    cancellation.abort();
+    await Promise.allSettled(workers.map(({ outcome }) => outcome));
   }
 }
 
 describe("node-host SQLite config", () => {
-  const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-    afterEach(() => {
-      closeOpenClawStateDatabaseForTest();
-      cleanup();
-    });
+  afterEach(async () => {
+    closeOpenClawStateDatabaseForTest();
+    await fixture.cleanup();
   });
 
   function makeTestEnv(): { env: NodeJS.ProcessEnv; stateDir: string } {
-    const stateDir = tempDirs.make("openclaw-node-host-config-");
+    const stateDir = fixture.createTempDir("openclaw-node-host-config-");
     return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir }, stateDir };
   }
 
@@ -194,6 +155,13 @@ describe("node-host SQLite config", () => {
         },
       },
     });
+    expect(readConfigMachineState<NodeHostConfig>(NODE_HOST_CONFIG_KEY, { env })).toEqual(
+      configured,
+    );
+    expect(readConfigMachineStateWithMetadata(NODE_HOST_CONFIG_KEY, { env })?.updatedAtMs).toBe(
+      1_234,
+    );
+    expect(readConfigMachineState(NODE_HOST_CONFIG_KEY, { env })).not.toHaveProperty("token");
     closeOpenClawStateDatabaseForTest();
     await expect(loadNodeHostConfig(env)).resolves.toEqual(configured);
     await expect(fs.stat(path.join(stateDir, "node.json"))).rejects.toMatchObject({
@@ -223,64 +191,11 @@ describe("node-host SQLite config", () => {
     await expect(loadNodeHostConfig(env)).resolves.toMatchObject({ installedAppsSharing: true });
   });
 
-  it("adds the gateway context-path column to an existing state database", async () => {
-    const { env } = makeTestEnv();
-    const database = openOpenClawStateDatabase({ env });
-    database.db.exec(`
-      ALTER TABLE node_host_config DROP COLUMN gateway_context_path;
-      PRAGMA user_version = 5;
-      UPDATE schema_meta SET schema_version = 5 WHERE meta_key = 'primary';
-    `);
-    closeOpenClawStateDatabaseForTest();
-
-    const configured = await configureNodeHost({
-      fallbackDisplayName: "node",
-      gateway: { contextPath: "/upgraded" },
-      env,
-      nowMs: 1,
-      candidateNodeId: "upgraded-node",
-    });
-
-    expect(configured.gateway?.contextPath).toBe("/upgraded");
-    const columns = openOpenClawStateDatabase({ env })
-      .db.prepare("PRAGMA table_info(node_host_config)")
-      .all() as Array<{ name?: unknown }>;
-    expect(columns).toContainEqual(expect.objectContaining({ name: "gateway_context_path" }));
-  });
-
-  it("adds the Cloudflare Access column to an existing state database", async () => {
-    const { env } = makeTestEnv();
-    const database = openOpenClawStateDatabase({ env });
-    database.db.exec("ALTER TABLE node_host_config DROP COLUMN gateway_cloudflare_access_json;");
-    closeOpenClawStateDatabaseForTest();
-
-    const configured = await configureNodeHost({
-      fallbackDisplayName: "node",
-      gateway: {
-        cloudflareAccess: {
-          clientId: "$CF_ACCESS_CLIENT_ID",
-          clientSecret: "$CF_ACCESS_CLIENT_SECRET",
-        },
-      },
-      env,
-      nowMs: 1,
-    });
-
-    expect(configured.gateway?.cloudflareAccess).toEqual({
-      clientId: { source: "env", provider: "default", id: "CF_ACCESS_CLIENT_ID" },
-      clientSecret: { source: "env", provider: "default", id: "CF_ACCESS_CLIENT_SECRET" },
-    });
-    const columns = openOpenClawStateDatabase({ env })
-      .db.prepare("PRAGMA table_info(node_host_config)")
-      .all() as Array<{ name?: unknown }>;
-    expect(columns).toContainEqual(
-      expect.objectContaining({ name: "gateway_cloudflare_access_json" }),
-    );
-  });
-
-  it("keeps the first committed implicit node id across processes", async () => {
+  it("keeps the first committed implicit node id across processes", async ({ signal }) => {
     const { env, stateDir } = makeTestEnv();
-    const [first, second] = await runConcurrentImplicitConfigures(stateDir);
+    const [first, second] = await fixture.run(() =>
+      runConcurrentImplicitConfigures(stateDir, signal),
+    );
 
     expect(["candidate-a", "candidate-b"]).toContain(first.nodeId);
     expect(second.nodeId).toBe(first.nodeId);
@@ -323,68 +238,12 @@ describe("node-host SQLite config", () => {
 
   it("rejects corrupt canonical rows instead of rotating identity", async () => {
     const { env } = makeTestEnv();
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        executeSqliteQuerySync(
-          db,
-          getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "node_host_config">>(db)
-            .insertInto("node_host_config")
-            .values({
-              config_key: "current",
-              version: 2,
-              node_id: "stale-node",
-              token: null,
-              display_name: null,
-              gateway_host: null,
-              gateway_port: null,
-              gateway_tls: null,
-              gateway_tls_fingerprint: null,
-              gateway_context_path: null,
-              gateway_cloudflare_access_json: null,
-              updated_at_ms: 1,
-            }),
-        );
-      },
-      { env },
-    );
+    writeConfigMachineState(NODE_HOST_CONFIG_KEY, { version: 2, nodeId: "stale-node" }, { env });
 
     await expect(loadNodeHostConfig(env)).rejects.toThrow("unsupported version 2");
     await expect(
       configureNodeHost({ fallbackDisplayName: "node", gateway: {}, env }),
     ).rejects.toThrow("unsupported version 2");
-  });
-
-  it("never reads legacy token material and nulls it on every configure", async () => {
-    const { env } = makeTestEnv();
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        executeSqliteQuerySync(
-          db,
-          getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "node_host_config">>(db)
-            .insertInto("node_host_config")
-            .values({
-              config_key: "current",
-              version: 1,
-              node_id: "node-with-token",
-              token: "test-token-placeholder",
-              display_name: null,
-              gateway_host: null,
-              gateway_port: null,
-              gateway_tls: null,
-              gateway_tls_fingerprint: null,
-              gateway_context_path: null,
-              gateway_cloudflare_access_json: null,
-              updated_at_ms: 1,
-            }),
-        );
-      },
-      { env },
-    );
-
-    await expect(loadNodeHostConfig(env)).resolves.toMatchObject({ nodeId: "node-with-token" });
-    expect(readStoredToken(env)).toBe("test-token-placeholder");
-    await configureNodeHost({ fallbackDisplayName: "node", gateway: {}, env, nowMs: 2 });
-    expect(readStoredToken(env)).toBeNull();
   });
 
   it.each(["source", "claim", "dangling-source-symlink"] as const)(

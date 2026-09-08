@@ -2,11 +2,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
-import {
-  createOllamaNodeHostCommands,
-  createOllamaNodeInferenceTool,
-  createOllamaNodeInvokePolicy,
-} from "./node-inference.js";
+import { createOllamaNodeInvokePolicy } from "./node-inference-registration.js";
+import { createOllamaNodeHostCommands, createOllamaNodeInferenceTool } from "./node-inference.js";
 
 const [OLLAMA_MODELS_COMMAND, OLLAMA_CHAT_COMMAND] = createOllamaNodeInvokePolicy().commands;
 if (!OLLAMA_MODELS_COMMAND || !OLLAMA_CHAT_COMMAND) {
@@ -44,6 +41,12 @@ async function withOllamaServer<T>(
               name: "remote:cloud",
               size: 1,
               remote_host: "https://ollama.com",
+              details: {},
+            },
+            {
+              name: "remote-model-only:latest",
+              size: 1,
+              remote_model: "upstream-chat",
               details: {},
             },
             {
@@ -259,26 +262,19 @@ describe("Ollama node host inference", () => {
 
   it("rejects remote and non-chat models before inference", async () => {
     await withOllamaServer(async (baseUrl, chatRequests) => {
-      await expect(
-        commandByName(baseUrl, OLLAMA_CHAT_COMMAND).handle(
-          JSON.stringify({ model: "remote:cloud", prompt: "hello" }),
-        ),
-      ).rejects.toThrow("is not a local chat model");
-      await expect(
-        commandByName(baseUrl, OLLAMA_CHAT_COMMAND).handle(
-          JSON.stringify({ model: "tagged-only:cloud", prompt: "hello" }),
-        ),
-      ).rejects.toThrow("is not a local chat model");
-      await expect(
-        commandByName(baseUrl, OLLAMA_CHAT_COMMAND).handle(
-          JSON.stringify({ model: "tagged-only:120b-cloud", prompt: "hello" }),
-        ),
-      ).rejects.toThrow("is not a local chat model");
-      await expect(
-        commandByName(baseUrl, OLLAMA_CHAT_COMMAND).handle(
-          JSON.stringify({ model: "embedding:latest", prompt: "hello" }),
-        ),
-      ).rejects.toThrow("is not a local chat model");
+      for (const model of [
+        "remote:cloud",
+        "remote-model-only:latest",
+        "tagged-only:cloud",
+        "tagged-only:120b-cloud",
+        "embedding:latest",
+      ]) {
+        await expect(
+          commandByName(baseUrl, OLLAMA_CHAT_COMMAND).handle(
+            JSON.stringify({ model, prompt: "hello" }),
+          ),
+        ).rejects.toThrow("is not a local chat model");
+      }
       expect(chatRequests).toHaveLength(0);
     });
   });

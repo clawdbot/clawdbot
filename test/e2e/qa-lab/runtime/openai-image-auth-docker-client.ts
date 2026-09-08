@@ -181,7 +181,16 @@ async function main() {
     const { buildOpenAIImageGenerationProvider } = (await import(
       providerModulePath
     )) as typeof import("../../../../extensions/openai/image-generation-provider.js");
-    const provider = buildOpenAIImageGenerationProvider();
+    const authModulePath = "../../../../dist/plugin-sdk/provider-auth.js" as string;
+    const { ensureAuthProfileStore, listProfilesForProvider, isProviderApiKeyConfigured } =
+      (await import(
+        authModulePath
+      )) as typeof import("../../../../src/plugin-sdk/provider-auth.js");
+    const provider = buildOpenAIImageGenerationProvider({
+      ensureAuthProfileStore,
+      listProfilesForProvider,
+      isProviderApiKeyConfigured,
+    });
 
     const directResult = await provider.generateImage({
       provider: "openai",

@@ -234,8 +234,6 @@ describe("Nested Lists - 3+ Level Deep Nesting", () => {
   });
 });
 
-describe("Nested Lists - Mixed Nesting", () => {});
-
 describe("Nested Lists - Newline Handling", () => {
   it("does not produce triple newlines in nested lists", () => {
     const input = `- Item 1
@@ -301,6 +299,26 @@ describe("Nested Lists - Edge Cases", () => {
 
 describe("list paragraph spacing", () => {
   it.each([
+    {
+      title: "separates prose from a fenced block in a tight item",
+      markdown: "- Run this:\n  ```sh\n  echo hello\n  ```\n- Done",
+      expected: "• Run this:\necho hello\n• Done",
+    },
+    {
+      title: "separates headings and paragraphs in a tight ordered item",
+      markdown: "1. Intro\n   # Heading\n   Details\n2. Done",
+      expected: "1. Intro\nHeading\n\nDetails\n2. Done",
+    },
+    {
+      title: "preserves paragraph breaks inside a list-owned quote",
+      markdown: "- > First paragraph\n  >\n  > Second paragraph\n- Next",
+      expected: "• First paragraph\n\nSecond paragraph\n• Next",
+    },
+    {
+      title: "separates a quote from its containing item's next paragraph",
+      markdown: "- > Quoted\n\n  Continue here\n- Next",
+      expected: "• Quoted\n\nContinue here\n\n• Next",
+    },
     {
       title: "preserves paragraph breaks inside loose bullet list items",
       markdown: `- first paragraph

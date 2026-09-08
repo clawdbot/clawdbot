@@ -3,11 +3,7 @@ import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts"
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 
-export type RequestFn = (
-  method: string,
-  params?: unknown,
-  options?: { timeoutMs?: number | null },
-) => Promise<unknown>;
+export type RequestFn = (...args: Parameters<GatewayBrowserClient["request"]>) => Promise<unknown>;
 
 const SYSTEM_APPROVAL_TITLE = "OpenClaw change";
 const SYSTEM_APPROVAL_COMMAND = "Set gateway.port to 19001";
@@ -54,7 +50,9 @@ export function createGatewayHarness(
       return snapshot;
     },
     connection: { gatewayUrl: "ws://gateway.test", password: "", token: "", bootstrapToken: "" },
+    connectionRevision: 0,
     eventLog: [],
+    eventLogRevision: 0,
     connect,
     setSessionKey() {},
     start() {},
@@ -207,7 +205,7 @@ export function registerOverlayPairingAccessTests() {
         await flushMicrotasks();
 
         expect(overlays.snapshot.devicePairPendingCount).toBe(2);
-        expect(request).not.toHaveBeenCalledWith("device.pair.setupCode", {});
+        expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.setupCode");
       } finally {
         stalePending.resolve({ pending: [] });
         overlays.dispose();
@@ -252,7 +250,7 @@ export function registerOverlayPairingAccessTests() {
       expect(request.mock.calls.filter(([method]) => method === "device.pair.list")).toHaveLength(
         2,
       );
-      expect(request).not.toHaveBeenCalledWith("device.pair.setupCode", {});
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.setupCode");
       overlays.dispose();
     });
 
@@ -276,7 +274,10 @@ export function registerOverlayPairingAccessTests() {
       const overlays = createApplicationOverlays(harness.gateway);
       await overlays.openDevicePairSetup();
       const mintingSetup = overlays.refreshDevicePairSetup();
-      expect(request).toHaveBeenCalledWith("device.pair.setupCode", {});
+      expect(overlays.snapshot.devicePairSetupLifecycle).toEqual({
+        phase: "loading",
+        access: "full",
+      });
 
       harness.update({
         hello: {
@@ -339,7 +340,7 @@ export function registerOverlayPairingAccessTests() {
         access: "full",
       });
       expect(overlays.snapshot.devicePairPendingCount).toBe(0);
-      expect(request).not.toHaveBeenCalledWith("device.pair.setupCode", {});
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.setupCode");
       overlays.dispose();
     });
 
@@ -359,7 +360,7 @@ export function registerOverlayPairingAccessTests() {
       await overlays.refreshDevicePairSetup();
 
       expect(request).not.toHaveBeenCalledWith("device.pair.list", {});
-      expect(request).not.toHaveBeenCalledWith("device.pair.setupCode", {});
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.setupCode");
       expect(overlays.snapshot.devicePairSetupOpen).toBe(false);
       overlays.dispose();
     });
@@ -380,7 +381,7 @@ export function registerOverlayPairingAccessTests() {
       await overlays.refreshDevicePairSetup();
 
       expect(request).toHaveBeenCalledWith("device.pair.list", {});
-      expect(request).not.toHaveBeenCalledWith("device.pair.setupCode", {});
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.setupCode");
       overlays.dispose();
     });
 

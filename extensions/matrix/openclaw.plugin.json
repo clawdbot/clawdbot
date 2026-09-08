@@ -2,7 +2,15 @@
   "id": "matrix",
   "doctorContract": {
     "configRepair": true,
-    "stateMigrations": true
+    "stateMigrations": [
+      { "id": "matrix-account-sqlite-schema" },
+      { "id": "matrix-credentials-json-to-plugin-state" },
+      { "id": "matrix-inbound-dedupe-to-claimable-dedupe" },
+      { "id": "matrix-storage-meta-json-to-plugin-state" },
+      { "id": "matrix-sync-cache-json-to-plugin-state" },
+      { "id": "matrix-recovery-key-json-to-plugin-state" },
+      { "id": "matrix-legacy-crypto-migration-json-to-plugin-state" }
+    ]
   },
   "name": "Matrix",
   "description": "OpenClaw Matrix channel plugin for rooms and direct messages.",
@@ -13,7 +21,6 @@
       "hasSubcommands": true
     }
   ],
-  "icon": "https://cdn.simpleicons.org/matrix",
   "commandAliases": [{ "name": "matrix" }],
   "activation": {
     "onStartup": false,

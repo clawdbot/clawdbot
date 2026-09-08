@@ -39,13 +39,14 @@ export function consumeChannelRunAdmission(evidence: ChannelAdmissionEvidence | 
     }),
     onAdmitted: (context) => {
       const token = context.executionIdentityToken;
-      if (token && admission.decisionCoverage) {
+      if (token && admission.decisionCoverage && admission.identifierAuthentication) {
         recordChannelAdmissionDecision({
           contextId: token.contextId,
           executionId: token.executionId,
           runId: token.runId,
           occurredAt: token.createdAt,
           coverageState: admission.decisionCoverage,
+          identifierAuthentication: admission.identifierAuthentication,
         });
       }
     },
@@ -67,6 +68,7 @@ export function prepareChannelRunAdmission(params: {
   let closed = false;
   return Object.freeze({
     operationalRunInstance,
+    assertSourceCurrent: () => prepared?.assertSourceCurrent(),
     admit: (runtimeKind, runtimeInstanceId) => {
       if (closed) {
         return Promise.reject(new Error("prepared execution context is already closed"));

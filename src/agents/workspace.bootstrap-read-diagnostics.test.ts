@@ -1,3 +1,4 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -29,6 +30,25 @@ function captureWarningLogger() {
 }
 
 describe("workspace bootstrap read diagnostics", () => {
+  it("does not split surrogate pairs when bounding unreadable reasons", async () => {
+    const tempDir = tempDirs.make("openclaw-workspace-");
+    await fs.writeFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), "# AGENTS.md\n");
+    const reason = `${"x".repeat(299)}😀tail`;
+    const readSpy = vi.spyOn(syncFs, "read").mockImplementation(((...args: unknown[]) => {
+      const callback = args.at(-1) as (error: Error) => void;
+      callback(new Error(reason));
+    }) as typeof syncFs.read);
+
+    try {
+      const files = await loadWorkspaceBootstrapFiles(tempDir);
+      expect(files.find((file) => file.name === DEFAULT_AGENTS_FILENAME)?.content).toBe(
+        `[UNREADABLE: ${"x".repeat(299)}]`,
+      );
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
   it("marks oversized bootstrap files unreadable and warns with the bounded-read reason", async () => {
     const tempDir = tempDirs.make("openclaw-workspace-");
     const agentsPath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);

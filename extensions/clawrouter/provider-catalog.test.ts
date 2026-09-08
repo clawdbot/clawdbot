@@ -162,6 +162,7 @@ describe("ClawRouter provider catalog", () => {
     ]);
     const openai = provider.models.find((model) => model.id === "openai/gpt-5.6");
     expect(openai).toMatchObject({
+      name: "OpenAI · openai/gpt-5.6",
       api: "openai-responses",
       baseUrl: "https://clawrouter.example/v1",
       reasoning: true,
@@ -199,6 +200,60 @@ describe("ClawRouter provider catalog", () => {
     });
     expect(provider.models.map((model) => model.id)).not.toContain("cohere/command-a-plus-05-2026");
   });
+
+  it.each(["codex-latest", "synthetic-upstream-sentinel"])(
+    "preserves the catalog display name and Responses alias with upstream %s",
+    async (upstream) => {
+      const catalog = {
+        providers: [
+          {
+            ...CATALOG.providers[0],
+            models: [
+              {
+                id: "codex-latest",
+                displayName: "Codex (Latest)",
+                upstream,
+                capabilities: ["llm.responses"],
+              },
+            ],
+          },
+        ],
+      };
+      const provider = await buildClawRouterProviderConfig({
+        apiKey: "isolated-workload-test-key",
+        baseUrl: "https://clawrouter.example/private",
+        fetchGuard: buildFetchGuard(catalog).fetchGuard,
+      });
+      expect(provider.models).toHaveLength(1);
+      const model = expectDefined(provider.models[0], "catalog alias");
+      expect(model).toMatchObject({
+        id: "codex-latest",
+        name: "Codex (Latest)",
+        api: "openai-responses",
+        baseUrl: "https://clawrouter.example/private/v1",
+      });
+      const normalized = expectDefined(
+        normalizeClawRouterResolvedModel({
+          ...model,
+          provider: "clawrouter",
+        } as ProviderRuntimeModel),
+        "resolved catalog alias",
+      );
+      expect(prepareClawRouterRequestModel(normalized)).toMatchObject({
+        id: "codex-latest",
+        name: "Codex (Latest)",
+        params: undefined,
+      });
+      expect(JSON.stringify(provider)).not.toContain("synthetic-upstream-sentinel");
+
+      const publicProvider = await buildClawRouterProviderConfig({
+        apiKey: "public-workload-test-key",
+        baseUrl: "https://clawrouter.example",
+        fetchGuard: buildFetchGuard().fetchGuard,
+      });
+      expect(publicProvider.models.map((entry) => entry.id)).not.toContain("codex-latest");
+    },
+  );
 
   it("rewrites only native protocol model ids at the request boundary", async () => {
     const provider = await buildClawRouterProviderConfig({

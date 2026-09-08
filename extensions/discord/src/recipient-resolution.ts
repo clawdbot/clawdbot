@@ -42,9 +42,13 @@ export async function parseAndResolveRecipient(
 export async function parseAndResolveChannelRecipient(
   raw: string,
   cfg: OpenClawConfig,
-  accountId?: string,
+  accountId: string,
 ): Promise<DiscordRecipient> {
-  return await parseAndResolveRecipient(raw, cfg, accountId, {
-    defaultKind: "channel",
-  });
+  const resolvedCfg = requireRuntimeConfig(cfg, "Discord recipient resolution");
+  const resolved = await parseAndResolveDiscordTarget(
+    raw,
+    { cfg: resolvedCfg, accountId },
+    { defaultKind: "channel" },
+  );
+  return { kind: resolved.kind, id: resolved.id };
 }

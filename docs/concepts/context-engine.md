@@ -215,11 +215,13 @@ Required members:
 
 Set `info.acceptedHostParams` to restrict the host-added lifecycle fields the
 engine receives. Current keys are `sessionKey`, `prompt`, `runtimeSettings`,
-`sessionTarget`, and `runtimeContext`. OpenClaw intersects the declaration with
-the fields available for each lifecycle method, so undeclared or unknown keys
-are never injected. Engines without this declaration receive every current
-host field; declare an explicit list, including `[]`, when the engine validates
-a narrower input shape.
+`sessionTarget`, `runtimeContext`, and `abortSignal`. OpenClaw intersects the
+declaration with the fields available for each lifecycle method, so undeclared
+or unknown keys are never injected. `abortSignal` governs optional cooperative
+cancellation for `maintain()`; the existing compact-operation abort signal is
+always preserved. Engines without this declaration receive every current host
+field; declare an explicit list, including `[]`, when the engine validates a
+narrower input shape.
 
 For durable admitted turns, declare both transcript semantics:
 
@@ -237,6 +239,11 @@ Pre-turn transcript reads during bootstrap, maintenance, assembly, and retries
 then see the exact transcript prefix before the admitted user message. The host
 calls `commitTurn` only for the accepted successful turn; failed or aborted
 turns do not advance context-engine state.
+
+For these admitted turns, embedded tool-loop `assemble()` receives the history
+before the current turn, with a token budget that reserves space for pending user
+and tool messages. The host appends those pending messages to the assembled history before
+the next model request, so they remain visible without entering the engine's store.
 
 Without the full declaration and method, OpenClaw uses the legacy context path
 for the whole logical turn, including retries. The configured context-engine
@@ -288,7 +295,13 @@ Optional members:
 | `afterTurn(params)`            | Method | Post-run lifecycle work (persist state, trigger background compaction).                                                                      |
 | `prepareSubagentSpawn(params)` | Method | Set up shared state for a child session before it starts.                                                                                    |
 | `onSubagentEnded(params)`      | Method | Clean up after a subagent ends.                                                                                                              |
-| `dispose()`                    | Method | Release resources. Called during gateway shutdown or plugin reload - not per-session.                                                        |
+| `dispose()`                    | Method | Release engine-instance resources when the logical turn retires, after any retained turn work finishes.                                      |
+
+Foreground engine disposal shares the agent cleanup deadline: 10 seconds by
+default, adjustable with `OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS`. A stalled cleanup
+logs a warning and lets the completed reply return; it does not cancel the
+plugin's pending disposal. Cleanup failures and timeouts retain the existing
+one-shot CLI cleanup-failure outcome; they do not certify resource closure.
 
 ### Runtime settings
 

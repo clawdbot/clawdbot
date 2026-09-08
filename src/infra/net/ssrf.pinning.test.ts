@@ -1,11 +1,14 @@
 // SSRF pinning tests cover DNS pinning behavior, blocked DNS results, hostname
 // allowlists, and IPv4/IPv6 address ordering.
+import { getEventListeners } from "node:events";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createPinnedLookup,
   type LookupFn,
   resolvePinnedHostname,
   resolvePinnedHostnameWithPolicy,
+  resolveSsrFPolicyForUrl,
   SsrFBlockedError,
 } from "./ssrf.js";
 
@@ -14,6 +17,48 @@ function createPublicLookupMock(): LookupFn {
 }
 
 describe("ssrf pinning", () => {
+  it.each(["success", "failure", "cancel"] as const)(
+    "releases the DNS abort listener after %s without changing errors",
+    async (outcome) => {
+      const caller = new AbortController();
+      const dns = createDeferredCore<Awaited<ReturnType<LookupFn>>>();
+      const lookupFn = vi.fn(() => dns.promise);
+      const reason = new Error("DNS lifecycle stopped");
+      const result = resolvePinnedHostnameWithPolicy("example.com", {
+        lookupFn,
+        signal: caller.signal,
+      });
+      const settled = result.catch((error: unknown) => error);
+      try {
+        expect(lookupFn).toHaveBeenCalledOnce();
+        if (outcome === "success") {
+          dns.resolve([{ address: "93.184.216.34", family: 4 }]);
+          await expect(result).resolves.toMatchObject({ addresses: ["93.184.216.34"] });
+        } else {
+          if (outcome === "cancel") {
+            caller.abort(reason);
+          } else {
+            dns.reject(reason);
+          }
+          expect(
+            await Promise.race([
+              settled,
+              new Promise((resolve) => {
+                setImmediate(() => resolve("DNS still pending"));
+              }),
+            ]),
+          ).toBe(reason);
+        }
+        expect(getEventListeners(caller.signal, "abort")).toHaveLength(0);
+      } finally {
+        caller.abort(reason);
+        // Cancellation must still observe a later DNS rejection.
+        dns.reject(reason);
+        await settled;
+      }
+    },
+  );
+
   it("pins resolved addresses for the target hostname", async () => {
     const lookup = vi.fn(async () => [
       { address: "93.184.216.34", family: 4 },
@@ -187,6 +232,46 @@ describe("ssrf pinning", () => {
         policy: { hostnameAllowlist: ["*.example.com"] },
       }),
     ).rejects.toThrow(/allowlist/i);
+  });
+
+  it.each([
+    ["tracker.example.com", "tracker.example.com"],
+    ["outside.example.net", "outside.example.net"],
+    ["[::1]", "::1"],
+    [" TRACKER.Example.COM... ", " tracker.example.com. "],
+    ["ads.example.com", "*.example.com"],
+    ["pixel.ads.example.com", " *.EXAMPLE.COM. "],
+    ["xn--bcher-kva.example", "XN--BCHER-KVA.EXAMPLE."],
+  ])("blocks configured pattern %s / %s before DNS and allow rules", async (hostname, pattern) => {
+    const lookupFn = createPublicLookupMock();
+    const policy = resolveSsrFPolicyForUrl(new URL("https://tracker.example.com"), {
+      blockedHostnames: [pattern],
+      allowedHostnames: [hostname.trim()],
+      allowedOrigins: ["https://tracker.example.com"],
+      hostnameAllowlist: ["*.example.com", "*.example"],
+      dangerouslyAllowPrivateNetwork: true,
+    });
+
+    const result = resolvePinnedHostnameWithPolicy(hostname, { lookupFn, policy });
+    await expect(result).rejects.toThrow(SsrFBlockedError);
+    await expect(result).rejects.toThrow(/configured blocklist.*blockedHostnames/);
+    expect(lookupFn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["example.com", ["*.example.com"]],
+    ["notexample.com", ["*.example.com"]],
+    ["example.com.evil.test", ["*.example.com"]],
+    ["safe.example.net", ["tracker.example.com"]],
+    ["example.com", []],
+    ["example.com", undefined],
+  ])("leaves unblocked host %s reachable with %j", async (hostname, blockedHostnames) => {
+    await expect(
+      resolvePinnedHostnameWithPolicy(hostname, {
+        lookupFn: createPublicLookupMock(),
+        policy: { blockedHostnames },
+      }),
+    ).resolves.toMatchObject({ hostname, addresses: ["93.184.216.34"] });
   });
 
   it.each([

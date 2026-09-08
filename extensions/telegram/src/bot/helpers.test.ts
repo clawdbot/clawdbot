@@ -1,5 +1,6 @@
 // Telegram tests cover helpers plugin behavior.
 import type { MessageEntity } from "grammy/types";
+import { markdownToIR } from "openclaw/plugin-sdk/text-chunking";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   describeReplyTarget,
@@ -495,13 +496,19 @@ describe("describeReplyTarget", () => {
               type: "photo",
               caption: { text: "Chart", credit: "OpenClaw" },
             },
+            {
+              type: "buttons",
+              buttons: [{ text: "Copy result", copy_text: { text: "result" } }],
+            },
           ],
         },
         from: { id: 42, first_name: "Alice", is_bot: false },
       },
     } as never);
 
-    expect(result?.body).toBe("Run summary\n1.\nCI clean\na^2+b^2=c^2\nChart\nOpenClaw");
+    expect(result?.body).toBe(
+      "Run summary\n1.\nCI clean\na^2+b^2=c^2\nChart\nOpenClaw\nCopy result",
+    );
     expect(result?.quoteSourceText).toBeUndefined();
   });
 
@@ -716,7 +723,7 @@ describe("isBinaryContent", () => {
 describe("getTelegramTextParts — binary caption filtering (#66647)", () => {
   it("keeps rich-message-only updates out of canonical text", () => {
     const result = getTelegramTextParts({
-      rich_message: { blocks: [{ type: "paragraph" }] },
+      rich_message: { blocks: [{ type: "paragraph", text: "" }] },
     });
 
     expect(result).toEqual({ text: "", entities: [] });
@@ -725,7 +732,7 @@ describe("getTelegramTextParts — binary caption filtering (#66647)", () => {
   it("keeps normal text when Telegram also supplies a rich message", () => {
     const result = getTelegramTextParts({
       text: "normal text",
-      rich_message: { blocks: [{ type: "paragraph" }] },
+      rich_message: { blocks: [{ type: "paragraph", text: "" }] },
     });
 
     expect(result).toEqual({ text: "normal text", entities: [] });
@@ -956,4 +963,83 @@ describe("renderTelegramTextEntities", () => {
 
     expect(renderTelegramTextEntities(text, entities)).toBe("Hi 😀 **bold**");
   });
+
+  it.each([
+    {
+      description: "an unmatched closing parenthesis",
+      label: "docs",
+      url: "https://example.com/report)final",
+      expectedHref: "https://example.com/report)final",
+    },
+    {
+      description: "nested and trailing parentheses",
+      label: "docs",
+      url: "https://example.com/quarter(a)b)",
+      expectedHref: "https://example.com/quarter(a)b)",
+    },
+    {
+      description: "a literal destination backslash",
+      label: "docs",
+      url: String.raw`https://example.com/a\b)`,
+      expectedHref: "https://example.com/a%5Cb)",
+    },
+    {
+      description: "angle brackets and whitespace",
+      label: "docs",
+      url: "https://example.com/<report final>",
+      expectedHref: "https://example.com/%3Creport%20final%3E",
+    },
+    {
+      description: "a closing bracket in the linked label",
+      label: "docs]more",
+      url: "https://example.com/report)final",
+      expectedHref: "https://example.com/report)final",
+    },
+    {
+      description: "a literal backslash before a bracket in the linked label",
+      label: String.raw`docs\]more`,
+      url: "https://example.com/report)final",
+      expectedHref: "https://example.com/report)final",
+    },
+    {
+      description: "an opening bracket and UTF-16 emoji in the linked label",
+      label: "😀 [docs",
+      url: "https://example.com/report)final",
+      expectedHref: "https://example.com/report)final",
+    },
+    {
+      description: "a newline in a provider link destination",
+      label: "docs",
+      url: "https://example.com/report\nfinal",
+      expectedHref: "https://example.com/report%0Afinal",
+    },
+    {
+      description: "an already percent-encoded parenthesis",
+      label: "docs",
+      url: "https://example.com/report%29final",
+      expectedHref: "https://example.com/report%29final",
+    },
+  ])(
+    "preserves $description through the actual Markdown parser",
+    ({ label, url, expectedHref }) => {
+      const text = `Read ${label} now`;
+      const offset = "Read ".length;
+      const entities = [
+        { type: "bold", offset, length: label.length },
+        { type: "text_link", offset, length: label.length, url },
+      ] satisfies MessageEntity[];
+
+      const parsed = markdownToIR(renderTelegramTextEntities(text, entities));
+
+      expect(parsed.text).toBe(text);
+      expect(parsed.links).toEqual([
+        { start: offset, end: offset + label.length, href: expectedHref },
+      ]);
+      expect(parsed.styles).toContainEqual({
+        start: offset,
+        end: offset + label.length,
+        style: "bold",
+      });
+    },
+  );
 });

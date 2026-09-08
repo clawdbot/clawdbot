@@ -150,10 +150,11 @@ describe("config help copy quality", () => {
     }
   }
 
-  it("describes auto-mode collection mutation", () => {
+  it("describes auto-mode weekly Workshop review", () => {
     const help = requireHelp("skills.workshop.autonomous.mode");
-    expect(help).toContain("daily");
-    expect(help).toContain("rewrite or drop");
+    expect(help).toContain("weekly");
+    expect(help).toContain("Workshop-owned skills");
+    expect(help).toContain("ordinary file edits");
   });
 
   it("keeps root section labels and help complete", () => {
@@ -203,10 +204,14 @@ describe("config help copy quality", () => {
   });
 
   it("covers final backlog help keys with non-trivial operational guidance", () => {
-    expectOperationalGuidance(
-      FINAL_BACKLOG_TARGET_KEYS,
-      /(default|keep|use|enable|disable|controls|set|sets|increase|lower|prefer|tune|avoid|choose|when)/i,
-    );
+    for (const key of FINAL_BACKLOG_TARGET_KEYS) {
+      expectOperationalGuidance(
+        [key],
+        key === "gateway.remote.token"
+          ? /Store via secret\/env substitution and rotate alongside remote gateway auth changes\./
+          : /(default|keep|use|enable|disable|controls|set|sets|increase|lower|prefer|tune|avoid|choose|when)/i,
+      );
+    }
   });
 
   it("documents option behavior for enum-style fields", () => {

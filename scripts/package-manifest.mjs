@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Temporarily removes private workspace dependencies from the published manifest.
+// Temporarily prepares source-only package metadata for publishing.
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -8,29 +8,45 @@ import { fileURLToPath } from "node:url";
 
 const PACKAGE_JSON_PATH = "package.json";
 const BACKUP_PATH = path.join(".artifacts", "package-manifest", "package.json.prepack-backup");
+// Source checkouts use TS tooling; production installs omit dev dependencies.
+// Rewrite only during prepack so published commands load the bundled runtime.
+const CRABBOX_SOURCE_LAUNCHER = "node scripts/crabbox-wrapper.mjs";
+const CRABBOX_PUBLISHED_LAUNCHER = "node dist/crabbox-wrapper.js";
 
 function preparedPackageManifest(content) {
   const packageJson = JSON.parse(content);
+  let changed = false;
+
+  for (const [name, command] of Object.entries(packageJson.scripts ?? {})) {
+    if (
+      typeof command === "string" &&
+      (command === CRABBOX_SOURCE_LAUNCHER || command.startsWith(`${CRABBOX_SOURCE_LAUNCHER} `))
+    ) {
+      packageJson.scripts[name] =
+        `${CRABBOX_PUBLISHED_LAUNCHER}${command.slice(CRABBOX_SOURCE_LAUNCHER.length)}`;
+      changed = true;
+    }
+  }
+
   const devDependencies = packageJson.devDependencies;
-  if (!devDependencies || typeof devDependencies !== "object" || Array.isArray(devDependencies)) {
-    return content;
+  if (devDependencies && typeof devDependencies === "object" && !Array.isArray(devDependencies)) {
+    const devDependencyEntries = Object.entries(devDependencies);
+    const publishedDevDependencyEntries = devDependencyEntries.filter(
+      ([, spec]) => typeof spec !== "string" || !spec.startsWith("workspace:"),
+    );
+    if (publishedDevDependencyEntries.length !== devDependencyEntries.length) {
+      changed = true;
+      if (publishedDevDependencyEntries.length === 0) {
+        delete packageJson.devDependencies;
+      } else {
+        packageJson.devDependencies = Object.fromEntries(publishedDevDependencyEntries);
+      }
+    }
   }
-  const devDependencyEntries = Object.entries(devDependencies);
-  const publishedDevDependencyEntries = devDependencyEntries.filter(
-    ([, spec]) => typeof spec !== "string" || !spec.startsWith("workspace:"),
-  );
-  if (publishedDevDependencyEntries.length === devDependencyEntries.length) {
-    return content;
-  }
-  if (publishedDevDependencyEntries.length === 0) {
-    delete packageJson.devDependencies;
-  } else {
-    packageJson.devDependencies = Object.fromEntries(publishedDevDependencyEntries);
-  }
-  return `${JSON.stringify(packageJson, null, 2)}\n`;
+  return changed ? `${JSON.stringify(packageJson, null, 2)}\n` : content;
 }
 
-/** Restore package.json after prepack removed private workspace dependencies. */
+/** Restore package.json after prepack prepared it for publishing. */
 export async function restorePackageManifest(cwd = process.cwd()) {
   const backupPath = path.join(cwd, BACKUP_PATH);
   if (!existsSync(backupPath)) {
@@ -51,7 +67,7 @@ export async function restorePackageManifest(cwd = process.cwd()) {
   return true;
 }
 
-/** Remove private workspace dependencies while recording restorable source bytes. */
+/** Prepare published package metadata while recording restorable source bytes. */
 export async function preparePackageManifest(cwd = process.cwd()) {
   const packageJsonPath = path.join(cwd, PACKAGE_JSON_PATH);
   const backupPath = path.join(cwd, BACKUP_PATH);

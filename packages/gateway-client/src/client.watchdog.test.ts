@@ -3,7 +3,6 @@ import { createServer as createHttpsServer } from "node:https";
 import { createServer } from "node:net";
 import type { EventFrame } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { WebSocket, WebSocketServer } from "ws";
 import { GatewayClient } from "./client.js";
 import {
   GatewayProtocolClient,
@@ -12,6 +11,7 @@ import {
 } from "./protocol-client.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "./timeouts.js";
 import { rawDataToString } from "./websocket-data.js";
+import { WebSocket, WebSocketServer } from "./websocket.test-support.js";
 
 async function getFreePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
@@ -203,8 +203,9 @@ describe("GatewayClient", () => {
   let httpsServer: ReturnType<typeof createHttpsServer> | null = null;
 
   afterEach(async () => {
-    vi.useRealTimers();
+    // Timer spies must restore their fake functions before the clock uninstalls them.
     vi.restoreAllMocks();
+    vi.useRealTimers();
     if (wss) {
       for (const client of wss.clients) {
         client.terminate();

@@ -13,8 +13,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 describe("ollama lazy imports", () => {
   afterEach(() => {
     for (const moduleId of [
-      "./src/embedding-provider.runtime.js",
-      "./src/media-understanding-provider.js",
       "./src/memory-embedding-adapter.js",
       "./src/node-inference.js",
       "./src/setup.runtime.js",
@@ -29,12 +27,11 @@ describe("ollama lazy imports", () => {
   });
 
   it("loads optional runtime owners only on first use", async () => {
-    let embeddingImports = 0;
-    let mediaImports = 0;
     let memoryImports = 0;
     let nodeInferenceImports = 0;
     let setupImports = 0;
     let streamImports = 0;
+    let streamParams: Record<string, unknown> | undefined;
     let webSearchImports = 0;
     let wslImports = 0;
     let wslChecks = 0;
@@ -46,15 +43,6 @@ describe("ollama lazy imports", () => {
         return false;
       },
     }));
-    vi.doMock("./src/embedding-provider.runtime.js", () => {
-      embeddingImports += 1;
-      return {
-        createOllamaEmbeddingProvider: async () => ({
-          provider: { id: "ollama", model: "nomic-embed-text" },
-          client: { baseUrl: "http://127.0.0.1:11434" },
-        }),
-      };
-    });
     vi.doMock("./src/memory-embedding-adapter.js", () => {
       memoryImports += 1;
       return {
@@ -64,17 +52,6 @@ describe("ollama lazy imports", () => {
           transport: "remote",
           authProviderId: "ollama",
           create: async () => ({ provider: null }),
-        },
-      };
-    });
-    vi.doMock("./src/media-understanding-provider.js", () => {
-      mediaImports += 1;
-      return {
-        ollamaMediaUnderstandingProvider: {
-          id: "ollama",
-          capabilities: ["image"],
-          describeImage: async () => ({ text: "image" }),
-          describeImages: async () => ({ text: "images" }),
         },
       };
     });
@@ -114,7 +91,10 @@ describe("ollama lazy imports", () => {
     vi.doMock("./src/stream.runtime.js", () => {
       streamImports += 1;
       return {
-        createConfiguredOllamaStreamFn: () => async () => ({ transport: "ollama" }),
+        createConfiguredOllamaStreamFn: (params: Record<string, unknown>) => {
+          streamParams = params;
+          return async () => ({ transport: "ollama" });
+        },
       };
     });
     vi.doMock("./src/web-search-provider.runtime.js", () => {
@@ -144,13 +124,14 @@ describe("ollama lazy imports", () => {
     const providers: ProviderPlugin[] = [];
     let nodeInferenceTool: AnyAgentTool | undefined;
     let webSearchProvider: WebSearchProviderPlugin | undefined;
+    const runtime = createPluginRuntimeMock();
     ollamaPlugin.register(
       createTestPluginApi({
         id: "ollama",
         name: "Ollama",
         source: "test",
         config: {},
-        runtime: createPluginRuntimeMock(),
+        runtime,
         registerEmbeddingProvider: (adapter) => {
           embeddingAdapter = adapter;
         },
@@ -172,8 +153,6 @@ describe("ollama lazy imports", () => {
     await vi.waitFor(() => expect(wslChecks).toBe(1));
 
     expect({
-      embeddingImports,
-      mediaImports,
       memoryImports,
       nodeInferenceImports,
       setupImports,
@@ -181,8 +160,6 @@ describe("ollama lazy imports", () => {
       webSearchImports,
       wslImports,
     }).toEqual({
-      embeddingImports: 0,
-      mediaImports: 0,
       memoryImports: 0,
       nodeInferenceImports: 0,
       setupImports: 0,
@@ -190,9 +167,9 @@ describe("ollama lazy imports", () => {
       webSearchImports: 0,
       wslImports: 0,
     });
+    expect(mediaProvider).toMatchObject({ id: "ollama", capabilities: ["image"] });
 
     await expect(embeddingAdapter?.create({} as never)).resolves.toEqual({ provider: null });
-    await expect(mediaProvider?.describeImage?.({} as never)).resolves.toEqual({ text: "image" });
     await expect(nodeCommands[0]?.handle()).resolves.toBe(
       JSON.stringify({ provider: "ollama", models: [] }),
     );
@@ -208,16 +185,6 @@ describe("ollama lazy imports", () => {
 
     const localProvider = providers.find((provider) => provider.id === "ollama");
     await expect(
-      localProvider?.createEmbeddingProvider?.({
-        config: {},
-        model: "",
-        provider: "ollama",
-      } as never),
-    ).resolves.toMatchObject({
-      id: "ollama",
-      client: { baseUrl: "http://127.0.0.1:11434" },
-    });
-    await expect(
       localProvider?.auth[0]?.run({
         config: {},
         prompter: {},
@@ -229,9 +196,9 @@ describe("ollama lazy imports", () => {
       config: {
         models: {
           providers: {
-            ollama: {
+            "ollama-gpu": {
               api: "ollama",
-              baseUrl: "http://127.0.0.1:11434",
+              baseUrl: "http://127.0.0.1:11435",
               models: [],
             },
           },
@@ -240,17 +207,22 @@ describe("ollama lazy imports", () => {
       model: {
         api: "ollama",
         id: "qwen3:32b",
-        provider: "ollama",
+        provider: "ollama-gpu",
       },
-      provider: "ollama",
+      provider: "ollama-gpu",
     } as never);
     await expect(streamFn?.({} as never, {} as never, {})).resolves.toEqual({
       transport: "ollama",
     });
+    expect(streamParams).toMatchObject({
+      providerBaseUrl: "http://127.0.0.1:11435",
+      localService: {
+        providerId: "ollama-gpu",
+        acquire: runtime.llm.acquireLocalService,
+      },
+    });
 
     expect({
-      embeddingImports,
-      mediaImports,
       memoryImports,
       nodeInferenceImports,
       setupImports,
@@ -258,8 +230,6 @@ describe("ollama lazy imports", () => {
       webSearchImports,
       wslImports,
     }).toEqual({
-      embeddingImports: 1,
-      mediaImports: 1,
       memoryImports: 1,
       nodeInferenceImports: 1,
       setupImports: 1,

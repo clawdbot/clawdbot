@@ -4,6 +4,8 @@
 
 export { formatErrorMessage, withManager } from "../cli/cli-utils.js";
 export { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
+export { getMemoryEmbeddingCommandSecretTargetIds } from "../cli/command-secret-targets.js";
+export { formatCliJsonFailure } from "../cli/failure-output.js";
 export { formatHelpExamples } from "../cli/help-format.js";
 export { withProgress, withProgressTotals } from "../cli/progress.js";
 export { isVerbose, setVerbose } from "../globals.js";

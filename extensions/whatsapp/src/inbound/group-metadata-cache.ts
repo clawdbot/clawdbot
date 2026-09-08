@@ -1,5 +1,5 @@
 // Whatsapp plugin module owns group metadata caching and hydration.
-import type { AnyMessageContent, GroupMetadata, WASocket } from "baileys";
+import type { AnyMessageContent, BaileysEventMap, GroupMetadata, WASocket } from "baileys";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -9,6 +9,7 @@ import {
   rememberWhatsAppBaileysCacheEntry,
   type WhatsAppBaileysGroupMetadataCache,
 } from "./baileys-cache.js";
+import type { WhatsAppSocketListen } from "./lifecycle.js";
 import {
   addWhatsAppOutboundMentionsToContent,
   mayContainWhatsAppOutboundMention,
@@ -38,7 +39,7 @@ type GroupMetadataCacheOwnerParams = {
   resolveInboundJid: (jid: string | null | undefined) => Promise<string | null>;
   reconnectCache?: WhatsAppGroupMetadataCache;
   baileysCache?: WhatsAppBaileysGroupMetadataCache;
-  listen: (event: string, listener: (...args: unknown[]) => void) => () => void;
+  listen: WhatsAppSocketListen;
   logVerbose: (message: string) => void;
   logHydrationWarning: (error: string) => void;
 };
@@ -95,8 +96,7 @@ function readGroupMetadataCacheEntry<T extends WhatsAppGroupMetadataCacheEntry>(
 export function createWhatsAppGroupMetadataCacheOwner(params: GroupMetadataCacheOwnerParams) {
   const reconnectCache = params.reconnectCache ?? new Map();
   const localCache = new Map<string, LocalGroupMetadataCacheEntry>();
-  const publishedJids = new Set<string>();
-  const invalidatedJids = new Set<string>();
+  const groupMetadataGenerations = new Map<string, object>();
   const detachListeners: Array<() => void> = [];
   let closed = false;
   let started = false;
@@ -133,62 +133,76 @@ export function createWhatsAppGroupMetadataCacheOwner(params: GroupMetadataCache
     if (closed) {
       return;
     }
+    groupMetadataGenerations.set(jid, {});
     rememberWhatsAppBaileysCacheEntry(params.baileysCache, jid, meta, GROUP_META_TTL_MS);
-    publishedJids.add(jid);
-    invalidatedJids.delete(jid);
     rememberGroupMetadataCacheEntry(reconnectCache, jid, summarizeForReconnect(meta));
     localCache.delete(jid);
   };
 
   const forgetFullMetadata = (jid: string) => {
+    groupMetadataGenerations.set(jid, {});
     params.baileysCache?.delete(jid);
     reconnectCache.delete(jid);
     localCache.delete(jid);
-    publishedJids.delete(jid);
-    invalidatedJids.add(jid);
   };
 
   const get = async (jid: string): Promise<LocalGroupMetadataCacheEntry> => {
-    const cached = readGroupMetadataCacheEntry(localCache, jid);
-    if (cached) {
-      return cached;
-    }
-    try {
-      const hydratedEntry = params.baileysCache?.get(jid);
-      const providerMetadata = params.baileysCache
-        ? readWhatsAppBaileysCacheEntry(params.baileysCache, jid)
-        : undefined;
-      const hydratedMetadata = providerMetadata?.participants?.length
-        ? providerMetadata
-        : undefined;
-      const meta =
-        hydratedMetadata ?? (await (params.getCurrentSock() ?? params.sock).groupMetadata(jid));
-      if (!hydratedMetadata) {
-        rememberWhatsAppBaileysCacheEntry(params.baileysCache, jid, meta, GROUP_META_TTL_MS);
+    for (;;) {
+      if (closed) {
+        return { expires: resolveGroupMetadataExpiresAt() ?? 0 };
       }
-      publishedJids.add(jid);
-      const entry = await summarize(meta);
-      if (hydratedMetadata && hydratedEntry) {
-        // Reusing provider-owned membership must not extend its authoritative freshness window.
-        entry.expires = hydratedEntry.expiresAt;
+      const cached = readGroupMetadataCacheEntry(localCache, jid);
+      if (cached) {
+        return cached;
       }
-      rememberGroupMetadataCacheEntry(reconnectCache, jid, {
-        subject: entry.subject,
-        expires: entry.expires,
-      });
-      rememberGroupMetadataCacheEntry(localCache, jid, entry);
-      return entry;
-    } catch (error) {
-      const hydrated = readGroupMetadataCacheEntry(reconnectCache, jid);
-      if (hydrated) {
-        rememberGroupMetadataCacheEntry(localCache, jid, hydrated);
-        params.logVerbose(
-          `Using cached group metadata for ${jid} after fetch failure: ${String(error)}`,
-        );
-        return hydrated;
+      const generation = groupMetadataGenerations.get(jid);
+      try {
+        const hydratedEntry = params.baileysCache?.get(jid);
+        const providerMetadata = params.baileysCache
+          ? readWhatsAppBaileysCacheEntry(params.baileysCache, jid)
+          : undefined;
+        const hydratedMetadata = providerMetadata?.participants?.length
+          ? providerMetadata
+          : undefined;
+        const meta =
+          hydratedMetadata ?? (await (params.getCurrentSock() ?? params.sock).groupMetadata(jid));
+        if (closed || groupMetadataGenerations.get(jid) !== generation) {
+          continue;
+        }
+        const entry = await summarize(meta);
+        // Membership updates and shutdown can happen during either provider lookup or LID mapping.
+        // Publish all caches together only while this JID still owns its exact live generation.
+        if (closed || groupMetadataGenerations.get(jid) !== generation) {
+          continue;
+        }
+        if (hydratedMetadata && hydratedEntry) {
+          // Reusing provider-owned membership must not extend its authoritative freshness window.
+          entry.expires = hydratedEntry.expiresAt;
+        } else {
+          rememberWhatsAppBaileysCacheEntry(params.baileysCache, jid, meta, GROUP_META_TTL_MS);
+        }
+        groupMetadataGenerations.set(jid, {});
+        rememberGroupMetadataCacheEntry(reconnectCache, jid, {
+          subject: entry.subject,
+          expires: entry.expires,
+        });
+        rememberGroupMetadataCacheEntry(localCache, jid, entry);
+        return entry;
+      } catch (error) {
+        if (closed || groupMetadataGenerations.get(jid) !== generation) {
+          continue;
+        }
+        const hydrated = readGroupMetadataCacheEntry(reconnectCache, jid);
+        if (hydrated) {
+          rememberGroupMetadataCacheEntry(localCache, jid, hydrated);
+          params.logVerbose(
+            `Using cached group metadata for ${jid} after fetch failure: ${String(error)}`,
+          );
+          return hydrated;
+        }
+        params.logVerbose(`Failed to fetch group metadata for ${jid}: ${String(error)}`);
+        return { expires: resolveGroupMetadataExpiresAt() ?? 0 };
       }
-      params.logVerbose(`Failed to fetch group metadata for ${jid}: ${String(error)}`);
-      return { expires: resolveGroupMetadataExpiresAt() ?? 0 };
     }
   };
 
@@ -234,18 +248,21 @@ export function createWhatsAppGroupMetadataCacheOwner(params: GroupMetadataCache
       return;
     }
     started = true;
-    const listen = (event: string, listener: (...args: unknown[]) => void) => {
+    const listen = <Event extends keyof BaileysEventMap>(
+      event: Event,
+      listener: (arg: BaileysEventMap[Event]) => void,
+    ) => {
       detachListeners.push(params.listen(event, listener));
     };
 
-    listen("groups.upsert", ((groups: GroupMetadata[]) => {
+    listen("groups.upsert", (groups) => {
       for (const group of groups) {
         if (group.id) {
           rememberFullUpdate(group.id, group);
         }
       }
-    }) as unknown as (...args: unknown[]) => void);
-    listen("groups.update", ((updates: Partial<GroupMetadata>[]) => {
+    });
+    listen("groups.update", (updates) => {
       for (const update of updates) {
         if (!update.id) {
           continue;
@@ -256,10 +273,10 @@ export function createWhatsAppGroupMetadataCacheOwner(params: GroupMetadataCache
         }
         forgetFullMetadata(update.id);
       }
-    }) as unknown as (...args: unknown[]) => void);
-    listen("group-participants.update", ((update: { id: string }) => {
+    });
+    listen("group-participants.update", (update) => {
       forgetFullMetadata(update.id);
-    }) as unknown as (...args: unknown[]) => void);
+    });
 
     void (async () => {
       try {
@@ -268,10 +285,10 @@ export function createWhatsAppGroupMetadataCacheOwner(params: GroupMetadataCache
           return;
         }
         for (const [jid, meta] of Object.entries(groups ?? {})) {
-          if (meta && !publishedJids.has(jid) && !invalidatedJids.has(jid)) {
+          if (meta && !groupMetadataGenerations.has(jid)) {
             rememberGroupMetadataCacheEntry(reconnectCache, jid, summarizeForReconnect(meta));
             rememberWhatsAppBaileysCacheEntry(params.baileysCache, jid, meta, GROUP_META_TTL_MS);
-            publishedJids.add(jid);
+            groupMetadataGenerations.set(jid, {});
           }
         }
         params.logVerbose(

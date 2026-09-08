@@ -15,6 +15,7 @@ export function normalizeVoiceTranscriptText(text: string): string {
 
 export const VOICE_TRANSCRIPT_QUEUE_POLICY = {
   maxPendingCount: VOICE_TRANSCRIPT_QUEUE_MAX_PENDING,
+  maxEntryChars: VOICE_TRANSCRIPT_MAX_CHARS,
   overflowMessage: VOICE_TRANSCRIPT_QUEUE_OVERFLOW_MESSAGE,
   createQueue: () =>
     new BoundedSerialQueue({

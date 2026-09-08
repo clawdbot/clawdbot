@@ -1,0 +1,47 @@
+name: FRV Proof Fixture
+run-name: FRV Proof Fixture [${{ inputs.operation }}] ${{ inputs.correlation }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Fixed harmless operation used by the FRV recovery proof
+        required: true
+        default: noop
+        type: choice
+        options:
+          - noop
+      correlation:
+        description: Broker-generated correlation identifier
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  fixture:
+    name: Fail once, then pass
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Exercise failed-job rerun
+        env:
+          CORRELATION: ${{ inputs.correlation }}
+          OPERATION: ${{ inputs.operation }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          [[ "$OPERATION" == "noop" ]] || {
+            echo "FRV proof fixture accepts only the fixed noop operation." >&2
+            exit 2
+          }
+          [[ "$CORRELATION" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || {
+            echo "FRV proof fixture correlation is invalid." >&2
+            exit 2
+          }
+          if [[ "$RUN_ATTEMPT" == "1" ]]; then
+            echo "Intentional first-attempt failure for $CORRELATION." >&2
+            exit 42
+          fi
+          echo "No-op fixture passed on rerun attempt $RUN_ATTEMPT."

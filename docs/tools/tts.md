@@ -8,9 +8,9 @@ title: "Text-to-speech"
 sidebarTitle: "Text to speech (TTS)"
 ---
 
-OpenClaw converts outbound replies into audio across **14 speech providers**:
-native voice messages on Feishu, Matrix, Telegram, and WhatsApp; audio
-attachments everywhere else; and PCM/Ulaw streams for telephony and Talk.
+OpenClaw converts outbound replies into native voice messages on Feishu, Matrix,
+Telegram, and WhatsApp; audio attachments everywhere else; and PCM/Ulaw streams
+for telephony and Talk.
 
 TTS is the speech-output half of Talk's `stt-tts` mode (`talk.speak` calls this
 same synthesis path). Provider-native `realtime` Talk sessions synthesize
@@ -96,6 +96,11 @@ TTS config lives under `tts` in `~/.openclaw/openclaw.json`. Pick a
 preset and adapt the provider block. The `speakerVoice`/`speakerVoiceId`
 fields shown below are canonical; each provider's own `voice`/`voiceId`/
 `voiceName` field names still work as legacy aliases.
+
+OpenRouter and DeepInfra use the first nonblank value from `speakerVoice`,
+`speakerVoiceId`, `voice`, and `voiceId`, in that order, before the provider default.
+Talk applies the same order to its provider block; when all four fields are absent
+or blank, it keeps the base TTS voice.
 
 <Tabs>
   <Tab title="Azure Speech">
@@ -812,6 +817,9 @@ whether voice-style TTS should ask providers for a native `voice-note` target or
 keep normal `audio-file` synthesis, and whether the channel transcodes
 non-native output before sending.
 
+One-off speech requests from the agent tool and `/tts` commands use the same
+channel delivery rules as automatic replies.
+
 Telegram also advertises captioned final TTS. With `tts.mode: "final"` and
 Auto-TTS set to `always` (or eligible `inbound` mode), streamed text is held
 until synthesis finishes and sent as the voice-note caption. Text beyond
@@ -859,6 +867,10 @@ channel that supports conversion.
 
 When `tts.auto` is enabled, OpenClaw:
 
+- Keeps terminal slash and plugin command replies text-only, including with
+  `auto: "always"`. Explicit speech requests such as `/tts audio` and `/tts latest`
+  still send audio. Commands that continue into an assistant run keep the normal
+  auto-TTS behavior for the assistant's answer.
 - Skips TTS if the reply already contains structured media.
 - Skips very short replies (under 10 chars).
 - Summarizes long replies when summaries are enabled, using
@@ -910,7 +922,7 @@ Reply -> TTS enabled?
       Active persona id from `personas`. Normalized to lowercase.
     </ParamField>
     <ParamField path="personas.<id>" type="object">
-      Stable spoken identity. Fields: `label`, `description`, `provider`, `fallbackPolicy`, `prompt`, `providers.<provider>`. See [Personas](#personas).
+      Stable spoken identity. Fields: `label`, `description`, `provider`, `fallbackPolicy`, `providers.<provider>`. See [Personas](#personas).
     </ParamField>
     <ParamField path="summaryModel" type="string">
       Cheap model for auto-summary; defaults to `agents.defaults.model.primary`. Accepts `provider/model` or a configured model alias.
@@ -929,8 +941,9 @@ Reply -> TTS enabled?
     </ParamField>
   </Accordion>
 
-Provider `apiKey` fields can be raw strings or SecretRefs. During cold Gateway
-startup, an unavailable TTS SecretRef marks the built-in TTS capability
+Provider `apiKey` fields, including `personas.<id>.providers.<provider>.apiKey`,
+can be raw strings or SecretRefs in global, per-agent, and Discord voice TTS config.
+During cold Gateway startup, an unavailable TTS SecretRef marks the built-in TTS capability
 configured-unavailable instead of stopping the Gateway. `tts.speak` then returns
 `UNAVAILABLE` with reason `SECRET_SURFACE_UNAVAILABLE`, and no provider request is
 sent. Status and doctor list the degraded TTS owner and its config paths. The
@@ -996,7 +1009,7 @@ and resolved values still fail startup or reject the update.
     <ParamField path="command" type="string">Local executable or command string for CLI TTS.</ParamField>
     <ParamField path="args" type="string[]">Command arguments. Supports `{{Text}}`, `{{OutputPath}}`, `{{OutputDir}}`, `{{OutputBase}}` placeholders.</ParamField>
     <ParamField path="outputFormat" type='"mp3" | "opus" | "wav"'>Expected CLI output format. Default `mp3` for audio attachments.</ParamField>
-    <ParamField path="timeoutMs" type="number">Command timeout in milliseconds. Default `120000`.</ParamField>
+    <ParamField path="timeoutMs" type="number">Command timeout in milliseconds. Overrides the resolved TTS request timeout when set. When omitted, follows the request timeout; the plugin default is `120000`.</ParamField>
     <ParamField path="cwd" type="string">Optional command working directory.</ParamField>
     <ParamField path="env" type="Record<string, string>">Optional environment overrides for the command.</ParamField>
 

@@ -22,6 +22,11 @@ Status: official downloadable plugin.
 openclaw plugins install @tencent-connect/openclaw-qqbot
 ```
 
+If the bot was installed as `@openclaw/qqbot` under plugin id `qqbot`,
+`openclaw plugins update qqbot` and `openclaw update` rewrite it to
+`@tencent-connect/openclaw-qqbot` under plugin id `openclaw-qqbot`. Channel
+config stays under `channels.qqbot`.
+
 ## Setup
 
 1. Go to the [QQ Open Platform](https://q.qq.com/) and scan the QR code with your

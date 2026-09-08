@@ -23,13 +23,7 @@ function monitor(state: CronServiceState): Monitor {
 function arm(state: CronServiceState): void {
   const current = monitor(state);
   const reconcile = current.reconcile;
-  if (
-    state.stopped ||
-    state.schedulingPaused ||
-    current.timer ||
-    current.byJobId.size === 0 ||
-    !reconcile
-  ) {
+  if (state.stopped || current.timer || current.byJobId.size === 0 || !reconcile) {
     return;
   }
   current.timer = setTimeout(() => {
@@ -69,16 +63,14 @@ export function removeForeignReceipt(state: CronServiceState, jobId: string): vo
   monitor(state).byJobId.delete(jobId);
 }
 
-export function stopForeignReceiptMonitor(state: CronServiceState, clear: boolean): void {
+export function stopForeignReceiptMonitor(state: CronServiceState): void {
   const current = monitor(state);
   if (current.timer) {
     clearTimeout(current.timer);
     current.timer = null;
   }
-  if (clear) {
-    current.byJobId.clear();
-    current.reconcile = undefined;
-  }
+  current.byJobId.clear();
+  current.reconcile = undefined;
 }
 
 export function resumeForeignReceiptMonitor(state: CronServiceState): void {

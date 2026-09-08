@@ -1,9 +1,6 @@
 /** Runtime entrypoint for image generation with provider fallback and override normalization. */
-import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
-import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseImageGenerationModelRef } from "../media-generation/model-ref.js";
 import {
@@ -15,7 +12,8 @@ import {
   buildNoCapabilityModelConfiguredMessage,
   resolveCapabilityModelCandidates,
   resolveMediaProviderRequestTimeoutMs,
-  throwCapabilityGenerationFailure,
+  resolveReferenceImageCapabilityError,
+  runMediaGenerationCandidates,
 } from "../media-generation/runtime-shared.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { resolveImageGenerationMaxInputImages } from "./capabilities.js";
@@ -81,137 +79,112 @@ export async function generateImage(
     throw new Error(buildNoImageGenerationModelConfiguredMessage(params.cfg, deps));
   }
 
-  const attempts: FallbackAttempt[] = [];
-  let lastError: unknown;
-
-  // Try configured/fallback models in order and return the first provider whose
-  // entire image batch is present and non-empty; preserve failed attempts for diagnostics.
-  for (const candidate of candidates) {
-    const provider = getProvider(candidate.provider, params.cfg);
-    if (!provider) {
-      const error = `No image-generation provider registered for ${candidate.provider}`;
-      attempts.push({
-        provider: candidate.provider,
-        model: candidate.model,
-        error,
-      });
-      lastError = new Error(error);
+  return runMediaGenerationCandidates({
+    candidates,
+    capability: "image",
+    getProvider: (providerId) => getProvider(providerId, params.cfg),
+    includeSkipFailureDetails: true,
+    onMissingProvider: (attempt) => {
       logger.warn(
-        `image-generation candidate failed: ${candidate.provider}/${candidate.model}: ${error}`,
+        `image-generation candidate failed: ${attempt.provider}/${attempt.model}: ${attempt.error}`,
       );
-      continue;
-    }
-
-    const inputImageCount = params.inputImages?.length ?? 0;
-    const maxInputImages = resolveImageGenerationMaxInputImages({
-      provider,
-      model: candidate.model,
-    });
-    if (maxInputImages !== undefined && inputImageCount > maxInputImages) {
-      const error = `${candidate.provider}/${candidate.model} supports at most ${maxInputImages} reference image${maxInputImages === 1 ? "" : "s"}, ${inputImageCount} requested`;
-      attempts.push({
-        provider: candidate.provider,
-        model: candidate.model,
-        error,
-      });
-      lastError = new Error(error);
-      logger.warn(`image-generation candidate skipped: ${error}`);
-      continue;
-    }
-
-    try {
-      const timeoutMs = resolveMediaProviderRequestTimeoutMs({
-        timeoutMs: requestedTimeoutMs,
-        providerDefaultTimeoutMs: provider.defaultTimeoutMs,
-      });
-      const modelResolutions =
-        provider.capabilities.geometry?.resolutionsByModel?.[candidate.model];
-      const modeCapabilities = params.inputImages?.length
-        ? provider.capabilities.edit
-        : provider.capabilities.generate;
-      const inferredResolution =
-        modeCapabilities.supportsResolution === false || modelResolutions?.length === 0
-          ? undefined
-          : params.inferredResolution;
-      const sanitized = resolveImageGenerationOverrides({
+    },
+    onFailure: (attempt) => {
+      logger.warn(
+        `image-generation candidate failed: ${attempt.provider}/${attempt.model}: ${attempt.error}`,
+      );
+    },
+    prepareCandidate(candidate, provider) {
+      const inputImageCount = params.inputImages?.length ?? 0;
+      const maxInputImages = resolveImageGenerationMaxInputImages({
         provider,
         model: candidate.model,
-        size: params.size,
-        aspectRatio: params.aspectRatio,
-        resolution: params.resolution ?? inferredResolution,
-        quality: params.quality,
-        outputFormat: params.outputFormat,
-        background: params.background,
-        inputImages: params.inputImages,
       });
-      // Providers receive only supported overrides. Ignored/normalized values
-      // are returned to callers so user-facing replies can explain adjustments.
-      const result: ImageGenerationResult = await provider.generateImage({
-        provider: candidate.provider,
-        model: candidate.model,
-        prompt: params.prompt,
-        cfg: params.cfg,
-        agentDir: params.agentDir,
-        authStore: params.authStore,
-        count: params.count,
-        size: sanitized.size,
-        aspectRatio: sanitized.aspectRatio,
-        resolution: sanitized.resolution,
-        quality: sanitized.quality,
-        outputFormat: sanitized.outputFormat,
-        background: sanitized.background,
-        inputImages: params.inputImages,
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-        providerOptions: params.providerOptions,
-        ssrfPolicy: params.ssrfPolicy,
-      });
-      if (!Array.isArray(result.images) || result.images.length === 0) {
-        throw new Error("Image generation provider returned no images.");
-      }
-      const emptyImageIndex = result.images.findIndex((image) => image.buffer.byteLength === 0);
-      if (emptyImageIndex >= 0) {
-        throw new Error(
-          `Image generation provider returned an empty image buffer at index ${emptyImageIndex}.`,
-        );
-      }
-      return {
-        images: result.images,
-        provider: candidate.provider,
-        model: result.model ?? candidate.model,
-        attempts,
-        ...(sanitized.resolution ? { appliedResolution: sanitized.resolution } : {}),
-        normalization: sanitized.normalization,
-        metadata: {
-          ...result.metadata,
-          ...buildMediaGenerationNormalizationMetadata({
-            normalization: sanitized.normalization,
-            requestedSizeForDerivedAspectRatio: params.size,
-          }),
+      const referenceImageError = resolveReferenceImageCapabilityError({
+        candidateRef: `${candidate.provider}/${candidate.model}`,
+        inputImageCount,
+        edit: {
+          enabled: provider.capabilities.edit.enabled,
+          ...(maxInputImages !== undefined ? { maxInputImages } : {}),
         },
-        ignoredOverrides: sanitized.ignoredOverrides,
-      };
-    } catch (err) {
-      lastError = err;
-      const described = isFailoverError(err) ? describeFailoverError(err) : undefined;
-      attempts.push({
-        provider: candidate.provider,
-        model: candidate.model,
-        error: described?.message ?? formatErrorMessage(err),
-        reason: described?.reason,
-        status: described?.status,
-        code: described?.code,
       });
-      logger.warn(
-        `image-generation candidate failed: ${candidate.provider}/${candidate.model}: ${
-          described?.message ?? formatErrorMessage(err)
-        }`,
-      );
-    }
-  }
+      if (referenceImageError) {
+        logger.warn(`image-generation candidate skipped: ${referenceImageError}`);
+        return referenceImageError;
+      }
 
-  return throwCapabilityGenerationFailure({
-    capabilityLabel: "image generation",
-    attempts,
-    lastError,
+      return async (attempts): Promise<GenerateImageRuntimeResult> => {
+        const timeoutMs = resolveMediaProviderRequestTimeoutMs({
+          timeoutMs: requestedTimeoutMs,
+          providerDefaultTimeoutMs: provider.defaultTimeoutMs,
+        });
+        const modelResolutions =
+          provider.capabilities.geometry?.resolutionsByModel?.[candidate.model];
+        const modeCapabilities = params.inputImages?.length
+          ? provider.capabilities.edit
+          : provider.capabilities.generate;
+        const inferredResolution =
+          modeCapabilities.supportsResolution === false || modelResolutions?.length === 0
+            ? undefined
+            : params.inferredResolution;
+        const sanitized = resolveImageGenerationOverrides({
+          provider,
+          model: candidate.model,
+          size: params.size,
+          aspectRatio: params.aspectRatio,
+          resolution: params.resolution ?? inferredResolution,
+          quality: params.quality,
+          outputFormat: params.outputFormat,
+          background: params.background,
+          inputImages: params.inputImages,
+        });
+        // Providers receive only supported overrides. Ignored/normalized values
+        // are returned to callers so user-facing replies can explain adjustments.
+        const result: ImageGenerationResult = await provider.generateImage({
+          provider: candidate.provider,
+          model: candidate.model,
+          prompt: params.prompt,
+          cfg: params.cfg,
+          agentDir: params.agentDir,
+          authStore: params.authStore,
+          count: params.count,
+          size: sanitized.size,
+          aspectRatio: sanitized.aspectRatio,
+          resolution: sanitized.resolution,
+          quality: sanitized.quality,
+          outputFormat: sanitized.outputFormat,
+          background: sanitized.background,
+          inputImages: params.inputImages,
+          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+          providerOptions: params.providerOptions,
+          ssrfPolicy: params.ssrfPolicy,
+        });
+        if (!Array.isArray(result.images) || result.images.length === 0) {
+          throw new Error("Image generation provider returned no images.");
+        }
+        const emptyImageIndex = result.images.findIndex((image) => image.buffer.byteLength === 0);
+        if (emptyImageIndex >= 0) {
+          throw new Error(
+            `Image generation provider returned an empty image buffer at index ${emptyImageIndex}.`,
+          );
+        }
+        return {
+          images: result.images,
+          provider: candidate.provider,
+          model: result.model ?? candidate.model,
+          attempts,
+          ...(sanitized.resolution ? { appliedResolution: sanitized.resolution } : {}),
+          normalization: sanitized.normalization,
+          metadata: {
+            ...result.metadata,
+            ...buildMediaGenerationNormalizationMetadata({
+              normalization: sanitized.normalization,
+              requestedSizeForDerivedAspectRatio: params.size,
+            }),
+          },
+          ignoredOverrides: sanitized.ignoredOverrides,
+        };
+      };
+    },
   });
 }

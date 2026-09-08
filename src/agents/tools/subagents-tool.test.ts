@@ -1,5 +1,6 @@
 // Subagents tool tests cover requester-scoped task listing and cancellation.
 import { describe, expect, it, vi } from "vitest";
+import type { cancelDetachedTaskRunById } from "../../tasks/task-executor.js";
 import type { TaskRecord, TaskRuntime, TaskStatus } from "../../tasks/task-registry.types.js";
 import { TASK_STATUS_DETAIL_MAX_CHARS } from "../../tasks/task-status.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../subagents/registry/subagent-lifecycle-events.js";
@@ -207,6 +208,50 @@ describe("subagents tool", () => {
     expect(cancelTask).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["list", "cancel"] as const)(
+    "keeps %s available when an unrelated retained task has ambiguous ownership",
+    async (action) => {
+      const config = { agents: { entries: { alpha: {}, beta: {} } } };
+      const cancelTask = vi.fn<typeof cancelDetachedTaskRunById>().mockResolvedValue({
+        found: true,
+        cancelled: true,
+      });
+      const tool = createSubagentsTool({
+        agentSessionKey: "agent:alpha:main",
+        config,
+        listTasks: () => [
+          task({
+            taskId: "legacy-orphan",
+            runtime: "cli",
+            ownerKey: "global",
+            requesterSessionKey: "global",
+          }),
+          task({
+            taskId: "owned-task",
+            runtime: "cli",
+            ownerKey: "agent:alpha:main",
+            requesterSessionKey: "agent:alpha:main",
+          }),
+        ],
+        cancelTask,
+      });
+
+      const result = await tool.execute(action, { action, taskId: "owned-task" });
+
+      if (action === "list") {
+        expect(result.details).toMatchObject({
+          status: "ok",
+          taskTotal: 1,
+          tasks: [expect.objectContaining({ taskId: "owned-task" })],
+        });
+        expect(cancelTask).not.toHaveBeenCalled();
+      } else {
+        expect(result.details).toMatchObject({ status: "cancelled", taskId: "owned-task" });
+        expect(cancelTask).toHaveBeenCalledExactlyOnceWith({ cfg: config, taskId: "owned-task" });
+      }
+    },
+  );
+
   it("preserves blocked terminal outcomes and actionable terminal failure reasons", async () => {
     const tasks = [
       task({
@@ -350,5 +395,55 @@ describe("subagents tool", () => {
         recentMinutes,
       }),
     ).rejects.toThrow("recentMinutes must be a positive integer");
+  });
+
+  it("lists and cancels retained policy-key tasks for a split-key caller", async () => {
+    // Regression for the ClawSweeper P2 finding on #137779: when the listing root switches to
+    // the durable key, task rows created by pre-change code still carry the policy key in
+    // owner_key. Without the fallback policy key, split-key callers (e.g. Telegram DM) lose
+    // sight of retained running tasks and cannot cancel them ("Task outside session tree").
+    const durableKey = "agent:main:telegram:direct:456";
+    const policyKey = "agent:main:telegram:default:direct:456";
+    const tasks = [
+      // Retained row from pre-change code: owner_key is the policy key.
+      task({
+        taskId: "retained-media",
+        runtime: "cli",
+        ownerKey: policyKey,
+        requesterSessionKey: policyKey,
+      }),
+      // Newly created row: owner_key is the durable key.
+      task({
+        taskId: "new-spawn",
+        runtime: "cli",
+        ownerKey: durableKey,
+        requesterSessionKey: durableKey,
+      }),
+    ];
+
+    const cancelTask = vi.fn(async () => ({ found: true, cancelled: true }));
+    const tool = createSubagentsTool({
+      agentSessionKey: durableKey,
+      callerPolicySessionKey: policyKey,
+      config: {},
+      listTasks: () => tasks,
+      cancelTask: cancelTask as never,
+    });
+
+    const result = await tool.execute("list", { action: "list" });
+    const rows = (result.details as { tasks: Array<{ taskId: string }> }).tasks;
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ taskId: "retained-media" }),
+        expect.objectContaining({ taskId: "new-spawn" }),
+      ]),
+    );
+
+    await expect(
+      tool.execute("cancel", { action: "cancel", taskId: "retained-media" }),
+    ).resolves.toEqual(
+      expect.objectContaining({ details: expect.objectContaining({ status: "cancelled" }) }),
+    );
+    expect(cancelTask).toHaveBeenCalledWith({ cfg: {}, taskId: "retained-media" });
   });
 });

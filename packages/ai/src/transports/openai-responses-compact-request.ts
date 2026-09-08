@@ -1,10 +1,12 @@
 import type { Context, Model, StreamFn } from "@openclaw/llm-core";
+import type { OpenAIResponsesCompactionOutput } from "./openai-responses-compaction-window.js";
 import type {
   OpenAIResponsesOptions,
   OpenAIResponsesReasoningReplayMetadata,
 } from "./openai-responses-contracts.js";
 
 export type OpenAIResponsesCompactEndpointResult = {
+  output: OpenAIResponsesCompactionOutput;
   item: { type: "compaction"; id?: string; encrypted_content: string };
   historyMode: "compacted-prefix" | "retained-users";
   usage: Record<string, unknown> & { input_tokens: number; output_tokens: number };

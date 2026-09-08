@@ -11,11 +11,13 @@ import {
   type MessagePresentationInteractiveBlock,
   type MessagePresentationTableBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  resolveAskUserQuestionOptionIndices,
+  type ReplyPayload,
+} from "openclaw/plugin-sdk/reply-payload";
 import {
   buildTelegramPresentationButtons,
   resolveTelegramInlineButtons,
-  resolveTelegramQuestionOptionIndices,
   type TelegramButtonBuildOptions,
 } from "./button-types.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
@@ -28,20 +30,18 @@ const TELEGRAM_PRESENTATION_CAPABILITIES = {
   selects: true,
   context: true,
   divider: false,
-  // Native table blocks require the account's Bot API 10.2 rich-message path;
+  // Native table blocks require the account's Bot API 10.3 rich-message path;
   // per-account capability resolution flips this on when richMessages is enabled.
   tables: false,
   limits: {
     actions: {
       maxActions: 100,
       maxActionsPerRow: 3,
-      maxLabelLength: 64,
       supportsStyles: false,
       supportsDisabled: false,
     },
     selects: {
       maxOptions: 100,
-      maxLabelLength: 64,
     },
     text: {
       markdownDialect: "markdown" as const,
@@ -67,7 +67,7 @@ function escapeTelegramTableCellText(value: string | number): string {
 }
 
 // The `<table>` HTML island feeds the existing island -> rich-block converter,
-// which emits native Bot API 10.2 table blocks (bordered, striped, native
+// which emits native Bot API 10.3 table blocks (bordered, striped, native
 // caption, header cells) on rich accounts. Markdown pipe tables cannot express
 // row-header columns or native captions, so the island form is canonical here.
 function renderTelegramTableIsland(block: MessagePresentationTableBlock): string {
@@ -223,7 +223,7 @@ export function canonicalizeTelegramPresentationPayload(
   const interactive = normalizeLegacyInteractiveReply(payload.interactive);
   const buttonOptions: TelegramButtonBuildOptions = {
     allowWebAppButtons: options?.allowWebAppButtons === true,
-    questionOptionIndices: resolveTelegramQuestionOptionIndices(payload),
+    questionOptionIndices: resolveAskUserQuestionOptionIndices(payload),
   };
   const existingButtons = resolveTelegramInlineButtons(
     {
@@ -238,10 +238,17 @@ export function canonicalizeTelegramPresentationPayload(
     presentationControlsSelected,
     buttonOptions,
   });
+  // Only native labels are clipped; unavailable controls retain their full text.
   const presentationButtons = buildTelegramPresentationButtons(
-    {
-      blocks: nativeControlBlocks,
-    },
+    adaptMessagePresentationForChannel({
+      presentation: { blocks: nativeControlBlocks },
+      capabilities: {
+        limits: {
+          actions: { maxLabelLength: 64 },
+          selects: { maxLabelLength: 64 },
+        },
+      },
+    }),
     buttonOptions,
   );
   const buttons = existingButtons ?? presentationButtons;
@@ -257,13 +264,14 @@ export function canonicalizeTelegramPresentationPayload(
   const hasFallback =
     fallbackText.length > 0 &&
     (currentText === fallbackText || currentText.endsWith(`\n\n${fallbackText}`));
-  // presentationTextMode "fallback" marks payload.text as the authored plain
-  // rendering of the same presentation: rich accounts replace it with the
-  // native block rendering, plain accounts keep it and drop the generic flatten.
+  // Native controls replace their choice text, including control-only replies.
+  // Text-only delivery keeps the producer's complete authored fallback.
   const text = textIsFallback
-    ? richTables
-      ? fallbackText || currentText
-      : currentText || fallbackText
+    ? nativeControlBlocks.length > 0
+      ? fallbackText
+      : richTables
+        ? fallbackText || currentText
+        : currentText || fallbackText
     : hasFallback
       ? currentText
       : [currentText, fallbackText].filter(Boolean).join("\n\n");

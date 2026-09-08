@@ -68,26 +68,43 @@ function collectMixedUnions(
   return result;
 }
 
+function schemaChildAtSegment(schema: JsonSchema, segment: string): JsonSchema | undefined {
+  let direct: JsonSchema | undefined;
+  if (segment === "*") {
+    direct = Array.isArray(schema.items)
+      ? undefined
+      : schema.items ||
+        (schema.additionalProperties && typeof schema.additionalProperties === "object"
+          ? schema.additionalProperties
+          : undefined);
+  } else if (/^\d+$/u.test(segment) && Array.isArray(schema.items)) {
+    direct = schema.items[Number(segment)];
+  } else {
+    direct = schema.properties?.[segment];
+  }
+  if (direct) {
+    return direct;
+  }
+  for (const branch of [
+    ...(schema.allOf ?? []),
+    ...(schema.anyOf ?? []),
+    ...(schema.oneOf ?? []),
+  ]) {
+    const nested = schemaChildAtSegment(branch, segment);
+    if (nested) {
+      return nested;
+    }
+  }
+  return undefined;
+}
+
 function schemaAtPath(schema: JsonSchema, path: string): JsonSchema | undefined {
   let current: JsonSchema | undefined = schema;
   for (const segment of path === "<root>" ? [] : path.split(".")) {
     if (!current) {
       return undefined;
     }
-    if (segment === "*") {
-      current = Array.isArray(current.items)
-        ? undefined
-        : current.items ||
-          (current.additionalProperties && typeof current.additionalProperties === "object"
-            ? current.additionalProperties
-            : undefined);
-      continue;
-    }
-    if (/^\d+$/u.test(segment) && Array.isArray(current.items)) {
-      current = current.items[Number(segment)];
-      continue;
-    }
-    current = current.properties?.[segment];
+    current = schemaChildAtSegment(current, segment);
   }
   return current;
 }

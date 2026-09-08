@@ -2,7 +2,7 @@ import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
 import type { ChatWorkspaceDock, UiSettings } from "../../../app/settings.ts";
 import type { SessionCapability, SessionScopeHost } from "../../../lib/sessions/index.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import type { SidebarContent, SidebarSelection } from "./chat-sidebar.ts";
 
 export type SessionWorkspaceProps = {
   collapsed: boolean;
@@ -19,7 +19,6 @@ export type SessionWorkspaceProps = {
   onSetDock: (dock: ChatWorkspaceDock) => void;
   onRefresh: () => void;
   onBrowsePath: (path: string) => void;
-  onCopyPath: (path: string) => void;
   onOpenFile: (path: string, origin: "session" | "workspace") => void;
   onSearch: (search: string) => void;
   onOpenArtifact: (artifactId: string) => void;
@@ -44,7 +43,6 @@ export type SessionWorkspaceState = {
   error: string | null;
   list: SessionWorkspaceListResult | null;
   loading: boolean;
-  openRequest?: object;
   pendingReload: boolean;
   sessionKey: string;
 };
@@ -65,9 +63,9 @@ export type SessionWorkspaceHost = {
   settings?: UiSettings;
   sessionWorkspaceState?: SessionWorkspaceState;
   sessionWorkspaceDraftScope?: string;
-  sidebarContent: SidebarContent | null;
+  sidebarContent: SidebarSelection | null;
   requestUpdate?: () => void;
-  handleOpenSidebar: (content: SidebarContent | null) => void;
+  handleOpenSidebar: (content: SidebarSelection | null) => void;
 };
 
 /** Agent owning the pane's current session: explicit key scope first, then the

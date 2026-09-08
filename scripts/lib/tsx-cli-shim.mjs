@@ -1,51 +1,50 @@
 // Bootstraps documented JavaScript entrypoints before the TypeScript loader is active.
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { constants as osConstants } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { ensureRepoNodeModulesLink } from "./local-check-runtime.mts";
 
 const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
-const FORCE_KILL_DELAY_MS = 5_000;
+const DEFAULT_FORCE_KILL_DELAY_MS = 5_000;
 const SHIM_CHECKOUT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-function resolvePrimaryRoot(checkoutRoot) {
-  const result = spawnSync("git", ["rev-parse", "--git-common-dir"], {
-    cwd: checkoutRoot,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
-    return null;
+export function resolveTsxImport(checkoutRoot) {
+  const modulesDir =
+    (process.env.PNPM_CONFIG_MODULES_DIR ?? process.env.pnpm_config_modules_dir) ||
+    process.env.npm_config_modules_dir;
+  const localModulesDir = path.resolve(checkoutRoot, "node_modules");
+  const configuredModulesDir = modulesDir ? path.resolve(checkoutRoot, modulesDir) : undefined;
+  const candidates = configuredModulesDir
+    ? [configuredModulesDir, localModulesDir]
+    : [localModulesDir];
+  for (const selectedModulesDir of candidates) {
+    const tsxManifest = path.join(selectedModulesDir, "tsx", "package.json");
+    if (!existsSync(tsxManifest)) {
+      continue;
+    }
+    const require = createRequire(tsxManifest);
+    // Keep compiled ESM native: tsx's CJS hook rewrites its import-only
+    // dependency edges into require() calls with incompatible export conditions.
+    const importUrl = pathToFileURL(require.resolve("tsx/esm")).href;
+    if (selectedModulesDir === configuredModulesDir) {
+      ensureRepoNodeModulesLink(selectedModulesDir, { cwd: checkoutRoot });
+    }
+    return importUrl;
   }
-  const commonDir = result.stdout.trim();
-  if (!commonDir) {
-    return null;
-  }
-  const resolved = path.resolve(checkoutRoot, commonDir);
-  return path.basename(resolved) === ".git" ? path.dirname(resolved) : null;
+  throw new Error(
+    `Repository dependencies are missing from ${localModulesDir}. Run pnpm install --frozen-lockfile in an independently owned checkout.`,
+  );
 }
 
-function resolveTsxImport(checkoutRoot) {
-  const modulesDir =
-    process.env.PNPM_CONFIG_MODULES_DIR?.trim() || process.env.npm_config_modules_dir?.trim();
-  const hydratedTsxRoot = modulesDir
-    ? path.join(path.resolve(checkoutRoot, modulesDir), "tsx")
-    : null;
-  let resolutionError;
-  for (const candidateRoot of [
-    hydratedTsxRoot,
-    checkoutRoot,
-    resolvePrimaryRoot(checkoutRoot),
-  ].filter(Boolean)) {
-    try {
-      const require = createRequire(path.join(candidateRoot, "package.json"));
-      return pathToFileURL(require.resolve("tsx")).href;
-    } catch (error) {
-      resolutionError = error;
-    }
-  }
-  throw resolutionError;
+export async function registerToolingTsx() {
+  // tsx indexes the entire shared disk cache before expiration, coupling startup
+  // to other checkouts' cache size. This flag retains its in-process Map and
+  // reaches descendant tooling before their loaders initialize.
+  process.env.TSX_DISABLE_CACHE = "1";
+  await import(resolveTsxImport(SHIM_CHECKOUT_ROOT));
 }
 
 function signalExitCode(signal) {
@@ -76,8 +75,9 @@ function signalChild(child, signal, detached) {
   }
 }
 
-async function runTsxCliShimInner(moduleUrl, options) {
+async function runCliShimInner(moduleUrl, options, nodeArgs) {
   const detached = options.detached ?? (process.platform !== "win32" && !process.stdin.isTTY);
+  const forceKillDelayMs = options.forceKillDelayMs ?? DEFAULT_FORCE_KILL_DELAY_MS;
   let child = null;
   let forceKillTimer = null;
   const signalHandlers = new Map();
@@ -96,11 +96,15 @@ async function runTsxCliShimInner(moduleUrl, options) {
   for (const signal of FORWARDED_SIGNALS) {
     const handler = () => {
       signalChild(child, signal, detached);
-      forceKillTimer ??= setTimeout(
-        () => signalChild(child, "SIGKILL", detached),
-        FORCE_KILL_DELAY_MS,
-      );
-      forceKillTimer.unref();
+      // A lifecycle-owning implementation must finish killing its own child groups.
+      // A competing shim deadline can kill that owner and orphan those children.
+      if (options.terminationOwner !== "implementation") {
+        forceKillTimer ??= setTimeout(
+          () => signalChild(child, "SIGKILL", detached),
+          forceKillDelayMs,
+        );
+        forceKillTimer.unref();
+      }
     };
     signalHandlers.set(signal, handler);
     process.on(signal, handler);
@@ -110,18 +114,13 @@ async function runTsxCliShimInner(moduleUrl, options) {
   try {
     const implementationUrl = new URL(options.implementation, moduleUrl);
     const implementationPath = fileURLToPath(implementationUrl);
-    const tsxImport = resolveTsxImport(SHIM_CHECKOUT_ROOT);
     const nodeExecutable = process.versions.bun ? "node" : process.execPath;
-    child = spawn(
-      nodeExecutable,
-      ["--import", tsxImport, implementationPath, ...process.argv.slice(2)],
-      {
-        cwd: process.cwd(),
-        detached,
-        env: process.env,
-        stdio: "inherit",
-      },
-    );
+    child = spawn(nodeExecutable, [...nodeArgs, implementationPath, ...process.argv.slice(2)], {
+      cwd: process.cwd(),
+      detached,
+      env: process.env,
+      stdio: "inherit",
+    });
     const result = await new Promise((resolve, reject) => {
       child.once("error", reject);
       child.once("close", (code, signal) => resolve({ code, signal }));
@@ -144,12 +143,20 @@ async function runTsxCliShimInner(moduleUrl, options) {
   }
 }
 
-export async function runTsxCliShim(moduleUrl, options = {}) {
+async function runCliShim(moduleUrl, options, nodeArgs) {
   try {
-    await runTsxCliShimInner(moduleUrl, options);
+    await runCliShimInner(moduleUrl, options, nodeArgs);
   } catch (error) {
     console.error(error);
     writeFailureTrailer(options.failureTool, 1);
     process.exitCode = 1;
   }
+}
+
+export function runNodeCliShim(moduleUrl, options = {}) {
+  return runCliShim(moduleUrl, options, []);
+}
+
+export function runTsxCliShim(moduleUrl, options = {}) {
+  return runCliShim(moduleUrl, options, ["--import", new URL("../tsx.mjs", import.meta.url).href]);
 }

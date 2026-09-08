@@ -47,22 +47,28 @@ function renderStatusPreviewRow(task: TaskSummary): TemplateResult {
     : taskTimestampMs(task.updatedAt ?? task.createdAt);
   return html`
     <div class="chat-tasks-preview__row">
-      ${task.status === "running"
-        ? html`<span class="chat-tasks-rail__task-pulse" aria-hidden="true"></span>`
-        : nothing}
+      ${
+        task.status === "running"
+          ? html`<span class="chat-tasks-rail__task-pulse" aria-hidden="true"></span>`
+          : nothing
+      }
       <span class="chat-tasks-preview__title">${taskTitle(task)}</span>
       <span class="chat-tasks-preview__meta">
         <span class="chat-tasks-rail__task-status chat-tasks-rail__task-status--${tone}"
           >${taskStatusLabel(task.status)}</span
         >
-        ${timeMs > 0
-          ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
-              <span>
-                ${active
-                  ? html`<openclaw-elapsed-time .startMs=${timeMs}></openclaw-elapsed-time>`
-                  : formatRelativeTimestamp(timeMs)}
-              </span>`
-          : nothing}
+        ${
+          timeMs > 0
+            ? html`<span class="chat-tasks-rail__task-sep" aria-hidden="true">·</span>
+                <span>
+                  ${
+                    active
+                      ? html`<openclaw-elapsed-time .startMs=${timeMs}></openclaw-elapsed-time>`
+                      : formatRelativeTimestamp(timeMs)
+                  }
+                </span>`
+            : nothing
+        }
       </span>
     </div>
   `;
@@ -78,12 +84,18 @@ function renderStatusPreview(remainingTasks: readonly TaskSummary[]): TemplateRe
   const overflow = tasks.length - preview.length;
   return html`
     <div slot="content" class="chat-tasks-preview">
+      <div class="chat-tasks-preview__heading">
+        <span>${t("chat.backgroundTasks.title")}</span>
+        <span>${t("chat.backgroundTasks.running", { count: String(active.length) })}</span>
+      </div>
       ${preview.map((task) => renderStatusPreviewRow(task))}
-      ${overflow > 0
-        ? html`<div class="chat-tasks-preview__more">
-            ${t("chat.backgroundTasks.statusPreviewMore", { count: String(overflow) })}
-          </div>`
-        : nothing}
+      ${
+        overflow > 0
+          ? html`<div class="chat-tasks-preview__more">
+              ${t("chat.backgroundTasks.statusPreviewMore", { count: String(overflow) })}
+            </div>`
+          : nothing
+      }
     </div>
   `;
 }
@@ -129,14 +141,16 @@ export function renderBackgroundTasksStatusRow(
   const aggregate = html`
     <div class="chat-tasks-status" id=${backgroundTasks.statusRowId}>
       <span class="chat-tasks-status__claw" aria-hidden="true">${icons.claw}</span>
-      ${status.startedMs !== null
-        ? html`
-            <span class="chat-tasks-status__time" aria-hidden="true">
-              <openclaw-elapsed-time .startMs=${status.startedMs}></openclaw-elapsed-time>
-            </span>
-            <span class="chat-tasks-status__sep" aria-hidden="true">·</span>
-          `
-        : nothing}
+      ${
+        status.startedMs !== null
+          ? html`
+              <span class="chat-tasks-status__time" aria-hidden="true">
+                <openclaw-elapsed-time .startMs=${status.startedMs}></openclaw-elapsed-time>
+              </span>
+              <span class="chat-tasks-status__sep" aria-hidden="true">·</span>
+            `
+          : nothing
+      }
       <span class="sr-only" role="status">${label}</span>
       <openclaw-tooltip class="chat-tasks-status__preview">
         <button class="chat-tasks-status__link" type="button" @click=${openRail}>${label}</button>

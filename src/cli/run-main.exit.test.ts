@@ -6,11 +6,15 @@ import process from "node:process";
 import { expectDefined } from "@openclaw/normalization-core";
 import { CommanderError } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ConfigSnapshotReadOptions } from "../config/io.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
+import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
+import { createNewerSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getPluginCache, getScopedPluginCache, type PluginCache } from "../plugins/plugin-cache.js";
 import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
 import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
@@ -36,16 +40,6 @@ type ConfigSnapshotStub = {
   raw?: string | null;
   valid: boolean;
   sourceConfig: Record<string, unknown>;
-};
-
-type ConfigSnapshotReadOptionsStub = {
-  isolateEnv?: boolean;
-  observe?: boolean;
-  recoverSuspicious?: boolean;
-  allowSuspiciousRecovery?: (
-    candidate: Record<string, unknown>,
-    current: Record<string, unknown>,
-  ) => boolean | Promise<boolean>;
 };
 
 const tryRouteCliMock = vi.hoisted(() => vi.fn());
@@ -88,11 +82,19 @@ const loadRootHelpRenderOptionsForConfigSensitivePluginsMock = vi.hoisted(() =>
 );
 const tryOutputSetupOnboardConfigureHelpMock = vi.hoisted(() => vi.fn(async () => true));
 const buildProgramMock = vi.hoisted(() => vi.fn());
+const parkCurrentLaunchAgentForMaintenanceMock = vi.hoisted(() => vi.fn(async () => true));
 const getProgramContextMock = vi.hoisted(() => vi.fn(() => null));
 const registerCoreCliByNameMock = vi.hoisted(() => vi.fn());
 const registerSubCliByNameMock = vi.hoisted(() => vi.fn());
 const registerPluginCliCommandsFromValidatedConfigMock = vi.hoisted(() => vi.fn(async () => ({})));
 const resolvePluginCliRootOwnerIdsMock = vi.hoisted(() => vi.fn());
+const createPluginCliLoadSessionMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    readConfig: <T>(read: () => Promise<T>) => read(),
+    withCache: <T>(run: () => T) => run(),
+    close: vi.fn(),
+  })),
+);
 const loadPluginCliDescriptorsMock = vi.hoisted(() =>
   vi.fn<
     () => Promise<
@@ -112,7 +114,7 @@ const restoreRuntimeTerminalStateMock = vi.hoisted(() => vi.fn());
 const hasEnvHttpProxyAgentConfiguredMock = vi.hoisted(() => vi.fn(() => false));
 const ensureGlobalUndiciEnvProxyDispatcherMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() =>
-  vi.fn<(options?: ConfigSnapshotReadOptionsStub) => Promise<ConfigSnapshotStub>>(async () => ({
+  vi.fn<(options?: ConfigSnapshotReadOptions) => Promise<ConfigSnapshotStub>>(async () => ({
     exists: true,
     valid: true,
     sourceConfig: { gateway: { mode: "local" } },
@@ -133,24 +135,18 @@ const runTuiCliActionMock = vi.hoisted(() =>
   vi.fn<(target: string | undefined, opts: unknown) => Promise<void>>(async () => {}),
 );
 const probeGatewayConfiguredModelMock = vi.hoisted(() =>
-  vi.fn<
-    () => Promise<{
-      kind: "configured" | "missing-configured-model" | "reachable-unverified" | "unreachable";
-      detail?: string;
-    }>
-  >(async () => ({ kind: "configured" })),
+  vi.fn<typeof import("../commands/onboard-helpers.js").probeGatewayConfiguredModel>(async () => ({
+    kind: "configured",
+  })),
 );
 const readActiveGatewayLockPortMock = vi.hoisted(() =>
   vi.fn(async (): Promise<number | undefined> => undefined),
 );
-const loadGatewayTlsRuntimeMock = vi.hoisted(() =>
-  vi.fn<
-    () => Promise<{
-      enabled: boolean;
-      required: boolean;
-      fingerprintSha256?: string;
-    }>
-  >(async () => ({ enabled: false, required: false })),
+const inspectGatewayTlsCertificateMock = vi.hoisted(() =>
+  vi.fn<typeof import("../infra/tls/gateway.js").inspectGatewayTlsCertificate>(async () => ({
+    ok: false,
+    error: "gateway tls is disabled",
+  })),
 );
 const resolveControlUiLinksMock = vi.hoisted(() =>
   vi.fn(() => ({
@@ -179,7 +175,11 @@ const createCliProgressMock = vi.hoisted(() =>
     done: progressDoneMock,
   })),
 );
-const loadConfigMock = vi.hoisted(() => vi.fn(() => ({})));
+const loadConfigMock = vi.hoisted(() =>
+  vi.fn<
+    (...args: Parameters<typeof import("../config/io.js").readBestEffortConfig>) => OpenClawConfig
+  >(() => ({})),
+);
 const readSourceConfigBestEffortMock = vi.hoisted(() => vi.fn(async () => ({})));
 const startProxyMock = vi.hoisted(() =>
   vi.fn<(config: unknown) => Promise<unknown>>(async () => null),
@@ -234,12 +234,17 @@ vi.mock("./gateway-cli/run-command.js", () => ({
   addGatewayRunCommand: addGatewayRunCommandMock,
 }));
 
+vi.mock("../daemon/launchd.js", () => ({
+  parkCurrentLaunchAgentForMaintenance: parkCurrentLaunchAgentForMaintenanceMock,
+}));
+
 vi.mock("./command-execution-startup.js", () => ({
   ensureCliExecutionBootstrap: ensureCliExecutionBootstrapMock,
 }));
 
 vi.mock("../version.js", () => ({
   VERSION: "9.9.9-test",
+  resolveRuntimeServiceCommit: () => null,
 }));
 
 vi.mock("./banner.js", () => ({
@@ -300,7 +305,7 @@ vi.mock("../infra/gateway-lock.js", async (importOriginal) => ({
 
 vi.mock("../infra/tls/gateway.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/tls/gateway.js")>()),
-  loadGatewayTlsRuntime: loadGatewayTlsRuntimeMock,
+  inspectGatewayTlsCertificate: inspectGatewayTlsCertificateMock,
 }));
 
 vi.mock("../utils.js", async (importOriginal) => ({
@@ -403,6 +408,7 @@ vi.mock("../plugins/cli.js", () => ({
 
 vi.mock("../plugins/cli-registry-loader.js", () => ({
   loadPluginCliDescriptors: loadPluginCliDescriptorsMock,
+  createPluginCliLoadSession: createPluginCliLoadSessionMock,
   resolvePluginCliRootOwnerIds: resolvePluginCliRootOwnerIdsMock,
 }));
 
@@ -462,6 +468,9 @@ vi.mock("./progress.js", () => ({
 
 vi.mock("../config/io.js", () => ({
   readBestEffortConfig: loadConfigMock,
+  readBestEffortConfigSnapshot: async (...args: Parameters<typeof loadConfigMock>) => ({
+    config: loadConfigMock(...args),
+  }),
   readSourceConfigBestEffort: readSourceConfigBestEffortMock,
 }));
 
@@ -576,9 +585,9 @@ describe("runCli exit behavior", () => {
     readLocalOnboardingStateMock.mockReset().mockReturnValue(undefined);
     probeGatewayConfiguredModelMock.mockResolvedValue({ kind: "configured" });
     readActiveGatewayLockPortMock.mockReset().mockResolvedValue(undefined);
-    loadGatewayTlsRuntimeMock.mockReset().mockResolvedValue({
-      enabled: false,
-      required: false,
+    inspectGatewayTlsCertificateMock.mockReset().mockResolvedValue({
+      ok: false,
+      error: "gateway tls is disabled",
     });
     resolveControlUiLinksMock.mockReturnValue({
       httpUrl: "http://127.0.0.1:18789/",
@@ -613,8 +622,127 @@ describe("runCli exit behavior", () => {
     loggingState.forceConsoleToStderr = false;
   });
 
-  it("does not load inactive provider cleanup modules for cold help", async () => {
+  it("carries one lightweight generation through builtin reads, nested registration and actions", async () => {
+    const outside = getPluginCache();
+    const phases: PluginCache[] = [];
+    loadConfigMock.mockImplementationOnce(() => {
+      phases.push(getPluginCache());
+      return {};
+    });
+    registerSubCliByNameMock.mockImplementationOnce(async () => {
+      await Promise.resolve();
+      phases.push(getPluginCache());
+    });
+    const parseAsync = vi.fn(async () => {
+      await Promise.resolve();
+      phases.push(getPluginCache());
+    });
+    const program = {
+      commands: [{ name: () => "plugins", aliases: () => [] }],
+      parseAsync,
+    };
+    buildProgramMock.mockReturnValueOnce(program).mockReturnValueOnce(program);
+    tryRouteCliMock.mockResolvedValueOnce(false).mockResolvedValueOnce(false);
+
+    await runCli(["node", "openclaw", "plugins", "late"]);
+
+    expect(phases).toHaveLength(3);
+    const owner = phases[0]!;
+    expect(owner.kind).toBe("operation");
+    expect(phases.every((cache) => cache === owner)).toBe(true);
+    expect(owner).not.toBe(outside);
+    expect(getPluginCache()).toBe(outside);
+    expect(createPluginCliLoadSessionMock).not.toHaveBeenCalled();
+    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+
+    await runCli(["node", "openclaw", "plugins", "late"]);
+    expect(phases.at(-1)).not.toBe(owner);
+    expect(getPluginCache()).toBe(outside);
+  });
+
+  it("does not replace Gateway's cache owner on the full Commander path", async () => {
+    const owner = getPluginCache();
+    const scoped = getScopedPluginCache();
+    const parseAsync = vi.fn(async () => {
+      await Promise.resolve();
+      expect(getPluginCache()).toBe(owner);
+      expect(getScopedPluginCache()).toBe(scoped);
+    });
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => "gateway", aliases: () => [] }],
+      parseAsync,
+    });
     tryRouteCliMock.mockResolvedValueOnce(false);
+    await runCli(["node", "openclaw", "--log-level", "debug", "gateway", "run"]);
+    expect(parseAsync).toHaveBeenCalledTimes(1);
+    expect(getPluginCache()).toBe(owner);
+  });
+
+  it.each(["environment selection", "full Commander preaction"])(
+    "parks the managed Gateway when a newer schema blocks %s",
+    async (phase) => {
+      const error = createNewerSqliteSchemaVersionError(
+        "OpenClaw state database",
+        "/tmp/openclaw-startup/state/openclaw.sqlite",
+        14,
+        13,
+      );
+      const argv = ["node", "openclaw", "--log-level", "debug", "gateway", "run"];
+      if (phase === "environment selection") {
+        readConfigFileSnapshotMock.mockRejectedValueOnce(error);
+      } else {
+        buildProgramMock.mockReturnValueOnce({
+          commands: [{ name: () => "gateway", aliases: () => [] }],
+          parseAsync: vi.fn().mockRejectedValueOnce(error),
+        });
+        tryRouteCliMock.mockResolvedValueOnce(false);
+      }
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+        throw new Error(`exit:${code}`);
+      }) as never);
+      try {
+        await expect(runCli(argv)).rejects.toThrow("exit:78");
+
+        expect(parkCurrentLaunchAgentForMaintenanceMock).toHaveBeenCalledOnce();
+        expect(exitSpy).toHaveBeenCalledWith(78);
+        expect(errorSpy.mock.calls.flat().join("\n")).toContain(error.message);
+        expect(addGatewayRunCommandMock).not.toHaveBeenCalled();
+        if (phase === "environment selection") {
+          expect(buildProgramMock).not.toHaveBeenCalled();
+        } else {
+          expect(buildProgramMock).toHaveBeenCalledOnce();
+        }
+      } finally {
+        errorSpy.mockRestore();
+        exitSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each([
+    { label: "Gateway help", args: ["gateway", "--help"] },
+    { label: "another command", args: ["status"] },
+  ])("does not park the Gateway for a newer-schema failure during $label", async ({ args }) => {
+    const error = createNewerSqliteSchemaVersionError(
+      "OpenClaw state database",
+      "/tmp/openclaw-startup/state/openclaw.sqlite",
+      14,
+      13,
+    );
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => args[0], aliases: () => [] }],
+      parseAsync: vi.fn().mockRejectedValueOnce(error),
+    });
+
+    await withEnvAsync({ OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1" }, async () => {
+      await expect(runCli(["node", "openclaw", ...args])).rejects.toBe(error);
+    });
+
+    expect(parkCurrentLaunchAgentForMaintenanceMock).not.toHaveBeenCalled();
+  });
+
+  it("does not load inactive provider cleanup modules for cold help", async () => {
     const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
     buildProgramMock.mockReturnValueOnce({
       commands: [{ name: () => "nodes", aliases: () => [] }],
@@ -712,7 +840,8 @@ describe("runCli exit behavior", () => {
     disposeRegisteredAgentHarnessesMock.mockImplementationOnce(async () => {
       order.push("harnesses");
     });
-    stopManagedProviderLocalServicesMock.mockImplementationOnce(() => {
+    stopManagedProviderLocalServicesMock.mockImplementationOnce(async () => {
+      await Promise.resolve();
       order.push("provider-local-services");
     });
     closeProviderTransportDispatcherPoolMock.mockImplementationOnce(async () => {
@@ -795,6 +924,33 @@ describe("runCli exit behavior", () => {
     expect(progressDoneMock).toHaveBeenCalledTimes(1);
   });
 
+  it("suppresses startup progress for plain model output before full CLI parsing", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => "models", aliases: () => [] }],
+      parseAsync,
+    });
+
+    await runCli(["node", "openclaw", "models", "aliases", "list", "--plain"]);
+
+    expect(createCliProgressMock).toHaveBeenCalledWith({
+      label: "Loading OpenClaw CLI…",
+      indeterminate: true,
+      delayMs: 0,
+      enabled: false,
+    });
+    expect(parseAsync).toHaveBeenCalledWith([
+      "node",
+      "openclaw",
+      "models",
+      "aliases",
+      "list",
+      "--plain",
+    ]);
+    expect(progressDoneMock).toHaveBeenCalledTimes(1);
+  });
+
   it("pauses non-tty stdin after full CLI command completion", async () => {
     tryRouteCliMock.mockResolvedValueOnce(false);
     const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
@@ -851,7 +1007,9 @@ describe("runCli exit behavior", () => {
   it("configures the gateway foreground fast path with the standard CLI bootstrap", async () => {
     await runCli(["node", "openclaw", "gateway", "--force"]);
 
-    expect(readConfigFileSnapshotMock.mock.calls).toEqual([[{ isolateEnv: true, observe: false }]]);
+    expect(readConfigFileSnapshotMock.mock.calls).toEqual([
+      [{ isolateEnv: true, observe: false, pluginValidation: "core-only" }],
+    ]);
     const hooks = addGatewayRunCommandMock.mock.calls[0]?.[1] as
       | { beforeRun?: (opts: { reset?: boolean }) => Promise<void> }
       | undefined;
@@ -864,15 +1022,14 @@ describe("runCli exit behavior", () => {
         loadPlugins: false,
       }),
     );
-    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({
-      isolateEnv: true,
-      recoverSuspicious: true,
-      allowSuspiciousRecovery: expect.any(Function),
-    });
-    const recoveryOrder = readConfigFileSnapshotMock.mock.invocationCallOrder[2] ?? 0;
+    expect(readConfigFileSnapshotMock.mock.calls).toEqual([
+      [{ isolateEnv: true, observe: false, pluginValidation: "core-only" }],
+      [{ isolateEnv: true, observe: false, pluginValidation: "core-only" }],
+    ]);
+    const admissionOrder = readConfigFileSnapshotMock.mock.invocationCallOrder[1] ?? 0;
     const bootstrapOrder = ensureCliExecutionBootstrapMock.mock.invocationCallOrder[0] ?? 0;
-    expect(recoveryOrder).toBeGreaterThan(0);
-    expect(bootstrapOrder).toBeGreaterThan(recoveryOrder);
+    expect(admissionOrder).toBeGreaterThan(0);
+    expect(bootstrapOrder).toBeGreaterThan(admissionOrder);
   });
 
   it("defers config-drift exit to the migration owner before startup migrations", async () => {
@@ -1048,7 +1205,7 @@ describe("runCli exit behavior", () => {
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(params.expectedAction));
       expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
       expect(readConfigFileSnapshotMock.mock.calls).toEqual([
-        [{ isolateEnv: true, observe: false }],
+        [{ isolateEnv: true, observe: false, pluginValidation: "core-only" }],
       ]);
       if (params.marker) {
         expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
@@ -1249,127 +1406,6 @@ describe("runCli exit behavior", () => {
       );
     } finally {
       await fs.rm(homeDir, { recursive: true, force: true });
-    }
-  });
-
-  it("blocks a future-config recovery candidate before destructive gateway reset", async () => {
-    const currentSnapshot = {
-      exists: true,
-      valid: true,
-      sourceConfig: { gateway: { mode: "local" } },
-    };
-    readConfigFileSnapshotMock.mockImplementation(async (options) => {
-      if (options?.recoverSuspicious) {
-        await options?.allowSuspiciousRecovery?.(
-          {
-            meta: { lastTouchedVersion: "9999.1.1" },
-            gateway: { mode: "local" },
-          },
-          currentSnapshot.sourceConfig,
-        );
-      }
-      return currentSnapshot;
-    });
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
-      throw new Error(`exit:${String(code)}`);
-    }) as typeof process.exit);
-    try {
-      await runCli(["node", "openclaw", "gateway", "--dev", "--reset"]);
-      const hooks = addGatewayRunCommandMock.mock.calls[0]?.[1] as
-        | { beforeRun?: (opts: { reset?: boolean }) => Promise<void> }
-        | undefined;
-      await expect(hooks?.beforeRun?.({ reset: true })).rejects.toThrow("exit:1");
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Refusing to reset the dev gateway state"),
-      );
-      expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
-    } finally {
-      exitSpy.mockRestore();
-      errorSpy.mockRestore();
-    }
-  });
-
-  it("blocks a future current config before pre-bootstrap suspicious recovery", async () => {
-    const currentSnapshot = {
-      exists: true,
-      valid: true,
-      sourceConfig: { gateway: { mode: "local" } },
-    };
-    readConfigFileSnapshotMock.mockImplementation(async (options) => {
-      if (options?.recoverSuspicious) {
-        await options.allowSuspiciousRecovery?.(
-          { gateway: { mode: "local" } },
-          {
-            meta: { lastTouchedVersion: "9999.1.1" },
-            gateway: { mode: "local" },
-          },
-        );
-      }
-      return currentSnapshot;
-    });
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
-      throw new Error(`exit:${String(code)}`);
-    }) as typeof process.exit);
-    try {
-      await runCli(["node", "openclaw", "gateway"]);
-      const hooks = addGatewayRunCommandMock.mock.calls[0]?.[1] as
-        | { beforeRun?: (opts: { force?: boolean }) => Promise<void> }
-        | undefined;
-      await expect(hooks?.beforeRun?.({})).rejects.toThrow("exit:1");
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining("run automatic gateway startup migrations"),
-      );
-      expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
-    } finally {
-      exitSpy.mockRestore();
-      errorSpy.mockRestore();
-    }
-  });
-
-  it("blocks a future service-mode candidate before pre-bootstrap suspicious recovery", async () => {
-    const currentSnapshot = {
-      exists: true,
-      valid: true,
-      sourceConfig: { gateway: { mode: "local" } },
-    };
-    readConfigFileSnapshotMock.mockImplementation(async (options) => {
-      if (options?.recoverSuspicious) {
-        await options.allowSuspiciousRecovery?.(
-          {
-            env: { vars: { OPENCLAW_SERVICE_MARKER: "gateway" } },
-            gateway: { mode: "local" },
-            meta: { lastTouchedVersion: "9999.1.1" },
-          },
-          { gateway: { mode: "local" } },
-        );
-      }
-      return currentSnapshot;
-    });
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
-      throw new Error(`exit:${String(code)}`);
-    }) as typeof process.exit);
-    try {
-      await withEnvAsync(
-        {
-          OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1",
-          OPENCLAW_SERVICE_MARKER: undefined,
-        },
-        async () => {
-          await runCli(["node", "openclaw", "gateway"]);
-          const hooks = addGatewayRunCommandMock.mock.calls[0]?.[1] as
-            | { beforeRun?: (opts: { force?: boolean }) => Promise<void> }
-            | undefined;
-          await expect(hooks?.beforeRun?.({})).rejects.toThrow("exit:78");
-        },
-      );
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("start the gateway service"));
-      expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
-    } finally {
-      exitSpy.mockRestore();
-      errorSpy.mockRestore();
     }
   });
 
@@ -1580,123 +1616,6 @@ describe("runCli exit behavior", () => {
     }
   });
 
-  it("re-inspects recovery after recovery changes config selection", async () => {
-    await withEnvAsync({ OPENCLAW_CONFIG_PATH: undefined }, async () => {
-      const selectedConfigPath = "/tmp/openclaw-recovered-selection.json";
-      const currentSnapshot = {
-        exists: true,
-        valid: true,
-        sourceConfig: { gateway: { mode: "local" } },
-      };
-      let recoveryReads = 0;
-      readConfigFileSnapshotMock.mockImplementation(async (options) => {
-        if (!options?.recoverSuspicious) {
-          return currentSnapshot;
-        }
-        recoveryReads += 1;
-        if (recoveryReads === 1) {
-          const recoveredSnapshot = {
-            exists: true,
-            valid: true,
-            sourceConfig: {
-              env: { vars: { OPENCLAW_CONFIG_PATH: selectedConfigPath } },
-              gateway: { mode: "local" },
-            },
-          };
-          await options.allowSuspiciousRecovery?.(
-            recoveredSnapshot.sourceConfig,
-            currentSnapshot.sourceConfig,
-          );
-          return recoveredSnapshot;
-        }
-        await options.allowSuspiciousRecovery?.(
-          {
-            meta: { lastTouchedVersion: "9999.1.1" },
-            gateway: { mode: "local" },
-          },
-          currentSnapshot.sourceConfig,
-        );
-        return currentSnapshot;
-      });
-      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-      const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
-        throw new Error(`exit:${String(code)}`);
-      }) as typeof process.exit);
-      try {
-        await runCli(["node", "openclaw", "gateway"]);
-        const hooks = addGatewayRunCommandMock.mock.calls[0]?.[1] as
-          | { beforeRun?: (opts: { force?: boolean }) => Promise<void> }
-          | undefined;
-        await expect(hooks?.beforeRun?.({})).rejects.toThrow("exit:1");
-        expect(errorSpy).toHaveBeenCalledWith(
-          expect.stringContaining("run automatic gateway startup migrations"),
-        );
-        expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
-        expect(recoveryReads).toBe(2);
-      } finally {
-        exitSpy.mockRestore();
-        errorSpy.mockRestore();
-      }
-    });
-  });
-
-  it("discards env from a config replaced by suspicious recovery", async () => {
-    await withEnvAsync(
-      { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_PROXY_ACTIVE: undefined },
-      async () => {
-        const clobberedSnapshot = {
-          exists: true,
-          valid: true,
-          sourceConfig: {
-            env: { vars: { OPENCLAW_GATEWAY_TOKEN: "discarded-token" } },
-            gateway: { mode: "local" },
-          },
-          hash: "clobbered",
-          path: "/tmp/openclaw.json",
-        };
-        const recoveredSnapshot = {
-          exists: true,
-          valid: true,
-          sourceConfig: { gateway: { mode: "local" } },
-          hash: "recovered",
-          path: "/tmp/openclaw.json",
-        };
-        const initialSnapshot = {
-          exists: true,
-          valid: true,
-          sourceConfig: { gateway: { mode: "local" } },
-          hash: "initial",
-          path: "/tmp/openclaw.json",
-        };
-        let currentSnapshot = initialSnapshot;
-        let recovered = false;
-        readConfigFileSnapshotMock.mockImplementation(async (options) => {
-          if (!options?.recoverSuspicious) {
-            return recovered ? recoveredSnapshot : currentSnapshot;
-          }
-          recovered = true;
-          await options.allowSuspiciousRecovery?.(
-            recoveredSnapshot.sourceConfig,
-            currentSnapshot.sourceConfig,
-          );
-          return recoveredSnapshot;
-        });
-        await runCli(["node", "openclaw", "gateway"]);
-
-        currentSnapshot = clobberedSnapshot;
-        process.env.OPENCLAW_PROXY_ACTIVE = "1";
-        const hooks = addGatewayRunCommandMock.mock.calls[0]?.[1] as
-          | { beforeRun?: (opts: { force?: boolean }) => Promise<void> }
-          | undefined;
-        await hooks?.beforeRun?.({});
-
-        expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
-        expect(process.env.OPENCLAW_PROXY_ACTIVE).toBe("1");
-        expect(ensureCliExecutionBootstrapMock).toHaveBeenCalledOnce();
-      },
-    );
-  });
-
   it("does not apply environment variables from invalid config snapshots", async () => {
     await withEnvAsync({ OPENCLAW_INCLUDE_ROOTS: undefined }, async () => {
       readConfigFileSnapshotMock.mockResolvedValue({
@@ -1718,8 +1637,8 @@ describe("runCli exit behavior", () => {
 
       expect(process.env.OPENCLAW_INCLUDE_ROOTS).toBeUndefined();
       expect(readConfigFileSnapshotMock.mock.calls).toEqual([
-        [{ isolateEnv: true, observe: false }],
-        [{ isolateEnv: true, observe: false }],
+        [{ isolateEnv: true, observe: false, pluginValidation: "core-only" }],
+        [{ isolateEnv: true, observe: false, pluginValidation: "core-only" }],
       ]);
       expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
     });
@@ -2112,7 +2031,11 @@ describe("runCli exit behavior", () => {
       | undefined;
     await hooks?.beforeRun?.({ reset: true });
 
-    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ isolateEnv: true, observe: false });
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({
+      isolateEnv: true,
+      observe: false,
+      pluginValidation: "core-only",
+    });
     expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
   });
 
@@ -2279,6 +2202,26 @@ describe("runCli exit behavior", () => {
     expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["plugins install", ["plugins", "install", "--help"]],
+    ["plugins list", ["plugins", "list", "--help"]],
+    ["gateway status", ["gateway", "status", "--help"]],
+  ])("renders %s help without importing the command router", async (_name, args) => {
+    const argv = ["node", "openclaw", ...args];
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    const program = {
+      commands: [{ name: () => args[0], aliases: () => [] }],
+      parseAsync,
+    };
+    buildProgramMock.mockReturnValueOnce(program);
+
+    await runCli(argv);
+
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(registerSubCliByNameMock).toHaveBeenCalledWith(program, args[0], argv);
+    expect(parseAsync).toHaveBeenCalledWith(argv);
+  });
+
   it("propagates precomputed help metadata failures", async () => {
     outputPrecomputedSecretsHelpTextMock.mockImplementationOnce(() => {
       throw new Error("startup metadata failed");
@@ -2436,6 +2379,33 @@ describe("runCli exit behavior", () => {
   });
 
   it.each([
+    ["worker", { observe: false, pluginValidation: "core-only" }],
+    ["run", { observe: false, skipPluginValidation: true }],
+  ])(
+    "preserves node %s config ownership when startup tracing is enabled",
+    async (subcommand, readOptions) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-timeline-"));
+      const timelinePath = path.join(root, "timeline.jsonl");
+      tryRouteCliMock.mockResolvedValueOnce(true);
+      loadConfigMock.mockResolvedValueOnce({ diagnostics: { flags: ["timeline"] } });
+      try {
+        await withEnvAsync(
+          { OPENCLAW_DIAGNOSTICS: "", OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath },
+          async () => {
+            await runCli(["node", "openclaw", "node", subcommand]);
+          },
+        );
+        expect(loadConfigMock).toHaveBeenCalledWith(readOptions);
+        flushDiagnosticsTimeline();
+        expect(await fs.readFile(timelinePath, "utf8")).toContain("cli.main.argv");
+      } finally {
+        flushDiagnosticsTimeline();
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([
     ["root command", ["node", "openclaw", "update", "--dry-run", "--json"]],
     ["root shorthand", ["node", "openclaw", "--update", "--dry-run", "--json"]],
   ])("reads source-only proxy config for the update dry-run %s", async (_name, argv) => {
@@ -2531,6 +2501,8 @@ describe("runCli exit behavior", () => {
 
   it.each([
     ["cron", ["node", "openclaw", "cron", "status"]],
+    ["cron parent timeout", ["node", "openclaw", "cron", "--timeout", "250", "status"]],
+    ["automations parent port", ["node", "openclaw", "automations", "--port", "18789", "status"]],
     ["cron alias", ["node", "openclaw", "cron", "create", "daily", "message"]],
     ["cron removal alias", ["node", "openclaw", "cron", "delete", "job"]],
     ["cron scratch equals", ["node", "openclaw", "cron", "scratch", "job", "--set=text"]],
@@ -2693,17 +2665,17 @@ describe("runCli exit behavior", () => {
         exists: true,
         valid: true,
         sourceConfig: {
-          env: { vars: { OPENCLAW_TEST_PROXY_SELECTION: "selected" } },
+          env: { vars: { OPENCLAW_TEST_PROXY_SELECTION: "http://127.0.0.1:19876" } },
           gateway: { mode: "local" },
         },
       });
       loadConfigMock.mockImplementationOnce(() => ({
-        proxy: { selected: process.env.OPENCLAW_TEST_PROXY_SELECTION },
+        proxy: { proxyUrl: process.env.OPENCLAW_TEST_PROXY_SELECTION },
       }));
 
       await runCli(["node", "openclaw", "gateway", "run"]);
 
-      expect(startProxyMock).toHaveBeenCalledWith({ selected: "selected" });
+      expect(startProxyMock).toHaveBeenCalledWith({ proxyUrl: "http://127.0.0.1:19876" });
     });
   });
 
@@ -3090,7 +3062,12 @@ describe("runCli exit behavior", () => {
       program,
       undefined,
       undefined,
-      { mode: "lazy", primary: "workboard", skipPluginValidation: false },
+      {
+        mode: "lazy",
+        primary: "workboard",
+        skipPluginValidation: false,
+        session: createPluginCliLoadSessionMock.mock.results.at(-1)?.value,
+      },
     );
     expect(program.parseAsync).not.toHaveBeenCalled();
   });
@@ -3234,7 +3211,12 @@ describe("runCli exit behavior", () => {
       expect.anything(),
       undefined,
       undefined,
-      { mode: "lazy", primary: "memory", skipPluginValidation: true },
+      {
+        mode: "lazy",
+        primary: "memory",
+        skipPluginValidation: true,
+        session: createPluginCliLoadSessionMock.mock.results.at(-1)?.value,
+      },
     );
     expect(stderrDuringPluginRegistration).toBe(true);
     expect(stderrDuringParse).toBe(true);
@@ -3341,7 +3323,16 @@ describe("runCli exit behavior", () => {
       expect.anything(),
       undefined,
       undefined,
-      { mode: "lazy", primary: "memory", skipPluginValidation: false },
+      {
+        mode: "lazy",
+        primary: "memory",
+        skipPluginValidation: false,
+        session: createPluginCliLoadSessionMock.mock.results.at(-1)?.value,
+      },
+    );
+    const session = createPluginCliLoadSessionMock.mock.results.at(-1)?.value;
+    expect(session?.close.mock.invocationCallOrder[0]).toBeLessThan(
+      parseAsync.mock.invocationCallOrder[0]!,
     );
     expect(stderrDuringPluginRegistration).toBe(false);
     expect(loggingState.forceConsoleToStderr).toBe(false);
@@ -3456,13 +3447,15 @@ describe("runCli exit behavior", () => {
     const processOnceSpy = vi.spyOn(process, "once");
     try {
       const runPromise = runCli(["node", "openclaw", "plugins", "marketplace", "list"]);
+      // Only the managed-proxy kill hook registers here: the debug-capture
+      // finalize hook stays unloaded unless the capture env requests it.
       await vi.waitFor(() => {
         expect(
           processOnceSpy.mock.calls.reduce(
             (count, [event]) => count + (event === "exit" ? 1 : 0),
             0,
           ),
-        ).toBe(2);
+        ).toBe(1);
       });
 
       const exitHandler = processOnceSpy.mock.calls.find(([event]) => event === "exit")?.[1];
@@ -3693,40 +3686,47 @@ describe("runCli exit behavior", () => {
     });
   });
 
-  it("configures missing inference on the selected remote Gateway", async () => {
-    const sourceConfig = {
-      agents: { defaults: { model: { primary: "openai/local-only-model" } } },
-      gateway: {
-        mode: "remote",
-        remote: {
-          url: "wss://gateway.example/ws",
-          token: "missing-inference-remote-auth",
-          tlsFingerprint: `sha256:${TLS_FINGERPRINT.toUpperCase()}`,
+  it.each(["wss://gateway.example/ws", "ws://127.0.0.1:18789"])(
+    "configures missing inference on the selected remote Gateway: %s",
+    async (url) => {
+      const sourceConfig = {
+        agents: { defaults: { model: { primary: "openai/local-only-model" } } },
+        gateway: {
+          mode: "remote",
+          remote: {
+            url,
+            token: "missing-inference-remote-auth",
+            tlsFingerprint: `sha256:${TLS_FINGERPRINT.toUpperCase()}`,
+          },
         },
-      },
-    };
-    readConfigFileSnapshotMock.mockResolvedValueOnce({
-      exists: true,
-      valid: true,
-      sourceConfig,
-    });
-    probeGatewayConfiguredModelMock.mockResolvedValueOnce({
-      kind: "missing-configured-model",
-      detail: "Gateway default agent has no configured model",
-    });
+      };
+      readConfigFileSnapshotMock.mockResolvedValueOnce({
+        exists: true,
+        valid: true,
+        sourceConfig,
+      });
+      probeGatewayConfiguredModelMock.mockImplementationOnce(async (options) =>
+        options.url === "ws://127.0.0.1:18789" && !options.originScopedDeviceAuth
+          ? { kind: "reachable-unverified", detail: "missing scope: operator.read" }
+          : {
+              kind: "missing-configured-model",
+              detail: "Gateway default agent has no configured model",
+            },
+      );
 
-    await runBareCli();
+      await runBareCli();
 
-    expect(setupWizardCommandMock).not.toHaveBeenCalled();
-    expect(readLocalOnboardingStateMock).not.toHaveBeenCalled();
-    expect(runRemoteGatewayInferenceOnboardingMock).toHaveBeenCalledWith({
-      config: sourceConfig,
-      gatewayUrl: "wss://gateway.example/ws",
-      token: "missing-inference-remote-auth",
-      tlsFingerprint: TLS_FINGERPRINT,
-    });
-    expect(runTuiMock).not.toHaveBeenCalled();
-  });
+      expect(setupWizardCommandMock).not.toHaveBeenCalled();
+      expect(readLocalOnboardingStateMock).not.toHaveBeenCalled();
+      expect(runRemoteGatewayInferenceOnboardingMock).toHaveBeenCalledWith({
+        config: sourceConfig,
+        gatewayUrl: url,
+        token: "missing-inference-remote-auth",
+        tlsFingerprint: TLS_FINGERPRINT,
+      });
+      expect(runTuiMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps missing inference setup local for a local Gateway", async () => {
     primeBareRootConfig({
@@ -3812,10 +3812,9 @@ describe("runCli exit behavior", () => {
         auth: { mode: "token", token: "configured-token" },
       },
     });
-    loadGatewayTlsRuntimeMock.mockResolvedValueOnce({
-      enabled: true,
-      required: true,
-      fingerprintSha256: TLS_FINGERPRINT,
+    inspectGatewayTlsCertificateMock.mockResolvedValueOnce({
+      ok: true,
+      value: { cert: "public-certificate", fingerprintSha256: TLS_FINGERPRINT },
     });
 
     await runBareCli();
@@ -4184,6 +4183,7 @@ describe("runCli exit behavior", () => {
 
     expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url,
+      originScopedDeviceAuth: true,
       token: "loopback-remote-auth",
     });
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
@@ -4208,6 +4208,7 @@ describe("runCli exit behavior", () => {
 
     expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url,
+      originScopedDeviceAuth: true,
       config,
       token: "test-token",
     });
@@ -4232,6 +4233,7 @@ describe("runCli exit behavior", () => {
 
     expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url,
+      originScopedDeviceAuth: true,
       password: "configured-remote-password",
     });
     expectBoundTui({ url, password: "configured-remote-password" });
@@ -4270,7 +4272,10 @@ describe("runCli exit behavior", () => {
       },
     );
 
-    expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({ url });
+    expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
+      url,
+      originScopedDeviceAuth: true,
+    });
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
     expectBoundTui({ url });
   });
@@ -4293,6 +4298,7 @@ describe("runCli exit behavior", () => {
 
     expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url,
+      originScopedDeviceAuth: true,
       token: "private-remote-auth",
     });
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
@@ -4315,6 +4321,7 @@ describe("runCli exit behavior", () => {
 
     expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url: "wss://gateway.example.com:18789",
+      originScopedDeviceAuth: true,
       token: "tls-remote-auth",
       tlsFingerprint: TLS_FINGERPRINT,
     });
@@ -4541,9 +4548,7 @@ describe("runCli exit behavior", () => {
 
     await runCli(["node", "openclaw", "doctor", "--help"]);
 
-    expect(registerCoreCliByNameMock.mock.calls).toEqual([
-      [program, ctx, "doctor", ["node", "openclaw", "doctor", "--help"]],
-    ]);
+    expect(registerCoreCliByNameMock.mock.calls).toEqual([[program, ctx, "doctor"]]);
     expect(registerSubCliByNameMock.mock.calls).toEqual([
       [program, "doctor", ["node", "openclaw", "doctor", "--help"]],
     ]);

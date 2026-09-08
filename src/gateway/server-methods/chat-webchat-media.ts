@@ -53,7 +53,7 @@ function resolveLocalMediaPathForEmbedding(raw: string): string | null {
   if (/^https?:/i.test(trimmed)) {
     return null;
   }
-  if (trimmed.startsWith("file:")) {
+  if (/^file:/iu.test(trimmed)) {
     try {
       const p = safeFileURLToPath(trimmed);
       if (!path.isAbsolute(p)) {
@@ -214,15 +214,20 @@ function resolveReplyDirectivePrefix(payload: ReplyPayload): string {
 export async function buildWebchatAssistantMessageFromReplyPayloads(
   payloads: ReplyPayload[],
   options?: WebchatAudioEmbeddingOptions,
-): Promise<{ content: Array<Record<string, unknown>>; transcriptText: string } | null> {
+): Promise<{
+  content: Array<Record<string, unknown>>;
+  transcriptText: string;
+  payloadTexts: Array<string | undefined>;
+} | null> {
   const content: Array<Record<string, unknown>> = [];
   const transcriptTextParts: string[] = [];
+  const payloadTexts: Array<string | undefined> = [];
   const seenAudio = new Set<string>();
   const seenImages = new Set<string>();
   let hasAudio = false;
   let hasImage = false;
 
-  for (const payload of payloads) {
+  for (const [payloadIndex, payload] of payloads.entries()) {
     if (payload.isReasoning === true) {
       continue;
     }
@@ -270,9 +275,11 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
     if (blockText) {
       const fullText = replyDirectivePrefix ? `${replyDirectivePrefix}${blockText}` : blockText;
       transcriptTextParts.push(fullText);
+      payloadTexts[payloadIndex] = fullText;
       content.push({ type: "text", text: fullText });
     } else if (replyDirectivePrefix) {
       transcriptTextParts.push(replyDirectivePrefix);
+      payloadTexts[payloadIndex] = replyDirectivePrefix;
       content.push({ type: "text", text: replyDirectivePrefix });
     }
     content.push(...payloadMediaBlocks);
@@ -287,5 +294,5 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
   if (transcriptTextParts.length === 0) {
     content.unshift({ type: "text", text: transcriptText });
   }
-  return { content, transcriptText };
+  return { content, transcriptText, payloadTexts };
 }

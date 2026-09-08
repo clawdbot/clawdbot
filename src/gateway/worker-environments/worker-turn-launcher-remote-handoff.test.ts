@@ -1,3 +1,4 @@
+import { mkdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +12,7 @@ import {
   type ExecutionIdentityAdmissionWork,
 } from "../../audit/execution-identity-admission.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { saveMediaBuffer } from "../../media/store.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import {
   buildWorkerConnectParams,
@@ -34,6 +36,7 @@ import {
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   credential,
+  measureLaunchTurn,
   openSessionManager,
   placements,
   root,
@@ -101,12 +104,15 @@ describe("worker turn launcher remote handoff", () => {
     const acknowledgeCredentialDelivery = vi.fn(() => true);
     const reconcileWorkspace = vi.fn(
       async (request: Parameters<WorkerTunnelHandle["reconcileWorkspace"]>[0]) => {
-        expect(request.stagedResult).toBeDefined();
-        request.stagedResult!.record(request.stagedResult!.ref);
+        if (request.source.kind !== "local") {
+          throw new Error("expected a local workspace source");
+        }
+        expect(request.source.stagedResult).toBeDefined();
+        request.source.stagedResult!.record(request.source.stagedResult!.ref);
         expect(placements.listPendingWorkspaceResults()).toMatchObject([
-          { stagedResultRef: request.stagedResult!.ref, workspaceAcceptedAtMs: null },
+          { stagedResultRef: request.source.stagedResult!.ref, workspaceAcceptedAtMs: null },
         ]);
-        request.journal.commit(MANIFEST_REF);
+        request.source.journal.commit(MANIFEST_REF);
         return {
           manifestRef: MANIFEST_REF,
           changed: false,
@@ -135,6 +141,7 @@ describe("worker turn launcher remote handoff", () => {
         }),
       })),
       runWorkspaceCommand: vi.fn(),
+      measureLaunchTurn,
       launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
         expect(placements.get(SESSION_ID)?.turnClaim).toMatchObject({
           owner: "worker",
@@ -213,11 +220,11 @@ describe("worker turn launcher remote handoff", () => {
       stopTunnel: vi.fn(async () => {}),
       destroy: vi.fn(async () => attachedEnvironment()),
     };
-    const resolveWorkspacePath = vi.fn(async () => root);
+    const resolveWorkspace = vi.fn(async () => ({ kind: "local" as const, path: root }));
     const provider = createWorkerSessionTurnPlacementProvider({
       environments,
       placements,
-      resolveWorkspacePath,
+      resolveWorkspace,
     });
     const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
     const onAgentEvent = vi.fn(() => {
@@ -242,12 +249,14 @@ describe("worker turn launcher remote handoff", () => {
     );
 
     expect(runLocal).not.toHaveBeenCalled();
-    expect(resolveWorkspacePath).toHaveBeenCalledWith({
+    expect(resolveWorkspace).toHaveBeenCalledWith({
       sessionId: SESSION_ID,
       sessionKey: sessionTarget.sessionKey,
       agentId: sessionTarget.agentId,
     });
-    expect(reconcileWorkspace).toHaveBeenCalledWith(expect.objectContaining({ localPath: root }));
+    expect(reconcileWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({ source: expect.objectContaining({ kind: "local", path: root }) }),
+    );
     const conflictSummary =
       "Cloud result applied with 1 conflict(s); kept local versions: src/local.ts. Cloud versions staged at refs/openclaw/worker-results/";
     expect(result.payloads).toEqual([
@@ -349,7 +358,26 @@ describe("worker turn launcher remote handoff", () => {
   });
 
   it("keeps reset tool pairs valid without replaying the already-persisted current user", async () => {
-    seedActivePlacement();
+    const remote = path.join(await realpath(root), "remote");
+    await mkdir(remote);
+    seedActivePlacement("worker-turn", remote);
+    const image = {
+      type: "image" as const,
+      data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==",
+      mimeType: "image/png",
+    };
+    const inlineImages = [
+      { ...image, sourceIndex: 0 },
+      { ...image, sourceIndex: 2 },
+    ];
+    const savedImage = await saveMediaBuffer(
+      Buffer.from(image.data, "base64"),
+      "image/png",
+      "inbound",
+      5_000,
+      "offloaded.png",
+    );
+    const imagePath = savedImage.path;
     const manager = openSessionManager();
     manager.appendMessage(
       makeAgentAssistantMessage({
@@ -402,7 +430,17 @@ describe("worker turn launcher remote handoff", () => {
         assertActive: vi.fn(async () => {}),
         resume: vi.fn(async () => {}),
       })),
-      runWorkspaceCommand: vi.fn(),
+      runWorkspaceCommand: vi.fn(
+        async (command) =>
+          await runCommandWithTimeout([...command.argv], {
+            cwd: remote,
+            input: command.input,
+            timeoutMs: 5_000,
+            signal: command.signal,
+          }),
+      ),
+      measureLaunchTurn,
+      stageAttachments: vi.fn(async () => {}),
       launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
         request.onDispatchReady?.();
         descriptor = completeWorkerLaunchDescriptor(structuredClone(request.plan), {
@@ -438,7 +476,10 @@ describe("worker turn launcher remote handoff", () => {
         throw new Error("unexpected workspace sync");
       }),
       reconcileWorkspace: vi.fn(async (request) => {
-        request.journal.commit(MANIFEST_REF);
+        if (request.source.kind !== "local") {
+          throw new Error("expected a local workspace source");
+        }
+        request.source.journal.commit(MANIFEST_REF);
         return {
           manifestRef: MANIFEST_REF,
           changed: false,
@@ -473,11 +514,23 @@ describe("worker turn launcher remote handoff", () => {
         },
         toolsAllow: ["browser"],
         suppressNextUserMessagePersistence: true,
+        images: inlineImages,
+        imageOrder: ["inline", "offloaded", "inline"],
+        media: [{ path: imagePath, contentType: "image/png", kind: "image" }],
       },
       async () => ({ meta: { durationMs: 1 } }),
     );
 
-    expect(descriptor?.assignment.prompt).toBe("Inspect this workspace");
+    expect(descriptor?.assignment.prompt).toEqual([
+      { type: "text", text: expect.stringContaining("Inspect this workspace") },
+      image,
+      image,
+      image,
+    ]);
+    expect(JSON.stringify(descriptor?.assignment.prompt)).toContain(
+      "media/inbound/openclaw-staged-",
+    );
+    expect(tunnel.stageAttachments).toHaveBeenCalledOnce();
     const verifiedRuntimeIdentity = await verifyAgentRuntimeIdentityToken(
       descriptor?.assignment.agentRuntimeIdentityToken,
     );

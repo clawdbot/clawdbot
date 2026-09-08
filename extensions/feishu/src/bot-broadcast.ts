@@ -1,5 +1,5 @@
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
-import type { ClawdbotConfig } from "./bot-runtime-api.js";
+import type { ClawdbotConfig } from "../runtime-api.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 
 export function createFeishuBroadcastIngressSettlement(params: {
@@ -182,6 +182,7 @@ export function createFeishuBroadcastIngressSettlement(params: {
             lane.status = "deferred";
             defer();
           },
+          onDeferredHeartbeat: () => params.lifecycle?.onDeferredHeartbeat?.(),
           onAdoptionFinalizing: beginFinalizing,
           onAbandoned: async () => {
             if (

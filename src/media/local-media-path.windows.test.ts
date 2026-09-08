@@ -100,7 +100,12 @@ describe.runIf(process.platform === "win32")("Windows local media file URLs", ()
         const blocks = await createManagedOutgoingMediaBlocks({
           stateDir: root,
           sessionKey: "agent:main:main",
-          mediaUrls: [sourceUrl.href.replace(/^file:/u, "FILE:")],
+          items: [
+            {
+              url: sourceUrl.href.replace(/^file:/u, "FILE:"),
+              trustedLocal: false,
+            },
+          ],
           localRoots: [path.join(root, "workspace")],
         });
 

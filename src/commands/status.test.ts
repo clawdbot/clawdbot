@@ -794,9 +794,6 @@ vi.mock("./status.scan.js", () => ({
 }));
 
 vi.mock("./status-runtime-shared.ts", () => ({
-  loadStatusProviderUsageModule: vi.fn(async () => ({
-    formatUsageReportLines: vi.fn(() => []),
-  })),
   resolveStatusGatewayHealth: vi.fn(async () => ({})),
   resolveStatusSecurityAudit: vi.fn(async (input: unknown) =>
     mocks.runSecurityAudit({
@@ -1148,7 +1145,7 @@ describe("statusCommand", () => {
       expect(output).toContain("Config diagnostics:");
       expect(output).toContain("Config file is invalid: /tmp/openclaw.json");
       expect(output).toContain("gateway.port: Invalid input: expected number, received string");
-      expect(output).toContain("Fix: openclaw doctor --fix");
+      expect(output).toContain("Fix: openclaw --profile isolated doctor --fix");
     }
 
     expect((await runStatusAndGetLogs()).join("\n")).not.toContain("Config diagnostics:");
@@ -1187,10 +1184,7 @@ describe("statusCommand", () => {
 
     await statusCommand({ deep: true, timeoutMs: 5000 }, runtime as never);
 
-    expect(scanStatus).toHaveBeenCalledWith(
-      { json: false, timeoutMs: 5000, all: undefined, deep: true },
-      runtime,
-    );
+    expect(scanStatus).toHaveBeenCalledWith({ timeoutMs: 5000, deep: true });
   });
 
   it("surfaces unknown usage when totalTokens is missing", async () => {

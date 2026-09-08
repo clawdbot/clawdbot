@@ -1,9 +1,7 @@
-import {
-  CHAT_SNAPSHOT_DB_NAME,
-  CHAT_SNAPSHOT_STORE_NAME,
-} from "./session-snapshot-invalidation.ts";
-
-const CHAT_SNAPSHOT_DB_VERSION = 1;
+export const CHAT_SNAPSHOT_DB_NAME = "openclaw-chat-snapshots";
+export const CHAT_SNAPSHOT_STORE_NAME = "snapshots";
+export const CHAT_SNAPSHOT_METADATA_STORE_NAME = "snapshotMetadata";
+const CHAT_SNAPSHOT_DB_VERSION = 2;
 
 function debugSnapshotDatabase(message: string, error?: unknown): void {
   if (error === undefined) {
@@ -31,6 +29,7 @@ function openIndexedDb(factory: IDBFactory): Promise<IDBDatabase> {
         database.deleteObjectStore(name);
       }
       database.createObjectStore(CHAT_SNAPSHOT_STORE_NAME, { keyPath: "sessionKey" });
+      database.createObjectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME, { keyPath: "sessionKey" });
     });
     request.addEventListener("success", () => resolve(request.result));
     request.addEventListener("error", () =>
@@ -75,8 +74,9 @@ export async function openSessionSnapshotDatabase(): Promise<IDBDatabase | null>
   }
   database.addEventListener("versionchange", () => database.close());
   if (
-    database.objectStoreNames.length === 1 &&
-    database.objectStoreNames.contains(CHAT_SNAPSHOT_STORE_NAME)
+    database.objectStoreNames.length === 2 &&
+    database.objectStoreNames.contains(CHAT_SNAPSHOT_STORE_NAME) &&
+    database.objectStoreNames.contains(CHAT_SNAPSHOT_METADATA_STORE_NAME)
   ) {
     return database;
   }
@@ -95,10 +95,59 @@ export async function openSessionSnapshotDatabase(): Promise<IDBDatabase | null>
   }
 }
 
+export async function readStoredChatSnapshotRecord(sessionKey: string): Promise<unknown> {
+  const database = await openSessionSnapshotDatabase();
+  if (!database) {
+    return undefined;
+  }
+  try {
+    return await new Promise<unknown>((resolve, reject) => {
+      const transaction = database.transaction(CHAT_SNAPSHOT_STORE_NAME, "readonly");
+      const request = transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).get(sessionKey);
+      transaction.addEventListener("complete", () => resolve(request.result));
+      transaction.addEventListener("error", () =>
+        reject(transaction.error ?? new Error("IndexedDB read failed")),
+      );
+      transaction.addEventListener("abort", () =>
+        reject(transaction.error ?? new Error("IndexedDB read aborted")),
+      );
+    });
+  } catch (error) {
+    debugSnapshotDatabase("resetting cache after IndexedDB read failure", error);
+    await resetSessionSnapshotDatabase(database);
+    return undefined;
+  } finally {
+    database.close();
+  }
+}
+
 export async function resetSessionSnapshotDatabase(database?: IDBDatabase | null): Promise<void> {
   database?.close();
   const factory = indexedDbFactory();
   if (factory && !(await deleteIndexedDb(factory))) {
     debugSnapshotDatabase("IndexedDB cache reset was blocked");
+  }
+}
+
+export async function deleteSessionSnapshotDatabaseRecord(sessionKey: string): Promise<void> {
+  const database = await openSessionSnapshotDatabase();
+  if (!database) {
+    return;
+  }
+  try {
+    await new Promise<void>((resolve) => {
+      const transaction = database.transaction(
+        [CHAT_SNAPSHOT_STORE_NAME, CHAT_SNAPSHOT_METADATA_STORE_NAME],
+        "readwrite",
+      );
+      transaction.addEventListener("complete", () => resolve());
+      transaction.addEventListener("error", () => resolve());
+      transaction.addEventListener("abort", () => resolve());
+      transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).delete(sessionKey);
+      transaction.objectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME).delete(sessionKey);
+    });
+  } catch {
+  } finally {
+    database.close();
   }
 }

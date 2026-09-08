@@ -2,13 +2,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
-import {
-  createManagerIndexFixture,
-  type ManagerIndexFixtureConfig,
-} from "./manager-index.test-support.js";
+import { recordMemoryEntryOrigins } from "../memory-entry-origins.js";
+import { forgetMemoryEntries } from "../memory-forget.js";
+import type { EmbeddingProvider } from "./embeddings.js";
+import { MemoryIndexRevisionConflictError } from "./manager-db.js";
+import { createManagerIndexFixture } from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
+const { MemoryIndexManager } = await import("./manager.js");
 
 describe("memory index", () => {
   const fixture = createManagerIndexFixture({
@@ -44,54 +47,90 @@ describe("memory index", () => {
     }
   }
 
-  it.each([
-    {
-      name: "zero vector weight",
-      config: {
-        hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
-      } satisfies ManagerIndexFixtureConfig,
+  it.each([0, 0.35])(
+    "finds keyword matches through default hybrid search at minimum score %s",
+    async (minScore) => {
+      await expectHybridKeywordSearchFindsMemory(createCfg({ minScore }));
     },
-    {
-      name: "minimum score exceeds text weight",
-      config: {
-        minScore: 0.35,
-        hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
-      } satisfies ManagerIndexFixtureConfig,
-    },
-  ])("finds keyword matches via hybrid search when $name", async ({ config }) => {
-    await expectHybridKeywordSearchFindsMemory(createCfg(config));
+  );
+
+  it("keeps a dirty status manager read-only while searching published results", async () => {
+    const cfg = createCfg({ provider: "none", minScore: 0 });
+    const writer = await getFreshManager(cfg, "cli");
+    await writer.sync({ reason: "baseline", force: true });
+    const manager = await getFreshManager(cfg, "status");
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "pending.md"),
+      "unpublished maintenance marker",
+    );
+    Reflect.set(manager, "dirty", true);
+
+    const results = await manager.search("zebra", { minScore: 0 });
+    expect(results.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
+    expect(manager.status().dirty).toBe(true);
+    expect(await manager.search("unpublished maintenance marker")).toEqual([]);
+  });
+
+  it("invalidates keyword snapshots before changing the fallback provider", async () => {
+    const manager = await getPersistentManager(
+      createCfg({ fallback: "fallback-provider", minScore: 0 }),
+    );
+    await manager.sync({ reason: "test" });
+    const fields = manager as unknown as { provider: EmbeddingProvider };
+    const fallbackGate = createDeferred<void>();
+    const queryEntered = createDeferred<void>();
+    const failQuery = createDeferred<void>();
+    providerFixture.providerInitGate = fallbackGate.promise;
+    const querySpy = vi.spyOn(fields.provider, "embed").mockImplementation(async () => {
+      queryEntered.resolve();
+      await failQuery.promise;
+      throw new Error("embedding provider failed");
+    });
+    const snapshots: Array<Awaited<ReturnType<typeof manager.search>> | null> = [];
+    const search = manager.search("zebra", {
+      maxResults: 1,
+      minScore: 0,
+      onPartialResults: (results) => snapshots.push(results),
+    });
+    try {
+      await queryEntered.promise;
+      expect(snapshots).toEqual([[expect.objectContaining({ path: "memory/2026-01-12.md" })]]);
+      failQuery.resolve();
+      await vi.waitFor(() => {
+        expect(providerFixture.providerCalls.at(-1)?.provider).toBe("fallback-provider");
+      });
+      expect(snapshots.at(-1)).toBeNull();
+    } finally {
+      failQuery.resolve();
+      fallbackGate.resolve();
+      await search.catch(() => undefined);
+      querySpy.mockRestore();
+      providerFixture.providerInitGate = null;
+    }
   });
 
   it("retries transient query embedding transport failures during search", async () => {
-    const cfg = createCfg({
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-    });
+    const cfg = createCfg({});
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
 
     let queryCalls = 0;
     (
       manager as unknown as {
-        provider: {
-          id: string;
-          model: string;
-          embedQuery: (text: string) => Promise<number[]>;
-          embedBatch: (texts: string[]) => Promise<number[][]>;
-          close: () => Promise<void>;
-        };
+        provider: EmbeddingProvider;
         waitForEmbeddingRetry: (delayMs: number, action: string) => Promise<void>;
       }
     ).provider = {
       id: "mock",
       model: "mock-embed",
-      embedQuery: async () => {
+      embed: async () => {
         queryCalls += 1;
         if (queryCalls === 1) {
           throw new Error("TypeError: fetch failed | other side closed");
         }
         return [1, 0, 0, 0];
       },
-      embedBatch: async (texts: string[]) => texts.map(() => [1, 0, 0, 0]),
+      embedBatch: async (texts) => texts.map(() => [1, 0, 0, 0]),
       close: async () => {},
     };
     (
@@ -107,31 +146,23 @@ describe("memory index", () => {
   });
 
   it("fails search after bounded query embedding retries are exhausted", async () => {
-    const cfg = createCfg({
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-    });
+    const cfg = createCfg({});
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
 
     let queryCalls = 0;
     (
       manager as unknown as {
-        provider: {
-          id: string;
-          model: string;
-          embedQuery: (text: string) => Promise<number[]>;
-          embedBatch: (texts: string[]) => Promise<number[][]>;
-          close: () => Promise<void>;
-        };
+        provider: EmbeddingProvider;
       }
     ).provider = {
       id: "mock",
       model: "mock-embed",
-      embedQuery: async () => {
+      embed: async () => {
         queryCalls += 1;
         throw new Error("TypeError: fetch failed | other side closed");
       },
-      embedBatch: async (texts: string[]) => texts.map(() => [1, 0, 0, 0]),
+      embedBatch: async (texts) => texts.map(() => [1, 0, 0, 0]),
       close: async () => {},
     };
     (
@@ -145,22 +176,14 @@ describe("memory index", () => {
   });
 
   it("keeps a healthy local provider active when the caller cancels search", async () => {
-    const cfg = createCfg({
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-    });
+    const cfg = createCfg({});
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
 
     const close = vi.fn(async () => {});
     let queryCalls = 0;
     const fields = manager as unknown as {
-      provider: {
-        id: string;
-        model: string;
-        embedQuery: (text: string) => Promise<number[]>;
-        embedBatch: (texts: string[]) => Promise<number[][]>;
-        close: () => Promise<void>;
-      };
+      provider: EmbeddingProvider;
       providerKey: string;
       providerLifecycle: { mode: "active"; providerId: string };
       computeProviderKey: () => string;
@@ -168,7 +191,7 @@ describe("memory index", () => {
     fields.provider = {
       id: "local",
       model: "mock-embed",
-      embedQuery: async () => {
+      embed: async () => {
         queryCalls += 1;
         return [1, 0, 0, 0];
       },
@@ -200,7 +223,6 @@ describe("memory index", () => {
     const manager = await getPersistentManager(
       createCfg({
         minScore: 0,
-        hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
       }),
     );
     await manager.sync({ reason: "test" });
@@ -296,14 +318,11 @@ describe("memory index", () => {
     const manager = await getPersistentManager(
       createCfg({
         minScore: 0,
-        hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
       }),
     );
     await manager.sync({ reason: "test" });
-    const provider = Reflect.get(manager, "provider") as {
-      embedQuery: (text: string) => Promise<number[]>;
-    };
-    const embedQuerySpy = vi.spyOn(provider, "embedQuery");
+    const provider = Reflect.get(manager, "provider") as EmbeddingProvider;
+    const embedSpy = vi.spyOn(provider, "embed");
 
     for (const entry of cases) {
       const results = await manager.search(entry.query, { maxResults: 6 });
@@ -311,13 +330,12 @@ describe("memory index", () => {
         true,
       );
     }
-    expect(embedQuerySpy).toHaveBeenCalledTimes(cases.length);
+    expect(embedSpy).toHaveBeenCalledTimes(cases.length);
   });
 
   it("bounds per-keyword FTS fallback in provider-backed hybrid search", async () => {
     const cfg = createCfg({
       minScore: 0.35,
-      hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
     });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
@@ -360,7 +378,6 @@ describe("memory index", () => {
     const manager = await getPersistentManager(
       createCfg({
         minScore: 0,
-        hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
       }),
     );
     await fs.writeFile(
@@ -369,7 +386,7 @@ describe("memory index", () => {
     );
     await fs.writeFile(
       path.join(fixture.paths.memory, "alpha.md"),
-      "Unrelated path-only candidate.",
+      "Unrelated beta path-only candidate.",
     );
     await manager.sync({ reason: "test" });
 
@@ -419,7 +436,6 @@ describe("memory index", () => {
         provider: "none",
         rememberAcrossConversations: true,
         minScore: 0,
-        hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
       });
       const manager = await getFreshManager(cfg);
       trackManager(manager);
@@ -454,9 +470,7 @@ describe("memory index", () => {
   });
 
   it("returns before provider or index bootstrap for a blank query", async () => {
-    const manager = await getPersistentManager(
-      createCfg({ provider: "required-provider", hybrid: { enabled: true } }),
-    );
+    const manager = await getPersistentManager(createCfg({ provider: "required-provider" }));
     providerFixture.providerCalls = [];
 
     await expect(manager.search(" \n\t ")).resolves.toStrictEqual([]);
@@ -465,21 +479,19 @@ describe("memory index", () => {
   });
 
   it("does not block querying on session reconciliation", async () => {
-    const manager = await getPersistentManager(
-      createCfg({ provider: "none", minScore: 0, onSearch: true, hybrid: { enabled: true } }),
-    );
+    const manager = await getPersistentManager(createCfg({ provider: "none", minScore: 0 }));
     await manager.sync({ reason: "test" });
 
     let releaseSync = () => {};
     const pendingSync = new Promise<void>((resolve) => {
       releaseSync = () => resolve();
     });
-    const syncAdmitted = vi
+    const backgroundSync = vi
       .spyOn(
         manager as unknown as {
-          syncAdmitted: (params: { reason: string }) => Promise<void>;
+          syncPublishedIndexInBackground: (params: { reason: string }) => Promise<void>;
         },
-        "syncAdmitted",
+        "syncPublishedIndexInBackground",
       )
       .mockImplementation(async () => await pendingSync);
 
@@ -490,7 +502,7 @@ describe("memory index", () => {
       maxResults: 5,
       minScore: 0,
     });
-    await vi.waitFor(() => expect(syncAdmitted).toHaveBeenCalledWith({ reason: "search" }));
+    await vi.waitFor(() => expect(backgroundSync).toHaveBeenCalledWith({ reason: "search" }));
 
     const results = await searchPromise;
     expect(results.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
@@ -498,23 +510,489 @@ describe("memory index", () => {
     await pendingSync;
   });
 
-  it("waits for dirty sync before querying", async () => {
-    providerFixture.forceNoProvider = true;
-    const manager = await getPersistentManager(
-      createCfg({ provider: "none", minScore: 0, onSearch: true, hybrid: { enabled: true } }),
-    );
-    await manager.sync({ reason: "test" });
-    await fs.writeFile(
-      path.join(fixture.paths.memory, "search-sync.md"),
-      "Current memory appears only after the dirty search sync.",
-    );
-    await vi.waitFor(() => expect(manager.status().dirty).toBe(true));
+  it.each([
+    { name: "dirty memory", source: "memory", fullRetry: false },
+    { name: "one dirty session", source: "sessions", fullRetry: false },
+    { name: "full memory retry", source: "memory", fullRetry: true },
+  ] as const)(
+    "keeps search usable while maintenance syncs $name",
+    async ({ source, fullRetry }) => {
+      providerFixture.forceNoProvider = true;
+      const cfg = createCfg({
+        provider: "none",
+        sources: ["memory", "sessions"],
+        sessionMemory: true,
+        minScore: 0,
+      });
+      const manager = await getPersistentManager(cfg);
+      await manager.sync({ reason: "test", force: true });
+      const content = "Current memory appears only after the dirty search sync.";
+      if (source === "memory") {
+        await fs.writeFile(path.join(fixture.paths.memory, "search-sync.md"), content);
+      } else {
+        await seedMemoryIndexSessionTranscript({
+          sessionId: "search-sync",
+          messages: [{ role: "assistant", timestamp: Date.now(), content }],
+        });
+      }
+      const servingFields = manager as unknown as {
+        dirty: boolean;
+        memoryFullRetryDirty: boolean;
+        sessionsDirty: boolean;
+        sessionsDirtyFiles: Set<string>;
+        listSessionCorpusEntries: () => Promise<Array<{ sessionFile: string }>>;
+        awaitManagerIdle: () => Promise<void>;
+      };
+      servingFields.dirty = source === "memory";
+      servingFields.memoryFullRetryDirty = fullRetry;
+      servingFields.sessionsDirty = source === "sessions";
+      if (source === "sessions") {
+        const entries = await servingFields.listSessionCorpusEntries();
+        expect(entries).toHaveLength(1);
+        servingFields.sessionsDirtyFiles = new Set(entries.map((entry) => entry.sessionFile));
+      }
 
-    const results = await manager.search("current dirty search sync", {
-      maxResults: 5,
+      const maintenanceReady = createDeferred<void>();
+      const releaseMaintenance = createDeferred<void>();
+      const originalGet = MemoryIndexManager.get.bind(MemoryIndexManager);
+      let maintenanceClosed = false;
+      let maintenanceFields:
+        | {
+            runInPlaceReindex: (params: unknown) => Promise<void>;
+            syncMemoryFiles: (params: { needsFullReindex: boolean }) => Promise<unknown>;
+            syncArchiveFiles: (params: { needsFullReindex: boolean }) => Promise<unknown>;
+          }
+        | undefined;
+      const getSpy = vi.spyOn(MemoryIndexManager, "get").mockImplementation(async (params) => {
+        const acquired = await originalGet(params);
+        if (params.purpose !== "maintenance" || !acquired) {
+          return acquired;
+        }
+        const closeMaintenance = acquired.close.bind(acquired);
+        vi.spyOn(acquired, "close").mockImplementation(async () => {
+          await closeMaintenance();
+          maintenanceClosed = true;
+        });
+        const fields = acquired as unknown as NonNullable<typeof maintenanceFields>;
+        maintenanceFields = fields;
+        vi.spyOn(fields, "runInPlaceReindex");
+        const sourceSync = source === "memory" ? "syncMemoryFiles" : "syncArchiveFiles";
+        const syncSource = fields[sourceSync].bind(acquired);
+        vi.spyOn(fields, sourceSync).mockImplementation(async (syncParams) => {
+          // Full retries hold completed shadow writes; incremental sync holds before
+          // its live writes so both cases prove reads remain available during work.
+          const result = fullRetry ? await syncSource(syncParams) : undefined;
+          maintenanceReady.resolve();
+          await releaseMaintenance.promise;
+          return fullRetry ? result : await syncSource(syncParams);
+        });
+        return acquired;
+      });
+
+      try {
+        const firstSearch = manager.search("zebra", { maxResults: 5, minScore: 0 });
+        await maintenanceReady.promise;
+        expect(manager.status()).toMatchObject({ dirty: true });
+        expect(maintenanceFields!.runInPlaceReindex).toHaveBeenCalledTimes(fullRetry ? 1 : 0);
+        expect(
+          maintenanceFields![source === "memory" ? "syncMemoryFiles" : "syncArchiveFiles"],
+        ).toHaveBeenCalledWith(expect.objectContaining({ needsFullReindex: fullRetry }));
+
+        const publishedResults = await firstSearch;
+        expect(publishedResults.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
+        await expect(
+          manager.search("current dirty search sync", { maxResults: 5, minScore: 0 }),
+        ).resolves.toEqual([]);
+
+        releaseMaintenance.resolve();
+        await servingFields.awaitManagerIdle();
+        expect(manager.status().dirty).toBe(false);
+
+        const refreshedResults = await manager.search("current dirty search sync", {
+          maxResults: 5,
+          minScore: 0,
+        });
+        expect(refreshedResults).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ source, snippet: expect.stringContaining(content) }),
+          ]),
+        );
+        expect(maintenanceClosed).toBe(true);
+      } finally {
+        releaseMaintenance.resolve();
+        await servingFields.awaitManagerIdle();
+        getSpy.mockRestore();
+      }
+    },
+  );
+
+  it("rebuilds automatic maintenance from the revision after a concurrent memory purge", async () => {
+    providerFixture.forceNoProvider = true;
+    const cfg = createCfg({
+      provider: "none",
+      sources: ["memory"],
       minScore: 0,
     });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test", force: true });
+    const servingFields = manager as unknown as {
+      dirty: boolean;
+      memoryFullRetryDirty: boolean;
+      closeNativeMemoryWatchPairs: () => void;
+      awaitManagerIdle: () => Promise<void>;
+    };
+    servingFields.closeNativeMemoryWatchPairs();
 
-    expect(results.some((entry) => entry.path === "memory/search-sync.md")).toBe(true);
+    const sessionId = "automatic-maintenance-purge";
+    const memoryPath = path.join(fixture.paths.workspace, "MEMORY.md");
+    await fs.writeFile(
+      memoryPath,
+      "# Memory\n<!-- openclaw-memory-promotion:private-entry -->\n- Private violet alpha fragment.\n",
+    );
+    recordMemoryEntryOrigins({
+      agentId: "main",
+      origins: [
+        {
+          agentId: "main",
+          sessionId,
+          sessionKey: null,
+          entryKey: "private-entry",
+          originClass: "owner",
+          observedAt: Date.now(),
+        },
+      ],
+    });
+    servingFields.dirty = true;
+    servingFields.memoryFullRetryDirty = true;
+
+    const shadowReady = createDeferred<void>();
+    const releasePublish = createDeferred<void>();
+    const originalGet = MemoryIndexManager.get.bind(MemoryIndexManager);
+    let syncCalls = 0;
+    const getSpy = vi.spyOn(MemoryIndexManager, "get").mockImplementation(async (params) => {
+      const acquired = await originalGet(params);
+      if (params.purpose !== "maintenance" || !acquired) {
+        return acquired;
+      }
+      const fields = acquired as unknown as {
+        syncMemoryFiles: (params: unknown) => Promise<unknown>;
+      };
+      const syncMemoryFiles = fields.syncMemoryFiles.bind(acquired);
+      vi.spyOn(fields, "syncMemoryFiles").mockImplementation(async (syncParams) => {
+        const result = await syncMemoryFiles(syncParams);
+        syncCalls += 1;
+        if (syncCalls === 1) {
+          shadowReady.resolve();
+          await releasePublish.promise;
+        }
+        return result;
+      });
+      return acquired;
+    });
+
+    try {
+      const search = manager.search("zebra", { maxResults: 5, minScore: 0 });
+      await shadowReady.promise;
+      await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: [sessionId] });
+      releasePublish.resolve();
+
+      await expect(search).resolves.toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
+      );
+      await servingFields.awaitManagerIdle();
+      expect(manager.status()).toMatchObject({ dirty: false, lastSyncError: undefined });
+      expect(syncCalls).toBe(2);
+      expect(await fs.readFile(memoryPath, "utf8")).not.toContain("Private violet");
+      const database = Reflect.get(manager, "db") as DatabaseSync;
+      expect(
+        database
+          .prepare("SELECT text FROM memory_index_chunks WHERE text LIKE '%Private violet%'")
+          .all(),
+      ).toEqual([]);
+    } finally {
+      releasePublish.resolve();
+      await servingFields.awaitManagerIdle();
+      getSpy.mockRestore();
+    }
+  });
+
+  it("keeps transient CLI search off the serving manager write path", async () => {
+    providerFixture.forceNoProvider = true;
+    const cfg = createCfg({
+      provider: "none",
+      minScore: 0,
+    });
+    const initialManager = await getFreshManager(cfg, "cli");
+    await initialManager.sync({ reason: "test", force: true });
+    await initialManager.close?.();
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "cli-refresh.md"),
+      "Content published after transient CLI maintenance.",
+    );
+
+    const manager = await getFreshManager(cfg, "cli", true);
+    const servingFields = manager as unknown as {
+      syncMemoryFiles: (params: { needsFullReindex: boolean }) => Promise<unknown>;
+    };
+    const servingSync = vi.spyOn(servingFields, "syncMemoryFiles");
+    const maintenanceReady = createDeferred<void>();
+    const releaseMaintenance = createDeferred<void>();
+    let closePromise: Promise<void> | undefined;
+    let maintenanceClosed = false;
+    const originalGet = MemoryIndexManager.get.bind(MemoryIndexManager);
+    const getSpy = vi.spyOn(MemoryIndexManager, "get").mockImplementation(async (params) => {
+      const acquired = await originalGet(params);
+      if (params.purpose !== "maintenance" || !acquired) {
+        return acquired;
+      }
+      const closeMaintenance = acquired.close.bind(acquired);
+      vi.spyOn(acquired, "close").mockImplementation(async () => {
+        await closeMaintenance();
+        maintenanceClosed = true;
+      });
+      const fields = acquired as unknown as {
+        syncMemoryFiles: (params: { needsFullReindex: boolean }) => Promise<unknown>;
+      };
+      const syncMemoryFiles = fields.syncMemoryFiles.bind(acquired);
+      vi.spyOn(fields, "syncMemoryFiles").mockImplementation(async (syncParams) => {
+        const result = await syncMemoryFiles(syncParams);
+        maintenanceReady.resolve();
+        await releaseMaintenance.promise;
+        return result;
+      });
+      return acquired;
+    });
+
+    try {
+      const search = manager.search("zebra", {
+        maxResults: 5,
+        minScore: 0,
+        sessionKey: "agent:main:cli:memory-search",
+      });
+      await vi.waitFor(() =>
+        expect(getSpy).toHaveBeenCalledWith(expect.objectContaining({ purpose: "maintenance" })),
+      );
+      await maintenanceReady.promise;
+      const results = await search;
+
+      expect(results.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
+      expect(servingSync).not.toHaveBeenCalled();
+      if (typeof manager.close !== "function") {
+        throw new Error("Expected CLI memory manager close support");
+      }
+      closePromise = manager.close();
+      let closeSettled = false;
+      void closePromise.then(() => {
+        closeSettled = true;
+      });
+      await vi.waitFor(() => expect(closeSettled).toBe(true));
+      expect(maintenanceClosed).toBe(false);
+    } finally {
+      releaseMaintenance.resolve();
+      await closePromise;
+      getSpy.mockRestore();
+      await manager.close?.();
+    }
+  });
+
+  it.each([
+    {
+      name: "an unrelated error",
+      error: new Error("maintenance failed"),
+      expectedSyncCalls: 1,
+    },
+    {
+      name: "a second revision conflict",
+      error: new MemoryIndexRevisionConflictError("stale shadow"),
+      expectedSyncCalls: 2,
+    },
+  ])(
+    "restores a failed maintenance generation after $name and still closes its transient manager",
+    async ({ error: syncError, expectedSyncCalls }) => {
+      const manager = await getPersistentManager(createCfg({ provider: "none", minScore: 0 }));
+      await manager.sync({ reason: "test" });
+      const maintenance = {
+        adoptReindexRetryState: vi.fn(),
+        sync: vi.fn(async () => {
+          throw syncError;
+        }),
+        close: vi.fn(async () => {}),
+      };
+      const getSpy = vi.spyOn(MemoryIndexManager, "get").mockResolvedValue(maintenance as never);
+      Reflect.set(manager, "dirty", true);
+      Reflect.set(manager, "memoryFullRetryDirty", true);
+      Reflect.set(manager, "sessionsDirty", true);
+      Reflect.set(manager, "sessionsFullRetryDirty", true);
+      Reflect.set(manager, "sessionsReconcileDirty", true);
+      Reflect.set(manager, "sessionsDirtyFiles", new Set(["session.jsonl"]));
+
+      try {
+        await expect(
+          (
+            manager as unknown as {
+              syncPublishedIndexInBackground: (params: { reason: string }) => Promise<void>;
+            }
+          ).syncPublishedIndexInBackground({ reason: "search" }),
+        ).rejects.toThrow(syncError);
+
+        expect(maintenance.adoptReindexRetryState).toHaveBeenCalledWith({
+          dirty: true,
+          memoryFullRetryDirty: true,
+          sessionsDirty: true,
+          sessionsFullRetryDirty: true,
+          sessionsReconcileDirty: true,
+          sessionsDirtyFiles: new Set(["session.jsonl"]),
+        });
+        expect(maintenance.sync).toHaveBeenCalledTimes(expectedSyncCalls);
+        expect(maintenance.sync).toHaveBeenCalledWith({ reason: "search" });
+        expect(maintenance.close).toHaveBeenCalledTimes(1);
+        expect(manager.status().lastSyncError).toContain(syncError.message);
+        expect(Reflect.get(manager, "dirty")).toBe(true);
+        expect(Reflect.get(manager, "memoryFullRetryDirty")).toBe(true);
+        expect(Reflect.get(manager, "sessionsDirty")).toBe(true);
+        expect(Reflect.get(manager, "sessionsFullRetryDirty")).toBe(true);
+        expect(Reflect.get(manager, "sessionsReconcileDirty")).toBe(true);
+        expect(Reflect.get(manager, "sessionsDirtyFiles")).toEqual(new Set(["session.jsonl"]));
+      } finally {
+        getSpy.mockRestore();
+      }
+    },
+  );
+
+  it("keeps sync failures process-local and clears them after a successful sync", async () => {
+    const cfg = createCfg({
+      provider: "none",
+      minScore: 0,
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "baseline" });
+    const fields = manager as unknown as {
+      syncMemoryFiles: (params: { needsFullReindex: boolean }) => Promise<unknown>;
+    };
+    const syncMemoryFiles = fields.syncMemoryFiles.bind(manager);
+    const syncSpy = vi
+      .spyOn(fields, "syncMemoryFiles")
+      .mockRejectedValueOnce(new Error("sync failed"));
+    Reflect.set(manager, "dirty", true);
+
+    await expect(manager.sync({ reason: "failure" })).rejects.toThrow("sync failed");
+    expect(manager.status().lastSyncError).toBe("sync failed");
+    const statusManager = await getFreshManager(cfg, "status");
+    expect(statusManager.status().lastSyncError).toBeUndefined();
+
+    syncSpy.mockImplementation(syncMemoryFiles);
+    await manager.sync({ reason: "recovery" });
+    expect(manager.status().lastSyncError).toBeUndefined();
+  });
+
+  it("does not let a no-op sync hide a later detached failure", async () => {
+    const manager = await getPersistentManager(createCfg({ provider: "none", minScore: 0 }));
+    await manager.sync({ reason: "baseline" });
+    const maintenanceStarted = createDeferred<void>();
+    const releaseMaintenance = createDeferred<void>();
+    const maintenance = {
+      adoptReindexRetryState: vi.fn(),
+      sync: vi.fn(async () => {
+        maintenanceStarted.resolve();
+        await releaseMaintenance.promise;
+        throw new Error("older maintenance failed");
+      }),
+      close: vi.fn(async () => {}),
+    };
+    const getSpy = vi.spyOn(MemoryIndexManager, "get").mockResolvedValue(maintenance as never);
+    Reflect.set(manager, "dirty", true);
+    const detachedSync = (
+      manager as unknown as {
+        syncPublishedIndexInBackground: (params: { reason: string }) => Promise<void>;
+      }
+    ).syncPublishedIndexInBackground({ reason: "search" });
+
+    try {
+      await maintenanceStarted.promise;
+      expect(manager.status().dirty).toBe(false);
+      await manager.sync({ reason: "interval" });
+      releaseMaintenance.resolve();
+      await expect(detachedSync).rejects.toThrow("older maintenance failed");
+
+      expect(manager.status().dirty).toBe(true);
+      expect(manager.status().lastSyncError).toContain("older maintenance failed");
+
+      await manager.sync({ reason: "retry" });
+      expect(manager.status().lastSyncError).toBeUndefined();
+    } finally {
+      releaseMaintenance.resolve();
+      await detachedSync.catch(() => undefined);
+      getSpy.mockRestore();
+    }
+  });
+
+  it("restores a maintenance generation when a null fallback leaves it dirty", async () => {
+    const cfg = createCfg({
+      fallback: "fallback-provider",
+      minScore: 0,
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test", force: true });
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "null-fallback.md"),
+      "New content that requires a fallback embedding.",
+    );
+    Reflect.set(manager, "dirty", true);
+    Reflect.set(manager, "memoryFullRetryDirty", true);
+    providerFixture.providerNullResult = "fallback-provider";
+    const originalGet = MemoryIndexManager.get.bind(MemoryIndexManager);
+    const getSpy = vi.spyOn(MemoryIndexManager, "get").mockImplementation(async (params) => {
+      const acquired = await originalGet(params);
+      if (params.purpose !== "maintenance" || !acquired) {
+        return acquired;
+      }
+      const fields = acquired as unknown as {
+        ensureProviderInitialized: () => Promise<void>;
+        provider: EmbeddingProvider | null;
+      };
+      await fields.ensureProviderInitialized();
+      if (!fields.provider) {
+        throw new Error("expected maintenance embedding provider");
+      }
+      fields.provider.embedBatch = async () => {
+        throw providerFixture.createLocalWorkerExitError();
+      };
+      return acquired;
+    });
+
+    try {
+      await expect(
+        (
+          manager as unknown as {
+            syncPublishedIndexInBackground: (params: { reason: string }) => Promise<void>;
+          }
+        ).syncPublishedIndexInBackground({ reason: "search" }),
+      ).resolves.toBeUndefined();
+
+      expect(manager.status().dirty).toBe(true);
+      expect(manager.status().lastSyncError).toContain("Local embedding worker exited");
+      expect(Reflect.get(manager, "memoryFullRetryDirty")).toBe(true);
+    } finally {
+      providerFixture.providerNullResult = null;
+      getSpy.mockRestore();
+    }
+  });
+
+  it("does not let a rejected maintenance handoff abort manager teardown", async () => {
+    const manager = await getPersistentManager(createCfg({ provider: "none", minScore: 0 }));
+    await manager.sync({ reason: "test" });
+    Reflect.set(manager, "dirty", true);
+    const syncSpy = vi
+      .spyOn(
+        manager as unknown as {
+          syncPublishedIndexInBackground: (params: { reason: string }) => Promise<void>;
+        },
+        "syncPublishedIndexInBackground",
+      )
+      .mockRejectedValue(new Error("maintenance failed"));
+
+    await manager.search("zebra", { maxResults: 5, minScore: 0 });
+    await expect(manager.close?.()).resolves.toBeUndefined();
+    expect(syncSpy).toHaveBeenCalledWith({ reason: "search" });
   });
 });

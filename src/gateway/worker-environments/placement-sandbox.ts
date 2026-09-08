@@ -4,6 +4,7 @@ import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import { createSandboxFsBridge } from "../../agents/sandbox/fs-bridge.js";
 import { createPreprovisionedSshSandboxBackend } from "../../agents/sandbox/ssh-backend.js";
 import type { SandboxConfig, SandboxContext } from "../../agents/sandbox/types.js";
+import { resolveSessionSkillResourceMounts } from "../../agents/session-placement-skill-resources.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type { WorkerEnvironmentService } from "./service.js";
@@ -53,7 +54,7 @@ function requireRemoteWorkspaceDir(value: string, nodeCarrier: boolean): string 
 export async function createRemoteExecPlacementSandbox(params: {
   config?: OpenClawConfig;
   environments: PlacementSandboxEnvironmentService;
-  localWorkspaceDir: string;
+  workspaceDir: string;
   placement: ActiveRemoteExecPlacement;
 }): Promise<RemoteExecPlacementSandbox> {
   const { placement } = params;
@@ -107,9 +108,10 @@ export async function createRemoteExecPlacementSandbox(params: {
     enabled: true,
     placementExecutionMode: "remote-exec" as const,
     sessionKey: placement.sessionKey,
-    workspaceDir: params.localWorkspaceDir,
-    agentWorkspaceDir: params.localWorkspaceDir,
+    workspaceDir: params.workspaceDir,
+    agentWorkspaceDir: params.workspaceDir,
     workspaceAccess: "rw" as const,
+    readOnlyResourceMounts: resolveSessionSkillResourceMounts(),
     runtimeId,
     runtimeLabel: runtimeId,
     containerName: runtimeId,
@@ -157,8 +159,8 @@ export async function createRemoteExecPlacementSandbox(params: {
     {
       sessionKey: placement.sessionKey,
       scopeKey: placement.sessionKey,
-      workspaceDir: params.localWorkspaceDir,
-      agentWorkspaceDir: params.localWorkspaceDir,
+      workspaceDir: params.workspaceDir,
+      agentWorkspaceDir: params.workspaceDir,
       cfg,
     },
     { runtimeId, remoteWorkspaceDir },

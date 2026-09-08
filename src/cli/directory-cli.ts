@@ -15,13 +15,16 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 import { nullChannelDirectorySelf } from "../channels/plugins/directory-adapters.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
-import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
+import { requireValidConfigForWrite } from "../commands/config-validation.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { danger } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMessageChannelSelection } from "../infra/outbound/channel-selection.js";
 import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { defaultRuntime } from "../runtime.js";
+import { resolveCommandConfigWithSecrets } from "./command-config-resolution.js";
+import { getScopedChannelsCommandSecretTargets } from "./command-secret-targets.js";
 import { formatHelpExamples } from "./help-format.js";
 
 function parseLimit(value: unknown): number | null {
@@ -107,46 +110,46 @@ export function registerDirectoryCli(program: Command) {
       .option("--json", "Output JSON", false);
 
   const resolve = async (opts: { channel?: string; account?: string }) => {
-    const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
+    const writeSnapshot = await requireValidConfigForWrite(defaultRuntime);
+    if (!writeSnapshot) {
+      return null;
+    }
     const autoEnabled = applyPluginAutoEnable({
-      config: getRuntimeConfig(),
+      config: writeSnapshot.snapshot.sourceConfig,
       env: process.env,
     });
-    let cfg = autoEnabled.config;
+    const sourceConfig = autoEnabled.config;
     const explicitChannel = opts.channel?.trim();
     const resolvedExplicit = explicitChannel
       ? await resolveInstallableChannelPlugin({
-          cfg,
+          cfg: sourceConfig,
           runtime: defaultRuntime,
           rawChannel: explicitChannel,
           allowInstall: true,
+          preferRegisteredPlugin: true,
           supports: (plugin) => Boolean(plugin.directory),
         })
       : null;
-    if (resolvedExplicit?.configChanged) {
-      cfg = resolvedExplicit.cfg;
-      // Installing an explicit channel can update plugin records; commit before directory calls
-      // so subsequent registry reads see the channel the user just selected.
-      const committed = await commitConfigWithPendingPluginInstalls({
-        nextConfig: cfg,
-        baseHash: (await sourceSnapshotPromise)?.hash,
-      });
-      cfg = committed.config;
-    } else if (autoEnabled.changes.length > 0) {
-      // Auto-enable changes are config-only and must be persisted before later CLI invocations.
-      await replaceConfigFile({
-        nextConfig: cfg,
-        baseHash: (await sourceSnapshotPromise)?.hash,
+    if (resolvedExplicit?.configChanged || autoEnabled.changes.length > 0) {
+      // Commit install records and enablement before directory calls consume the new runtime.
+      await commitConfigWithPendingPluginInstalls({
+        sourceConfig: resolvedExplicit?.cfg ?? sourceConfig,
+        baseHash: writeSnapshot.snapshot.hash,
+        writeOptions: writeSnapshot.writeOptions,
       });
     }
+    // Config writes refresh the active runtime snapshot. Directory execution must use that
+    // prepared view, never the authored config that was just persisted.
+    const runtimeConfig = getRuntimeConfig();
     const selection = explicitChannel
       ? {
           channel: resolvedExplicit?.channelId,
           plugin: resolvedExplicit?.plugin,
         }
       : await resolveMessageChannelSelection({
-          cfg,
+          cfg: runtimeConfig,
           channel: opts.channel ?? null,
+          accountResolution: "read_only",
         });
     const selectedChannelId = selection.channel;
     const plugin = selection.plugin;
@@ -155,8 +158,22 @@ export function registerDirectoryCli(program: Command) {
     }
     const channelId = selectedChannelId ?? plugin.id;
     const accountId =
-      normalizeOptionalString(opts.account) || resolveChannelDefaultAccountId({ plugin, cfg });
-    return { cfg, channelId, accountId, plugin };
+      normalizeOptionalString(opts.account) ||
+      resolveChannelDefaultAccountId({ plugin, cfg: runtimeConfig });
+    const secretTargets = getScopedChannelsCommandSecretTargets({
+      config: runtimeConfig,
+      channel: channelId,
+      accountId,
+    });
+    const { effectiveConfig } = await resolveCommandConfigWithSecrets({
+      config: runtimeConfig,
+      commandName: "directory",
+      targetIds: secretTargets.targetIds,
+      ...(secretTargets.allowedPaths ? { allowedPaths: secretTargets.allowedPaths } : {}),
+      mode: "read_only_operational",
+      runtime: defaultRuntime,
+    });
+    return { cfg: effectiveConfig, channelId, accountId, plugin };
   };
 
   const runDirectoryList = async (params: {
@@ -173,10 +190,14 @@ export function registerDirectoryCli(program: Command) {
     emptyMessage: string;
   }) => {
     const limit = parseLimit(params.opts.limit);
-    const { cfg, channelId, accountId, plugin } = await resolve({
+    const resolved = await resolve({
       channel: params.opts.channel as string | undefined,
       account: params.opts.account as string | undefined,
     });
+    if (!resolved) {
+      return;
+    }
+    const { cfg, channelId, accountId, plugin } = resolved;
     const fn =
       params.action === "listPeers"
         ? (plugin.directory?.listPeersLive ?? plugin.directory?.listPeers)
@@ -217,10 +238,14 @@ export function registerDirectoryCli(program: Command) {
   withChannel(directory.command("self").description("Show the current account user")).action(
     (opts) =>
       runDirectoryAction(opts, async () => {
-        const { cfg, channelId, accountId, plugin } = await resolve({
+        const resolved = await resolve({
           channel: opts.channel as string | undefined,
           account: opts.account as string | undefined,
         });
+        if (!resolved) {
+          return;
+        }
+        const { cfg, channelId, accountId, plugin } = resolved;
         const fn = plugin.directory?.self;
         if (!fn) {
           throw new Error(`Channel ${channelId} does not support directory self`);
@@ -309,10 +334,14 @@ export function registerDirectoryCli(program: Command) {
     .action((opts) =>
       runDirectoryAction(opts, async () => {
         const limit = parseLimit(opts.limit);
-        const { cfg, channelId, accountId, plugin } = await resolve({
+        const resolved = await resolve({
           channel: opts.channel as string | undefined,
           account: opts.account as string | undefined,
         });
+        if (!resolved) {
+          return;
+        }
+        const { cfg, channelId, accountId, plugin } = resolved;
         const fn = plugin.directory?.listGroupMembers;
         if (!fn) {
           throw new Error(`Channel ${channelId} does not support group members listing`);

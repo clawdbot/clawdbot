@@ -39,6 +39,8 @@ export const STALLED_CATALOG_MODEL_ID = "bench-model";
 
 export const BASE_GATEWAY_BENCH_CONFIG = {
   browser: { enabled: false },
+  // Loopback listener binding does not suppress LAN discovery.
+  discovery: { mdns: { mode: "off" } },
   gateway: {
     mode: "local",
     bind: "loopback",
@@ -227,11 +229,14 @@ export function formatMb(value: number | null): string {
   return value == null ? "n/a" : `${value.toFixed(1)}MB`;
 }
 
-export function formatStats(stats: SummaryStats | null | undefined): string {
+export function formatStats(
+  stats: SummaryStats | null | undefined,
+  formatValue: (value: number) => string = formatMs,
+): string {
   if (!stats) {
     return "n/a";
   }
-  return `p50=${formatMs(stats.p50)} avg=${formatMs(stats.avg)} min=${formatMs(stats.min)} max=${formatMs(stats.max)}`;
+  return `p50=${formatValue(stats.p50)} avg=${formatValue(stats.avg)} min=${formatValue(stats.min)} max=${formatValue(stats.max)}`;
 }
 
 export function createGatewayBenchEnv(

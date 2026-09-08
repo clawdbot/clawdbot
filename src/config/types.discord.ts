@@ -38,7 +38,8 @@ export type DiscordDmConfig = {
 export type DiscordGuildChannelConfig = {
   requireMention?: boolean;
   /**
-   * If true, drop messages that mention another user/role but not this one (not @everyone/@here).
+   * If true, drop messages addressed to another identity by mention or bot reply, but not this
+   * bot (not @everyone/@here).
    * Default: false.
    */
   ignoreOtherMentions?: boolean;
@@ -71,7 +72,8 @@ export type DiscordGuildEntry = {
   slug?: string;
   requireMention?: boolean;
   /**
-   * If true, drop messages that mention another user/role but not this one (not @everyone/@here).
+   * If true, drop messages addressed to another identity by mention or bot reply, but not this
+   * bot (not @everyone/@here).
    * Default: false.
    */
   ignoreOtherMentions?: boolean;
@@ -278,6 +280,8 @@ export type DiscordAccountConfig = Omit<
 > &
   ChannelBotInteractionConfig &
   ChannelReactionConfig<never, never, string> & {
+    /** Post a room-specific introduction when joining a group. Default: true. */
+    joinIntro?: boolean;
     /** Override native command registration for Discord (bool or "auto"). */
     commands?: ProviderCommandsConfig;
     token?: SecretInput;
@@ -318,9 +322,6 @@ export type DiscordAccountConfig = Omit<
     slashCommand?: DiscordSlashCommandConfig;
     /** Thread binding lifecycle settings. */
     threadBindings?: DiscordThreadBindingsConfig;
-    /** Show subagent count reactions and typing on the source message. Default: false. */
-    /** @deprecated Doctor-only legacy input. */
-    subagentProgress?: boolean;
     /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
     intents?: DiscordIntentsConfig;
     /** Voice channel conversation settings. */

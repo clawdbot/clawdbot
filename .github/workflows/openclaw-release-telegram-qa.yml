@@ -56,7 +56,7 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN: "HTTP 5[0-9][0-9]|Server Error|invalid character .* looking for beginning of value|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i/o timeout|network is unreachable|ETIMEDOUT|ECONNRESET|EAI_AGAIN"
-  NODE_VERSION: "24.16.0"
+  NODE_VERSION: "24.19.0"
   OPENCLAW_BUILD_PRIVATE_QA: "1"
   OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
 
@@ -265,7 +265,7 @@ jobs:
           [[ "$IDENTITY_STATUS" == "success" ]]
 
       - name: Checkout trusted Telegram QA bootstrap
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.trusted_identity.outputs.workflow_repository }}
           ref: ${{ needs.trusted_identity.outputs.workflow_sha }}
@@ -289,7 +289,7 @@ jobs:
           install-deps: "false"
 
       - name: Checkout candidate runtime
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.target_sha }}
           fetch-depth: 1
@@ -326,6 +326,8 @@ jobs:
           set -euo pipefail
           candidate_home="${RUNNER_TEMP}/openclaw-telegram-candidate-home"
           mkdir -p "$candidate_home"
+          # Native pnpm reads this policy from env; the config flag also covers older targets.
+          # Copies keep the candidate independent of the external package store.
           env -i \
             CI=true \
             COREPACK_HOME="${candidate_home}/.cache/corepack" \
@@ -333,12 +335,13 @@ jobs:
             LANG=C.UTF-8 \
             NPM_CONFIG_USERCONFIG=/dev/null \
             PATH="$PATH" \
+            PNPM_CONFIG_PACKAGE_IMPORT_METHOD=copy \
             RUNNER_TEMP="$RUNNER_TEMP" \
             pnpm install \
               --store-dir "$RUNNER_TEMP/openclaw-telegram-candidate-pnpm-store" \
               --prefer-offline \
               --frozen-lockfile \
-              --ignore-scripts=false \
+              --config.ignore-scripts=false \
               --config.engine-strict=false \
               --config.enable-pre-post-scripts=true \
               --config.package-import-method=copy \
@@ -386,7 +389,7 @@ jobs:
           } >>"$GITHUB_OUTPUT"
 
       - name: Restore trusted Telegram QA bootstrap
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.trusted_identity.outputs.workflow_repository }}
           ref: ${{ needs.trusted_identity.outputs.workflow_sha }}
@@ -539,7 +542,7 @@ jobs:
           [[ "$IDENTITY_STATUS" == "success" && "$BUILD_STATUS" == "success" ]]
 
       - name: Checkout trusted Telegram QA verifier
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.trusted_identity.outputs.workflow_repository }}
           ref: ${{ needs.trusted_identity.outputs.workflow_sha }}
@@ -639,7 +642,7 @@ jobs:
           echo "archive_path=$archive_path" >>"$GITHUB_OUTPUT"
 
       - name: Checkout independent candidate source
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.target_sha }}
           fetch-depth: 1
@@ -708,7 +711,7 @@ jobs:
 
       - name: Attest exact candidate archive bytes
         id: attest
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: ${{ steps.verify_candidate.outputs.archive_path }}
 
@@ -764,7 +767,7 @@ jobs:
              "$ATTESTATION_STATUS" == "success" ]]
 
       - name: Checkout trusted Telegram QA harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.trusted_identity.outputs.workflow_repository }}
           ref: ${{ needs.trusted_identity.outputs.workflow_sha }}
@@ -1422,6 +1425,36 @@ jobs:
             exec sudo -n -- "$0" --root-terminate-uid
           fi
 
+          if [[ "${1:-}" == "--cleanup-temp-root" ]]; then
+            shift
+            exec sudo -n -- "$0" --root-cleanup-temp-root "$@"
+          fi
+
+          if [[ "${1:-}" == "--root-cleanup-temp-root" ]]; then
+            [[ "$EUID" == "0" && "$#" == "2" ]]
+            source /etc/openclaw-telegram-sut.conf
+            temp_root="$2"
+            case "$(dirname "$temp_root")" in
+              "$RUNTIME_ROOT/tmp" | "$RUNTIME_ROOT/tmp/openclaw-$RUNNER_UID") ;;
+              *) echo "SUT cleanup escaped the workflow runtime root." >&2; exit 1 ;;
+            esac
+            [[ "$(basename "$temp_root")" == openclaw-qa-suite-* ]]
+            if sut_uid_processes_alive; then
+              echo "SUT runtime cleanup requires isolated UID quiescence." >&2
+              exit 1
+            fi
+            [[ ! -L "$temp_root" ]]
+            if [[ ! -e "$temp_root" ]]; then
+              exit 0
+            fi
+            [[ -d "$temp_root" && "$(realpath -e "$temp_root")" == "$temp_root" ]]
+            [[ "$(stat -c '%u' "$temp_root")" == "$RUNNER_UID" ]]
+            # Preserve SUT-private modes until final shutdown. Unlink its tree
+            # without changing ownership or following links into other roots.
+            rm -rf --one-file-system -- "$temp_root"
+            exit 0
+          fi
+
           if [[ "${1:-}" == "--verify" ]]; then
             shift
             exec sudo -n -- "$0" --root-verify "$@"
@@ -1591,6 +1624,48 @@ jobs:
           if [[ -n "${OPENCLAW_BUNDLED_PLUGINS_DIR:-}" ]]; then
             chown -R root:root "$OPENCLAW_BUNDLED_PLUGINS_DIR"
             chmod -R a+rX,go-w "$OPENCLAW_BUNDLED_PLUGINS_DIR"
+          fi
+
+          if [[ "$requested_config_path" == "$config_path" ]]; then
+            # Doctor owns a writable runtime copy; the scenario's source stays immutable.
+            # Keep generation receipts outside SUT state so a canonical mutation always
+            # refreshes the copy, while an unchanged source preserves Doctor repairs.
+            projection_dir="${OPENCLAW_STATE_DIR}/qa-runtime-config"
+            generation_dir="${RUNTIME_ROOT}/config-generations"
+            install -d -o root -g root -m 0700 "$generation_dir"
+            generation_key="$(printf %s "$config_path" | sha256sum | cut -d ' ' -f1)"
+            generation_path="${generation_dir}/${generation_key}"
+            config_generation="$(sha256sum "$config_path" | cut -d ' ' -f1)"
+            previous_generation=""
+            if [[ -e "$generation_path" ]]; then
+              [[ "$(stat -c '%F:%a:%u:%g' "$generation_path")" == "regular file:600:0:0" ]]
+              previous_generation="$(<"$generation_path")"
+            fi
+            if [[ "$previous_generation" != "$config_generation" || ! -e "$projection_dir/openclaw.json" ]]; then
+              # Only the unprivileged SUT writes below its private state root.
+              /usr/bin/setpriv --reuid="$SUT_UID" --regid="$SUT_GID" \
+                --clear-groups --no-new-privs --inh-caps=-all --ambient-caps=-all --bounding-set=-all \
+                /usr/bin/env -i PATH=/usr/bin:/bin /bin/bash -ceu '
+                  umask 077
+                  source_config="$1"
+                  projection_dir="$2"
+                  expected_generation="$3"
+                  mkdir -p "$projection_dir"
+                  [[ -d "$projection_dir" && ! -L "$projection_dir" &&
+                        "$(realpath -e "$projection_dir")" == "$projection_dir" ]]
+                  projection_tmp="$(mktemp "$projection_dir/.seed.XXXXXX")"
+                  trap '\''rm -f "$projection_tmp"'\'' EXIT
+                  cat "$source_config" >"$projection_tmp"
+                  [[ "$(sha256sum "$projection_tmp" | cut -d " " -f1)" == "$expected_generation" ]]
+                  mv -T "$projection_tmp" "$projection_dir/openclaw.json"
+                ' openclaw-config-projection "$config_path" "$projection_dir" "$config_generation"
+              [[ "$(sha256sum "$config_path" | cut -d ' ' -f1)" == "$config_generation" ]]
+              generation_tmp="$(mktemp "$generation_dir/.generation.XXXXXX")"
+              printf %s "$config_generation" >"$generation_tmp"
+              chmod 0600 "$generation_tmp"
+              mv -T "$generation_tmp" "$generation_path"
+            fi
+            export OPENCLAW_CONFIG_PATH="$projection_dir/openclaw.json"
           fi
 
           boundary_mode=false
@@ -1818,8 +1893,14 @@ jobs:
                           -r "${CANONICAL_CONFIG_PATH:?}" &&
                           ! -w "$CANONICAL_CONFIG_PATH" ]]
                     if [[ "$OPENCLAW_CONFIG_PATH" != "$CANONICAL_CONFIG_PATH" ]]; then
-                      [[ "${1:-}" == "models" && "${2:-}" == "auth" &&
-                            -r "$OPENCLAW_CONFIG_PATH" && -w "$OPENCLAW_CONFIG_PATH" ]]
+                      [[ -r "$OPENCLAW_CONFIG_PATH" && -w "$OPENCLAW_CONFIG_PATH" &&
+                            ! -L "$OPENCLAW_CONFIG_PATH" ]]
+                      case "$OPENCLAW_CONFIG_PATH" in
+                        "${OPENCLAW_STATE_DIR}/qa-runtime-config/openclaw.json") ;;
+                        "${OPENCLAW_STATE_DIR}/qa-auth-bootstrap/openclaw.json")
+                          [[ "${1:-}" == "models" && "${2:-}" == "auth" ]] ;;
+                        *) exit 1 ;;
+                      esac
                     fi
                     [[ -d "${CANDIDATE_ARTIFACTS_DIR:?}" && -r "$CANDIDATE_ARTIFACTS_DIR" && -x "$CANDIDATE_ARTIFACTS_DIR" && ! -w "$CANDIDATE_ARTIFACTS_DIR" ]]
                     for writable_path in \
@@ -1934,8 +2015,6 @@ jobs:
       - name: Validate required QA credential env
         id: validate_credentials
         env:
-          # Release trains share a bounded Telegram pool; wait through overlapping lanes.
-          CREDENTIAL_ACQUIRE_TIMEOUT_MS: "600000"
           JOB_TIMEOUT_MINUTES: "60"
           LEASE_TTL_MS: "7200000"
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
@@ -1952,13 +2031,12 @@ jobs:
       - name: Run Telegram live lane
         id: run_lane
         env:
+          TELEGRAM_E2E_SKILL_DIR: ${{ github.workspace }}/.agents/skills/telegram-e2e-userbot
           CANDIDATE_ROOT: ${{ steps.create_sut.outputs.candidate_root }}
           EVIDENCE_RELATIVE: ${{ steps.create_sut.outputs.evidence_relative }}
           EVIDENCE_ROOT: ${{ steps.create_sut.outputs.evidence_root }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
-          # Keep the CLI lease wait aligned with the validated workflow contract above.
-          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "600000"
           OPENCLAW_QA_CREDENTIAL_LEASE_TTL_MS: "7200000"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL: trusted-parent-${{ github.run_id }}-${{ github.run_attempt }}
@@ -2571,7 +2649,7 @@ jobs:
       # Identity binds this checkout to the workflow definition that received
       # the OIDC token. Do not execute status code from the release candidate.
       - name: Checkout trusted Telegram status helper
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.trusted_identity.outputs.workflow_repository }}
           ref: ${{ needs.trusted_identity.outputs.workflow_sha }}

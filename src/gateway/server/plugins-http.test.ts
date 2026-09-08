@@ -53,6 +53,10 @@ function createMockUpgradeSocket() {
     write(chunk: string) {
       socket.chunks.push(chunk);
     },
+    end(chunk: string, callback: () => void) {
+      socket.write(chunk);
+      callback();
+    },
     destroy() {
       socket.destroyed = true;
     },

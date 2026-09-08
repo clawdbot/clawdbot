@@ -33,7 +33,7 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "session.store":
     "Sets the session storage file path used to persist session records across restarts. Use an explicit path only when you need custom disk layout, backup routing, or mounted-volume storage.",
   "session.mainKey":
-    'Overrides the canonical main session key used for continuity when dmScope or routing logic points to "main". Use a stable value only if you intentionally need custom session anchoring.',
+    'Accepted but ignored: the per-agent main session suffix is always "main". Omit this field; global session scope uses "global" instead.',
   "session.sendPolicy":
     "Controls cross-session send permissions using allow/deny rules evaluated against channel, chatType, and key prefixes. Use this to fence where session tools can deliver messages in complex environments.",
   "session.sendPolicy.default":
@@ -53,11 +53,11 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "session.sendPolicy.rules[].match.rawKeyPrefix":
     "Matches the raw, unnormalized session-key prefix for exact full-key policy targeting. Use this when normalized keyPrefix is too broad and you need agent-prefixed or transport-specific precision.",
   "session.threadBindings":
-    "Shared defaults for thread-bound session routing behavior across providers that support thread focus workflows. Configure global defaults here and override per channel only when behavior differs.",
+    "Shared defaults for thread-bound session spawning and routing across supported channels. Configure global defaults here and override per channel only when behavior differs.",
   "session.threadBindings.enabled":
-    "Global master switch for thread-bound session routing features and focused thread delivery behavior. Keep enabled for modern thread workflows unless you need to disable thread binding globally.",
+    "Global master switch for thread-bound session spawning, routing, and delivery. Disable to turn off thread binding globally.",
   "session.threadBindings.idleHours":
-    "Default inactivity window in hours for thread-bound sessions across providers/channels (0 disables idle auto-unfocus). Default: 24.",
+    "Default inactivity window in hours for thread-bound sessions across providers/channels (0 disables idle expiry). Default: 24.",
   "session.threadBindings.maxAgeHours":
     "Optional hard max age in hours for thread-bound sessions across providers/channels (0 disables hard cap). Default: 0.",
   "session.threadBindings.spawnSessions":
@@ -77,22 +77,24 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "session.maintenance.mode":
     'Determines whether maintenance policies are only reported ("warn") or actively applied ("enforce"). Keep "warn" during rollout and switch to "enforce" after validating safe thresholds.',
   "session.maintenance.pruneAfter":
-    "Removes entries older than this duration (for example `30d` or `12h`) during maintenance passes. Use this as the primary age-retention control and align it with data retention policy.",
+    "Archives eligible durable conversations and removes disposable automation entries older than this duration (default `30d`; for example `12h`). Archived conversations retain their history and can be restored; protected or routable conversations remain active.",
   "session.maintenance.archiveDashboardAfter":
     "Archives inactive dashboard sessions after this duration (for example `7d`) so they remain available without crowding the active session list. Set `false` or `0` to disable automatic dashboard archiving.",
   "session.maintenance.maxEntries":
-    "Caps total session entry count retained in the store to prevent unbounded growth over time. Protected entries count toward the limit but are never automatically removed, so the store can remain above the cap when protection alone exceeds it. Use lower limits for constrained environments, or higher limits when longer history is required.",
+    "Caps unarchived session entries (default 5000). Eligible durable overflow conversations are archived with their history; disposable automation entries are removed. Existing archives do not consume the cap. Protected active entries still count and can keep the store above the limit.",
   "session.maintenance.preserveRecent":
     "Protects interactive sessions active within this duration (for example `7d`) from automatic age, count, and disk-budget history eviction. Unset or `false` keeps the normal oldest-first policy. Synthetic model-run, cron, hook, heartbeat, ACP, and sub-agent rows remain eligible for bounded cleanup.",
   "session.maintenance.resetArchiveRetention":
     "Age-based retention for archived transcripts (`*.reset.<timestamp>` and `*.deleted.<timestamp>`). Defaults to keeping archives until the disk budget evicts them oldest-first; set a duration (for example `30d`) to opt into wall-clock deletion, or `false` to disable it explicitly.",
   "session.maintenance.maxDiskBytes":
-    'Per-agent sessions-directory disk budget (for example `500mb`). Defaults to `10gb`; when exceeded, warn mode reports pressure and enforce mode performs oldest-first cleanup (archived transcripts before live sessions). Set `false`, `0`, or `"0"` to disable.',
+    'Per-agent physical disk budget covering SQLite main/WAL and counted session-directory artifacts (for example `500mb`). Defaults to `10gb`; protected data can keep usage above the target. When exceeded, warn mode reports pressure and enforce mode removes old reset/delete artifacts, unreferenced history, then cap-created archives. Manual, age-retention, dashboard, recovery, and legacy archives remain protected. Set `false`, `0`, or `"0"` to disable.',
   "session.maintenance.highWaterBytes":
     "Target size after disk-budget cleanup (high-water mark). Defaults to 80% of maxDiskBytes; set explicitly for tighter reclaim behavior on constrained disks. A value that resolves to zero falls back to the default; negative values are invalid. Disable the budget with maxDiskBytes instead.",
   cron: "Global scheduler settings for stored automations, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling automation volume or integrating external webhook receivers.",
   "cron.enabled":
     "Enables automation execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all automation execution without deleting jobs.",
+  "cron.skipMissedJobs":
+    "Skips missed recurring cron/every slots at Gateway startup and schedules their next future occurrence instead of catching up. Default: false. Enable to avoid stale reminders after downtime; one-shot at jobs still catch up.",
   "cron.webhookToken":
     "Bearer token attached to automation webhook POST deliveries when webhook mode is used. Prefer secret/env substitution and rotate this token regularly if shared webhook endpoints are internet-reachable.",
   "cron.webhookSsrfPolicy":
@@ -101,6 +103,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Allows automation webhooks to private and internal network targets. Keep disabled unless every configured webhook destination is trusted.",
   "cron.webhookSsrfPolicy.allowedHostnames":
     "Exact hostnames or IP literals allowed for automation webhook delivery, including otherwise blocked targets. Keep the list minimal.",
+  "cron.webhookSsrfPolicy.blockedHostnames":
+    'Hostname patterns denied before DNS and allow rules for automation webhook delivery. Supports exact hosts and "*.example.com" for subdomains only; add "example.com" separately to block the apex. Empty or unset adds no denials.',
   "cron.webhookSsrfPolicy.allowRfc2544BenchmarkRange":
     "Allows automation webhooks to RFC 2544 benchmark-range IPs (198.18.0.0/15). Use only with trusted fake-IP proxy environments.",
   "cron.webhookSsrfPolicy.allowIpv6UniqueLocalRange":
@@ -112,13 +116,15 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "transcripts.enabled":
     "Enables durable automatic meeting notes, the transcripts agent tool, and configured auto-start sources. Default: true. Set false to disable persistence and the tool; explicit meeting transcribe mode retains its bounded live tail.",
   "transcripts.autoStart":
-    "Live transcript sources started automatically when the gateway starts. Each entry is enabled by being present; remove an entry to disable that source.",
+    "Live transcript sources managed automatically from gateway startup. Each entry is enabled by being present; remove an entry to disable that source. Sources capture continuously unless whenOccupied is enabled.",
   "transcripts.autoStart[].providerId":
     "Transcript source provider id, such as a Discord voice or future Slack huddle provider. Use the exact id exposed by the provider plugin.",
   "transcripts.autoStart[].sessionId":
-    "Optional fixed transcript session id for this auto-start source. Leave unset for generated ids unless you need a stable daily selector and can avoid same-day collisions.",
+    "Optional fixed transcript session id for this auto-start source. Ignored when whenOccupied is true. Leave unset for generated ids unless you need a stable daily selector and can avoid same-day collisions.",
+  "transcripts.autoStart[].whenOccupied":
+    "Start a fresh transcript session each time humans are present in the source and stop it (generating notes) after the last human leaves. Requires a provider that reports occupancy, such as discord-voice. Default: false (capture continuously from gateway start).",
   "transcripts.autoStart[].title":
-    "Optional human-readable title stored with the transcript session and shown in transcript listings. Use concise meeting names that help operators identify the captured source.",
+    "Optional title for future transcript captures. Changing only titles keeps current captures running and does not rename their admitted title or saved notes. Other source changes retain their normal restart handling.",
   "transcripts.autoStart[].accountId":
     "Optional provider account or workspace identifier for transcript sources that need account disambiguation. Use the provider's documented account id format.",
   "transcripts.autoStart[].guildId":
@@ -173,6 +179,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Template for synthesizing structured mapping input into the final message content sent to the target action path. Keep templates deterministic so downstream parsing and behavior remain stable.",
   "hooks.mappings[].textTemplate":
     "Text-only fallback template used when rich payload rendering is not desired or not supported. Use this to provide a concise, consistent summary string for chat delivery surfaces.",
+  "hooks.mappings[].forEach":
+    "Top-level payload array key the mapping fans out over: each element dispatches its own action, and templates or transforms see a payload whose array holds only the current element. The Gmail preset uses forEach: messages so batched pushes dispatch one run per email.",
   "hooks.mappings[].deliver":
     "Controls whether mapping execution results are delivered back to a channel destination versus being processed silently. Disable delivery for background automations that should not post user-facing output.",
   "hooks.mappings[].allowUnsafeExternalContent":
@@ -338,8 +346,6 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Allow Mattermost to write config in response to channel events/commands (default: true).",
   "channels.modelByChannel":
     "Map provider -> channel id / DM peer id -> model override (values are provider/model or aliases).",
-  "messages.suppressToolErrors":
-    "When true, suppress ⚠️ tool-error warnings from being shown to the user. The agent already sees errors in context and can retry. Default: false.",
   "messages.ackReaction": "Emoji reaction used to acknowledge inbound messages (empty disables).",
   "messages.ackReactionScope":
     'When to send ack reactions ("group-mentions", "group-all", "direct", "all", "off", "none"). "group-mentions" acks group messages that mention the agent, whether or not the group requires mentions; "group-all" acks every group message. "off"/"none" disables ack reactions entirely.',

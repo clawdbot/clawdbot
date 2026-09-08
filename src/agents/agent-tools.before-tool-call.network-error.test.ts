@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import { describe, expect, it, vi } from "vitest";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.wrapper.js";
+import { createPostCompactionLoopGuard } from "./embedded-agent-runner/post-compaction-loop-guard.js";
 import { resolveToolExecutionErrorKind } from "./tool-result-error.js";
 import { ToolInputError, type AnyAgentTool } from "./tools/common.js";
 
@@ -32,6 +33,68 @@ function createFailingTool(params: {
 }
 
 describe("before-tool-call network execution error boundary", () => {
+  it.each([undefined, false])(
+    "preserves post-compaction protection when loop detection is %s",
+    async (enabled) => {
+      const guard = createPostCompactionLoopGuard({ enabled: enabled !== false });
+      guard.armPostCompaction();
+      const verdicts: boolean[] = [];
+      const source = createFailingTool({ error: new Error("same network failure"), network: true });
+      const tool = wrapToolWithBeforeToolCallHook(
+        source,
+        {
+          sessionKey: `network-compaction-${enabled}`,
+          runId: `network-compaction-${enabled}`,
+          ...(enabled === undefined ? {} : { loopDetection: { enabled } }),
+          onToolOutcome: (outcome) => verdicts.push(guard.observe(outcome).shouldAbort),
+        },
+        { emitDiagnostics: false },
+      );
+      for (let index = 0; index < 3; index += 1) {
+        await expect(tool.execute(`compaction-${enabled}-${index}`, {})).rejects.toBeInstanceOf(
+          Error,
+        );
+      }
+      expect(verdicts).toEqual([false, false, enabled !== false]);
+    },
+  );
+
+  it("blocks the next call after twenty identical protected network failures", async () => {
+    const original = new Error('keyboard.press: Unknown key: "NotAKey"');
+    const source = createFailingTool({ error: original, network: true });
+    const tool = wrapToolWithBeforeToolCallHook(
+      source,
+      {
+        sessionKey: "network-error-loop",
+        runId: "network-error-loop",
+        loopDetection: { enabled: true },
+      },
+      { emitDiagnostics: false },
+    );
+    const markerIds = new Set<string>();
+    for (let index = 0; index < 20; index += 1) {
+      const failure = await tool
+        .execute(`network-loop-${index}`, {})
+        .catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error);
+      const matches = [
+        ...(failure as Error).message.matchAll(/EXTERNAL_UNTRUSTED_CONTENT id="([a-f0-9]{16})"/g),
+      ];
+      expect(matches).toHaveLength(2);
+      const markerId = matches[0]?.[1];
+      if (!markerId) {
+        throw new Error("Expected a generated external-content marker");
+      }
+      expect(markerId).toBe(matches[1]?.[1]);
+      markerIds.add(markerId);
+    }
+    expect(markerIds.size).toBe(20);
+    const result = await tool.execute("network-loop-blocked", {});
+    expect(result.details).toMatchObject({ status: "blocked", deniedReason: "tool-loop" });
+    expect(source.execute).toHaveBeenCalledTimes(20);
+    expect(original.message).toBe('keyboard.press: Unknown key: "NotAKey"');
+  });
+
   it.each([
     ["host input", () => new ToolInputError("query required")],
     [

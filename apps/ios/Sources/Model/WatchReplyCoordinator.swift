@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import OpenClawChatUI
 import OpenClawKit
@@ -12,359 +11,408 @@ enum WatchApprovalReadbackCandidate<Prompt, PersistedReadback> {
     case held(WatchExecApprovalSnapshotRequestItem)
 }
 
-/// Owns the one canonical interpretation of projected chat rows shared by Watch
-/// previews and run-correlated voice replies.
-enum WatchChatPresentation {
-    private static let previewItemLimit = 5
+/// This reader is used only by the named journal data migration, never for runtime replay.
+enum WatchMessageLegacyDefaults {
+    private static let queueKey = "watch.chat.command.queue.v1"
+    private static let metadataKey = "watch.message.outbox.metadata.v1"
 
-    private struct MetadataEnvelope: Decodable {
-        struct Metadata: Decodable {
-            var id: String?
-        }
-
-        var metadata: Metadata?
-        var messageToolMirror: [String: String]?
-
-        enum CodingKeys: String, CodingKey {
-            case metadata = "__openclaw"
-            case messageToolMirror = "openclawMessageToolMirror"
-        }
+    private struct Queued: Decodable {
+        let gatewayStableID: String
+        let event: WatchAppCommandEvent
     }
 
-    private struct MessageEntry {
-        var message: OpenClawChatMessage
-        var text: String
-        var serverID: String?
-        var isMessageToolMirror: Bool
+    private struct Metadata: Decodable {
+        let recentMessageIDs: [String]
     }
 
-    nonisolated static func replyText(
-        from rawMessages: [OpenClawKit.AnyCodable],
-        runID: String,
-        submittedText: String,
-        submittedAtMs: Int64) -> String?
-    {
-        let entries = rawMessages.compactMap(Self.decodeMessage)
-        if let directReply = entries.last(where: {
-            Self.isTerminalAssistant($0) && $0.message.idempotencyKey == runID
-        }) {
-            return directReply.text
-        }
+    struct Snapshot {
+        let legacyImport: OpenClawWatchMessageLegacyImport
+        fileprivate let queueData: Data?
+        fileprivate let metadataData: Data?
 
-        let userIdempotencyKey = "\(runID):user"
-        let exactUserIndex = entries.lastIndex(where: {
-            $0.message.role.lowercased() == "user" &&
-                $0.message.idempotencyKey == userIdempotencyKey
-        })
-        let queuedUserIndex = entries.lastIndex(where: { entry in
-            guard entry.message.role.lowercased() == "user",
-                  let timestampMs = Self.timestampMs(entry.message.timestamp),
-                  timestampMs >= submittedAtMs
-            else { return false }
-            return entry.text.contains(submittedText)
-        })
-        guard let userIndex = exactUserIndex ?? queuedUserIndex else { return nil }
-        return entries[(userIndex + 1)...].first(where: Self.isTerminalAssistant)?.text
-    }
-
-    nonisolated static func makeItems(
-        from rawMessages: [OpenClawKit.AnyCodable]) -> [OpenClawWatchChatItem]
-    {
-        var occurrences: [String: Int] = [:]
-        let identified = rawMessages.compactMap(Self.decodeMessage).map { entry in
-            let baseID = entry.serverID.map { "\(entry.message.role)-\($0)" }
-                ?? Self.fallbackKey(entry)
-            occurrences[baseID, default: 0] += 1
-            return (entry, "\(baseID)-\(occurrences[baseID]!)")
-        }
-        return identified.suffix(Self.previewItemLimit).map { entry, stableID in
-            OpenClawWatchChatItem(
-                id: stableID,
-                role: entry.message.role,
-                text: Self.truncatedText(entry.text),
-                timestampMs: Self.timestampMs(entry.message.timestamp))
+        var hasSource: Bool {
+            self.queueData != nil || self.metadataData != nil
         }
     }
 
-    private nonisolated static func isTerminalAssistant(_ entry: MessageEntry) -> Bool {
-        guard entry.message.role.lowercased() == "assistant" else { return false }
-        if entry.isMessageToolMirror { return true }
-        guard let stopReason = entry.message.stopReason?.lowercased() else { return false }
-        // Progress rows are not final replies; the later assistant row owns completion.
-        return stopReason != "tooluse" && stopReason != "tool_use" && stopReason != "tool_calls"
+    private static func data(_ key: String, defaults: UserDefaults) throws -> Data? {
+        guard let value = defaults.object(forKey: key) else { return nil }
+        guard let data = value as? Data else { throw WatchMessagingError.admissionUnavailable }
+        return data
     }
 
-    private nonisolated static func decodeMessage(_ raw: OpenClawKit.AnyCodable) -> MessageEntry? {
-        guard let data = try? JSONEncoder().encode(raw),
-              let message = try? JSONDecoder().decode(OpenClawChatMessage.self, from: data)
-        else { return nil }
-        let text = ChatMessageVisibleText.visibleText(in: message)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return nil }
-        let metadata = try? JSONDecoder().decode(MetadataEnvelope.self, from: data)
-        return MessageEntry(
-            message: message,
-            text: text,
-            serverID: metadata?.metadata?.id,
-            isMessageToolMirror: metadata?.messageToolMirror != nil)
+    static func prepare(_ defaults: UserDefaults) throws -> Snapshot {
+        let queueData = try self.data(self.queueKey, defaults: defaults)
+        let metadataData = try self.data(self.metadataKey, defaults: defaults)
+        let queued = try queueData.map { try JSONDecoder().decode([Queued].self, from: $0) } ?? []
+        let metadata = try metadataData.map { try JSONDecoder().decode(Metadata.self, from: $0) }
+        let legacyImport = OpenClawWatchMessageLegacyImport(
+            messages: queued.map {
+                .init(
+                    id: $0.event.commandId,
+                    gatewayStableID: GatewayStableIdentifier.exact($0.gatewayStableID),
+                    text: $0.event.text ?? "",
+                    submittedAtMs: $0.event.sentAtMs)
+            },
+            recentMessageIDs: metadata?.recentMessageIDs ?? [])
+        return Snapshot(legacyImport: legacyImport, queueData: queueData, metadataData: metadataData)
     }
 
-    private nonisolated static func fallbackKey(_ entry: MessageEntry) -> String {
-        let timestamp = Self.timestampMs(entry.message.timestamp).map(String.init) ?? "missing"
-        let source = "\(entry.message.role)\u{0}\(timestamp)\u{0}\(entry.text)"
-        let digest = SHA256.hash(data: Data(source.utf8))
-            .map { String(format: "%02x", $0) }
-            .joined()
-        return "\(entry.message.role)-\(digest)"
+    static func finish(_ snapshot: Snapshot, defaults: UserDefaults) throws -> Bool {
+        // Check both keys before removing either. A changed source must remain retryable;
+        // a crash between removals is safe because SQLite retained per-ID import receipts.
+        let queueData = try self.data(self.queueKey, defaults: defaults)
+        let metadataData = try self.data(self.metadataKey, defaults: defaults)
+        guard queueData == snapshot.queueData, metadataData == snapshot.metadataData
+        else { return false }
+        self.removeAll(defaults)
+        return true
     }
 
-    private nonisolated static func truncatedText(_ text: String) -> String {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count > 240 else { return trimmed }
-        return "\(trimmed.prefix(237))..."
-    }
-
-    private nonisolated static func timestampMs(_ timestamp: Double?) -> Int64? {
-        guard let timestamp, timestamp.isFinite, timestamp >= 0 else { return nil }
-        let milliseconds = timestamp > 100_000_000_000 ? timestamp : timestamp * 1000
-        guard milliseconds.isFinite,
-              milliseconds >= 0,
-              milliseconds <= 32_503_680_000_000
-        else { return nil }
-        return Int64(milliseconds)
+    static func removeAll(_ defaults: UserDefaults) {
+        defaults.removeObject(forKey: self.queueKey)
+        defaults.removeObject(forKey: self.metadataKey)
     }
 }
 
 @MainActor
-final class WatchMessageOutbox {
-    enum Decision {
-        case dropMissingFields
-        case dropMissingTarget
-        case deduped(messageID: String)
-        case queue(messageID: String)
-        case forward
+final class WatchReplyCoordinator {
+    private struct CommandKey: Hashable {
+        let context: OpenClawWatchChatDeliveryContext
+        let id: Data
+
+        init(context: OpenClawWatchChatDeliveryContext, id: String) {
+            self.context = context
+            self.id = Data(id.utf8)
+        }
     }
 
-    // Keep the shipped chat key so upgrades retain messages already queued by the Watch.
-    private static let persistedQueueKey = "watch.chat.command.queue.v1"
-    private static let persistedMetadataKey = "watch.message.outbox.metadata.v1"
-    private static let maxRecentMessageIDs = 128
-    private static let maxPromptRoutes = 128
-
-    private struct QueuedMessage: Codable, Equatable {
-        var gatewayStableID: String
-        var event: WatchAppCommandEvent
+    private struct ReceiptKey: Hashable {
+        let command: CommandKey
+        let receiptID: Data?
     }
 
-    private struct PromptRoute: Codable, Equatable {
-        var promptID: String
-        var gatewayStableID: String
-    }
+    private let journal: OpenClawWatchMessageJournal
+    private let gateway: GatewayNodeSession
+    private let messaging: any WatchMessagingServicing
+    private let reportStorageWarning: @MainActor (String?) -> Void
+    private var tasks: [CommandKey: Task<Void, Never>] = [:]
+    private var pendingResumes: Set<CommandKey> = []
+    private var receiptTasks: [ReceiptKey: Task<Void, Never>] = [:]
+    private var pendingReceiptResumes: Set<ReceiptKey> = []
+    private var retryAttempts: [CommandKey: Int] = [:]
+    private var stopped = false
 
-    private struct PersistedMetadata: Codable, Equatable {
-        var recentMessageIDs: [String]
-        var promptRoutes: [PromptRoute]
-    }
-
-    private let defaults: UserDefaults
-    private var queuedMessages: [QueuedMessage] = []
-    private var recentMessageIDs: [String] = []
-    private var seenMessageIDs = Set<String>()
-    private var promptRoutes: [PromptRoute] = []
-
-    init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
-        self.restoreMetadata()
-        self.restoreQueue()
-    }
-
-    func ingest(
-        _ event: WatchAppCommandEvent,
-        isAvailable: Bool,
-        gatewayStableID: String?) -> Decision
+    init(
+        journal: OpenClawWatchMessageJournal,
+        gateway: GatewayNodeSession,
+        messaging: any WatchMessagingServicing,
+        reportStorageWarning: @escaping @MainActor (String?) -> Void)
     {
-        let messageID = event.commandId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let text = event.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if messageID.isEmpty || text.isEmpty {
-            return .dropMissingFields
+        self.journal = journal
+        self.gateway = gateway
+        self.messaging = messaging
+        self.reportStorageWarning = reportStorageWarning
+    }
+
+    @discardableResult
+    func admit(
+        _ command: OpenClawWatchChatDeliveryCommand,
+        destination: OpenClawWatchMessageReceiptDestination = .watch) async throws -> OpenClawWatchMessageEntry
+    {
+        guard !self.stopped else { throw WatchMessagingError.admissionUnavailable }
+        try await self.journal.recoverInterruptedWork(nowMs: Self.nowMs())
+        guard !self.stopped, !Task.isCancelled else { throw CancellationError() }
+        let entry = try await self.journal.admit(command, nowMs: Self.nowMs(), destination: destination)
+        guard !self.stopped else { throw CancellationError() }
+        self.updateStorageWarning(nil)
+        // Neither transport nor provider work belongs to the application's admission ACK.
+        self.sendReceipt(entry)
+        self.start(entry)
+        return entry
+    }
+
+    func acknowledge(_ acknowledgment: OpenClawWatchChatDeliveryReceiptAck) async throws {
+        guard !self.stopped else { throw WatchMessagingError.admissionUnavailable }
+        let result = try await self.journal.acknowledge(acknowledgment)
+        guard result == .applied else {
+            throw OpenClawWatchChatDeliveryError(code: "receipt_mismatch", message: "Watch receipt was not accepted.")
         }
-        let owner = gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !owner.isEmpty else { return .dropMissingTarget }
-        if self.seenMessageIDs.contains(messageID) {
-            return .deduped(messageID: messageID)
-        }
-        // Persist before network delivery; iOS may suspend a background callback at any await.
-        self.queuedMessages.append(
-            QueuedMessage(gatewayStableID: owner, event: self.message(event, taggedFor: owner)))
-        self.rebuildSeenMessageIDs()
-        self.persistQueue()
-        return isAvailable ? .forward : .queue(messageID: messageID)
+        self.updateStorageWarning(nil)
     }
 
-    func recordPromptRoute(promptID: String?, gatewayStableID: String?) {
-        let promptID = promptID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let gatewayStableID = gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !promptID.isEmpty, promptID != "unknown", !gatewayStableID.isEmpty else { return }
-        self.promptRoutes.removeAll { $0.promptID == promptID }
-        self.promptRoutes.append(PromptRoute(promptID: promptID, gatewayStableID: gatewayStableID))
-        if self.promptRoutes.count > Self.maxPromptRoutes {
-            self.promptRoutes.removeFirst(self.promptRoutes.count - Self.maxPromptRoutes)
-        }
-        self.persistMetadata()
-    }
-
-    func gatewayStableID(forPromptID promptID: String) -> String? {
-        let promptID = promptID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !promptID.isEmpty, promptID != "unknown" else { return nil }
-        return self.promptRoutes.last { $0.promptID == promptID }?.gatewayStableID
-    }
-
-    func nextQueuedMessage(isAvailable: Bool, gatewayStableID: String?) -> WatchAppCommandEvent? {
-        let owner = gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard isAvailable, !owner.isEmpty else { return nil }
-        // Replies are time-sensitive; a retrying chat must not strand them behind it.
-        if let reply = self.queuedMessages.first(where: {
-            $0.gatewayStableID == owner && self.kind(of: $0.event) == .quickReply
-        }) {
-            return reply.event
-        }
-        return self.queuedMessages.first { $0.gatewayStableID == owner }?.event
-    }
-
-    func removeQueuedMessage(messageID: String, gatewayStableID: String?) {
-        let messageID = messageID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let owner = gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !messageID.isEmpty, !owner.isEmpty else { return }
-        guard let index = self.queuedMessages.firstIndex(where: {
-            $0.gatewayStableID == owner && $0.event.commandId == messageID
-        }) else { return }
-        self.queuedMessages.remove(at: index)
-        self.rememberRecentMessageID(messageID)
-        self.persistQueue()
-    }
-
-    func requeueFront(_ event: WatchAppCommandEvent, gatewayStableID: String?) {
-        let messageID = event.commandId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let owner = gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !messageID.isEmpty, !owner.isEmpty else { return }
-        self.queuedMessages.removeAll { $0.event.commandId == messageID }
-        self.queuedMessages.insert(
-            QueuedMessage(gatewayStableID: owner, event: self.message(event, taggedFor: owner)),
-            at: 0)
-        self.rebuildSeenMessageIDs()
-        self.persistQueue()
-    }
-
-    func queuedCount(kind: WatchMessageKind? = nil) -> Int {
-        guard let kind else { return self.queuedMessages.count }
-        return self.queuedMessages.count(where: { self.kind(of: $0.event) == kind })
-    }
-
-    func queuedMessageIDs(kind: WatchMessageKind? = nil) -> [String] {
-        self.queuedMessages.compactMap { queued in
-            guard kind == nil || self.kind(of: queued.event) == kind else { return nil }
-            return queued.event.commandId
-        }
-    }
-
-    private func restoreQueue() {
-        guard let data = defaults.data(forKey: Self.persistedQueueKey),
-              let persisted = try? JSONDecoder().decode([QueuedMessage].self, from: data)
-        else {
-            return
-        }
-
-        var seenSet = Set<String>()
-        self.queuedMessages = persisted.compactMap { queued in
-            let owner = queued.gatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
-            let messageID = queued.event.commandId.trimmingCharacters(in: .whitespacesAndNewlines)
-            let text = queued.event.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !owner.isEmpty,
-                  !messageID.isEmpty,
-                  !text.isEmpty,
-                  !self.recentMessageIDs.contains(messageID),
-                  seenSet.insert(messageID).inserted
-            else {
-                return nil
+    func resume(gatewayStableID: String?, resetRetryBudget: Bool = false) async {
+        guard !self.stopped else { return }
+        if resetRetryBudget { self.retryAttempts.removeAll() }
+        do {
+            try await self.journal.recoverInterruptedWork(nowMs: Self.nowMs())
+            try await self.sendPendingReceipts()
+            for entry in try await self.journal.entries() {
+                guard let command = entry.command else { continue }
+                // Acceptance already completes quick replies; recovery must not wait for a live Gateway.
+                let acceptedReply = entry.phase == .accepted && command.kind == .quickReply
+                let selectedGateway = gatewayStableID.map {
+                    command.context.gatewayStableID.utf8.elementsEqual($0.utf8)
+                } ?? false
+                if acceptedReply || selectedGateway { self.start(entry) }
             }
-            return QueuedMessage(gatewayStableID: owner, event: self.message(queued.event, taggedFor: owner))
-        }
-        self.rebuildSeenMessageIDs()
-        if self.queuedMessages.count != persisted.count {
-            self.persistQueue()
+        } catch {
+            self.storageFailed()
         }
     }
 
-    private func rememberRecentMessageID(_ messageID: String) {
-        guard !messageID.isEmpty else { return }
-        self.recentMessageIDs.removeAll { $0 == messageID }
-        self.recentMessageIDs.append(messageID)
-        if self.recentMessageIDs.count > Self.maxRecentMessageIDs {
-            self.recentMessageIDs.removeFirst(self.recentMessageIDs.count - Self.maxRecentMessageIDs)
+    func stop() {
+        self.stopped = true
+        self.pendingResumes.removeAll()
+        self.pendingReceiptResumes.removeAll()
+        for task in self.tasks.values {
+            task.cancel()
         }
-        self.rebuildSeenMessageIDs()
-        self.persistMetadata()
+        for task in self.receiptTasks.values {
+            task.cancel()
+        }
     }
 
-    private func restoreMetadata() {
-        guard let data = self.defaults.data(forKey: Self.persistedMetadataKey),
-              let metadata = try? JSONDecoder().decode(PersistedMetadata.self, from: data)
-        else { return }
-
-        for rawMessageID in metadata.recentMessageIDs {
-            let messageID = rawMessageID.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !messageID.isEmpty else { continue }
-            self.recentMessageIDs.removeAll { $0 == messageID }
-            self.recentMessageIDs.append(messageID)
+    func stopAndWait() async {
+        self.stop()
+        for task in Array(self.tasks.values) + Array(self.receiptTasks.values) {
+            await task.value
         }
-        self.recentMessageIDs = Array(self.recentMessageIDs.suffix(Self.maxRecentMessageIDs))
-
-        for rawRoute in metadata.promptRoutes {
-            let promptID = rawRoute.promptID.trimmingCharacters(in: .whitespacesAndNewlines)
-            let gatewayStableID = rawRoute.gatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !promptID.isEmpty, promptID != "unknown", !gatewayStableID.isEmpty else { continue }
-            self.promptRoutes.removeAll { $0.promptID == promptID }
-            self.promptRoutes.append(PromptRoute(promptID: promptID, gatewayStableID: gatewayStableID))
-        }
-        self.promptRoutes = Array(self.promptRoutes.suffix(Self.maxPromptRoutes))
-        self.rebuildSeenMessageIDs()
     }
 
-    private func rebuildSeenMessageIDs() {
-        var ids = Set(self.recentMessageIDs)
-        ids.formUnion(self.queuedMessages.map(\.event.commandId))
-        self.seenMessageIDs = ids
+    func retire(gatewayStableID: String) {
+        for (key, task) in self.tasks where key.context.gatewayStableID.utf8.elementsEqual(gatewayStableID.utf8) {
+            self.pendingResumes.remove(key)
+            task.cancel()
+        }
+        for (key, task) in self.receiptTasks
+            where key.command.context.gatewayStableID.utf8.elementsEqual(gatewayStableID.utf8)
+        {
+            self.pendingReceiptResumes.remove(key)
+            task.cancel()
+        }
     }
 
-    private func persistQueue() {
-        if self.queuedMessages.isEmpty {
-            self.defaults.removeObject(forKey: Self.persistedQueueKey)
+    private func start(_ entry: OpenClawWatchMessageEntry) {
+        guard [.queued, .accepted].contains(entry.phase), let command = entry.command else { return }
+        self.start(CommandKey(context: command.context, id: command.commandId))
+    }
+
+    private func start(_ key: CommandKey) {
+        guard !self.stopped, let commandID = String(bytes: key.id, encoding: .utf8) else { return }
+        guard self.tasks[key] == nil else {
+            self.pendingResumes.insert(key)
             return
         }
-        guard let data = try? JSONEncoder().encode(self.queuedMessages) else { return }
-        self.defaults.set(data, forKey: Self.persistedQueueKey)
+        // Each bounded journal row owns its task; a slow reply must not block a fresh quick reply.
+        self.tasks[key] = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                self.tasks[key] = nil
+                // A reconnect may arrive before the old route observer unwinds.
+                // A fresh task also survives cancellation of a subsequently restored owner.
+                if self.pendingResumes.remove(key) != nil { self.start(key) }
+            }
+            do {
+                while !self.stopped, !Task.isCancelled {
+                    guard let current = try await self.journal.resumableEntry(
+                        id: commandID, context: key.context),
+                        !self.stopped, !Task.isCancelled, await self.process(current)
+                    else { return }
+                    let attempt = (self.retryAttempts[key] ?? 0) + 1
+                    self.retryAttempts[key] = attempt
+                    guard attempt <= 3 else { return }
+                    try? await Task.sleep(for: .milliseconds(500 * (1 << (attempt - 1))))
+                }
+            } catch {
+                if !self.stopped, !Task.isCancelled { self.storageFailed() }
+            }
+        }
     }
 
-    private func persistMetadata() {
-        let metadata = PersistedMetadata(
-            recentMessageIDs: self.recentMessageIDs,
-            promptRoutes: self.promptRoutes)
-        guard let data = try? JSONEncoder().encode(metadata) else { return }
-        self.defaults.set(data, forKey: Self.persistedMetadataKey)
+    private func process(_ entry: OpenClawWatchMessageEntry) async -> Bool {
+        guard let command = entry.command, let owner = entry.owner, !Task.isCancelled else { return false }
+        let transport = IOSGatewayChatTransport(
+            gateway: self.gateway,
+            globalAgentId: command.context.agentId,
+            outboxGatewayID: command.context.gatewayStableID)
+        if entry.phase == .accepted {
+            await self.observe(entry, transport: transport)
+            return false
+        }
+        guard case let .available(lease) = await transport.acquireOutboxRouteLease() else { return false }
+        do {
+            guard !Task.isCancelled else { return false }
+            guard let claim = try await self.journal.claim(command, nowMs: Self.nowMs())
+            else {
+                try await self.sendPendingReceipts()
+                return false
+            }
+            guard lease.sessionRoutingContract == command.context.sessionRoutingContract else {
+                await self.finish(claim, outcome: .failed(
+                    code: "routing_changed",
+                    message: String(localized: "The Gateway delivery target changed. Review this message on iPhone.")))
+                return false
+            }
+            let response: OpenClawChatSendResponse
+            do {
+                response = try await lease.sendMessage(
+                    sessionKey: command.context.deliverySessionKey,
+                    agentID: command.context.agentId,
+                    message: command.text,
+                    // The canonical request encoder omits an empty override for free-form chat.
+                    thinking: NodeAppModel.watchThinkingOverride(for: command.kind) ?? "",
+                    idempotencyKey: command.commandId,
+                    attachments: [])
+            } catch OpenClawChatTransportSendError.notDispatched {
+                return try await self.journal.releaseNotDispatched(claim) == .applied
+            } catch {
+                // The Gateway's native dedupe is not a durable 48-hour replay contract.
+                await self.finish(claim, outcome: .uncertain(
+                    message: String(
+                        localized: "Delivery could not be confirmed. Check Chat on iPhone before sending again.")))
+                return false
+            }
+            guard response.runId.utf8.elementsEqual(command.commandId.utf8),
+                  ["started", "in_flight", "ok"].contains(response.status)
+            else {
+                await self.finish(claim, outcome: .uncertain(
+                    message: String(
+                        localized: "The Gateway returned an unexpected delivery result. Check Chat on iPhone.")))
+                return false
+            }
+            guard try await self.journal.recordAccepted(claim, runID: response.runId) == .applied,
+                  let accepted = try await self.journal.accepted(owner: owner).first(where: {
+                      $0.id == entry.id && $0.attemptVersion == claim.attemptVersion
+                  })
+            else { return false }
+            await self.observe(accepted, transport: transport)
+        } catch {
+            self.storageFailed()
+        }
+        return false
     }
 
-    private func message(_ event: WatchAppCommandEvent, taggedFor gatewayStableID: String) -> WatchAppCommandEvent {
-        var tagged = event
-        tagged.gatewayStableID = gatewayStableID
-        return tagged
+    private func observe(_ entry: OpenClawWatchMessageEntry, transport: IOSGatewayChatTransport) async {
+        guard let command = entry.command, let runID = entry.acceptedRunID else { return }
+        // Persisted acceptance completes quick replies, including recovery without assistant history.
+        if command.kind == .quickReply {
+            await self.finish(entry, outcome: .forwarded)
+            return
+        }
+        guard let route = await self.gateway.currentRoute(ifGatewayID: command.context.gatewayStableID) else { return }
+        let deadline = Date().addingTimeInterval(75)
+        let observation = await transport.waitForRunCompletion(runId: runID, timeoutMs: 60000, ifCurrentRoute: route)
+        if case let .terminal(.failed(message)) = observation {
+            await self.finish(entry, outcome: .failed(
+                code: "gateway_run_failed",
+                message: OpenClawWatchChatDeliveryCodec.boundedReplyText(message)))
+            return
+        }
+        var inputRunIDs: [String]? = [runID]
+        repeat {
+            guard !self.stopped, !Task.isCancelled, await self.gateway.currentRoute() == route else { return }
+            do {
+                let history = try await transport.requestHistory(
+                    sessionKey: command.context.deliverySessionKey,
+                    agentID: command.context.agentId,
+                    inputRunIDs: inputRunIDs,
+                    ifCurrentRoute: route)
+                if let text = OpenClawChatHistoryPresentation.replyText(
+                    from: history.messages ?? [],
+                    runID: runID,
+                    inputConsumptions: history.inputConsumptions)
+                {
+                    await self.finish(
+                        entry,
+                        outcome: .reply(text: OpenClawWatchChatDeliveryCodec.boundedReplyText(text)))
+                    return
+                }
+            } catch {
+                if inputRunIDs != nil, IOSGatewayChatTransport.isUnsupportedHistoryInputRunIDsError(error) {
+                    inputRunIDs = nil
+                    continue
+                }
+            }
+            guard Date() < deadline else { return }
+            try? await Task.sleep(for: .seconds(1))
+        } while !Task.isCancelled
+        // No observed reply is not failure or permission to execute the accepted command again.
     }
 
-    private func kind(of event: WatchAppCommandEvent) -> WatchMessageKind {
-        event.messageKind ?? .chat
+    private func finish(_ entry: OpenClawWatchMessageEntry, outcome: OpenClawWatchChatDeliveryOutcome) async {
+        do {
+            guard try await self.journal.recordTerminal(entry, outcome: outcome, nowMs: Self.nowMs()) == .applied else {
+                return
+            }
+            try await self.sendPendingReceipts()
+        } catch {
+            self.storageFailed()
+        }
     }
 
-    static func resetPersistedQueue(defaults: UserDefaults = .standard) {
-        defaults.removeObject(forKey: self.persistedQueueKey)
-        defaults.removeObject(forKey: self.persistedMetadataKey)
+    private func sendPendingReceipts() async throws {
+        let entries = try await self.journal.pendingReceipts()
+        self.updateStorageWarning(nil)
+        for entry in entries {
+            self.sendReceipt(entry)
+        }
+    }
+
+    private func sendReceipt(_ entry: OpenClawWatchMessageEntry) {
+        guard !self.stopped, entry.destination == .watch, let receipt = entry.receipt else {
+            return
+        }
+        let key = ReceiptKey(
+            command: CommandKey(context: receipt.context, id: receipt.commandId),
+            receiptID: receipt.terminal.map { Data($0.receiptId.utf8) })
+        guard self.receiptTasks[key] == nil else {
+            self.pendingReceiptResumes.insert(key)
+            return
+        }
+        self.receiptTasks[key] = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                self.receiptTasks[key] = nil
+                // Reachability can recover before a failed or retired transfer unwinds.
+                // Only a recorded new wake starts another attempt, with the same journal fences.
+                if self.pendingReceiptResumes.remove(key) != nil { self.sendReceipt(entry) }
+            }
+            guard !self.stopped, !Task.isCancelled else { return }
+            do {
+                guard let owner = entry.owner,
+                      try await self.journal.route(gatewayStableID: owner.gatewayStableID)?.owner == owner,
+                      let current = try await self.journal.entries(owner: owner).first(where: {
+                          $0.id == entry.id
+                      }), current.receipt == receipt,
+                      (current.expiresAtMs ?? 0) > Self.nowMs(), !Task.isCancelled, !self.stopped
+                else { return }
+                self.updateStorageWarning(nil)
+            } catch {
+                self.storageFailed()
+                return
+            }
+            do {
+                // A successful WC transfer does not retire the committed application receipt.
+                _ = try await self.messaging.sendChatDeliveryReceipt(receipt)
+            } catch {
+                GatewayDiagnostics.log("watch chat receipt retained for retry")
+            }
+        }
+    }
+
+    private func storageFailed() {
+        GatewayDiagnostics.log("watch chat journal operation failed")
+        self.updateStorageWarning(
+            String(localized: "Watch delivery could not be saved. Open Apple Watch settings to review it."))
+    }
+
+    private func updateStorageWarning(_ message: String?) {
+        guard !self.stopped, !Task.isCancelled else { return }
+        self.reportStorageWarning(message)
+    }
+
+    private static func nowMs() -> Int64 {
+        Int64(Date().timeIntervalSince1970 * 1000)
     }
 }

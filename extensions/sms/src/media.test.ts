@@ -23,6 +23,7 @@ import {
 import { setSmsRuntime } from "./runtime.js";
 import type { ResolvedSmsAccount } from "./types.js";
 
+const assertSmsCredentialOwnerAvailable = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.hoisted(() => vi.fn<typeof loadWebMediaType>());
 const unlinkIfExistsMock = vi.hoisted(() =>
   vi.fn<typeof unlinkIfExistsType>(async () => undefined),
@@ -84,6 +85,7 @@ const TWILIO_MMS_FILENAME_CASES = [
 vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia: loadWebMediaMock,
 }));
+vi.mock("./credential-availability.js", () => ({ assertSmsCredentialOwnerAvailable }));
 vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   unlinkIfExists: unlinkIfExistsMock,
@@ -135,16 +137,23 @@ function twilioMediaUrl(
   }/Messages/${params.messageSid ?? MESSAGE_SID}/Media/${params.mediaSid ?? MEDIA_SID}`;
 }
 
-function installRuntime() {
-  const openKeyedStore = vi.fn((options: OpenKeyedStoreOptions) =>
-    createPluginStateKeyedStoreForTests("sms", { ...options, env: testStateEnv }),
-  );
+function installRuntime(bulkReads = true) {
+  const openKeyedStore = vi.fn((options: OpenKeyedStoreOptions) => {
+    const store = createPluginStateKeyedStoreForTests("sms", { ...options, env: testStateEnv });
+    return { ...store, lookupMany: bulkReads ? store.lookupMany : undefined };
+  });
   setSmsRuntime({
     state: {
       openKeyedStore,
     },
   } as unknown as PluginRuntime);
   return openKeyedStore;
+}
+
+function trackChunkReads<T>(store: PluginStateKeyedStore<T>) {
+  const lookup = vi.spyOn(store, "lookup");
+  const lookupMany = store.lookupMany ? vi.spyOn(store, "lookupMany") : undefined;
+  return () => lookup.mock.calls.length + (lookupMany?.mock.calls.length ?? 0);
 }
 
 function createMockResponse() {
@@ -254,61 +263,65 @@ describe("SMS outbound hosted media", () => {
     await expect(prepared.cleanup()).resolves.toBeUndefined();
   });
 
-  it("hosts media on the exact webhook path and supports repeat GET/HEAD fetches", async () => {
-    const hostedUrl = await prepareHostedSmsMediaUrl({
-      account: createAccount(),
-      mediaUrl: "https://example.com/photo.png",
-    });
-    const publicUrl = new URL(hostedUrl);
-    const chunkStore = openKeyedStore.mock.results[1]?.value;
-    if (!chunkStore) {
-      throw new Error("expected hosted media chunk store");
-    }
-    const chunkLookup = vi.spyOn(chunkStore, "lookup");
+  it.each([true, false])(
+    "hosts repeat GET/HEAD fetches on the exact webhook path (bulk: %s)",
+    async (bulkReads) => {
+      openKeyedStore = installRuntime(bulkReads);
+      const hostedUrl = await prepareHostedSmsMediaUrl({
+        account: createAccount(),
+        mediaUrl: "https://example.com/photo.png",
+      });
+      const publicUrl = new URL(hostedUrl);
+      const chunkStore = openKeyedStore.mock.results[1]?.value;
+      if (!chunkStore) {
+        throw new Error("expected hosted media chunk store");
+      }
+      const chunkReads = trackChunkReads(chunkStore);
 
-    expect(publicUrl.origin).toBe("https://gateway.example.com");
-    expect(publicUrl.pathname).toBe("/public/sms");
-    expect(publicUrl.searchParams.get("upstream-token")).toBe("keep");
-    expect(publicUrl.hash).toBe("");
-    const tokenEntry = [...publicUrl.searchParams.entries()].find(([key]) =>
-      key.startsWith("__openclaw_mms_token_"),
-    );
-    const id = tokenEntry?.[0].slice("__openclaw_mms_token_".length);
-    expect(id).toMatch(/^[a-f0-9]{24}$/u);
-    expect(publicUrl.searchParams.get(`__openclaw_mms_token_${id}`)).toMatch(/^[a-f0-9]{48}$/u);
+      expect(publicUrl.origin).toBe("https://gateway.example.com");
+      expect(publicUrl.pathname).toBe("/public/sms");
+      expect(publicUrl.searchParams.get("upstream-token")).toBe("keep");
+      expect(publicUrl.hash).toBe("");
+      const tokenEntry = [...publicUrl.searchParams.entries()].find(([key]) =>
+        key.startsWith("__openclaw_mms_token_"),
+      );
+      const id = tokenEntry?.[0].slice("__openclaw_mms_token_".length);
+      expect(id).toMatch(/^[a-f0-9]{24}$/u);
+      expect(publicUrl.searchParams.get(`__openclaw_mms_token_${id}`)).toMatch(/^[a-f0-9]{48}$/u);
 
-    const internalUrl = `/internal/sms${publicUrl.search}`;
-    const getResponse = createMockResponse();
-    await tryHandleHostedSmsMediaRequest(
-      { method: "GET", url: internalUrl } as never,
-      getResponse.res as never,
-    );
-    expect(getResponse.res.statusCode).toBe(200);
-    expect(getResponse.headers.get("Content-Type")).toBe("image/png");
-    expect(getResponse.headers.get("Content-Disposition")).toMatch(
-      /^inline; filename="mms-[a-f0-9]{10}\.png"$/u,
-    );
-    expect(getResponse.res.end).toHaveBeenCalledWith(Buffer.from("image-bytes"));
-    expect(chunkLookup).toHaveBeenCalled();
+      const internalUrl = `/internal/sms${publicUrl.search}`;
+      const getResponse = createMockResponse();
+      await tryHandleHostedSmsMediaRequest(
+        { method: "GET", url: internalUrl } as never,
+        getResponse.res as never,
+      );
+      expect(getResponse.res.statusCode).toBe(200);
+      expect(getResponse.headers.get("Content-Type")).toBe("image/png");
+      expect(getResponse.headers.get("Content-Disposition")).toMatch(
+        /^inline; filename="mms-[a-f0-9]{10}\.png"$/u,
+      );
+      expect(getResponse.res.end).toHaveBeenCalledWith(Buffer.from("image-bytes"));
+      expect(chunkReads()).toBeGreaterThan(0);
 
-    chunkLookup.mockClear();
-    const headResponse = createMockResponse();
-    await tryHandleHostedSmsMediaRequest(
-      { method: "HEAD", url: internalUrl } as never,
-      headResponse.res as never,
-    );
-    expect(headResponse.res.statusCode).toBe(200);
-    expect(headResponse.res.end).toHaveBeenCalledWith(undefined);
-    expect(chunkLookup).not.toHaveBeenCalled();
+      const readsBeforeHead = chunkReads();
+      const headResponse = createMockResponse();
+      await tryHandleHostedSmsMediaRequest(
+        { method: "HEAD", url: internalUrl } as never,
+        headResponse.res as never,
+      );
+      expect(headResponse.res.statusCode).toBe(200);
+      expect(headResponse.res.end).toHaveBeenCalledWith(undefined);
+      expect(chunkReads()).toBe(readsBeforeHead);
 
-    const repeatedGetResponse = createMockResponse();
-    await tryHandleHostedSmsMediaRequest(
-      { method: "GET", url: internalUrl } as never,
-      repeatedGetResponse.res as never,
-    );
-    expect(repeatedGetResponse.res.statusCode).toBe(200);
-    expect(chunkLookup).toHaveBeenCalled();
-  });
+      const repeatedGetResponse = createMockResponse();
+      await tryHandleHostedSmsMediaRequest(
+        { method: "GET", url: internalUrl } as never,
+        repeatedGetResponse.res as never,
+      );
+      expect(repeatedGetResponse.res.statusCode).toBe(200);
+      expect(chunkReads()).toBeGreaterThan(readsBeforeHead);
+    },
+  );
 
   it.each(TWILIO_MMS_FILENAME_CASES)(
     "serves %s with Twilio's required %s filename",
@@ -358,7 +371,7 @@ describe("SMS outbound hosted media", () => {
     if (!chunkStore) {
       throw new Error("expected hosted media chunk store");
     }
-    const chunkLookup = vi.spyOn(chunkStore, "lookup");
+    const chunkReads = trackChunkReads(chunkStore);
     const response = createMockResponse();
 
     await tryHandleHostedSmsMediaRequest(
@@ -371,7 +384,7 @@ describe("SMS outbound hosted media", () => {
 
     expect(response.res.statusCode).toBe(401);
     expect(response.res.end).toHaveBeenCalledWith("Unauthorized");
-    expect(chunkLookup).not.toHaveBeenCalled();
+    expect(chunkReads()).toBe(0);
   });
 
   it("rejects multiple hosted-media token candidates before reading state", async () => {
@@ -411,12 +424,12 @@ describe("SMS outbound hosted media", () => {
       throw new Error("expected hosted media stores");
     }
     const originalLookup = metadataStore.lookup.bind(metadataStore);
-    let metadataLookups = 0;
-    vi.spyOn(metadataStore, "lookup").mockImplementation(async (key) => {
-      metadataLookups += 1;
-      return metadataLookups === 1 ? await originalLookup(key) : undefined;
+    vi.spyOn(metadataStore, "lookup").mockImplementationOnce(async (key) => {
+      const metadata = await originalLookup(key);
+      await metadataStore.delete(key);
+      return metadata;
     });
-    const chunkLookup = vi.spyOn(chunkStore, "lookup");
+    const chunkReads = trackChunkReads(chunkStore);
     const response = createMockResponse();
 
     await tryHandleHostedSmsMediaRequest(
@@ -429,7 +442,7 @@ describe("SMS outbound hosted media", () => {
 
     expect(response.res.statusCode).toBe(404);
     expect(response.res.end).toHaveBeenCalledWith("Not Found");
-    expect(chunkLookup).not.toHaveBeenCalled();
+    expect(chunkReads()).toBe(0);
   });
 
   it("ignores tokenless webhook requests before enforcing media methods", async () => {
@@ -596,6 +609,7 @@ describe("SMS outbound hosted media", () => {
 
 describe("SMS inbound MMS materialization", () => {
   beforeEach(() => {
+    assertSmsCredentialOwnerAvailable.mockReset();
     unlinkIfExistsMock.mockClear();
   });
 
@@ -926,25 +940,34 @@ describe("SMS inbound MMS materialization", () => {
     expect(saveRemoteMedia).not.toHaveBeenCalled();
   });
 
-  it.each(["claim cancellation", "retryable provider failure"])(
+  it.each(["claim cancellation", "retryable provider failure", "credential loss"])(
     "cleans already-saved files when a later attachment ends with %s",
     async (failureKind) => {
       const abortController = new AbortController();
       const abortReason =
         failureKind === "claim cancellation"
           ? new Error("SMS ingress claim superseded")
-          : new MediaFetchError("http_error", "Twilio temporarily unavailable", { status: 503 });
+          : failureKind === "credential loss"
+            ? new Error("SMS credential owner became unavailable")
+            : new MediaFetchError("http_error", "Twilio temporarily unavailable", { status: 503 });
+      if (failureKind === "credential loss") {
+        assertSmsCredentialOwnerAvailable
+          .mockImplementationOnce(() => {})
+          .mockImplementationOnce(() => {
+            throw abortReason;
+          });
+      }
       const saveRemoteMedia = vi
         .fn()
-        .mockResolvedValueOnce({
-          path: "/tmp/first.jpg",
-          size: 128,
-          contentType: "image/jpeg",
+        .mockImplementationOnce(async (options) => {
+          options.beforeRequest?.();
+          return { path: "/tmp/first.jpg", size: 128, contentType: "image/jpeg" };
         })
-        .mockImplementationOnce(async () => {
+        .mockImplementationOnce(async (options) => {
           if (failureKind === "claim cancellation") {
             abortController.abort(abortReason);
           }
+          options.beforeRequest?.();
           throw abortReason;
         });
 

@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { makeCronJob } from "../../../cron/delivery.test-helpers.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
 import { loadCronRows, replaceCronRows } from "../../../cron/store/row-codec.js";
-import { writeConfigMachineState } from "../../../state/config-machine-state.js";
+import { writeConfigMachineState } from "../../../state/config-machine-state-write.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -547,10 +547,8 @@ describe("default role materialization authored writes", () => {
       jobs: [makeCronJob({ id: "corrupt" })],
     });
     database
-      .prepare(
-        "UPDATE cron_jobs SET job_json = ?, schedule_kind = ? WHERE store_key = ? AND job_id = ?",
-      )
-      .run("not json", "broken", cronStoreKey(storePath), "corrupt");
+      .prepare("UPDATE cron_jobs SET job_json = ? WHERE store_key = ? AND job_id = ?")
+      .run("not json", cronStoreKey(storePath), "corrupt");
     const io = createConfigIO({
       configPath,
       env,

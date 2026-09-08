@@ -50,13 +50,14 @@ describe("mock OpenAI Responses output item slots", () => {
     expect(events.map((event) => event.type)).toEqual([
       "response.created",
       "response.output_item.added",
+      "response.content_part.added",
       "response.output_text.delta",
       "response.failed",
     ]);
     expect(events[1]).toMatchObject({
       item: { type: "message", role: "assistant", status: "in_progress" },
     });
-    expect(events[2]).toMatchObject({
+    expect(events[3]).toMatchObject({
       type: "response.output_text.delta",
       delta: marker,
     });

@@ -2,6 +2,8 @@
 // The row builders combine scan surfaces with health/session summaries while keeping rendering elsewhere.
 
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveIsNixMode } from "../config/paths.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { StatusSummary } from "../status/types.js";
@@ -31,13 +33,29 @@ import {
 } from "./status.command-sections.js";
 import type { MemoryPluginStatus, MemoryStatusSnapshot } from "./status.scan.shared.js";
 
-type StatusDegradationSummary = Pick<StatusSummary, "degradedSecretOwners" | "degradedPlugins">;
+type StatusDegradationSummary = Pick<
+  StatusSummary,
+  "degradedSecretOwners" | "degradedPlugins" | "startupMigrationWarning" | "secretEgressProxy"
+>;
 
 function buildStatusDegradationRows(
   summary: StatusDegradationSummary,
   decorate = (value: string) => value,
 ) {
   const rows: Array<{ Item: string; Value: string }> = [];
+  if (summary.startupMigrationWarning) {
+    rows.push({ Item: "Startup migrations", Value: decorate(summary.startupMigrationWarning) });
+  }
+  if (summary.secretEgressProxy) {
+    const status = summary.secretEgressProxy;
+    rows.push({
+      Item: "Secret egress proxy",
+      Value:
+        status.state === "ready"
+          ? `ready · CA expires ${status.caExpiresAt}`
+          : decorate(status.message ?? "Certificate preparation unavailable"),
+    });
+  }
   const secretOwners = summary.degradedSecretOwners ?? [];
   if (secretOwners.length > 0) {
     rows.push({
@@ -86,7 +104,7 @@ export function buildStatusCommandOverviewRows(
     formatTimeAgo: (ageMs: number) => string;
     formatKTokens: (value: number) => string;
     updateValue?: string;
-    updateRestartValue?: string | null;
+    updateRows?: Array<{ Item: string; Value: string }>;
   } & StatusMemoryStateResolvers,
 ) {
   const agentsValue = buildStatusAgentsValue({
@@ -131,6 +149,18 @@ export function buildStatusCommandOverviewRows(
     ok: params.ok,
     warn: params.warn,
   });
+  const updatesDisabled =
+    params.surface.cfg.update?.checkOnStart === false ||
+    isTruthyEnvValue(params.env.OPENCLAW_NO_AUTO_UPDATE) ||
+    resolveIsNixMode(params.env);
+  const doNotTrack = params.env.DO_NOT_TRACK?.trim().toLowerCase();
+  const telemetryValue = updatesDisabled
+    ? params.muted("disabled · update checks off")
+    : doNotTrack === "1" || doNotTrack === "true"
+      ? params.muted("disabled (DO_NOT_TRACK)")
+      : params.surface.cfg.telemetry?.enabled === true
+        ? params.ok("enabled · anonymous feature stats")
+        : params.muted("disabled · update checks only");
   const hostDesktop = params.summary.hostDesktop ?? {
     enabled: false,
     state: "disabled" as const,
@@ -158,9 +188,8 @@ export function buildStatusCommandOverviewRows(
     updateValue: params.updateValue,
     agentsValue,
     suffixRows: [
-      ...(params.updateRestartValue
-        ? [{ Item: "Update restart", Value: params.updateRestartValue }]
-        : []),
+      ...(params.updateRows ?? []),
+      { Item: "Telemetry", Value: telemetryValue },
       { Item: "Memory", Value: memoryValue },
       { Item: "Host desktop", Value: hostDesktopValue },
       ...buildStatusDegradationRows(params.summary, params.warn),
@@ -198,7 +227,7 @@ export function buildStatusAllOverviewRows(params: {
   osLabel: string;
   configPath: string;
   secretDiagnosticsCount: number;
-  updateRestartValue?: string | null;
+  updateRows?: Array<{ Item: string; Value: string }>;
   agentStatus: {
     bootstrapPendingCount: number;
     totalSessions: number;
@@ -222,9 +251,7 @@ export function buildStatusAllOverviewRows(params: {
       { Item: "Config", Value: params.configPath },
     ],
     middleRows: [
-      ...(params.updateRestartValue
-        ? [{ Item: "Update restart", Value: params.updateRestartValue }]
-        : []),
+      ...(params.updateRows ?? []),
       { Item: "Security", Value: `Run: ${formatCliCommand("openclaw security audit --deep")}` },
       ...buildStatusDegradationRows(params.summary),
     ],

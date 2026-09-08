@@ -11,14 +11,25 @@ const BuzzGroupConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
     requireMention: z.boolean().optional(),
+    groupPolicy: GroupPolicySchema.optional(),
+    groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   })
   .strict();
 
-const RawBuzzConfigSchema = z
+export const BuzzAccountIdSchema = z
+  .string()
+  .regex(
+    /^(?!(?:constructor|prototype)$)[a-z0-9][a-z0-9_-]{0,63}$/u,
+    "Buzz account IDs must be canonical lowercase account keys",
+  );
+
+const BuzzAccountConfigSchema = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
+    responsePrefix: z.string().optional(),
+    replyToMode: z.enum(["off", "all"]).optional(),
     markdown: MarkdownConfigSchema,
     relayUrl: z
       .string()
@@ -27,7 +38,7 @@ const RawBuzzConfigSchema = z
       .optional(),
     privateKey: buildSecretInputSchema().optional(),
     authTag: buildSecretInputSchema().optional(),
-    groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    groupPolicy: GroupPolicySchema.optional(),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groups: z
       .record(
@@ -35,9 +46,16 @@ const RawBuzzConfigSchema = z
         BuzzGroupConfigSchema,
       )
       .optional(),
+    historyLimit: z.number().int().min(0).max(20).optional(),
     defaultTo: z.string().optional(),
   })
   .strict();
+
+const RawBuzzConfigSchema = BuzzAccountConfigSchema.extend({
+  groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+  accounts: z.record(BuzzAccountIdSchema, BuzzAccountConfigSchema).optional(),
+  defaultAccount: BuzzAccountIdSchema.optional(),
+});
 
 export const BuzzConfigSchema = buildChannelConfigSchema(RawBuzzConfigSchema);
 export type BuzzConfigInput = z.input<typeof RawBuzzConfigSchema>;

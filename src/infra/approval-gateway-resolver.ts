@@ -79,7 +79,10 @@ export async function resolveApprovalOverGateway(
 ): Promise<ApprovalResolveResult | void> {
   const approvalKind = (params as { approvalKind?: unknown }).approvalKind;
   const resolveMethod = (params as { resolveMethod?: unknown }).resolveMethod;
-  const canonicalKind = approvalKind === "exec" || approvalKind === "plugin" ? approvalKind : null;
+  const canonicalKind =
+    approvalKind === "exec" || approvalKind === "plugin" || approvalKind === "system-agent"
+      ? approvalKind
+      : null;
   const legacyMethod =
     resolveMethod === "exec" || resolveMethod === "plugin" ? resolveMethod : null;
   const hasCanonicalKind = canonicalKind !== null;

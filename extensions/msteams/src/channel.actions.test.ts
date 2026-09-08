@@ -20,6 +20,7 @@ const {
   sendAdaptiveCardMSTeamsMock,
   sendMessageMSTeamsMock,
   unpinMessageMSTeamsMock,
+  unreactMessageMSTeamsMock,
 } = vi.hoisted(() => ({
   addParticipantMSTeamsMock: vi.fn(),
   editMessageMSTeamsMock: vi.fn(),
@@ -37,6 +38,7 @@ const {
   sendAdaptiveCardMSTeamsMock: vi.fn(),
   sendMessageMSTeamsMock: vi.fn(),
   unpinMessageMSTeamsMock: vi.fn(),
+  unreactMessageMSTeamsMock: vi.fn(),
 }));
 vi.mock("./channel.runtime.js", () => ({
   msTeamsChannelRuntime: {
@@ -56,6 +58,7 @@ vi.mock("./channel.runtime.js", () => ({
     sendAdaptiveCardMSTeams: sendAdaptiveCardMSTeamsMock,
     sendMessageMSTeams: sendMessageMSTeamsMock,
     unpinMessageMSTeams: unpinMessageMSTeamsMock,
+    unreactMessageMSTeams: unreactMessageMSTeamsMock,
   },
 }));
 
@@ -76,6 +79,7 @@ const actionMocks = [
   sendAdaptiveCardMSTeamsMock,
   sendMessageMSTeamsMock,
   unpinMessageMSTeamsMock,
+  unreactMessageMSTeamsMock,
 ];
 const currentChannelId = "conversation:19:ctx@thread.tacv2";
 const graphTeamId = "11111111-1111-1111-1111-111111111111";
@@ -1090,30 +1094,43 @@ describe("msteamsPlugin message actions", () => {
     expect(properties).toHaveProperty("pinnedMessageId");
   });
 
-  it.each([
-    {
-      chatType: "channel",
-      conversationTarget: "conversation:19:c@thread.tacv2",
-      currentMessagingTarget: "team-1/19:c@thread.tacv2",
-      expectedTarget: "team-1/19:c@thread.tacv2",
-    },
-    {
-      chatType: "group",
-      conversationTarget: "conversation:19:g@thread.v2",
-      currentMessagingTarget: undefined,
-      expectedTarget: "conversation:19:g@thread.v2",
-    },
-    {
-      chatType: "direct",
-      conversationTarget: "conversation:a:dm",
-      currentMessagingTarget: undefined,
-      expectedTarget: "conversation:a:dm",
-    },
-  ] as const)(
-    "routes agent react actions and preserves their result shape for $chatType turns",
-    async ({ chatType, conversationTarget, currentMessagingTarget, expectedTarget }) => {
+  it.each(
+    (
+      [
+        {
+          chatType: "channel",
+          conversationTarget: "conversation:19:c@thread.tacv2",
+          currentMessagingTarget: "team-1/19:c@thread.tacv2",
+          expectedTarget: "team-1/19:c@thread.tacv2",
+        },
+        {
+          chatType: "group",
+          conversationTarget: "conversation:19:g@thread.v2",
+          currentMessagingTarget: undefined,
+          expectedTarget: "conversation:19:g@thread.v2",
+        },
+        {
+          chatType: "direct",
+          conversationTarget: "conversation:a:dm",
+          currentMessagingTarget: undefined,
+          expectedTarget: "conversation:a:dm",
+        },
+      ] as const
+    ).flatMap((conversation) =>
+      [false, true].map((remove) => ({
+        conversation,
+        chatType: conversation.chatType,
+        operation: remove ? "remove" : "add",
+        remove,
+      })),
+    ),
+  )(
+    "routes agent reaction $operation actions and preserves their result shape for $chatType turns",
+    async ({ conversation, remove }) => {
+      const { chatType, conversationTarget, currentMessagingTarget, expectedTarget } = conversation;
+      const resultDetails = { ...(remove ? { removed: true } : {}), reactionType };
       await expectSuccessfulAction({
-        mockFn: reactMessageMSTeamsMock,
+        mockFn: remove ? unreactMessageMSTeamsMock : reactMessageMSTeamsMock,
         mockResult: { ok: true },
         action: "react",
         cfg: unrestrictedReadCfg,
@@ -1123,6 +1140,7 @@ describe("msteamsPlugin message actions", () => {
           ...(chatType === "channel" ? { target: conversationTarget } : {}),
           messageId: padded("msg-react"),
           emoji: padded(reactionType),
+          ...(remove ? { remove: true } : {}),
         },
         toolContext: {
           currentChannelProvider: "msteams",
@@ -1135,11 +1153,11 @@ describe("msteamsPlugin message actions", () => {
           messageId: "msg-react",
           reactionType,
         },
-        details: okMSTeamsActionDetails("react", { reactionType }),
+        details: okMSTeamsActionDetails("react", resultDetails),
         contentDetails: {
           channel: "msteams",
           action: "react",
-          reactionType,
+          ...resultDetails,
           ok: true,
         },
       });
@@ -1258,20 +1276,24 @@ describe("msteamsPlugin message actions", () => {
     });
   });
 
-  it("reports the allowed reaction types when emoji is missing", async () => {
-    await expectActionParamError(
-      "react",
-      {
-        to: targetChannelId,
-        messageId: "msg-4",
-      },
-      reactMissingEmojiError,
-      {
-        error: reactMissingEmojiDetail,
-        validTypes: reactionTypes,
-      },
-    );
-  });
+  it.each([false, true])(
+    "reports the allowed reaction types when emoji is missing (remove=%s)",
+    async (remove) => {
+      await expectActionParamError(
+        "react",
+        {
+          to: targetChannelId,
+          messageId: "msg-4",
+          ...(remove ? { remove: true } : {}),
+        },
+        reactMissingEmojiError,
+        {
+          error: reactMissingEmojiDetail,
+          validTypes: reactionTypes,
+        },
+      );
+    },
+  );
 
   it("requires a non-empty search query after trimming", async () => {
     await expectActionError(
@@ -1341,6 +1363,11 @@ describe("msteamsPlugin message actions", () => {
       action: "react",
       params: { to: graphChannelTarget, messageId: "msg-1", emoji: "like" },
       runtimeMock: reactMessageMSTeamsMock,
+    },
+    {
+      action: "react",
+      params: { to: graphChannelTarget, messageId: "msg-1", emoji: "like", remove: true },
+      runtimeMock: unreactMessageMSTeamsMock,
     },
   ])("rejects a blocked $action target before the provider operation", async (testCase) => {
     await expect(

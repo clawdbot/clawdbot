@@ -107,6 +107,27 @@ describe("widget export", () => {
     await expect(result).resolves.toBe("png");
   });
 
+  it("downloads retained authenticated HTML when an isolated widget cannot snapshot", async () => {
+    vi.useFakeTimers();
+    const frame = createWidgetFrame();
+    frame.src = "https://sandbox.example/mcp-app-sandbox";
+    const fetchDocument = vi.fn();
+    const download = vi.fn();
+    const createUrl = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:widget-source");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    const result = exportWidget("download", frame, "Isolated widget", {
+      timeoutMs: 10,
+      documentHtml: "<p>Authenticated document</p>",
+      fetch: fetchDocument,
+      download,
+    });
+    await vi.advanceTimersByTimeAsync(10);
+    await expect(result).resolves.toBe("html");
+    expect(fetchDocument).not.toHaveBeenCalled();
+    expect(createUrl.mock.calls[0]?.[0]).toMatchObject({ size: 29, type: "text/html" });
+    expect(download).toHaveBeenCalledWith("blob:widget-source", "Isolated-widget.html");
+  });
+
   it("does not use legacy fallbacks for an explicit bridge error", async () => {
     const frame = createWidgetFrame();
     const fetchDocument = vi.fn();
@@ -120,21 +141,18 @@ describe("widget export", () => {
     expect(fetchDocument).not.toHaveBeenCalled();
   });
 
-  it("sanitizes PNG download filenames and falls back to widget", async () => {
+  it.each([
+    ["  Quarterly / status: Q3?  ", "Quarterly-status-Q3.png"],
+    ["... <> ", "widget.png"],
+    [`${"a".repeat(119)}📊`, `${"a".repeat(119)}.png`],
+  ])("sanitizes PNG download filename %s", async (title, filename) => {
     const frame = createWidgetFrame();
     const download = vi.fn();
-    await exportWidget("download", frame, "  Quarterly / status: Q3?  ", {
+    await exportWidget("download", frame, title, {
       requestSnapshot: () => Promise.resolve(PNG_DATA_URL),
       download,
     });
-    await exportWidget("download", frame, "... <> ", {
-      requestSnapshot: () => Promise.resolve(PNG_DATA_URL),
-      download,
-    });
-    expect(download.mock.calls).toEqual([
-      [PNG_DATA_URL, "Quarterly-status-Q3.png"],
-      [PNG_DATA_URL, "widget.png"],
-    ]);
+    expect(download.mock.calls).toEqual([[PNG_DATA_URL, filename]]);
   });
 
   it("rejects non-PNG and oversized snapshot replies", async () => {

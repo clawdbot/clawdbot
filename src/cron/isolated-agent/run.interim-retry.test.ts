@@ -40,12 +40,12 @@ function requireEmbeddedAgentCall(index: number): {
 }
 
 function requireDeliveryRequest(): {
-  skipHeartbeatDelivery?: boolean;
+  skipDelivery?: string;
   deliveryPayloads?: unknown;
 } {
   const request = dispatchCronDeliveryMock.mock.calls[0]?.[0] as
     | {
-        skipHeartbeatDelivery?: boolean;
+        skipDelivery?: string;
         deliveryPayloads?: unknown;
       }
     | undefined;
@@ -168,7 +168,7 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
 
     expect(result.delivered).toBe(true);
     expect(requireDeliveryRequest()).toMatchObject({
-      skipHeartbeatDelivery: false,
+      skipDelivery: undefined,
       deliveryPayloads: [{ text: finalResult }],
     });
   });
@@ -228,7 +228,7 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
     expect(result.status).toBe("error");
     expect(result.error).toBe("SYSTEM_RUN_DENIED: approval required");
     const deliveryRequest = requireDeliveryRequest();
-    expect(deliveryRequest.skipHeartbeatDelivery).toBe(false);
+    expect(deliveryRequest.skipDelivery).toBeUndefined();
     expect(deliveryRequest.deliveryPayloads).toEqual([
       { text: "SYSTEM_RUN_DENIED: approval required", isError: true },
     ]);

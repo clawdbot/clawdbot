@@ -9,7 +9,6 @@
       "hasSubcommands": true
     }
   ],
-  "icon": "https://res.cdn.office.net/files/fabric-cdn-prod_20230815.001/assets/brand-icons/product/svg/teams_48x1.svg",
   "enabledByDefault": true,
   "commandAliases": [{ "name": "teamsmeetings" }],
   "activation": {

@@ -54,6 +54,7 @@ vi.mock("ws", () => ({
 type FakeWebSocketInstance = InstanceType<typeof FakeWebSocket>;
 
 async function waitForFakeSocket(index = 0): Promise<FakeWebSocketInstance> {
+  await vi.dynamicImportSettled();
   let socket: FakeWebSocketInstance | undefined;
   await vi.waitFor(() => {
     socket = FakeWebSocket.instances[index];
@@ -201,7 +202,7 @@ describe("OpenAI realtime transcription terminal history bounds", () => {
     session.close();
   });
 
-  it("does not re-admit a terminal item after the settled frontier fills", async () => {
+  it("preserves terminal history at capacity, fails on overflow, and reconnects", async () => {
     const onError = vi.fn();
     const onPartial = vi.fn();
     const transcripts: string[] = [];
@@ -212,90 +213,75 @@ describe("OpenAI realtime transcription terminal history bounds", () => {
       onPartial,
       onTranscript: (transcript) => transcripts.push(transcript),
     });
-    const socket = await connectFakeSession(session);
+    try {
+      const socket = await connectFakeSession(session);
 
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "oldest",
-      transcript: "first",
-    });
-    for (let index = 0; index < 4095; index += 1) {
       emitJson(socket, {
         type: "conversation.item.input_audio_transcription.completed",
-        item_id: `settled-${index}`,
-        transcript: "",
+        item_id: "oldest",
+        transcript: "first",
       });
-    }
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "oldest",
-      transcript: "duplicate",
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.delta",
-      item_id: "oldest",
-      delta: "late partial",
-    });
-
-    expect(transcripts).toEqual(["first"]);
-    expect(onPartial).not.toHaveBeenCalled();
-    expect(onError).not.toHaveBeenCalled();
-    expect(session.isConnected()).toBe(true);
-    session.close();
-  });
-
-  it("fails visibly instead of evicting terminal item history", async () => {
-    const onError = vi.fn();
-    const onTranscript = vi.fn();
-    const provider = buildOpenAIRealtimeTranscriptionProvider();
-    const session = provider.createSession({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onError,
-      onTranscript,
-    });
-    const socket = await connectFakeSession(session);
-
-    for (let index = 0; index < 4096; index += 1) {
+      for (let index = 0; index < 4095; index += 1) {
+        emitJson(socket, {
+          type: "conversation.item.input_audio_transcription.completed",
+          item_id: `settled-${index}`,
+          transcript: "",
+        });
+      }
       emitJson(socket, {
         type: "conversation.item.input_audio_transcription.completed",
-        item_id: `settled-${index}`,
-        transcript: "",
+        item_id: "oldest",
+        transcript: "duplicate",
       });
+      emitJson(socket, {
+        type: "conversation.item.input_audio_transcription.delta",
+        item_id: "oldest",
+        delta: "late partial",
+      });
+
+      expect(transcripts).toEqual(["first"]);
+      expect(onPartial).not.toHaveBeenCalled();
+      expect(onError).not.toHaveBeenCalled();
+      expect(session.isConnected()).toBe(true);
+
+      emitJson(socket, {
+        type: "input_audio_buffer.committed",
+        item_id: "overflow-item",
+        previous_item_id: null,
+      });
+      emitJson(socket, {
+        type: "conversation.item.input_audio_transcription.failed",
+        item_id: "overflow-item",
+        error: { message: "provider failure" },
+      });
+
+      expect(onError).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          message: "OpenAI realtime transcription exceeded the terminal item history limit",
+        }),
+      );
+      expect(transcripts).toEqual(["first"]);
+      expect(session.isConnected()).toBe(false);
+
+      const reconnecting = session.connect();
+      const replacementSocket = await waitForFakeSocket(1);
+      replacementSocket.readyState = FakeWebSocket.OPEN;
+      replacementSocket.emit("open");
+      emitJson(replacementSocket, { type: "session.updated" });
+      await reconnecting;
+      emitJson(replacementSocket, {
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "replacement-item",
+        transcript: "replacement transcript",
+      });
+
+      expect(transcripts).toEqual(["first", "replacement transcript"]);
+      expect(onError).toHaveBeenCalledTimes(1);
+    } finally {
+      session.close();
+      // Close the fake peer too so the session releases its graceful-close timer.
+      FakeWebSocket.instances.at(-1)?.close();
     }
-    emitJson(socket, {
-      type: "input_audio_buffer.committed",
-      item_id: "overflow-item",
-      previous_item_id: null,
-    });
-    emitJson(socket, {
-      type: "conversation.item.input_audio_transcription.failed",
-      item_id: "overflow-item",
-      error: { message: "provider failure" },
-    });
-
-    expect(onError).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        message: "OpenAI realtime transcription exceeded the terminal item history limit",
-      }),
-    );
-    expect(onTranscript).not.toHaveBeenCalled();
-    expect(session.isConnected()).toBe(false);
-
-    const reconnecting = session.connect();
-    const replacementSocket = await waitForFakeSocket(1);
-    replacementSocket.readyState = FakeWebSocket.OPEN;
-    replacementSocket.emit("open");
-    emitJson(replacementSocket, { type: "session.updated" });
-    await reconnecting;
-    emitJson(replacementSocket, {
-      type: "conversation.item.input_audio_transcription.completed",
-      item_id: "replacement-item",
-      transcript: "replacement transcript",
-    });
-
-    expect(onTranscript).toHaveBeenCalledExactlyOnceWith("replacement transcript");
-    expect(onError).toHaveBeenCalledTimes(1);
-    session.close();
   });
 
   it("fails visibly when terminal item identities exceed 256 KiB", async () => {

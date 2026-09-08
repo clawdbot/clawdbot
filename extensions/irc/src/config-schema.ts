@@ -5,6 +5,7 @@ import {
   GroupPolicySchema,
   MarkdownConfigSchema,
   ReplyRuntimeConfigSchemaShape,
+  ReplyToModeSchema,
   buildChannelConfigSchema,
   buildMultiAccountChannelSchema,
   requireOpenAllowFrom,
@@ -32,11 +33,22 @@ const IrcNickServSchema = z
     }
   });
 
+// Mirrors the core channel health-monitor leaf; the gateway supervisor reads
+// channels.irc.healthMonitor.enabled for any started account.
+const IrcHealthMonitorSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 const IrcAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
+    healthMonitor: IrcHealthMonitorSchema,
+    replyToMode: ReplyToModeSchema.optional(),
     dangerouslyAllowNameMatching: z.boolean().optional(),
     host: z.string().optional(),
     port: z.number().int().min(1).max(65535).optional(),
@@ -53,7 +65,6 @@ const IrcAccountSchemaBase = z
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groups: z.record(z.string(), ChannelGroupEntrySchema.optional()).optional(),
     channels: z.array(z.string()).optional(),
-    mentionPatterns: z.array(z.string()).optional(),
     markdown: MarkdownConfigSchema,
     ...ReplyRuntimeConfigSchemaShape,
   })

@@ -83,14 +83,14 @@ describe("tool terminal outcome observer", () => {
       toolName: "message",
       arguments: { action: "send", to: "channel:original" },
       outcome: "failure",
-      failure: { error: "timed out during execution" },
+      failure: { error: "timed out during execution", executionStarted: false },
     });
 
     expect(resolution).toMatchObject({
       executionStarted: true,
       executedArguments: { action: "send", to: "channel:adjusted" },
       sideEffectEvidence: true,
-      lastToolError: { mutatingAction: true },
+      lastToolError: { executionStarted: true, mutatingAction: true },
     });
   });
 
@@ -111,7 +111,86 @@ describe("tool terminal outcome observer", () => {
     expect(resolution).toMatchObject({
       executionStarted: false,
       sideEffectEvidence: false,
-      lastToolError: { mutatingAction: false },
+      lastToolError: { executionStarted: false, mutatingAction: false },
+    });
+  });
+
+  it.each([
+    {
+      name: "pre-execution rejection",
+      input: {
+        toolName: "message",
+        arguments: { action: "send" },
+        executionStarted: false,
+        outcome: "failure",
+        failure: { error: "blocked" },
+      },
+      state: "uncertain",
+    },
+    {
+      name: "completed read",
+      input: { toolName: "message", arguments: { action: "read" }, outcome: "success" },
+      state: "read_completed",
+    },
+    {
+      name: "failed read",
+      input: {
+        toolName: "message",
+        arguments: { action: "read" },
+        outcome: "failure",
+        failure: { error: "read failed" },
+      },
+      state: "failed_no_effect",
+    },
+    {
+      name: "completed computer observation",
+      input: { toolName: "computer", arguments: { action: "list_windows" }, outcome: "success" },
+      state: "read_completed",
+    },
+    {
+      name: "failed computer observation",
+      input: {
+        toolName: "computer",
+        arguments: { action: "get_cursor_position" },
+        outcome: "failure",
+        failure: { error: "observation unavailable" },
+      },
+      state: "failed_no_effect",
+    },
+    {
+      name: "owner-declared replay-safe failure",
+      input: {
+        toolName: "plugin_read",
+        arguments: {},
+        replaySafe: true,
+        outcome: "failure",
+        failure: { error: "read failed" },
+      },
+      state: "failed_no_effect",
+    },
+    {
+      name: "completed mutation",
+      input: { toolName: "message", arguments: { action: "send" }, outcome: "success" },
+      state: "mutation_committed",
+    },
+    {
+      name: "completed unknown operation",
+      input: { toolName: "plugin_unknown", arguments: {}, outcome: "success" },
+      state: "uncertain",
+    },
+    {
+      name: "failed mutation",
+      input: {
+        toolName: "message",
+        arguments: { action: "send" },
+        outcome: "failure",
+        failure: { error: "send failed" },
+      },
+      state: "uncertain",
+    },
+  ] as const)("records a host-owned effect receipt for $name", ({ input, state }) => {
+    expect(createToolTerminalObserver("run-effect-receipt")(input).effectReceipt).toEqual({
+      state,
     });
   });
 

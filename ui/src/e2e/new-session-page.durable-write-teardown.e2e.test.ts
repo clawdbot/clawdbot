@@ -2,9 +2,12 @@ import { Buffer } from "node:buffer";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
+  controlUiSessionPath,
   createNewSessionPageE2eSuite,
   installMockGateway,
+  navigateInApp,
   waitForCommittedNewSessionDraft,
 } from "./new-session-page.test-support.ts";
 
@@ -73,11 +76,7 @@ async function rawDraftMatches(
 
 suite.define(() => {
   it("coalesces a burst of near-limit attachment draft mutations into one write", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     try {
       const page = await context.newPage();
       await page.addInitScript(() => {
@@ -130,11 +129,7 @@ suite.define(() => {
   });
 
   it("starts an attachment write while an earlier text write is still pending", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     try {
       const text = "keep the attachment added during the pending text write";
       const fileName = "favicon-32.png";
@@ -241,6 +236,46 @@ suite.define(() => {
         .poll(() => restoredPage.locator(".new-session-page__message").inputValue())
         .toBe(text);
       await restoredPage.getByRole("button", { name: `Open image ${fileName}` }).waitFor();
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("isolates route drafts and retires incognito and submitted drafts", async () => {
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
+    try {
+      const page = await context.newPage();
+      await installMockGateway(page, {
+        methodResponses: {
+          "sessions.create": { key: "agent:main:retired-draft", runStarted: true },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}new?agent=main`);
+      const message = page.locator(".new-session-page__message");
+      await message.fill("main route draft");
+      await navigateInApp(page, "new-session", "?agent=writer");
+      await expect.poll(() => message.inputValue()).toBe("");
+      await message.fill("writer route draft");
+      await navigateInApp(page, "new-session", "?agent=main");
+      await expect.poll(() => message.inputValue()).toBe("main route draft");
+
+      await page.getByRole("switch", { name: "Incognito" }).click();
+      await waitForCommittedNewSessionDraft(page, null, 0);
+      await page.reload();
+      await expect.poll(() => message.inputValue()).toBe("");
+      await navigateInApp(page, "new-session", "?agent=writer");
+      await expect.poll(() => message.inputValue()).toBe("writer route draft");
+      await page.getByRole("button", { name: "Start session" }).click();
+      await page.waitForURL(
+        (url) => url.pathname === controlUiSessionPath("agent:main:retired-draft"),
+      );
+      await page.close();
+      const restoredPage = await context.newPage();
+      await installMockGateway(restoredPage);
+      await restoredPage.goto(`${suite.server.baseUrl}new?agent=writer`);
+      await expect
+        .poll(() => restoredPage.locator(".new-session-page__message").inputValue())
+        .toBe("");
     } finally {
       await context.close();
     }

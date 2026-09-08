@@ -15,6 +15,20 @@ async function main() {
     process.env.OPENAI_API_KEY?.trim() ||
     process.env.OPENCLAW_MCP_CODE_MODE_OPENAI_API_KEY?.trim() ||
     "sk-docker-smoke-test";
+  const legacyMemoryConfig = process.env.OPENCLAW_FROZEN_TARGET_MCP_MEMORY_CONFIG_MODE === "agent";
+  const agentDefaults = {
+    heartbeat: {
+      every: "0m",
+    },
+    ...(legacyMemoryConfig
+      ? {
+          memorySearch: {
+            enabled: false,
+            sync: { onSearch: false, onSessionStart: false, watch: false },
+          },
+        }
+      : {}),
+  };
 
   const cfg = applyDockerOpenAiProviderConfig(
     {
@@ -32,16 +46,10 @@ async function main() {
       },
       agents: {
         defaults: {
-          heartbeat: {
-            every: "0m",
-          },
+          ...agentDefaults,
         },
       },
-      memory: {
-        search: {
-          enabled: false,
-        },
-      },
+      ...(legacyMemoryConfig ? {} : { memory: { search: { enabled: false } } }),
       plugins: {
         slots: {
           memory: "none",

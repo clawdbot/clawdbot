@@ -53,19 +53,23 @@ export function prepareQuestionReactionPayloadForDelivery(params: {
     return null;
   }
   const buttonBlocks = presentation.blocks.filter((block) => block.type === "buttons");
-  if (buttonBlocks.length !== 1) {
+  const buttonBlock = buttonBlocks[0];
+  if (!buttonBlock || buttonBlocks.length !== 1) {
     return null;
   }
-  const [buttonBlock] = buttonBlocks;
-  if (!buttonBlock || buttonBlock.buttons.length < 1 || buttonBlock.buttons.length > 4) {
+  const optionButtons = buttonBlock.buttons.filter(
+    (button) => button.action?.type === "question" && !("intent" in button.action),
+  );
+  if (optionButtons.length < 1 || optionButtons.length > 4) {
     return null;
   }
   const labels: string[] = [];
   const optionValues: string[] = [];
-  for (const button of buttonBlock.buttons) {
+  for (const button of optionButtons) {
     if (
       button.action?.type !== "question" ||
       button.action.questionId !== questionId ||
+      !("optionValue" in button.action) ||
       !button.action.optionValue
     ) {
       return null;
@@ -85,9 +89,14 @@ export function prepareQuestionReactionPayloadForDelivery(params: {
   const reactionHint = labels
     .map((label, index) => `${QUESTION_REACTION_EMOJIS[index]} ${label}`)
     .join("\n");
+  const hasCustomInput = buttonBlock.buttons.some((button) => {
+    const action = button.action;
+    return action?.type === "question" && "intent" in action && action.intent === "custom-input";
+  });
+  const customInputHint = hasCustomInput ? "\n\nOr reply with your own answer." : "";
   return {
     ...params.payload,
-    text: `${prompt}\n\nReact with:\n${reactionHint}`,
+    text: `${prompt}\n\nReact with:\n${reactionHint}${customInputHint}`,
     presentation: undefined,
     presentationTextMode: undefined,
     channelData: {

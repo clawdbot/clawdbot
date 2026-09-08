@@ -11,9 +11,21 @@ import {
   STRUCTURED_MEMORY_EMPTY_STATUSES,
   STRUCTURED_MEMORY_FAILURE_STATUSES,
   TIMEOUT_BOILERPLATE_PATTERNS,
+  type ActiveRecallResult,
   type ActiveMemoryPromptStyle,
   type ResolvedActiveRecallPluginConfig,
 } from "./types.js";
+
+type ActiveMemoryRecallOutcome =
+  | Extract<ActiveRecallResult["status"], "unavailable">
+  | "skipped-no-recall-intent";
+
+const ACTIVE_MEMORY_RECALL_OUTCOME_TEXT = {
+  "skipped-no-recall-intent":
+    "Active Memory intentionally skipped deep recall because this turn did not ask for past context.",
+  unavailable:
+    "Active Memory could not retrieve memory for this turn. Do not assume that no relevant memory exists.",
+} satisfies Record<ActiveMemoryRecallOutcome, string>;
 
 function buildPromptStyleLines(style: ActiveMemoryPromptStyle): string[] {
   switch (style) {
@@ -247,6 +259,17 @@ function isTimeoutBoilerplateSummary(value: string): boolean {
   return TIMEOUT_BOILERPLATE_PATTERNS.some((pattern) => pattern.test(value));
 }
 
+const ASSISTANT_CHITCHAT_PATTERNS = [
+  /^(?:hello|hi|hey|greetings)\b(?=.{0,120}(?:\b(?:help|assist|message|question|need)\b|\b(?:how|what)\s+(?:can|may|do)\b|cut off|come through))/i,
+  /^(?:hello|hi|hey|greetings)[!.,?]?\s*$/i,
+  /^(?:it\s+)?(?:seems?|looks?)\s+like\s+(?:your\s+)?(?:message|text|input|query).{0,40}(?:cut\s+off|incomplete|didn'?t\s+come\s+through|missing)/i,
+  /^(?:could|can|would|please).{0,20}(?:provide|share|give|clarify|elaborate|repeat).{0,20}(?:details|information|context)/i,
+  /^(?:(?:i(?:'?m|\s+am)\s+(?:here|happy|ready|glad)\s+to|i\s+can)\s+(?:help|assist)|(?:please\s+)?(?:let\s+me\s+know|tell\s+me|feel\s+free).{0,30}(?:help|assist|question|need))/i,
+  /^(?:您好|你好|嗨)(?:[！!？?，,\s]*$|(?=.{0,120}(?:帮助|请问|问题|需要|消息|请求)))/u,
+  /^(?:看起来|似乎).{0,20}(?:消息|信息).{0,20}(?:没有|未|截断|不完整)/u,
+  /^(?:当前模型|当前日期|当前时间|今天).{0,100}(?:帮助|请|如果)/u,
+];
+
 function normalizeActiveSummary(rawReply: string): string | null {
   const trimmed = rawReply.trim();
   if (normalizeNoRecallValue(trimmed)) {
@@ -256,7 +279,8 @@ function normalizeActiveSummary(rawReply: string): string | null {
   if (
     !singleLine ||
     normalizeNoRecallValue(singleLine) ||
-    isTimeoutBoilerplateSummary(singleLine)
+    isTimeoutBoilerplateSummary(singleLine) ||
+    ASSISTANT_CHITCHAT_PATTERNS.some((pattern) => pattern.test(singleLine))
   ) {
     return null;
   }
@@ -289,10 +313,7 @@ function truncateSummary(summary: string, maxSummaryChars: number): string {
   return `${bounded}${ellipsis}`;
 }
 
-function buildMetadata(summary: string | null): string | undefined {
-  if (!summary) {
-    return undefined;
-  }
+function buildMetadata(summary: string): string {
   return [
     `<${ACTIVE_MEMORY_PLUGIN_TAG}>`,
     escapeXml(summary),
@@ -300,17 +321,19 @@ function buildMetadata(summary: string | null): string | undefined {
   ].join("\n");
 }
 
-function buildPromptPrefix(summary: string | null): string | undefined {
+function buildPromptPrefix(summary: string): string {
   const metadata = buildMetadata(summary);
-  if (!metadata) {
-    return undefined;
-  }
   return [ACTIVE_MEMORY_CONTEXT_HEADER, metadata].join("\n");
+}
+
+function buildRecallOutcomePrefix(outcome: ActiveMemoryRecallOutcome): string {
+  return buildPromptPrefix(ACTIVE_MEMORY_RECALL_OUTCOME_TEXT[outcome]);
 }
 
 export {
   buildMetadata,
   buildPromptPrefix,
+  buildRecallOutcomePrefix,
   buildRecallPrompt,
   normalizeActiveSummary,
   readExplicitMemoryEvidence,

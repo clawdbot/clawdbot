@@ -3,7 +3,7 @@ import type { CodexAppServerClient } from "./client.js";
 import type { CodexServerNotification, RpcRequest } from "./protocol.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
-type ServerRequestHandler = (request: RpcRequest) => unknown;
+type ServerRequestHandler = (request: RpcRequest, signal: AbortSignal) => unknown;
 type NotificationHandler = (notification: CodexServerNotification) => Promise<void> | void;
 
 export function codexTestTurnIds(threadId = "thread-1", turnId = "turn-1") {
@@ -33,6 +33,7 @@ export function threadStartResult(threadId = "thread-1", cwd = "/tmp/openclaw-co
       status: { type: "idle" },
       path: null,
       cwd,
+      projectId: null,
       cliVersion: CODEX_APP_SERVER_VERSION,
       source: "unknown",
       agentNickname: null,
@@ -115,16 +116,16 @@ export function createFakeCodexAppServerClient(
         [...notificationHandlers].map((handler) => Promise.resolve(handler(notification))),
       );
     },
-    async handleServerRequest(serverRequest: RpcRequest) {
+    async handleServerRequest(serverRequest: RpcRequest, signal = new AbortController().signal) {
       for (const handler of requestHandlers) {
-        const result = await handler(serverRequest);
+        const result = await handler(serverRequest, signal);
         if (result !== undefined) {
           return result;
         }
       }
       return undefined;
     },
-    close(error?: Error) {
+    close(this: void, error?: Error) {
       closeError = error;
       for (const handler of closeHandlers) {
         handler(client);

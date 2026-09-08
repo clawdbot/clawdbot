@@ -2,6 +2,10 @@ import CryptoKit
 import Foundation
 import Security
 
+extension GatewayConnection {
+    nonisolated static let requestRetryDelaysMs = [150, 400, 900]
+}
+
 struct GatewayRouteChangedAfterDispatchError: LocalizedError, Sendable {
     let method: String
 

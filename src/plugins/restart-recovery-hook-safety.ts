@@ -1,4 +1,5 @@
 import { hasGlobalHooks } from "./hook-runner-global.js";
+import type { PluginHookReplyDispatchKind } from "./hook-types.js";
 
 const RESTART_RECOVERY_UNSAFE_CHAT_ADMISSION_HOOKS = [
   "before_dispatch",
@@ -8,8 +9,12 @@ const RESTART_RECOVERY_UNSAFE_CHAT_ADMISSION_HOOKS = [
 ] as const;
 
 /** Initial chat admission defers before_agent_reply until after its durable checkpoint. */
-export function findRestartRecoveryUnsafeChatAdmissionHook():
-  | (typeof RESTART_RECOVERY_UNSAFE_CHAT_ADMISSION_HOOKS)[number]
-  | undefined {
-  return RESTART_RECOVERY_UNSAFE_CHAT_ADMISSION_HOOKS.find((hookName) => hasGlobalHooks(hookName));
+export function findRestartRecoveryUnsafeChatAdmissionHook(
+  dispatchKind: PluginHookReplyDispatchKind,
+): (typeof RESTART_RECOVERY_UNSAFE_CHAT_ADMISSION_HOOKS)[number] | undefined {
+  return RESTART_RECOVERY_UNSAFE_CHAT_ADMISSION_HOOKS.find((hookName) =>
+    hookName === "reply_dispatch"
+      ? hasGlobalHooks(hookName, { dispatchKind })
+      : hasGlobalHooks(hookName),
+  );
 }

@@ -30,31 +30,22 @@ type GatewayDispatchConfigReadOptions = {
   logger?: Pick<Console, "warn" | "error">;
 };
 
-function cloneConfigValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((entry) => cloneConfigValue(entry));
-  }
-  if (!isRecord(value)) {
-    return value;
-  }
-  const out: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(value)) {
-    out[key] = cloneConfigValue(child);
-  }
-  return out;
-}
-
-function projectGatewayDispatchConfig(value: unknown): OpenClawConfig {
+function resolveGatewayDispatchConfig(value: unknown, env: NodeJS.ProcessEnv): OpenClawConfig {
   if (!isRecord(value)) {
     return {};
+  }
+  if (Object.hasOwn(value, "env")) {
+    applyConfigEnvVars(value as OpenClawConfig, env);
   }
   const projected: Record<string, unknown> = {};
   for (const key of GATEWAY_DISPATCH_TOP_LEVEL_KEYS) {
     if (Object.hasOwn(value, key)) {
-      projected[key] = cloneConfigValue(value[key]);
+      projected[key] = value[key];
     }
   }
-  return projected as OpenClawConfig;
+  // Substitution owns the fresh nested containers; discarded branches need neither
+  // substitution nor another deep copy after the complete include graph is resolved.
+  return resolveConfigEnvVars(projected, env, { onMissing: () => undefined }) as OpenClawConfig;
 }
 
 // Main session keys are process-local; Gateway dispatch always sees the canonical main key.
@@ -91,13 +82,6 @@ function resolveIncludesForGatewayDispatch(
   );
 }
 
-function resolveGatewayDispatchEnvVars(config: unknown, env: NodeJS.ProcessEnv): unknown {
-  if (isRecord(config) && Object.hasOwn(config, "env")) {
-    applyConfigEnvVars(config as OpenClawConfig, env);
-  }
-  return resolveConfigEnvVars(config, env, { onMissing: () => undefined });
-}
-
 function readRawGatewayDispatchConfig(options: GatewayDispatchConfigReadOptions = {}): {
   config: OpenClawConfig;
   configPath: string;
@@ -111,9 +95,9 @@ function readRawGatewayDispatchConfig(options: GatewayDispatchConfigReadOptions 
   const raw = fs.readFileSync(configPath, "utf-8");
   const parsed = parseJsonWithJson5Fallback(raw);
   const resolvedIncludes = resolveIncludesForGatewayDispatch(parsed, configPath, env);
-  const resolvedConfig = resolveGatewayDispatchEnvVars(resolvedIncludes, env);
+  const resolvedConfig = resolveGatewayDispatchConfig(resolvedIncludes, env);
   return {
-    config: applyGatewayDispatchSessionDefaults(projectGatewayDispatchConfig(resolvedConfig)),
+    config: applyGatewayDispatchSessionDefaults(resolvedConfig),
     configPath,
   };
 }

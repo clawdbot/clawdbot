@@ -1,19 +1,7 @@
-// Control UI view renders usage query screen content.
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { extractQueryTerms } from "./helpers.ts";
 import type { CostDailyEntry, UsageAggregates, UsageSessionEntry } from "./types.ts";
-
-function downloadTextFile(filename: string, content: string, type = "text/plain") {
-  const blob = new Blob([content], { type: `${type};charset=utf-8` });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
 
 function neutralizeSpreadsheetFormulaCell(value: string): string {
   return /^[ \t\r\n]*[=+\-@\uFF0B\uFF0D\uFF1D\uFF20]/u.test(value) ? `'${value}` : value;
@@ -132,16 +120,48 @@ type QuerySuggestion = {
   value: string;
 };
 
-const buildQuerySuggestions = (
-  query: string,
-  sessions: UsageSessionEntry[],
+type UsageFilterOptions = Record<"agent" | "channel" | "provider" | "model" | "tool", string[]>;
+
+function appendFilterValues<T>(
+  values: string[],
+  entries: readonly T[],
+  read: (entry: T) => string | undefined,
+  limit = 12,
+): void {
+  for (const entry of entries) {
+    if (values.length >= limit) {
+      break;
+    }
+    const value = read(entry);
+    if (value && !values.includes(value)) {
+      values.push(value);
+    }
+  }
+}
+
+export function buildUsageFilterOptions(
+  sessions: readonly UsageSessionEntry[],
   aggregates?: UsageAggregates | null,
-): QuerySuggestion[] => {
+): UsageFilterOptions {
+  const options: UsageFilterOptions = { agent: [], channel: [], provider: [], model: [], tool: [] };
+  appendFilterValues(options.agent, sessions, (session) => session.agentId, 6);
+  appendFilterValues(options.channel, sessions, (session) => session.channel);
+  appendFilterValues(options.provider, sessions, (session) => session.modelProvider);
+  // Overrides follow every observed provider, preserving the menu's first-seen order.
+  appendFilterValues(options.provider, sessions, (session) => session.providerOverride);
+  appendFilterValues(options.provider, aggregates?.byProvider ?? [], (entry) => entry.provider);
+  appendFilterValues(options.model, sessions, (session) => session.model);
+  appendFilterValues(options.model, aggregates?.byModel ?? [], (entry) => entry.model);
+  appendFilterValues(options.tool, aggregates?.tools.tools ?? [], (entry) => entry.name);
+  return options;
+}
+
+const buildQuerySuggestions = (query: string, options: UsageFilterOptions): QuerySuggestion[] => {
   const trimmed = query.trim();
   if (!trimmed) {
     return [];
   }
-  const tokens = trimmed.length ? trimmed.split(/\s+/) : [];
+  const tokens = extractQueryTerms(trimmed).map((term) => term.raw);
   const lastQueryWord = tokens.at(-1) ?? "";
   const [rawKey, rawValue] = lastQueryWord.includes(":")
     ? [
@@ -152,23 +172,6 @@ const buildQuerySuggestions = (
 
   const key = normalizeLowercaseStringOrEmpty(rawKey);
   const value = normalizeLowercaseStringOrEmpty(rawValue);
-
-  const unique = (items: Array<string | undefined>): string[] => {
-    return uniqueStrings(items.filter((item): item is string => Boolean(item)));
-  };
-
-  const agents = unique(sessions.map((s) => s.agentId)).slice(0, 6);
-  const channels = unique(sessions.map((s) => s.channel)).slice(0, 6);
-  const providers = unique([
-    ...sessions.map((s) => s.modelProvider),
-    ...sessions.map((s) => s.providerOverride),
-    ...(aggregates?.byProvider.map((p) => p.provider) ?? []),
-  ]).slice(0, 6);
-  const models = unique([
-    ...sessions.map((s) => s.model),
-    ...(aggregates?.byModel.map((m) => m.model) ?? []),
-  ]).slice(0, 6);
-  const tools = unique(aggregates?.tools.tools.map((t) => t.name) ?? []).slice(0, 6);
 
   if (!key) {
     return [
@@ -186,7 +189,7 @@ const buildQuerySuggestions = (
 
   const suggestions: QuerySuggestion[] = [];
   const addValues = (prefix: string, values: string[]) => {
-    for (const val of values) {
+    for (const val of values.slice(0, 6)) {
       if (!value || normalizeLowercaseStringOrEmpty(val).includes(value)) {
         suggestions.push({ label: `${prefix}:${val}`, value: `${prefix}:${val}` });
       }
@@ -195,19 +198,19 @@ const buildQuerySuggestions = (
 
   switch (key) {
     case "agent":
-      addValues("agent", agents);
+      addValues("agent", options.agent);
       break;
     case "channel":
-      addValues("channel", channels);
+      addValues("channel", options.channel);
       break;
     case "provider":
-      addValues("provider", providers);
+      addValues("provider", options.provider);
       break;
     case "model":
-      addValues("model", models);
+      addValues("model", options.model);
       break;
     case "tool":
-      addValues("tool", tools);
+      addValues("tool", options.tool);
       break;
     case "has":
       ["errors", "tools", "context", "usage", "model", "provider"].forEach((entry) => {
@@ -228,54 +231,41 @@ const applySuggestionToQuery = (query: string, suggestion: string): string => {
   if (!trimmed) {
     return `${suggestion} `;
   }
-  const tokens = trimmed.split(/\s+/);
+  const tokens = extractQueryTerms(trimmed).map((term) => term.raw);
   tokens[tokens.length - 1] = suggestion;
   return `${tokens.join(" ")} `;
 };
 
 const normalizeQueryText = (value: string): string => normalizeLowercaseStringOrEmpty(value);
 
-const addQueryToken = (query: string, token: string): string => {
-  const trimmed = query.trim();
-  if (!trimmed) {
-    return `${token} `;
-  }
-  const tokens = trimmed.split(/\s+/);
-  const last = tokens[tokens.length - 1] ?? "";
-  const tokenKey = token.includes(":") ? token.split(":")[0] : null;
-  const lastKey = last.includes(":") ? last.split(":")[0] : null;
-  if (last.endsWith(":") && tokenKey && lastKey === tokenKey) {
-    tokens[tokens.length - 1] = token;
-    return `${tokens.join(" ")} `;
-  }
-  if (tokens.includes(token)) {
-    return `${tokens.join(" ")} `;
-  }
-  return `${tokens.join(" ")} ${token} `;
-};
-
 const removeQueryToken = (query: string, token: string): string => {
-  const tokens = query.trim().split(/\s+/).filter(Boolean);
+  const tokens = extractQueryTerms(query).map((term) => term.raw);
   const next = tokens.filter((entry) => entry !== token);
   return next.length ? `${next.join(" ")} ` : "";
 };
 
 const setQueryTokensForKey = (query: string, key: string, values: string[]): string => {
   const normalizedKey = normalizeQueryText(key);
-  const tokens = extractQueryTerms(query)
-    .filter((term) => normalizeQueryText(term.key ?? "") !== normalizedKey)
-    .map((term) => term.raw);
-  const next = [...tokens, ...values.map((value) => `${key}:${value}`)];
+  const remaining = new Map(values.map((value) => [normalizeQueryText(value), value]));
+  const tokens: string[] = [];
+  // Retained values keep their authored spelling and quotes; serialize only new selections.
+  for (const term of extractQueryTerms(query)) {
+    if (
+      normalizeQueryText(term.key ?? "") !== normalizedKey ||
+      remaining.delete(normalizeQueryText(term.value))
+    ) {
+      tokens.push(term.raw);
+    }
+  }
+  const next = [...tokens, ...Array.from(remaining.values(), (value) => `${key}:${value}`)];
   return next.length ? `${next.join(" ")} ` : "";
 };
 
 export {
-  addQueryToken,
   applySuggestionToQuery,
   buildDailyCsv,
   buildQuerySuggestions,
   buildSessionsCsv,
-  downloadTextFile,
   normalizeQueryText,
   removeQueryToken,
   setQueryTokensForKey,

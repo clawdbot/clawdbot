@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { isChannelConfigMetadataKey } from "../channels/config-metadata.js";
+import { INCLUDE_KEY } from "../config/includes.js";
 import { parseConfigJson5 } from "../config/io.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
@@ -36,6 +38,7 @@ import {
   type SupportRedactionContext,
 } from "./diagnostic-support-redaction.js";
 import { readConfiguredLogTail, type LogTailPayload } from "./log-tail.js";
+import { formatDiagnosticFilenameTimestamp } from "./timestamps.js";
 
 const DIAGNOSTIC_SUPPORT_EXPORT_VERSION = 1;
 
@@ -181,10 +184,6 @@ type CollectedSupportSnapshot = {
   file?: DiagnosticSupportExportFile;
 };
 
-function formatExportTimestamp(now: Date): string {
-  return now.toISOString().replace(/[:.]/g, "-");
-}
-
 function normalizePositiveInteger(value: unknown, fallback: number): number {
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(parsed) || parsed < 1) {
@@ -221,8 +220,10 @@ function resolveBonjourEnvOverride(
   return disabled === false ? "force-enabled" : "unrecognized";
 }
 
-function sortedObjectKeys(value: unknown): string[] {
-  return Object.keys(asOptionalRecord(value) ?? {}).toSorted((a, b) => a.localeCompare(b));
+function sortedConfigEntryKeys(value: unknown): string[] {
+  return Object.keys(asOptionalRecord(value) ?? {})
+    .filter((key) => key !== INCLUDE_KEY)
+    .toSorted((a, b) => a.localeCompare(b));
 }
 
 function sanitizeConfigShape(
@@ -238,7 +239,7 @@ function sanitizeConfigShape(
   const mdns = asOptionalRecord(discovery?.mdns);
   const channels = asOptionalRecord(root.channels);
   const plugins = asOptionalRecord(root.plugins);
-  const agents = Array.isArray(root.agents) ? root.agents : undefined;
+  const agents = asOptionalRecord(asOptionalRecord(root.agents)?.entries);
 
   const shape: ConfigShape = {
     path: configPath,
@@ -246,7 +247,7 @@ function sanitizeConfigShape(
     parseOk: true,
     bytes: stat.size,
     mtime: stat.mtime.toISOString(),
-    topLevelKeys: sortedObjectKeys(root),
+    topLevelKeys: Object.keys(root).toSorted((a, b) => a.localeCompare(b)),
   };
 
   if (gateway) {
@@ -255,7 +256,7 @@ function sanitizeConfigShape(
       bind: safeScalar(gateway.bind),
       port: safeScalar(gateway.port),
       authMode: safeScalar(auth?.mode),
-      tailscale: safeScalar(gateway.tailscale),
+      tailscale: safeScalar(asOptionalRecord(gateway.tailscale)?.mode),
     };
   }
 
@@ -268,21 +269,17 @@ function sanitizeConfigShape(
   }
 
   if (channels) {
-    shape.channels = {
-      count: Object.keys(channels).length,
-      ids: sortedObjectKeys(channels),
-    };
+    const ids = sortedConfigEntryKeys(channels).filter((key) => !isChannelConfigMetadataKey(key));
+    shape.channels = { count: ids.length, ids };
   }
 
   if (plugins) {
-    shape.plugins = {
-      count: Object.keys(plugins).length,
-      ids: sortedObjectKeys(plugins),
-    };
+    const ids = sortedConfigEntryKeys(plugins.entries);
+    shape.plugins = { count: ids.length, ids };
   }
 
   if (agents) {
-    shape.agents = { count: agents.length };
+    shape.agents = { count: sortedConfigEntryKeys(agents).length };
   }
 
   return shape;
@@ -636,7 +633,7 @@ function defaultOutputPath(options: { now: Date; stateDir: string }): string {
     options.stateDir,
     "logs",
     "support",
-    `${SUPPORT_EXPORT_PREFIX}${formatExportTimestamp(options.now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`,
+    `${SUPPORT_EXPORT_PREFIX}${formatDiagnosticFilenameTimestamp(options.now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`,
   );
 }
 
@@ -659,7 +656,7 @@ function resolveOutputPath(options: {
     if (fs.statSync(resolved).isDirectory()) {
       return path.join(
         resolved,
-        `${SUPPORT_EXPORT_PREFIX}${formatExportTimestamp(options.now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`,
+        `${SUPPORT_EXPORT_PREFIX}${formatDiagnosticFilenameTimestamp(options.now)}-${process.pid}${SUPPORT_EXPORT_SUFFIX}`,
       );
     }
   } catch {

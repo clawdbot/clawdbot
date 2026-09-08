@@ -296,6 +296,29 @@ describe("deliverWebReply", () => {
     });
   });
 
+  it.each([
+    {
+      name: "an image without alt text",
+      text: "![](https://example.com/diagram.png)",
+      expected: "![](https://example.com/diagram.png)",
+    },
+    {
+      name: "an image with visible alt text",
+      text: "![Diagram](https://example.com/diagram.png)",
+      expected: "Diagram",
+    },
+  ])("delivers $name instead of silently dropping the auto-reply", async ({ text, expected }) => {
+    const { msg, params } = createDelivery({ text });
+
+    const delivery = await deliverWebReply(params);
+
+    expect(msg.platform.reply).toHaveBeenCalledExactlyOnceWith(expected, undefined);
+    expect(delivery).toMatchObject({
+      providerAccepted: true,
+      results: [{ messageId: "reply-sent-1" }],
+    });
+  });
+
   it("retains an accepted auto-reply receipt when outbound activity bookkeeping fails", async () => {
     hoisted.recordChannelActivity.mockClear();
     const activityError = new Error("auto-reply activity bookkeeping disconnected");
@@ -603,7 +626,8 @@ describe("deliverWebReply", () => {
   });
 
   it("falls back to text-only when the first media send fails", async () => {
-    const { msg, params } = createImageDelivery("caption", { textLimit: 20 });
+    const onMediaAccepted = vi.fn();
+    const { msg, params } = createImageDelivery("caption", { textLimit: 20, onMediaAccepted });
     vi.mocked(msg.platform.sendMedia).mockRejectedValueOnce(new Error("boom"));
 
     await deliverWebReply(params);
@@ -617,6 +641,7 @@ describe("deliverWebReply", () => {
       "replyLogger.warn",
     );
     expect(warnContext.mediaUrl).toBe("http://example.com/img.jpg");
+    expect(onMediaAccepted).not.toHaveBeenCalled();
   });
 
   it("delivers the opening text chunk when the first media fails on a multi-chunk reply", async () => {
@@ -755,10 +780,11 @@ describe("deliverWebReply", () => {
 
   it("preserves accepted voice receipts without false media fallback after caption rejection", async () => {
     hoisted.recordChannelActivity.mockClear();
-    const { msg, params } = createDelivery({
-      text: "caption",
-      mediaUrl: "http://example.com/accepted-voice.ogg",
-    });
+    const onMediaAccepted = vi.fn();
+    const { msg, params } = createDelivery(
+      { text: "caption", mediaUrl: "http://example.com/accepted-voice.ogg" },
+      { onMediaAccepted },
+    );
     mockLoadedMedia("aud", "audio/ogg", "audio");
     vi.mocked(msg.platform.sendMedia).mockImplementationOnce(async () =>
       normalizeWhatsAppSendResult(
@@ -785,6 +811,9 @@ describe("deliverWebReply", () => {
     expect(msg.platform.sendMedia).toHaveBeenCalledOnce();
     expect(msg.platform.reply).toHaveBeenCalledOnce();
     expect(msg.platform.reply).toHaveBeenCalledWith("caption", undefined);
+    expect(onMediaAccepted).toHaveBeenCalledExactlyOnceWith(
+      "http://example.com/accepted-voice.ogg",
+    );
     expect(hoisted.recordChannelActivity).toHaveBeenCalledOnce();
     expect(hoisted.recordChannelActivity).toHaveBeenCalledWith({
       channel: "whatsapp",
@@ -810,10 +839,11 @@ describe("deliverWebReply", () => {
       },
       defaultAccountId: "work",
     });
-    const { msg, params } = createDelivery({
-      text: "caption",
-      mediaUrl: "http://example.com/nested-voice.ogg",
-    });
+    const onMediaAccepted = vi.fn();
+    const { msg, params } = createDelivery(
+      { text: "caption", mediaUrl: "http://example.com/nested-voice.ogg" },
+      { onMediaAccepted },
+    );
     mockLoadedMedia("aud", "audio/ogg", "audio");
     vi.mocked(msg.platform.sendMedia).mockImplementationOnce(async () =>
       sendApi.sendMessage("+1555", "", Buffer.from("aud"), "audio/ogg"),
@@ -831,6 +861,7 @@ describe("deliverWebReply", () => {
     expect(msg.platform.sendMedia).toHaveBeenCalledOnce();
     expect(msg.platform.reply).not.toHaveBeenCalled();
     expect(replyLogger.warn).not.toHaveBeenCalled();
+    expect(onMediaAccepted).toHaveBeenCalledExactlyOnceWith("http://example.com/nested-voice.ogg");
     expect(hoisted.recordChannelActivity).toHaveBeenCalledExactlyOnceWith({
       channel: "whatsapp",
       accountId: "work",

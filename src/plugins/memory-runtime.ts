@@ -27,6 +27,9 @@ type MemoryRuntime = NonNullable<
 type MemorySearchAuthorization = Parameters<
   NonNullable<MemoryPluginRuntime["authorizeSearchHits"]>
 >[0];
+type WorkspaceMemoryPathClassification = Parameters<
+  NonNullable<MemoryPluginRuntime["classifyWorkspaceMemoryPaths"]>
+>[0];
 type MemoryRuntimeOwner = { runtime: MemoryRuntime; registry?: PluginRegistry };
 let standaloneMemoryRegistrySlot:
   | { key: string; registry: PluginRegistry; retiredRuntimes: Map<MemoryRuntime, PluginRegistry> }
@@ -54,20 +57,24 @@ function normalizeRegisteredMemoryManager(
   }
   const readFile: MemorySearchManager["readFile"] = async (params) =>
     normalizeRegisteredMemoryReadResult(await manager.readFile(params));
-  const adapter = new Proxy(manager, {
-    get(target, property) {
-      if (property === "readFile") {
-        return readFile;
-      }
-      const value = Reflect.get(target, property, target) as unknown;
-      if (typeof value !== "function") {
-        return value;
-      }
-      // Registered managers may use class/private state, so calls retain the target receiver.
-      return value.bind(target);
+  // A neutral target permits wrapped methods even when the manager is frozen.
+  const adapter = new Proxy(
+    { readFile },
+    {
+      get(_target, property) {
+        if (property === "readFile") {
+          return readFile;
+        }
+        const value = Reflect.get(manager, property, manager) as unknown;
+        if (typeof value !== "function") {
+          return value;
+        }
+        // Registered managers may use class/private state, so calls retain the target receiver.
+        return value.bind(manager);
+      },
     },
-    // SAFETY: readFile is replaced with the canonical adapter; every other member is unchanged.
-  }) as MemorySearchManager;
+    // SAFETY: readFile is canonical; every other member is forwarded from the manager.
+  ) as MemorySearchManager;
   registeredMemoryManagerAdapters.set(manager, adapter);
   return adapter;
 }
@@ -207,6 +214,31 @@ export async function authorizeActiveMemorySearchHits(
     }
     return await runtime.authorizeSearchHits(params);
   });
+}
+
+/** Classifies workspace memory paths through the selected memory plugin's provenance owner. */
+export async function classifyActiveMemoryWorkspacePaths(
+  params: WorkspaceMemoryPathClassification,
+): Promise<
+  | { status: "unavailable" }
+  | { status: "unsupported" }
+  | {
+      status: "classified";
+      classifications: Array<{ relativePath: string; originClass: string }>;
+    }
+> {
+  const owner = ensureMemoryRuntime(params);
+  if (!owner) {
+    return { status: "unavailable" };
+  }
+  if (!owner.runtime.classifyWorkspaceMemoryPaths) {
+    return { status: "unsupported" };
+  }
+  const classifications = await withMemoryRuntimeOwner(
+    owner,
+    async (runtime) => await runtime.classifyWorkspaceMemoryPaths!(params),
+  );
+  return { status: "classified", classifications };
 }
 
 /** Resolves current memory backend config without constructing a manager. */

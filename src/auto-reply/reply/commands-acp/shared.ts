@@ -54,8 +54,8 @@ export type AcpAction =
   | "install"
   | "help";
 
-export type AcpSpawnThreadMode = "auto" | "here" | "off";
-export type AcpSpawnBindMode = "here" | "off";
+type AcpSpawnThreadMode = "auto" | "here" | "off";
+type AcpSpawnBindMode = "here" | "off";
 
 type ParsedSpawnInput = {
   agentId: string;
@@ -445,7 +445,7 @@ export function resolveAcpHelpText(): string {
     "Notes:",
     "- /acp spawn harness-id is an ACP runtime harness alias (for example codex), not an OpenClaw agents.list id.",
     "- Use --bind here to pin the current conversation to the ACP session without creating a child thread.",
-    "- /focus and /unfocus also work with ACP session keys.",
+    "- /session unbind detaches this conversation without closing its ACP session.",
     "- ACP dispatch of normal thread messages is controlled by acp.dispatch.enabled.",
   ].join("\n");
 }
@@ -460,6 +460,7 @@ export function formatRuntimeOptionsText(options: AcpSessionRuntimeOptions): str
   const parts = [
     options.runtimeMode ? `runtimeMode=${options.runtimeMode}` : null,
     options.model ? `model=${options.model}` : null,
+    options.thinking ? `thinking=${options.thinking}` : null,
     options.cwd ? `cwd=${options.cwd}` : null,
     options.permissionProfile ? `permissionProfile=${options.permissionProfile}` : null,
     typeof options.timeoutSeconds === "number" ? `timeoutSeconds=${options.timeoutSeconds}` : null,

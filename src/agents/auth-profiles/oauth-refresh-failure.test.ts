@@ -115,12 +115,19 @@ describe("oauth refresh failure hints", () => {
           provider: "openai",
           profileId: "openai:user@example.com",
           message: "invalid_grant",
+          errorType: "invalid_grant",
+          reason: "invalid_grant",
+          status: 401,
+          summary: "Please sign in again.",
         }),
       ),
     ).toEqual({
+      errorType: "invalid_grant",
       provider: "openai",
       profileId: "openai:user@example.com",
       reason: "invalid_grant",
+      status: 401,
+      summary: "Please sign in again.",
     });
   });
 
@@ -149,6 +156,55 @@ describe("oauth refresh failure hints", () => {
       provider: "openai",
       reason: "token_invalidated",
     });
+  });
+
+  it("classifies provider requests to log in again", () => {
+    expect(
+      classifyOAuthRefreshFailure(
+        "OAuth token refresh failed for openai: Your session ended. Please log in again.",
+      ),
+    ).toEqual({
+      provider: "openai",
+      reason: "sign_in_again",
+    });
+  });
+
+  it("classifies refresh failures preserved in failover raw error metadata", () => {
+    expect(
+      classifyOAuthRefreshFailureError(
+        new FailoverError("Authentication refresh failed", {
+          reason: "auth_permanent",
+          provider: "openai",
+          profileId: "openai:work",
+          rawError: "OAuth token refresh failed for openai: refresh_token_invalidated",
+        }),
+      ),
+    ).toEqual({
+      provider: "openai",
+      profileId: "openai:work",
+      reason: "token_invalidated",
+    });
+  });
+
+  it("prefers a structured OAuth cause over legacy failover raw text", () => {
+    const summary = "Please sign in again.";
+    const cause = new OAuthRefreshFailureError({
+      provider: "openai",
+      message: "wrapped provider failure",
+      reason: "refresh_token_reused",
+      summary,
+    });
+
+    expect(
+      classifyOAuthRefreshFailureError(
+        new FailoverError("Authentication refresh failed", {
+          reason: "auth_permanent",
+          provider: "openai",
+          rawError: "OAuth token refresh failed for openai: refresh_token_reused",
+          cause,
+        }),
+      ),
+    ).toMatchObject({ provider: "openai", reason: "refresh_token_reused", summary });
   });
 
   it("classifies claude-cli subprocess 401 OAuth expiry as a provider refresh failure", () => {

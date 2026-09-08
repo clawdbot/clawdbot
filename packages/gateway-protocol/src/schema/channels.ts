@@ -251,6 +251,8 @@ export const TalkClientMutationResultSchema = closedObject({
 export const TalkClientToolCallResultSchema = closedObject({
   runId: NonEmptyString,
   idempotencyKey: NonEmptyString,
+  agentId: NonEmptyString,
+  agentSessionKey: NonEmptyString,
 });
 
 /** Text steering request for a Talk session bound to an agent turn. */
@@ -317,6 +319,15 @@ export const TalkSessionCancelOutputParamsSchema = closedObject({
   reason: Type.Optional(Type.String()),
 });
 
+/** Reports whether a Talk output cancellation applied to the requested turn. */
+export const TalkSessionCancelOutputResultSchema = closedObject({
+  ok: Type.Literal(true),
+  status: Type.Optional(
+    Type.Union([Type.Literal("applied"), Type.Literal("stale"), Type.Literal("idle")]),
+  ),
+  turnId: Type.Optional(NonEmptyString),
+});
+
 /** Submits a tool result back to a Talk provider session. */
 export const TalkSessionSubmitToolResultParamsSchema = closedObject({
   sessionId: NonEmptyString,
@@ -354,6 +365,9 @@ const TalkCatalogProviderSchema = closedObject({
   aliases: Type.Optional(Type.Array(NonEmptyString)),
   models: Type.Optional(Type.Array(Type.String())),
   voices: Type.Optional(Type.Array(Type.String())),
+  activeVoices: Type.Optional(Type.Array(Type.String())),
+  activeVoiceSelectionPolicy: Type.Optional(Type.Literal("allowlist-default")),
+  voicesByModel: Type.Optional(Type.Record(Type.String(), Type.Array(Type.String()))),
   defaultModel: Type.Optional(Type.String()),
   modes: Type.Optional(Type.Array(TalkModeSchema)),
   transports: Type.Optional(Type.Array(TalkTransportSchema)),
@@ -559,6 +573,16 @@ export const TalkConfigResultSchema = closedObject({
         seamColor: Type.Optional(Type.String()),
       }),
     ),
+    clientHints: Type.Optional(
+      closedObject({
+        realtime: Type.Optional(
+          closedObject({
+            modelSource: Type.Optional(Type.Literal("gateway")),
+            gatewayRelaySupported: Type.Optional(Type.Boolean()),
+          }),
+        ),
+      }),
+    ),
   }),
 });
 
@@ -589,7 +613,7 @@ export const ChannelsStatusParamsSchema = closedObject({
 });
 
 /**
- * Per-account status snapshot for channel docking.
+ * Per-account channel status snapshot.
  *
  * This is intentionally schema-light so new channel-specific metadata can ship
  * without a gateway protocol update; known fields stay documented for UI use.
@@ -680,6 +704,24 @@ export const ChannelsStatusResultSchema = closedObject({
   eventLoop: Type.Optional(ChannelEventLoopHealthSchema),
   partial: Type.Optional(Type.Boolean()),
   warnings: Type.Optional(Type.Array(Type.String())),
+  statusIssues: Type.Optional(
+    Type.Array(
+      closedObject({
+        channel: NonEmptyString,
+        accountId: NonEmptyString,
+        kind: Type.Union([
+          Type.Literal("intent"),
+          Type.Literal("permissions"),
+          Type.Literal("config"),
+          Type.Literal("auth"),
+          Type.Literal("runtime"),
+        ]),
+        message: Type.String(),
+        fix: Type.Optional(Type.String()),
+      }),
+      { maxItems: 50 },
+    ),
+  ),
 });
 
 /** Logs out one channel account. */
@@ -702,6 +744,7 @@ export const ChannelsStartParamsSchema = closedObject({
 
 /** Starts browser/web login for a channel account. */
 export const WebLoginStartParamsSchema = closedObject({
+  channel: Type.Optional(NonEmptyString),
   force: Type.Optional(Type.Boolean()),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
   verbose: Type.Optional(Type.Boolean()),
@@ -715,6 +758,8 @@ const QrDataUrlSchema = Type.String({
 
 /** Waits for web login completion or the next QR code. */
 export const WebLoginWaitParamsSchema = closedObject({
+  channel: Type.Optional(NonEmptyString),
+  sessionKey: Type.Optional(NonEmptyString),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
   accountId: Type.Optional(Type.String()),
   currentQrDataUrl: Type.Optional(QrDataUrlSchema),
@@ -741,6 +786,7 @@ export type TalkSessionCreateParams = Static<typeof TalkSessionCreateParamsSchem
 export type TalkSessionCreateResult = Static<typeof TalkSessionCreateResultSchema>;
 export type TalkSessionAppendAudioParams = Static<typeof TalkSessionAppendAudioParamsSchema>;
 export type TalkSessionCancelOutputParams = Static<typeof TalkSessionCancelOutputParamsSchema>;
+export type TalkSessionCancelOutputResult = Static<typeof TalkSessionCancelOutputResultSchema>;
 export type TalkSessionSteerParams = Static<typeof TalkSessionSteerParamsSchema>;
 export type TalkSessionSubmitToolResultParams = Static<
   typeof TalkSessionSubmitToolResultParamsSchema

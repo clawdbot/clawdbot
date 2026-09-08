@@ -1,10 +1,19 @@
 import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
+import type { DB } from "../state/openclaw-state-db.generated.js";
+import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import type { PersistedClawPackageRef } from "./provenance.js";
+import {
+  toPackageRefExtensionSqlParams,
+  type PersistedClawPackageRef,
+} from "./package-extension-provenance.js";
 
 export function digestClawPackageRef(ref: PersistedClawPackageRef): string {
   const persisted = {
@@ -37,70 +46,57 @@ export function replaceClawPackageRefExpected(
     throw new Error("Package reference replacement requires an identity.");
   }
   runOpenClawStateWriteTransaction(({ db }) => {
+    const kysely = getNodeSqliteKysely<Pick<DB, "claw_package_refs">>(db);
     if (expected) {
-      const result = db /* sqlite-allow-raw: Claw package provenance compare-and-swap delete. */
-        .prepare(
-          `DELETE FROM claw_package_refs
-            WHERE agent_id = @agent_id
-              AND package_kind = @package_kind
-              AND package_source = @package_source
-              AND package_ref = @package_ref
-              AND package_version = @package_version
-              AND package_integrity = @package_integrity
-              AND schema_version = @schema_version
-              AND claw_name = @claw_name
-              AND package_status = @package_status
-              AND relationship = @relationship
-              AND origin = @origin
-              AND independent_owner = @independent_owner
-              AND extension_id IS @extension_id
-              AND extension_format IS @extension_format
-              AND extension_detected_format IS @extension_detected_format
-              AND extension_mapped_json IS @extension_mapped_json
-              AND extension_unavailable_json IS @extension_unavailable_json
-              AND extension_adapter_identity IS @extension_adapter_identity
-              AND installed_at_ms = @installed_at_ms
-              AND updated_at_ms = @updated_at_ms`,
-        )
-        .run({
-          agent_id: expected.agentId,
-          package_kind: expected.kind,
-          package_source: expected.source,
-          package_ref: expected.ref,
-          package_version: expected.version,
-          package_integrity: expected.integrity,
-          schema_version: expected.schemaVersion,
-          claw_name: expected.clawName,
-          package_status: expected.status,
-          relationship: expected.relationship,
-          origin: expected.origin,
-          independent_owner: expected.independentOwner ? 1 : 0,
-          extension_id: expected.extension?.id ?? null,
-          extension_format: expected.extension?.format ?? null,
-          extension_detected_format: expected.extension?.detectedFormat ?? null,
-          extension_mapped_json: expected.extension
-            ? JSON.stringify(expected.extension.mapped)
-            : null,
-          extension_unavailable_json: expected.extension
-            ? JSON.stringify(expected.extension.unavailable)
-            : null,
-          extension_adapter_identity: expected.extension?.adapterIdentity ?? null,
-          installed_at_ms: expected.installedAtMs,
-          updated_at_ms: expected.updatedAtMs,
-        });
-      if (Number(result.changes) !== 1) {
+      const extension = toPackageRefExtensionSqlParams(expected.extension);
+      // Nullable extension fields participate in the same full-row compare-and-swap.
+      const result = executeSqliteQuerySync(
+        db,
+        kysely
+          .deleteFrom("claw_package_refs")
+          .where((eb) =>
+            eb.and({
+              agent_id: expected.agentId,
+              package_kind: expected.kind,
+              package_source: expected.source,
+              package_ref: expected.ref,
+              package_version: expected.version,
+              package_integrity: expected.integrity,
+              schema_version: expected.schemaVersion,
+              claw_name: expected.clawName,
+              package_status: expected.status,
+              relationship: expected.relationship,
+              origin: expected.origin,
+              independent_owner: expected.independentOwner ? 1 : 0,
+              installed_at_ms: expected.installedAtMs,
+              updated_at_ms: expected.updatedAtMs,
+            }),
+          )
+          .where("extension_id", "is", extension.extension_id)
+          .where("extension_format", "is", extension.extension_format)
+          .where("extension_detected_format", "is", extension.extension_detected_format)
+          .where("extension_mapped_json", "is", extension.extension_mapped_json)
+          .where("extension_unavailable_json", "is", extension.extension_unavailable_json)
+          .where("extension_adapter_identity", "is", extension.extension_adapter_identity),
+      );
+      if (result.numAffectedRows !== 1n) {
         throw new Error(
           `Package reference ${JSON.stringify(`${expected.kind}:${expected.ref}`)} changed after planning.`,
         );
       }
     } else {
-      const occupied =
-        db /* sqlite-allow-raw: Claw package provenance compare-and-swap occupancy check. */
-          .prepare(
-            `SELECT 1 FROM claw_package_refs
-            WHERE agent_id = ? AND package_kind = ? AND package_source = ? AND package_ref = ?`,
-          )
-          .get(identity.agentId, identity.kind, identity.source, identity.ref);
+      // Any version occupies this dependency edge; only one row is needed to reject it.
+      const occupied = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("claw_package_refs")
+          .select((eb) => eb.val(1).as("occupied"))
+          .where("agent_id", "=", identity.agentId)
+          .where("package_kind", "=", identity.kind)
+          .where("package_source", "=", identity.source)
+          .where("package_ref", "=", identity.ref)
+          .limit(1),
+      );
       if (occupied) {
         throw new Error(
           `Package reference ${JSON.stringify(`${identity.kind}:${identity.ref}`)} appeared after planning.`,
@@ -108,23 +104,9 @@ export function replaceClawPackageRefExpected(
       }
     }
     if (replacement) {
-      db /* sqlite-allow-raw: Claw package provenance compare-and-swap insert. */
-        .prepare(
-          `INSERT INTO claw_package_refs (
-           agent_id, package_kind, package_source, package_ref, package_version, package_integrity,
-           schema_version, claw_name, package_status, relationship, origin, independent_owner,
-           extension_id, extension_format, extension_detected_format, extension_mapped_json,
-           extension_unavailable_json, extension_adapter_identity,
-           installed_at_ms, updated_at_ms
-         ) VALUES (
-           @agent_id, @package_kind, @package_source, @package_ref, @package_version, @package_integrity,
-           @schema_version, @claw_name, @package_status, @relationship, @origin,
-           @independent_owner, @extension_id, @extension_format, @extension_detected_format,
-           @extension_mapped_json, @extension_unavailable_json, @extension_adapter_identity,
-           @installed_at_ms, @updated_at_ms
-         )`,
-        )
-        .run({
+      executeSqliteQuerySync(
+        db,
+        kysely.insertInto("claw_package_refs").values({
           agent_id: replacement.agentId,
           package_kind: replacement.kind,
           package_source: replacement.source,
@@ -137,19 +119,11 @@ export function replaceClawPackageRefExpected(
           relationship: replacement.relationship,
           origin: replacement.origin,
           independent_owner: replacement.independentOwner ? 1 : 0,
-          extension_id: replacement.extension?.id ?? null,
-          extension_format: replacement.extension?.format ?? null,
-          extension_detected_format: replacement.extension?.detectedFormat ?? null,
-          extension_mapped_json: replacement.extension
-            ? JSON.stringify(replacement.extension.mapped)
-            : null,
-          extension_unavailable_json: replacement.extension
-            ? JSON.stringify(replacement.extension.unavailable)
-            : null,
-          extension_adapter_identity: replacement.extension?.adapterIdentity ?? null,
+          ...toPackageRefExtensionSqlParams(replacement.extension),
           installed_at_ms: replacement.installedAtMs,
           updated_at_ms: replacement.updatedAtMs,
-        });
+        }),
+      );
     }
   }, options);
 }

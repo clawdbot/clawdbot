@@ -22,13 +22,21 @@ import {
   applyUnsetPathsForWrite,
   resolveManagedUnsetPathsForWrite,
 } from "./config-path-mutation.js";
+import { getConfigValueAtPath, setConfigValueAtPath } from "./config-paths.js";
 import { restoreEnvVarRefs, resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
 import {
+  collectChangedConfigPaths,
+  resolveIncludeWriteBoundary,
+  type ChangedConfigPaths,
+  type IncludeWriteBoundary,
+} from "./include-write-boundary.js";
+import {
   ConfigIncludeError,
   hashConfigIncludeRaw,
   INCLUDE_KEY,
+  isInternalIncludeWriteTarget,
   resolveConfigIncludeWritePath,
 } from "./includes.js";
 import { createInvalidConfigError, formatInvalidConfigDetails } from "./io.invalid-config.js";
@@ -41,8 +49,17 @@ import {
   type ConfigWriteOptions,
   type ConfigWriteResult,
 } from "./io.js";
+import {
+  containsConfigIncludeDirective,
+  rejectConfigNonFiniteNumbers,
+  resolveManagedRuntimeEnvBaseline,
+} from "./io.read-helpers.js";
+import { injectExplicitlySetPaths, projectConfigWriteSource } from "./io.write-prepare.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
-import { ConfigMutationConflictError } from "./mutation-conflict.js";
+import {
+  ConfigMutationConflictError,
+  GUARDED_CONFIG_INCLUDE_WRITE_ERROR,
+} from "./mutation-conflict.js";
 import type { ConfigMutationBase } from "./mutation-types.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
 import { resolveConfigPath } from "./paths.js";
@@ -62,6 +79,12 @@ import {
   type ConfigWriteFollowUp,
   type RuntimeConfigWritePreparedCandidate,
 } from "./runtime-snapshot.js";
+import { projectLegacyRuntimeConfigWrite } from "./runtime-source-projection.js";
+import {
+  attachRuntimeConfigWriteApplication,
+  copyRuntimeConfigWriteApplication,
+  getRuntimeConfigWriteApplication,
+} from "./runtime-write-application.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
@@ -141,6 +164,8 @@ export type TransformConfigFileParams<T> = {
   transform: (
     currentConfig: OpenClawConfig,
     context: ConfigMutationContext,
+    // Read-time env stays with host transforms, outside public mutation callbacks.
+    preservation: Pick<ConfigWriteOptions, "envSnapshotForRestore">,
   ) => Promise<ConfigTransformResult<T>> | ConfigTransformResult<T>;
 };
 
@@ -159,19 +184,6 @@ type ConfigMutationOwnership = {
   ownedConfigPathForWrite?: string;
   assertConfigPathForWrite?: () => void;
 };
-
-function resolveManagedRuntimeEnvBaseline(): {
-  generation: number;
-  sourceConfig: OpenClawConfig;
-} {
-  // Accepted restart candidates publish env before the runtime snapshot advances.
-  // Managed writes must stay on that publication generation to avoid mixed env refs.
-  const published = getPublishedConfigRuntimeEnvState();
-  return {
-    generation: published.generation,
-    sourceConfig: published.sourceConfig ?? getRuntimeConfigSourceSnapshot() ?? {},
-  };
-}
 
 function assertManagedRuntimeEnvGeneration(generation: number): void {
   if (getPublishedConfigRuntimeEnvState().generation !== generation) {
@@ -200,7 +212,8 @@ function assertExpectedConfigPathMatches(
   }
 }
 
-async function withConfigMutationLock<T>(
+/** Serialize config writers without requiring a schema-valid snapshot. */
+export async function withConfigMutationLock<T>(
   params: { io?: ConfigMutationIO; lockPath?: string },
   fn: () => Promise<T>,
 ): Promise<T> {
@@ -225,10 +238,10 @@ async function withConfigMutationLock<T>(
         async () => await withFileLock(configPath, CONFIG_MUTATION_LOCK_OPTIONS, fn),
       ),
     )
-    .catch((error: unknown) => {
+    .catch(async (error: unknown) => {
       // Only relabel a permission failure on the config directory itself. The caller's mutation
       // runs inside this scope, so an unrelated EACCES from its own work must not be misdiagnosed.
-      if (!isPermissionErrorInDirectory(error, configDir)) {
+      if (!(await isPermissionErrorInDirectory(error, configDir))) {
         throw error;
       }
       throw new Error(
@@ -238,7 +251,7 @@ async function withConfigMutationLock<T>(
     });
 }
 
-function isPermissionErrorInDirectory(error: unknown, directory: string): boolean {
+async function isPermissionErrorInDirectory(error: unknown, directory: string): Promise<boolean> {
   if (
     !isErrno(error) ||
     (error.code !== "EACCES" && error.code !== "EPERM" && error.code !== "EROFS")
@@ -246,7 +259,18 @@ function isPermissionErrorInDirectory(error: unknown, directory: string): boolea
     return false;
   }
   const failedPath = error.path;
-  return typeof failedPath === "string" && path.dirname(path.resolve(failedPath)) === directory;
+  if (typeof failedPath !== "string") {
+    return false;
+  }
+  const failedDir = path.dirname(path.resolve(failedPath));
+  if (failedDir === directory) {
+    return true;
+  }
+  // Node reports the canonical path, so a config directory reached through a symlink (a macOS
+  // /var -> /private/var home, for one) never matches the raw string. Resolve only on mismatch to
+  // keep the successful write path free of an extra syscall.
+  const canonicalDirectory = await fs.realpath(directory).catch(() => undefined);
+  return canonicalDirectory !== undefined && failedDir === canonicalDirectory;
 }
 
 function markActiveConfigMutationPath(configPath: string): void {
@@ -287,14 +311,31 @@ async function readConfigSnapshotForMutation(params: {
   return await readConfigFileSnapshotForWrite(options);
 }
 
+function mergeConfigMutationWriteOptions(
+  prepared: ConfigWriteOptions,
+  caller?: ConfigWriteOptions,
+): ConfigWriteOptions {
+  const merged = copyRuntimeConfigWriteApplication(caller, { ...prepared, ...caller });
+  const capturedGuard = prepared.assertConfigPathForWrite;
+  const callerGuard = caller?.assertConfigPathForWrite;
+  // Caller authority narrows the captured destination; it must never replace
+  // that ownership check through retries and post-write validation.
+  if (capturedGuard && callerGuard && capturedGuard !== callerGuard) {
+    merged.assertConfigPathForWrite = () => {
+      capturedGuard();
+      callerGuard();
+    };
+  } else if (capturedGuard) {
+    merged.assertConfigPathForWrite = capturedGuard;
+  }
+  return merged;
+}
+
 function createConfigMutationOwnership(
   prepared: Awaited<ReturnType<typeof readConfigSnapshotForMutation>>,
   writeOptions?: ConfigWriteOptions,
 ): ConfigMutationOwnership {
-  const mergedWriteOptions = {
-    ...prepared.writeOptions,
-    ...writeOptions,
-  };
+  const mergedWriteOptions = mergeConfigMutationWriteOptions(prepared.writeOptions, writeOptions);
   return {
     initialized: true,
     expectedConfigPath: mergedWriteOptions.expectedConfigPath ?? prepared.snapshot.path,
@@ -345,70 +386,122 @@ export async function withConfigMutationExclusive<T>(
   );
 }
 
-function getChangedTopLevelKeys(base: unknown, next: unknown): string[] {
-  if (!isRecord(base) || !isRecord(next)) {
-    return isDeepStrictEqual(base, next) ? [] : ["<root>"];
-  }
-  const keys = new Set([...Object.keys(base), ...Object.keys(next)]);
-  return [...keys].filter((key) => !isDeepStrictEqual(base[key], next[key]));
-}
-
-function getSingleTopLevelIncludeTarget(params: {
+function getLegacyTopLevelIncludeBoundary(params: {
   snapshot: ConfigFileSnapshot;
-  key: string;
-}): string | null {
-  const targetPath = [params.key];
-  // Include callbacks are depth-first, so the last event at a path is the
-  // outer directive that decides whether writing through is unambiguous.
-  // Ancestor ownership also wins: a root include can override a nested target.
-  const ownership = params.snapshot.includeProvenance?.findLast(
-    (entry) =>
-      entry.path.length <= targetPath.length &&
-      entry.path.every((segment, index) => segment === targetPath[index]),
-  );
-  if (
-    ownership?.path.length === targetPath.length &&
-    ownership.kind === "single" &&
-    !ownership.hasSiblingOverrides &&
-    ownership.targetPath
-  ) {
-    return path.normalize(ownership.targetPath);
-  }
-  if (params.snapshot.includeProvenance !== undefined) {
-    return null;
-  }
-
+  changed: ChangedConfigPaths;
+}): IncludeWriteBoundary | null {
   // Synthetic/legacy snapshots and invalid include repair have no completed
   // provenance event, so retain the parsed-directive fallback at this boundary.
-  if (!isRecord(params.snapshot.parsed)) {
+  if (!isRecord(params.snapshot.parsed) || params.changed.rootChanged) {
     return null;
   }
-  const authoredSection = params.snapshot.parsed[params.key];
+  const topLevelKeys = new Set(
+    params.changed.paths.map((changedPath) => changedPath[0]).filter((key) => key !== undefined),
+  );
+  if (topLevelKeys.size !== 1) {
+    return null;
+  }
+  const key = expectDefined([...topLevelKeys][0], "changed top-level key at 0");
+  const authoredSection = params.snapshot.parsed[key];
   if (!isRecord(authoredSection)) {
     return null;
   }
-  const keys = Object.keys(authoredSection);
   const includeValue = authoredSection[INCLUDE_KEY];
-  if (keys.length !== 1 || typeof includeValue !== "string") {
+  if (Object.keys(authoredSection).length !== 1 || typeof includeValue !== "string") {
     return null;
   }
 
   const rootDir = path.dirname(params.snapshot.path);
-  return path.normalize(
-    path.isAbsolute(includeValue) ? includeValue : path.resolve(rootDir, includeValue),
-  );
+  return {
+    boundaryPath: [key],
+    includePath: path.normalize(
+      path.isAbsolute(includeValue) ? includeValue : path.resolve(rootDir, includeValue),
+    ),
+  };
 }
 
-function containsConfigIncludeDirective(value: unknown): boolean {
-  if (Array.isArray(value)) {
-    return value.some((item) => containsConfigIncludeDirective(item));
+/**
+ * One include-owned write decision for the guarded writer and Doctor's
+ * eligibility check; a split decision lets Doctor advertise an include write
+ * that the writer then declines. Null means the write belongs to the root writer.
+ */
+function resolveIncludeOwnedWriteCandidate(params: {
+  snapshot: ConfigFileSnapshot;
+  nextConfig: OpenClawConfig;
+  writeOptions?: ConfigWriteOptions;
+  io?: ConfigMutationIO;
+}): (IncludeWriteBoundary & { nextConfig: OpenClawConfig }) | null {
+  // A roster-format persist is a root write; an include-only commit cannot carry it.
+  if (params.writeOptions?.persistCanonicalAgentRoster === true) {
+    return null;
   }
-  if (!isRecord(value)) {
-    return false;
+  const projection = {
+    inputBasis:
+      params.writeOptions?.inputBase === "source"
+        ? { kind: "source" as const, config: params.snapshot.sourceConfig }
+        : undefined,
+    runtimeConfig: params.snapshot.runtimeConfig,
+    sourceConfig: params.snapshot.sourceConfig,
+    nextConfig:
+      !params.io && params.writeOptions?.inputBase === undefined
+        ? projectLegacyRuntimeConfigWrite(params.nextConfig)
+        : params.nextConfig,
+    unsetPaths: resolveManagedUnsetPathsForWrite(params.writeOptions?.unsetPaths),
+    explicitSetPaths: params.writeOptions?.explicitSetPaths,
+    explicitSetValueSource: params.writeOptions?.explicitSetValueSource ?? params.nextConfig,
+  };
+  // Select includes from authored changes; custom IO retains its own runtime projection.
+  // Apply explicit values before removals; provenance still owns the destination below.
+  const nextConfig = applyUnsetPathsForWrite(
+    injectExplicitlySetPaths({
+      ...projection,
+      valueSource: projection.explicitSetValueSource,
+      persistedCandidate: projectConfigWriteSource(projection),
+    }) as OpenClawConfig, // SAFETY: Projection and path edits preserve the config object.
+    projection.unsetPaths,
+  );
+  const changed = collectChangedConfigPaths(params.snapshot.sourceConfig, nextConfig);
+  if (changed.rootChanged || changed.paths.length === 0) {
+    return null;
   }
+  const boundary =
+    params.snapshot.includeProvenance === undefined
+      ? getLegacyTopLevelIncludeBoundary({ snapshot: params.snapshot, changed })
+      : resolveIncludeWriteBoundary({ provenance: params.snapshot.includeProvenance, changed });
+  // A removed section belongs to the root writer, never a rewrite from an absent value.
+  if (!boundary || getConfigValueAtPath(nextConfig, [...boundary.boundaryPath]) === undefined) {
+    return null;
+  }
+  return { nextConfig, ...boundary, includePath: path.normalize(boundary.includePath) };
+}
+
+/**
+ * Whether one authored $include file solely owns every changed path of this
+ * write. Callers that add root-level metadata before persisting (Doctor wizard
+ * state) must consult this first: an extra root key would push the change set
+ * outside the boundary and force the guarded root writer to reject the write.
+ */
+export function configWriteTargetsIncludeBoundary(params: {
+  snapshot: ConfigFileSnapshot;
+  nextConfig: OpenClawConfig;
+  persistCanonicalAgentRoster?: boolean;
+}): boolean {
+  const includeWrite = resolveIncludeOwnedWriteCandidate({
+    snapshot: params.snapshot,
+    nextConfig: params.nextConfig,
+    writeOptions: {
+      inputBase: "source",
+      persistCanonicalAgentRoster: params.persistCanonicalAgentRoster,
+    },
+  });
+  // Eligibility must match the guarded writer: a canonical external target is
+  // rejected there, so it must classify as manual repair rather than eligible.
   return (
-    Object.hasOwn(value, INCLUDE_KEY) ||
-    Object.values(value).some((item) => containsConfigIncludeDirective(item))
+    includeWrite !== null &&
+    isInternalIncludeWriteTarget({
+      configPath: params.snapshot.path,
+      includePath: includeWrite.includePath,
+    })
   );
 }
 
@@ -424,6 +517,7 @@ function snapshotProvesBrokenInclude(snapshot: ConfigFileSnapshot, includePath: 
 }
 
 function formatJsonFileValue(value: unknown): string {
+  rejectConfigNonFiniteNumbers(value);
   return `${JSON.stringify(value, null, 2)}\n`;
 }
 
@@ -528,6 +622,35 @@ async function assertRootConfigStillMatchesSnapshot(snapshot: ConfigFileSnapshot
   }
 }
 
+async function assertIncludeGraphStillMatchesSnapshot(params: {
+  snapshot: ConfigFileSnapshot;
+  writeOptions: ConfigWriteOptions | undefined;
+  includePath: string;
+  includeHash: string;
+}): Promise<void> {
+  await assertRootConfigStillMatchesSnapshot(params.snapshot);
+  for (const [includePath, capturedHash] of Object.entries(
+    params.writeOptions?.includeFileHashesForWrite ?? {},
+  )) {
+    const expectedTarget = params.writeOptions?.includeFileTargetsForWrite?.[includePath];
+    if (!expectedTarget) {
+      throw new ConfigMutationConflictError("included config target changed since last load");
+    }
+    const target = await resolveExpectedRootBoundIncludeFile({
+      configPath: params.snapshot.path,
+      includePath,
+      // Dependencies may be read-only external includes. Pin each read to its
+      // captured target; the selected write still requires the config directory.
+      allowedRoots: [path.dirname(expectedTarget)],
+      expectedAbsolutePath: expectedTarget,
+    });
+    const expectedHash = includePath === params.includePath ? params.includeHash : capturedHash;
+    if (hashConfigIncludeRaw(await readRootBoundFileRawIfExists(target)) !== expectedHash) {
+      throw new ConfigMutationConflictError("included config changed while preparing write");
+    }
+  }
+}
+
 async function rollbackJsonFileWriteIfUnchanged(params: {
   target: RootBoundIncludeFile;
   previousRaw: string | null;
@@ -593,7 +716,7 @@ async function writeRootBoundJsonFile(params: {
   expectedTargetPath: string;
   value: unknown;
   expectedRaw: string | null;
-  rootSnapshot: ConfigFileSnapshot;
+  assertIncludeGraphForWrite: (committedHash?: string) => Promise<void>;
   assertConfigPathForWrite: () => void;
   preCommitRuntimePreflight?: () => Promise<unknown>;
   skipOutputLogs?: boolean;
@@ -611,14 +734,15 @@ async function writeRootBoundJsonFile(params: {
       createRootBoundBackupFs(targetBeforeBackup),
     );
   }
+  await params.preCommitRuntimePreflight?.();
   const targetAtCommit = await resolveExpectedRootBoundIncludeFile({
     configPath: params.configPath,
     includePath: params.includePath,
     allowedRoots: params.allowedRoots,
     expectedAbsolutePath: params.expectedTargetPath,
   });
+  await params.assertIncludeGraphForWrite();
   params.assertConfigPathForWrite();
-  await assertRootConfigStillMatchesSnapshot(params.rootSnapshot);
   const currentRaw = await readRootBoundFileRawIfExists(targetAtCommit);
   const currentHash = hashConfigIncludeRaw(currentRaw);
   if (currentHash !== hashConfigIncludeRaw(params.expectedRaw)) {
@@ -628,7 +752,6 @@ async function writeRootBoundJsonFile(params: {
   // The include fast path bypasses writeConfigFile(); keep its authority guard
   // and comment warning on the final conflict-checked target. No later await may
   // run before the write.
-  await params.preCommitRuntimePreflight?.();
   params.assertConfigPathForWrite();
   warnIfJSON5CommentsWillBeStripped({
     raw: currentRaw,
@@ -641,6 +764,7 @@ async function writeRootBoundJsonFile(params: {
     overwrite: true,
   });
   try {
+    await params.assertIncludeGraphForWrite(hashConfigIncludeRaw(content));
     params.assertConfigPathForWrite();
   } catch (error) {
     await rollbackJsonFileWriteIfUnchanged({
@@ -652,28 +776,27 @@ async function writeRootBoundJsonFile(params: {
   }
 }
 
-async function tryWriteSingleTopLevelIncludeMutation(params: {
+async function tryWriteIncludeOwnedConfigMutation(params: {
   snapshot: ConfigFileSnapshot;
   nextConfig: OpenClawConfig;
   afterWrite?: ConfigWriteOptions["afterWrite"];
   writeOptions?: ConfigWriteOptions;
   io?: ConfigMutationIO;
 }): Promise<{ persistedHash: string | null; persistedConfig: OpenClawConfig } | null> {
-  const nextConfig = applyUnsetPathsForWrite(
-    params.nextConfig,
-    resolveManagedUnsetPathsForWrite(params.writeOptions?.unsetPaths),
-  );
-  const changedKeys = getChangedTopLevelKeys(params.snapshot.sourceConfig, nextConfig);
-  if (changedKeys.length !== 1 || changedKeys[0] === "<root>") {
+  const includeWrite = resolveIncludeOwnedWriteCandidate({
+    snapshot: params.snapshot,
+    nextConfig: params.nextConfig,
+    writeOptions: params.writeOptions,
+    io: params.io,
+  });
+  if (!includeWrite) {
     return null;
   }
-
-  const key = expectDefined(changedKeys[0], "changed keys entry at 0");
-  const includePath = getSingleTopLevelIncludeTarget({ snapshot: params.snapshot, key });
-  if (!includePath || !isRecord(nextConfig) || !(key in nextConfig)) {
-    return null;
+  const { nextConfig, boundaryPath, includePath } = includeWrite;
+  if (params.writeOptions?.beforeCommit) {
+    // The pinned include writer cannot revalidate an async authority at publication.
+    throw new Error(GUARDED_CONFIG_INCLUDE_WRITE_ERROR);
   }
-  const nextConfigRecord = nextConfig as Record<string, unknown>;
 
   const writeEnv = params.io?.env ?? process.env;
   const allowedRoots: readonly string[] = [];
@@ -719,7 +842,7 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
   ) {
     throw new ConfigMutationConflictError("included config changed since last load");
   }
-  let includedValueToWrite = nextConfigRecord[key];
+  let includedValueToWrite = getConfigValueAtPath(nextConfig, [...boundaryPath]);
   if (previousIncludeRaw !== null) {
     let authoredIncludeValue: unknown;
     let parsedInclude = false;
@@ -739,7 +862,11 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
       const currentIncludedValue = resolveConfigEnvVars(authoredIncludeValue, envForRestore, {
         onMissing: () => {},
       });
-      const snapshotIncludedValue = (params.snapshot.sourceConfig as Record<string, unknown>)[key];
+      // Read-time compatibility migrations can add keys the authored include file
+      // does not carry, so compare against the pre-migration source when present.
+      const authoredSnapshotSource =
+        params.snapshot.sourceConfigBeforeMigrations ?? params.snapshot.sourceConfig;
+      const snapshotIncludedValue = getConfigValueAtPath(authoredSnapshotSource, [...boundaryPath]);
       if (!isDeepStrictEqual(currentIncludedValue, snapshotIncludedValue)) {
         throw new ConfigMutationConflictError("included config changed since last load");
       }
@@ -765,14 +892,11 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
     envForRestore,
   ) as OpenClawConfig;
   applyConfigEnvVars(authoredRuntimeCandidate, runtimeCandidateEnv);
-  const runtimeConfigToWrite = resolveConfigEnvVars(
-    {
-      ...authoredRuntimeCandidate,
-      [key]: includedValueToWrite,
-    },
-    runtimeCandidateEnv,
-    { onMissing: () => {} },
-  ) as OpenClawConfig;
+  const runtimeCandidate = structuredClone(authoredRuntimeCandidate);
+  setConfigValueAtPath(runtimeCandidate, [...boundaryPath], includedValueToWrite);
+  const runtimeConfigToWrite = resolveConfigEnvVars(runtimeCandidate, runtimeCandidateEnv, {
+    onMissing: () => {},
+  }) as OpenClawConfig;
   const validated = validateConfigObjectWithPlugins(
     runtimeConfigToWrite,
     params.writeOptions?.skipPluginValidation ? { pluginValidation: "skip" } : undefined,
@@ -812,31 +936,31 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
   const committedIncludeRaw = formatJsonFileValue(includedValueToWrite);
   const committedIncludeHash = hashConfigIncludeRaw(committedIncludeRaw);
   const callerPreCommit = params.writeOptions?.preCommitRuntimePreflight;
-  assertConfigPathForWrite();
-  await assertRootConfigStillMatchesSnapshot(params.snapshot);
-  const includeRawAtCommit = await readRootBoundFileRawIfExists(includeTarget);
-  if (hashConfigIncludeRaw(includeRawAtCommit) !== hashConfigIncludeRaw(previousIncludeRaw)) {
-    throw new ConfigMutationConflictError("included config changed while preparing write");
-  }
+  const assertIncludeGraphForWrite = (includeHash = previousIncludeHash) =>
+    assertIncludeGraphStillMatchesSnapshot({
+      snapshot: params.snapshot,
+      writeOptions: params.writeOptions,
+      includePath,
+      includeHash,
+    });
   await writeRootBoundJsonFile({
     configPath: params.snapshot.path,
     includePath,
     allowedRoots,
     expectedTargetPath: expectedIncludeTarget,
     value: includedValueToWrite,
-    expectedRaw: includeRawAtCommit,
-    rootSnapshot: params.snapshot,
-    assertConfigPathForWrite,
+    expectedRaw: previousIncludeRaw,
+    assertIncludeGraphForWrite,
+    assertConfigPathForWrite: () => {
+      assertConfigPathForWrite();
+      if (runtimeEnvBaseline) {
+        assertManagedRuntimeEnvGeneration(runtimeEnvBaseline.generation);
+      }
+    },
     skipOutputLogs: params.writeOptions?.skipOutputLogs,
-    preCommitRuntimePreflight:
-      runtimeEnvBaseline || callerPreCommit
-        ? async () => {
-            if (runtimeEnvBaseline) {
-              assertManagedRuntimeEnvGeneration(runtimeEnvBaseline.generation);
-            }
-            await callerPreCommit?.(runtimeConfigToWrite);
-          }
-        : undefined,
+    preCommitRuntimePreflight: callerPreCommit
+      ? () => callerPreCommit(runtimeConfigToWrite)
+      : undefined,
   });
   const envBeforePostWriteRead = { ...writeEnv };
   let envAfterPostWriteRead = envBeforePostWriteRead;
@@ -860,6 +984,7 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
       envAfterPostWriteRead = { ...writeEnv };
     }
     const refreshedSnapshot = refreshed.snapshot;
+    await assertIncludeGraphForWrite(committedIncludeHash);
     assertConfigPathForWrite();
     assertExpectedConfigPathMatches(refreshedSnapshot, params.snapshot.path);
     const persistedHash = resolveConfigSnapshotHash(refreshedSnapshot);
@@ -898,17 +1023,20 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
         ]),
       );
       notifyRuntimeConfigWriteListeners(
-        createRuntimeConfigWriteNotification({
-          configPath: params.snapshot.path,
-          sourceConfig: refreshedSnapshot.sourceConfig,
-          runtimeConfig: notificationRuntimeConfig,
-          persistedHash,
-          afterWrite: params.afterWrite ?? params.writeOptions?.afterWrite,
-          runtimeRefresh: params.writeOptions?.runtimeRefresh,
-          ...(notificationPreparedCandidates.size > 0
-            ? { preparedCandidatesByOwner: notificationPreparedCandidates }
-            : {}),
-        }),
+        attachRuntimeConfigWriteApplication(
+          createRuntimeConfigWriteNotification({
+            configPath: params.snapshot.path,
+            sourceConfig: refreshedSnapshot.sourceConfig,
+            runtimeConfig: notificationRuntimeConfig,
+            persistedHash,
+            afterWrite: params.afterWrite ?? params.writeOptions?.afterWrite,
+            runtimeRefresh: params.writeOptions?.runtimeRefresh,
+            ...(notificationPreparedCandidates.size > 0
+              ? { preparedCandidatesByOwner: notificationPreparedCandidates }
+              : {}),
+          }),
+          getRuntimeConfigWriteApplication(params.writeOptions ?? {}),
+        ),
       );
     };
     await finalizeRuntimeSnapshotWrite({
@@ -932,7 +1060,7 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
     try {
       const rolledBack = await rollbackJsonFileWriteIfUnchanged({
         target: includeTarget,
-        previousRaw: includeRawAtCommit,
+        previousRaw: previousIncludeRaw,
         committedHash: committedIncludeHash,
       });
       if (rolledBack) {
@@ -965,14 +1093,19 @@ function resolveConfigWriteResult(
   return { persistedHash: null, persistedConfig: fallbackConfig };
 }
 
-export async function replaceConfigFile(params: {
-  nextConfig: OpenClawConfig;
+export type ConfigReplaceInput =
+  | { sourceConfig: OpenClawConfig; nextConfig?: never }
+  | { nextConfig: OpenClawConfig; sourceConfig?: never };
+
+type ConfigReplaceParams = ConfigReplaceInput & {
   baseHash?: string;
   snapshot?: ConfigFileSnapshot;
   afterWrite?: ConfigWriteOptions["afterWrite"];
   writeOptions?: ConfigWriteOptions;
   io?: ConfigMutationIO;
-}): Promise<ConfigReplaceResult> {
+};
+
+export async function replaceConfigFile(params: ConfigReplaceParams): Promise<ConfigReplaceResult> {
   if (!params.snapshot && !params.io) {
     return await withConfigMutationSnapshotLock(
       { writeOptions: params.writeOptions },
@@ -980,10 +1113,7 @@ export async function replaceConfigFile(params: {
         await replaceConfigFileUnlocked({
           ...params,
           snapshot: prepared.snapshot,
-          writeOptions: {
-            ...prepared.writeOptions,
-            ...params.writeOptions,
-          },
+          writeOptions: mergeConfigMutationWriteOptions(prepared.writeOptions, params.writeOptions),
         }),
     );
   }
@@ -993,14 +1123,10 @@ export async function replaceConfigFile(params: {
   );
 }
 
-async function replaceConfigFileUnlocked(params: {
-  nextConfig: OpenClawConfig;
-  baseHash?: string;
-  snapshot?: ConfigFileSnapshot;
-  afterWrite?: ConfigWriteOptions["afterWrite"];
-  writeOptions?: ConfigWriteOptions;
-  io?: ConfigMutationIO;
-}): Promise<ConfigReplaceResult> {
+async function replaceConfigFileUnlocked(
+  params: ConfigReplaceParams,
+): Promise<ConfigReplaceResult> {
+  const nextConfig = params.sourceConfig ?? params.nextConfig;
   const prepared = params.snapshot
     ? { snapshot: params.snapshot, writeOptions: params.writeOptions ?? {} }
     : await readConfigSnapshotForMutation({
@@ -1008,10 +1134,8 @@ async function replaceConfigFileUnlocked(params: {
         writeOptions: params.writeOptions,
       });
   const { snapshot, writeOptions } = prepared;
-  const mergedWriteOptions = {
-    ...writeOptions,
-    ...params.writeOptions,
-  };
+  const mergedWriteOptions = mergeConfigMutationWriteOptions(writeOptions, params.writeOptions);
+  mergedWriteOptions.inputBase = params.sourceConfig ? "source" : mergedWriteOptions.inputBase;
   mergedWriteOptions.assertConfigPathForWrite?.();
   assertExpectedConfigPathMatches(snapshot, mergedWriteOptions.expectedConfigPath);
   assertConfigWriteAllowedInCurrentMode({ configPath: snapshot.path });
@@ -1020,19 +1144,22 @@ async function replaceConfigFileUnlocked(params: {
   const afterWrite = resolveConfigWriteAfterWrite(
     params.afterWrite ?? params.writeOptions?.afterWrite,
   );
-  let writeResult = await tryWriteSingleTopLevelIncludeMutation({
+  let writeResult = await tryWriteIncludeOwnedConfigMutation({
     snapshot,
-    nextConfig: params.nextConfig,
+    nextConfig,
     afterWrite,
     writeOptions: mergedWriteOptions,
     io: params.io,
   });
   if (!writeResult) {
-    const fallbackWriteOptions: ConfigWriteOptions = {
-      baseSnapshot: snapshot,
-      ...mergedWriteOptions,
-      afterWrite,
-    };
+    const fallbackWriteOptions: ConfigWriteOptions = copyRuntimeConfigWriteApplication(
+      mergedWriteOptions,
+      {
+        baseSnapshot: snapshot,
+        ...mergedWriteOptions,
+        afterWrite,
+      },
+    );
     const ioPreCommitRuntimePreflight = params.io
       ? fallbackWriteOptions.preCommitRuntimePreflight
       : undefined;
@@ -1052,11 +1179,8 @@ async function replaceConfigFileUnlocked(params: {
       };
     }
     writeResult = resolveConfigWriteResult(
-      await (params.io?.writeConfigFile ?? writeConfigFile)(
-        params.nextConfig,
-        fallbackWriteOptions,
-      ),
-      params.nextConfig,
+      await (params.io?.writeConfigFile ?? writeConfigFile)(nextConfig, fallbackWriteOptions),
+      nextConfig,
     );
   }
   return {
@@ -1077,10 +1201,10 @@ async function commitPreparedConfigMutation(
     nextConfig: params.nextConfig,
     snapshot: params.snapshot,
     baseHash: params.baseHash,
-    writeOptions: {
+    writeOptions: copyRuntimeConfigWriteApplication(params.writeOptions, {
       ...params.writeOptions,
       afterWrite: params.afterWrite,
-    },
+    }),
     io: params.io,
   });
   return {
@@ -1106,10 +1230,7 @@ async function transformConfigFileAttempt<T>(
       io: params.io,
       writeOptions: params.writeOptions,
     }));
-  let mergedWriteOptions: ConfigWriteOptions = {
-    ...writeOptions,
-    ...params.writeOptions,
-  };
+  let mergedWriteOptions = mergeConfigMutationWriteOptions(writeOptions, params.writeOptions);
   if (ownership) {
     if (!ownership.initialized) {
       ownership.initialized = true;
@@ -1117,7 +1238,7 @@ async function transformConfigFileAttempt<T>(
       ownership.ownedConfigPathForWrite = mergedWriteOptions.ownedConfigPathForWrite;
       ownership.assertConfigPathForWrite = mergedWriteOptions.assertConfigPathForWrite;
     }
-    mergedWriteOptions = {
+    mergedWriteOptions = copyRuntimeConfigWriteApplication(mergedWriteOptions, {
       ...mergedWriteOptions,
       expectedConfigPath: ownership.expectedConfigPath,
       ...(ownership.ownedConfigPathForWrite
@@ -1126,7 +1247,7 @@ async function transformConfigFileAttempt<T>(
       ...(ownership.assertConfigPathForWrite
         ? { assertConfigPathForWrite: ownership.assertConfigPathForWrite }
         : {}),
-    };
+    });
   }
   mergedWriteOptions.assertConfigPathForWrite?.();
   assertExpectedConfigPathMatches(snapshot, mergedWriteOptions.expectedConfigPath);
@@ -1134,10 +1255,15 @@ async function transformConfigFileAttempt<T>(
   markActiveConfigMutationPath(snapshot.path);
   const previousHash = assertBaseHashMatches(snapshot, params.baseHash);
   const baseConfig = params.base === "runtime" ? snapshot.runtimeConfig : snapshot.sourceConfig;
+  mergedWriteOptions.inputBase = params.base ?? "source";
   const afterWrite = resolveConfigWriteAfterWrite(
     params.afterWrite ?? params.writeOptions?.afterWrite,
   );
-  const transformed = await params.transform(baseConfig, { snapshot, previousHash, attempt });
+  const transformed = await params.transform(
+    baseConfig,
+    { snapshot, previousHash, attempt },
+    { envSnapshotForRestore: writeOptions.envSnapshotForRestore },
+  );
   const committed = await (params.commit ?? commitPreparedConfigMutation)({
     nextConfig: transformed.nextConfig,
     snapshot,
@@ -1227,14 +1353,13 @@ export async function transformConfigFileWithRetry<T = void>(
   return await withConfigMutationLock({ io: params.io }, async () => await runWithPrepared());
 }
 
-export async function mutateConfigFile<T = void>(params: {
-  base?: ConfigMutationBase;
-  baseHash?: string;
-  afterWrite?: ConfigWriteOptions["afterWrite"];
-  writeOptions?: ConfigWriteOptions;
-  io?: ConfigMutationIO;
+type MutateConfigFileParams<T> = Omit<TransformConfigFileParams<T>, "transform" | "commit"> & {
   mutate: (draft: OpenClawConfig, context: ConfigMutationContext) => Promise<T | void> | T | void;
-}): Promise<ConfigMutationResult<T>> {
+};
+
+export async function mutateConfigFile<T = void>(
+  params: MutateConfigFileParams<T>,
+): Promise<ConfigMutationResult<T>> {
   return await transformConfigFile<T>({
     base: params.base,
     baseHash: params.baseHash,
@@ -1249,15 +1374,9 @@ export async function mutateConfigFile<T = void>(params: {
   });
 }
 
-export async function mutateConfigFileWithRetry<T = void>(params: {
-  base?: ConfigMutationBase;
-  baseHash?: string;
-  maxAttempts?: number;
-  afterWrite?: ConfigWriteOptions["afterWrite"];
-  writeOptions?: ConfigWriteOptions;
-  io?: ConfigMutationIO;
-  mutate: (draft: OpenClawConfig, context: ConfigMutationContext) => Promise<T | void> | T | void;
-}): Promise<ConfigMutationResult<T>> {
+export async function mutateConfigFileWithRetry<T = void>(
+  params: MutateConfigFileParams<T> & { maxAttempts?: number },
+): Promise<ConfigMutationResult<T>> {
   return await transformConfigFileWithRetry<T>({
     base: params.base,
     baseHash: params.baseHash,

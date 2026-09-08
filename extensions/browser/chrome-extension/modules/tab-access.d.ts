@@ -6,9 +6,23 @@ import type {
 
 export type TabAccessMode = "all" | "selected";
 
+export type CreatedTabOperation = {
+  isCurrent(): boolean;
+  attachDebugger(
+    tabId: number,
+    assertCurrent: () => void,
+    creationEpoch?: TabAccessEpoch,
+  ): Promise<{ targetId: string; assertCurrent(): void }>;
+  handoff(result: { tabId: number; targetId: string }): void;
+};
+
+type TabGroupSnapshot = { id: number; title?: string };
+
 export type TabAccessEpoch = Readonly<{
   revision: number;
+  groupRevision: number;
   tabRevision: number;
+  documentRevision?: number;
 }>;
 
 export type TabAccessReason = TabEligibilityReason | "revoked" | "paused" | "not-selected" | null;
@@ -41,21 +55,57 @@ export type TabAccessChromeApi = {
 export type TabAccessPolicy = {
   initialize(initialMode?: TabAccessMode, initialEnabled?: boolean): Promise<void>;
   readonly mode: TabAccessMode;
+  readonly discoveryRevision: number;
   setMode(nextMode: TabAccessMode): TabAccessMode;
   setEnabled(nextEnabled: boolean): void;
   beginTransition(): void;
   endTransition(): void;
   beginRevocation(tabId: number): symbol;
   endRevocation(token: symbol): void;
-  capture(tabId: number): TabAccessEpoch;
+  capture(tabId: number, method?: string): TabAccessEpoch;
   epochIsCurrent(tabId: number, epoch: TabAccessEpoch): boolean;
   invalidateTab(tabId: number): void;
+  retireTab(tabId: number): void;
+  retireTabDocument(tabId: number): void;
+  forwardDocumentEvent(
+    event: Record<string, unknown>,
+    send: (event: Record<string, unknown>) => void,
+  ): void;
+  navigateTab(
+    tabId: number,
+    epoch: TabAccessEpoch,
+    params: Record<string, unknown>,
+    isAttached: () => TabAccessEpoch | undefined,
+    isConnectionCurrent: () => boolean,
+    sendCommand: (method: string, params: Record<string, unknown>) => Promise<unknown>,
+  ): Promise<unknown>;
+  renewTabAccess(
+    tabId: number,
+    attachedEpoch: TabAccessEpoch | undefined,
+    tab: BrowserTabSnapshot | undefined,
+  ): TabAccessEpoch | undefined;
+  invalidateGroup(group?: TabGroupSnapshot, removed?: boolean): void;
   invalidateAll(): void;
+  observeTabUpdate(
+    tabId: number,
+    change: { url?: string; groupId?: number; status?: string },
+    tab?: BrowserTabSnapshot,
+  ): boolean;
+  addTabToGroup(tabId: number): Promise<void>;
+  createTab(
+    message: { url: string; background?: boolean; focus?: boolean },
+    operation: CreatedTabOperation,
+  ): Promise<void>;
   inspectTab(tabId: number, epoch?: TabAccessEpoch): Promise<TabAccessState>;
   requireTab(tabId: number, epoch?: TabAccessEpoch): Promise<AccessibleBrowserTabSnapshot>;
+  requireTabAfterNavigation(
+    tabId: number,
+    epoch: TabAccessEpoch,
+  ): Promise<AccessibleBrowserTabSnapshot>;
   listAccessibleTabs(options?: {
     allowDuringTransition?: boolean;
   }): Promise<AccessibleBrowserTabSnapshot[]>;
+  canPublishTab(tabId: number): boolean;
   pause(tabId: number): Promise<void>;
   allow(tabId: number): Promise<void>;
   forgetTab(tabId: number): Promise<void>;
@@ -67,4 +117,5 @@ export type TabAccessPolicy = {
 export function createTabAccessPolicy(options: {
   chromeApi?: TabAccessChromeApi;
   isSelectedTab(tab: BrowserTabSnapshot): boolean | Promise<boolean>;
+  getGroupColor?(): Promise<string>;
 }): TabAccessPolicy;

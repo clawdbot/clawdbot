@@ -7,12 +7,11 @@
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import express from "express";
+import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isLoopbackHost } from "../gateway/net.js";
 import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "./bridge-auth-registry.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 import { listenBrowserHttpServer } from "./http-listen.js";
-import type { BrowserRouteRegistrar } from "./routes/types.js";
 import { stopBrowserBridgeRuntime } from "./runtime-lifecycle.js";
 import type { BrowserServerState, ProfileContext } from "./server-context.js";
 import {
@@ -146,7 +145,7 @@ export async function startBrowserBridgeServer(params: {
     getState: () => state,
     onEnsureAttachTarget: params.onEnsureAttachTarget,
   });
-  registerBrowserRoutes(app as unknown as BrowserRouteRegistrar, ctx);
+  registerBrowserRoutes(app, ctx);
 
   const server = await listenBrowserHttpServer(app, port, host);
 

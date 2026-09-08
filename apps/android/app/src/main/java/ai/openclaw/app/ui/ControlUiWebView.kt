@@ -8,11 +8,17 @@ import android.content.Context
 import android.content.res.Configuration
 import android.view.ContextThemeWrapper
 import android.view.View
+import android.view.ViewGroup
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
@@ -35,16 +41,19 @@ internal fun ControlUiWebView(
 ) {
   val context = LocalContext.current
   val darkAppearance = LocalResolvedAppearanceIsDark.current
+  var rendererGeneration by remember { mutableIntStateOf(0) }
 
   // A WebView reads prefers-color-scheme from the Context it was built with, so an appearance
   // flip has to rebuild it; keying on the resolved boolean keeps that to real dark/light changes.
   // The reload is safe because both Control UI surfaces reattach to server-side state: the shell
   // outlives the page, and the desktop session lingers on the Gateway long enough to re-observe.
-  key(darkAppearance) {
+  key(darkAppearance, rendererGeneration) {
     AndroidView(
       modifier = modifier,
       factory = {
         val webView = WebView(controlUiWebViewContext(context, darkAppearance))
+        // WRAP_CONTENT forces a zero-height CSS viewport even when Compose measures the view exactly.
+        webView.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         val webSettings = webView.settings
         webSettings.setAllowContentAccess(false)
         webSettings.setAllowFileAccess(false)
@@ -64,14 +73,13 @@ internal fun ControlUiWebView(
         // The native gateway connection already established this route's trust.
         // Reuse only that exact accepted fingerprint; every other SSL error cancels.
         // The same client protects both terminal and dashboard pages.
-        webView.webViewClient = ControlUiWebViewClient(page)
+        webView.webViewClient = ControlUiWebViewClient(page) { rendererGeneration += 1 }
         installControlUiAuthScript(webView, page)
         webView.loadUrl(url)
         webView
       },
       onRelease = { webView ->
-        webView.stopLoading()
-        webView.destroy()
+        (webView.webViewClient as? ControlUiWebViewClient)?.release(webView)
       },
     )
   }
@@ -135,9 +143,35 @@ internal fun controlUiOriginRule(baseUrl: String): String? {
 
 private const val X509_CERTIFICATE_BUNDLE_KEY = "x509-certificate"
 
+// WebKit 1.17's lint detector reports Kotlin WebViewClient constructors even when this callback exists.
+@SuppressLint("MissingOnRenderProcessGone")
 private class ControlUiWebViewClient(
   private val page: NodeRuntime.GatewayControlPage,
+  private val onRendererGone: () -> Unit,
 ) : WebViewClient() {
+  private var released = false
+
+  fun release(view: WebView) {
+    if (released) return
+    released = true
+    view.stopLoading()
+    view.destroy()
+  }
+
+  override fun onRenderProcessGone(
+    view: WebView,
+    detail: RenderProcessGoneDetail,
+  ): Boolean {
+    if (released) return true
+    released = true
+    // The renderer cannot be reused. Detach and destroy this instance before
+    // advancing the Compose key so the authenticated page gets a fresh process.
+    (view.parent as? ViewGroup)?.removeView(view)
+    view.destroy()
+    onRendererGone()
+    return true
+  }
+
   // Android lint cannot infer the exact pin and origin checks below; every other path cancels.
   // WebView exposes no pre-document certificate hook for successful CA-trusted handshakes;
   // this callback extends native pin trust only to recoverable self-signed errors.

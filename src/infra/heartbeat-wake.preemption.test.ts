@@ -41,6 +41,19 @@ describe("heartbeat wake preemption retry", () => {
     vi.restoreAllMocks();
   });
 
+  it("dispatches an urgent wake after the wall clock changes forward", async () => {
+    vi.setSystemTime(2_000_000_000_000);
+    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handler);
+
+    requestHeartbeat(wake("interval", { agentId: "slow", coalesceMs: 60_000 }));
+    vi.setSystemTime(Date.now() + 3_600_000);
+    requestHeartbeat(wake("manual", { agentId: "urgent", coalesceMs: 0 }));
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(handler).toHaveBeenCalledExactlyOnceWith(wake("manual", { agentId: "urgent" }));
+  });
+
   it("gives scheduled requests-in-flight a 60-second idle grace", async () => {
     const handler = vi
       .fn()
@@ -70,29 +83,32 @@ describe("heartbeat wake preemption retry", () => {
     expect(handler).toHaveBeenCalledTimes(2);
   });
 
-  it("retries preempted task work after idle grace without losing its payload", async () => {
-    const tasks = [{ jobId: "job-backup", name: "backup", prompt: "Check backup" }];
-    const handler = vi
-      .fn()
-      .mockResolvedValueOnce({ status: "skipped", reason: "preempted" })
-      .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
-    setHeartbeatWakeHandler(handler);
-    requestHeartbeat({
-      source: "background-task",
-      intent: "task",
-      reason: "heartbeat-task:job-backup",
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      tasks,
-      coalesceMs: 0,
-    });
+  it.each(["preempted", "channel-not-ready"])(
+    "retries %s task work after idle grace without losing its payload",
+    async (reason) => {
+      const tasks = [{ jobId: "job-backup", name: "backup", prompt: "Check backup" }];
+      const handler = vi
+        .fn()
+        .mockResolvedValueOnce({ status: "skipped", reason })
+        .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
+      setHeartbeatWakeHandler(handler);
+      requestHeartbeat({
+        source: "background-task",
+        intent: "task",
+        reason: "heartbeat-task:job-backup",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        tasks,
+        coalesceMs: 0,
+      });
 
-    await vi.advanceTimersByTimeAsync(59_999);
-    expect(handler).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(handler).toHaveBeenCalledTimes(2);
-    expect(handler.mock.calls[1]?.[0]).toMatchObject({ tasks, retainedWork: true });
-  });
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(handler).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(handler).toHaveBeenCalledTimes(2);
+      expect(handler.mock.calls[1]?.[0]).toMatchObject({ tasks, retainedWork: true });
+    },
+  );
 
   it("lets a fresh manual wake bypass a scheduled idle grace", async () => {
     const target = { agentId: "main", sessionKey: "agent:main:main" };
@@ -113,24 +129,5 @@ describe("heartbeat wake preemption retry", () => {
       ...wake("interval", target),
       retainedWork: true,
     });
-  });
-
-  it("keeps guarded event work retained through preemption", async () => {
-    const handler = vi
-      .fn()
-      .mockResolvedValueOnce({
-        status: "skipped",
-        reason: "not-due",
-        retryAtMs: Date.now() + 30_000,
-      })
-      .mockResolvedValueOnce({ status: "skipped", reason: "preempted" })
-      .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
-    setHeartbeatWakeHandler(handler);
-    requestHeartbeat(wake("exec-event", { coalesceMs: 0 }));
-
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(handler.mock.calls[1]?.[0]).toMatchObject({ retainedWork: true });
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(handler.mock.calls[2]?.[0]).toMatchObject({ retainedWork: true });
   });
 });

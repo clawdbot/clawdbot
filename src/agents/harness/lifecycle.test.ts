@@ -16,12 +16,18 @@ import {
   type DiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
+import {
+  getCoreTtsAttemptResultMediaUrls,
+  markCoreTtsAttemptResult,
+} from "../tools/tts-tool-result-provenance.js";
 import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
 import { AgentHarnessPreflightError, resolveAgentHarnessPreflightOwner } from "./errors.js";
 import {
   runAgentHarnessLifecycleAttempt,
   runAgentHarnessLifecycleFinalization,
 } from "./lifecycle.js";
+import { EmptySettledTurnFinalizationError } from "./settled-turn-finalization-outcome.js";
 import type {
   AgentHarness,
   AgentHarnessAttemptParamsV2,
@@ -70,14 +76,7 @@ function createFinalAssistant(): NonNullable<EmbeddedRunAttemptResult["lastAssis
     api: "openai-responses",
     provider: "openai",
     model: "gpt-5.5",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop",
     timestamp: 0,
   };
@@ -178,6 +177,31 @@ describe("AgentHarness lifecycle runner", () => {
 
     expect(attemptResult).toEqual({ ...result, agentHarnessId: "codex" });
     expect(runAttempt).toHaveBeenCalledWith(params);
+  });
+
+  it("preserves core TTS delivery provenance through lifecycle normalization", async () => {
+    const operationalRunInstance = {};
+    const params = createAttemptParams();
+    const result = createAttemptResult();
+    result.toolMediaUrls = ["/tmp/reply.opus"];
+    markCoreTtsAttemptResult(result, ["/tmp/reply.opus"], operationalRunInstance);
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      pluginId: "codex-plugin",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: async () => result,
+    };
+
+    const normalized = await runAgentHarnessLifecycleAttempt(harness, params);
+
+    expect(
+      getCoreTtsAttemptResultMediaUrls(
+        normalized,
+        normalized.toolMediaUrls,
+        operationalRunInstance,
+      ),
+    ).toEqual(["/tmp/reply.opus"]);
   });
 
   it("backfills omitted current-attempt provenance from the harness assistant", async () => {
@@ -298,6 +322,35 @@ describe("AgentHarness lifecycle runner", () => {
       outcome: "empty",
       result: { assistant: emptyAssistant, usage: { input: 1, output: 0, total: 1 } },
     });
+    expect(diagnostics.events.map(({ event }) => event.type)).toEqual([
+      "harness.run.started",
+      "harness.run.completed",
+    ]);
+  });
+
+  it("records an empty finalization already validated by the harness owner", async () => {
+    const params = createFinalizationParams();
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      pluginId: "codex-plugin",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => createAttemptResult(),
+    };
+    const diagnostics = captureDiagnosticEvents();
+    const result = {
+      assistant: { ...createFinalAssistant(), content: [] },
+      usage: { input: 1, output: 0, total: 1 },
+    };
+
+    await expect(
+      runAgentHarnessLifecycleFinalization(harness, params, async () => {
+        throw new EmptySettledTurnFinalizationError(result);
+      }),
+    ).resolves.toMatchObject({ outcome: "empty", result });
+    await flushDiagnosticEvents();
+    diagnostics.unsubscribe();
+
     expect(diagnostics.events.map(({ event }) => event.type)).toEqual([
       "harness.run.started",
       "harness.run.completed",

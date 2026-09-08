@@ -140,7 +140,7 @@ const rejectedStreamedToolFixture = (params: {
             },
           ]
         : [],
-      responseId: null,
+      responseId: params.status === "incomplete" ? "resp_rejected_streamed_tool" : null,
       stopReason: "stop",
       error: params.error,
     },
@@ -692,10 +692,124 @@ const fixtures: ParityFixture[] = [
       error: null,
     },
   },
+  {
+    name: "terminal reasoning backfill follows the completed output slot",
+    events: [
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: { id: "rs_backfill", type: "reasoning", summary: [] },
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          id: "rs_backfill",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "Checking the answer." }],
+        },
+      },
+      completed("resp_reasoning_backfill", [
+        {
+          id: "rs_backfill",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "Checking the answer." }],
+          encrypted_content: "fixture-reasoning-ciphertext",
+        },
+      ]),
+    ],
+    canonical: {
+      events: [
+        { type: "thinking_start", contentIndex: 0 },
+        { type: "thinking_end", contentIndex: 0, content: "Checking the answer." },
+      ],
+      content: [{ type: "thinking", thinking: "Checking the answer.", encrypted: true }],
+      responseId: "resp_reasoning_backfill",
+      stopReason: "stop",
+      error: null,
+    },
+  },
+  {
+    name: "equal text in distinct output slots remains distinct",
+    events: [
+      ...[0, 1].flatMap((outputIndex) => [
+        {
+          type: "response.output_item.added",
+          output_index: outputIndex,
+          item: { id: `msg_equal_${outputIndex}`, type: "message", content: [] },
+        },
+        {
+          type: "response.output_item.done",
+          output_index: outputIndex,
+          item: {
+            id: `msg_equal_${outputIndex}`,
+            type: "message",
+            content: [{ type: "output_text", text: "Again." }],
+          },
+        },
+      ]),
+      completed(
+        "resp_equal_messages",
+        [0, 1].map((outputIndex) => ({
+          id: `msg_equal_${outputIndex}`,
+          type: "message",
+          content: [{ type: "output_text", text: "Again." }],
+        })),
+      ),
+    ],
+    canonical: {
+      events: [
+        { type: "text_start", contentIndex: 0 },
+        { type: "text_end", contentIndex: 0, content: "Again." },
+        { type: "text_start", contentIndex: 1 },
+        { type: "text_end", contentIndex: 1, content: "Again." },
+      ],
+      content: [
+        { type: "text", text: "Again." },
+        { type: "text", text: "Again." },
+      ],
+      responseId: "resp_equal_messages",
+      stopReason: "stop",
+      error: null,
+    },
+  },
 ];
 
-describe("Responses terminal recovery fixtures", () => {
+describe.each(["stable", "rotated"])("Responses terminal recovery with %s item IDs", (ids) => {
   it.each(fixtures)("$name", async (fixture) => {
-    expect(await runFixture(fixture.events)).toEqual(fixture.canonical);
+    let sequence = 0;
+    const events: ParityFixture["events"] = JSON.parse(
+      JSON.stringify(fixture.events),
+      (key, value: unknown) =>
+        ids === "rotated" &&
+        (key === "id" || key === "item_id") &&
+        typeof value === "string" &&
+        /^(msg|rs)_/.test(value)
+          ? `${value}_event_${sequence++}`
+          : value,
+    );
+    expect(await runFixture(events)).toEqual(fixture.canonical);
   });
+});
+
+it.each(["type", "call_id"])("rejects terminal output that changes its %s", async (field) => {
+  const streamed = {
+    type: "function_call",
+    id: "fc_original",
+    call_id: "call_original",
+    name: "lookup",
+    arguments: "{}",
+    status: "completed",
+  };
+  const terminal =
+    field === "type"
+      ? { type: "message", id: "msg_changed", content: [{ type: "output_text", text: "Changed" }] }
+      : { ...streamed, call_id: "call_changed" };
+  const result = await runFixture([
+    { type: "response.output_item.done", output_index: 0, item: streamed },
+    completed("resp_changed_identity", [terminal]),
+  ]);
+  expect(result.error).toBe("Responses stream changed output item identity");
+  expect(result.content).toHaveLength(1);
+  expect(result.events.filter((event) => event.type === "toolcall_end")).toHaveLength(1);
 });

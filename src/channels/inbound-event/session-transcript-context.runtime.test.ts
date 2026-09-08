@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
 import { runPreparedChannelTurn } from "../turn/execution.js";
@@ -28,6 +32,8 @@ function context(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgCont
 }
 
 describe("session transcript inbound context", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   beforeEach(() => {
     readRecent.mockReset();
   });
@@ -42,7 +48,7 @@ describe("session transcript inbound context", () => {
     await runPreparedChannelTurn({
       channel: "slack",
       routeSessionKey: ctx.SessionKey!,
-      storePath: "/tmp/sessions.json",
+      storePath: path.join(tempDirs.make("openclaw-session-transcript-context-"), "sessions.json"),
       ctxPayload: ctx,
       recordInboundSession: vi.fn(async () => undefined),
       runDispatch: vi.fn(async () => ({ queuedFinal: false })),
@@ -56,6 +62,34 @@ describe("session transcript inbound context", () => {
         body: "I will remind you at 11:50",
         timestamp: 2_000,
       },
+    ]);
+  });
+
+  it("restores marked Cron delivery context when no live chat window survives", async () => {
+    readRecent.mockImplementation(async (params) =>
+      params.includeCronDirectDeliveryContext
+        ? [{ id: "cron-1", role: "assistant", text: "scheduled payload", timestamp: 2_000 }]
+        : [],
+    );
+    const ctx = context({
+      SessionTranscriptContext: { chatWindow: true, historyLimit: 3 },
+    });
+
+    await mergeSessionTranscriptContext({
+      agentId: "main",
+      ctx,
+      sessionKey: ctx.SessionKey!,
+      storePath: "/tmp/sessions.json",
+    });
+
+    expect(ctx.ChannelStructuredContext).toEqual([
+      expect.objectContaining({
+        source: "session",
+        type: "chat_window",
+        payload: expect.objectContaining({
+          messages: [expect.objectContaining({ body: "scheduled payload" })],
+        }),
+      }),
     ]);
   });
 
@@ -132,6 +166,7 @@ describe("session transcript inbound context", () => {
       storePath: "/tmp/sessions.json",
     });
 
+    expect(readRecent.mock.calls[0]?.[0]).not.toHaveProperty("includeCronDirectDeliveryContext");
     expect(ctx.ChannelStructuredContext?.[0]).toMatchObject({
       source: "session",
       payload: {
@@ -168,6 +203,61 @@ describe("session transcript inbound context", () => {
     expect(ctx.ChannelStructuredContext?.[0]?.payload).toEqual({
       messages: [{ body: "target", is_reply_target: true }],
     });
+  });
+
+  it("preserves a provider-owned thread window while enriching a populated session prompt", async () => {
+    readRecent.mockResolvedValue([
+      { id: "u1", role: "user", text: "canonical question", timestamp: 1_000 },
+      { id: "a1", role: "assistant", text: "canonical reply", timestamp: 2_000 },
+    ]);
+    const graphMessages = [
+      { message_id: "graph-parent", sender: "Parent", body: "Graph parent" },
+      { message_id: "graph-reply", sender: "Teammate", body: "Graph reply" },
+    ];
+    const ctx = context({
+      ChatType: "channel",
+      InboundHistory: [
+        { messageId: "pending", sender: "Pending", body: "pending backlog", timestamp: 3_000 },
+      ],
+      SessionTranscriptContext: { historyLimit: 2 },
+      ChannelStructuredContext: [
+        {
+          label: "Thread history",
+          source: "msteams",
+          type: "chat_window",
+          sessionTranscriptMode: "preserve",
+          payload: {
+            order: "chronological",
+            relation: "before_current_message",
+            messages: graphMessages,
+          },
+        },
+      ],
+    });
+
+    let prompt = "";
+    await runPreparedChannelTurn({
+      channel: "msteams",
+      routeSessionKey: ctx.SessionKey!,
+      storePath: path.join(tempDirs.make("openclaw-teams-transcript-context-"), "sessions.json"),
+      ctxPayload: ctx,
+      recordInboundSession: vi.fn(async () => undefined),
+      runDispatch: vi.fn(async () => {
+        prompt = buildInboundUserContextPrefix(ctx, { timezone: "UTC" });
+        return { queuedFinal: false };
+      }),
+    });
+
+    expect(ctx.ChannelStructuredContext?.[0]?.source).toBe("msteams");
+    expect(asRecord(ctx.ChannelStructuredContext?.[0]?.payload).messages).toEqual(graphMessages);
+    expect(ctx.InboundHistory?.map((entry) => entry.body)).toEqual([
+      "canonical reply",
+      "pending backlog",
+    ]);
+    expect(prompt).toContain("Graph parent");
+    expect(prompt).toContain("Graph reply");
+    expect(prompt).toContain("canonical reply");
+    expect(prompt).toContain("pending backlog");
   });
 
   it("fails closed for an unscoped session key without a routed agent owner", async () => {

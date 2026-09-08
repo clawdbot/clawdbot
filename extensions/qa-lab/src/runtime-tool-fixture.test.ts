@@ -2,8 +2,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QaSuiteInfraError } from "./errors.js";
 import { runRuntimeToolFixture } from "./runtime-tool-fixture.js";
@@ -437,6 +439,10 @@ async function runMockRuntimeToolFixtureWithOutputs(params: {
 }
 
 afterEach(async () => {
+  // The session store keeps the state database open under the temporary root, so
+  // Windows fails the removal with EBUSY unless the cached handle is released first.
+  closeOpenClawAgentDatabasesForTest();
+  resetPluginStateStoreForTests();
   await Promise.all(
     tempRoots.splice(0).map((tempRoot) => fs.rm(tempRoot, { recursive: true, force: true })),
   );

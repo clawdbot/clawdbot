@@ -1,276 +1,268 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionEntry } from "../../../config/sessions/types.js";
-import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
-import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions/types.js";
 import {
-  consumeSessionWorkAdmissionHandoff,
-  type SessionWorkAdmissionLease,
-} from "../../../sessions/session-lifecycle-admission.js";
+  getAgentEventLifecycleGeneration,
+  rotateAgentEventLifecycleGeneration,
+} from "../../../infra/agent-events.js";
 import {
-  createSubagentRunRecord,
-  type SubagentRunRecordOverrides,
-} from "../../subagent-test-fixtures.test-helpers.js";
+  clearAgentRunContext,
+  registerAgentRunContext,
+} from "../../../infra/agent-run-registry.js";
+import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
 import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
-import { recoverInterruptedSubagentRow } from "./subagent-registry-restart-recovery.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { recoverInterruptedSubagentRow } from "./subagent-registry-restart-recovery.js";
+import { restartRecoveryTestHarness } from "./subagent-registry-restart-recovery.test-support.js";
 
-const mocks = vi.hoisted(() => ({
-  entries: {} as Record<string, SessionEntry>,
-  loadSessionEntry: vi.fn(),
-  patchSessionEntryCore: vi.fn(),
-  readSessionMessages: vi.fn(async () => [] as unknown[]),
-}));
-
-vi.mock("../../../config/config.js", () => ({
-  getRuntimeConfig: () => ({ session: { store: undefined } }),
-}));
-vi.mock("../../../config/sessions.js", () => ({
-  resolveAgentIdFromSessionKey: () => "main",
-  resolveSessionStorePathCore: () => "/tmp/subagent-recovery.sqlite",
-}));
-vi.mock("../../../config/sessions/session-accessor.js", () => ({
-  loadSessionEntry: mocks.loadSessionEntry,
-  patchSessionEntryCore: mocks.patchSessionEntryCore,
-}));
-vi.mock("../../../gateway/session-transcript-readers.js", () => ({
-  extractMessageRole: (message: { role?: string }) => message?.role,
-  extractSessionTranscriptText: (message: { content?: string }) => message?.content ?? null,
-  readSessionMessagesAsync: mocks.readSessionMessages,
-}));
-
-const childSessionKey = "agent:main:subagent:restart-child";
-function consumeRecoveryAdmission(payload: Record<string, unknown>): SessionWorkAdmissionLease {
-  const lease = consumeSessionWorkAdmissionHandoff({
-    handoffId: String(payload.internalRuntimeHandoffId),
-    scope: "/tmp/subagent-recovery.sqlite",
-    identities: [childSessionKey, String(payload.expectedExistingSessionId)],
-    onInterrupt: () => undefined,
-  });
-  if (!lease) {
-    throw new Error("expected recovery dispatch to consume its session admission handoff");
-  }
-  return lease;
-}
-
-const dispatchAgent = vi.fn(async (payload: Record<string, unknown>, _timeoutMs?: number) => {
-  consumeRecoveryAdmission(payload).release();
-  return {
-    runId: String(payload.idempotencyKey),
-    status: "accepted",
-  };
-});
-const gatewayRuntime: GatewayRecoveryRuntime = {
-  dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
-  waitForAgent: vi.fn(),
-  sendRecoveryNotice: vi.fn(),
-};
 type RecoveryParams = Parameters<typeof recoverInterruptedSubagentRow>[0];
 type ReplaceRunParams = Parameters<RecoveryParams["replaceRun"]>[0];
-const replaceRun = vi.fn<RecoveryParams["replaceRun"]>(() => true);
-const clearAcceptedRecovery = vi.fn<RecoveryParams["clearAcceptedRecovery"]>((params) => {
-  params.expected.execution.restartRecovery = undefined;
-  return true;
-});
-const resumeAcceptedRecovery = vi.fn<RecoveryParams["resumeAcceptedRecovery"]>(() => true);
-const reserveLaunch = vi.fn<RecoveryParams["reserveLaunch"]>((params) => params.idempotencyKey);
-const markLaunchAttempted = vi.fn<RecoveryParams["markLaunchAttempted"]>((params) => ({
-  sessionId: "session-id",
-  sessionMarker: params.sessionMarker,
-  idempotencyKey: params.idempotencyKey,
-  phase: "attempted" as const,
-  lifecycleGeneration: params.lifecycleGeneration,
-}));
-const markLaunchConsumed = vi.fn<RecoveryParams["markLaunchConsumed"]>((params) => ({
-  sessionId: "session-id",
-  sessionMarker: params.sessionMarker,
-  idempotencyKey: params.idempotencyKey,
-  phase: "consumed" as const,
-}));
-const markLaunchAccepted = vi.fn<RecoveryParams["markLaunchAccepted"]>((params) => {
-  const accepted = {
-    sessionId: "session-id",
-    sessionMarker: params.sessionMarker,
-    idempotencyKey: params.idempotencyKey,
-    phase: "accepted" as const,
-  };
-  params.expected.execution.restartRecovery = accepted;
-  return accepted;
-});
-const resetLaunchAttempt = vi.fn<RecoveryParams["resetLaunchAttempt"]>(() => true);
-const abandonLaunch = vi.fn<RecoveryParams["abandonLaunch"]>(() => true);
-const warn = vi.fn();
 
-function run(overrides: Partial<SubagentRunRecordOverrides> = {}): SubagentRunRecord {
-  return createSubagentRunRecord({
-    runId: "original-run",
-    childSessionKey,
-    requesterSessionKey: "agent:main:main",
-    requesterDisplayKey: "main",
-    task: "finish the restart-safe task",
-    cleanup: "keep",
-    createdAt: Date.now() - 60_000,
-    startedAt: Date.now() - 55_000,
-    ...overrides,
-  });
-}
-
-function getMockSessionId(): string {
-  const sessionId = mocks.entries[childSessionKey]?.sessionId;
-  if (!sessionId) {
-    throw new Error("expected mock recovery session");
-  }
-  return sessionId;
-}
-
-function recover(
-  entry: SubagentRunRecord,
-  overrides: Partial<Parameters<typeof recoverInterruptedSubagentRow>[0]> = {},
-) {
-  return recoverInterruptedSubagentRow({
-    runId: entry.runId,
-    entry,
-    now: Date.now(),
-    gatewayRuntime,
-    isCurrent: () => true,
-    abandonLaunch,
-    clearAcceptedRecovery,
-    getRun: () => entry,
-    replaceRun,
-    markLaunchAccepted,
-    markLaunchAttempted,
-    markLaunchConsumed,
-    reserveLaunch,
-    resumeAcceptedRecovery,
-    resetLaunchAttempt,
-    warn,
-    ...overrides,
-  });
-}
+const {
+  mocks,
+  childSessionKey,
+  gatewayRuntime,
+  consumeRecoveryAdmission,
+  dispatchAgent,
+  replaceRun,
+  clearAcceptedRecovery,
+  resumeAcceptedRecovery,
+  reserveLaunch,
+  markLaunchAttempted,
+  markLaunchConsumed,
+  markLaunchAccepted,
+  resetLaunchAttempt,
+  abandonLaunch,
+  warn,
+  run,
+  getMockSessionId,
+  recover,
+} = restartRecoveryTestHarness;
 
 describe("subagent registry restart recovery", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.entries = {
-      [childSessionKey]: {
+  beforeEach(() => restartRecoveryTestHarness.reset());
+
+  const signedAssistantText = (phase: "commentary" | "final_answer", text: string) => ({
+    type: "text",
+    text,
+    textSignature: JSON.stringify({ v: 1, id: `recovery-${phase}`, phase }),
+  });
+
+  describe("orphaned running sessions", () => {
+    it("recovers the exact running session orphaned before its Gateway could write an abort marker", async () => {
+      const entry = run();
+      entry.execution.lifecycleGeneration = getAgentEventLifecycleGeneration();
+      Object.assign(mocks.entries[childSessionKey]!, {
+        status: "running",
+        lifecycleRunId: entry.runId,
+        abortedLastRun: false,
+      });
+      rotateAgentEventLifecycleGeneration();
+
+      expect(await recover(entry)).toEqual({ status: "accepted" });
+      expect(dispatchAgent).toHaveBeenCalledTimes(1);
+      expect(dispatchAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: childSessionKey,
+          expectedExistingSessionId: "session-id",
+        }),
+      );
+      expect(mocks.entries[childSessionKey]).toMatchObject({
         sessionId: "session-id",
-        updatedAt: Date.now(),
-        abortedLastRun: true,
-      },
-    };
-    mocks.loadSessionEntry.mockImplementation(
-      ({ sessionKey }: { sessionKey: string }) => mocks.entries[sessionKey],
-    );
-    mocks.patchSessionEntryCore.mockImplementation(
-      async (
-        { sessionKey }: { sessionKey: string },
-        update: (entry: SessionEntry) => SessionEntry,
-      ) => {
-        const current = mocks.entries[sessionKey];
-        if (!current) {
-          return null;
+        abortedLastRun: false,
+        subagentRecovery: { automaticAttempts: 1 },
+      });
+      expect(gatewayRuntime.sendRecoveryNotice).toHaveBeenCalledWith({
+        channel: "qa-channel",
+        to: "qa-requester",
+        accountId: "default",
+        threadId: undefined,
+        text: "Resumed your interrupted task after the Gateway restart.",
+        idempotencyKey: expect.stringMatching(
+          /^main-session-restart-recovery:subagent:subagent-recovery:.*:resumed-notice$/,
+        ),
+        isCurrent: expect.any(Function),
+      });
+    });
+
+    it.each(["current lifecycle", "different run", "completed session"])(
+      "does not invent a restart interruption for a %s",
+      async (scenario) => {
+        const entry = run();
+        entry.execution.lifecycleGeneration = getAgentEventLifecycleGeneration();
+        if (scenario !== "current lifecycle") {
+          rotateAgentEventLifecycleGeneration();
         }
-        const next = update({ ...current });
-        mocks.entries[sessionKey] = next;
-        return next;
+        Object.assign(mocks.entries[childSessionKey]!, {
+          status: scenario === "completed session" ? "done" : "running",
+          lifecycleRunId: scenario === "different run" ? "newer-run" : entry.runId,
+          abortedLastRun: false,
+        });
+        expect(await recover(entry)).toEqual({ status: "ignored" });
+        expect(dispatchAgent).not.toHaveBeenCalled();
+        expect(mocks.patchSessionEntryCore).not.toHaveBeenCalled();
       },
     );
-    dispatchAgent.mockImplementation(async (payload) => {
-      consumeRecoveryAdmission(payload).release();
-      return {
-        runId: String(payload.idempotencyKey),
-        status: "accepted",
-      };
-    });
-    replaceRun.mockReturnValue(true);
-    reserveLaunch.mockImplementation((params: { idempotencyKey: string }) => params.idempotencyKey);
-    markLaunchAttempted.mockImplementation(
-      (params: { idempotencyKey: string; lifecycleGeneration: string; sessionMarker: string }) => ({
-        sessionId: getMockSessionId(),
-        sessionMarker: params.sessionMarker,
-        idempotencyKey: params.idempotencyKey,
-        phase: "attempted" as const,
-        lifecycleGeneration: params.lifecycleGeneration,
-      }),
+
+    it.each(["run", "admission"])(
+      "does not mark a hard-kill orphan after a fresh %s owns its session",
+      async (owner) => {
+        const entry = run();
+        entry.execution.lifecycleGeneration = getAgentEventLifecycleGeneration();
+        rotateAgentEventLifecycleGeneration();
+        Object.assign(mocks.entries[childSessionKey]!, {
+          status: "running",
+          lifecycleRunId: entry.runId,
+          abortedLastRun: false,
+        });
+        const lease =
+          owner === "admission"
+            ? await beginSessionWorkAdmission({
+                scope: "/tmp/subagent-recovery.sqlite",
+                identities: [childSessionKey, "session-id"],
+                assertAllowed: () => {},
+              })
+            : undefined;
+        if (owner === "run") {
+          registerAgentRunContext("fresh-owner", {
+            sessionKey: childSessionKey,
+            sessionId: "session-id",
+          });
+        }
+        try {
+          expect(await recover(entry)).toEqual({ status: "deferred" });
+          expect(mocks.entries[childSessionKey]?.abortedLastRun).toBe(false);
+          expect(dispatchAgent).not.toHaveBeenCalled();
+        } finally {
+          lease?.release();
+          clearAgentRunContext("fresh-owner");
+        }
+      },
     );
-    markLaunchConsumed.mockImplementation(
-      (params: { idempotencyKey: string; sessionMarker: string }) => ({
-        sessionId: getMockSessionId(),
-        sessionMarker: params.sessionMarker,
-        idempotencyKey: params.idempotencyKey,
-        phase: "consumed" as const,
-      }),
-    );
-    markLaunchAccepted.mockImplementation((params) => {
-      const accepted = {
-        sessionId: getMockSessionId(),
-        sessionMarker: params.sessionMarker,
-        idempotencyKey: params.idempotencyKey,
-        phase: "accepted" as const,
-      };
-      params.expected.execution.restartRecovery = accepted;
-      return accepted;
+
+    it("keeps a replacement session untouched when orphan marking waits for the store", async () => {
+      const entry = run();
+      entry.execution.lifecycleGeneration = getAgentEventLifecycleGeneration();
+      rotateAgentEventLifecycleGeneration();
+      Object.assign(mocks.entries[childSessionKey]!, {
+        status: "running",
+        lifecycleRunId: entry.runId,
+        abortedLastRun: false,
+      });
+      mocks.patchSessionEntryCore.mockImplementationOnce(async (_scope, update) => {
+        const replacement = {
+          ...mocks.entries[childSessionKey]!,
+          sessionId: "replacement-session",
+          lifecycleRunId: "replacement-run",
+        };
+        mocks.entries[childSessionKey] = replacement;
+        return update({ ...replacement });
+      });
+      expect(await recover(entry)).toEqual({ status: "deferred" });
+      expect(dispatchAgent).not.toHaveBeenCalled();
+      expect(mocks.entries[childSessionKey]).toMatchObject({
+        sessionId: "replacement-session",
+        lifecycleRunId: "replacement-run",
+        abortedLastRun: false,
+      });
     });
-    resetLaunchAttempt.mockReturnValue(true);
-    abandonLaunch.mockReturnValue(true);
-    clearAcceptedRecovery.mockImplementation((params) => {
-      params.expected.execution.restartRecovery = undefined;
-      return true;
-    });
-    resumeAcceptedRecovery.mockReturnValue(true);
-    mocks.readSessionMessages.mockResolvedValue([]);
   });
 
-  it("resumes a collector with transcript context and its output contract", async () => {
-    mocks.readSessionMessages.mockResolvedValue([
-      { role: "user", content: "latest user direction" },
-      { role: "assistant", content: "I updated openclaw.json" },
-    ]);
-    const entry = run({ collect: true, outputSchema: { type: "object" } });
+  it.each([
+    {
+      label: "legacy scalar user text and visible assistant text",
+      userContent: "latest user direction",
+      assistantContent: "I updated openclaw.json",
+      appendImage: false,
+      configChanged: true,
+    },
+    {
+      label: "input_text user direction before an image and hidden reasoning",
+      userContent: [{ type: "input_text", text: "latest user direction" }],
+      assistantContent: [{ type: "reasoning", text: "I updated openclaw.json" }],
+      appendImage: true,
+      configChanged: false,
+    },
+    {
+      label: "legacy untyped user text and signed commentary",
+      userContent: [{ text: "latest user direction" }],
+      assistantContent: [signedAssistantText("commentary", "I will apply config.patch")],
+      appendImage: false,
+      configChanged: false,
+    },
+    {
+      label: "a final answer instead of preceding signed commentary",
+      userContent: "latest user direction",
+      assistantContent: [
+        signedAssistantText("commentary", "I will run openclaw gateway restart"),
+        signedAssistantText("final_answer", "The requested work remains pending"),
+      ],
+      appendImage: false,
+      configChanged: false,
+    },
+    {
+      label: "visible output_text after an image-only user follow-up",
+      userContent: [{ type: "input_text", text: "latest user direction" }],
+      assistantContent: [{ type: "output_text", text: "I updated openclaw.json" }],
+      appendImage: true,
+      configChanged: true,
+    },
+  ])(
+    "resumes a collector with $label",
+    async ({ userContent, assistantContent, appendImage, configChanged }) => {
+      mocks.readSessionMessages.mockResolvedValue([
+        { role: "user", content: userContent },
+        ...(appendImage ? [{ role: "user", content: [{ type: "image", image: "opaque" }] }] : []),
+        { role: "assistant", content: assistantContent },
+      ]);
+      const entry = run({ collect: true, outputSchema: { type: "object" } });
 
-    await expect(recover(entry)).resolves.toEqual({ status: "accepted" });
+      await expect(recover(entry)).resolves.toEqual({ status: "accepted" });
 
-    expect(dispatchAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: childSessionKey,
-        expectedExistingSessionId: "session-id",
-        internalRuntimeHandoffId: expect.any(String),
-        lane: "subagent",
-        deliver: false,
-        swarmCollector: true,
-        swarmOutputSchema: { type: "object" },
-        sessionEffects: "internal",
-        suppressPromptPersistence: true,
-        message: expect.stringMatching(/latest user direction[\s\S]*already applied/),
-      }),
-    );
-    expect(reserveLaunch).toHaveBeenCalledWith({
-      runId: "original-run",
-      expected: entry,
-      sessionId: "session-id",
-      sessionMarker: expect.any(String),
-      idempotencyKey: expect.stringMatching(/^subagent-recovery:[a-f0-9]{64}$/),
-    });
-    expect(replaceRun).toHaveBeenCalledWith(
-      expect.objectContaining({
-        previousRunId: "original-run",
-        nextRunId: expect.stringMatching(/^subagent-recovery:[a-f0-9]{64}$/),
+      expect(dispatchAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: childSessionKey,
+          expectedExistingSessionId: "session-id",
+          internalRuntimeHandoffId: expect.any(String),
+          lane: "subagent",
+          deliver: false,
+          swarmCollector: true,
+          swarmOutputSchema: { type: "object" },
+          sessionEffects: "internal",
+          suppressPromptPersistence: true,
+          message: expect.stringContaining("latest user direction"),
+        }),
+      );
+      expect(String(dispatchAgent.mock.calls[0]?.[0].message).includes("already applied")).toBe(
+        configChanged,
+      );
+      expect(reserveLaunch).toHaveBeenCalledWith({
+        runId: "original-run",
         expected: entry,
-        task: "finish the restart-safe task",
-        persistenceFailure: "return-false",
-      }),
-    );
-    expect(replaceRun.mock.calls[0]?.[0].restartRecovery).toMatchObject({
-      phase: "accepted",
-      sessionId: "session-id",
-    });
-    expect(mocks.entries[childSessionKey]).toMatchObject({
-      abortedLastRun: false,
-      subagentRecovery: {
-        automaticAttempts: 1,
-        lastRunId: "original-run",
-      },
-    });
-  });
+        sessionId: "session-id",
+        sessionMarker: expect.any(String),
+        idempotencyKey: expect.stringMatching(/^subagent-recovery:[a-f0-9]{64}$/),
+      });
+      expect(replaceRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          previousRunId: "original-run",
+          nextRunId: expect.stringMatching(/^subagent-recovery:[a-f0-9]{64}$/),
+          expected: entry,
+          task: "finish the restart-safe task",
+          persistenceFailure: "return-false",
+        }),
+      );
+      expect(replaceRun.mock.calls[0]?.[0].restartRecovery).toMatchObject({
+        phase: "accepted",
+        sessionId: "session-id",
+      });
+      expect(mocks.entries[childSessionKey]).toMatchObject({
+        abortedLastRun: false,
+        subagentRecovery: {
+          automaticAttempts: 1,
+          lastRunId: "original-run",
+        },
+      });
+    },
+  );
 
   it("ignores non-aborted, yielded, steer-owned, and already-terminal rows", async () => {
     mocks.entries[childSessionKey]!.abortedLastRun = false;
@@ -299,9 +291,11 @@ describe("subagent registry restart recovery", () => {
   });
 
   it("returns stale and durable terminal owners to the sweeper finalizer", async () => {
+    const interruptedAt = Date.now() - 3 * 60 * 60_000;
     const stale = run({
-      createdAt: Date.now() - 3 * 60 * 60_000,
-      startedAt: Date.now() - 3 * 60 * 60_000,
+      createdAt: interruptedAt,
+      startedAt: interruptedAt,
+      execution: { status: "interrupted", interruptedAt, interruptionReason: "gateway-restart" },
     });
     await expect(recover(stale)).resolves.toMatchObject({
       status: "terminal",
@@ -756,6 +750,7 @@ describe("subagent registry restart recovery", () => {
 
     expect(clearAcceptedRecovery).not.toHaveBeenCalled();
     expect(resumeAcceptedRecovery).not.toHaveBeenCalled();
+    expect(gatewayRuntime.sendRecoveryNotice).not.toHaveBeenCalled();
     expect(mocks.entries[childSessionKey]).toMatchObject({
       abortedLastRun: true,
     });
@@ -916,46 +911,6 @@ describe("subagent registry restart recovery", () => {
     expect(mocks.patchSessionEntryCore).not.toHaveBeenCalled();
     expect(clearAcceptedRecovery).not.toHaveBeenCalled();
     expect(successor.execution.restartRecovery).toMatchObject({ phase: "accepted" });
-  });
-
-  it("retires the accepted receipt so a later restart can dispatch a new recovery", async () => {
-    const entry = run();
-    const replacements: SubagentRunRecord[] = [];
-    replaceRun.mockImplementation((params: ReplaceRunParams) => {
-      const replacement = structuredClone(params.expected ?? entry);
-      replacement.runId = params.nextRunId;
-      replacement.execution = {
-        status: "running",
-        startedAt: Date.now(),
-        restartRecovery: params.restartRecovery,
-      };
-      replacements.push(replacement);
-      return true;
-    });
-
-    const getRun = (runId: string) => replacements.find((candidate) => candidate.runId === runId);
-    await expect(recover(entry, { getRun })).resolves.toEqual({ status: "accepted" });
-    const firstSuccessor = replacements[0]!;
-    const firstRecoveryRunId = firstSuccessor.runId;
-    expect(firstSuccessor.execution.restartRecovery).toBeUndefined();
-    expect(replaceRun.mock.calls[0]?.[0].restartRecovery).toMatchObject({
-      phase: "accepted",
-    });
-
-    mocks.entries[childSessionKey] = {
-      sessionId: "session-id-2",
-      updatedAt: Date.now() + 1_000,
-      abortedLastRun: true,
-    };
-    await expect(recover(firstSuccessor, { getRun })).resolves.toEqual({ status: "accepted" });
-
-    expect(dispatchAgent).toHaveBeenCalledTimes(2);
-    expect(replacements).toHaveLength(2);
-    expect(replacements[1]!.runId).not.toBe(firstRecoveryRunId);
-    expect(replacements[1]!.execution.restartRecovery).toBeUndefined();
-    expect(replaceRun.mock.calls[1]?.[0].restartRecovery).toMatchObject({
-      phase: "accepted",
-    });
   });
 
   it("tombstones a rapid third accepted recovery", async () => {

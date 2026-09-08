@@ -13,12 +13,10 @@ type AgentCallResponse = {
   disposition?: "ambiguous";
 };
 
-const agentSpy = vi.fn(
-  async (_req: AgentCallRequest): Promise<AgentCallResponse> => ({
-    runId: "run-main",
-    status: "ok",
-  }),
-);
+const agentSpy = vi.fn(async (_req: AgentCallRequest): Promise<AgentCallResponse> => ({
+  runId: "run-main",
+  status: "ok",
+}));
 const sessionsDeleteSpy = vi.fn((_req: AgentCallRequest) => undefined);
 const callGatewayMock = vi.fn(async (_request: unknown) => ({}));
 const loadSessionStoreMock = vi.fn((_storePath: string) => ({}));

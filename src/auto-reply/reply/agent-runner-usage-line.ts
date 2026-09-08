@@ -1,13 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { hasNonzeroUsage, type NormalizedUsage } from "../../agents/usage.js";
+import { hasBillableUsage, hasNonzeroUsage, type NormalizedUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginHookReplyUsageState } from "../../plugins/hook-types.js";
 import {
-  estimateUsageCost,
+  estimateAggregateUsageCost,
   formatTokenCount,
   formatUsd,
-  type ModelCostConfig,
-  resolveModelCostConfig,
 } from "../../utils/usage-format.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { resolveEffectiveResponseUsage } from "../thinking.js";
@@ -16,42 +14,28 @@ import { buildUsageContract } from "../usage-bar/contract.js";
 import { loadUsageBarTemplate } from "../usage-bar/template.js";
 import { renderUsageBar } from "../usage-bar/translator.js";
 
-const formatResponseUsageLine = (params: {
-  usage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-  };
-  showCost: boolean;
-  costConfig?: ModelCostConfig;
-}): string | null => {
+const formatResponseUsageLine = (
+  params: Parameters<typeof estimateAggregateUsageCost>[0] & {
+    showCost: boolean;
+  },
+): string | null => {
   const usage = params.usage;
   if (!usage) {
     return null;
   }
   const input = usage.input;
   const output = usage.output;
-  if (typeof input !== "number" && typeof output !== "number") {
-    return null;
-  }
   const inputLabel = typeof input === "number" ? formatTokenCount(input) : "?";
   const outputLabel = typeof output === "number" ? formatTokenCount(output) : "?";
   const cacheRead = typeof usage.cacheRead === "number" ? usage.cacheRead : undefined;
   const cacheWrite = typeof usage.cacheWrite === "number" ? usage.cacheWrite : undefined;
-  const cost =
-    params.showCost && typeof input === "number" && typeof output === "number"
-      ? estimateUsageCost({
-          usage: {
-            input,
-            output,
-            cacheRead: usage.cacheRead,
-            cacheWrite: usage.cacheWrite,
-          },
-          cost: params.costConfig,
-        })
-      : undefined;
+  const canPriceUsage =
+    usage.cost !== undefined || (typeof input === "number" && typeof output === "number");
+  const cost = params.showCost && canPriceUsage ? estimateAggregateUsageCost(params) : undefined;
   const costLabel = params.showCost ? formatUsd(cost) : undefined;
+  if (typeof input !== "number" && typeof output !== "number" && !costLabel) {
+    return null;
+  }
   const cacheSuffix =
     (typeof cacheRead === "number" && cacheRead > 0) ||
     (typeof cacheWrite === "number" && cacheWrite > 0)
@@ -77,26 +61,20 @@ export const resolveResponseUsageLine = (params: {
     params.config.messages?.responseUsage,
     params.channel,
   );
-  if (
-    responseUsageMode === "off" ||
-    !hasNonzeroUsage(params.usage) ||
-    params.preserveUserFacingSessionState === true
-  ) {
+  const showCost = responseUsageMode === "full";
+  const hasUsage = showCost ? hasBillableUsage(params.usage) : hasNonzeroUsage(params.usage);
+  if (responseUsageMode === "off" || !hasUsage || params.preserveUserFacingSessionState === true) {
     return undefined;
   }
 
-  const costConfig = resolveModelCostConfig({
+  const formatted = formatResponseUsageLine({
+    usage: params.usage,
+    showCost,
     provider: params.provider,
     model: params.model,
     config: params.config,
     agentDir: params.agentDir,
     allowPluginNormalization: false,
-  });
-  const showCost = responseUsageMode === "full" && costConfig !== undefined;
-  const formatted = formatResponseUsageLine({
-    usage: params.usage,
-    showCost,
-    costConfig,
   });
   const usageTemplate =
     responseUsageMode === "full" && params.replyUsageState

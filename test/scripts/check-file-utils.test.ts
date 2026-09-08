@@ -20,14 +20,6 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 const { createTempDir } = createScriptTestHarness();
 
-describe("scripts/check-file-utils isCodeFile", () => {
-  it("accepts source files and skips declarations", () => {
-    expect(isCodeFile("example.ts")).toBe(true);
-    expect(isCodeFile("example.mjs")).toBe(true);
-    expect(isCodeFile("example.d.ts")).toBe(false);
-  });
-});
-
 describe("scripts/check-file-utils collectFilesSync", () => {
   it("collects matching files while skipping common generated dirs", () => {
     const rootDir = createTempDir("openclaw-check-file-utils-");
@@ -78,14 +70,14 @@ describe("scripts/check-file-utils listRepoFilesSync", () => {
     execFileSyncMock.mockReset();
   });
 
-  it("bounds git ls-files with a timeout and kill signal", () => {
-    execFileSyncMock.mockReturnValue("src/keep.ts\nsrc/skip.d.ts\n");
+  it("filters tracked source files and bounds the git lookup", () => {
+    execFileSyncMock.mockReturnValue("src/keep.ts\nsrc/keep.mjs\nsrc/skip.d.ts\n");
 
     expect(
       listRepoFilesSync("/fake/repo", {
         includeFile: (filePath) => isCodeFile(filePath),
       }),
-    ).toEqual(["src/keep.ts"]);
+    ).toEqual(["src/keep.mjs", "src/keep.ts"]);
     expect(execFileSyncMock).toHaveBeenCalledWith(
       "git",
       expect.arrayContaining(["-C", "/fake/repo", "ls-files", "--"]),

@@ -1,8 +1,6 @@
 // Qwen provider module implements model/runtime integration.
 import {
   describeOpenAiCompatibleVideo,
-  describeImageWithModel,
-  describeImagesWithModel,
   type MediaUnderstandingProvider,
   type VideoDescriptionRequest,
 } from "openclaw/plugin-sdk/media-understanding";
@@ -33,8 +31,8 @@ export function buildQwenMediaUnderstandingProvider(): MediaUnderstandingProvide
     autoPriority: {
       video: 15,
     },
-    describeImage: describeImageWithModel,
-    describeImages: describeImagesWithModel,
+    describeImage: undefined,
+    describeImages: undefined,
     describeVideo: describeQwenVideo,
   };
 }

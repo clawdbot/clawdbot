@@ -13,6 +13,10 @@ import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import {
   browserAct,
   browserConsoleMessages,
+  browserRequests,
+  browserErrors,
+  browserPageText,
+  browserEmulateSetting,
   browserDownload,
   browserTabs,
   browserWaitForDownload,
@@ -23,7 +27,12 @@ import {
   readStringValue,
   type BrowserTabsResult,
 } from "./browser-tool.runtime.js";
-import { appendNavigatedPageState, wrapBrowserExternalJson } from "./browser-tool.snapshot.js";
+import {
+  appendNavigatedPageState,
+  formatBrowserDebugLogResult,
+  wrapBrowserExternalJson,
+  wrapBrowserExternalText,
+} from "./browser-tool.snapshot.js";
 import { resolveBrowserActRequestTimeoutMs } from "./browser/act-policy.js";
 import type {
   BrowserBatchAbort,
@@ -31,6 +40,7 @@ import type {
 } from "./browser/client-actions-types.js";
 import {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
+  DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
 } from "./browser/constants.js";
 import { formatErrorMessage } from "./infra/errors.js";
@@ -38,6 +48,10 @@ import { formatErrorMessage } from "./infra/errors.js";
 const browserToolActionDeps = {
   browserAct,
   browserConsoleMessages,
+  browserRequests,
+  browserErrors,
+  browserPageText,
+  browserEmulateSetting,
   browserDownload,
   browserTabs,
   browserWaitForDownload,
@@ -105,6 +119,7 @@ type BrowserTabLike = {
   label?: unknown;
   title?: unknown;
   url?: unknown;
+  urlUnavailableReason?: unknown;
   type?: unknown;
   targetId?: unknown;
   wsUrl?: unknown;
@@ -125,6 +140,10 @@ function formatAgentTab(tab: unknown): Record<string, unknown> {
     ...(label ? { label } : {}),
     title: source.title,
     url: source.url,
+    ...(source.urlUnavailableReason === "navigation_blocked" ||
+    source.urlUnavailableReason === "navigation_check_failed"
+      ? { urlUnavailableReason: source.urlUnavailableReason }
+      : {}),
     type: source.type,
     ...(targetId ? { targetId } : {}),
     ...(source.wsUrl ? { wsUrl: source.wsUrl } : {}),
@@ -325,6 +344,157 @@ export async function executeConsoleAction(params: {
     signal: params.signal,
   });
   return formatConsoleToolResult(result);
+}
+
+/** Read recent network requests, keeping counts aligned with the bounded payload. */
+export async function executeRequestsAction(
+  params: Parameters<typeof executeConsoleAction>[0],
+): Promise<AgentToolResult<unknown>> {
+  const { input, baseUrl, profile, proxyRequest, signal } = params;
+  const targetId = normalizeOptionalString(input.targetId);
+  const filter = normalizeOptionalString(input.filter);
+  const clear = typeof input.clear === "boolean" ? input.clear : undefined;
+  const limit =
+    readPositiveIntegerParam(input, "limit", { message: "limit must be a positive integer." }) ??
+    50;
+  const result = proxyRequest
+    ? ((await proxyRequest({
+        method: "GET",
+        path: "/requests",
+        profile,
+        query: { targetId, filter, clear },
+        // SAFETY: The proxy dispatches the same /requests route as the typed local client.
+      })) as Awaited<ReturnType<typeof browserRequests>>)
+    : await browserToolActionDeps.browserRequests(baseUrl, {
+        targetId,
+        filter,
+        clear,
+        profile,
+        signal,
+      });
+  return formatBrowserDebugLogResult("requests", result, result.requests, limit);
+}
+
+/** Read recent page errors, keeping counts aligned with the bounded payload. */
+export async function executeErrorsAction(
+  params: Parameters<typeof executeConsoleAction>[0],
+): Promise<AgentToolResult<unknown>> {
+  const { input, baseUrl, profile, proxyRequest, signal } = params;
+  const targetId = normalizeOptionalString(input.targetId);
+  const clear = typeof input.clear === "boolean" ? input.clear : undefined;
+  const limit =
+    readPositiveIntegerParam(input, "limit", { message: "limit must be a positive integer." }) ??
+    50;
+  const result = proxyRequest
+    ? ((await proxyRequest({
+        method: "GET",
+        path: "/errors",
+        profile,
+        query: { targetId, clear },
+        // SAFETY: The proxy dispatches the same /errors route as the typed local client.
+      })) as Awaited<ReturnType<typeof browserErrors>>)
+    : await browserToolActionDeps.browserErrors(baseUrl, {
+        targetId,
+        clear,
+        profile,
+        signal,
+      });
+  return formatBrowserDebugLogResult("errors", result, result.errors, limit);
+}
+
+/** Extract visible page prose with the same trust boundary as snapshots. */
+export async function executeTextAction(
+  params: Parameters<typeof executeConsoleAction>[0],
+): Promise<AgentToolResult<unknown>> {
+  const { input, baseUrl, profile, proxyRequest, signal } = params;
+  const targetId = normalizeOptionalString(input.targetId);
+  const selector = normalizeOptionalString(input.selector);
+  const maxChars = Math.min(
+    readPositiveIntegerParam(input, "maxChars", {
+      message: "maxChars must be a positive integer.",
+    }) ?? DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+    DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+  );
+  const result = proxyRequest
+    ? ((await proxyRequest({
+        method: "GET",
+        path: "/text",
+        profile,
+        query: { targetId, selector, maxChars },
+        // SAFETY: The proxy dispatches the same /text route as the typed local client.
+      })) as Awaited<ReturnType<typeof browserPageText>>)
+    : await browserToolActionDeps.browserPageText(baseUrl, {
+        targetId,
+        selector,
+        maxChars,
+        profile,
+        signal,
+      });
+  const wrapped = wrapBrowserExternalText({
+    value: result.text,
+    marker: "\n[truncated — retry with a narrower selector]",
+    includeWarning: true,
+    maxChars,
+    prefix: result.truncated
+      ? "Page text was truncated. Retry with a narrower selector."
+      : undefined,
+  });
+  return {
+    content: [{ type: "text", text: wrapped.text }],
+    details: {
+      ok: result.ok,
+      targetId: result.targetId,
+      url: result.url,
+      truncated: result.truncated || wrapped.truncated,
+      externalContent: { untrusted: true, source: "browser", kind: "text", wrapped: true },
+    },
+  };
+}
+
+/** Apply settings in order and pin later changes to the first resolved tab. */
+export async function executeEmulateAction(
+  params: Parameters<typeof executeConsoleAction>[0],
+): Promise<AgentToolResult<unknown>> {
+  const { input, baseUrl, profile, proxyRequest, signal } = params;
+  const settings = [
+    ["device", "device", "name"],
+    ["colorScheme", "media", "colorScheme"],
+    ["timezoneId", "timezone", "timezoneId"],
+    ["locale", "locale", "locale"],
+  ] as const;
+  const requested = settings.flatMap(([field, setting, key]) => {
+    const value = normalizeOptionalString(input[field]);
+    return value ? [{ field, setting, key, value }] : [];
+  });
+  if (requested.length === 0) {
+    throw new Error("emulate requires at least one of device, colorScheme, timezoneId, or locale.");
+  }
+  const colorScheme = requested.find(({ field }) => field === "colorScheme")?.value;
+  if (colorScheme && !["dark", "light", "no-preference", "none"].includes(colorScheme)) {
+    throw new Error("colorScheme must be dark|light|no-preference|none.");
+  }
+  let targetId = normalizeOptionalString(input.targetId);
+  const applied: string[] = [];
+  for (const { field, setting, key, value } of requested) {
+    const body = { targetId, [key]: value };
+    const result = proxyRequest
+      ? ((await proxyRequest({
+          method: "POST",
+          path: `/set/${setting}`,
+          profile,
+          body,
+          // SAFETY: All four /set routes return the local client's resolved-tab result.
+        })) as Awaited<ReturnType<typeof browserEmulateSetting>>)
+      : await browserToolActionDeps.browserEmulateSetting(baseUrl, {
+          setting,
+          body,
+          profile,
+          signal,
+        });
+    targetId = result.targetId ?? targetId;
+    applied.push(field);
+  }
+  return jsonResult({ ok: true, targetId, applied });
 }
 
 function resolveDownloadProxyTimeoutMs(timeoutMs: number | undefined): number {

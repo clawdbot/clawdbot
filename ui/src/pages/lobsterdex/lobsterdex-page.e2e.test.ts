@@ -65,7 +65,7 @@ suite.define(() => {
             return state.execSucceeds;
           };
         });
-        const gateway = await installMockGateway(page);
+        await installMockGateway(page);
         const response = await page.goto(`${suite.server.baseUrl}settings/lobsterdex`);
         expect(response?.status()).toBe(200);
 
@@ -76,8 +76,6 @@ suite.define(() => {
         const blue = copyButtons.nth(1);
         const crimsonUrl = `${new URL(suite.server.baseUrl).origin}/settings/lobsterdex#lobsterdex-crimson`;
         const blueUrl = `${new URL(suite.server.baseUrl).origin}/settings/lobsterdex#lobsterdex-blue`;
-        const requestsBeforeCopy = (await gateway.getRequests()).length;
-
         await crimson.focus();
         await page.keyboard.press("Enter");
         await expect
@@ -189,7 +187,6 @@ suite.define(() => {
           ),
         ).toEqual([blueUrl]);
         await expect.poll(() => blue.locator('path[d="M20 6 9 17l-5-5"]').count()).toBe(0);
-        expect((await gateway.getRequests()).length).toBe(requestsBeforeCopy);
       },
     );
   });

@@ -2,6 +2,10 @@
 import { readFile, rm, stat } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { executeBashWithOperations } from "./bash-executor.js";
+import {
+  expectNativeBashSpill,
+  nativeBashSpillScenarios,
+} from "./bash-output-spill.test-support.js";
 import type { BashOperations } from "./tools/bash-operations.js";
 import { DEFAULT_MAX_BYTES } from "./tools/truncate.js";
 
@@ -21,6 +25,13 @@ function operationsForChunks(chunks: readonly OutputChunk[]): BashOperations {
 }
 
 describe("executeBashWithOperations", () => {
+  it.runIf(process.platform !== "win32").each(nativeBashSpillScenarios)(
+    "settles real Bash output for %s",
+    async (scenario) => {
+      await expectNativeBashSpill("executor", scenario);
+    },
+  );
+
   it("stores truncated full output in an owner-only temp file", async () => {
     const sanitizedOutput = "secret output\n".repeat(9000);
     const operations: BashOperations = {

@@ -1,19 +1,13 @@
 // Builds base config schema metadata shared across generated config surfaces.
-import { isSensitiveUrlConfigPath } from "@openclaw/net-policy/redact-sensitive-url";
 import { VERSION } from "../version.js";
 import { FIELD_HELP } from "./schema.help.js";
-import type { ConfigUiHints } from "./schema.hints.js";
-import {
-  applySensitiveUrlHints,
-  buildBaseHints,
-  collectMatchingSchemaPaths,
-  mapSensitivePaths,
-} from "./schema.hints.js";
+import { buildBaseHints, mapSensitivePaths } from "./schema.hints.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 import {
   asSchemaObject,
   cloneSchema,
   type ConfigJsonSchemaObject as JsonSchemaObject,
+  type ConfigSchemaResponse,
 } from "./schema.shared.js";
 import { applyDerivedTags } from "./schema.tags.js";
 import { applyResolvedConfigTierHints } from "./schema.tiers.js";
@@ -94,20 +88,13 @@ function applyNodeDocumentation(node: JsonSchemaObject, pathCandidates: readonly
   }
 }
 
-type BaseConfigSchemaResponse = {
-  schema: ConfigSchema;
-  uiHints: ConfigUiHints;
-  version: string;
-  generatedAt: string;
-};
+type BaseConfigSchemaStablePayload = Omit<ConfigSchemaResponse, "generatedAt">;
 
-type BaseConfigSchemaStablePayload = Omit<BaseConfigSchemaResponse, "generatedAt">;
-
-function stripChannelSchema(schema: ConfigSchema): ConfigSchema {
-  const next = cloneSchema(schema);
-  const root = asSchemaObject(next);
+function preparePublicSchema(schema: ConfigSchema): ConfigSchema {
+  // Zod returns an independent JSON tree; prepare it before publishing the cache.
+  const root = asSchemaObject(schema);
   if (!root || !root.properties) {
-    return next;
+    return schema;
   }
   // Allow `$schema` in config files for editor tooling, but hide it from the
   // Control UI form schema so it does not show up as a configurable section.
@@ -117,22 +104,17 @@ function stripChannelSchema(schema: ConfigSchema): ConfigSchema {
   }
   const channelsNode = asSchemaObject(root.properties.channels);
   if (channelsNode) {
-    channelsNode.properties = {};
-    channelsNode.required = [];
+    // Keep plugin config permissive without advertising an untyped lookup wildcard.
     channelsNode.additionalProperties = true;
   }
-  return next;
+  return schema;
 }
 
 let baseConfigSchemaStablePayload: BaseConfigSchemaStablePayload | null = null;
 
 function computeBaseConfigSchemaStablePayload(): BaseConfigSchemaStablePayload {
   if (baseConfigSchemaStablePayload) {
-    return {
-      schema: cloneSchema(baseConfigSchemaStablePayload.schema),
-      uiHints: cloneSchema(baseConfigSchemaStablePayload.uiHints),
-      version: baseConfigSchemaStablePayload.version,
-    };
+    return baseConfigSchemaStablePayload;
   }
   const schema = OpenClawSchema.toJSONSchema({
     io: "input",
@@ -145,37 +127,25 @@ function computeBaseConfigSchemaStablePayload(): BaseConfigSchemaStablePayload {
     applyFieldDocumentation(schemaRoot);
   }
   const baseHints = mapSensitivePaths(OpenClawSchema, "", buildBaseHints());
-  const sensitiveUrlPaths = collectMatchingSchemaPaths(
-    OpenClawSchema,
-    "",
-    isSensitiveUrlConfigPath,
-  );
-  const publicSchema = stripChannelSchema(schema);
+  const publicSchema = preparePublicSchema(schema);
   const stablePayload = {
     schema: publicSchema,
     uiHints: applyDerivedTags(
-      applyResolvedConfigTierHints(
-        publicSchema,
-        applyDerivedTags(applySensitiveUrlHints(baseHints, sensitiveUrlPaths)),
-      ),
+      applyResolvedConfigTierHints(publicSchema, applyDerivedTags(baseHints)),
     ),
     version: VERSION,
   } satisfies BaseConfigSchemaStablePayload;
   baseConfigSchemaStablePayload = stablePayload;
-  return {
-    schema: cloneSchema(stablePayload.schema),
-    uiHints: cloneSchema(stablePayload.uiHints),
-    version: stablePayload.version,
-  };
+  return stablePayload;
 }
 
 export function computeBaseConfigSchemaResponse(params?: {
   generatedAt?: string;
-}): BaseConfigSchemaResponse {
+}): ConfigSchemaResponse {
   const stablePayload = computeBaseConfigSchemaStablePayload();
   return {
-    schema: stablePayload.schema,
-    uiHints: stablePayload.uiHints,
+    schema: cloneSchema(stablePayload.schema),
+    uiHints: cloneSchema(stablePayload.uiHints),
     version: stablePayload.version,
     generatedAt: params?.generatedAt ?? new Date().toISOString(),
   };

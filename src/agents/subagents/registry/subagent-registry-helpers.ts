@@ -16,8 +16,16 @@ import { patchSessionEntryCore } from "../../../config/sessions/session-accessor
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { computeBackoff } from "../../../infra/backoff.js";
 import { defaultRuntime } from "../../../runtime.js";
+import {
+  recordGatewaySessionRunFailure,
+  resolveSessionRunError,
+} from "../../../sessions/session-run-error.js";
 import { truncateUtf8Prefix } from "../../../utils/utf8-truncate.js";
-import { getDeliveryAttemptCount, getDeliveryLastError } from "./subagent-delivery-state.js";
+import {
+  getDeliveryAttemptCount,
+  getDeliveryLastError,
+  hasRetainedRequiredCompletionDelivery,
+} from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
@@ -123,7 +131,10 @@ export async function persistSubagentSessionTiming(
       : getSubagentSessionRuntimeMs(entry);
   const status = resolveSubagentSessionStatus(entry);
 
-  await patchSessionEntryCore(
+  const lastRunError = status
+    ? resolveSessionRunError(entry.execution.outcome ?? {}, status)
+    : undefined;
+  const persisted = await patchSessionEntryCore(
     { storePath, sessionKey: childSessionKey },
     (sessionEntry) => {
       // Recheck under the session-store write lock. A completion may have
@@ -172,6 +183,11 @@ export async function persistSubagentSessionTiming(
       } else {
         delete next.status;
       }
+      if (lastRunError) {
+        next.lastRunError = lastRunError;
+      } else if (status === "done") {
+        delete next.lastRunError;
+      }
       if (status && status !== "killed") {
         delete next.abortedLastRun;
       }
@@ -182,6 +198,20 @@ export async function persistSubagentSessionTiming(
       replaceEntry: true,
     },
   );
+  if (persisted && lastRunError) {
+    await recordGatewaySessionRunFailure({
+      target: {
+        agentId,
+        storePath,
+        sessionKey: childSessionKey,
+        sessionId: persisted.sessionId,
+        expectedLifecycleRevision: persisted.lifecycleRevision,
+      },
+      runId: entry.runId,
+      error: entry.execution.outcome?.error,
+      assertCommitAllowed: options?.assertCommitAllowed,
+    });
+  }
 }
 
 // Attachment cleanup must stay within the recorded root even if paths were
@@ -273,6 +303,9 @@ export function reconcileOrphanedRun(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
 }) {
+  if (hasRetainedRequiredCompletionDelivery(params.entry)) {
+    return false;
+  }
   const shouldDeleteAttachments =
     params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
   if (shouldDeleteAttachments) {

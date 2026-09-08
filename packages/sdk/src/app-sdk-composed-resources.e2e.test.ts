@@ -39,7 +39,10 @@ import {
   testState,
   writeSessionStore,
 } from "../../../src/gateway/test-helpers.js";
-import type { WorkerEnvironmentServiceRecord } from "../../../src/gateway/worker-environments/service-contract.js";
+import type {
+  WorkerEnvironmentServiceContract,
+  WorkerEnvironmentServiceRecord,
+} from "../../../src/gateway/worker-environments/service-contract.js";
 import { emitAgentEvent } from "../../../src/infra/agent-events.js";
 import { registerAgentRunContext } from "../../../src/infra/agent-run-registry.js";
 import { withTimeout } from "../../../src/utils/with-timeout.js";
@@ -106,6 +109,7 @@ function workerRecord(state: "requested" | "ready" | "destroyed"): WorkerEnviron
   return {
     environmentId: "worker-sdk-e2e",
     providerId: "testbox",
+    profileId: "development",
     leaseId: "lease-sdk-e2e",
     sharedHost: null,
     state,
@@ -131,6 +135,10 @@ async function createFakeGateway(): Promise<FakeGateway> {
   const workerEnvironmentService = {
     list: () => [worker],
     get: (environmentId: string) => (environmentId === worker.environmentId ? worker : undefined),
+    inventoryVersion: () => 0,
+    supportsExecutionMode: (profileId, mode) =>
+      profileId === "development" && mode === "worker-turn",
+    listMachineOptions: async () => undefined,
     create: async (_profileId: string, _idempotencyKey: string) => {
       const requested = workerRecord("requested");
       worker = workerRecord("ready");
@@ -144,11 +152,17 @@ async function createFakeGateway(): Promise<FakeGateway> {
       worker = workerRecord("destroyed");
       return worker;
     },
+    observeDesktop: async () => {
+      throw new Error("desktop observation is outside the SDK environment RPC proof");
+    },
+    launchDesktopApp: async () => {
+      throw new Error("desktop launch is outside the SDK environment RPC proof");
+    },
     startTunnel: async () => {
       throw new Error("tunnel start is outside the SDK environment RPC proof");
     },
     stopTunnel: async () => {},
-  };
+  } satisfies WorkerEnvironmentServiceContract;
   const environmentContext = {
     logGateway: { warn: vi.fn() },
     nodeRegistry: { listConnectedForPairingStates: () => [] },
@@ -551,7 +565,14 @@ async function proveDeterministicGatewayContracts(): Promise<void> {
       },
     });
     const environments = await oc.environments.list();
-    expect(environments.profiles).toEqual([{ id: "development", providerId: "testbox" }]);
+    expect(environments.profiles).toEqual([
+      {
+        id: "development",
+        providerId: "testbox",
+        executionMode: "worker-turn",
+        executionModes: ["worker-turn"],
+      },
+    ]);
     expect(environments.environments).toContainEqual({
       id: "worker-sdk-e2e",
       type: "worker",

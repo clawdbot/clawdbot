@@ -1,9 +1,64 @@
 import { describe, expect, it, vi } from "vitest";
 import { readAcpSessionMeta, upsertAcpSessionMeta } from "../../acp/runtime/session-meta.js";
+import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 
 describe("plugin runtime ACP session creation", () => {
+  it("does not initialize or remove a successor observed after ACP preparation", async () => {
+    await withOpenClawTestState({ label: "plugin-runtime-acp-successor" }, async () => {
+      const runtime = createRuntimeAgent();
+      const key = "agent:main:plugin:acpx:catalog-adopt:pi:source";
+      let successor: ReturnType<typeof runtime.session.getSessionEntry>;
+      const database = openOpenClawStateDatabase();
+      database.db.function("replace_prepared_child", () => {
+        const current = runtime.session.getSessionEntry({
+          sessionKey: key,
+          readConsistency: "latest",
+        });
+        if (!current) {
+          throw new Error("expected the freshly created ACP child");
+        }
+        successor = {
+          ...current,
+          sessionId: "successor",
+          lifecycleRevision: "successor-generation",
+        };
+        runOpenClawAgentWriteTransaction(
+          (agentDatabase) => {
+            writeSessionEntry(agentDatabase, key, successor!);
+          },
+          { agentId: "main" },
+        );
+        return 0;
+      });
+      database.db.exec(
+        "CREATE TEMP TRIGGER replace_prepared_child AFTER INSERT ON acp_sessions BEGIN SELECT replace_prepared_child(); END",
+      );
+      const afterCreate = vi.fn(async () => {
+        throw new Error("initializer must not receive a successor");
+      });
+      await expect(
+        runtime.session.createSessionEntry({
+          cfg: {},
+          key,
+          initialEntry: {
+            acpBackendId: "acpx",
+            acpSessionBinding: { acpAgentId: "pi", agentSessionId: "pi-source" },
+            pluginOwnerId: "acpx",
+          },
+          afterCreate,
+        }),
+      ).rejects.toThrow();
+      expect(afterCreate).not.toHaveBeenCalled();
+      expect(
+        runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
+      ).toEqual(successor);
+    });
+  });
+
   it("persists a plugin-owned native resume binding", async () => {
     await withOpenClawTestState({ label: "plugin-runtime-acp-session-create" }, async () => {
       const runtime = createRuntimeAgent();

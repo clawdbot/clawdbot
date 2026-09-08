@@ -1,7 +1,6 @@
 package ai.openclaw.app.node
 
 import ai.openclaw.app.BuildConfig
-import ai.openclaw.app.LocationMode
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.gateway.GatewayClientInfo
 import ai.openclaw.app.gateway.GatewayConnectOptions
@@ -16,18 +15,8 @@ import android.os.Build
  */
 class ConnectionManager internal constructor(
   private val prefs: SecurePrefs,
-  private val cameraEnabled: () -> Boolean,
-  private val locationMode: () -> LocationMode,
-  private val motionActivityAvailable: () -> Boolean,
-  private val motionPedometerAvailable: () -> Boolean,
-  private val sendSmsAvailable: () -> Boolean,
-  private val readSmsAvailable: () -> Boolean,
-  private val smsSearchPossible: () -> Boolean,
-  private val callLogAvailable: () -> Boolean,
-  private val photosAvailable: () -> Boolean,
-  private val installedAppsSharingEnabled: () -> Boolean,
-  private val voiceWakeAvailable: () -> Boolean,
-  private val mobileUiAvailable: () -> Boolean,
+  private val advertisedCapabilities: () -> List<String>,
+  private val advertisedCommands: () -> List<String>,
   private val inlineWidgetsAvailable: () -> Boolean,
   private val permissionSnapshot: () -> AndroidPermissionSnapshot,
   private val manualTls: (GatewayEndpoint) -> Boolean,
@@ -54,6 +43,7 @@ class ConnectionManager internal constructor(
 
     internal const val AGENT_KIND_CLIENT_CAPABILITY = "agent-kind"
     internal const val INLINE_WIDGETS_CLIENT_CAPABILITY = "inline-widgets"
+    internal const val USAGE_REFRESHING_CLIENT_CAPABILITY = "usage-refreshing"
 
     internal fun operatorScopesForStoredDeviceToken(storedScopes: List<String>): List<String> {
       val normalized =
@@ -85,79 +75,20 @@ class ConnectionManager internal constructor(
       if (isManual) {
         // Manual remote hosts default to TLS; only local manual hosts may honor the cleartext toggle.
         if (!manualTlsEnabled && cleartextAllowedHost) return null
-        if (!stored.isNullOrBlank()) {
-          return GatewayTlsParams(
-            required = true,
-            expectedFingerprint = stored,
-            allowTOFU = false,
-            stableId = stableId,
-          )
-        }
-        return GatewayTlsParams(
-          required = true,
-          expectedFingerprint = null,
-          allowTOFU = false,
-          stableId = stableId,
-        )
+      } else {
+        val hinted = endpoint.tlsEnabled || !endpoint.tlsFingerprintSha256.isNullOrBlank()
+        if (stored == null && !hinted && cleartextAllowedHost) return null
       }
 
-      // Prefer stored pins. Never let discovery-provided TXT override a stored fingerprint.
-      if (!stored.isNullOrBlank()) {
-        return GatewayTlsParams(
-          required = true,
-          expectedFingerprint = stored,
-          allowTOFU = false,
-          stableId = stableId,
-        )
-      }
-
-      val hinted = endpoint.tlsEnabled || !endpoint.tlsFingerprintSha256.isNullOrBlank()
-      if (hinted) {
-        // TXT is unauthenticated. Do not treat the advertised fingerprint as authoritative.
-        return GatewayTlsParams(
-          required = true,
-          expectedFingerprint = null,
-          allowTOFU = false,
-          stableId = stableId,
-        )
-      }
-
-      if (!cleartextAllowedHost) {
-        // Non-loopback discovered hosts require TLS even without TXT hints.
-        return GatewayTlsParams(
-          required = true,
-          expectedFingerprint = null,
-          allowTOFU = false,
-          stableId = stableId,
-        )
-      }
-
-      return null
+      // TXT may require TLS, but only a stored pin is authoritative.
+      return GatewayTlsParams(
+        required = true,
+        expectedFingerprint = stored,
+        allowTOFU = false,
+        stableId = stableId,
+      )
     }
   }
-
-  private fun runtimeFlags(): NodeRuntimeFlags =
-    NodeRuntimeFlags(
-      cameraEnabled = cameraEnabled(),
-      locationEnabled = locationMode() != LocationMode.Off,
-      sendSmsAvailable = sendSmsAvailable(),
-      readSmsAvailable = readSmsAvailable(),
-      smsSearchPossible = smsSearchPossible(),
-      callLogAvailable = callLogAvailable(),
-      photosAvailable = photosAvailable(),
-      motionActivityAvailable = motionActivityAvailable(),
-      motionPedometerAvailable = motionPedometerAvailable(),
-      installedAppsSharingEnabled = installedAppsSharingEnabled(),
-      debugBuild = BuildConfig.DEBUG,
-      voiceWakeEnabled = prefs.voiceWakeEnabled.value && voiceWakeAvailable(),
-      mobileUiAvailable = mobileUiAvailable(),
-    )
-
-  /** Builds the gateway-advertised node.invoke command list from current permission and feature state. */
-  fun buildInvokeCommands(): List<String> = InvokeCommandRegistry.advertisedCommands(runtimeFlags())
-
-  /** Builds the gateway-advertised capability list from current permission and feature state. */
-  fun buildCapabilities(): List<String> = InvokeCommandRegistry.advertisedCapabilities(runtimeFlags())
 
   /** Builds the current independently grantable Android permission surface. */
   fun buildPermissions(): Map<String, Boolean> = permissionSnapshot().gatewayPermissions()
@@ -215,8 +146,8 @@ class ConnectionManager internal constructor(
     GatewayConnectOptions(
       role = "node",
       scopes = emptyList(),
-      caps = buildCapabilities(),
-      commands = buildInvokeCommands(),
+      caps = advertisedCapabilities(),
+      commands = advertisedCommands(),
       permissions = buildPermissions(),
       client = buildClientInfo(clientId = "openclaw-android", clientMode = "node"),
       userAgent = buildUserAgent(),
@@ -233,6 +164,7 @@ class ConnectionManager internal constructor(
         buildList {
           add(AGENT_KIND_CLIENT_CAPABILITY)
           if (inlineWidgetsAvailable()) add(INLINE_WIDGETS_CLIENT_CAPABILITY)
+          add(USAGE_REFRESHING_CLIENT_CAPABILITY)
         },
       commands = emptyList(),
       permissions = emptyMap(),

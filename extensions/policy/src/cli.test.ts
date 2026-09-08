@@ -466,6 +466,27 @@ describe("policy commands", () => {
     ]);
   });
 
+  it.each([
+    ["empty", ""],
+    ["whitespace-only", "   "],
+  ])("rejects %s policy compare baseline values", async (_name, baseline) => {
+    const errorSpy = vi.spyOn(cliRuntime, "error");
+    try {
+      const { exitCode, output } = await runPolicyCli([
+        "compare",
+        "--baseline",
+        baseline,
+        "--json",
+      ]);
+
+      expect(exitCode).toBe(2);
+      expect(errorSpy).toHaveBeenCalledWith("Missing required --baseline value.");
+      expect(output).toEqual(["Missing required --baseline value.\n"]);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it("checks policy file conformance with metadata-backed global rules", async () => {
     const { exitCode, parsed } = await runPolicyCompareFixture(
       {

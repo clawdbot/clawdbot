@@ -14,48 +14,6 @@ function requireEntry<T>(entries: readonly T[], index: number, context: string):
 }
 
 describe("stripMarkdown", () => {
-  it("strips inline markdown marker variants", () => {
-    const cases = [
-      ["strips bold **", "This is **bold** text", "This is bold text"],
-      ["strips bold __", "This is __bold__ text", "This is bold text"],
-      ["strips italic *", "This is *italic* text", "This is italic text"],
-      ["strips italic _", "This is _italic_ text", "This is italic text"],
-      ["strips strikethrough", "This is ~~deleted~~ text", "This is deleted text"],
-      ["strips setext heading underline", "Above\n---\nBelow", "Above\nBelow"],
-      ["removes hr ***", "Above\n***\nBelow", "Above\n\nBelow"],
-      ["strips inline code markers", "Use `const` keyword", "Use const keyword"],
-    ] as const;
-    for (const [name, input, expected] of cases) {
-      expect(stripMarkdown(input), name).toBe(expected);
-    }
-  });
-
-  it("preserves underscores inside words", () => {
-    expect(stripMarkdown("here_is_a_message")).toBe("here_is_a_message");
-    expect(stripMarkdown("snake_case_var")).toBe("snake_case_var");
-    expect(stripMarkdown("use foo_bar_baz in code")).toBe("use foo_bar_baz in code");
-  });
-
-  it("still strips proper italic _text_", () => {
-    expect(stripMarkdown("This is _italic_ text")).toBe("This is italic text");
-    expect(stripMarkdown("_italic_ at start")).toBe("italic at start");
-    expect(stripMarkdown("end _italic_")).toBe("end italic");
-  });
-
-  it("strips italic between underscored words", () => {
-    expect(stripMarkdown("foo_bar _italic_ baz_qux")).toBe("foo_bar italic baz_qux");
-  });
-
-  it("preserves underscores inside non-Latin words", () => {
-    expect(stripMarkdown("привет_мир_тест")).toBe("привет_мир_тест");
-    expect(stripMarkdown("東京_駅_前")).toBe("東京_駅_前");
-    expect(stripMarkdown("var_123_end")).toBe("var_123_end");
-  });
-
-  it("strips standalone italic between non-Latin words", () => {
-    expect(stripMarkdown("こんにちは _italic_ テスト")).toBe("こんにちは italic テスト");
-  });
-
   it("handles complex markdown", () => {
     const input = `# Title
 
@@ -65,16 +23,13 @@ This is **bold** and *italic* text.
 
 Some ~~deleted~~ content.`;
 
-    const result = stripMarkdown(input);
+    expect(stripMarkdown(input)).toBe(`Title
 
-    expect(result).toContain("Title");
-    expect(result).toContain("This is bold and italic text.");
-    expect(result).toContain("A quote");
-    expect(result).toContain("Some deleted content.");
-    expect(result).not.toContain("#");
-    expect(result).not.toContain("**");
-    expect(result).not.toContain("~~");
-    expect(result).not.toContain(">");
+This is bold and italic text.
+
+A quote
+
+Some deleted content.`);
   });
 });
 
@@ -205,6 +160,38 @@ describe("processLineMessage", () => {
       "Check out Google (https://google.com) and GitHub (https://github.com).",
     );
     expect(result.flexMessages).toHaveLength(0);
+  });
+
+  it("keeps ordinary code cards, table cards, and prose in authored order", () => {
+    const result = processLineMessage(
+      "Before\n\n```js\nfirst()\n```\n\nBetween\n\n| Name | Value |\n|---|---|\n| Item | one |\n\nAfter",
+    );
+
+    expect(result.flexMessages.map((message) => message.altText)).toEqual(["Code", "Table"]);
+    expect(
+      result.segments?.map((segment) =>
+        segment.type === "flex" ? segment.message.altText : segment.text,
+      ),
+    ).toEqual(["Before", "Code", "Between", "Table", "After"]);
+  });
+
+  it("delivers a code block the card cannot hold as text instead of cutting it", () => {
+    // The card shows 2000 characters. Nothing in LINE caps a Flex text there, so
+    // a longer block belongs to the reader in full, the way an oversized table
+    // already reaches them as text.
+    const code = Array.from({ length: 120 }, (_, i) => `const line${i} = ${i}; // padding`).join(
+      "\n",
+    );
+    expect(code.length).toBeGreaterThan(2000);
+
+    const result = processLineMessage(`Header\n\n\`\`\`ts\n${code}\n\`\`\`\n\nFooter`);
+
+    expect(result.flexMessages).toHaveLength(0);
+    expect(result.text).toContain("const line0 = 0;");
+    expect(result.text).toContain("const line119 = 119;");
+    expect(result.text).not.toContain("\n...");
+    expect(result.text.indexOf("Header")).toBeLessThan(result.text.indexOf("const line0"));
+    expect(result.text.indexOf("const line119")).toBeLessThan(result.text.indexOf("Footer"));
   });
 
   it("processes text with code blocks", () => {
@@ -346,7 +333,7 @@ print("done")
       Buffer.byteLength(JSON.stringify(result.flexMessages[0]?.contents), "utf8"),
     ).toBeLessThanOrEqual(30_000);
     expect(result.text).toBe("");
-    expect(result.segments).toBeUndefined();
+    expect(result.segments).toEqual([{ type: "flex", message: result.flexMessages[0] }]);
   });
 
   it("downgrades a generic table with more than 10 rows to ordered bullet text", () => {
@@ -384,7 +371,7 @@ print("done")
     const result = processLineMessage(`| Name | Price |\n|---|---|\n${rows}`);
 
     expect(result.flexMessages).toHaveLength(1);
-    expect(result.segments).toBeUndefined();
+    expect(result.segments).toEqual([{ type: "flex", message: result.flexMessages[0] }]);
   });
 
   it("keeps a generic table with exactly 10 rows as a Flex bubble", () => {
@@ -394,7 +381,7 @@ print("done")
     const result = processLineMessage(`| Name | Value | Extra |\n|---|---|---|\n${rows}`);
 
     expect(result.flexMessages).toHaveLength(1);
-    expect(result.segments).toBeUndefined();
+    expect(result.segments).toEqual([{ type: "flex", message: result.flexMessages[0] }]);
   });
 
   it("downgrades a two-column table with inline markup and more than 10 rows using the renderer's layout decision", () => {
@@ -468,5 +455,36 @@ describe("hasMarkdownToConvert", () => {
 
   it("returns false for plain text", () => {
     expect(hasMarkdownToConvert("Just plain text.")).toBe(false);
+  });
+});
+
+describe("empty code fences", () => {
+  // LINE rejects the whole push when a Flex text is blank, so a fence with no
+  // code has to drop out rather than cost the reply it was part of.
+  it.each([
+    ["no language", "Here:\n\n```\n```\n\ndone"],
+    ["with a language", "Here:\n\n```js\n```\n\ndone"],
+    ["whitespace only", "Here:\n\n```\n   \n```\n\ndone"],
+  ])("renders no card for a fence with %s, keeping the surrounding text", (_label, markdown) => {
+    const processed = processLineMessage(markdown);
+
+    expect(processed.flexMessages).toEqual([]);
+    expect(processed.text).toContain("Here:");
+    expect(processed.text).toContain("done");
+  });
+
+  it("still renders a card for a fence that has code", () => {
+    const processed = processLineMessage("Here:\n\n```js\nconst a = 1;\n```\n\ndone");
+
+    expect(processed.flexMessages).toHaveLength(1);
+  });
+
+  it("keeps the surviving card when one fence of two is empty", () => {
+    const processed = processLineMessage("A\n\n```js\nx\n```\n\nB\n\n```\n```\n\nC");
+
+    expect(processed.flexMessages).toHaveLength(1);
+    expect(processed.text).toContain("A");
+    expect(processed.text).toContain("B");
+    expect(processed.text).toContain("C");
   });
 });

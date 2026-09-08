@@ -46,11 +46,11 @@ The bundled crabbox profile currently has no `image` settings key — AWS select
 ## Repair
 
 ```
-openclaw doctor --non-interactive
+openclaw doctor --lint
 crabbox doctor --provider <backend> --json
 ```
 
-Apply `openclaw doctor --fix --non-interactive` only after approval, then re-read the profile and provider inventory.
+`doctor --lint` can exit `1` for findings: read the report and continue the remaining checks. Ordinary `doctor` and `doctor --non-interactive` can write config/state; do not use them for diagnosis before approval. Apply `openclaw doctor --fix --non-interactive` only after explicit approval, then re-read the profile and provider inventory.
 
 ## Prove
 

@@ -5,7 +5,17 @@ import { en } from "./en.ts";
 // surfaces so device recovery does not tax every Control UI startup.
 const enSessionPlacement = {
   sessionsView: {
+    placementFactService: "Service",
+    placementFactProfile: "Profile",
+    placementFactMachine: "Machine",
+    placementFactState: "State",
+    placementFactDisk: "Disk",
+    placementDiskFree: "{free} free",
     runsOnDevice: "Runs on device",
+    runsOnWorker: "Runs on worker",
+    stopWorker: "Stop worker…",
+    stopWorkerConfirm: 'Stop the worker for "{session}"?',
+    stopWorkerConfirmAction: "Stop worker",
     deviceOffline: "Device offline",
     waitingForDevice: "Waiting for device to reconnect; retry after it returns.",
     continueOnGatewayMenu: "Continue on Gateway…",
@@ -15,8 +25,21 @@ const enSessionPlacement = {
     stopDeviceWorker: "Stop device worker…",
     offlineDeviceStopUnavailable:
       "Reconnect the device to stop and sync its workspace, or Continue on Gateway.",
-    stopDeviceWorkerConfirm: 'Stop the device worker for "{session}" after it reconnects?',
+    stopDeviceWorkerConfirm: 'Stop the device worker for "{session}"?',
     stopDeviceWorkerConfirmAction: "Stop device worker",
+    restartSession: "Restart session…",
+    restartingSession: "Restarting session…",
+    restartSessionTitle: "Restart session",
+    restartSessionDescription: 'Choose where "{session}" should restart.',
+    restartSessionWarning:
+      "A new worker starts from the last reconciled worktree. Changes that the previous worker did not upload may be lost.",
+    restartSessionAction: "Restart session",
+    stoppingSession: "Stopping session…",
+    finishingSessionMove: "Finishing session move…",
+    failedSessionTitle: "Runner failed",
+    failedSessionRestartPrompt: "Restart this session to continue.",
+    failedSessionStopPrompt: "Stop the failed worker before restarting this session.",
+    failedSessionUnavailable: "This session's runner failed and cannot accept messages.",
   },
 } satisfies TranslationMap;
 

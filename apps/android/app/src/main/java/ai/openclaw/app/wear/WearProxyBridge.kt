@@ -123,6 +123,7 @@ internal class WearProxyBridge(
         sendEventPreservingActor(operation.message)
         operation.message.sequence
       }
+
       is WearBridgeOperation.Request -> {
         try {
           val response =
@@ -141,6 +142,7 @@ internal class WearProxyBridge(
         }
         lastDeliveredSequence
       }
+
       WearBridgeOperation.Overflow -> {
         val overflow = takeOverflow()
         var deliveredSequence = lastDeliveredSequence
@@ -154,6 +156,7 @@ internal class WearProxyBridge(
         }
         deliveredSequence
       }
+
       is WearBridgeOperation.Barrier -> {
         operation.completion.complete(Unit)
         lastDeliveredSequence
@@ -496,9 +499,11 @@ internal fun wearConnectionFailure(
 ): WearConnectionFailure =
   when {
     problemCode == "PROTOCOL_MISMATCH" -> WearConnectionFailure.Incompatible
+
     // Protocol v1 shipped with status-only disconnect events. Keep that exact
     // staggered-update signal while newer peers use the typed failure field.
     status.contains("update", ignoreCase = true) -> WearConnectionFailure.Incompatible
+
     else -> WearConnectionFailure.GatewayOffline
   }
 

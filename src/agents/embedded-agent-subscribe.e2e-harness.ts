@@ -4,6 +4,7 @@
 import { expect } from "vitest";
 import type { AssistantMessage } from "../llm/types.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 type SubscribeEmbeddedAgentSession = typeof subscribeEmbeddedAgentSession;
 type SubscribeEmbeddedAgentSessionParams = Parameters<SubscribeEmbeddedAgentSession>[0];
@@ -178,15 +179,16 @@ export function emitAssistantLifecycleErrorAndEnd(params: {
   provider?: string;
   model?: string;
 }): void {
-  const assistantMessage = {
-    role: "assistant",
+  const assistantMessage = makeAgentAssistantMessage({
+    content: [],
     stopReason: "error",
     errorMessage: params.errorMessage,
     ...(params.provider ? { provider: params.provider } : {}),
     ...(params.model ? { model: params.model } : {}),
-  } as AssistantMessage;
-  params.emit({ type: "message_update", message: assistantMessage });
-  params.emit({ type: "agent_end" });
+  });
+  params.emit({ type: "message_start", message: assistantMessage });
+  params.emit({ type: "message_end", message: assistantMessage });
+  params.emit({ type: "agent_end", messages: [assistantMessage], willRetry: false });
 }
 
 export function createReasoningFinalAnswerMessage(): AssistantMessage {

@@ -378,47 +378,4 @@ describe("resolveGatewayRuntimeConfig", () => {
       expect(result.bindHost).toBe("0.0.0.0");
     });
   });
-
-  describe("HTTP security headers", () => {
-    const cases = [
-      {
-        name: "resolves strict transport security headers from config",
-        strictTransportSecurity: "  max-age=31536000; includeSubDomains  ",
-        expected: "max-age=31536000; includeSubDomains",
-      },
-      {
-        name: "does not set strict transport security when explicitly disabled",
-        strictTransportSecurity: false,
-        expected: undefined,
-      },
-      {
-        name: "does not set strict transport security when the value is blank",
-        strictTransportSecurity: "   ",
-        expected: undefined,
-      },
-    ] satisfies ReadonlyArray<{
-      name: string;
-      strictTransportSecurity: string | false;
-      expected: string | undefined;
-    }>;
-
-    it.each(cases)("$name", async ({ strictTransportSecurity, expected }) => {
-      const result = await resolveGatewayRuntimeConfig({
-        cfg: {
-          gateway: {
-            bind: "loopback",
-            auth: { mode: "none" },
-            http: {
-              securityHeaders: {
-                strictTransportSecurity,
-              },
-            },
-          },
-        },
-        port: 18789,
-      });
-
-      expect(result.strictTransportSecurityHeader).toBe(expected);
-    });
-  });
 });

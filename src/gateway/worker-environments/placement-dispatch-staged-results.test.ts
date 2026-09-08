@@ -1,18 +1,28 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { type PlacementStore, REQUEST } from "./placement-dispatch-test-fixtures.js";
-import { createHarness } from "./placement-dispatch-test-harness.js";
-import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import {
+  type PlacementStore,
+  REQUEST,
+  seedActivePlacement,
+} from "./placement-dispatch-test-fixtures.js";
+import { createHarness } from "./placement-dispatch-test-harness.js";
+import { placementTurnOwner } from "./placement-record.js";
+import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
+import * as support from "./service.test-support.js";
+import { createWorkerTunnelManager } from "./tunnel.js";
+import {
+  applyStagedWorkerWorkspaceResult,
+  cleanupWorkerWorkspaceResultRef,
   workerWorkspaceResultRef,
   workerWorkspaceResultStaging,
 } from "./workspace-result-staging.js";
@@ -20,15 +30,30 @@ import {
 const { stageWorkerWorkspaceResult } = workerWorkspaceResultStaging;
 
 describe("staged worker placement result recovery", () => {
+  support.setupWorkerEnvironmentServiceSuite();
   let root: string;
   let database: OpenClawStateDatabase;
   let placementStore: PlacementStore;
 
-  beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-staged-dispatch-"));
-    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+  beforeEach(() => {
+    root = support.testState.root;
+    database = support.testState.stateDb;
     placementStore = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
   });
+
+  function seedWorkerTurn(harness: ReturnType<typeof createHarness>) {
+    const active = harness.placements.seedActive(2);
+    if (active.state !== "active") {
+      throw new Error("active placement fixture was not active");
+    }
+    const claim = placementStore.claimTurn({
+      ...REQUEST,
+      claimId: "staged-claim",
+      runId: "staged-run",
+      owner: placementTurnOwner(active),
+    });
+    return { active, claim };
+  }
 
   async function stagePendingResult(params: {
     store: PlacementStore;
@@ -37,7 +62,7 @@ describe("staged worker placement result recovery", () => {
     base?: string;
     current: string;
     record?: boolean;
-  }): Promise<{ currentManifestRef: string; stagedResultRef: string }> {
+  }): Promise<{ baseManifestRef: string; currentManifestRef: string; stagedResultRef: string }> {
     await fs.mkdir(params.workspacePath, { recursive: true });
     const initialized = await runCommandWithTimeout(
       ["git", "-C", params.workspacePath, "init", "--quiet"],
@@ -87,13 +112,9 @@ describe("staged worker placement result recovery", () => {
       params.store.recordStagedWorkspaceResult(params.claim, stagedResultRef);
     }
     await fs.rm(payload, { recursive: true, force: true });
-    return { currentManifestRef: current.ref, stagedResultRef };
+    return { baseManifestRef: base.ref, currentManifestRef: current.ref, stagedResultRef };
   }
 
-  afterEach(async () => {
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
-  });
   it("applies a staged pending result without a tunnel and reclaims the worker", async () => {
     const workspacePath = path.join(root, "same-worker-staged-result");
     const priorConflictRef = "refs/openclaw/worker-results/prior-conflict";
@@ -107,21 +128,8 @@ describe("staged worker placement result recovery", () => {
       prepareAcceptedWorkspacePublication,
       publishAcceptedWorkspace,
     });
-    const active = harness.placements.seedActive(2);
+    const { active, claim } = seedWorkerTurn(harness);
     harness.markEnvironmentOwnerEpoch(2);
-    if (active.state !== "active") {
-      throw new Error("active placement fixture was not active");
-    }
-    const claim = placementStore.claimTurn({
-      ...REQUEST,
-      claimId: "same-worker-staged-claim",
-      runId: "same-worker-staged-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
     const staged = await stagePendingResult({
       store: placementStore,
       claim,
@@ -178,76 +186,165 @@ describe("staged worker placement result recovery", () => {
     ).not.toBe(0);
   });
 
-  it("publishes an accepted result after cleanup removed its staged ref", async () => {
-    const workspacePath = path.join(root, "accepted-result-missing-ref");
-    const originalHarness = createHarness(placementStore, { workspacePath });
-    const active = originalHarness.placements.seedActive(2);
-    if (active.state !== "active") {
-      throw new Error("active placement fixture was not active");
-    }
-    const claim = placementStore.claimTurn({
-      ...REQUEST,
-      claimId: "accepted-result-missing-ref-claim",
-      runId: "accepted-result-missing-ref-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
-    const staged = await stagePendingResult({
-      store: placementStore,
-      claim,
-      workspacePath,
-      base: "base\n",
-      current: "worker\n",
-    });
-    placementStore.acceptWorkspaceResult(claim);
-    placementStore.handoffWorkspaceResultRecovery(claim);
-    expect(
-      (
-        await runCommandWithTimeout(
-          ["git", "-C", workspacePath, "update-ref", "-d", staged.stagedResultRef],
-          { timeoutMs: 10_000 },
-        )
-      ).code,
-    ).toBe(0);
-    const publishAcceptedWorkspace = vi.fn(async () => undefined);
-    const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
-    const restartedHarness = createHarness(restartedStore, {
-      workspacePath,
-      publishAcceptedWorkspace,
-    });
-    restartedHarness.markEnvironmentDestroyed();
+  it.each(["retained", "removed-before-restart"] as const)(
+    "keeps an accepted result fenced until provider deletion succeeds (%s ref)",
+    async (refState) => {
+      const workspacePath = path.join(root, "accepted-result-cleanup");
+      const publishAcceptedWorkspace = vi.fn(async () => undefined);
+      const fixtureHarness = createHarness(placementStore, { workspacePath });
+      const fixtureStart = vi
+        .mocked(fixtureHarness.environments.startTunnel)
+        .getMockImplementation()!;
+      const tunnels = createWorkerTunnelManager();
+      let claim: ReturnType<PlacementStore["claimTurn"]> | undefined;
+      vi.spyOn(tunnels, "start").mockImplementation(async (request) => ({
+        ...(await fixtureStart(request)),
+        reconcileWorkspace: async ({ source }) => {
+          if (source.kind !== "local") {
+            throw new Error("expected a local workspace source");
+          }
+          const owned = placementStore.get(REQUEST.sessionId);
+          if (owned?.state !== "draining" || !owned.turnClaim) {
+            throw new Error("reclaim fixture lost its claim");
+          }
+          claim = {
+            sessionId: owned.sessionId,
+            claimId: owned.turnClaim.claimId,
+            runId: owned.turnClaim.runId,
+            placementGeneration: owned.turnClaim.generation,
+            owner: placementTurnOwner(owned),
+          };
+          const staged = await stagePendingResult({
+            store: placementStore,
+            claim,
+            workspacePath,
+            base: "base\n",
+            current: "worker\n",
+          });
+          const applied = await applyStagedWorkerWorkspaceResult({
+            root: workspacePath,
+            stagedResultRef: staged.stagedResultRef,
+            expectedBaseManifestRef: staged.baseManifestRef,
+            journal: source.journal,
+          });
+          return {
+            ...applied,
+            verifyStable: async () => {},
+            getAppliedWorkspaceResult: () => applied,
+          };
+        },
+      }));
+      const destroy = vi.fn(async (): Promise<void> => {
+        throw new Error("provider deletion unavailable");
+      });
+      support.testState.prepareInstallation = async () => ({
+        ...support.BUNDLE_ARTIFACT,
+        protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+      });
+      const environments = support.createService(support.createProvider({ destroy }), {
+        tunnelManager: tunnels,
+        placementStore: createWorkerSessionPlacementGate(placementStore),
+      });
+      const ready = await environments.create(
+        "development",
+        "session-dispatch:session-1:1",
+        undefined,
+        "remote-exec",
+      );
+      const attached = await environments.attachSession({
+        environmentId: ready.environmentId,
+        ownerEpoch: ready.ownerEpoch,
+        sessionId: REQUEST.sessionId,
+      });
+      seedActivePlacement(placementStore, {
+        environmentId: ready.environmentId,
+        ownerEpoch: attached.ownerEpoch,
+        executionMode: "remote-exec",
+      });
+      fixtureHarness.markEnvironmentOwnerEpoch(attached.ownerEpoch);
+      const harness = createHarness(placementStore, {
+        workspacePath,
+        publishAcceptedWorkspace,
+        environmentService: environments,
+      });
 
-    await restartedHarness.service.reconcile();
+      await expect(harness.service.reclaim(REQUEST)).rejects.toThrow(
+        "provider deletion unavailable",
+      );
+      expect(environments.get(ready.environmentId)).toMatchObject({
+        state: "destroying",
+        ownerEpoch: attached.ownerEpoch + 1,
+        destroyRequestedAtMs: 1_000,
+        leaseId: ready.leaseId,
+      });
+      const [pending] = placementStore.listPendingWorkspaceResults();
+      expect(pending).toMatchObject({ workspaceAcceptedAtMs: 1_000 });
+      if (!pending?.stagedResultRef) {
+        throw new Error("reclaim fixture did not retain its staged result");
+      }
+      let recovery = harness;
+      if (refState === "removed-before-restart") {
+        expect(
+          await runCommandWithTimeout(
+            [
+              "git",
+              "-C",
+              workspacePath,
+              "update-ref",
+              "-d",
+              cleanupWorkerWorkspaceResultRef(pending.stagedResultRef),
+            ],
+            { timeoutMs: 10_000 },
+          ),
+        ).toMatchObject({ code: 0 });
+        const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
+        restartedStore.clearLocalTurnClaimsAfterRestart();
+        recovery = createHarness(restartedStore, {
+          workspacePath,
+          publishAcceptedWorkspace,
+          environmentService: environments,
+        });
+      }
 
-    expect(publishAcceptedWorkspace).toHaveBeenCalledWith(claim);
-    expect(restartedHarness.placements.current()).toMatchObject({
-      state: "reclaimed",
-      turnClaim: null,
-    });
-    expect(restartedStore.listPendingWorkspaceResults()).toEqual([]);
-  });
+      destroy.mockClear();
+      await recovery.service.reconcileActive(ready.environmentId);
+      expect(destroy).toHaveBeenCalledOnce();
+      expect(recovery.placements.current()).toMatchObject({
+        state: "draining",
+        environmentId: ready.environmentId,
+        activeOwnerEpoch: attached.ownerEpoch,
+        turnClaim:
+          refState === "retained"
+            ? expect.objectContaining({ claimId: pending.claimId, runId: pending.runId })
+            : null,
+      });
+
+      await expect(recovery.service.reclaim(REQUEST)).rejects.toThrow(
+        refState === "retained"
+          ? "cannot stop cloud worker"
+          : "Active cloud worker does not match its session placement",
+      );
+      expect(placementStore.listPendingWorkspaceResults()).toMatchObject([pending]);
+      destroy.mockClear().mockResolvedValue(undefined);
+      await recovery.service.reconcileActive(ready.environmentId);
+      expect(destroy).toHaveBeenCalledOnce();
+      await expect(recovery.service.reclaim(REQUEST)).resolves.toMatchObject({
+        state: "reclaimed",
+      });
+      expect(environments.get(ready.environmentId)?.state).toBe("destroyed");
+      expect(publishAcceptedWorkspace).toHaveBeenCalledWith(claim);
+      expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+      await expect(fs.readFile(path.join(workspacePath, "result.txt"), "utf8")).resolves.toBe(
+        "worker\n",
+      );
+    },
+  );
 
   it("does not destroy the worker while a nested session operation is running", async () => {
     const workspacePath = path.join(root, "running-session-operation");
     const harness = createHarness(placementStore, { workspacePath });
-    const active = harness.placements.seedActive(2);
-    if (active.state !== "active") {
-      throw new Error("active placement fixture was not active");
-    }
+    const { active, claim } = seedWorkerTurn(harness);
     harness.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
-    const claim = placementStore.claimTurn({
-      ...REQUEST,
-      claimId: "running-session-operation-claim",
-      runId: "running-session-operation-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
     await stagePendingResult({
       store: placementStore,
       claim,
@@ -308,20 +405,7 @@ describe("staged worker placement result recovery", () => {
   it("applies a staged result after restart even when the worker is dead", async () => {
     const workspacePath = path.join(root, "dead-worker-staged-result");
     const originalHarness = createHarness(placementStore, { workspacePath });
-    const active = originalHarness.placements.seedActive(2);
-    if (active.state !== "active") {
-      throw new Error("active placement fixture was not active");
-    }
-    const claim = placementStore.claimTurn({
-      ...REQUEST,
-      claimId: "dead-worker-staged-claim",
-      runId: "dead-worker-staged-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
+    const { claim } = seedWorkerTurn(originalHarness);
     const staged = await stagePendingResult({
       store: placementStore,
       claim,
@@ -348,11 +432,14 @@ describe("staged worker placement result recovery", () => {
     expect(restartedHarness.log).not.toContain("placement:failed");
   });
 
-  it.each(["active", "draining"] as const)(
+  it.each(["active", "draining", "draining-reclaim", "accepted-reclaim"] as const)(
     "recovers a staged remote-exec %s result after restart clears its local claim",
     async (placementState) => {
       const workspacePath = path.join(root, `remote-exec-restart-${placementState}-result`);
-      const originalHarness = createHarness(placementStore, { workspacePath });
+      const originalHarness = createHarness(placementStore, {
+        workspacePath,
+        destroyFailureCount: placementState === "accepted-reclaim" ? 1 : 0,
+      });
       const active = originalHarness.placements.seedActive(2, "remote-exec");
       if (active.state !== "active") {
         throw new Error("active placement fixture was not active");
@@ -368,11 +455,7 @@ describe("staged worker placement result recovery", () => {
           ownerEpoch: active.activeOwnerEpoch,
         },
       };
-      const claim =
-        placementState === "active"
-          ? placementStore.claimReclaimWorkspaceResult(claimInput)
-          : placementStore.claimTurn(claimInput);
-      if (placementState === "draining") {
+      const drain = () => {
         expect(
           placementStore.startDrain({
             sessionId: active.sessionId,
@@ -381,6 +464,16 @@ describe("staged worker placement result recovery", () => {
             expectedGeneration: active.generation,
           }),
         ).toMatchObject({ state: "draining" });
+      };
+      if (placementState === "draining-reclaim" || placementState === "accepted-reclaim") {
+        drain();
+      }
+      const claim =
+        placementState === "draining"
+          ? placementStore.claimTurn(claimInput)
+          : placementStore.claimReclaimWorkspaceResult(claimInput);
+      if (placementState === "draining") {
+        drain();
       }
       const staged = await stagePendingResult({
         store: placementStore,
@@ -389,13 +482,22 @@ describe("staged worker placement result recovery", () => {
         base: "base\n",
         current: "remote exec\n",
       });
+      if (placementState === "accepted-reclaim") {
+        originalHarness.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
+        placementStore.handoffWorkspaceResultRecovery(claim);
+        await originalHarness.service.reconcile();
+        expect(placementStore.listPendingWorkspaceResults()).toMatchObject([
+          { workspaceAcceptedAtMs: 1_000, placementGeneration: claim.placementGeneration },
+        ]);
+        expect(originalHarness.environments.destroy).toHaveBeenCalledOnce();
+      }
 
       closeOpenClawStateDatabaseForTest();
       database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
       const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
       expect(restartedStore.clearLocalTurnClaimsAfterRestart()).toBe(1);
       expect(restartedStore.get(active.sessionId)).toMatchObject({
-        state: placementState,
+        state: placementState === "active" ? "active" : "draining",
         turnClaim: null,
       });
       expect(restartedStore.validateTurnClaim(claim)).toBe(false);
@@ -403,7 +505,17 @@ describe("staged worker placement result recovery", () => {
       for (const staleClaim of [
         { ...claim, claimId: `${claim.claimId}-stale` },
         { ...claim, runId: `${claim.runId}-stale` },
+        { ...claim, placementGeneration: claim.placementGeneration - 1 },
         { ...claim, placementGeneration: claim.placementGeneration + 1 },
+        { ...claim, placementGeneration: claim.placementGeneration + 2 },
+        {
+          ...claim,
+          owner: {
+            kind: "worker" as const,
+            environmentId: active.environmentId,
+            ownerEpoch: active.activeOwnerEpoch,
+          },
+        },
         {
           ...claim,
           owner: { ...claim.owner, environmentId: `${claim.owner.environmentId}-stale` },
@@ -418,8 +530,23 @@ describe("staged worker placement result recovery", () => {
           "Cannot update stale worker workspace result",
         );
       }
+      expect(() =>
+        restartedStore.claimReclaimWorkspaceResult({
+          ...claimInput,
+          claimId: "reclaim-replacement",
+          runId: "reclaim-replacement",
+        }),
+      ).toThrow("Worker workspace result is already pending");
+      expect(restartedStore.validateWorkspaceResultClaim(claim)).toBe(true);
       const restartedHarness = createHarness(restartedStore, { workspacePath });
       restartedHarness.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
+      if (placementState === "accepted-reclaim") {
+        restartedHarness.markEnvironmentDestroyed();
+        expect(restartedHarness.environments.get(active.environmentId)).toMatchObject({
+          state: "destroyed",
+          ownerEpoch: active.activeOwnerEpoch + 1,
+        });
+      }
 
       await restartedHarness.service.reconcile();
 
@@ -433,26 +560,29 @@ describe("staged worker placement result recovery", () => {
         workspaceBaseManifestRef: staged.currentManifestRef,
       });
       expect(restartedHarness.environments.startTunnel).not.toHaveBeenCalled();
+      if (placementState === "accepted-reclaim") {
+        expect(restartedHarness.environments.destroy).not.toHaveBeenCalled();
+        expect(
+          await runCommandWithTimeout(
+            [
+              "git",
+              "-C",
+              workspacePath,
+              "show-ref",
+              "--verify",
+              cleanupWorkerWorkspaceResultRef(staged.stagedResultRef),
+            ],
+            { timeoutMs: 10_000 },
+          ),
+        ).not.toMatchObject({ code: 0 });
+      }
     },
   );
 
   it("adopts a published result after a crash before its fence-row update", async () => {
     const workspacePath = path.join(root, "published-unrecorded-result");
     const originalHarness = createHarness(placementStore, { workspacePath });
-    const active = originalHarness.placements.seedActive(2);
-    if (active.state !== "active") {
-      throw new Error("active placement fixture was not active");
-    }
-    const claim = placementStore.claimTurn({
-      ...REQUEST,
-      claimId: "published-unrecorded-claim",
-      runId: "published-unrecorded-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
+    const { claim } = seedWorkerTurn(originalHarness);
     const staged = await stagePendingResult({
       store: placementStore,
       claim,
@@ -481,20 +611,7 @@ describe("staged worker placement result recovery", () => {
   it("resolves a diverged staged fence and retains its inspectable cloud ref", async () => {
     const workspacePath = path.join(root, "diverged-staged-result");
     const originalHarness = createHarness(placementStore, { workspacePath });
-    const active = originalHarness.placements.seedActive(2);
-    if (active.state !== "active") {
-      throw new Error("active placement fixture was not active");
-    }
-    const claim = placementStore.claimTurn({
-      ...REQUEST,
-      claimId: "diverged-staged-claim",
-      runId: "diverged-staged-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
+    const { active, claim } = seedWorkerTurn(originalHarness);
     const staged = await stagePendingResult({
       store: placementStore,
       claim,
@@ -505,9 +622,21 @@ describe("staged worker placement result recovery", () => {
     await fs.writeFile(path.join(workspacePath, "result.txt"), "local divergence\n");
     const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
     const restartedHarness = createHarness(restartedStore, { workspacePath });
-    restartedHarness.markEnvironmentDestroyed();
-    restartedHarness.reportWorkspaceResultConflict.mockRejectedValueOnce(
-      new Error("transcript report interrupted"),
+    restartedHarness.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
+    const secret = [
+      String.fromCharCode(115, 107),
+      "proj",
+      "recovery",
+      "abcdefghijklmnopqrstuvwxyz",
+    ].join("-");
+    const failure = new Error(
+      `transcript report interrupted token=${secret} ${"detail ".repeat(200)}`,
+    );
+    restartedHarness.reportWorkspaceResultConflict
+      .mockRejectedValueOnce(failure)
+      .mockRejectedValueOnce(failure);
+    restartedHarness.reportWorkspaceResultRecoveryFailure.mockRejectedValueOnce(
+      new Error("recovery transcript temporarily unavailable"),
     );
 
     await restartedHarness.service.reconcile();
@@ -515,6 +644,27 @@ describe("staged worker placement result recovery", () => {
     expect(restartedStore.listPendingWorkspaceResults()).toMatchObject([
       { stagedResultRef: staged.stagedResultRef, workspaceAcceptedAtMs: 2_000 },
     ]);
+    expect(restartedStore.get(active.sessionId)).toMatchObject({
+      state: "draining",
+      turnClaim: { claimId: claim.claimId, runId: claim.runId },
+    });
+    expect(restartedHarness.environments.destroy).not.toHaveBeenCalled();
+    expect(restartedHarness.reportWorkspaceResultRecoveryFailure).toHaveBeenCalledOnce();
+    const recovery = restartedHarness.reportWorkspaceResultRecoveryFailure.mock.calls[0]?.[0];
+    expect(recovery).toMatchObject({
+      sessionId: active.sessionId,
+      sessionKey: active.sessionKey,
+      agentId: active.agentId,
+      error: expect.stringContaining("transcript report interrupted"),
+    });
+    expect(JSON.stringify(recovery)).not.toContain(secret);
+    expect(recovery?.error.length).toBeLessThanOrEqual(1_024);
+
+    await restartedHarness.service.reconcile();
+
+    expect(restartedHarness.reportWorkspaceResultRecoveryFailure).toHaveBeenCalledTimes(2);
+    expect(restartedStore.listPendingWorkspaceResults()).toHaveLength(1);
+    expect(restartedHarness.environments.destroy).not.toHaveBeenCalled();
     expect(
       await runCommandWithTimeout(
         ["git", "-C", workspacePath, "show-ref", "--verify", staged.stagedResultRef],
@@ -524,7 +674,7 @@ describe("staged worker placement result recovery", () => {
     await fs.writeFile(path.join(workspacePath, "result.txt"), "later local edit\n");
     const finalStore = createWorkerSessionPlacementStore({ database, now: () => 3_000 });
     const finalHarness = createHarness(finalStore, { workspacePath });
-    finalHarness.markEnvironmentDestroyed();
+    finalHarness.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
 
     await finalHarness.service.reconcile();
 
@@ -540,6 +690,8 @@ describe("staged worker placement result recovery", () => {
     expect(recovered?.workspaceBaseManifestRef).not.toBe(staged.currentManifestRef);
     expect(finalStore.listPendingWorkspaceResults()).toEqual([]);
     expect(finalHarness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(finalHarness.environments.destroy).toHaveBeenCalledWith(active.environmentId);
+    expect(finalHarness.reportWorkspaceResultRecoveryFailure).not.toHaveBeenCalled();
     expect(finalHarness.log).not.toContain("placement:failed");
     expect(finalHarness.reportWorkspaceResultConflict).toHaveBeenCalledWith({
       sessionId: REQUEST.sessionId,
@@ -563,20 +715,7 @@ describe("staged worker placement result recovery", () => {
   it("reports a post-accept revert to the original base as a conflict", async () => {
     const workspacePath = path.join(root, "accepted-clean-local-advance");
     const originalHarness = createHarness(placementStore, { workspacePath });
-    const active = originalHarness.placements.seedActive(2);
-    if (active.state !== "active") {
-      throw new Error("active placement fixture was not active");
-    }
-    const claim = placementStore.claimTurn({
-      ...REQUEST,
-      claimId: "accepted-clean-local-advance-claim",
-      runId: "accepted-clean-local-advance-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
+    const { claim } = seedWorkerTurn(originalHarness);
     const staged = await stagePendingResult({
       store: placementStore,
       claim,
@@ -620,20 +759,7 @@ describe("staged worker placement result recovery", () => {
   it("does not replay an unchanged-hash conflicted apply after a crash", async () => {
     const workspacePath = path.join(root, "unchanged-hash-conflict");
     const originalHarness = createHarness(placementStore, { workspacePath });
-    const active = originalHarness.placements.seedActive(2);
-    if (active.state !== "active") {
-      throw new Error("active placement fixture was not active");
-    }
-    const claim = placementStore.claimTurn({
-      ...REQUEST,
-      claimId: "unchanged-hash-conflict-claim",
-      runId: "unchanged-hash-conflict-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
+    const { active, claim } = seedWorkerTurn(originalHarness);
     await stagePendingResult({
       store: placementStore,
       claim,

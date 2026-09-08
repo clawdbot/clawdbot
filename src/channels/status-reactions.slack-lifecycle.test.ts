@@ -1,4 +1,4 @@
-// Slack lifecycle status reaction tests cover reaction updates around channel session state changes.
+// Shared reaction lifecycle coverage for adapters with multiple reaction slots.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createStatusReactionController,
@@ -36,7 +36,7 @@ function createSlackMockAdapter() {
   };
 }
 
-describe("Slack status reaction lifecycle", () => {
+describe("Multi-reaction status lifecycle", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -44,6 +44,38 @@ describe("Slack status reaction lifecycle", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
+
+  it.each(["clear", "restoreInitial"] as const)(
+    "keeps acknowledgement stable through activity, silence, success, and %s",
+    async (cleanup) => {
+      const { adapter, active, log } = createSlackMockAdapter();
+      const ctrl = createStatusReactionController({
+        enabled: true,
+        adapter,
+        initialEmoji: "working",
+        presentation: "acknowledgement",
+      });
+
+      void ctrl.setQueued();
+      await vi.advanceTimersByTimeAsync(0);
+      for (const update of [ctrl.setThinking, () => ctrl.setTool("exec"), ctrl.setCompacting]) {
+        void update();
+        await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+      }
+      await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.stallHardMs + 1);
+      expect(log).toEqual(["+working"]);
+
+      const donePromise = ctrl.setDone();
+      await vi.advanceTimersByTimeAsync(0);
+      await donePromise;
+      await ctrl[cleanup]();
+      void ctrl.setThinking();
+      await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.stallHardMs + 1);
+
+      expect(log).toEqual(cleanup === "clear" ? ["+working", "-working"] : ["+working"]);
+      expect([...active]).toEqual(cleanup === "clear" ? [] : ["working"]);
+    },
+  );
 
   it("queued -> thinking -> tool -> done -> clear", async () => {
     const { adapter, active, log } = createSlackMockAdapter();
@@ -80,13 +112,13 @@ describe("Slack status reaction lifecycle", () => {
     expect(log.length).toBeGreaterThan(0);
   });
 
-  it("queued -> error -> restoreInitial", async () => {
+  it("acknowledgement holds an actual error before restoring the initial reaction", async () => {
     const { adapter, active } = createSlackMockAdapter();
     const ctrl = createStatusReactionController({
       enabled: true,
       adapter,
       initialEmoji: "eyes",
-      timing: { debounceMs: 0, stallSoftMs: 99999, stallHardMs: 99999 },
+      presentation: "acknowledgement",
     });
 
     void ctrl.setQueued();
@@ -94,12 +126,13 @@ describe("Slack status reaction lifecycle", () => {
     expect(active.has("eyes")).toBe(true);
 
     const errorPromise = ctrl.setError();
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.errorHoldMs);
-    await errorPromise;
+    const restorePromise = ctrl.restoreInitial();
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.errorHoldMs - 1);
     expect(active.has(DEFAULT_EMOJIS.error)).toBe(true);
     expect(active.has("eyes")).toBe(false);
 
-    await ctrl.restoreInitial();
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.all([errorPromise, restorePromise]);
     expect(active.has("eyes")).toBe(true);
     expect(active.has(DEFAULT_EMOJIS.error)).toBe(false);
   });

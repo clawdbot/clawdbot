@@ -12,12 +12,20 @@ const hoisted = vi.hoisted(() => ({
       sessionKey: string;
     }>
   >(),
+  loadExactSessionEntryMock:
+    vi.fn<
+      (scope: {
+        storePath?: string;
+        sessionKey: string;
+      }) => { sessionKey: string; entry: SessionEntry } | undefined
+    >(),
   listAgentIdsMock: vi.fn<() => string[]>(),
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  listSessionEntriesCore: (scope?: { agentId?: string; storePath?: string; clone?: boolean }) =>
+  listSessionEntriesReadOnly: (scope?: { agentId?: string; storePath?: string; clone?: boolean }) =>
     hoisted.listSessionEntriesMock(scope),
+  loadExactSessionEntryReadOnly: hoisted.loadExactSessionEntryMock,
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
@@ -43,6 +51,10 @@ const { resolveSessionKeyForRequestCore, resolveStoredSessionKeyForSessionId } =
 const resolveSessionKeyForRequest = resolveSessionKeyForRequestCore;
 
 function mockSessionStores(storesByPath: Record<string, Record<string, SessionEntry>>): void {
+  hoisted.loadExactSessionEntryMock.mockImplementation(({ storePath, sessionKey }) => {
+    const entry = storesByPath[storePath ?? ""]?.[sessionKey];
+    return entry ? { sessionKey, entry: structuredClone(entry) } : undefined;
+  });
   hoisted.listSessionEntriesMock.mockImplementation((scope) =>
     Object.entries(storesByPath[scope?.storePath ?? ""] ?? {}).map(([sessionKey, entry]) => ({
       sessionKey,
@@ -67,13 +79,14 @@ function expectResolvedRequestSession(params: {
   });
 
   expect(result.sessionKey).toBe(params.sessionKey);
-  expect(result.sessionStore).toEqual(params.sessionStore);
+  expect(result.sessionEntry).toEqual(params.sessionStore[params.sessionKey]);
   expect(result.storePath).toBe(params.storePath);
 }
 
 describe("resolveSessionKeyForRequest", () => {
   beforeEach(() => {
     hoisted.listSessionEntriesMock.mockReset();
+    hoisted.loadExactSessionEntryMock.mockReset();
     hoisted.listAgentIdsMock.mockReset();
     hoisted.listAgentIdsMock.mockReturnValue(["main", "other"]);
   });
@@ -138,7 +151,7 @@ describe("resolveSessionKeyForRequest", () => {
     });
 
     expect(result.sessionKey).toBe("agent:embedded-agent:work");
-    expect(result.sessionStore).toEqual(embeddedAgentStore);
+    expect(result.sessionEntry).toEqual(embeddedAgentStore["agent:embedded-agent:work"]);
     expect(result.storePath).toBe("/stores/embedded-agent.json");
     expect(hoisted.listSessionEntriesMock).toHaveBeenCalledTimes(1);
   });
@@ -164,7 +177,7 @@ describe("resolveSessionKeyForRequest", () => {
 
     expect(result.agentId).toBe("ops");
     expect(result.sessionKey).toBe("main");
-    expect(result.sessionStore).toEqual(sharedStore);
+    expect(result.sessionEntry).toEqual(sharedStore.main);
     expect(result.storePath).toBe("/stores/shared.sqlite");
     expect(hoisted.listSessionEntriesMock.mock.calls.map(([scope]) => scope?.agentId)).toEqual([
       "research",
@@ -194,7 +207,7 @@ describe("resolveSessionKeyForRequest", () => {
     ).toMatchObject({
       agentId: "ops",
       sessionKey: "main",
-      sessionStore: sharedStore,
+      sessionEntry: sharedStore.main,
       storePath: "/stores/shared.sqlite",
     });
   });
@@ -241,7 +254,7 @@ describe("resolveSessionKeyForRequest", () => {
     ).toMatchObject({
       agentId: "research",
       sessionKey: "agent:research:work",
-      sessionStore: sharedStore,
+      sessionEntry: sharedStore["agent:research:work"],
       storePath: "/stores/shared.sqlite",
     });
   });
@@ -286,7 +299,7 @@ describe("resolveSessionKeyForRequest", () => {
     ).toMatchObject({
       agentId: "research",
       sessionKey: "agent:research:work",
-      sessionStore: researchStore,
+      sessionEntry: researchStore["agent:research:work"],
       storePath: "/stores/shared.sqlite",
     });
   });
@@ -452,7 +465,7 @@ describe("resolveSessionKeyForRequest", () => {
     ).toMatchObject({
       agentId: "research",
       sessionKey: "agent:research:work",
-      sessionStore: researchStore,
+      sessionEntry: researchStore["agent:research:work"],
       storePath: "/stores/research.json",
     });
   });
@@ -478,7 +491,7 @@ describe("resolveSessionKeyForRequest", () => {
 
     expect(result.agentId).toBe("ops");
     expect(result.sessionKey).toBe("main");
-    expect(result.sessionStore).toEqual(sharedStore);
+    expect(result.sessionEntry).toEqual(sharedStore.main);
     expect(result.storePath).toBe("/stores/shared.sqlite");
     expect(hoisted.listSessionEntriesMock).toHaveBeenCalledTimes(1);
     expect(hoisted.listSessionEntriesMock).toHaveBeenCalledWith(
@@ -550,14 +563,16 @@ describe("resolveSessionKeyForRequest", () => {
     );
   });
 
-  it("borrows session stores when requested", () => {
-    // clone=false is used by callers that intend to mutate the selected store,
-    // so the resolver must pass that option through every candidate load.
+  it("detaches the selected session entry from borrowed store rows", () => {
     const mainStore = {
       "agent:main:main": { sessionId: "sid", updatedAt: 10 },
     } satisfies Record<string, SessionEntry>;
     const otherStore = {
-      "agent:other:acp:sid": { sessionId: "sid", updatedAt: 20 },
+      "agent:other:acp:sid": {
+        sessionId: "sid",
+        updatedAt: 20,
+        skillsSnapshot: { prompt: "selected prompt", skills: [] },
+      },
     } satisfies Record<string, SessionEntry>;
     mockSessionStores({
       "/stores/main.json": mainStore,
@@ -571,11 +586,15 @@ describe("resolveSessionKeyForRequest", () => {
         },
       } satisfies OpenClawConfig,
       sessionId: "sid",
-      clone: false,
     });
 
     expect(result.sessionKey).toBe("agent:other:acp:sid");
-    expect(result.sessionStore).toEqual(otherStore);
+    expect(result.sessionEntry).toEqual(otherStore["agent:other:acp:sid"]);
+    if (!result.sessionEntry?.skillsSnapshot) {
+      throw new Error("expected the selected session's skills");
+    }
+    result.sessionEntry.skillsSnapshot.prompt = "caller-owned edit";
+    expect(otherStore["agent:other:acp:sid"].skillsSnapshot.prompt).toBe("selected prompt");
     expect(hoisted.listSessionEntriesMock).toHaveBeenCalledWith(
       expect.objectContaining({
         storePath: "/stores/main.json",

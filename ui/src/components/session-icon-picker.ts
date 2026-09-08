@@ -6,6 +6,7 @@ import {
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
 import { resolveSessionIconGlyph } from "./session-icon-glyph-registry.ts";
+import { renderSessionColorOptions } from "./session-menu-options.ts";
 
 const SESSION_ICON_EMOJI_CHOICES = [
   "🦞",
@@ -33,6 +34,11 @@ type SessionIconPickerProps = {
   inline?: boolean;
   mode: "grid" | "custom";
   currentIcon: string | null;
+  currentColor: string | null;
+  colorDisabled: boolean;
+  colorDisabledReason?: string;
+  onSelectColor: (event: MouseEvent, color: string | null) => void;
+  onReset: (event: MouseEvent) => void;
   customIconValue: string;
   disabled: boolean;
   disabledReason?: string;
@@ -41,7 +47,6 @@ type SessionIconPickerProps = {
   onBack: (event: Event) => void;
   onInput: (event: InputEvent) => void;
   onApply: (event: Event) => void;
-  onRemove: (event: MouseEvent) => void;
   onGridKeydown: (event: KeyboardEvent) => void;
 };
 
@@ -49,10 +54,7 @@ function renderCustomSessionIconEntry(props: SessionIconPickerProps) {
   const normalized = normalizeSessionIconValue(props.customIconValue);
   const shortcut = sessionEmojiPickerShortcut();
   return html`
-    <div
-      slot=${props.inline ? nothing : "submenu"}
-      class="session-menu__icon-picker session-menu__icon-custom-entry"
-    >
+    <div class="session-menu__icon-picker session-menu__icon-custom-entry">
       <div class="session-menu__icon-custom-header">
         <button
           type="button"
@@ -84,23 +86,40 @@ function renderCustomSessionIconEntry(props: SessionIconPickerProps) {
         </button>
       </div>
       <div class="session-menu__icon-custom-hint">
-        ${shortcut
-          ? t("sessionsView.customEmojiHint", { shortcut })
-          : t("sessionsView.customEmojiHintNoShortcut")}
+        ${
+          shortcut
+            ? t("sessionsView.customEmojiHint", { shortcut })
+            : t("sessionsView.customEmojiHintNoShortcut")
+        }
       </div>
     </div>
   `;
 }
 
-export function renderSessionIconPicker(props: SessionIconPickerProps) {
+function renderSessionIconGrid(props: SessionIconPickerProps) {
   if (props.mode === "custom") {
     return renderCustomSessionIconEntry(props);
   }
-  const tabStop = [...SESSION_ICON_EMOJI_CHOICES, ...SESSION_ICON_GLYPH_IDS].find(
-    (icon) => icon === props.currentIcon,
-  );
+  const tabStop =
+    [...SESSION_ICON_EMOJI_CHOICES, ...SESSION_ICON_GLYPH_IDS].find(
+      (icon) => icon === props.currentIcon,
+    ) ?? SESSION_ICON_EMOJI_CHOICES[0];
+  const renderChoice = (icon: string, glyph = false) => html`
+    <button
+      type="button"
+      class=${`session-menu__icon-choice${glyph ? " session-menu__icon-choice--glyph" : ""}`}
+      aria-label=${glyph ? icon : nothing}
+      aria-pressed=${String(props.currentIcon === icon)}
+      tabindex=${icon === tabStop ? "0" : "-1"}
+      ?disabled=${props.disabled}
+      title=${props.disabledReason ?? nothing}
+      @click=${(event: MouseEvent) => props.onSelect(event, icon)}
+    >
+      ${glyph ? resolveSessionIconGlyph(icon) : icon}
+    </button>
+  `;
   return html`
-    <div slot=${props.inline ? nothing : "submenu"} class="session-menu__icon-picker">
+    <div class="session-menu__icon-picker">
       <div
         class="session-menu__icon-options"
         role="group"
@@ -109,22 +128,7 @@ export function renderSessionIconPicker(props: SessionIconPickerProps) {
       >
         <div class="session-menu__icon-section-label">${t("sessionsView.iconEmojiSection")}</div>
         <div class="session-menu__icon-grid">
-          ${SESSION_ICON_EMOJI_CHOICES.map((icon, index) => {
-            const checked = props.currentIcon === icon;
-            return html`
-              <button
-                type="button"
-                class="session-menu__icon-choice"
-                aria-pressed=${String(checked)}
-                tabindex=${icon === tabStop || (!tabStop && index === 0) ? "0" : "-1"}
-                ?disabled=${props.disabled}
-                title=${props.disabledReason ?? nothing}
-                @click=${(event: MouseEvent) => props.onSelect(event, icon)}
-              >
-                ${icon}
-              </button>
-            `;
-          })}
+          ${SESSION_ICON_EMOJI_CHOICES.map((icon) => renderChoice(icon))}
           <button
             type="button"
             class="session-menu__icon-choice session-menu__icon-choice--custom"
@@ -140,39 +144,32 @@ export function renderSessionIconPicker(props: SessionIconPickerProps) {
         </div>
         <div class="session-menu__icon-section-label">${t("sessionsView.iconGlyphSection")}</div>
         <div class="session-menu__icon-grid">
-          ${SESSION_ICON_GLYPH_IDS.map((icon) => {
-            const checked = props.currentIcon === icon;
-            return html`
-              <button
-                type="button"
-                class="session-menu__icon-choice session-menu__icon-choice--glyph"
-                aria-label=${icon}
-                aria-pressed=${String(checked)}
-                tabindex=${icon === tabStop ? "0" : "-1"}
-                ?disabled=${props.disabled}
-                title=${props.disabledReason ?? nothing}
-                @click=${(event: MouseEvent) => props.onSelect(event, icon)}
-              >
-                ${resolveSessionIconGlyph(icon)}
-              </button>
-            `;
-          })}
+          ${SESSION_ICON_GLYPH_IDS.map((icon) => renderChoice(icon, true))}
         </div>
       </div>
-      ${props.currentIcon
-        ? html`
-            <div class="session-menu__icon-separator" role="separator"></div>
-            <button
-              type="button"
-              class="session-menu__icon-remove"
-              ?disabled=${props.disabled}
-              title=${props.disabledReason ?? nothing}
-              @click=${props.onRemove}
-            >
-              ${t("sessionsView.removeIcon")}
-            </button>
-          `
-        : nothing}
     </div>
   `;
+}
+
+export function renderSessionAppearancePicker(props: SessionIconPickerProps) {
+  return html`<div slot=${props.inline ? nothing : "submenu"} class="session-menu__appearance">
+    <div class="session-menu__icon-section-label">${t("sessionsView.setColorMenu")}</div>
+    ${renderSessionColorOptions({
+      color: props.currentColor,
+      disabled: props.colorDisabled,
+      disabledReason: props.colorDisabledReason,
+      onSelect: props.onSelectColor,
+    })}
+    ${renderSessionIconGrid(props)}
+    <div class="session-menu__separator" role="separator"></div>
+    <button
+      type="button"
+      class="session-menu__icon-remove"
+      ?disabled=${props.disabled || props.colorDisabled}
+      title=${props.disabledReason ?? props.colorDisabledReason ?? nothing}
+      @click=${props.onReset}
+    >
+      ${t("sessionsView.resetAppearance")}
+    </button>
+  </div>`;
 }

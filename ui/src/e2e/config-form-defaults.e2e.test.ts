@@ -1,8 +1,8 @@
 // Control UI tests cover schema defaults and restoring inherited config values.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -14,12 +14,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "config-form-defaults",
-);
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = createControlUiE2eArtifactDir("config-form-defaults");
+  }
+});
 
 function requestRaw(request: MockGatewayRequest): Record<string, unknown> {
   const params = request.params;
@@ -36,7 +36,7 @@ function settingsRow(page: Page, title: string): Locator {
 }
 
 suite.define(() => {
-  it("shows defaults and removes restored optional overrides from config.set", async () => {
+  it("shows defaults and removes cleared optional scalars from config.set", async () => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -135,7 +135,7 @@ suite.define(() => {
         const enabledRow = settingsRow(page, "Enabled");
         const modeRow = settingsRow(page, "Mode");
         const payloadRow = settingsRow(page, "Payload");
-        const profileBlock = panel.locator("details").filter({
+        const profileBlock = panel.locator("details.cfg-object").filter({
           has: page.locator(".cfg-object__summary .settings-row__title").getByText("Profile", {
             exact: true,
           }),
@@ -155,12 +155,8 @@ suite.define(() => {
           .toContain('Default: {"enabled":true,"mode":"balanced"}');
         await expect.poll(() => retriesRow.getByRole("spinbutton").inputValue()).toBe("9");
         await expect.poll(() => tagsBlock.textContent()).toContain('Default: ["stable","default"]');
-        await expect
-          .poll(() => panel.getByRole("button", { name: "Reset to default" }).count())
-          .toBe(5);
 
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await panel.screenshot({
             animations: "disabled",
             path: path.join(uiProofArtifactDir, "01-explicit-overrides.png"),
@@ -168,38 +164,29 @@ suite.define(() => {
         }
 
         await gateway.deferNext("config.set");
-        await enabledRow.getByRole("button", { name: "Reset to default" }).click();
         await modeRow.locator("select").selectOption("__unset__");
-        await payloadRow.getByRole("button", { name: "Reset to default" }).click();
-        await profileBlock.getByRole("button", { name: "Reset to default" }).click();
-        await retriesRow.getByRole("button", { name: "Reset to default" }).click();
-        await tagsBlock.getByRole("button", { name: "Reset to default" }).click();
+        await retriesRow.getByRole("spinbutton").fill("");
 
         // Form mutations schedule config.set automatically; form mode has no manual Save control.
         const saved = requestRaw(await gateway.waitForRequest("config.set"));
-        expect(saved).toEqual({ runtime: { keep: "preserved" } });
+        expect(saved).toEqual({
+          runtime: {
+            enabled: false,
+            keep: "preserved",
+            payload: { mode: "custom" },
+            profile: { enabled: false, mode: "custom" },
+            tags: ["custom"],
+          },
+        });
         await expect
           .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
           .toContain("Saving");
 
-        await expect.poll(() => enabledRow.textContent()).toContain("Using default: true");
         await expect.poll(() => modeRow.locator("select").inputValue()).toBe("__unset__");
-        await expect
-          .poll(() => payloadRow.textContent())
-          .toContain('Using default: {"mode":"balanced"}');
-        await expect
-          .poll(() => profileBlock.textContent())
-          .toContain('Using default: {"enabled":true,"mode":"balanced"}');
         await expect.poll(() => retriesRow.getByRole("spinbutton").inputValue()).toBe("");
         await expect
           .poll(() => retriesRow.getByRole("spinbutton").getAttribute("placeholder"))
           .toBe("Default: 3");
-        await expect
-          .poll(() => tagsBlock.textContent())
-          .toContain('Using default: ["stable","default"]');
-        await expect
-          .poll(() => panel.getByRole("button", { name: "Reset to default" }).count())
-          .toBe(0);
 
         const configGetsBeforeReload = (await gateway.getRequests("config.get")).length;
         await gateway.resolveDeferred("config.set");
@@ -212,31 +199,10 @@ suite.define(() => {
           .toBe(configGetsBeforeReload + 1);
 
         const reloadedPanel = page.locator("#config-section-panel");
-        const reloadedEnabledRow = settingsRow(page, "Enabled");
         const reloadedModeRow = settingsRow(page, "Mode");
-        const reloadedPayloadRow = settingsRow(page, "Payload");
-        const reloadedProfileBlock = reloadedPanel.locator("details").filter({
-          has: page
-            .locator(".cfg-object__summary .settings-row__title")
-            .getByText("Profile", { exact: true }),
-        });
         const reloadedRetriesRow = settingsRow(page, "Retries");
-        const reloadedTagsBlock = reloadedPanel.locator(".cfg-array").filter({ hasText: "Tags" });
-        await expect.poll(() => reloadedEnabledRow.textContent()).toContain("Using default: true");
         await expect.poll(() => reloadedModeRow.locator("select").inputValue()).toBe("__unset__");
-        await expect
-          .poll(() => reloadedPayloadRow.textContent())
-          .toContain('Using default: {"mode":"balanced"}');
-        await expect
-          .poll(() => reloadedProfileBlock.textContent())
-          .toContain('Using default: {"enabled":true,"mode":"balanced"}');
         await expect.poll(() => reloadedRetriesRow.getByRole("spinbutton").inputValue()).toBe("");
-        await expect
-          .poll(() => reloadedTagsBlock.textContent())
-          .toContain('Using default: ["stable","default"]');
-        await expect
-          .poll(() => reloadedPanel.getByRole("button", { name: "Reset to default" }).count())
-          .toBe(0);
 
         if (captureUiProofEnabled) {
           await reloadedPanel.screenshot({

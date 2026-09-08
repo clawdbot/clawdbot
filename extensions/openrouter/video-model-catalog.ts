@@ -7,7 +7,7 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import { getCachedLiveCatalogValue } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   assertOkOrThrowHttpError,
-  readProviderJsonResponse,
+  readProviderJsonArrayFieldResponse,
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
@@ -91,10 +91,6 @@ function normalizeStringRecord(value: unknown): Record<string, string> | undefin
     }
   }
   return Object.keys(record).length > 0 ? record : undefined;
-}
-
-function isOpenRouterVideoModel(value: unknown): value is OpenRouterVideoModel {
-  return isRecord(value);
 }
 
 function buildOpenRouterVideoModeCapabilities(params: {
@@ -189,13 +185,12 @@ function buildOpenRouterVideoModelCapabilities(
 }
 
 function projectOpenRouterVideoModelsToCatalogEntries(
-  payload: unknown,
+  models: unknown[],
 ): Array<UnifiedModelCatalogEntry<OpenRouterVideoModelCatalogCapabilities>> {
   const entries: Array<UnifiedModelCatalogEntry<OpenRouterVideoModelCatalogCapabilities>> = [];
   const seen = new Set<string>();
-  const models = isRecord(payload) && Array.isArray(payload.data) ? payload.data : [];
   for (const model of models) {
-    if (!isOpenRouterVideoModel(model)) {
+    if (!isRecord(model)) {
       continue;
     }
     const id = normalizeOptionalString(model.id);
@@ -269,7 +264,7 @@ async function fetchOpenRouterVideoModels(params: {
   timeoutMs: number;
   allowPrivateNetwork: boolean;
   dispatcherPolicy: OpenRouterVideoDispatcherPolicy;
-}): Promise<unknown> {
+}): Promise<unknown[]> {
   return await getCachedLiveCatalogValue({
     keyParts: [
       "openrouter",
@@ -290,9 +285,10 @@ async function fetchOpenRouterVideoModels(params: {
       });
       try {
         await assertOkOrThrowHttpError(response, "OpenRouter video models request failed");
-        return await readProviderJsonResponse<unknown>(
+        return await readProviderJsonArrayFieldResponse(
           response,
           "OpenRouter video models request failed",
+          "data",
         );
       } finally {
         await release();

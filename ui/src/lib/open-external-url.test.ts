@@ -113,18 +113,23 @@ describe("openExternalUrlSafe", () => {
 });
 
 describe("reserveExternalWindowForDeferredNavigation", () => {
-  it("opens an inert placeholder and detaches its opener", () => {
-    const openedLikeProxy = {
-      opener: { postMessage: () => void 0 },
-    } as unknown as WindowProxy;
-    const openMock = vi
-      .spyOn(window, "open")
-      .mockImplementation(() => openedLikeProxy as unknown as Window);
+  it.each([undefined, false, true])(
+    "opens an inert placeholder and detaches its opener (popup=%s)",
+    (popup) => {
+      const openedLikeProxy = {
+        opener: { postMessage: () => void 0 },
+      } as unknown as WindowProxy;
+      const openMock = vi
+        .spyOn(window, "open")
+        .mockImplementation(() => openedLikeProxy as unknown as Window);
 
-    const opened = reserveExternalWindowForDeferredNavigation();
+      const opened = reserveExternalWindowForDeferredNavigation(
+        popup === undefined ? undefined : { popup },
+      );
 
-    expect(openMock).toHaveBeenCalledWith("about:blank", "_blank");
-    expect(opened).toBe(openedLikeProxy);
-    expect(openedLikeProxy.opener).toBeNull();
-  });
+      expect(openMock).toHaveBeenCalledWith("about:blank", "_blank", popup ? "popup" : undefined);
+      expect(opened).toBe(openedLikeProxy);
+      expect(openedLikeProxy.opener).toBeNull();
+    },
+  );
 });

@@ -2,14 +2,16 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { DEFAULT_SECRET_FILE_MAX_BYTES } from "openclaw/plugin-sdk/secret-file-runtime";
 import {
   resolvePreferredOpenClawTmpDir,
   tempWorkspaceSync,
   type TempWorkspaceSync,
 } from "openclaw/plugin-sdk/temp-path";
+import { build } from "tsdown";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { createStateSchemaInlinePlugin } from "../../../scripts/lib/state-schema-inline-plugin.mjs";
 import { encodeOnePasswordSecretId } from "../onepassword-secret-id.js";
 import { createTrustedNodeFixture } from "./trusted-node.test-support.js";
 
@@ -23,11 +25,7 @@ const sourceStaticAssetPaths = [
 ];
 const manifestPath = fileURLToPath(new URL("../openclaw.plugin.json", import.meta.url));
 const packagePath = fileURLToPath(new URL("../package.json", import.meta.url));
-const tsxCliPath = fileURLToPath(import.meta.resolve("tsx/cli"));
 const rootTsconfigPath = path.resolve("tsconfig.json");
-const secretRefRuntimeSourceUrl = pathToFileURL(
-  path.resolve("src/plugin-sdk/secret-ref-runtime.ts"),
-).href;
 // The manifest test reads the production source; the timeout-only staged executable needs a
 // shorter deadline to prove cleanup without sleeping for the production seven seconds.
 const TEST_OP_READ_TIMEOUT_MS = process.platform === "win32" ? 5_000 : 1_500;
@@ -41,28 +39,14 @@ let stagedResolverRoot: string | undefined;
 let trustedNodeRoot: string | undefined;
 let trustedNodePath: string | undefined;
 
-beforeAll(() => {
+beforeAll(async () => {
   const tempRoot = path.join(process.cwd(), ".tmp");
   fs.mkdirSync(tempRoot, { recursive: true });
   stagedResolverRoot = fs.mkdtempSync(path.join(tempRoot, "onepassword-resolver-"));
   for (const sourcePath of sourceStaticAssetPaths) {
     const stagedPath = path.join(stagedResolverRoot, path.basename(sourcePath));
-    if (sourcePath.endsWith("onepassword-op-path.js")) {
-      fs.writeFileSync(
-        stagedPath,
-        fs
-          .readFileSync(sourcePath, "utf8")
-          .replace(
-            '"openclaw/plugin-sdk/secret-ref-runtime"',
-            JSON.stringify(secretRefRuntimeSourceUrl),
-          ),
-      );
-      continue;
-    }
     fs.copyFileSync(sourcePath, stagedPath);
   }
-  // Keep the relative static assets together, but resolve the real SDK from source so this
-  // focused test does not depend on a parallel build producing dist/plugin-sdk first.
   resolverPath = path.join(stagedResolverRoot, path.basename(sourceResolverPath));
   const resolverSource = fs.readFileSync(sourceResolverPath, "utf8");
   const timeoutResolverSource = resolverSource.replace(
@@ -74,6 +58,25 @@ beforeAll(() => {
   }
   timeoutResolverPath = path.join(stagedResolverRoot, "onepassword-timeout-resolver.js");
   fs.writeFileSync(timeoutResolverPath, timeoutResolverSource);
+  // Build the real SDK once; each request still gets a fresh process and real op execution.
+  // Keep native dependencies external and use the production schema-asset transform.
+  const compiledRoot = path.join(stagedResolverRoot, "compiled");
+  await build({
+    config: false,
+    entry: [resolverPath, timeoutResolverPath],
+    outDir: compiledRoot,
+    tsconfig: rootTsconfigPath,
+    format: "esm",
+    outExtensions: () => ({ js: ".js" }),
+    dts: false,
+    deps: {
+      neverBundle: true,
+      alwaysBundle: [/^openclaw\//, /^@openclaw\/(?!fs-safe(?:\/|$))/],
+    },
+    plugins: [createStateSchemaInlinePlugin()],
+  });
+  resolverPath = path.join(compiledRoot, path.basename(resolverPath));
+  timeoutResolverPath = path.join(compiledRoot, path.basename(timeoutResolverPath));
   // The fake op paths remain per-test; only their trusted Node interpreter is shared.
   // Re-copying the runtime does not strengthen path-ownership coverage.
   trustedNodeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-1password-node-"));
@@ -150,21 +153,17 @@ function runResolver(params: {
     );
   }
   return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      [tsxCliPath, "--tsconfig", rootTsconfigPath, params.resolverExecutablePath ?? resolverPath],
-      {
-        ...(params.cwd ? { cwd: params.cwd } : {}),
-        stdio: ["pipe", "pipe", "pipe"],
-        env: {
-          ...process.env,
-          OP_SERVICE_ACCOUNT_TOKEN: "",
-          CLAW_1PASSWORD_OP: "",
-          OPENCLAW_STATE_DIR: stateDir,
-          ...params.env,
-        },
+    const child = spawn(process.execPath, [params.resolverExecutablePath ?? resolverPath], {
+      ...(params.cwd ? { cwd: params.cwd } : {}),
+      stdio: ["pipe", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        OP_SERVICE_ACCOUNT_TOKEN: "",
+        CLAW_1PASSWORD_OP: "",
+        OPENCLAW_STATE_DIR: stateDir,
+        ...params.env,
       },
-    );
+    });
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8");
@@ -681,6 +680,84 @@ process.stdout.write("not-a-real-value");
   );
 
   it.runIf(process.platform !== "win32")(
+    "keeps literal $ patterns in home when expanding the tilde state dir",
+    async () => {
+      const home = path.join(fixtureWorkspace.dir, "home$&d");
+      const tokenDir = path.join(home, "oc-state", "credentials", "onepassword");
+      const opPath = path.join(fixtureWorkspace.dir, "op");
+      fs.mkdirSync(tokenDir, { recursive: true });
+      fs.writeFileSync(path.join(tokenDir, "service-account-token"), "dollar-token", {
+        mode: 0o600,
+      });
+      fs.writeFileSync(
+        opPath,
+        `#!${getTrustedNodePath()}\nprocess.stdout.write(process.env.OP_SERVICE_ACCOUNT_TOKEN);\n`,
+        { mode: 0o755 },
+      );
+
+      const result = await runResolver({
+        request: {
+          protocolVersion: 1,
+          provider: "onepassword",
+          ids: ["op://Engineering/OpenRouter/apiKey"],
+        },
+        env: {
+          CLAW_1PASSWORD_OP: opPath,
+          HOME: home,
+          OPENCLAW_HOME: "",
+          OPENCLAW_PROFILE: "",
+          OPENCLAW_STATE_DIR: "~/oc-state",
+        },
+        token: null,
+      });
+
+      expect(result).toMatchObject({ code: 0, stderr: "" });
+      expect(JSON.parse(result.stdout).values).toEqual({
+        "op://Engineering/OpenRouter/apiKey": "dollar-token",
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps literal $ patterns in HOME when expanding a tilde OPENCLAW_HOME",
+    async () => {
+      const home = path.join(fixtureWorkspace.dir, "home$&d");
+      const tokenDir = path.join(home, "oc-home", ".openclaw", "credentials", "onepassword");
+      const opPath = path.join(fixtureWorkspace.dir, "op");
+      fs.mkdirSync(tokenDir, { recursive: true });
+      fs.writeFileSync(path.join(tokenDir, "service-account-token"), "home-token", {
+        mode: 0o600,
+      });
+      fs.writeFileSync(
+        opPath,
+        `#!${getTrustedNodePath()}\nprocess.stdout.write(process.env.OP_SERVICE_ACCOUNT_TOKEN);\n`,
+        { mode: 0o755 },
+      );
+
+      const result = await runResolver({
+        request: {
+          protocolVersion: 1,
+          provider: "onepassword",
+          ids: ["op://Engineering/OpenRouter/apiKey"],
+        },
+        env: {
+          CLAW_1PASSWORD_OP: opPath,
+          HOME: home,
+          OPENCLAW_HOME: "~/oc-home",
+          OPENCLAW_PROFILE: "",
+          OPENCLAW_STATE_DIR: "",
+        },
+        token: null,
+      });
+
+      expect(result).toMatchObject({ code: 0, stderr: "" });
+      expect(JSON.parse(result.stdout).values).toEqual({
+        "op://Engineering/OpenRouter/apiKey": "home-token",
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "does not include failed child output in resolver errors",
     async () => {
       const tempDir = fixtureWorkspace.dir;
@@ -814,7 +891,6 @@ while true; do sleep 1; done
       // Windows verifies the executable owner and ACL chain through OS tooling before op starts.
       // Keep the synchronization bound above that preflight without weakening the kill deadline.
       await Promise.race([
-        // Source-mode loading now includes the shared process runtime before op starts.
         waitForPath(descendantReady, process.platform === "win32" ? 15_000 : 10_000),
         resultPromise.then((result) => {
           throw new Error(

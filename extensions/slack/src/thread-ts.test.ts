@@ -1,6 +1,44 @@
 // Slack tests cover thread ts plugin behavior.
 import { describe, expect, it } from "vitest";
-import { normalizeSlackThreadTsCandidate, resolveSlackThreadTsValue } from "./thread-ts.js";
+import {
+  normalizeSlackThreadTsCandidate,
+  resolveSlackReplyThreadTs,
+  resolveSlackThreadTsValue,
+} from "./thread-ts.js";
+
+describe("Slack reply target selection", () => {
+  it("prefers explicit reply targets when reply tags are enabled", () => {
+    expect(
+      resolveSlackReplyThreadTs({
+        replyToMode: "first",
+        replyToId: "explicit-thread",
+        threadId: "planned-thread",
+      }),
+    ).toBe("explicit-thread");
+  });
+
+  it("ignores explicit reply tags when replyToMode is off", () => {
+    expect(
+      resolveSlackReplyThreadTs({
+        replyToMode: "off",
+        replyToId: "explicit-thread",
+        threadId: "planned-thread",
+      }),
+    ).toBe("planned-thread");
+  });
+
+  it("uses the planned thread when no explicit reply tag exists", () => {
+    expect(resolveSlackReplyThreadTs({ replyToMode: "batched", threadId: "planned-thread" })).toBe(
+      "planned-thread",
+    );
+  });
+
+  it("keeps a current reply target when there is no existing thread", () => {
+    expect(resolveSlackReplyThreadTs({ replyToCurrent: true, replyToId: "current-message" })).toBe(
+      "current-message",
+    );
+  });
+});
 
 describe("Slack thread_ts resolution", () => {
   it("accepts trimmed Slack timestamp strings", () => {

@@ -1,5 +1,6 @@
 // Matrix setup module handles plugin onboarding behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import {
   type ChannelSetupWizardAdapter,
   formatDocsLink,
@@ -9,6 +10,7 @@ import {
   promptAccountId,
   promptChannelAccessConfig,
   splitSetupEntries,
+  type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-policy";
 import {
@@ -33,7 +35,6 @@ import {
 import { updateMatrixAccountConfig } from "./matrix/config-update.js";
 import { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./matrix/deps.js";
 import { isMatrixRoomId } from "./matrix/target-ids.js";
-import type { RuntimeEnv, WizardPrompter } from "./runtime-api.js";
 import { moveSingleMatrixAccountConfigToNamedAccount } from "./setup-config.js";
 import { createMatrixSetupDmPolicy } from "./setup-dm-policy.js";
 import type { CoreConfig, MatrixConfig } from "./types.js";

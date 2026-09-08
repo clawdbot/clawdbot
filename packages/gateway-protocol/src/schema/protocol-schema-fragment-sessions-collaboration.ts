@@ -5,6 +5,11 @@ import * as sessionsSharing from "./sessions-sharing.js";
 import * as sessionsSuggestions from "./sessions-suggestions.js";
 
 export const SessionCollaborationProtocolSchemas = {
+  SessionGitHubOptionsParams: sessionGitHubPublication.SessionGitHubOptionsParamsSchema,
+  SessionGitHubOptionsResult: sessionGitHubPublication.SessionGitHubOptionsResultSchema,
+  SessionGitHubStatusParams: sessionGitHubPublication.SessionGitHubStatusParamsSchema,
+  SessionGitHubStatusResult: sessionGitHubPublication.SessionGitHubStatusResultSchema,
+  SessionGitHubConfirmParams: sessionGitHubPublication.SessionGitHubConfirmParamsSchema,
   SessionGitHubPublishParams: sessionGitHubPublication.SessionGitHubPublishParamsSchema,
   SessionGitHubPublicationRequested:
     sessionGitHubPublication.SessionGitHubPublicationRequestedSchema,
@@ -13,20 +18,28 @@ export const SessionCollaborationProtocolSchemas = {
   SessionGitHubPublicationPublished:
     sessionGitHubPublication.SessionGitHubPublicationPublishedSchema,
   SessionGitHubPublicationFailed: sessionGitHubPublication.SessionGitHubPublicationFailedSchema,
+  SessionGitHubPublicationNeedsConfirmation:
+    sessionGitHubPublication.SessionGitHubPublicationNeedsConfirmationSchema,
   SessionGitHubPublicationResult: sessionGitHubPublication.SessionGitHubPublicationResultSchema,
   SessionVisibility: sessionsSharing.SessionVisibilitySchema,
   SessionSharingIdentity: sessionsSharing.SessionSharingIdentitySchema,
   SessionSharingRole: sessionsSharing.SessionSharingRoleSchema,
   SessionVisibilitySetParams: sessionsSharing.SessionVisibilitySetParamsSchema,
   SessionVisibilitySetResult: sessionsSharing.SessionVisibilitySetResultSchema,
+  SessionPublicShare: sessionsSharing.SessionPublicShareSchema,
+  SessionPublicShareSetParams: sessionsSharing.SessionPublicShareSetParamsSchema,
+  SessionPublicShareSetResult: sessionsSharing.SessionPublicShareSetResultSchema,
   SessionMembersListParams: sessionsSharing.SessionMembersListParamsSchema,
   SessionMember: sessionsSharing.SessionMemberSchema,
+  SessionMemberEvidence: sessionsSharing.SessionMemberEvidenceSchema,
   SessionMembersListResult: sessionsSharing.SessionMembersListResultSchema,
+  SessionMembersListEvidenceResult: sessionsSharing.SessionMembersListEvidenceResultSchema,
   SessionMemberAddParams: sessionsSharing.SessionMemberAddParamsSchema,
   SessionMemberRemoveParams: sessionsSharing.SessionMemberRemoveParamsSchema,
   SessionMemberMutationResult: sessionsSharing.SessionMemberMutationResultSchema,
   SessionSharingAction: sessionsSharing.SessionSharingActionSchema,
   SessionSharingEvent: sessionsSharing.SessionSharingEventSchema,
+  SessionSharingEvidenceEvent: sessionsSharing.SessionSharingEvidenceEventSchema,
   SessionSuggestionState: sessionsSuggestions.SessionSuggestionStateSchema,
   SessionSuggestionAction: sessionsSuggestions.SessionSuggestionActionSchema,
   SessionSuggestionResolution: sessionsSuggestions.SessionSuggestionResolutionSchema,

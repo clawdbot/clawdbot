@@ -4,16 +4,14 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { getPluginInstallRecordMapEntry } from "../config/plugin-install-record-map.js";
 import { hashJson } from "../plugins/installed-plugin-index-hash.js";
-import {
-  readPersistedInstalledPluginIndex,
-  writePersistedInstalledPluginIndex,
-} from "../plugins/installed-plugin-index-store.js";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
+import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   autoMigrateLegacyStateDir,
   resetAutoMigrateLegacyStateDirForTest,
-} from "./state-migrations.js";
+} from "./state-migrations.state-dir.js";
 
 async function withStateDirFixture(run: (root: string) => Promise<void>): Promise<void> {
   try {
@@ -50,6 +48,27 @@ describe("legacy state dir auto-migration", () => {
         "ok",
       );
       expect(fs.readFileSync(path.join(root, ".clawdbot", "marker.txt"), "utf-8")).toBe("ok");
+    });
+  });
+
+  it("links an empty legacy state dir to an existing canonical root", async () => {
+    await withStateDirFixture(async (root) => {
+      const legacyDir = path.join(root, ".clawdbot");
+      const targetDir = path.join(root, ".openclaw");
+      fs.mkdirSync(legacyDir, { recursive: true });
+      fs.mkdirSync(targetDir, { recursive: true });
+      fs.writeFileSync(path.join(targetDir, "openclaw.json"), "{}", "utf-8");
+
+      const result = await autoMigrateLegacyStateDir({
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => root,
+      });
+
+      expect(result).toMatchObject({ migrated: true, skipped: false, warnings: [] });
+      expect(result.changes).toContain(
+        `State dir: ${legacyDir} → ${targetDir} (legacy path now symlinked)`,
+      );
+      expect(fs.realpathSync(legacyDir)).toBe(fs.realpathSync(targetDir));
     });
   });
 
@@ -179,21 +198,20 @@ describe("legacy state dir auto-migration", () => {
         "utf8",
       );
       const installRecordsJson = '{"__proto__":{"source":"bogus"}}';
+      // Built by string concatenation so the "__proto__" key survives as JSON
+      // text instead of mutating a JS object prototype during serialization.
+      const persistedValueJson =
+        '{"revision":123,"index":{"version":1,"hostContractVersion":"test",' +
+        '"compatRegistryVersion":"test","migrationVersion":1,"policyHash":"test",' +
+        `"generatedAtMs":1,"installRecords":${installRecordsJson},"plugins":[],"diagnostics":[]}}`;
       runOpenClawStateWriteTransaction(
         ({ db }) => {
           db.prepare(
             `
-              INSERT OR REPLACE INTO installed_plugin_index (
-                index_key, version, host_contract_version, compat_registry_version,
-                migration_version, policy_hash, generated_at_ms, refresh_reason,
-                install_records_json, plugins_json, diagnostics_json, warning, updated_at_ms
-              ) VALUES (
-                'installed-plugin-index', 1, 'test', 'test',
-                1, 'test', 1, NULL,
-                ?, '[]', '[]', NULL, 123
-              )
+              INSERT OR REPLACE INTO config_machine_state (state_key, value_json, updated_at_ms)
+              VALUES ('plugins.installedIndex', ?, 123)
             `,
-          ).run(installRecordsJson);
+          ).run(persistedValueJson);
         },
         { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
       );
@@ -213,14 +231,14 @@ describe("legacy state dir auto-migration", () => {
         ({ db }) =>
           db
             .prepare(
-              `SELECT install_records_json, updated_at_ms
-                 FROM installed_plugin_index
-                WHERE index_key = 'installed-plugin-index'`,
+              `SELECT value_json, updated_at_ms
+                 FROM config_machine_state
+                WHERE state_key = 'plugins.installedIndex'`,
             )
-            .get() as { install_records_json: string; updated_at_ms: number | bigint },
+            .get() as { value_json: string; updated_at_ms: number | bigint },
         { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
       );
-      expect(row).toEqual({ install_records_json: installRecordsJson, updated_at_ms: 123 });
+      expect(row).toEqual({ value_json: persistedValueJson, updated_at_ms: 123 });
     });
   });
 

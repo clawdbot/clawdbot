@@ -5,28 +5,39 @@ import { coerceSecretRef, DEFAULT_SECRET_PROVIDER_ALIAS, type SecretRef } from "
 export type ConfigResolutionFacts = ReadonlySet<string> | null;
 
 const configResolutionFacts = new WeakMap<object, ReadonlySet<string>>();
-const authoredSecretRefsByFacts = new WeakMap<
+type ConfigEnvSecretRefFact = Readonly<{
+  ref: SecretRef;
+  state: "pending" | "resolved";
+}>;
+
+const envSecretRefsByFacts = new WeakMap<
   ReadonlySet<string>,
-  ReadonlyMap<string, SecretRef>
+  ReadonlyMap<string, ConfigEnvSecretRefFact>
 >();
 
 export function createConfigResolutionFacts(
   warnings: readonly EnvSubstitutionWarning[],
   pendingEnvSecretRefs: ReadonlyMap<string, string> = new Map(),
   envProvider: string | undefined = DEFAULT_SECRET_PROVIDER_ALIAS,
+  resolvedEnvSecretRefs: ReadonlyMap<string, string> = new Map(),
 ): ReadonlySet<string> {
   const facts = new Set(warnings.map(({ configPath }) => configPath));
-  if (pendingEnvSecretRefs.size > 0) {
-    const provider = envProvider?.trim() || DEFAULT_SECRET_PROVIDER_ALIAS;
-    authoredSecretRefsByFacts.set(
-      facts,
-      new Map(
-        [...pendingEnvSecretRefs].map(([path, id]) => [
-          path,
-          { source: "env", provider, id } satisfies SecretRef,
-        ]),
-      ),
-    );
+  const provider = envProvider?.trim() || DEFAULT_SECRET_PROVIDER_ALIAS;
+  if (pendingEnvSecretRefs.size > 0 || resolvedEnvSecretRefs.size > 0) {
+    const envSecretRefs = new Map<string, ConfigEnvSecretRefFact>();
+    for (const [path, id] of pendingEnvSecretRefs) {
+      envSecretRefs.set(path, {
+        ref: { source: "env", provider, id },
+        state: "pending",
+      });
+    }
+    for (const [path, id] of resolvedEnvSecretRefs) {
+      envSecretRefs.set(path, {
+        ref: { source: "env", provider, id },
+        state: "resolved",
+      });
+    }
+    envSecretRefsByFacts.set(facts, envSecretRefs);
   }
   return facts;
 }
@@ -66,24 +77,58 @@ export function copyConfigResolutionFactsExcept(
     setConfigResolutionFacts(target, null);
     return;
   }
-  const authoredSecretRefs = authoredSecretRefsByFacts.get(facts);
+  const envSecretRefs = envSecretRefsByFacts.get(facts);
   if (
     paths.length === 0 ||
-    !paths.some((path) => facts.has(path) || authoredSecretRefs?.has(path) === true)
+    !paths.some((path) => facts.has(path) || envSecretRefs?.has(path) === true)
   ) {
     setConfigResolutionFacts(target, facts);
     return;
   }
   const remaining = new Set(facts);
   paths.forEach((path) => remaining.delete(path));
-  if (authoredSecretRefs) {
-    const remainingAuthoredSecretRefs = new Map(authoredSecretRefs);
-    paths.forEach((path) => remainingAuthoredSecretRefs.delete(path));
-    if (remainingAuthoredSecretRefs.size > 0) {
-      authoredSecretRefsByFacts.set(remaining, remainingAuthoredSecretRefs);
+  if (envSecretRefs) {
+    const remainingEnvSecretRefs = new Map(envSecretRefs);
+    paths.forEach((path) => remainingEnvSecretRefs.delete(path));
+    if (remainingEnvSecretRefs.size > 0) {
+      envSecretRefsByFacts.set(remaining, remainingEnvSecretRefs);
     }
   }
   setConfigResolutionFacts(target, remaining);
+}
+
+type SerializedConfigResolutionFacts = Readonly<{
+  unresolvedPaths: readonly string[];
+  envSecretRefs: readonly (readonly [string, ConfigEnvSecretRefFact])[];
+}> | null;
+
+/** Captures loader provenance as deterministic data for a prepared worker generation. */
+export function serializeConfigResolutionFacts(target: unknown): SerializedConfigResolutionFacts {
+  const facts = getConfigResolutionFacts(target);
+  return facts === null
+    ? null
+    : {
+        unresolvedPaths: [...facts].toSorted(),
+        envSecretRefs: [...(envSecretRefsByFacts.get(facts) ?? [])].toSorted(([left], [right]) =>
+          left.localeCompare(right),
+        ),
+      };
+}
+
+/** Restores known-empty facts too: absence would reparse decoded literals as references. */
+export function restoreConfigResolutionFacts(
+  target: unknown,
+  data: SerializedConfigResolutionFacts,
+): void {
+  if (data === null) {
+    setConfigResolutionFacts(target, null);
+    return;
+  }
+  const facts = new Set(data.unresolvedPaths);
+  if (data.envSecretRefs.length > 0) {
+    envSecretRefsByFacts.set(facts, new Map(data.envSecretRefs));
+  }
+  setConfigResolutionFacts(target, facts);
 }
 
 export function hasUnresolvedConfigPath(target: unknown, path: string): boolean {
@@ -93,7 +138,15 @@ export function hasUnresolvedConfigPath(target: unknown, path: string): boolean 
 /** Returns only a still-pending reference recorded from the authored config source. */
 export function getAuthoredConfigSecretRef(target: unknown, path: string): SecretRef | null {
   const facts = getConfigResolutionFacts(target);
-  return facts ? (authoredSecretRefsByFacts.get(facts)?.get(path) ?? null) : null;
+  const fact = facts ? envSecretRefsByFacts.get(facts)?.get(path) : undefined;
+  return fact?.state === "pending" ? fact.ref : null;
+}
+
+/** Returns the env source of a value that config substitution already materialized. */
+export function getResolvedConfigEnvSecretRef(target: unknown, path: string): SecretRef | null {
+  const facts = getConfigResolutionFacts(target);
+  const fact = facts ? envSecretRefsByFacts.get(facts)?.get(path) : undefined;
+  return fact?.state === "resolved" ? fact.ref : null;
 }
 
 /** Reads inline references from authored facts and structured references from their values. */

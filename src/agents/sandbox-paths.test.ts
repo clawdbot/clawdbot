@@ -119,6 +119,14 @@ describe("resolveSandboxPath", () => {
 });
 
 describe("assertSandboxPath", () => {
+  it("expands file reference prefixes only once", async () => {
+    await withSandboxRoot(async (root) => {
+      await expect(
+        assertSandboxPath({ filePath: "@@notes.txt", cwd: root, root }),
+      ).resolves.toMatchObject({ relative: "@notes.txt" });
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "rejects symlink-then-dot-dot traversal for existing and new files",
     async () => {
@@ -202,10 +210,46 @@ describe("assertSandboxPath", () => {
       await expect(
         assertSandboxPath({ filePath: linkedRoot, cwd: linkedRoot, root: linkedRoot }),
       ).resolves.toMatchObject({ relative: "" });
+      await expect(
+        assertSandboxPath({
+          filePath: path.join(realRoot, "nested", "new.txt"),
+          cwd: realRoot,
+          root: linkedRoot,
+        }),
+      ).resolves.toEqual({
+        resolved: path.join(linkedRoot, "nested", "new.txt"),
+        relative: path.join("nested", "new.txt"),
+      });
     } finally {
       await fs.rm(parent, { recursive: true, force: true });
     }
   });
+
+  it.runIf(process.platform !== "win32")(
+    "does not trust unrelated ancestors of a cwd alias pointing deeper into the root",
+    async () => {
+      await withSandboxRoot(async (dir) => {
+        const parent = await fs.realpath(dir);
+        const root = path.join(parent, "workspace");
+        const unrelated = path.join(parent, "unrelated");
+        const cwd = path.join(unrelated, "cwd");
+        await fs.mkdir(path.join(root, "nested"), { recursive: true });
+        await fs.mkdir(unrelated);
+        await fs.symlink(path.join(root, "nested"), cwd);
+        await fs.writeFile(path.join(root, "proof.txt"), "inside");
+        const externalInput = path.join(unrelated, "proof.txt");
+        await fs.symlink(path.join(root, "proof.txt"), externalInput);
+        await expect(fs.realpath(externalInput)).resolves.toBe(path.join(root, "proof.txt"));
+        await expect(assertSandboxPath({ filePath: cwd, cwd, root })).resolves.toEqual({
+          resolved: path.join(root, "nested"),
+          relative: "nested",
+        });
+        await expect(assertSandboxPath({ filePath: externalInput, cwd, root })).rejects.toThrow(
+          /escapes sandbox root/i,
+        );
+      });
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "preserves final-symlink unlink policy through a root alias",
@@ -227,6 +271,37 @@ describe("assertSandboxPath", () => {
             allowFinalSymlinkForUnlink: true,
           }),
         ).resolves.toMatchObject({ relative: "link" });
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "checks raw absolute parents before a path enters the declared root",
+    async () => {
+      await withSandboxRoot(async (dir) => {
+        const parent = await fs.realpath(dir);
+        const root = path.join(parent, "workspace");
+        const outside = path.join(parent, "outside", "workspace");
+        await fs.mkdir(root);
+        await fs.mkdir(outside, { recursive: true });
+        await fs.mkdir(path.join(parent, "outside", "deep"));
+        await fs.mkdir(path.join(parent, "plain"));
+        await fs.symlink(path.join(parent, "outside", "deep"), path.join(parent, "jump"));
+        await fs.writeFile(path.join(root, "proof.txt"), "inside");
+        await fs.writeFile(path.join(outside, "proof.txt"), "outside");
+        const escaped = `${parent}/jump/../workspace/proof.txt`;
+        await expect(fs.readFile(escaped, "utf8")).resolves.toBe("outside");
+        expect(path.resolve(escaped)).toBe(path.join(root, "proof.txt"));
+        await expect(assertSandboxPath({ filePath: escaped, cwd: root, root })).rejects.toThrow(
+          /(?:resolves outside|escapes) sandbox root/i,
+        );
+        await expect(
+          assertSandboxPath({
+            filePath: `${parent}/plain/../workspace/proof.txt`,
+            cwd: root,
+            root,
+          }),
+        ).resolves.toMatchObject({ relative: "proof.txt" });
       });
     },
   );
@@ -353,6 +428,59 @@ describe("resolveSandboxedMediaSource", () => {
       });
     },
   );
+
+  it.each([
+    {
+      name: "OpenShell absolute path",
+      containerWorkdir: "/sandbox",
+      media: "/sandbox/media/pic.png",
+    },
+    {
+      name: "OpenShell file URL",
+      containerWorkdir: "/sandbox",
+      media: "file:///sandbox/media/pic.png",
+    },
+    {
+      name: "custom backend workdir with trailing slash",
+      containerWorkdir: "/remote/agent/",
+      media: "/remote/agent/media/pic.png",
+    },
+    {
+      name: "custom backend file URL",
+      containerWorkdir: "/remote/agent",
+      media: "FILE:/remote/agent/media/pic.png",
+    },
+  ])(
+    "maps $name through the authoritative backend workdir",
+    async ({ containerWorkdir, media }) => {
+      await withSandboxRoot(async (sandboxDir) => {
+        await expect(
+          resolveSandboxedMediaSource({
+            media,
+            sandboxRoot: sandboxDir,
+            containerWorkdir,
+          }),
+        ).resolves.toBe(path.join(sandboxDir, "media", "pic.png"));
+      });
+    },
+  );
+
+  it.each([
+    "/sandbox-other/secret.png",
+    "/workspace/secret.png",
+    "/sandbox/../secret.png",
+    "file:///sandbox-other/secret.png",
+  ])("rejects %s outside the authoritative backend workdir", async (media) => {
+    await withSandboxRoot(async (sandboxDir) => {
+      await expect(
+        resolveSandboxedMediaSource({
+          media,
+          sandboxRoot: sandboxDir,
+          containerWorkdir: "/sandbox",
+        }),
+      ).rejects.toThrow(/sandbox/i);
+    });
+  });
 
   it("preserves remote mxc:// media sources", async () => {
     await withSandboxRoot(async (sandboxDir) => {

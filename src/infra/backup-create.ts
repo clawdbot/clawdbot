@@ -1,9 +1,13 @@
 // Creates backup archives while filtering volatile runtime state.
-import type { Stats } from "node:fs";
+import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import type {
+  BackupAgentRoot,
+  BackupResourceInventory,
+} from "../commands/backup-resource-inventory.js";
 import {
   buildBackupArchiveBasename,
   buildBackupArchivePath,
@@ -12,18 +16,11 @@ import {
   type BackupAsset,
   resolveBackupPlanFromDisk,
 } from "../commands/backup-shared.js";
+import type { BackupManifest } from "../commands/backup-verify-manifest.js";
 import { isPathWithin } from "../commands/cleanup-utils.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
-import { assertOpenClawStateDatabaseOwner } from "../state/openclaw-state-db-maintenance.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import {
-  sanitizeOpenClawGlobalStateSnapshot,
-  sanitizeOpenClawStateLeaseRows,
-} from "../state/openclaw-state-snapshot-sanitizer.js";
-import { resolveHomeDir, resolveUserPath, shortenHomePath } from "../utils.js";
+import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { assertArchiveSymbolicLinkTarget } from "./backup-archive-path-policy.js";
 import {
@@ -37,21 +34,23 @@ import {
   removePreparedBackupArchive,
   writeArchiveStreamToFile,
 } from "./backup-create-stream.js";
+import {
+  classifyBackupSqliteSource,
+  createBackupSqliteSnapshotPlan,
+} from "./backup-sqlite-snapshot.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
-import { isTransientSqliteBackupPath, isVolatileBackupPath } from "./backup-volatile-filter.js";
 import {
   createBackupLinkCache,
   createBackupVolatileStatCache,
 } from "./backup-volatile-stat-cache.js";
-import { formatErrorMessage, isErrno } from "./errors.js";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
+import { isErrno } from "./errors.js";
 import { writeJson } from "./json-files.js";
-import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import {
-  createLegacyAuditBackupSnapshots,
+  createLegacyAuditBackupCapture,
   hasLegacyAuditBackupSources,
+  legacyAuditBackupCapturesMatch,
+  LegacyAuditBackupStateChangedError,
   isLegacyAuditMigrationBackupPath,
-  rewriteLegacyAuditBackupCheckpoints,
   type LegacyAuditBackupSnapshot,
 } from "./state-migrations.audit-backup.js";
 import { withLegacyAuditMigrationLease } from "./state-migrations.audit-coordination.js";
@@ -74,37 +73,7 @@ export type BackupCreateOptions = {
   log?: (message: string) => void;
 };
 
-type BackupManifestAsset = {
-  kind: BackupAsset["kind"];
-  sourcePath: string;
-  archivePath: string;
-};
-
-type BackupManifest = {
-  schemaVersion: 1;
-  createdAt: string;
-  archiveRoot: string;
-  runtimeVersion: string;
-  platform: NodeJS.Platform;
-  nodeVersion: string;
-  options: {
-    includeWorkspace: boolean;
-    onlyConfig?: boolean;
-  };
-  paths: {
-    stateDir: string;
-    configPath: string;
-    oauthDir: string;
-    workspaceDirs: string[];
-  };
-  assets: BackupManifestAsset[];
-  skipped: Array<{
-    kind: string;
-    sourcePath: string;
-    reason: string;
-    coveredBy?: string;
-  }>;
-};
+type BackupManifestAgentRoot = Pick<BackupAgentRoot, "agentId" | "sourcePath">;
 
 export type BackupCreateResult = {
   createdAt: string;
@@ -115,6 +84,7 @@ export type BackupCreateResult = {
   onlyConfig: boolean;
   verified: boolean;
   assets: BackupAsset[];
+  agentRoots?: readonly BackupManifestAgentRoot[];
   skipped: Array<{
     kind: string;
     sourcePath: string;
@@ -274,41 +244,34 @@ async function chooseBackupTempRoot(params: {
   return fallback;
 }
 
-function buildManifest(params: {
-  createdAt: string;
-  archiveRoot: string;
-  includeWorkspace: boolean;
-  onlyConfig: boolean;
-  assets: BackupAsset[];
-  skipped: BackupCreateResult["skipped"];
-  stateDir: string;
-  configPath: string;
-  oauthDir: string;
-  workspaceDirs: string[];
-}): BackupManifest {
+function buildManifest(
+  result: BackupCreateResult,
+  plan: Awaited<ReturnType<typeof resolveBackupPlanFromDisk>>,
+): BackupManifest {
   return {
     schemaVersion: 1,
-    createdAt: params.createdAt,
-    archiveRoot: params.archiveRoot,
+    createdAt: result.createdAt,
+    archiveRoot: result.archiveRoot,
     runtimeVersion: resolveRuntimeServiceVersion(),
     platform: process.platform,
     nodeVersion: process.version,
     options: {
-      includeWorkspace: params.includeWorkspace,
-      onlyConfig: params.onlyConfig,
+      includeWorkspace: result.includeWorkspace,
+      onlyConfig: result.onlyConfig,
     },
     paths: {
-      stateDir: params.stateDir,
-      configPath: params.configPath,
-      oauthDir: params.oauthDir,
-      workspaceDirs: params.workspaceDirs,
+      stateDir: plan.stateDir,
+      configPath: plan.configPath,
+      oauthDir: plan.oauthDir,
+      workspaceDirs: plan.workspaceDirs,
+      ...(result.agentRoots ? { agentRoots: [...result.agentRoots] } : {}),
     },
-    assets: params.assets.map((asset) => ({
+    assets: result.assets.map((asset) => ({
       kind: asset.kind,
       sourcePath: asset.sourcePath,
       archivePath: asset.archivePath,
     })),
-    skipped: params.skipped.map((entry) => ({
+    skipped: result.skipped.map((entry) => ({
       kind: entry.kind,
       sourcePath: entry.sourcePath,
       reason: entry.reason,
@@ -341,7 +304,7 @@ export function formatBackupCreateSummary(result: BackupCreateResult): string[] 
       lines.push(
         `Skipped ${result.skippedVolatileCount} volatile file${
           result.skippedVolatileCount === 1 ? "" : "s"
-        } (live sessions, cron logs, queues, sockets, pid/tmp).`,
+        } (live sessions, cron logs, queues, managed runtime paths, sockets, pid/tmp).`,
       );
     }
     if (result.verified) {
@@ -368,406 +331,116 @@ function remapArchiveEntryPath(params: {
   return buildBackupArchivePath(params.archiveRoot, normalizedEntry);
 }
 
-function normalizeBackupFilterPath(value: string): string {
-  return value.replaceAll("\\", "/").replace(/\/+$/u, "");
-}
-
-const NON_AUTHORITATIVE_STATE_ROOTS = new Set(["dev", "git", "npm", "npm-runtime", "tmp", "tools"]);
-
-function buildStateBackupFilter(
-  stateDir: string,
-  preservedStatePaths: readonly string[] = [],
-): (filePath: string) => boolean {
-  const normalizedStateDir = normalizeBackupFilterPath(stateDir);
-  const statePrefix = `${normalizedStateDir}/`;
-  const resolvedPreservedPaths = preservedStatePaths.map((entry) => path.resolve(entry));
-
-  return (filePath: string): boolean => {
-    const normalizedFilePath = normalizeBackupFilterPath(filePath);
-    if (!normalizedFilePath.startsWith(statePrefix)) {
-      return true;
-    }
-
-    const segments = normalizedFilePath.slice(statePrefix.length).split("/");
-    if (NON_AUTHORITATIVE_STATE_ROOTS.has(segments[0] ?? "")) {
-      const resolvedFilePath = path.resolve(filePath);
-      // Configured workspaces nested under a managed root remain authoritative
-      // user state. Keep their ancestors traversable without admitting siblings.
-      return resolvedPreservedPaths.some(
-        (preservedPath) =>
-          isPathWithin(resolvedFilePath, preservedPath) ||
-          isPathWithin(preservedPath, resolvedFilePath),
-      );
-    }
-
-    return segments[0] !== "extensions" || !segments.includes("node_modules");
-  };
-}
-
-type SqliteBackupAsset = {
-  sourcePath: string;
-  archiveSourcePath: string;
-  skippedSourcePaths: Set<string>;
-};
-
-type CanonicalSqliteSource = {
-  archiveSourcePath: string;
-  identity: Stats;
-  sourcePath: string;
-} & ({ role: "global" } | { role: "agent"; agentId: string });
-
-type StateSqliteBackupPlan = {
-  snapshots: SqliteBackupAsset[];
-  discoveredSourcePaths: Set<string>;
-};
-
-const SQLITE_BACKUP_SOURCE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
-
-function isCanonicalAgentSqlitePathOrAncestor(sourcePath: string, stateDir: string): boolean {
-  const relativePath = path.relative(path.resolve(stateDir), path.resolve(sourcePath));
-  const segments = relativePath.split(path.sep);
-  if (segments[0] !== "agents" || !segments[1]) {
-    return false;
+function remapDeclaredAbsoluteSymbolicLinkTarget(params: {
+  linkpath: string | undefined;
+  archiveEntryPath: string;
+  archiveRoot: string;
+  assets: readonly BackupAsset[];
+}): string | undefined {
+  if (!params.linkpath || !path.isAbsolute(params.linkpath) || params.linkpath.includes("\\")) {
+    return params.linkpath;
   }
-  if (segments.length === 2) {
-    return true;
+  // Tar exposes the first link hop, while assets own the final canonical path.
+  // Resolve before containment so chains map to one portable archive target.
+  let targetSourcePath: string;
+  try {
+    targetSourcePath = realpathSync(params.linkpath);
+  } catch {
+    return params.linkpath;
   }
-  if (segments[2] !== "agent") {
-    return false;
+  if (!params.assets.some((asset) => isPathWithin(targetSourcePath, asset.sourcePath))) {
+    return params.linkpath;
   }
-  if (segments.length === 3) {
-    return true;
-  }
-  if (segments.length !== 4) {
-    return false;
-  }
-  return SQLITE_BACKUP_SOURCE_SUFFIXES.some(
-    (suffix) => segments[3] === `openclaw-agent.sqlite${suffix}`,
+  return path.posix.relative(
+    path.posix.dirname(params.archiveEntryPath),
+    buildBackupArchivePath(params.archiveRoot, targetSourcePath),
   );
-}
-
-function resolveCanonicalAgentSqliteDatabaseAgentId(
-  sourcePath: string,
-  stateDir: string,
-): string | undefined {
-  const relativePath = path.relative(path.resolve(stateDir), path.resolve(sourcePath));
-  const segments = relativePath.split(path.sep);
-  if (
-    segments.length === 4 &&
-    segments[0] === "agents" &&
-    Boolean(segments[1]) &&
-    segments[2] === "agent" &&
-    segments[3] === "openclaw-agent.sqlite"
-  ) {
-    return segments[1];
-  }
-  return undefined;
-}
-
-function isCanonicalAgentSqliteDatabasePath(sourcePath: string, stateDir: string): boolean {
-  return resolveCanonicalAgentSqliteDatabaseAgentId(sourcePath, stateDir) !== undefined;
-}
-
-function isStatePackageContentPath(sourcePath: string, stateDir: string): boolean {
-  const resolvedStateDir = path.resolve(stateDir);
-  const resolvedSourcePath = path.resolve(sourcePath);
-  return (
-    isPathWithin(resolvedSourcePath, resolvedStateDir) &&
-    !isCanonicalAgentSqlitePathOrAncestor(resolvedSourcePath, resolvedStateDir) &&
-    path.relative(resolvedStateDir, resolvedSourcePath).split(path.sep).includes("node_modules")
-  );
-}
-
-function resolveSqliteBackupDatabasePath(sourcePath: string): string | undefined {
-  for (const suffix of SQLITE_BACKUP_SOURCE_SUFFIXES.slice(1)) {
-    if (sourcePath.endsWith(suffix)) {
-      const databasePath = sourcePath.slice(0, -suffix.length);
-      return databasePath.endsWith(".sqlite") ? databasePath : undefined;
-    }
-  }
-  return sourcePath.endsWith(".sqlite") ? sourcePath : undefined;
-}
-
-function classifyStateSqliteBackupSourcePath(
-  sourcePath: string,
-  stateDir: string,
-): "excluded" | "sqlite" | undefined {
-  const resolvedSourcePath = path.resolve(sourcePath);
-  if (!isPathWithin(resolvedSourcePath, stateDir)) {
-    return undefined;
-  }
-  if (isStatePackageContentPath(resolvedSourcePath, stateDir)) {
-    return undefined;
-  }
-  if (isTransientSqliteBackupPath(resolvedSourcePath)) {
-    return "excluded";
-  }
-  const databasePath = resolveSqliteBackupDatabasePath(resolvedSourcePath);
-  if (!databasePath) {
-    return undefined;
-  }
-  return "sqlite";
 }
 
 function isBackupTarFilterFile(entry: import("node:fs").Stats | import("tar").ReadEntry): boolean {
   return "isFile" in entry ? entry.isFile() : entry.type === "File";
 }
 
-async function listStateSqlitePaths(params: {
-  stateDir: string;
-  globalStateSqlitePath: string;
-  gatewayLockDir: string;
-  preservedStatePaths?: readonly string[];
-}): Promise<{ snapshotPaths: string[]; discoveredSourcePaths: Set<string> }> {
-  const snapshotPaths = new Set<string>();
-  const discoveredSourcePaths = new Set<string>();
-  const stateFilter = buildStateBackupFilter(params.stateDir, params.preservedStatePaths);
-  async function visit(dir: string): Promise<void> {
-    let entries: import("node:fs").Dirent[];
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const entryPath = path.join(dir, entry.name);
-      // Preserve noncanonical state-tree symlinks instead of dereferencing
-      // their SQLite-looking targets. Canonical agent DBs mirror the global
-      // DB contract: snapshot the target so restore receives a regular file.
-      if (entry.isSymbolicLink()) {
-        if (isCanonicalAgentSqliteDatabasePath(entryPath, params.stateDir)) {
-          let targetEntry: import("node:fs").Stats;
-          try {
-            targetEntry = await fs.stat(entryPath);
-          } catch (err) {
-            throw new Error(`Canonical agent SQLite symlink cannot be snapshotted: ${entryPath}`, {
-              cause: err,
-            });
-          }
-          if (!targetEntry.isFile()) {
-            throw new Error(
-              `Canonical agent SQLite symlink must resolve to a regular file: ${entryPath}`,
-            );
-          }
-          const resolvedEntryPath = path.resolve(entryPath);
-          snapshotPaths.add(resolvedEntryPath);
-          discoveredSourcePaths.add(resolvedEntryPath);
-        }
-        continue;
-      }
-      if (entry.isDirectory()) {
-        if (
-          stateFilter(entryPath) &&
-          !isPathWithin(entryPath, params.gatewayLockDir) &&
-          !isStatePackageContentPath(entryPath, params.stateDir)
-        ) {
-          await visit(entryPath);
-        }
-      } else if (
-        entry.isFile() &&
-        stateFilter(entryPath) &&
-        !isStatePackageContentPath(entryPath, params.stateDir)
-      ) {
-        const resolvedEntryPath = path.resolve(entryPath);
-        const sqliteSourceKind = classifyStateSqliteBackupSourcePath(
-          resolvedEntryPath,
-          params.stateDir,
-        );
-        if (sqliteSourceKind === "sqlite") {
-          discoveredSourcePaths.add(resolvedEntryPath);
-        }
-        if (entry.name.endsWith(".sqlite") && sqliteSourceKind === "sqlite") {
-          snapshotPaths.add(resolvedEntryPath);
-        }
-      }
-    }
-  }
-  await visit(params.stateDir);
+const MAX_LEGACY_AUDIT_CAPTURE_ATTEMPTS = 3;
 
-  const globalStateSqlitePath = path.resolve(params.globalStateSqlitePath);
-  let globalStateEntry: import("node:fs").Stats | undefined;
-  try {
-    globalStateEntry = await fs.lstat(globalStateSqlitePath);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw err;
-    }
-  }
-  if (globalStateEntry?.isFile()) {
-    snapshotPaths.add(globalStateSqlitePath);
-    discoveredSourcePaths.add(globalStateSqlitePath);
-  } else if (globalStateEntry?.isSymbolicLink()) {
-    let targetEntry: import("node:fs").Stats;
-    try {
-      targetEntry = await fs.stat(globalStateSqlitePath);
-    } catch (err) {
-      throw new Error(
-        `Canonical global SQLite symlink cannot be snapshotted: ${globalStateSqlitePath}`,
-        { cause: err },
-      );
-    }
-    if (!targetEntry.isFile()) {
-      throw new Error(
-        `Canonical global SQLite symlink must resolve to a regular file: ${globalStateSqlitePath}`,
-      );
-    }
-    snapshotPaths.add(globalStateSqlitePath);
-    discoveredSourcePaths.add(globalStateSqlitePath);
-  } else if (globalStateEntry) {
-    throw new Error(
-      `Canonical global SQLite path must be a regular file or symlink to one: ${globalStateSqlitePath}`,
-    );
-  }
+type ConsistentStateSnapshotPlan = {
+  legacyAuditSnapshots: LegacyAuditBackupSnapshot[];
+  stateSqliteBackup: Awaited<ReturnType<typeof createBackupSqliteSnapshotPlan>>;
+};
 
-  return {
-    snapshotPaths: [...snapshotPaths].toSorted((left, right) => left.localeCompare(right)),
-    discoveredSourcePaths,
-  };
-}
-
-async function createStateSqliteBackupPlan(params: {
-  stateDir: string;
+async function createConsistentStateSnapshotPlan(params: {
+  inventory: BackupResourceInventory;
+  stateDir?: string;
   tempDir: string;
-  preservedStatePaths?: readonly string[];
-  legacyAuditSnapshots: readonly LegacyAuditBackupSnapshot[];
-}): Promise<StateSqliteBackupPlan> {
-  // Complete discovery before writing snapshots. chooseBackupTempRoot keeps
-  // tempDir outside stateDir, and this ordering prevents future overlap from
-  // making backup discover one of its own staged SQLite files.
-  const globalStateSqlitePath = path.resolve(
-    resolveOpenClawStateSqlitePath({
-      ...process.env,
-      OPENCLAW_STATE_DIR: params.stateDir,
-    }),
-  );
-  const discovery = await listStateSqlitePaths({
-    stateDir: params.stateDir,
-    globalStateSqlitePath,
-    gatewayLockDir: resolveGatewayLockDir(params.stateDir),
-    preservedStatePaths: params.preservedStatePaths,
-  });
-  const globalStateIdentity = await fs.stat(globalStateSqlitePath).catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
-  });
-  const canonicalGlobalSourcePath = globalStateIdentity
-    ? await fs.realpath(globalStateSqlitePath)
-    : globalStateSqlitePath;
-  const canonicalSources: CanonicalSqliteSource[] = [];
-  if (globalStateIdentity) {
-    canonicalSources.push({
-      role: "global",
-      archiveSourcePath: globalStateSqlitePath,
-      identity: globalStateIdentity,
-      sourcePath: canonicalGlobalSourcePath,
-    });
+  onlyConfig: boolean;
+}): Promise<ConsistentStateSnapshotPlan> {
+  if (params.onlyConfig) {
+    return {
+      legacyAuditSnapshots: [],
+      stateSqliteBackup: { snapshots: [], discoveredSourcePaths: new Set<string>() },
+    };
   }
-  canonicalSources.push(
-    ...(await Promise.all(
-      discovery.snapshotPaths
-        .filter((sourcePath) => isCanonicalAgentSqliteDatabasePath(sourcePath, params.stateDir))
-        .map(async (sourcePath) => {
-          const agentId = resolveCanonicalAgentSqliteDatabaseAgentId(sourcePath, params.stateDir);
-          if (!agentId) {
-            throw new Error(`Canonical agent SQLite path has no agent owner: ${sourcePath}`);
-          }
-          if (normalizeAgentId(agentId) !== agentId) {
-            throw new Error(
-              `Canonical agent SQLite path has a noncanonical agent owner ${agentId}: ${sourcePath}`,
-            );
-          }
-          return {
-            role: "agent" as const,
-            agentId,
-            archiveSourcePath: sourcePath,
-            identity: await fs.stat(sourcePath),
-            sourcePath: await fs.realpath(sourcePath),
-          };
-        }),
-    )),
-  );
-  const snapshots: SqliteBackupAsset[] = [];
-  for (const archiveSourcePath of discovery.snapshotPaths) {
-    // A discovered *.sqlite file that SQLite cannot snapshot aborts backup.
-    // Raw-copying malformed or unreadable databases would restore unsafe state.
-    const archiveSourceIdentity = await fs.stat(archiveSourcePath);
-    const exactCanonicalSource = canonicalSources.find(
-      (source) => path.resolve(source.archiveSourcePath) === path.resolve(archiveSourcePath),
-    );
-    if (
-      exactCanonicalSource &&
-      !sameFileIdentity(exactCanonicalSource.identity, archiveSourceIdentity)
-    ) {
-      throw new Error(`Canonical SQLite path changed after discovery: ${archiveSourcePath}`);
+  if (!params.stateDir) {
+    return {
+      legacyAuditSnapshots: [],
+      stateSqliteBackup: await createBackupSqliteSnapshotPlan({
+        inventory: params.inventory,
+        tempDir: params.tempDir,
+        legacyAuditSnapshots: [],
+      }),
+    };
+  }
+
+  const stateDir = params.stateDir;
+  if (!(await hasLegacyAuditBackupSources(stateDir))) {
+    const fastAttemptDir = path.join(params.tempDir, "state-snapshot-no-legacy");
+    await fs.mkdir(fastAttemptDir, { recursive: true });
+    const stateSqliteBackup = await createBackupSqliteSnapshotPlan({
+      inventory: params.inventory,
+      tempDir: fastAttemptDir,
+      legacyAuditSnapshots: [],
+    });
+    if (!(await hasLegacyAuditBackupSources(stateDir))) {
+      return { legacyAuditSnapshots: [], stateSqliteBackup };
     }
-    const matchingCanonicalSources = exactCanonicalSource
-      ? [exactCanonicalSource]
-      : canonicalSources.filter((source) =>
-          sameFileIdentity(source.identity, archiveSourceIdentity),
-        );
-    if (matchingCanonicalSources.length > 1) {
-      const owners = matchingCanonicalSources
-        .map((source) => (source.role === "global" ? "global" : `agent:${source.agentId}`))
-        .join(", ");
-      throw new Error(
-        `SQLite path aliases multiple canonical database owners (${owners}): ${archiveSourcePath}`,
-      );
-    }
-    const canonicalSource = matchingCanonicalSources[0];
-    // Every alias of a canonical DB must read that database's WAL and receive
-    // the same role-specific transient-row sanitizer. Exact canonical paths
-    // keep their own owner even when another canonical path shares the inode.
-    const sourceDatabasePath = canonicalSource?.sourcePath ?? archiveSourcePath;
-    const sourcePath = path.join(params.tempDir, `openclaw-state-db-${snapshots.length}.sqlite`);
+    await fs.rm(fastAttemptDir, { recursive: true, force: true });
+  }
+
+  let lastStateChangeMessage: string | undefined;
+  for (let attempt = 0; attempt < MAX_LEGACY_AUDIT_CAPTURE_ATTEMPTS; attempt += 1) {
+    const attemptDir = path.join(params.tempDir, `state-snapshot-attempt-${attempt + 1}`);
+    const verificationDir = path.join(attemptDir, "legacy-verification");
+    await fs.mkdir(attemptDir, { recursive: true });
     try {
-      await createVerifiedSqliteSnapshot({
-        sourcePath: sourceDatabasePath,
-        targetPath: sourcePath,
-        requireNonEmptySource: Boolean(canonicalSource),
-        validate:
-          canonicalSource?.role === "global"
-            ? (database, pathname) =>
-                assertOpenClawStateDatabaseOwner(database, {
-                  pathname,
-                })
-            : canonicalSource?.role === "agent"
-              ? (database, pathname) =>
-                  assertOpenClawAgentDatabaseOwner(database, {
-                    agentId: canonicalSource.agentId,
-                    pathname,
-                  })
-              : undefined,
-        // Agent coordination is transient, while unrelated plugin databases
-        // remain owner-defined. Queue and TTL-blob policy is global-only.
-        transform:
-          canonicalSource?.role === "global"
-            ? (database) => {
-                sanitizeOpenClawGlobalStateSnapshot(database);
-                rewriteLegacyAuditBackupCheckpoints(database, params.legacyAuditSnapshots);
-              }
-            : canonicalSource?.role === "agent"
-              ? sanitizeOpenClawStateLeaseRows
-              : undefined,
-      });
-    } catch (err) {
-      throw new Error(
-        `SQLite database cannot be compacted safely for backup: ${archiveSourcePath}. ${formatErrorMessage(err)}. The source must pass full integrity checks, online SQLite backup, and offline compaction with its required SQLite capabilities; a direct file copy was refused because it can retain deleted data.`,
-        { cause: err },
+      const firstCapture = await withLegacyAuditMigrationLease(stateDir, () =>
+        createLegacyAuditBackupCapture({ stateDir, tempDir: attemptDir }),
       );
+      const stateSqliteBackup = await createBackupSqliteSnapshotPlan({
+        inventory: params.inventory,
+        tempDir: attemptDir,
+        legacyAuditSnapshots: firstCapture.snapshots,
+        legacyAuditDatabaseWitness: firstCapture.databaseWitness,
+      });
+      await fs.mkdir(verificationDir, { recursive: true });
+      const secondCapture = await withLegacyAuditMigrationLease(stateDir, () =>
+        createLegacyAuditBackupCapture({ stateDir, tempDir: verificationDir }),
+      );
+      if (!legacyAuditBackupCapturesMatch(firstCapture, secondCapture)) {
+        throw new LegacyAuditBackupStateChangedError();
+      }
+      await fs.rm(verificationDir, { recursive: true, force: true });
+      return { legacyAuditSnapshots: firstCapture.snapshots, stateSqliteBackup };
+    } catch (error) {
+      await fs.rm(attemptDir, { recursive: true, force: true });
+      if (!(error instanceof LegacyAuditBackupStateChangedError)) {
+        throw error;
+      }
+      lastStateChangeMessage = error.message;
     }
-    snapshots.push({
-      sourcePath,
-      archiveSourcePath,
-      skippedSourcePaths: new Set(
-        [archiveSourcePath, sourceDatabasePath].flatMap((databasePath) =>
-          SQLITE_BACKUP_SOURCE_SUFFIXES.map((suffix) => path.resolve(`${databasePath}${suffix}`)),
-        ),
-      ),
-    });
   }
-  return { snapshots, discoveredSourcePaths: discovery.discoveredSourcePaths };
+  throw new LegacyAuditBackupStateChangedError(
+    `${lastStateChangeMessage ?? "Legacy audit state changed while backup was capturing it"}; retry backup after legacy audit migration settles`,
+  );
 }
 
 export async function createBackupArchive(
@@ -809,9 +482,6 @@ export async function createBackupArchive(
 
   const createdAt = new Date(nowMs).toISOString();
   const stateAsset = plan.included.find((asset) => asset.kind === "state");
-  const pluginSkillsPath = stateAsset
-    ? path.join(stateAsset.sourcePath, "plugin-skills")
-    : undefined;
   const result: BackupCreateResult = {
     createdAt,
     archiveRoot,
@@ -821,6 +491,14 @@ export async function createBackupArchive(
     onlyConfig,
     verified: false,
     assets: plan.included,
+    ...(onlyConfig
+      ? {}
+      : {
+          agentRoots: plan.inventory.agentRoots.map(({ agentId, sourcePath }) => ({
+            agentId,
+            sourcePath,
+          })),
+        }),
     skipped: plan.skipped,
     skippedVolatileCount: 0,
   };
@@ -842,43 +520,13 @@ export async function createBackupArchive(
     throw formatBackupOutputFailure(error, outputPath, "publication");
   }
   const tempArchivePath = publication.tempArchivePath;
-  const preservedStatePaths = [
-    plan.configPath,
-    plan.oauthDir,
-    ...plan.skipped
-      .filter((asset) => asset.kind === "workspace" && asset.reason === "covered")
-      .map((asset) => asset.sourcePath),
-  ].filter((entry) => stateAsset && isPathWithin(entry, stateAsset.sourcePath));
   try {
-    // Capture every legacy file first, including active and claimed sources.
-    // A concurrent Doctor then leaves each row in this snapshot, the later
-    // SQLite snapshot, or both; restore-side import keys make overlap harmless.
-    const hasLegacyAuditSources = stateAsset
-      ? await hasLegacyAuditBackupSources(stateAsset.sourcePath)
-      : false;
-    const createSnapshotPlans = async () => {
-      const legacyAuditSnapshots =
-        stateAsset && hasLegacyAuditSources
-          ? await createLegacyAuditBackupSnapshots({
-              stateDir: stateAsset.sourcePath,
-              tempDir,
-            })
-          : [];
-      const stateSqliteBackup = stateAsset
-        ? await createStateSqliteBackupPlan({
-            stateDir: stateAsset.sourcePath,
-            tempDir,
-            preservedStatePaths,
-            legacyAuditSnapshots,
-          })
-        : { snapshots: [], discoveredSourcePaths: new Set<string>() };
-      return { legacyAuditSnapshots, stateSqliteBackup };
-    };
-    const snapshotPlans =
-      stateAsset && hasLegacyAuditSources
-        ? await withLegacyAuditMigrationLease(stateAsset.sourcePath, createSnapshotPlans)
-        : await createSnapshotPlans();
-    const { legacyAuditSnapshots, stateSqliteBackup } = snapshotPlans;
+    const { legacyAuditSnapshots, stateSqliteBackup } = await createConsistentStateSnapshotPlan({
+      inventory: plan.inventory,
+      stateDir: stateAsset?.sourcePath,
+      tempDir,
+      onlyConfig,
+    });
     const sourcePathRemaps = new Map<string, string>();
     const skippedStateSourcePaths = new Set<string>();
     for (const snapshot of stateSqliteBackup.snapshots) {
@@ -893,28 +541,12 @@ export async function createBackupArchive(
         skippedStateSourcePaths.add(skippedSourcePath);
       }
     }
-    const manifest = buildManifest({
-      createdAt,
-      archiveRoot,
-      includeWorkspace,
-      onlyConfig,
-      assets: result.assets,
-      skipped: result.skipped,
-      stateDir: plan.stateDir,
-      configPath: plan.configPath,
-      oauthDir: plan.oauthDir,
-      workspaceDirs: plan.workspaceDirs,
-    });
+    const manifest = buildManifest(result, plan);
     await writeJson(manifestPath, manifest, { trailingNewline: true });
 
     const tar = await loadTarRuntime();
-    const stateFilter = stateAsset
-      ? buildStateBackupFilter(stateAsset.sourcePath, preservedStatePaths)
-      : undefined;
     const gatewayLockDir = resolveGatewayLockDir(plan.stateDir);
-    const volatilePlan = { stateDirs: [stateAsset?.sourcePath ?? plan.stateDir] };
     let skippedVolatileCount = 0;
-    let skippedPluginSkills = false;
     // node-tar invokes filter/onWriteEntry from async filesystem callbacks, so
     // collect violations there and reject only after tar settles.
     const unexpectedSqliteSourcePaths: string[] = [];
@@ -929,13 +561,14 @@ export async function createBackupArchive(
       if (resolvedEntryPath === manifestPath) {
         return true;
       }
-      // This OpenClaw-owned symlink index is rebuilt from plugin metadata.
-      // Archiving it would preserve host-specific absolute targets.
-      if (pluginSkillsPath && isPathWithin(resolvedEntryPath, pluginSkillsPath)) {
-        skippedPluginSkills = true;
-        return false;
-      }
-      if (stateFilter && !stateFilter(entryPath)) {
+      const isDirectory =
+        "isDirectory" in entryStat ? entryStat.isDirectory() : entryStat.type === "Directory";
+      if (
+        !onlyConfig &&
+        !(isDirectory
+          ? plan.inventory.isTraversable(resolvedEntryPath)
+          : plan.inventory.isIncluded(resolvedEntryPath))
+      ) {
         return false;
       }
       if (isPathWithin(resolvedEntryPath, gatewayLockDir)) {
@@ -947,9 +580,9 @@ export async function createBackupArchive(
       ) {
         return false;
       }
-      const sqliteSourceKind = stateAsset
-        ? classifyStateSqliteBackupSourcePath(resolvedEntryPath, stateAsset.sourcePath)
-        : undefined;
+      const sqliteSourceKind = onlyConfig
+        ? undefined
+        : classifyBackupSqliteSource(resolvedEntryPath, plan.inventory);
       if (sqliteSourceKind === "excluded") {
         return false;
       }
@@ -966,7 +599,7 @@ export async function createBackupArchive(
         unexpectedSqliteSourcePaths.push(entryPath);
         return false;
       }
-      if (isVolatileBackupPath(entryPath, volatilePlan)) {
+      if (plan.inventory.isVolatile(resolvedEntryPath)) {
         skippedVolatileCount += 1;
         return false;
       }
@@ -980,7 +613,6 @@ export async function createBackupArchive(
         // attempt, so reset the closure counter here or retries would report
         // cumulative skip counts across attempts instead of the final one.
         skippedVolatileCount = 0;
-        skippedPluginSkills = false;
         unexpectedSqliteSourcePaths.length = 0;
         archiveSymlinkViolation = undefined;
         const prepared = await writeArchiveStreamToFile({
@@ -992,7 +624,7 @@ export async function createBackupArchive(
                 portable: true,
                 preservePaths: true,
                 linkCache: createBackupLinkCache(),
-                statCache: createBackupVolatileStatCache(volatilePlan),
+                statCache: createBackupVolatileStatCache(plan.inventory.isVolatile),
                 filter: (entryPath, entryStat) => {
                   reportProgress({ phase: "traversal", entryPath });
                   return tarFilter(entryPath, entryStat);
@@ -1013,10 +645,17 @@ export async function createBackupArchive(
                   });
                   if (entry.type === "SymbolicLink" && !archiveSymlinkViolation) {
                     try {
+                      entry.linkpath = remapDeclaredAbsoluteSymbolicLinkTarget({
+                        linkpath: entry.linkpath,
+                        archiveEntryPath,
+                        archiveRoot,
+                        assets: result.assets,
+                      });
                       assertArchiveSymbolicLinkTarget({
                         archiveRoot,
                         entryPath: archiveEntryPath,
                         linkpath: entry.linkpath,
+                        assets: manifest.assets,
                       });
                     } catch (error) {
                       archiveSymlinkViolation =
@@ -1055,19 +694,11 @@ export async function createBackupArchive(
       throw formatBackupOutputFailure(error, outputPath, "write", publication.stagingDir);
     });
     result.skippedVolatileCount = skippedVolatileCount;
-    if (pluginSkillsPath && skippedPluginSkills) {
-      result.skipped.push({
-        kind: "plugin skills",
-        sourcePath: pluginSkillsPath,
-        displayPath: shortenHomePath(pluginSkillsPath),
-        reason: "regenerable",
-      });
-    }
     if (skippedVolatileCount > 0) {
       opts.log?.(
         `Backup skipped ${skippedVolatileCount} volatile file${
           skippedVolatileCount === 1 ? "" : "s"
-        } (live sessions, cron logs, queues, sockets, pid/tmp).`,
+        } (live sessions, cron logs, queues, managed runtime paths, sockets, pid/tmp).`,
       );
     }
     try {
@@ -1086,4 +717,3 @@ export async function createBackupArchive(
 
   return result;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

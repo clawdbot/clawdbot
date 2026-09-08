@@ -1,7 +1,7 @@
 AndroidX Room
 Artifacts:
-- androidx.room:room-common
-- androidx.room:room-runtime
+- androidx.room3:room3-common
+- androidx.room3:room3-runtime
 License: Apache License 2.0
 
                                  Apache License

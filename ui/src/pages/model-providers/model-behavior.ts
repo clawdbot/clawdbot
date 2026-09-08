@@ -1,6 +1,6 @@
 import type { FastMode } from "../../api/types.ts";
 
-type ModelBehaviorConfig = {
+export type ModelBehaviorConfig = {
   thinkingLevel: string | undefined;
   thinkingOverridden: boolean;
   fastMode: FastMode | undefined;

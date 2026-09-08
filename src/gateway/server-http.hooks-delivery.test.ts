@@ -37,10 +37,11 @@ function createDeliveryHandler(params?: {
   mappings?: HookMappingResolved[];
   agentPolicy?: Partial<HooksConfigResolved["agentPolicy"]>;
 }) {
-  const dispatchWakeHook = vi.fn();
+  const dispatchWakeHook = vi.fn(() => ({ eventOutcome: "queued" as const }));
   const dispatchAgentHook = vi.fn((_value: HookAgentDispatchPayload) => ({
     ok: true as const,
     runId: "run-1",
+    completion: Promise.resolve({ status: "ok" as const, replyDisposition: "empty" as const }),
   }));
   const canonicalConfig = createHooksConfig();
   const hooksConfig = {

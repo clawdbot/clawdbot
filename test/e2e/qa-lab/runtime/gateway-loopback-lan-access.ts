@@ -303,18 +303,28 @@ async function probeTcpUnreachable(params: {
       socket.destroy();
       resolve(unreachable);
     };
-    socket.once("connect", () => finish(false));
+    socket.once("connect", () => {
+      // Linux can connect an ephemeral socket to itself on the probed address.
+      // Identical endpoints do not mean a listener accepted LAN traffic.
+      const selfConnected =
+        socket.localAddress === socket.remoteAddress && socket.localPort === socket.remotePort;
+      finish(selfConnected);
+    });
     socket.once("error", () => finish(true));
   });
 }
 
 async function startGateway(port: number, bind: "lan" | "loopback", token: string) {
-  return await startGatewayServer(port, {
+  const server = await startGatewayServer(port, {
     auth: { mode: "token", token },
     bind,
     controlUiEnabled: false,
     sidecarStartup: "defer",
   });
+  // HTTP attachment precedes mandatory sidecar settlement. Network probes own
+  // a fully admitted generation, not the intentional startup-unavailable phase.
+  await server.startupSettled;
+  return server;
 }
 
 async function stopGateway(server: GatewayServer | undefined): Promise<void> {

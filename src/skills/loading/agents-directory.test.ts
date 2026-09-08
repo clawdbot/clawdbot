@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { setTestEnvValue } from "../../test-utils/env.js";
+import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import {
   restoreMockSkillsHomeEnv,
@@ -12,7 +13,7 @@ import {
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 
 vi.mock("./plugin-skills.js", () => ({
-  resolvePluginSkillDirs: () => [],
+  resolvePluginSkillRoots: () => [],
 }));
 
 const tempDirs = createTempDirTracker();
@@ -73,6 +74,7 @@ describe("buildWorkspaceSkillsPrompt — .agents/skills/ directories", () => {
       name: "shared-skill",
       description: "Workspace version",
     });
+    bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
 
     const prompt2 = buildSkillsPrompt(workspaceDir, managedDir, bundledDir);
     expect(prompt2).toContain("Workspace version");
@@ -104,6 +106,7 @@ describe("buildWorkspaceSkillsPrompt — .agents/skills/ directories", () => {
       name: "shared-skill",
       description: "Project agents version",
     });
+    bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
 
     const prompt2 = buildSkillsPrompt(workspaceDir, managedDir, bundledDir);
     expect(prompt2).toContain("Project agents version");

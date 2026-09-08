@@ -22,13 +22,7 @@ if ! [[ "$LIVE_IMAGE_PULL_RETRY_DELAY_SECONDS" =~ ^[0-9]+$ ]]; then
   exit 2
 fi
 
-case " ${DOCKER_BUILD_EXTENSIONS} " in
-  *" matrix "*)
-    ;;
-  *)
-    DOCKER_BUILD_EXTENSIONS="${DOCKER_BUILD_EXTENSIONS:+${DOCKER_BUILD_EXTENSIONS} }matrix"
-    ;;
-esac
+DOCKER_BUILD_EXTENSIONS="$(node "$SCRIPT_ROOT_DIR/scripts/print-live-docker-plugin-selection.mjs" "$ROOT_DIR" "$DOCKER_BUILD_EXTENSIONS")"
 
 DOCKER_BUILD_ARGS=()
 if [[ -n "${DOCKER_BUILD_EXTENSIONS}" ]]; then

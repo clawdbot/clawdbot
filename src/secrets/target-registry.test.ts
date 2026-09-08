@@ -35,6 +35,39 @@ describe("secret target registry", () => {
     expect(targets[0]?.path).toBe(TALK_TEST_PROVIDER_API_KEY_PATH);
   });
 
+  it("preserves dotted provider header keys during discovery", () => {
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            headers: {
+              "X.Trace": { source: "env", provider: "default", id: "TRACE_HEADER" },
+            },
+            request: {
+              headers: {
+                "X.Request.Trace": {
+                  source: "env",
+                  provider: "default",
+                  id: "REQUEST_TRACE_HEADER",
+                },
+              },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const targets = discoverConfigSecretTargetsByIds(
+      config,
+      new Set(["models.providers.*.headers.*", "models.providers.*.request.headers.*"]),
+    );
+
+    expect(targets.map(({ path }) => path).toSorted()).toEqual([
+      'models.providers.openai.headers["X.Trace"]',
+      'models.providers.openai.request.headers["X.Request.Trace"]',
+    ]);
+  });
+
   it("resolves talk realtime provider api key targets", () => {
     const target = resolveConfigSecretTargetByPath([
       "talk",

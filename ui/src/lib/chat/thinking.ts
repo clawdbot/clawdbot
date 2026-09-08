@@ -48,11 +48,9 @@ function resolveThinkingLevelOptionsForSession(
 ): GatewayThinkingLevelOption[] {
   const { provider, model } = resolveThinkingTargetModel({ defaults, session });
   return resolveThinkingLevelOptions({
-    catalog,
+    catalogEntry: resolveThinkingCatalogEntry(catalog, provider, model, session?.agentRuntime?.id),
     defaults,
     fallbackLabels,
-    model,
-    provider,
     session,
   });
 }
@@ -75,10 +73,10 @@ export function formatThinkingCommandOptionsForSession(
   defaults?: SessionsListResult["defaults"],
   catalog: readonly ModelCatalogEntry[] = [],
 ): string {
-  const options = resolveThinkingLevelOptionsForSession(session, defaults, catalog)
-    .map((level) => level.label)
-    .join(", ");
-  return options.split(", ").includes("default") ? options : `default, ${options}`;
+  const options = resolveThinkingLevelOptionsForSession(session, defaults, catalog).map(
+    (level) => level.label,
+  );
+  return (options.includes("default") ? options : ["default", ...options]).join(", ");
 }
 
 export function resolveThinkingLevelInput(
@@ -183,31 +181,33 @@ function resolveThinkingCatalogEntry(
   catalog: readonly ModelCatalogEntry[],
   provider: string | null,
   model: string | null,
+  runtimeId?: string,
 ): ModelCatalogEntry | undefined {
-  return provider && model
-    ? catalog.find((entry) => entry.provider === provider && entry.id === model)
-    : undefined;
+  const runtime = runtimeId?.trim();
+  return catalog.find((entry) => {
+    const entryRuntime = entry.agentRuntime?.id?.trim();
+    // Agent-scoped catalogs must not supply another runtime's session thinking profile.
+    return (
+      entry.provider === provider &&
+      entry.id === model &&
+      (!runtime || !entryRuntime || runtime === entryRuntime)
+    );
+  });
 }
 
 function resolveThinkingLevelOptions(params: {
-  catalog: readonly ModelCatalogEntry[];
+  catalogEntry: ModelCatalogEntry | undefined;
   defaults: ThinkingSessionDefaults;
   fallbackLabels?: readonly string[];
   hideUnsupportedOffOnly?: boolean;
-  model: string | null;
-  provider: string | null;
   session: ChatThinkingTarget | undefined;
 }): GatewayThinkingLevelOption[] {
+  const { catalogEntry } = params;
   const modelMatchesDefaults = sessionModelMatchesDefaults(params.session, params.defaults);
-  const catalogEntry = resolveThinkingCatalogEntry(params.catalog, params.provider, params.model);
   const explicitLevels =
-    (params.session?.thinkingLevels?.length ? params.session.thinkingLevels : null) ??
-    (params.session?.model && catalogEntry?.thinkingLevels?.length
-      ? catalogEntry.thinkingLevels
-      : null) ??
-    (modelMatchesDefaults && params.defaults?.thinkingLevels?.length
-      ? params.defaults.thinkingLevels
-      : null);
+    params.session?.thinkingLevels ??
+    (params.session?.model ? catalogEntry?.thinkingLevels : undefined) ??
+    (modelMatchesDefaults ? params.defaults?.thinkingLevels : undefined);
   if (explicitLevels) {
     if (
       params.hideUnsupportedOffOnly &&
@@ -219,10 +219,8 @@ function resolveThinkingLevelOptions(params: {
     return explicitLevels;
   }
   const explicitLabels =
-    (params.session?.thinkingOptions?.length ? params.session.thinkingOptions : null) ??
-    (modelMatchesDefaults && params.defaults?.thinkingOptions?.length
-      ? params.defaults.thinkingOptions
-      : null);
+    params.session?.thinkingOptions ??
+    (modelMatchesDefaults ? params.defaults?.thinkingOptions : undefined);
   if (params.hideUnsupportedOffOnly && catalogEntry?.reasoning === false) {
     if (!explicitLabels || explicitLabels.every(isOffThinkingOption)) {
       return [];
@@ -254,13 +252,16 @@ export function resolveChatThinkingSelectState(params: {
       : "";
   const defaults = params.defaults ?? params.sessionsResult?.defaults;
   const { provider, model } = resolveThinkingTargetModel({ defaults, session });
-  const catalogEntry = resolveThinkingCatalogEntry(params.catalog, provider, model);
+  const catalogEntry = resolveThinkingCatalogEntry(
+    params.catalog,
+    provider,
+    model,
+    session?.agentRuntime?.id,
+  );
   const levels = resolveThinkingLevelOptions({
-    catalog: params.catalog,
+    catalogEntry,
     defaults,
     hideUnsupportedOffOnly: true,
-    model,
-    provider,
     session,
   });
   const defaultFromSessionDefaults =

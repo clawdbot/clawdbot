@@ -1,3 +1,4 @@
+import "../styles/lobster-pet.css";
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing, svg } from "lit";
 import { fnv1aUtf16 } from "../lib/fnv1a.ts";
@@ -55,8 +56,6 @@ import {
   SPLIT_HALF,
   TAIL_FAN,
 } from "./lobster-pet-sprites.ts";
-
-export { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
 
 const RETRO_GEOMETRY_PALETTES: ReadonlySet<LobsterPetPaletteId> = new Set(["retro", "goldenretro"]);
 
@@ -607,15 +606,19 @@ export function renderLobsterPetScene(args: {
             sailorCap: args.sailorDay,
           })}
           ${args.entering && args.entrance === "balloon" ? BALLOON : nothing}
-          ${args.entering && args.entrance === "bubble"
-            ? html`<span class="lobster-pet__entry-bubble"></span>`
-            : nothing}
-          ${args.look.shiny
-            ? html`
-                <span class="lobster-pet__sparkle" style="--i:0;left:12%;bottom:64%">✦</span>
-                <span class="lobster-pet__sparkle" style="--i:1;left:76%;bottom:82%">✦</span>
-              `
-            : nothing}
+          ${
+            args.entering && args.entrance === "bubble"
+              ? html`<span class="lobster-pet__entry-bubble"></span>`
+              : nothing
+          }
+          ${
+            args.look.shiny
+              ? html`
+                  <span class="lobster-pet__sparkle" style="--i:0;left:12%;bottom:64%">✦</span>
+                  <span class="lobster-pet__sparkle" style="--i:1;left:76%;bottom:82%">✦</span>
+                `
+              : nothing
+          }
           <span class="lobster-pet__z" style="--i:0">z</span>
           <span class="lobster-pet__z" style="--i:1">z</span>
           <span class="lobster-pet__z" style="--i:2">Z</span>
@@ -679,44 +682,52 @@ export function renderLobsterPetScene(args: {
     ? `${passerBaseStyle(args.passer.kind, args.passer.direction, passerLook)};--lob-cross:${args.passer.crossMs}ms`
     : "";
   return html`
-    ${showShell
-      ? html`
-          <div class="lobster-pet lobster-pet--shell" style=${shellStyle} aria-hidden="true">
-            <div class="lobster-pet__body">${renderLobsterSvg(args.look, { shell: true })}</div>
-          </div>
-        `
-      : nothing}
-    ${showBottle && args.bottle
-      ? html`
-          <div
-            class="lobster-bottle ${args.bottle.opened ? "lobster-bottle--open" : ""}"
-            style="--lob-x:${args.bottle.spotPct}%"
-            title=${args.bottle.opened ? args.bottle.fortune : "a message in a bottle"}
-            aria-hidden="true"
-            @pointerdown=${args.onBottleOpen}
-          >
-            ${renderBottleSvg(args.bottle.opened)}
-          </div>
-        `
-      : nothing}
+    ${
+      showShell
+        ? html`
+            <div class="lobster-pet lobster-pet--shell" style=${shellStyle} aria-hidden="true">
+              <div class="lobster-pet__body">${renderLobsterSvg(args.look, { shell: true })}</div>
+            </div>
+          `
+        : nothing
+    }
+    ${
+      showBottle && args.bottle
+        ? html`
+            <div
+              class="lobster-bottle ${args.bottle.opened ? "lobster-bottle--open" : ""}"
+              style="--lob-x:${args.bottle.spotPct}%"
+              title=${args.bottle.opened ? args.bottle.fortune : "a message in a bottle"}
+              aria-hidden="true"
+              @pointerdown=${args.onBottleOpen}
+            >
+              ${renderBottleSvg(args.bottle.opened)}
+            </div>
+          `
+        : nothing
+    }
     ${showSprites ? renderSprite(false) : nothing}
     ${showSprites && args.twinPlanned ? renderSprite(true) : nothing}
-    ${showPasser && args.passer
-      ? html`
-          <div
-            class=${passerClasses}
-            style=${passerStyle}
-            aria-hidden="true"
-            title=${PASSER_TITLES[args.passer.kind]}
-          >
-            <div class="lobster-pet__body">
-              ${args.passer.kind === "stranger"
-                ? renderLobsterSvg(passerLook, { standalone: true })
-                : PASSER_SPRITES[args.passer.kind]()}
+    ${
+      showPasser && args.passer
+        ? html`
+            <div
+              class=${passerClasses}
+              style=${passerStyle}
+              aria-hidden="true"
+              title=${PASSER_TITLES[args.passer.kind]}
+            >
+              <div class="lobster-pet__body">
+                ${
+                  args.passer.kind === "stranger"
+                    ? renderLobsterSvg(passerLook, { standalone: true })
+                    : PASSER_SPRITES[args.passer.kind]()
+                }
+              </div>
             </div>
-          </div>
-        `
-      : nothing}
+          `
+        : nothing
+    }
   `;
 }
 

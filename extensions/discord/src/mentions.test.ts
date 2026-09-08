@@ -85,19 +85,59 @@ describe("rewriteDiscordKnownMentions", () => {
     expect(rewritten).toBe("hello @unknown @everyone @here");
   });
 
-  it("does not rewrite mentions inside markdown code spans", () => {
+  it.each([
+    {
+      name: "balanced inline and fenced code",
+      input: "inline `@alice` fence ```\n@alice\n``` text @alice",
+      expected: "inline `@alice` fence ```\n@alice\n``` text <@123456789>",
+    },
+    {
+      name: "closed multiline single-backtick code",
+      input: "Example: `first\nsecond`\nPlease review @alice",
+      expected: "Example: `first\nsecond`\nPlease review <@123456789>",
+    },
+    {
+      name: "closed multiline double-backtick code with CRLF",
+      input: "Example: ``first ` line\r\nsecond``\r\nPlease review @alice",
+      expected: "Example: ``first ` line\r\nsecond``\r\nPlease review <@123456789>",
+    },
+    {
+      name: "closed multiline code containing a longer backtick run",
+      input: "Example: ``first ``` literal\nsecond``\nPlease review @alice",
+      expected: "Example: ``first ``` literal\nsecond``\nPlease review <@123456789>",
+    },
+    {
+      name: "unterminated single-backtick code",
+      input: "outside @alice then `inside @alice",
+      expected: "outside <@123456789> then `inside @alice",
+    },
+    {
+      name: "unterminated double-backtick code",
+      input: "outside @alice then ``inside @alice",
+      expected: "outside <@123456789> then ``inside @alice",
+    },
+    {
+      name: "escaped literal backticks",
+      input: "literal \\` outside @alice",
+      expected: "literal \\` outside <@123456789>",
+    },
+    {
+      name: "backticks after an even number of backslashes",
+      input: "literal \\\\` inside @alice",
+      expected: "literal \\\\` inside @alice",
+    },
+    {
+      name: "escaped backticks before real unterminated code",
+      input: "literal \\` outside @alice then `inside @alice",
+      expected: "literal \\` outside <@123456789> then `inside @alice",
+    },
+  ])("does not rewrite mentions inside $name", ({ input, expected }) => {
     rememberDiscordDirectoryUser({
       accountId: "default",
       userId: "123456789",
       handles: ["alice"],
     });
-    const rewritten = rewriteDiscordKnownMentions(
-      "inline `@alice` fence ```\n@alice\n``` text @alice",
-      {
-        accountId: "default",
-      },
-    );
-    expect(rewritten).toBe("inline `@alice` fence ```\n@alice\n``` text <@123456789>");
+    expect(rewriteDiscordKnownMentions(input, { accountId: "default" })).toBe(expected);
   });
 
   it("does not end longer code fences at triple-backtick literals inside the body", () => {

@@ -24,6 +24,7 @@ vi.mock("./cron-exit-watchers.js", async (importOriginal) => ({
     cancel: vi.fn(),
     cancelAll: cancelAllMock,
     activeJobIds: () => [],
+    updateHandlers: vi.fn(),
   }),
 }));
 

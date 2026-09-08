@@ -13,7 +13,7 @@ import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts";
 import {
-  renderDocsLink,
+  renderLearnMoreLink,
   renderSettingsEmpty,
   renderSettingsPage,
   renderSettingsRow,
@@ -24,6 +24,7 @@ import { renderSettingsWorkspace } from "../../components/settings-workspace.ts"
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
+import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { repoName } from "../../lib/session-display.ts";
 import {
@@ -160,6 +161,22 @@ class WorktreesPage extends OpenClawLightDomElement {
     await this.listTask.run([client]);
   }
 
+  private async runOperation(scope: GatewayConnectionScope, action: () => Promise<unknown>) {
+    this.error = null;
+    try {
+      await action();
+    } catch (error) {
+      if (this.gateway.isCurrent(scope)) {
+        this.error = formatUiError(error);
+      }
+    } finally {
+      if (this.gateway.isCurrent(scope)) {
+        this.invalidateOperations();
+        await this.load({ preserveError: true });
+      }
+    }
+  }
+
   private async removeWorktree(record: WorktreeRecord) {
     const scope = this.gateway.capture();
     if (!scope || !this.canAdmin || this.operationPending) {
@@ -180,8 +197,7 @@ class WorktreesPage extends OpenClawLightDomElement {
     // Both attempts belong to one Gateway epoch. A force retry must never jump
     // to a replacement client after the first request reports snapshot failure.
     this.busyId = record.id;
-    this.error = null;
-    try {
+    await this.runOperation(scope, async () => {
       const result = await scope.client.request<WorktreesRemoveResult>("worktrees.remove", {
         id: record.id,
       });
@@ -201,29 +217,14 @@ class WorktreesPage extends OpenClawLightDomElement {
         this.error = reason || null;
         return;
       }
-      try {
-        const forced = await scope.client.request<WorktreesRemoveResult>("worktrees.remove", {
-          id: record.id,
-          force: true,
-        });
-        if (this.gateway.isCurrent(scope)) {
-          this.error = forced.snapshotError ?? null;
-        }
-      } catch (forceError) {
-        if (this.gateway.isCurrent(scope)) {
-          this.error = formatUiError(forceError);
-        }
-      }
-    } catch (error) {
+      const forced = await scope.client.request<WorktreesRemoveResult>("worktrees.remove", {
+        id: record.id,
+        force: true,
+      });
       if (this.gateway.isCurrent(scope)) {
-        this.error = formatUiError(error);
+        this.error = forced.snapshotError ?? null;
       }
-    } finally {
-      if (this.gateway.isCurrent(scope)) {
-        this.busyId = null;
-        await this.load({ preserveError: true });
-      }
-    }
+    });
   }
 
   private async restore(record: WorktreeRecord) {
@@ -232,19 +233,9 @@ class WorktreesPage extends OpenClawLightDomElement {
       return;
     }
     this.busyId = record.id;
-    this.error = null;
-    try {
-      await scope.client.request("worktrees.restore", { id: record.id });
-    } catch (error) {
-      if (this.gateway.isCurrent(scope)) {
-        this.error = formatUiError(error);
-      }
-    } finally {
-      if (this.gateway.isCurrent(scope)) {
-        this.busyId = null;
-        await this.load({ preserveError: true });
-      }
-    }
+    await this.runOperation(scope, () =>
+      scope.client.request("worktrees.restore", { id: record.id }),
+    );
   }
 
   private async gc() {
@@ -253,19 +244,7 @@ class WorktreesPage extends OpenClawLightDomElement {
       return;
     }
     this.gcLoading = true;
-    this.error = null;
-    try {
-      await scope.client.request("worktrees.gc", {});
-    } catch (error) {
-      if (this.gateway.isCurrent(scope)) {
-        this.error = formatUiError(error);
-      }
-    } finally {
-      if (this.gateway.isCurrent(scope)) {
-        this.gcLoading = false;
-        await this.load({ preserveError: true });
-      }
-    }
+    await this.runOperation(scope, () => scope.client.request("worktrees.gc", {}));
   }
 
   private toggleCreate() {
@@ -299,8 +278,7 @@ class WorktreesPage extends OpenClawLightDomElement {
       return;
     }
     this.creating = true;
-    this.error = null;
-    try {
+    await this.runOperation(scope, async () => {
       await createManagedWorktree(scope.client, {
         repoRoot,
         name: this.createName,
@@ -310,16 +288,7 @@ class WorktreesPage extends OpenClawLightDomElement {
         this.createOpen = false;
         this.createName = "";
       }
-    } catch (error) {
-      if (this.gateway.isCurrent(scope)) {
-        this.error = formatUiError(error);
-      }
-    } finally {
-      if (this.gateway.isCurrent(scope)) {
-        this.creating = false;
-        await this.load({ preserveError: true });
-      }
-    }
+    });
   }
 
   private renderOwner(record: WorktreeRecord) {
@@ -382,7 +351,7 @@ class WorktreesPage extends OpenClawLightDomElement {
             type="text"
             aria-label=${t("worktrees.name")}
             ?disabled=${this.creating}
-            placeholder=${t("newSession.worktreeNamePlaceholder")}
+            placeholder=${t("worktrees.namePlaceholder")}
             .value=${this.createName}
             @input=${(event: Event) => {
               this.createName = (event.target as HTMLInputElement).value;
@@ -391,12 +360,12 @@ class WorktreesPage extends OpenClawLightDomElement {
         `,
       })}
       ${renderSettingsRow({
-        title: t("newSession.baseBranch"),
+        title: t("worktrees.baseBranch"),
         control: html`
           <input
             class="settings-input"
             type="text"
-            aria-label=${t("newSession.baseBranch")}
+            aria-label=${t("worktrees.baseBranch")}
             ?disabled=${this.creating}
             list="worktrees-create-branches"
             .value=${this.createBaseRef}
@@ -432,9 +401,11 @@ class WorktreesPage extends OpenClawLightDomElement {
         ${this.renderOwner(record)} · ${formatRelativeTimestamp(record.lastActiveAt)}
       `,
       control: html`
-        ${record.removedAt
-          ? renderSettingsStatus({ kind: "muted", label: t("worktrees.restorable") })
-          : renderSettingsStatus({ kind: "ok", label: t("common.active") })}
+        ${
+          record.removedAt
+            ? renderSettingsStatus({ kind: "muted", label: t("worktrees.restorable") })
+            : renderSettingsStatus({ kind: "ok", label: t("common.active") })
+        }
         <button
           class=${record.removedAt ? "btn btn--sm" : "btn btn--sm danger"}
           title=${this.canAdmin ? "" : t("worktrees.adminRequired")}
@@ -469,15 +440,19 @@ class WorktreesPage extends OpenClawLightDomElement {
     `;
     const rows = html`
       ${this.renderCreateRows()}
-      ${this.records.length === 0
-        ? renderSettingsEmpty(t("worktrees.empty"))
-        : this.records.map((record) => this.renderRecordRow(record))}
+      ${
+        this.records.length === 0
+          ? renderSettingsEmpty(t("worktrees.empty"))
+          : this.records.map((record) => this.renderRecordRow(record))
+      }
     `;
     const body = renderSettingsPage(
       html`
-        ${!this.canAdmin
-          ? html`<div class="callout info" role="note">${t("worktrees.adminRequired")}</div>`
-          : nothing}
+        ${
+          !this.canAdmin
+            ? html`<div class="callout info" role="note">${t("worktrees.adminRequired")}</div>`
+            : nothing
+        }
         ${this.error ? html`<div class="callout danger" role="alert">${this.error}</div>` : nothing}
         ${renderSettingsSection(
           { title: t("worktrees.title"), description: t("worktrees.subtitle"), actions },
@@ -490,8 +465,7 @@ class WorktreesPage extends OpenClawLightDomElement {
       ${renderSessionsHubHeader({
         active: "worktrees",
         title: titleForRoute("sessions"),
-        subtitle: html`${subtitleForRoute("worktrees")}
-        ${renderDocsLink(WORKTREES_DOCS_URL, t("common.learnMore"))}`,
+        subtitle: html`${subtitleForRoute("worktrees")} ${renderLearnMoreLink(WORKTREES_DOCS_URL)}`,
         onSelect: (tab) => {
           if (tab !== "worktrees") {
             this.context?.navigate(tab);

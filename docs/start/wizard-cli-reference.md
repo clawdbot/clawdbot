@@ -15,7 +15,23 @@ commands), see [`openclaw onboard`](/cli/onboard).
 
 ## What the wizard does
 
-Local mode (default) walks you through:
+Fresh local guided onboarding shows a one-line pointer to the
+[security guide](/gateway/security) and one choice: **Quick start** or
+**Custom setup**. Quick start records the security acknowledgment; Custom setup
+shows the full security note and asks for confirmation. Quick start reuses
+detected AI access, verifies it, saves config, and opens the web
+dashboard with a foreground Gateway. It uses agent name `main` and full access,
+leaves telemetry consent unset, and skips route confirmation, memory import,
+and app recommendations. **Ctrl+C** stops the Gateway without removing config;
+`openclaw gateway install` enables background operation later.
+
+Custom setup keeps the full guided prompts. If quick start finds no usable
+route, it continues with manual provider setup and the remaining guided steps,
+including Gateway service installation. The quick-start defaults for agent name
+(`main`), access mode (full access), and telemetry (consent unset) stay.
+See [Guided default](/start/wizard#guided-default).
+
+The classic wizard (`openclaw onboard --classic`) in local mode walks you through:
 
 - Workspace location and bootstrap files
 - Model and auth setup (Anthropic, OpenAI Code subscription OAuth, xAI, OpenCode, custom endpoints, and more provider-owned auth flows)
@@ -30,6 +46,9 @@ Remote mode configures this machine to connect to a Gateway elsewhere. It does
 not install or modify anything on the remote host.
 
 ## Local flow details
+
+These steps describe the classic wizard. The guided quick-start lane is
+described [above](/start/wizard-cli-reference#what-the-wizard-does).
 
 <Steps>
   <Step title="Setup mode">
@@ -90,16 +109,20 @@ not install or modify anything on the remote host.
 
   </Step>
   <Step title="Gateway">
-    - Prompts for port, bind, auth mode, and Tailscale exposure.
-    - Recommended: keep token auth enabled even for loopback so local WS clients must authenticate.
-    - In token mode, interactive setup offers:
-      - **Generate/store plaintext token** (default)
+    - Prompts for port, bind, secret storage, and Tailscale exposure.
+    - Generates a Gateway secret by default in token mode, without asking you
+      to choose token or password. Existing password-mode configs are preserved.
+      Use `--gateway-auth password` or `--gateway-password <value>` to choose
+      a password explicitly. Tailscale Funnel still requires password mode.
+    - Keep shared-secret auth enabled even for loopback so local WS clients must authenticate.
+    - For the generated secret, interactive setup offers:
+      - **Generate/store plaintext secret** (default)
       - **Use SecretRef** (opt-in)
       - QuickStart reuses an existing `gateway.auth.token` SecretRef from an
         `env`, `file`, `exec`, or `store` provider for its probe and dashboard
         handoff. An unresolved configured ref stops onboarding with remediation
         guidance instead of silently weakening Gateway auth.
-    - In password mode, interactive setup also supports plaintext or SecretRef storage.
+    - Explicit or existing password mode also supports plaintext or SecretRef storage.
     - Non-interactive token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
       - Requires a non-empty env var in the onboarding process environment.
       - Cannot be combined with `--gateway-token`.
@@ -146,7 +169,7 @@ not install or modify anything on the remote host.
     - Native Windows: Scheduled Task first
       - If task creation is denied, OpenClaw falls back to a per-user Startup-folder login item and starts the gateway immediately.
       - Scheduled Tasks remain preferred because they provide better supervisor status.
-    - Runtime selection: Node is required because OpenClaw's canonical runtime state store uses `node:sqlite`.
+    - Runtime selection: Node is the primary, default, and recommended runtime. Bun 1.4+ with WAL-reset-safe `node:sqlite` is available as an explicit opt-in.
     - A SecretRef-managed `gateway.auth.token` is validated without copying its
       resolved plaintext value into supervisor service metadata. An unresolved
       token ref blocks daemon installation with remediation guidance.
@@ -179,7 +202,8 @@ not install or modify anything on the remote host.
 What you set:
 
 - Remote gateway URL (`ws://...` or `wss://...`)
-- Token, password, or no auth, matching the remote Gateway's configuration
+- One Gateway secret (token or password), or explicit confirmation to connect
+  without a shared secret
 
 <Steps>
   <Step title="Discovery (optional)">
@@ -196,8 +220,12 @@ What you set:
       command to run first, then connects to the local tunnel endpoint.
   </Step>
   <Step title="Auth">
-    Choose token (recommended), password, or no auth, then optionally store it
-    as a SecretRef instead of plaintext.
+    Enter the configured token or password in **Gateway secret**. The Gateway
+    accepts either wire field; interactive setup stores the secret as
+    `gateway.remote.token`, optionally as a SecretRef instead of plaintext.
+    To connect without a shared secret, leave it blank, decline keeping an
+    existing credential if offered, and confirm **Continue without a Gateway secret?**.
+    Reference storage offers that confirmation before asking for the reference.
   </Step>
 </Steps>
 
@@ -340,8 +368,11 @@ Model behavior:
 
 Credential and profile paths:
 
-- Auth profiles (API keys + OAuth): `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
-- Legacy OAuth import: `~/.openclaw/credentials/oauth.json`
+- Agent-local auth profiles (API keys, tokens, and OAuth): `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (`auth_profile_store`).
+- Shared auth profiles: `~/.openclaw/state/openclaw.sqlite`; agent-local profiles override this read-through base. Older installs keep the shared store in the main agent's database until `openclaw doctor --fix` relocates it.
+- Legacy import only: `auth-profiles.json`, per-agent `auth.json`, and `~/.openclaw/credentials/oauth.json`. Run `openclaw doctor --fix` to import them into SQLite; new logins do not write these files.
+
+Paths respect `$OPENCLAW_STATE_DIR`. See [Auth credential semantics](/auth-credential-semantics#agent-copy-portability) for shared-store and agent-local behavior.
 
 Credential storage mode:
 
@@ -361,21 +392,45 @@ Credential storage mode:
   - For new custom-provider credentials, non-interactive `ref` mode stores `models.providers.<id>.apiKey` as `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`.
   - In that custom-provider case, `--custom-api-key` requires `CUSTOM_API_KEY` to be set; otherwise onboarding fails fast.
   - Existing plaintext profile credentials remain unchanged; reference mode does not migrate them. Run `openclaw secrets configure --apply`, then `openclaw secrets audit --check`. See [Secrets management](/gateway/secrets).
-- Gateway auth credentials support plaintext and SecretRef choices in interactive setup:
-  - Token mode: **Generate/store plaintext token** (default) or **Use SecretRef**.
-  - Password mode: plaintext or SecretRef.
+- Gateway setup generates a secret in token mode by default. Interactive storage
+  choices are **Generate/store plaintext secret** (default) or **Use SecretRef**.
+  Existing password mode, `--gateway-auth password`, or `--gateway-password <value>`
+  uses password storage, with plaintext or SecretRef support.
 - Non-interactive token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
 - The named environment variable must be non-empty in the onboarding process.
   `--gateway-token` and `--gateway-token-ref-env` are mutually exclusive.
 - Existing plaintext setups continue to work unchanged.
 
-<Note>
-Headless and server tip: complete OAuth on a machine with a browser, then copy
-that agent's `auth-profiles.json` (for example
-`~/.openclaw/agents/<agentId>/agent/auth-profiles.json`, or the matching
-`$OPENCLAW_STATE_DIR/...` path) to the gateway host. `credentials/oauth.json`
-is only a legacy import source.
-</Note>
+## Headless and server setup
+
+Run auth setup **on the Gateway host**, using the same OS user and state directory
+as the Gateway. Over SSH, use an interactive terminal:
+
+```bash
+openclaw configure --section model
+```
+
+Choose your provider's supported auth method. For a browser OAuth flow, open the
+displayed URL in your local browser and paste the redirect URL or authorization
+code back into the terminal on the Gateway host when prompted. If the provider
+offers device-code login, complete the displayed URL/code in your local browser
+while the Gateway host's login process waits. The completed login persists the
+credential on that host in SQLite; no credential file handoff is needed.
+
+For a specific agent, run `openclaw models auth login --provider <id> --agent <agentId>`
+on the Gateway host. See [Models CLI](/cli/models#auth-profiles) and
+[OAuth](/concepts/oauth).
+
+For unattended setup, use a provider API key with
+[non-interactive onboarding](/cli/onboard#non-interactive-setup). If you use
+`--secret-input-mode ref`, make the referenced environment variable available to
+the Gateway service as well as the onboarding process. See
+[Authentication](/gateway/authentication).
+
+Verify the result on the Gateway host with `openclaw models status` (add
+`--agent <agentId>` for a specific agent). Remote-client onboarding only configures
+the local client connection; it does not set up provider credentials on the server.
+Do not copy `auth-profiles.json` or replace a SQLite database to transfer a login.
 
 ## Outputs and internals
 
@@ -444,6 +499,15 @@ in [CLI automation](/start/wizard-cli-automation).
 - `wizard.status`
 
 Clients (macOS app and Control UI) can render steps without re-implementing onboarding logic.
+
+When setup admission is busy, `wizard.start` and the model setup start/activation
+methods return `UNAVAILABLE` with `details.code: "SETUP_ADMISSION_BUSY"`. This
+means that the requested operation did not begin: clients can retire that attempt
+and allow an explicit retry after the competing setup finishes. A terminal wizard
+`error` also ends that operation, but does not imply that earlier writes were
+rolled back. Generic request failures, timeouts, disconnects, and a missing wizard
+do not establish whether setup ran; clients must preserve that uncertainty rather
+than automatically retrying or claiming successful activation.
 
 ## Signal setup behavior
 

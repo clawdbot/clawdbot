@@ -7,24 +7,16 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withConsoleSubsystemsSuppressed } from "../logging/console.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
-// Guided onboarding: detect AI access, live-test it, then persist only a working route.
-import type {
-  SetupInferenceCandidate,
-  SetupInferenceDetection,
-} from "../system-agent/setup-inference.js";
+// Guided onboarding verifies the selected AI connection before persisting its route.
+import type { SetupInferenceDetection } from "../system-agent/setup-inference.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { requireRiskAcknowledgement } from "../wizard/setup.shared.js";
 import type { runBrowserHatchHandoff } from "./onboard-browser-handoff.js";
 import { promptFirstOnboardingAgent, showSessionMigrationWarnings } from "./onboard-first-agent.js";
-import {
-  activationLines,
-  formatSetupCandidateFailure,
-  runManualStage,
-  type SetupCandidateFailure,
-  tryCandidate,
-} from "./onboard-guided-manual.js";
+import { requestGuidedOnboardingConsent } from "./onboard-guided-consent.js";
+import { runManualStage } from "./onboard-guided-manual.js";
+import { enableDefaultOnboardingInternalHooks } from "./onboard-hooks.js";
 import {
   hasInteractiveOnboardingTty,
   runInteractiveOnboarding,
@@ -37,27 +29,28 @@ type DetectSetupInference =
   typeof import("../system-agent/setup-inference.js").detectSetupInference;
 
 export type GuidedOnboardingDeps = {
-  detect?: DetectSetupInference;
-  activate?: ActivateSetupInference;
   runSystemAgentChat?: (
     workspace: string,
     runtime: RuntimeEnv,
     acceptRisk: boolean,
     agentName?: string,
   ) => Promise<void>;
+  launchHatchTui?: (workspace: string) => Promise<void>;
+  runForegroundGateway?: typeof import("./onboard-quickstart-host.js").runQuickstartForegroundGateway;
+  detect?: DetectSetupInference;
+  activate?: ActivateSetupInference;
   createPrompter?: () => WizardPrompter | Promise<WizardPrompter>;
   persistRiskAcknowledgement?: (config: OpenClawConfig) => Promise<string | void>;
   persistAccessMode?: (mode: GuidedAccessMode) => Promise<void>;
   listManualOptions?: typeof import("../system-agent/setup-inference.js").listManualSetupInferenceOptions;
   /**
-   * "hatch" (default) runs the local custodian flow: question zero, quiet
-   * failure collection, deterministic setup apply, then the agent TUI.
+   * "hatch" (default) runs the local custodian flow: discovery consent,
+   * explicit provider selection, deterministic setup apply, then the agent TUI.
    * "chat" preserves the legacy handoff into the OpenClaw system-agent chat —
    * remote-gateway onboarding requires it because setup must apply remotely.
    */
   handoffMode?: "hatch" | "chat";
   applySetup?: typeof import("../system-agent/setup-apply.js").applySystemAgentSetup;
-  launchHatchTui?: (workspace: string) => Promise<void>;
   runSetupMemoryImportStep?: typeof import("../wizard/setup.memory-import.js").runSetupMemoryImportStep;
   runAppRecommendations?: typeof import("../wizard/setup.app-recommendations.js").setupAppRecommendations;
   /** Browser-first local hatch handoff. Tests inject this to avoid real browser/Gateway work. */
@@ -67,11 +60,11 @@ export type GuidedOnboardingDeps = {
 
 export type GuidedAccessMode = "full" | "guarded";
 
-type GuidedOnboardingHandoff = {
-  workspace: string;
-  next: "browser" | "hatch" | "chat";
-  agentName?: string;
-};
+type GuidedOnboardingHandoff =
+  | { workspace: string; next: "browser" }
+  | { workspace: string; next: "foreground-gateway" }
+  | { workspace: string; next: "hatch"; local: boolean }
+  | { workspace: string; next: "chat"; agentName?: string };
 
 async function openSystemAgentChat(
   deps: GuidedOnboardingDeps,
@@ -80,14 +73,9 @@ async function openSystemAgentChat(
   acceptRisk: boolean,
   agentName?: string,
 ): Promise<void> {
-  const runChat =
+  const runChat: NonNullable<GuidedOnboardingDeps["runSystemAgentChat"]> =
     deps.runSystemAgentChat ??
-    (async (
-      setupWorkspace: string,
-      chatRuntime: RuntimeEnv,
-      riskAccepted: boolean,
-      setupAgentName?: string,
-    ) => {
+    (async (setupWorkspace, chatRuntime, riskAccepted, setupAgentName) => {
       const { runConversationalOnboarding } = await import("./onboard-interactive.js");
       await runConversationalOnboarding(
         {
@@ -99,23 +87,6 @@ async function openSystemAgentChat(
       );
     });
   await runChat(workspace, runtime, acceptRisk, agentName);
-}
-
-async function persistRiskAcknowledgement(config: OpenClawConfig): Promise<string | undefined> {
-  const securityAcknowledgedAt = config.wizard?.securityAcknowledgedAt;
-  if (!securityAcknowledgedAt) {
-    return undefined;
-  }
-  const { mutateConfigFileWithRetry } = await import("../config/config.js");
-  const committed = await mutateConfigFileWithRetry({
-    mutate: (draft) => {
-      if (draft.wizard?.securityAcknowledgedAt) {
-        return;
-      }
-      draft.wizard = { ...draft.wizard, securityAcknowledgedAt };
-    },
-  });
-  return committed.nextConfig.wizard?.securityAcknowledgedAt;
 }
 
 async function runGuidedOnboardingFlow(
@@ -162,30 +133,31 @@ async function runGuidedOnboardingFlow(
   // Capture receipt ownership before risk acknowledgement creates the config;
   // otherwise a concurrent fresh run could be mistaken for stale reset state.
   const previousLocalSetup = localOnboarding?.readLocalOnboardingState(snapshot.path);
-  let acknowledgedConfig = await requireRiskAcknowledgement({
+  const offerQuickstart =
+    custodianMode &&
+    (!snapshot.exists || isUnconfiguredConfigSource(existingConfig)) &&
+    // An interrupted setup's ask-first consent must survive; quick start assumes full discovery.
+    existingConfig.wizard?.accessMode !== "guarded" &&
+    opts.nonInteractive !== true &&
+    opts.skipUi !== true &&
+    opts.tui !== true;
+  const consent = await requestGuidedOnboardingConsent({
     opts,
     prompter,
     config: existingConfig,
+    offerQuickstart,
+    persistRiskAcknowledgement: deps.persistRiskAcknowledgement,
   });
-  let securityAcknowledgedAt = acknowledgedConfig.wizard?.securityAcknowledgedAt;
-  if (!existingConfig.wizard?.securityAcknowledgedAt) {
-    const persistedAcknowledgement = await (
-      deps.persistRiskAcknowledgement ?? persistRiskAcknowledgement
-    )(acknowledgedConfig);
-    if (persistedAcknowledgement) {
-      securityAcknowledgedAt = persistedAcknowledgement;
-      acknowledgedConfig = {
-        ...acknowledgedConfig,
-        wizard: { ...acknowledgedConfig.wizard, securityAcknowledgedAt },
-      };
-    }
-  }
-  const onboardingSecurityAcknowledgedAt = securityAcknowledgedAt;
-  if (!onboardingSecurityAcknowledgedAt) {
-    throw new Error("Local onboarding requires its persisted security acknowledgement.");
-  }
+  const { quickstart } = consent;
+  const { config: acknowledgedConfig, securityAcknowledgedAt: onboardingSecurityAcknowledgedAt } =
+    consent;
   const hasAuthoredRoster = hasResolvedRosterBeforeMigrations(snapshot);
-  const firstAgent = await promptFirstOnboardingAgent(hasAuthoredRoster, opts.agentName, prompter);
+  const firstAgent = await promptFirstOnboardingAgent(
+    hasAuthoredRoster,
+    opts.agentName,
+    prompter,
+    quickstart,
+  );
 
   // Reset removes config but keeps SQLite. Only the original, pre-acknowledgement
   // snapshot distinguishes a new installation from an interrupted previous run.
@@ -233,7 +205,7 @@ async function runGuidedOnboardingFlow(
   // Remote-gateway onboarding (chat handoff) discovers on the gateway host and
   // keeps its legacy flow; the local-consent question would be misleading there.
   let accessMode: GuidedAccessMode = "full";
-  if (custodianMode) {
+  if (custodianMode && !quickstart) {
     const accessChoice = await prompter.select<string>({
       message: t("wizard.guided.accessQuestion"),
       options: [
@@ -253,9 +225,9 @@ async function runGuidedOnboardingFlow(
       initialValue: existingConfig.wizard?.accessMode === "guarded" ? "guarded" : "full",
     });
     accessMode = accessChoice === "guarded" ? "guarded" : "full";
-    if (existingConfig.wizard?.accessMode !== accessMode) {
-      await (deps.persistAccessMode ?? persistAccessMode)(accessMode);
-    }
+  }
+  if (custodianMode && existingConfig.wizard?.accessMode !== accessMode) {
+    await (deps.persistAccessMode ?? persistAccessMode)(accessMode);
   }
 
   // Inference is the only prerequisite for OpenClaw. Use the caller's or
@@ -272,11 +244,52 @@ async function runGuidedOnboardingFlow(
     deps.activate ?? (await import("../system-agent/setup-inference.js")).activateSetupInference;
   const detect =
     deps.detect ?? (await import("../system-agent/setup-inference.js")).detectSetupInference;
-  const autoAttemptedKinds = new Set<SetupInferenceCandidate["kind"]>();
-  const ladderFailures: SetupCandidateFailure[] = [];
   let detection: SetupInferenceDetection | undefined;
-  let resultLines: string[] | undefined;
-  let successLabel: string | undefined;
+  const claimLocalSetup = (sourceConfig: OpenClawConfig) => {
+    if (!localOnboarding) {
+      return;
+    }
+    const committedSecurityAcknowledgedAt = sourceConfig.wizard?.securityAcknowledgedAt;
+    if (committedSecurityAcknowledgedAt !== onboardingSecurityAcknowledgedAt) {
+      throw new Error(
+        "The onboarding configuration changed before inference could be saved. Retry onboarding.",
+      );
+    }
+    if (localSetup?.status === "pending") {
+      assertLocalSetupOwner(sourceConfig);
+      return;
+    }
+    const runId = randomUUID();
+    const claimedSetup = localOnboarding.beginLocalOnboarding({
+      configPath: snapshot.path,
+      workspace,
+      securityAcknowledgedAt: committedSecurityAcknowledgedAt,
+      runId,
+      ...(replacePreviousSetup
+        ? {
+            replace: true,
+            ...(previousLocalSetup ? { expectedRunId: previousLocalSetup.runId } : {}),
+          }
+        : {}),
+    });
+    if (claimedSetup.runId !== runId) {
+      throw new Error("Another onboarding run already owns this installation. Retry setup.");
+    }
+    localSetup = claimedSetup;
+  };
+  const assertLocalSetupEffects = () => {
+    if (!localSetup || !localOnboarding) {
+      return;
+    }
+    const current = localOnboarding.readLocalOnboardingState(snapshot.path);
+    if (
+      current?.status !== "pending" ||
+      current.runId !== localSetup.runId ||
+      current.securityAcknowledgedAt !== localSetup.securityAcknowledgedAt
+    ) {
+      throw new Error("Another onboarding run replaced this setup operation. Retry onboarding.");
+    }
+  };
   const activate: ActivateSetupInference = async (params) => {
     if (
       !localOnboarding ||
@@ -288,33 +301,7 @@ async function runGuidedOnboardingFlow(
       ...params,
       onCommitStarted: (sourceConfig) => {
         params.onCommitStarted?.(sourceConfig);
-        const committedSecurityAcknowledgedAt = sourceConfig.wizard?.securityAcknowledgedAt;
-        if (committedSecurityAcknowledgedAt !== onboardingSecurityAcknowledgedAt) {
-          throw new Error(
-            "The onboarding configuration changed before inference could be saved. Retry onboarding.",
-          );
-        }
-        if (localSetup?.status === "pending") {
-          assertLocalSetupOwner(sourceConfig);
-          return;
-        }
-        const runId = randomUUID();
-        const claimedSetup = localOnboarding.beginLocalOnboarding({
-          configPath: snapshot.path,
-          workspace,
-          securityAcknowledgedAt: committedSecurityAcknowledgedAt,
-          runId,
-          ...(replacePreviousSetup
-            ? {
-                replace: true,
-                ...(previousLocalSetup ? { expectedRunId: previousLocalSetup.runId } : {}),
-              }
-            : {}),
-        });
-        if (claimedSetup.runId !== runId) {
-          throw new Error("Another onboarding run already owns this installation. Retry setup.");
-        }
-        localSetup = claimedSetup;
+        claimLocalSetup(sourceConfig);
       },
     });
   };
@@ -385,39 +372,6 @@ async function runGuidedOnboardingFlow(
       );
       await prompter.note(unavailable.join("\n"), t("wizard.guided.unavailableTitle"));
     }
-
-    // Logged-out CLIs stay visible as manual choices, but auto-testing them would
-    // only produce predictable auth failures and slow the fallback ladder.
-    for (const candidate of detection.candidates.filter((item) => item.credentials !== false)) {
-      autoAttemptedKinds.add(candidate.kind);
-      const attempt = await tryCandidate({
-        candidate,
-        workspace,
-        runtime,
-        prompter,
-        activate,
-        // Legacy chat handoff keeps loud per-candidate failures.
-        ...(custodianMode
-          ? { collectFailure: (failure: SetupCandidateFailure) => ladderFailures.push(failure) }
-          : {}),
-      });
-      if (attempt.kind === "success") {
-        resultLines = activationLines(attempt.result);
-        successLabel =
-          candidate.kind === "existing-model"
-            ? `${candidate.label} (${candidate.modelRef})`
-            : candidate.label;
-        break;
-      }
-      // The verification probe runs outside the configured workspace (setup never
-      // executes workspace plugins), so a failing current model can be a false
-      // negative. Never let the ladder silently replace a configured default —
-      // stop and let the user decide in the manual stage.
-      if (candidate.kind === "existing-model") {
-        await prompter.note(t("wizard.guided.existingModelKept"), t("wizard.guided.aiAccessTitle"));
-        break;
-      }
-    }
   } else {
     // Declined discovery: build the manual picker from config/manifests only.
     const listManualOptions =
@@ -432,78 +386,41 @@ async function runGuidedOnboardingFlow(
     };
   }
 
-  if (resultLines && successLabel && custodianMode) {
-    // Announced default with an easy undo: the working route is already
-    // persisted; "see other options" reopens the full picker on top of it.
-    if (ladderFailures.length > 0) {
-      await prompter.note(
-        t("wizard.guided.silentFailures", { count: String(ladderFailures.length) }),
-        t("wizard.guided.aiAccessTitle"),
-      );
-    }
-    const routeChoice = await prompter.select<string>({
-      message: t("wizard.guided.routeConfirm", { label: successLabel }),
-      options: [
-        { value: "use", label: t("wizard.guided.routeUse", { label: successLabel }) },
-        { value: "other", label: t("wizard.guided.routeOther") },
-      ],
-      initialValue: "use",
-    });
-    if (routeChoice === "other") {
-      // The quiet summary promised the details here; show them before the picker.
-      if (ladderFailures.length > 0) {
-        await prompter.note(
-          [
-            t("wizard.guided.failedOptionsIntro"),
-            ...ladderFailures.map(formatSetupCandidateFailure),
-          ].join("\n"),
-          t("wizard.guided.aiAccessTitle"),
-        );
-      }
-      const manualResult = await runManualStage({
-        detection,
-        autoAttemptedKinds,
-        config: existingConfig,
-        workspace,
-        runtime,
-        prompter,
-        activate,
-        hasActiveRoute: true,
-      });
-      // Skip keeps the already-persisted working route instead of aborting.
-      if (manualResult) {
-        resultLines = manualResult;
-      }
-    }
-  } else if (!resultLines) {
-    if (ladderFailures.length > 0) {
-      const failureLines = ladderFailures.map(formatSetupCandidateFailure);
-      await prompter.note(
-        [t("wizard.guided.failedOptionsIntro"), ...failureLines].join("\n"),
-        t("wizard.guided.aiAccessTitle"),
-      );
-    }
-    const manualResult = await runManualStage({
-      detection,
-      autoAttemptedKinds,
-      config: existingConfig,
-      workspace,
-      runtime,
-      prompter,
-      activate,
-    });
-    if (!manualResult) {
-      return null;
-    }
-    resultLines = manualResult;
+  const resultLines = await runManualStage({
+    detection,
+    config: existingConfig,
+    workspace,
+    runtime,
+    prompter,
+    activate,
+  });
+  const skippedInference = resultLines === null;
+  if (
+    skippedInference &&
+    localOnboarding &&
+    (resumingSetup || (!existingConfig.gateway && !detection.setupComplete))
+  ) {
+    const { withConfigMutationExclusive } = await import("../config/config.js");
+    // Skip owns the same resumable baseline as verified inference. Claim before
+    // agent creation so an interruption cannot strand a half-installed roster.
+    await withConfigMutationExclusive(async (sourceConfig) => claimLocalSetup(sourceConfig));
+  }
+  if (resultLines?.length) {
+    await prompter.note(resultLines.join("\n"), t("wizard.guided.appliedTitle"));
   }
 
-  await prompter.note(resultLines.join("\n"), t("wizard.guided.appliedTitle"));
   const persistedSnapshot = await readConfigFileSnapshot();
   let persistedConfig = persistedSnapshot.valid
     ? (persistedSnapshot.sourceConfig ?? persistedSnapshot.config)
     : acknowledgedConfig;
   if (!custodianMode) {
+    if (skippedInference) {
+      await prompter.note(
+        t("wizard.guided.nextStepsWithoutAi", { workspace }),
+        t("wizard.guided.nextStepsTitle"),
+      );
+      return null;
+    }
     if (wantsDiscovery) {
       const runMemoryImport =
         deps.runSetupMemoryImportStep ??
@@ -520,6 +437,7 @@ async function runGuidedOnboardingFlow(
   // onboarding; authored model-only configs without that receipt stay untouched.
   const alreadyConfigured =
     localSetup?.status !== "pending" && Boolean(detection?.setupComplete || existingConfig.gateway);
+  let gatewayExternallyManaged = false;
   const { resolveSetupWorkspaceSelection } = await import("../wizard/setup.workspace.js");
   const workspaceSelection = await resolveSetupWorkspaceSelection({
     baseConfig: existingConfig,
@@ -538,7 +456,9 @@ async function runGuidedOnboardingFlow(
     );
   }
   if (alreadyConfigured) {
-    await prompter.note(t("wizard.guided.alreadySetUp"), t("wizard.guided.welcomeTitle"));
+    if (!skippedInference) {
+      await prompter.note(t("wizard.guided.alreadySetUp"), t("wizard.guided.welcomeTitle"));
+    }
     if (workspaceConflict) {
       await prompter.note(
         t("wizard.guided.workspaceConflictClassic", {
@@ -578,18 +498,29 @@ async function runGuidedOnboardingFlow(
       }
       const applySetup =
         deps.applySetup ?? (await import("../system-agent/setup-apply.js")).applySystemAgentSetup;
+      // Inference can materialize a roster before setup applies the workspace;
+      // the pending receipt remains the authority for that approved write.
       const applied = await withConsoleSubsystemsSuppressed(() =>
-        applySetup({
-          workspace,
-          ...(firstAgent ? { firstAgent } : {}),
-          ...(allowWorkspaceChange ? { allowWorkspaceChange: true } : {}),
-          ...(resumingSetup ? { resume: true } : {}),
-          ...(localSetup?.status === "pending"
-            ? { assertCommitPreconditions: assertLocalSetupOwner }
-            : {}),
-          surface: "cli",
-          runtime,
-        }),
+        applySetup(
+          {
+            workspace,
+            ...(firstAgent ? { firstAgent } : {}),
+            allowWorkspaceChange: allowWorkspaceChange || localSetup?.status === "pending",
+            ...(resumingSetup ? { resume: true } : {}),
+            ...(localSetup?.status === "pending"
+              ? { assertCommitPreconditions: assertLocalSetupOwner }
+              : {}),
+            ...(!opts.skipHooks && !skippedInference
+              ? { finalizeConfig: enableDefaultOnboardingInternalHooks }
+              : {}),
+            surface: "cli",
+            ...(quickstart || skippedInference ? { installDaemon: false } : {}),
+            runtime,
+          },
+          localSetup?.status === "pending"
+            ? { beforePersistentApply: assertLocalSetupEffects }
+            : undefined,
+        ),
       );
       if (applied.lines.length > 0) {
         await prompter.note(applied.lines.join("\n"), t("wizard.guided.appliedTitle"));
@@ -599,9 +530,12 @@ async function runGuidedOnboardingFlow(
           "The agent workspace could not be prepared. Retry onboarding to finish setup.",
         );
       }
-      if (applied.gateway.status === "failed") {
-        throw new Error(applied.gateway.error);
+      const gateway = applied.gateway;
+      if (gateway.status === "failed") {
+        throw new Error(gateway.error);
       }
+      gatewayExternallyManaged =
+        applied.gateway.status === "skipped" && applied.gateway.reason === "external";
       const appliedSnapshot =
         localSetup?.status === "pending"
           ? await (
@@ -624,10 +558,21 @@ async function runGuidedOnboardingFlow(
         }),
         t("wizard.guided.aiAccessTitle"),
       );
+      if (skippedInference) {
+        throw error;
+      }
       return { workspace, next: "chat", ...(firstAgent ? { agentName: firstAgent.name } : {}) };
     }
   }
-  if (wantsDiscovery) {
+  if (skippedInference) {
+    await prompter.note(
+      t("wizard.guided.nextStepsWithoutAi", { workspace: appliedWorkspace }),
+      t("wizard.guided.nextStepsTitle"),
+    );
+    await prompter.outro(t("wizard.guided.setupDone"));
+    return null;
+  }
+  if (wantsDiscovery && !quickstart) {
     // Import destinations come from the final persisted agent workspace. Importing
     // before setup apply strands memories when first run specifies --workspace.
     const runMemoryImport =
@@ -659,6 +604,10 @@ async function runGuidedOnboardingFlow(
         existingConfig.agents?.defaults?.workspace?.trim() || onboardHelpers.DEFAULT_WORKSPACE,
       )
     : appliedWorkspace;
+  if (quickstart && !gatewayExternallyManaged) {
+    await prompter.outro(t("wizard.guided.setupDone"));
+    return { workspace: hatchWorkspace, next: "foreground-gateway" };
+  }
   if (opts.skipUi === true) {
     await prompter.outro(t("wizard.guided.complete"));
     return null;
@@ -681,7 +630,7 @@ async function runGuidedOnboardingFlow(
   await prompter.outro(t("wizard.guided.hatchingNow"));
   // The TUI opens the configured default agent/workspace; on a configured
   // rerun that is the persisted default, not the --workspace probe context.
-  return { workspace: hatchWorkspace, next: "hatch" };
+  return { workspace: hatchWorkspace, next: "hatch", local: alreadyConfigured };
 }
 
 async function persistAccessMode(mode: GuidedAccessMode): Promise<void> {
@@ -696,7 +645,7 @@ async function persistAccessMode(mode: GuidedAccessMode): Promise<void> {
   });
 }
 
-async function launchHatchTui(workspace: string): Promise<void> {
+async function launchHatchTui(workspace: string, local: boolean): Promise<void> {
   const [{ launchTuiCli }, { DEFAULT_BOOTSTRAP_FILENAME }, { restoreTerminalState }, fs, path] =
     await Promise.all([
       import("../tui/tui-launch.js"),
@@ -708,10 +657,11 @@ async function launchHatchTui(workspace: string): Promise<void> {
   const hasBootstrap = fs.existsSync(path.join(workspace, DEFAULT_BOOTSTRAP_FILENAME));
   restoreTerminalState("guided hatch tui", { resumeStdinIfPaused: false });
   try {
+    // Fresh setup already started the Gateway; local mode would contend for its state lock.
     // No timeoutMs: the run-level TUI timeout overrides the configured agent
     // timeout for every turn in the session, not just the hatch message.
     await launchTuiCli({
-      local: true,
+      ...(local ? { local: true } : {}),
       deliver: false,
       // Seed the first-run hatch only when the workspace bootstrap exists;
       // re-runs against an established agent open a plain chat instead.
@@ -740,10 +690,24 @@ export async function runGuidedOnboarding(
   if (!handoff) {
     return;
   }
+  if (handoff.next === "foreground-gateway") {
+    const runForegroundGateway =
+      deps.runForegroundGateway ??
+      (await import("./onboard-quickstart-host.js")).runQuickstartForegroundGateway;
+    await runForegroundGateway({
+      runtime,
+      ...(opts.suppressGatewayTokenOutput ? { suppressTokenOutput: true } : {}),
+    });
+    return;
+  }
   // Interactive surfaces start only after the wizard lifecycle restores stdin
   // so the TUI (or recovery chat) receives a clean TTY.
   if (handoff.next === "hatch") {
-    await (deps.launchHatchTui ?? launchHatchTui)(handoff.workspace);
+    if (deps.launchHatchTui) {
+      await deps.launchHatchTui(handoff.workspace);
+    } else {
+      await launchHatchTui(handoff.workspace, handoff.local);
+    }
     return;
   }
   if (handoff.next === "browser") {

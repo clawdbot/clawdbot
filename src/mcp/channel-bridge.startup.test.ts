@@ -42,7 +42,7 @@ vi.mock("../gateway/client.js", () => ({
       }
       const onHelloOk = this.options.onHelloOk;
       if (typeof onHelloOk === "function") {
-        onHelloOk();
+        onHelloOk({ features: { methods: ["chat.message.get"], events: [] } });
       }
     }
 
@@ -97,7 +97,7 @@ describe("OpenClawChannelBridge startup", () => {
     await bridge.close();
   });
 
-  it("waits through retryable Gateway startup until hello succeeds", async () => {
+  it("waits through retryable startup and updates lookup support after reconnect", async () => {
     mockState.autoHello = false;
     const bridge = new OpenClawChannelBridge({} as never, {
       claudeChannelMode: "off",
@@ -114,9 +114,17 @@ describe("OpenClawChannelBridge startup", () => {
     if (typeof onHelloOk !== "function") {
       throw new Error("Expected Gateway hello callback");
     }
-    onHelloOk();
+    onHelloOk({ features: { methods: ["chat.message.get"], events: [] } });
 
     await expect(started).resolves.toBeUndefined();
+    expect(
+      (bridge as unknown as { supportsExactMessageLookup: boolean }).supportsExactMessageLookup,
+    ).toBe(true);
+
+    onHelloOk({ features: { methods: [], events: [] } });
+    expect(
+      (bridge as unknown as { supportsExactMessageLookup: boolean }).supportsExactMessageLookup,
+    ).toBe(false);
     await bridge.close();
   });
 });

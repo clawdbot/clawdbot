@@ -6,6 +6,8 @@ import {
   getExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
+  fallbackAttemptOptions,
+  initialFallbackAttemptOptions,
   createMinimalRunAgentTurnParams,
 } from "./agent-runner-execution.test-support.js";
 import type {
@@ -14,7 +16,7 @@ import type {
 } from "./agent-runner-execution.test-support.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: message tool progress", () => {
   it("suppresses progress callbacks after message-tool-only delivery completes", async () => {
@@ -71,11 +73,12 @@ describe("executeAgentTurn: message tool progress", () => {
         },
       });
       await params.onAgentEvent?.({
-        stream: "assistant",
+        stream: "item",
         data: {
-          phase: "commentary",
+          kind: "preamble",
+          phase: "update",
           itemId: "commentary-1",
-          text: "This must stay suppressed.",
+          progressText: "This must stay suppressed.",
         },
       });
       releaseItemEvent?.();
@@ -135,32 +138,77 @@ describe("executeAgentTurn: message tool progress", () => {
   });
 
   it("records mute when a message-tool-only run completes without a send", async () => {
+    const onAgentRunTerminalOutcome = vi.fn();
     state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
     const followupRun = createFollowupRun();
     followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
+    await executeAgentTurn(
+      createMinimalRunAgentTurnParams({ followupRun, opts: { onAgentRunTerminalOutcome } }),
+    );
 
+    expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("completed");
     expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledWith(
       expect.objectContaining({ outcome: "mute", runStatus: "completed" }),
     );
   });
 
-  it("classifies a failed message-tool-only run separately from omission", async () => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [],
-      meta: { error: { message: "provider crashed" } },
-    });
+  it.each([false, true])(
+    "records failed execution independently of delivery (%s)",
+    async (delivered) => {
+      const onAgentRunTerminalOutcome = vi.fn();
+      state.runEmbeddedAgentMock.mockResolvedValueOnce({
+        payloads: [],
+        didDeliverSourceReplyViaMessageTool: delivered,
+        meta: { error: { message: "provider crashed" } },
+      });
+      const followupRun = createFollowupRun();
+      followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      await executeAgentTurn(
+        createMinimalRunAgentTurnParams({ followupRun, opts: { onAgentRunTerminalOutcome } }),
+      );
+
+      expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("failed");
+      expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outcome: delivered ? "tool_delivered" : "mute",
+          runStatus: "errored",
+        }),
+      );
+    },
+  );
+
+  it("clears run ownership when image preflight fails", async () => {
+    const onAgentRunTerminalOutcome = vi.fn();
     const followupRun = createFollowupRun();
     followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+    const agentRunRegistry = await import("../../infra/agent-run-registry.js");
+    const clearAgentRunContext = vi.mocked(agentRunRegistry.clearAgentRunContext);
+    state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(new Error("invalid image metadata"));
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
+    await expect(
+      executeAgentTurn(
+        createMinimalRunAgentTurnParams({
+          followupRun,
+          opts: { runId: "preflight-failure", onAgentRunTerminalOutcome },
+        }),
+      ),
+    ).rejects.toThrow("invalid image metadata");
 
-    expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledWith(
-      expect.objectContaining({ outcome: "mute", runStatus: "errored" }),
+    expect(clearAgentRunContext).toHaveBeenCalledWith("preflight-failure", expect.any(String));
+    expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("failed");
+    expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        runId: "preflight-failure",
+        outcome: "mute",
+        runStatus: "errored",
+      }),
     );
+    expect(state.runWithModelFallbackMock).not.toHaveBeenCalled();
   });
 
   it("preserves message-tool-only suppression across fallback candidates", async () => {
@@ -205,9 +253,9 @@ describe("executeAgentTurn: message tool progress", () => {
         return { payloads: [{ text: "NO_REPLY" }], meta: {} };
       });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      await params.run("anthropic", "primary");
+      await params.run("anthropic", "primary", initialFallbackAttemptOptions(params));
       return {
-        result: await params.run("openai", "fallback"),
+        result: await params.run("openai", "fallback", fallbackAttemptOptions(params, "unknown")),
         provider: "openai",
         model: "fallback",
         attempts: [],

@@ -17,6 +17,61 @@ vi.mock("../infra/resolve-system-bin.js", () => ({
 import { ensurePrivateSnapshotRepositoryRoot } from "./local-repository.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const CURRENT_USER_SID = "S-1-5-21-1000";
+
+type WindowsAclProbeEntry = {
+  accessType: "Allow" | "Deny";
+  inheritanceFlags: string;
+  principal: string;
+  propagationFlags: string;
+  rightsMask: number;
+};
+
+const CURRENT_USER_FULL_ACCESS: WindowsAclProbeEntry = {
+  principal: CURRENT_USER_SID,
+  accessType: "Allow",
+  rightsMask: 0x1f01ff,
+  inheritanceFlags: "None",
+  propagationFlags: "None",
+};
+
+function mockWindowsPathSecurity(
+  params: {
+    ancestorEntries?: WindowsAclProbeEntry[];
+    rootEntries?: WindowsAclProbeEntry[];
+    rootOwnerSid?: string;
+  } = {},
+): void {
+  execMocks.runExec.mockImplementation(async (_command, args) => {
+    const encodedIndex = args.indexOf("-EncodedCommand");
+    const encoded = args[encodedIndex + 1];
+    if (typeof encoded !== "string") {
+      throw new Error("expected encoded PowerShell command");
+    }
+    const command = Buffer.from(encoded, "base64").toString("utf16le");
+    const pathsPayload = /FromBase64String\('([^']+)'\)/u.exec(command)?.[1];
+    if (!pathsPayload) {
+      throw new Error("expected encoded path payload");
+    }
+    const paths = JSON.parse(Buffer.from(pathsPayload, "base64").toString("utf8")) as string[];
+    return {
+      stdout: Buffer.from(
+        JSON.stringify({
+          currentUserSid: CURRENT_USER_SID,
+          paths: paths.map((entry, index) => ({
+            path: entry,
+            ownerSid: index === 0 ? (params.rootOwnerSid ?? CURRENT_USER_SID) : CURRENT_USER_SID,
+            entries:
+              index === 0
+                ? (params.rootEntries ?? [CURRENT_USER_FULL_ACCESS])
+                : (params.ancestorEntries ?? [CURRENT_USER_FULL_ACCESS]),
+          })),
+        }),
+        "utf8",
+      ).toString("base64"),
+    };
+  });
+}
 
 describe("fail-closed Windows ACL probe", () => {
   it("budgets for cold PowerShell startup and sanitizes the spawn failure", async () => {
@@ -67,5 +122,78 @@ describe("fail-closed Windows ACL probe", () => {
       expect.any(Array),
       expect.objectContaining({ timeoutMs: WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS }),
     );
+  });
+
+  it("names the untrusted root principal and rights without weakening rejection", async () => {
+    const tempDir = tempDirs.make("openclaw-snapshot-windows-acl-detail-");
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    mockWindowsPathSecurity({
+      rootEntries: [
+        {
+          principal: "S-1-1-0",
+          accessType: "Allow",
+          rightsMask: 0x120089,
+          inheritanceFlags: "ContainerInherit, ObjectInherit",
+          propagationFlags: "None",
+        },
+      ],
+    });
+
+    await expect(ensurePrivateSnapshotRepositoryRoot(tempDir)).rejects.toThrow(
+      /repository root: path=.* principal=S-1-1-0 rights=.*Remove the untrusted grant/u,
+    );
+  });
+
+  it("accepts a private local Windows repository root", async () => {
+    const tempDir = tempDirs.make("openclaw-snapshot-windows-acl-private-");
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    mockWindowsPathSecurity();
+
+    await expect(ensurePrivateSnapshotRepositoryRoot(tempDir)).resolves.toBe(tempDir);
+  });
+
+  it.each([
+    {
+      label: "a OneDrive-style synced root",
+      params: {
+        rootEntries: [
+          {
+            principal: "S-1-1-0",
+            accessType: "Allow" as const,
+            rightsMask: 0x1f01ff,
+            inheritanceFlags: "ContainerInherit, ObjectInherit",
+            propagationFlags: "None",
+          },
+        ],
+      },
+      expected: /repository root: path=.*principal=S-1-1-0 rights=.*shared or synced root/u,
+    },
+    {
+      label: "a network-share root owned by another principal",
+      params: { rootOwnerSid: "S-1-5-21-2000" },
+      expected:
+        /repository root is owned by an untrusted principal: path=.*principal=S-1-5-21-2000/u,
+    },
+    {
+      label: "an inherited shared ancestor grant",
+      params: {
+        ancestorEntries: [
+          {
+            principal: "S-1-1-0",
+            accessType: "Allow" as const,
+            rightsMask: 0x000040,
+            inheritanceFlags: "ContainerInherit, ObjectInherit",
+            propagationFlags: "None",
+          },
+        ],
+      },
+      expected: /ancestor: path=.*principal=S-1-1-0 rights=.*shared or synced root/u,
+    },
+  ])("rejects $label", async ({ params, expected }) => {
+    const tempDir = tempDirs.make("openclaw-snapshot-windows-acl-matrix-");
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    mockWindowsPathSecurity(params);
+
+    await expect(ensurePrivateSnapshotRepositoryRoot(tempDir)).rejects.toThrow(expected);
   });
 });

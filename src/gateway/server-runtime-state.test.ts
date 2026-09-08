@@ -1,8 +1,10 @@
 /**
  * Gateway runtime state construction tests.
  */
+import { once } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { connect } from "node:net";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
@@ -96,6 +98,61 @@ describe("createGatewayRuntimeState", () => {
 
   afterEach(() => {
     resetPluginRuntimeStateForTest();
+  });
+
+  it("yields between buffered WebSocket messages without reordering them", async () => {
+    const runtimeState = await createGatewayRuntimeStateForTest();
+    const server = runtimeState.httpServers[0]!;
+    const events: string[] = [];
+    let sentinel: ReturnType<typeof setImmediate> | undefined;
+    const received = new Promise<void>((resolve, reject) => {
+      runtimeState.wss.once("connection", (socket, req) => {
+        socket.once("error", reject);
+        socket.on("message", (data) => {
+          const message = rawDataToString(data);
+          events.push(message);
+          if (message === "a") {
+            sentinel = setImmediate(() => events.push("yield"));
+          } else {
+            resolve();
+          }
+        });
+        // Feed both masked text frames as one receive chunk through the real
+        // upgraded socket, independent of TCP packet splitting/coalescing.
+        req.socket.pause();
+        req.socket.unshift(
+          Buffer.from([0x81, 0x81, 1, 2, 3, 4, 0x60, 0x81, 0x81, 1, 2, 3, 4, 0x63]),
+        );
+        req.socket.resume();
+      });
+    });
+    let client: WebSocket | undefined;
+    try {
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected TCP gateway address");
+      }
+      client = new WebSocket(`ws://127.0.0.1:${address.port}/`, {
+        handshakeTimeout: 2_000,
+      });
+      await once(client, "open");
+      await received;
+      expect(events).toEqual(["a", "yield", "b"]);
+    } finally {
+      clearImmediate(sentinel);
+      client?.terminate();
+      for (const socket of runtimeState.wss.clients) {
+        socket.terminate();
+      }
+      if (server.listening) {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+      runtimeState.wss.close();
+    }
   });
 
   it("keeps unrelated plugin HTTP routes cold for core HTTP and WebSocket requests", async () => {

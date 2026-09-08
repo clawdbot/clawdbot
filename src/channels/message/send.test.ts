@@ -218,6 +218,28 @@ describe("withDurableMessageSendContext", () => {
     });
   });
 
+  it.each([
+    {
+      name: "title-only presentations",
+      payload: { presentation: { title: "Delivery failed: action required", blocks: [] } },
+      expected: { presentationCount: 1, items: [{ kinds: ["presentation"] }] },
+    },
+    {
+      name: "single attachments mirrored by the media alias",
+      payload: { mediaUrl: "/tmp/image.png", mediaUrls: ["/tmp/image.png"] },
+      expected: { mediaCount: 1, items: [{ mediaUrls: ["/tmp/image.png"] }] },
+    },
+  ])("keeps $name visible in durable live previews", async ({ payload, expected }) => {
+    await withDurableMessageSendContext(
+      { cfg, channel: "telegram", to: "chat-1", payloads: [payload] },
+      async (ctx) => {
+        const rendered = await ctx.render();
+        expect(rendered.plan).toMatchObject(expected);
+        expect((await ctx.previewUpdate(rendered)).lastRendered?.plan).toMatchObject(expected);
+      },
+    );
+  });
+
   it("forwards the durable send context signal to outbound delivery", async () => {
     const abortController = new AbortController();
     deliverOutboundPayloads.mockImplementationOnce(

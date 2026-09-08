@@ -137,6 +137,7 @@ docker_e2e_build_or_reuse() {
     # The Dockerfile never sees repo sources as app input; functional installs
     # exactly this tarball through a named BuildKit context.
     build_args+=(--build-context "openclaw_package=$package_context")
+    build_args+=(--build-arg "OPENCLAW_FS_SAFE_NATIVE_CONTRACT=${OPENCLAW_FS_SAFE_NATIVE_CONTRACT:-required}")
   fi
   build_args+=(-t "$image_name" -f "$dockerfile" "$context")
   local build_status=0

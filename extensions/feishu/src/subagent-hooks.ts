@@ -4,12 +4,8 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildFeishuConversationId, parseFeishuConversationId } from "./conversation-id.js";
-import { normalizeFeishuTarget } from "./targets.js";
+import { normalizeFeishuTarget, stripFeishuProviderPrefix } from "./targets.js";
 import { getFeishuThreadBindingManager } from "./thread-bindings.js";
-
-function stripProviderPrefix(raw: string): string {
-  return raw.replace(/^(feishu|lark):/i, "").trim();
-}
 
 function resolveFeishuRequesterConversation(params: {
   accountId?: string;
@@ -26,7 +22,7 @@ function resolveFeishuRequesterConversation(params: {
     return null;
   }
   const rawTo = params.to?.trim();
-  const withoutProviderPrefix = rawTo ? stripProviderPrefix(rawTo) : "";
+  const withoutProviderPrefix = rawTo ? stripFeishuProviderPrefix(rawTo) : "";
   const normalizedTarget = rawTo ? normalizeFeishuTarget(rawTo) : null;
   const threadId =
     params.threadId != null && params.threadId !== "" ? String(params.threadId).trim() : "";

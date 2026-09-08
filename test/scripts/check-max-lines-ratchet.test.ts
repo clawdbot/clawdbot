@@ -5,13 +5,15 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectCurrentSuppressionState,
+  collectLintDisableDirectives,
   hasAllRuleDisable,
   hasMaxLinesDisable,
   isGovernedSourcePath,
   main,
 } from "../../scripts/check-max-lines-ratchet.mts";
+import { createTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs: string[] = [];
+const tempDirs = createTempDirTracker();
 const nestedGitEnvKeys = [
   "GIT_ALTERNATE_OBJECT_DIRECTORIES",
   "GIT_COMMON_DIR",
@@ -41,17 +43,47 @@ function git(cwd: string, args: string[]): void {
   for (const key of nestedGitEnvKeys) {
     delete env[key];
   }
-  execFileSync("git", args, { cwd, env, stdio: "ignore" });
+  execFileSync("git", ["-c", "user.email=test@example.com", "-c", "user.name=Test", ...args], {
+    cwd,
+    env,
+    stdio: "ignore",
+  });
+}
+
+function commitFixture(root: string, message = "base"): void {
+  for (const args of [["init"], ["add", "."], ["commit", "-m", message]]) {
+    git(root, args);
+  }
 }
 
 afterEach(() => {
   vi.restoreAllMocks();
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { force: true, recursive: true });
-  }
+  tempDirs.cleanup();
 });
 
 describe("check-max-lines-ratchet", () => {
+  it.each(["\n", "\r\n"])("preserves directive discovery with %j line endings", (newline) => {
+    const source = [
+      'const text = "\u{1f680} /* oxlint-disable max-lines */";',
+      "const template = `// eslint-disable max-lines`;",
+      "function example() {",
+      "  /* oxlint-disable no-console */",
+      "} // eslint-disable no-debugger",
+      "consume(",
+      "  1",
+      "  // oxlint-disable no-console",
+      ");",
+      "// eslint-disable max-lines, eqeqeq",
+    ].join(newline);
+
+    expect(collectLintDisableDirectives(source)).toEqual([
+      ["no-debugger"],
+      ["no-console"],
+      ["no-console"],
+      ["max-lines", "eqeqeq"],
+    ]);
+  });
+
   it("recognizes suppressions without matching reason prose", () => {
     expect(hasMaxLinesDisable("/* oxlint-disable max-lines -- TODO: split. */\n")).toBe(true);
     expect(hasMaxLinesDisable("// eslint-disable-next-line no-console, max-lines\n")).toBe(true);
@@ -91,8 +123,7 @@ describe("check-max-lines-ratchet", () => {
   });
 
   it("rejects baseline growth even when the new suppression is listed", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-max-lines-"));
-    tempDirs.push(root);
+    const root = tempDirs.make("openclaw-max-lines-", os.tmpdir());
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
     fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\n");
@@ -100,15 +131,7 @@ describe("check-max-lines-ratchet", () => {
       path.join(root, "src/a.ts"),
       "/* oxlint-disable max-lines -- TODO: split. */\n",
     );
-    for (const args of [
-      ["init"],
-      ["config", "user.email", "test@example.com"],
-      ["config", "user.name", "Test"],
-      ["add", "."],
-      ["commit", "-m", "base"],
-    ]) {
-      git(root, args);
-    }
+    commitFixture(root);
 
     fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\nsrc/b.ts\n");
     fs.writeFileSync(
@@ -122,21 +145,12 @@ describe("check-max-lines-ratchet", () => {
   });
 
   it("rejects replacing an explicit max-lines suppression with an all-rule disable", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-max-lines-all-rule-"));
-    tempDirs.push(root);
+    const root = tempDirs.make("openclaw-max-lines-all-rule-", os.tmpdir());
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
     fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\n");
     fs.writeFileSync(path.join(root, "src/a.ts"), "/* oxlint-disable max-lines */\n");
-    for (const args of [
-      ["init"],
-      ["config", "user.email", "test@example.com"],
-      ["config", "user.name", "Test"],
-      ["add", "."],
-      ["commit", "-m", "base"],
-    ]) {
-      git(root, args);
-    }
+    commitFixture(root);
 
     fs.writeFileSync(path.join(root, "src/a.ts"), "/* oxlint-disable */\n");
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -145,21 +159,12 @@ describe("check-max-lines-ratchet", () => {
   });
 
   it("rejects a new all-rule disable without baseline growth", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-max-lines-all-rule-new-"));
-    tempDirs.push(root);
+    const root = tempDirs.make("openclaw-max-lines-all-rule-new-", os.tmpdir());
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
     fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "");
     fs.writeFileSync(path.join(root, "src/a.ts"), "export const a = 1;\n");
-    for (const args of [
-      ["init"],
-      ["config", "user.email", "test@example.com"],
-      ["config", "user.name", "Test"],
-      ["add", "."],
-      ["commit", "-m", "base"],
-    ]) {
-      git(root, args);
-    }
+    commitFixture(root);
 
     fs.writeFileSync(path.join(root, "src/a.ts"), "/* oxlint-disable */\n");
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -168,8 +173,7 @@ describe("check-max-lines-ratchet", () => {
   });
 
   it("transfers grandfathered debt across a verified rename", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-max-lines-rename-"));
-    tempDirs.push(root);
+    const root = tempDirs.make("openclaw-max-lines-rename-", os.tmpdir());
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
     fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\n");
@@ -177,15 +181,7 @@ describe("check-max-lines-ratchet", () => {
       path.join(root, "src/a.ts"),
       "export const a = 1;\n/* oxlint-disable max-lines -- TODO: split. */\n",
     );
-    for (const args of [
-      ["init"],
-      ["config", "user.email", "test@example.com"],
-      ["config", "user.name", "Test"],
-      ["add", "."],
-      ["commit", "-m", "base"],
-    ]) {
-      git(root, args);
-    }
+    commitFixture(root);
     git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
 
     git(root, ["mv", "src/a.ts", "src/b.ts"]);
@@ -195,21 +191,12 @@ describe("check-max-lines-ratchet", () => {
   });
 
   it("defaults worktree comparisons to origin/main", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-max-lines-default-base-"));
-    tempDirs.push(root);
+    const root = tempDirs.make("openclaw-max-lines-default-base-", os.tmpdir());
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
     fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\n");
     fs.writeFileSync(path.join(root, "src/a.ts"), "/* oxlint-disable max-lines */\n");
-    for (const args of [
-      ["init"],
-      ["config", "user.email", "test@example.com"],
-      ["config", "user.name", "Test"],
-      ["add", "."],
-      ["commit", "-m", "base"],
-    ]) {
-      git(root, args);
-    }
+    commitFixture(root);
     git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
 
     fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\nsrc/b.ts\n");
@@ -222,23 +209,14 @@ describe("check-max-lines-ratchet", () => {
   });
 
   it("compares an explicit moving base at the branch fork", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-max-lines-diverged-"));
-    tempDirs.push(root);
+    const root = tempDirs.make("openclaw-max-lines-diverged-", os.tmpdir());
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
     fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\nsrc/b.ts\n");
     fs.writeFileSync(path.join(root, "src/a.ts"), "/* oxlint-disable max-lines */\n");
     fs.writeFileSync(path.join(root, "src/b.ts"), "/* oxlint-disable max-lines */\n");
-    for (const args of [
-      ["init"],
-      ["config", "user.email", "test@example.com"],
-      ["config", "user.name", "Test"],
-      ["add", "."],
-      ["commit", "-m", "base"],
-      ["branch", "release"],
-    ]) {
-      git(root, args);
-    }
+    commitFixture(root);
+    git(root, ["branch", "release"]);
 
     fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\n");
     fs.writeFileSync(path.join(root, "src/b.ts"), "export const b = 1;\n");
@@ -251,22 +229,13 @@ describe("check-max-lines-ratchet", () => {
   });
 
   it("falls back to main when no merge base is available", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-max-lines-disconnected-"));
-    tempDirs.push(root);
+    const root = tempDirs.make("openclaw-max-lines-disconnected-", os.tmpdir());
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
     fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\n");
     fs.writeFileSync(path.join(root, "src/a.ts"), "/* oxlint-disable max-lines */\n");
-    for (const args of [
-      ["init"],
-      ["config", "user.email", "test@example.com"],
-      ["config", "user.name", "Test"],
-      ["add", "."],
-      ["commit", "-m", "release"],
-      ["branch", "-m", "release"],
-    ]) {
-      git(root, args);
-    }
+    commitFixture(root, "release");
+    git(root, ["branch", "-m", "release"]);
     git(root, ["checkout", "--orphan", "main"]);
     fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "");
     fs.writeFileSync(path.join(root, "src/a.ts"), "export const a = 1;\n");
@@ -279,21 +248,12 @@ describe("check-max-lines-ratchet", () => {
   });
 
   it("checks staged content instead of unstaged worktree edits", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-max-lines-staged-"));
-    tempDirs.push(root);
+    const root = tempDirs.make("openclaw-max-lines-staged-", os.tmpdir());
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
     fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "");
     fs.writeFileSync(path.join(root, "src/a.ts"), "export const a = 1;\n");
-    for (const args of [
-      ["init"],
-      ["config", "user.email", "test@example.com"],
-      ["config", "user.name", "Test"],
-      ["add", "."],
-      ["commit", "-m", "base"],
-    ]) {
-      git(root, args);
-    }
+    commitFixture(root);
 
     fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\n");
     fs.writeFileSync(path.join(root, "src/a.ts"), "/* oxlint-disable */\n");
@@ -306,8 +266,7 @@ describe("check-max-lines-ratchet", () => {
   });
 
   it.skipIf(process.platform === "win32")("keeps staged filenames NUL-framed", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-max-lines-nul-"));
-    tempDirs.push(root);
+    const root = tempDirs.make("openclaw-max-lines-nul-", os.tmpdir());
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
     git(root, ["init"]);
     const filePath = "src/newline\nname.ts";
@@ -318,21 +277,12 @@ describe("check-max-lines-ratchet", () => {
   });
 
   it("checks untracked sources and tolerates unstaged deletions", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-max-lines-worktree-"));
-    tempDirs.push(root);
+    const root = tempDirs.make("openclaw-max-lines-worktree-", os.tmpdir());
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
     fs.mkdirSync(path.join(root, "src"), { recursive: true });
     fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "");
     fs.writeFileSync(path.join(root, "src/deleted.ts"), "export const deleted = true;\n");
-    for (const args of [
-      ["init"],
-      ["config", "user.email", "test@example.com"],
-      ["config", "user.name", "Test"],
-      ["add", "."],
-      ["commit", "-m", "base"],
-    ]) {
-      git(root, args);
-    }
+    commitFixture(root);
     git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
     fs.rmSync(path.join(root, "src/deleted.ts"));
     expect(main(root)).toBe(0);

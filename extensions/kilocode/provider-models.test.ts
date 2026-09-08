@@ -13,23 +13,16 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   }),
 }));
 
-import { discoverKilocodeModels, KILOCODE_MODELS_URL } from "./provider-models.js";
+import { buildKilocodeProvider, buildKilocodeProviderWithDiscovery } from "./api.js";
+import {
+  discoverKilocodeModels,
+  KILOCODE_DEFAULT_COST,
+  KILOCODE_MODELS_URL,
+} from "./provider-models.js";
 
 type MockKilocodeFetch = ((url: string, init?: RequestInit) => Promise<Response>) & {
   mock: { calls: unknown[][] };
 };
-
-const EXPECTED_STATIC_KILOCODE_MODELS = [
-  {
-    id: "kilo-auto/balanced",
-    name: "Auto Balanced",
-    reasoning: true,
-    input: ["text", "image"],
-    cost: { input: 0.325, output: 1.95, cacheRead: 0.0325, cacheWrite: 0.40625 },
-    contextWindow: 1000000,
-    maxTokens: 65536,
-  },
-];
 
 function requireModelById(
   models: Awaited<ReturnType<typeof discoverKilocodeModels>>,
@@ -141,6 +134,20 @@ afterAll(() => {
 });
 
 describe("discoverKilocodeModels (fetch path)", () => {
+  it.each([503, 200])(
+    "preserves the public advisory builder for HTTP %s with no rows",
+    async (status) => {
+      await withFetchPathTest(
+        vi.fn(async () => jsonResponse({ data: [] }, { status })),
+        async () => {
+          await expect(buildKilocodeProviderWithDiscovery()).resolves.toEqual(
+            buildKilocodeProvider(),
+          );
+        },
+      );
+    },
+  );
+
   it("parses gateway models with correct pricing conversion", async () => {
     const mockFetch = vi.fn().mockResolvedValue(
       jsonResponse({
@@ -188,37 +195,113 @@ describe("discoverKilocodeModels (fetch path)", () => {
     });
   });
 
-  it("falls back to static catalog on network error", async () => {
+  it.each([
+    {
+      label: "negative routing rates with missing cache prices",
+      pricing: { prompt: "-1", completion: "-1" },
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    {
+      label: "unknown routing rates with valid cache prices",
+      pricing: {
+        prompt: "unavailable",
+        completion: "-1",
+        input_cache_read: "0.0000003",
+        input_cache_write: "0.00000375",
+      },
+      cacheRead: 0.3,
+      cacheWrite: 3.75,
+    },
+  ])(
+    "preserves known default-model pricing for $label",
+    async ({ pricing, cacheRead, cacheWrite }) => {
+      const mockFetch = vi.fn().mockResolvedValue(
+        jsonResponse({
+          data: [
+            makeAutoModel({ pricing }),
+            makeGatewayModel({
+              id: "kilo-auto/frontier",
+              pricing: { prompt: "-1", completion: "-1" },
+            }),
+            makeGatewayModel({
+              id: "kilo-auto/free",
+              pricing: {
+                prompt: "0",
+                completion: "0",
+                input_cache_read: "0",
+                input_cache_write: "0",
+              },
+            }),
+          ],
+        }),
+      );
+
+      await withFetchPathTest(mockFetch, async () => {
+        const models = await discoverKilocodeModels();
+
+        expect(requireModelById(models, "kilo-auto/balanced").cost).toEqual({
+          input: KILOCODE_DEFAULT_COST.input,
+          output: KILOCODE_DEFAULT_COST.output,
+          cacheRead,
+          cacheWrite,
+        });
+        for (const id of ["kilo-auto/frontier", "kilo-auto/free"]) {
+          expect(requireModelById(models, id).cost).toEqual({
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+          });
+        }
+      });
+    },
+  );
+
+  it("propagates network errors", async () => {
     const mockFetch = vi.fn().mockRejectedValue(new Error("network error"));
     await withFetchPathTest(mockFetch, async () => {
-      const models = await discoverKilocodeModels();
-      expect(models).toStrictEqual(EXPECTED_STATIC_KILOCODE_MODELS);
+      await expect(discoverKilocodeModels({ discoveryMode: "strict" })).rejects.toThrow(
+        "network error",
+      );
     });
   });
 
-  it("falls back to static catalog on HTTP error", async () => {
+  it("releases the response before propagating an HTTP error", async () => {
     const response = new Response("temporary failure", { status: 500 });
     const cancelSpy = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
     const mockFetch = vi.fn().mockResolvedValue(response);
 
     const release = await withFetchPathTest(mockFetch, async () => {
-      const models = await discoverKilocodeModels();
-      expect(models).toStrictEqual(EXPECTED_STATIC_KILOCODE_MODELS);
+      await expect(discoverKilocodeModels({ discoveryMode: "strict" })).rejects.toMatchObject({
+        status: 500,
+      });
     });
 
     expect(cancelSpy).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("falls back to static catalog for malformed successful model list payloads", async () => {
-    for (const payload of [[], { data: {} }, { data: [null] }]) {
+  it("rejects malformed model list envelopes", async () => {
+    for (const payload of [[], { data: {} }]) {
       const mockFetch = vi.fn().mockResolvedValue(jsonResponse(payload));
       await withFetchPathTest(mockFetch, async () => {
-        const models = await discoverKilocodeModels();
-        expect(models).toStrictEqual(EXPECTED_STATIC_KILOCODE_MODELS);
+        await expect(discoverKilocodeModels({ discoveryMode: "strict" })).rejects.toThrow(
+          "Kilocode model list: malformed JSON response",
+        );
       });
     }
   });
+
+  it.each([{ data: [] }, { data: [null] }])(
+    "does not restore seed models when no usable live rows remain: %j",
+    async (payload) => {
+      const mockFetch = vi.fn().mockResolvedValue(jsonResponse(payload));
+      await withFetchPathTest(mockFetch, async () => {
+        await expect(discoverKilocodeModels({ discoveryMode: "strict" })).resolves.toEqual([]);
+      });
+    },
+  );
 
   it("falls back from malformed live token metadata", async () => {
     const mockFetch = vi.fn().mockResolvedValue(

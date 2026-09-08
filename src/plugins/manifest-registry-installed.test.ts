@@ -3,24 +3,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  recordInstalledPluginIndexInstallOwner,
-  resolveInstalledPluginIndexInstallOwner,
-} from "./installed-plugin-index-install-owner.js";
-import {
-  readPersistedInstalledPluginIndex,
-  writePersistedInstalledPluginIndex,
-} from "./installed-plugin-index-store.js";
-import { loadInstalledPluginIndex, type InstalledPluginIndex } from "./installed-plugin-index.js";
-import {
-  hasMissingInstalledPluginOwnerMetadata,
-  resolveInstalledPluginPackageOwnership,
-} from "./installed-plugin-package-ownership.js";
-import { resolvePluginManifestInstallOwner } from "./manifest-install-owner.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
+import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
+import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import {
   loadPluginManifestRegistryForInstalledIndex,
   resolveInstalledManifestRegistryIndexFingerprint,
 } from "./manifest-registry-installed.js";
+import { createIndex } from "./manifest-registry-installed.test-helpers.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -53,36 +44,6 @@ function writePlugin(rootDir: string, pluginId: string, modelPrefix: string) {
     }),
     "utf8",
   );
-}
-
-function createIndex(rootDir: string): InstalledPluginIndex {
-  return {
-    version: 1,
-    hostContractVersion: "2026.4.25",
-    compatRegistryVersion: "compat-v1",
-    migrationVersion: 1,
-    policyHash: "policy-v1",
-    generatedAtMs: 1777118400000,
-    installRecords: {},
-    plugins: [
-      {
-        pluginId: "installed",
-        manifestPath: path.join(rootDir, "openclaw.plugin.json"),
-        manifestHash: "manifest-hash",
-        source: path.join(rootDir, "index.ts"),
-        rootDir,
-        origin: "global",
-        enabled: true,
-        startup: {
-          sidecar: false,
-          memory: false,
-          agentHarnesses: [],
-        },
-        compat: [],
-      },
-    ],
-    diagnostics: [],
-  };
 }
 
 function fileSignature(filePath: string) {
@@ -120,7 +81,7 @@ function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
   return Object.freeze(value);
 }
 
-function writePackageManifest(rootDir: string, channelLabel: string) {
+function writePackageManifest(rootDir: string, channelLabel: string, selectionDocsPrefix?: string) {
   const packageJsonPath = path.join(rootDir, "package.json");
   fs.writeFileSync(
     packageJsonPath,
@@ -134,6 +95,7 @@ function writePackageManifest(rootDir: string, channelLabel: string) {
         channel: {
           id: "installed",
           label: channelLabel,
+          ...(selectionDocsPrefix !== undefined ? { selectionDocsPrefix } : {}),
         },
       },
     }),
@@ -142,9 +104,12 @@ function writePackageManifest(rootDir: string, channelLabel: string) {
   return packageJsonPath;
 }
 
-function createIndexWithPackageJson(rootDir: string): InstalledPluginIndex {
+function createIndexWithPackageJson(
+  rootDir: string,
+  selectionDocsPrefix?: string,
+): InstalledPluginIndex {
   const index = createIndexWithFileSignatures(rootDir);
-  const packageJsonPath = writePackageManifest(rootDir, "Installed");
+  const packageJsonPath = writePackageManifest(rootDir, "Installed", selectionDocsPrefix);
   const record = index.plugins[0];
   if (!record) {
     throw new Error("expected index record");
@@ -179,6 +144,16 @@ function createIndexWithUnhashedPackageJson(rootDir: string): InstalledPluginInd
 }
 
 describe("loadPluginManifestRegistryForInstalledIndex", () => {
+  const loadRegistry = (index: InstalledPluginIndex) =>
+    loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
   it("reuses frozen installed-index fingerprints when file signatures are persisted", () => {
     const rootDir = makeTempDir();
     writePlugin(rootDir, "installed", "installed-");
@@ -260,7 +235,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(second).toBe(first);
   });
 
-  it("reconstructs installed-index manifest registries when manifest files change", () => {
+  it("reconstructs installed-index manifests in a fresh operation after files change", () => {
     const rootDir = makeTempDir();
     const manifestPath = path.join(rootDir, "openclaw.plugin.json");
     writePlugin(rootDir, "installed", "installed-");
@@ -283,11 +258,13 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     const nextMtime = new Date(Date.now() + 5000);
     fs.utimesSync(manifestPath, nextMtime, nextMtime);
 
-    const second = loadPluginManifestRegistryForInstalledIndex({
-      index,
-      env,
-      includeDisabled: true,
-    });
+    const second = withPluginCache(createPluginCache(), () =>
+      loadPluginManifestRegistryForInstalledIndex({
+        index,
+        env,
+        includeDisabled: true,
+      }),
+    );
 
     expect(second).not.toBe(first);
     expect(second.plugins[0]?.modelSupport).toEqual({
@@ -328,6 +305,38 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(third.plugins[0]?.packageDependencies).toEqual({
       "runtime-dep": "1.0.0",
     });
+  });
+
+  it("preserves empty docs prefixes from package channel metadata", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+
+    const registry = loadRegistry(createIndexWithPackageJson(rootDir, ""));
+
+    expect(registry.plugins[0]?.packageChannel?.selectionDocsPrefix).toBe("");
+  });
+
+  it("preserves empty docs prefixes from persisted installed-index metadata", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = createIndex(rootDir);
+    const record = expectDefined(index.plugins[0], "index.plugins[0] test invariant");
+
+    const registry = loadRegistry({
+      ...index,
+      plugins: [
+        {
+          ...record,
+          packageChannel: {
+            id: "installed",
+            label: "Installed",
+            selectionDocsPrefix: "",
+          },
+        },
+      ],
+    });
+
+    expect(registry.plugins[0]?.packageChannel?.selectionDocsPrefix).toBe("");
   });
 
   it("reuses installed package json path validation across registry loads", () => {
@@ -382,190 +391,6 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(registry.plugins[0]?.modelSupport).toEqual({
       modelPrefixes: ["installed-"],
     });
-  });
-
-  it("preserves package entry identities through a persisted cold reload", async () => {
-    const stateDir = makeTempDir();
-    const packageDir = path.join(stateDir, "extensions", "pack");
-    fs.mkdirSync(packageDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(packageDir, "package.json"),
-      JSON.stringify({
-        name: "pack",
-        version: "1.0.0",
-        openclaw: { extensions: ["./one.cjs", "./two.cjs"] },
-      }),
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(packageDir, "openclaw.plugin.json"),
-      JSON.stringify({ id: "pack", configSchema: { type: "object" } }),
-      "utf8",
-    );
-    for (const entry of ["one", "two"]) {
-      fs.writeFileSync(
-        path.join(packageDir, `${entry}.cjs`),
-        `module.exports = { id: "pack/${entry}", register() {} };\n`,
-        "utf8",
-      );
-    }
-    const config = {
-      plugins: {
-        entries: {
-          "pack/one": { enabled: true },
-          "pack/two": { enabled: false },
-        },
-      },
-    };
-    const env = {
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_VERSION: "2026.4.25",
-      VITEST: "true",
-    };
-    const installRecords = {
-      pack: {
-        source: "path" as const,
-        sourcePath: packageDir,
-        installPath: packageDir,
-      },
-    };
-    const index = loadInstalledPluginIndex({ config, env, installRecords, stateDir });
-
-    expect(
-      index.plugins.map((plugin) => ({
-        pluginId: plugin.pluginId,
-        installOwner: resolveInstalledPluginIndexInstallOwner(plugin),
-        enabled: plugin.enabled,
-      })),
-    ).toEqual([
-      { pluginId: "pack/one", installOwner: "pack", enabled: true },
-      { pluginId: "pack/two", installOwner: "pack", enabled: false },
-    ]);
-    await writePersistedInstalledPluginIndex(index, { stateDir });
-    clearPluginMetadataLifecycleCaches();
-    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
-    if (!persisted) {
-      throw new Error("expected persisted package plugin index");
-    }
-    expect(resolveInstalledPluginPackageOwnership(persisted, "pack/one")).toMatchObject({
-      ok: true,
-      value: { installOwner: "pack", pluginIds: ["pack/one", "pack/two"] },
-    });
-
-    const allEntries = loadPluginManifestRegistryForInstalledIndex({
-      index: persisted,
-      config,
-      env,
-      includeDisabled: true,
-    });
-    expect(
-      allEntries.plugins.map(({ id, source }) => ({ id, source: path.basename(source) })),
-    ).toEqual([
-      { id: "pack/one", source: "one.cjs" },
-      { id: "pack/two", source: "two.cjs" },
-    ]);
-    expect(allEntries.plugins.map(resolvePluginManifestInstallOwner)).toEqual(["pack", "pack"]);
-
-    const enabledEntries = loadPluginManifestRegistryForInstalledIndex({
-      index: persisted,
-      config,
-      env,
-    });
-    expect(enabledEntries.plugins.map(({ id }) => id)).toEqual(["pack/one"]);
-
-    const ownerless = {
-      ...persisted,
-      plugins: persisted.plugins.map((plugin) => {
-        const {
-          installOwner: _installOwner,
-          installOwnerAmbiguous: _installOwnerAmbiguous,
-          ...ownerlessPlugin
-        } = plugin as typeof plugin & {
-          installOwner?: string;
-          installOwnerAmbiguous?: true;
-        };
-        return ownerlessPlugin;
-      }),
-    };
-    expect(resolveInstalledPluginPackageOwnership(ownerless, "pack/one").ok).toBe(false);
-
-    const orphanedOwner = {
-      ...persisted,
-      installRecords: {
-        ...persisted.installRecords,
-        orphaned: {
-          source: "path" as const,
-          sourcePath: path.join(stateDir, "removed-orphan"),
-          installPath: path.join(stateDir, "removed-orphan"),
-        },
-      },
-    };
-    expect(resolveInstalledPluginPackageOwnership(orphanedOwner, "orphaned").ok).toBe(false);
-    expect(hasMissingInstalledPluginOwnerMetadata(orphanedOwner, env)).toBe(false);
-
-    const legacyAmbiguous = {
-      ...ownerless,
-      installRecords: {
-        "pack/one": installRecords.pack,
-        "pack/two": installRecords.pack,
-      },
-    };
-    expect(resolveInstalledPluginPackageOwnership(legacyAmbiguous, "pack/one").ok).toBe(false);
-    expect(hasMissingInstalledPluginOwnerMetadata(legacyAmbiguous, env)).toBe(true);
-
-    const packageAlias = path.join(stateDir, "pack-alias");
-    fs.symlinkSync(packageDir, packageAlias, process.platform === "win32" ? "junction" : "dir");
-    const aliasedAmbiguous = {
-      ...ownerless,
-      installRecords: {
-        "pack/one": installRecords.pack,
-        "pack/two": {
-          ...installRecords.pack,
-          sourcePath: packageAlias,
-          installPath: packageAlias,
-        },
-      },
-    };
-    expect(resolveInstalledPluginPackageOwnership(aliasedAmbiguous, "pack/one").ok).toBe(false);
-    expect(hasMissingInstalledPluginOwnerMetadata(aliasedAmbiguous, env)).toBe(true);
-
-    const unrelatedOwner = "unrelated";
-    const relationScoped = {
-      ...aliasedAmbiguous,
-      plugins: [
-        ...aliasedAmbiguous.plugins,
-        recordInstalledPluginIndexInstallOwner(
-          {
-            ...aliasedAmbiguous.plugins[0]!,
-            pluginId: unrelatedOwner,
-            rootDir: path.join(stateDir, unrelatedOwner),
-          },
-          unrelatedOwner,
-        ),
-      ],
-      installRecords: {
-        ...aliasedAmbiguous.installRecords,
-        [unrelatedOwner]: {
-          source: "path" as const,
-          sourcePath: path.join(stateDir, unrelatedOwner),
-          installPath: path.join(stateDir, unrelatedOwner),
-        },
-      },
-    };
-    expect(resolveInstalledPluginPackageOwnership(relationScoped, unrelatedOwner)).toMatchObject({
-      ok: true,
-      value: { installOwner: unrelatedOwner, pluginIds: [unrelatedOwner] },
-    });
-
-    const ambiguous = {
-      ...legacyAmbiguous,
-      plugins: ownerless.plugins.map((plugin) =>
-        recordInstalledPluginIndexInstallOwner(plugin, undefined, true),
-      ),
-    };
-    expect(resolveInstalledPluginPackageOwnership(ambiguous, "pack/one").ok).toBe(false);
-    expect(hasMissingInstalledPluginOwnerMetadata(ambiguous, env)).toBe(true);
   });
 
   it("reuses a prepared manifest graph without reopening plugin manifests", () => {

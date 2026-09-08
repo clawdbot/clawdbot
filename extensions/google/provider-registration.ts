@@ -1,9 +1,9 @@
-// Google provider module implements model/runtime integration.
 import type {
   OpenClawPluginApi,
   ProviderReasoningOutputModeContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeGoogleModelId } from "./model-id.js";
 import { GOOGLE_GEMINI_DEFAULT_MODEL, applyGoogleGeminiModelDefault } from "./onboard.js";
@@ -101,19 +101,26 @@ export function buildGoogleProvider(): ProviderPlugin {
     catalog: {
       order: "simple",
       run: async (ctx) => {
+        if (ctx.providerIds && !ctx.providerIds.includes("google")) {
+          return null;
+        }
         const auth = ctx.resolveProviderApiKey("google");
         if (!auth.apiKey) {
           return null;
         }
-        return {
-          providers: {
-            google: await buildGoogleLiveCatalogProvider({
-              apiKey: auth.apiKey,
-              discoveryApiKey: auth.discoveryApiKey,
-            }),
-            "google-vertex": buildGoogleVertexStaticCatalogProvider(),
-          },
-        };
+        return await runLiveProviderCatalog({
+          providerId: "google",
+          profileId: auth.profileId,
+          run: async () => ({
+            providers: {
+              google: await buildGoogleLiveCatalogProvider({
+                discoveryMode: "strict",
+                apiKey: auth.apiKey,
+                discoveryApiKey: auth.discoveryApiKey,
+              }),
+            },
+          }),
+        });
       },
     },
     normalizeModelId: ({ modelId }) => normalizeGoogleModelId(modelId),

@@ -1,7 +1,6 @@
 /** Public queue API for deferred auto-reply follow-up runs. */
 
 export { clearSessionQueues } from "./queue/cleanup.js";
-export type { ClearSessionQueueResult } from "./queue/cleanup.js";
 export { scheduleFollowupDrain } from "./queue/drain.js";
 export { enqueueFollowupRun, getFollowupQueueDepth, parkSteerCandidate } from "./queue/enqueue.js";
 export { resolveQueueSettings } from "./queue/settings-runtime.js";

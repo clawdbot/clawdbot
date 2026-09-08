@@ -99,7 +99,7 @@ export {
   buildModelsProviderData,
   formatModelsAvailableHeader,
   resolveModelsCommandReply,
-} from "../auto-reply/reply/commands-models.js";
+} from "./models-provider-runtime.js";
 export type { ModelsProviderData } from "../auto-reply/reply/commands-models.js";
 export { resolveStoredModelOverride } from "../sessions/stored-model-overrides.js";
 export type { StoredModelOverride } from "../sessions/stored-model-overrides.js";

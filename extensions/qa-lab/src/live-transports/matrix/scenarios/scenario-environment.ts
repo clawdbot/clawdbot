@@ -9,6 +9,7 @@ import type { MatrixQaProvisionResult, MatrixQaRoomObserver } from "../substrate
 import { buildMatrixQaConfig, type MatrixQaConfigOverrides } from "../substrate/config.js";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import type { startMatrixQaHarness } from "../substrate/harness.runtime.js";
+import { createMatrixQaRoomObserver } from "../substrate/sync.js";
 import { runMatrixQaCanary } from "./scenario-runtime-room.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 import type { MatrixQaCanaryArtifact } from "./scenario-types.js";
@@ -32,6 +33,7 @@ type MatrixQaScenarioEnvironmentParams = {
 };
 
 type MatrixQaConfigPatchResult = {
+  changedPaths: string[];
   hash?: string;
   noop?: boolean;
   sentinel?: {
@@ -48,16 +50,6 @@ type MatrixQaConfigApplyStatus = {
   configRevisionHash?: string;
   hash?: string;
 };
-
-function resetMatrixQaScenarioObserverState(params: {
-  syncState: MatrixQaScenarioContext["syncState"];
-  syncStreams: NonNullable<MatrixQaScenarioContext["syncStreams"]>;
-}) {
-  delete params.syncState.driver;
-  delete params.syncState.observer;
-  delete params.syncStreams.driver;
-  delete params.syncStreams.observer;
-}
 
 function readMatrixConfigOverrides(
   config: Record<string, unknown>,
@@ -287,10 +279,21 @@ async function readMatrixAccountStatuses(
 }
 
 export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnvironmentParams) {
-  const syncState = {};
+  const syncState: MatrixQaScenarioContext["syncState"] = {};
   const syncStreams: Partial<Record<"driver" | "observer", MatrixQaRoomObserver>> = {};
   let canary: MatrixQaCanaryArtifact | undefined;
   let baselineConfig: OpenClawConfig | undefined;
+  const resetObserverState = () => {
+    for (const actorId of ["driver", "observer"] as const) {
+      delete syncState[actorId];
+      syncStreams[actorId] = createMatrixQaRoomObserver({
+        accessToken: params.provisioning.observationAccounts[actorId].accessToken,
+        baseUrl: params.harness.baseUrl,
+        observedEvents: params.observedEvents,
+      });
+    }
+  };
+  resetObserverState();
 
   const prepareFlow = async (input: FlowPreparationInput) => {
     const preparationDeadline =
@@ -329,10 +332,6 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
       gatewayConfig,
       params.accountId,
     );
-    const matrixConfigChanged = !isDeepStrictEqual(
-      configSnapshot.config.channels?.matrix,
-      gatewayConfig.channels?.matrix,
-    );
     const patchStartedAt = Date.now();
     const accountStartAtBeforePatch = (
       await readMatrixAccountStatuses(input.gateway, 5_000, preparationDeadline).catch(() => [])
@@ -343,6 +342,9 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
       patch: gatewayPatch.patch,
       replacePaths: gatewayPatch.replacePaths,
     });
+    const matrixConfigChanged = patchResult.changedPaths.some(
+      (path) => path === "channels.matrix" || path.startsWith("channels.matrix."),
+    );
     if (!patchResult.hash) {
       throw new Error("Matrix QA config patch returned no persisted hash");
     }
@@ -354,9 +356,9 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
       gateway: input.gateway,
     });
     await waitForMatrixAccountReady({
-      // Config writes acknowledge persisted state before a deferred channel
-      // reload completes. Require the changed Matrix account to actually restart
-      // so a later config patch cannot supersede this scenario's live runtime.
+      // Use the owner's effective paths: desired tokens differ from redacted
+      // snapshots even when unchanged, while real token rotations redact alike.
+      // Actual Matrix changes must still advance the channel generation.
       afterStartAt:
         matrixConfigChanged && patchResult.noop !== true
           ? (accountStartAtBeforePatch ?? patchStartedAt - 1)
@@ -368,7 +370,7 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
     // Scenario actors must prime after each config/reload boundary. Reusing an
     // observer across channel restarts can retain an in-flight timeline cursor
     // and consume the next scenario's first preview before its predicate exists.
-    resetMatrixQaScenarioObserverState({ syncState, syncStreams });
+    resetObserverState();
 
     const scenarioContext = {
       baseUrl: params.harness.baseUrl,
@@ -468,7 +470,8 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
         opts?: { replacePaths?: string[]; restartDelayMs?: number },
       ) => {
         await patchGatewayConfig({
-          deadlineMs: preparationDeadline,
+          // This callback runs during actions, after the preparation budget may expire.
+          deadlineMs: Date.now() + input.timeoutMs,
           gateway: input.gateway,
           patch,
           replacePaths: opts?.replacePaths,

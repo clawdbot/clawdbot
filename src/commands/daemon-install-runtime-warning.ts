@@ -12,6 +12,9 @@ export async function emitNodeRuntimeWarning(params: {
   warn?: DaemonInstallWarnFn;
   title: string;
 }): Promise<void> {
+  if (params.runtime !== "node") {
+    return;
+  }
   const systemNode = await resolveSystemNodeInfo({ env: params.env });
   const warning = renderSystemNodeWarning(systemNode, params.nodeProgram);
   if (warning) {

@@ -5,6 +5,7 @@ import {
 import { readToolStringParam } from "../../agents/tools/common.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import { normalizeConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
+import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import {
   prepareExternalMessageActionTargetForResolution,
   shouldDeferExternalMessageActionTargetResolution,
@@ -396,6 +397,19 @@ export async function prepareMessageRoute(params: {
       agentId,
     });
   }
+  const delegatesActionToGateway =
+    Boolean(input.gateway) &&
+    channelPlugin?.actions?.resolveExecutionMode?.({ action }) === "gateway";
+  // Resolve once for locally owned sends so formatting and delivery share an
+  // identity. Remote calls must retain omitted input for the Gateway to resolve.
+  if (
+    !accountId &&
+    action === "send" &&
+    !delegatesActionToGateway &&
+    (channelPlugin.outbound?.deliveryMode !== "gateway" || input.gatewayOwnedDelivery === true)
+  ) {
+    accountId = resolveChannelDefaultAccountId({ plugin: channelPlugin, cfg });
+  }
   if (accountId) {
     actionParams.accountId = accountId;
   }
@@ -408,9 +422,6 @@ export async function prepareMessageRoute(params: {
     cfg,
     agentId,
   });
-  const delegatesActionToGateway =
-    Boolean(input.gateway) &&
-    channelPlugin?.actions?.resolveExecutionMode?.({ action }) === "gateway";
   const defersExternalTargetResolution =
     delegatesActionToGateway &&
     !dryRun &&

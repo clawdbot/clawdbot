@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { assertScheduledCodexAppAuthorityRuntime } from "./scheduled-app-authority.js";
+import {
+  assertScheduledCodexAppAuthorityRuntime,
+  buildScheduledCodexAppServerConnectionIdentity,
+} from "./scheduled-app-authority.js";
 import { canResolveScheduledConfiguredMcpCreatorAuthority } from "./scheduled-configured-mcp-authority.js";
 
 const eligible = {
@@ -81,6 +84,82 @@ describe("assertScheduledCodexAppAuthorityRuntime", () => {
         scheduledRuntimeAuthority: scheduledAuthority,
       }),
     ).not.toThrow();
+  });
+
+  it.each([
+    ["endpoint URL rotation", { url: "wss://other.example.com" }, {}],
+    ["endpoint removal", { transport: "stdio", url: undefined }, { connectionClass: "local" }],
+    ["remote workspace rotation", {}, { remoteWorkspaceRoot: "/different-workspace" }],
+  ])("continues across account rotation but rejects %s", (_name, startOverride, serverOverride) => {
+    const appServer = {
+      start: {
+        transport: "websocket",
+        homeScope: "agent",
+        command: "codex",
+        args: [] as string[],
+        headers: {},
+        url: "wss://codex.example.com/app-server",
+      },
+      connectionClass: "remote",
+    } as const;
+    const connectionIdentity = buildScheduledCodexAppServerConnectionIdentity(appServer);
+    const configuredAuthority = {
+      ...scheduledAuthority,
+      payload: {
+        ...scheduledAuthority.payload,
+        auth: {
+          kind: "configured-app-server",
+          connectionFingerprint: connectionIdentity,
+          managedRequirementsFingerprint: "managed-requirements",
+        },
+      },
+    };
+    expect(
+      buildScheduledCodexAppServerConnectionIdentity({
+        ...appServer,
+        start: {
+          ...appServer.start,
+          authToken: "rotated",
+          headers: { Authorization: "Bearer rotated" },
+        },
+      }),
+    ).toBe(connectionIdentity);
+
+    // Configured authority is endpoint-owned; prepared-profile accounts do not
+    // replace it when the endpoint is reauthenticated between scheduled runs.
+    for (const accountId of [undefined, "account-1", "account-2"]) {
+      expect(() =>
+        assertScheduledCodexAppAuthorityRuntime(
+          scheduledConnection({
+            appServer,
+            startupPreparedAuth: accountId
+              ? {
+                  kind: "profile",
+                  profileId: "openai:work",
+                  snapshot: {
+                    loginParams: { type: "chatgptAuthTokens" },
+                    chatgptAccountId: accountId,
+                  },
+                }
+              : undefined,
+          }),
+          { trigger: "cron", scheduledRuntimeAuthority: configuredAuthority },
+        ),
+      ).not.toThrow();
+    }
+    expect(() =>
+      assertScheduledCodexAppAuthorityRuntime(
+        scheduledConnection({
+          appServer: {
+            ...appServer,
+            ...serverOverride,
+            start: { ...appServer.start, ...startOverride },
+          },
+          startupPreparedAuth: undefined,
+        }),
+        { trigger: "cron", scheduledRuntimeAuthority: configuredAuthority },
+      ),
+    ).toThrow("different configured Codex app-server");
   });
 
   it.each([

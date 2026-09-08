@@ -4,9 +4,14 @@ import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 import type { DiscordGuildEntry, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelSetupDmPolicy, ChannelSetupWizard } from "openclaw/plugin-sdk/setup-runtime";
 import {
+  createAccountScopedAllowFromSection,
+  createAccountScopedGroupAccessSection,
   createSetupTranslator,
   createStandardChannelSetupStatus,
   defineTokenCredential,
+  parseMentionOrPrefixedId,
+  patchChannelConfigForAccount,
+  setSetupChannelEnabled,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -14,14 +19,6 @@ import {
   inspectDiscordSetupAccount,
   resolveDiscordSetupAccountConfig,
 } from "./setup-account-state.js";
-import {
-  createAccountScopedAllowFromSection,
-  createAccountScopedGroupAccessSection,
-  parseMentionOrPrefixedId,
-  patchChannelConfigForAccount,
-  setSetupChannelEnabled,
-} from "./setup-runtime-helpers.js";
-
 const t = createSetupTranslator();
 
 const channel = "discord" as const;

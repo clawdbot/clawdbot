@@ -50,6 +50,7 @@ describe("inspectDiscordAccount", () => {
     expect(inspected.token).toBe("");
     expect(inspected.tokenSource).toBe("config");
     expect(inspected.tokenStatus).toBe("configured_unavailable");
+    expect(inspected.enabled).toBe(true);
     expect(inspected.configured).toBe(true);
   });
 
@@ -73,6 +74,7 @@ describe("inspectDiscordAccount", () => {
     expect(inspected.token).toBe("");
     expect(inspected.tokenSource).toBe("none");
     expect(inspected.tokenStatus).toBe("missing");
+    expect(inspected.enabled).toBe(true);
     expect(inspected.configured).toBe(false);
   });
 

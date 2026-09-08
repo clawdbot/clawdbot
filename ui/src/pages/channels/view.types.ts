@@ -15,6 +15,7 @@ import type {
   TelegramStatus,
   WhatsAppStatus,
 } from "../../api/types.ts";
+import type { PluginListResult } from "../../lib/plugins/index.ts";
 import type { NostrProfileFormState } from "./view.nostr-profile-form.ts";
 import type { ChannelWizardState } from "./wizard-controller.ts";
 
@@ -31,6 +32,8 @@ export type ChannelsProps = {
   connected: boolean;
   loading: boolean;
   snapshot: ChannelsStatusSnapshot | null;
+  pluginCatalog: PluginListResult | null;
+  pluginIconUrls: Readonly<Record<string, string>>;
   lastError: string | null;
   lastSuccessAt: number | null;
   pairingLoading: boolean;
@@ -53,6 +56,7 @@ export type ChannelsProps = {
   configForm: Record<string, unknown> | null;
   configUiHints: ConfigUiHints;
   configSaving: boolean;
+  configError: string | null;
   configFormDirty: boolean;
   showAdvancedSettings: boolean;
   nostrProfileFormState: NostrProfileFormState | null;

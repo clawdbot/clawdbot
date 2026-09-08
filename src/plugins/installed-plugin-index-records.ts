@@ -19,7 +19,7 @@ import {
   refreshPersistedInstalledPluginIndexWithLeaseSync,
   type InstalledPluginIndexWriteLease,
   type InstalledPluginIndexWriteReceipt,
-} from "./installed-plugin-index-store.js";
+} from "./installed-plugin-index-store-write.js";
 import type { RefreshInstalledPluginIndexParams } from "./installed-plugin-index.js";
 import { recordPluginInstall, type PluginInstallUpdate } from "./installs.js";
 

@@ -96,10 +96,11 @@ describe("speech provider registry", () => {
     expect(registry.canonicalizeSpeechProviderId("edge")).toBe("microsoft");
   });
 
-  it("resolves fallback order and aliases from a supplied provider inventory", () => {
+  it("resolves deterministic fallback order and aliases from a supplied provider inventory", () => {
     const inventory = [
       { ...createSpeechProvider("openai", ["oai"]), autoSelectOrder: 5 },
       { ...createSpeechProvider("google"), autoSelectOrder: 1 },
+      { ...createSpeechProvider("azure"), autoSelectOrder: 1 },
       { ...createSpeechProvider("elevenlabs"), autoSelectOrder: 3 },
     ];
 
@@ -109,7 +110,7 @@ describe("speech provider registry", () => {
         undefined,
         inventory,
       ),
-    ).toEqual(["openai", "google", "elevenlabs"]);
+    ).toEqual(["openai", "azure", "google", "elevenlabs"]);
   });
 
   it("selects the first configured provider entirely from prepared facts", () => {

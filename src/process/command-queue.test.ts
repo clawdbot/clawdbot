@@ -335,6 +335,17 @@ describe("command queue", () => {
     );
   });
 
+  it("does not report capacity waiting for an entry synchronously cleared during enqueue", async () => {
+    const lane = "reentrant-clear";
+    setCommandLaneConcurrency(lane, 0);
+    diagnosticMocks.logLaneEnqueue.mockImplementationOnce(() => clearCommandLane(lane));
+    const onQueued = vi.fn();
+    await expect(
+      enqueueCommandInLane(lane, async () => undefined, { onQueued }),
+    ).rejects.toBeInstanceOf(CommandLaneClearedError);
+    expect(onQueued).not.toHaveBeenCalled();
+  });
+
   it("reports queueAhead after priority insertion", async () => {
     vi.useFakeTimers();
     try {
@@ -998,64 +1009,6 @@ describe("command queue", () => {
     setCommandLaneConcurrency(outerLane, 1);
 
     await expect(task).rejects.toBeInstanceOf(GatewayDrainingError);
-  });
-
-  it("migrates legacy queued entries missing priority and wait diagnostics", async () => {
-    const key = Symbol.for("openclaw.commandQueueState");
-    const globalStore = globalThis as Record<PropertyKey, unknown>;
-    const original = globalStore[key];
-    let queuedAhead: number | null = null;
-    const legacyTask = new Promise<string>((resolve, reject) => {
-      globalStore[key] = {
-        gatewayDraining: false,
-        lanes: new Map([
-          [
-            CommandLane.Main,
-            {
-              lane: CommandLane.Main,
-              queue: [
-                {
-                  task: async () => "done",
-                  resolve,
-                  reject,
-                  enqueuedAt: Date.now() - 10,
-                  warnAfterMs: 0,
-                  onWait: (_ms: number, ahead: number) => {
-                    queuedAhead = ahead;
-                  },
-                },
-              ],
-              activeTaskIds: new Set(),
-              maxConcurrent: 1,
-              draining: false,
-              generation: 0,
-            },
-          ],
-        ]),
-        activeTaskWaiters: new Set(),
-        nextTaskId: 1,
-        nextQueueSequence: 1,
-      };
-    });
-
-    try {
-      resetAllLanes();
-
-      await expect(legacyTask).resolves.toBe("done");
-      expect(queuedAhead).toBe(0);
-      const waitWarning = diagnosticMocks.diag.warn.mock.calls.find(
-        ([message]) =>
-          typeof message === "string" && message.includes("lane wait exceeded: lane=main"),
-      );
-      expect(waitWarning?.[0]).toContain("queueAhead=0 activeAhead=0");
-    } finally {
-      if (original !== undefined) {
-        globalStore[key] = original;
-      } else {
-        delete globalStore[key];
-      }
-      resetCommandQueueStateForTest();
-    }
   });
 
   it("shares lane state across distinct module instances", async () => {

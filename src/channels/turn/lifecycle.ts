@@ -2,8 +2,9 @@ import type { ExecutionIdentityAdmissionToken as ExecutionToken } from "../../au
 import { dispatchInboundMessageWithRoutedChannelDispatcher } from "../../auto-reply/dispatch.js";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { suppressPendingFinalDelivery } from "../../auto-reply/reply/dispatch-from-config.pending-final.js";
+import { isReplyDispatchDeliveryPending } from "../../auto-reply/reply/reply-dispatch-outcome.js";
 import { runWithSessionInitConflictRetry } from "../../auto-reply/reply/session-init-conflict-retry.js";
-import { withReplySystemEventSessionKey } from "../../auto-reply/reply/system-event-session-key.js";
+import { withReplySystemEventContext } from "../../auto-reply/reply/system-event-session-key.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   deriveInboundMessageHookContext,
@@ -114,7 +115,9 @@ function resolveAssembledReplyPipeline(
     ? { ...params.replyOptions, turnAdoptionLifecycle: adoption }
     : params.replyOptions;
   if (params.routeSessionKey !== params.ctxPayload.SessionKey) {
-    replyOptions = withReplySystemEventSessionKey(replyOptions ?? {}, params.routeSessionKey);
+    replyOptions = withReplySystemEventContext(replyOptions ?? {}, {
+      sessionKey: params.routeSessionKey,
+    });
   }
   if (!params.replyPipeline) {
     return {
@@ -170,7 +173,7 @@ async function runChannelDeliveryObserver(params: {
   info: Parameters<NonNullable<ChannelEventDeliveryAdapter["onDelivered"]>>[1];
   result: Parameters<NonNullable<ChannelEventDeliveryAdapter["onDelivered"]>>[2];
 }): Promise<void> {
-  if (!params.onDelivered) {
+  if (!params.onDelivered || isReplyDispatchDeliveryPending(params.result)) {
     return;
   }
   try {
@@ -293,7 +296,8 @@ async function settleChannelDeliveryAttempt(params: {
     throw toErrorObject(error, "channel delivery finalization failed");
   }
 
-  if (!isExplicitlyNonVisibleChannelDelivery(finalized)) {
+  const pending = isReplyDispatchDeliveryPending(finalized);
+  if (!pending && !isExplicitlyNonVisibleChannelDelivery(finalized)) {
     params.emitMessageSent?.({
       success: true,
       content: finalized?.content ?? attempt.payload.text ?? "",
@@ -304,7 +308,11 @@ async function settleChannelDeliveryAttempt(params: {
   if (completion) {
     await settlePendingFinalDelivery(
       completion,
-      isExplicitlyNonVisibleChannelDelivery(finalized) ? "suppressed" : "delivered",
+      pending
+        ? "unknown"
+        : isExplicitlyNonVisibleChannelDelivery(finalized)
+          ? "suppressed"
+          : "delivered",
     );
   }
   await runChannelDeliveryObserver({
@@ -383,11 +391,11 @@ async function dispatchChannelTurnWithDeliveryOwner(
   const normalizationSuppressionAttempts: PendingChannelDeliveryAttempt[] = [];
   let agentRun: [runId?: string, executionIdentityToken?: ExecutionToken] = [];
   const onAgentRunStart = replyPipeline.replyOptions?.onAgentRunStart;
-  const replyOptions = {
+  const replyOptions: NonNullable<AssembledChannelTurn["replyOptions"]> = {
     ...replyPipeline.replyOptions,
-    onAgentRunStart: (runId: string, executionIdentityToken?: ExecutionToken) => {
-      agentRun = [runId, executionIdentityToken];
-      onAgentRunStart?.(runId, executionIdentityToken);
+    onAgentRunStart: (...runStartArgs) => {
+      agentRun = [runStartArgs[0], runStartArgs[1]];
+      return onAgentRunStart?.(...runStartArgs);
     },
   };
   const hookCtx = delivery.observeMessageSent
@@ -546,7 +554,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
                       ) {
                         const providerInfo = {
                           ...info,
-                          ...(createDirectPendingFinalCustody(effectivePayload) ??
+                          ...(createDirectPendingFinalCustody(effectivePayload, params.storePath) ??
                             NO_PENDING_FINAL_CUSTODY),
                         };
                         directInfo = providerInfo;
@@ -574,7 +582,10 @@ async function dispatchChannelTurnWithDeliveryOwner(
                               "channel delivery adapter is missing a direct deliverer",
                             );
                           }
-                          const custody = createDirectPendingFinalCustody(effectivePayload);
+                          const custody = createDirectPendingFinalCustody(
+                            effectivePayload,
+                            params.storePath,
+                          );
                           await custody?.onPlatformSendDispatch();
                           result = await delivery.deliver(
                             effectivePayload,

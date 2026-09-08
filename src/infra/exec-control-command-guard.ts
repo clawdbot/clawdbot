@@ -10,7 +10,11 @@ import {
   buildCommandPayloadArgvCandidates,
   buildCommandPayloadCandidates,
 } from "./command-analysis/risks.js";
-import { explainShellCommand } from "./command-explainer/extract.js";
+import {
+  CommandExplanationWorkLimitError,
+  explainShellCommand,
+} from "./command-explainer/extract.js";
+import type { CommandExplanation } from "./command-explainer/types.js";
 import { isPathInside } from "./path-guards.js";
 
 type ParsedExecApprovalCommand = {
@@ -18,7 +22,11 @@ type ParsedExecApprovalCommand = {
   decision: "allow-once" | "allow-always" | "deny";
 };
 
-type UnsafeExecControlShellCommandKind = "approve" | "channel-login" | "live-state-sqlite";
+type UnsafeExecControlShellCommandKind =
+  | "approve"
+  | "channel-login"
+  | "live-state-sqlite"
+  | "incomplete-analysis";
 
 type ExecControlShellCommandContext = {
   stateDir?: string;
@@ -258,18 +266,22 @@ export async function detectUnsafeExecControlShellCommand(
   context: ExecControlShellCommandContext = {},
 ): Promise<UnsafeExecControlShellCommandKind | null> {
   const rawCommand = command.trim();
-  const { controlCandidates, argvCandidates } = await (async () => {
-    try {
-      const explanation = await explainShellCommand(rawCommand);
-      if (explanation.ok) {
-        const commands = [...explanation.topLevelCommands, ...explanation.nestedCommands];
-        return {
-          controlCandidates: commands.flatMap((step) => buildCommandPayloadCandidates(step.argv)),
-          argvCandidates: commands.flatMap((step) => buildCommandPayloadArgvCandidates(step.argv)),
-        };
-      }
-    } catch {
-      // Fall back to line-local shell splitting below.
+  let explanation: CommandExplanation | null = null;
+  try {
+    explanation = await explainShellCommand(rawCommand);
+  } catch (error) {
+    if (error instanceof CommandExplanationWorkLimitError) {
+      return "incomplete-analysis";
+    }
+    // Fall back to line-local shell splitting below.
+  }
+  const { controlCandidates, argvCandidates } = (() => {
+    if (explanation?.ok) {
+      const commands = [...explanation.topLevelCommands, ...explanation.nestedCommands];
+      return {
+        controlCandidates: commands.flatMap((step) => buildCommandPayloadCandidates(step.argv)),
+        argvCandidates: commands.flatMap((step) => buildCommandPayloadArgvCandidates(step.argv)),
+      };
     }
     const fallbackArgv = normalizeStringEntries(rawCommand.split(/\r?\n/)).map((line) => {
       const argv = splitShellArgs(line);
@@ -300,8 +312,19 @@ export async function detectUnsafeExecControlShellCommand(
   return null;
 }
 
+function rejectIncompleteCommandAnalysis(
+  unsafeKind: UnsafeExecControlShellCommandKind | null,
+): void {
+  if (unsafeKind === "incomplete-analysis") {
+    throw new Error(
+      "exec cannot run a shell command that exceeds the command explanation work limit. Simplify the command so its complete syntax can be inspected before execution.",
+    );
+  }
+}
+
 export async function rejectUnsafeExecControlShellCommand(command: string): Promise<void> {
   const unsafeKind = await detectUnsafeExecControlShellCommand(command);
+  rejectIncompleteCommandAnalysis(unsafeKind);
   if (unsafeKind === "approve") {
     throw new Error(
       [
@@ -325,6 +348,7 @@ export async function rejectUnsafeExecLiveStateSqliteShellCommand(
   context: Required<ExecControlShellCommandContext>,
 ): Promise<void> {
   const unsafeKind = await detectUnsafeExecControlShellCommand(command, context);
+  rejectIncompleteCommandAnalysis(unsafeKind);
   if (unsafeKind !== "live-state-sqlite") {
     return;
   }

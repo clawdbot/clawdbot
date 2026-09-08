@@ -4,11 +4,10 @@ import {
   ChannelBotLoopProtectionSchema,
   ChannelDangerouslyAllowNameMatchingSchema,
   buildChannelAllowBotsSchema,
-  buildCommonChannelAccountShape,
+  buildChannelAccountSchemaParts,
 } from "./zod-schema.channel-messaging-common.js";
 import {
   ChannelDeliveryStreamingConfigSchema,
-  DmPolicySchema,
   SecretRefSchema,
   requireAllowlistAllowFrom,
   requireOpenAllowFrom,
@@ -31,13 +30,14 @@ const GoogleChatGroupSchema = z
   })
   .strict();
 
+const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
+  omit: ["mentionPatterns"],
+  streaming: ChannelDeliveryStreamingConfigSchema.optional(),
+});
+
 const GoogleChatAccountSchemaBase = z
   .object({
-    ...buildCommonChannelAccountShape({
-      groupPolicyDefault: true,
-      omit: ["mentionPatterns"],
-      streaming: ChannelDeliveryStreamingConfigSchema.optional(),
-    }),
+    ...accountShape,
     allowBots: buildChannelAllowBotsSchema(),
     botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
     dangerouslyAllowNameMatching: ChannelDangerouslyAllowNameMatchingSchema,
@@ -60,7 +60,7 @@ const GoogleChatAccountSchemaBase = z
   .strict();
 
 export const GoogleChatConfigSchema = GoogleChatAccountSchemaBase.extend({
-  dmPolicy: DmPolicySchema.optional().default("pairing"),
+  ...rootPolicyShape,
   accounts: z.record(z.string(), GoogleChatAccountSchemaBase.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {

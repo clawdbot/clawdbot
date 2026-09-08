@@ -1,7 +1,9 @@
 // Full-entry usage reporting coverage spans metadata attribution, runtime plugin
 // bootstrap inputs, and forwarding fields into embedded attempts.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createModelFallbackConfig } from "../test-helpers/model-fallback-config-fixture.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   mockedAcquireAgentRunPreparedModelRuntime,
@@ -12,6 +14,7 @@ import {
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
+let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
 function makeAssistantMessage(
@@ -47,21 +50,18 @@ describe("runEmbeddedAgent usage reporting", () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     resetSharedRunIntegrationHarnessMocks();
+    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+    state = await createOpenClawTestState({ label: "usage-reporting" });
+  });
+
+  afterEach(async () => {
+    await state?.cleanup();
   });
 
   it("bootstraps runtime plugins with the resolved workspace before running", async () => {
-    const config = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "anthropic/test-model",
-            fallbacks: ["openai/gpt-5.5"],
-          },
-        },
-      },
-    };
+    const config = createModelFallbackConfig("anthropic/test-model", ["openai/gpt-5.5"]);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Response 1"],
@@ -72,7 +72,7 @@ describe("runEmbeddedAgent usage reporting", () => {
       sessionId: "test-session",
       sessionKey: "test-key",
       sessionFile: "test-key",
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: state.workspaceDir,
       prompt: "hello",
       timeoutMs: 30000,
       runId: "run-plugin-bootstrap",
@@ -82,7 +82,7 @@ describe("runEmbeddedAgent usage reporting", () => {
     expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
       expect.objectContaining({
         config,
-        workspaceDir: "/tmp/workspace",
+        workspaceDir: state.workspaceDir,
         runtimePluginSelections: expect.arrayContaining([
           expect.objectContaining({ provider: "openai", modelId: "gpt-5.5" }),
         ]),
@@ -112,7 +112,7 @@ describe("runEmbeddedAgent usage reporting", () => {
       sessionKey: "agent:support:test-key",
       sessionFile: "agent:support:test-key",
       agentId: "support",
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: state.workspaceDir,
       prompt: "hello",
       timeoutMs: 30000,
       runId: "run-agent-fallback-plugin-bootstrap",
@@ -131,16 +131,7 @@ describe("runEmbeddedAgent usage reporting", () => {
   });
 
   it("preserves an explicitly pinned harness across fallback plugin planning", async () => {
-    const config = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "codex/test-model",
-            fallbacks: ["openai/gpt-5.5"],
-          },
-        },
-      },
-    };
+    const config = createModelFallbackConfig("codex/test-model", ["openai/gpt-5.5"]);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({ assistantTexts: ["Response 1"] }),
     );
@@ -149,7 +140,7 @@ describe("runEmbeddedAgent usage reporting", () => {
       sessionId: "test-session",
       sessionKey: "test-key",
       sessionFile: "test-key",
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: state.workspaceDir,
       prompt: "hello",
       timeoutMs: 30000,
       runId: "run-pinned-fallback-plugin-bootstrap",
@@ -182,7 +173,7 @@ describe("runEmbeddedAgent usage reporting", () => {
       sessionId: "test-session",
       sessionKey: "test-key",
       sessionFile: "test-key",
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: state.workspaceDir,
       prompt: "hello",
       timeoutMs: 30000,
       runId: "run-gateway-bind",
@@ -193,7 +184,7 @@ describe("runEmbeddedAgent usage reporting", () => {
     expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
       expect.objectContaining({
         config: {},
-        workspaceDir: "/tmp/workspace",
+        workspaceDir: state.workspaceDir,
         allowGatewaySubagentBinding: true,
       }),
       expect.anything(),
@@ -212,7 +203,7 @@ describe("runEmbeddedAgent usage reporting", () => {
       sessionId: "test-session",
       sessionKey: "test-key",
       sessionFile: "test-key",
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: state.workspaceDir,
       prompt: "hello",
       timeoutMs: 30000,
       runId: "run-sender-forwarding",
@@ -240,7 +231,7 @@ describe("runEmbeddedAgent usage reporting", () => {
       sessionId: "test-session",
       sessionKey: "test-key",
       sessionFile: "test-key",
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: state.workspaceDir,
       prompt: "hello",
       timeoutMs: 30000,
       runId: "run-message-action-capability",
@@ -261,7 +252,7 @@ describe("runEmbeddedAgent usage reporting", () => {
       sessionId: "test-session",
       sessionKey: "test-key",
       sessionFile: "test-key",
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: state.workspaceDir,
       prompt: "flush",
       timeoutMs: 30000,
       runId: "run-memory-forwarding",
@@ -307,7 +298,7 @@ describe("runEmbeddedAgent usage reporting", () => {
       sessionId: "test-session",
       sessionKey: "test-key",
       sessionFile: "test-key",
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: state.workspaceDir,
       prompt: "hello",
       timeoutMs: 30000,
       runId: "run-anthropic-multi-call-usage",
@@ -357,7 +348,7 @@ describe("runEmbeddedAgent usage reporting", () => {
       sessionId: "test-session",
       sessionKey: "test-key",
       sessionFile: "test-key",
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: state.workspaceDir,
       prompt: "hello",
       provider: "openrouter",
       model: "openai/gpt-5.4",

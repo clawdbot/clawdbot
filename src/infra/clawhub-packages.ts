@@ -1,6 +1,7 @@
 // ClawHub package metadata, security, search, and telemetry operations.
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { ExternalPluginCompatibility } from "../../packages/plugin-package-contract/src/index.js";
 import {
   createClawHubError,
   fetchClawHubJson,
@@ -8,6 +9,7 @@ import {
   readClawHubStringField,
   readRequiredClawHubBooleanField,
   readRequiredClawHubStringArrayField,
+  readRequiredClawHubStringField,
   requestClawHub,
   resolveClawHubAuthToken,
   type ClawHubFetch,
@@ -15,13 +17,7 @@ import {
 
 export type ClawHubPackageFamily = "skill" | "code-plugin" | "bundle-plugin";
 export type ClawHubPackageChannel = "official" | "community" | "private";
-// Keep aligned with @openclaw/plugin-package-contract ExternalPluginCompatibility.
-export type ClawHubPackageCompatibility = {
-  pluginApiRange?: string;
-  builtWithOpenClawVersion?: string;
-  pluginSdkVersion?: string;
-  minGatewayVersion?: string;
-};
+export type ClawHubPackageCompatibility = ExternalPluginCompatibility;
 type ClawHubPackageHostTarget = {
   os?: string | null;
   arch?: string | null;
@@ -123,6 +119,8 @@ export type ClawHubPackageSecurityResponse = {
     id?: string | null;
     version?: string | null;
   } | null;
+  overview: string;
+  securityAuditUrl: string;
   trust: ClawHubPackageSecurityTrust;
 };
 export type ClawHubPackageClawPackSummary = {
@@ -319,7 +317,15 @@ function parseClawHubPackageSecurityResponse(value: unknown): ClawHubPackageSecu
   if (moderationState !== undefined) {
     parsedTrust.moderationState = moderationState;
   }
-  const result: ClawHubPackageSecurityResponse = { trust: parsedTrust };
+  const result: ClawHubPackageSecurityResponse = {
+    overview: readRequiredClawHubStringField(value, "overview", "security response"),
+    securityAuditUrl: readRequiredClawHubStringField(
+      value,
+      "securityAuditUrl",
+      "security response",
+    ),
+    trust: parsedTrust,
+  };
   const parsedPackage = parseOptionalSecurityPackage(value.package);
   const parsedRelease = parseOptionalSecurityRelease(value.release);
   if (parsedPackage !== undefined) {

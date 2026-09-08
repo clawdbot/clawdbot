@@ -51,7 +51,7 @@ function emitDaemonActionJson(payload: DaemonActionResponse) {
 }
 
 function classifyDaemonHintText(text: string): DaemonHintKind {
-  if (text.includes("openclaw gateway install") || text.startsWith("Service not installed. Run:")) {
+  if (/\b(gateway|node) install\b/u.test(text) || text.startsWith("Service not installed. Run:")) {
     return "install";
   }
   if (text.startsWith("Restart the container or the service that manages it for ")) {
@@ -175,7 +175,7 @@ export function createDaemonActionContext(params: { action: DaemonAction; json: 
   stdout: Writable;
   warnings: string[];
   emit: (payload: Omit<DaemonActionResponse, "action">) => void;
-  fail: (message: string, hints?: string[]) => void;
+  fail: (message: string, hints?: string[], result?: "restart-health-failed") => void;
 } {
   const warnings: string[] = [];
   const stdout = params.json ? createNullWriter() : process.stdout;
@@ -190,12 +190,13 @@ export function createDaemonActionContext(params: { action: DaemonAction; json: 
       warnings: payload.warnings ?? (warnings.length ? warnings : undefined),
     });
   };
-  const fail = (message: string, hints?: string[]) => {
+  const fail = (message: string, hints?: string[], result?: "restart-health-failed") => {
     if (params.json) {
       emit({
         ok: false,
         error: message,
         hints,
+        ...(result ? { result } : {}),
       });
     } else {
       defaultRuntime.error(message);

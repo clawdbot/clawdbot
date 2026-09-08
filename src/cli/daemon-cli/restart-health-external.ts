@@ -1,8 +1,9 @@
+import { createConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
 import type { GatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { sleep } from "../../utils.js";
 import {
   inspectGatewayPortHealth,
-  resolveGatewayRestartProbeAuth,
+  resolveGatewayRestartProbeContext,
 } from "./restart-health-probe.js";
 import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
@@ -22,7 +23,11 @@ export async function waitForGatewayHealthyListener(params: {
   const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
   const previousLockIdentity = params.previousLockIdentity;
 
-  const probeAuth = await resolveGatewayRestartProbeAuth(undefined).catch(() => undefined);
+  const probeContext = await resolveGatewayRestartProbeContext(undefined).catch(() => ({
+    auth: undefined,
+    config: {},
+  }));
+  const configuredProbe = createConfiguredGatewayLocalProbe(probeContext.config);
   let snapshot: GatewayPortHealthSnapshot = previousLockIdentity
     ? {
         portUsage: {
@@ -38,7 +43,8 @@ export async function waitForGatewayHealthyListener(params: {
       }
     : await inspectGatewayPortHealth({
         port: params.port,
-        auth: probeAuth,
+        auth: probeContext.auth,
+        configuredProbe,
       });
 
   let attempt = 0;
@@ -57,7 +63,8 @@ export async function waitForGatewayHealthyListener(params: {
     expectedListenerPid = replacement.lockIdentity.pid;
     snapshot = await inspectGatewayPortHealth({
       port: params.port,
-      auth: probeAuth,
+      auth: probeContext.auth,
+      configuredProbe,
       expectedListenerPid,
     });
   }
@@ -70,7 +77,8 @@ export async function waitForGatewayHealthyListener(params: {
     await sleep(delayMs);
     snapshot = await inspectGatewayPortHealth({
       port: params.port,
-      auth: probeAuth,
+      auth: probeContext.auth,
+      configuredProbe,
       expectedListenerPid,
     });
     if (snapshot.healthy) {

@@ -1,11 +1,17 @@
 // Covers diagnostics timeline event writing and spans.
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   emitDiagnosticsTimelineEvent,
+  flushDiagnosticsTimeline,
   isDiagnosticsTimelineEnabled,
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
@@ -28,19 +34,11 @@ async function createTimelineEnv() {
 }
 
 async function readTimeline(path: string) {
-  await Promise.resolve();
+  flushDiagnosticsTimeline();
   return (await readFile(path, "utf8"))
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line) as Record<string, unknown>);
-}
-
-function eventRecord(events: Record<string, unknown>[], index: number): Record<string, unknown> {
-  const event = events[index];
-  if (!event) {
-    throw new Error(`Expected diagnostics event at index ${index}`);
-  }
-  return event;
 }
 
 function attributesRecord(event: Record<string, unknown>): Record<string, unknown> {
@@ -55,11 +53,114 @@ function attributesRecord(event: Record<string, unknown>): Record<string, unknow
 }
 
 afterEach(async () => {
+  flushDiagnosticsTimeline();
   vi.restoreAllMocks();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 describe("diagnostics timeline", () => {
+  it("defers a timeline burst and writes its ordered events in one safe append", async () => {
+    const { env, path } = await createTimelineEnv();
+    const open = vi.spyOn(fs, "openSync");
+    const names = Array.from({ length: 64 }, (_, index) => `event-${index}`);
+
+    for (const name of names) {
+      emitDiagnosticsTimelineEvent({ type: "mark", name }, { env });
+    }
+
+    expect(open.mock.calls.filter(([file]) => file === path)).toHaveLength(0);
+    await yieldToEventLoop();
+    expect(open.mock.calls.filter(([file]) => file === path)).toHaveLength(1);
+    expect((await readTimeline(path)).map((event) => event.name)).toEqual(names);
+    expect(fs.statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  it("captures emitted values and flushes earlier paths before switching destinations", async () => {
+    const first = await createTimelineEnv();
+    const second = await createTimelineEnv();
+    const attributes = { value: "before" };
+    emitDiagnosticsTimelineEvent({ type: "mark", name: "first", attributes }, { env: first.env });
+    attributes.value = "after";
+    first.env.OPENCLAW_DIAGNOSTICS_RUN_ID = "changed";
+    first.env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH = second.path;
+    emitDiagnosticsTimelineEvent({ type: "mark", name: "second", attributes }, { env: first.env });
+
+    expect(JSON.parse(fs.readFileSync(first.path, "utf8"))).toMatchObject({
+      name: "first",
+      runId: "run-1",
+      attributes: { value: "before" },
+    });
+    expect(fs.existsSync(second.path)).toBe(false);
+    first.env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH = first.path;
+    emitDiagnosticsTimelineEvent({ type: "mark", name: "third" }, { env: first.env });
+    expect(JSON.parse(fs.readFileSync(second.path, "utf8"))).toMatchObject({
+      name: "second",
+      runId: "changed",
+      attributes: { value: "after" },
+    });
+    expect((await readTimeline(first.path)).map((event) => event.name)).toEqual(["first", "third"]);
+  });
+
+  it("bounds queued UTF-8 bytes without dropping bursts or oversized events", async () => {
+    const { env, path } = await createTimelineEnv();
+    const write = vi.spyOn(fs, "writeSync");
+    const names = Array.from({ length: 6 }, (_, index) => `event-${index}`);
+    for (const name of names) {
+      emitDiagnosticsTimelineEvent(
+        { type: "mark", name, attributes: { text: "界".repeat(8192) } },
+        { env },
+      );
+    }
+    const chunks = () =>
+      write.mock.calls.flatMap(([, content]) => (Buffer.isBuffer(content) ? [content] : []));
+    expect(chunks().length).toBeGreaterThan(0);
+    expect(chunks().every((content) => content.byteLength <= 64 * 1024)).toBe(true);
+    const oversized = "界".repeat(32 * 1024);
+    emitDiagnosticsTimelineEvent(
+      { type: "mark", name: "oversized", attributes: { text: oversized } },
+      { env },
+    );
+    emitDiagnosticsTimelineEvent({ type: "mark", name: "last" }, { env });
+    flushDiagnosticsTimeline();
+
+    expect(chunks().filter((content) => content.byteLength > 64 * 1024)).toHaveLength(1);
+    const events = await readTimeline(path);
+    expect(events.map((event) => event.name)).toEqual([...names, "oversized", "last"]);
+    const oversizedEvent = expectDefined(events[names.length], "oversized timeline event");
+    expect(attributesRecord(oversizedEvent).text).toBe(oversized);
+  });
+
+  it.each(["natural", "immediate", "first-event-at-exit"])(
+    "retains queued and later exit-listener events on %s exit",
+    async (mode) => {
+      const { env, path } = await createTimelineEnv();
+      const script = `
+        import { emitDiagnosticsTimelineEvent } from ${JSON.stringify(new URL("./diagnostics-timeline.ts", import.meta.url).href)};
+        const env = ${JSON.stringify(env)};
+        process.on("exit", () => emitDiagnosticsTimelineEvent({ type: "mark", name: "last" }, { env }));
+        ${mode === "first-event-at-exit" ? "" : 'emitDiagnosticsTimelineEvent({ type: "mark", name: "first" }, { env });'}
+        ${mode === "natural" ? "" : "process.exit(0);"}
+      `;
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url)),
+          "--input-type=module",
+          "--eval",
+          script,
+        ],
+        { encoding: "utf8", env: { ...process.env, VITEST: "false" }, timeout: 10_000 },
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      expect((await readTimeline(path)).map((event) => event.name)).toEqual(
+        mode === "first-event-at-exit" ? ["last"] : ["first", "last"],
+      );
+    },
+  );
+
   it("detects when timeline output is enabled", async () => {
     const { env } = await createTimelineEnv();
 
@@ -194,10 +295,38 @@ describe("diagnostics timeline", () => {
 
     emitDiagnosticsTimelineEvent({ type: "mark", name: "first" }, { env: failingEnv });
     emitDiagnosticsTimelineEvent({ type: "mark", name: "second" }, { env: failingEnv });
+    flushDiagnosticsTimeline();
 
     expect(warnSpy).toHaveBeenCalledTimes(1);
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("failed to write timeline event"));
+    emitDiagnosticsTimelineEvent({ type: "mark", name: "recovered" }, { env });
+    expect((await readTimeline(path)).map((event) => event.name)).toEqual(["recovered"]);
   });
+
+  it.each(["symlink", "hardlink", "directory"])(
+    "keeps unsafe %s targets unchanged when a batch drains",
+    async (kind) => {
+      const { env, path } = await createTimelineEnv();
+      await mkdir(dirname(path), { recursive: true });
+      const target = join(dirname(path), "target");
+      await writeFile(target, "unchanged");
+      if (kind === "symlink") {
+        fs.symlinkSync(target, path);
+      } else if (kind === "hardlink") {
+        fs.linkSync(target, path);
+      } else {
+        await mkdir(path);
+      }
+      emitDiagnosticsTimelineEvent({ type: "mark", name: "first" }, { env });
+      emitDiagnosticsTimelineEvent({ type: "mark", name: "second" }, { env });
+      flushDiagnosticsTimeline();
+
+      expect(await readFile(target, "utf8")).toBe("unchanged");
+      if (kind === "directory") {
+        expect(fs.readdirSync(path)).toEqual([]);
+      }
+    },
+  );
 
   it("records span start and end events around successful work", async () => {
     const { env, path } = await createTimelineEnv();
@@ -215,8 +344,8 @@ describe("diagnostics timeline", () => {
 
     const events = await readTimeline(path);
     expect(events).toHaveLength(2);
-    const start = eventRecord(events, 0);
-    const end = eventRecord(events, 1);
+    const start = expectDefined(events[0], "span start");
+    const end = expectDefined(events[1], "span end");
     expect(start.type).toBe("span.start");
     expect(start.name).toBe("runtimeDeps.stage");
     expect(start.phase).toBe("startup");
@@ -244,7 +373,7 @@ describe("diagnostics timeline", () => {
 
     const events = await readTimeline(path);
     expect(events).toHaveLength(2);
-    const errorEvent = eventRecord(events, 1);
+    const errorEvent = expectDefined(events[1], "span error");
     expect(errorEvent.type).toBe("span.error");
     expect(errorEvent.name).toBe("plugins.load");
     expect(errorEvent.phase).toBe("startup");
@@ -267,7 +396,7 @@ describe("diagnostics timeline", () => {
 
     const events = await readTimeline(path);
     expect(events).toHaveLength(2);
-    const errorEvent = eventRecord(events, 1);
+    const errorEvent = expectDefined(events[1], "span error");
     expect(errorEvent.type).toBe("span.error");
     expect(errorEvent.name).toBe("secrets.prepare");
     expect(errorEvent.errorName).toBe("Error");
@@ -287,8 +416,8 @@ describe("diagnostics timeline", () => {
     expect(result).toBe(42);
     const events = await readTimeline(path);
     expect(events).toHaveLength(2);
-    const start = eventRecord(events, 0);
-    const end = eventRecord(events, 1);
+    const start = expectDefined(events[0], "span start");
+    const end = expectDefined(events[1], "span end");
     expect(start.type).toBe("span.start");
     expect(start.name).toBe("plugins.metadata.scan");
     expect(end.type).toBe("span.end");

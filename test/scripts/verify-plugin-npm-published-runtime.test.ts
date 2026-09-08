@@ -6,7 +6,6 @@ import {
   parseVerifyPublishedPluginRuntimeArgs,
   parseNpmReadmeMetadata,
   readPluginNpmCommandOptions,
-  readPositiveIntEnv,
   resolveNpmPackFilename,
   runPluginNpmCommand,
   usage,
@@ -29,35 +28,6 @@ describe("plugin npm publish verifier args", () => {
     expect(() =>
       parseVerifyPublishedPluginRuntimeArgs(["@openclaw/discord@2026.5.2", "extra"]),
     ).toThrow("Unexpected plugin npm verifier argument: extra");
-  });
-});
-
-describe("plugin npm publish verifier retry limits", () => {
-  it("rejects loose numeric retry env values instead of parsing prefixes", () => {
-    expect(() =>
-      readPositiveIntEnv("OPENCLAW_PLUGIN_NPM_VERIFY_ATTEMPTS", 90, {
-        OPENCLAW_PLUGIN_NPM_VERIFY_ATTEMPTS: "2tries",
-      }),
-    ).toThrow("invalid OPENCLAW_PLUGIN_NPM_VERIFY_ATTEMPTS: 2tries");
-    expect(() =>
-      readPositiveIntEnv("OPENCLAW_PLUGIN_NPM_VERIFY_DELAY_MS", 10000, {
-        OPENCLAW_PLUGIN_NPM_VERIFY_DELAY_MS: "1e3",
-      }),
-    ).toThrow("invalid OPENCLAW_PLUGIN_NPM_VERIFY_DELAY_MS: 1e3");
-    expect(() =>
-      readPositiveIntEnv("OPENCLAW_PLUGIN_NPM_README_VERIFY_ATTEMPTS", 6, {
-        OPENCLAW_PLUGIN_NPM_README_VERIFY_ATTEMPTS: "0",
-      }),
-    ).toThrow("invalid OPENCLAW_PLUGIN_NPM_README_VERIFY_ATTEMPTS: 0");
-  });
-
-  it("accepts strict positive retry env values and defaults", () => {
-    expect(readPositiveIntEnv("OPENCLAW_PLUGIN_NPM_VERIFY_ATTEMPTS", 90, {})).toBe(90);
-    expect(
-      readPositiveIntEnv("OPENCLAW_PLUGIN_NPM_README_VERIFY_DELAY_MS", 10000, {
-        OPENCLAW_PLUGIN_NPM_README_VERIFY_DELAY_MS: "2500",
-      }),
-    ).toBe(2500);
   });
 });
 
@@ -85,11 +55,11 @@ describe("plugin npm publish verifier command limits", () => {
   });
 
   it("rejects loose npm command timeout and buffer overrides", () => {
-    expect(() =>
-      readPluginNpmCommandOptions({
-        OPENCLAW_PLUGIN_NPM_COMMAND_TIMEOUT_MS: "60s",
-      }),
-    ).toThrow("invalid OPENCLAW_PLUGIN_NPM_COMMAND_TIMEOUT_MS: 60s");
+    for (const value of ["60s", "1e3", "0"]) {
+      expect(() =>
+        readPluginNpmCommandOptions({ OPENCLAW_PLUGIN_NPM_COMMAND_TIMEOUT_MS: value }),
+      ).toThrow(`invalid OPENCLAW_PLUGIN_NPM_COMMAND_TIMEOUT_MS: ${value}`);
+    }
     expect(() =>
       readPluginNpmCommandOptions({
         OPENCLAW_PLUGIN_NPM_COMMAND_MAX_BUFFER_BYTES: "16mb",
@@ -128,6 +98,50 @@ describe("plugin npm publish verifier command limits", () => {
 });
 
 describe("collectPluginNpmPublishedRuntimeErrors", () => {
+  it.each([".ts", ".tsx", ".mts", ".cts"])(
+    "rejects source-only %s runtime and setup entries",
+    (extension) => {
+      const errors = collectPluginNpmPublishedRuntimeErrors({
+        packageJson: {
+          name: "entry-fixture",
+          openclaw: {
+            extensions: [`./src/index${extension}`],
+            setupEntry: `./src/setup${extension}`,
+          },
+        },
+        files: ["openclaw.plugin.json", `src/index${extension}`, `src/setup${extension}`],
+      });
+      expect(errors).toEqual([
+        expect.stringContaining(
+          `compiled runtime output for TypeScript entry ./src/index${extension}`,
+        ),
+        expect.stringContaining(
+          `compiled runtime output for TypeScript entry ./src/setup${extension}`,
+        ),
+      ]);
+    },
+  );
+
+  it.each([
+    [".ts", ".js"],
+    [".tsx", ".js"],
+    [".mts", ".mjs"],
+    [".cts", ".cjs"],
+  ])("accepts nested compiler output for %s entries without source", (source, output) => {
+    expect(
+      collectPluginNpmPublishedRuntimeErrors({
+        packageJson: {
+          name: "entry-fixture",
+          openclaw: {
+            extensions: [`./src/index${source}`],
+            setupEntry: `./src/setup${source}`,
+          },
+        },
+        files: ["openclaw.plugin.json", `dist/src/index${output}`, `dist/src/setup${output}`],
+      }),
+    ).toEqual([]);
+  });
+
   it("flags published plugin packages with TypeScript entries and no compiled runtime output", () => {
     expect(
       collectPluginNpmPublishedRuntimeErrors({
@@ -368,15 +382,18 @@ describe("findPackedPackageReadmePath", () => {
 });
 
 describe("parseNpmReadmeMetadata", () => {
-  it("accepts non-empty npm readme metadata", () => {
-    expect(parseNpmReadmeMetadata(JSON.stringify("# Plugin\n\nInstall it."))).toBe(
-      "# Plugin\n\nInstall it.",
-    );
+  it.each([
+    { npm: "<=11", payload: "# Plugin\n\nInstall it." },
+    { npm: "12", payload: ["# Plugin\n\nInstall it."] },
+  ])("accepts non-empty npm $npm readme metadata", ({ payload }) => {
+    expect(parseNpmReadmeMetadata(JSON.stringify(payload))).toBe("# Plugin\n\nInstall it.");
   });
 
   it("rejects empty or unsupported npm readme metadata", () => {
     expect(parseNpmReadmeMetadata(JSON.stringify(""))).toBe("");
     expect(parseNpmReadmeMetadata(JSON.stringify(null))).toBe("");
+    expect(parseNpmReadmeMetadata(JSON.stringify([]))).toBe("");
+    expect(parseNpmReadmeMetadata(JSON.stringify(["# One", "# Two"]))).toBe("");
     expect(parseNpmReadmeMetadata("{")).toBe("");
   });
 });

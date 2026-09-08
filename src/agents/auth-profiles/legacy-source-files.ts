@@ -26,8 +26,8 @@ function resolveLegacySourceAgentDir(
   return agentDir ? resolveUserPath(agentDir) : resolveSharedMainAuthAgentDir(env);
 }
 
-/** Detects retired auth files by name only; runtime code must never read their contents. */
-export function listLegacyAuthProfileSources(params: {
+/** Capture the fixed legacy candidates before the producer's environment can change. */
+export function resolveLegacyAuthProfileSourceCandidates(params: {
   agentDir?: string;
   env?: NodeJS.ProcessEnv;
 }): LegacyAuthProfileSource[] {
@@ -41,7 +41,17 @@ export function listLegacyAuthProfileSources(params: {
   if (path.resolve(agentDir) === path.resolve(sharedMainDir)) {
     candidates.push({ kind: "legacy-oauth", path: resolveLegacyOAuthPath(params.env) });
   }
-  return candidates.filter((candidate) => fs.existsSync(candidate.path));
+  return candidates;
+}
+
+/** Detects retired auth files by name only; runtime code must never read their contents. */
+export function listLegacyAuthProfileSources(params: {
+  agentDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): LegacyAuthProfileSource[] {
+  return resolveLegacyAuthProfileSourceCandidates(params).filter((candidate) =>
+    fs.existsSync(candidate.path),
+  );
 }
 
 export function listLegacyAuthProfileArchives(params: {

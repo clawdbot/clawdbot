@@ -1,15 +1,19 @@
 // Collects process activity shared by restart and host-suspension decisions.
 import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
-import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/run-state.js";
+import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/active-run-projections.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
 import { getSuspensionVisibleCronTaskRunCount } from "../cron/service/active-run-cancellation.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
-import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import {
+  getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
+} from "../process/gateway-work-admission.js";
 import {
   getActiveSessionLifecycleMutationCount,
   getActiveSessionWorkAdmissionCount,
 } from "../sessions/session-lifecycle-admission.js";
+import { isBackgroundExecTask } from "../tasks/background-exec-task-contract.js";
 import { getInspectableActiveTaskRestartBlockers } from "../tasks/task-registry.maintenance.js";
 import {
   type ActiveTaskRestartBlocker,
@@ -51,7 +55,7 @@ export type GatewayActiveWorkBlocker = {
     | "terminal-session";
   count: number;
   message: string;
-  task?: ActiveTaskRestartBlocker;
+  task?: Omit<ActiveTaskRestartBlocker, "taskKind">;
 };
 
 export type GatewayActiveWorkSnapshot = {
@@ -74,6 +78,7 @@ export type GatewayActiveWorkInspectors = {
   getActiveTasks: () => number;
   getTaskBlockers: () => ActiveTaskRestartBlocker[];
   getRootRequests: () => number;
+  getRootRequestHolders?: () => string[];
   getSessionAdmissions: () => number;
   getSessionMutations: () => number;
   getChatRuns: () => number;
@@ -91,6 +96,7 @@ const defaultInspectors: GatewayActiveWorkInspectors = {
   getActiveTasks: () => getInspectableActiveTaskRestartBlockers().length,
   getTaskBlockers: getInspectableActiveTaskRestartBlockers,
   getRootRequests: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }),
+  getRootRequestHolders: () => getActiveGatewayRootWorkHolders({ excludeCurrent: true }),
   getSessionAdmissions: getActiveSessionWorkAdmissionCount,
   getSessionMutations: getActiveSessionLifecycleMutationCount,
   getChatRuns: () => 0,
@@ -147,7 +153,21 @@ export function createGatewayActiveWorkSnapshot(
     `${counts.backgroundExecSessions} active background exec session(s)`,
   );
   add(counts.cronRuns, "cron-run", `${counts.cronRuns} active cron run(s)`);
-  add(counts.rootRequests, "root-request", `${counts.rootRequests} active gateway request(s)`);
+  const rootRequestHolders =
+    inspectors.getRootRequests && !inspectors.getRootRequestHolders
+      ? []
+      : (resolved.getRootRequestHolders?.() ?? []);
+  const rootRequestHolderNames = rootRequestHolders.toSorted().slice(0, 8);
+  if (rootRequestHolders.length > rootRequestHolderNames.length) {
+    rootRequestHolderNames.push(
+      `+${rootRequestHolders.length - rootRequestHolderNames.length} more`,
+    );
+  }
+  add(
+    counts.rootRequests,
+    "root-request",
+    `${counts.rootRequests} active gateway request(s)${rootRequestHolderNames.length > 0 ? `: ${rootRequestHolderNames.join(", ")}` : ""}`,
+  );
   add(
     counts.sessionAdmissions,
     "session-admission",
@@ -183,9 +203,11 @@ export function createGatewayActiveWorkSnapshot(
       });
     } else {
       const shownTaskBlockers = taskBlockers.slice(0, 8);
-      for (const task of shownTaskBlockers) {
+      for (const { taskKind, ...task } of shownTaskBlockers) {
         blockers.push({
-          kind: "task",
+          kind: isBackgroundExecTask({ runtime: task.runtime, taskKind })
+            ? "background-exec"
+            : "task",
           count: 1,
           message: formatActiveTaskRestartBlocker(task),
           task,

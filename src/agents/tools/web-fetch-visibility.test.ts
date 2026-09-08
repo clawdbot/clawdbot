@@ -5,7 +5,7 @@ import { stripInvisibleUnicode } from "../../infra/unicode-visibility.js";
 import { sanitizeHtml } from "./web-fetch-visibility.js";
 
 describe("sanitizeHtml", () => {
-  it("reuses compiled CSS property matchers across styled elements", async () => {
+  it("reuses compiled visibility matchers across styled elements", async () => {
     const styledElements = 256;
     const html = Array.from(
       { length: styledElements },
@@ -21,13 +21,9 @@ describe("sanitizeHtml", () => {
 
     try {
       const result = await sanitizeHtml(html);
-      const perElementStyleMatchers = regexpConstructor.mock.calls.filter(
-        ([pattern]) => typeof pattern === "string" && pattern.startsWith("(?:^|;)\\s*"),
-      );
-
       expect(result).toContain("Visible 0");
       expect(result).toContain(`Visible ${styledElements - 1}`);
-      expect(perElementStyleMatchers).toHaveLength(0);
+      expect(regexpConstructor).not.toHaveBeenCalled();
     } finally {
       regexpConstructor.mockRestore();
     }

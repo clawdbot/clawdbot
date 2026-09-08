@@ -34,6 +34,24 @@ describe("plugin npm runtime build args", () => {
     });
   });
 
+  it("selects preparation without compilation only when explicitly requested", () => {
+    for (const args of [
+      ["--prepare-native-import", "extensions/slack"],
+      ["extensions/slack", "--prepare-native-import"],
+      ["--", "--prepare-native-import", "extensions/slack"],
+    ]) {
+      expect(parseSingleBuildArgs(args)).toEqual({
+        packageDir: "extensions/slack",
+        prepareNativeImport: true,
+      });
+    }
+    expect(() => parseSingleBuildArgs(["--prepare-native-import"])).toThrow(/usage:/u);
+    expect(() => parseSingleBuildArgs(["--prepare-native-import", "--unknown"])).toThrow(/usage:/u);
+    expect(() =>
+      parseSingleBuildArgs(["--prepare-native-import", "extensions/slack", "extra"]),
+    ).toThrow(/unexpected/u);
+  });
+
   it("rejects missing or option-looking package targets", () => {
     expect(() => parseBulkBuildArgs(["--package"])).toThrow("missing value for --package");
     expect(() => parseBulkBuildArgs(["--package", "--package", "extensions/slack"])).toThrow(

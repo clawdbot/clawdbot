@@ -3,8 +3,11 @@ import type { SetSessionModeRequest } from "@agentclientprotocol/sdk";
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
-import { AcpGatewayAgent } from "./translator.js";
-import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
+import {
+  createAcpConnection,
+  createAcpGateway,
+  createAcpGatewayAgent,
+} from "./translator.test-helpers.js";
 
 function createSetSessionModeRequest(modeId: string): SetSessionModeRequest {
   return {
@@ -20,7 +23,7 @@ function createAgentWithSession(request: GatewayClient["request"]) {
     sessionKey: "agent:main:main",
     cwd: "/tmp",
   });
-  return new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+  return createAcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
     sessionStore,
   });
 }

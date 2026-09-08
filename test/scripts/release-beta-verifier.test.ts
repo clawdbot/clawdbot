@@ -1,7 +1,9 @@
 // Release Beta Verifier tests cover release beta verifier script behavior.
 /* oxlint-disable typescript/no-base-to-string -- fetch mock normalizes standard RequestInfo inputs for URL assertions. */
 import { createHash } from "node:crypto";
-import { resolve } from "node:path";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { crc32 } from "node:zlib";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -13,22 +15,32 @@ import {
   readBoundedJsonResponse,
   resolveOpenClawNpmPostpublishVerifier,
   runNpmViewWithRetry,
+  runReleaseVerifierCommand,
   validateClawHubBootstrapEvidence,
+  verifyBetaRelease,
 } from "../../scripts/lib/release-beta-verifier.ts";
+import { createTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = createTempDirTracker();
+type CommandError = Error & {
+  code?: string;
+  signal?: NodeJS.Signals;
+  status?: number;
+  stderr?: string;
+  stdout?: string;
+};
+
+function captureCommandError(run: () => unknown): CommandError {
+  try {
+    run();
+  } catch (error) {
+    return error as CommandError;
+  }
+  throw new Error("expected command to fail");
+}
 
 function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
-}
-
-function crc32(bytes: Uint8Array): number {
-  let crc = 0xffffffff;
-  for (const byte of bytes) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
-    }
-  }
-  return (crc ^ 0xffffffff) >>> 0;
 }
 
 function createStoredZip(files: Array<{ name: string; bytes: Buffer }>): Buffer {
@@ -75,8 +87,142 @@ function createStoredZip(files: Array<{ name: string; bytes: Buffer }>): Buffer 
 }
 
 afterEach(() => {
+  tempDirs.cleanup();
+  vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   vi.useRealTimers();
+});
+
+describe("verifyBetaRelease workflow outcomes", () => {
+  const version = "2026.5.10-beta.3";
+
+  function workflowFixture(overrides: Record<string, unknown> = {}, telegram = true) {
+    const rootDir = tempDirs.make("release-workflow-outcome-");
+    const binDir = join(rootDir, "bin");
+    mkdirSync(binDir);
+    mkdirSync(join(rootDir, "extensions"));
+    writeFileSync(join(rootDir, "package.json"), JSON.stringify({ version }));
+    const run = {
+      workflowName: telegram ? "NPM Telegram Beta E2E" : "OpenClaw NPM Release",
+      headBranch: "main",
+      event: "workflow_dispatch",
+      status: "completed",
+      conclusion: "success",
+      url: "https://example.invalid/runs/44",
+      createdAt: "2026-07-10T00:00:00Z",
+      updatedAt: "2026-07-10T00:02:00Z",
+      jobs: [],
+      ...overrides,
+    };
+    writeFileSync(join(binDir, "run.json"), JSON.stringify(run));
+    const command = `#!${process.execPath}
+const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+if (path.basename(process.argv[1]) === "npm" && args[0] === "view" && args[1] === "openclaw@${version}") {
+  console.log(JSON.stringify({version: "${version}", "dist-tags.beta": "${version}", "dist.integrity": "sha512-test", "dist.tarball": "https://example.invalid/openclaw.tgz"}));
+} else if (args[0] === "run" && args[1] === "view" && args[2] === "44") {
+  process.stdout.write(fs.readFileSync(path.join(path.dirname(process.argv[1]), "run.json")));
+} else {
+  throw new Error("Unexpected release verifier command: " + args.join(" "));
+}
+`;
+    for (const name of ["npm", "gh"]) {
+      const file = join(binDir, name);
+      writeFileSync(file, command);
+      chmodSync(file, 0o755);
+    }
+    vi.stubEnv("PATH", `${binDir}:${process.env.PATH}`);
+    const args = parseReleaseVerifyBetaArgs([
+      version,
+      "--skip-postpublish",
+      "--skip-github-release",
+      "--skip-clawhub",
+      "--workflow-ref",
+      "main",
+      telegram ? "--npm-telegram-run" : "--openclaw-npm-run",
+      "44",
+      "--evidence-out",
+      "evidence.json",
+    ]);
+    return { args, rootDir };
+  }
+
+  it.each([
+    { status: "completed", conclusion: "failure" },
+    { status: "completed", conclusion: "cancelled" },
+    { status: "completed", conclusion: "skipped" },
+    { status: "completed", conclusion: "success" },
+  ])(
+    "records optional Telegram as advisory without relabeling $status/$conclusion",
+    async (run) => {
+      const fixture = workflowFixture(run);
+
+      const lines = await verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir });
+      const evidence = JSON.parse(readFileSync(join(fixture.rootDir, "evidence.json"), "utf8"));
+
+      expect(lines).toContain("openclaw npm OK: 2026.5.10-beta.3 (beta)");
+      expect(lines.some((line) => line.startsWith("NPM Telegram Beta E2E advisory:"))).toBe(true);
+      expect(lines.some((line) => line.startsWith("NPM Telegram Beta E2E OK:"))).toBe(false);
+      expect(evidence.workflowRuns).toEqual([
+        expect.objectContaining({
+          id: "44",
+          advisory: {
+            status: run.status,
+            conclusion: run.conclusion ?? "unavailable",
+            failedJobs: [],
+          },
+        }),
+      ]);
+    },
+  );
+
+  it("requires a terminal Telegram attempt before recording advisory evidence", async () => {
+    const fixture = workflowFixture({ status: "in_progress", conclusion: null });
+
+    await expect(verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir })).rejects.toThrow(
+      "NPM Telegram Beta E2E: run 44 is in_progress/<missing>",
+    );
+  });
+
+  it("preserves a failed Telegram job even when its advisory workflow concludes success", async () => {
+    const fixture = workflowFixture({
+      jobs: [{ name: "Run package Telegram E2E", conclusion: "failure" }],
+    });
+
+    const lines = await verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir });
+    const evidence = JSON.parse(readFileSync(join(fixture.rootDir, "evidence.json"), "utf8"));
+
+    expect(lines.join("\n")).toContain("Run package Telegram E2E");
+    expect(evidence.workflowRuns[0].advisory).toEqual({
+      status: "completed",
+      conclusion: "success",
+      failedJobs: ["Run package Telegram E2E"],
+    });
+  });
+
+  it.each([
+    { override: { workflowName: "Other Workflow" }, error: "workflow is Other Workflow" },
+    { override: { event: "push" }, error: "event is push" },
+    { override: { headBranch: "untrusted" }, error: "branch is untrusted" },
+  ])("keeps Telegram identity validation strict: $error", async ({ override, error }) => {
+    const fixture = workflowFixture({ conclusion: "failure", ...override });
+
+    await expect(verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir })).rejects.toThrow(
+      error,
+    );
+  });
+
+  it.each([
+    { conclusion: "failure" },
+    { jobs: [{ name: "Publish package", conclusion: "failure" }] },
+  ])("keeps non-Telegram workflow failures blocking: %j", async (run) => {
+    const fixture = workflowFixture(run, false);
+
+    await expect(verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir })).rejects.toThrow(
+      "OpenClaw NPM Release: run 44 is",
+    );
+  });
 });
 
 describe("parseReleaseVerifyBetaArgs", () => {
@@ -211,9 +357,11 @@ describe("parseReleaseVerifyBetaArgs", () => {
 
 describe("validateClawHubBootstrapEvidence", () => {
   const clawhubToolchainIntegrity =
-    "sha512-YvUImhsVaM90BUAv3uP7lfABziwR5XL3ch2Owa+GvNxwQ2xzZFmZC0yVjAtQbvep+dDDS16nUGRwKx7jqnTOEA==";
-  const clawhubToolchainSha256 = "f44f670d70f13a8cde566a174cae5be682ad98456ec7a85aafd497f7d8c71816";
-  const clawhubToolchainVersion = "0.23.1";
+    "sha512-VwM6FQrZVarFRDiEqG42npUeyCu/iLhPnpO+b7kKIGRXv+TA6Lb8pboHnIgT6cmjFEnW3j/pTbshWeDQMQ7QWQ==";
+  const clawhubToolchainSha256 = sha256(
+    readFileSync(".github/release/clawhub-cli/package-lock.json"),
+  );
+  const clawhubToolchainVersion = "0.23.3";
   const releaseSha = "a".repeat(40);
   const workflowSha = "b".repeat(40);
   const packageSha = "c".repeat(64);
@@ -623,7 +771,9 @@ describe("runNpmViewWithRetry", () => {
         run: (args) => {
           calls.push(args);
           if (calls.length < 3) {
-            throw new Error("npm registry has not propagated the release yet");
+            throw Object.assign(new Error("npm registry has not propagated the release yet"), {
+              code: "E404",
+            });
           }
           return '"2026.5.10-beta.3"';
         },
@@ -633,6 +783,71 @@ describe("runNpmViewWithRetry", () => {
     expect(calls).toHaveLength(3);
     expect(calls.every((args) => args.at(-1) === "--prefer-online")).toBe(true);
     expect(delays).toEqual([1000, 2000]);
+  });
+
+  it("fails a timed-out npm read after one attempt and reaps the child", async () => {
+    const delay = vi.fn(async () => {});
+    let calls = 0;
+    let timeoutError: CommandError | undefined;
+    const result = runNpmViewWithRetry(["view", "openclaw", "version"], {
+      attempts: 3,
+      delay,
+      run: () => {
+        calls += 1;
+        try {
+          return runReleaseVerifierCommand(
+            process.execPath,
+            ["-e", "process.stdout.write(String(process.pid)); setInterval(() => {}, 1000)"],
+            { timeoutMs: 5_000 },
+          );
+        } catch (error) {
+          timeoutError = error as CommandError;
+          throw error;
+        }
+      },
+    });
+    await expect(result).rejects.toMatchObject({ code: "ETIMEDOUT", signal: "SIGKILL" });
+    expect(calls).toBe(1);
+    expect(delay).not.toHaveBeenCalled();
+    const observedTimeoutError = expectDefined(timeoutError, "timeout command error");
+    const childPid = Number(observedTimeoutError.stdout?.trim());
+    expect(Number.isInteger(childPid) && childPid > 0).toBe(true);
+    expect(() => process.kill(childPid, 0)).toThrow();
+  });
+});
+
+describe("runReleaseVerifierCommand", () => {
+  it("trims successful captured output", () => {
+    expect(
+      runReleaseVerifierCommand(process.execPath, [
+        "-e",
+        'process.stdout.write("  release ready  \\n")',
+      ]),
+    ).toBe("release ready");
+  });
+
+  it("preserves stdout and stderr when a command exits nonzero", () => {
+    const error = captureCommandError(() =>
+      runReleaseVerifierCommand(process.execPath, [
+        "-e",
+        'process.stdout.write("partial output"); process.stderr.write("failure detail"); process.exit(7)',
+      ]),
+    );
+    expect(error).toMatchObject({ status: 7 });
+    expect(error.stdout).toContain("partial output");
+    expect(error.stderr).toContain("failure detail");
+  });
+
+  it("fails when captured output exceeds the command buffer", () => {
+    const error = captureCommandError(() =>
+      runReleaseVerifierCommand(
+        process.execPath,
+        ["-e", 'process.stdout.write("x".repeat(4096))'],
+        { maxBufferBytes: 64 },
+      ),
+    );
+    expect(error.code).toBe("ENOBUFS");
+    expect(error.stdout).toContain("x");
   });
 });
 

@@ -1,8 +1,5 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import {
-  measureDiagnosticsTimelineSpan,
-  measureDiagnosticsTimelineSpanSync,
-} from "../../../infra/diagnostics-timeline.js";
+import { measureDiagnosticsTimelineSpan } from "../../../infra/diagnostics-timeline.js";
 
 type EmbeddedAgentPreparationTimingOptions = {
   config?: OpenClawConfig;
@@ -25,13 +22,4 @@ export function measureEmbeddedAgentPreparation<T>(
   options: EmbeddedAgentPreparationTimingOptions = {},
 ): Promise<T> {
   return measureDiagnosticsTimelineSpan("agent.prepare", run, timingOptions(stage, options));
-}
-
-/** Measures synchronous pre-provider work under the canonical agent preparation span. */
-export function measureEmbeddedAgentPreparationSync<T>(
-  stage: string,
-  run: () => T,
-  options: EmbeddedAgentPreparationTimingOptions = {},
-): T {
-  return measureDiagnosticsTimelineSpanSync("agent.prepare", run, timingOptions(stage, options));
 }

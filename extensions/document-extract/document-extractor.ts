@@ -26,12 +26,9 @@ async function loadPdfEngine(): Promise<PdfEngine> {
   return pdfEnginePromise;
 }
 
-function toDocumentImage(image: PdfImage): DocumentExtractedImage {
-  return {
-    type: "image",
-    data: Buffer.from(image.bytes).toString("base64"),
-    mimeType: image.mimeType,
-  };
+function toDocumentImage({ bytes, mimeType }: PdfImage): DocumentExtractedImage {
+  const data = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("base64");
+  return { type: "image", data, mimeType };
 }
 
 function isPdfPasswordError(err: unknown): boolean {
@@ -61,7 +58,7 @@ async function extractPdfContent(
   const engine = await loadPdfEngine();
   const pdf = await openPdfDocument({
     engine,
-    input: new Uint8Array(request.buffer),
+    input: request.buffer,
     ...(request.password ? { password: request.password } : {}),
   });
   try {

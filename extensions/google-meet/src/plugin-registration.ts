@@ -112,9 +112,8 @@ function googleMeetGatewayMethodForToolAction(action: GoogleMeetGatewayToolActio
 function isGoogleMeetAgentToolActionUnsupportedOnHost(params: {
   config: GoogleMeetConfig;
   raw: Record<string, unknown>;
-  platform?: NodeJS.Platform;
 }): boolean {
-  const platform = params.platform ?? googleMeetToolDeps.platform();
+  const platform = googleMeetToolDeps.platform();
   if (platform === "darwin" || platform === "linux") {
     return false;
   }
@@ -281,5 +280,4 @@ export const testing = {
   setPlatformForTests(next?: () => NodeJS.Platform): void {
     googleMeetToolDeps.platform = next ?? (() => process.platform);
   },
-  isGoogleMeetAgentToolActionUnsupportedOnHost,
 };

@@ -12,13 +12,11 @@ export function createExportCommandSessionMocks(viInstance: ViLike) {
     resolveSessionFilePathOptionsMock: viInstance.fn(
       (params: { agentId: string; storePath: string }) => params,
     ),
-    loadSessionStoreMock: viInstance.fn(
-      (_storePath?: string): Record<string, SessionEntry> => ({
-        "agent:target:session": {
-          sessionId: "session-1",
-          updatedAt: 1,
-        },
-      }),
-    ),
+    loadSessionStoreMock: viInstance.fn((_storePath?: string): Record<string, SessionEntry> => ({
+      "agent:target:session": {
+        sessionId: "session-1",
+        updatedAt: 1,
+      },
+    })),
   };
 }

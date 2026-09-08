@@ -13,11 +13,8 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { resetLegacyWorkspaceStateCheckForTest } from "./workspace-legacy-state.test-support.js";
-import {
-  mergeWorkspaceSetupState,
-  readWorkspaceStateSnapshot,
-  resolveWorkspaceStateIdentity,
-} from "./workspace-state-store.js";
+import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
+import { mergeWorkspaceSetupState, readWorkspaceStateSnapshot } from "./workspace-state-store.js";
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -45,9 +42,17 @@ afterEach(async () => {
 
 function deleteWorkspaceAttestation(workspaceDir: string): void {
   const identity = resolveWorkspaceStateIdentity(workspaceDir);
-  openOpenClawStateDatabase()
-    .db.prepare("DELETE FROM workspace_attestations WHERE workspace_key = ?")
-    .run(identity.workspaceKey);
+  const db = openOpenClawStateDatabase().db;
+  // Mirrors the pre-v13 attestation-row delete: clearing the merged columns
+  // must also drop the generated hashes the old FK cascade removed.
+  db.prepare(
+    `UPDATE workspace_setup_state
+        SET attested_at_ms = NULL, attestation_updated_at_ms = NULL
+      WHERE workspace_key = ?`,
+  ).run(identity.workspaceKey);
+  db.prepare("DELETE FROM workspace_generated_bootstrap_hashes WHERE workspace_key = ?").run(
+    identity.workspaceKey,
+  );
 }
 
 describe("workspace setup-only SQLite safety", () => {
@@ -83,7 +88,7 @@ describe("workspace setup-only SQLite safety", () => {
     const expiredAtMs = Date.now() - 25 * 60 * 60 * 1000;
     const db = openOpenClawStateDatabase().db;
     db.prepare(
-      "UPDATE workspace_attestations SET attested_at_ms = ?, updated_at_ms = ? WHERE workspace_key = ?",
+      "UPDATE workspace_setup_state SET attested_at_ms = ?, attestation_updated_at_ms = ? WHERE workspace_key = ?",
     ).run(expiredAtMs, expiredAtMs, identity.workspaceKey);
     db.prepare("UPDATE workspace_setup_state SET updated_at = ? WHERE workspace_key = ?").run(
       expiredAtMs,

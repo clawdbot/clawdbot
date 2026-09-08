@@ -2,9 +2,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveMemorySlotDecision } from "./config-state.js";
 import { loadPluginManifest } from "./manifest.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
@@ -12,6 +13,10 @@ const tempDirs: string[] = [];
 function makeTempDir() {
   return makeTrackedTempDir("openclaw-manifest-json5", tempDirs);
 }
+
+beforeEach(() => {
+  clearPluginMetadataLifecycleCaches();
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -93,7 +98,7 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     expect(json5Parse).not.toHaveBeenCalled();
   });
 
-  it("reuses unchanged manifest loads by file signature", () => {
+  it("reuses unchanged manifest loads within one lifecycle generation", () => {
     const dir = makeTempDir();
     fs.writeFileSync(
       path.join(dir, "openclaw.plugin.json"),
@@ -103,14 +108,11 @@ describe("loadPluginManifest JSON5 tolerance", () => {
       }),
       "utf-8",
     );
-    const readFileSync = vi.spyOn(fs, "readFileSync");
-
     const first = loadPluginManifest(dir, false);
     const second = loadPluginManifest(dir, false);
 
     expect(first.ok).toBe(true);
-    expect(second.ok).toBe(true);
-    expect(readFileSync).toHaveBeenCalledTimes(1);
+    expect(second).toBe(first);
   });
 
   it("parses a manifest with trailing commas", () => {

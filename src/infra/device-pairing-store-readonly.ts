@@ -15,3 +15,10 @@ export function loadDevicePairingStoreStateReadOnly(baseDir?: string): DevicePai
     ) ?? { pendingById: {}, pairedByDeviceId: {} }
   );
 }
+
+/** Read paired-device authority synchronously for closure-bound privileged use. */
+export function listPairedDevicesReadOnly(baseDir?: string) {
+  return Object.values(loadDevicePairingStoreStateReadOnly(baseDir).pairedByDeviceId).toSorted(
+    (a, b) => b.approvedAtMs - a.approvedAtMs,
+  );
+}

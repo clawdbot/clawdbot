@@ -1,16 +1,26 @@
 // Doctor-only import for the retired exec approvals JSON store.
+import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { root, type Root } from "@openclaw/fs-safe";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { err, ok } from "@openclaw/normalization-core/result";
+import { z } from "zod";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
+  normalizeExecApprovalsInternal,
+  parsePersistedExecApprovals,
   resolveExecApprovalsPath,
   tryParsePersistedExecApprovals,
 } from "./exec-approvals-config.js";
+import type { ExecApprovalsFile } from "./exec-approvals-core.js";
+import { ExecApprovalsMigrationRequiredError } from "./exec-approvals-migration-gate.js";
 import {
   readExecApprovalsConfigRow,
   serializeExecApprovals,
   writeExecApprovalsConfigRow,
 } from "./exec-approvals-sqlite.js";
+import { pathMayExistSync } from "./path-existence.js";
 import type { LegacyExecApprovalsDetection } from "./state-migrations.exec-approvals.types.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
@@ -36,12 +46,52 @@ const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
 type LegacySourceSnapshot = Omit<LegacyMigrationSourceSnapshot, "raw"> & { raw: string | null };
 
+// Only the observed policy-free stub may omit its version. Unknown fields or
+// nonempty policy are not proof that a legacy file is safe to retire.
+const emptyLegacyExecApprovalsSchema = z.strictObject({
+  version: z.literal(1).optional(),
+  defaults: z.strictObject({}),
+  agents: z.strictObject({}),
+  socket: z.strictObject({ path: z.string().optional(), token: z.string().optional() }).optional(),
+});
+
+type ArchivedEmptyLegacy = { file: ExecApprovalsFile; archivePath: string };
+
 type MigrationDecision =
+  | "empty-legacy-retired"
   | "canonical-preserved"
   | "invalid-canonical-repaired"
   | "legacy-imported"
   | "malformed-legacy-preserved"
   | "receipt-authoritative";
+
+function normalizeLegacyNullableUsageMetadata(raw: string): string {
+  const parsed = safeParseJsonRecord(raw);
+  if (!parsed || !isRecord(parsed.agents)) {
+    return raw;
+  }
+
+  let changed = false;
+  for (const agent of Object.values(parsed.agents)) {
+    if (!isRecord(agent) || !Array.isArray(agent.allowlist)) {
+      continue;
+    }
+    for (const entry of agent.allowlist) {
+      if (!isRecord(entry)) {
+        continue;
+      }
+      // Legacy files can contain null usage metadata. Repair only these fields at
+      // import so canonical policy validation remains strict.
+      for (const key of ["lastUsedAt", "lastUsedCommand"]) {
+        if (entry[key] === null) {
+          delete entry[key];
+          changed = true;
+        }
+      }
+    }
+  }
+  return changed ? JSON.stringify(parsed) : raw;
+}
 
 /** Detect retired approvals only when an explicit Doctor flow opts in. */
 export function detectLegacyExecApprovals(params: {
@@ -82,12 +132,17 @@ function decideAndRecordMigration(params: {
   env: NodeJS.ProcessEnv;
   sourcePath: string;
   snapshot: LegacySourceSnapshot;
-}): { decision: MigrationDecision; removeSource: boolean; sourceKey: string } {
+  emptyStub?: ArchivedEmptyLegacy;
+}): { message: string; removeSource: boolean; sourceKey: string } {
   const sourceKey = resolveLegacyMigrationSourceKey("exec-approvals-json", params.sourcePath);
   const runId = `${sourceKey}:${params.snapshot.sha256.slice(0, 16)}`;
   const now = Date.now();
-  const legacyFile =
-    params.snapshot.raw === null ? null : tryParsePersistedExecApprovals(params.snapshot.raw);
+  const legacy = params.emptyStub
+    ? ok<ExecApprovalsFile, string>(params.emptyStub.file)
+    : params.snapshot.raw === null
+      ? err<never, string>("invalid UTF-8 encoding")
+      : parsePersistedExecApprovals(normalizeLegacyNullableUsageMetadata(params.snapshot.raw));
+  const legacyFile = legacy.ok ? legacy.value : null;
 
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
@@ -109,7 +164,15 @@ function decideAndRecordMigration(params: {
       }
       let decision: MigrationDecision;
       let removeSource = false;
-      if (!legacyFile || params.snapshot.raw === null) {
+      // A running exec host retains its socket credential. Import it when SQLite
+      // is absent; a policy-free stub must never replace an existing canonical row.
+      if (
+        params.emptyStub &&
+        (canonical || (!legacyFile?.socket?.path && !legacyFile?.socket?.token))
+      ) {
+        decision = "empty-legacy-retired";
+        removeSource = true;
+      } else if (!legacyFile || params.snapshot.raw === null) {
         decision = "malformed-legacy-preserved";
       } else if (receiptImportedSameSource && canonicalFile) {
         decision = "receipt-authoritative";
@@ -163,10 +226,16 @@ function decideAndRecordMigration(params: {
         decision,
         sourceSha256: params.snapshot.sha256,
         sourceValid: legacyFile !== null,
+        ...(params.emptyStub ? { archivePath: params.emptyStub.archivePath } : {}),
         importedRecordCount:
           decision === "legacy-imported" || decision === "invalid-canonical-repaired" ? 1 : 0,
         preservedSqliteRecordCount:
-          decision === "canonical-preserved" || decision === "receipt-authoritative" ? 1 : 0,
+          canonical &&
+          decision !== "legacy-imported" &&
+          decision !== "invalid-canonical-repaired" &&
+          decision !== "malformed-legacy-preserved"
+            ? 1
+            : 0,
         removesSource: removeSource,
       });
       recordLegacyMigrationReceipt(db, {
@@ -176,37 +245,33 @@ function decideAndRecordMigration(params: {
         targetTable: TARGET_TABLE,
         sourceSha256: params.snapshot.sha256,
         sourceSizeBytes: params.snapshot.size,
-        sourceRecordCount: legacyFile ? 1 : 0,
+        sourceRecordCount: legacyFile && decision !== "empty-legacy-retired" ? 1 : 0,
         runId,
         now,
         reportJson,
         upsert: true,
       });
-      return { decision, removeSource, sourceKey };
+      const message = removeSource
+        ? decisionMessages[decision]
+        : legacy.ok
+          ? "Conflicting legacy exec approvals remain"
+          : `Invalid legacy exec approvals (${legacy.error})`;
+      return { message, removeSource, sourceKey };
     },
     { env: params.env },
     { operationLabel: "state-migration.exec-approvals" },
   );
 }
 
-function decisionMessage(decision: MigrationDecision, removeSource: boolean): string {
-  switch (decision) {
-    case "legacy-imported":
-      return "Imported legacy exec approvals into shared SQLite state.";
-    case "invalid-canonical-repaired":
-      return "Replaced an invalid SQLite exec approvals row with validated legacy state.";
-    case "canonical-preserved":
-      return removeSource
-        ? "Preserved byte-identical canonical SQLite exec approvals."
-        : "Preserved canonical SQLite exec approvals and retained conflicting legacy JSON.";
-    case "malformed-legacy-preserved":
-      return "Preserved malformed legacy exec approvals for operator recovery.";
-    case "receipt-authoritative":
-      return "Completed cleanup for previously imported legacy exec approvals.";
-  }
-  const unreachable: never = decision;
-  return unreachable;
-}
+const decisionMessages: Record<MigrationDecision, string> = {
+  "empty-legacy-retired": "Archived empty legacy exec approvals without changing SQLite policy.",
+  "legacy-imported": "Imported legacy exec approvals into shared SQLite state.",
+  "invalid-canonical-repaired":
+    "Replaced an invalid SQLite exec approvals row with validated legacy state.",
+  "canonical-preserved": "Preserved byte-identical canonical SQLite exec approvals.",
+  "malformed-legacy-preserved": "Preserved malformed legacy exec approvals for operator recovery.",
+  "receipt-authoritative": "Completed cleanup for previously imported legacy exec approvals.",
+};
 
 async function migrateWithExclusiveStateOwnership(params: {
   detected: LegacyExecApprovalsDetection;
@@ -269,11 +334,39 @@ async function migrateWithExclusiveStateOwnership(params: {
   }
 
   let result: ReturnType<typeof decideAndRecordMigration>;
+  let emptyStub: ArchivedEmptyLegacy | undefined;
   try {
+    const parsedStub = emptyLegacyExecApprovalsSchema.safeParse(
+      snapshot.raw === null ? null : safeParseJsonRecord(snapshot.raw),
+    );
+    if (parsedStub.success) {
+      const archiveSuffix = `.migrated.${snapshot.sha256}.${randomUUID()}`;
+      const archivePath = `${sourcePath}${archiveSuffix}`;
+      // Keep exact bytes before retirement; a fresh no-clobber backup lets retries
+      // recover even when an earlier archive write was interrupted.
+      await params.stateRoot.create(
+        `${source.sourceRelativePath}${archiveSuffix}`,
+        snapshot.buffer,
+        { mode: 0o600 },
+      );
+      const archived = await readLegacySourceSnapshot(
+        params.stateRoot,
+        params.stateDir,
+        archivePath,
+      );
+      if (archived.sha256 !== snapshot.sha256) {
+        throw new Error("legacy exec approvals archive differs from the claimed source");
+      }
+      emptyStub = {
+        archivePath,
+        file: normalizeExecApprovalsInternal({ ...parsedStub.data, version: 1 }),
+      };
+    }
     result = decideAndRecordMigration({
       env: params.env,
       sourcePath,
       snapshot,
+      emptyStub,
     });
   } catch (error) {
     const restoreError = await source.restore();
@@ -290,7 +383,7 @@ async function migrateWithExclusiveStateOwnership(params: {
     return {
       changes: [],
       warnings: [
-        `${decisionMessage(result.decision, result.removeSource)}${restoreError ? ` Claim restore failed: ${restoreError}` : ""}`,
+        `${result.message}${restoreError ? ` Claim restore failed: ${restoreError}` : ""}`,
       ],
     };
   }
@@ -321,9 +414,12 @@ async function migrateWithExclusiveStateOwnership(params: {
     );
   }
   return {
-    changes: [decisionMessage(result.decision, result.removeSource)],
+    changes: [result.message],
     warnings,
-    notices: ["Removed retired exec approvals JSON after recording its migration decision."],
+    notices: [
+      ...(emptyStub ? [`Archived empty legacy exec approvals at ${emptyStub.archivePath}.`] : []),
+      "Removed retired exec approvals JSON after recording its migration decision.",
+    ],
   };
 }
 
@@ -340,13 +436,13 @@ export async function migrateLegacyExecApprovals(params: {
   if (!detected?.hasLegacy) {
     return { changes: [], warnings: [] };
   }
-  return await withLegacyMigrationStateLock({
+  const result = await withLegacyMigrationStateLock({
     stateDir: params.stateDir,
     env: params.env,
     label: "legacy exec approvals",
     releaseLabel: "Exec approvals",
     errorLabel: "Failed reading legacy exec approvals",
-    retryGuidance: "Stop the Gateway, then run `openclaw doctor --fix` again.",
+    retryGuidance: `Stop the Gateway and node hosts holding ${params.stateDir}.`,
     run: async (env) => {
       const stateRoot = await root(params.stateDir, {
         hardlinks: "reject",
@@ -361,4 +457,22 @@ export async function migrateLegacyExecApprovals(params: {
       });
     },
   });
+  if (result.changes.length > 0) {
+    return result;
+  }
+  const retainedPaths = [
+    detected.sourcePath,
+    `${detected.sourcePath}${DOCTOR_CLAIM_SUFFIX}`,
+  ].filter(pathMayExistSync);
+  return {
+    ...result,
+    warnings: result.warnings.map(
+      (problem) =>
+        new ExecApprovalsMigrationRequiredError(
+          retainedPaths.join(", ") || detected.sourcePath,
+          "doctor",
+          problem,
+        ).message,
+    ),
+  };
 }

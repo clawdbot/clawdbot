@@ -1,6 +1,8 @@
-import { mkdir } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -26,15 +28,15 @@ const models = [
   },
 ];
 
-const proofDir =
-  process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-    ? path.join(process.cwd(), ".artifacts", "control-ui-e2e", "model-alias-display")
-    : null;
+let proofDir: string | null;
+beforeEach(() => {
+  proofDir =
+    process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+      ? createControlUiE2eArtifactDir("model-alias-display")
+      : null;
+});
 
 async function createProofContext() {
-  if (proofDir) {
-    await mkdir(proofDir, { recursive: true });
-  }
   return suite.newBrowserContext({
     locale: "en-US",
     serviceWorkers: "block",
@@ -77,23 +79,23 @@ suite.define(() => {
       await expect.poll(() => sonnet.textContent()).toBe("Sonnet 5 · sonnet");
 
       if (proofDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(proofDir, "anthropic-versioned-model-aliases.png"),
-        });
+        await writeFile(
+          path.join(proofDir, "anthropic-versioned-model-aliases.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [opus, sonnet]),
+        );
       }
 
       const nvidia = main.locator(
         '[data-chat-model-option="nvidia/moonshotai/kimi-k2.5"] .chat-controls__model-option-name',
       );
-      await expect.poll(() => nvidia.textContent()).toBe("Kimi K2.5 (NVIDIA)");
+      await expect.poll(() => nvidia.textContent()).toBe("Kimi K2.5");
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
 
       if (proofDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(proofDir, "preserved-nvidia-model-alias.png"),
-        });
+        await writeFile(
+          path.join(proofDir, "preserved-nvidia-model-alias.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [nvidia]),
+        );
       }
     } finally {
       await suite.closeBrowserContext(context);
@@ -160,10 +162,10 @@ suite.define(() => {
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
 
       if (proofDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(proofDir, "agents-versioned-model-aliases.png"),
-        });
+        await writeFile(
+          path.join(proofDir, "agents-versioned-model-aliases.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [select]),
+        );
       }
     } finally {
       await suite.closeBrowserContext(context);

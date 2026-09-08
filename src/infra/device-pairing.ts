@@ -7,7 +7,6 @@ import { isProgressCardRendererClient } from "../utils/message-channel.js";
 import { revokeDeviceBootstrapTokensForDevice } from "./device-bootstrap.js";
 import {
   cloneDevicePairingTokens,
-  isPairingRequestExpired,
   loadDevicePairingState,
   loadDevicePairingStateReadOnly,
   mergeDevicePairingRoles,
@@ -45,13 +44,8 @@ export type NodePairingGeneration = {
   key: string;
 };
 
-export type NodePairingIdentity = {
-  nodeId: string;
-  key: string;
-};
-
 export type NodePairingState = {
-  identity: NodePairingIdentity;
+  identity: { nodeId: string; key: string };
   generation: NodePairingGeneration | null;
 };
 
@@ -185,7 +179,9 @@ export function hasEffectivePairedDeviceRole(
 }
 
 /** Resolve the authenticated node pairing independently of surface approval. */
-function resolveNodePairingIdentity(device: PairedDevice | null): NodePairingIdentity | null {
+function resolveNodePairingIdentity(
+  device: PairedDevice | null,
+): NodePairingState["identity"] | null {
   if (!device || !hasEffectivePairedDeviceRole(device, "node")) {
     return null;
   }
@@ -429,11 +425,7 @@ export async function getPairedDevice(
   deviceId: string,
   baseDir?: string,
 ): Promise<PairedDevice | null> {
-  const device = loadPairedDevicePairingStoreRecord(normalizeDevicePairingId(deviceId), baseDir);
-  if (device?.pendingNodeSurface && isPairingRequestExpired(device.pendingNodeSurface.ts)) {
-    delete device.pendingNodeSurface;
-  }
-  return device;
+  return loadPairedDevicePairingStoreRecord(normalizeDevicePairingId(deviceId), baseDir);
 }
 
 /** Return one pending pairing request by request id. */

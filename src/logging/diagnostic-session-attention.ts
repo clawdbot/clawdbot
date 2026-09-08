@@ -31,7 +31,17 @@ export function classifySessionAttention(params: {
   activity: DiagnosticSessionActivitySnapshot;
   staleMs: number;
   stuckSessionAbortMs?: number;
+  runtimeOwnsLiveness?: boolean;
 }): SessionAttentionClassification {
+  if (params.runtimeOwnsLiveness) {
+    return {
+      eventType: "session.long_running",
+      reason: "runtime_owned_wait",
+      classification: "long_running",
+      activeWorkKind: params.activity.activeWorkKind,
+      recoveryEligible: false,
+    };
+  }
   if (params.activity.activeWorkKind) {
     const lastProgressAgeMs = params.activity.lastProgressAgeMs ?? 0;
     if (

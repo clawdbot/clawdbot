@@ -4,10 +4,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
-  requiresNativeThreadContextForThreadHere,
   resolveThreadBindingIdleTimeoutMs,
   resolveThreadBindingMaxAgeMs,
-  resolveThreadBindingPlacementForCurrentContext,
   resolveThreadBindingSpawnPolicy,
   supportsAutomaticThreadBindingSpawn,
 } from "./thread-bindings-policy.js";
@@ -40,36 +38,6 @@ describe("thread binding spawn policy helpers", () => {
     expect(supportsAutomaticThreadBindingSpawn("child-chat")).toBe(true);
     expect(supportsAutomaticThreadBindingSpawn("current-chat")).toBe(false);
     expect(supportsAutomaticThreadBindingSpawn("unknown-chat")).toBe(false);
-  });
-
-  it("allows thread-here on threadless conversation channels without a native thread id", () => {
-    expect(requiresNativeThreadContextForThreadHere("current-chat")).toBe(false);
-    expect(requiresNativeThreadContextForThreadHere("unknown-chat")).toBe(false);
-    expect(requiresNativeThreadContextForThreadHere("child-chat")).toBe(true);
-  });
-
-  it("resolves current vs child placement from the current channel context", () => {
-    expect(
-      resolveThreadBindingPlacementForCurrentContext({
-        channel: "child-chat",
-      }),
-    ).toBe("child");
-    expect(
-      resolveThreadBindingPlacementForCurrentContext({
-        channel: "child-chat",
-        threadId: "thread-1",
-      }),
-    ).toBe("current");
-    expect(
-      resolveThreadBindingPlacementForCurrentContext({
-        channel: "current-chat",
-      }),
-    ).toBe("current");
-    expect(
-      resolveThreadBindingPlacementForCurrentContext({
-        channel: "unknown-chat",
-      }),
-    ).toBe("current");
   });
 
   it("enables unified thread-bound session spawns by default", () => {

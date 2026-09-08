@@ -1,9 +1,14 @@
 /** Cleans up embedded attempt subscription resources. */
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { isFastTestRuntimeEnv } from "../../../infra/test-runtime-env.js";
+import { recordAgentCleanupFailure, runAgentCleanupStep } from "../../run-cleanup-timeout.js";
 import { log } from "../logger.js";
-import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt-finalize.js";
 
-/** Shared timeout for waiting on aborted model/prompt cleanup before releasing resources. */
-const EMBEDDED_ABORT_SETTLE_TIMEOUT_MS = resolveEmbeddedAbortSettleTimeoutMs();
+// Invalid overrides retain the normal/test defaults; partial numeric parsing
+// must not silently widen cleanup waits.
+const EMBEDDED_ABORT_SETTLE_TIMEOUT_MS =
+  parseStrictPositiveInteger(process.env.OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS) ??
+  (isFastTestRuntimeEnv() ? 250 : 2_000);
 
 type IdleAwareAgent = {
   waitForIdle?: (() => Promise<void>) | undefined;
@@ -14,39 +19,26 @@ type ToolResultFlushManager = {
   clearPendingToolResults?: (() => void) | undefined;
 };
 
-async function waitForEmbeddedAbortSettle(params: {
+export async function waitForEmbeddedAbortSettle(params: {
   promise: Promise<unknown> | null | undefined;
   runId: string;
   sessionId: string;
+  reason?: "embedded" | "sessions_yield";
 }): Promise<void> {
   if (!params.promise) {
     return;
   }
 
-  let timeout: NodeJS.Timeout | undefined;
-  // Abort settlement is advisory cleanup; timeout or errors are logged but do
-  // not block disposing attempt-owned resources.
-  const outcome = await Promise.race([
-    params.promise
-      .then(() => "settled" as const)
-      .catch((err: unknown) => {
-        log.warn(
-          `embedded abort settle failed: runId=${params.runId} sessionId=${params.sessionId} err=${String(err)}`,
-        );
-        return "errored" as const;
-      }),
-    new Promise<"timed_out">((resolve) => {
-      timeout = setTimeout(() => resolve("timed_out"), EMBEDDED_ABORT_SETTLE_TIMEOUT_MS);
-    }),
-  ]);
-  if (timeout) {
-    clearTimeout(timeout);
-  }
-  if (outcome === "timed_out") {
-    log.warn(
-      `embedded abort settle timed out: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${EMBEDDED_ABORT_SETTLE_TIMEOUT_MS}`,
-    );
-  }
+  await runAgentCleanupStep({
+    runId: params.runId,
+    sessionId: params.sessionId,
+    step: `${params.reason ?? "embedded"}-abort-settle`,
+    log,
+    timeoutMs: EMBEDDED_ABORT_SETTLE_TIMEOUT_MS,
+    cleanup: async () => {
+      await params.promise;
+    },
+  });
 }
 
 /**
@@ -72,7 +64,7 @@ export async function cleanupEmbeddedAttemptResources(params: {
   try {
     params.removeToolResultContextGuard?.();
   } catch {
-    /* best-effort */
+    recordAgentCleanupFailure();
   }
   if (params.aborted && params.abortSettlePromise) {
     await waitForEmbeddedAbortSettle({
@@ -88,22 +80,22 @@ export async function cleanupEmbeddedAttemptResources(params: {
       ...(params.aborted ? { timeoutMs: 0 } : {}),
     });
   } catch {
-    /* best-effort */
+    recordAgentCleanupFailure();
   }
 
   try {
     params.session?.dispose();
   } catch {
-    /* best-effort */
+    recordAgentCleanupFailure();
   }
   try {
     await params.bundleMcpRuntime?.dispose();
   } catch {
-    /* best-effort */
+    recordAgentCleanupFailure();
   }
   try {
     await params.bundleLspRuntime?.dispose();
   } catch {
-    /* best-effort */
+    recordAgentCleanupFailure();
   }
 }

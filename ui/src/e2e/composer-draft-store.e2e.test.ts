@@ -23,7 +23,7 @@ async function rawDraftRecords(page: Page, scopes: readonly TestDraftScope[], ex
           });
         });
       const database = await requestResult(
-        indexedDB.open("openclaw-control-ui", 1),
+        indexedDB.open("openclaw-control-ui"),
         "IndexedDB open failed",
       );
       const transaction = database.transaction(
@@ -64,6 +64,309 @@ async function rawDraftRecords(page: Page, scopes: readonly TestDraftScope[], ex
 }
 
 suite.define(() => {
+  it("does not reuse a cached composer owner while reconnect authentication is unresolved", async () => {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const storeHandle = await page.evaluateHandle<
+        typeof import("../lib/chat/composer-draft-store.runtime.ts")
+      >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
+      const composerHandle = await page.evaluateHandle<
+        typeof import("../pages/chat/composer-persistence.ts")
+      >('import("/src/pages/chat/composer-persistence.ts")');
+      const sessionKeyHandle = await page.evaluateHandle<
+        typeof import("../lib/sessions/session-key.ts")
+      >('import("/src/lib/sessions/session-key.ts")');
+      const result = await page.evaluate(
+        async ({ draftStore, sessionKeys, composer }) => {
+          const client = { recoveryScope: "credential-a", recoveryScopeReady: true };
+          const state = {
+            settings: { gatewayUrl: "owner-fence-gateway" },
+            hello: null,
+            sessionKey: "agent:main:owner-fence",
+            chatMessage: "",
+            chatAttachments: [],
+            chatQueue: [],
+            client,
+            connected: true,
+            selectedChatSessionIncognito: false,
+          };
+          const scope = {
+            gatewayOwner: state.settings.gatewayUrl,
+            recoveryScope: client.recoveryScope,
+            scopeKey: `chat:v3:${composer.storedChatOutboxScopeKey(
+              sessionKeys.resolveUiConversationIdentity(state, state.sessionKey),
+            )}`,
+          };
+          const persistence = new composer.ChatComposerPersistence(() => state);
+          persistence.start();
+          state.connected = false;
+          client.recoveryScopeReady = false;
+          state.chatMessage = "authenticated offline draft";
+          persistence.persistChangedState();
+          let offlineStored = false;
+          for (let attempt = 0; attempt < 100; attempt += 1) {
+            const stored = await draftStore.readDurableComposerDraft(scope);
+            if (stored.status === "found" && stored.draft.text === state.chatMessage) {
+              offlineStored = true;
+              break;
+            }
+            await new Promise((resolve) => {
+              setTimeout(resolve, 10);
+            });
+          }
+          if (!offlineStored) {
+            throw new Error("offline composer draft did not settle");
+          }
+
+          state.connected = true;
+          state.chatMessage = "unresolved reconnect draft";
+          persistence.persistChangedState();
+          // Let a wrongly admitted fire-and-forget write open its transaction,
+          // then commit a later transaction in the same object store as a barrier.
+          await Promise.resolve();
+          await draftStore.writeDurableComposerDraft(
+            { ...scope, recoveryScope: "credential-b", scopeKey: "reconnect-barrier" },
+            { revision: 1, text: "barrier", attachments: [] },
+            { expectedRevision: 0, writeId: "reconnect-barrier" },
+          );
+          return draftStore.readDurableComposerDraft(scope);
+        },
+        { draftStore: storeHandle, sessionKeys: sessionKeyHandle, composer: composerHandle },
+      );
+
+      expect(result).toMatchObject({
+        status: "found",
+        draft: { text: "authenticated offline draft" },
+      });
+    });
+  });
+
+  it("migrates identifiable attachment drafts and atomically retains failed or conflicting recovery", async () => {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}settings`);
+      const handle = await page.evaluateHandle<
+        typeof import("../lib/chat/composer-draft-store.runtime.ts")
+      >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
+      const result = await page.evaluate(async (store) => {
+        const owner = { gatewayOwner: "migration-gateway", recoveryScope: "migration-account" };
+        const qualified = { ...owner, scopeKey: "agent:work:main\u0000agent:work" };
+        const ambiguous = { ...owner, scopeKey: "global\u0000agent:work" };
+        const attachment = {
+          blob: new Blob(["preserve these bytes"], { type: "text/plain" }),
+          mimeType: "text/plain",
+          fileName: "saved.txt",
+        };
+        for (const scope of [qualified, ambiguous]) {
+          await store.writeDurableComposerDraft(
+            scope,
+            { revision: 42, text: "saved attachment draft", attachments: [attachment] },
+            { expectedRevision: 0, writeId: "legacy" },
+          );
+        }
+        const migrated = await store.prepareDurableComposerRecovery(owner);
+        if (migrated.status !== "ready" || migrated.entries.length !== 1) {
+          throw new Error("Expected one ambiguous draft");
+        }
+        const entry = migrated.entries[0]!;
+        const canonical = { ...owner, scopeKey: "chat:v3:agent:work:main\u0000agent:work" };
+        const identified = await store.readDurableComposerDraft(canonical);
+        const destination = { ...owner, scopeKey: "chat:v3:agent:work:review\u0000agent:work" };
+        const originalPut = Object.getOwnPropertyDescriptor(IDBObjectStore.prototype, "put")
+          ?.value as IDBObjectStore["put"];
+        IDBObjectStore.prototype.put = function (value, key) {
+          if (value.scopeKey === ambiguous.scopeKey) {
+            throw new DOMException("quota", "QuotaExceededError");
+          }
+          return key === undefined
+            ? originalPut.call(this, value)
+            : originalPut.call(this, value, key);
+        };
+        const failed = await store.restoreDurableComposerRecovery(
+          destination,
+          entry,
+          0,
+          undefined,
+          () => true,
+          0,
+        );
+        IDBObjectStore.prototype.put = originalPut;
+        const afterFailure = await store.readDurableComposerDraft(ambiguous);
+        const failedDestination = await store.readDurableComposerDraft(destination);
+        await store.writeDurableComposerDraft(
+          destination,
+          { revision: 50, text: "newer destination", attachments: [] },
+          { expectedRevision: 0, writeId: "newer" },
+        );
+        const conflict = await store.restoreDurableComposerRecovery(
+          destination,
+          entry,
+          0,
+          undefined,
+          () => true,
+          0,
+        );
+        const newer = await store.readDurableComposerDraft(destination);
+        const fence = await store.retireDurableComposerDraft(destination, 50);
+        if (fence.status !== "persisted" || fence.revision === undefined) {
+          throw new Error("Missing destination fence");
+        }
+        const staleOwner = await store.restoreDurableComposerRecovery(
+          destination,
+          entry,
+          fence.revision!,
+          fence.writeId,
+          () => false,
+          0,
+        );
+        const restored = await store.restoreDurableComposerRecovery(
+          destination,
+          entry,
+          fence.revision!,
+          fence.writeId,
+          () => true,
+          fence.revision!,
+        );
+        const recovered = await store.readDurableComposerDraft(destination);
+        const sourceAfter = await store.readDurableComposerDraft(ambiguous);
+        // A downgraded reader can start a new draft behind the source tombstone.
+        const oldFence = await store.readDurableComposerDraft(qualified);
+        if (oldFence.status !== "not-found" || oldFence.revision === undefined) {
+          throw new Error("Missing legacy fence");
+        }
+        await store.writeDurableComposerDraft(
+          qualified,
+          {
+            revision: oldFence.revision + 1,
+            text: "older UI new draft",
+            attachments: [attachment],
+          },
+          {
+            expectedRevision: oldFence.revision,
+            expectedWriteId: oldFence.writeId,
+            writeId: "downgraded",
+          },
+        );
+        const reopened = await store.prepareDurableComposerRecovery(owner);
+        return {
+          identified:
+            identified.status === "found"
+              ? {
+                  text: identified.draft.text,
+                  revision: identified.draft.revision,
+                  writeId: identified.draft.writeId,
+                  bytes: await identified.draft.attachments[0]!.blob.text(),
+                }
+              : null,
+          failed: failed.status,
+          afterFailure: afterFailure.status,
+          failedDestination: failedDestination.status,
+          conflict: conflict.status,
+          newer: newer.status === "found" ? newer.draft.text : null,
+          staleOwner: staleOwner.status,
+          restored: restored.status,
+          sourceAfter: sourceAfter.status,
+          recovered:
+            recovered.status === "found" ? await recovered.draft.attachments[0]!.blob.text() : null,
+          reopened: reopened.status === "ready" ? reopened.entries.map((row) => row.text) : null,
+        };
+      }, handle);
+      expect(result).toEqual({
+        identified: {
+          text: "saved attachment draft",
+          revision: 42,
+          writeId: "legacy",
+          bytes: "preserve these bytes",
+        },
+        failed: "storage-failed",
+        afterFailure: "found",
+        failedDestination: "not-found",
+        conflict: "conflict",
+        newer: "newer destination",
+        staleOwner: "conflict",
+        restored: "persisted",
+        sourceAfter: "not-found",
+        recovered: "preserve these bytes",
+        reopened: ["older UI new draft"],
+      });
+    });
+  });
+
+  it("reads the requested draft before global expiry maintenance settles", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block" },
+      async ({ context, page }) => {
+        await installMockGateway(page);
+        await page.goto(`${suite.server.baseUrl}settings`);
+        const scope = {
+          gatewayOwner: "foreground-gateway",
+          recoveryScope: "foreground-credential",
+          scopeKey: "foreground-draft",
+        };
+        const seedStoreHandle = await page.evaluateHandle<
+          typeof import("../lib/chat/composer-draft-store.runtime.ts")
+        >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
+        await page.evaluate(
+          ({ draftScope, draftStore }) =>
+            draftStore.writeDurableComposerDraft(
+              draftScope,
+              { revision: 1, text: "restore before maintenance", attachments: [] },
+              { expectedRevision: 0, writeId: "foreground-write" },
+            ),
+          { draftScope: scope, draftStore: seedStoreHandle },
+        );
+
+        await page.close();
+        const reopened = await context.newPage();
+        await reopened.addInitScript(() => {
+          const blockedTransactions = new WeakSet<IDBTransaction>();
+          const originalOpenCursor = Object.getOwnPropertyDescriptor(
+            IDBObjectStore.prototype,
+            "openCursor",
+          )?.value as IDBObjectStore["openCursor"];
+          IDBObjectStore.prototype.openCursor = function (this: IDBObjectStore, ...args) {
+            if (this.name === "composerDrafts") {
+              blockedTransactions.add(this.transaction);
+            }
+            return originalOpenCursor.apply(this, args);
+          };
+          IDBTransaction.prototype.addEventListener = function (
+            this: IDBTransaction,
+            type: string,
+            listener: EventListenerOrEventListenerObject,
+            options?: boolean | AddEventListenerOptions,
+          ) {
+            if (type === "complete" && blockedTransactions.has(this)) {
+              return;
+            }
+            return EventTarget.prototype.addEventListener.call(this, type, listener, options);
+          } as IDBTransaction["addEventListener"];
+        });
+        await installMockGateway(reopened);
+        await reopened.goto(`${suite.server.baseUrl}settings`);
+        const reopenedStoreHandle = await reopened.evaluateHandle<
+          typeof import("../lib/chat/composer-draft-store.runtime.ts")
+        >('import("/src/lib/chat/composer-draft-store.runtime.ts")');
+        const result = await reopened.evaluate(
+          ({ draftScope, draftStore }) =>
+            Promise.race([
+              draftStore.readDurableComposerDraft(draftScope),
+              new Promise((resolve) => {
+                setTimeout(() => resolve({ status: "maintenance-blocked-read" }), 1_000);
+              }),
+            ]),
+          { draftScope: scope, draftStore: reopenedStoreHandle },
+        );
+
+        expect(result).toMatchObject({
+          status: "found",
+          draft: { text: "restore before maintenance" },
+        });
+      },
+    );
+  });
+
   it("expires drafts across abandoned credential owners on the next database open", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block" },
@@ -136,11 +439,14 @@ suite.define(() => {
       const composerHandle = await page.evaluateHandle<
         typeof import("../pages/chat/composer-persistence.ts")
       >('import("/src/pages/chat/composer-persistence.ts")');
+      const sessionKeyHandle = await page.evaluateHandle<
+        typeof import("../lib/sessions/session-key.ts")
+      >('import("/src/lib/sessions/session-key.ts")');
       const durableHandle = await page.evaluateHandle<
         typeof import("../pages/chat/durable-composer-persistence.ts")
       >('import("/src/pages/chat/durable-composer-persistence.ts")');
       const result = await page.evaluate(
-        async ({ draftStore, composer, durable }) => {
+        async ({ draftStore, sessionKeys, composer, durable }) => {
           const waitFor = async (predicate: () => Promise<boolean>) => {
             for (let attempt = 0; attempt < 100; attempt += 1) {
               if (await predicate()) {
@@ -154,6 +460,7 @@ suite.define(() => {
           };
           const state = {
             settings: { gatewayUrl: "incognito-chat-gateway" },
+            hello: null,
             sessionKey: "agent:main:incognito-chat",
             chatMessage: "",
             chatAttachments: [] as import("../lib/chat/chat-types.ts").ChatAttachment[],
@@ -165,11 +472,11 @@ suite.define(() => {
             connected: true,
             selectedChatSessionIncognito: false,
           };
-          const storedScope = composer.resolveStoredChatOutboxScope(state, state.sessionKey);
+          const storedScope = sessionKeys.resolveUiConversationIdentity(state, state.sessionKey);
           const scope = {
             gatewayOwner: state.settings.gatewayUrl,
             recoveryScope: state.client.recoveryScope,
-            scopeKey: composer.storedChatOutboxScopeKey(storedScope),
+            scopeKey: `chat:v3:${composer.storedChatOutboxScopeKey(storedScope)}`,
           };
           const persistence = new composer.ChatComposerPersistence(() => state);
           persistence.start();
@@ -214,7 +521,12 @@ suite.define(() => {
             attachments: restartedState.chatAttachments.length,
           };
         },
-        { draftStore: storeHandle, composer: composerHandle, durable: durableHandle },
+        {
+          draftStore: storeHandle,
+          sessionKeys: sessionKeyHandle,
+          composer: composerHandle,
+          durable: durableHandle,
+        },
       );
 
       expect(result).toEqual({ message: "", attachments: 0 });
@@ -325,7 +637,8 @@ suite.define(() => {
             oversizedScope,
             {
               revision: 30,
-              text: "oversized",
+              text: "@Alex oversized",
+              mentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
               attachments: [
                 {
                   blob: tooLargeBlob,
@@ -376,7 +689,6 @@ suite.define(() => {
             expectedRevision: 0,
             revision: 59,
             text: "stale attachment draft",
-            attachments: [],
             storedAttachments: null,
             writeId: "stale-missing-payload",
           });
@@ -535,7 +847,7 @@ suite.define(() => {
           );
           resetLineagePersistence.activateRoute(resetLineageScope.scopeKey);
           await waitFor(async () => resetLineageState.message === "cached predecessor");
-          const databaseRequest = indexedDB.open("openclaw-control-ui", 1);
+          const databaseRequest = indexedDB.open("openclaw-control-ui");
           const database = await new Promise<IDBDatabase>((resolve, reject) => {
             databaseRequest.addEventListener("success", () => resolve(databaseRequest.result), {
               once: true,
@@ -613,6 +925,8 @@ suite.define(() => {
             oversized: oversized.status,
             oversizedRead: oversizedRead.status,
             oversizedText: oversizedRead.status === "found" ? oversizedRead.draft.text : null,
+            oversizedMentions:
+              oversizedRead.status === "found" ? oversizedRead.draft.mentions : null,
             oversizedAttachmentCount:
               oversizedRead.status === "found" ? oversizedRead.draft.attachments.length : null,
             oversizeConflict: oversizeConflict.status,
@@ -661,7 +975,8 @@ suite.define(() => {
         missingPredecessor: "conflict",
         oversized: "payload-too-large",
         oversizedRead: "found",
-        oversizedText: "oversized",
+        oversizedText: "@Alex oversized",
+        oversizedMentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
         oversizedAttachmentCount: 0,
         oversizeConflict: "conflict",
         oversizeConflictRead: "found",

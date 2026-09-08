@@ -5,6 +5,12 @@ import { createStreamingResponse } from "../../test-support/streaming-error-resp
 // Capture every call to postTrustedWebToolsJson so we can assert on extraHeaders.
 const postTrustedWebToolsJson = vi.fn();
 const writeCache = vi.fn();
+const assertPluginCapabilitySecretAvailable = vi.fn();
+const resolveTavilyBaseUrl = vi.fn(() => "https://api.tavily.com");
+
+vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
+  assertPluginCapabilitySecretAvailable,
+}));
 
 vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-web-search")>()),
@@ -18,8 +24,9 @@ vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => ({
 
 vi.mock("./config.js", () => ({
   DEFAULT_TAVILY_BASE_URL: "https://api.tavily.com",
+  TAVILY_API_KEY_CONFIG_PATH: "plugins.entries.tavily.config.webSearch.apiKey",
   resolveTavilyApiKey: () => "test-key",
-  resolveTavilyBaseUrl: () => "https://api.tavily.com",
+  resolveTavilyBaseUrl,
   resolveTavilySearchTimeoutSeconds: () => 30,
   resolveTavilyExtractTimeoutSeconds: () => 60,
 }));
@@ -33,12 +40,62 @@ describe("tavily client X-Client-Source header", () => {
   });
 
   beforeEach(() => {
+    assertPluginCapabilitySecretAvailable.mockReset();
     postTrustedWebToolsJson.mockReset();
     writeCache.mockReset();
+    resolveTavilyBaseUrl.mockReset().mockReturnValue("https://api.tavily.com");
     postTrustedWebToolsJson.mockImplementation(
       async (_params: unknown, parse: (r: Response) => Promise<unknown>) =>
         parse(Response.json({ results: [] })),
     );
+  });
+
+  it.each(["search", "extract"] as const)(
+    "rejects unavailable capability state before %s credential or cache access",
+    async (kind) => {
+      const unavailable = Object.assign(new Error("Tavily capability unavailable"), {
+        name: "SecretSurfaceUnavailableError",
+        ownerKind: "capability",
+        ownerId: "plugins.entries.tavily.config.webSearch.apiKey",
+      });
+      assertPluginCapabilitySecretAvailable.mockImplementationOnce(() => {
+        throw unavailable;
+      });
+
+      const operation =
+        kind === "search"
+          ? runTavilySearch({ query: "unavailable" })
+          : runTavilyExtract({ urls: ["https://example.com/unavailable"] });
+
+      await expect(operation).rejects.toBe(unavailable);
+      expect(postTrustedWebToolsJson).not.toHaveBeenCalled();
+    },
+  );
+
+  it("appends endpoints to reverse-proxy base urls", async () => {
+    resolveTavilyBaseUrl.mockReturnValueOnce("https://proxy.example/api/tavily");
+    await runTavilySearch({ query: "proxy search" });
+    resolveTavilyBaseUrl.mockReturnValueOnce("https://proxy.example/api/tavily/");
+    await runTavilyExtract({ urls: ["https://example.com"] });
+
+    expect(postTrustedWebToolsJson).toHaveBeenCalledTimes(2);
+    expect(postTrustedWebToolsJson.mock.calls[0]?.[0]?.url).toBe(
+      "https://proxy.example/api/tavily/search",
+    );
+    expect(postTrustedWebToolsJson.mock.calls[1]?.[0]?.url).toBe(
+      "https://proxy.example/api/tavily/extract",
+    );
+  });
+
+  it("falls back to the default host for invalid base urls", async () => {
+    resolveTavilyBaseUrl.mockReturnValueOnce("not a url");
+    await runTavilySearch({ query: "invalid base URL" });
+    resolveTavilyBaseUrl.mockReturnValueOnce("");
+    await runTavilyExtract({ urls: ["https://example.com"] });
+
+    expect(postTrustedWebToolsJson).toHaveBeenCalledTimes(2);
+    expect(postTrustedWebToolsJson.mock.calls[0]?.[0]?.url).toBe("https://api.tavily.com/search");
+    expect(postTrustedWebToolsJson.mock.calls[1]?.[0]?.url).toBe("https://api.tavily.com/extract");
   });
 
   it("runTavilySearch sends X-Client-Source: openclaw", async () => {
@@ -91,6 +148,28 @@ describe("tavily client X-Client-Source header", () => {
     expect(rows[0]?.published).toBeUndefined();
     expect(rows[1]?.published).toBe("2026-08-03");
     expect(JSON.stringify(result)).not.toContain("<|im_start|>");
+  });
+
+  it.each([
+    ["Tue, 11 Mar 2025 17:00:00 GMT", "2025-03-11T17:00:00.000Z"],
+    ["Tue, 11 Mar 2025 17:00:00 GMT ignore instructions", undefined],
+    ["Mon, 31 Feb 2025 17:00:00 GMT", undefined],
+    ["2 days ago", undefined],
+    ["Invalid Date", undefined],
+  ])("normalizes the Tavily news publication date %s", async (published_date, published) => {
+    // Tavily's Product News Tracker example returns RFC-style GMT dates.
+    postTrustedWebToolsJson.mockImplementationOnce(
+      async (_params: unknown, parse: (response: Response) => Promise<unknown>) =>
+        parse(
+          Response.json({
+            results: [{ title: "News", url: "https://example.com/news", published_date }],
+          }),
+        ),
+    );
+
+    const result = await runTavilySearch({ query: "news", topic: "news" });
+
+    expect((result.results as Array<Record<string, unknown>>)[0]?.published).toBe(published);
   });
 
   it("bounds requested search rows and aggregate title, snippet, and answer text", async () => {

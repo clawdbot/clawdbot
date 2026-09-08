@@ -1,10 +1,23 @@
 // Bench Cli Startup script supports OpenClaw repository automation.
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import {
+  assertCompatibleCliStartupMemoryMetrics,
+  CLI_RUNTIME_MEMORY_METRIC,
+  cliStartupMemoryMetric,
+} from "./lib/cli-startup-memory-contract.mts";
 import {
   inspectManagedProcessGroup,
   terminateManagedChild,
@@ -27,6 +40,7 @@ type Sample = {
   ms: number;
   firstOutputMs: number | null;
   maxRssMb: number | null;
+  memory?: SampleMemory;
   exitCode: number | null;
   signal: string | null;
   startedAt?: string;
@@ -34,6 +48,26 @@ type Sample = {
   timedOut?: boolean;
   stdoutTail?: string;
   stderrTail?: string;
+};
+
+type RssObservation = {
+  pid: number;
+  parentPid: number;
+  matchesArguments: boolean;
+  matchesInvocation: boolean;
+  maxRssBytes: number | null;
+};
+
+type SampleMemory = {
+  runtimePid: number | null;
+  processes: Array<{
+    pid: number;
+    parentPid: number;
+    role: "runtime" | "launcher" | "auxiliary" | "unresolved";
+    metricKind: "process-high-water-rss";
+    maxRssBytes: number | null;
+  }>;
+  error?: string;
 };
 
 type CaseRuns = {
@@ -59,6 +93,7 @@ type CaseSummary = {
 
 type SuiteResult = {
   entry: string;
+  memoryMetric?: string;
   cases: Array<{
     id: string;
     name: string;
@@ -122,7 +157,6 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_TIMEOUT_KILL_GRACE_MS = 1_000;
 const TIMEOUT_KILL_GRACE_MS = resolveTimeoutKillGraceMs(process.env);
 const DEFAULT_ENTRY = "openclaw.mjs";
-const MAX_RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
 
 function resolveTimeoutKillGraceMs(env: NodeJS.ProcessEnv): number {
   const raw = env.VITEST ? env.OPENCLAW_TEST_CLI_STARTUP_TIMEOUT_KILL_GRACE_MS : undefined;
@@ -678,7 +712,7 @@ function formatMs(value: number): string {
 }
 
 function formatMb(value: number): string {
-  return `${value.toFixed(1)}MB`;
+  return `${value.toFixed(1)}MiB`;
 }
 
 function collectExitSummary(samples: Sample[]): string {
@@ -721,25 +755,145 @@ function buildRssHook(tmpDir: string): string {
   const rssHookPath = path.join(tmpDir, "measure-rss.mjs");
   writeFileSync(
     rssHookPath,
-    [
-      "process.on('exit', () => {",
-      "  const usage = typeof process.resourceUsage === 'function' ? process.resourceUsage() : null;",
-      `  if (usage && typeof usage.maxRSS === 'number') console.error('${MAX_RSS_MARKER}' + String(usage.maxRSS));`,
-      "});",
-      "",
-    ].join("\n"),
+    `import { writeFileSync, realpathSync } from "node:fs";
+import { join } from "node:path";
+import { isMainThread } from "node:worker_threads";
+if (isMainThread) {
+  const { directory, entries, args } = JSON.parse(process.env.OPENCLAW_BENCH_MEMORY);
+  let entry;
+  try {
+    if (process.argv[1]) entry = realpathSync(process.argv[1]);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  const matchesArguments = JSON.stringify(process.argv.slice(2)) === JSON.stringify(args);
+  const record = {
+    pid: process.pid,
+    parentPid: process.ppid,
+    matchesArguments,
+    matchesInvocation: entries.includes(entry) && matchesArguments,
+    maxRssBytes: null,
+  };
+  const file = join(directory, String(process.pid) + ".json");
+  writeFileSync(file, JSON.stringify(record));
+  process.on("exit", () => {
+    record.maxRssBytes = process.resourceUsage().maxRSS * 1024;
+    writeFileSync(file, JSON.stringify(record));
+  });
+}
+`,
     "utf8",
   );
   return rssHookPath;
 }
 
-function parseMaxRssMb(stderr: string): number | null {
-  const matches = [...stderr.matchAll(new RegExp(`^${MAX_RSS_MARKER}(\\d+)\\s*$`, "gm"))];
-  const lastMatch = matches.at(-1);
-  if (!lastMatch?.[1]) {
-    return null;
+function readSampleMemory(directory: string, entryPid: number | undefined): SampleMemory {
+  const memory: SampleMemory = { runtimePid: null, processes: [] };
+  try {
+    const observations: RssObservation[] = readdirSync(directory).map((file) => {
+      const value: unknown = JSON.parse(readFileSync(path.join(directory, file), "utf8"));
+      if (
+        typeof value !== "object" ||
+        value === null ||
+        !("pid" in value) ||
+        typeof value.pid !== "number" ||
+        !Number.isSafeInteger(value.pid) ||
+        value.pid <= 0 ||
+        file !== `${value.pid}.json` ||
+        !("parentPid" in value) ||
+        typeof value.parentPid !== "number" ||
+        !Number.isSafeInteger(value.parentPid) ||
+        value.parentPid < 0 ||
+        !("matchesArguments" in value) ||
+        typeof value.matchesArguments !== "boolean" ||
+        !("matchesInvocation" in value) ||
+        typeof value.matchesInvocation !== "boolean" ||
+        !("maxRssBytes" in value) ||
+        !(
+          value.maxRssBytes === null ||
+          (typeof value.maxRssBytes === "number" &&
+            Number.isSafeInteger(value.maxRssBytes) &&
+            value.maxRssBytes > 0)
+        )
+      ) {
+        throw new Error("invalid process RSS observation");
+      }
+      return {
+        pid: value.pid,
+        parentPid: value.parentPid,
+        matchesArguments: value.matchesArguments,
+        matchesInvocation: value.matchesInvocation,
+        maxRssBytes: value.maxRssBytes,
+      };
+    });
+    memory.processes = observations.map((record) => ({
+      pid: record.pid,
+      parentPid: record.parentPid,
+      role: record.matchesInvocation ? "unresolved" : "auxiliary",
+      metricKind: "process-high-water-rss",
+      maxRssBytes: record.maxRssBytes,
+    }));
+    if (observations.some((record) => record.matchesArguments && !record.matchesInvocation)) {
+      throw new Error("unrecognized CLI entry with matching command arguments");
+    }
+    const invocation = observations.filter((record) => record.matchesInvocation);
+    let current = invocation.find((record) => record.pid === entryPid);
+    if (!current) {
+      throw new Error("missing CLI entry process identity");
+    }
+    const lineage = new Set<number>();
+    // Respawns preserve CLI argv and the preload. Follow the unique invocation
+    // chain, not exit order, RSS magnitude, or platform-specific ready flags.
+    while (true) {
+      if (lineage.has(current.pid)) {
+        throw new Error("cyclic CLI process identity");
+      }
+      lineage.add(current.pid);
+      if (current.maxRssBytes === null) {
+        throw new Error(`missing process high-water RSS for CLI PID ${current.pid}`);
+      }
+      const parentPid = current.pid;
+      const children = invocation.filter((record) => record.parentPid === parentPid);
+      if (children.length > 1) {
+        throw new Error("ambiguous CLI runtime identity: multiple matching children");
+      }
+      const child = children[0];
+      if (!child) {
+        break;
+      }
+      current = child;
+    }
+    if (lineage.size !== invocation.length) {
+      throw new Error("disconnected CLI runtime identity");
+    }
+    memory.runtimePid = current.pid;
+    for (const record of memory.processes) {
+      if (lineage.has(record.pid)) {
+        record.role = record.pid === current.pid ? "runtime" : "launcher";
+      }
+    }
+  } catch (error) {
+    memory.error = error instanceof Error ? error.message : String(error);
   }
-  return Number(lastMatch[1]) / 1024;
+  return memory;
+}
+
+function memoryInvocationEntries(entry: string): string[] {
+  const resolvedEntry = realpathSync(entry);
+  const entries = [resolvedEntry];
+  // The wrapper's compile-cache handoff can enter dist directly.
+  if (path.basename(resolvedEntry) === "openclaw.mjs") {
+    for (const name of ["entry.js", "entry.mjs"]) {
+      try {
+        entries.push(realpathSync(path.join(path.dirname(resolvedEntry), "dist", name)));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
+      }
+    }
+  }
+  return entries;
 }
 
 function nodeImportSpecifierForPath(filePath: string): string {
@@ -800,6 +954,7 @@ async function runSample(params: {
   let forceKillAt: number | null = null;
   let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
   const maxOutputLength = 32 * 1024 * 1024;
+  const memoryDirectory = mkdtempSync(path.join(path.dirname(params.rssHookPath), "sample-"));
 
   try {
     return await new Promise<Sample>((resolve) => {
@@ -816,6 +971,11 @@ async function runSample(params: {
           OPENCLAW_HIDE_BANNER: "1",
           NO_COLOR: "1",
           FORCE_COLOR: "0",
+          OPENCLAW_BENCH_MEMORY: JSON.stringify({
+            directory: memoryDirectory,
+            entries: memoryInvocationEntries(params.entry),
+            args: params.commandCase.args,
+          }),
         },
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -830,10 +990,15 @@ async function runSample(params: {
           forceKillTimer = null;
         }
         const ms = Number(process.hrtime.bigint() - started) / 1e6;
+        const memory = readSampleMemory(memoryDirectory, proc.pid);
+        const runtimeRss = memory.processes.find(
+          (record) => record.role === "runtime",
+        )?.maxRssBytes;
         resolve({
           ms,
           firstOutputMs,
-          maxRssMb: parseMaxRssMb(stderr),
+          maxRssMb: runtimeRss == null ? null : runtimeRss / 1024 / 1024,
+          memory,
           startedAt: startedAt.toISOString(),
           endedAt: new Date().toISOString(),
           ...(timedOut ? { timedOut } : {}),
@@ -904,6 +1069,7 @@ async function runSample(params: {
       });
     });
   } finally {
+    rmSync(memoryDirectory, { recursive: true, force: true });
     if (ownsRunRoot) {
       rmSync(runRoot, { recursive: true, force: true });
     }
@@ -998,6 +1164,7 @@ function tailLines(value: string, maxLines: number): string {
 
 function printSuite(result: SuiteResult): void {
   console.log(`Entry: ${result.entry}`);
+  console.log(`RSS metric: ${cliStartupMemoryMetric(result)}`);
   for (const commandCase of result.cases) {
     const { durationMs, firstOutputMs, maxRssMb, exitSummary } = commandCase.summary;
     const rssSummary =
@@ -1040,6 +1207,7 @@ function printDelta(primary: SuiteResult, secondary: SuiteResult): void {
 }
 
 function buildCaseDeltas(primary: SuiteResult, secondary: SuiteResult): CaseDelta[] {
+  assertCompatibleCliStartupMemoryMetrics(primary, secondary);
   const primaryById = new Map(primary.cases.map((commandCase) => [commandCase.id, commandCase]));
   const deltas: CaseDelta[] = [];
   for (const commandCase of secondary.cases) {
@@ -1092,7 +1260,9 @@ export function collectFailedSamples(result: SuiteResult): string[] {
         } else if (!expectedExitCodes.has(sample.exitCode ?? -1)) {
           failures.push(`${label}: exited with code ${String(sample.exitCode)}`);
         } else if (sample.maxRssMb === null) {
-          failures.push(`${label}: did not report max RSS`);
+          failures.push(
+            `${label}: did not report max RSS${sample.memory?.error ? ` (${sample.memory.error})` : ""}`,
+          );
         } else if (sample.exitCode !== 0) {
           const output = `${sample.stdoutTail ?? ""}\n${sample.stderrTail ?? ""}`;
           const missing = (commandCase.expectedNonzeroOutputIncludes ?? []).filter(
@@ -1153,6 +1323,7 @@ async function buildSuiteResult(params: {
   }
   return {
     entry: params.entry,
+    memoryMetric: CLI_RUNTIME_MEMORY_METRIC,
     cases,
   };
 }

@@ -1,10 +1,17 @@
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-companion-lifecycle.test/"} */
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ModelCatalogEntry } from "../../api/types.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
+import { createGatewayRequestMock } from "../../test-helpers/gateway-client.ts";
+import { getChatHistoryLoadState } from "./chat-history-state.ts";
+import {
+  createGatewayBrowserClientFixture,
+  createTestChatPane,
+  type TestChatPane,
+} from "./chat-pane.test-support.ts";
 import type { ChatSessionCompanionThreads } from "./chat-session-companion.ts";
 
 const companionThreads = (pane: TestChatPane) =>
@@ -13,8 +20,31 @@ const companionThreads = (pane: TestChatPane) =>
 
 describe("chat pane companion connection lifecycle", () => {
   it("preserves threads while a same-client reconnect settles a pending answer", async () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const consoleError = vi.spyOn(console, "error");
+    onTestFinished(() => consoleError.mockRestore());
+    const models: ModelCatalogEntry[] = [
+      { id: "fixture-model", name: "Fixture model", provider: "test", available: true },
+    ];
+    const request = createGatewayRequestMock(async (method) => {
+      switch (method) {
+        case "chat.startup":
+          return { messages: [], sessionId: "session-current", hasMore: false, totalMessages: 0 };
+        case "chat.metadata":
+          return { commands: [], models, swarmEnabled: false };
+        default:
+          throw new Error(`Unexpected gateway request: ${method}`);
+      }
+    });
+    const client = createGatewayBrowserClientFixture({ request });
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    onTestFinished(() => {
+      pane.applyGatewaySnapshot({
+        ...pane.context.gateway.snapshot,
+        phase: "stopped",
+        hello: null,
+      });
+      pane.disconnectedCallback();
+    });
     let rejectAnswer!: (error: Error) => void;
     const threads = companionThreads(pane);
     await threads.hydrate(
@@ -57,6 +87,7 @@ describe("chat pane companion connection lifecycle", () => {
 
     pane.connectedClient = client;
     pane.applyGatewaySnapshot({ ...pane.context.gateway.snapshot, phase: "connected" });
+    expect(state.chatModelsLoading).toBe(true);
     expect(threads.view("agent:main:other", "main").draft).toBe("other draft");
     await threads.hydrate(
       "agent:main:current",
@@ -76,6 +107,12 @@ describe("chat pane companion connection lifecycle", () => {
       failedQuestion: null,
       pendingQuestion: null,
     });
+    await vi.waitFor(() => expect(state.chatModelsLoading).toBe(false));
+    expect(consoleError).not.toHaveBeenCalled();
+    expect(state.chatModelCatalog).toEqual(models);
+    expect(state.chatModelCatalogError).toBeNull();
+    expect(getChatHistoryLoadState(state).phase).toBe("committed");
+    expect(state.chatError).toBeNull();
   });
 
   it("retires every thread and late answer when the Gateway client is replaced", async () => {

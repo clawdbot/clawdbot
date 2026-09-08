@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { callGatewayFromCli, isGatewayClientRequestError } from "../plugin-sdk/gateway-runtime.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { createPluginGatewayMethodDescriptor } from "./methods/registry.js";
+import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 import {
   getGatewayTestPort,

@@ -1,7 +1,6 @@
 /** Invokes optional startup maintenance for loaded channel plugins. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listLoadedChannelPlugins } from "./registry-loaded.js";
-import type { ChannelPlugin } from "./types.plugin.js";
 
 type ChannelStartupLogger = {
   info?: (message: string) => void;
@@ -18,7 +17,7 @@ export async function runChannelPluginStartupMaintenance(params: {
   trigger?: string;
   logPrefix?: string;
 }): Promise<void> {
-  for (const plugin of listLoadedChannelPlugins() as ChannelPlugin[]) {
+  for (const plugin of listLoadedChannelPlugins()) {
     const runStartupMaintenance = plugin.lifecycle?.runStartupMaintenance;
     if (!runStartupMaintenance) {
       continue;

@@ -13,11 +13,6 @@ scenario:
   gatewayConfigPatch:
     session:
       dmScope: per-channel-peer
-    tools:
-      toolsBySender:
-        "id:qa-active-memory-cold-user":
-          deny:
-            - group:memory
     plugins:
       entries:
         active-memory:

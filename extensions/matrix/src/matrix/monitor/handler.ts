@@ -5,11 +5,13 @@ import {
   resolveInboundReplyDispatchCounts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { prepareMatrixReplyPayload } from "../../outbound.js";
 import { isPollEventType } from "../poll-types.js";
 import type { LocationMessageEventContent } from "../sdk.js";
 import { normalizeMatrixUserId } from "./allowlist.js";
@@ -40,11 +42,17 @@ import { createMatrixThreadContextResolver } from "./thread-context.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 import { EventType } from "./types.js";
 
+// Core emits this stable error code across the plugin boundary; Matrix cannot import the
+// core lifecycle module that owns it. Keep the notice actionable or replay will dead-end.
+const SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE = "SESSION_RESTART_RECOVERY_TOMBSTONE";
+const RESTART_RECOVERY_TOMBSTONE_NOTICE =
+  "This session ended during gateway restart recovery and cannot accept more messages. Send /new or /reset to start a replacement session.";
+
 export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParams) {
   const {
     client,
     core,
-    cfg,
+    cfg: startupConfig,
     accountId,
     runtime,
     logger,
@@ -58,7 +66,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     streaming,
     previewToolProgressEnabled,
     blockStreamingEnabled,
-    textLimit,
     historyLimit,
     startupMs,
     startupGraceMs,
@@ -84,11 +91,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     createChannelInboundEnvelopeBuilder: createChannelInboundEnvelopeBuilderImpl,
     resolveHumanDelayConfig: resolveHumanDelayConfigImpl,
   };
-  const contextVisibilityMode = resolveChannelContextVisibilityMode({
-    cfg,
-    channel: "matrix",
-    accountId,
-  });
   const handlerState = createMatrixHandlerState({
     core,
     accountId,
@@ -155,11 +157,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const eventTs = event.origin_server_ts;
       const eventAge = event.unsigned?.age;
       const commitInboundEventIfClaimed = async () => {
-        if (!inboundReplayClaim) {
+        const claim = inboundReplayClaim;
+        if (!claim) {
           return;
         }
-        await inboundReplayClaim.commit();
-        inboundReplayClaim = undefined;
+        await claim.commit();
+        if (inboundReplayClaim === claim) {
+          inboundReplayClaim = undefined;
+        }
       };
       const readIngressPrefix = () =>
         readMatrixIngressPrefix({
@@ -234,7 +239,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 ...prefix,
                 audioPreflightMode: shouldDeferMatrixAudioPreflightForRoomIngress({
                   content: prefix.content,
-                  cfg,
+                  cfg: startupConfig,
                 })
                   ? "defer"
                   : "run",
@@ -264,6 +269,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       }
 
       const {
+        cfg,
+        liveDmAllowFrom,
         route: _route,
         hasExplicitSessionBinding,
         roomConfig,
@@ -291,6 +298,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         effectiveRoomUsers,
         resolveMessageIngress,
       } = resolvedIngressResult;
+      const contextVisibilityMode = resolveChannelContextVisibilityMode({
+        cfg,
+        channel: "matrix",
+        accountId,
+      });
 
       // Keep the per-room ingress gate focused on ordering-sensitive state updates.
       // Prompt/session enrichment below can run concurrently after the history snapshot is fixed.
@@ -352,11 +364,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         replyTarget,
         sharedDmContextNotice,
       } = inboundContext;
-      const tableMode = core.channel.text.resolveMarkdownTableMode({
-        cfg,
-        channel: "matrix",
-        accountId: _route.accountId,
-      });
       const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, _route.agentId);
       const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
         cfg,
@@ -425,36 +432,59 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         client,
         roomId,
         runtime,
-        textLimit,
         replyToMode,
         threadTarget,
         replyToEventId: replyToEventId ?? undefined,
         accountId: _route.accountId,
         mediaLocalRoots,
-        tableMode,
         logVerboseMessage,
       });
       const { deliverReply, onReplyError, turnDispatcherOptions } = replyDispatcher;
       const pinnedMainDmOwner = isDirectMessage
-        ? await (async () => {
-            const { liveCfg, liveDmAllowFrom } = await handlerState.resolveLiveAccountAllowlists();
-            return resolvePinnedMainDmOwnerFromAllowlist({
-              dmScope: liveCfg.session?.dmScope,
-              allowFrom: liveDmAllowFrom,
-              normalizeEntry: normalizeMatrixUserId,
-            });
-          })()
+        ? resolvePinnedMainDmOwnerFromAllowlist({
+            dmScope: cfg.session?.dmScope,
+            allowFrom: liveDmAllowFrom,
+            normalizeEntry: normalizeMatrixUserId,
+          })
         : null;
 
       const inboundLastRouteSessionKey = resolveInboundLastRouteSessionKey({
         route: _route,
         sessionKey: _route.sessionKey,
       });
+      const replayClaimAtDispatch = inboundReplayClaim;
+      // Active-run deferral outlives this handler. Transfer the exact replay claim to the
+      // reply lane so adoption commits it and abandonment reopens it for Matrix replay.
+      const turnAdoptionLifecycle = replayClaimAtDispatch
+        ? {
+            admission: "exclusive" as const,
+            onDeferred: () => {
+              if (inboundReplayClaim !== replayClaimAtDispatch) {
+                return false;
+              }
+              inboundReplayClaim = undefined;
+              return undefined;
+            },
+            onAdopted: async () => {
+              if (inboundReplayClaim === replayClaimAtDispatch) {
+                inboundReplayClaim = undefined;
+              }
+              await replayClaimAtDispatch.commit();
+            },
+            onAbandoned: () => {
+              if (inboundReplayClaim === replayClaimAtDispatch) {
+                inboundReplayClaim = undefined;
+              }
+              replayClaimAtDispatch.release();
+            },
+          }
+        : undefined;
 
-      const turnResult = await core.channel.inbound.run({
+      const turnResultPromise = core.channel.inbound.run({
         channel: "matrix",
         accountId: _route.accountId,
         raw: event,
+        ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
         adapter: {
           ingest: () => ({
             id: messageId,
@@ -524,6 +554,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             },
             delivery: {
               observeMessageSent: true,
+              preparePayload: prepareMatrixReplyPayload,
               deliver: deliverReply,
               onError: (err, info) => onReplyError(err, info as Parameters<typeof onReplyError>[1]),
             },
@@ -554,7 +585,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               onAssistantMessageStart: draftStream
                 ? () => {
                     draftController.resetDraftBlockOffsets();
-                    draftController.resetPreviewToolProgress();
+                    draftController.beginAssistantMessage();
                     return false;
                   }
                 : undefined,
@@ -567,6 +598,35 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           }),
         },
       });
+      let turnResult: Awaited<typeof turnResultPromise>;
+      try {
+        turnResult = await turnResultPromise;
+      } catch (err) {
+        if (extractErrorCode(err) !== SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE) {
+          throw err;
+        }
+        try {
+          const { sendMessageMatrix } = await loadMatrixSendModule();
+          await sendMessageMatrix(roomId, RESTART_RECOVERY_TOMBSTONE_NOTICE, {
+            cfg,
+            client,
+            accountId: _route.accountId,
+            replyToId: threadTarget || replyToMode === "off" ? undefined : messageId,
+            fallbackReplyToId: threadTarget,
+            threadId: threadTarget,
+            deliveryQueueId: `matrix:restart-recovery-tombstone:${_route.accountId}:${roomId}:${eventId}`,
+            deliveryPartIndex: 0,
+            deliveryPartCount: 1,
+            extraContent: { msgtype: "m.notice" },
+          });
+          await commitInboundEventIfClaimed();
+        } catch (noticeError) {
+          runtime.error?.(
+            `matrix: failed completing restart-recovery tombstone notice room=${roomId} id=${eventId || "unknown"}: ${String(noticeError)}`,
+          );
+        }
+        return;
+      }
       if (!turnResult.dispatched) {
         if (
           turnResult.admission.kind === "drop" &&

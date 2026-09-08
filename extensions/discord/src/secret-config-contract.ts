@@ -15,11 +15,11 @@ import {
 import { collectNestedChannelTtsAssignments } from "openclaw/plugin-sdk/channel-secret-tts-runtime";
 
 function createVoiceProviderSecretTarget(params: {
-  capability: "realtime" | "tts";
+  providerPath: "realtime" | "tts" | "tts.personas.*";
   scope: "account" | "channel";
 }): SecretTargetRegistryEntry {
   const prefix = params.scope === "account" ? "channels.discord.accounts.*" : "channels.discord";
-  const path = `${prefix}.voice.${params.capability}.providers.*.apiKey`;
+  const path = `${prefix}.voice.${params.providerPath}.providers.*.apiKey`;
   return {
     id: path,
     targetType: path,
@@ -30,7 +30,7 @@ function createVoiceProviderSecretTarget(params: {
     includeInPlan: true,
     includeInConfigure: true,
     includeInAudit: true,
-    providerIdPathSegmentIndex: params.scope === "account" ? 7 : 5,
+    providerIdPathSegmentIndex: path.split(".").length - 2,
   };
 }
 
@@ -65,8 +65,9 @@ export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
     includeInConfigure: true,
     includeInAudit: true,
   },
-  createVoiceProviderSecretTarget({ capability: "realtime", scope: "account" }),
-  createVoiceProviderSecretTarget({ capability: "tts", scope: "account" }),
+  createVoiceProviderSecretTarget({ providerPath: "realtime", scope: "account" }),
+  createVoiceProviderSecretTarget({ providerPath: "tts", scope: "account" }),
+  createVoiceProviderSecretTarget({ providerPath: "tts.personas.*", scope: "account" }),
   {
     id: "channels.discord.pluralkit.token",
     targetType: "channels.discord.pluralkit.token",
@@ -89,8 +90,9 @@ export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
     includeInConfigure: true,
     includeInAudit: true,
   },
-  createVoiceProviderSecretTarget({ capability: "realtime", scope: "channel" }),
-  createVoiceProviderSecretTarget({ capability: "tts", scope: "channel" }),
+  createVoiceProviderSecretTarget({ providerPath: "realtime", scope: "channel" }),
+  createVoiceProviderSecretTarget({ providerPath: "tts", scope: "channel" }),
+  createVoiceProviderSecretTarget({ providerPath: "tts.personas.*", scope: "channel" }),
 ];
 
 export function collectRuntimeConfigAssignments(params: {

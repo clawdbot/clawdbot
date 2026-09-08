@@ -88,21 +88,5 @@ export function createSlackPluginBase(params: {
       secretTargetRegistryEntries,
       collectRuntimeConfigAssignments,
     },
-  } as Pick<
-    ChannelPlugin<ResolvedSlackAccount>,
-    | "id"
-    | "meta"
-    | "setupWizard"
-    | "capabilities"
-    | "commands"
-    | "doctor"
-    | "agentPrompt"
-    | "streaming"
-    | "reload"
-    | "configSchema"
-    | "config"
-    | "setupContract"
-    | "security"
-    | "secrets"
-  >;
+  };
 }

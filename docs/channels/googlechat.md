@@ -193,6 +193,7 @@ Use these identifiers for delivery and allowlists:
 Notes:
 
 - Service account credentials: `serviceAccountFile` (path) or `serviceAccount` (inline JSON string, object, or env/file/exec/store SecretRef). Env vars `GOOGLE_CHAT_SERVICE_ACCOUNT` (inline JSON) and `GOOGLE_CHAT_SERVICE_ACCOUNT_FILE` (path) apply to the default account only. Multi-account setups use `channels.googlechat.accounts.<id>` with the same keys, including per-account `serviceAccount` SecretRefs.
+- Omitted account `dmPolicy` and `groupPolicy` inherit the channel root; explicit account policies win. The root defaults to `pairing` and `allowlist` respectively. Shared settings from `accounts.default` have lower precedence than the root; its credentials, `enabled`, and `dangerouslyAllowNameMatching` are not inherited by named accounts.
 - Default webhook path is `/googlechat` when `webhookPath` is unset; `webhookUrl` can supply the path instead.
 - Group keys must be stable space ids (`spaces/<spaceId>`). Display-name keys are deprecated and logged as such.
 - `dangerouslyAllowNameMatching` re-enables mutable email principal matching for allowlists (break-glass compatibility mode); doctor warns about email entries.
@@ -200,8 +201,10 @@ Notes:
 - Native approval cards use Google Chat `cardsV2` button clicks, not reaction events. Approvers come from `allowFrom` or `defaultTo` and must be stable numeric `users/<id>` values.
 - Message actions expose text `send` only. Google Chat attachment upload requires user authentication, while this plugin uses service-account authentication, so outbound file upload is not exposed.
 - `typingIndicator`: `message` (default) posts a `_<Bot> is typing..._` placeholder and edits it into the first reply; `none` disables it; `reaction` requires user OAuth and currently falls back to `message` with a logged error under service-account auth.
-- Inbound attachments (first attachment per message) are downloaded through the Chat API into the media pipeline, capped by `mediaMaxMb` (default 20).
+- Inbound attachments (first attachment per message) are downloaded through the Chat API into the media pipeline, capped by `mediaMaxMb` (default 20). Google Drive files are not downloaded; the agent receives an unavailable-attachment notice asking for a direct file upload instead. Other unsupported attachment sources receive the same upload guidance. Messages with multiple attachments include a counted notice for the additional attachments that were not processed. Oversize attachments retain their size-limit notice.
 - Bot-authored messages are ignored by default. With `allowBots: true`, accepted bot messages use shared [bot loop protection](/channels/bot-loop-protection): configure `channels.defaults.botLoopProtection`, then override with `channels.googlechat.botLoopProtection` or `channels.googlechat.groups.<space>.botLoopProtection`.
+
+Custom emoji listing is unavailable because Google Chat's `customEmojis.list` endpoint requires user authentication with the `chat.customemojis` or `chat.customemojis.readonly` scope. This plugin authenticates exclusively as a service account with the `chat.bot` scope, which cannot access that endpoint.
 
 Secrets reference details: [Secrets Management](/gateway/secrets).
 

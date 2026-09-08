@@ -1,11 +1,13 @@
 // Profiles Vitest main or runner processes and writes CPU/heap artifacts.
-import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { formatErrorMessage } from "./lib/error-format.mts";
-import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mts";
+import { signalExitCode } from "./lib/managed-child-process.mts";
+import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
+import { spawnOwnedVitestProcess } from "./lib/vitest-process.mts";
+import { installVitestProcessGroupCleanup } from "./vitest-process-group.mts";
 
 function readOutputDirValue(argv: string[], index: number): string {
   const value = argv[index + 1];
@@ -55,12 +57,6 @@ export function parseArgs(argv: string[]) {
 }
 
 type VitestProfileOptions = Pick<ReturnType<typeof parseArgs>, "mode" | "outputDir">;
-type VitestProfileSpawnSpec = {
-  args: string[];
-  command: string;
-  options: SpawnSyncOptions;
-};
-
 /**
  * Resolves or creates the directory used for profiler artifacts.
  */
@@ -73,13 +69,6 @@ export function resolveVitestProfileDir({ mode, outputDir }: VitestProfileOption
 }
 
 /**
- * Builds a profiler command without additional Vitest args.
- */
-export function buildVitestProfileCommand({ mode, outputDir }: VitestProfileOptions) {
-  return buildVitestProfileCommandWithArgs({ mode, outputDir, vitestArgs: [] });
-}
-
-/**
  * Builds the profiler command for either Vitest main or worker-runner profiling.
  */
 export function buildVitestProfileCommandWithArgs({
@@ -87,65 +76,19 @@ export function buildVitestProfileCommandWithArgs({
   outputDir,
   vitestArgs,
 }: ReturnType<typeof parseArgs>) {
-  if (mode === "main") {
-    return {
-      command: process.execPath,
-      args: [
-        "--cpu-prof",
-        `--cpu-prof-dir=${outputDir}`,
-        "./node_modules/vitest/vitest.mjs",
-        "run",
-        "--config",
-        "test/vitest/vitest.unit.config.ts",
-        "--no-file-parallelism",
-        ...vitestArgs,
-      ],
-    };
-  }
-
   return {
-    command: "pnpm",
+    command: process.execPath,
     args: [
-      "vitest",
+      fileURLToPath(new URL("./run-vitest-profile-child.mts", import.meta.url)),
+      mode,
+      outputDir,
       "run",
-      "--config",
-      "test/vitest/vitest.unit.config.ts",
-      "--no-file-parallelism",
-      "--execArgv=--cpu-prof",
-      `--execArgv=--cpu-prof-dir=${outputDir}`,
-      "--execArgv=--heap-prof",
-      `--execArgv=--heap-prof-dir=${outputDir}`,
       ...vitestArgs,
     ],
   };
 }
 
-/**
- * Converts a profiler plan into a spawn spec, routing pnpm through the wrapper.
- */
-export function buildVitestProfileSpawnSpec(
-  plan: ReturnType<typeof buildVitestProfileCommandWithArgs>,
-  runnerOptions: NonNullable<Parameters<typeof createPnpmRunnerSpawnSpec>[0]> = {},
-): VitestProfileSpawnSpec {
-  if (plan.command === "pnpm") {
-    return createPnpmRunnerSpawnSpec({
-      ...runnerOptions,
-      env: runnerOptions.env ?? process.env,
-      pnpmArgs: plan.args,
-      stdio: "inherit",
-    });
-  }
-  return {
-    args: plan.args,
-    command: plan.command,
-    options: {
-      env: process.env,
-      stdio: "inherit",
-    } satisfies SpawnSyncOptions,
-  };
-}
-
-function main() {
+async function main() {
   const parsed = parseArgs(process.argv.slice(2));
   const outputDir = resolveVitestProfileDir(parsed);
   fs.mkdirSync(outputDir, { recursive: true });
@@ -158,13 +101,27 @@ function main() {
 
   console.log(`[run-vitest-profile] writing ${parsed.mode} profiles to ${outputDir}`);
 
-  const spawnSpec = buildVitestProfileSpawnSpec(plan);
-  const result = spawnSync(spawnSpec.command, spawnSpec.args, spawnSpec.options);
-
-  if (result.error) {
-    throw result.error;
+  const { child, completion } = spawnOwnedVitestProcess({
+    ...plan,
+    homeMode: resolveVitestHomeSelection(parsed.vitestArgs, {
+      defaultConfig: "test/vitest/vitest.unit.config.ts",
+      env: process.env,
+    }),
+    options: { env: process.env, stdio: "inherit" },
+  });
+  const cleanup = installVitestProcessGroupCleanup({
+    child,
+    forceSignal: "SIGKILL",
+    forceSignalDelayMs: 100,
+  });
+  const result = await completion.finally(cleanup.teardown);
+  const forwardedSignal = cleanup.getForwardedSignal();
+  if (forwardedSignal) {
+    console.error(`[run-vitest-profile] FAILED (exit ${signalExitCode(forwardedSignal)})`);
+    process.kill(process.pid, forwardedSignal);
+    return;
   }
-  process.exit(result.status ?? 1);
+  process.exitCode = result.code ?? 1;
 }
 
 const isMain =
@@ -174,9 +131,12 @@ const isMain =
 
 if (isMain) {
   try {
-    main();
+    await main();
   } catch (error) {
     console.error(formatErrorMessage(error));
-    process.exit(1);
+    process.exitCode = 1;
+  }
+  if (process.exitCode) {
+    console.error(`[run-vitest-profile] FAILED (exit ${process.exitCode})`);
   }
 }

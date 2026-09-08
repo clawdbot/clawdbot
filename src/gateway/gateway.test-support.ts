@@ -18,6 +18,7 @@ export const GATEWAY_TEST_ENV_KEYS = [
   "OPENCLAW_GATEWAY_TOKEN",
   "OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN",
   "OPENCLAW_TEST_RUNTIME_OVERRIDE_TOKEN",
+  "OPENCLAW_TEST_MINIMAL_GATEWAY",
   "OPENCLAW_SKIP_CHANNELS",
   "OPENCLAW_SKIP_GMAIL_WATCHER",
   "OPENCLAW_SKIP_CRON",
@@ -54,10 +55,7 @@ export async function removeGatewayTempHome(tempHome: string): Promise<void> {
 }
 
 export async function setupGatewayTempHome(params: { prefix: string; minimalGateway?: boolean }) {
-  const envSnapshot = captureEnv([
-    ...GATEWAY_TEST_ENV_KEYS,
-    ...(params.minimalGateway ? (["OPENCLAW_TEST_MINIMAL_GATEWAY"] as const) : []),
-  ]);
+  const envSnapshot = captureEnv([...GATEWAY_TEST_ENV_KEYS]);
 
   const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), params.prefix));
   setTestEnvValue("HOME", tempHome);

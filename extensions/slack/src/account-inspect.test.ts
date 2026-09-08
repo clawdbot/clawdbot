@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { isSlackPluginAccountConfigured } from "./account-configured.js";
 import { inspectSlackAccount } from "./account-inspect.js";
+import { resolveSlackAccount } from "./accounts.js";
 
 function isInspectedSlackAccountUsable(account: ReturnType<typeof inspectSlackAccount>): boolean {
   return isSlackPluginAccountConfigured({
@@ -12,6 +13,75 @@ function isInspectedSlackAccountUsable(account: ReturnType<typeof inspectSlackAc
 }
 
 describe("inspectSlackAccount", () => {
+  it.each(["http", "relay"] as const)(
+    "ignores inactive app-token refs and environment tokens in %s mode",
+    (mode) => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          slack: {
+            mode,
+            botToken: "test-bot-token",
+            appToken: { source: "env", provider: "default", id: "MISSING_SLACK_APP_TOKEN" },
+            signingSecret: "test-signing-secret",
+            relay: {
+              url: "https://relay.example.test",
+              authToken: "test-relay-auth",
+              gatewayId: "test-gateway",
+            },
+          },
+        },
+      };
+      const account = inspectSlackAccount({
+        cfg,
+        envBotToken: "",
+        envAppToken: "test-env-app-token",
+        envUserToken: "",
+      });
+
+      expect(account).toMatchObject({
+        configured: true,
+        appToken: undefined,
+        appTokenSource: "none",
+        appTokenStatus: "missing",
+      });
+      expect(isSlackPluginAccountConfigured(resolveSlackAccount({ cfg }))).toBe(true);
+      if (mode === "http") {
+        expect(account.signingSecretStatus).toBe("available");
+      } else {
+        expect(account).not.toHaveProperty("signingSecretStatus");
+      }
+
+      delete cfg.channels!.slack!.appToken;
+      expect(inspectSlackAccount({ cfg, envAppToken: "test-env-app-token" })).toMatchObject({
+        appToken: undefined,
+        appTokenSource: "none",
+        appTokenStatus: "missing",
+      });
+    },
+  );
+
+  it("keeps an active socket app-token ref unavailable and operational resolution strict", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        slack: {
+          botToken: "test-bot-token",
+          appToken: { source: "env", provider: "default", id: "MISSING_SLACK_APP_TOKEN" },
+          signingSecret: { source: "env", provider: "default", id: "MISSING_SLACK_SIGNING_SECRET" },
+        },
+      },
+    };
+    const account = inspectSlackAccount({ cfg, envAppToken: "test-env-app-token" });
+
+    expect(account).toMatchObject({
+      configured: true,
+      appToken: undefined,
+      appTokenSource: "config",
+      appTokenStatus: "configured_unavailable",
+    });
+    expect(account).not.toHaveProperty("signingSecretStatus");
+    expect(() => resolveSlackAccount({ cfg })).toThrow(/appToken/);
+  });
+
   it("reports user-token source and status for a configured user identity", () => {
     const account = inspectSlackAccount({
       cfg: {

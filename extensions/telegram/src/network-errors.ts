@@ -1,4 +1,3 @@
-// Telegram plugin module implements network errors behavior.
 import {
   collectErrorGraphCandidates,
   extractErrorCode,
@@ -8,9 +7,13 @@ import {
 } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
-const TELEGRAM_NETWORK_ORIGIN = Symbol("openclaw.telegram.network-origin");
+const TELEGRAM_SUPERGROUP_MIGRATION_DESCRIPTION =
+  "Bad Request: group chat was upgraded to a supergroup chat";
 
 export class TelegramRequestNotStartedError extends Error {
   constructor(message = "Telegram request did not start") {
@@ -28,9 +31,14 @@ function isTelegramRequestNotStartedError(err: unknown): boolean {
 }
 
 export function rethrowTelegramSendError(err: unknown): never {
-  throw isTelegramRequestNotStartedError(err)
-    ? new PlatformMessageNotDispatchedError("Telegram request not started", { cause: err })
-    : err;
+  if (isTelegramRequestNotStartedError(err)) {
+    throw new PlatformMessageNotDispatchedError("Telegram request not started", { cause: err });
+  }
+  const migrationRejection = describeTelegramSupergroupMigration(err);
+  if (migrationRejection === undefined) {
+    throw err;
+  }
+  throw new PlatformMessageNotDispatchedError(migrationRejection, { cause: err, retryable: false });
 }
 
 const TELEGRAM_ADDITIONAL_TRANSIENT_ERROR_CODES = new Set([
@@ -139,6 +147,28 @@ function getNumericHttpStatus(err: unknown): number | undefined {
   return undefined;
 }
 
+// Once a basic group is upgraded, its old id answers every send with this exact Bot API
+// 400 (https://core.telegram.org/bots/api#making-requests). Matching the description
+// literally keeps every other 400 retryable; `migrate_to_chat_id` is bounded at 52
+// significant bits, so a non-safe integer is not the documented id and stays unreported.
+function describeTelegramSupergroupMigration(err: unknown): string | undefined {
+  for (const candidate of collectTelegramErrorCandidates(err)) {
+    if (!isRecord(candidate) || candidate.error_code !== 400) {
+      continue;
+    }
+    if (candidate.description !== TELEGRAM_SUPERGROUP_MIGRATION_DESCRIPTION) {
+      continue;
+    }
+    const migratedChatId = isRecord(candidate.parameters)
+      ? candidate.parameters.migrate_to_chat_id
+      : undefined;
+    return typeof migratedChatId === "number" && Number.isSafeInteger(migratedChatId)
+      ? `Telegram rejected send: group migrated to supergroup ${migratedChatId}`
+      : "Telegram rejected send: group migrated to a supergroup";
+  }
+  return undefined;
+}
+
 export function isTelegramMisdirectedRequestError(err: unknown): boolean {
   for (const candidate of collectTelegramErrorCandidates(err)) {
     const code = normalizeCode(getErrorCode(candidate));
@@ -163,52 +193,6 @@ type TelegramNetworkErrorContext =
   | "edit"
   | "action"
   | "unknown";
-type TelegramNetworkErrorOrigin = {
-  method?: string | null;
-  url?: string | null;
-};
-
-function normalizeTelegramNetworkMethod(method?: string | null): string | null {
-  const trimmed = method?.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return normalizeLowercaseStringOrEmpty(trimmed);
-}
-
-export function tagTelegramNetworkError(err: unknown, origin: TelegramNetworkErrorOrigin): void {
-  if (!err || typeof err !== "object") {
-    return;
-  }
-  Object.defineProperty(err, TELEGRAM_NETWORK_ORIGIN, {
-    value: {
-      method: normalizeTelegramNetworkMethod(origin.method),
-      url: typeof origin.url === "string" && origin.url.trim() ? origin.url : null,
-    } satisfies TelegramNetworkErrorOrigin,
-    configurable: true,
-  });
-}
-
-function getTelegramNetworkErrorOrigin(err: unknown): TelegramNetworkErrorOrigin | null {
-  for (const candidate of collectTelegramErrorCandidates(err)) {
-    if (!candidate || typeof candidate !== "object") {
-      continue;
-    }
-    const origin = (candidate as Record<PropertyKey, unknown>)[TELEGRAM_NETWORK_ORIGIN];
-    if (!origin || typeof origin !== "object") {
-      continue;
-    }
-    const method = "method" in origin && typeof origin.method === "string" ? origin.method : null;
-    const url = "url" in origin && typeof origin.url === "string" ? origin.url : null;
-    return { method, url };
-  }
-  return null;
-}
-
-export function isTelegramPollingNetworkError(err: unknown): boolean {
-  return getTelegramNetworkErrorOrigin(err)?.method === "getupdates";
-}
-
 /** True only for channel-owned no-send proof or proven pre-connect failures. */
 export function isSafeToRetrySendError(err: unknown): boolean {
   if (!err) {

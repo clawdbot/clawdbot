@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { verifyAgentRuntimeIdentityToken } from "../../gateway/agent-runtime-identity-token.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -82,7 +83,9 @@ function testGatewayCaller(
 ): NonNullable<Parameters<typeof withGatewayToolCallerIdentity>[0]> {
   const operationalRunInstance = createOperationalRunInstanceRef("run-gateway-tool-test");
   testDelegatedAuthorities.push(claimAgentRunDelegatedAuthority(operationalRunInstance));
+  const context = {} as GatewayRequestContext;
   return {
+    gatewayContextResolver: () => context,
     ...identity,
     operationalRunInstance,
   };
@@ -96,7 +99,7 @@ describe("gateway tool defaults", () => {
 
   beforeEach(() => {
     releaseTestDelegatedAuthorities();
-    mocks.callGateway.mockClear();
+    mocks.callGateway.mockReset();
     mocks.deviceIdentityError = undefined;
     mocks.persistedDeviceIdentity = undefined;
     mocks.configState.value = {};
@@ -745,6 +748,43 @@ describe("gateway tool defaults", () => {
       expect.any(String),
     );
   });
+
+  it.each(["preparation", "retry"] as const)(
+    "carries dispatch authority across %s without sending it as RPC data",
+    async (stage) => {
+      let current = true;
+      const refused = new Error("source closed");
+      const sent: unknown[] = [];
+      const assertCurrent = vi.fn(() => {
+        if (!current) {
+          throw refused;
+        }
+      });
+      mocks.callGateway.mockImplementation(async (options: CallGatewayOptions) => {
+        options.assertDispatchCurrent?.();
+        sent.push(options.params);
+        current = false;
+        throw Object.assign(
+          new Error("invalid node.invoke params: unexpected property 'turnSourceChannel'"),
+          {
+            name: "GatewayClientRequestError",
+            gatewayCode: "INVALID_REQUEST",
+            details: { nodeCommandDispatched: false },
+          },
+        );
+      });
+      const params = { nodeId: "node-1", command: "device.info", idempotencyKey: "guarded" };
+      const result = callGatewayTool("node.invoke", {}, params, {
+        dispatchAuthority: { version: 2, kind: "source-bound", assertCurrent },
+      });
+      if (stage === "preparation") {
+        current = false;
+      }
+      await expect(result).rejects.toBe(refused);
+      expect(assertCurrent).toHaveBeenCalledTimes(stage === "preparation" ? 1 : 2);
+      expect(sent).toEqual(stage === "preparation" ? [] : [params]);
+    },
+  );
 
   it("does not retry a dispatched node invoke whose error resembles schema rejection", async () => {
     const dispatchedError = Object.assign(

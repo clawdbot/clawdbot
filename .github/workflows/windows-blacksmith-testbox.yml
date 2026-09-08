@@ -29,6 +29,7 @@ jobs:
         shell: pwsh
     steps:
       - name: Begin Testbox
+        id: begin_testbox
         shell: bash
         env:
           TESTBOX_ID: ${{ inputs.testbox_id }}
@@ -69,6 +70,15 @@ jobs:
           fi
           runner_ssh_port="${BLACKSMITH_SSH_PORT:-22}"
 
+          echo "$TESTBOX_ID" > "$state/testbox_id"
+          echo "$installation_model_id" > "$state/installation_model_id"
+          echo "$auth_token" > "$state/auth_token"
+          echo "$api_url" > "$state/api_url"
+          echo "$runner_host" > "$state/runner_host"
+          echo "$runner_ssh_port" > "$state/runner_ssh_port"
+          echo "$GITHUB_WORKSPACE" > "$state/working_directory"
+          echo "$GITHUB_RUN_ID" > "$state/adopted_run_id"
+
           hydrating_body="$RUNNER_TEMP/testbox-hydrating.json"
           hydrating_response="$RUNNER_TEMP/testbox-hydrating.response"
           jq -n \
@@ -103,20 +113,10 @@ jobs:
           echo "phone_home_hydrating_curl=${hydrating_curl_status}"
           echo "phone_home_hydrating_http=${hydrating_http_code}"
           if (( hydrating_curl_status != 0 )) || [[ ! "$hydrating_http_code" =~ ^2 ]]; then
-            echo "Blacksmith phone-home hydrating failed; response body:" >&2
-            cat "$hydrating_response" >&2 || true
+            echo "Blacksmith phone-home hydrating failed." >&2
             exit 1
           fi
           response="$(cat "$hydrating_response")"
-
-          echo "$TESTBOX_ID" > "$state/testbox_id"
-          echo "$installation_model_id" > "$state/installation_model_id"
-          echo "$auth_token" > "$state/auth_token"
-          echo "$api_url" > "$state/api_url"
-          echo "$runner_host" > "$state/runner_host"
-          echo "$runner_ssh_port" > "$state/runner_ssh_port"
-          echo "$GITHUB_WORKSPACE" > "$state/working_directory"
-          echo "$GITHUB_RUN_ID" > "$state/adopted_run_id"
 
           if [ -n "$response" ] && echo "$response" | jq -e . >/dev/null 2>&1; then
             echo "$response" | jq -r '.ssh_public_key // empty' > "$state/ssh_public_key"
@@ -131,32 +131,85 @@ jobs:
 
           ssh_public_key="$(cat "$state/ssh_public_key" 2>/dev/null || true)"
           if [ -z "$ssh_public_key" ]; then
-            echo "Blacksmith phone-home did not return an SSH public key; testbox cannot accept CLI connections." >&2
+            echo "Blacksmith phone-home did not return an SSH public key; testbox cannot accept native SSH connections." >&2
             exit 1
           fi
-          mkdir -p ~/.ssh
-          printf '%s\n' "$ssh_public_key" >> ~/.ssh/authorized_keys
-          chmod 700 ~/.ssh
-          chmod 600 ~/.ssh/authorized_keys
+          public_key_path="$(cygpath -aw "$state/ssh_public_key")"
+          printf 'public_key_path=%s\n' "$public_key_path" >> "$GITHUB_OUTPUT"
+          printf 'bash_os=%s\nbash_user=%s\n' "$(uname -s)" "$(id -un)"
 
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           submodules: false
 
-      - name: Prepare Windows shell
+      - name: Prepare Windows SSH
+        id: prepare_windows
+        env:
+          TESTBOX_PUBLIC_KEY_PATH: ${{ steps.begin_testbox.outputs.public_key_path }}
         run: |
           $ErrorActionPreference = "Stop"
-          Write-Host "runner=$env:RUNNER_NAME"
-          Write-Host "machine=$env:COMPUTERNAME"
-          Write-Host ("os=" + [System.Environment]::OSVersion.VersionString)
+          $PSNativeCommandUseErrorActionPreference = $false
+          $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+          if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            throw "Native Windows SSH preparation requires an elevated administrator."
+          }
+          $nativeUser = [Environment]::UserName
+          Write-Host "windows_user=$nativeUser"
+          Write-Host ("os=" + [Environment]::OSVersion.VersionString)
+          Write-Host ("architecture=" + [Runtime.InteropServices.RuntimeInformation]::OSArchitecture)
           Write-Host ("powershell=" + $PSVersionTable.PSVersion.ToString())
-          git --version
+
+          # Only the stock native OpenSSH service and administrator key-file contract are supported.
+          $sshd = "$env:WINDIR\System32\OpenSSH\sshd.exe"
+          $keygen = "$env:WINDIR\System32\OpenSSH\ssh-keygen.exe"
+          $service = Get-CimInstance Win32_Service -Filter "Name='sshd'"
+          if (-not $service -or $service.State -ne "Running" -or $service.StartName -ne "LocalSystem" -or
+              $service.PathName.Trim().Trim('"') -ine $sshd) {
+            throw "Expected the running stock LocalSystem Windows OpenSSH service without arguments."
+          }
+          $effectiveConfig = & $sshd -T -C "user=$nativeUser" 2>&1
+          if ($LASTEXITCODE -ne 0) { throw "Could not inspect native Windows OpenSSH configuration." }
+          $keySetting = @($effectiveConfig | Where-Object { $_ -match '^authorizedkeysfile\s' })
+          if ($keySetting.Count -ne 1 -or $keySetting[0] -cne 'authorizedkeysfile __PROGRAMDATA__/ssh/administrators_authorized_keys') {
+            throw "Expected the stock administrator AuthorizedKeysFile for the native Windows user."
+          }
+          $authorizedKeys = Join-Path $env:ProgramData 'ssh\administrators_authorized_keys'
+          if (-not (Test-Path -LiteralPath $authorizedKeys -PathType Leaf)) {
+            throw "Expected the provider's existing administrator authorized keys file."
+          }
+
+          $keyInfo = @(& $keygen -E sha256 -lf $env:TESTBOX_PUBLIC_KEY_PATH 2>&1)
+          if ($LASTEXITCODE -ne 0 -or $keyInfo.Count -ne 1 -or
+              $keyInfo[0] -notmatch '^\d+\s+(SHA256:[A-Za-z0-9+/]+)\s') {
+            throw "Testbox did not provide one valid SSH public key."
+          }
+          $fingerprint = $Matches[1]
+          $publicKey = [IO.File]::ReadAllText($env:TESTBOX_PUBLIC_KEY_PATH).Trim()
+          if ($publicKey -match '[\r\n]') { throw "Expected a single-line Testbox SSH public key." }
+
+          # Windows OpenSSH requires only SYSTEM and Administrators; SIDs avoid localized names.
+          $acl = [Security.AccessControl.FileSecurity]::new()
+          $acl.SetOwner([Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
+          $acl.SetAccessRuleProtection($true, $false)
+          foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+            $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+              [Security.Principal.SecurityIdentifier]::new($sid), "FullControl", "Allow"))
+          }
+          Set-Acl -LiteralPath $authorizedKeys -AclObject $acl
+          # Preserve provider keys byte-for-byte, including a final line without a newline.
+          [IO.File]::AppendAllText($authorizedKeys, "`r`n$publicKey`r`n", [Text.UTF8Encoding]::new($false))
+          Write-Host "authorized_keys=$authorizedKeys testbox_key_fingerprint=$fingerprint"
+          "ssh_user=$nativeUser" >> $env:GITHUB_OUTPUT
 
       - name: Run Testbox
         if: always()
         shell: bash
+        env:
+          JOB_STATUS: ${{ job.status }}
+          NATIVE_SSH_USER: ${{ steps.prepare_windows.outputs.ssh_user }}
         run: |
           set -euo pipefail
 
@@ -178,11 +231,15 @@ jobs:
             exit 1
           fi
 
-          ready_body="$RUNNER_TEMP/testbox-ready.json"
+          phone_home_status="ready"
+          if [ "$JOB_STATUS" != "success" ]; then
+            phone_home_status="hydration_failed"
+          fi
+          final_body="$RUNNER_TEMP/testbox-final.json"
           jq -n \
             --arg testbox_id "$testbox_id" \
             --argjson installation_model_id "$installation_model_id" \
-            --arg status "ready" \
+            --arg status "$phone_home_status" \
             --arg ip_address "$runner_host" \
             --arg ssh_port "$runner_ssh_port" \
             --arg working_directory "$working_directory" \
@@ -196,22 +253,26 @@ jobs:
               working_directory: $working_directory,
               adopted_run_id: $adopted_run_id,
               metadata: {}
-            }' > "$ready_body"
+            }' > "$final_body"
 
           # curl can expose a 2xx status before a response-body timeout, so preserve its exit code.
-          ready_curl_status=0
+          final_curl_status=0
           http_code="$(curl -sS -L --post302 --post303 \
             --connect-timeout 10 --max-time 30 \
-            -o "$RUNNER_TEMP/testbox-ready.response" -w '%{http_code}' \
+            -o "$RUNNER_TEMP/testbox-final.response" -w '%{http_code}' \
             -X POST "${api_url}/api/testbox/phone-home" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${auth_token}" \
-            --data-binary @"$ready_body")" || ready_curl_status=$?
-          echo "phone_home_ready_curl=${ready_curl_status}"
-          echo "phone_home_ready_http=${http_code}"
-          if (( ready_curl_status != 0 )) || [[ ! "$http_code" =~ ^2 ]]; then
-            echo "Blacksmith phone-home ready failed; response body:" >&2
-            cat "$RUNNER_TEMP/testbox-ready.response" >&2 || true
+            --data-binary @"$final_body")" || final_curl_status=$?
+          echo "phone_home_${phone_home_status}_curl=${final_curl_status}"
+          echo "phone_home_${phone_home_status}_http=${http_code}"
+          if (( final_curl_status != 0 )) || [[ ! "$http_code" =~ ^2 ]]; then
+            echo "Blacksmith phone-home ${phone_home_status} failed." >&2
+            exit 1
+          fi
+
+          if [ "$phone_home_status" != "ready" ]; then
+            echo "Testbox setup failed; reported hydration_failed." >&2
             exit 1
           fi
 
@@ -222,8 +283,23 @@ jobs:
           echo "  SSH port:           ${runner_ssh_port}"
           echo "  Working directory:  ${working_directory}"
           echo "  Run ID:             ${adopted_run_id}"
-          echo "  SSH:                ssh -p ${runner_ssh_port} runner@${runner_host}"
+          echo "  SSH:                ssh -p ${runner_ssh_port} ${NATIVE_SSH_USER}@${runner_host}"
           echo "============================================"
+
+          echo "Native SSH inspection only: Blacksmith CLI 0.4.57 still targets runner and has no username override; supported sync/run remains blocked."
+
+          # Blacksmith advertises a forwarded port; native sockets use sshd's local listeners.
+          runner_ssh_local_ports="$(pwsh -NoProfile -NonInteractive -Command '
+            $ErrorActionPreference = "Stop"
+            $service = Get-CimInstance Win32_Service -Filter "Name = `"sshd`""
+            if ($service.State -ne "Running" -or $service.ProcessId -eq 0) {
+              throw "Cannot monitor activity without the running Windows SSH service."
+            }
+            $ports = @(Get-NetTCPConnection -State Listen -OwningProcess $service.ProcessId |
+              Select-Object -ExpandProperty LocalPort -Unique)
+            if ($ports.Count -eq 0) { throw "No local Windows SSH listener found." }
+            [Console]::Write(($ports -join "|"))
+          ')"
 
           last_activity="$(date +%s)"
           idle_timeout_seconds=$(( idle_timeout * 60 ))
@@ -232,7 +308,12 @@ jobs:
             sleep 30
             now="$(date +%s)"
 
-            if netstat -na 2>/dev/null | grep ":${runner_ssh_port}" | grep -q ESTABLISHED; then
+            connections="$(netstat -na)"
+            # Match the local endpoint exactly; consume all rows to avoid pipefail/SIGPIPE races.
+            if awk -v ports="$runner_ssh_local_ports" '
+              $1 == "TCP" && $2 ~ (":(" ports ")$") && $4 ~ /^ESTABLISHED\r?$/ { active = 1 }
+              END { exit !active }
+            ' <<< "$connections"; then
               last_activity="$now"
             elif [ -f ~/.testbox-last-activity ]; then
               file_mtime="$(stat -c %Y ~/.testbox-last-activity 2>/dev/null || stat -f %m ~/.testbox-last-activity)"

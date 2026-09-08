@@ -1,3 +1,4 @@
+import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import {
   ErrorCodes,
   errorShape,
@@ -7,7 +8,6 @@ import {
   validateSessionTypingParams,
   type SessionSuggestion,
   type SessionSuggestionResolution,
-  type SessionSharingIdentity,
   type SessionTypingEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -21,6 +21,8 @@ import {
   SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
   type StoredSessionSuggestion,
 } from "../../config/sessions.js";
+import { presenceUserKey } from "../../shared/presence-user.js";
+import { operatorSessionCap } from "../operator-role-policy.js";
 import { sessionObserverScopeKey } from "../session-observer-model.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import {
@@ -33,7 +35,6 @@ import {
 import { resolveSessionSubscriptionKeys as subscriptionKeys } from "../session-subscription-keys.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
-import { appendSessionAudit } from "./session-audit.js";
 import {
   broadcastTypingThrottled,
   liveViewerIdentities,
@@ -115,30 +116,6 @@ function runSessionSuggestionMutation<T>(params: {
   }
 }
 
-function resolutionAuditAction(resolution: SessionSuggestionResolution): string {
-  switch (resolution) {
-    case "send":
-      return "sent a suggestion immediately";
-    case "queue":
-      return "queued a suggestion";
-    case "edit":
-      return "moved a suggestion into the composer";
-    case "dismiss":
-      return "dismissed a suggestion";
-  }
-  throw new Error(`unsupported suggestion resolution: ${String(resolution)}`);
-}
-
-function actorIdentity(client: GatewayClient | null): SessionSharingIdentity {
-  return (
-    gatewayClientSessionCreator(client) ?? {
-      type: "system",
-      id: "operator.admin",
-      label: "Administrator",
-    }
-  );
-}
-
 function attributedSuggestionClient(
   client: GatewayClient,
   suggestion: StoredSessionSuggestion,
@@ -151,6 +128,7 @@ function attributedSuggestionClient(
       syntheticClient: true,
       senderAttribution: {
         id: suggestion.authorId,
+        identity: { type: "profile", id: suggestion.authorId },
         name: `Suggested by ${label}`,
       },
     },
@@ -202,15 +180,28 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const target = requireSuggestionTarget({ context, ...params, respond });
+    const cfg = context.getRuntimeConfig();
+    const target = requireSuggestionTarget({ client, context, ...params, respond });
     const author = gatewayClientSessionCreator(client);
     if (!target) {
       return;
     }
-    if (
-      requireVisibleSuggestionRole({ client, sessionKey: params.sessionKey, target, respond }) ===
-      null
-    ) {
+    const role = requireVisibleSuggestionRole({
+      client,
+      cfg,
+      sessionKey: params.sessionKey,
+      target,
+      respond,
+    });
+    if (role === null) {
+      return;
+    }
+    if (role === "viewer" && operatorSessionCap(client, cfg) === "view") {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.FORBIDDEN, "your operator role permits viewing sessions only"),
+      );
       return;
     }
     const lifecycleError = resolveSessionWorkStartError(target.canonicalKey, target.entry);
@@ -281,12 +272,14 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const target = requireSuggestionTarget({ context, ...params, respond });
+    const cfg = context.getRuntimeConfig();
+    const target = requireSuggestionTarget({ client, context, ...params, respond });
     if (!target) {
       return;
     }
     const role = requireVisibleSuggestionRole({
       client,
+      cfg,
       sessionKey: params.sessionKey,
       target,
       respond,
@@ -327,12 +320,14 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const target = requireSuggestionTarget({ context, ...params, respond });
+    const cfg = context.getRuntimeConfig();
+    const target = requireSuggestionTarget({ client, context, ...params, respond });
     if (!target) {
       return;
     }
     const role = requireVisibleSuggestionRole({
       client,
+      cfg,
       sessionKey: params.sessionKey,
       target,
       respond,
@@ -518,17 +513,6 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       action: "resolved",
       suggestion: projected,
     });
-    const actor = actorIdentity(client);
-    try {
-      await appendSessionAudit({
-        cfg: context.getRuntimeConfig(),
-        target: { ...target, sessionKey: target.canonicalKey },
-        text: `${actor.label ?? actor.id} ${resolutionAuditAction(resolution)}.`,
-        now: Date.now(),
-      });
-    } catch (error) {
-      context.logGateway.warn(`failed to append suggestion resolution audit: ${String(error)}`);
-    }
     respond(true, { suggestion: projected });
   },
 
@@ -537,13 +521,14 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       typeof requestParams.preview === "string"
         ? {
             ...requestParams,
-            preview: Array.from(requestParams.preview.trim()).slice(0, 400).join(""),
+            preview: truncateCodePoints(requestParams.preview.trim(), 400),
           }
         : requestParams;
     if (!assertValidParams(params, validateSessionTypingParams, "session.typing", respond)) {
       return;
     }
-    const target = requireSuggestionTarget({ context, ...params, respond });
+    const cfg = context.getRuntimeConfig();
+    const target = requireSuggestionTarget({ client, context, ...params, respond });
     const actor = gatewayClientSessionCreator(client);
     if (!target) {
       return;
@@ -565,8 +550,12 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       respond(true, { ok: true, broadcast: false });
       return;
     }
-    const role = resolveSessionSharingRole({ client, target });
+    const role = resolveSessionSharingRole({ client, cfg, target });
     const visibility = resolveSessionVisibility(target.entry);
+    if (role === "viewer" && operatorSessionCap(client, cfg) === "view") {
+      respond(true, { ok: true, broadcast: false });
+      return;
+    }
     if (visibility === "draft" && !canManageSessionSharing(role)) {
       respond(true, { ok: true, broadcast: false });
       return;
@@ -574,6 +563,9 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     if (role === "viewer" && visibility !== "shared" && visibility !== "suggest") {
       respond(true, { ok: true, broadcast: false });
       return;
+    }
+    if (params.typing) {
+      context.recordClientActivity?.(client);
     }
     const sessionKeys = new Set([
       params.sessionKey,
@@ -609,8 +601,12 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
         if (!current || current.entry.sessionId !== target.entry.sessionId) {
           return false;
         }
-        const currentRole = resolveSessionSharingRole({ client, target: current });
+        const currentCfg = context.getRuntimeConfig();
+        const currentRole = resolveSessionSharingRole({ client, cfg: currentCfg, target: current });
         const currentVisibility = resolveSessionVisibility(current.entry);
+        if (currentRole === "viewer" && operatorSessionCap(client, currentCfg) === "view") {
+          return false;
+        }
         if (currentVisibility === "draft" && !canManageSessionSharing(currentRole)) {
           return false;
         }
@@ -622,7 +618,11 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
           return false;
         }
         const liveIdentities = liveViewerIdentities(sessionKeys);
-        if (liveIdentities.size < 2 || !liveIdentities.has(actor.id)) {
+        const actorKey = presenceUserKey({
+          id: actor.id,
+          identity: { type: "profile", id: actor.id },
+        });
+        if (liveIdentities.size < 2 || !liveIdentities.has(actorKey)) {
           return false;
         }
         const event: SessionTypingEvent = {

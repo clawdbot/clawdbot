@@ -8,12 +8,11 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import {
-  createWebPushVapidKeyPair,
+  ensureWebPushSubscriptionBindingColumns,
   webPushSubscriptionFromRow,
   webPushSubscriptionToRow,
   webPushSubscriptionsEqual,
-  webPushVapidKeyPairToRow,
-  WEB_PUSH_VAPID_KEY_ID,
+  WEB_PUSH_VAPID_STATE_KEY,
   type VapidKeyPair,
   type WebPushDatabase,
   type WebPushSubscription,
@@ -192,6 +191,7 @@ function migrateIntoDatabase(params: {
   let importedVapidKeys = false;
   runOpenClawStateWriteTransaction(
     ({ db }) => {
+      ensureWebPushSubscriptionBindingColumns(db);
       const webPushDb = getNodeSqliteKysely<WebPushDatabase>(db);
       const expectedSubscriptions = new Map<string, WebPushSubscription>();
       for (const [endpointHash, legacySubscription] of params.legacy.subscriptions) {
@@ -225,30 +225,28 @@ function migrateIntoDatabase(params: {
         const existingVapidRow = executeSqliteQueryTakeFirstSync(
           db,
           webPushDb
-            .selectFrom("web_push_vapid_keys")
-            .selectAll()
-            .where("key_id", "=", WEB_PUSH_VAPID_KEY_ID),
+            .selectFrom("config_machine_state")
+            .select("value_json")
+            .where("state_key", "=", WEB_PUSH_VAPID_STATE_KEY),
         );
         if (existingVapidRow) {
+          // SAFETY: The Web Push owner stores only VapidKeyPair objects under this key.
+          const existingVapidKeys = JSON.parse(existingVapidRow.value_json) as VapidKeyPair;
           if (
-            existingVapidRow.public_key !== params.legacy.vapidKeys.publicKey ||
-            existingVapidRow.private_key !== params.legacy.vapidKeys.privateKey
+            existingVapidKeys.publicKey !== params.legacy.vapidKeys.publicKey ||
+            existingVapidKeys.privateKey !== params.legacy.vapidKeys.privateKey
           ) {
             throw new Error("legacy Web Push VAPID identity conflicts with SQLite");
           }
-          expectedVapidKeys = createWebPushVapidKeyPair(
-            existingVapidRow.public_key,
-            existingVapidRow.private_key,
-            existingVapidRow.subject,
-          );
+          expectedVapidKeys = existingVapidKeys;
         } else {
           executeSqliteQuerySync(
             db,
-            webPushDb
-              .insertInto("web_push_vapid_keys")
-              .values(
-                webPushVapidKeyPairToRow({ keyPair: params.legacy.vapidKeys, nowMs: params.nowMs }),
-              ),
+            webPushDb.insertInto("config_machine_state").values({
+              state_key: WEB_PUSH_VAPID_STATE_KEY,
+              value_json: JSON.stringify(params.legacy.vapidKeys),
+              updated_at_ms: params.nowMs,
+            }),
           );
           expectedVapidKeys = params.legacy.vapidKeys;
           importedVapidKeys = true;
@@ -271,15 +269,17 @@ function migrateIntoDatabase(params: {
         const row = executeSqliteQueryTakeFirstSync(
           db,
           webPushDb
-            .selectFrom("web_push_vapid_keys")
-            .selectAll()
-            .where("key_id", "=", WEB_PUSH_VAPID_KEY_ID),
+            .selectFrom("config_machine_state")
+            .select("value_json")
+            .where("state_key", "=", WEB_PUSH_VAPID_STATE_KEY),
         );
+        // SAFETY: This transaction writes or validates this key as a VapidKeyPair above.
+        const persisted = row ? (JSON.parse(row.value_json) as VapidKeyPair) : undefined;
         if (
-          !row ||
-          row.public_key !== expectedVapidKeys.publicKey ||
-          row.private_key !== expectedVapidKeys.privateKey ||
-          row.subject !== expectedVapidKeys.subject
+          !persisted ||
+          persisted.publicKey !== expectedVapidKeys.publicKey ||
+          persisted.privateKey !== expectedVapidKeys.privateKey ||
+          persisted.subject !== expectedVapidKeys.subject
         ) {
           throw new Error("SQLite verification failed for the Web Push VAPID identity");
         }

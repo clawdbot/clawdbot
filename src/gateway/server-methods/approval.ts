@@ -14,6 +14,7 @@ import {
   validateApprovalHistoryParams,
   validateApprovalResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import type {
   ExecApprovalDecision,
@@ -30,6 +31,7 @@ import {
   canResolveOperatorApproval,
   canReviewOperatorApproval,
 } from "../operator-approval-authorization.js";
+import { projectOperatorApprovalSnapshot } from "../operator-approval-snapshot.js";
 import {
   getOperatorApprovalDetailed,
   listTerminalOperatorApprovals,
@@ -42,6 +44,7 @@ import {
   type ExecApprovalIosPushDelivery,
   type PluginApprovalIosPushDelivery,
 } from "./approval-publication.js";
+import { canAccessApprovalSession } from "./approval-record-lookup.js";
 import { respondApprovalStorageUnavailable } from "./approval-shared.js";
 import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 
@@ -59,24 +62,13 @@ function buildApprovalSnapshot(
   record: OperatorApprovalRecord,
   controlUiBasePath: string,
 ): ApprovalSnapshot | null {
-  const common = {
-    id: record.id,
-    status: record.status,
-    presentation: record.presentation,
-    urlPath: `${controlUiBasePath}/approve/${encodeURIComponent(record.id)}`,
-    createdAtMs: record.createdAtMs,
-    expiresAtMs: record.expiresAtMs,
-  };
-  if (record.status === "pending") {
-    return common as ApprovalSnapshot;
+  const snapshot = projectOperatorApprovalSnapshot(record, controlUiBasePath);
+  if (!snapshot || snapshot.status === "pending") {
+    return snapshot;
   }
-  if (record.resolvedAtMs === null || record.terminalReason === null) {
-    return null;
-  }
-  const terminal = {
-    ...common,
-    resolvedAtMs: record.resolvedAtMs,
-    reason: record.terminalReason,
+  // Terminal attribution belongs to RPC readers; session events omit it.
+  return {
+    ...snapshot,
     source: {
       ...(record.source.agentId ? { agentId: record.source.agentId } : {}),
       ...(record.source.sessionKey ? { sessionKey: record.source.sessionKey } : {}),
@@ -90,16 +82,6 @@ function buildApprovalSnapshot(
         }
       : {}),
   };
-  if (record.status === "allowed") {
-    if (record.decision !== "allow-once" && record.decision !== "allow-always") {
-      return null;
-    }
-    return { ...terminal, decision: record.decision } as ApprovalSnapshot;
-  }
-  if (record.status === "denied") {
-    return { ...terminal, decision: "deny" } as ApprovalSnapshot;
-  }
-  return terminal as ApprovalSnapshot;
 }
 
 function resolveApprovalResolver(client: GatewayClient | null): OperatorApprovalResolver {
@@ -140,6 +122,7 @@ function readExactApprovalId(params: unknown): string | null {
 function loadVisibleApproval(params: {
   id: string;
   client: GatewayClient | null;
+  cfg: OpenClawConfig;
   allowApprovalRuntime?: boolean;
   allowTransportRef?: boolean;
   execApprovalManager: ExecApprovalManager;
@@ -159,6 +142,17 @@ function loadVisibleApproval(params: {
     params.execApprovalManager.getLiveSnapshot(params.id) ??
     params.pluginApprovalManager.getLiveSnapshot(params.id) ??
     params.systemAgentApprovalManager?.getLiveSnapshot(params.id);
+  if (
+    liveRecord &&
+    !canAccessApprovalSession({
+      cfg: params.cfg,
+      client: params.client,
+      sessionKey: liveRecord.request.sessionKey,
+      agentId: liveRecord.request.agentId,
+    })
+  ) {
+    return null;
+  }
   if (
     liveRecord &&
     !canAccessOperatorApproval({
@@ -184,6 +178,16 @@ function loadVisibleApproval(params: {
     throw error;
   }
   if (lookup.outcome === "found") {
+    if (
+      !canAccessApprovalSession({
+        cfg: params.cfg,
+        client: params.client,
+        sessionKey: lookup.record.source.sessionKey,
+        agentId: lookup.record.source.agentId,
+      })
+    ) {
+      return null;
+    }
     if (
       !canAccessOperatorApproval({
         client: params.client,
@@ -237,6 +241,7 @@ function applyApprovalDecision<TPayload>(params: {
   forceMalformedDeny: boolean;
   resolver: OperatorApprovalResolver;
   localResolvedBy: string | null;
+  grantExpiresAtMs?: number;
 }): ApplyApprovalDecisionResult<TPayload> {
   const result = params.forceMalformedDeny
     ? params.manager.forceDenyDetailed(
@@ -253,6 +258,8 @@ function applyApprovalDecision<TPayload>(params: {
         params.decision as ExecApprovalDecision,
         params.resolver,
         params.localResolvedBy,
+        "operator",
+        params.grantExpiresAtMs !== undefined ? { grantExpiresAtMs: params.grantExpiresAtMs } : {},
       );
   if (result.outcome === "decision-not-allowed") {
     return applyApprovalDecision({ ...params, forceMalformedDeny: true });
@@ -276,7 +283,7 @@ export function createApprovalHandlers(
   params: CreateApprovalHandlersParams,
 ): GatewayRequestHandlers {
   return {
-    "approval.history": ({ params: rawParams, respond, context }) => {
+    "approval.history": ({ params: rawParams, respond, client, context }) => {
       if (!validateApprovalHistoryParams(rawParams)) {
         respond(
           false,
@@ -306,10 +313,19 @@ export function createApprovalHandlers(
         respondApprovalStorageUnavailable({ context, respond, operation: "history", error });
         return;
       }
-      const controlUiBasePath = normalizeControlUiBasePath(
-        context.getRuntimeConfig()?.gateway?.controlUi?.basePath,
-      );
+      const cfg = context.getRuntimeConfig();
+      const controlUiBasePath = normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath);
       const items = history.records.flatMap((record) => {
+        if (
+          !canAccessApprovalSession({
+            cfg,
+            client,
+            sessionKey: record.source.sessionKey,
+            agentId: record.source.agentId,
+          })
+        ) {
+          return [];
+        }
         const snapshot = buildApprovalSnapshot(record, controlUiBasePath);
         return snapshot && snapshot.status !== "pending" ? [snapshot] : [];
       });
@@ -336,6 +352,7 @@ export function createApprovalHandlers(
           ? loadVisibleApproval({
               id,
               client,
+              cfg: context.getRuntimeConfig(),
               execApprovalManager: params.execApprovalManager,
               pluginApprovalManager: params.pluginApprovalManager,
               systemAgentApprovalManager: params.systemAgentApprovalManager,
@@ -372,6 +389,7 @@ export function createApprovalHandlers(
           ? loadVisibleApproval({
               id,
               client,
+              cfg: context.getRuntimeConfig(),
               allowApprovalRuntime: true,
               allowTransportRef: true,
               execApprovalManager: params.execApprovalManager,
@@ -391,7 +409,7 @@ export function createApprovalHandlers(
       const custody = resolveParams?.reviewer
         ? prepareApprovalChannelCustody({
             cfg: context.getRuntimeConfig(),
-            approvalKind: record.kind === "plugin" ? "plugin" : "exec",
+            approvalKind: record.kind,
             reviewer: resolveParams.reviewer,
           })
         : null;
@@ -400,7 +418,7 @@ export function createApprovalHandlers(
           ? params.execApprovalManager.getLiveSnapshot(record.id)
           : record.kind === "plugin"
             ? params.pluginApprovalManager.getLiveSnapshot(record.id)
-            : undefined;
+            : params.systemAgentApprovalManager?.getLiveSnapshot(record.id);
       if (resolveParams?.reviewer && (!custody || !liveRecord || !custody.authorizes(liveRecord))) {
         respondApprovalNotFound(respond);
         return;
@@ -446,6 +464,15 @@ export function createApprovalHandlers(
                 forceMalformedDeny,
                 resolver,
                 localResolvedBy,
+                // Grant terms freeze at resolve; an explicit per-resolve
+                // override (custom operator UIs, CLI) beats the config default.
+                ...(requestedDecision === "allow-always" &&
+                typeof resolveParams?.grantExpiresInDays === "number"
+                  ? {
+                      grantExpiresAtMs:
+                        Date.now() + Math.floor(resolveParams.grantExpiresInDays) * 86_400_000,
+                    }
+                  : {}),
               })
             : record.kind === "plugin"
               ? applyApprovalDecision({

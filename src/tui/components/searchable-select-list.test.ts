@@ -72,7 +72,7 @@ describe("SearchableSelectList", () => {
     ];
     const list = new SearchableSelectList(items, 5, mockTheme);
     // Ensure first row is non-selected so description styling path is exercised.
-    list.setSelectedIndex(1);
+    list.handleInput("\x1b[B");
     const output = list.render(width).join("\n");
     if (shouldContainDescription) {
       expect(output).toContain("(desc)");
@@ -155,8 +155,6 @@ describe("SearchableSelectList", () => {
       { value: "other", label: "other", description: "Other description" },
     ];
     const list = new SearchableSelectList(items, 5, ansiHighlightTheme);
-    list.setSelectedIndex(1); // make first row non-selected so description styling is applied
-
     typeInput(list, "provider");
 
     const width = 80;
@@ -204,19 +202,24 @@ describe("SearchableSelectList", () => {
     expectNoMatchesForQuery(list, "32m");
   });
 
-  it("does not corrupt ANSI sequences when highlighting multiple tokens", () => {
-    const items = [{ value: "gpt-model", label: "gpt-model" }];
-    const list = new SearchableSelectList(items, 5, ansiHighlightTheme);
+  it.each(["gpt m", "gpt GPT m", "  GPT  m  "])(
+    "does not corrupt ANSI sequences when highlighting query %j",
+    (query) => {
+      const items = [{ value: "gpt-model", label: "gpt-model" }];
+      const list = new SearchableSelectList(items, 5, ansiHighlightTheme);
 
-    typeInput(list, "gpt m");
+      typeInput(list, query);
 
-    const renderedLine = list.render(80).find((line) => stripAnsi(line).includes("gpt-model"));
-    if (!renderedLine) {
-      throw new Error("expected rendered gpt-model line");
-    }
-    const highlightOpens = renderedLine.split("\u001b[31m").length - 1;
-    expect(highlightOpens).toBe(2);
-  });
+      const rendered = list.render(80);
+      const renderedLine = rendered.find((line) => stripAnsi(line).includes("gpt-model"));
+      if (!renderedLine) {
+        throw new Error("expected rendered gpt-model line");
+      }
+      const highlightOpens = renderedLine.split("\u001b[31m").length - 1;
+      expect(highlightOpens).toBe(2);
+      expect(list.render(80)).toEqual(rendered);
+    },
+  );
 
   it("filters items when typing", () => {
     const list = new SearchableSelectList(testItems, 5, mockTheme);
@@ -330,20 +333,22 @@ describe("SearchableSelectList", () => {
     expect(output).toContain("*gpt*");
   });
 
-  it("discards compiled regexes from previous searches", () => {
-    const queryLength = 300;
-    const label = "a".repeat(queryLength);
-    const list = new SearchableSelectList([{ value: "match", label }], 5, mockTheme);
+  it("renders the current query after clearing and replacing it", () => {
+    const list = new SearchableSelectList(
+      [{ value: "match", label: "alpha beta", description: "alpha beta description" }],
+      5,
+      ansiHighlightTheme,
+    );
+    list.handleInput("alpha");
+    list.render(80);
+    list.handleInput("\u0015");
+    const cleared = list.render(80).join("\n");
+    list.handleInput("beta");
+    const replaced = list.render(80).join("\n");
 
-    for (let index = 0; index < queryLength; index += 1) {
-      list.handleInput("a");
-      list.render(queryLength + 10);
-    }
-
-    const regexCache = (list as unknown as { regexCache: Map<string, RegExp> }).regexCache;
-    expect(regexCache.size).toBe(1);
-    expect(regexCache.has(label)).toBe(true);
-    expect(list.render(queryLength + 10).join("\n")).toContain(`*${label}*`);
+    expect(cleared).not.toContain("\u001b[31m");
+    expect(replaced.split("alpha \u001b[31mbeta\u001b[0m")).toHaveLength(3);
+    expect(list.render(80).join("\n")).toBe(replaced);
   });
 
   it("shows no match message when filter yields no results", () => {
@@ -444,7 +449,14 @@ describe("SearchableSelectList", () => {
     expect(selectedValue).toBe(rawValue);
   });
 
-  it("calls onCancel when escape is pressed", () => {
+  it.each(
+    ["", "gemini"].flatMap((query) => [
+      { name: "Escape", key: "\x1b", query },
+      { name: "Ctrl+C", key: "\u0003", query },
+      { name: "Kitty Ctrl+C", key: "\x1b[99;5u", query },
+      { name: "modifyOtherKeys Ctrl+C", key: "\x1b[27;5;99~", query },
+    ]),
+  )("cancels query '$query' with $name", ({ query, key }) => {
     const list = new SearchableSelectList(testItems, 5, mockTheme);
     let cancelled = false;
 
@@ -452,9 +464,11 @@ describe("SearchableSelectList", () => {
       cancelled = true;
     };
 
-    // Press escape
-    list.handleInput("\x1b");
+    typeInput(list, query);
+    const selected = list.getSelectedItem();
+    list.handleInput(key);
 
     expect(cancelled).toBe(true);
+    expect(list.getSelectedItem()).toBe(selected);
   });
 });

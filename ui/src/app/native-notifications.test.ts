@@ -126,6 +126,28 @@ describe("native notifications", () => {
     expect(postMessage.mock.calls).toEqual([[{ type: "send-test" }]]);
   });
 
+  it.each(["unknown", "notDetermined", "denied", "granted"] as const)(
+    "forwards completion to the native permission owner without prompting: %s",
+    (permission) => {
+      const postMessage = installBridge();
+      capability = createNativeNotificationsCapability();
+      if (permission !== "unknown") {
+        window.dispatchEvent(
+          new CustomEvent(NATIVE_NOTIFICATIONS_STATUS_EVENT, {
+            detail: { permission, test: null },
+          }),
+        );
+      }
+      postMessage.mockClear();
+
+      capability?.backgroundSessionCompleted({ runId: "run-1", path: "/chat/research" });
+
+      expect(postMessage.mock.calls).toEqual([
+        [{ type: "background-session-completed", runId: "run-1", path: "/chat/research" }],
+      ]);
+    },
+  );
+
   it("keeps permission and failed send as independent facts across focus refresh", () => {
     const postMessage = installBridge();
     capability = createNativeNotificationsCapability();

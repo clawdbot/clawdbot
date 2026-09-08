@@ -1,28 +1,34 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { buildPortableAuthProfileStoreForAgentCopy } from "../../src/agents/auth-profiles/portability.js";
 import {
   inspectPersistedAuthProfileStateRaw,
   inspectPersistedAuthProfileStoreRaw,
   resolveAuthProfileDatabaseOwnerId,
   resolveAuthProfileDatabasePath,
-  runAuthProfileWriteTransaction,
-  writePersistedAuthProfileStateRaw,
-  writePersistedAuthProfileStoreRaw,
 } from "../../src/agents/auth-profiles/sqlite.js";
+import {
+  ensureAuthProfileStoreWithoutExternalProfiles,
+  saveAuthProfileStore,
+} from "../../src/agents/auth-profiles/store-runtime.js";
+import { withAuthProfileStoreAgentDir } from "../../src/agents/auth-profiles/store.js";
+import { DEFAULT_AGENT_ID } from "../../src/routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../src/state/openclaw-agent-db-readonly.js";
 
 export function stageLiveAuthProfiles(realStateDir: string, tempStateDir: string): void {
   const agentsDir = path.join(realStateDir, "agents");
-  if (!fs.existsSync(agentsDir)) {
-    return;
-  }
-
-  for (const entry of fs.readdirSync(agentsDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    const sourceAgentDir = path.join(agentsDir, entry.name, "agent");
+  const agentIds = new Set([
+    DEFAULT_AGENT_ID,
+    ...(fs.existsSync(agentsDir)
+      ? fs
+          .readdirSync(agentsDir, { withFileTypes: true })
+          .filter((entry) => entry.isDirectory())
+          .map((entry) => entry.name)
+      : []),
+  ]);
+  for (const agentId of agentIds) {
+    const sourceAgentDir = path.join(agentsDir, agentId, "agent");
     const sourceDatabasePath = resolveAuthProfileDatabasePath(sourceAgentDir);
     const sourceSnapshot = withOpenClawAgentDatabaseReadOnly(
       (database) => {
@@ -48,45 +54,37 @@ export function stageLiveAuthProfiles(realStateDir: string, tempStateDir: string
     );
     if (!sourceSnapshot.found) {
       if (sourceSnapshot.reason === "schema-missing") {
-        throw new Error(
-          `Could not safely stage SQLite auth profiles for live agent "${entry.name}".`,
-        );
+        throw new Error(`Could not safely stage SQLite auth profiles for live agent "${agentId}".`);
       }
-      continue;
     }
-    const sourceStore = sourceSnapshot.value.store;
-    const sourceState = sourceSnapshot.value.state;
-    if (sourceStore.status === "unreadable" || sourceState.status === "unreadable") {
-      throw new Error(
-        `Could not safely stage SQLite auth profiles for live agent "${entry.name}".`,
-      );
+    const sourceStore = sourceSnapshot.found ? sourceSnapshot.value.store : undefined;
+    const sourceState = sourceSnapshot.found ? sourceSnapshot.value.state : undefined;
+    if (sourceStore?.status === "unreadable" || sourceState?.status === "unreadable") {
+      throw new Error(`Could not safely stage SQLite auth profiles for live agent "${agentId}".`);
     }
-    const storeTableMissing = sourceStore.status === "missing" && sourceStore.reason === "table";
-    const stateTableMissing = sourceState.status === "missing" && sourceState.reason === "table";
+    const storeTableMissing = sourceStore?.status === "missing" && sourceStore.reason === "table";
+    const stateTableMissing = sourceState?.status === "missing" && sourceState.reason === "table";
     if (storeTableMissing || stateTableMissing) {
       throw new Error(
-        `Could not safely stage SQLite auth profiles for live agent "${entry.name}": canonical auth schema is incomplete.`,
+        `Could not safely stage SQLite auth profiles for live agent "${agentId}": canonical auth schema is incomplete.`,
       );
     }
-    if (sourceStore.status !== "readable" && sourceState.status !== "readable") {
+    const portable = withAuthProfileStoreAgentDir(sourceAgentDir, realStateDir, () =>
+      buildPortableAuthProfileStoreForAgentCopy(
+        ensureAuthProfileStoreWithoutExternalProfiles(sourceAgentDir, {
+          readOnly: true,
+          syncExternalCli: false,
+        }),
+      ),
+    );
+    if (portable.copiedProfileIds.length === 0) {
       continue;
     }
-
-    const targetAgentDir = path.join(tempStateDir, "agents", entry.name, "agent");
-    fs.mkdirSync(targetAgentDir, { recursive: true });
-    // Copy only canonical auth rows; cloning the agent database would expose
-    // unrelated sessions to the isolated live-test home.
-    runAuthProfileWriteTransaction(
-      targetAgentDir,
-      (database) => {
-        if (sourceStore.status === "readable") {
-          writePersistedAuthProfileStoreRaw(sourceStore.raw, targetAgentDir, database);
-        }
-        if (sourceState.status === "readable") {
-          writePersistedAuthProfileStateRaw(sourceState.raw, targetAgentDir, database);
-        }
-      },
-      { stateDir: tempStateDir },
+    const targetAgentDir = path.join(tempStateDir, "agents", agentId, "agent");
+    // Copy the canonical portable view, including shared static credentials;
+    // never clone session databases or acquire another OAuth refresh owner.
+    withAuthProfileStoreAgentDir(targetAgentDir, tempStateDir, () =>
+      saveAuthProfileStore(portable.store, targetAgentDir, { syncExternalCli: false }),
     );
   }
 }

@@ -1,6 +1,7 @@
 // QA Lab plugin module implements cli behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   isCrablineServerChannel,
   OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
@@ -36,6 +37,10 @@ import {
 } from "./coverage-report.js";
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
 import { runQaDockerUp } from "./docker-up.runtime.js";
+import {
+  resolveQaGatewayChildCommand,
+  type QaGatewayChildCommand,
+} from "./gateway-child-command.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import {
   createMockJsonlReplayCellRunner,
@@ -69,6 +74,7 @@ import {
 } from "./qa-credentials-admin.runtime.js";
 import { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-gateway-config.js";
 import {
+  defaultQaSuiteConcurrencyForTransport,
   normalizeQaTransportId,
   qaTransportSupportsModuleFlows,
   type QaTransportId,
@@ -122,6 +128,8 @@ import {
 
 const QA_CREDENTIAL_PAYLOAD_MAX_BYTES_ENV = "OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES";
 const DEFAULT_QA_CREDENTIAL_PAYLOAD_MAX_BYTES = 64 * 1024 * 1024;
+const QA_HARNESS_ROOT_MAX_PARENT_HOPS = 8;
+
 type InterruptibleServer = {
   baseUrl: string;
   stop(): Promise<void>;
@@ -341,6 +349,7 @@ async function runQaParityPreflight(params: {
   primaryModel?: string;
   alternateModel?: string;
   allowFailures?: boolean;
+  sutOpenClawCommand?: QaGatewayChildCommand;
 }) {
   const outputDir = path.join(
     params.repoRoot,
@@ -359,6 +368,7 @@ async function runQaParityPreflight(params: {
       alternateModel: params.alternateModel,
       scenarioIds: ["approval-turn-tool-followthrough"],
       concurrency: 1,
+      ...(params.sutOpenClawCommand ? { sutOpenClawCommand: params.sutOpenClawCommand } : {}),
     }),
   );
   process.stdout.write(`QA parity preflight watch: ${result.watchUrl}\n`);
@@ -376,6 +386,57 @@ async function runQaParityPreflight(params: {
       `QA parity preflight failed with ${blockingScenarioCount} failing or skipped scenario${blockingScenarioCount === 1 ? "" : "s"}.`,
     );
   }
+}
+
+export async function resolveQaHarnessRepoRoot(moduleUrl = import.meta.url): Promise<string> {
+  const modulePath = fileURLToPath(moduleUrl);
+  let candidateDir = path.dirname(modulePath);
+  for (let parentHops = 0; parentHops <= QA_HARNESS_ROOT_MAX_PARENT_HOPS; parentHops += 1) {
+    const packagePath = path.join(candidateDir, "package.json");
+    try {
+      const packageJson: unknown = JSON.parse(await fs.readFile(packagePath, "utf8"));
+      if (
+        packageJson !== null &&
+        typeof packageJson === "object" &&
+        "name" in packageJson &&
+        packageJson.name === "openclaw"
+      ) {
+        return candidateDir;
+      }
+    } catch (error) {
+      const code = error instanceof Error && "code" in error ? error.code : undefined;
+      if (code !== "ENOENT" && code !== "ENOTDIR") {
+        throw new Error(
+          `Unable to inspect QA harness package at ${packagePath}: ${formatErrorMessage(error)}`,
+          { cause: error },
+        );
+      }
+    }
+    const parentDir = path.dirname(candidateDir);
+    if (parentDir === candidateDir) {
+      break;
+    }
+    candidateDir = parentDir;
+  }
+  throw new Error(
+    `Unable to resolve QA harness repository root from ${modulePath}: no ancestor package.json named "openclaw" within ${QA_HARNESS_ROOT_MAX_PARENT_HOPS} parent directories.`,
+  );
+}
+
+async function resolveExternalQaCandidateCommand(
+  repoRoot: string,
+): Promise<QaGatewayChildCommand | undefined> {
+  const harnessRepoRoot = await resolveQaHarnessRepoRoot();
+  const [realHarnessRepoRoot, targetRepoRoot] = await Promise.all([
+    fs.realpath(harnessRepoRoot),
+    fs.realpath(repoRoot),
+  ]);
+  // An explicit path may be "." or a symlink back to this harness checkout.
+  // Only a different checkout needs candidate-owned CLI setup and state writes.
+  if (targetRepoRoot === realHarnessRepoRoot) {
+    return undefined;
+  }
+  return resolveQaGatewayChildCommand(repoRoot);
 }
 
 function parseQaCliBackendAuthMode(value: string | undefined): QaCliBackendAuthMode | undefined {
@@ -1016,6 +1077,8 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     }
     return result;
   }
+  const sutOpenClawCommand =
+    opts.repoRoot === undefined ? undefined : await resolveExternalQaCandidateCommand(repoRoot);
   if (opts.preflight === true) {
     await runQaParityPreflight({
       repoRoot,
@@ -1024,10 +1087,17 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       primaryModel,
       alternateModel,
       allowFailures,
+      ...(sutOpenClawCommand ? { sutOpenClawCommand } : {}),
     });
     return undefined;
   }
   const thinkingDefault = parseQaThinkingLevel("--thinking", opts.thinking);
+  // Only isolated live adapters may share the host budget; keep disposable
+  // servers bounded even when a caller requests a larger suite concurrency.
+  const liveConcurrencyLimit =
+    liveAdapterFactory?.isolatesInstances === true
+      ? defaultQaSuiteConcurrencyForTransport(transportId)
+      : undefined;
   const runtimeResult = await runQaSuite({
     repoRoot,
     outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
@@ -1061,64 +1131,47 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     scenarioIds: liveChannelId ? scenarioIds : hostScenarioIds,
     ...(opts.enabledPluginIds !== undefined ? { enabledPluginIds: opts.enabledPluginIds } : {}),
     ...(liveChannelId
-      ? { concurrency: 1 }
+      ? {
+          concurrency:
+            liveConcurrencyLimit === undefined
+              ? 1
+              : Math.min(
+                  liveConcurrencyLimit,
+                  parseQaPositiveIntegerOption("--concurrency", opts.concurrency) ??
+                    liveConcurrencyLimit,
+                ),
+        }
       : opts.concurrency !== undefined
         ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
         : {}),
     ...(runtimePair ? { runtimePair } : {}),
+    ...(sutOpenClawCommand ? { sutOpenClawCommand } : {}),
   });
-  switch (runtimeResult.executionKind) {
-    case "suite": {
-      const result = runtimeResult.result;
-      process.stdout.write(`QA suite report: ${result.reportPath}\n`);
-      process.stdout.write(`QA suite evidence: ${result.evidencePath}\n`);
-      process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
-      const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
-        result.summaryPath,
-        {
-          optionalScenarioNames: resolveQaReportOnlyOptionalScenarioNames({
-            scenarioIds,
-            explicitScenarioSelection: opts.explicitScenarioSelection,
-          }),
-          requireExecutedScenario: allowFailures,
-        },
-      );
-      if (!allowFailures && blockingScenarioCount > 0) {
-        process.exitCode = 1;
-      }
-      return {
-        ...result,
-        expectedCells: runtimeResult.expectedCells,
-        observedCells: runtimeResult.observedCells,
-      };
-    }
-    case "flow": {
-      const result = runtimeResult.result;
-      process.stdout.write(`QA suite watch: ${result.watchUrl}\n`);
-      process.stdout.write(`QA suite report: ${result.reportPath}\n`);
-      process.stdout.write(`QA suite evidence: ${result.evidencePath}\n`);
-      process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
-      const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
-        result.summaryPath,
-        {
-          optionalScenarioNames: resolveQaReportOnlyOptionalScenarioNames({
-            scenarioIds,
-            explicitScenarioSelection: opts.explicitScenarioSelection,
-          }),
-          requireExecutedScenario: allowFailures,
-        },
-      );
-      if (!allowFailures && blockingScenarioCount > 0) {
-        process.exitCode = 1;
-      }
-      return {
-        ...result,
-        expectedCells: runtimeResult.expectedCells,
-        observedCells: runtimeResult.observedCells,
-      };
-    }
+  const result = runtimeResult.result;
+  if (runtimeResult.executionKind === "flow") {
+    process.stdout.write(`QA suite watch: ${runtimeResult.result.watchUrl}\n`);
   }
-  return undefined;
+  process.stdout.write(`QA suite report: ${result.reportPath}\n`);
+  process.stdout.write(`QA suite evidence: ${result.evidencePath}\n`);
+  process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
+  const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
+    result.summaryPath,
+    {
+      optionalScenarioNames: resolveQaReportOnlyOptionalScenarioNames({
+        scenarioIds,
+        explicitScenarioSelection: opts.explicitScenarioSelection,
+      }),
+      requireExecutedScenario: allowFailures,
+    },
+  );
+  if (!allowFailures && blockingScenarioCount > 0) {
+    process.exitCode = 1;
+  }
+  return {
+    ...result,
+    expectedCells: runtimeResult.expectedCells,
+    observedCells: runtimeResult.observedCells,
+  };
 }
 
 export async function runQaParityReportCommand(opts: {

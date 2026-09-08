@@ -6,10 +6,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
 import { startGatewayServer } from "../gateway/server.js";
 import {
@@ -21,7 +23,9 @@ import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../gateway/test-helpers.env.js
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { withTimeout } from "../utils/with-timeout.js";
-import { createExecTool } from "./bash-tools.exec-run.js";
+import { createOpenClawCodingTools } from "./agent-tools.js";
+import { getFinishedSession } from "./bash-process-registry.js";
+import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import type { ExecApprovalFollowupOutcome } from "./bash-tools.exec-types.js";
 
 const TEST_ENV_KEYS = [
@@ -43,6 +47,14 @@ const EXEC_APPROVAL_E2E_TIMEOUT_MS = 180_000;
 
 type Cleanup = () => Promise<void> | void;
 
+function requireApprovalId(details: unknown): string {
+  const record = asNonArrayRecord(details);
+  if (record?.status !== "approval-pending" || typeof record.approvalId !== "string") {
+    throw new Error("expected approval-pending exec result");
+  }
+  return record.approvalId;
+}
+
 describe("gateway-hosted exec approvals", () => {
   const cleanup: Cleanup[] = [];
 
@@ -53,10 +65,11 @@ describe("gateway-hosted exec approvals", () => {
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     clearSessionStoreCacheForTest();
+    resetProcessRegistryForTests();
   });
 
   it(
-    "lets OpenClaw-style gateway tool calls request and wait for approval over separate connections",
+    "keeps a scheduled approval floor in a reused full-permission session",
     async () => {
       const envSnapshot = captureEnv(TEST_ENV_KEYS);
       cleanup.push(() => envSnapshot.restore());
@@ -72,27 +85,26 @@ describe("gateway-hosted exec approvals", () => {
       const token = "exec-approval-e2e-token";
       const configPath = path.join(stateDir, "openclaw.json");
       await fs.mkdir(stateDir, { recursive: true });
-      await fs.writeFile(
-        configPath,
-        `${JSON.stringify(
-          {
-            gateway: {
-              port,
-              auth: { mode: "token", token },
-            },
-            tools: {
-              exec: {
-                host: "gateway",
-                security: "allowlist",
-                ask: "always",
-              },
-            },
+      const config = {
+        agents: {
+          ownership: "explicit",
+          defaults: { workspace: workspaceDir },
+          list: [{ id: "main", tools: { exec: { cleanupMs: 180_000 } } }, { id: "helper" }],
+        },
+        gateway: {
+          port,
+          auth: { mode: "token", token },
+        },
+        tools: {
+          exec: {
+            host: "gateway",
+            security: "full",
+            ask: "off",
+            cleanupMs: 60_000,
           },
-          null,
-          2,
-        )}\n`,
-        "utf8",
-      );
+        },
+      } satisfies OpenClawConfig;
+      await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 
       setTestEnvValue("HOME", tempHome);
       setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
@@ -132,21 +144,50 @@ describe("gateway-hosted exec approvals", () => {
       cleanup.push(() => disconnectGatewayClient(operator));
 
       let resolveOutcome: (outcome: ExecApprovalFollowupOutcome) => void = () => {};
-      const outcomePromise = new Promise<ExecApprovalFollowupOutcome>((resolve) => {
-        resolveOutcome = resolve;
-      });
+      let approvedProcessId: string | undefined;
 
-      const tool = createExecTool({
-        host: "gateway",
-        security: "allowlist",
-        ask: "always",
+      const tools = createOpenClawCodingTools({
+        agentId: "main",
+        workspaceDir,
         cwd: workspaceDir,
-        approvalRunningNoticeMs: 0,
-        approvalFollowupMode: "direct",
-        approvalFollowup: ({ outcome }) => {
-          resolveOutcome(outcome);
-          return undefined;
+        config,
+        sessionPermissionPolicy: { root: workspaceDir, mode: "full" },
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "trusted",
+          execTarget: { host: "gateway", ask: "always" },
         },
+        exec: {
+          approvalRunningNoticeMs: 0,
+          approvalFollowupMode: "direct",
+          approvalFollowup: ({ outcome, sessionId }) => {
+            approvedProcessId = sessionId;
+            resolveOutcome(outcome);
+            return undefined;
+          },
+        },
+      });
+      const tool = tools.find((candidate) => candidate.name === "exec");
+      if (!tool) {
+        throw new Error("expected scheduled exec tool");
+      }
+
+      const markerPath = path.join(workspaceDir, "denied-marker");
+      const deniedPending = await tool.execute("exec-approval-e2e-denied", {
+        command: `touch ${JSON.stringify(markerPath)}`,
+        workdir: workspaceDir,
+        timeoutSeconds: 5,
+      });
+      const deniedApprovalId = requireApprovalId(deniedPending.details);
+      await operator.request(
+        "exec.approval.resolve",
+        { id: deniedApprovalId, decision: "deny" },
+        { timeoutMs: 10_000 },
+      );
+      await expect(fs.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+      const allowedOutcomePromise = new Promise<ExecApprovalFollowupOutcome>((resolve) => {
+        resolveOutcome = resolve;
       });
 
       const pending = await tool.execute("exec-approval-e2e", {
@@ -154,24 +195,35 @@ describe("gateway-hosted exec approvals", () => {
         workdir: workspaceDir,
         timeoutSeconds: 5,
       });
+      const approvalId = requireApprovalId(pending.details);
 
-      expect(pending.details.status).toBe("approval-pending");
-      if (pending.details.status !== "approval-pending") {
-        throw new Error("expected approval-pending exec result");
+      const helperTools = createOpenClawCodingTools({ agentId: "helper", config, workspaceDir });
+      const helperProcess = helperTools.find((candidate) => candidate.name === "process");
+      if (!helperProcess) {
+        throw new Error("expected helper process tool");
       }
+      await helperProcess.execute("helper-process-during-approval", { action: "list" });
 
       await operator.request(
         "exec.approval.resolve",
-        { id: pending.details.approvalId, decision: "allow-once" },
+        { id: approvalId, decision: "allow-once" },
         { timeoutMs: 10_000 },
       );
 
-      const outcome = await withTimeout(outcomePromise, 15_000, {
+      const outcome = await withTimeout(allowedOutcomePromise, 15_000, {
         message: "timed out waiting for approved exec outcome",
       });
       expect(outcome.status).toBe("completed");
       expect(outcome.exitCode).toBe(0);
       expect(outcome.aggregated).toBe("smoke");
+      if (!approvedProcessId) {
+        throw new Error("expected the approved process identity");
+      }
+      const finished = getFinishedSession(approvedProcessId);
+      if (!finished) {
+        throw new Error("expected retained approved process output");
+      }
+      expect(finished.expiresAt - finished.endedAt).toBe(180_000);
     },
     EXEC_APPROVAL_E2E_TIMEOUT_MS,
   );

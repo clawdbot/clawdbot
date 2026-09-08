@@ -84,7 +84,7 @@ export function extractToolResultIds(msg: Extract<AgentMessage, { role: "toolRes
   return extractPairingToolResultIds(msg);
 }
 
-function hasToolCallInput(block: ReplaySafeToolCallBlock): boolean {
+export function hasToolCallInput(block: ReplaySafeToolCallBlock): boolean {
   const hasInput = "input" in block ? block.input !== undefined && block.input !== null : false;
   const hasArguments =
     "arguments" in block ? block.arguments !== undefined && block.arguments !== null : false;
@@ -372,7 +372,8 @@ function rewriteAssistantToolCallIds(params: {
   return { ...params.message, content: next as typeof params.message.content };
 }
 
-function rewriteToolResultIds(params: {
+/** Keeps every persisted tool-result ID alias aligned with its canonical call. */
+export function rewriteToolResultIds(params: {
   message: Extract<AgentMessage, { role: "toolResult" }>;
   resolveId: (id: string) => string;
 }): Extract<AgentMessage, { role: "toolResult" }> {

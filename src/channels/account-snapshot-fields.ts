@@ -26,6 +26,19 @@ const CREDENTIAL_STATUS_KEYS = [
 ] as const;
 
 type CredentialStatusKey = (typeof CREDENTIAL_STATUS_KEYS)[number];
+const CREDENTIAL_SOURCE_KEYS = [
+  "tokenSource",
+  "botTokenSource",
+  "appTokenSource",
+  "signingSecretSource",
+  "userTokenSource",
+  "credentialSource",
+  "secretSource",
+] as const;
+type CredentialSnapshotFields = Pick<
+  Partial<ChannelAccountSnapshot>,
+  CredentialStatusKey | (typeof CREDENTIAL_SOURCE_KEYS)[number]
+>;
 
 /** Redacts a plugin-provided base URL after status hooks have produced their final record. */
 export function redactChannelStatusSummaryBaseUrl<T>(summary: T): T {
@@ -73,7 +86,10 @@ function readStringArray(record: Record<string, unknown>, key: string): string[]
   return normalized.length > 0 ? normalized : undefined;
 }
 
-function readCredentialStatus(record: Record<string, unknown>, key: CredentialStatusKey) {
+function readCredentialStatus(
+  record: Record<string, unknown>,
+  key: CredentialStatusKey | "apiCredentialStatus",
+) {
   const value = record[key];
   return value === "available" || value === "configured_unavailable" || value === "missing"
     ? value
@@ -175,44 +191,14 @@ export function hasResolvedCredentialValue(account: unknown): boolean {
 }
 
 /** Projects credential source/status metadata while omitting raw credential values. */
-export function projectCredentialSnapshotFields(
-  account: unknown,
-): Pick<
-  Partial<ChannelAccountSnapshot>,
-  | "tokenSource"
-  | "botTokenSource"
-  | "appTokenSource"
-  | "signingSecretSource"
-  | "tokenStatus"
-  | "botTokenStatus"
-  | "appTokenStatus"
-  | "signingSecretStatus"
-  | "userTokenStatus"
-> {
+export function projectCredentialSnapshotFields(account: unknown): CredentialSnapshotFields {
   const record = isRecord(account) ? account : null;
   if (!record) {
     return {};
   }
-  type CredentialSnapshotFields = Pick<
-    Partial<ChannelAccountSnapshot>,
-    | "tokenSource"
-    | "botTokenSource"
-    | "appTokenSource"
-    | "signingSecretSource"
-    | "tokenStatus"
-    | "botTokenStatus"
-    | "appTokenStatus"
-    | "signingSecretStatus"
-    | "userTokenStatus"
-  >;
   const snapshot: CredentialSnapshotFields = {};
   // Only the explicit source/status allowlist crosses the credential boundary.
-  for (const key of [
-    "tokenSource",
-    "botTokenSource",
-    "appTokenSource",
-    "signingSecretSource",
-  ] as const) {
+  for (const key of CREDENTIAL_SOURCE_KEYS) {
     setSnapshotField(snapshot, key, normalizeOptionalString(record[key]));
   }
   for (const key of CREDENTIAL_STATUS_KEYS) {
@@ -274,16 +260,23 @@ export function projectSafeChannelAccountSnapshotFields(
   for (const key of ["lastRunActivityAt", "activeRunStartedAt"] as const) {
     setSnapshotField(snapshot, key, readNullableNumber(record, key));
   }
-  for (const key of ["mode", "dmPolicy"] as const) {
+  for (const key of ["mode", "dmPolicy", "identity", "audienceType", "webhookPath"] as const) {
     setSnapshotField(snapshot, key, normalizeOptionalString(record[key]));
   }
   setSnapshotField(snapshot, "allowFrom", readStringArray(record, "allowFrom"));
   Object.assign(snapshot, projectCredentialSnapshotFields(account));
+  setSnapshotField(
+    snapshot,
+    "apiCredentialStatus",
+    readCredentialStatus(record, "apiCredentialStatus"),
+  );
 
-  const baseUrl = normalizeOptionalString(record.baseUrl);
-  if (baseUrl) {
-    // Preserve diagnostics without allowing URL-embedded credentials to escape.
-    snapshot.baseUrl = stripUrlUserInfo(redactSensitiveUrlLikeString(baseUrl));
+  for (const key of ["baseUrl", "audience"] as const) {
+    const value = normalizeOptionalString(record[key]);
+    if (value) {
+      // Preserve diagnostics without allowing URL-embedded credentials to escape.
+      snapshot[key] = stripUrlUserInfo(redactSensitiveUrlLikeString(value));
+    }
   }
   setSnapshotField(snapshot, "allowUnmentionedGroups", asBoolean(record.allowUnmentionedGroups));
   for (const key of ["cliPath", "dbPath"] as const) {

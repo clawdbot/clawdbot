@@ -303,8 +303,10 @@ internal class ChatComposerStateStore(
           attachmentMigration.omittedCount > 0 ||
             currentNotices[to] == ChatComposerAttachmentNotice.Attachment ||
             ChatComposerAttachmentNotice.Attachment in sourceNotices -> ChatComposerAttachmentNotice.Attachment
+
           currentNotices[to] == ChatComposerAttachmentNotice.Image ||
             ChatComposerAttachmentNotice.Image in sourceNotices -> ChatComposerAttachmentNotice.Image
+
           else -> null
         }
       if (nextNotice != null) nextNotices += (to to nextNotice)

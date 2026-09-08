@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import {
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
@@ -10,23 +11,10 @@ import { DEFAULT_PROVIDER } from "../defaults.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../model-catalog.types.js";
 import { resolveModelRefFromString } from "../model-selection-shared.js";
 import { resolveModelCatalogIdentityKey } from "../openai-model-routes.js";
+import { collectPreparedModelRuntimeConfiguredRefs } from "../prepared-model-runtime.configured.js";
 import type { PreparedModelRuntimeInput } from "../prepared-model-runtime.types.js";
 import { resolveDefaultAgentWorkspaceDir } from "../workspace.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
-
-function dedupeByKey(
-  entries: readonly ModelCatalogEntry[],
-  keyOf: (entry: ModelCatalogEntry) => string,
-): ModelCatalogEntry[] {
-  const merged = new Map<string, ModelCatalogEntry>();
-  for (const entry of entries) {
-    const key = keyOf(entry);
-    if (!merged.has(key)) {
-      merged.set(key, entry);
-    }
-  }
-  return [...merged.values()];
-}
 
 function normalizeRouteBaseUrl(value: string | undefined): string {
   if (!value) {
@@ -41,12 +29,11 @@ function normalizeRouteBaseUrl(value: string | undefined): string {
   }
 }
 
-function routeVariantKey(entry: ModelCatalogEntry): string {
-  return [
-    resolveModelCatalogIdentityKey(entry),
-    entry.api ?? "",
-    normalizeRouteBaseUrl(entry.baseUrl),
-  ].join("\0");
+function routeVariantKey(
+  entry: ModelCatalogEntry,
+  identityKey = resolveModelCatalogIdentityKey(entry),
+): string {
+  return [identityKey, entry.api ?? "", normalizeRouteBaseUrl(entry.baseUrl)].join("\0");
 }
 
 function mergeHarnessCompat(
@@ -77,22 +64,31 @@ function enrichHarnessRows(
 ): ModelCatalogEntry[] {
   const routeDonors = new Map<string, ModelCatalogEntry>();
   const identityDonors = new Map<string, ModelCatalogEntry>();
-  // First donor wins: live snapshot entries take precedence over static rows.
-  for (const donor of [...snapshot.entries, ...(snapshot.staticEntries ?? [])]) {
-    const routeKey = routeVariantKey(donor);
-    const identityKey = resolveModelCatalogIdentityKey(donor);
-    if (!routeDonors.has(routeKey)) {
-      routeDonors.set(routeKey, donor);
-    }
-    if (!identityDonors.has(identityKey)) {
-      identityDonors.set(identityKey, donor);
-    }
-  }
+  let donorsPrepared = false;
   return rows.map((entry) => {
+    // Native discovery owns these capabilities; host donors cannot invent its transport.
+    if (entry.nativeRuntime) {
+      return entry;
+    }
+    if (!donorsPrepared) {
+      // First donor wins: live snapshot entries take precedence over static rows.
+      for (const donor of [...snapshot.entries, ...(snapshot.staticEntries ?? [])]) {
+        const identityKey = resolveModelCatalogIdentityKey(donor);
+        const routeKey = routeVariantKey(donor, identityKey);
+        if (!routeDonors.has(routeKey)) {
+          routeDonors.set(routeKey, donor);
+        }
+        if (!identityDonors.has(identityKey)) {
+          identityDonors.set(identityKey, donor);
+        }
+      }
+      donorsPrepared = true;
+    }
+    const identityKey = resolveModelCatalogIdentityKey(entry);
     const donor =
-      routeDonors.get(routeVariantKey(entry)) ??
+      routeDonors.get(routeVariantKey(entry, identityKey)) ??
       (entry.api === undefined && entry.baseUrl === undefined
-        ? identityDonors.get(resolveModelCatalogIdentityKey(entry))
+        ? identityDonors.get(identityKey)
         : undefined);
     if (!donor) {
       return entry;
@@ -118,6 +114,8 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   defaultModel?: string;
   snapshot: ModelCatalogSnapshot;
   pluginRegistry?: PluginRegistry | null;
+  isCurrent?: () => boolean;
+  observationConfig?: OpenClawConfig;
   onError?: (error: unknown) => void;
 }): Promise<ModelCatalogSnapshot> {
   const rawDefaultModel = params.defaultModel?.trim();
@@ -149,20 +147,43 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   if (runtime === "auto" || runtime === "openclaw") {
     return params.snapshot;
   }
-  const pluginRegistry = params.pluginRegistry ?? getActivePluginRegistry();
+  const pluginRegistry = params.observationConfig
+    ? params.pluginRegistry
+    : (params.pluginRegistry ?? getActivePluginRegistry());
   const harness = pluginRegistry?.agentHarnesses.find(
     (entry) => entry.harness.id === runtime,
   )?.harness;
-  if (!harness?.loadModelCatalog) {
+  if (!harness?.loadModelCatalog || params.isCurrent?.() === false) {
     return params.snapshot;
   }
   try {
+    const configuredModelRefs = collectPreparedModelRuntimeConfiguredRefs(
+      params.cfg,
+      params.agentId,
+    ).flatMap(({ value }) => {
+      const resolved = resolveModelRefFromString({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        raw: value,
+        defaultProvider: params.defaultProvider,
+        allowManifestNormalization: true,
+        allowPluginNormalization: true,
+      })?.ref;
+      return resolved ? [resolved] : [];
+    });
     const listedRows = await harness.loadModelCatalog({
-      config: params.cfg,
+      config: params.observationConfig ?? params.cfg,
       agentId: params.agentId,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
+      configuredModelRefs,
     });
+    if (
+      params.isCurrent?.() === false ||
+      (!params.pluginRegistry && getActivePluginRegistry() !== pluginRegistry)
+    ) {
+      return params.snapshot;
+    }
     if (listedRows.length === 0) {
       return params.snapshot;
     }
@@ -182,6 +203,7 @@ export function augmentPreparedModelCatalogWithAgentHarness(params: {
   input: PreparedModelRuntimeInput;
   snapshot: ModelCatalogSnapshot;
   pluginRegistry?: PluginRegistry;
+  isCurrent?: () => boolean;
 }): Promise<ModelCatalogSnapshot> {
   const agentId = params.input.agentId ?? resolveDefaultAgentId(params.input.config);
   return augmentModelCatalogWithAgentHarness({
@@ -196,5 +218,7 @@ export function augmentPreparedModelCatalogWithAgentHarness(params: {
     defaultModel: resolveAgentEffectiveModelPrimary(params.input.config, agentId),
     snapshot: params.snapshot,
     pluginRegistry: params.pluginRegistry,
+    isCurrent: params.isCurrent,
+    observationConfig: params.input.config,
   });
 }

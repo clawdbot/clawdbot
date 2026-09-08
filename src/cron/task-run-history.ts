@@ -33,6 +33,8 @@ type ReadCronTaskRunHistoryPageOptions = {
   query?: string;
   sortDir?: CronRunHistorySortDir;
   jobNameById?: Record<string, string>;
+  /** Filter before paging so hidden runs cannot consume page slots or inflate totals. */
+  entryFilter?: (entry: CronRunLogEntry) => boolean;
 };
 
 type CronTaskRunHistoryPage = {
@@ -58,26 +60,18 @@ export function isInvalidCronTaskRunJobIdError(error: unknown): boolean {
   return error instanceof Error && error.message === INVALID_CRON_TASK_RUN_JOB_ID_MESSAGE;
 }
 
-function normalizeStatuses(options: ReadCronTaskRunHistoryPageOptions): CronRunStatus[] | null {
-  if (options.statuses?.length) {
-    const statuses = options.statuses.filter(isCronRunStatus);
-    if (statuses.length > 0) {
-      return uniqueValues(statuses);
+function normalizeStatusFilter<T>(
+  values: T[] | undefined,
+  fallback: unknown,
+  predicate: (value: unknown) => value is T,
+): T[] | null {
+  if (values?.length) {
+    const validValues = values.filter(predicate);
+    if (validValues.length > 0) {
+      return uniqueValues(validValues);
     }
   }
-  return isCronRunStatus(options.status) ? [options.status] : null;
-}
-
-function normalizeDeliveryStatuses(
-  options: ReadCronTaskRunHistoryPageOptions,
-): CronDeliveryStatus[] | null {
-  if (options.deliveryStatuses?.length) {
-    const statuses = options.deliveryStatuses.filter(isCronDeliveryStatus);
-    if (statuses.length > 0) {
-      return uniqueValues(statuses);
-    }
-  }
-  return isCronDeliveryStatus(options.deliveryStatus) ? [options.deliveryStatus] : null;
+  return predicate(fallback) ? [fallback] : null;
 }
 
 function queryText(entry: CronRunLogEntry, jobNameById?: Record<string, string>): string {
@@ -112,7 +106,7 @@ function attachJobNames(entries: CronRunLogEntry[], jobNameById?: Record<string,
   for (const entry of entries) {
     const jobName = jobNameById?.[entry.jobId];
     if (jobName) {
-      (entry as CronRunLogEntry & { jobName?: string }).jobName = jobName;
+      entry.jobName = jobName;
     }
   }
 }
@@ -124,8 +118,12 @@ export function readCronTaskRunHistoryPage(
   const jobId = options.jobId ? normalizeCronTaskRunJobId(options.jobId) : undefined;
   const limit = Math.max(1, Math.min(200, Math.floor(options.limit ?? 50)));
   const offset = Math.max(0, Math.floor(options.offset ?? 0));
-  const statuses = normalizeStatuses(options);
-  const deliveryStatuses = normalizeDeliveryStatuses(options);
+  const statuses = normalizeStatusFilter(options.statuses, options.status, isCronRunStatus);
+  const deliveryStatuses = normalizeStatusFilter(
+    options.deliveryStatuses,
+    options.deliveryStatus,
+    isCronDeliveryStatus,
+  );
   const runId = normalizeOptionalString(options.runId);
   const agentId = options.agentId ? normalizeAgentId(options.agentId) : undefined;
   const query = normalizeLowercaseStringOrEmpty(options.query);
@@ -149,8 +147,9 @@ export function readCronTaskRunHistoryPage(
         return false;
       }
       return (
-        !query ||
-        normalizeLowercaseStringOrEmpty(queryText(entry, options.jobNameById)).includes(query)
+        (!query ||
+          normalizeLowercaseStringOrEmpty(queryText(entry, options.jobNameById)).includes(query)) &&
+        (!options.entryFilter || options.entryFilter(entry))
       );
     })
     .toSorted((left, right) => compareHistoryRows(left, right, sortDir));

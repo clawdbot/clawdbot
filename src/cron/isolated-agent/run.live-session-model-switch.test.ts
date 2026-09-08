@@ -2,6 +2,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import {
+  runInitialModelFallbackAttempt,
+  type TestModelFallbackRunnerParams,
+} from "../../agents/test-helpers/model-fallback-runner.test-support.js";
+import {
   clearFastTestEnv,
   loadRunCronIsolatedAgentTurn,
   logWarnMock,
@@ -51,12 +55,14 @@ function makeParams(overrides?: Record<string, unknown>) {
 function makeSuccessfulRunResult(modelUsed = "claude-sonnet-4-6") {
   return {
     result: {
-      payloads: [{ text: "task complete" }],
-      meta: {
-        agentMeta: {
-          model: modelUsed,
-          provider: "anthropic",
-          usage: { input: 100, output: 50 },
+      result: {
+        payloads: [{ text: "task complete" }],
+        meta: {
+          agentMeta: {
+            model: modelUsed,
+            provider: "anthropic",
+            usage: { input: 100, output: 50 },
+          },
         },
       },
     },
@@ -138,23 +144,17 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
     });
 
     let callCount = 0;
-    runWithModelFallbackMock.mockImplementation(
-      async (params: {
-        provider: string;
-        model: string;
-        run: (p: string, m: string) => Promise<unknown>;
-      }) => {
-        callCount++;
-        if (callCount === 1) {
-          // First attempt: session started with opus, throw to request sonnet
-          throw switchError;
-        }
-        // Second attempt: should now be called with sonnet
-        expect(params.provider).toBe("anthropic");
-        expect(params.model).toBe("claude-sonnet-4-6");
-        return makeSuccessfulRunResult("claude-sonnet-4-6");
-      },
-    );
+    runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => {
+      callCount++;
+      if (callCount === 1) {
+        // First attempt: session started with opus, throw to request sonnet
+        throw switchError;
+      }
+      // Second attempt: should now be called with sonnet
+      expect(params.provider).toBe("anthropic");
+      expect(params.model).toBe("claude-sonnet-4-6");
+      return makeSuccessfulRunResult("claude-sonnet-4-6");
+    });
 
     const result = await runCronIsolatedAgentTurn(makeParams());
 
@@ -206,10 +206,10 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
         isNewSession: false,
       }),
     );
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => ({
-      result: await run(provider, model),
-      provider,
-      model,
+    runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => ({
+      result: await runInitialModelFallbackAttempt(params),
+      provider: params.provider,
+      model: params.model,
       attempts: [],
     }));
 
@@ -239,10 +239,10 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
         isNewSession: false,
       }),
     );
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => ({
-      result: await run(provider, model),
-      provider,
-      model,
+    runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => ({
+      result: await runInitialModelFallbackAttempt(params),
+      provider: params.provider,
+      model: params.model,
       attempts: [],
     }));
 
@@ -275,10 +275,10 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
       isNewSession: true,
     });
     resolveCronSessionMock.mockReturnValue(cronSession);
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => ({
-      result: await run(provider, model),
-      provider,
-      model,
+    runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => ({
+      result: await runInitialModelFallbackAttempt(params),
+      provider: params.provider,
+      model: params.model,
       attempts: [],
     }));
     runEmbeddedAgentMock
@@ -350,10 +350,10 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
       isNewSession: false,
     });
     resolveCronSessionMock.mockReturnValue(cronSession);
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => ({
-      result: await run(provider, model),
-      provider,
-      model,
+    runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => ({
+      result: await runInitialModelFallbackAttempt(params),
+      provider: params.provider,
+      model: params.model,
       attempts: [],
     }));
     runEmbeddedAgentMock

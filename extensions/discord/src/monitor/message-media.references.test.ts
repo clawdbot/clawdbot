@@ -27,11 +27,11 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   };
 });
 
-let resolveMediaList: typeof import("./message-utils.js").resolveMediaList;
-let resolveReferencedReplyMediaList: typeof import("./message-utils.js").resolveReferencedReplyMediaList;
+let resolveMediaList: typeof import("./message-media.js").resolveMediaList;
+let resolveReferencedReplyMediaList: typeof import("./message-media.js").resolveReferencedReplyMediaList;
 
 beforeAll(async () => {
-  ({ resolveMediaList, resolveReferencedReplyMediaList } = await import("./message-utils.js"));
+  ({ resolveMediaList, resolveReferencedReplyMediaList } = await import("./message-media.js"));
 });
 
 beforeEach(() => {
@@ -78,7 +78,9 @@ describe("resolveReferencedReplyMediaList", () => {
       512,
     );
 
-    expect(result).toEqual([{ path: "/tmp/reply-image.png", contentType: "image/png" }]);
+    expect(result).toEqual([
+      { path: "/tmp/reply-image.png", contentType: "image/png", fileName: "reply-image.png" },
+    ]);
     expect(readRemoteMediaBuffer).toHaveBeenCalledWith(
       expect.objectContaining({
         url: attachment.url,

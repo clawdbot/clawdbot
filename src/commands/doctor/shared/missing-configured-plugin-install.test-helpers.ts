@@ -133,13 +133,18 @@ export function successfulUpdate(
   };
 }
 
-export function brokenPluginSnapshot(pluginId: string, expectedEntry = "./dist/index.js") {
+export function brokenPluginSnapshot(
+  pluginId: string,
+  source: string,
+  expectedEntry = "./dist/index.js",
+) {
   return {
     plugins: [],
     diagnostics: [
       {
         level: "error",
         pluginId,
+        source,
         message: `installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ${expectedEntry}.`,
       },
     ],

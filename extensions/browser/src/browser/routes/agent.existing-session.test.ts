@@ -73,6 +73,7 @@ vi.mock("../screenshot.js", () => ({
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE: 64,
   normalizeBrowserScreenshot: vi.fn(async (buffer: Buffer) => ({
     buffer,
+    sourceDimensions: null,
     contentType: "image/png",
   })),
 }));
@@ -164,6 +165,20 @@ describe("existing-session browser routes", () => {
     chromeMcpMocks.evaluateChromeMcpScript
       .mockResolvedValueOnce({ labels: 1, skipped: 0 } as never)
       .mockResolvedValueOnce(true);
+  });
+
+  it.each(["", "  spaced  "])("forwards exact select input %j to Chrome MCP", async (value) => {
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      { params: {}, query: {}, body: { kind: "select", ref: "select-1", values: [value] } },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(chromeMcpMocks.fillChromeMcpElement).toHaveBeenCalledWith(
+      expect.objectContaining({ targetId: "7", uid: "select-1", value }),
+    );
   });
 
   it("allows labeled AI snapshots for existing-session profiles", async () => {

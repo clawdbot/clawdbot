@@ -91,6 +91,46 @@ deepinfra/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B
 ...and many more
 ```
 
+## Price estimates
+
+Chat discovery keeps model membership, order, tags, and limits from DeepInfra's
+agent projection. Prices come separately from the anonymous native
+[`/models/list`](https://docs.deepinfra.com/api-reference/models/models-list)
+catalog. The plugin converts cents per token to USD per million tokens, applies
+the advertised numeric discount once, and uses the native cached-input ratio.
+Both requests share the existing five-minute live-catalog cache and run
+concurrently only for configured chat discovery. Image and video discovery do
+not request chat prices.
+
+Schedules qualified by pricing prose, a nonempty pricing table, or a scheduled
+discount expiry remain unknown; OpenClaw does not guess context tiers or parse
+promotion dates. A declared generic cache-write rate also remains unsupported
+because its numeric semantics are not documented. Explicit 5-minute/1-hour
+retention and priority/flex rates are separate contracts and are not included in
+standard estimates. See DeepInfra's [prompt caching](https://docs.deepinfra.com/chat/prompt-caching)
+and [cache retention](https://docs.deepinfra.com/chat/prompt-cache-retention) docs.
+
+Missing or unsupported individual price schedules use the required runtime
+zero-cost placeholder, which means unknown, not verified free billing. A failed
+metadata or native pricing request marks chat discovery unavailable and retains
+the last successful catalog for the same provider configuration and credentials.
+A successful empty model response clears discovered chat models even when pricing
+is unavailable. Live discovery
+does not append bundled models absent from the response. Without credentials,
+the bundled catalog remains available without fetching. Explicitly configured
+models and costs remain authoritative; onboarding does not pin provider prices.
+
+The plugin's public `buildDeepInfraProvider` API keeps its advisory default:
+it retains bundled choices and uses unknown price estimates when discovery fails.
+OpenClaw's registered catalog hook explicitly selects `discoveryMode: "strict"`
+so failed or empty acquisitions reach the shared publication owner unchanged.
+
+Hosted publication uses the same native parser. It preserves metadata without
+cost for unsupported or absent schedules, retains declared zero prices, and
+leaves the previous hosted catalog intact if the native feed fails validation.
+The existing [hosted catalog refresh and Gateway restart lifecycle](/concepts/models#hosted-catalog-updates)
+is unchanged.
+
 ## Notes
 
 - Model refs are `deepinfra/<provider>/<model>` (for example `deepinfra/Qwen/Qwen3-Max`).

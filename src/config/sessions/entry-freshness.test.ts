@@ -4,7 +4,11 @@ import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js"
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveSessionEntryResetFreshness } from "./entry-freshness.js";
-import { appendTranscriptEvent, upsertSessionEntryCore } from "./session-accessor.js";
+import {
+  appendTranscriptEvent,
+  replaceSessionEntry,
+  upsertSessionEntryCore,
+} from "./session-accessor.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -262,7 +266,8 @@ describe("resolveSessionEntryResetFreshness", () => {
     const now = new Date("2026-01-02T12:00:00Z").getTime();
     const headerTimestamp = new Date(now - 2 * DAY_MS).toISOString();
     const target = { agentId: "main", sessionId, sessionKey, storePath };
-    await upsertSessionEntryCore(target, { sessionId, updatedAt: now });
+    const entry = await replaceSessionEntry(target, { sessionId, updatedAt: now });
+    expect(entry?.sessionStartedAt).toBeUndefined();
     await appendTranscriptEvent(target, {
       type: "session",
       version: 3,

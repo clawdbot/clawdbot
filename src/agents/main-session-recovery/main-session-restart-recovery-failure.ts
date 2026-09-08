@@ -5,16 +5,20 @@ import {
   type SessionTranscriptTurnExpectedState,
   type SessionTranscriptTurnLifecyclePatch,
 } from "../../config/sessions/session-accessor.js";
+import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { MainSessionRecoveryObservation } from "./main-session-recovery-state.js";
-import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
+import {
+  commitMainSessionRecovery,
+  type MainSessionRecoveryStoreTarget,
+} from "./main-session-recovery-store.js";
 import { resolveRestartRecoveryDeliveryContext } from "./main-session-restart-dispatch.js";
 import {
-  buildRestartRecoveryExpectedState,
   mainSessionRecoveryLog,
+  resolveRestartRecoveryTerminalClientRunId,
 } from "./main-session-restart-recovery-shared.js";
 
 const TOMBSTONED_SESSION_NOTICE =
@@ -65,12 +69,8 @@ async function writeRestartRecoveryTombstoneNotice(params: {
   sessionLifecyclePatch: SessionTranscriptTurnLifecyclePatch;
 }): Promise<"failed" | "stale" | "written"> {
   const result = await appendAssistantMessageToSessionTranscript({
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
+    ...params,
     expectedSessionId: params.entry.sessionId,
-    expectedSessionState: params.expectedSessionState,
-    sessionLifecyclePatch: params.sessionLifecyclePatch,
-    storePath: params.storePath,
     text: TOMBSTONED_SESSION_NOTICE,
     idempotencyKey: buildRestartRecoveryTombstoneNoticeKey(params.entry),
   }).catch((error: unknown) => ({ ok: false as const, reason: String(error) }));
@@ -86,12 +86,12 @@ async function writeRestartRecoveryTombstoneNotice(params: {
       : "failed";
 }
 
-async function claimMainRestartRecoveryTombstone(params: {
-  observation: MainSessionRecoveryObservation;
-  reason: string;
-  storePath: string;
-  sessionKey: string;
-}): Promise<SessionEntry | null> {
+async function claimMainRestartRecoveryTombstone(
+  params: MainSessionRecoveryStoreTarget & {
+    observation: MainSessionRecoveryObservation;
+    reason: string;
+  },
+): Promise<SessionEntry | null> {
   const claim = await commitMainSessionRecovery({
     command: {
       kind: "tombstone",
@@ -100,7 +100,7 @@ async function claimMainRestartRecoveryTombstone(params: {
       reason: params.reason,
     },
     requireWriteSuccess: true,
-    target: { sessionKey: params.sessionKey, storePath: params.storePath },
+    target: params,
   });
   if (claim.transition.kind !== "tombstoned" || !claim.entry) {
     return null;
@@ -143,14 +143,14 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
       }
       const now = Date.now();
       const notice = await writeRestartRecoveryTombstoneNotice({
-        agentId: params.agentId,
+        ...params,
         entry,
         expectedSessionState: buildRestartRecoveryExpectedState(entry, observation),
-        sessionKey: params.sessionKey,
         sessionLifecyclePatch: {
           abortedLastRun: false,
           endedAt: now,
           lifecycleRunId: undefined,
+          lastRunId: resolveRestartRecoveryTerminalClientRunId(entry),
           mainRestartRecovery: {
             ...recoveryState,
             revision: recoveryState.revision + 1,
@@ -160,7 +160,6 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
           status: "failed",
           updatedAt: now,
         },
-        storePath: params.storePath,
       });
       if (notice === "written") {
         return "tombstoned";
@@ -169,6 +168,7 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
         return "notice_failed";
       }
       const current = loadSessionEntry({
+        agentId: params.agentId,
         sessionKey: params.sessionKey,
         storePath: params.storePath,
         readConsistency: "latest",
@@ -198,11 +198,9 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
     return "skipped";
   }
   await sendRestartRecoveryTombstoneNotice({
+    ...params,
     deliveryContext,
     entry: tombstonedEntry,
-    gatewayRuntime: params.gatewayRuntime,
-    reason: params.reason,
-    sessionKey: params.sessionKey,
   });
   return "tombstoned";
 }

@@ -1,6 +1,7 @@
 // Runs a command with inline KEY=value assignments while preserving signal behavior.
 import { spawn } from "node:child_process";
 import { terminateManagedChild } from "./lib/managed-child-process.mts";
+import { parsePositiveInt } from "./lib/numeric-options.mjs";
 
 const ENV_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/u;
 const USAGE =
@@ -83,13 +84,7 @@ export function resolveForceKillDelayMs(env: NodeJS.ProcessEnv = process.env) {
   if (!text) {
     return 5_000;
   }
-  if (!/^\d+$/u.test(text)) {
-    throw new Error("OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS must be a positive integer");
-  }
-  const parsed = Number(text);
-  if (!Number.isSafeInteger(parsed) || parsed < 1) {
-    throw new Error("OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS must be a positive integer");
-  }
+  const parsed = parsePositiveInt(text, "OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS");
   return Math.min(parsed, MAX_TIMER_TIMEOUT_MS);
 }
 

@@ -4,20 +4,31 @@ type CallbackLogger = {
   warn(message: string): void;
 };
 
-/** Contains failures from untracked subscriber presentation and telemetry callbacks. */
+/** Contains callback failures and tracks completion for delivery owners that join it. */
 export function runBestEffortCallback(params: {
   callback: () => unknown;
   label: string;
   log: CallbackLogger;
+  pending?: Set<Promise<void>>;
+  onSuccess?: () => void;
+  onError?: (error: unknown) => void;
 }): void {
+  const failed = (error: unknown) => {
+    params.onError?.(error);
+    params.log.warn(`${params.label} callback failed: ${String(error)}`);
+  };
   try {
     const result = params.callback();
     if (isPromiseLike(result)) {
-      void Promise.resolve(result).catch((error: unknown) => {
-        params.log.warn(`${params.label} callback failed: ${String(error)}`);
-      });
+      const task = Promise.resolve(result).then(() => params.onSuccess?.(), failed);
+      if (params.pending) {
+        params.pending.add(task);
+        void task.finally(() => params.pending?.delete(task));
+      }
+    } else {
+      params.onSuccess?.();
     }
   } catch (error) {
-    params.log.warn(`${params.label} callback failed: ${String(error)}`);
+    failed(error);
   }
 }

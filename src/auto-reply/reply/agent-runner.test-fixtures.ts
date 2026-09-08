@@ -1,7 +1,15 @@
 // Shared fixtures for agent runner tests and temporary session files.
+import path from "node:path";
+import { onTestFinished } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  hasInternalRuntimeContext,
+  stripInternalRuntimeContext,
+} from "../../agents/internal-runtime-context.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 
@@ -11,6 +19,19 @@ type FollowupRunFixture = Pick<FollowupRun, "prompt" | "summaryLine" | "enqueued
       skillsSnapshot?: Partial<FollowupRun["run"]["skillsSnapshot"]>;
     };
   };
+
+export function isModelRuntimeContextCarrier(message: { role: string; content: unknown }): boolean {
+  const text =
+    extractTextFromChatContent(message.content, {
+      joinWith: "\n",
+      normalizeText: (value) => value,
+    }) ?? "";
+  return (
+    message.role === "user" &&
+    hasInternalRuntimeContext(text) &&
+    !stripInternalRuntimeContext(text).trim()
+  );
+}
 
 export function createTestTemplateContext(
   overrides: Partial<TemplateContext> = {},
@@ -23,22 +44,30 @@ export function createTestQueueSettings(overrides: Partial<QueueSettings> = {}):
 }
 
 export function createTestFollowupRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun {
+  const rootDir = useAutoCleanupTempDirTracker(onTestFinished).make("openclaw-followup-run-");
   return {
     prompt: "hello",
     summaryLine: "hello",
     enqueuedAt: Date.now(),
     run: {
       agentId: "main",
-      agentDir: "/tmp/agent",
+      agentDir: path.join(rootDir, "agent"),
       sessionId: "session",
       sessionKey: "main",
       messageProvider: "whatsapp",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
+      sessionFile: path.join(rootDir, "session.jsonl"),
+      workspaceDir: rootDir,
       config: {},
       skillsSnapshot: { prompt: "", skills: [] },
       provider: "anthropic",
       model: "claude",
+      thinkingCatalog: [
+        {
+          provider: overrides.provider ?? "anthropic",
+          id: overrides.model ?? "claude",
+          input: ["text"],
+        },
+      ],
       thinkLevel: "low",
       verboseLevel: "off",
       elevatedLevel: "off",

@@ -1,6 +1,7 @@
 // Covers managed task-flow creation, lookup, ownership, and state transitions.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createInMemoryTaskFlowRegistryStore } from "../test-utils/task-registry-store.js";
 import {
   createTaskFlowForTask as createTaskFlowForTaskOrNull,
   createManagedTaskFlow as createManagedTaskFlowOrNull,
@@ -62,11 +63,11 @@ async function withFlowRegistryTempDir<T>(run: () => Promise<T>): Promise<T> {
   return await withOpenClawTestState(
     { layout: "state-only", prefix: "openclaw-task-flow-registry-" },
     async () => {
-      resetTaskFlowRegistryForTests();
+      resetTaskFlowRegistryForTests({ persist: false });
       try {
         return await run();
       } finally {
-        resetTaskFlowRegistryForTests();
+        resetTaskFlowRegistryForTests({ persist: false });
       }
     },
   );
@@ -79,7 +80,7 @@ describe("task-flow-registry", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    resetTaskFlowRegistryForTests();
+    resetTaskFlowRegistryForTests({ persist: false });
   });
 
   it("creates managed flows and updates them through revision-checked helpers", async () => {
@@ -221,10 +222,10 @@ describe("task-flow-registry", () => {
     const onEvent = vi.fn();
     configureTaskFlowRegistryRuntime({
       store: {
+        ...createInMemoryTaskFlowRegistryStore(),
         loadSnapshot: () => ({
           flows: new Map(),
         }),
-        saveSnapshot: () => {},
       },
       observers: {
         onEvent,
@@ -276,7 +277,6 @@ describe("task-flow-registry", () => {
     configureTaskFlowRegistryRuntime({
       store: {
         loadSnapshot,
-        saveSnapshot: () => {},
         upsertFlow,
         deleteFlow,
       },
@@ -328,10 +328,10 @@ describe("task-flow-registry", () => {
     });
     configureTaskFlowRegistryRuntime({
       store: {
+        ...createInMemoryTaskFlowRegistryStore(),
         loadSnapshot: () => ({
           flows: new Map(),
         }),
-        saveSnapshot: () => {},
         upsertFlow,
       },
     });
@@ -357,10 +357,10 @@ describe("task-flow-registry", () => {
     });
     configureTaskFlowRegistryRuntime({
       store: {
+        ...createInMemoryTaskFlowRegistryStore(),
         loadSnapshot: () => ({
           flows: new Map(),
         }),
-        saveSnapshot: () => {},
         upsertFlow,
       },
     });
@@ -401,7 +401,6 @@ describe("task-flow-registry", () => {
         loadSnapshot: () => ({
           flows: new Map(),
         }),
-        saveSnapshot: () => {},
         upsertFlow: () => {},
         deleteFlow,
       },
@@ -421,6 +420,7 @@ describe("task-flow-registry", () => {
   it("normalizes restored managed flows without a controller id", () => {
     configureTaskFlowRegistryRuntime({
       store: {
+        ...createInMemoryTaskFlowRegistryStore(),
         loadSnapshot: () => ({
           flows: new Map([
             [
@@ -439,7 +439,6 @@ describe("task-flow-registry", () => {
             ],
           ]),
         }),
-        saveSnapshot: () => {},
       },
     });
 

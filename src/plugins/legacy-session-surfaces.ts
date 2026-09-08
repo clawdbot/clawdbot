@@ -18,20 +18,12 @@ import {
   isBundledManifestOwner,
 } from "./manifest-owner-policy.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
-import {
-  createPluginModuleLoaderCache,
-  getCachedPluginModuleLoader,
-  type PluginModuleLoaderCache,
-} from "./plugin-module-loader-cache.js";
-import {
-  resolveCanonicalDistRuntimeSource,
-  resolvePluginRuntimeArtifact,
-} from "./plugin-runtime-artifact-resolution.js";
+import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
+import { resolvePluginRuntimeArtifact } from "./plugin-runtime-artifact-resolution.js";
+import { resolvePluginRuntimeExecutionArtifact } from "./plugin-runtime-artifact-selection.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
-import {
-  resolvePluginRuntimeLoadContext,
-  type PluginRuntimeLoadContext,
-} from "./runtime/load-context.js";
+import type { PluginRuntimeLoadContext } from "./runtime/load-context.js";
+import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
 
 type LegacySurfaceManifestRecord = NonNullable<
   PluginRuntimeLoadContext["manifestRegistry"]
@@ -87,6 +79,7 @@ function isEnabledLegacySurfaceOwner(params: {
     !shouldIncludeChannelSetupFeatureForConfig({
       plugin: params.record,
       config: params.config,
+      normalizedConfig: params.normalizedConfig,
     })
   ) {
     return false;
@@ -110,21 +103,20 @@ function isEnabledLegacySurfaceOwner(params: {
 function loadLegacySessionSurface(params: {
   record: LegacySurfaceManifestRecord & { setupSource: string };
   env: NodeJS.ProcessEnv;
-  moduleLoaders: PluginModuleLoaderCache;
   artifactRegistry: ReturnType<typeof createEmptyPluginRegistry>;
 }): BundledChannelLegacySessionSurface {
-  const setupEntry = resolvePluginRuntimeArtifact({
-    pluginId: params.record.id,
-    entryKind: "setup",
-    source: params.record.setupSource,
-    rootDir: params.record.rootDir,
-    origin: params.record.origin,
-    preferBuiltPluginArtifacts: false,
-    packageManifest: params.record.packageManifest,
-    registry: params.artifactRegistry,
-  });
-  const moduleSource = resolveCanonicalDistRuntimeSource(setupEntry.source);
-  const moduleRoot = resolveCanonicalDistRuntimeSource(setupEntry.rootDir);
+  const { source: moduleSource, rootDir: moduleRoot } = resolvePluginRuntimeExecutionArtifact(
+    resolvePluginRuntimeArtifact({
+      pluginId: params.record.id,
+      entryKind: "setup",
+      source: params.record.setupSource,
+      rootDir: params.record.rootDir,
+      origin: params.record.origin,
+      preferBuiltPluginArtifacts: false,
+      packageManifest: params.record.packageManifest,
+      registry: params.artifactRegistry,
+    }),
+  );
   const opened = openRootFileSync({
     absolutePath: moduleSource,
     rootPath: moduleRoot,
@@ -149,8 +141,8 @@ function loadLegacySessionSurface(params: {
   const safeSource = opened.path;
   fs.closeSync(opened.fd);
   const moduleExport = getCachedPluginModuleLoader({
-    cache: params.moduleLoaders,
     modulePath: safeSource,
+    rootDir: moduleRoot,
     importerUrl: import.meta.url,
     loaderFilename: import.meta.url,
   })(safeSource);
@@ -217,7 +209,6 @@ export function prepareLegacySessionSurfaces(params: {
   }
 
   const surfaces: BundledChannelLegacySessionSurface[] = [];
-  const moduleLoaders = createPluginModuleLoaderCache();
   const artifactRegistry = createEmptyPluginRegistry();
   for (const record of loadableRecords) {
     try {
@@ -225,7 +216,6 @@ export function prepareLegacySessionSurfaces(params: {
         loadLegacySessionSurface({
           record: record as LegacySurfaceManifestRecord & { setupSource: string },
           env: context.env,
-          moduleLoaders,
           artifactRegistry,
         }),
       );

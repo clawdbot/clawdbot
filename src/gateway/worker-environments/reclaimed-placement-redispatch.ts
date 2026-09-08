@@ -19,12 +19,9 @@ export function createReclaimedPlacementRedispatch(params: {
       );
     }
     let devicePlacement: Awaited<ReturnType<WorkerDevicePlacementRequirementResolver>> | undefined;
-    if (
-      previousEnvironment.providerId === DEVICE_WORKER_PROVIDER_ID &&
-      previousEnvironment.nodeDeviceId
-    ) {
+    if (previousEnvironment.nodeDeviceId) {
       if (!params.resolveDevicePlacementRequirement) {
-        throw new Error("Paired-device redispatch has no authoritative runtime requirement");
+        throw new Error("Node-backed redispatch has no authoritative runtime requirement");
       }
       devicePlacement = await params.resolveDevicePlacementRequirement({
         sessionId: placement.sessionId,
@@ -39,9 +36,10 @@ export function createReclaimedPlacementRedispatch(params: {
       agentId: placement.agentId,
       profileId: previousEnvironment.profileId,
       executionMode: placement.executionMode,
+      ...(devicePlacement ? { devicePlacement } : {}),
       ...(previousEnvironment.providerId === DEVICE_WORKER_PROVIDER_ID &&
       previousEnvironment.nodeDeviceId
-        ? { deviceId: previousEnvironment.nodeDeviceId, devicePlacement }
+        ? { deviceId: previousEnvironment.nodeDeviceId }
         : {}),
       inheritedProfile: {
         providerId: previousEnvironment.providerId,

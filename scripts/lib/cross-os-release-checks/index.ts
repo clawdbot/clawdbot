@@ -9,3 +9,4 @@ export * from "./process.ts";
 export * from "./reporting.ts";
 export * from "./runtime.ts";
 export * from "./shared.ts";
+export * from "./suite-filter.mjs";

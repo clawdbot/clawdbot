@@ -269,6 +269,44 @@ describe("createVoiceCallRuntime lifecycle", () => {
     mocks.cleanupTailscaleExposure.mockResolvedValue(undefined);
   });
 
+  it("explains the missing phone-call owner before provisioning a runtime", async () => {
+    await expect(
+      createVoiceCallRuntime({
+        config: createBaseConfig(),
+        coreConfig: {
+          agents: { ownership: "explicit", entries: { operator: {}, support: {} } },
+        },
+        agentRuntime: {} as never,
+      }),
+    ).rejects.toThrow("Set plugins.entries.voice-call.config.agentId to a configured agent ID.");
+    expect(mocks.webhookCtorArgs).toHaveLength(0);
+    expect(mocks.managerInitialize).not.toHaveBeenCalled();
+    expect(mocks.startTunnel).not.toHaveBeenCalled();
+  });
+
+  it.each<{ name: string; coreConfig: OpenClawConfig; agentId?: string }>([
+    { name: "sole named agent", coreConfig: { agents: { entries: { operator: {} } } } },
+    {
+      name: "explicit fleet owner",
+      coreConfig: {
+        agents: { ownership: "explicit", entries: { operator: {}, support: {} } },
+      },
+      agentId: "OPERATOR",
+    },
+    {
+      name: "legacy default owner",
+      coreConfig: { agents: { list: [{ id: "support" }, { id: "operator", default: true }] } },
+    },
+  ])("preserves the $name for phone-call startup", async ({ coreConfig, agentId }) => {
+    const runtime = await createVoiceCallRuntime({
+      config: { ...createBaseConfig(), agentId },
+      coreConfig,
+      agentRuntime: {} as never,
+    });
+    expect(runtime.config.agentId).toBe("operator");
+    await runtime.stop();
+  });
+
   it("cleans up tunnel, tailscale, and webhook server when init fails after start", async () => {
     const config = createBaseConfig();
     config.tunnel.provider = "tailscale-funnel";

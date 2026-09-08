@@ -1,11 +1,11 @@
 // Owns atomic delivery-queue ownership changes across namespace versions.
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import type { DeliveryQueueDatabase } from "./delivery-queue-sqlite-bound.js";
 import {
-  completeDeliveryQueueEntry,
-  deleteDeliveryQueueEntry,
-  getDeliveryQueueEntryStatuses,
-  upsertDeliveryQueueEntry,
+  completeDeliveryQueueEntryInDatabase,
+  deleteDeliveryQueueEntryInDatabase,
+  getDeliveryQueueEntryOwnersInDatabase,
+  upsertDeliveryQueueEntryInDatabase,
   type DeliveryQueueEntryState,
 } from "./delivery-queue-sqlite.js";
 import {
@@ -13,16 +13,6 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
-
-type DeliveryQueueDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
-type QueueStatus = "pending" | "failed" | "completed";
-
-function openStateDatabase(stateDir?: string) {
-  return openOpenClawStateDatabase({
-    env: stateDir ? { ...process.env, OPENCLAW_STATE_DIR: stateDir } : process.env,
-  });
-}
 
 /** Atomically publishes one staged owner only when retired namespaces do not own its id. */
 export function commitStagedDeliveryQueueEntryOnceAcrossNamespaces(params: {
@@ -33,11 +23,9 @@ export function commitStagedDeliveryQueueEntryOnceAcrossNamespaces(params: {
   stagingQueueName: string;
   stateDir?: string;
 }): "created" | "existing" | "missing" {
-  const database = openStateDatabase(params.stateDir);
-  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
-  return runSqliteImmediateTransactionSync(
-    database.db,
-    () => {
+  return runOpenClawStateWriteTransaction(
+    (database) => {
+      const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
       const staging = executeSqliteQueryTakeFirstSync(
         database.db,
         queueDb
@@ -50,20 +38,22 @@ export function commitStagedDeliveryQueueEntryOnceAcrossNamespaces(params: {
       if (!staging) {
         return "missing";
       }
-      const owner = getDeliveryQueueEntryStatuses(
+      const owner = getDeliveryQueueEntryOwnersInDatabase(
+        database,
         [params.queueName, ...params.conflictQueueNames],
         params.entry.id,
-        params.stateDir,
       );
       if (owner.size > 0) {
         return "existing";
       }
-      const inserted = upsertDeliveryQueueEntry({
-        queueName: params.queueName,
-        entry: params.entry,
-        stateDir: params.stateDir,
-        insertOnly: true,
-      });
+      const inserted = upsertDeliveryQueueEntryInDatabase(
+        {
+          queueName: params.queueName,
+          entry: params.entry,
+          insertOnly: true,
+        },
+        database,
+      );
       if (!inserted) {
         return "existing";
       }
@@ -83,7 +73,9 @@ export function commitStagedDeliveryQueueEntryOnceAcrossNamespaces(params: {
       return "created";
     },
     {
-      databaseLabel: "openclaw-state",
+      env: params.stateDir ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } : process.env,
+    },
+    {
       operationLabel: "commit staged stable delivery queue owner",
     },
   );
@@ -96,27 +88,29 @@ export function upsertDeliveryQueueEntryOnceAcrossNamespaces(params: {
   entry: DeliveryQueueEntryState;
   stateDir?: string;
 }): boolean {
-  const database = openStateDatabase(params.stateDir);
-  return runSqliteImmediateTransactionSync(
-    database.db,
-    () => {
-      const owner = getDeliveryQueueEntryStatuses(
+  return runOpenClawStateWriteTransaction(
+    (database) => {
+      const owner = getDeliveryQueueEntryOwnersInDatabase(
+        database,
         [params.queueName, ...params.conflictQueueNames],
         params.entry.id,
-        params.stateDir,
       );
       if (owner.size > 0) {
         return false;
       }
-      return upsertDeliveryQueueEntry({
-        queueName: params.queueName,
-        entry: params.entry,
-        stateDir: params.stateDir,
-        insertOnly: true,
-      });
+      return upsertDeliveryQueueEntryInDatabase(
+        {
+          queueName: params.queueName,
+          entry: params.entry,
+          insertOnly: true,
+        },
+        database,
+      );
     },
     {
-      databaseLabel: "openclaw-state",
+      env: params.stateDir ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } : process.env,
+    },
+    {
       operationLabel: "insert stable delivery queue owner",
     },
   );
@@ -146,11 +140,9 @@ export function replacePendingDeliveryQueueEntry(params: {
       `Delivery queue replacement id mismatch: ${params.expectedEntry.id} != ${params.replacementEntry.id}`,
     );
   }
-  const database = openStateDatabase(params.stateDir);
-  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
-  return runSqliteImmediateTransactionSync(
-    database.db,
-    () => {
+  return runOpenClawStateWriteTransaction(
+    (database) => {
+      const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
       const source = executeSqliteQueryTakeFirstSync(
         database.db,
         queueDb
@@ -158,7 +150,7 @@ export function replacePendingDeliveryQueueEntry(params: {
           .select(["entry_json", "status"])
           .where("queue_name", "=", params.queueName)
           .where("id", "=", params.expectedEntry.id),
-      ) as { entry_json: string; status: QueueStatus } | undefined;
+      );
       if (
         !source ||
         source.status !== "pending" ||
@@ -166,15 +158,19 @@ export function replacePendingDeliveryQueueEntry(params: {
       ) {
         return false;
       }
-      return upsertDeliveryQueueEntry({
-        queueName: params.queueName,
-        entry: params.replacementEntry,
-        stateDir: params.stateDir,
-        updatePendingOnly: true,
-      });
+      return upsertDeliveryQueueEntryInDatabase(
+        {
+          queueName: params.queueName,
+          entry: params.replacementEntry,
+          updatePendingOnly: true,
+        },
+        database,
+      );
     },
     {
-      databaseLabel: "openclaw-state",
+      env: params.stateDir ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } : process.env,
+    },
+    {
       operationLabel: "replace pending delivery queue entry",
     },
   );
@@ -186,11 +182,9 @@ export function completePendingDeliveryQueueEntry(params: {
   expectedEntry: DeliveryQueueEntryState;
   stateDir?: string;
 }): boolean {
-  const database = openStateDatabase(params.stateDir);
-  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
-  return runSqliteImmediateTransactionSync(
-    database.db,
-    () => {
+  return runOpenClawStateWriteTransaction(
+    (database) => {
+      const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
       const source = executeSqliteQueryTakeFirstSync(
         database.db,
         queueDb
@@ -198,7 +192,7 @@ export function completePendingDeliveryQueueEntry(params: {
           .select(["entry_json", "status"])
           .where("queue_name", "=", params.queueName)
           .where("id", "=", params.expectedEntry.id),
-      ) as { entry_json: string; status: QueueStatus } | undefined;
+      );
       if (
         !source ||
         source.status !== "pending" ||
@@ -206,11 +200,13 @@ export function completePendingDeliveryQueueEntry(params: {
       ) {
         return false;
       }
-      completeDeliveryQueueEntry(params.queueName, params.expectedEntry.id, params.stateDir);
+      completeDeliveryQueueEntryInDatabase(database, params.queueName, params.expectedEntry.id);
       return true;
     },
     {
-      databaseLabel: "openclaw-state",
+      env: params.stateDir ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } : process.env,
+    },
+    {
       operationLabel: "complete pending delivery queue entry",
     },
   );
@@ -223,11 +219,9 @@ export function completePendingDeliveryQueueEntry(params: {
 export function movePendingDeliveryQueueEntryNamespace(
   params: MovePendingDeliveryQueueEntryNamespaceParams,
 ): "moved" | "source-changed" | "destination-exists" | "staging-missing" {
-  const database = openStateDatabase(params.stateDir);
-  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
-  return runSqliteImmediateTransactionSync(
-    database.db,
-    () => {
+  return runOpenClawStateWriteTransaction(
+    (database) => {
+      const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
       const source = executeSqliteQueryTakeFirstSync(
         database.db,
         queueDb
@@ -235,7 +229,7 @@ export function movePendingDeliveryQueueEntryNamespace(
           .select(["entry_json", "status"])
           .where("queue_name", "=", params.sourceQueueName)
           .where("id", "=", params.expectedSourceEntry.id),
-      ) as { entry_json: string; status: QueueStatus } | undefined;
+      );
       if (
         !source ||
         source.status !== "pending" ||
@@ -243,10 +237,10 @@ export function movePendingDeliveryQueueEntryNamespace(
       ) {
         return "source-changed";
       }
-      const destination = getDeliveryQueueEntryStatuses(
+      const destination = getDeliveryQueueEntryOwnersInDatabase(
+        database,
         [params.destinationQueueName, ...(params.conflictQueueNames ?? [])],
         params.destinationEntry.id,
-        params.stateDir,
       );
       if (destination.size > 0) {
         return "destination-exists";
@@ -265,37 +259,41 @@ export function movePendingDeliveryQueueEntryNamespace(
           return "staging-missing";
         }
       }
-      const inserted = upsertDeliveryQueueEntry({
-        queueName: params.destinationQueueName,
-        entry: params.destinationEntry,
-        stateDir: params.stateDir,
-        insertOnly: true,
-      });
+      const inserted = upsertDeliveryQueueEntryInDatabase(
+        {
+          queueName: params.destinationQueueName,
+          entry: params.destinationEntry,
+          insertOnly: true,
+        },
+        database,
+      );
       if (!inserted) {
         return "destination-exists";
       }
       if (params.retainSourceCompletionFence) {
         // Completion rewrites entry_json to a minimal tombstone. Never retain
         // the legacy pre-policy payload or hook context in the source fence.
-        completeDeliveryQueueEntry(
+        completeDeliveryQueueEntryInDatabase(
+          database,
           params.sourceQueueName,
           params.expectedSourceEntry.id,
-          params.stateDir,
         );
       } else {
-        deleteDeliveryQueueEntry(
+        deleteDeliveryQueueEntryInDatabase(
+          database,
           params.sourceQueueName,
           params.expectedSourceEntry.id,
-          params.stateDir,
         );
       }
       if (params.stagingId && params.stagingQueueName) {
-        deleteDeliveryQueueEntry(params.stagingQueueName, params.stagingId, params.stateDir);
+        deleteDeliveryQueueEntryInDatabase(database, params.stagingQueueName, params.stagingId);
       }
       return "moved";
     },
     {
-      databaseLabel: "openclaw-state",
+      env: params.stateDir ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } : process.env,
+    },
+    {
       operationLabel: "migrate delivery queue namespace",
     },
   );

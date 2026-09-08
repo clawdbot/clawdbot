@@ -40,6 +40,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -55,6 +56,9 @@ import androidx.webkit.ProfileStore
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -71,6 +75,16 @@ private const val INLINE_WIDGET_FETCH_TIMEOUT_SECONDS = 8L
 private const val HTTP_HEADER_ACCEPT = "Accept"
 private const val HTTP_HEADER_CACHE_CONTROL = "Cache-Control"
 
+// Socket closure may block and must finish after the widget's composition is gone.
+private val inlineWidgetCleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+internal fun closePinnedWidgetClientAsync(client: OkHttpClient) {
+  inlineWidgetCleanupScope.launch {
+    client.dispatcher.cancelAll()
+    client.connectionPool.evictAll()
+  }
+}
+
 @Composable
 internal fun ChatInlineWidget(
   preview: ChatWidgetPreview,
@@ -79,7 +93,7 @@ internal fun ChatInlineWidget(
 ) {
   var resolvedResource by remember(preview.path) { mutableStateOf<ChatWidgetResource?>(null) }
   var unavailable by remember(preview.path) { mutableStateOf(false) }
-  var recoveryAttempts by remember(preview.path) { mutableStateOf(0) }
+  var recoveryAttempts by remember(preview.path) { mutableIntStateOf(0) }
   var refreshInFlight by remember(preview.path) { mutableStateOf(false) }
   var refreshRequestId by remember(preview.path) { mutableStateOf<UUID?>(null) }
   var exportMenuExpanded by remember(preview.path) { mutableStateOf(false) }
@@ -225,16 +239,20 @@ internal fun ChatInlineWidget(
           }
         }
       }
-      unavailable || resolvedResource != null ->
+
+      unavailable || resolvedResource != null -> {
         Text(
           text = nativeString("Widget unavailable"),
           style = ClawTheme.type.caption,
           color = ClawTheme.colors.textMuted,
         )
-      else ->
+      }
+
+      else -> {
         Box(modifier = Modifier.fillMaxWidth().height(44.dp), contentAlignment = Alignment.Center) {
           CircularProgressIndicator(color = ClawTheme.colors.textMuted)
         }
+      }
     }
   }
 }
@@ -335,6 +353,8 @@ private fun deleteInlineWidgetProfile(profileName: String) {
   }
 }
 
+// WebKit 1.17's lint detector reports Kotlin WebViewClient constructors even when this callback exists.
+@SuppressLint("MissingOnRenderProcessGone")
 private class InlineWidgetWebViewClient(
   private val resource: ChatWidgetResource,
   private val onFailure: () -> Unit,
@@ -349,7 +369,6 @@ private class InlineWidgetWebViewClient(
     view.setOnLongClickListener(null)
     view.stopLoading()
     closePinnedClient()
-    view.webViewClient = WebViewClient()
     view.removeAllViews()
     view.destroy()
   }
@@ -367,8 +386,7 @@ private class InlineWidgetWebViewClient(
   }
 
   private fun closePinnedClient() {
-    pinnedClient?.dispatcher?.cancelAll()
-    pinnedClient?.connectionPool?.evictAll()
+    pinnedClient?.let(::closePinnedWidgetClientAsync)
   }
 
   override fun onPageCommitVisible(

@@ -23,7 +23,7 @@ function createCatalogContinuationPane(request: ReturnType<typeof vi.fn>) {
     hostId: "gateway:local",
     threadId: "thread-101",
   } satisfies CatalogSessionKey;
-  const sourceSessionKey = buildCatalogSessionKey(key);
+  const sourceSessionKey = buildCatalogSessionKey(key, "main");
   state.sessionKey = sourceSessionKey;
   pane.sessionKey = sourceSessionKey;
   state.chatMessage = "Continue the original catalog conversation";
@@ -43,6 +43,32 @@ function createCatalogContinuationPane(request: ReturnType<typeof vi.fn>) {
 }
 
 describe("chat pane catalog session lifecycle", () => {
+  it.each(["global", "agent:other:main", "agent:other:catalog:fixture:gateway:Thread"])(
+    "preserves the pane owner and pending model selection across ordinary snapshots for %s",
+    (sessionKey) => {
+      const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+      const retireModelOverride = vi.fn();
+      const sessions = { retireModelOverride } as unknown as SessionCapability;
+      const { pane, state } = createTestChatPane({ client, sessions });
+      pane.sessionKey = state.sessionKey = sessionKey;
+      pane.context.agentSelection.set("other");
+      state.assistantAgentId = "other";
+      const pending = { [sessionKey]: new Promise<boolean>(() => {}) };
+      state.chatModelSwitchPromises = pending;
+
+      pane.applyGatewaySnapshot({
+        ...pane.context.gateway.snapshot,
+        assistantAgentId: "main",
+        selfUser: { id: "fixture-user", name: "Fixture User" },
+      });
+
+      expect(state.selfUser?.id).toBe("fixture-user");
+      expect(state.assistantAgentId).toBe("other");
+      expect(state.chatModelSwitchPromises).toBe(pending);
+      expect(retireModelOverride).not.toHaveBeenCalled();
+    },
+  );
+
   it("finds continuation metadata on a later catalog page", async () => {
     const key = {
       catalogId: "codex",
@@ -96,7 +122,7 @@ describe("chat pane catalog session lifecycle", () => {
       .mockResolvedValueOnce(transcript);
     const client = { request } as unknown as GatewayBrowserClient;
     const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    pane.sessionKey = buildCatalogSessionKey(key);
+    pane.sessionKey = buildCatalogSessionKey(key, "main");
 
     await pane.loadCatalogSession(key, false);
 
@@ -118,7 +144,7 @@ describe("chat pane catalog session lifecycle", () => {
     expect(pane.catalogSession).toEqual(selectedSession);
   });
 
-  it("discards a catalog read when the selected agent changes", async () => {
+  it("discards a catalog read when the pane owner changes", async () => {
     const key = {
       catalogId: "codex",
       hostId: "gateway:local",
@@ -156,13 +182,14 @@ describe("chat pane catalog session lifecycle", () => {
       .mockImplementationOnce(() => read.promise);
     const client = { request } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    pane.sessionKey = buildCatalogSessionKey(key);
+    pane.sessionKey = buildCatalogSessionKey(key, "main");
     state.sessionKey = pane.sessionKey;
     state.assistantAgentId = "main";
 
     const pending = pane.loadCatalogSession(key, false);
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    state.assistantAgentId = "jarvis";
+    state.sessionKey = buildCatalogSessionKey(key, "other");
+    pane.sessionKey = state.sessionKey;
     read.resolve({
       hostId: key.hostId,
       threadId: key.threadId,
@@ -175,45 +202,93 @@ describe("chat pane catalog session lifecycle", () => {
 
   it.each([
     {
-      name: "uses a raw command for an empty tool call",
+      name: "labels a tool call with the text its catalog provided",
+      item: { type: "toolCall", text: "git status --short" },
+      expected: "Tool call\n\ngit status --short",
+    },
+    {
+      name: "labels a tool result with the text its catalog provided",
+      item: { type: "toolResult", text: "working tree clean" },
+      expected: "Tool result\n\nworking tree clean",
+    },
+    {
+      name: "keeps raw-only tool command labels readable",
       item: { type: "toolCall", raw: { command: "git status --short" } },
       expected: "Tool call\n\ngit status --short",
     },
     {
-      name: "uses aggregated output for an empty tool result",
-      item: { type: "toolResult", raw: { aggregatedOutput: "working tree clean" } },
-      expected: "Tool result\n\nworking tree clean",
+      name: "keeps a Unicode tool result at the preview boundary whole",
+      item: { type: "toolResult", text: "海".repeat(500) },
+      expected: `Tool result\n\n${"海".repeat(500)}`,
     },
     {
       name: "renders an empty reasoning item as its label alone",
       item: { type: "reasoning" },
       expected: "Thinking",
     },
-  ])("$name", ({ item, expected }) => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
+  ] satisfies Array<{ name: string; item: SessionCatalogTranscriptItem; expected: string }>)(
+    "$name",
+    ({ item, expected }) => {
+      const { pane } = createCatalogContinuationPane(vi.fn());
 
-    const message = pane.catalogItemMessage(item as SessionCatalogTranscriptItem) as {
-      content: Array<{ text: string }>;
-    };
+      expect(pane.catalogItemMessage(item)).toMatchObject({
+        content: [{ type: "text", text: expected }],
+      });
+    },
+  );
 
-    expect(message.content[0]?.text).toBe(expected);
-    expect(message.content[0]?.text).not.toContain("Unsupported external session item");
-  });
+  it.each([
+    {
+      name: "text before a conflicting raw fallback",
+      item: {
+        type: "toolResult",
+        text: "x".repeat(750),
+        raw: { aggregatedOutput: "different raw output" },
+      },
+      preview: `${"x".repeat(499)}…`,
+    },
+    {
+      name: "raw aggregated output",
+      item: { type: "toolResult", raw: { aggregatedOutput: "x".repeat(750) } },
+      preview: `${"x".repeat(499)}…`,
+    },
+    {
+      name: "raw structured result",
+      item: { type: "toolResult", raw: { result: { output: "x".repeat(750) } } },
+      preview: `${JSON.stringify({ output: "x".repeat(750) }).slice(0, 499)}…`,
+    },
+    {
+      name: "text ending at a surrogate pair",
+      item: { type: "toolResult", text: `${"x".repeat(498)}🌱tail` },
+      preview: `${"x".repeat(498)}…`,
+    },
+  ] satisfies Array<{ name: string; item: SessionCatalogTranscriptItem; preview: string }>)(
+    "bounds the visible preview from $name without changing source data",
+    ({ item, preview }) => {
+      const { pane } = createCatalogContinuationPane(vi.fn());
+      const original = structuredClone(item);
 
-  it("clamps oversized aggregated tool output before rendering", () => {
+      expect(pane.catalogItemMessage(item)).toMatchObject({
+        content: [{ type: "text", text: `Tool result\n\n${preview}\n\n[Output truncated]` }],
+      });
+      expect(item).toEqual(original);
+    },
+  );
+
+  it("marks a preview that its catalog truncated", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
 
     const message = pane.catalogItemMessage({
       type: "toolResult",
-      raw: { aggregatedOutput: "x".repeat(5000) },
+      text: "first bytes of a huge command output",
+      truncated: true,
     } as SessionCatalogTranscriptItem) as { content: Array<{ text: string }> };
 
-    // The 500-char preview cap keeps a single huge tool result from injecting
-    // megabytes into one chat message; the "Tool result\n\n" prefix adds a bit.
-    expect(message.content[0]?.text.length).toBeLessThan(600);
-    expect(message.content[0]?.text.startsWith("Tool result")).toBe(true);
+    // Without the marker a previewed payload reads as output that simply ended.
+    expect(message.content[0]?.text).toBe(
+      "Tool result\n\nfirst bytes of a huge command output\n\n[Output truncated]",
+    );
   });
 
   it("skips an empty unknown catalog item", () => {
@@ -244,7 +319,7 @@ describe("chat pane catalog session lifecycle", () => {
       request: vi.fn(async () => readPage),
     } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const key = "catalog:claude:gateway%3Alocal:thread-1";
+    const key = "agent:main:catalog:claude:gateway%3Alocal:thread-1";
     state.sessionKey = key;
     pane.sessionKey = key;
     pane.catalogCursor = "cursor-1";
@@ -269,7 +344,7 @@ describe("chat pane catalog session lifecycle", () => {
       request: vi.fn(async () => readPage),
     } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const key = "catalog:claude:gateway%3Alocal:thread-1";
+    const key = "agent:main:catalog:claude:gateway%3Alocal:thread-1";
     state.sessionKey = key;
     pane.sessionKey = key;
     pane.catalogCursor = "final-page";
@@ -297,7 +372,7 @@ describe("chat pane catalog session lifecycle", () => {
       request: vi.fn(async () => readPage),
     } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const key = "catalog:claude:gateway%3Alocal:thread-1";
+    const key = "agent:main:catalog:claude:gateway%3Alocal:thread-1";
     state.sessionKey = key;
     pane.sessionKey = key;
     pane.catalogCursor = "cursor-1";
@@ -324,7 +399,7 @@ describe("chat pane catalog session lifecycle", () => {
       request: vi.fn(async () => readPage),
     } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const key = "catalog:claude:gateway%3Alocal:thread-1";
+    const key = "agent:main:catalog:claude:gateway%3Alocal:thread-1";
     state.sessionKey = key;
     pane.sessionKey = key;
     pane.catalogCursor = "cursor-2";
@@ -465,14 +540,15 @@ describe("chat pane catalog continuation lifecycle", () => {
     expect(state.chatSending).toBe(false);
   });
 
-  it("does not apply a catalog continuation after the selected agent changes", async () => {
+  it("does not apply a catalog continuation after the pane owner changes", async () => {
     const continued = createDeferred<{ sessionKey: string }>();
     const request = vi.fn(() => continued.promise);
     const { key, pane, state } = createCatalogContinuationPane(request);
     state.assistantAgentId = "main";
 
     const pending = pane.continueCatalogSession(key);
-    state.assistantAgentId = "jarvis";
+    state.sessionKey = buildCatalogSessionKey(key, "other");
+    pane.sessionKey = state.sessionKey;
     continued.resolve({ sessionKey: "agent:main:stale-owner" });
     await pending;
 

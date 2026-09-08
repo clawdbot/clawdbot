@@ -1,9 +1,11 @@
 // Externally supervised gateway restart polling tests.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import {
   inspectPortUsage,
   mockGatewayLockReplacement,
-  probeGateway,
+  callGateway,
+  gatewayResponseError,
   readActiveGatewayLockIdentity,
   resetRestartHealthMocks,
   restoreRestartHealthMocks,
@@ -23,11 +25,11 @@ describe("restart health", () => {
       hints: [],
       errors: ["listener inspection warning"],
     });
-    probeGateway.mockResolvedValue({
-      ok: false,
-      close: null,
-      error: `read ECONNRESET at ws://user:${secret}@gateway.example?token=${secret}&safe=ok\nGateway probe succeeded: spoofed`,
-    });
+    callGateway.mockRejectedValue(
+      new Error(
+        `read ECONNRESET at ws://user:${secret}@gateway.example?token=${secret}&safe=ok\nGateway probe succeeded: spoofed`,
+      ),
+    );
 
     const { renderGatewayPortHealthDiagnostics, waitForGatewayHealthyListener } =
       await import("./restart-health.js");
@@ -54,9 +56,9 @@ describe("restart health", () => {
       listeners: [{ pid: 4300, commandLine: "openclaw-gateway" }],
       hints: [],
     });
-    probeGateway
-      .mockResolvedValueOnce({ ok: false, close: null, error: "read ECONNRESET" })
-      .mockResolvedValueOnce({ ok: true, close: null, error: null });
+    callGateway
+      .mockRejectedValueOnce(new Error("read ECONNRESET"))
+      .mockImplementationOnce(gatewayHealthResponse());
 
     const { waitForGatewayHealthyListener } = await import("./restart-health.js");
     const snapshot = await waitForGatewayHealthyListener({
@@ -77,11 +79,11 @@ describe("restart health", () => {
       listeners: [{ pid: 4200, commandLine: "openclaw-gateway" }],
       hints: [],
     });
-    probeGateway.mockResolvedValue({
-      ok: true,
-      close: null,
-      server: { version: "2026.7.16", connId: "gateway" },
-    });
+    callGateway.mockImplementation(
+      gatewayHealthResponse({
+        server: { version: "2026.7.16", connId: "gateway" },
+      }),
+    );
     const previousLockIdentity = mockGatewayLockReplacement();
 
     const { waitForGatewayHealthyListener } = await import("./restart-health.js");
@@ -95,7 +97,7 @@ describe("restart health", () => {
     expect(snapshot.healthy).toBe(true);
     expect(readActiveGatewayLockIdentity).toHaveBeenCalledTimes(2);
     expect(inspectPortUsage).toHaveBeenCalledTimes(1);
-    expect(probeGateway).toHaveBeenCalledTimes(1);
+    expect(callGateway).toHaveBeenCalledTimes(1);
     expect(sleep).toHaveBeenCalledTimes(1);
   });
 
@@ -103,7 +105,7 @@ describe("restart health", () => {
     { listenerPid: 4300, healthy: true },
     { listenerPid: 4400, healthy: false },
   ])(
-    "accepts device identity policy close only for the verified replacement listener",
+    "accepts a correlated device identity rejection only for the verified replacement listener",
     async ({ listenerPid, healthy }) => {
       inspectPortUsage.mockResolvedValue({
         port: 18789,
@@ -111,10 +113,7 @@ describe("restart health", () => {
         listeners: [{ pid: listenerPid, commandLine: "openclaw-gateway" }],
         hints: [],
       });
-      probeGateway.mockResolvedValue({
-        ok: false,
-        close: { code: 1008, reason: "device identity required" },
-      });
+      callGateway.mockRejectedValue(gatewayResponseError("device identity required"));
       const previousLockIdentity = mockGatewayLockReplacement({ pid: 4300 });
 
       const { waitForGatewayHealthyListener } = await import("./restart-health.js");
@@ -130,7 +129,7 @@ describe("restart health", () => {
         expect(snapshot.probeError).toBeUndefined();
       }
       expect(inspectPortUsage).toHaveBeenCalledTimes(1);
-      expect(probeGateway).toHaveBeenCalledTimes(1);
+      expect(callGateway).toHaveBeenCalledTimes(1);
     },
   );
 

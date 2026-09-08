@@ -108,4 +108,24 @@ describe("buildGoogleProvider createStreamFn", () => {
       expect(normalized?.input).toEqual(["text", "image"]);
     }
   });
+
+  it.each(["google-vertex", "google-antigravity"])(
+    "does not resolve AI Studio credentials for %s-only catalog scope",
+    async (providerId) => {
+      const resolveProviderApiKey = vi.fn(() => {
+        throw new Error("unselected Google credential read");
+      });
+
+      await expect(
+        buildGoogleProvider().catalog?.run({
+          providerIds: [providerId],
+          config: {},
+          env: {},
+          resolveProviderApiKey,
+          resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+        }),
+      ).resolves.toBeNull();
+      expect(resolveProviderApiKey).not.toHaveBeenCalled();
+    },
+  );
 });

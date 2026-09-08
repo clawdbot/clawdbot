@@ -1,11 +1,10 @@
 /** Identity and execution metadata for heartbeat tasks migrated into cron. */
 import { createHash } from "node:crypto";
+import { HEARTBEAT_TASK_DECLARATION_PREFIX } from "./system-owned-declaration.js";
 import type { CronJob } from "./types.js";
 
-const HEARTBEAT_TASK_DECLARATION_PREFIX = "heartbeat-task:";
-
 /** Whether a declaration key belongs to the doctor-owned heartbeat-task namespace. */
-export function isHeartbeatTaskDeclarationKey(declarationKey: string | undefined): boolean {
+function isHeartbeatTaskDeclarationKey(declarationKey: string | undefined): boolean {
   return declarationKey?.startsWith(HEARTBEAT_TASK_DECLARATION_PREFIX) === true;
 }
 

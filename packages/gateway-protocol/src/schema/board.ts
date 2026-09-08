@@ -71,6 +71,10 @@ export const BoardWidgetSchema = closedObject({
   tabId: BoardTabIdSchema,
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
   contentKind: Type.Union([Type.Literal("html"), Type.Literal("mcp-app"), Type.Literal("plugin")]),
+  contentOwner: Type.Optional(
+    Type.Enum(["html", "mcp-app", "plugin", "registered"] as const, { type: "string" }),
+  ),
+  registeredContentKind: Type.Optional(Type.String({ pattern: "^[a-z][a-z0-9-]{0,31}$" })),
   pluginKind: Type.Optional(BoardWidgetPluginKindSchema),
   props: Type.Optional(BoardWidgetPluginPropsSchema),
   presentation: Type.Optional(BoardWidgetPresentationSchema),

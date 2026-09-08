@@ -1,6 +1,33 @@
 import Foundation
 
 extension OpenClawChatViewModel {
+    func fetchModels(sessionSnapshot: SessionSnapshot? = nil) async {
+        self.nextModelCatalogRequestID &+= 1
+        let requestID = self.nextModelCatalogRequestID
+        let session = sessionSnapshot ?? self.currentSessionSnapshot()
+        let target = self.currentModelPatchTarget()
+        let settingsRevision = self.settingsPatchRevisionsByTarget[target, default: 0]
+        do {
+            let catalog = try await transport.loadModelCatalog(
+                sessionKey: session.key,
+                agentID: session.deliveryAgentID)
+            guard self.isCurrentSession(session), requestID == self.nextModelCatalogRequestID else {
+                return
+            }
+            self.modelChoices = catalog.choices
+            self.modelAvailabilityIsSessionScoped = catalog.availabilityIsSessionScoped
+            if target == self.currentModelPatchTarget(),
+               settingsRevision == self.settingsPatchRevisionsByTarget[target, default: 0],
+               self.inFlightSettingsPatchCountsByTarget[target] == nil
+            {
+                self.syncSelectedModel()
+            }
+            syncThinkingLevelOptions()
+        } catch {
+            // Best-effort.
+        }
+    }
+
     public static let verboseLevelOptions = ["off", "on", "full"]
 
     public var modelPickerSections: ChatModelPickerSections {
@@ -12,6 +39,121 @@ extension OpenClawChatViewModel {
             favorites: self.modelPickerFavorites,
             recents: self.modelPickerRecents,
             defaultProvider: defaultProvider)
+    }
+
+    public var modelSelectionTargetDescription: String? {
+        switch self.sessionDefaults?.modelSelectionTarget {
+        case "session": String(localized: "Changes this session only")
+        case "agent": String(localized: "Changes this agent's default")
+        case "global": String(localized: "Changes the global default")
+        default: nil
+        }
+    }
+
+    public func isModelUnavailable(_ model: OpenClawChatModelChoice) -> Bool {
+        self.modelAvailabilityIsSessionScoped && model.available == false
+    }
+
+    public func canSelectModel(_ selectionID: String) -> Bool {
+        guard selectionID != Self.defaultModelSelectionID,
+              let model = self.modelChoices.first(where: { $0.selectionID == selectionID })
+        else { return true }
+        return !self.isModelUnavailable(model)
+    }
+
+    public func modelUnavailableDescription(_ model: OpenClawChatModelChoice) -> String? {
+        guard self.isModelUnavailable(model) else { return nil }
+        return model.availabilityReason?.pickerDescription ?? String(localized: "Unavailable")
+    }
+
+    public var selectedModelUnavailableReason: OpenClawChatModelUnavailableReason? {
+        guard self.modelAvailabilityIsSessionScoped,
+              let selectedKey = self.selectedModelAvailabilityKey()
+        else { return nil }
+        let matches = self.modelChoices.filter {
+            Self.modelAvailabilityKey(modelID: $0.modelID, provider: $0.provider) == selectedKey
+        }
+        guard !matches.isEmpty,
+              matches.allSatisfy({ $0.available == false && $0.availabilityReason != nil })
+        else { return nil }
+        let reasons = matches.compactMap(\.availabilityReason)
+        if reasons.contains(.cooldown) {
+            return .cooldown
+        }
+        if let unknown = reasons.first(where: {
+            if case .unknown = $0 { return true }
+            return false
+        }) {
+            return unknown
+        }
+        return reasons.contains(.authFailed) ? .authFailed : .missingAuth
+    }
+
+    public var composerModelAvailabilityMessage: String? {
+        guard self.healthOK,
+              !self.currentDraftUsesDurableQueue,
+              let reason = self.selectedModelUnavailableReason,
+              reason.blocksSend
+        else { return nil }
+        switch reason {
+        case .missingAuth:
+            return String(localized: "No provider credential is configured for this model. Set it up in Model Setup.")
+        case .authFailed:
+            return String(localized: "Authentication failed. Review the provider credential or sign-in, then retry.")
+        case .cooldown, .unknown:
+            return nil
+        }
+    }
+
+    private var currentDraftUsesDurableQueue: Bool {
+        self.outbox != nil && (!self.attachments.isEmpty || self.hasPendingOutboxCommandsForCurrentSession)
+    }
+
+    private func selectedModelAvailabilityKey() -> String? {
+        if self.modelSelectionID != Self.defaultModelSelectionID {
+            return Self.modelAvailabilityKey(modelID: self.canonicalModelSelectionID, provider: nil)
+        }
+        let session = self.currentSessionEntry()
+        if let model = session?.model {
+            return self.resolvedModelAvailabilityKey(modelID: model, provider: session?.modelProvider)
+        }
+        return self.resolvedModelAvailabilityKey(
+            modelID: self.sessionDefaults?.model,
+            provider: self.sessionDefaults?.modelProvider)
+    }
+
+    private func resolvedModelAvailabilityKey(modelID: String?, provider: String?) -> String? {
+        guard let direct = Self.modelAvailabilityKey(modelID: modelID, provider: provider) else { return nil }
+        if direct.contains("/") {
+            return direct
+        }
+        let matches = Set(self.modelChoices.compactMap { choice -> String? in
+            guard choice.modelID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == direct else {
+                return nil
+            }
+            return Self.modelAvailabilityKey(modelID: choice.modelID, provider: choice.provider)
+        })
+        return matches.count == 1 ? matches.first : direct
+    }
+
+    private static func modelAvailabilityKey(modelID: String?, provider: String?) -> String? {
+        guard let modelID = modelID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !modelID.isEmpty
+        else { return nil }
+        if let separator = modelID.firstIndex(of: "/"), separator != modelID.startIndex {
+            let embeddedProvider = String(modelID[..<separator])
+            let model = String(modelID[modelID.index(after: separator)...])
+            return "\(self.modelAvailabilityProvider(embeddedProvider))/\(model)"
+        }
+        guard let provider = provider?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !provider.isEmpty
+        else { return modelID }
+        return "\(self.modelAvailabilityProvider(provider))/\(modelID)"
+    }
+
+    private static func modelAvailabilityProvider(_ provider: String) -> String {
+        let normalized = provider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized == "codex" || normalized == "openai-codex" ? "openai" : normalized
     }
 
     public func isDefaultModel(_ model: OpenClawChatModelChoice) -> Bool {
@@ -60,6 +202,72 @@ extension OpenClawChatViewModel {
         return (session.effectiveFastMode ?? session.fastMode)?.isEnabled == true ? "on" : "off"
     }
 
+    public var fastModeIsEnabled: Bool {
+        guard let session = self.currentSessionEntry() else { return false }
+        return (session.effectiveFastMode ?? session.fastMode)?.isEnabled == true
+    }
+
+    public var composerInlineModelLabel: String {
+        let label = if self.modelSelectionID == Self.defaultModelSelectionID {
+            self.defaultModelLabel.replacingOccurrences(of: "Default: ", with: "")
+        } else {
+            self.modelChoices.first { self.isSelectedModel($0.selectionID) }?.displayLabel ??
+                self.modelSelectionID
+        }
+        return label.split(separator: "/").last.map(String.init) ?? label
+    }
+
+    public var canonicalModelSelectionID: String {
+        if self.modelSelectionID == Self.defaultModelSelectionID {
+            return Self.defaultModelSelectionID
+        }
+        return self.modelChoices.first { self.isSelectedModel($0.selectionID) }?.selectionID ??
+            self.modelSelectionID
+    }
+
+    public func isSelectedModel(_ selectionID: String) -> Bool {
+        Self.modelSelectionMatches(
+            selectionID: selectionID,
+            currentSelectionID: self.modelSelectionID,
+            choices: self.modelChoices)
+    }
+
+    static func modelSelectionMatches(
+        selectionID: String,
+        currentSelectionID: String,
+        choices: [OpenClawChatModelChoice]) -> Bool
+    {
+        if selectionID == defaultModelSelectionID {
+            return currentSelectionID == defaultModelSelectionID
+        }
+        guard let choice = choices.first(where: { $0.selectionID == selectionID }) else {
+            return currentSelectionID == selectionID
+        }
+        return currentSelectionID == choice.selectionID || currentSelectionID == choice.modelID
+    }
+
+    public var composerInlineEffortLabel: String {
+        let effort = self.thinkingOverrideIsInherited
+            ? String(
+                format: String(localized: "Inherited %@"),
+                self.thinkingLevel)
+            : self.thinkingLevel
+        return self.fastModeSelectionID == "on"
+            ? String(
+                format: String(localized: "%@, Fast"),
+                effort)
+            : effort
+    }
+
+    public var composerInlineEffortAngle: Double {
+        guard self.thinkingLevel != "off",
+              let index = self.thinkingLevelOptions.firstIndex(where: { $0.id == self.thinkingLevel })
+        else { return -120 }
+        guard self.thinkingLevelOptions.count > 1 else { return 120 }
+        let fraction = Double(index) / Double(self.thinkingLevelOptions.count - 1)
+        return -120 + fraction * 240
+    }
+
     /// `models.list` currently has no fast-support capability field. Keep the
     /// control available and let the gateway validate the session patch.
     public var selectedModelSupportsFastMode: Bool {
@@ -85,6 +293,7 @@ extension OpenClawChatViewModel {
         guard clearsOverride ? baselineSessionLevel != nil : Self.normalizedVerboseLevel(baselineSessionLevel) != next
         else { return }
 
+        self.errorText = nil
         if self.acceptedVerboseLevelsByTarget[target] == nil {
             self.acceptedVerboseLevelsByTarget[target] = baselineSessionLevel.map(VerboseLevelState.value)
                 ?? VerboseLevelState.none
@@ -133,6 +342,7 @@ extension OpenClawChatViewModel {
                         self.acceptedVerboseLevelsByTarget[target]?.level,
                         sessionKey: state.key,
                         exactMatchOnly: state.exactMatchOnly)
+                    if !state.exactMatchOnly { self.errorText = error.localizedDescription }
                 }
             }
         }
@@ -177,6 +387,7 @@ extension OpenClawChatViewModel {
         let baselineEffectiveFastMode = self.currentSessionEntry()?.effectiveFastMode
         guard baselineFastMode != next else { return }
 
+        self.errorText = nil
         if self.acceptedFastModesByTarget[target] == nil {
             self.acceptedFastModesByTarget[target] = FastModeState(
                 override: baselineFastMode,
@@ -225,6 +436,7 @@ extension OpenClawChatViewModel {
                         effective: accepted?.effective,
                         sessionKey: state.key,
                         exactMatchOnly: state.exactMatchOnly)
+                    if !state.exactMatchOnly { self.errorText = error.localizedDescription }
                 }
             }
         }

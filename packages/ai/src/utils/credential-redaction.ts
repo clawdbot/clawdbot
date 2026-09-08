@@ -1,5 +1,6 @@
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { extractBalancedJsonFragments, stableStringify } from "@openclaw/normalization-core";
+import { parseRetryAfterHeadersSeconds } from "../internal/retry-after.js";
 
 const NON_CREDENTIAL_FIELD_NAMES = new Set([
   "passwordfile",
@@ -46,8 +47,7 @@ function normalizeDiagnosticFieldName(value: string): string {
   return value.toLowerCase().replaceAll(/[^a-z0-9]/g, "");
 }
 
-function isCredentialFieldName(key: string): boolean {
-  const normalized = normalizeDiagnosticFieldName(key);
+function isCredentialFieldName(normalized: string): boolean {
   if (!normalized || NON_CREDENTIAL_FIELD_NAMES.has(normalized)) {
     return false;
   }
@@ -114,10 +114,10 @@ export type DiagnosticProjectionPolicy = {
 
 function extractDiagnosticMediaField(
   key: string,
+  normalized: string,
   value: unknown,
   parentMedia: boolean,
 ): DiagnosticMediaField | undefined {
-  const normalized = normalizeDiagnosticFieldName(key);
   const privateField = normalized === "b64json";
   const mediaField = MEDIA_FIELD_NAME_RE.test(normalized) || MEDIA_WRAPPER_NAME_RE.test(key);
   const contextualPayload = parentMedia && MEDIA_PAYLOAD_SUFFIX_RE.test(normalized);
@@ -171,6 +171,15 @@ export function projectDiagnosticValue(
       state.changed = true;
       return "[Truncated]";
     }
+    try {
+      // Brand-check without provider getters; retain only numeric retry timing.
+      Headers.prototype.has.call(value, "retry-after");
+      const seconds = parseRetryAfterHeadersSeconds(value);
+      state.changed = true;
+      return seconds === undefined ? {} : { "retry-after-ms": seconds * 1000 };
+    } catch {
+      // Other objects follow the bounded descriptor walk below.
+    }
     const keys = Reflect.ownKeys(value).slice(0, 65);
     const descriptors = Object.fromEntries(
       keys.slice(0, 64).flatMap((key) => {
@@ -184,20 +193,22 @@ export function projectDiagnosticValue(
     const rawName =
       typeof descriptors.name?.value === "string" ? descriptors.name.value : descriptors.key?.value;
     const redactValueField =
-      keys.length > 64 || (typeof rawName === "string" && isCredentialFieldName(rawName));
+      keys.length > 64 ||
+      (typeof rawName === "string" && isCredentialFieldName(normalizeDiagnosticFieldName(rawName)));
     const redactMedia = mediaPayload || keys.length > 64 || isDiagnosticMediaPayload(descriptors);
     for (const [key, descriptor] of Object.entries(descriptors)) {
       if (
         !("value" in descriptor) ||
         (!descriptor.enumerable &&
           (policy.propertyScope === "enumerable" ||
-            !["cause", "message", "name", "stack"].includes(key))) ||
+            !["cause", "errors", "message", "name", "stack"].includes(key))) ||
         key === "length"
       ) {
         continue;
       }
       const child = descriptor.value;
-      if (policy.omitField?.(key) || isCredentialFieldName(key)) {
+      const normalized = policy.omitField?.(key) ? undefined : normalizeDiagnosticFieldName(key);
+      if (normalized === undefined || isCredentialFieldName(normalized)) {
         state.changed = true;
         continue;
       }
@@ -206,7 +217,7 @@ export function projectDiagnosticValue(
         state.changed = true;
         continue;
       }
-      const media = extractDiagnosticMediaField(key, child, redactMedia);
+      const media = extractDiagnosticMediaField(key, normalized, child, redactMedia);
       if (media?.kind === "redacted") {
         const redacted =
           media.bytes === undefined ? "<redacted>" : { redacted: "<redacted>", bytes: media.bytes };

@@ -24,7 +24,7 @@ describe("scoped session access providers", () => {
       allowed: false,
       status: "forbidden",
       error:
-        "Session history visibility is restricted. Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access; use tools.agentToAgent.allow to restrict permitted agent pairs.",
+        "Session history visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access; use tools.agentToAgent to restrict permitted agent pairs.",
     });
   });
 
@@ -141,7 +141,7 @@ describe("scoped session access providers", () => {
       allowed: false,
       status: "forbidden",
       error:
-        "Session history visibility is restricted. Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access; use tools.agentToAgent.allow to restrict permitted agent pairs.",
+        "Session history visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access; use tools.agentToAgent to restrict permitted agent pairs.",
     });
   });
 
@@ -159,7 +159,7 @@ describe("scoped session access providers", () => {
       allowed: false,
       status: "forbidden",
       error:
-        "Session send visibility is restricted. Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access; use tools.agentToAgent.allow to restrict permitted agent pairs.",
+        "Session send visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access; use tools.agentToAgent to restrict permitted agent pairs.",
     });
   });
 
@@ -265,6 +265,38 @@ describe("scoped session access providers", () => {
     } finally {
       unregister();
     }
+  });
+});
+
+describe("createAgentToAgentPolicy allow list", () => {
+  it.each([
+    { name: "omitted", agentToAgent: {} },
+    { name: "empty", agentToAgent: { allow: [] } },
+  ])(
+    "allows every agent pair by default with an $name allow list unless explicitly disabled",
+    ({ agentToAgent }) => {
+      const enabled = createAgentToAgentPolicy({
+        tools: { agentToAgent },
+      });
+      expect(enabled.enabled).toBe(true);
+      expect(enabled.matchesAllow("ops")).toBe(true);
+      expect(enabled.isAllowed("main", "ops")).toBe(true);
+
+      const disabled = createAgentToAgentPolicy({
+        tools: { agentToAgent: { ...agentToAgent, enabled: false } },
+      });
+      expect(disabled.enabled).toBe(false);
+      expect(disabled.isAllowed("main", "ops")).toBe(false);
+    },
+  );
+
+  it("requires both requester and target to match a configured allow entry", () => {
+    const policy = createAgentToAgentPolicy({
+      tools: { agentToAgent: { enabled: true, allow: ["main"] } },
+    });
+    expect(policy.isAllowed("main", "ops")).toBe(false);
+    expect(policy.isAllowed("ops", "main")).toBe(false);
+    expect(policy.isAllowed("main", "main")).toBe(true);
   });
 });
 

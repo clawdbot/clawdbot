@@ -9,13 +9,14 @@ import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-m
 // per-load salt, so the palette (and with it sprite geometry like the sleeping
 // eye peek) varies per test process. Pin a canonical look so pose assertions
 // stay deterministic.
-vi.mock("../../components/lobster-pet.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../components/lobster-pet.ts")>();
+vi.mock("../../components/lobster-pet-look.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../components/lobster-pet-look.ts")>();
+  const { LOBSTER_PET_PALETTES } = await import("../../components/lobster-pet-palettes.ts");
   return {
     ...actual,
     createLobsterPetLook: () =>
       actual.canonicalLobsterLook(
-        expectDefined(actual.LOBSTER_PET_PALETTES[0], "canonical lobster palette"),
+        expectDefined(LOBSTER_PET_PALETTES[0], "canonical lobster palette"),
       ),
   };
 });

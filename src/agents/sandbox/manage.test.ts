@@ -3,6 +3,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let listSandboxBrowsers: typeof import("./manage.js").listSandboxBrowsers;
+let removeSandboxContainer: typeof import("./manage.js").removeSandboxContainer;
 let removeSandboxBrowserContainer: typeof import("./manage.js").removeSandboxBrowserContainer;
 let BROWSER_BRIDGES: typeof import("./browser-bridges.js").BROWSER_BRIDGES;
 
@@ -56,7 +57,8 @@ vi.mock("./docker-backend.js", () => ({
 
 beforeAll(async () => {
   ({ BROWSER_BRIDGES } = await import("./browser-bridges.js"));
-  ({ listSandboxBrowsers, removeSandboxBrowserContainer } = await import("./manage.js"));
+  ({ listSandboxBrowsers, removeSandboxContainer, removeSandboxBrowserContainer } =
+    await import("./manage.js"));
 });
 
 function firstDescribeRuntimeInput(): { agentId?: string; entry?: { configLabelKind?: string } } {
@@ -181,6 +183,27 @@ describe("listSandboxBrowsers", () => {
     expect(removeInput?.entry?.runtimeLabel).toBe("browser-1");
     expect(removeInput?.entry?.backendId).toBe("docker");
     expect(registryMocks.removeBrowserRegistryEntry).toHaveBeenCalledWith("browser-1");
+  });
+
+  it("preserves a sandbox registry entry when its backend plugin is unavailable", async () => {
+    registryMocks.readRegistry.mockResolvedValue({
+      entries: [
+        {
+          containerName: "openshell-1",
+          backendId: "openshell",
+          runtimeLabel: "openshell-1",
+          sessionKey: "agent:coder:main",
+          createdAtMs: 1,
+          lastUsedAtMs: 1,
+          image: "openclaw",
+        },
+      ],
+    });
+
+    await expect(removeSandboxContainer("openshell-1")).rejects.toThrow(
+      'Sandbox backend "openshell" is unavailable',
+    );
+    expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
   });
 
   it("retains the exact bridge owner when cleanup fails", async () => {

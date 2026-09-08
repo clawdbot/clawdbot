@@ -22,6 +22,7 @@ const sendSmsViaTwilio = vi.hoisted(() =>
     return { sid: `SM-${to}`, to };
   }),
 );
+const assertSmsCredentialOwnerAvailable = vi.hoisted(() => vi.fn());
 const hostedMediaMocks = vi.hoisted(() => {
   const cleanup = vi.fn(async () => undefined);
   return {
@@ -39,6 +40,7 @@ vi.mock("./twilio.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./twilio.js")>()),
   sendSmsViaTwilio,
 }));
+vi.mock("./credential-availability.js", () => ({ assertSmsCredentialOwnerAvailable }));
 vi.mock("./media.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./media.js")>()),
   prepareHostedSmsMedia: hostedMediaMocks.prepare,
@@ -57,6 +59,7 @@ vi.mock("./runtime.js", async (importOriginal) => ({
 }));
 
 beforeEach(() => {
+  assertSmsCredentialOwnerAvailable.mockReset();
   sendSmsViaTwilio.mockReset();
   sendSmsViaTwilio.mockImplementation(async ({ to, onPlatformSendDispatch }) => {
     await onPlatformSendDispatch?.();
@@ -405,6 +408,23 @@ describe("sendSmsTextChunks", () => {
 });
 
 describe("sendSmsMedia", () => {
+  it("rejects a cold owner before hosted-media staging", async () => {
+    assertSmsCredentialOwnerAvailable.mockImplementationOnce(() => {
+      throw new Error("SMS credential owner unavailable");
+    });
+
+    await expect(
+      prepareSmsMediaAttempt({
+        account: createAccount(1500),
+        text: "photo",
+        mediaUrl: "/tmp/photo.jpg",
+        mediaLocalRoots: ["/tmp"],
+      }),
+    ).rejects.toThrow("SMS credential owner unavailable");
+
+    expect(hostedMediaMocks.prepare).not.toHaveBeenCalled();
+  });
+
   it("preserves existing pre-dispatch proof from hosted-media staging", async () => {
     const rejection = new PlatformMessageNotDispatchedError("unsupported hosted media", {
       cause: new Error("unsupported content type"),

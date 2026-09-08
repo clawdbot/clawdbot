@@ -109,7 +109,7 @@ function mockBatchEmbeddingFetch(count: number) {
 async function embedTestQuery(overrides: Partial<EmbeddingProviderOptions> = {}, query = "hello") {
   const fetchMock = mockEmbeddingFetch([1, 0]);
   const { provider } = await createEmbeddingProvider(overrides);
-  await provider.embedQuery(query);
+  await provider.embed(query, { inputType: "query" });
   return { fetchMock, provider };
 }
 
@@ -126,12 +126,6 @@ function readEmbeddingRequestBody(init: RequestInit | undefined): { input?: unkn
     throw new Error("expected JSON string request body");
   }
   return JSON.parse(init.body) as { input?: unknown };
-}
-
-function readFirstEmbeddingInput(fetchMock: ReturnType<typeof mockEmbeddingFetch>): unknown {
-  const init = firstFetchInit(fetchMock);
-  const body = readEmbeddingRequestBody(init);
-  return body.input;
 }
 
 function firstGuardedFetchCall(): Record<string, unknown> {
@@ -167,7 +161,7 @@ describe("ollama embedding provider", () => {
 
     const { provider } = await createEmbeddingProvider({ model: "unknown-embedder" });
 
-    const vector = await provider.embedQuery("hi");
+    const vector = await provider.embed("hi", { inputType: "query" });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expectEmbeddingFetch(fetchMock, "http://127.0.0.1:11434/api/embed", {
@@ -183,10 +177,10 @@ describe("ollama embedding provider", () => {
 
     const { provider } = await createEmbeddingProvider({
       model: "unknown-embedder",
-      outputDimensionality: 2,
+      dimensions: 2,
     });
 
-    const vector = await provider.embedQuery("hi");
+    const vector = await provider.embed("hi", { inputType: "query" });
 
     expect(vector).toHaveLength(2);
     expect(vector[0]).toBeCloseTo(0.6, 5);
@@ -445,7 +439,7 @@ describe("ollama embedding provider", () => {
 
     let error: unknown;
     try {
-      await provider.embedQuery("hello");
+      await provider.embed("hello", { inputType: "query" });
     } catch (err) {
       error = err;
     }
@@ -467,7 +461,7 @@ describe("ollama embedding provider", () => {
 
     const { provider } = await createEmbeddingProvider();
 
-    await expect(provider.embedQuery("hello")).rejects.toThrow(
+    await expect(provider.embed("hello", { inputType: "query" })).rejects.toThrow(
       "Ollama embed response: malformed JSON response",
     );
   });
@@ -484,7 +478,7 @@ describe("ollama embedding provider", () => {
 
     const { provider } = await createEmbeddingProvider();
 
-    await expect(provider.embedQuery("hello")).rejects.toThrow(
+    await expect(provider.embed("hello", { inputType: "query" })).rejects.toThrow(
       "Ollama embed response: JSON response exceeds 16777216 bytes",
     );
 
@@ -503,44 +497,82 @@ describe("ollama embedding provider", () => {
 
     const { provider } = await createEmbeddingProvider();
 
-    await expect(provider.embedQuery("hello")).rejects.toThrow(
+    await expect(provider.embed("hello", { inputType: "query" })).rejects.toThrow(
       "Ollama embed response contains a non-number embedding value",
     );
   });
 
-  it("uses a retrieval query prefix for qwen3 embedding queries", async () => {
-    const { fetchMock } = await embedTestQuery({ model: "qwen3-embedding:0.6b" }, "怀孕");
+  it.each([
+    {
+      name: "bare qwen",
+      model: "qwen3-embedding:0.6b",
+      query: "怀孕",
+      expected:
+        "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:怀孕",
+    },
+    {
+      name: "namespaced qwen",
+      model: "library/qwen3-embedding:0.6b",
+      query: "怀孕",
+      expected:
+        "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:怀孕",
+    },
+    {
+      name: "registry-qualified qwen",
+      model: "registry.ollama.ai/library/qwen3-embedding:0.6b",
+      query: "怀孕",
+      expected:
+        "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:怀孕",
+    },
+    {
+      name: "bare nomic",
+      model: "nomic-embed-text",
+      query: "What does $& mean?",
+      expected: "search_query: What does $& mean?",
+    },
+    {
+      name: "namespaced nomic",
+      model: "library/nomic-embed-text:latest",
+      query: "What does $& mean?",
+      expected: "search_query: What does $& mean?",
+    },
+    {
+      name: "bare mixedbread",
+      model: "mxbai-embed-large:latest",
+      query: "capital of Australia",
+      expected: "Represent this sentence for searching relevant passages: capital of Australia",
+    },
+    {
+      name: "namespaced mixedbread",
+      model: "mixedbread/mxbai-embed-large:latest",
+      query: "capital of Australia",
+      expected: "Represent this sentence for searching relevant passages: capital of Australia",
+    },
+    {
+      name: "unknown namespaced model",
+      model: "custom/unknown-embedder:latest",
+      query: "unmodified query",
+      expected: "unmodified query",
+    },
+  ])("uses the correct retrieval query for $name", async ({ model, query, expected }) => {
+    const { fetchMock } = await embedTestQuery({ model }, query);
 
-    expect(readFirstEmbeddingInput(fetchMock)).toBe(
-      "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:怀孕",
-    );
+    expectEmbeddingFetch(fetchMock, "http://127.0.0.1:11434/api/embed", {
+      model,
+      input: expected,
+    });
   });
 
-  it("uses the nomic search_query prefix for query embeddings", async () => {
-    const { fetchMock } = await embedTestQuery({}, "What does $& mean?");
+  it.each(["qwen3-embedding:0.6b", "library/qwen3-embedding:0.6b"])(
+    "keeps document batch embeddings raw for %s",
+    async (model) => {
+      const { inputs } = mockBatchEmbeddingFetch(2);
+      const { provider } = await createEmbeddingProvider({ model });
 
-    expect(readFirstEmbeddingInput(fetchMock)).toBe("search_query: What does $& mean?");
-  });
-
-  it("uses the mixedbread retrieval prompt for query embeddings", async () => {
-    const { fetchMock } = await embedTestQuery(
-      { model: "mxbai-embed-large:latest" },
-      "capital of Australia",
-    );
-
-    expect(readFirstEmbeddingInput(fetchMock)).toBe(
-      "Represent this sentence for searching relevant passages: capital of Australia",
-    );
-  });
-
-  it("keeps document batch embeddings raw", async () => {
-    const { inputs } = mockBatchEmbeddingFetch(2);
-
-    const { provider } = await createEmbeddingProvider({ model: "qwen3-embedding:0.6b" });
-
-    await expect(provider.embedBatch(["doc one", "doc two"])).resolves.toHaveLength(2);
-    expect(inputs).toEqual([["doc one", "doc two"]]);
-  });
+      await expect(provider.embedBatch(["doc one", "doc two"])).resolves.toHaveLength(2);
+      expect(inputs).toEqual([["doc one", "doc two"]]);
+    },
+  );
 
   it("uses custom Ollama provider config and strips that provider prefix", async () => {
     const release = vi.fn();
@@ -610,7 +642,7 @@ describe("ollama embedding provider", () => {
       acquireLocalService,
     });
 
-    await expect(provider.embedQuery("hello")).resolves.toEqual([1, 0]);
+    await expect(provider.embed("hello", { inputType: "query" })).resolves.toEqual([1, 0]);
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(acquireLocalService).not.toHaveBeenCalled();
   });
@@ -841,10 +873,10 @@ describe("ollama embedding provider", () => {
   });
 
   it("preserves the legacy identity only for the default Ollama endpoint", async () => {
-    const defaultEndpoint = await createMemoryEmbeddingProvider({ outputDimensionality: 2 });
+    const defaultEndpoint = await createMemoryEmbeddingProvider({ dimensions: 2 });
     const customEndpoint = await createMemoryEmbeddingProvider({
       remote: { baseUrl: "http://10.0.0.5:11434" },
-      outputDimensionality: 2,
+      dimensions: 2,
     });
 
     expect(defaultEndpoint.runtime?.cacheKeyData).toEqual({
@@ -880,7 +912,7 @@ describe("ollama embedding provider", () => {
       model: "qwen3-embedding:4b",
     });
 
-    await result.provider!.embedQuery("hello");
+    await result.provider!.embed("hello", { inputType: "query" });
     expectEmbeddingFetch(fetchMock, "https://ollama-cpu.home.lab/api/embed", {
       model: "qwen3-embedding:4b",
       input:

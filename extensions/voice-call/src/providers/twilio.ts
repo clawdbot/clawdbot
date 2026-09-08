@@ -180,8 +180,9 @@ export class TwilioProvider implements VoiceCallProvider {
     this.activeStreamCalls.add(callSid);
   }
 
-  hasRegisteredStream(callSid: string): boolean {
-    return this.callStreamMap.has(callSid);
+  hasRegisteredStream(callSid: string, streamSid?: string): boolean {
+    const current = this.callStreamMap.get(callSid);
+    return current !== undefined && (streamSid === undefined || current === streamSid);
   }
 
   unregisterCallStream(callSid: string, streamSid?: string): void {

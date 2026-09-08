@@ -1,20 +1,22 @@
 // Stores and resolves the last TUI session per workspace.
 import { createHash } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty as normalizeMarker } from "@openclaw/normalization-core/string-coerce";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  writeConfigMachineState,
+  updateConfigMachineState,
+} from "../state/config-machine-state-write.js";
+import { readConfigMachineStateWithMetadata } from "../state/config-machine-state.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type { TuiSessionList } from "./tui-backend.js";
 import type { SessionScope } from "./tui-types.js";
 
-type TuiLastSessionDatabase = Pick<OpenClawStateKyselyDatabase, "tui_last_sessions">;
+type TuiLastSessionDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;
+
+const TUI_LAST_SESSION_STATE_KEY_PREFIX = "tui.lastSession.";
 
 function stateDatabaseOptions(stateDir?: string) {
   return stateDir
@@ -62,24 +64,12 @@ export async function readTuiLastSessionKey(params: {
   scopeKey: string;
   stateDir?: string;
 }): Promise<string | null> {
-  const options = stateDatabaseOptions(params.stateDir);
-  // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      if (!tableExists(db, "tui_last_sessions")) {
-        return null;
-      }
-      const row = executeSqliteQueryTakeFirstSync(
-        db,
-        getNodeSqliteKysely<TuiLastSessionDatabase>(db)
-          .selectFrom("tui_last_sessions")
-          .select("session_key")
-          .where("scope_key", "=", params.scopeKey),
-      );
-      const sessionKey = row?.session_key.trim() ?? "";
-      return sessionKey && !isHeartbeatSessionKey(sessionKey) ? sessionKey : null;
-    }, options) ?? null
+  const sessionKey = readConfigMachineStateWithMetadata<string>(
+    `${TUI_LAST_SESSION_STATE_KEY_PREFIX}${params.scopeKey}`,
+    stateDatabaseOptions(params.stateDir),
   );
+  const rememberedKey = sessionKey?.value.trim() ?? "";
+  return rememberedKey && !isHeartbeatSessionKey(rememberedKey) ? rememberedKey : null;
 }
 
 /** Writes the remembered session key unless it is empty, unknown, or heartbeat-owned. */
@@ -92,26 +82,11 @@ export async function writeTuiLastSessionKey(params: {
   if (!sessionKey || sessionKey === "unknown" || isHeartbeatSessionKey(sessionKey)) {
     return;
   }
-  const updatedAt = Date.now();
-  runOpenClawStateWriteTransaction(({ db }) => {
-    const tuiDb = getNodeSqliteKysely<TuiLastSessionDatabase>(db);
-    executeSqliteQuerySync(
-      db,
-      tuiDb
-        .insertInto("tui_last_sessions")
-        .values({
-          scope_key: params.scopeKey,
-          session_key: sessionKey,
-          updated_at: updatedAt,
-        })
-        .onConflict((conflict) =>
-          conflict.column("scope_key").doUpdateSet({
-            session_key: sessionKey,
-            updated_at: updatedAt,
-          }),
-        ),
-    );
-  }, stateDatabaseOptions(params.stateDir));
+  writeConfigMachineState(
+    `${TUI_LAST_SESSION_STATE_KEY_PREFIX}${params.scopeKey}`,
+    sessionKey,
+    stateDatabaseOptions(params.stateDir),
+  );
 }
 
 /**
@@ -151,15 +126,49 @@ export function clearTuiLastSessionPointers(params: {
   if (params.sessionKeys.size === 0) {
     return 0;
   }
-  return runOpenClawStateWriteTransaction(({ db }) => {
-    const result = executeSqliteQuerySync(
+  const options = stateDatabaseOptions(params.stateDir);
+  const matchingKeys = withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+    const rows = executeSqliteQuerySync(
       db,
       getNodeSqliteKysely<TuiLastSessionDatabase>(db)
-        .deleteFrom("tui_last_sessions")
-        .where("session_key", "in", [...params.sessionKeys]),
-    );
-    return Number(result.numAffectedRows ?? 0n);
-  }, stateDatabaseOptions(params.stateDir));
+        .selectFrom("config_machine_state")
+        .select(["state_key", "value_json"])
+        .where("state_key", "like", `${TUI_LAST_SESSION_STATE_KEY_PREFIX}%`),
+    ).rows;
+    return rows.flatMap((row) => {
+      const sessionKey: unknown = JSON.parse(row.value_json);
+      return typeof sessionKey === "string" && params.sessionKeys.has(sessionKey)
+        ? [row.state_key]
+        : [];
+    });
+  }, options);
+  return (matchingKeys ?? []).reduce(
+    (cleared, stateKey) =>
+      cleared + Number(clearTuiPointerIfRetired(stateKey, params.sessionKeys, options)),
+    0,
+  );
+}
+
+// Compare-and-delete inside the write transaction: a live replacement pointer
+// written after the read-only scan must survive doctor cleanup.
+function clearTuiPointerIfRetired(
+  stateKey: string,
+  retiredSessionKeys: ReadonlySet<string>,
+  options: OpenClawStateDatabaseOptions,
+): boolean {
+  let cleared = false;
+  updateConfigMachineState<string>(
+    stateKey,
+    (current) => {
+      if (typeof current === "string" && retiredSessionKeys.has(current)) {
+        cleared = true;
+        return undefined;
+      }
+      return current;
+    },
+    options,
+  );
+  return cleared;
 }
 
 /** Resolves a remembered key to a currently listed session for the active agent. */

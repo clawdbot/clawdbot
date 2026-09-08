@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw dashboard` (securely open the Control UI)"
 read_when:
   - You want to open or re-pair the Control UI from the Gateway host
   - You want to print the URL without launching a browser
-title: "Dashboard"
+title: "Dashboard CLI"
 ---
 
 # `openclaw dashboard`
@@ -23,6 +23,21 @@ openclaw dashboard --yes
 - `--no-open`: print the URL but do not launch a browser.
 - `--json`: print one machine-readable connection object without opening a browser, using the clipboard, prompting, or starting the Gateway.
 - `--yes`: start/install the Gateway without prompting when needed.
+
+## Gateway service and state compatibility
+
+The OpenClaw CLI and the background Gateway service are separate. A service-installation
+prompt refers to the background service for the selected profile; it does not mean the
+CLI is missing. The dashboard needs a running Gateway, which can also run in a terminal.
+
+If the configured port is busy but its Gateway handshake cannot be verified, the dashboard
+reports the failed probe and does not offer to start another service. Run
+`openclaw gateway status --deep` to inspect the listener and repair its connection.
+
+A newer database schema warning means this build cannot read the existing state. Use a
+compatible build with that state. To start fresh, point `OPENCLAW_STATE_DIR` at a separate
+directory. Installing the background service does not resolve a database version mismatch. See
+[database compatibility](/reference/database-schemas#troubleshooting).
 
 ## Machine-readable output
 
@@ -45,6 +60,9 @@ Notes:
 - `browserUrl` carries a single-use, ten-minute bootstrap in the URL fragment. The Control UI strips
   it immediately, binds it to the browser's signed device identity, and stores only the resulting
   administrator per-device credential. Another browser profile cannot inherit or replay that grant.
+- The pairing link includes its Gateway destination. If another Gateway is selected in the browser,
+  confirm the destination before pairing; canceling keeps the existing selection. This also applies
+  when a Gateway update reloads the dashboard before pairing completes.
 - Follows `gateway.tls.enabled`: TLS-enabled gateways print/open `https://` Control UI URLs and connect over `wss://`.
 - For `lan` or a wildcard `custom` bind, same-host launches always use loopback because a wildcard is not a browser destination. Plaintext `tailnet` and `custom` binds also use `127.0.0.1` so the browser has a secure context; TLS-enabled specific hosts keep the configured address so certificate names match.
 - Before delivering an authenticated loopback URL for a specific-interface bind, the command probes the configured interface and verifies that it and `127.0.0.1` are owned by the same Gateway process. Ambiguous listener ownership fails closed with status guidance.

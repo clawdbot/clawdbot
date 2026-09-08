@@ -3,19 +3,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import YAML from "yaml";
 import type { CommandOptions } from "../process/exec.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
   listMissingRequiredPlatformPackages,
   repairManagedNpmRootOpenClawPeer,
-  removeManagedNpmRootDependency,
   readManagedNpmRootInstalledDependency,
   readOpenClawManagedNpmRootOverrides,
   resolveManagedNpmRootDependencySpec,
-  restoreManagedNpmRootPeerDependencySnapshot,
   syncManagedNpmRootPeerDependencies,
   upsertManagedNpmRootDependency,
 } from "./npm-managed-root.js";
@@ -77,17 +75,6 @@ async function expectPathMissing(targetPath: string): Promise<void> {
     return;
   }
   throw new Error(`Expected path to be missing: ${targetPath}`);
-}
-
-function requireFirstMockCall<T extends unknown[]>(
-  mock: { mock: { calls: T[] } },
-  label: string,
-): T {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
 }
 
 function requireCommandOptions(
@@ -161,6 +148,73 @@ describe("managed npm root", () => {
         .toSorted((left, right) => left.packagePath.localeCompare(right.packagePath)),
     );
   });
+
+  it.each([
+    { installedState: "missing package manifest", expectedMissing: true },
+    { installedState: "invalid package manifest", expectedMissing: true },
+    { installedState: "missing native executable", expectedMissing: true },
+    {
+      installedState: "non-executable native executable",
+      expectedMissing: process.platform !== "win32",
+    },
+    { installedState: "installed native executable", expectedMissing: false },
+  ])(
+    "validates current-platform package contents: $installedState",
+    async ({ installedState, expectedMissing }) => {
+      const npmRoot = await makeTempRoot();
+      const platformPackage = "@vendor/tool-platform";
+      const canonicalPackage = "@vendor/tool";
+      const packagePath = path.join(npmRoot, "node_modules", ...platformPackage.split("/"));
+      await fs.mkdir(packagePath, { recursive: true });
+      await fs.writeFile(
+        path.join(npmRoot, "package-lock.json"),
+        JSON.stringify({
+          lockfileVersion: 3,
+          packages: {
+            "": {},
+            [`node_modules/${canonicalPackage}`]: {
+              bin: { tool: "bin/tool.js" },
+            },
+            [`node_modules/${platformPackage}`]: {
+              name: canonicalPackage,
+              optional: true,
+              os: [process.platform],
+              cpu: [process.arch],
+            },
+          },
+        }),
+      );
+
+      if (installedState === "invalid package manifest") {
+        await fs.writeFile(path.join(packagePath, "package.json"), "{", "utf8");
+      } else if (installedState !== "missing package manifest") {
+        await fs.writeFile(
+          path.join(packagePath, "package.json"),
+          JSON.stringify({ name: canonicalPackage, version: "1.0.0-platform", files: ["vendor"] }),
+        );
+        const nativeBinDir = path.join(packagePath, "vendor", "current-platform", "bin");
+        await fs.mkdir(nativeBinDir, { recursive: true });
+        await fs.writeFile(path.join(nativeBinDir, "tool-helper"), "helper", "utf8");
+        if (
+          installedState === "installed native executable" ||
+          installedState === "non-executable native executable"
+        ) {
+          const executableName = process.platform === "win32" ? "tool.exe" : "tool";
+          await fs.writeFile(path.join(nativeBinDir, executableName), "native executable", {
+            encoding: "utf8",
+            mode: installedState === "installed native executable" ? 0o755 : 0o644,
+          });
+        }
+      }
+
+      await expect(
+        listMissingRequiredPlatformPackages({
+          npmRoot,
+          requiredPackageNames: [platformPackage],
+        }),
+      ).resolves.toEqual(expectedMissing ? [{ name: platformPackage, packagePath }] : []);
+    },
+  );
 
   it("keeps existing plugin dependencies when adding another managed plugin", async () => {
     const npmRoot = await makeTempRoot();
@@ -269,7 +323,7 @@ describe("managed npm root", () => {
       npmRoot,
       packageName: "@openclaw/feishu",
       dependencySpec: "2026.5.4",
-      overrideOmissions: { npmAliases: true },
+      omitNpmAliasOverrides: true,
       managedOverrides: {
         axios: "1.18.0",
         "node-domexception": "npm:@nolyfill/domexception@1.0.28",
@@ -480,69 +534,6 @@ describe("managed npm root", () => {
     });
   });
 
-  it("realigns restored managed peer pins with manifest overrides", async () => {
-    const npmRoot = await makeTempRoot();
-    await fs.writeFile(
-      path.join(npmRoot, "package.json"),
-      `${JSON.stringify(
-        {
-          private: true,
-          dependencies: {
-            plugin: "1.0.0",
-            "runtime-peer": "4.12.18",
-          },
-          overrides: {
-            "runtime-peer": "4.12.18",
-          },
-          openclaw: {
-            managedOverrides: ["runtime-peer"],
-            managedPeerDependencies: ["runtime-peer"],
-          },
-        },
-        null,
-        2,
-      )}\n`,
-    );
-
-    await restoreManagedNpmRootPeerDependencySnapshot({
-      npmRoot,
-      snapshot: {
-        dependencies: { "runtime-peer": "4.12.23" },
-        managedPeerDependencies: ["runtime-peer"],
-      },
-    });
-
-    await expect(
-      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
-    ).resolves.toEqual({
-      private: true,
-      dependencies: {
-        plugin: "1.0.0",
-        "runtime-peer": "4.12.18",
-      },
-      overrides: {
-        "runtime-peer": "4.12.18",
-      },
-      openclaw: {
-        managedOverrides: ["runtime-peer"],
-        managedPeerDependencies: ["runtime-peer"],
-      },
-    });
-  });
-
-  it("reads workspace pnpm overrides for managed plugin installs", async () => {
-    const workspace = YAML.parse(
-      await fs.readFile(path.resolve(process.cwd(), "pnpm-workspace.yaml"), "utf8"),
-    ) as { overrides?: Record<string, unknown> };
-    const expectedOverrides = workspace.overrides ?? {};
-
-    expect(expectedOverrides).toMatchObject({
-      axios: "1.18.1",
-      "node-domexception": "npm:@nolyfill/domexception@1.0.28",
-    });
-    await expect(readOpenClawManagedNpmRootOverrides()).resolves.toEqual(expectedOverrides);
-  });
-
   it("resolves workspace pnpm overrides from packaged dist chunks", async () => {
     const packageRoot = await makeTempRoot();
     await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
@@ -571,7 +562,7 @@ describe("managed npm root", () => {
     });
   });
 
-  it("resolves npm override dependency references from the host package manifest", async () => {
+  it("normalizes workspace overrides before managed npm use", async () => {
     const packageRoot = await makeTempRoot();
     await fs.writeFile(
       path.join(packageRoot, "package.json"),
@@ -594,8 +585,15 @@ describe("managed npm root", () => {
       path.join(packageRoot, "pnpm-workspace.yaml"),
       [
         "overrides:",
+        '  "parent@1>child": 2.0.0',
+        '  "parent>@scope/child": 2.0.0',
+        '  "@scope/parent@1>@scope/child": 2.0.0',
+        '  "range-target@>1": 2.0.0',
         '  managed-runtime: "$managed-runtime"',
         "  nested:",
+        '    "parent>child": 2.0.0',
+        '    "range-target@>=1": 2.0.0',
+        '    ".": 1.0.0',
         '    optional-runtime: "$optional-runtime"',
         '    alias: "$node-domexception"',
         "  axios: 1.18.0",
@@ -605,8 +603,11 @@ describe("managed npm root", () => {
     );
 
     await expect(readOpenClawManagedNpmRootOverrides({ packageRoot })).resolves.toEqual({
+      "range-target@>1": "2.0.0",
       "managed-runtime": "3.1024.0",
       nested: {
+        "range-target@>=1": "2.0.0",
+        ".": "1.0.0",
         "optional-runtime": "2.0.0",
         alias: "npm:@nolyfill/domexception@1.0.28",
       },
@@ -796,7 +797,10 @@ describe("managed npm root", () => {
 
     await expect(syncManagedNpmRootPeerDependencies({ npmRoot, runCommand })).resolves.toBe(true);
 
-    const [args, rawOptions] = requireFirstMockCall(runCommand, "npm peer plan command");
+    const [args, rawOptions] = expectDefined(
+      runCommand.mock.calls[0],
+      "npm peer plan command call",
+    );
     const options = requireCommandOptions(rawOptions, "npm peer plan");
     expect(args).toEqual([
       "npm",
@@ -1245,44 +1249,6 @@ describe("managed npm root", () => {
     });
   });
 
-  it("removes one managed dependency without dropping unrelated metadata", async () => {
-    const npmRoot = await makeTempRoot();
-    await fs.writeFile(
-      path.join(npmRoot, "package.json"),
-      `${JSON.stringify(
-        {
-          private: true,
-          dependencies: {
-            "@openclaw/discord": "2026.5.2",
-            "@openclaw/voice-call": "2026.5.2",
-          },
-          devDependencies: {
-            fixture: "1.0.0",
-          },
-        },
-        null,
-        2,
-      )}\n`,
-    );
-
-    await removeManagedNpmRootDependency({
-      npmRoot,
-      packageName: "@openclaw/voice-call",
-    });
-
-    await expect(
-      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
-    ).resolves.toEqual({
-      private: true,
-      dependencies: {
-        "@openclaw/discord": "2026.5.2",
-      },
-      devDependencies: {
-        fixture: "1.0.0",
-      },
-    });
-  });
-
   it("repairs stale managed openclaw peer state without dropping plugin packages", async () => {
     const npmRoot = await makeTempRoot();
     await fs.mkdir(path.join(npmRoot, "node_modules", "openclaw"), { recursive: true });
@@ -1356,7 +1322,10 @@ describe("managed npm root", () => {
     const runCommand = vi.fn().mockResolvedValue(successfulSpawn);
     await expect(repairManagedNpmRootOpenClawPeer({ npmRoot, runCommand })).resolves.toBe(true);
     expect(runCommand).toHaveBeenCalledTimes(1);
-    const [repairArgs, rawRepairOptions] = requireFirstMockCall(runCommand, "repair command");
+    const [repairArgs, rawRepairOptions] = expectDefined(
+      runCommand.mock.calls[0],
+      "repair command call",
+    );
     const repairOptions = requireCommandOptions(rawRepairOptions, "repair");
     expect(repairArgs).toEqual([
       "npm",

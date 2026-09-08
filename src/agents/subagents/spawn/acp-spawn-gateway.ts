@@ -9,6 +9,7 @@ import {
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
 
 export async function launchAcpChildThroughGateway(params: {
+  assertDispatchCurrent?: () => void;
   attachments?: unknown[];
   childIdem: string;
   deliveryPlan: AcpSpawnBootstrapDeliveryPlan;
@@ -20,10 +21,12 @@ export async function launchAcpChildThroughGateway(params: {
   sessionKey: string;
   task: string;
 }) {
+  const promptedAt = Date.now();
   const response = await callSubagentGateway(
     withSubagentGatewayExecutionIdentity(
       {
         method: "agent",
+        assertDispatchCurrent: params.assertDispatchCurrent,
         params: {
           message: params.task,
           sessionKey: params.sessionKey,
@@ -48,10 +51,10 @@ export async function launchAcpChildThroughGateway(params: {
     ),
   );
   recordSessionParticipantBestEffort({
-    actor: { type: "agent", id: params.lineage.parentAgentId },
+    promptedAt,
+    identity: { type: "agent", id: params.lineage.parentAgentId },
     agentId: params.lineage.targetAgentId,
     sessionKey: params.sessionKey,
-    source: "agent",
     storePath: params.participantStorePath,
   });
   return response;

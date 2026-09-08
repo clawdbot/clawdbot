@@ -23,8 +23,8 @@ function issue(overrides: Partial<UiProtocolFreshnessIssue> = {}): UiProtocolFre
   } as UiProtocolFreshnessIssue;
 }
 
-async function createOpenClawRoot(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-ui-"));
+async function createOpenClawRoot(prefix = "openclaw-doctor-ui-"): Promise<string> {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), prefix)));
   tempRoots.push(root);
   await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
   await fs.mkdir(path.join(root, "packages/gateway-protocol/src"), { recursive: true });
@@ -84,6 +84,61 @@ describe("UI protocol freshness health mapping", () => {
       },
     ]);
   });
+
+  it.each([
+    { kind: "missing-assets", field: "message" },
+    { kind: "stale-assets", field: "fixHint" },
+  ] as const)(
+    "runs the $kind manual repair in its source root, not cwd",
+    async ({ kind, field }) => {
+      const root = await createOpenClawRoot("openclaw-doctor-ui-owner's source-");
+      const unrelated = await createOpenClawRoot();
+      for (const directory of [root, unrelated]) {
+        await fs.writeFile(
+          path.join(directory, "package.json"),
+          JSON.stringify({
+            name: "openclaw",
+            private: true,
+            scripts: { "ui:build": "node build.cjs" },
+          }),
+        );
+        await fs.writeFile(
+          path.join(directory, "build.cjs"),
+          'require("node:fs").writeFileSync("built-root.txt", process.cwd());\n',
+        );
+      }
+      await touch(path.join(root, "ui/package.json"), new Date("2026-01-01"));
+      if (kind === "stale-assets") {
+        await touch(path.join(root, "dist/control-ui/index.html"), new Date("2026-01-01"));
+      }
+      const findings = await detectUiProtocolFreshnessIssues({
+        root,
+        cwd: unrelated,
+        collectChangesSinceBuild: async () => ["abc123 protocol changed"],
+      });
+      expect(findings).toHaveLength(1);
+      expect(findings[0]?.kind).toBe(kind);
+      const finding = uiProtocolFreshnessIssueToHealthFinding(findings[0]!);
+      const command = finding[field]?.match(/pnpm [^`\n]+/u)?.[0];
+      expect(command).toBeDefined();
+
+      const windows = process.platform === "win32";
+      execFileSync(
+        windows ? "powershell.exe" : "/bin/sh",
+        windows
+          ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command!]
+          : ["-c", command!],
+        { cwd: unrelated, timeout: 10_000, stdio: "pipe" },
+      );
+
+      await expect(
+        fs.readFile(path.join(unrelated, "built-root.txt"), "utf8"),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(fs.readFile(path.join(root, "built-root.txt"), "utf8")).resolves.toBe(root);
+    },
+  );
 
   it("does not report dry-run effects when UI sources are unavailable", () => {
     expect(uiProtocolFreshnessIssueToRepairEffects(issue({ canBuild: false }))).toEqual([]);

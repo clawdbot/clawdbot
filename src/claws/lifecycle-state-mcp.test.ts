@@ -1,19 +1,35 @@
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readSourceConfigSnapshot } from "../config/io.js";
+import * as configMutate from "../config/mutate.js";
 import { withTempHomeConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  beginAgentDeletionJournal,
+  readAgentDeletionJournal,
+} from "../state/agent-deletion-journal.js";
 import { markClawMcpServerIndependentlyOwned } from "../state/claw-mcp-adoption.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { setTestEnvValue } from "../test-utils/env.js";
 import { applyClawAddPlan } from "./add.js";
+import { quiescentClawMonitorGateway } from "./lifecycle-remove.test-support.js";
 import { applyClawRemovePlan, buildClawRemovePlan } from "./lifecycle-state.js";
 import { buildClawAddPlan } from "./lifecycle.js";
-import { installClawMcpServers } from "./mcp.js";
+import { installClawMcpServers, readClawMcpServerRefsByName } from "./mcp.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => closeOpenClawStateDatabaseForTest());
+afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+});
 
 const sourceServer = {
   command: "uvx",
@@ -84,6 +100,133 @@ async function recordManagedMcp(current: Awaited<ReturnType<typeof addMcpFixture
 }
 
 describe("Claw MCP removal", () => {
+  it.each(["config publication", "unset settlement"] as const)(
+    "preserves MCP state after deletion takeover during %s",
+    async (boundary) => {
+      const current = await addMcpFixture();
+      await recordManagedMcp(current);
+      const config = structuredClone(current.getConfig());
+      config.agents = { ...config.agents, ownership: "explicit" };
+      for (const entry of Object.values(config.agents.entries ?? {})) {
+        delete entry.default;
+      }
+      config.mcp = { servers: { docs: sourceServer } };
+      await withTempHomeConfig(config, async ({ configPath }) => {
+        const snapshot = await readSourceConfigSnapshot();
+        expect(snapshot.valid, JSON.stringify(snapshot.issues)).toBe(true);
+        const refs = readClawMcpServerRefsByName("docs", { env: current.env });
+        const plan = await buildClawRemovePlan("worker", {
+          env: current.env,
+          config,
+          sourceMcpServers: { docs: sourceServer },
+        });
+        let replaced = false;
+        const replaceOwner = () => {
+          const entry = readAgentDeletionJournal("worker", { env: current.env });
+          expect(entry).toBeDefined();
+          if (!entry) {
+            throw new Error("expected active deletion journal");
+          }
+          beginAgentDeletionJournal({ ...entry, operationId: "replacement" }, { env: current.env });
+          replaced = true;
+        };
+        const replace = configMutate.replaceConfigFile;
+        const writeSpy = vi
+          .spyOn(configMutate, "replaceConfigFile")
+          .mockImplementation(async (params) => {
+            replaceOwner();
+            return await replace(params);
+          });
+        try {
+          await expect(
+            applyClawRemovePlan(plan, {
+              env: current.env,
+              config,
+              sourceMcpServers: { docs: sourceServer },
+              consentPlanIntegrity: plan.planIntegrity,
+              monitorGateway: quiescentClawMonitorGateway,
+              ...(boundary === "unset settlement"
+                ? {
+                    unsetMcpServer: async () => {
+                      replaceOwner();
+                      return {
+                        ok: true as const,
+                        path: configPath,
+                        config,
+                        mcpServers: {},
+                        removed: true,
+                      };
+                    },
+                  }
+                : {}),
+            }),
+          ).resolves.toMatchObject({
+            status: "partial",
+            agentRemoved: false,
+            error: { message: expect.stringContaining("no longer owns") },
+          });
+          expect(replaced).toBe(true);
+          expect(JSON.parse(await readFile(configPath, "utf8")).mcp?.servers?.docs).toEqual(
+            sourceServer,
+          );
+          expect(
+            JSON.parse(await readFile(configPath, "utf8")).agents.entries.worker,
+          ).toBeDefined();
+          expect(readClawMcpServerRefsByName("docs", { env: current.env })).toEqual(refs);
+          expect(readAgentDeletionJournal("worker", { env: current.env })?.operationId).toBe(
+            "replacement",
+          );
+        } finally {
+          writeSpy.mockRestore();
+        }
+      });
+    },
+  );
+
+  it("preserves managed MCP resources when the agent owns a shared session store", async () => {
+    const current = await addMcpFixture();
+    await recordManagedMcp(current);
+    const installedConfig = current.getConfig();
+    const storePath = join(current.env.OPENCLAW_STATE_DIR, "shared.sqlite");
+    const config: OpenClawConfig = {
+      ...installedConfig,
+      agents: {
+        ...installedConfig.agents,
+        entries: { ...installedConfig.agents?.entries, ops: {} },
+      },
+      session: { store: storePath },
+    };
+    openOpenClawAgentDatabase({ agentId: "worker", path: storePath, env: current.env });
+    const plan = await buildClawRemovePlan("worker", {
+      env: current.env,
+      config,
+      sourceMcpServers: { docs: sourceServer },
+    });
+    const refs = readClawMcpServerRefsByName("docs", { env: current.env });
+    const unsetMcpServer = vi
+      .fn()
+      .mockResolvedValue({ ok: true, path: "config", config: {}, mcpServers: {}, removed: true });
+
+    await expect(
+      applyClawRemovePlan(plan, {
+        consentPlanIntegrity: plan.planIntegrity,
+        env: current.env,
+        config,
+        sourceMcpServers: { docs: sourceServer },
+        unsetMcpServer,
+        monitorGateway: quiescentClawMonitorGateway,
+      }),
+    ).rejects.toThrow();
+
+    expect(unsetMcpServer).not.toHaveBeenCalled();
+    expect(readClawMcpServerRefsByName("docs", { env: current.env })).toEqual(refs);
+    expect(readAgentDeletionJournal("worker", { env: current.env })).toBeUndefined();
+    expect(plan.blockers).toContainEqual({
+      code: "shared_session_store_owner",
+      message: expect.stringContaining("session database still used by agent"),
+    });
+  });
+
   it("releases an exact pre-existing MCP server without deleting it", async () => {
     const current = await addMcpFixture();
     await installClawMcpServers(current.plan, {
@@ -91,32 +234,43 @@ describe("Claw MCP removal", () => {
       setMcpServer: vi.fn(),
       listMcpServers: vi.fn().mockResolvedValue(listedMcpServers({}, { docs: sourceServer })),
     });
-    let config: OpenClawConfig = {
+    const config: OpenClawConfig = {
       ...current.getConfig(),
       mcp: { servers: { docs: sourceServer } },
     };
     const plan = await buildClawRemovePlan("worker", { env: current.env, config });
     const unsetMcpServer = vi.fn();
 
-    const result = await applyClawRemovePlan(plan, {
-      consentPlanIntegrity: plan.planIntegrity,
-      env: current.env,
-      config,
-      unsetMcpServer,
-      commitConfig: async (transform) => {
-        config = transform(config);
-      },
+    const result = await withTempHomeConfig(config, async ({ configPath }) => {
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+      setTestEnvValue("OPENCLAW_STATE_DIR", current.env.OPENCLAW_STATE_DIR);
+      const removed = await applyClawRemovePlan(plan, {
+        monitorGateway: quiescentClawMonitorGateway,
+        consentPlanIntegrity: plan.planIntegrity,
+        env: current.env,
+        config,
+        unsetMcpServer,
+        trashPath: async () => true,
+      });
+      expect(JSON.parse(await readFile(configPath, "utf8"))).toHaveProperty(
+        "mcp.servers.docs",
+        sourceServer,
+      );
+      return removed;
     });
 
     expect(unsetMcpServer).not.toHaveBeenCalled();
-    expect(result.mcpServers).toEqual([{ name: "docs", action: "released" }]);
-    expect(config.mcp?.servers?.docs).toEqual(sourceServer);
+    expect(result).toMatchObject({
+      status: "complete",
+      agentRemoved: true,
+      mcpServers: [{ name: "docs", action: "released" }],
+    });
   });
 
   it("deletes the final unchanged Claw-created MCP server", async () => {
     const current = await addMcpFixture();
     await recordManagedMcp(current);
-    let config: OpenClawConfig = {
+    const config: OpenClawConfig = {
       ...current.getConfig(),
       mcp: {
         servers: {
@@ -136,46 +290,61 @@ describe("Claw MCP removal", () => {
       .fn()
       .mockResolvedValue({ ok: true, path: "config", config: {}, mcpServers: {}, removed: true });
 
-    const result = await applyClawRemovePlan(plan, {
-      consentPlanIntegrity: plan.planIntegrity,
-      env: current.env,
-      config,
-      sourceMcpServers: { docs: sourceServer },
-      unsetMcpServer,
-      commitConfig: async (transform) => {
-        config = transform(config);
-      },
+    const result = await withTempHomeConfig(config, async ({ configPath }) => {
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+      setTestEnvValue("OPENCLAW_STATE_DIR", current.env.OPENCLAW_STATE_DIR);
+      return applyClawRemovePlan(plan, {
+        monitorGateway: quiescentClawMonitorGateway,
+        consentPlanIntegrity: plan.planIntegrity,
+        env: current.env,
+        config,
+        sourceMcpServers: { docs: sourceServer },
+        unsetMcpServer,
+        trashPath: async () => true,
+      });
     });
 
     expect(unsetMcpServer).toHaveBeenCalledWith({
       name: "docs",
       expectedServer: sourceServer,
       recordIndependentOwner: false,
+      assertCurrent: expect.any(Function),
     });
-    expect(result.mcpServers).toEqual([{ name: "docs", action: "removed" }]);
+    expect(result).toMatchObject({
+      status: "complete",
+      agentRemoved: true,
+      mcpServers: [{ name: "docs", action: "removed" }],
+    });
   });
 
   it("releases missing managed MCP provenance without changing the remove plan", async () => {
     const current = await addMcpFixture();
     await recordManagedMcp(current);
-    let config = current.getConfig();
+    const config = current.getConfig();
     const plan = await buildClawRemovePlan("worker", {
       env: current.env,
       config,
       sourceMcpServers: {},
     });
 
-    const result = await applyClawRemovePlan(plan, {
-      consentPlanIntegrity: plan.planIntegrity,
-      env: current.env,
-      config,
-      sourceMcpServers: {},
-      commitConfig: async (transform) => {
-        config = transform(config);
-      },
+    const result = await withTempHomeConfig(config, async ({ configPath }) => {
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+      setTestEnvValue("OPENCLAW_STATE_DIR", current.env.OPENCLAW_STATE_DIR);
+      return applyClawRemovePlan(plan, {
+        monitorGateway: quiescentClawMonitorGateway,
+        consentPlanIntegrity: plan.planIntegrity,
+        env: current.env,
+        config,
+        sourceMcpServers: {},
+        trashPath: async () => true,
+      });
     });
 
-    expect(result.mcpServers).toEqual([{ name: "docs", action: "missing" }]);
+    expect(result).toMatchObject({
+      status: "complete",
+      agentRemoved: true,
+      mcpServers: [{ name: "docs", action: "missing" }],
+    });
   });
 
   it("retains a managed MCP server adopted after remove planning", async () => {
@@ -191,13 +360,18 @@ describe("Claw MCP removal", () => {
     const unsetMcpServer = vi.fn();
 
     await expect(
-      applyClawRemovePlan(plan, {
-        consentPlanIntegrity: plan.planIntegrity,
-        env: current.env,
-        config,
-        sourceMcpServers: { docs: sourceServer },
-        unsetMcpServer,
-        commitConfig: async () => undefined,
+      withTempHomeConfig(config, async ({ configPath }) => {
+        setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+        setTestEnvValue("OPENCLAW_STATE_DIR", current.env.OPENCLAW_STATE_DIR);
+        return applyClawRemovePlan(plan, {
+          monitorGateway: quiescentClawMonitorGateway,
+          consentPlanIntegrity: plan.planIntegrity,
+          env: current.env,
+          config,
+          sourceMcpServers: { docs: sourceServer },
+          unsetMcpServer,
+          trashPath: async () => true,
+        });
       }),
     ).rejects.toMatchObject({ code: "remove_changed" });
     expect(unsetMcpServer).not.toHaveBeenCalled();
@@ -207,7 +381,9 @@ describe("Claw MCP removal", () => {
     const current = await addMcpFixture();
     await recordManagedMcp(current);
 
-    await withTempHomeConfig(current.getConfig(), async () => {
+    await withTempHomeConfig(current.getConfig(), async ({ configPath }) => {
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+      setTestEnvValue("OPENCLAW_STATE_DIR", current.env.OPENCLAW_STATE_DIR);
       const missing = listedMcpServers(current.getConfig(), {});
       const restored = listedMcpServers(
         { ...current.getConfig(), mcp: { servers: { docs: sourceServer } } },
@@ -226,24 +402,26 @@ describe("Claw MCP removal", () => {
       const unsetMcpServer = vi
         .fn()
         .mockResolvedValue({ ok: true, path: "config", config: {}, mcpServers: {}, removed: true });
-      let config = current.getConfig();
-
       const result = await applyClawRemovePlan(plan, {
+        monitorGateway: quiescentClawMonitorGateway,
         consentPlanIntegrity: plan.planIntegrity,
         env: current.env,
         listMcpServers,
         unsetMcpServer,
-        commitConfig: async (transform) => {
-          config = transform(config);
-        },
+        trashPath: async () => true,
       });
 
       expect(unsetMcpServer).toHaveBeenCalledWith({
         name: "docs",
         expectedServer: sourceServer,
         recordIndependentOwner: false,
+        assertCurrent: expect.any(Function),
       });
-      expect(result.mcpServers).toEqual([{ name: "docs", action: "removed" }]);
+      expect(result).toMatchObject({
+        status: "complete",
+        agentRemoved: true,
+        mcpServers: [{ name: "docs", action: "removed" }],
+      });
     });
   });
 
@@ -252,7 +430,9 @@ describe("Claw MCP removal", () => {
     const replacementServer = { command: "node", args: ["replacement-mcp"] };
     await recordManagedMcp(current);
 
-    await withTempHomeConfig(current.getConfig(), async () => {
+    await withTempHomeConfig(current.getConfig(), async ({ configPath }) => {
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+      setTestEnvValue("OPENCLAW_STATE_DIR", current.env.OPENCLAW_STATE_DIR);
       const missing = listedMcpServers(current.getConfig(), {});
       const restored = listedMcpServers(
         { ...current.getConfig(), mcp: { servers: { docs: replacementServer } } },
@@ -269,19 +449,20 @@ describe("Claw MCP removal", () => {
         listMcpServers,
       });
       const unsetMcpServer = vi.fn();
-      let config = current.getConfig();
-
       await expect(
         applyClawRemovePlan(plan, {
+          monitorGateway: quiescentClawMonitorGateway,
           consentPlanIntegrity: plan.planIntegrity,
           env: current.env,
           listMcpServers,
           unsetMcpServer,
-          commitConfig: async (transform) => {
-            config = transform(config);
-          },
+          trashPath: async () => true,
         }),
-      ).rejects.toMatchObject({ code: "mcp_cleanup_changed" });
+      ).resolves.toMatchObject({
+        status: "partial",
+        agentRemoved: false,
+        error: { code: "mcp_cleanup_changed" },
+      });
       expect(unsetMcpServer).not.toHaveBeenCalled();
     });
   });

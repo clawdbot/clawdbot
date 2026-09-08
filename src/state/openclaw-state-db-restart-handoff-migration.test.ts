@@ -2,11 +2,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
   detectOpenClawStateDatabaseSchemaMigrations,
   openOpenClawStateDatabase,
-  OPENCLAW_STATE_SCHEMA_VERSION,
   repairOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
 
@@ -86,6 +86,7 @@ describe("gateway restart handoff state migration", () => {
     legacy.close();
 
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
+      { kind: "creator-namespace-v14", path: databasePath },
       { kind: "strict-tables-v3", path: databasePath },
       { kind: "session-watch-cursor-provenance-v4", path: databasePath },
     ]);
@@ -93,6 +94,7 @@ describe("gateway restart handoff state migration", () => {
       changes: [
         "Migrated cloud worker placements to execution modes",
         "Migrated shared state session watch cursors → provenance column (0 ambient, 0 sentinels removed)",
+        "Qualified historical cron creator attribution as unknown (v14)",
         "Migrated shared state tables to SQLite STRICT typing (1)",
       ],
       warnings: [],

@@ -516,10 +516,18 @@ describe("Reef SQLite state", () => {
     };
 
     await expect(stores.reviews.request(review)).resolves.toBeUndefined();
-    await expect(stores.reviews.decide(review.approvalDigest, true)).resolves.toBe(true);
-    await expect(
-      openStores(createRuntime(stateDir), keys).reviews.request(review),
-    ).resolves.toEqual({
+    await expect(stores.reviews.lookupDecision(review.approvalDigest)).resolves.toBe("pending");
+    await expect(stores.reviews.lookupDecision("c".repeat(64))).resolves.toBe("none");
+    await expect(stores.reviews.decide(review.approvalDigest, true)).resolves.toMatchObject({
+      id: review.id,
+      direction: "outbound",
+    });
+    await expect(stores.reviews.decide("c".repeat(64), true)).resolves.toBeUndefined();
+    const reopened = openStores(createRuntime(stateDir), keys);
+    await expect(reopened.reviews.lookupDecision(review.approvalDigest)).resolves.toEqual({
+      approved: true,
+    });
+    await expect(reopened.reviews.request(review)).resolves.toEqual({
       approved: true,
       approvalDigest: review.approvalDigest,
     });

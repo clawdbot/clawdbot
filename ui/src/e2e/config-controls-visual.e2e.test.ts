@@ -1,9 +1,14 @@
 // Control UI tests cover shared Settings control styling through the mocked Gateway.
 import { Buffer } from "node:buffer";
-import { mkdir } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import {
+  takeControlUiElementScreenshot,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -15,12 +20,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "settings-controls",
-);
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = createControlUiE2eArtifactDir("settings-controls");
+  }
+});
 
 async function resolvedBackground(page: Page, value: string): Promise<string> {
   return page.evaluate((background) => {
@@ -95,19 +100,119 @@ async function captureBrowserSettingProof(
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(uiProofArtifactDir, { recursive: true });
-  await section.screenshot({
-    animations: "disabled",
-    path: path.join(uiProofArtifactDir, `${name}-desktop.png`),
-  });
+  if (page.video()) {
+    await writeFile(
+      path.join(uiProofArtifactDir, `${name}-desktop.png`),
+      await takeControlUiElementScreenshot(page, section, [
+        section.locator(".settings-row").first(),
+      ]),
+    );
+  } else {
+    await section.screenshot({
+      animations: "disabled",
+      path: path.join(uiProofArtifactDir, `${name}-desktop.png`),
+    });
+  }
   await page.setViewportSize({ height: 844, width: 390 });
-  await section.screenshot({
-    animations: "disabled",
-    path: path.join(uiProofArtifactDir, `${name}-narrow.png`),
-  });
+  if (page.video()) {
+    await waitForControlUiProofSurface(page.locator(".shell.shell--mobile-nav"), [
+      section.locator(".settings-row").first(),
+    ]);
+    await writeFile(
+      path.join(uiProofArtifactDir, `${name}-narrow.png`),
+      await takeControlUiElementScreenshot(page, section, [
+        section.locator(".settings-row").first(),
+      ]),
+    );
+  } else {
+    await section.screenshot({
+      animations: "disabled",
+      path: path.join(uiProofArtifactDir, `${name}-narrow.png`),
+    });
+  }
 }
 
 suite.define(() => {
+  it.each(["light", "dark"] as const)(
+    "keeps selected Usage accents at rest and on hover in %s mode",
+    async (colorScheme) => {
+      await suite.withPage(
+        { colorScheme, locale: "en-US", viewport: { width: 1280, height: 900 } },
+        async ({ page }) => {
+          const totals = {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            totalCost: 0,
+            inputCost: 0,
+            outputCost: 0,
+            cacheReadCost: 0,
+            cacheWriteCost: 0,
+            missingCostEntries: 0,
+          };
+          const gateway = await installMockGateway(page, {
+            methodResponses: {
+              "sessions.usage": {
+                updatedAt: Date.now(),
+                startDate: "2026-09-01",
+                endDate: "2026-09-07",
+                sessions: [],
+                totals,
+                aggregates: {
+                  messages: {
+                    total: 0,
+                    user: 0,
+                    assistant: 0,
+                    toolCalls: 0,
+                    toolResults: 0,
+                    errors: 0,
+                  },
+                  tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
+                  byModel: [],
+                  byProvider: [],
+                  byAgent: [],
+                  byChannel: [],
+                  daily: [],
+                },
+              },
+              "usage.cost": { updatedAt: Date.now(), days: 7, daily: [], totals },
+            },
+          });
+          await page.goto(`${suite.server.baseUrl}usage`);
+          await gateway.waitForRequest("sessions.usage");
+          await expect
+            .poll(() => page.locator("html").getAttribute("data-theme-mode"))
+            .toBe(colorScheme);
+          const expected = await resolvedBackground(page, "var(--accent-subtle)");
+          const filters = page.locator(".usage-controls");
+          for (const label of ["Cost", "Tokens"]) {
+            const selected = filters.getByRole("button", { name: label, exact: true });
+            await selected.click();
+            await page.mouse.move(0, 0);
+            for (const state of ["rest", "hover"]) {
+              if (state === "hover") {
+                await selected.hover();
+              }
+              if (captureUiProofEnabled) {
+                await filters.screenshot({
+                  animations: "disabled",
+                  path: path.join(uiProofArtifactDir, `usage-${colorScheme}-${label}-${state}.png`),
+                });
+              }
+              await expect
+                .poll(() =>
+                  selected.evaluate((element) => getComputedStyle(element).backgroundColor),
+                )
+                .toBe(expected);
+            }
+          }
+        },
+      );
+    },
+  );
+
   it("keeps selected segmented options distinct in forced colors", async () => {
     const cases = [
       {
@@ -165,7 +270,6 @@ suite.define(() => {
           expect(await selected.getAttribute("aria-checked")).toBe("true");
           expect(await unselected.getAttribute("aria-checked")).toBe("false");
           if (captureUiProofEnabled) {
-            await mkdir(uiProofArtifactDir, { recursive: true });
             await selected
               .locator(
                 "xpath=ancestor::div[contains(concat(' ', normalize-space(@class), ' '), ' settings-row ')][1]",
@@ -257,7 +361,6 @@ suite.define(() => {
         ).toBe(await resolvedBackground(page, "var(--accent)"));
 
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await page.locator(".content-header").screenshot({
             animations: "disabled",
             path: path.join(uiProofArtifactDir, "01-settings-view.png"),
@@ -306,9 +409,6 @@ suite.define(() => {
 
   for (const host of ["browser", "app"] as const) {
     it(`routes links to the Control UI browser in a ${host}-hosted UI`, async () => {
-      if (captureUiProofEnabled) {
-        await mkdir(uiProofArtifactDir, { recursive: true });
-      }
       await suite.withPage(
         {
           colorScheme: "dark",
@@ -326,7 +426,11 @@ suite.define(() => {
               const messages: unknown[] = [];
               const appWindow = window as Window & {
                 openclawNativeLinkMessages?: unknown[];
-                webkit?: unknown;
+                webkit?: {
+                  messageHandlers?: {
+                    openclawLink?: { postMessage: (message: unknown) => void };
+                  };
+                };
               };
               appWindow.openclawNativeLinkMessages = messages;
               appWindow.webkit = {
@@ -497,10 +601,12 @@ suite.define(() => {
           ).toBe(true);
           await browserPanel.getByText("Example", { exact: true }).first().waitFor();
           await expect
-            .poll(
-              async () => (await browserPanel.textContent())?.includes("Loading page...") ?? true,
+            .poll(() =>
+              browserPanel
+                .locator('openclaw-panel-loading-skeleton[data-panel-skeleton="browser"]')
+                .count(),
             )
-            .toBe(false);
+            .toBe(0);
           expect(await browserPanel.textContent()).not.toContain("Browser request failed");
 
           if (host === "app") {

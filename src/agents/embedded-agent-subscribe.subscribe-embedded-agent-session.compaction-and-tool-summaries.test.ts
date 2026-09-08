@@ -1,9 +1,16 @@
 // Compaction retry state, fenced retry output, and tool summaries.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { onAgentEvent } from "../infra/agent-events.js";
-import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
+import type { EmbeddedContextAccountingEvent } from "./embedded-agent-runner/run/internal-params.js";
+import {
+  createStubSessionHarness,
+  createSubscribedSessionHarness,
+} from "./embedded-agent-subscribe.e2e-harness.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
+import type { AgentSessionEvent } from "./sessions/index.js";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 type SessionEventHandler = (evt: unknown) => void;
@@ -27,6 +34,166 @@ const skippedCompactionEnd = () =>
     reason: "threshold",
     outcome: { status: "skipped", reason: "Nothing to compact (session too small)" },
   }) as const;
+
+function accountingAssistant(input: number, stopReason: AssistantMessage["stopReason"] = "stop") {
+  return makeAgentAssistantMessage({
+    content: [{ type: "text", text: "model reply" }],
+    usage: { ...makeZeroUsageSnapshot(), input, totalTokens: input },
+    stopReason,
+  });
+}
+
+describe("synchronous context accounting", () => {
+  it.each([
+    {
+      name: "model snapshots without counting public compaction notices as commits",
+      events: [
+        accountingAssistant(90_000),
+        completedCompactionEnd(false, 90_000, 12_000),
+        accountingAssistant(18_000),
+        completedCompactionEnd(false, 18_000, 8_000),
+      ],
+      expected: [
+        { kind: "model", contextTokens: 90_000 },
+        { kind: "model", contextTokens: 18_000 },
+      ],
+    },
+    {
+      name: "explicitly unavailable provider context despite billing usage",
+      events: [
+        completedCompactionEnd(false, 90_000, 12_000),
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text: "context unavailable" }],
+          usage: {
+            ...makeZeroUsageSnapshot(),
+            input: 90_000,
+            totalTokens: 90_000,
+            contextUsage: { state: "unavailable" },
+          },
+        }),
+      ],
+      expected: [{ kind: "model", contextTokens: undefined }],
+    },
+    {
+      name: "failed zero-usage retry without old assistant backfill",
+      events: [
+        accountingAssistant(90_000),
+        completedCompactionEnd(true, 90_000, 12_000),
+        accountingAssistant(0, "error"),
+      ],
+      expected: [
+        { kind: "model", contextTokens: 90_000 },
+        { kind: "model", contextTokens: undefined },
+      ],
+    },
+  ])("records $name in producer order", ({ events, expected }) => {
+    const observed: EmbeddedContextAccountingEvent[] = [];
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-context-accounting",
+      sessionPersistence: "detached",
+      onContextAccountingEvent: (event) => {
+        observed.push(event);
+      },
+    });
+    try {
+      for (const event of events) {
+        if ("role" in event) {
+          emit({ type: "message_start", message: event });
+          emit({ type: "message_end", message: event });
+        } else {
+          emit(event);
+        }
+      }
+      expect(observed).toEqual(expected);
+    } finally {
+      subscription.unsubscribe();
+    }
+  });
+
+  it("captures repaired model usage before queued delivery and throwing cleanup", async () => {
+    const deliveryStarted = createDeferred();
+    const releaseDelivery = createDeferred();
+    const cleanupError = new Error("subscription cleanup failed");
+    const observed: EmbeddedContextAccountingEvent[] = [];
+    const { session, emit } = createStubSessionHarness();
+    const subscribe = session.subscribe.bind(session);
+    session.subscribe = (listener) => {
+      const unsubscribe = subscribe(listener);
+      return () => {
+        unsubscribe();
+        throw cleanupError;
+      };
+    };
+    let aborted = false;
+    const subscription = subscribeEmbeddedAgentSession({
+      session,
+      runId: "run-held-context-accounting",
+      sessionPersistence: "detached",
+      isTerminalAborted: () => aborted,
+      blockReplyBreak: "message_end",
+      onBlockReply: () => {},
+      onBlockReplyFlush: () => {
+        deliveryStarted.resolve();
+        return releaseDelivery.promise;
+      },
+      onContextAccountingEvent: (event) => {
+        observed.push(event);
+      },
+    });
+    const expected: EmbeddedContextAccountingEvent[] = [
+      { kind: "model", contextTokens: 90_000 },
+      { kind: "model", contextTokens: 20_000 },
+    ];
+    try {
+      const before = accountingAssistant(90_000);
+      emit({ type: "message_start", message: before });
+      emit({ type: "message_end", message: before });
+      await deliveryStarted.promise;
+      emit(completedCompactionEnd(false, 90_000, 12_000));
+      const after = accountingAssistant(0);
+      emit({ type: "message_start", message: after });
+      const partial = {
+        ...after,
+        usage: {
+          ...makeZeroUsageSnapshot(),
+          input: 18_000,
+          cacheRead: 2_000,
+          totalTokens: 20_000,
+        },
+      };
+      emit({
+        type: "message_update",
+        message: partial,
+        assistantMessageEvent: {
+          type: "text_end",
+          contentIndex: 0,
+          content: "model reply",
+          partial,
+        },
+      } satisfies AgentSessionEvent);
+      emit({ type: "message_end", message: after });
+      for (const model of ["delivery-mirror", "gateway-injected"]) {
+        const synthetic = { ...accountingAssistant(99_000), provider: "openclaw", model };
+        emit({ type: "message_start", message: synthetic });
+        emit({ type: "message_end", message: synthetic });
+        const withoutUsage = { role: "assistant", provider: "openclaw", model };
+        emit({ type: "message_end", message: withoutUsage });
+        expect(withoutUsage).not.toHaveProperty("usage");
+      }
+      expect(observed).toEqual(expected);
+      expect(after.usage.input).toBe(18_000);
+      aborted = true;
+    } finally {
+      try {
+        expect(() => subscription.unsubscribe()).toThrow(cleanupError);
+      } finally {
+        releaseDelivery.resolve();
+        await subscription.waitForPendingEvents();
+      }
+    }
+    expect(observed).toEqual(expected);
+  });
+});
 
 describe("fenced output and compaction retries", () => {
   it("waits for auto-compaction retry and clears buffered text", async () => {
@@ -573,7 +740,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       result: { content: [{ type: "text", text: "file data" }] },
     });
 
-    await Promise.resolve();
+    await toolHarness.subscription.waitForPendingEvents();
 
     expect(onToolResult).toHaveBeenCalledTimes(3);
     const readOutput = toolResultPayloadAt(onToolResult, 2);

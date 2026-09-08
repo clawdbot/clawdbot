@@ -1,10 +1,5 @@
 // Applies media-understanding outputs to inbound message context, including
 // attachment normalization, provider execution, file text extraction, and echoing.
-import {
-  attachmentClassFromMime,
-  type AttachmentClassification,
-} from "@openclaw/media-core/attachment-classify";
-import { mimeTypeFromFilePath, normalizeMimeType } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import pMap from "p-map";
 import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
@@ -15,28 +10,16 @@ import {
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { logVerbose, shouldLogVerbose } from "../globals.js";
-import { renderFileContextBlock } from "../media/file-context.js";
-import { extractFileContentFromSource } from "../media/input-files.js";
-import { classifyMediaReferenceSource } from "../media/media-reference.js";
 import { runMediaCapability } from "./apply-capability.js";
 import { resolveAttachmentKind } from "./attachments.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
 import type { ExtractedFileImage } from "./extracted-file-images.js";
+import { extractFileContext, type LocalPathSelfServeUpgrade } from "./file-context.js";
+import { resolveFileExtractionLimits } from "./file-extraction-limits.js";
 import {
-  type FileAttachmentOutcome,
-  isSkippedFileOutcome,
-  renderFileAttachmentOutcome,
-  sanitizeMimeType,
-} from "./file-attachment-outcomes.js";
-import {
-  type FileExtractionLimits,
-  resolveFileExtractionLimits,
-} from "./file-extraction-limits.js";
-import {
-  MAX_SKIPPED_FILE_MARKERS,
+  applyAttachmentMarkerBudget,
+  type AttachmentContextBlock,
   renderMediaAttachmentDisposition,
-  renderSkippedFileOverflowSummary,
 } from "./media-attachment-outcomes.js";
 import { resolveConcurrency } from "./resolve.js";
 import {
@@ -82,279 +65,6 @@ function appendFileBlocks(body: string | undefined, blocks: string[]): string {
     return suffix;
   }
   return `${base}\n\n${suffix}`.trim();
-}
-
-function buildSyntheticSkippedAudioOutputs(
-  decisions: MediaUnderstandingDecision[],
-): MediaUnderstandingOutput[] {
-  const audioDecision = decisions.find((decision) => decision.capability === "audio");
-  if (!audioDecision) {
-    return [];
-  }
-  return audioDecision.attachments.flatMap((attachment) => {
-    const hasTooSmallAttempt = attachment.attempts.some((attempt) =>
-      attempt.reason?.trim().startsWith("tooSmall"),
-    );
-    if (!hasTooSmallAttempt) {
-      return [];
-    }
-    return [
-      {
-        kind: "audio.transcription" as const,
-        attachmentIndex: attachment.attachmentIndex,
-        text: EMPTY_VOICE_NOTE_PLACEHOLDER,
-        provider: "openclaw",
-        model: "synthetic-empty-audio",
-      },
-    ];
-  });
-}
-
-type ClassifiedFileAttachment = {
-  outcome: FileAttachmentOutcome;
-  filename?: string;
-  mimeType?: string;
-};
-
-type AttachmentContextBlock = { text: string; consumesMarkerBudget: boolean };
-type LocalPathSelfServeUpgrade = {
-  attachmentIndex: number;
-  fallback: string;
-  render: (path?: string) => string | undefined;
-};
-
-// URL attachments may carry signed query credentials; only the pathname
-// basename is safe to surface as a model-visible display name.
-function attachmentUrlDisplayName(url: string): string | undefined {
-  try {
-    const base = new URL(url).pathname.split("/").findLast((segment) => segment.length > 0);
-    return base || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-async function classifyFileAttachment(params: {
-  attachment: MediaAttachment;
-  cache: ReturnType<typeof createMediaAttachmentCache>;
-  cfg: OpenClawConfig;
-  limits: FileExtractionLimits;
-  skipAttachmentIndexes?: Set<number>;
-}): Promise<ClassifiedFileAttachment> {
-  const { attachment, cache, cfg, limits, skipAttachmentIndexes } = params;
-  const attachmentFilename =
-    attachment.path ?? (attachment.url ? attachmentUrlDisplayName(attachment.url) : undefined);
-  if (skipAttachmentIndexes?.has(attachment.index)) {
-    return { outcome: { kind: "claimed-elsewhere" } };
-  }
-  const extensionMime = mimeTypeFromFilePath(attachmentFilename);
-  const forcedTextMime =
-    attachmentClassFromMime(extensionMime) === "text" ? extensionMime : undefined;
-  const kind = forcedTextMime ? "document" : resolveAttachmentKind(attachment);
-  if (!forcedTextMime && (kind === "image" || kind === "video" || kind === "audio")) {
-    return { outcome: { kind: "claimed-elsewhere" } };
-  }
-  if (
-    !limits.allowUrl &&
-    attachment.url &&
-    !attachment.path &&
-    !classifyMediaReferenceSource(attachment.url).isMediaStoreUrl
-  ) {
-    if (shouldLogVerbose()) {
-      logVerbose(`media: file attachment skipped (url disabled) index=${attachment.index}`);
-    }
-    return { outcome: { kind: "url-sources-disabled" }, filename: attachmentFilename };
-  }
-  let bufferResult: Awaited<ReturnType<typeof cache.getBuffer>>;
-  try {
-    bufferResult = await cache.getBuffer({
-      attachmentIndex: attachment.index,
-      maxBytes: limits.maxBytes,
-      timeoutMs: limits.timeoutMs,
-    });
-  } catch (err) {
-    if (shouldLogVerbose()) {
-      logVerbose(`media: file attachment skipped (buffer): ${String(err)}`);
-    }
-    return { outcome: { kind: "read-failure" }, filename: attachmentFilename };
-  }
-  const filename = bufferResult?.fileName;
-  const classification: AttachmentClassification = bufferResult.classification;
-  // Marker mime prefers the sender-declared type; never the name-forced text mime,
-  // which would mislabel binary bytes inside a text-named file as a text format.
-  // Both candidates pass strict token validation so raw header text never
-  // reaches model context; undefined drops the mime from block and marker.
-  const classifiedMime = sanitizeMimeType(classification.mime);
-  const binaryMime = sanitizeMimeType(normalizeMimeType(attachment.mime)) ?? classifiedMime;
-  // Preserve only the cache's root-approved local read. Rendering still waits
-  // for the reply runtime's final filesystem capability (#122411).
-  const selfServeLocalPath = bufferResult.localPath;
-  if (
-    classification.class !== "text" &&
-    !(classification.class === "document" && classification.mime === "application/pdf")
-  ) {
-    // An operator-pinned allowlist that excludes this type is a policy "no";
-    // it must win before any self-serve directive can name the file.
-    if (
-      limits.allowedMimesConfigured &&
-      !(classifiedMime && limits.allowedMimes.has(classifiedMime))
-    ) {
-      return {
-        outcome: { kind: "policy-rejected", mime: classifiedMime ?? binaryMime },
-        filename,
-        mimeType: classifiedMime ?? binaryMime,
-      };
-    }
-    return {
-      outcome: {
-        kind: "unsupported-format",
-        mime: binaryMime,
-        ...(selfServeLocalPath ? { localPath: selfServeLocalPath } : {}),
-      },
-      filename,
-      mimeType: binaryMime,
-    };
-  }
-  const mimeType = sanitizeMimeType(classification.mime);
-  if (
-    classification.class === "text" &&
-    attachment.mime &&
-    normalizeMimeType(attachment.mime) !== classification.mime
-  ) {
-    logVerbose(
-      `media: MIME override from "${attachment.mime}" to "${classification.mime}" for index=${attachment.index}`,
-    );
-  }
-  if (!mimeType) {
-    if (shouldLogVerbose()) {
-      logVerbose(`media: file attachment skipped (unknown mime) index=${attachment.index}`);
-    }
-    return { outcome: { kind: "unsupported-format" }, filename };
-  }
-  const allowedMimes = new Set(limits.allowedMimes);
-  if (!limits.allowedMimesConfigured && classification.class === "text") {
-    allowedMimes.add(mimeType);
-  }
-  if (!allowedMimes.has(mimeType)) {
-    if (shouldLogVerbose()) {
-      logVerbose(
-        `media: file attachment skipped (unsupported mime ${mimeType}) index=${attachment.index}`,
-      );
-    }
-    // Operator-pinned allowlists reject as policy; the default allowlist
-    // rejects as a capability gap. The markers differ so the prompt never
-    // claims support the active configuration disables.
-    const outcome: FileAttachmentOutcome = limits.allowedMimesConfigured
-      ? { kind: "policy-rejected", mime: mimeType }
-      : {
-          kind: "unsupported-format",
-          mime: mimeType,
-          ...(selfServeLocalPath ? { localPath: selfServeLocalPath } : {}),
-        };
-    return { outcome, filename, mimeType };
-  }
-  let extracted: Awaited<ReturnType<typeof extractFileContentFromSource>>;
-  try {
-    const { allowedMimesConfigured: _allowedMimesConfigured, ...baseLimits } = limits;
-    extracted = await extractFileContentFromSource({
-      source: {
-        type: "base64",
-        data: bufferResult.buffer.toString("base64"),
-        mediaType: mimeType,
-        filename: bufferResult.fileName,
-      },
-      limits: { ...baseLimits, allowedMimes },
-      config: cfg,
-      classification,
-    });
-  } catch (err) {
-    if (shouldLogVerbose()) {
-      logVerbose(`media: file attachment skipped (extract): ${String(err)}`);
-    }
-    return { outcome: { kind: "read-failure" }, filename, mimeType };
-  }
-  const text = extracted?.text?.trim() ?? "";
-  const extractedImages = extracted?.images ?? [];
-  if (text) {
-    return { outcome: { kind: "extracted", text, images: extractedImages }, filename, mimeType };
-  }
-  if (extractedImages.length > 0) {
-    return { outcome: { kind: "rendered-to-images", images: extractedImages }, filename, mimeType };
-  }
-  return { outcome: { kind: "no-extractable-text" }, filename, mimeType };
-}
-
-async function extractFileContext(params: {
-  attachments: ReturnType<typeof normalizeMediaAttachments>;
-  cache: ReturnType<typeof createMediaAttachmentCache>;
-  cfg: OpenClawConfig;
-  limits: FileExtractionLimits;
-  skipAttachmentIndexes?: Set<number>;
-  selfServePathsEnabled: boolean;
-}) {
-  const { attachments, cache, cfg, limits, skipAttachmentIndexes } = params;
-  if (!attachments || attachments.length === 0) {
-    return { blocks: [], images: [], localPathSelfServeUpgrades: [] };
-  }
-  const blocks: AttachmentContextBlock[] = [];
-  const images: ExtractedFileImage[] = [];
-  const localPathSelfServeUpgrades: LocalPathSelfServeUpgrade[] = [];
-  for (const attachment of attachments) {
-    if (!attachment) {
-      continue;
-    }
-    const { outcome, filename, mimeType } = await classifyFileAttachment({
-      attachment,
-      cache,
-      cfg,
-      limits,
-      skipAttachmentIndexes,
-    });
-    if (outcome.kind === "extracted" || outcome.kind === "rendered-to-images") {
-      images.push(
-        ...outcome.images.map((image) => ({
-          ...image,
-          attachmentIndex: attachment.index,
-        })),
-      );
-    }
-    const blockText = renderFileAttachmentOutcome(outcome, {
-      selfServeLocalPath: params.selfServePathsEnabled ? undefined : false,
-    });
-    if (blockText === null) {
-      continue;
-    }
-    const renderBlock = (content: string) =>
-      renderFileContextBlock({
-        filename,
-        fallbackName: `file-${attachment.index + 1}`,
-        mimeType,
-        content,
-      });
-    const text = renderBlock(blockText);
-    blocks.push({
-      text,
-      consumesMarkerBudget: isSkippedFileOutcome(outcome),
-    });
-    if (outcome.kind === "unsupported-format" && outcome.localPath) {
-      const fallback = renderFileAttachmentOutcome(outcome, { selfServeLocalPath: false });
-      const selfServe = renderFileAttachmentOutcome(outcome);
-      if (fallback && selfServe) {
-        localPathSelfServeUpgrades.push({
-          attachmentIndex: attachment.index,
-          fallback: renderBlock(fallback),
-          render: (path) => {
-            const rendered = renderFileAttachmentOutcome(
-              outcome,
-              path ? { selfServeLocalPath: path } : undefined,
-            );
-            return rendered ? renderBlock(rendered) : undefined;
-          },
-        });
-      }
-    }
-  }
-  return { blocks, images, localPathSelfServeUpgrades };
 }
 
 const SELF_SERVE_CONTEXT_FIELDS = ["Body", "BodyForAgent", "agentText"] as const;
@@ -424,21 +134,6 @@ function renderMediaAttachmentMarkers(params: {
   });
 }
 
-function applyAttachmentMarkerBudget(blocks: AttachmentContextBlock[]): string[] {
-  const rendered: string[] = [];
-  let markers = 0;
-  let overflow = 0;
-  for (const block of blocks) {
-    if (block.consumesMarkerBudget && markers >= MAX_SKIPPED_FILE_MARKERS) {
-      overflow += 1;
-      continue;
-    }
-    markers += Number(block.consumesMarkerBudget);
-    rendered.push(block.text);
-  }
-  return overflow > 0 ? [...rendered, renderSkippedFileOverflowSummary(overflow)] : rendered;
-}
-
 export async function applyMediaUnderstanding(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
@@ -494,58 +189,38 @@ export async function applyMediaUnderstanding(params: {
     );
     const outputs: MediaUnderstandingOutput[] = [];
     const decisions: MediaUnderstandingDecision[] = [];
+    const audioAttachmentIndexes = new Set<number>();
     for (const entry of results) {
-      for (const output of entry.outputs) {
-        outputs.push(output);
-      }
       decisions.push(entry.decision);
-    }
-
-    const audioOutputAttachmentIndexes = new Set(
-      outputs
-        .filter((output) => output.kind === "audio.transcription")
-        .map((output) => output.attachmentIndex),
-    );
-    const syntheticSkippedAudioOutputs = buildSyntheticSkippedAudioOutputs(decisions).filter(
-      (output) => !audioOutputAttachmentIndexes.has(output.attachmentIndex),
-    );
-
-    // Merge synthetic placeholders into the audio slice while preserving the
-    // selected audio attachment order from `runCapability()` / `attachments.prefer`.
-    // When audio produced no real outputs, insert the synthetic slice at the
-    // audio capability slot (before video) instead of appending at the end.
-    if (syntheticSkippedAudioOutputs.length > 0) {
-      const audioDecision = decisions.find((decision) => decision.capability === "audio");
-      const audioAttachmentOrder =
-        audioDecision?.attachments.map((attachment) => attachment.attachmentIndex) ?? [];
-      const audioOutputsByAttachmentIndex = new Map<number, MediaUnderstandingOutput>();
-      for (const output of outputs) {
-        if (output.kind === "audio.transcription") {
-          audioOutputsByAttachmentIndex.set(output.attachmentIndex, output);
+      if (entry.decision.capability !== "audio") {
+        for (const output of entry.outputs) {
+          outputs.push(output);
         }
+        continue;
       }
-      for (const output of syntheticSkippedAudioOutputs) {
+      const audioOutputsByAttachmentIndex = new Map<number, MediaUnderstandingOutput>();
+      for (const output of entry.outputs) {
         audioOutputsByAttachmentIndex.set(output.attachmentIndex, output);
+        audioAttachmentIndexes.add(output.attachmentIndex);
       }
-      const mergedAudio = audioAttachmentOrder
-        .map((attachmentIndex) => audioOutputsByAttachmentIndex.get(attachmentIndex))
-        .filter((output): output is MediaUnderstandingOutput => Boolean(output));
-
-      const firstAudioIdx = outputs.findIndex((o) => o.kind === "audio.transcription");
-      if (firstAudioIdx >= 0) {
-        const before = outputs.slice(0, firstAudioIdx);
-        const afterLastAudio = outputs.slice(
-          outputs.reduce(
-            (last, o, i) => (o.kind === "audio.transcription" ? i : last),
-            firstAudioIdx,
-          ) + 1,
-        );
-        outputs.length = 0;
-        outputs.push(...before, ...mergedAudio, ...afterLastAudio);
-      } else {
-        const firstVideoIdx = outputs.findIndex((o) => o.kind === "video.description");
-        const audioInsertIdx = firstVideoIdx >= 0 ? firstVideoIdx : outputs.length;
-        outputs.splice(audioInsertIdx, 0, ...mergedAudio);
+      // Capability results retain image/audio/video order. Project audio in the
+      // runner's selected order so placeholders honor attachments.prefer and
+      // stay before video even when every audio attachment was too small.
+      for (const attachment of entry.decision.attachments) {
+        const output = audioOutputsByAttachmentIndex.get(attachment.attachmentIndex);
+        if (output) {
+          outputs.push(output);
+        } else if (
+          attachment.attempts.some((attempt) => attempt.reason?.trim().startsWith("tooSmall"))
+        ) {
+          outputs.push({
+            kind: "audio.transcription",
+            attachmentIndex: attachment.attachmentIndex,
+            text: EMPTY_VOICE_NOTE_PLACEHOLDER,
+            provider: "openclaw",
+            model: "synthetic-empty-audio",
+          });
+        }
       }
     }
 
@@ -554,7 +229,6 @@ export async function applyMediaUnderstanding(params: {
     }
 
     if (outputs.length > 0) {
-      ctx.Body = formatMediaUnderstandingBody({ body: ctx.Body, outputs });
       const audioOutputs = outputs.filter((output) => output.kind === "audio.transcription");
       if (audioOutputs.length > 0) {
         const transcript = formatAudioTranscripts(audioOutputs);
@@ -585,18 +259,6 @@ export async function applyMediaUnderstanding(params: {
     // Only skip file extraction for attachments that have a real (non-synthetic)
     // audio transcription. Synthetic placeholders should not prevent file extraction
     // for tiny audio-MIME files that could be recovered as text via forcedTextMime.
-    const syntheticAudioIndexes = new Set(
-      syntheticSkippedAudioOutputs.map((o) => o.attachmentIndex),
-    );
-    const audioAttachmentIndexes = new Set(
-      outputs
-        .filter(
-          (output) =>
-            output.kind === "audio.transcription" &&
-            !syntheticAudioIndexes.has(output.attachmentIndex),
-        )
-        .map((output) => output.attachmentIndex),
-    );
     const fileContext =
       params.processingMode === "audio-only"
         ? { blocks: [], images: [], localPathSelfServeUpgrades: [] }
@@ -611,24 +273,23 @@ export async function applyMediaUnderstanding(params: {
             // placement, suppress — a wrong path is worse than the plain marker (#122411).
             selfServePathsEnabled: params.selfServeLocalPaths === true,
           });
-    const mediaMarkers =
-      params.processingMode === "audio-only"
-        ? []
-        : renderMediaAttachmentMarkers({
-            attachments,
-            decisions,
-            outputs,
-            deliveredImageIndexes: params.deliveredImageIndexes,
-          });
+    // Only processed capabilities have decisions, so audio-only runs cannot
+    // add markers for image/video inputs still owned by the native harness.
+    const mediaMarkers = renderMediaAttachmentMarkers({
+      attachments,
+      decisions,
+      outputs,
+      deliveredImageIndexes: params.deliveredImageIndexes,
+    });
     const contextBlocks = applyAttachmentMarkerBudget([...fileContext.blocks, ...mediaMarkers]);
-    if (contextBlocks.length > 0) {
-      ctx.Body = appendFileBlocks(ctx.Body, contextBlocks);
-    }
     if (outputs.length > 0 || contextBlocks.length > 0) {
-      finalizeInboundContext(ctx, {
-        forceBodyForAgent: true,
-        forceBodyForCommands: true,
-      });
+      const enrich = (body?: string) =>
+        appendFileBlocks(formatMediaUnderstandingBody({ body, outputs }), contextBlocks);
+      // Channels may carry preflight transcripts only in prepared agent text.
+      // Enrich that base before changing the separate transport envelope.
+      ctx.agentText = enrich(ctx.agentText ?? ctx.BodyForAgent ?? ctx.Body);
+      ctx.Body = enrich(ctx.Body);
+      finalizeInboundContext(ctx, { forceBodyForCommands: true });
     }
 
     return {

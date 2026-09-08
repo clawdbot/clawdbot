@@ -1,9 +1,34 @@
 {
   "id": "codex",
+  "backupResources": [
+    {
+      "disposition": "regenerable",
+      "scope": "agent",
+      "relativePath": "codex-home/tmp/arg0"
+    },
+    {
+      "disposition": "regenerable",
+      "scope": "agent",
+      "relativePath": "codex-home/.tmp/plugins"
+    },
+    {
+      "disposition": "regenerable",
+      "scope": "agent",
+      "relativePath": "codex-home/.tmp/bundled-marketplaces"
+    }
+  ],
   "doctorContract": {
     "configRepair": true,
-    "stateMigrations": true
+    "stateMigrations": [
+      { "id": "codex-app-server-sidecars-to-plugin-state" },
+      {
+        "id": "codex-app-server-orphaned-session-bindings",
+        "doctorOnly": true,
+        "phase": "after-session-repair"
+      }
+    ]
   },
+  "doctorHealthChecks": true,
   "sessionRouteStateOwners": [
     {
       "id": "codex",
@@ -63,6 +88,20 @@
       "cliCommand": "plugins"
     }
   ],
+  "setup": {
+    "nativeSessionCatalog": {
+      "label": "Codex",
+      "legacyDefaultEnabled": true,
+      "description": "Existing native Codex conversations on this Gateway and eligible paired nodes.",
+      "nodeCommands": [
+        "codex.appServer.threads.list.v1",
+        "codex.appServer.thread.turns.list.v1",
+        "codex.sessionCatalog.transcript.read.v1",
+        "codex.terminal.resume.v1",
+        "codex.cli.sessions.list"
+      ]
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -314,21 +353,6 @@
             "minimum": 1,
             "default": 60000
           },
-          "turnCompletionIdleTimeoutMs": {
-            "type": "number",
-            "minimum": 1,
-            "default": 60000
-          },
-          "turnAssistantCompletionIdleTimeoutMs": {
-            "type": "number",
-            "minimum": 1,
-            "default": 10000
-          },
-          "postToolRawAssistantCompletionIdleTimeoutMs": {
-            "type": "number",
-            "minimum": 1,
-            "default": 300000
-          },
           "approvalPolicy": {
             "type": "string",
             "enum": ["never", "on-request", "on-failure", "untrusted"]
@@ -497,7 +521,7 @@
     },
     "computerUse.autoRepair": {
       "label": "Auto Repair",
-      "help": "When true, failed Computer Use live tests repair stale scoped Computer Use MCP children before retrying once.",
+      "help": "When true, failed Computer Use live tests reload the Codex-owned MCP runtime before retrying once.",
       "advanced": true
     },
     "computerUse.marketplaceSource": {
@@ -644,21 +668,6 @@
     "appServer.requestTimeoutMs": {
       "label": "Request Timeout",
       "help": "Maximum time to wait for Codex app-server control-plane requests.",
-      "advanced": true
-    },
-    "appServer.turnCompletionIdleTimeoutMs": {
-      "label": "Turn Completion Idle Timeout",
-      "help": "Maximum quiet time after Codex accepts a turn or after a turn-scoped app-server request before OpenClaw interrupts the turn while waiting for turn/completed.",
-      "advanced": true
-    },
-    "appServer.turnAssistantCompletionIdleTimeoutMs": {
-      "label": "Assistant Completion Idle Timeout",
-      "help": "Short quiet-time guard after Codex reports a completed assistant message before OpenClaw releases the turn.",
-      "advanced": true
-    },
-    "appServer.postToolRawAssistantCompletionIdleTimeoutMs": {
-      "label": "Post-Tool Continuation Idle Timeout",
-      "help": "Completion-idle and progress guard after a tool handoff, native tool completion, or post-tool raw assistant progress while waiting for turn/completed. Defaults to 300000 ms when unset.",
       "advanced": true
     },
     "appServer.approvalPolicy": {

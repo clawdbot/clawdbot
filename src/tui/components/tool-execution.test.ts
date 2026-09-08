@@ -1,6 +1,6 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
-import { splitAnsiSegments } from "../../../packages/terminal-core/src/ansi-sequences.js";
+import { iterateAnsiSegments } from "../../../packages/terminal-core/src/ansi-sequences.js";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { ToolExecutionComponent } from "./tool-execution.js";
 
@@ -13,6 +13,164 @@ function renderToolOutput(text: string, width: number) {
 }
 
 describe("ToolExecutionComponent", () => {
+  it.each(
+    ["exec", "wait"].flatMap((toolName) =>
+      [false, true].flatMap((pretty) =>
+        [false, true].map((partial) => ({ toolName, pretty, partial })),
+      ),
+    ),
+  )(
+    "preserves literal Code Mode $toolName output (pretty=$pretty, partial=$partial)",
+    ({ toolName, pretty, partial }) => {
+      const details = {
+        status: partial ? "waiting" : "failed",
+        telemetry: { visibleTools: ["exec", "wait"] },
+      };
+      const json = JSON.stringify(
+        {
+          status: details.status,
+          value: 'START_COMPLETED **stars** "quoted" \\path',
+          literal: "```\n# literal heading\n```",
+        },
+        null,
+        pretty ? 2 : undefined,
+      );
+      const text = `SECURITY NOTICE: EXTERNAL, UNTRUSTED source\n<<<EXTERNAL_UNTRUSTED_CONTENT>>>\n${json}\n\`\`\`\n# literal heading\n\`\`\`\n<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>`;
+      const component = new ToolExecutionComponent(
+        toolName,
+        toolName === "exec" ? { code: "return value;" } : { runId: "synthetic-run" },
+      );
+      const result = { content: [{ type: "text", text }], details };
+      if (partial) {
+        component.setPartialResult(result);
+      } else {
+        component.setResult(result, { isError: true });
+      }
+      component.setExpanded(true);
+
+      const rendered = normalizeTestText(component.render(1_024).join("\n"));
+      for (const line of text.split("\n")) {
+        expect(rendered).toContain(line);
+      }
+    },
+  );
+
+  it("keeps Code Mode literal output bounded and terminal-safe through expansion", () => {
+    const attack = "\x1b]52;c;SYNTHETIC_CLIPBOARD_PAYLOAD\x07";
+    const text = `START_LITERAL ${attack}\u202eمرحبا\u202c\r\n${"**literal**".repeat(2_048)} END_LITERAL`;
+    const component = new ToolExecutionComponent("wait", { runId: "synthetic-run" });
+    component.setResult({
+      content: [{ type: "text", text }],
+      details: { status: "completed", telemetry: { visibleTools: ["exec", "wait"] } },
+    });
+
+    for (const expanded of [false, true, false]) {
+      component.setExpanded(expanded);
+      const lines = component.render(40);
+      const raw = lines.join("\n");
+      const rendered = normalizeTestText(raw);
+      expect(lines.every((line) => visibleWidth(line) <= 40)).toBe(true);
+      expect(rendered).toContain("**literal**");
+      expect(rendered.includes("END_LITERAL")).toBe(expanded);
+      if (!expanded) {
+        expect(lines.length).toBeLessThanOrEqual(MAX_COLLAPSED_COMPONENT_LINES);
+      }
+      expect(rendered).not.toContain("SYNTHETIC_CLIPBOARD_PAYLOAD");
+      expect(rendered).not.toContain("]52;c;");
+      expect(raw).not.toMatch(/[\r\u202e\u202c]/u);
+      expect(raw).toContain("\u2067");
+      expect(raw).toContain("\u2069");
+    }
+  });
+
+  it.each([
+    { name: "exec", details: undefined },
+    { name: "exec", details: { status: "completed", telemetry: { visibleTools: ["exec"] } } },
+    { name: "custom_tool", details: { telemetry: { visibleTools: ["exec", "wait"] } } },
+  ])(
+    "retains ordinary Markdown output for $name without Code Mode result identity",
+    ({ name, details }) => {
+      const component = new ToolExecutionComponent(name, { command: "echo sample" });
+      component.setResult({
+        content: [{ type: "text", text: "# Heading\n\n**emphasis**" }],
+        details,
+      });
+      const rendered = normalizeTestText(component.render(80).join("\n"));
+      expect(rendered).toContain("Heading");
+      expect(rendered).toContain("emphasis");
+      expect(rendered).not.toContain("# Heading");
+      expect(rendered).not.toContain("**emphasis**");
+    },
+  );
+
+  it("keeps tool arguments, output, and running status independent across updates", () => {
+    const component = new ToolExecutionComponent("read", { path: "initial.txt" });
+    component.setPartialResult({ content: [{ type: "text", text: "partial output" }] });
+    component.setArgs({ path: "updated.txt" });
+    component.setExpanded(true);
+
+    let rendered = normalizeTestText(component.render(80).join("\n"));
+    expect(rendered).toContain("updated.txt");
+    expect(rendered).not.toContain("initial.txt");
+    expect(rendered).toContain("partial output");
+    expect(rendered).toContain("(running)");
+
+    component.setResult({ content: [{ type: "text", text: "final output" }] }, { isError: true });
+    component.setArgs({ path: "complete.txt" });
+    component.setExpanded(false);
+
+    rendered = normalizeTestText(component.render(80).join("\n"));
+    expect(rendered).toContain("complete.txt");
+    expect(rendered).toContain("final output");
+    expect(rendered).not.toContain("partial output");
+    expect(rendered).not.toContain("(running)");
+
+    component.setPartialResult(undefined);
+    rendered = normalizeTestText(component.render(80).join("\n"));
+    expect(rendered).toContain("complete.txt");
+    expect(rendered).toContain("(running)");
+    expect(rendered).not.toContain("final output");
+  });
+
+  it.each(
+    [
+      { source: "    # heading\n    command --flag", literal: "# heading" },
+      { source: "    > quoted source\n    next line", literal: "> quoted source" },
+      { source: "    - source item\n      nested", literal: "- source item" },
+    ].flatMap(({ source, literal }) => [
+      { source, literal, phase: "partial", complete: false },
+      { source, literal, phase: "final", complete: true },
+    ]),
+  )("preserves indented $literal in $phase tool output", ({ source, literal, complete }) => {
+    const component = new ToolExecutionComponent("read_file", { path: "example.txt" });
+    const result = { content: [{ type: "text", text: source }] };
+    if (complete) {
+      component.setResult(result);
+    } else {
+      component.setPartialResult(result);
+    }
+
+    const rendered = component.render(80).map(normalizeTestText).join("\n");
+    expect(rendered).toContain("```");
+    expect(rendered).toContain(literal);
+  });
+
+  it.each([
+    { phase: "partial", complete: false },
+    { phase: "final", complete: true },
+  ])("keeps whitespace-only $phase tool output visually empty", ({ complete }) => {
+    const component = new ToolExecutionComponent("read_file", { path: "example.txt" });
+    const result = { content: [{ type: "text", text: "   \n  " }] };
+    if (complete) {
+      component.setResult(result);
+    } else {
+      component.setPartialResult(result);
+    }
+
+    const rendered = component.render(80).map(normalizeTestText).join("\n");
+    expect(rendered.includes("...")).toBe(!complete);
+  });
+
   it.each([
     { width: 20, characters: 8_192 },
     { width: 20, characters: 16_384 },
@@ -125,7 +283,7 @@ describe("ToolExecutionComponent", () => {
     const raw = lines.join("\n");
     const normalized = normalizeTestText(raw).replace(/[\u2067\u2069]/gu, "");
     const linkedRtl = lines.find((line) => line.includes("عنصر") && line.includes("\x1b]8;;"));
-    const targets = splitAnsiSegments(raw).flatMap((segment) => {
+    const targets = [...iterateAnsiSegments(raw)].flatMap((segment) => {
       if (segment.kind !== "ansi" || !segment.value.startsWith("\x1b]8;;")) {
         return [];
       }

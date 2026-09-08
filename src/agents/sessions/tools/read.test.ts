@@ -6,10 +6,13 @@ import os from "node:os";
 import path from "node:path";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
-import { createReadToolDefinition } from "./read.js";
+import { withFileMutationQueue } from "./file-mutation-queue.js";
+import { createReadTool, createReadToolDefinition } from "./read.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./truncate.js";
+import { createWriteToolDefinition } from "./write.js";
 
 const decodeWindowsTextFileBufferMock = vi.hoisted(() =>
   vi.fn(({ buffer }: { buffer: Buffer }) => buffer.toString("utf8")),
@@ -38,9 +41,7 @@ function createTinyBmp(): Buffer {
   return buffer;
 }
 
-function textContent(
-  result: Awaited<ReturnType<ReturnType<typeof createReadToolDefinition>["execute"]>>,
-): string {
+function textContent(result: { content: Array<{ type: string; text?: string }> }): string {
   const first = result.content[0];
   return first?.type === "text" ? (first.text ?? "") : "";
 }
@@ -104,6 +105,46 @@ describe("read tool", () => {
       });
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { source: "extension", modelHasVision: false },
+    { source: "extension", modelHasVision: true },
+    { source: "embedded", modelHasVision: false },
+    { source: "embedded", modelHasVision: true },
+    { source: "embedded", modelHasVision: undefined },
+  ])("matches image attachments to $source vision capability $modelHasVision", async (testCase) => {
+    const stateDir = tempDirs.make("openclaw-read-vision-");
+    const imagePath = path.join(stateDir, "pixel.png");
+    await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_BASE64, "base64"));
+
+    const result =
+      testCase.source === "embedded"
+        ? await createReadTool(stateDir, {
+            autoResizeImages: false,
+            modelHasVision: testCase.modelHasVision,
+          }).execute("embedded-read", { path: imagePath })
+        : await createReadToolDefinition(stateDir, { autoResizeImages: false }).execute(
+            "extension-read",
+            { path: imagePath },
+            undefined,
+            undefined,
+            {
+              model: { input: testCase.modelHasVision ? ["text", "image"] : ["text"] },
+            } as never,
+          );
+    const imageParts = result.content.filter((part) => part.type === "image");
+    const omitted = testCase.modelHasVision === false;
+
+    expect(imageParts).toHaveLength(omitted ? 0 : 1);
+    expect(textContent(result).includes("does not support images")).toBe(omitted);
+    if (!omitted) {
+      expect(imageParts[0]).toStrictEqual({
+        type: "image",
+        data: ONE_PIXEL_PNG_BASE64,
+        mimeType: "image/png",
+      });
     }
   });
 
@@ -384,6 +425,7 @@ describe("read tool", () => {
 
     expect(textContent(result)).toContain("Resolved filename");
     expect(textContent(result)).toContain("matched");
+    expect(result.details).toEqual({ kind: "text", content: "matched" });
   });
 
   it("counts filename-resolution notes inside the complete 50 KiB read ceiling", async () => {
@@ -508,23 +550,82 @@ describe("read tool", () => {
     ).rejects.toThrow(/cursor.*surrogate.*(?:1|3)/i);
   });
 
-  it.each([4, 5])("explains an intra-line cursor at or past EOF (%s)", async (cursor) => {
-    const tool = createReadToolDefinition("/workspace", {
-      operations: {
-        access: async () => {},
-        readFile: async () => Buffer.from("done"),
-      },
+  it.each([
+    { cursor: 4, contents: "done", length: 4 },
+    { cursor: 5, contents: "done", length: 4 },
+    { cursor: 1, contents: "\n", length: 0 },
+  ])(
+    "explains an intra-line cursor at or past EOF ($cursor)",
+    async ({ cursor, contents, length }) => {
+      const tool = createReadToolDefinition("/workspace", {
+        operations: {
+          access: async () => {},
+          readFile: async () => Buffer.from(contents),
+        },
+      });
+
+      const result = await tool.execute(
+        "call-cursor-eof",
+        { path: "done.txt", cursor },
+        undefined,
+        undefined,
+        {} as never,
+      );
+
+      expect(textContent(result)).toBe(
+        `Cursor ${cursor} is at or beyond the end of line 1 (${length} characters).`,
+      );
+    },
+  );
+
+  it.each([
+    {
+      name: "an empty first line",
+      contents: "\nsecond line\n",
+      offset: 1,
+      limit: 2000,
+      expected: "\nsecond line\n",
+    },
+    {
+      name: "a later empty line",
+      contents: "first line\n\nsecond line\n",
+      offset: 2,
+      limit: 2000,
+      expected: "\nsecond line\n",
+    },
+    {
+      name: "a nonempty line",
+      contents: "\nsecond line\n",
+      offset: 2,
+      limit: 2000,
+      expected: "second line\n",
+    },
+    {
+      name: "a blank-only file",
+      contents: "\n\n",
+      offset: 1,
+      limit: 2000,
+      expected: "File contains 2 blank lines.",
+    },
+    {
+      name: "a blank-only range",
+      contents: "\n\n",
+      offset: 1,
+      limit: 1,
+      expected:
+        "Selected range contains 1 blank line.\n\n[1 more line in file. Use offset=2 to continue.]",
+    },
+  ])("accepts cursor 0 on $name", async ({ contents, offset, limit, expected }) => {
+    const tempDir = tempDirs.make("openclaw-read-cursor-zero-");
+    await fs.writeFile(path.join(tempDir, "synthetic.txt"), contents);
+    const result = await createReadTool(tempDir).execute("read-zero", {
+      path: "synthetic.txt",
+      offset,
+      limit,
+      cursor: 0,
     });
 
-    const result = await tool.execute(
-      "call-cursor-eof",
-      { path: "done.txt", cursor },
-      undefined,
-      undefined,
-      {} as never,
-    );
-
-    expect(textContent(result)).toMatch(/cursor.*(?:end|beyond).*line 1/i);
+    expect(textContent(result)).toBe(expected);
   });
 
   it("finishes an oversized selected line before continuing at the next line", async () => {
@@ -555,29 +656,55 @@ describe("read tool", () => {
       undefined,
       {} as never,
     );
-    const firstChunk = textContent(first).replace(/\n\n\[Showing[^\]]*\]$/, "");
-    const secondChunk = textContent(second).replace(/\n\n\[\d+ more lines[^\]]*\]$/, "");
-    expect(`${firstChunk}${secondChunk}`).toBe(longLine);
+    if (first.details.kind !== "truncated" || second.details.kind !== "truncated") {
+      throw new Error("Expected both partial pages to retain their continuation");
+    }
+    expect(first.details.content + second.details.content).toBe(longLine);
     expect(textContent(second)).toContain("offset=3");
   });
 
-  it("preserves ordinary multi-line selection and trailing newlines", async () => {
+  it.each([
+    {
+      name: "CRLF lines through EOF",
+      contents: "first\r\nsecond\r\nthird\r\n",
+      args: { offset: 2 },
+      expected: "second\nthird\n",
+    },
+    {
+      name: "the last terminated line",
+      contents: "first\nsecond\nthird\n",
+      args: { offset: 3, limit: 1 },
+      expected: "third\n",
+    },
+    {
+      name: "a limit extending past an unterminated EOF",
+      contents: "first\nsecond\nthird",
+      args: { offset: 2, limit: 20 },
+      expected: "second\nthird",
+    },
+    {
+      name: "a later line cursor through EOF",
+      contents: "first\nsecond\nthird\n",
+      args: { offset: 2, limit: 2, cursor: 2 },
+      expected: "cond\nthird\n",
+    },
+  ])("preserves selected content for $name", async ({ contents, args, expected }) => {
     const tool = createReadToolDefinition("/workspace", {
       operations: {
         access: async () => {},
-        readFile: async () => Buffer.from("first\r\nsecond\r\nthird\r\n"),
+        readFile: async () => Buffer.from(contents),
       },
     });
 
     const selected = await tool.execute(
       "call-lines",
-      { path: "lines.txt", offset: 2 },
+      { path: "lines.txt", ...args },
       undefined,
       undefined,
       {} as never,
     );
 
-    expect(textContent(selected)).toBe("second\nthird\n");
+    expect(textContent(selected)).toBe(expected);
   });
 
   it("clamps non-positive line limits before slicing file content", async () => {
@@ -600,6 +727,11 @@ describe("read tool", () => {
     );
 
     expect(textContent(result)).toBe("alpha\n\n[2 more lines in file. Use offset=2 to continue.]");
+    expect(result.details).toMatchObject({
+      kind: "truncated",
+      content: "alpha",
+      continuation: { kind: "line", offset: 2, limit: 1 },
+    });
   });
 
   it.each([
@@ -722,25 +854,112 @@ describe("read tool", () => {
     expect(textContent(result)).toBe("import value\nconst marker = '\uFEFF';");
   });
 
-  it("uses an injected backend decoder when declared", async () => {
-    const bytes = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]);
-    const tool = createReadToolDefinition("/workspace", {
-      operations: {
-        decodeText: ({ buffer, absolutePath }) => `${absolutePath}:${buffer.toString("hex")}`,
-        access: async () => {},
-        detectImageMimeType: async () => null,
-        readFile: async () => bytes,
-      },
+  it.each(["\ud800a🦞b\udc00", "\ud800first\udc00\nsecond🦞\ud800\n"])(
+    "preserves an injected backend decoder's exact UTF-16 text: %j",
+    async (decoded) => {
+      const bytes = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]);
+      const tool = createReadToolDefinition("/workspace", {
+        operations: {
+          decodeText: ({ buffer, absolutePath }) =>
+            `${absolutePath}:${buffer.toString("hex")}:${decoded}`,
+          access: async () => {},
+          detectImageMimeType: async () => null,
+          readFile: async () => bytes,
+        },
+      });
+      const result = await tool.execute(
+        "call-1",
+        { path: "legacy.txt" },
+        undefined,
+        undefined,
+        {} as never,
+      );
+
+      expect(decodeWindowsTextFileBufferMock).not.toHaveBeenCalled();
+      expect(textContent(result)).toBe(
+        `${path.resolve("/workspace", "legacy.txt")}:c4e3bac3:${decoded}`,
+      );
+    },
+  );
+
+  it("waits for an aliased queued write before reading the same new file", async () => {
+    const tempDir = tempDirs.make("openclaw-read-write-order-");
+    const realDir = path.join(tempDir, "real");
+    const aliasDir = path.join(tempDir, "alias");
+    await fs.mkdir(realDir);
+    await fs.symlink(realDir, aliasDir, process.platform === "win32" ? "junction" : "dir");
+    const writePath = path.join(aliasDir, "race-target.txt");
+    const readPath = path.join(realDir, "race-target.txt");
+    const blockerStarted = createDeferred();
+    const releaseBlocker = createDeferred();
+    const readAccess = vi.fn(async (absolutePath: string) => await fs.access(absolutePath));
+    const blocker = withFileMutationQueue(writePath, async () => {
+      blockerStarted.resolve();
+      await releaseBlocker.promise;
     });
-    const result = await tool.execute(
-      "call-1",
-      { path: "legacy.txt" },
+    await blockerStarted.promise;
+    const writeResult = createWriteToolDefinition(tempDir).execute(
+      "write",
+      { path: writePath, content: "first snapshot" },
       undefined,
       undefined,
       {} as never,
     );
+    const readResult = createReadToolDefinition(tempDir, {
+      operations: {
+        access: readAccess,
+        readFile: async (absolutePath) => await fs.readFile(absolutePath),
+      },
+    }).execute("read", { path: readPath }, undefined, undefined, {} as never);
+    void readResult.catch(() => {});
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(readAccess).not.toHaveBeenCalled();
 
-    expect(decodeWindowsTextFileBufferMock).not.toHaveBeenCalled();
-    expect(textContent(result)).toBe(`${path.resolve("/workspace", "legacy.txt")}:c4e3bac3`);
+    releaseBlocker.resolve();
+    await blocker;
+    const [, result] = await Promise.all([writeResult, readResult]);
+    expect(readAccess).toHaveBeenCalledOnce();
+    expect(textContent(result)).toBe("first snapshot");
+  });
+
+  it("queues every accepted Unicode spelling before reading a new file", async () => {
+    const tempDir = tempDirs.make("openclaw-read-unicode-order-");
+    const writePath = path.join(tempDir, "caf\u00e9.txt");
+    const readPath = path.join(tempDir, "cafe\u0301.txt");
+    const blockerStarted = createDeferred();
+    const releaseBlocker = createDeferred();
+    const blocker = withFileMutationQueue(writePath, async () => {
+      blockerStarted.resolve();
+      await releaseBlocker.promise;
+    });
+    await blockerStarted.promise;
+
+    const writeResult = createWriteToolDefinition(tempDir).execute(
+      "write",
+      { path: writePath, content: "normalized snapshot" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    const readAccess = vi.fn(async (absolutePath: string) => await fs.access(absolutePath));
+    const readResult = createReadToolDefinition(tempDir, {
+      operations: {
+        access: readAccess,
+        readFile: async (absolutePath) => await fs.readFile(absolutePath),
+      },
+    }).execute("read", { path: readPath }, undefined, undefined, {} as never);
+    void readResult.catch(() => {});
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(readAccess).not.toHaveBeenCalled();
+
+    releaseBlocker.resolve();
+    await blocker;
+    const [, result] = await Promise.all([writeResult, readResult]);
+    expect(readAccess).toHaveBeenCalled();
+    expect(textContent(result)).toContain("normalized snapshot");
   });
 });

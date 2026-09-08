@@ -1,4 +1,4 @@
-import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { botNames, botOpenIds, httpServers, wsClients } from "./monitor.state.js";
 
 export function cleanupFeishuMonitorStateForTests(): void {

@@ -9,7 +9,7 @@ metadata:
         - graincrawl
     install:
       - kind: go
-        module: github.com/vincentkoc/graincrawl/cmd/graincrawl@latest
+        module: github.com/openclaw/graincrawl/cmd/graincrawl@latest
         bins:
           - graincrawl
 ---
@@ -41,4 +41,4 @@ graincrawl panels get <id>
 graincrawl --json sql "select count(*) as notes from notes;"
 ```
 
-Report absolute date spans, note titles, source gaps, and transcript/panel availability. Use read-only SQL for exact counts/rankings. Before encrypted source debugging, run explicit unlock/secrets checks; do not surprise-prompt Keychain.
+Report absolute date spans, note titles, source gaps, and transcript/panel availability. Use read-only SQL for exact counts/rankings. Ordinary reads must not surprise-prompt Keychain. Before encrypted source debugging, inspect `graincrawl secrets --json`; use `graincrawl unlock --json` before enabling encrypted sources. Resolve the database from status/config rather than assuming a machine-specific path.

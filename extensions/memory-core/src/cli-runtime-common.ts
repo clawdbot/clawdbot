@@ -10,7 +10,9 @@ import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   defaultRuntime,
+  formatCliJsonFailure,
   formatErrorMessage,
+  getMemoryEmbeddingCommandSecretTargetIds,
   getMemorySearchManager,
   getRuntimeConfig,
   resolveCommandSecretRefsViaGateway,
@@ -27,9 +29,10 @@ export type MemoryManager = NonNullable<
   Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]
 >;
 type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpose"];
-function getMemoryCommandSecretTargetIds(): Set<string> {
-  return new Set(["memory.search.remote.apiKey", "agents.entries.*.memory.search.remote.apiKey"]);
-}
+type MemoryCommandUnavailable = { agentId: string } & (
+  | { status: "disabled" }
+  | ReturnType<typeof formatCliJsonFailure>
+);
 function isMemorySecretOwnerFailure(error: unknown, message: string): boolean {
   const candidate = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
   if (
@@ -60,7 +63,7 @@ async function loadMemoryCommandConfig(
     const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
       config,
       commandName,
-      targetIds: getMemoryCommandSecretTargetIds(),
+      targetIds: getMemoryEmbeddingCommandSecretTargetIds(),
       ...(mode ? { mode } : {}),
     });
     return { config: resolvedConfig, diagnostics };
@@ -128,7 +131,7 @@ export function formatAuditCounts(audit: ShortTermAuditSummary): string {
   const suffix = scriptCoverage ? ` · scripts=${scriptCoverage}` : "";
   return `${audit.entryCount} entries · ${audit.promotedCount} promoted · ${audit.conceptTaggedEntryCount} concept-tagged · ${audit.spacedEntryCount} spaced${suffix}`;
 }
-function resolveAgent(cfg: OpenClawConfig, agent?: string) {
+export function resolveMemoryAgent(cfg: OpenClawConfig, agent?: string) {
   const trimmed = agent?.trim();
   if (agent !== undefined && !trimmed) {
     throw new Error("--agent must not be blank");
@@ -143,7 +146,7 @@ export function buildCliMemorySearchSessionKey(agentId: string): string {
     dmScope: "per-channel-peer",
   });
 }
-function resolveAgentIds(cfg: OpenClawConfig, agent?: string): string[] {
+export function resolveMemoryAgentIds(cfg: OpenClawConfig, agent?: string): string[] {
   const trimmed = agent?.trim();
   if (agent !== undefined && !trimmed) {
     throw new Error("--agent must not be blank");
@@ -156,51 +159,13 @@ export function formatExtraPaths(workspaceDir: string, extraPaths: MemoryExtraPa
     return entry.pattern ? `${root} (pattern: ${entry.pattern})` : root;
   });
 }
-async function withMemoryManagerForAgent(params: {
-  commandName: string;
-  cfg: OpenClawConfig;
-  agentId: string;
-  purpose?: MemoryManagerPurpose;
-  inspectSources?: boolean;
-  acquireLocalService?: MemoryCoreAcquireLocalService;
-  run: (manager: MemoryManager) => Promise<void>;
-}): Promise<void> {
-  const managerParams: Parameters<typeof getMemorySearchManager>[0] = {
-    cfg: params.cfg,
-    agentId: params.agentId,
-  };
-  if (params.purpose) {
-    managerParams.purpose = params.purpose;
-  }
-  if (params.inspectSources) {
-    managerParams.inspectSources = true;
-  }
-  if (params.acquireLocalService) {
-    managerParams.acquireLocalService = params.acquireLocalService;
-  }
-  await withManager<MemoryManager>({
-    getManager: () => getMemorySearchManager(managerParams),
-    onMissing: (error) => {
-      if (!error?.trim()) {
-        defaultRuntime.log("Memory search disabled.");
-        return;
-      }
-      defaultRuntime.error(`${params.commandName} failed (${params.agentId}): ${error}`);
-      process.exitCode = 1;
-    },
-    onCloseError: (err) =>
-      defaultRuntime.error(`Memory manager close failed: ${formatErrorMessage(err)}`),
-    close: async (manager) => {
-      await manager.close?.();
-    },
-    run: params.run,
-  });
-}
 export async function withMemoryCommand(params: {
   commandName: string;
   agent?: string;
   allAgents?: boolean;
   diagnosticsToStderr?: boolean;
+  // Single-command writers opt in; status owns one aggregate document after this scope.
+  onUnavailable?: (result: MemoryCommandUnavailable) => void;
   purpose?: MemoryManagerPurpose;
   inspectSources?: boolean;
   acquireLocalService?: MemoryCoreAcquireLocalService;
@@ -212,16 +177,40 @@ export async function withMemoryCommand(params: {
   );
   emitMemorySecretResolveDiagnostics(diagnostics, { json: params.diagnosticsToStderr });
   const agentIds = params.allAgents
-    ? resolveAgentIds(cfg, params.agent)
-    : [resolveAgent(cfg, params.agent)];
+    ? resolveMemoryAgentIds(cfg, params.agent)
+    : [resolveMemoryAgent(cfg, params.agent)];
   for (const agentId of agentIds) {
-    await withMemoryManagerForAgent({
-      commandName: params.commandName,
+    const managerParams: Parameters<typeof getMemorySearchManager>[0] = {
       cfg,
       agentId,
-      purpose: params.purpose,
-      inspectSources: params.inspectSources,
-      acquireLocalService: params.acquireLocalService,
+    };
+    if (params.purpose) {
+      managerParams.purpose = params.purpose;
+    }
+    if (params.inspectSources) {
+      managerParams.inspectSources = true;
+    }
+    if (params.acquireLocalService) {
+      managerParams.acquireLocalService = params.acquireLocalService;
+    }
+    await withManager<MemoryManager>({
+      getManager: () => getMemorySearchManager(managerParams),
+      onMissing: (error) => {
+        if (!error?.trim()) {
+          defaultRuntime.log("Memory search disabled.");
+          params.onUnavailable?.({ agentId, status: "disabled" });
+          return;
+        }
+        const message = `${params.commandName} failed (${agentId}): ${error}`;
+        defaultRuntime.error(message);
+        process.exitCode = 1;
+        params.onUnavailable?.({ ...formatCliJsonFailure(message), agentId });
+      },
+      onCloseError: (err) =>
+        defaultRuntime.error(`Memory manager close failed: ${formatErrorMessage(err)}`),
+      close: async (manager) => {
+        await manager.close?.();
+      },
       run: async (manager) => params.run({ manager, cfg, agentId }),
     });
   }
@@ -243,13 +232,11 @@ export async function scanMemoryManagerSources(
   if (!status.sourceCounts?.length) {
     return undefined;
   }
-  const sources = status.sourceCounts.map(
-    (entry): SourceScan => ({
-      source: entry.source,
-      totalFiles: entry.eligible ?? null,
-      issues: entry.issues ?? [],
-    }),
-  );
+  const sources = status.sourceCounts.map((entry): SourceScan => ({
+    source: entry.source,
+    totalFiles: entry.eligible ?? null,
+    issues: entry.issues ?? [],
+  }));
   const totalFiles = sources.some((entry) => entry.totalFiles === null)
     ? null
     : sources.reduce((total, entry) => total + (entry.totalFiles ?? 0), 0);

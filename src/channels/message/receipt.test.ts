@@ -4,9 +4,30 @@ import {
   createMessageReceiptFromOutboundResults,
   listMessageReceiptPlatformIds,
   resolveMessageReceiptPrimaryId,
+  resolveReceiptSourceId,
 } from "./receipt.js";
 
 describe("createMessageReceiptFromOutboundResults", () => {
+  it("excludes explicit no-send results from identity and aggregate receipt evidence", () => {
+    const notSent = {
+      outcome: "not_sent" as const,
+      messageId: "not-a-delivery",
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ messageId: "stale-id" }],
+        threadId: "stale-thread",
+      }),
+    };
+    const receipt = createMessageReceiptFromOutboundResults({
+      results: [notSent, { messageId: "accepted" }],
+    });
+
+    expect(resolveReceiptSourceId(notSent)).toBeUndefined();
+    expect(receipt.platformMessageIds).toEqual(["accepted"]);
+    expect(receipt.parts.map((part) => part.platformMessageId)).toEqual(["accepted"]);
+    expect(receipt.threadId).toBeUndefined();
+    expect(receipt.raw?.[0]).toBe(notSent);
+  });
+
   it("builds a multi-part receipt from outbound delivery results", () => {
     const receipt = createMessageReceiptFromOutboundResults({
       results: [
@@ -85,11 +106,6 @@ describe("createMessageReceiptFromOutboundResults", () => {
     {
       label: "Slack suppression sentinels",
       result: { channel: "slack", messageId: "suppressed", channelId: "" },
-      receiptMetadata: {},
-    },
-    {
-      label: "Twitch skip sentinels",
-      result: { channel: "twitch", messageId: "skipped" },
       receiptMetadata: {},
     },
   ])("does not fabricate platform ids from $label", ({ result, receiptMetadata }) => {

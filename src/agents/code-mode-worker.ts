@@ -1,26 +1,53 @@
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import type { CodeModeFailureCode, CodeModeWorkerResult } from "./code-mode-runtime.js";
+import {
+  WorkerTaskError,
+  WorkerTaskPool,
+  type WorkerTaskRequestContext,
+  type WorkerTaskResponse,
+} from "../infra/worker-task-pool.js";
+import { createLazyPromise } from "../shared/lazy-promise.js";
+import { EMPTY_CODE_MODE_OUTPUT } from "./code-mode-json.js";
+import {
+  codeModeFailureCode,
+  type CodeModeFailureCode,
+  type CodeModeWorkerResult,
+} from "./code-mode-runtime.js";
+import {
+  CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
+  type CodeModeWorkerBoundary,
+  type CodeModeWorkerContinuation,
+} from "./code-mode-worker-types.js";
 
-let quickJsWasmModulePromise: Promise<WebAssembly.Module> | undefined;
+export type CodeModeWorkerInlineHost = {
+  /** Append boundary output once. Continue with the remaining shared call budget;
+   * checkpoint only when genuinely parking the VM (including an internal wait). Host tools keep
+   * their cell-owner signal, not the shorter-lived worker-task signal. */
+  onBoundary: (
+    boundary: CodeModeWorkerBoundary,
+    context: WorkerTaskRequestContext & {
+      /** Exact queue/initialization-adjusted grant sent to the worker and enforced there. */
+      maxTimeoutMs: number;
+    },
+  ) => Promise<CodeModeWorkerContinuation & { onConsumed?: () => void }>;
+  onInputConsumed?: () => void;
+};
 
-function getQuickJsWasmModule(): Promise<WebAssembly.Module> {
-  quickJsWasmModulePromise ??= Promise.resolve()
-    .then(() => createRequire(import.meta.url).resolve("quickjs-wasi/quickjs.wasm"))
-    .then((wasmPath) => readFile(wasmPath))
-    .then((bytes) => WebAssembly.compile(bytes))
-    .catch((error: unknown) => {
-      // Failed initialization is transient host state, not a process-wide
-      // verdict; later runs must retry without bypassing their watchdog.
-      quickJsWasmModulePromise = undefined;
-      throw error;
-    });
-  return quickJsWasmModulePromise;
-}
+const getQuickJsModules = createLazyPromise(async () => {
+  const resolve = createRequire(import.meta.url).resolve;
+  const compile = async (path: string) => WebAssembly.compile(await readFile(resolve(path)));
+  const [wasmModule, encoding] = await Promise.all([
+    compile("quickjs-wasi/quickjs.wasm"),
+    compile("quickjs-wasi/encoding.so"),
+  ]);
+  return {
+    wasmModule,
+    wasmExtensions: [{ name: "encoding", wasm: encoding }],
+  };
+});
 
 function codeModeWorkerUrl(): URL {
   return resolveRuntimeWorkerUrl({
@@ -40,7 +67,7 @@ function failedCodeModeWorkerResult(
     code,
     failurePhase: "host",
     bridgeDispatchStarted: false,
-    output: [],
+    output: EMPTY_CODE_MODE_OUTPUT,
   };
 }
 
@@ -60,8 +87,16 @@ export function normalizeCodeModeTimeoutResult<
   return result;
 }
 
-export function normalizeCodeModeWorkerResult(result: CodeModeWorkerResult): CodeModeWorkerResult {
-  return normalizeCodeModeTimeoutResult(result);
+let sharedPool: { url: string; pool: WorkerTaskPool<unknown, unknown> } | undefined;
+
+function getCodeModePool(url: URL): WorkerTaskPool<unknown, unknown> {
+  if (sharedPool?.url !== url.href) {
+    // A runtime entry change retires its old workers; ordinary runs reuse the
+    // process-stable entry while each request still creates an isolated VM.
+    void sharedPool?.pool.close();
+    sharedPool = { url: url.href, pool: new WorkerTaskPool({ workerUrl: url }) };
+  }
+  return sharedPool.pool;
 }
 
 export async function runCodeModeWorker(
@@ -69,111 +104,94 @@ export async function runCodeModeWorker(
   timeoutMs: number,
   workerUrl?: URL,
   signal?: AbortSignal,
+  inlineHost?: CodeModeWorkerInlineHost,
 ): Promise<CodeModeWorkerResult> {
-  const resolvedWorkerUrl = workerUrl ?? codeModeWorkerUrl();
-  const sourceWorkerExecArgv = resolvedWorkerUrl.pathname.endsWith(".ts")
-    ? ["--import", "tsx"]
-    : undefined;
-  let worker: Worker | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let onAbort: (() => void) | undefined;
+  const pool = workerUrl
+    ? new WorkerTaskPool<unknown, unknown>({ workerUrl, maxWorkers: 1 })
+    : getCodeModePool(codeModeWorkerUrl());
+  const startedAt = performance.now();
+  let admittedTimeoutMs: number | undefined;
   try {
-    return await new Promise<CodeModeWorkerResult>((resolve) => {
-      let settled = false;
-      const finish = (result: CodeModeWorkerResult) => {
-        if (settled) {
-          return;
+    const message = await pool.run(
+      async () => {
+        const modules = await getQuickJsModules();
+        if (!isRecord(workerData)) {
+          return workerData;
         }
-        settled = true;
-        resolve(result);
-      };
-      timer = setTimeout(() => {
-        finish({
-          status: "failed",
-          error: "code mode worker timeout exceeded",
-          code: "timeout",
-          failurePhase: "host",
-          bridgeDispatchStarted: false,
-          output: [],
-        });
-      }, timeoutMs);
-      onAbort = () => {
-        const abortReason = signal?.reason;
-        finish({
-          status: "failed",
-          error:
-            abortReason instanceof CodeModeHeadlessTimeoutError
-              ? "code mode timeout exceeded"
-              : "code mode execution aborted",
-          code: abortReason instanceof CodeModeHeadlessTimeoutError ? "timeout" : "aborted",
-          failurePhase: "host",
-          bridgeDispatchStarted: false,
-          output: [],
-        });
-      };
-      signal?.addEventListener("abort", onAbort, { once: true });
-      if (signal?.aborted) {
-        onAbort();
-        return;
-      }
-
-      // Compilation is part of the same execution deadline. A timed-out or
-      // aborted initialization must never create a worker after settlement.
-      void getQuickJsWasmModule().then(
-        (wasmModule) => {
-          if (settled) {
-            return;
-          }
-          try {
-            worker = new Worker(resolvedWorkerUrl, {
-              workerData: isRecord(workerData) ? { ...workerData, wasmModule } : workerData,
-              execArgv: sourceWorkerExecArgv,
-            });
-          } catch (error) {
-            finish(failedCodeModeWorkerResult(error, "runtime_unavailable"));
-            return;
-          }
-
-          worker.once("message", (message: unknown) => {
-            const result = isRecord(message)
-              ? (message as CodeModeWorkerResult)
-              : ({
-                  status: "failed",
-                  error: "invalid code mode worker response",
-                  code: "internal_error",
-                  failurePhase: "host",
-                  bridgeDispatchStarted: false,
-                  output: [],
-                } satisfies CodeModeWorkerResult);
-            finish(normalizeCodeModeWorkerResult(result));
-          });
-          worker.once("error", (error) => {
-            finish(failedCodeModeWorkerResult(error, "runtime_unavailable"));
-          });
-          worker.once("exit", (code) => {
-            // A clean exit without a response is still unavailable; `finish`
-            // prevents normal message-then-exit from replacing a real result.
-            finish(
-              failedCodeModeWorkerResult(
-                new Error(`code mode worker exited with code ${code} before returning a result`),
-                "runtime_unavailable",
-              ),
-            );
-          });
-        },
-        (error: unknown) => {
-          finish(failedCodeModeWorkerResult(error, "runtime_unavailable"));
-        },
+        const config = isRecord(workerData.config) ? workerData.config : undefined;
+        const prepared: Record<string, unknown> = { ...workerData, ...modules };
+        if (config && typeof config.timeoutMs === "number") {
+          // Queueing and initialization consume the same budget as parsing and execution.
+          const admittedConfig = {
+            ...config,
+            timeoutMs: Math.max(0, config.timeoutMs - (performance.now() - startedAt)),
+          };
+          // Both sides receive the exact value produced by this single admission calculation.
+          admittedTimeoutMs = admittedConfig.timeoutMs;
+          prepared.config = admittedConfig;
+        }
+        return prepared;
+      },
+      {
+        timeoutMs,
+        signal,
+        onInputConsumed: inlineHost?.onInputConsumed,
+        onRequest: inlineHost
+          ? async (value, context): Promise<WorkerTaskResponse> => {
+              if (!isRecord(value) || value.status !== "boundary") {
+                throw new Error("invalid code mode worker boundary");
+              }
+              if (
+                admittedTimeoutMs === undefined ||
+                !Number.isFinite(admittedTimeoutMs) ||
+                admittedTimeoutMs <= 0
+              ) {
+                throw new Error("invalid code mode worker admission budget");
+              }
+              const { onConsumed, ...input } = await inlineHost.onBoundary(
+                // SAFETY: The private worker owns this boundary, never a guest routing identity.
+                value as CodeModeWorkerBoundary,
+                { ...context, maxTimeoutMs: admittedTimeoutMs },
+              );
+              return {
+                input,
+                onConsumed,
+                timeoutMs:
+                  (input.kind === "continue" ? input.timeoutMs : 0) +
+                  CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
+              };
+            }
+          : undefined,
+        // A committed resume consumes this snapshot. Failure already closes
+        // the run, so transferring ownership avoids copying its entire heap.
+        transferList: (input) =>
+          isRecord(input) && isRecord(input.snapshot) && input.snapshot.memory instanceof Uint8Array
+            ? [input.snapshot.memory.buffer as ArrayBuffer] // SAFETY: QuickJS.snapshot owns a dedicated ArrayBuffer.
+            : [],
+      },
+    );
+    return isRecord(message)
+      ? normalizeCodeModeTimeoutResult(message as CodeModeWorkerResult)
+      : failedCodeModeWorkerResult("invalid code mode worker response", "internal_error");
+  } catch (error) {
+    if (signal?.aborted) {
+      return failedCodeModeWorkerResult(
+        signal.reason instanceof CodeModeHeadlessTimeoutError
+          ? "code mode timeout exceeded"
+          : "code mode execution aborted",
+        signal.reason instanceof CodeModeHeadlessTimeoutError ? "timeout" : "aborted",
       );
-    });
+    }
+    return error instanceof WorkerTaskError && error.code === "timeout"
+      ? failedCodeModeWorkerResult("code mode worker timeout exceeded", "timeout")
+      : failedCodeModeWorkerResult(
+          error,
+          error instanceof WorkerTaskError ? "runtime_unavailable" : codeModeFailureCode(error),
+        );
   } finally {
-    if (timer) {
-      clearTimeout(timer);
+    if (workerUrl) {
+      await pool.close();
     }
-    if (onAbort) {
-      signal?.removeEventListener("abort", onAbort);
-    }
-    await worker?.terminate();
   }
 }
 

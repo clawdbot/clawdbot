@@ -115,7 +115,7 @@ describe("tool-cards", () => {
           name: "web_search",
           args: { query: "openclaw" },
         },
-        { expanded: false, onToggleExpanded: toggle },
+        { messageKey: "test-message", expanded: false, onToggleExpanded: toggle },
       ),
       container,
     );
@@ -144,7 +144,7 @@ describe("tool-cards", () => {
           args: { command: "pnpm test" },
           live: true,
         },
-        { expanded: false, runActive: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: false, runActive: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -167,7 +167,7 @@ describe("tool-cards", () => {
           inputText: '{\n  "url": "https://example.com"\n}',
           outputText: "Opened page",
         },
-        { expanded: true, onToggleExpanded: toggle },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: toggle },
       ),
       container,
     );
@@ -214,7 +214,7 @@ describe("tool-cards", () => {
           },
           outputText: "Applied patch",
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -275,7 +275,7 @@ describe("tool-cards", () => {
           },
           outputText: "Applied patch",
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -298,7 +298,7 @@ describe("tool-cards", () => {
           completed: true,
           isError: true,
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -319,6 +319,7 @@ describe("tool-cards", () => {
   it("labels a completed Codex file creation from its recorded operation", () => {
     const container = document.createElement("div");
     const onOpenWorkspaceFile = vi.fn();
+    const onToggleExpanded = vi.fn();
     render(
       renderToolCard(
         {
@@ -335,7 +336,7 @@ describe("tool-cards", () => {
           },
           completed: true,
         },
-        { expanded: false, onOpenWorkspaceFile, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: false, onOpenWorkspaceFile, onToggleExpanded },
       ),
       container,
     );
@@ -346,6 +347,11 @@ describe("tool-cards", () => {
     );
     container.querySelector<HTMLButtonElement>(".chat-tool-row__file-link")?.click();
     expect(onOpenWorkspaceFile).toHaveBeenCalledWith({ path: "src/new.ts" });
+    expect(onToggleExpanded).not.toHaveBeenCalled();
+
+    container.querySelector<HTMLButtonElement>(".chat-tool-row__toggle")?.click();
+    expect(onToggleExpanded).toHaveBeenCalledWith("msg:patch:add");
+    expect(onOpenWorkspaceFile).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -395,7 +401,7 @@ describe("tool-cards", () => {
           args: { patch },
           completed: true,
         },
-        { expanded: false, onOpenWorkspaceFile, onToggleExpanded },
+        { messageKey: "test-message", expanded: false, onOpenWorkspaceFile, onToggleExpanded },
       ),
       container,
     );
@@ -480,6 +486,7 @@ describe("tool-cards", () => {
               ...state.card,
             },
             {
+              messageKey: "test-message",
               expanded: true,
               onToggleExpanded: vi.fn(),
               runActive: state.runActive,
@@ -498,6 +505,90 @@ describe("tool-cards", () => {
         }
         expect(container.querySelector(".chat-tool-msg-summary--error")).toBeNull();
       }
+    }
+  });
+
+  it.each(
+    [
+      {
+        name: "edit",
+        args: { path: "src/edit.ts", oldText: "old edit", newText: "new edit" },
+        copiedText: "new edit",
+      },
+      {
+        name: "write",
+        args: { path: "src/write.ts", content: "new file\n" },
+        copiedText: "new file",
+      },
+      {
+        name: "apply_patch",
+        args: {
+          changes: [
+            {
+              path: "src/patch.ts",
+              kind: { type: "update" },
+              diff: "--- a/src/patch.ts\n+++ b/src/patch.ts\n@@ -1 +1 @@\n-old patch\n+new patch\n",
+            },
+          ],
+        },
+        copiedText: "new patch",
+      },
+    ].flatMap((tool) =>
+      [
+        { failed: false, feedback: "Copied!" },
+        { failed: true, feedback: "Copy failed" },
+      ].map((outcome) => ({
+        name: tool.name,
+        args: tool.args,
+        copiedText: tool.copiedText,
+        failed: outcome.failed,
+        feedback: outcome.feedback,
+      })),
+    ),
+  )("shows $feedback after copying a completed $name diff", async (tool) => {
+    const writeText = tool.failed
+      ? vi.fn().mockRejectedValue(new DOMException("Clipboard access denied", "NotAllowedError"))
+      : vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const container = document.body.appendChild(document.createElement("div"));
+    const onOpenSidebar = vi.fn();
+
+    try {
+      render(
+        renderToolCard(
+          {
+            id: `msg:${tool.name}:copy`,
+            name: tool.name,
+            args: tool.args,
+            completed: true,
+          },
+          { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn(), onOpenSidebar },
+        ),
+        container,
+      );
+
+      const copyButton = container.querySelector<HTMLButtonElement>(
+        '.chat-tool-card__actions button[aria-label="Copy"]',
+      );
+      expect(copyButton).toBeInstanceOf(HTMLButtonElement);
+      copyButton!.click();
+
+      await vi.waitFor(() => expect(copyButton!.getAttribute("aria-label")).toBe(tool.feedback));
+
+      expect(writeText).toHaveBeenCalledWith(expect.stringContaining(tool.copiedText));
+      const feedback = copyButton!.parentElement?.querySelector<HTMLElement>('[role="status"]');
+      expect(feedback?.textContent).toBe(tool.feedback);
+      expect(feedback?.hidden).toBe(false);
+
+      const sidebarButton = container.querySelector<HTMLButtonElement>(
+        `.chat-tool-card__actions button[aria-label="${t("chat.toolCards.openDetails")}"]`,
+      );
+      expect(sidebarButton).toBeInstanceOf(HTMLButtonElement);
+      sidebarButton!.click();
+      expect(onOpenSidebar).toHaveBeenCalledOnce();
+    } finally {
+      container.remove();
+      vi.unstubAllGlobals();
     }
   });
 
@@ -525,6 +616,7 @@ describe("tool-cards", () => {
           completed: true,
         },
         {
+          messageKey: "test-message",
           expanded: true,
           onOpenWorkspaceFile,
           onToggleExpanded: vi.fn(),
@@ -551,7 +643,7 @@ describe("tool-cards", () => {
           args: { path: "/repo/src/a.ts", offset: 40, limit: 20 },
           inputText: JSON.stringify({ path: "/repo/src/a.ts", offset: 40, limit: 20 }),
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -581,6 +673,7 @@ describe("tool-cards", () => {
           outputText: "Proposal created",
         },
         {
+          messageKey: "test-message",
           expanded: true,
           onOpenSidebar: vi.fn(),
           onToggleExpanded: vi.fn(),
@@ -610,7 +703,7 @@ describe("tool-cards", () => {
           args: { mode: "session", thread: true },
           inputText: '{\n  "mode": "session",\n  "thread": true\n}',
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -639,7 +732,7 @@ describe("tool-cards", () => {
           args: { mode: "run" },
           inputText: '{\n  "mode": "run"\n}',
         },
-        { expanded: false, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: false, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -667,7 +760,7 @@ describe("tool-cards", () => {
           },
           inputText: "message input",
         },
-        { expanded: false, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: false, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -705,7 +798,7 @@ describe("tool-cards", () => {
           inputText: '{\n  "action": "create"\n}',
           outputText: "Proposal created",
         },
-        { expanded: false, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: false, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -730,7 +823,7 @@ describe("tool-cards", () => {
           args: "with Example Deck",
           inputText: "with Example Deck",
         },
-        { expanded: false, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: false, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -748,7 +841,7 @@ describe("tool-cards", () => {
           args: "with Example Deck",
           inputText: "with Example Deck",
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -797,7 +890,7 @@ describe("tool-cards", () => {
           args: rawInput,
           inputText: rawInput,
         },
-        { expanded: false, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: false, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -838,7 +931,7 @@ describe("tool-cards", () => {
             preferredHeight: 480,
           },
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -893,7 +986,7 @@ describe("tool-cards", () => {
             url: "/__openclaw__/canvas/documents/qr_preview/index.html",
           },
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -937,7 +1030,7 @@ describe("tool-cards", () => {
             preferredHeight: 360,
           },
         },
-        { expanded: true, onToggleExpanded: vi.fn(), onOpenSidebar },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn(), onOpenSidebar },
       ),
       container,
     );
@@ -956,7 +1049,7 @@ describe("tool-cards", () => {
     expect(sidebar.entryUrl).toBe("/__openclaw__/canvas/documents/cv_sidebar/index.html");
   });
 
-  it("does not add a full-message request for ambiguous tool details", () => {
+  it("opens ambiguous tool details with the same sidebar output", () => {
     const container = document.createElement("div");
     const onOpenSidebar = vi.fn();
     render(
@@ -967,13 +1060,7 @@ describe("tool-cards", () => {
           outputText: "Opened page",
           messageId: "msg-tool-full",
         },
-        {
-          expanded: true,
-          sessionKey: "main",
-          agentId: "work",
-          onToggleExpanded: vi.fn(),
-          onOpenSidebar,
-        },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn(), onOpenSidebar },
       ),
       container,
     );
@@ -983,7 +1070,10 @@ describe("tool-cards", () => {
     sidebarButton!.click();
 
     const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");
-    expect(sidebar.kind).toBe("markdown");
-    expect(sidebar.fullMessageRequest).toBeUndefined();
+    expect(sidebar).toEqual({
+      kind: "markdown",
+      content: "## Browser.open\n\n**Tool:** `browser.open`\n\n### Tool output\nOpened page",
+      rawText: "Opened page",
+    });
   });
 });
