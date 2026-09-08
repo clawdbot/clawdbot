@@ -194,7 +194,10 @@ export function buildGatewaySessionRow(params: {
         params.storeChildSessionsByKey.get(key),
       )
     : resolveChildSessionKeys(key, store, now, rowContext?.subagentRuns);
-  const pinnedAt = isPinnableSessionEntry(key, entry) ? entry?.pinnedAt : undefined;
+  const pinnedAt =
+    entry?.pinnedAt !== undefined && isPinnableSessionEntry(key, entry)
+      ? entry.pinnedAt
+      : undefined;
   const compactionCheckpoints = resolveProjectableCompactionCheckpoints(entry);
   const compactionCheckpointCount = Array.isArray(entry?.compactionCheckpoints)
     ? compactionCheckpoints.length
