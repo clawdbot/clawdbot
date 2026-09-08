@@ -32,6 +32,7 @@ export function createExtensionCodexAppServerAttemptExtraVitestConfig(
       "extensions/codex/src/app-server/run-attempt.turn-watches.test.ts",
       "extensions/codex/src/app-server/run-attempt.usage-limits.test.ts",
       "extensions/codex/src/app-server/run-attempt.vision-tools.test.ts",
+      "extensions/codex/src/app-server/run-attempt.workspace-adoption.test.ts",
     ],
     {
       dir: "extensions",
