@@ -3,6 +3,7 @@ import type { DeclaredProviderOwnerIndex } from "../provider-owner-index.js";
 export type PluginRuntimeLoadContextState = {
   controlPlaneFingerprint: string;
   registrationConfigKey: string;
+  loaderCacheIdentity?: Readonly<{ requestKey: string; resolvedKey: string }>;
   declaredProviderOwners: DeclaredProviderOwnerIndex;
 };
 

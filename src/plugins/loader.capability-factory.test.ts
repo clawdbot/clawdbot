@@ -27,6 +27,11 @@ import {
 import { createPluginCache, getPluginCache, withPluginCache } from "./plugin-cache.js";
 import { pluginLoaderCacheState } from "./registry-lifecycle.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
+import { setActivePluginRegistry } from "./runtime.js";
+import {
+  getPluginRuntimeLoadContext,
+  setPluginRuntimeLoadContext,
+} from "./runtime/load-context.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import * as sdkAlias from "./sdk-alias.js";
 
@@ -252,7 +257,7 @@ describe.each(["cjs", "ts"] as const)("%s capability factory registration", (ext
     await withFactoryPlugin(
       extension,
       'api.logger.info("inside registration");' + registerFactories,
-      (options) => {
+      (options, root) => {
         let inFlightAtRegistration: boolean | undefined;
         const authored: PluginLoadOptions = Object.freeze({
           ...options,
@@ -277,7 +282,29 @@ describe.each(["cjs", "ts"] as const)("%s capability factory registration", (ext
         expect(resolvePluginRegistryLoadCacheKey(authored)).toBe(cacheKey);
         expect(pluginLoaderCacheState.get(cacheKey)).toBe(registry);
         expect(resolveCompatibleRuntimePluginRegistry(authored)).toBe(registry);
+        const bound = getPluginRuntimeLoadContext(registry)!;
+        const prepared = { ...authored, manifestRegistry: bound.manifestRegistry };
+        expect(resolveCompatibleRuntimePluginRegistry(prepared)).toBe(registry);
         expect(loadOpenClawPlugins(authored)).toBe(registry);
+        expect(resolveCompatibleRuntimePluginRegistry(prepared)).toBe(registry);
+        const changedManifest = {
+          ...bound.manifestRegistry!,
+          plugins: bound.manifestRegistry!.plugins.map((plugin) =>
+            Object.assign({}, plugin, { source: path.join(root, "different-source.cjs") }),
+          ),
+        };
+        const changedSelection = { ...prepared, manifestRegistry: changedManifest };
+        expect(resolveCompatibleRuntimePluginRegistry(changedSelection)).toBeUndefined();
+        setPluginRuntimeLoadContext(registry, { ...bound, manifestRegistry: changedManifest });
+        expect(resolveCompatibleRuntimePluginRegistry(changedSelection)).toBeUndefined();
+        expect(resolveCompatibleRuntimePluginRegistry(prepared)).toBe(registry);
+        try {
+          setActivePluginRegistry(registry, `${cacheKey}-different`);
+          expect(resolveCompatibleRuntimePluginRegistry(prepared)).toBeUndefined();
+        } finally {
+          setActivePluginRegistry(registry, cacheKey);
+          setPluginRuntimeLoadContext(registry, bound);
+        }
         expect(authored).not.toHaveProperty("capabilityCatalogContext");
         expect(authored.runtimeOptions).toEqual({});
       },

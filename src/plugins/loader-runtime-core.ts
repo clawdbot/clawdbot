@@ -193,6 +193,10 @@ export function loadOpenClawPluginsCore(
         preferBuiltPluginArtifacts: options.preferBuiltPluginArtifacts,
       },
       context.registrationConfigKey,
+      Object.freeze({
+        requestKey: context.cacheKey,
+        resolvedKey: context.resolveManifestCacheKey(manifestRegistry),
+      }),
     );
     const selectedMiddlewareOwnerManifests = new Map<
       string,
