@@ -9,14 +9,14 @@ title: "Android app"
 ---
 
 <Note>
-The official Android app is available on [Google Play](https://play.google.com/store/apps/details?id=ai.openclaw.app&hl=en_IN) and as a signed standalone APK on supported [GitHub Releases](https://github.com/openclaw/openclaw/releases). It is a companion node and requires a running OpenClaw Gateway. Source: [apps/android](https://github.com/openclaw/openclaw/tree/main/apps/android) ([build instructions](https://github.com/openclaw/openclaw/blob/main/apps/android/README.md)).
+The official Android app is available on [Google Play](https://play.google.com/store/apps/details?id=ai.openclaw.app&hl=en_IN) and, for sideloading, as a signed standalone APK on selected [GitHub Releases](https://github.com/openclaw/openclaw/releases). Not every release carries the APK — it is attached to specific release tags when the Android pipeline produces one. If no recent release carries `OpenClaw-Android.apk`, install from Google Play or build from source. It is a companion node and requires a running OpenClaw Gateway. Source: [apps/android](https://github.com/openclaw/openclaw/tree/main/apps/android) ([build instructions](https://github.com/openclaw/openclaw/blob/main/apps/android/README.md)).
 </Note>
 
 ## Support snapshot
 
 - Role: companion node app (Android does not host the Gateway).
 - Gateway required: yes (run it on macOS, Linux, or Windows via WSL2).
-- Install: [Google Play](https://play.google.com/store/apps/details?id=ai.openclaw.app&hl=en_IN) or `OpenClaw-Android.apk` from a supported [GitHub Release](https://github.com/openclaw/openclaw/releases), [Getting Started](/start/getting-started) for the Gateway, then [Pairing](/channels/pairing).
+- Install: [Google Play](https://play.google.com/store/apps/details?id=ai.openclaw.app&hl=en_IN) or `OpenClaw-Android.apk` from a [GitHub Release](https://github.com/openclaw/openclaw/releases) that lists the asset (see [Install outside Google Play](#install-outside-google-play)), [Getting Started](/start/getting-started) for the Gateway, then [Pairing](/channels/pairing).
 - Gateway: [Runbook](/gateway) + [Configuration](/gateway/configuration).
   - Protocols: [Gateway protocol](/gateway/protocol) (nodes + control plane).
 - Select an agent in the sidebar to view its credential status in **Settings → Providers & Models**. The page updates when the Gateway publishes model, credential, or config changes. Use **Refresh** to recheck model availability.
@@ -45,9 +45,16 @@ The Wear OS companion uses the paired Android phone's authenticated Gateway conn
 
 ## Install outside Google Play
 
-Regular final and correction GitHub Releases include a universal `OpenClaw-Android.apk` and `OpenClaw-Android-SHA256SUMS.txt`. The APK is built from the release tag, signed with the OpenClaw Android release key, and carries GitHub Actions provenance.
+Selected GitHub Releases include a universal `OpenClaw-Android.apk` and `OpenClaw-Android-SHA256SUMS.txt`. The APK is built from the release tag, signed with the OpenClaw Android release key, and carries GitHub Actions provenance. Releases without Android artifacts only publish CLI/SDK assets; the latest APK lives on the most recent release that carries the asset, which is not necessarily the latest Gateway release.
 
-Choose a [release](https://github.com/openclaw/openclaw/releases) that lists both assets, then download and verify that exact tag before sideloading:
+To find a release that ships the APK, list recent releases and look for the `OpenClaw-Android.apk` asset:
+
+```bash
+gh release list --repo openclaw/openclaw --limit 50 \
+  --json tagName,assets --jq '.[] | {tag: .tagName, apk: ([.assets[].name] | any(. == "OpenClaw-Android.apk"))}'
+```
+
+Pick a release that lists both assets, then download and verify that exact tag before sideloading:
 
 ```bash
 release_tag=vYYYY.M.PATCH
@@ -62,6 +69,8 @@ gh attestation verify OpenClaw-Android.apk \
   --source-ref "refs/tags/${release_tag}" \
   --deny-self-hosted-runners
 ```
+
+If the latest Gateway release does not carry the APK and you need the newest app build, fall back to Google Play or build from source — do not assume the APK is always on the latest Gateway release.
 
 <Warning>
 Google Play and standalone APK installs use different update channels and may have different signing identities. Android may require uninstalling the existing app before switching channels, which removes its local app data. Stay on one channel for normal updates.
