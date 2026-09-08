@@ -286,9 +286,14 @@ Notes:
 Run `openclaw gateway status --json`, then inspect the local [Gateway log](/gateway/logging).
 Entries from `gateway/task-supervisor` record the child exit code, signal, and
 the last 8,192 characters of stderr, including failures before Gateway logging
-starts. Child stdout is discarded. A failed child or supervisor exits nonzero
-so Task Scheduler can apply its failure policy; an intentional clean stop still
-exits zero. A successful task result alone does not prove the Gateway is healthy.
+starts. Child stdout is discarded. A failed child or supervisor exits nonzero;
+an intentional clean stop still exits zero. A successful task result alone does
+not prove the Gateway is healthy.
+
+Task Scheduler's [`RestartOnFailure` policy](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-tsch/2ff4aa5a-7bc4-449f-bbb1-27475645867f)
+retries failed start conditions or action launches. Do not rely on it to restart
+a Gateway that launches successfully and then exits with an error, such as an
+occupied port. Fix the logged cause, then run `openclaw gateway start`.
 
 ### The tray icon does not appear
 
