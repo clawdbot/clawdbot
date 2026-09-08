@@ -2306,33 +2306,62 @@ describe("models.authStatus", () => {
     },
   );
 
-  it.each(["deepseek", "clawrouter"])("shows %s saved-key balance", async (provider) => {
+  it.each([
+    { provider: "deepseek", source: "saved-key" },
+    { provider: "clawrouter", source: "saved-key" },
+    { provider: "openrouter", source: "proxy-only" },
+    { provider: "openrouter", source: "proxy-account" },
+  ])("shows independent usage for $provider with $source", async ({ provider, source }) => {
     const { buildAuthHealthSummary } = await vi.importActual<
       typeof import("../../agents/auth-health.js")
     >("../../agents/auth-health.js");
     mocks.buildAuthHealthSummary.mockImplementation(buildAuthHealthSummary);
+    if (source !== "saved-key") {
+      mocks.getRuntimeConfig.mockReturnValue({
+        models: {
+          providers: {
+            [provider]: {
+              models: [],
+              request: {
+                auth: { mode: "header", headerName: "X-Proxy-Key", value: "synthetic-proxy" },
+              },
+            },
+          },
+        },
+      });
+    }
     mocks.listProviderUsagePluginDescriptors.mockReturnValue([{ provider, displayName: provider }]);
     setPreparedAuthStore({
       version: 1,
-      profiles: {
-        [`${provider}:default`]: { type: "api_key", provider, key: "key" },
-      },
+      profiles:
+        source === "proxy-only"
+          ? {}
+          : {
+              [`${provider}:default`]: {
+                type: "api_key",
+                provider,
+                key: "synthetic-account",
+                ...(source === "proxy-account" ? { metadata: { authFlow: "oauth-pkce" } } : {}),
+              },
+            },
     });
-    mocks.loadProviderUsageSummary.mockResolvedValue({
+    mocks.loadProviderUsageSummary.mockImplementation(async (options = {}) => ({
       updatedAt: 0,
       providers: [
         {
           provider,
           displayName: provider,
           windows: [],
-          summary: "Balance ¥42.50",
+          ...(options.authProfile
+            ? {
+                unavailableReason: "configured-request-auth" as const,
+                error: "Account usage unavailable",
+              }
+            : { summary: "Balance ¥42.50" }),
         },
       ],
-    });
-
-    const first = await readAuthStatus();
-    expect(first.providers[0]?.usage).toBeUndefined();
-
+    }));
+    expect((await readAuthStatus()).providers[0]?.usage).toBeUndefined();
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
       providers: [provider],
       providerOnly: true,
@@ -2341,18 +2370,30 @@ describe("models.authStatus", () => {
       config: expect.any(Object),
       timeoutMs: 5_000,
     });
-    let result: ModelAuthStatusResult | undefined;
-    await waitForFast(async () => {
-      result = await readAuthStatus();
-      expect(result.providers[0]?.usage).toBeDefined();
-    });
-    const refreshed = expectDefined(result, "refreshed auth status");
-    expect(refreshed.providers[0]?.usage).toEqual({
+    await waitForFast(async () =>
+      expect((await readAuthStatus()).usageRefreshPending).toBeUndefined(),
+    );
+    const result = (await readAuthStatus()).providers[0];
+    expect(result?.usage).toEqual({
       providerId: provider,
       refreshedAt: 0,
       windows: [],
       summary: "Balance ¥42.50",
     });
+    expect(result?.usageProfileId).toBeUndefined();
+    if (source === "proxy-account") {
+      expect(result?.profiles[0]?.usage?.error).toBe("Account usage unavailable");
+      expect(result?.profiles[0]?.usage).not.toHaveProperty("unavailableReason");
+    }
+    const readOnly = createOptions({}, ["operator.read"]);
+    await handler(readOnly);
+    const readonlyResult = expectDefined<ModelAuthStatusResult>(
+      firstRespondCall(readOnly)?.[1],
+      "read-only result",
+    ).providers[0];
+    expect(readonlyResult?.usage?.summary).toBe("Balance ¥42.50");
+    expect(readonlyResult?.usageProfileId).toBeUndefined();
+    expect(readonlyResult?.profiles.every((profile) => profile.usage === undefined)).toBe(true);
   });
 
   it("serves stale usage immediately while one background refresh replaces it", async () => {

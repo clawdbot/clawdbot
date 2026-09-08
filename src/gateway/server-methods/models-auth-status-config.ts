@@ -8,6 +8,7 @@ import { resolveProviderEntryApiKeyProfileReference } from "../../agents/model-a
 import type { ProviderAuthAliasLookupParams } from "../../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
+import { hasProviderUsageRequestAuth } from "../../infra/provider-usage.auth.js";
 import type { ModelAuthStatusProvider } from "./models-auth-status.types.js";
 
 export function resolveConfigBoundProfileIds(
@@ -47,7 +48,12 @@ export function resolveConfiguredProviders(
       (rawKey === NON_ENV_SECRETREF_MARKER ||
         !isNonSecretApiKeyMarker(rawKey, { includeEnvVarName: false }));
     const mode = provider?.auth;
-    if (mode !== "oauth" && mode !== "token" && !hasApiKey) {
+    if (
+      mode !== "oauth" &&
+      mode !== "token" &&
+      !hasApiKey &&
+      !hasProviderUsageRequestAuth(config, id)
+    ) {
       continue;
     }
     if (!apiKeys.has(normalized)) {

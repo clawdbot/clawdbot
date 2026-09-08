@@ -86,6 +86,8 @@ export type ProviderUsageSnapshot = {
   plan?: string;
   /** Account identity (email) the usage was fetched under, when known. */
   accountEmail?: string;
+  /** The plugin cannot attribute this request's authentication to the selected account. */
+  unavailableReason?: "configured-request-auth";
   error?: string;
 };
 

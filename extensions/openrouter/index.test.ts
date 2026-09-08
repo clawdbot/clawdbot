@@ -346,7 +346,7 @@ describe("openrouter provider hooks", () => {
   });
 
   it.each(["bearer", "custom-header", "ordinary-header"] as const)(
-    "keeps account usage tied to its credential with a %s override",
+    "keeps a %s override independent of selected-account usage",
     async (authKind) => {
       const provider = await registerSingleProviderPlugin(openrouterPlugin);
       const request: ModelProviderConfig["request"] = {
@@ -366,26 +366,39 @@ describe("openrouter provider hooks", () => {
               }
             : {}),
       };
-      const fetchFn = vi.fn<typeof fetch>(async (_input, init) => {
-        const selected =
-          new Headers(init?.headers).get("authorization") === "Bearer synthetic-selected-key";
-        return Response.json({ data: { limit: 100, limit_remaining: selected ? 75 : 10 } });
-      });
+      const fetchFn = vi.fn<typeof fetch>(async () =>
+        Response.json({ data: { limit: 100, limit_remaining: 10 } }),
+      );
 
+      const config = {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://private.example.invalid/router/v1///",
+              request,
+              models: [],
+            },
+          },
+        },
+      };
+      await expect(
+        provider.resolveUsageAuth?.({
+          config,
+          env: {},
+          provider: "openrouter",
+          resolveApiKeyFromConfigAndStore: () => undefined,
+          resolveOAuthToken: async () => null,
+        }),
+      ).resolves.toEqual({
+        token:
+          authKind === "ordinary-header"
+            ? "Bearer synthetic-override-key"
+            : "synthetic-override-key",
+      });
       for (const authProfileId of [undefined, "openrouter:selected"]) {
         fetchFn.mockClear();
         const snapshot = await provider.fetchUsageSnapshot?.({
-          config: {
-            models: {
-              providers: {
-                openrouter: {
-                  baseUrl: "https://private.example.invalid/router/v1///",
-                  request,
-                  models: [],
-                },
-              },
-            },
-          },
+          config,
           env: {},
           provider: "openrouter",
           token: "synthetic-selected-key",
@@ -394,6 +407,15 @@ describe("openrouter provider hooks", () => {
           fetchFn,
         });
 
+        if (authProfileId) {
+          expect(fetchFn).not.toHaveBeenCalled();
+          expect(snapshot).toMatchObject({
+            windows: [],
+            unavailableReason: "configured-request-auth",
+            error: expect.stringContaining("configured request authentication"),
+          });
+          continue;
+        }
         expect(fetchFn.mock.calls.map(([url]) => url)).toEqual([
           "https://private.example.invalid/router/v1/credits",
           "https://private.example.invalid/router/v1/key",
@@ -402,19 +424,13 @@ describe("openrouter provider hooks", () => {
           const headers = new Headers(options?.headers);
           expect(headers.get("x-private-proxy-tenant")).toBe("synthetic-tenant");
           expect(headers.get("authorization")).toBe(
-            authProfileId
-              ? "Bearer synthetic-selected-key"
-              : authKind === "custom-header"
-                ? null
-                : "Bearer synthetic-override-key",
+            authKind === "custom-header" ? null : "Bearer synthetic-override-key",
           );
           expect(headers.get("x-proxy-key")).toBe(
-            !authProfileId && authKind === "custom-header" ? "synthetic-override-key" : null,
+            authKind === "custom-header" ? "synthetic-override-key" : null,
           );
         }
-        expect(snapshot?.windows).toEqual([
-          { label: "API key budget", usedPercent: authProfileId ? 25 : 90 },
-        ]);
+        expect(snapshot?.windows).toEqual([{ label: "API key budget", usedPercent: 90 }]);
       }
     },
   );

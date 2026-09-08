@@ -38,7 +38,10 @@ import {
   resolveProviderIdForAuth,
 } from "../../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveProviderUsageAuthEnvCredentialProviders } from "../../infra/provider-usage.auth.js";
+import {
+  hasProviderUsageRequestAuth,
+  resolveProviderUsageAuthEnvCredentialProviders,
+} from "../../infra/provider-usage.auth.js";
 import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import type { UsageProviderId } from "../../infra/provider-usage.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -266,7 +269,8 @@ export function aggregateRefreshableAuthStatus(
 }
 
 function mapUsageStatus(usage: ProviderUsageStatus, includeAccountEmail = true): ModelAuthUsage {
-  return includeAccountEmail ? usage : { ...usage, accountEmail: undefined };
+  const { unavailableReason: _unavailableReason, ...result } = usage;
+  return includeAccountEmail ? result : { ...result, accountEmail: undefined };
 }
 
 function mapAuthStatusProvider(params: {
@@ -330,9 +334,11 @@ function mapAuthStatusProvider(params: {
   const accountUsage = usageProfileId ? params.usageByProfile.get(usageProfileId) : undefined;
   const hasAccountUsageTarget =
     usageProfileId !== undefined && params.usageTargetProfileIds.has(usageProfileId);
-  // The selected account owns the summary even while its quota is pending.
-  // Independently fetched usage must not replace it with another credential.
-  const usage = hasAccountUsageTarget ? accountUsage : providerUsage;
+  // Only the plugin can declare that configured request auth prevents account attribution.
+  // Ordinary account failures and pending reads remain authoritative.
+  const useAccountUsage =
+    hasAccountUsageTarget && accountUsage?.unavailableReason !== "configured-request-auth";
+  const usage = useAccountUsage ? accountUsage : providerUsage;
   const rawRollup = aggregateRefreshableAuthStatus(
     provider,
     Date.now(),
@@ -400,7 +406,7 @@ function mapAuthStatusProvider(params: {
           result.lastUsedAt = lastUsedAt;
         }
         if (profileUsage) {
-          result.usage = profileUsage;
+          result.usage = mapUsageStatus(profileUsage);
         }
         if (params.pendingUsageProfileIds.has(profile.profileId)) {
           result.usageRefreshPending = true;
@@ -424,10 +430,8 @@ function mapAuthStatusProvider(params: {
         : {}),
     ...(apiKey ? { apiKey } : {}),
     usage: usage ? mapUsageStatus(usage, params.includeProfileDetails) : undefined,
-    ...(params.includeProfileDetails && hasAccountUsageTarget && accountUsage
-      ? { usageProfileId }
-      : {}),
-    ...(params.includeProfileDetails && hasAccountUsageTarget && providerUsage
+    ...(params.includeProfileDetails && useAccountUsage && accountUsage ? { usageProfileId } : {}),
+    ...(params.includeProfileDetails && useAccountUsage && providerUsage
       ? { independentUsage: mapUsageStatus(providerUsage, params.includeProfileDetails) }
       : {}),
     ...(usage?.usageScope ? { usageScope: usage.usageScope } : {}),
@@ -640,7 +644,11 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       for (const provider of apiKeys.keys()) {
         providerWideUsageIds.add(provider);
       }
-      const usageProviderIds = new Set<UsageProviderId>();
+      const usageProviderIds = new Set<UsageProviderId>(
+        [...activeUsageProviderIds].filter((provider) =>
+          hasProviderUsageRequestAuth(cfg, provider),
+        ),
+      );
       const usageTargets: Array<{ profileId: string; providerId: UsageProviderId }> = [];
       for (const profile of authHealth.profiles) {
         const providerId = resolveUsageProviderId(profile.provider, {

@@ -17,6 +17,7 @@ import {
   resolveUsableCustomProviderApiKey,
 } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
+import { sanitizeConfiguredModelProviderRequest } from "../agents/provider-request-config.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
@@ -45,6 +46,16 @@ export type ProviderAuth = {
 };
 
 type AuthStore = ReturnType<typeof ensureAuthProfileStore>;
+
+export function hasProviderUsageRequestAuth(config: OpenClawConfig, provider: string): boolean {
+  const request = sanitizeConfiguredModelProviderRequest(
+    config.models?.providers?.[provider]?.request,
+  );
+  return (
+    Boolean(request?.auth && request.auth.mode !== "provider-default") ||
+    new Headers(request?.headers).has("authorization")
+  );
+}
 
 type UsageAuthState = {
   cfg: OpenClawConfig;
@@ -687,6 +698,7 @@ export async function resolveProviderAuths(params: {
         provider,
       });
       const hasDirectCredentialSource =
+        hasProviderUsageRequestAuth(stateBase.cfg, provider) ||
         Boolean(
           resolveProviderApiKeyFromConfig({
             state: directCredentialState,

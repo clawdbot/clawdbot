@@ -809,6 +809,10 @@ catalog, API-key auth, and dynamic model resolution.
           infer scope from email, credential format, profile id, or billing shape.
           Account scope alone does not establish ownership by a saved profile.
         - `plan`: provider-reported subscription or key label
+        - `unavailableReason`: `"configured-request-auth"` when a selected-account
+          read cannot preserve account authentication through configured request
+          overrides. Return an explanatory error without sending that request.
+          Gateway status can then show independent usage without account attribution.
         - `windows`: resettable quota windows as used percentages
         - `billing`: typed `balance`, `spend`, or `budget` entries; `unit` can be
           an ISO currency or a provider unit such as `credits`

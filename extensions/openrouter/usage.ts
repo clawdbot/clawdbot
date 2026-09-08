@@ -174,12 +174,19 @@ export async function fetchOpenRouterUsage(params: {
     },
     request: configuredRequest,
   });
-  // Account usage must keep the selected credential; provider-wide overrides can name another account.
-  if (params.authProfileId) {
-    if (configuredRequest?.auth?.mode === "header") {
-      requestConfig.headers.delete(configuredRequest.auth.headerName);
-    }
-    requestConfig.headers.set("Authorization", `Bearer ${params.token}`);
+  // Configured authentication owns the proxy route; its quota cannot identify a saved account.
+  if (
+    params.authProfileId &&
+    requestConfig.headers.get("Authorization") !== `Bearer ${params.token}`
+  ) {
+    return {
+      provider: "openrouter",
+      displayName: "OpenRouter",
+      windows: [],
+      error:
+        "Account usage is unavailable with configured request authentication. See the provider summary.",
+      unavailableReason: "configured-request-auth",
+    };
   }
   const request = {
     baseUrl: requestConfig.baseUrl,

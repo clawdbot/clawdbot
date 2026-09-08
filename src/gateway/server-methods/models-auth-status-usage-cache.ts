@@ -29,6 +29,7 @@ export type ProviderUsageStatus = Pick<
   | "accountEmail"
   | "error"
   | "usageScope"
+  | "unavailableReason"
 > & { providerId: UsageProviderId; refreshedAt: number };
 
 type UsageCacheRead = {
@@ -100,6 +101,7 @@ function mapProviderUsage(usage: Awaited<ReturnType<typeof loadProviderUsageSumm
       ...(snap.costHistory ? { costHistory: snap.costHistory } : {}),
       ...(snap.accountEmail ? { accountEmail: snap.accountEmail } : {}),
       ...(snap.error ? { error: snap.error } : {}),
+      ...(snap.unavailableReason ? { unavailableReason: snap.unavailableReason } : {}),
     });
   }
   return usageByProvider;
