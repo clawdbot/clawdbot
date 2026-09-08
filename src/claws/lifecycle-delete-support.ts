@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
   isPathOwnedBySurvivingAgent,
   readAgentDeleteDatabaseRegistry,
@@ -254,9 +255,15 @@ export async function cleanupClawAgentFilesystem(params: {
   trashPath?: ClawTrashPath;
   retainWorkspace?: boolean;
   stateDatabase?: OpenClawStateDatabaseOptions;
+  assertCurrent: () => void;
 }): Promise<string[]> {
   const errors: string[] = [];
-  const trashPath = params.trashPath ?? moveToTrash;
+  const trashPath: ClawTrashPath = (pathname, runtime) => {
+    params.assertCurrent();
+    return params.trashPath
+      ? params.trashPath(pathname, runtime)
+      : moveToTrash(pathname, runtime, params.assertCurrent);
+  };
   const survivingDatabaseFilePaths = resolveSurvivingDatabaseFilePaths(
     readAgentDeleteDatabaseRegistry(params.stateDatabase),
     params.agentId,
@@ -280,10 +287,13 @@ export async function cleanupClawAgentFilesystem(params: {
     const workspaceRemoved = await trashPath(params.targets.workspaceDir, params.runtime);
     if (workspaceRemoved) {
       try {
-        const legacyCleanup = await removeLegacyWorkspaceStateForReset(legacyPlan);
+        const legacyCleanup = await removeLegacyWorkspaceStateForReset(legacyPlan, {
+          assertCurrent: params.assertCurrent,
+        });
         for (const warning of legacyCleanup.warnings) {
           params.runtime.log(warning);
         }
+        params.assertCurrent();
         deleteWorkspaceState(statePlan);
       } catch (error) {
         errors.push(coerceErrorMessage(error));
@@ -441,6 +451,7 @@ export async function inspectClawBootstrap(
 
 export async function removeClawWorkspaceFile(
   record: ClawRemovableWorkspaceFile,
+  assertCurrent: () => void,
   maxBytes = 1024 * 1024,
 ): Promise<RemovedWorkspaceFile> {
   if (record.state === "missing") {
@@ -459,15 +470,35 @@ export async function removeClawWorkspaceFile(
       return { path: record.path, action: "missing" };
     }
     const stagedPath = `${record.path}.openclaw-claw-remove-${randomUUID()}`;
+    assertCurrent();
     await workspace.move(record.path, stagedPath, { overwrite: false });
-    const content = await workspace.readBytes(stagedPath, { maxBytes });
-    const digest = `sha256:${createHash("sha256").update(content).digest("hex")}`;
-    if (digest !== record.contentDigest) {
-      await workspace.move(stagedPath, record.path, { overwrite: false });
-      return { path: record.path, action: "retainedModified" };
+    let outcome: Result<void, unknown>;
+    try {
+      const content = await workspace.readBytes(stagedPath, { maxBytes });
+      assertCurrent();
+      const digest = `sha256:${createHash("sha256").update(content).digest("hex")}`;
+      if (digest === record.contentDigest) {
+        await workspace.remove(stagedPath);
+        return { path: record.path, action: "deleted" };
+      }
+      outcome = ok(undefined);
+    } catch (error) {
+      outcome = err(error);
     }
-    await workspace.remove(stagedPath);
-    return { path: record.path, action: "deleted" };
+    // Undo this attempt's staging even after ownership loss; never replace new content.
+    try {
+      await workspace.move(stagedPath, record.path, { overwrite: false });
+    } catch (error) {
+      throw new AggregateError(
+        [...(outcome.ok ? [] : [outcome.error]), error],
+        `Could not restore ${record.path} from ${stagedPath}: ${String(error)}`,
+        { cause: error },
+      );
+    }
+    if (!outcome.ok) {
+      throw outcome.error;
+    }
+    return { path: record.path, action: "retainedModified" };
   } catch (error) {
     return {
       path: record.path,

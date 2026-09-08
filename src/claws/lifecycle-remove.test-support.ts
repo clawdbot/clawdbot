@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { hasActiveCronJobsForAgent } from "../cron/active-jobs.js";
@@ -32,12 +33,16 @@ export async function buildClawRemovalFixture(
     id?: string;
     name?: string;
     withFile?: boolean;
+    withBootstrap?: boolean;
     withCron?: boolean;
     withMcp?: boolean;
   } = {},
 ) {
   if (params.withFile) {
     await writeFile(join(root, "SOUL.md"), "managed\n", "utf8");
+  }
+  if (params.withBootstrap) {
+    await writeFile(join(root, "BOOTSTRAP.md"), "managed\n", "utf8");
   }
   const parsed = parseClawManifest({
     schemaVersion: 1,
@@ -78,6 +83,16 @@ export async function buildClawRemovalFixture(
   };
   const plan = await buildClawAddPlan({
     manifest: parsed.manifest,
+    ...(params.withBootstrap
+      ? {
+          packageBootstrap: {
+            sourcePath: "BOOTSTRAP.md",
+            realPath: join(root, "BOOTSTRAP.md"),
+            byteLength: Buffer.byteLength("managed\n"),
+            digest: `sha256:${createHash("sha256").update("managed\n").digest("hex")}`,
+          },
+        }
+      : {}),
     source,
     context: { workspace: join(root, `workspace-${params.id ?? "worker"}`) },
   });
