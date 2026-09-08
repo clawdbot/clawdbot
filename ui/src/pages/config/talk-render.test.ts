@@ -2,7 +2,9 @@
 
 import { html, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import type { SelectPicker } from "../../components/select-picker.ts";
 import { t } from "../../i18n/index.ts";
+import { updatePickers, choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { isTalkGptLiveModel, resolveTalkRealtimeSelection } from "./talk-schema.ts";
 import { renderTalk } from "./talk.ts";
 
@@ -38,7 +40,7 @@ describe("resolveTalkRealtimeSelection", () => {
 });
 
 describe("renderTalk", () => {
-  it("locks every curated picker when config mutation is unavailable", () => {
+  it("locks every curated picker when config mutation is unavailable", async () => {
     const container = document.createElement("div");
     render(
       renderTalk({
@@ -75,6 +77,7 @@ describe("renderTalk", () => {
       }),
       container,
     );
+    await updatePickers(container);
 
     const provider = container.querySelector<HTMLElement & { disabled?: boolean }>(
       "wa-radio-group",
@@ -84,11 +87,13 @@ describe("renderTalk", () => {
     expect(voice).toHaveLength(1);
     expect(voice.every((select) => select.disabled)).toBe(true);
     expect(
-      container.querySelector("wa-select.model-picker__select")?.hasAttribute("disabled"),
+      container
+        .querySelector("openclaw-select-picker.model-picker__select")
+        ?.querySelector<HTMLButtonElement>("button")?.disabled,
     ).toBe(true);
   });
 
-  it("commits provider-local model ids without qualifying them", () => {
+  it("commits provider-local model ids without qualifying them", async () => {
     const container = document.createElement("div");
     const onModelChange = vi.fn();
     render(
@@ -126,15 +131,14 @@ describe("renderTalk", () => {
       }),
       container,
     );
+    await updatePickers(container);
 
-    const picker = container.querySelector<HTMLElement & { value: string }>(
-      "wa-select.model-picker__select",
+    const picker = container.querySelector<SelectPicker>(
+      "openclaw-select-picker.model-picker__select",
     );
-    expect(picker?.querySelector('wa-option[value="gpt-realtime"]')).not.toBeNull();
+    expect(picker?.querySelector('[role="option"][data-value="gpt-realtime"]')).not.toBeNull();
     if (picker) {
-      Object.defineProperty(picker, "value", { configurable: true, value: "gpt-realtime" });
-      picker.dispatchEvent(new Event("change", { bubbles: true }));
-      Reflect.deleteProperty(picker, "value");
+      await choosePickerValue(picker, "gpt-realtime");
     }
     expect(onModelChange).toHaveBeenCalledWith("gpt-realtime");
   });

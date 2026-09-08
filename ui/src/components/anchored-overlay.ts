@@ -19,8 +19,19 @@ export function syncAnchoredOverlay(
   if (!anchor || !popup) {
     return;
   }
-  popup.anchor = options.anchor ?? anchor;
-  popup.placement = `${preferredSide}-${options.alignment ?? "start"}`;
+  configureAnchoredPopup(popup, options.anchor ?? anchor, preferredSide, options.alignment);
+  popup.active = details.open;
+}
+
+/** Shared popup geometry; the caller owns opening, focus, and dismissal. */
+export function configureAnchoredPopup(
+  popup: WaPopup,
+  anchor: Element,
+  preferredSide: AnchoredOverlaySide,
+  alignment: "start" | "end" = "start",
+): void {
+  popup.anchor = anchor;
+  popup.placement = `${preferredSide}-${alignment}`;
   popup.boundary = "viewport";
   popup.distance = 6;
   popup.flip = true;
@@ -29,5 +40,4 @@ export function syncAnchoredOverlay(
   popup.shiftPadding = VIEWPORT_SIDE_MARGIN;
   popup.autoSize = "vertical";
   popup.autoSizePadding = VIEWPORT_MARGIN;
-  popup.active = details.open;
 }

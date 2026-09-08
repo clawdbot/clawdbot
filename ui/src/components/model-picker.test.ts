@@ -1,10 +1,15 @@
 /* @vitest-environment jsdom */
+
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { updatePickers, choosePickerValue } from "../test-helpers/select-picker.ts";
 import { renderModelPicker } from "./model-picker.ts";
+import type { SelectPicker } from "./select-picker.ts";
+
+afterEach(() => document.body.replaceChildren());
 
 describe("renderModelPicker", () => {
-  it("renders provider details and caller sentinels while preserving an unknown current model", () => {
+  it("renders provider details and caller sentinels while preserving an unknown current model", async () => {
     const container = document.createElement("div");
     render(
       renderModelPicker({
@@ -24,18 +29,21 @@ describe("renderModelPicker", () => {
       }),
       container,
     );
+    await updatePickers(container);
 
-    expect(container.querySelector('wa-option[value=""] [slot="start"]')).toBeNull();
-    const openai = container.querySelector('wa-option[value="openai/gpt-5.6-luna"]');
+    expect(
+      container.querySelector('[role="option"][data-value=""] .picker-select__leading'),
+    ).toBeNull();
+    const openai = container.querySelector('[role="option"][data-value="openai/gpt-5.6-luna"]');
     expect(openai?.querySelector('[data-provider-icon="codex"]')).not.toBeNull();
     expect(openai?.textContent).toContain("Fast · 128k");
-    expect(openai?.hasAttribute("disabled")).toBe(true);
-    expect(container.querySelector('wa-option[value="legacy/model"]')?.textContent).toContain(
-      "legacy/model",
-    );
+    expect(openai?.getAttribute("aria-disabled") === "true").toBe(true);
+    expect(
+      container.querySelector('[role="option"][data-value="legacy/model"]')?.textContent,
+    ).toContain("legacy/model");
   });
 
-  it("reveals free-form entry without leaking its internal option value", () => {
+  it("reveals free-form entry without leaking its internal option value", async () => {
     const container = document.createElement("div");
     const onChange = vi.fn();
     render(
@@ -51,28 +59,24 @@ describe("renderModelPicker", () => {
       }),
       container,
     );
+    await updatePickers(container);
 
-    const customOption = Array.from(container.querySelectorAll("wa-option")).find(
+    const customOption = Array.from(container.querySelectorAll('[role="option"]')).find(
       (option) => option.textContent?.trim() === "Custom model…",
     );
-    const picker = container.querySelector<HTMLElement & { value: string }>("wa-select");
+    const picker = container.querySelector<SelectPicker>("openclaw-select-picker");
     const input = container.querySelector<HTMLInputElement>("input");
     expect(customOption).not.toBeNull();
     expect(input?.hidden).toBe(true);
     if (!customOption || !picker || !input) {
       return;
     }
-    Object.defineProperty(picker, "value", {
-      configurable: true,
-      value: customOption.getAttribute("value"),
-    });
-    picker.dispatchEvent(new Event("change", { bubbles: true }));
-    Reflect.deleteProperty(picker, "value");
+    await choosePickerValue(picker, customOption.getAttribute("data-value")!);
     expect(input.hidden).toBe(false);
 
     input.value = "vendor/model with spaces";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onChange).toHaveBeenCalledWith("vendor/model with spaces");
-    expect(onChange).not.toHaveBeenCalledWith(customOption.getAttribute("value"));
+    expect(onChange).not.toHaveBeenCalledWith(customOption.getAttribute("data-value"));
   });
 });

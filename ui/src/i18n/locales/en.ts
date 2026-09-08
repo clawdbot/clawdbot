@@ -128,6 +128,7 @@ export const en: TranslationMap & {
     colorMode: "Color mode",
     colorModeOption: "Color mode: {mode}",
     search: "Search",
+    pickerNoMatches: "No matches",
     save: "Save",
     saving: "Saving…",
     saveAndPublish: "Save & Publish",

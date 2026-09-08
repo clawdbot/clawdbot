@@ -10,6 +10,7 @@ import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
+import { configureAnchoredPopup } from "./anchored-overlay.ts";
 import { icons } from "./icons.ts";
 import { renderProviderBrandIcon } from "./provider-icon.ts";
 import "../styles/multi-select.css";
@@ -199,24 +200,13 @@ export class MultiSelect extends OpenClawLightDomElement {
     this.input = element instanceof HTMLInputElement ? element : null;
   };
 
-  // Ref callbacks run in DOM order, so the field anchor exists by the time the
-  // popup mounts. Positioning mirrors the shared anchored overlay tuning.
+  // Ref callbacks run in DOM order, so the field anchor exists when the popup mounts.
   private readonly configurePopup = (element?: Element) => {
     if (!(element instanceof WaPopup) || !this.field) {
       return;
     }
-    const popup = element;
-    popup.anchor = this.field;
-    popup.placement = "bottom-start";
-    popup.boundary = "viewport";
-    popup.distance = 6;
-    popup.flip = true;
-    popup.flipPadding = 8;
-    popup.shift = true;
-    popup.shiftPadding = 12;
-    popup.autoSize = "vertical";
-    popup.autoSizePadding = 8;
-    popup.sync = "width";
+    configureAnchoredPopup(element, this.field, "bottom");
+    element.sync = "width";
   };
 
   private readonly handleFieldClick = (event: MouseEvent) => {
