@@ -52,14 +52,14 @@ describe("resolveGatewayCredentialsForUrlEdit", () => {
     ).toEqual({ token: "", password: "" });
   });
 
-  it("preserves the token but clears the password when only the query scope changes", () => {
+  it("clears credentials when only the query scope changes", () => {
     expect(
       resolveGatewayCredentialsForUrlEdit(
         "wss://gateway.example/openclaw?tenant=first",
         "wss://gateway.example/openclaw?tenant=second",
         { token: "abc123", password: "secret" },
       ),
-    ).toEqual({ token: "abc123", password: "" });
+    ).toEqual({ token: "", password: "" });
   });
 
   it("does not restore legacy durable tokens when the gateway endpoint changes", () => {

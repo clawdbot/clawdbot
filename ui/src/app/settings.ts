@@ -18,11 +18,7 @@ import { normalizeChatSplitLayout } from "../pages/chat/split-layout-persistence
 import type { ChatSplitLayout } from "../pages/chat/split-layout-types.ts";
 import { resolveControlUiPaths } from "./browser.ts";
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
-import {
-  createGatewayProfile,
-  loadGatewayRegistry,
-  upsertGatewayProfile,
-} from "./gateway-registry.ts";
+import { registerGatewayProfileForSettings } from "./gateway-settings-registration.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 import { normalizeTypefaceOverride, type TypefaceId } from "./typography.ts";
 import { normalizeLocalUserIdentity, type LocalUserIdentity } from "./user-identity.ts";
@@ -777,15 +773,9 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     if (options.selectGateway || storage?.getItem(selectionKey) == null) {
       storage?.setItem(selectionKey, next.gatewayUrl);
     }
-    const profile = createGatewayProfile({ url: next.gatewayUrl });
-    if (profile) {
-      const existingProfile = loadGatewayRegistry({ url: next.gatewayUrl }).gateways.find(
-        (gateway) => gateway.id === profile.id,
-      );
-      upsertGatewayProfile(existingProfile ? { ...profile, name: existingProfile.name } : profile, {
-        select: options.selectGateway === true,
-      });
-    }
+    registerGatewayProfileForSettings(next.gatewayUrl, {
+      select: options.selectGateway === true,
+    });
     storage?.removeItem(LEGACY_SETTINGS_KEY);
     if (storage) {
       unpersistedSettings = null;

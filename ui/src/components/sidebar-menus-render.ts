@@ -26,7 +26,11 @@ import {
   pluginSessionMenuActions,
   runControlUiPluginAction,
 } from "../plugins/control-ui-actions.ts";
-import { renderSidebarAgentMenu, renderSidebarIdentityMenu } from "./app-sidebar-agent-menu.ts";
+import {
+  type GatewayMenuHost,
+  renderSidebarAgentMenu,
+  renderSidebarIdentityMenu,
+} from "./app-sidebar-agent-menu.ts";
 import { renderSidebarCustomizeMenu, renderSidebarMoreMenu } from "./app-sidebar-nav-menus.ts";
 import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
 import {
@@ -130,6 +134,8 @@ export function renderSidebarAgentMenuForController(controller: SidebarMenusCont
 
 export function renderSidebarIdentityMenuForController(controller: SidebarMenusController) {
   const { host } = controller;
+  // SAFETY: the concrete navigation sidebar host owns gateway fields omitted from the controller.
+  const gatewayHost = host as typeof host & GatewayMenuHost;
   const position = controller.identityMenuPosition;
   if (!position) {
     return nothing;
@@ -184,9 +190,9 @@ export function renderSidebarIdentityMenuForController(controller: SidebarMenusC
     onNavigate: (routeId, options) => host.onNavigate?.(routeId, options),
     onPairMobile: () => host.onPairMobile?.(),
     onRetryConnect: host.onRetryConnect,
-    gatewayRegistry: host.gatewayRegistry,
-    onSelectGateway: (id) => host.onSelectGateway?.(id),
-    onManageGateways: () => host.onManageGateways?.(),
+    gatewayRegistry: gatewayHost.gatewayRegistry,
+    onSelectGateway: (id) => gatewayHost.onSelectGateway?.(id),
+    onManageGateways: () => gatewayHost.onManageGateways?.(),
   });
 }
 

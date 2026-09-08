@@ -32,6 +32,12 @@ import {
   trackDropdownKeyboardDismissal,
 } from "./web-awesome.ts";
 
+export type GatewayMenuHost = {
+  readonly gatewayRegistry: GatewayRegistry;
+  readonly onSelectGateway?: (id: string) => void;
+  readonly onManageGateways?: () => void;
+};
+
 // External rows of the footer identity menu. Docs-first: public docs pages over
 // raw GitHub, matching the ClawSweeper docs-link policy for user-facing copy.
 const IDENTITY_MENU_LINKS: ReadonlyArray<{
