@@ -25,9 +25,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function mountGroupsPage(groupsPut: () => Promise<SessionGroupMutationResult>) {
+async function mountGroupsPage(groupsAdd: (name: string) => Promise<SessionGroupMutationResult>) {
   const sessions = createSessions({
-    groupsPut: vi.fn(groupsPut),
+    groupsAdd: vi.fn(groupsAdd),
     patch: vi.fn(async () => ({ key: SESSION_KEY })),
   } as unknown as Partial<SessionCapability>);
   const mutableGateway = createGateway({} as GatewayBrowserClient);
@@ -58,10 +58,10 @@ describe("sessions page new group", () => {
 
     await page.requestNewCategory(SESSION_KEY);
 
-    expect(sessions.groupsPut).toHaveBeenCalledWith(["Client work"]);
+    expect(sessions.groupsAdd).toHaveBeenCalledWith("Client work");
     expect(sessions.patch).toHaveBeenCalledOnce();
     expect(vi.mocked(sessions.patch).mock.invocationCallOrder[0]).toBeGreaterThan(
-      vi.mocked(sessions.groupsPut).mock.invocationCallOrder[0]!,
+      vi.mocked(sessions.groupsAdd).mock.invocationCallOrder[0]!,
     );
     expect(sessions.patch).toHaveBeenCalledWith(
       SESSION_KEY,
@@ -92,7 +92,7 @@ describe("sessions page new group", () => {
     await opened;
 
     expect(dialogSignal?.aborted).toBe(true);
-    expect(sessions.groupsPut).not.toHaveBeenCalled();
+    expect(sessions.groupsAdd).not.toHaveBeenCalled();
   });
 
   it("keeps the live dialog abortable when a second open overlaps it", async () => {
@@ -117,7 +117,7 @@ describe("sessions page new group", () => {
     await Promise.all([first, second]);
 
     expect(signals[0]?.aborted).toBe(true);
-    expect(sessions.groupsPut).not.toHaveBeenCalled();
+    expect(sessions.groupsAdd).not.toHaveBeenCalled();
   });
 
   it("skips the assignment when its catalog write outlived the connection", async () => {
@@ -128,7 +128,7 @@ describe("sessions page new group", () => {
     const { mutableGateway, page, sessions, submitMessages } = await mountGroupsPage(() => pending);
 
     const created = page.requestNewCategory(SESSION_KEY);
-    await vi.waitFor(() => expect(sessions.groupsPut).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(sessions.groupsAdd).toHaveBeenCalledOnce());
 
     // Replacement connection: the catalog entry belongs to the old one, so the
     // row must not be filed into a group this connection never confirmed.
@@ -159,7 +159,7 @@ describe("sessions page new group", () => {
     });
 
     const created = page.requestNewCategory(SESSION_KEY);
-    await vi.waitFor(() => expect(sessions.groupsPut).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(sessions.groupsAdd).toHaveBeenCalledOnce());
     mutableGateway.emit({ client: {} as GatewayBrowserClient });
     landCatalogWrite();
     await created;
@@ -205,7 +205,7 @@ describe("sessions page new group", () => {
       });
 
       const created = page.requestNewCategory(SESSION_KEY);
-      await vi.waitFor(() => expect(sessions.groupsPut).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(sessions.groupsAdd).toHaveBeenCalledOnce());
 
       page.result = {
         count: visible ? 1 : 0,
@@ -242,7 +242,7 @@ describe("sessions page new group", () => {
   it("creates an empty group without a selected row", async () => {
     const { page, sessions, submitMessages } = await mountGroupsPage(async () => "completed");
     await page.requestNewCategory();
-    expect(sessions.groupsPut).toHaveBeenCalledWith(["Client work"]);
+    expect(sessions.groupsAdd).toHaveBeenCalledWith("Client work");
     expect(sessions.patch).not.toHaveBeenCalled();
     expect(submitMessages).toEqual([null]);
   });
@@ -261,7 +261,7 @@ describe("sessions page new group", () => {
     page.result = { count: 1, sessions: [{ key: SESSION_KEY }] } as SessionsListResult;
     await page.requestNewCategory(SESSION_KEY);
     expect(showInputDialog).not.toHaveBeenCalled();
-    expect(sessions.groupsPut).not.toHaveBeenCalled();
+    expect(sessions.groupsAdd).not.toHaveBeenCalled();
     expect(sessions.patch).not.toHaveBeenCalled();
     expect(page.error).toBe("Refresh");
   });
@@ -273,7 +273,7 @@ describe("sessions page new group", () => {
 
     await page.requestNewCategory(SESSION_KEY);
 
-    expect(sessions.groupsPut).toHaveBeenCalledOnce();
+    expect(sessions.groupsAdd).toHaveBeenCalledOnce();
     expect(sessions.patch).not.toHaveBeenCalled();
     expect(submitMessages).toEqual([
       "Gateway connection replaced before the group was saved. Try again.",

@@ -1311,9 +1311,15 @@ function installControlUiMockGateway(
   // fixtures because the real gateway rewrites member categories server-side.
   // Cross-tab proof scenarios can opt into localStorage sharing instead.
   const groupsStateKey = "openclaw.control-ui-e2e.sessionGroups";
-  const groupsStorage = scenario.shareSessionGroupsAcrossTabs
-    ? window.localStorage
-    : window.sessionStorage;
+  // Storage-denied browser contexts throw on property access; keep the
+  // in-memory catalog working instead of failing mock installation.
+  const groupsStorage: Storage | null = (() => {
+    try {
+      return scenario.shareSessionGroupsAcrossTabs ? window.localStorage : window.sessionStorage;
+    } catch {
+      return null;
+    }
+  })();
   let groupsState: {
     names: string[];
     defaults: Record<string, { cwd?: string; worktree?: boolean }>;
@@ -1332,7 +1338,7 @@ function installControlUiMockGateway(
     // Storage-disabled browser contexts still get the in-memory mock default.
   }
   try {
-    const rawGroups = groupsStorage.getItem(groupsStateKey);
+    const rawGroups = groupsStorage?.getItem(groupsStateKey);
     if (rawGroups) {
       groupsState = JSON.parse(rawGroups) as typeof groupsState;
       groupsState.sectionOrder ??= [];
@@ -1446,7 +1452,7 @@ function installControlUiMockGateway(
 
   function persistGroupsState(): void {
     try {
-      groupsStorage.setItem(groupsStateKey, JSON.stringify(groupsState));
+      groupsStorage?.setItem(groupsStateKey, JSON.stringify(groupsState));
     } catch {
       // In-memory catalog still serves the current page.
     }

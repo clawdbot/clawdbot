@@ -46,7 +46,7 @@ suite.define(() => {
       return { page, gateway };
     }
 
-    async function createGroupFromSessionMenu(page: typeof tab1.page, name: string) {
+    async function openNewGroupDialog(page: typeof tab1.page) {
       const row = page.locator(".sidebar-recent-session").first();
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await row.hover();
@@ -55,6 +55,12 @@ suite.define(() => {
       const newGroupItem = page.getByRole("menuitem", { name: "New group" });
       await newGroupItem.waitFor({ state: "visible" });
       await activateSelfRemovingControl(newGroupItem);
+      // Keep the dialog open: both callers must submit from the same
+      // pre-mutation catalog to exercise the reported stale-catalog race.
+      await page.locator("openclaw-modal-dialog input").waitFor({ state: "visible" });
+    }
+
+    async function submitNewGroupDialog(page: typeof tab1.page, name: string) {
       await submitInputDialog(page, name);
       await page.locator(`[data-session-section="category:${name}"]`).waitFor({ state: "visible" });
     }
@@ -63,10 +69,16 @@ suite.define(() => {
     const tab2 = await openTab("agent:main:tab-two", "Tab two session");
 
     try {
-      await createGroupFromSessionMenu(tab1.page, "Alpha");
+      // Hold both callers at the same empty catalog before either mutates.
+      // The old read-modify-write replacement lost one name here; the atomic
+      // add must keep both.
+      await openNewGroupDialog(tab1.page);
+      await openNewGroupDialog(tab2.page);
+
+      await submitNewGroupDialog(tab1.page, "Alpha");
       await captureUiProof(suite, tab1.page, "concurrent-groups-tab1-alpha.png");
 
-      await createGroupFromSessionMenu(tab2.page, "Beta");
+      await submitNewGroupDialog(tab2.page, "Beta");
       await captureUiProof(suite, tab2.page, "concurrent-groups-tab2-beta.png");
 
       // Each tab must eventually observe the group created in the other tab.

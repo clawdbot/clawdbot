@@ -553,6 +553,7 @@ export function createSessionCapability(
       resultAgentId: state.agentId,
       archivedFilter: roster.lastOptions().archivedFilter,
     });
+    // SAFETY: sessions.changed/session.message payloads are record envelopes; narrowed fields stay unknown and are re-checked by typeof before use.
     const payload = event.payload as {
       agentId?: unknown;
       reason?: unknown;
