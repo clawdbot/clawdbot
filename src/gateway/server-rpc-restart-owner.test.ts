@@ -14,6 +14,7 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayContextResolver, GatewayRequestContext } from "./server-methods/types.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
+import "./server.subagent-prompt-recent.gateway.test-support.js";
 
 it(
   "records an actual RPC queued reply awaiting final delivery during restart",

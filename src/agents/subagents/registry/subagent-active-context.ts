@@ -18,6 +18,10 @@ function quotePromptData(value: string): string {
   return JSON.stringify(sanitizeForPromptLiteral(value));
 }
 
+// Hard cap on completed children in the parent prompt. Bursty sequential
+// spawn/finish cycles would otherwise grow every later parent turn unbounded.
+const RECENT_PROMPT_MAX_ENTRIES = 8;
+
 /** Builds a bounded, deterministic snapshot without repeating system instructions. */
 export function buildActiveSubagentRuntimeContext(params: {
   cfg: OpenClawConfig;
@@ -43,33 +47,53 @@ export function buildActiveSubagentRuntimeContext(params: {
   if (runs.length === 0) {
     return undefined;
   }
+  const recentMinutes = params.recentMinutes ?? 30;
   const list = buildSubagentList({
     cfg: params.cfg,
     runs,
-    recentMinutes: params.recentMinutes ?? 30,
+    recentMinutes,
     taskMaxChars: 96,
   });
-  if (list.active.length === 0) {
+  // buildSubagentList returns recent runs in registry order, so sort before
+  // capping to keep the prompt block deterministic across turns.
+  const recentForPrompt = list.recent
+    .toSorted((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0))
+    .slice(0, RECENT_PROMPT_MAX_ENTRIES);
+  if (list.active.length === 0 && recentForPrompt.length === 0) {
     return undefined;
   }
-  return [
-    "## Active Subagents",
-    ...list.active
-      .toSorted((a, b) => (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0))
-      .slice(0, 16)
-      .map((entry) =>
-        [
-          "-",
-          entry.taskName ? `taskName=${entry.taskName};` : undefined,
-          `session=${entry.sessionKey};`,
-          `run=${entry.runId};`,
-          `status=${entry.status};`,
-          `label_json=${quotePromptData(entry.label)};`,
-          `task_json=${quotePromptData(entry.task)}`,
-        ]
-          .filter(Boolean)
-          .join(" "),
-      ),
-    ...(list.active.length > 16 ? [`- additional_runs=${list.active.length - 16}`] : []),
-  ].join("\n");
+  const formatEntry = (entry: (typeof list.active)[number]) =>
+    [
+      "-",
+      entry.taskName ? `taskName=${entry.taskName};` : undefined,
+      `session=${entry.sessionKey};`,
+      `run=${entry.runId};`,
+      `status=${entry.status};`,
+      `label_json=${quotePromptData(entry.label)};`,
+      `task_json=${quotePromptData(entry.task)}`,
+    ]
+      .filter(Boolean)
+      .join(" ");
+  const lines: string[] = [];
+  if (list.active.length > 0) {
+    lines.push(
+      "## Active Subagents",
+      ...list.active
+        .toSorted((a, b) => (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0))
+        .slice(0, 16)
+        .map(formatEntry),
+      ...(list.active.length > 16 ? [`- additional_runs=${list.active.length - 16}`] : []),
+    );
+  }
+  if (recentForPrompt.length > 0) {
+    if (lines.length > 0) {
+      lines.push("");
+    }
+    lines.push(
+      "## Recently Completed Subagents",
+      `Children that ended in the last ${recentMinutes}m, newest first:`,
+      ...recentForPrompt.map(formatEntry),
+    );
+  }
+  return lines.join("\n");
 }
