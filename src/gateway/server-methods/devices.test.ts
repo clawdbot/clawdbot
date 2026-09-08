@@ -262,6 +262,71 @@ describe("device management", () => {
     expectRespondedErrorMessage(opts, "device pairing approval denied");
   });
 
+  it("trims whitespace around device.pair.approve requestId before lookup", async () => {
+    approveDevicePairingMock.mockResolvedValue({
+      status: "approved",
+      requestId: "req-2",
+      device: {
+        deviceId: "device-2",
+        publicKey: "pk-2",
+        approvedAtMs: 200,
+        createdAtMs: 150,
+      },
+    });
+    const opts = createOptions(
+      "device.pair.approve",
+      { requestId: " req-2 " },
+      {
+        client: createClient(["operator.admin"], "device-1", {
+          isDeviceTokenAuth: true,
+        }),
+      },
+    );
+
+    await expectDefined(
+      deviceHandlers["device.pair.approve"],
+      'deviceHandlers["device.pair.approve"] test invariant',
+    )(opts);
+
+    expect(getPendingDevicePairingMock).not.toHaveBeenCalled();
+    expect(approveDevicePairingMock).toHaveBeenCalledWith("req-2", {
+      callerScopes: ["operator.admin"],
+    });
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ requestId: "req-2" }),
+      undefined,
+    );
+  });
+
+  it("trims whitespace around device.pair.reject requestId before lookup", async () => {
+    rejectDevicePairingMock.mockResolvedValue({
+      requestId: "req-2",
+      deviceId: "device-2",
+    });
+    const opts = createOptions(
+      "device.pair.reject",
+      { requestId: " req-2 " },
+      {
+        client: createClient(["operator.admin"], "device-1", {
+          isDeviceTokenAuth: true,
+        }),
+      },
+    );
+
+    await expectDefined(
+      deviceHandlers["device.pair.reject"],
+      'deviceHandlers["device.pair.reject"] test invariant',
+    )(opts);
+
+    expect(rejectDevicePairingMock).toHaveBeenCalledWith("req-2");
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ requestId: "req-2", deviceId: "device-2" }),
+      undefined,
+    );
+  });
+
   it("allows admins to approve another device", async () => {
     approveDevicePairingMock.mockResolvedValue({
       status: "approved",
