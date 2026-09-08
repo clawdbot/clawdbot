@@ -49,11 +49,11 @@ Add the CLI backend to your fallback list so it only runs when primary models fa
   agents: {
     defaults: {
       model: {
-        primary: "anthropic/claude-opus-4-6",
+        primary: "anthropic/claude-opus-5",
         fallbacks: ["claude-cli/claude-sonnet-5"],
       },
       models: {
-        "anthropic/claude-opus-4-6": { alias: "Opus" },
+        "anthropic/claude-opus-5": { alias: "Opus" },
         "claude-cli/claude-sonnet-5": {},
       },
     },
