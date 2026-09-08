@@ -109,6 +109,11 @@ on:
           - beta
           - stable
           - full
+      gateway_repo_e2e_use_github_hosted_runners:
+        description: Use GitHub-hosted Gateway repo E2E when the overall hosted-runner option is enabled
+        required: false
+        default: true
+        type: boolean
       use_github_hosted_runners:
         description: Use GitHub-hosted runners where supported, including OpenWebUI
         required: false
@@ -461,6 +466,11 @@ on:
         required: false
         default: stable
         type: string
+      gateway_repo_e2e_use_github_hosted_runners:
+        description: Use GitHub-hosted Gateway repo E2E when the overall hosted-runner option is enabled
+        required: false
+        default: true
+        type: boolean
       use_github_hosted_runners:
         description: Use GitHub-hosted runners where supported, including OpenWebUI
         required: false
@@ -1083,7 +1093,7 @@ jobs:
          {"name":"Gateway 2/4","command":"pnpm test:e2e:gateway --shard=2/4"},
          {"name":"Gateway 3/4","command":"pnpm test:e2e:gateway --shard=3/4"},
          {"name":"Gateway 4/4","command":"pnpm test:e2e:gateway --shard=4/4"}]
-      use_github_hosted_runners: ${{ inputs.use_github_hosted_runners }}
+      use_github_hosted_runners: ${{ inputs.use_github_hosted_runners && inputs.gateway_repo_e2e_use_github_hosted_runners }}
       advisory: ${{ inputs.advisory }}
       allow_unreleased_changelog: ${{ inputs.allow_unreleased_changelog }}
       allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}

@@ -315,6 +315,60 @@ function executeParentFilterValidation(
 }
 
 describe("release validation no-push transport", () => {
+  it("scopes release Gateway capacity to the existing repo E2E runner input", () => {
+    const live = readWorkflow(LIVE_E2E);
+    for (const entry of [live.on?.workflow_call, live.on?.workflow_dispatch]) {
+      expect(entry?.inputs?.gateway_repo_e2e_use_github_hosted_runners).toMatchObject({
+        type: "boolean",
+        default: true,
+        required: false,
+      });
+    }
+    const release = readWorkflow(RELEASE_CHECKS);
+    expect(
+      job(release, "live_repo_e2e_release_checks").with?.gateway_repo_e2e_use_github_hosted_runners,
+    ).toBe(false);
+    expect(
+      job(release, "docker_e2e_release_checks").with?.gateway_repo_e2e_use_github_hosted_runners,
+    ).toBeUndefined();
+    expect(
+      job(release, "live_repo_e2e_release_checks").with?.use_github_hosted_runners,
+    ).toBeUndefined();
+  });
+
+  it.each([
+    [true, true],
+    [true, false],
+    [false, true],
+    [false, false],
+  ])(
+    "routes Gateway capacity without changing runtime routing (hosted=%s, gatewayHosted=%s)",
+    (hosted, gatewayHosted) => {
+      const live = readWorkflow(LIVE_E2E);
+      const repo = readWorkflow(".github/workflows/openclaw-repo-e2e-reusable.yml");
+      const inputs = {
+        use_github_hosted_runners: hosted,
+        gateway_repo_e2e_use_github_hosted_runners: gatewayHosted,
+      };
+      for (const [pipeline, expected] of [
+        ["validate_repo_e2e_gateway", hosted && gatewayHosted],
+        ["validate_repo_e2e_runtime", hosted],
+      ] as const) {
+        const expression = String(job(live, pipeline).with?.use_github_hosted_runners);
+        const resolved = runInNewContext(expression.slice(3, -2), { inputs });
+        expect(resolved).toBe(expected);
+        for (const phase of ["build", "test"]) {
+          const runner = job(repo, phase)["runs-on"]!;
+          expect(
+            runInNewContext(runner.slice(3, -2), {
+              inputs: { use_github_hosted_runners: resolved },
+            }),
+          ).toBe(expected ? "ubuntu-24.04" : "blacksmith-32vcpu-ubuntu-2404");
+        }
+      }
+    },
+  );
+
   it.each([
     ["openclaw/openclaw", "hybrid", false, "blacksmith-4vcpu-ubuntu-2404"],
     ["openclaw/openclaw", "github", false, "ubuntu-24.04"],

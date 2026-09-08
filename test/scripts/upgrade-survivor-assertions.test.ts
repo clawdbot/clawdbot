@@ -24,6 +24,76 @@ import {
 
 const ASSERTIONS_PATH = "scripts/e2e/lib/upgrade-survivor/assertions.mjs";
 
+function selectFrozenUpgradeOracle(
+  root: string,
+  version: string,
+  baseline = "openclaw@2026.6.35",
+  workingVersion?: string,
+) {
+  const selectedRoot = join(root, "selected");
+  const selectedScenario = join(selectedRoot, "scripts/e2e/lib/upgrade-survivor");
+  const selectedOracle = join(selectedRoot, ASSERTIONS_PATH);
+  mkdirSync(join(selectedOracle, ".."), { recursive: true });
+  writeFileSync(join(selectedRoot, "package.json"), JSON.stringify({ version }));
+  writeFileSync(
+    selectedOracle,
+    'throw new Error("selected oracle has no serving-turn command");\n',
+  );
+  writeFileSync(join(selectedScenario, "run.sh"), "# selected scenario runner\n");
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", selectedRoot, ...args], { encoding: "utf8" }).trim();
+  git("init", "--quiet");
+  git("add", ".");
+  git(
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "commit",
+    "--quiet",
+    "-m",
+    "selected release contract",
+  );
+  const selectedSha = git("rev-parse", "HEAD");
+  if (workingVersion) {
+    writeFileSync(join(selectedRoot, "package.json"), JSON.stringify({ version: workingVersion }));
+  }
+  const source = readFileSync("scripts/e2e/upgrade-survivor-docker.sh", "utf8");
+  const policy = source.slice(
+    source.indexOf("UPGRADE_SCENARIO_ARGS=()"),
+    source.indexOf("\nIMAGE_NAME="),
+  );
+  const result = spawnSync(
+    "bash",
+    [
+      "-euo",
+      "pipefail",
+      "-c",
+      `
+source "$HARNESS_ROOT_DIR/scripts/lib/frozen-target-compat.sh"
+${policy}
+printf '%s\\n' "\${UPGRADE_SCENARIO_DIR:-$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor}/assertions.mjs"
+printf '%s\\n' "$UPGRADE_RUNNER"
+printf '%s\\n' \${UPGRADE_SCENARIO_ARGS[@]+"\${UPGRADE_SCENARIO_ARGS[@]}"}
+`,
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        ROOT_DIR: selectedRoot,
+        HARNESS_ROOT_DIR: process.cwd(),
+        OPENCLAW_SELECTED_SHA: selectedSha,
+        OPENCLAW_TOOLING_SHA: "f".repeat(40),
+        OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: baseline,
+      },
+    },
+  );
+  const [oracle, runner, ...mounts] = result.stdout.trim().split("\n").filter(Boolean);
+  return { result, oracle, runner, mounts, selectedOracle, selectedScenario };
+}
+
 function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
@@ -906,6 +976,53 @@ function assertUpdateRunSelfUpgrade(summary: ReturnType<typeof createUpdateRunSe
 }
 
 describe("upgrade survivor assertions", () => {
+  it.each([
+    ["2026.9.3", false, "openclaw@2026.6.35", ""],
+    ["2026.9.3-beta.1", false, "openclaw@2026.6.35", ""],
+    ["2026.4.25", false, "openclaw@2026.6.35", ""],
+    ["2026.6.35", true, "openclaw@2026.9.2", ""],
+    ["2026.7.33", true, "openclaw@2026.9.2", ""],
+    ["2026.9.3", false, "openclaw@2026.6.35", "2026.6.35"],
+  ])(
+    "selects upgrade assertion ownership from immutable target %s",
+    (version, selected, baseline, workingVersion) => {
+      const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-oracle-"));
+      try {
+        const proof = selectFrozenUpgradeOracle(root, version, baseline, workingVersion);
+        expect(proof.result.status, proof.result.stderr).toBe(0);
+        expect(proof.oracle).toBe(
+          selected ? proof.selectedOracle : join(process.cwd(), ASSERTIONS_PATH),
+        );
+        expect(proof.runner).toBe(
+          join(
+            selected
+              ? proof.selectedScenario
+              : join(process.cwd(), "scripts/e2e/lib/upgrade-survivor"),
+            "run.sh",
+          ),
+        );
+        expect(proof.mounts).toEqual(
+          selected
+            ? ["-v", `${proof.selectedScenario}:/app/scripts/e2e/lib/upgrade-survivor:ro`]
+            : [],
+        );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["invalid", "2026.6.35-1"])("rejects invalid frozen target train %s", (version) => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-invalid-oracle-"));
+    try {
+      const proof = selectFrozenUpgradeOracle(root, version);
+      expect(proof.result.status).not.toBe(0);
+      expect(proof.oracle).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     {
       name: "legacy default-only doctor export",
@@ -1876,6 +1993,7 @@ process.stdout.write(sessionDir + "\\n");
 
   it.each([
     "ok",
+    "frozen-regular",
     "queued",
     "wait-timeout",
     "cli-failed",
@@ -1919,21 +2037,23 @@ process.stdout.write(JSON.stringify(result));
         { mode: 0o755 },
       );
       const receipt = join(root, "receipt.json");
-      const result = spawnSync(
-        process.execPath,
-        [ASSERTIONS_PATH, "assert-restart-serving-turn", receipt],
-        {
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            PATH: `${bin}${delimiter}${process.env.PATH}`,
-            GATEWAY_AUTH_TOKEN_REF: "synthetic-serving-token",
-            PROBE_OUTCOME: outcome,
-            PROBE_MARKER_FILE: join(root, "marker"),
-          },
+      let oracle = ASSERTIONS_PATH;
+      if (outcome === "frozen-regular") {
+        const selection = selectFrozenUpgradeOracle(root, "2026.9.3");
+        expect(selection.result.status, selection.result.stderr).toBe(0);
+        oracle = selection.oracle!;
+      }
+      const result = spawnSync(process.execPath, [oracle, "assert-restart-serving-turn", receipt], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${bin}${delimiter}${process.env.PATH}`,
+          GATEWAY_AUTH_TOKEN_REF: "synthetic-serving-token",
+          PROBE_OUTCOME: outcome,
+          PROBE_MARKER_FILE: join(root, "marker"),
         },
-      );
-      const succeeded = outcome === "ok" || outcome === "queued" || outcome === "wait-timeout";
+      });
+      const succeeded = ["ok", "frozen-regular", "queued", "wait-timeout"].includes(outcome);
       expect(result.status, result.stderr).toBe(succeeded ? 0 : 1);
       expect(existsSync(receipt)).toBe(succeeded);
       expect(result.stderr).not.toContain("synthetic-serving-token");

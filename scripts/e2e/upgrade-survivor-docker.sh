@@ -51,10 +51,40 @@ source "$HARNESS_ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
 
 UPGRADE_SCENARIO_ARGS=()
 UPGRADE_RUNNER="$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/run.sh"
-UPGRADE_SCENARIO_DIR="$(openclaw_resolve_frozen_target_file \
-  "$ROOT_DIR" scripts/e2e/lib/upgrade-survivor)"
-if [ -n "$UPGRADE_SCENARIO_DIR" ]; then
-  # The runner, assertions, and fixtures form one shipped scenario contract.
+UPGRADE_SCENARIO_DIR=""
+UPGRADE_TARGET_TRAIN=""
+context_status=0
+openclaw_prepare_frozen_target_context "$ROOT_DIR" || context_status=$?
+case "$context_status" in
+  0)
+    UPGRADE_TARGET_TRAIN="$(node --input-type=module - "$ROOT_DIR" "$OPENCLAW_SELECTED_SHA" "$HARNESS_ROOT_DIR/scripts/lib/release-version.mjs" <<'NODE'
+import { execFileSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
+const [root, sha, classifier] = process.argv.slice(2);
+const { parseReleaseVersion, classifyReleaseTrain } = await import(pathToFileURL(classifier).href);
+const { version } = JSON.parse(execFileSync("git", ["-C", root, "show", `${sha}:package.json`], { encoding: "utf8" }));
+const parsed = typeof version === "string" ? parseReleaseVersion(version) : null;
+if (!parsed) throw new Error("Selected upgrade target has an invalid release version.");
+const train = classifyReleaseTrain(parsed);
+if (train === "unsupported-extended-stable-correction") {
+  throw new Error("Selected extended-stable target has an unsupported correction version.");
+}
+process.stdout.write(train);
+NODE
+)"
+    ;;
+  1) ;;
+  *) exit "$context_status" ;;
+esac
+if [ "$UPGRADE_TARGET_TRAIN" = extended-stable ]; then
+  # Extended-stable retains shipped state expectations. Regular releases keep
+  # the trusted runner and its serving-turn/post-inference assertions together.
+  UPGRADE_SCENARIO_DIR="$(openclaw_resolve_frozen_target_file \
+    "$ROOT_DIR" scripts/e2e/lib/upgrade-survivor)"
+  if [ -z "$UPGRADE_SCENARIO_DIR" ]; then
+    echo "Selected extended-stable target does not provide an upgrade scenario." >&2
+    exit 2
+  fi
   UPGRADE_RUNNER="$UPGRADE_SCENARIO_DIR/run.sh"
   UPGRADE_SCENARIO_ARGS+=(
     -v "$UPGRADE_SCENARIO_DIR:/app/scripts/e2e/lib/upgrade-survivor:ro"
