@@ -1,9 +1,9 @@
 import type { ConversationRouteContext } from "./conversation-route-context.js";
 import type {
+  SessionArchivedTranscriptCleanupRule,
   SessionLifecycleArchivedTranscript,
   SessionResetBoundaryWrite,
 } from "./session-accessor.lifecycle-types.js";
-import type { SessionArchivedTranscriptCleanupRule } from "./session-accessor.lifecycle-types.js";
 import type { SessionStateDeletePlan } from "./session-accessor.sqlite-archive.js";
 import type { SessionEntryLifecycleRemoval } from "./session-accessor.sqlite-contract.js";
 import type { SessionEntry } from "./types.js";

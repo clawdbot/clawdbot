@@ -203,7 +203,13 @@ describe("sweepCronRunSessions", () => {
         },
       },
     });
-    const rmSpy = vi.spyOn(fsPromises, "rm").mockRejectedValueOnce(cleanupError);
+    const rm = fsPromises.rm.bind(fsPromises);
+    const rmSpy = vi.spyOn(fsPromises, "rm").mockImplementation(async (target, options) => {
+      if (String(target) === staleArchive) {
+        throw cleanupError;
+      }
+      return await rm(target, options);
+    });
 
     try {
       const result = await sweepCronRunSessions({
