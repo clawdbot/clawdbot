@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "status": "Unknown",
+  "evidenceStatus": "Unknown",
+  "objective": "Coordinate approved planning, status, verification, and handoffs.",
+  "scope": [
+    "planning",
+    "status",
+    "verification",
+    "structured handoffs"
+  ],
+  "priorities": [],
+  "blockers": [],
+  "dependencies": [],
+  "lastKnownGood": null,
+  "unknowns": [
+    "No approved trusted truth source is assigned to this fixture."
+  ],
+  "source": {
+    "kind": "fixture",
+    "label": "No approved trusted truth source assigned",
+    "verifiedAt": null
+  },
+  "updatedAt": null
+}

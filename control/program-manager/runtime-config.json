@@ -1,0 +1,78 @@
+{
+  "agents": {
+    "ownership": "explicit",
+    "entries": {
+      "program-manager": {
+        "skills": [],
+        "skillsLimits": {
+          "maxSkillsPromptChars": 0
+        },
+        "bootstrapMaxChars": 3500,
+        "bootstrapTotalMaxChars": 10000,
+        "contextLimits": {
+          "memoryGetMaxChars": 6000,
+          "postCompactionMaxChars": 2500
+        },
+        "model": {
+          "primary": "omlx-qwen38-agent/openclaw-qwen38-builder-standard-q8-mtp",
+          "fallbacks": [
+            "ollama/openclaw-control-qwen25-32b:latest",
+            "ollama/qwen3.5:27b-q8_0"
+          ]
+        },
+        "params": {
+          "cacheRetention": "short",
+          "chat_template_kwargs": {
+            "enable_thinking": false,
+            "preserve_thinking": false
+          },
+          "maxTokens": 1024,
+          "text_verbosity": "low"
+        },
+        "thinkingDefault": "low",
+        "subagents": {
+          "allowAgents": [
+            "builder-agent",
+            "research-brief-agent"
+          ],
+          "delegationMode": "suggest",
+          "requireAgentId": true
+        },
+        "tools": {
+          "alsoAllow": [
+            "read",
+            "get_goal",
+            "progress_card",
+            "sessions_spawn",
+            "sessions_yield"
+          ],
+          "deny": [
+            "apply_patch",
+            "browser",
+            "code_execution",
+            "cron",
+            "edit",
+            "exec",
+            "message",
+            "process",
+            "session_status",
+            "sessions_send",
+            "web_fetch",
+            "web_search",
+            "write"
+          ],
+          "exec": {
+            "ask": "always",
+            "security": "deny"
+          },
+          "fs": {
+            "workspaceOnly": true
+          },
+          "profile": "minimal"
+        }
+      },
+      "builder-agent": {},
+      "research-brief-agent": {}
+    }
+  }
+}

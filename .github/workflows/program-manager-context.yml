@@ -1,0 +1,50 @@
+name: Program Manager context checks
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  push:
+    paths:
+      - "control/program-manager/**"
+      - "scripts/program-manager-workspace.mjs"
+      - "test/scripts/program-manager-workspace.test.ts"
+      - ".github/workflows/program-manager-context.yml"
+  pull_request:
+    paths:
+      - "control/program-manager/**"
+      - "scripts/program-manager-workspace.mjs"
+      - "test/scripts/program-manager-workspace.test.ts"
+      - ".github/workflows/program-manager-context.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: program-manager-context-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.x"
+
+jobs:
+  contract:
+    name: Program Manager context contract
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+      - name: Validate source package
+        run: node scripts/program-manager-workspace.mjs check --json
+      - name: Validate canonical runtime config
+        run: node scripts/program-manager-workspace.mjs check-config --config control/program-manager/runtime-config.json --json
+      - name: Run focused tests
+        run: pnpm test test/scripts/program-manager-workspace.test.ts -- --reporter=dot
