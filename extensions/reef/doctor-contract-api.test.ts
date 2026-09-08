@@ -550,6 +550,39 @@ describe("Reef doctor contract", () => {
     expect(fs.existsSync(`${filePath}.migrated`)).toBe(true);
   });
 
+  it("drops a semantically invalid final replay record without a trailing newline", async () => {
+    const legacyDir = path.join(stateDir, ".openclaw", "data", "reef");
+    const replayPath = path.join(legacyDir, "replay.jsonl");
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.writeFileSync(
+      replayPath,
+      JSON.stringify({
+        op: "consume",
+        peer: "alice",
+        id: "01JZ0000000000000000000000",
+      }),
+    );
+    const migration = migrationById("reef-runtime-files-to-plugin-state");
+    const params = {
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    };
+
+    const result = await migration.migrateLegacyState(params);
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Migrated 0 Reef replay bindings -> plugin state",
+      expect.stringContaining("Archived Reef replay state legacy source"),
+      "Verified all Reef durable state; cleared migration barrier",
+    ]);
+    expect(fs.existsSync(replayPath)).toBe(false);
+    expect(fs.existsSync(`${replayPath}.migrated`)).toBe(true);
+  });
+
   it("finishes an interrupted migration of an empty audit trail", async () => {
     const legacyDir = path.join(stateDir, ".openclaw", "data", "reef");
     const filePath = path.join(legacyDir, "audit.jsonl");
