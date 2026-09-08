@@ -235,6 +235,14 @@ describe("markdownToTelegramRichBlocks", () => {
     expect(collectLinkTargets(paragraph.text)).toEqual(["https://example.com"]);
   });
 
+  it("drops a file:// href but keeps the label instead of leaking raw markdown", () => {
+    const rendered = markdownToTelegramRichBlocks(
+      "[Nova_Core.md](file:///home/x/workspace/Nova_Core.md)",
+    );
+    expect(rendered.blocks).toEqual([{ type: "paragraph", text: "Nova_Core.md" }]);
+    expect(rendered.plainText).toBe("Nova_Core.md");
+  });
+
   it("degrades native lists beyond 16 nesting levels", () => {
     const markdown = Array.from(
       { length: 17 },

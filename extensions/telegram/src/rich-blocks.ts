@@ -565,6 +565,11 @@ export function markdownToTelegramRichBlocks(
     headingStyle: "rich",
     blockquotePrefix: "",
     tableMode,
+    // resolveTelegramLinkAction already collapses unsupported hrefs (file:,
+    // data:, ...) to their label; let the parser tokenize them instead of
+    // leaking raw `[label](href)` source when markdown-it's own scheme
+    // denylist rejects it.
+    allowAllLinkSchemes: true,
   });
 
   let degradationReasons = new Set<TelegramRichBlocksDegradationReason>();

@@ -313,6 +313,12 @@ export type MarkdownParseOptions = {
    * instead of emphasis delimiters. Disabled by default.
    */
   preserveDunderIdentifiers?: boolean;
+  /**
+   * Let links with any scheme (file:, data:, javascript:, ...) tokenize instead
+   * of being dropped by markdown-it's built-in denylist. Only set this when the
+   * caller's own `buildLink` already applies a scheme allowlist downstream.
+   */
+  allowAllLinkSchemes?: boolean;
 };
 
 function appendHeadingSeparator(state: RenderState, nextBlockStart: number | undefined) {
@@ -331,7 +337,7 @@ function appendHeadingSeparator(state: RenderState, nextBlockStart: number | und
   state.headingLineEnd = undefined;
 }
 
-// These seven parser switches bound the prepared configurations to 128 entries.
+// These eight parser switches bound the prepared configurations to 256 entries.
 // Parse state and rendered options remain local to each markdownToIRWithMeta call.
 const markdownParsers = new Map<number, MarkdownItParser>();
 
@@ -343,7 +349,8 @@ function createMarkdownIt(options: MarkdownParseOptions): MarkdownItParser {
     (options.enableHtmlUnderline ? 8 : 0) |
     (options.enableSpoilers ? 16 : 0) |
     (options.tableMode && options.tableMode !== "off" ? 32 : 0) |
-    (options.autolink === false ? 64 : 0);
+    (options.autolink === false ? 64 : 0) |
+    (options.allowAllLinkSchemes ? 128 : 0);
   const prepared = markdownParsers.get(key);
   if (prepared) {
     return prepared;
@@ -395,6 +402,13 @@ function createMarkdownIt(options: MarkdownParseOptions): MarkdownItParser {
   }
   if (options.autolink === false) {
     md.disable("autolink");
+  }
+  if (options.allowAllLinkSchemes) {
+    // markdown-it's default validateLink drops file:/javascript:/vbscript:/data:
+    // links before they ever tokenize as a link, so the raw `[label](href)`
+    // source leaks through unparsed. Scheme allowlisting belongs to the
+    // renderer's own buildLink policy, not this parser (see image-spans.ts).
+    md.validateLink = () => true;
   }
   markdownParsers.set(key, md);
   return md;

@@ -252,6 +252,12 @@ describe("markdownToTelegramHtml", () => {
     expect(res).toBe('<a href="https://example.com"><b>bold</b></a>');
   });
 
+  it("drops a file:// href but keeps the label instead of leaking raw markdown", () => {
+    const res = markdownToTelegramHtml("[Nova_Core.md](file:///home/x/workspace/Nova_Core.md)");
+    expect(res).not.toContain("file://");
+    expect(res).toContain("Nova_Core.md");
+  });
+
   it("wraps punctuated file references in code tags", () => {
     const res = markdownToTelegramHtml("See README.md. Also (backup.sh).");
     expect(res).toContain("<code>README.md</code>.");
