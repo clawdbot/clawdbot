@@ -6,7 +6,7 @@ import type { Duplex } from "node:stream";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../../test/helpers/tls-fixture.js";
 import { openProviderWebSocket } from "./provider-websocket.js";
 import * as ssrf from "./ssrf.js";
@@ -17,7 +17,9 @@ async function createStalledHandshakeServer(event: "upgrade" | "connect") {
   const server = createHttpServer();
   const received = createDeferred<Duplex>();
   const connections = new Set<net.Socket>();
+  let connectionCount = 0;
   server.on("connection", (socket) => {
+    connectionCount += 1;
     connections.add(socket);
     socket.once("close", () => connections.delete(socket));
   });
@@ -40,7 +42,39 @@ async function createStalledHandshakeServer(event: "upgrade" | "connect") {
       server.close((error) => (error ? reject(error) : resolve()));
     });
   });
-  return { url: `http://127.0.0.1:${port}`, received: received.promise };
+  return {
+    url: `http://127.0.0.1:${port}`,
+    received: received.promise,
+    connectionCount: () => connectionCount,
+  };
+}
+
+function configureProxyEnvironment(proxyUrl: string, noProxy = "") {
+  vi.stubEnv("OPENCLAW_PROXY_ACTIVE", undefined);
+  for (const name of [
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+  ]) {
+    vi.stubEnv(name, proxyUrl);
+  }
+  vi.stubEnv("NO_PROXY", noProxy);
+  vi.stubEnv("no_proxy", noProxy);
+}
+
+function resolveProviderToLoopback() {
+  const resolveHostname = ssrf.resolvePinnedHostnameWithPolicy;
+  vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation((hostname, params) =>
+    resolveHostname(
+      hostname,
+      hostname === "provider.example"
+        ? { ...params, lookupFn: async () => [{ address: "127.0.0.1", family: 4 }] }
+        : params,
+    ),
+  );
 }
 
 async function createLocalWebSocketServer(options: { tls?: boolean } = {}) {
@@ -105,8 +139,118 @@ async function createConnectProxy(proxyHostname = "127.0.0.1") {
 describe("openProviderWebSocket", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     vi.useRealTimers();
     await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
+  });
+
+  it.each(["explicit-proxy", "env-proxy"] as const)(
+    "rejects private target DNS before connecting through configured %s",
+    async (mode) => {
+      const proxy = await createStalledHandshakeServer("connect");
+      configureProxyEnvironment(proxy.url);
+      resolveProviderToLoopback();
+      const opening = openProviderWebSocket({
+        allowPrivateNetwork: false,
+        baseUrl: "wss://provider.example/audio",
+        dispatcherPolicy:
+          mode === "explicit-proxy"
+            ? { mode, proxyUrl: proxy.url, allowPrivateProxy: true }
+            : { mode },
+        timeoutMs: 1000,
+        trustConfiguredBaseUrlOrigin: false,
+        url: "wss://provider.example/audio",
+      }).then((socket) => {
+        socket.on("error", () => {});
+        socket.terminate();
+        return socket;
+      });
+      await expect(opening).rejects.toThrow(/private|loopback|blocked/iu);
+      expect(proxy.connectionCount()).toBe(0);
+    },
+  );
+
+  it.each([
+    { name: "an ambient proxy", managed: false, dispatcherPolicy: undefined },
+    {
+      name: "a managed proxy with configured env-proxy policy",
+      managed: true,
+      dispatcherPolicy: { mode: "env-proxy" },
+    },
+    {
+      name: "a managed proxy with configured direct policy",
+      managed: true,
+      dispatcherPolicy: { mode: "direct" },
+    },
+  ] as const)("leaves target DNS to $name", async ({ managed, dispatcherPolicy }) => {
+    const proxy = await createStalledHandshakeServer("connect");
+    configureProxyEnvironment(proxy.url);
+    if (managed) {
+      vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
+    }
+    resolveProviderToLoopback();
+    const socket = await openProviderWebSocket({
+      allowPrivateNetwork: false,
+      baseUrl: "wss://provider.example/audio",
+      dispatcherPolicy,
+      timeoutMs: 1000,
+      trustConfiguredBaseUrlOrigin: false,
+      url: "wss://provider.example/audio",
+    });
+    socket.on("error", () => {});
+    const peer = await withTestTimeout(proxy.received, 2000, "Proxy did not receive CONNECT");
+    const closed = once(peer, "close", { signal: AbortSignal.timeout(2000) });
+    socket.terminate();
+    await closed;
+    expect(proxy.connectionCount()).toBe(1);
+  });
+
+  it.each([
+    { name: "ambient", managed: false, dispatcherPolicy: undefined },
+    { name: "managed", managed: true, dispatcherPolicy: { mode: "env-proxy" } },
+  ] as const)(
+    "checks target DNS when NO_PROXY bypasses a $name proxy",
+    async ({ managed, dispatcherPolicy }) => {
+      const proxy = await createStalledHandshakeServer("connect");
+      configureProxyEnvironment(proxy.url, "provider.example");
+      if (managed) {
+        vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
+      }
+      resolveProviderToLoopback();
+      await expect(
+        openProviderWebSocket({
+          allowPrivateNetwork: false,
+          baseUrl: "wss://provider.example/audio",
+          dispatcherPolicy,
+          timeoutMs: 1000,
+          trustConfiguredBaseUrlOrigin: false,
+          url: "wss://provider.example/audio",
+        }),
+      ).rejects.toThrow(/private|loopback|blocked/iu);
+      expect(proxy.connectionCount()).toBe(0);
+    },
+  );
+
+  it("checks target DNS when only ALL_PROXY is configured", async () => {
+    const proxy = await createStalledHandshakeServer("connect");
+    configureProxyEnvironment(proxy.url);
+    for (const name of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]) {
+      vi.stubEnv(name, undefined);
+    }
+    resolveProviderToLoopback();
+    const opening = openProviderWebSocket({
+      allowPrivateNetwork: false,
+      baseUrl: "wss://provider.example/audio",
+      timeoutMs: 1000,
+      trustConfiguredBaseUrlOrigin: false,
+      url: "wss://provider.example/audio",
+    }).then((socket) => {
+      socket.on("error", () => {});
+      socket.terminate();
+      return socket;
+    });
+    await expect(opening).rejects.toThrow(/private|loopback|blocked/iu);
+    expect(proxy.connectionCount()).toBe(0);
   });
 
   it("keeps DNS preparation and the handshake within one connection deadline", async () => {
@@ -155,12 +299,12 @@ describe("openProviderWebSocket", () => {
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const socket = await openProviderWebSocket({
         allowPrivateNetwork: true,
-        baseUrl: "wss://provider.example/audio",
+        baseUrl: "wss://127.0.0.1/audio",
         dispatcherPolicy: { mode: "explicit-proxy", proxyUrl: proxy.url },
         signal: controller.signal,
         timeoutMs: 1000,
         trustConfiguredBaseUrlOrigin: false,
-        url: "wss://provider.example/audio",
+        url: "wss://127.0.0.1/audio",
       });
       socket.on("error", () => {});
       const peer = await proxy.received;

@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { AudioTranscriptionRequest } from "openclaw/plugin-sdk/media-understanding";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -116,11 +117,11 @@ describe("Deepgram Flux audio", () => {
   });
 
   it("keeps decoding, connection preparation, and transcription within one deadline", async () => {
-    const decodeStarted = Promise.withResolvers<void>();
-    const releaseDecode = Promise.withResolvers<void>();
-    const preparationStarted = Promise.withResolvers<void>();
-    const releasePreparation = Promise.withResolvers<void>();
-    const flushed = Promise.withResolvers<void>();
+    const decodeStarted = createDeferred<void>();
+    const releaseDecode = createDeferred<void>();
+    const preparationStarted = createDeferred<void>();
+    const releasePreparation = createDeferred<void>();
+    const flushed = createDeferred<void>();
     const server = await createFluxServer({ onCloseStream: () => flushed.resolve() });
     runCommandBuffered.mockImplementationOnce(async () => {
       decodeStarted.resolve();

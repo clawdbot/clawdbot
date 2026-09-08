@@ -7,7 +7,9 @@ import WebSocket from "ws";
 import { resolveProviderTransportSsrFPolicy } from "../../agents/provider-transport-fetch.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import { racePromiseWithAbortSignal } from "../abort-signal.js";
+import { isManagedProxyActive } from "./fetch-guard.js";
 import { resolveEnvNodeProxyUrlForTarget } from "./node-proxy-agent.js";
+import { shouldUseEnvHttpProxyForUrl } from "./proxy-env.js";
 import { resolveActiveManagedProxyTlsOptions } from "./proxy/active-managed-proxy-tls.js";
 import {
   assertHostnameAllowedWithPolicy,
@@ -67,6 +69,7 @@ async function createProxyAgent(params: {
 }): Promise<HttpAgent> {
   const pinnedProxy = await resolvePinnedHostnameWithPolicy(params.proxyUrl.hostname, {
     policy: proxyPolicy(params.policy, params.allowPrivateProxy),
+    signal: params.signal,
   });
   return new HttpsProxyAgent(params.proxyUrl, {
     ...params.proxyTls,
@@ -81,56 +84,64 @@ async function createProviderWebSocketAgent(params: {
   url: URL;
   signal?: AbortSignal;
 }): Promise<HttpAgent> {
-  const targetTls = targetTlsOptions(params.dispatcherPolicy);
-  if (params.dispatcherPolicy?.mode === "explicit-proxy") {
-    let proxyUrl: URL;
+  const { dispatcherPolicy, policy, url, signal } = params;
+  const canDelegateEnvDns = shouldUseEnvHttpProxyForUrl(toHttpUrl(url.href));
+  const useManagedProxy = isManagedProxyActive() && canDelegateEnvDns;
+  const envProxyUrl =
+    useManagedProxy || dispatcherPolicy?.mode !== "direct"
+      ? resolveEnvNodeProxyUrlForTarget(url)
+      : undefined;
+  let proxyUrl: URL | undefined;
+  if (dispatcherPolicy?.mode === "explicit-proxy") {
     try {
-      proxyUrl = new URL(params.dispatcherPolicy.proxyUrl);
+      proxyUrl = new URL(dispatcherPolicy.proxyUrl);
     } catch {
       throw new Error("Invalid explicit proxy URL");
     }
     if (proxyUrl.protocol !== "http:" && proxyUrl.protocol !== "https:") {
       throw new Error("Explicit proxy URL must use http or https");
     }
-    // The proxy resolves the final target. Check that hostname before sending
-    // credentials, and pin the separately configured proxy host in createProxyAgent.
-    assertHostnameAllowedWithPolicy(params.url.hostname, params.policy);
-    return await createProxyAgent({
-      policy: params.policy,
-      proxyUrl,
-      proxyTls: params.dispatcherPolicy.proxyTls,
-      allowPrivateProxy: params.dispatcherPolicy.allowPrivateProxy === true,
-      signal: params.signal,
-    });
+  } else if (dispatcherPolicy?.mode !== "direct") {
+    proxyUrl = envProxyUrl;
+  }
+  if (useManagedProxy) {
+    proxyUrl = envProxyUrl;
   }
 
-  const useEnvProxy =
-    params.dispatcherPolicy?.mode === "env-proxy" || params.dispatcherPolicy === undefined;
-  const envProxyUrl = useEnvProxy ? resolveEnvNodeProxyUrlForTarget(params.url) : undefined;
-  if (envProxyUrl) {
-    // Environment proxies are operator-owned DNS boundaries, matching guarded HTTP.
-    // The target hostname still passes policy before the handshake carries credentials.
-    assertHostnameAllowedWithPolicy(params.url.hostname, params.policy);
-    return await createProxyAgent({
-      policy: params.policy,
-      proxyUrl: envProxyUrl,
-      proxyTls:
-        params.dispatcherPolicy?.mode === "env-proxy"
-          ? params.dispatcherPolicy.proxyTls
-          : resolveActiveManagedProxyTlsOptions({ proxyUrl: envProxyUrl.href }),
-      allowPrivateProxy: true,
-      signal: params.signal,
-    });
+  if (!proxyUrl) {
+    const pinned = await resolvePinnedHostnameWithPolicy(url.hostname, { policy, signal });
+    const options = {
+      keepAlive: false,
+      ...targetTlsOptions(dispatcherPolicy),
+      lookup: pinned.lookup,
+    };
+    return url.protocol === "wss:" ? new https.Agent(options) : new http.Agent(options);
   }
 
-  const pinned = await resolvePinnedHostnameWithPolicy(params.url.hostname, {
-    policy: params.policy,
+  // Match guarded HTTP: configured proxies stay strict, while applicable
+  // managed/ambient HTTP proxy routes own DNS. ALL_PROXY alone grants no trust.
+  if (!useManagedProxy && (dispatcherPolicy || !canDelegateEnvDns)) {
+    await resolvePinnedHostnameWithPolicy(url.hostname, { policy, signal });
+  } else {
+    assertHostnameAllowedWithPolicy(url.hostname, policy);
+  }
+  return await createProxyAgent({
+    policy,
+    proxyUrl,
+    proxyTls:
+      !useManagedProxy &&
+      (dispatcherPolicy?.mode === "explicit-proxy" || dispatcherPolicy?.mode === "env-proxy")
+        ? dispatcherPolicy.proxyTls
+        : resolveActiveManagedProxyTlsOptions({ proxyUrl: proxyUrl.href }),
+    allowPrivateProxy:
+      useManagedProxy ||
+      dispatcherPolicy?.mode !== "explicit-proxy" ||
+      dispatcherPolicy.allowPrivateProxy === true,
+    signal,
   });
-  const options = { keepAlive: false, ...targetTls, lookup: pinned.lookup };
-  return params.url.protocol === "wss:" ? new https.Agent(options) : new http.Agent(options);
 }
 
-/** Opens a provider WebSocket through resolved request policy and pinned network targets. */
+/** Opens a provider WebSocket through the resolved request and network policy. */
 export async function openProviderWebSocket(
   params: OpenProviderWebSocketParams,
 ): Promise<WebSocket> {

@@ -176,7 +176,7 @@ function resolveGuardedFetchMode(params: GuardedFetchOptions): GuardedFetchMode 
   return GUARDED_FETCH_MODE.STRICT;
 }
 
-function isManagedProxyActive(): boolean {
+export function isManagedProxyActive(): boolean {
   return process.env["OPENCLAW_PROXY_ACTIVE"] === "1";
 }
 

@@ -1235,6 +1235,11 @@ catalog, API-key auth, and dynamic model resolution.
         `allowPrivateNetwork`, and `trustConfiguredBaseUrlOrigin` alongside the
         WebSocket `url`.
 
+        Configured proxy routes retain resolved target-address checks.
+        Applicable ambient HTTP(S) proxies and OpenClaw-managed proxies retain
+        their existing DNS delegation; `NO_PROXY` bypasses and `ALL_PROXY` alone
+        do not disable target-address checks.
+
         - The promise resolves after network-policy and agent preparation,
           while the returned socket is still connecting. Attach `error`,
           `close`, and `open` handlers immediately; send frames after `open`.
