@@ -15,6 +15,7 @@ import {
   readChatHistoryMessageSeq as resolveMessageSeq,
   readIncrementalChatHistoryTail,
 } from "./session-history-tail.js";
+import { readTranscriptMessageIdempotencyKey } from "./session-transcript-message.js";
 import { resolveTranscriptPathForComparison } from "./session-transcript-path.js";
 import {
   attachOpenClawTranscriptMeta,
@@ -77,14 +78,6 @@ type SessionHistoryStateSnapshot = SessionHistoryRawSnapshot & {
   limit?: number;
   cursor?: string;
 };
-
-function readMessageIdempotencyKey(message: unknown): string | undefined {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return undefined;
-  }
-  const value = (message as Record<string, unknown>).idempotencyKey;
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
 
 /** Owns both complete history snapshots and bounded visible-message pages. */
 export async function readSessionHistoryRawSnapshotAsync(
@@ -325,7 +318,7 @@ export class SessionHistorySseState {
     } else {
       this.rawTranscriptSeq += 1;
     }
-    const idempotencyKey = readMessageIdempotencyKey(update.message);
+    const idempotencyKey = readTranscriptMessageIdempotencyKey(update.message);
     const nextMessage = attachOpenClawTranscriptMeta(update.message, {
       ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
