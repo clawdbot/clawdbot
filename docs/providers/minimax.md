@@ -275,8 +275,8 @@ See [Music Generation](/tools/music-generation) for shared tool parameters, prov
 The bundled MiniMax plugin registers video generation through the shared `video_generate` tool for both `minimax` and `minimax-portal`.
 
 - Default video model: `minimax/MiniMax-Hailuo-2.3` (OAuth: `minimax-portal/MiniMax-Hailuo-2.3`)
-- Also supports `MiniMax-Hailuo-2.3-Fast`, `MiniMax-Hailuo-02`, `I2V-01-Director`, `I2V-01-live`, and `I2V-01`
-- Modes: text-to-video and single-image reference flows
+- Also supports `MiniMax-Hailuo-2.3-Fast`, `MiniMax-Hailuo-02`, `T2V-01-Director`, `T2V-01`, `I2V-01-Director`, `I2V-01-live`, and `I2V-01`
+- Modes: text-to-video and single-image reference flows; `T2V-01-Director` and `T2V-01` are text-to-video only, `I2V-01*` are image-to-video only
 - Supports `resolution` (`768P` or `1080P` on Hailuo 2.3/02 models); `aspectRatio` is not supported and is ignored
 
 ```json5
