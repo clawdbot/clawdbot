@@ -1081,6 +1081,31 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
     writeFileSync(fullPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   }
 
+  function makeCompanionImportFixture(params: {
+    source: string;
+    fileName?: string;
+    companions: Array<{ id: string; name?: string; dependencies: Record<string, string> }>;
+  }): { installRoot: string; packageRoot: string } {
+    const installRoot = makeInstalledPackageRoot();
+    const packageRoot = join(installRoot, "openclaw");
+    writePackageFile(packageRoot, "package.json", {
+      name: "openclaw",
+      version: "2026.7.33",
+      dependencies: {},
+    });
+    for (const companion of params.companions) {
+      writePackageFile(installRoot, `@openclaw/${companion.id}/package.json`, {
+        name: companion.name ?? `@openclaw/${companion.id}`,
+        version: "2026.7.33",
+        dependencies: companion.dependencies,
+      });
+    }
+    const filePath = join(packageRoot, "dist", params.fileName ?? "companion-runtime.js");
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, params.source, "utf8");
+    return { installRoot, packageRoot };
+  }
+
   it("flags root dist imports whose declared runtime package name is missing", () => {
     const packageRoot = makeInstalledPackageRoot();
 
@@ -1124,6 +1149,131 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
       expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toStrictEqual([]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts runtime imports owned by installed companion extension packages", () => {
+    const { installRoot, packageRoot } = makeCompanionImportFixture({
+      companions: [
+        { id: "discord", dependencies: { "@discordjs/voice": "0.19.2" } },
+        { id: "msteams", dependencies: { "@microsoft/teams.apps": "2.0.15" } },
+      ],
+      source: [
+        "//#region extensions/discord/src/voice.js",
+        'const voice = require("@discordjs/voice");',
+        "//#endregion",
+        "//#region extensions/msteams/src/graph.js",
+        'import teams from "@microsoft/teams.apps";',
+        "//#endregion",
+        "export { teams, voice };",
+        "",
+      ].join("\n"),
+    });
+
+    try {
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toStrictEqual([]);
+    } finally {
+      rmSync(installRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not trust a companion manifest with the wrong package identity", () => {
+    const { installRoot, packageRoot } = makeCompanionImportFixture({
+      companions: [
+        {
+          id: "discord",
+          name: "attacker-package",
+          dependencies: { "@discordjs/voice": "0.19.2" },
+        },
+      ],
+      source: [
+        "//#region extensions/discord/src/voice.js",
+        'require("@discordjs/voice");',
+        "//#endregion",
+        "",
+      ].join("\n"),
+    });
+
+    try {
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        "installed package root is missing declared runtime dependency '@discordjs/voice' for dist importers: companion-runtime.js. Add it to package.json dependencies/optionalDependencies.",
+      ]);
+    } finally {
+      rmSync(installRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not let an extension marker authorize imports outside its region", () => {
+    const { installRoot, packageRoot } = makeCompanionImportFixture({
+      companions: [{ id: "discord", dependencies: { "@discordjs/voice": "0.19.2" } }],
+      fileName: "mixed-runtime.js",
+      source: [
+        "//#region extensions/discord/src/voice.js",
+        "const extensionValue = true;",
+        "//#endregion",
+        "//#region src/root-runtime.js",
+        'const voice = require("@discordjs/voice");',
+        "//#endregion",
+        "export { extensionValue, voice };",
+        "",
+      ].join("\n"),
+    });
+
+    try {
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        "installed package root is missing declared runtime dependency '@discordjs/voice' for dist importers: mixed-runtime.js. Add it to package.json dependencies/optionalDependencies.",
+      ]);
+    } finally {
+      rmSync(installRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      name: "marker text inside JavaScript data",
+      source: [
+        "const marker = `//#region extensions/discord/src/voice.js`;",
+        'const voice = require("@discordjs/voice");',
+        "export { marker, voice };",
+        "",
+      ].join("\n"),
+    },
+    {
+      name: "marker text inside a block comment",
+      source: [
+        "/*",
+        "//#region extensions/discord/src/voice.js",
+        "*/",
+        'const voice = require("@discordjs/voice");',
+        "export { voice };",
+        "",
+      ].join("\n"),
+    },
+    {
+      name: "an unclosed extension region before a root region",
+      source: [
+        "//#region extensions/discord/src/voice.js",
+        "const extensionValue = true;",
+        "//#region src/root-runtime.js",
+        'const voice = require("@discordjs/voice");',
+        "//#endregion",
+        "export { extensionValue, voice };",
+        "",
+      ].join("\n"),
+    },
+  ])("does not trust $name", ({ source }) => {
+    const { installRoot, packageRoot } = makeCompanionImportFixture({
+      companions: [{ id: "discord", dependencies: { "@discordjs/voice": "0.19.2" } }],
+      fileName: "untrusted-region.js",
+      source,
+    });
+
+    try {
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        "installed package root is missing declared runtime dependency '@discordjs/voice' for dist importers: untrusted-region.js. Add it to package.json dependencies/optionalDependencies.",
+      ]);
+    } finally {
+      rmSync(installRoot, { recursive: true, force: true });
     }
   });
 

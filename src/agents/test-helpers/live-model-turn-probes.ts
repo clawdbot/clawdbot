@@ -151,7 +151,7 @@ export function fileProbeTextMatches(text: string): boolean {
 }
 
 /** Returns whether image probe output contains an OK acknowledgement. */
-export function imageProbeTextMatches(text: string): boolean {
+function imageProbeTextMatches(text: string): boolean {
   return /\bok\b/i.test(text);
 }
 

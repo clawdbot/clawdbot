@@ -214,7 +214,8 @@ export async function runPreparedModelCatalogWorkerRequest(
         }),
       };
     }
-    const { prepareAgentCatalogSource } = await import("./prepared-model-runtime.facts.js");
+    const { prepareAgentCatalogSource } =
+      await import("./prepared-model-runtime.scoped-catalog.js");
     const { prepareFullCatalogFacts } = await import("./prepared-model-runtime.full-catalog.js");
     // Full discovery is one point-in-time operation: refresh first, then let every provider hook
     // and the returned availability projection consume the same exact store.

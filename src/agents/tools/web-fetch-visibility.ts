@@ -7,6 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+import { readTagToken } from "./web-fetch-html-tag.js";
 
 // Compile property matchers once: this list is checked for every styled element.
 const HIDDEN_STYLE_PATTERNS = (
@@ -168,84 +169,6 @@ function shouldRemoveElement(tagNameRaw: string, attrs: string): boolean {
   return false;
 }
 
-type HtmlTagToken = {
-  tagName: string;
-  attrs: string;
-  closing: boolean;
-  selfClosing: boolean;
-};
-
-function findTagEnd(html: string, start: number): number {
-  let quote: '"' | "'" | undefined;
-  for (let index = start + 1; index < html.length; index += 1) {
-    const char = html[index];
-    if (quote) {
-      if (char === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      quote = char;
-      continue;
-    }
-    if (char === ">") {
-      return index;
-    }
-  }
-  return -1;
-}
-
-function readTagName(source: string, start: number): { tagName: string; end: number } | null {
-  let end = start;
-  while (end < source.length) {
-    const code = source.charCodeAt(end);
-    const isNameChar =
-      (code >= 65 && code <= 90) ||
-      (code >= 97 && code <= 122) ||
-      (code >= 48 && code <= 57) ||
-      source[end] === "-" ||
-      source[end] === "_" ||
-      source[end] === ":";
-    if (!isNameChar) {
-      break;
-    }
-    end += 1;
-  }
-  if (end === start) {
-    return null;
-  }
-  return {
-    tagName: normalizeLowercaseStringOrEmpty(source.slice(start, end)),
-    end,
-  };
-}
-
-function parseHtmlTagToken(token: string): HtmlTagToken | null {
-  let inner = token.slice(1, -1).trim();
-  if (!inner || inner.startsWith("!") || inner.startsWith("?")) {
-    return null;
-  }
-
-  const closing = inner.startsWith("/");
-  if (closing) {
-    inner = inner.slice(1).trimStart();
-  }
-
-  const name = readTagName(inner, 0);
-  if (!name) {
-    return null;
-  }
-
-  const attrs = closing ? "" : inner.slice(name.end);
-  return {
-    tagName: name.tagName,
-    attrs,
-    closing,
-    selfClosing: !closing && attrs.trimEnd().endsWith("/"),
-  };
-}
-
 function popDroppedElement(dropStack: string[], tagName: string): void {
   const index = dropStack.lastIndexOf(tagName);
   if (index >= 0) {
@@ -277,44 +200,44 @@ function removeMarkedElements(html: string): string {
       continue;
     }
 
-    const tagEnd = findTagEnd(html, tagStart);
-    if (tagEnd < 0) {
+    const read = readTagToken(html, tagStart, "visibility");
+    if (!read) {
       if (dropStack.length === 0) {
         output += html.slice(tagStart);
       }
       break;
     }
 
-    const token = html.slice(tagStart, tagEnd + 1);
-    const parsed = parseHtmlTagToken(token);
+    const token = html.slice(tagStart, read.next);
+    const parsed = read.token;
     if (!parsed) {
       if (dropStack.length === 0) {
         output += token;
       }
-      cursor = tagEnd + 1;
+      cursor = read.next;
       continue;
     }
 
     if (dropStack.length > 0) {
       if (parsed.closing) {
-        popDroppedElement(dropStack, parsed.tagName);
-      } else if (!parsed.selfClosing && !HTML_VOID_ELEMENTS.has(parsed.tagName)) {
-        dropStack.push(parsed.tagName);
+        popDroppedElement(dropStack, parsed.name);
+      } else if (!parsed.selfClosing && !HTML_VOID_ELEMENTS.has(parsed.name)) {
+        dropStack.push(parsed.name);
       }
-      cursor = tagEnd + 1;
+      cursor = read.next;
       continue;
     }
 
     if (parsed.closing) {
       output += token;
-    } else if (shouldRemoveElement(parsed.tagName, parsed.attrs)) {
-      if (!parsed.selfClosing && !HTML_VOID_ELEMENTS.has(parsed.tagName)) {
-        dropStack.push(parsed.tagName);
+    } else if (shouldRemoveElement(parsed.name, parsed.attrs)) {
+      if (!parsed.selfClosing && !HTML_VOID_ELEMENTS.has(parsed.name)) {
+        dropStack.push(parsed.name);
       }
     } else {
       output += token;
     }
-    cursor = tagEnd + 1;
+    cursor = read.next;
   }
 
   return output;

@@ -34,6 +34,14 @@ export {
   MEMORY_DREAMING_SYSTEM_EVENT_TEXT,
 } from "../memory-host-sdk/dreaming.js";
 export type {
+  DreamingArtifactsAuditIssue,
+  DreamingArtifactsAuditSummary,
   MemoryDreamingPhaseName,
   MemoryDreamingStorageConfig,
+  RepairDreamingArtifactsResult,
+  RepairShortTermPromotionArtifactsResult,
+  ShortTermAuditIssue,
+  ShortTermAuditSummary,
+  ShortTermDreamingStats,
+  ShortTermDreamingStatsEntry,
 } from "../memory-host-sdk/dreaming.js";

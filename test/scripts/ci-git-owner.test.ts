@@ -390,6 +390,35 @@ exec "$REAL_GIT" "$@"`,
   },
 );
 
+releasePolicyIt("hydrates a divergent release source through its canonical branch", () => {
+  const fixture = createAncestryFixture({
+    sourceDistance: 220,
+    targetDistance: 8,
+    related: true,
+  });
+  const proxy = writeGitProxy(
+    fixture,
+    "detached-source-no-deepen-git",
+    `if [[ " $* " == *" fetch "* && " $* " == *" --deepen=128 "* && " $* " == *" +${fixture.source}:refs/remotes/origin/release-ancestry-source "* ]]; then
+  exit 0
+fi
+exec "$REAL_GIT" "$@"`,
+  );
+  try {
+    const checkout = cloneAncestrySource(fixture, "checkout");
+    expectPolicySuccess(
+      runReleaseAncestry(checkout, "merge-base", {
+        PATH: `${proxy.binDir}:${process.env.PATH ?? ""}`,
+        REAL_GIT: proxy.realGit,
+        RELEASE_ANCESTRY_SOURCE_REF: "refs/heads/release-source",
+      }),
+      "merge-base",
+    );
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
 releasePolicyIt("rejects fully hydrated disconnected release histories", () => {
   const fixture = createAncestryFixture({
     sourceDistance: 8,

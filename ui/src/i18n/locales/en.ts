@@ -3253,7 +3253,7 @@ export const en: TranslationMap & {
     workerDesktop: {
       title: "Cloud Worker Desktop",
       description:
-        "Watch and control node-carried desktops from capable Crabbox AWS or Hetzner profiles with desktop: true.",
+        "Watch and control node-carried desktops from capable Crabbox AWS, Azure, or Hetzner profiles with desktop: true.",
     },
   },
   aboutPage: {
@@ -3349,6 +3349,10 @@ export const en: TranslationMap & {
     },
   },
   presence: {
+    sharedOwner: {
+      name: "Shared owner",
+      hint: "Connected with the Gateway token or over a tunnel, not a personal sign-in.",
+    },
     rosterTitle: "Online",
     idle: "Idle",
     offline: "Offline",
@@ -3945,7 +3949,7 @@ export const en: TranslationMap & {
       title: "How to connect",
       step1: "Start the gateway on your host machine:",
       step2: "Get a tokenized dashboard URL:",
-      step3: "Paste the WebSocket URL and token above, or open the tokenized URL directly.",
+      step3: "Paste the Gateway URL and secret above, or open that URL directly.",
       docsLink: "Read the docs →",
       copyCommand: "Copy command",
       copyCommandAria: "Copy command: {command}",

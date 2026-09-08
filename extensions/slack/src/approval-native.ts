@@ -1,10 +1,7 @@
 // Slack plugin module implements approval native behavior.
 import { createApproverRestrictedNativeApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
-import type {
-  ChannelApprovalKind,
-  ChannelApprovalNativeRuntimeAdapter,
-} from "openclaw/plugin-sdk/approval-handler-runtime";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
   createChannelNativeOriginTargetResolver,
   createNativeApprovalForwardingFallbackSuppressor,
@@ -170,6 +167,7 @@ const baseSlackApprovalCapability = createApproverRestrictedNativeApprovalCapabi
   resolveApproverDmTargets: resolveSlackApproverDmTargets,
   notifyOriginWhenDmOnly: true,
   nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
+    capabilityBoundary: true,
     eventKinds: ["exec", "plugin", "system-agent"],
     isConfigured: ({ cfg, accountId }) =>
       isSlackAnyNativeApprovalClientEnabled({
@@ -183,9 +181,7 @@ const baseSlackApprovalCapability = createApproverRestrictedNativeApprovalCapabi
         approvalKind,
         request,
       }),
-    load: async () =>
-      (await import("./approval-handler.runtime.js"))
-        .slackApprovalNativeRuntime as unknown as ChannelApprovalNativeRuntimeAdapter,
+    load: async () => (await import("./approval-handler.runtime.js")).slackApprovalNativeRuntime,
   }),
 });
 

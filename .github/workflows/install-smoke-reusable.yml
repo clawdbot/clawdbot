@@ -489,6 +489,23 @@ jobs:
       - *trusted_workflow_subdir_checkout_step
       - *trusted_workflow_subdir_identity_step
 
+      - name: Prepare trusted selected-source Git owner
+        uses: ./.release-harness/.github/actions/git-owner
+
+      - name: Checkout selected source for gateway network provenance
+        env:
+          CHECKOUT_KIND: preflight
+          CHECKOUT_REPO: openclaw/openclaw
+          CHECKOUT_REF: ${{ needs.preflight.outputs.target_sha }}
+          CHECKOUT_FALLBACK_REF: ${{ needs.preflight.outputs.target_sha }}
+          CHECKOUT_TOKEN: ""
+          SELECTED_SOURCE_DIR: ${{ github.workspace }}/.release-source
+          WORKFLOW_SHA: ${{ steps.workflow.outputs.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$SELECTED_SOURCE_DIR"
+          GITHUB_WORKSPACE="$SELECTED_SOURCE_DIR" python3 -I -S "$CI_GIT_OWNER"
+
       - name: Validate root Dockerfile image artifact binding
         env:
           ARCHIVE_SHA256: ${{ needs.root_dockerfile_image.outputs.archive_sha256 }}
@@ -586,6 +603,7 @@ jobs:
 
       - name: Run Docker gateway network e2e
         env:
+          OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}/.release-source
           OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}
           OPENCLAW_GATEWAY_NETWORK_E2E_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}
           OPENCLAW_GATEWAY_NETWORK_E2E_SKIP_BUILD: "1"

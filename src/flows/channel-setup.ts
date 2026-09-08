@@ -26,6 +26,9 @@ import {
 } from "../commands/channel-setup/trusted-catalog.js";
 import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
+import { createConfigIO } from "../config/io.factory.js";
+import { createManagedRuntimeEnvBase } from "../config/io.read-helpers.js";
+import { formatConfigIssueSummary } from "../config/issue-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveBundledPluginSources } from "../plugins/bundled-sources.js";
@@ -57,49 +60,57 @@ import {
   resolveQuickstartDefault,
 } from "./channel-setup.status.js";
 
-export function createChannelSetupTransaction(params: {
+export function createChannelSetupHooks(params: {
   runtime: RuntimeEnv;
   beforePersistentEffect?: () => Promise<void>;
 }) {
   const hooks = new Map<string, ChannelOnboardingPostWriteHook>();
-  const runPostWriteHooks = async (cfg: OpenClawConfig) => {
-    await runCollectedChannelOnboardingPostWriteHooks({
-      hooks: [...hooks.values()],
-      cfg,
-      runtime: params.runtime,
-      ...(params.beforePersistentEffect
-        ? { beforePersistentEffect: params.beforePersistentEffect }
-        : {}),
-    });
-    hooks.clear();
-  };
   return {
     onPostWriteHook: (hook: ChannelOnboardingPostWriteHook) => {
       hooks.set(`${hook.channel}:${hook.accountId}`, hook);
     },
-    async commit(
-      nextConfig: OpenClawConfig,
-      write: (config: OpenClawConfig) => Promise<OpenClawConfig>,
-    ): Promise<OpenClawConfig> {
-      await params.beforePersistentEffect?.();
-      const committedConfig = await write(nextConfig);
-      await runPostWriteHooks(committedConfig);
-      return committedConfig;
+    async runPostWriteHooks(configPath: string) {
+      await runCollectedChannelOnboardingPostWriteHooks({
+        hooks: [...hooks.values()],
+        configPath,
+        runtime: params.runtime,
+        ...(params.beforePersistentEffect
+          ? { beforePersistentEffect: params.beforePersistentEffect }
+          : {}),
+      });
+      hooks.clear();
     },
-    runPostWriteHooks,
   };
 }
 
 export async function runCollectedChannelOnboardingPostWriteHooks(params: {
   hooks: ChannelOnboardingPostWriteHook[];
-  cfg: OpenClawConfig;
+  configPath: string;
   runtime: RuntimeEnv;
   beforePersistentEffect?: () => Promise<void>;
 }): Promise<void> {
+  if (params.hooks.length === 0) {
+    return;
+  }
+  // Writer receipts bind the file even if config selection changes after commit.
+  // Hooks execute against fresh runtime values; persisted config may contain env refs.
+  const { snapshot } = await createConfigIO({
+    configPath: params.configPath,
+    env: createManagedRuntimeEnvBase(),
+    observe: false,
+  }).readConfigFileSnapshotWithPluginMetadata({ allowCurrentPluginMetadata: false });
   for (const hook of params.hooks) {
     await params.beforePersistentEffect?.();
     try {
-      await hook.run({ cfg: params.cfg, runtime: params.runtime });
+      if (!snapshot.exists || !snapshot.valid) {
+        const reason = snapshot.exists
+          ? formatConfigIssueSummary(snapshot.issues)
+          : "file not found";
+        throw new Error(
+          `Saved config is unavailable: ${reason}. Run openclaw doctor --fix, then retry setup.`,
+        );
+      }
+      await hook.run({ cfg: snapshot.runtimeConfig, runtime: params.runtime });
     } catch (err) {
       const message = formatErrorMessage(err);
       params.runtime.error(

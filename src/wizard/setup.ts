@@ -87,7 +87,7 @@ async function runSetupWizardOnce(
   // Ordinary onboard reruns must preserve existing agents.list / bindings. Only
   // explicit reset or import flows are allowed to shrink the config — see issue
   // openclaw#84692.
-  const writeSetupConfigFile = async (
+  const commitSetupConfigFile = async (
     config: OpenClawConfig,
     optsLocal: { allowConfigSizeDrop?: boolean } = {},
   ) => {
@@ -95,7 +95,7 @@ async function runSetupWizardOnce(
       ...optsLocal,
       mergeBase: setupConfigMergeBase,
     });
-    setupConfigMergeBase = structuredClone(committed);
+    setupConfigMergeBase = structuredClone(committed.nextConfig);
     return committed;
   };
 
@@ -248,11 +248,13 @@ async function runSetupWizardOnce(
           if (!isDeepStrictEqual(latestConfig, expectedConfig)) {
             throw new ConfigMutationConflictError("config changed during migration promotion");
           }
-          return await writeWizardConfigFile(cfg, {
-            allowConfigSizeDrop: true,
-            baseSnapshot: latest,
-            ...(latest.hash !== undefined ? { baseHash: latest.hash } : {}),
-          });
+          return (
+            await writeWizardConfigFile(cfg, {
+              allowConfigSizeDrop: true,
+              baseSnapshot: latest,
+              ...(latest.hash !== undefined ? { baseHash: latest.hash } : {}),
+            })
+          ).nextConfig;
         },
         allowProviderBack: flowFromPrompt,
         continueOnboarding: true,
@@ -467,7 +469,7 @@ async function runSetupWizardOnce(
     nextConfig = opts.skipBootstrap ? applySkipBootstrapConfig(nextConfig) : nextConfig;
     nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
     prompter.disableBackNavigation?.();
-    await writeSetupConfigFile(nextConfig, {
+    await commitSetupConfigFile(nextConfig, {
       allowConfigSizeDrop: false,
     });
     logConfigUpdated(runtime);
@@ -585,7 +587,7 @@ async function runSetupWizardOnce(
       runtime,
       workspaceDir: verificationTarget.workspaceDir,
       writeConfig: async (config) =>
-        await writeSetupConfigFile(config, { allowConfigSizeDrop: false }),
+        (await commitSetupConfigFile(config, { allowConfigSizeDrop: false })).nextConfig,
       required: usedImportFlow && keepExistingModelConfig,
     });
     nextConfig = verification.config;
@@ -610,9 +612,10 @@ async function runSetupWizardOnce(
 
   if (!setupConfigPersisted) {
     // Persist gateway/roster decisions only after the interactive verification boundary.
-    nextConfig = await writeSetupConfigFile(nextConfig, {
+    const committed = await commitSetupConfigFile(nextConfig, {
       allowConfigSizeDrop: false,
     });
+    nextConfig = committed.nextConfig;
   }
 
   prompter.disableBackNavigation?.();
@@ -620,9 +623,9 @@ async function runSetupWizardOnce(
     await prompter.note(t("wizard.setup.skipChannels"), t("wizard.setup.channelsTitle"));
   } else {
     const { listChannelPlugins } = await import("../channels/plugins/index.js");
-    const { createChannelSetupTransaction, setupChannels } =
+    const { createChannelSetupHooks, setupChannels } =
       await import("../commands/onboard-channels.js");
-    const channelSetup = createChannelSetupTransaction({ runtime });
+    const channelSetup = createChannelSetupHooks({ runtime });
     const quickstartAllowFromChannels =
       flow === "quickstart"
         ? listChannelPlugins()
@@ -640,16 +643,16 @@ async function runSetupWizardOnce(
       secretInputMode: opts.secretInputMode,
       onPostWriteHook: (hook) => channelSetup.onPostWriteHook(hook),
     });
-    nextConfig = await channelSetup.commit(
-      nextConfig,
-      async (config) => await writeSetupConfigFile(config, { allowConfigSizeDrop: false }),
-    );
+    const committed = await commitSetupConfigFile(nextConfig, { allowConfigSizeDrop: false });
+    await channelSetup.runPostWriteHooks(committed.path);
+    nextConfig = committed.nextConfig;
   }
 
   if (opts.skipChannels) {
-    nextConfig = await writeSetupConfigFile(nextConfig, {
+    const committed = await commitSetupConfigFile(nextConfig, {
       allowConfigSizeDrop: false,
     });
+    nextConfig = committed.nextConfig;
   }
   let onboardingTarget = resolveOnboardingSetupTarget(nextConfig);
   const { logConfigUpdated } = await loadConfigLoggingModule();
@@ -718,9 +721,10 @@ async function runSetupWizardOnce(
   }
 
   nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
-  nextConfig = await writeSetupConfigFile(nextConfig, {
+  const committed = await commitSetupConfigFile(nextConfig, {
     allowConfigSizeDrop: false,
   });
+  nextConfig = committed.nextConfig;
   onboardingTarget = resolveOnboardingSetupTarget(nextConfig);
   commitAppRecommendationResult?.();
 

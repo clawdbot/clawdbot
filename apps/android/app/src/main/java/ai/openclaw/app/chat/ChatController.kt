@@ -9082,7 +9082,7 @@ internal fun applySessionObserverDigest(
   if (index < 0) return scopedSessions
   val session = scopedSessions[index]
   val runId = digest.runId?.trim()?.takeIf { it.isNotEmpty() } ?: return scopedSessions
-  val isRunning = session.hasActiveRun == true || session.status?.trim()?.lowercase() == "running"
+  val isRunning = isSessionRunActive(session.hasActiveRun, session.status)
   val matchesActiveRun = session.activeRunIds.orEmpty().any { it.trim() == runId }
   if (!isRunning || !matchesActiveRun) return scopedSessions
   val previous = session.observerDigest
@@ -9146,7 +9146,7 @@ private fun reconcileSessionObserverDigest(
   activeRunIds: List<String>?,
   status: String?,
 ): SessionObserverDigest? {
-  val isRunning = hasActiveRun == true || status?.trim()?.lowercase() == "running"
+  val isRunning = isSessionRunActive(hasActiveRun, status)
   val activeIds = activeRunIds.orEmpty().mapNotNull { it.trim().takeIf(String::isNotEmpty) }.toSet()
   var resolved = existing
   if (isRunning && resolved?.runId?.trim()?.let(activeIds::contains) != true) {

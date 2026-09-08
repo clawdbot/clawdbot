@@ -119,6 +119,62 @@ async function capturePeopleCard(page: Page, filename: string) {
 }
 
 suite.define(() => {
+  it("labels shared owner presence separately from a personal sign-in", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, colorScheme: "light", locale: "en-US" },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          sessionKey: selected,
+          methodResponses: {
+            "sessions.list": chatSessionListResponse([
+              { key: selected, kind: "direct", label: "Synthetic audit session", updatedAt: 1 },
+            ]),
+          },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
+        await gateway.waitForRequest("connect");
+        await gateway.emitGatewayEvent("presence", {
+          presence: [
+            {
+              user: { id: "gateway-owner", identity: { type: "profile", id: "gateway-owner" } },
+              platform: "macOS 27.0.0",
+              deviceFamily: "Mac",
+              clientId: "openclaw-macos",
+              mode: "ui",
+              onlineSince: Date.now() - 720_000,
+              watchedSessions: [selected],
+            },
+            { user: { id: "example-person", name: "Example person" } },
+          ],
+        });
+        const owner = page.locator('[data-online-user-id="gateway-owner"]');
+        await owner.hover();
+        const card = page.locator(".person-activity-hovercard");
+        await card.waitFor({ state: "visible" });
+        await capturePeopleCard(page, "shared-owner.png");
+        expect(await owner.textContent()).toContain("Shared owner");
+        expect(await card.getAttribute("aria-label")).toBe("Activity for Shared owner");
+        expect(await card.locator("h2").textContent()).toBe("Shared owner");
+        expect(await card.textContent()).toContain(
+          "Connected with the Gateway token or over a tunnel, not a personal sign-in.",
+        );
+        expect(await card.textContent()).toContain("Mac · macOS 27.0.0 · App");
+        expect(await card.textContent()).toContain("Not observed yet");
+        expect(await card.getByRole("link", { name: "View activity" }).getAttribute("href")).toBe(
+          "/activity/gateway-owner",
+        );
+        expect(
+          await page.locator('[data-online-user-id="example-person"]').textContent(),
+        ).toContain("Example person");
+        expect(
+          await page
+            .locator('.chat-pane__presence [data-viewer-id="gateway-owner"]')
+            .getAttribute("aria-label"),
+        ).toBe("Shared owner");
+      },
+    );
+  });
+
   it.each(["click", "Enter", "tap"] as const)(
     "opens a person's Activity page directly on %s",
     async (action) => {

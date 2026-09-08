@@ -607,6 +607,63 @@ class ChatComposerLayoutTest {
   }
 
   @Test
+  fun expandingTheOnlyLoadedUserPromptOffersJumpWithoutPriorScrolling() {
+    val head = "The original user prompt starts here."
+    val tail = "The original user prompt ends here."
+    val prompt = (listOf(head) + List(40) { "Original user paragraph ${it + 1}." } + tail).joinToString("\n\n")
+    withReaderHistory(assistantCount = 0, userText = prompt) { model ->
+      val transcript = readerTranscript()
+      val viewport = transcript.getUnclippedBoundsInRoot()
+      val range = transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
+      assertEquals("The unchanged loaded prompt starts at the live edge", 0f, range.value(), 0f)
+      readerHeaderControl("Jump to latest").assertDoesNotExist()
+      val viewAll = composeRule.onNode(hasText(nativeString("View all")) and hasClickAction())
+      val button = viewAll.assertIsDisplayed().assertIsEnabled().getUnclippedBoundsInRoot()
+      assertTrue(
+        "View all must already be wholly visible without any preparatory scroll",
+        button.left >= viewport.left && button.right <= viewport.right && button.top >= viewport.top && button.bottom <= viewport.bottom,
+      )
+
+      // The disclosure is the first reader action; a preceding drag would hide this premise.
+      viewAll.performClick()
+      composeRule.waitForIdle()
+      assertEquals(1, model.chatMessages.value.size)
+      assertEquals(
+        prompt,
+        model.chatMessages.value
+          .single()
+          .content
+          .mapNotNull { it.text }
+          .joinToString("\n"),
+      )
+      assertEquals(0, model.pendingRunCount.value)
+      assertTrue(model.chatStreamingAssistantText.value == null)
+      val beginning = readerMarkerBounds(head, speaker = "You")
+      val ending = readerMarkerBounds(tail, speaker = "You")
+      assertTrue(
+        "Actual disclosure must reveal the first prompt glyphs",
+        beginning.left >= viewport.left && beginning.right <= viewport.right && beginning.top >= viewport.top && beginning.bottom <= viewport.bottom,
+      )
+      assertTrue("The expanded prompt's ending must now be below the viewport", ending.top > viewport.bottom)
+      assertTrue(
+        "BringIntoView must actually move the transcript away from latest",
+        transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > 0f,
+      )
+      assertReaderHeaderControl("Jump to latest")
+      readerHeaderControl("Jump to latest").performClick()
+      composeRule.waitForIdle()
+      val restoredEnding = readerMarkerBounds(tail, speaker = "You")
+      assertTrue(
+        "The actual header Jump callback must reveal the prompt's ending",
+        restoredEnding.left >= viewport.left && restoredEnding.right <= viewport.right && restoredEnding.top >= viewport.top && restoredEnding.bottom <= viewport.bottom,
+      )
+      assertEquals(0f, transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value(), 0f)
+      readerHeaderControl("Jump to latest").assertDoesNotExist()
+      assertEquals("Disclosure and Jump preserve the transcript viewport", viewport, transcript.getUnclippedBoundsInRoot())
+    }
+  }
+
+  @Test
   fun tallLatestRowOffersJumpWhenItsTailIsBelowTheViewport() {
     val head = "Latest reply starts here."
     val tail = "Latest reply ends here."
@@ -2711,10 +2768,11 @@ class ChatComposerLayoutTest {
     displayFeatures: (() -> List<DisplayFeature>)? = null,
     additionalAssistantMessages: () -> List<String> = { emptyList() },
     onRequest: (String) -> Unit = {},
+    userText: String = "Reader prompt",
     assertions: (MainViewModel) -> Unit,
   ) {
     val sessionKey = "agent:main:reader-history"
-    val texts = listOf("Reader prompt") + List(assistantCount, assistantText)
+    val texts = listOf(userText) + List(assistantCount, assistantText)
 
     fun history() =
       buildJsonObject {
@@ -2778,10 +2836,13 @@ class ChatComposerLayoutTest {
     }
   }
 
-  private fun readerMarkerBounds(marker: String): DpRect {
+  private fun readerMarkerBounds(
+    marker: String,
+    speaker: String = "OpenClaw",
+  ): DpRect {
     val target =
       composeRule.onNode(
-        hasText(marker) and hasAnyAncestor(hasContentDescription(nativeString("OpenClaw"))),
+        hasText(marker) and hasAnyAncestor(hasContentDescription(nativeString(speaker))),
         useUnmergedTree = true,
       )
     val layouts = mutableListOf<TextLayoutResult>()

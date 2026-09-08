@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
+import { parsePkgAndParentSelector, type PackageSelector } from "@pnpm/parse-overrides";
 import pMap from "p-map";
 import semver from "semver";
 import { parse as parseYaml } from "yaml";
@@ -94,6 +95,30 @@ function normalizeOverrideValue(value: unknown): unknown {
   return value;
 }
 
+function formatPnpmPackageSelector(selector: PackageSelector): string {
+  return selector.bareSpecifier === undefined
+    ? selector.name
+    : `${selector.name}@${selector.bareSpecifier}`;
+}
+
+function parsePnpmScopedOverride(
+  key: string,
+): { parentSelector: string; targetSelector: string } | undefined {
+  try {
+    const parsed = parsePkgAndParentSelector(key);
+    if (!parsed.parentPkg) {
+      return undefined;
+    }
+    return {
+      parentSelector: formatPnpmPackageSelector(parsed.parentPkg),
+      targetSelector: formatPnpmPackageSelector(parsed.targetPkg),
+    };
+  } catch {
+    // Let npm report malformed non-pnpm keys when it consumes the generated manifest.
+    return undefined;
+  }
+}
+
 function normalizeOverrides(overrides: unknown): OverrideMap {
   if (!overrides || typeof overrides !== "object" || Array.isArray(overrides)) {
     return {};
@@ -105,16 +130,12 @@ function normalizeOverrides(overrides: unknown): OverrideMap {
     if (value === "-") {
       continue;
     }
-    const scopedSeparator = key.indexOf(">");
-    if (scopedSeparator > 0) {
-      const parentSelector = key.slice(0, scopedSeparator).trim();
-      const dependencyName = key.slice(scopedSeparator + 1).trim();
-      if (parentSelector && dependencyName) {
-        mergeOverrideEntry(normalized, parentSelector, {
-          [dependencyName]: normalizeOverrideValue(value),
-        });
-        continue;
-      }
+    const scopedOverride = parsePnpmScopedOverride(key);
+    if (scopedOverride) {
+      mergeOverrideEntry(normalized, scopedOverride.parentSelector, {
+        [scopedOverride.targetSelector]: normalizeOverrideValue(value),
+      });
+      continue;
     }
     mergeOverrideEntry(normalized, key, normalizeOverrideValue(value));
   }

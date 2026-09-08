@@ -127,7 +127,7 @@ const enLogin = {
           "The browser could not reach {host}. Check the address and transport before retrying credentials.",
         stepGateway: "Confirm the Gateway is running with openclaw status or openclaw gateway run.",
         stepUrl:
-          "Check the WebSocket URL and use wss:// when the Gateway is behind HTTPS/Tailscale Serve.",
+          "Check the Gateway URL and use wss:// when the Gateway is behind HTTPS/Tailscale Serve.",
         stepDashboard:
           "Reopen the dashboard with openclaw dashboard --no-open to recopy the current URL and auth details.",
       },

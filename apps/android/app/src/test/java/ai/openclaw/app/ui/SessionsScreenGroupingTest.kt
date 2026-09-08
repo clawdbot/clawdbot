@@ -232,6 +232,24 @@ class SessionsScreenGroupingTest {
   }
 
   @Test
+  fun collapsedParentUsesLiveActivityInsteadOfHistoricalRunStatus() {
+    for ((status, flag, active) in listOf(
+      Triple("running", false, false),
+      Triple("done", true, false),
+      Triple("running", null, true),
+      Triple("queued", null, true),
+      Triple("queued", false, false),
+    )) {
+      val parent =
+        buildSessionTreeSections(
+          entries = listOf(session("parent"), session("child", spawnedBy = "parent", status = status, hasActiveRun = flag)),
+          collapsedSessionKeys = setOf("parent"),
+        ).single().entries.single()
+      assertEquals("status=$status flag=$flag", active, parent.descendantState.hasRunning)
+    }
+  }
+
+  @Test
   fun sessionStatusExpiryReschedulesAfterEarlyWakeAndSelectsTheNextExpiry() =
     runBlocking {
       val entries =

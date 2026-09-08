@@ -42,6 +42,7 @@ import {
 } from "../../lib/format.ts";
 import { handleContextMenuEvent } from "../../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { presenceViewerLabel } from "../../lib/presence-users.ts";
 import { formatSessionTokens } from "../../lib/presenter.ts";
 import { isCronSessionKey } from "../../lib/session-display.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
@@ -792,7 +793,10 @@ function sessionGroupLabel(group: SessionRowGroup, props: SessionsProps): string
     }
   }
   if (props.groupBy === "person") {
-    return group.rows[0]?.owner?.actor.label?.trim() || id;
+    const actor = group.rows[0]?.owner?.actor;
+    return actor?.identity?.type === "profile"
+      ? presenceViewerLabel({ id: actor.identity.id, name: actor.label?.trim() || id })
+      : actor?.label?.trim() || id;
   }
   return id;
 }

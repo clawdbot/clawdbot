@@ -11,12 +11,10 @@ source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
 
 openclaw_resolve_frozen_core_harness_capabilities "$TARGET_ROOT_DIR"
 SCENARIO_PATH="$ROOT_DIR/scripts/e2e/lib/release-typed-onboarding/scenario.sh"
-if openclaw_prepare_frozen_target_context "$TARGET_ROOT_DIR" &&
-  openclaw_frozen_target_source_has_path "$TARGET_ROOT_DIR" scripts/e2e/lib/release-typed-onboarding/scenario.sh; then
-  # A frozen package is qualified by its own shipped onboarding journey. Do not
-  # overlay later companion-plugin setup onto the selected package's config.
-  SCENARIO_PATH="$TARGET_ROOT_DIR/scripts/e2e/lib/release-typed-onboarding/scenario.sh"
-fi
+# A frozen package is qualified by its own shipped onboarding journey. Do not
+# overlay later companion-plugin setup onto the selected package's config.
+SCENARIO_PATH="$(openclaw_resolve_frozen_target_file "$TARGET_ROOT_DIR" \
+  scripts/e2e/lib/release-typed-onboarding/scenario.sh "$SCENARIO_PATH")"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-release-typed-onboarding-e2e" OPENCLAW_RELEASE_TYPED_ONBOARDING_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_RELEASE_TYPED_ONBOARDING_E2E_SKIP_BUILD:-0}"
