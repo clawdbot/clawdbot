@@ -65,9 +65,16 @@ export async function resumeUpdateCommandRestorePublication(
         record: expected,
         env: run.env,
         definitionPaths: source.definitionPaths,
+        inspectOwnedUnit: () => {
+          assertCurrent();
+          if (!sealed) {
+            assertExactUpdateRecoveryClaim(expected, { assertCurrent }, recovery.options);
+          }
+        },
         assertCurrent,
         timeoutMs,
       });
+      await inspect();
       assertCurrent();
       if (
         !native.facts.stopped ||

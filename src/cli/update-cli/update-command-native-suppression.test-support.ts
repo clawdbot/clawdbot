@@ -9,11 +9,12 @@ import { resumePendingUpdateCommand } from "./update-command-pending-replay.js";
 import type { FinishUpdateParams } from "./update-command-post-update.js";
 import { UpdateCommandFinalizedRecoveryFailure } from "./update-command-result.js";
 
-/** Leave the first real executor after disable applied but readback was interrupted.
+/** Leave the first real executor after disable/stop applied but readback was interrupted.
  * Only a new owner may reconcile the same pending operation and fresh native stop. */
 export async function interruptNativeSuppressionReplay(
   params: FinishUpdateParams,
   releaseInspection: () => void,
+  action: "stop" | "suppress" = "suppress",
 ): Promise<() => Promise<void>> {
   const recovery = params.opts.recovery!;
   const env = params.opts.run!.env;
@@ -22,10 +23,10 @@ export async function interruptNativeSuppressionReplay(
   const pending = recovery.getRecord();
   const suppression = structuredClone(pending.nativeManager!.effects.at(-1)!);
   expect(suppression).toMatchObject({
-    action: "suppress",
+    action,
     state: "intent",
-    before: { enabled: true, loaded: true, stopped: false },
-    after: { enabled: false, loaded: true, stopped: false },
+    before: { enabled: action === "suppress", loaded: true, stopped: false },
+    after: { enabled: false, loaded: true, stopped: action === "stop" },
   });
   expect(pending.effects.at(-1)).toMatchObject({
     kind: "service-restart",
@@ -64,6 +65,10 @@ export async function interruptNativeSuppressionReplay(
     const settled = current.nativeManager!.effects.find(
       (effect) => effect.effectId === suppression.effectId,
     )!;
+    if (action === "stop") {
+      expect(settled.state).toBe("observed");
+      expect(settled.observedRevision).toBeGreaterThan(suppression.intentRevision);
+    }
     expect(settled.before).toEqual(suppression.before);
     expect(settled.after).toEqual(suppression.after);
     expect(settled.intentRevision).toBe(suppression.intentRevision);

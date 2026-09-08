@@ -1577,6 +1577,80 @@ describe("parseSystemdExecStart", () => {
 });
 
 describe("readSystemdServiceExecStart", () => {
+  it.each([
+    "none",
+    "uid",
+    "revoked-before",
+    "revoked-load",
+    "manager-change",
+    "unavailable",
+  ] as const)(
+    "reads a collected definition only with current recovery ownership (%s)",
+    async (fault) => {
+      mockReadGatewayServiceFile(["[Service]", "ExecStart=/usr/bin/openclaw gateway run"]);
+      let loaded = false;
+      let owners = 0;
+      const assertCurrent = vi.fn(() => {
+        if (fault === "revoked-before" || (fault === "revoked-load" && loaded)) {
+          throw new Error("source/executor revoked");
+        }
+      });
+      execFileMock.mockImplementation((_command, args, _options, callback) => {
+        let output: string;
+        if (args.includes("GetUnit") || (fault === "unavailable" && args.includes("LoadUnit"))) {
+          const detail = `Call failed: Unit ${GATEWAY_SERVICE} not loaded.`;
+          callback(createExecFileError(detail), "", detail);
+          return;
+        }
+        if (args.includes("GetNameOwner")) {
+          output = JSON.stringify({
+            type: "s",
+            data: [++owners > 1 && fault === "manager-change" ? ":1.99" : ":1.42"],
+          });
+        } else if (args.includes("GetConnectionUnixUser")) {
+          output = JSON.stringify({ type: "u", data: [2001] });
+        } else if (args.includes("LoadUnit")) {
+          loaded = true;
+          output = JSON.stringify({
+            type: "o",
+            data: ["/org/freedesktop/systemd1/unit/openclaw_2dgateway_2eservice"],
+          });
+        } else if (args.includes("org.freedesktop.systemd1.Unit")) {
+          output = buildSystemdUnitPropertyOutput({});
+        } else {
+          output = buildSystemdManagerPropertyOutput({
+            programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+          });
+        }
+        callback(null, output, "");
+      });
+      const observed = readSystemdServiceExecStart(
+        { HOME: TEST_SERVICE_HOME },
+        {
+          requireEffective: true,
+          requireLoaded: true,
+          loadForInspection: { managerUid: fault === "uid" ? 2002 : 2001, assertCurrent },
+        },
+      );
+      if (fault === "none") {
+        await expect(observed).resolves.toMatchObject({
+          programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        });
+      } else {
+        await expect(observed).rejects.toThrow();
+      }
+      expect(loaded).toBe(!["uid", "revoked-before", "unavailable"].includes(fault));
+      expect(assertCurrent).toHaveBeenCalled();
+      expect(
+        execFileMock.mock.calls.every(
+          (call) =>
+            (!call[1].includes("--json=short") || call[1].includes("--auto-start=no")) &&
+            !call[1].some((arg) => /^(Start|Restart|Enable|Stop)Unit/.test(arg)),
+        ),
+      ).toBe(true);
+    },
+  );
+
   beforeEach(() => {
     vi.restoreAllMocks();
   });

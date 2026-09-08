@@ -60,14 +60,25 @@ export async function withUpdateCommandNativeRestoration<T>(
     async (source) => {
       const { assertCurrent, verifySources, definitionPaths } = source;
       const fence = { assertCurrent };
-      const observe = () =>
-        readUpdateCommandNativeObservation({
-          record: recovery.getRecord(),
+      const observe = async () => {
+        const expected = recovery.getRecord();
+        await verifySources();
+        assertExactUpdateRecoveryClaim(expected, fence, recovery.options);
+        const observation = await readUpdateCommandNativeObservation({
+          record: expected,
           env,
           definitionPaths,
+          inspectOwnedUnit: () => {
+            assertCurrent();
+            assertExactUpdateRecoveryClaim(expected, fence, recovery.options);
+          },
           assertCurrent,
           timeoutMs: params.timeoutMs,
         });
+        await verifySources();
+        assertExactUpdateRecoveryClaim(expected, fence, recovery.options);
+        return observation;
+      };
       const apply = async (
         target: UpdateRecoveryNativeFacts,
         restart: boolean,

@@ -1,11 +1,12 @@
-// Read already-loaded user-manager state without loading a unit or starting a bus service.
+// Admission reads already-loaded state. Recovery may load a bound definition
+// under live custody; neither mode starts a unit or a bus service.
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   createServiceRuntimeInspectionFailure,
   type GatewayServiceRuntime,
 } from "./service-runtime.js";
-import type { GatewayServiceEnv } from "./service-types.js";
+import type { GatewayServiceEnv, GatewayServiceUnitInspection } from "./service-types.js";
 import { execBusctlUser } from "./systemd-exec.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
 
@@ -25,6 +26,7 @@ const optionalCounter = (value: unknown): number | undefined =>
 export async function readLoadedSystemdServiceRuntime(
   env: GatewayServiceEnv,
   timeoutMs?: number,
+  inspection?: GatewayServiceUnitInspection,
 ): Promise<GatewayServiceRuntime> {
   const unitName = `${resolveSystemdServiceName(env)}.service`;
   const budget =
@@ -38,11 +40,13 @@ export async function readLoadedSystemdServiceRuntime(
     if (remaining <= 0 || remainingQueries <= 0) {
       throw unavailable();
     }
+    inspection?.assertCurrent();
     const result = await execBusctlUser(
       env,
       ["--auto-start=no", "--json=short", ...args],
       Math.max(1, Math.floor(remaining / remainingQueries--)),
     );
+    inspection?.assertCurrent();
     if (result.code !== 0 || result.termination !== "exit" || performance.now() >= deadline) {
       throw unavailable();
     }
@@ -89,8 +93,19 @@ export async function readLoadedSystemdServiceRuntime(
       throw unavailable();
     }
     const managerUid = credentials[0];
+    if (inspection && managerUid !== inspection.managerUid) {
+      throw unavailable();
+    }
     const [unit] = await query(
-      ["call", owner, "/org/freedesktop/systemd1", `${MANAGER}.Manager`, "GetUnit", "s", unitName],
+      [
+        "call",
+        owner,
+        "/org/freedesktop/systemd1",
+        `${MANAGER}.Manager`,
+        inspection ? "LoadUnit" : "GetUnit",
+        "s",
+        unitName,
+      ],
       ["o"],
     );
     if (
@@ -146,18 +161,22 @@ export async function readLoadedSystemdServiceRuntime(
     ) {
       // TasksCurrent is UINT64_MAX when accounting is unavailable, not zero.
       // Ask the pinned manager for descendants and main/control PIDs instead.
-      // This does not load a unit; failures remain unknown under the same deadline.
+      // Admission never loads. Owned inspection uses the unit-object method so
+      // collection between queries can reload a definition, never start a process.
+      // Any failed or nonempty enumeration remains unknown.
       remainingQueries++;
       const [processes] = await query(
-        [
-          "call",
-          owner,
-          "/org/freedesktop/systemd1",
-          `${MANAGER}.Manager`,
-          "GetUnitProcesses",
-          "s",
-          unitName,
-        ],
+        inspection
+          ? ["call", owner, unitPath, `${MANAGER}.Unit`, "GetProcesses"]
+          : [
+              "call",
+              owner,
+              "/org/freedesktop/systemd1",
+              `${MANAGER}.Manager`,
+              "GetUnitProcesses",
+              "s",
+              unitName,
+            ],
         ["a(sus)"],
       );
       drained =

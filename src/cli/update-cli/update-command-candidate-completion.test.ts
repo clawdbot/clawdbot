@@ -92,6 +92,8 @@ it.each([
   "auto-restart-stopped-rollback",
   "auto-restart-observed-stop-rollback",
   "auto-restart-retained-rollback",
+  "auto-restart-collected-stop-rollback",
+  "auto-restart-collected-retained-rollback",
   "auto-restart-foreign-manager",
   "auto-restart-counter-drift",
   "auto-restart-unverified",
@@ -117,10 +119,16 @@ it.each([
     const replay = mode.startsWith("replay-");
     const packageGap = mode.startsWith("replay-package-gap");
     const autoRestart = mode.startsWith("auto-restart-");
-    const nativeRetained = mode === "auto-restart-retained-rollback";
+    const collectedStop =
+      mode === "auto-restart-collected-stop-rollback" ||
+      mode === "auto-restart-collected-retained-rollback";
+    const collectedRetained = mode === "auto-restart-collected-retained-rollback";
+    const nativeRetained = mode === "auto-restart-retained-rollback" || collectedRetained;
     const observedStop = mode === "auto-restart-observed-stop-rollback";
     const nativeStopped =
-      nativeRetained || observedStop || mode === "auto-restart-stopped-rollback";
+      (nativeRetained && !collectedRetained) ||
+      observedStop ||
+      mode === "auto-restart-stopped-rollback";
     const refusedAutoRestart = autoRestart && !mode.endsWith("rollback");
     if (packageGap || autoRestart) {
       vi.mocked(os.platform).mockReturnValue("linux");
@@ -275,6 +283,7 @@ it.each([
                 !previous &&
                 autoRestart &&
                 !nativeStopped &&
+                !collectedStop &&
                 mode !== "auto-restart-after-start-rollback"
               ) {
                 running = false;
@@ -288,14 +297,28 @@ it.each([
           );
           vi.spyOn(services, "resolveGatewayService").mockReturnValue(
             createMockGatewayService({
-              readCommand: async () => ({
-                programArguments: [
-                  process.execPath,
-                  path.join(pkg.packageRoot, "dist", "index.js"),
-                  "gateway",
-                ],
-                sourcePath: definition,
-              }),
+              readCommand: async (_env, inspection) => {
+                if (
+                  collectedStop &&
+                  recovery?.getRecord().primaryFailure &&
+                  !enabled &&
+                  !running &&
+                  !autoRestarting
+                ) {
+                  if (inspectionUnavailable || !inspection?.loadForInspection) {
+                    throw new Error("Effective systemd service command could not be inspected.");
+                  }
+                  inspection.loadForInspection.assertCurrent();
+                }
+                return {
+                  programArguments: [
+                    process.execPath,
+                    path.join(pkg.packageRoot, "dist", "index.js"),
+                    "gateway",
+                  ],
+                  sourcePath: definition,
+                };
+              },
               readRuntime: async () => {
                 const last = recovery?.getRecord().nativeManager?.effects.at(-1);
                 if (
@@ -347,6 +370,9 @@ it.each([
                 events.push("stop");
                 running = false;
                 autoRestarting = false;
+                if (collectedRetained) {
+                  inspectionUnavailable = true;
+                }
               },
             }),
           );
@@ -388,7 +414,7 @@ it.each([
             if (nativeStopped && !observedStop) {
               running = false;
               autoRestarting = false;
-              inspectionUnavailable = nativeRetained;
+              inspectionUnavailable = nativeRetained && !collectedRetained;
             }
             return { code: 0, stdout: "", stderr: "", termination: "exit" as const };
           };
@@ -606,7 +632,7 @@ it.each([
               });
               expect(healthRecord.nativeManager!.effects.at(-1)!.state).toBe("observed");
               const failedAfterStart =
-                (nativeStopped || mode === "auto-restart-after-start-rollback") &&
+                (nativeStopped || collectedStop || mode === "auto-restart-after-start-rollback") &&
                 servingBoot === "candidate-boot";
               if (failedAfterStart) {
                 running = false;
@@ -702,10 +728,18 @@ it.each([
               );
             }
             if (nativeRetained) {
-              resume = await interruptNativeSuppressionReplay(params, () => {
-                inspectionUnavailable = false;
-              });
-              expect(events).toEqual(["enable", "start", "disable"]);
+              resume = await interruptNativeSuppressionReplay(
+                params,
+                () => {
+                  inspectionUnavailable = false;
+                },
+                collectedRetained ? "stop" : "suppress",
+              );
+              expect(events).toEqual(
+                collectedRetained
+                  ? ["enable", "start", "disable", "stop"]
+                  : ["enable", "start", "disable"],
+              );
               return;
             }
             if (replay) {
@@ -855,7 +889,14 @@ it.each([
           });
           await resume?.();
           if (nativeRetained) {
-            expect(events).toEqual(["enable", "start", "disable", "enable", "start"]);
+            expect(events).toEqual([
+              "enable",
+              "start",
+              "disable",
+              ...(collectedRetained ? ["stop"] : []),
+              "enable",
+              "start",
+            ]);
             expect(start).toHaveBeenCalledTimes(2);
             expect(await fs.readFile(pkg.launcher, "utf8")).toBe("old launcher\n");
             expect(JSON.parse(await fs.readFile(config, "utf8")).update).toBeUndefined();

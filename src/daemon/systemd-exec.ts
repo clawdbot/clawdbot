@@ -403,3 +403,69 @@ export async function isSystemctlAvailable(env: GatewayServiceEnv): Promise<bool
   // must still attempt disable before removing a potentially loaded unit.
   return res.code === 0 || !isSystemctlMissing(res);
 }
+
+/** Authenticate the existing unique manager owner before loading a bound unit.
+ * The caller supplies its deadline- and custody-checked D-Bus query. */
+export async function bindSystemdManagerOwner(
+  query: (args: string[], signatures: string[]) => Promise<unknown[] | null>,
+  managerUid: number,
+  unavailable: () => Error,
+): Promise<{ destination: string; verify: () => Promise<void> }> {
+  const manager = "org.freedesktop.systemd1";
+  const readOwner = async () => {
+    const [value] =
+      (await query(
+        [
+          "call",
+          "org.freedesktop.DBus",
+          "/org/freedesktop/DBus",
+          "org.freedesktop.DBus",
+          "GetNameOwner",
+          "s",
+          manager,
+        ],
+        ["s"],
+      )) ?? [];
+    if (
+      !Array.isArray(value) ||
+      value.length !== 1 ||
+      typeof value[0] !== "string" ||
+      !/^:[0-9]+\.[0-9]+$/.test(value[0])
+    ) {
+      throw unavailable();
+    }
+    return value[0];
+  };
+  const destination = await readOwner();
+  const [uid] =
+    (await query(
+      [
+        "call",
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+        "GetConnectionUnixUser",
+        "s",
+        destination,
+      ],
+      ["u"],
+    )) ?? [];
+  if (
+    !Number.isInteger(managerUid) ||
+    managerUid < 0 ||
+    managerUid >= 0xffffffff ||
+    !Array.isArray(uid) ||
+    uid.length !== 1 ||
+    uid[0] !== managerUid
+  ) {
+    throw unavailable();
+  }
+  return {
+    destination,
+    async verify() {
+      if (destination !== (await readOwner())) {
+        throw unavailable();
+      }
+    },
+  };
+}

@@ -29,6 +29,8 @@ export async function readUpdateCommandNativeObservation(params: {
   assertCurrent: () => void;
   timeoutMs?: number;
   quiescingFailedCandidate?: true;
+  /** Only a live source/executor owner may reload a checkpoint-bound unit definition. */
+  inspectOwnedUnit?: () => void;
 }): Promise<UpdateRecoveryNativeObservation> {
   const unavailable = () =>
     new UpdateCommandRecoveryPendingError("Original native-manager state cannot be verified.");
@@ -60,12 +62,38 @@ export async function readUpdateCommandNativeObservation(params: {
     typeof value.runtime.systemd?.nRestarts === "number" &&
     Number.isInteger(value.runtime.systemd.nRestarts) &&
     value.runtime.systemd.nRestarts >= 0;
+  const nativeIdentity = params.record.nativeManager?.identity;
+  if (params.inspectOwnedUnit && (!params.record.checkpoint || !nativeIdentity)) {
+    throw unavailable();
+  }
+  if (
+    params.inspectOwnedUnit &&
+    (nativeIdentity?.runId !== params.record.runId ||
+      nativeIdentity.stateDir !== source.stateDir ||
+      nativeIdentity.configPath !== source.configPath ||
+      nativeIdentity.profile !== source.profile ||
+      resolveStateDir(params.env) !== source.stateDir ||
+      resolveConfigPath(params.env) !== source.configPath ||
+      (params.env.OPENCLAW_PROFILE?.trim() || null) !== source.profile ||
+      (nativeIdentity.platform === "linux" &&
+        nativeIdentity.unitName !== `${resolveSystemdServiceName(params.env)}.service`))
+  ) {
+    throw unavailable();
+  }
+  const loadForInspection =
+    params.inspectOwnedUnit &&
+    platform() === "linux" &&
+    nativeIdentity?.platform === "linux" &&
+    nativeIdentity.scope === "user"
+      ? { managerUid: nativeIdentity.uid, assertCurrent: params.inspectOwnedUnit }
+      : undefined;
   params.assertCurrent();
   const service = resolveGatewayService();
   const state = await readGatewayServiceState(service, {
     env: params.env,
     requireEffective: true,
     requireLoadedCommand: true,
+    ...(loadForInspection ? { loadForInspection } : {}),
     timeoutMs: params.timeoutMs,
   });
   params.assertCurrent();
@@ -108,6 +136,7 @@ export async function readUpdateCommandNativeObservation(params: {
     env: params.env,
     requireEffective: true,
     requireLoadedCommand: true,
+    ...(loadForInspection ? { loadForInspection } : {}),
     timeoutMs: params.timeoutMs,
   });
   params.assertCurrent();
@@ -142,6 +171,7 @@ export async function readUpdateCommandNativeObservation(params: {
     env: params.env,
     requireEffective: true,
     requireLoadedCommand: true,
+    ...(loadForInspection ? { loadForInspection } : {}),
     timeoutMs: params.timeoutMs,
   });
   params.assertCurrent();
@@ -176,8 +206,9 @@ export async function readUpdateCommandNativeObservation(params: {
     ) {
       throw unavailable();
     }
-    // requireLoaded uses the daemon's non-activating GetUnit reader. Successful
-    // runtime inspection proves loaded, independently of is-enabled policy.
+    // Ordinary inspection uses GetUnit; a live recovery owner may reload the
+    // bound definition. Both paths verify effective properties and drained native
+    // processes, independently of is-enabled policy and without starting it.
     identity = { ...binding, platform: "linux", scope: "user", unitName, uid: native.managerUid };
     loaded = true;
   } else if (platform() === "win32") {

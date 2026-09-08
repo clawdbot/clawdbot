@@ -87,12 +87,20 @@ export type GatewayServiceEnvArgs = {
   timeoutMs?: number;
 };
 
+/** Live recovery custody, never reconstructed from a saved record alone. Loading
+ * permits native definition inspection, not enablement, start, or readiness. */
+export type GatewayServiceUnitInspection = {
+  managerUid: number;
+  assertCurrent: () => void;
+};
+
 /** Bounded service inspection; strict reads reject unverified commands/environments and return null only for proven absence. */
 export type GatewayServiceReadOptions = {
   timeoutMs?: number;
   requireEffective?: boolean;
   /** Command inspection must not load an unloaded native unit. */
   requireLoaded?: boolean;
+  loadForInspection?: GatewayServiceUnitInspection;
 };
 
 export type GatewayServiceEnvironmentValueSource = "inline" | "file" | "inline-and-file";

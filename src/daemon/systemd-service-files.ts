@@ -17,7 +17,11 @@ import type {
   GatewayServiceManagedOverrides,
   GatewayServiceReadOptions,
 } from "./service-types.js";
-import { execBusctlUser } from "./systemd-exec.js";
+import { bindSystemdManagerOwner, execBusctlUser } from "./systemd-exec.js";
+import type {
+  SystemdCommandSnapshotParams,
+  SystemdEnvironmentFilesParams,
+} from "./systemd-service-files.types.js";
 import {
   parseSystemdEnvAssignments,
   parseSystemdExecStart,
@@ -47,23 +51,14 @@ export function resolveSystemdUnitPath(env: GatewayServiceEnv): string {
 
 // Unit file parsing/rendering: see systemd-unit.ts
 
-type SystemdEnvironmentFileSpec = string | [string, boolean];
-
 const UNKNOWN_SYSTEMD_OVERRIDES = {
   launcher: "command",
   environment: true,
 } satisfies GatewayServiceManagedOverrides;
 
-async function buildSystemdCommandSnapshot(params: {
-  programArguments: string[];
-  workingDirectory: string;
-  inlineEnvironment: Record<string, string>;
-  environmentFileSpecs: SystemdEnvironmentFileSpec[];
-  unsetEnvironment: string[];
-  env: GatewayServiceEnv;
-  unitPath: string;
-  failOnUnavailable?: boolean;
-}): Promise<GatewayServiceCommandSnapshot> {
+async function buildSystemdCommandSnapshot(
+  params: SystemdCommandSnapshotParams,
+): Promise<GatewayServiceCommandSnapshot> {
   const fileEnvironment = await resolveSystemdEnvironmentFiles(params);
   const environment = { ...params.inlineEnvironment, ...fileEnvironment };
   const environmentValueSources: Record<string, GatewayServiceEnvironmentValueSource> =
@@ -100,14 +95,23 @@ async function readSystemdManagerCommand(
   const timeoutMs =
     opts?.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : SYSTEMD_MANAGER_QUERY_TIMEOUT_MS;
   const deadlineAt = performance.now() + timeoutMs;
-  let remainingCalls = 3;
+  const inspection = opts?.requireLoaded ? opts.loadForInspection : undefined;
+  let remainingCalls = inspection ? 6 : 3;
   // All manager D-Bus calls share one deadline so wedged reads reach local fallback promptly.
   const query = async (args: string[], signatures: string[]): Promise<unknown[] | null> => {
+    inspection?.assertCurrent();
+    if (inspection && (performance.now() >= deadlineAt || remainingCalls <= 0)) {
+      throw unavailable();
+    }
     const result = await execBusctlUser(
       env,
       ["--json=short", ...(opts?.requireLoaded ? ["--auto-start=no"] : []), ...args],
       Math.max(1, Math.floor((deadlineAt - performance.now()) / remainingCalls--)),
     );
+    inspection?.assertCurrent();
+    if (inspection && (result.termination !== "exit" || performance.now() >= deadlineAt)) {
+      throw unavailable();
+    }
     if (result.code !== 0) {
       const detail = result.stderr.trim();
       if (
@@ -135,6 +139,10 @@ async function readSystemdManagerCommand(
     }
     return properties.map((property) => property?.data);
   };
+  const binding = inspection
+    ? await bindSystemdManagerOwner(query, inspection.managerUid, unavailable)
+    : undefined;
+  const destination = binding?.destination ?? manager;
   const assertAbsentWithoutLoading = async (): Promise<null> => {
     // GetUnit only proves that a unit is not currently loaded. An existing
     // authored or native unit file must not be mistaken for service absence.
@@ -144,7 +152,7 @@ async function readSystemdManagerCommand(
     const fileState = await query(
       [
         "call",
-        manager,
+        destination,
         "/org/freedesktop/systemd1",
         `${manager}.Manager`,
         "GetUnitFileState",
@@ -161,10 +169,10 @@ async function readSystemdManagerCommand(
   const loaded = await query(
     [
       "call",
-      manager,
+      destination,
       "/org/freedesktop/systemd1",
       `${manager}.Manager`,
-      opts?.requireLoaded ? "GetUnit" : "LoadUnit",
+      opts?.requireLoaded && !inspection ? "GetUnit" : "LoadUnit",
       "s",
       unitName,
     ],
@@ -179,7 +187,7 @@ async function readSystemdManagerCommand(
     throw unavailable();
   }
   const readProperties = (scope: "Unit" | "Service", names: string[], signatures: string[]) =>
-    query(["get-property", manager, unitPath, `${manager}.${scope}`, ...names], signatures);
+    query(["get-property", destination, unitPath, `${manager}.${scope}`, ...names], signatures);
   const isStringArray = (value: unknown): value is string[] =>
     Array.isArray(value) && value.every((entry) => typeof entry === "string");
   const unitProperties = await readProperties(
@@ -245,6 +253,7 @@ async function readSystemdManagerCommand(
     inlineEnvironment[assignment.slice(0, separator)] = assignment.slice(separator + 1);
   }
 
+  await binding?.verify();
   const managedDefinition = sourcePath === resolveSystemdUnitPath(env) ? localDefinition : null;
   const managedOverrides =
     !reloadPending && managedDefinition
@@ -672,12 +681,9 @@ export async function readSystemdEnvironmentFile(pathname: string): Promise<{
   return { environment, literalShellReferenceKeys };
 }
 
-async function resolveSystemdEnvironmentFiles(params: {
-  environmentFileSpecs: SystemdEnvironmentFileSpec[];
-  env: GatewayServiceEnv;
-  unitPath: string;
-  failOnUnavailable?: boolean;
-}): Promise<Record<string, string>> {
+async function resolveSystemdEnvironmentFiles(
+  params: SystemdEnvironmentFilesParams,
+): Promise<Record<string, string>> {
   const resolved: Record<string, string> = {};
   const unitDir = path.posix.dirname(params.unitPath);
   const failIfUnavailable = (error: unknown, optional: boolean) => {

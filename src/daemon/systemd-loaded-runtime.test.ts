@@ -353,3 +353,109 @@ describe("loaded-only systemd runtime", () => {
     expect(systemctl).not.toHaveBeenCalled();
   });
 });
+
+describe("owned recovery inspection of collected systemd units", () => {
+  it.each([false, true])(
+    "requires fresh authority to inspect an unloaded definition (owned=%s)",
+    async (owned) => {
+      const assertCurrent = vi.fn();
+      busctl.mockImplementation(async (_env, args) => {
+        if (args.includes("GetUnit")) {
+          return {
+            code: 1,
+            termination: "exit",
+            stdout: "",
+            stderr: `Call failed: Unit ${unitName} not loaded.`,
+          };
+        }
+        if (args.includes("LoadUnit")) {
+          return success(JSON.stringify({ type: "o", data: [unitPath] }));
+        }
+        if (args.includes("GetProcesses")) {
+          return success(JSON.stringify({ type: "a(sus)", data: [[]] }));
+        }
+        return managerReply(args, {
+          ActiveState: { type: "s", data: "inactive" },
+          SubState: { type: "s", data: "dead" },
+          MainPID: { type: "u", data: 0 },
+          TasksCurrent: { type: "t", data: Number("18446744073709551615") },
+        });
+      });
+      const opts = {
+        requireLoaded: true,
+        ...(owned ? { loadForInspection: { managerUid: 2001, assertCurrent } } : {}),
+      };
+      const runtime = await readSystemdServiceRuntime(env, opts);
+      expect(runtime.status).toBe(owned ? "stopped" : "unknown");
+      if (owned) {
+        expect(assertCurrent).toHaveBeenCalled();
+        expect(busctl.mock.calls.some(([, args]) => args.includes("GetProcesses"))).toBe(true);
+      }
+      expect(busctl.mock.calls.some(([, args]) => args.includes("LoadUnit"))).toBe(owned);
+      expect(systemctl).not.toHaveBeenCalled();
+    },
+  );
+});
+
+describe("owned inspection refuses foreign or unverified collected units", () => {
+  it.each([
+    "uid",
+    "revoked-before",
+    "revoked-load",
+    "manager-change",
+    "busy",
+    "inventory-error",
+    "terminated",
+  ] as const)("keeps %s unknown without enabling or starting anything", async (fault) => {
+    let loaded = false;
+    let owners = 0;
+    const assertCurrent = () => {
+      if (fault === "revoked-before" || (fault === "revoked-load" && loaded)) {
+        throw new Error("source/executor revoked");
+      }
+    };
+    busctl.mockImplementation(async (_env, args) => {
+      if (args.includes("GetNameOwner") && ++owners > 1 && fault === "manager-change") {
+        return success(JSON.stringify({ type: "s", data: [":1.99"] }));
+      }
+      if (args.includes("LoadUnit")) {
+        loaded = true;
+        return success(JSON.stringify({ type: "o", data: [unitPath] }));
+      }
+      if (args.includes("GetProcesses")) {
+        if (fault === "inventory-error") {
+          return { code: 1, termination: "exit", stdout: "", stderr: "inventory unavailable" };
+        }
+        return {
+          ...success(
+            JSON.stringify({
+              type: "a(sus)",
+              data: [fault === "busy" ? [["/owned", 91, "child"]] : []],
+            }),
+          ),
+          ...(fault === "terminated" ? { termination: "timeout" as const } : {}),
+        };
+      }
+      return managerReply(args, {
+        ActiveState: { type: "s", data: "inactive" },
+        SubState: { type: "s", data: "dead" },
+        MainPID: { type: "u", data: 0 },
+        TasksCurrent: { type: "t", data: Number("18446744073709551615") },
+      });
+    });
+    const runtime = await readSystemdServiceRuntime(env, {
+      requireLoaded: true,
+      loadForInspection: { managerUid: fault === "uid" ? 2002 : 2001, assertCurrent },
+    });
+    expect(runtime.status).toBe("unknown");
+    expect(loaded).toBe(!["uid", "revoked-before"].includes(fault));
+    expect(systemctl).not.toHaveBeenCalled();
+    expect(
+      busctl.mock.calls.every(
+        ([, args]) =>
+          args.includes("--auto-start=no") &&
+          !args.some((arg) => /^(Start|Restart|Enable|Stop)Unit/.test(arg)),
+      ),
+    ).toBe(true);
+  });
+});

@@ -112,6 +112,7 @@ export type GatewayService = {
 type ReadGatewayServiceStateArgs = GatewayServiceEnvArgs & {
   requireEffective?: boolean;
   requireLoadedCommand?: boolean;
+  loadForInspection?: GatewayServiceReadOptions["loadForInspection"];
   validateEnvBeforeStatusRead?: (env: GatewayServiceEnv) => void;
 };
 
@@ -226,6 +227,7 @@ export async function readGatewayServiceState(
         timeoutMs,
         requireEffective: true,
         ...(args.requireLoadedCommand ? { requireLoaded: true } : {}),
+        ...(args.loadForInspection ? { loadForInspection: args.loadForInspection } : {}),
       })
     : await service.readCommand(baseEnv, { timeoutMs }).catch(() => null);
   const env = mergeGatewayServiceEnv(baseEnv, command);
@@ -240,6 +242,7 @@ export async function readGatewayServiceState(
       .readRuntime(env, {
         timeoutMs,
         ...(args.requireEffective && args.requireLoadedCommand ? { requireLoaded: true } : {}),
+        ...(args.loadForInspection ? { loadForInspection: args.loadForInspection } : {}),
       })
       .catch((error: unknown) => createServiceRuntimeInspectionFailure(error)),
     // Update policy needs definition authority; ordinary status/start reads do not.

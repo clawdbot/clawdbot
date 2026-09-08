@@ -86,15 +86,21 @@ export async function restoreUpdateCommandFailure(
               maintenance.assertOwned();
             };
             const fence = { assertCurrent };
+            await source.verifySources();
             assertExactUpdateRecoveryClaim(expected, fence, recovery.options);
             const native = await readUpdateCommandNativeObservation({
               record: expected,
               env,
               definitionPaths: source.definitionPaths,
+              inspectOwnedUnit: () => {
+                assertCurrent();
+                assertExactUpdateRecoveryClaim(expected, { assertCurrent }, recovery.options);
+              },
               assertCurrent,
               timeoutMs,
             });
-            assertCurrent();
+            await source.verifySources();
+            assertExactUpdateRecoveryClaim(expected, fence, recovery.options);
             if (
               !native.facts.stopped ||
               !isDeepStrictEqual(native.identity, expected.nativeManager!.identity) ||

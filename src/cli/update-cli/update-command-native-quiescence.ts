@@ -51,6 +51,10 @@ export async function quiesceFailedUpdateCommand(params: {
         record: expected,
         env,
         definitionPaths,
+        inspectOwnedUnit: () => {
+          assertCurrent();
+          assertExactUpdateRecoveryClaim(expected, { assertCurrent }, recovery.options);
+        },
         assertCurrent,
         timeoutMs: params.timeoutMs,
         quiescingFailedCandidate: true,
