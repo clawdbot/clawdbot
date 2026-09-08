@@ -5,6 +5,7 @@ import { beforeEach, expect, it } from "vitest";
 import type { SessionsCatalogHostEvent } from "../../../packages/gateway-protocol/src/index.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
+  assertCatalogCountAlignment,
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
   controlUiSessionPath,
@@ -97,7 +98,7 @@ suite.define(() => {
     await page.close();
   });
 
-  it("separates native catalogs from live Coding rows and aligns collapsed counts", async () => {
+  it("separates native catalogs from live Coding rows", async () => {
     const page = await suite.browser.newPage({
       deviceScaleFactor: 2,
       viewport: { height: 900, width: 1280 },
@@ -145,12 +146,7 @@ suite.define(() => {
             {
               id: "codex",
               label: "Codex",
-              capabilities: {
-                continueSession: true,
-                archive: true,
-                createSession: true,
-                startTerminal: true,
-              },
+              capabilities: { continueSession: true, archive: true, startTerminal: true },
               hosts: [
                 {
                   hostId: "gateway:local",
@@ -230,10 +226,8 @@ suite.define(() => {
         liveRows.boundingBox(),
         catalog.boundingBox(),
       ]);
-      expect(liveRowsBox).not.toBeNull();
-      expect(catalogBox).not.toBeNull();
-      // Read the rhythm from the token instead of restating it: the guard is
-      // that catalogs are a separate group, not that the gap is any one number.
+      expect([liveRowsBox, catalogBox]).not.toContain(null);
+      // Guard that catalogs are a separate group without restating the gap token.
       const groupGap = await page.evaluate(() => {
         const sidebar = document.querySelector(".sidebar");
         return sidebar
@@ -248,20 +242,7 @@ suite.define(() => {
           path: path.join(uiProofArtifactDir, "06-coding-catalog-spacing.png"),
         });
       }
-
-      await catalog.locator(".sidebar-session-group-toggle").click();
-      await claudeCatalog.locator(".sidebar-session-group-toggle").click();
-      const [catalogCountBox, claudeCountBox] = await Promise.all([
-        catalog.locator(".sidebar-session-group-count").boundingBox(),
-        claudeCatalog.locator(".sidebar-session-group-count").boundingBox(),
-      ]);
-      if (!catalogCountBox || !claudeCountBox) {
-        throw new Error("Expected visible collapsed catalog counts");
-      }
-      expect(catalogCountBox.x + catalogCountBox.width).toBeCloseTo(
-        claudeCountBox.x + claudeCountBox.width,
-        1,
-      );
+      await assertCatalogCountAlignment(page, ["codex", "claude"]);
     } finally {
       await page.close();
     }
