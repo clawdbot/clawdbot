@@ -2281,7 +2281,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it("routes mac restart helpers through restart-mac owner tests", () => {
     expectChangedTargets(
       ["scripts/lib/restart-mac-gateway.sh"],
-      ["test/scripts/restart-mac.test.ts"],
+      ["test/scripts/mac-script-shebangs.test.ts", "test/scripts/restart-mac.test.ts"],
     );
   });
 

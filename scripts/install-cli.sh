@@ -7,7 +7,11 @@ if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 
   fi
   # Sourced and stdin installers cannot replay their caller or consumed input.
   printf '%s\n' 'Run this installer with /bin/bash on macOS (including curl | /bin/bash).' >&2
-  return 1 2>/dev/null || exit 1
+  if (return 0 2>/dev/null); then
+    return 1
+  else
+    exit 1
+  fi
 fi
 
 set -euo pipefail

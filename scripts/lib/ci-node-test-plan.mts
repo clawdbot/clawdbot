@@ -2519,9 +2519,9 @@ function splitOversizedCompactGroup(
         tail.length > 1 &&
         batchWeight(tail) <= COMPACT_EXCLUSIVE_JOB_SECONDS
       ) {
-        // Half-budget tails can share with another family instead of stranding
-        // capacity. Keep full chunks and indivisible files at their original cost.
-        stripes.splice(-1, 1, ...packFiles(tail, COMPACT_EXCLUSIVE_JOB_SECONDS / 2));
+        // Third-budget tails let three distinct families share spare capacity.
+        // Keep full chunks and indivisible files at their original cost.
+        stripes.splice(-1, 1, ...packFiles(tail, COMPACT_EXCLUSIVE_JOB_SECONDS / 3));
       }
     } else {
       // The fixed build stays with its runtime child; only remaining test
