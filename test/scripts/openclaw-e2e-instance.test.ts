@@ -757,7 +757,7 @@ fi
 set -euo pipefail
 source ${shellQuote(helperPath)}
 tracked_pid="$(openclaw_e2e_start_tracked_process ${shellQuote(logPath)} ${shellQuote(process.execPath)} ${shellQuote(parentPath)} ${shellQuote(childPath)} ${shellQuote(parentPidPath)} ${shellQuote(childPidPath)} ${shellQuote(childTermPath)})"
-for ((i = 0; i < 100; i += 1)); do
+for ((i = 0; i < 500; i += 1)); do
   [ -s ${shellQuote(parentPidPath)} ] && [ -s ${shellQuote(childPidPath)} ] && break
   /bin/sleep 0.02
 done
@@ -765,7 +765,7 @@ done
 [ -s ${shellQuote(childPidPath)} ]
 child_pid="$(/bin/cat ${shellQuote(childPidPath)})"
 openclaw_e2e_stop_process "$tracked_pid"
-for ((i = 0; i < 100; i += 1)); do
+for ((i = 0; i < 500; i += 1)); do
   [ -s ${shellQuote(childTermPath)} ] && break
   /bin/sleep 0.02
 done
@@ -773,7 +773,7 @@ done
   echo "tracked child did not receive SIGTERM" >&2
   exit 1
 }
-for ((i = 0; i < 100; i += 1)); do
+for ((i = 0; i < 500; i += 1)); do
   kill -0 "$child_pid" 2>/dev/null || exit 0
   /bin/sleep 0.02
 done
@@ -781,7 +781,9 @@ echo "tracked child still alive after group termination" >&2
 exit 1
 `;
 
-      const result = runBash(script, { PATH: hostPath }, 5_000);
+      // Hosted 4-core runners can take well over two seconds to start two Node processes,
+      // so each readiness and termination window allows ten seconds.
+      const result = runBash(script, { PATH: hostPath }, 40_000);
 
       expectShellSuccess(result);
     } finally {
