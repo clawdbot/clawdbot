@@ -27,7 +27,10 @@ describe("terminal.close/attach padded sessionId", () => {
     expect(manager.size).toBe(1);
 
     const respond = vi.fn();
-    await expectDefined(terminalHandlers["terminal.close"], "terminal.close")({
+    await expectDefined(
+      terminalHandlers["terminal.close"],
+      "terminal.close",
+    )({
       params: { sessionId: padded },
       respond,
       context: {
@@ -67,7 +70,10 @@ describe("terminal.close/attach padded sessionId", () => {
 
     const padded = ` ${opened.sessionId} `;
     const respond = vi.fn();
-    await expectDefined(terminalHandlers["terminal.attach"], "terminal.attach")({
+    await expectDefined(
+      terminalHandlers["terminal.attach"],
+      "terminal.attach",
+    )({
       params: { sessionId: padded },
       respond,
       context: {

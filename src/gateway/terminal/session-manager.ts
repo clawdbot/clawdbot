@@ -88,7 +88,6 @@ export class TerminalSessionManager {
     this.scrollbackChars = options.scrollbackChars ?? DEFAULT_SCROLLBACK_CHARS;
   }
 
-
   /** Clipboard/RPC padding must not miss exact Map keys stored at create time. */
   private normalizeSessionLookupId(sessionId: string): string {
     return sessionId.trim();
