@@ -76,7 +76,6 @@ import {
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 
-const CLI_NAME = resolveCliName();
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
 
 export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<void> {
@@ -308,7 +307,7 @@ async function updateCommandInternal(
         );
         defaultRuntime.log(
           theme.muted(
-            `After the update, make sure \`${CLI_NAME}\` on PATH resolves to the managed service root or reinstall the gateway service from the shell install you want to use.`,
+            `After the update, make sure \`${resolveCliName()}\` on PATH resolves to the managed service root or reinstall the gateway service from the shell install you want to use.`,
           ),
         );
         if (managedServiceNodeRunner) {
