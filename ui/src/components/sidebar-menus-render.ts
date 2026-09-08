@@ -255,6 +255,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
           sessionId: session.sessionId ?? null,
           isChild: session.isChild,
           pinned: session.pinned,
+          pinnable: session.pinnable,
           unread: batchRows ? allUnread : session.unread,
           archived: allArchived,
           category: batchRows ? sharedCategory : (session.category ?? null),
@@ -306,6 +307,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
               break;
             case "copy-session-id":
             case "copy-session-link":
+            case "copy-session-preview-link":
             case "copy-markdown":
             case "open-new-tab":
             case "open-new-window":

@@ -11,11 +11,8 @@ import {
 } from "../../app/user-identity.ts";
 import { icons } from "../../components/icons.ts";
 import {
-  identityAvatarClass,
   identityAvatarImage,
-  renderIdentityAvatarImage,
   resolveIdentityAvatarView,
-  type IdentityAvatarView,
 } from "../../components/identity-avatar-view.ts";
 import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
 import {
@@ -38,6 +35,7 @@ import {
   parseAgentSessionKey,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
+import { renderUserAvatarSlot } from "./components/chat-author-avatar.ts";
 
 export function renderChatAvatar(
   role: string,
@@ -179,33 +177,6 @@ export function renderForwardedAvatar(agentId: string | undefined, opts: Forward
       "assistant",
     ),
   );
-}
-
-/**
- * The avatar URL may 404 or be unreachable (missing upload, dead Gravatar,
- * stale configured URL); swap to initials instead of a broken image. Lit
- * reuses DOM parts, so a load must clear a prior identity's error state.
- */
-function renderUserAvatarSlot(view: IdentityAvatarView, label: string, role = "user") {
-  const initialsAvatar = html`<div
-    class="chat-avatar ${role} chat-avatar--sender-initials"
-    style=${`background: hsl(${view.fallback.colorSeed % 360} 48% 42%)`}
-    role="img"
-    aria-label="${label}"
-  >
-    ${view.fallback.initials}
-  </div>`;
-  if (!view.imageUrl) {
-    return initialsAvatar;
-  }
-  return html`<span class=${identityAvatarClass("chat-avatar-slot", view)}>
-    ${renderIdentityAvatarImage({
-      view,
-      fallbackSelector: ".chat-avatar-slot",
-      className: `chat-avatar ${role}`,
-      alt: label,
-    })}${initialsAvatar}
-  </span>`;
 }
 
 function isAvatarUrl(value: string): boolean {
@@ -432,32 +403,22 @@ async function loadSenderAgentAvatars(host: ChatAvatarHost, agentIds: readonly s
   const roster = new Set(agents?.map((agent) => agent.id));
   // Bound forwarded-agent work independently of transcript size.
   const ids = [...new Set(agentIds)]
-    .filter((id) => id !== agentId && roster.has(id))
+    .filter((id) => host.connected && id !== agentId && roster.has(id))
     .slice(0, CHAT_AVATAR_CACHE_LIMIT - 1);
-  if (!host.connected || ids.length === 0) {
-    const references = chatAvatarReferences.get(host);
-    for (const [key, release] of references ?? []) {
-      if (key !== currentAvatarReference) {
-        release();
-        references?.delete(key);
-      }
-    }
-    if (host.senderAgentAvatars?.size) {
-      host.senderAgentAvatars = new Map();
-      host.requestUpdate?.();
-    }
-    return;
-  }
   const previousAvatars = host.senderAgentAvatars;
-  const snapshots = await Promise.all(ids.map((id) => loadChatAvatarSnapshot(host, id)));
+  // Empty/disconnected batches clear synchronously; only awaited loads need the stale fence.
+  const snapshots = ids.length
+    ? await Promise.all(ids.map((id) => loadChatAvatarSnapshot(host, id)))
+    : [];
   if (
-    !host.connected ||
-    host.client !== client ||
-    host.connectionEpoch !== epoch ||
-    host.agentsList?.agents !== agents ||
-    host.sessionKey !== sessionKey ||
-    resolveAgentIdForSession(host) !== agentId ||
-    senderAvatarRequests.get(host) !== request
+    ids.length &&
+    (!host.connected ||
+      host.client !== client ||
+      host.connectionEpoch !== epoch ||
+      host.agentsList?.agents !== agents ||
+      host.sessionKey !== sessionKey ||
+      resolveAgentIdForSession(host) !== agentId ||
+      senderAvatarRequests.get(host) !== request)
   ) {
     for (const snapshot of snapshots) {
       snapshot?.release();
@@ -471,7 +432,7 @@ async function loadSenderAgentAvatars(host: ChatAvatarHost, agentIds: readonly s
       references?.delete(key);
     }
   }
-  host.senderAgentAvatars = new Map(
+  const avatars = new Map(
     ids.map((id, index) => {
       const snapshot = snapshots[index];
       if (snapshot) {
@@ -480,7 +441,14 @@ async function loadSenderAgentAvatars(host: ChatAvatarHost, agentIds: readonly s
       return [id, snapshot ? snapshot.url : (previousAvatars?.get(id) ?? null)];
     }),
   );
-  host.requestUpdate?.();
+  // Leases and identity TTL refresh independently; unchanged URLs keep settled rows memoized.
+  if (
+    avatars.size !== (previousAvatars?.size ?? 0) ||
+    [...avatars].some(([id, url]) => previousAvatars?.get(id) !== url)
+  ) {
+    host.senderAgentAvatars = avatars;
+    host.requestUpdate?.();
+  }
 }
 
 export async function refreshChatAvatar(host: ChatAvatarHost) {

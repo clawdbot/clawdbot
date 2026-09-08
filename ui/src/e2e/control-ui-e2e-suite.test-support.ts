@@ -1,6 +1,13 @@
 import { writeSync } from "node:fs";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
+import {
+  chromium,
+  type Browser,
+  type BrowserContext,
+  type BrowserContextOptions,
+  type Locator,
+  type Page,
+} from "playwright";
 import {
   afterAll,
   afterEach,
@@ -136,6 +143,14 @@ async function settleControlUiCleanup(promises: Promise<unknown>[]): Promise<voi
   );
 }
 
+export function createControlUiE2eContextOptions(): BrowserContextOptions {
+  return {
+    locale: "en-US",
+    serviceWorkers: "block",
+    viewport: { height: 900, width: 1280 },
+  };
+}
+
 export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): ControlUiE2eSuite {
   const { executablePath: chromiumExecutablePath, available: chromiumAvailable } =
     inject("controlUiE2eChromium");
@@ -198,6 +213,8 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
     );
     try {
       return await Promise.race([operation, expired.promise]);
+    } catch (error) {
+      throw retireFork(error, retainedState);
     } finally {
       clearTimeout(deadline);
     }
@@ -442,9 +459,7 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
             throwControlUiCleanupErrors(errors);
             assertControlUiForkActive();
             await resources?.release?.();
-          })().catch((error: unknown) => {
-            throw retireFork(error, resources?.retainedState);
-          });
+          })();
           return joinCleanup(
             teardown,
             "suite teardown",

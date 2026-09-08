@@ -8,10 +8,9 @@ import {
   sessionCatalogAdoptedSourceKey,
   type SessionCatalogEntrySnapshot,
 } from "openclaw/plugin-sdk/session-catalog";
-import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexThread } from "./app-server/protocol.js";
-import { importCodexThreadHistoryToTranscript } from "./app-server/transcript-mirror.js";
 import { CatalogParamsError } from "./session-catalog-parsing.js";
 import type { CodexSessionCatalogSession } from "./session-catalog-types.js";
 
@@ -287,6 +286,8 @@ export async function createOrReuseNodeAdoptedSession(params: {
         const storePath = resolveStorePath(params.config.session?.store, {
           agentId: entry.agentId,
         });
+        const { importCodexThreadHistoryToTranscript } =
+          await import("./app-server/transcript-mirror.js");
         await importCodexThreadHistoryToTranscript({
           thread: params.history.thread,
           throughTurnId: params.history.throughTurnId,

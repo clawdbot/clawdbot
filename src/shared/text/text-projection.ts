@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { escapeRegExp } from "../regexp.js";
 import { findCodeRegions } from "./code-regions.js";
 
@@ -175,27 +176,24 @@ function collapseDuplicateParagraphs(text: string): string {
     marker += "\0";
   }
   const inlineTokens = new Map<string, string>();
-  const protectedRegions = regions.map((region, index) => {
+  let masked = "";
+  let cursor = 0;
+  const protectedText = regions.map((region, index) => {
     const source = text.slice(region.start, region.end);
     let token = `${marker}${index}${marker}`;
     if (!region.block) {
       token = inlineTokens.get(source) ?? token;
       inlineTokens.set(source, token);
     }
-    return { region, token };
-  });
-  let masked = "";
-  let cursor = 0;
-  for (const { region, token } of protectedRegions) {
     masked += text.slice(cursor, region.start) + token;
     cursor = region.end;
-  }
-  let projected = collapsePlainDuplicateParagraphs(masked + text.slice(cursor));
-  for (const { region, token } of protectedRegions) {
-    // Replacement-string dollar sequences must remain literal inside code.
-    projected = projected.replace(token, () => text.slice(region.start, region.end));
-  }
-  return projected;
+    return source;
+  });
+  // Only our indexed tokens contain the marker; a callback preserves literal dollar sequences.
+  return collapsePlainDuplicateParagraphs(masked + text.slice(cursor)).replace(
+    new RegExp(`${marker}(\\d+)${marker}`, "g"),
+    (_token, index: string) => expectDefined(protectedText[Number(index)], "protected code text"),
+  );
 }
 
 function createDuplicateParagraphProjector(protectCode = true): TextProjector {

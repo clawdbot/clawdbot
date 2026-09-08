@@ -14,7 +14,7 @@ import { CommandLane } from "../../process/lanes.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture,
-  installSystemAgentPluginMetadataTestSnapshot,
+  createSystemAgentPluginMetadataTestSnapshot,
   type SystemAgentPluginMetadataTestSnapshot,
 } from "../../system-agent/system-agent.test-helpers.js";
 import type {
@@ -56,8 +56,17 @@ export function makeContext(sessions: Map<string, SystemAgentChatSession>): Gate
   return { systemAgentSessions: sessions } as unknown as GatewayRequestContext;
 }
 
+let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
+
 export function systemAgentHandler(method: keyof typeof systemAgentHandlers) {
-  return expectDefined(systemAgentHandlers[method], `systemAgentHandlers["${method}"] invariant`);
+  const handler = expectDefined(
+    systemAgentHandlers[method],
+    `systemAgentHandlers["${method}"] invariant`,
+  );
+  return (...args: Parameters<typeof handler>) =>
+    expectDefined(pluginMetadataSnapshot, "metadata fixture was not initialized").run(() =>
+      handler(...args),
+    );
 }
 
 export function systemAgentLane() {
@@ -76,7 +85,7 @@ export const verifiedConfig: OpenClawConfig = {
 export function useSystemAgentGatewayTestFixture() {
   let verifiedInference: SystemAgentVerifiedInferenceBinding | undefined;
   let verifiedInferenceDeps: SystemAgentVerifiedInferenceDeps | undefined;
-  let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
+
   const systemAgentTempDirs = useAutoCleanupTempDirTracker(afterEach);
   let previousAppliedHash: string | null = null;
 
@@ -122,14 +131,15 @@ export function useSystemAgentGatewayTestFixture() {
   }
 
   beforeAll(async () => {
-    pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot(verifiedConfig);
-    const fixture = await createSystemAgentVerifiedInferenceTestFixture(verifiedConfig);
+    pluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot(verifiedConfig);
+    const fixture = await pluginMetadataSnapshot.run(() =>
+      createSystemAgentVerifiedInferenceTestFixture(verifiedConfig),
+    );
     verifiedInference = fixture.binding;
     verifiedInferenceDeps = fixture.deps;
   });
 
   afterAll(() => {
-    pluginMetadataSnapshot?.restore();
     verifiedInference = undefined;
     verifiedInferenceDeps = undefined;
   });
@@ -178,7 +188,6 @@ export function useSystemAgentGatewayTestFixture() {
     resetPluginStateStoreForTests();
     resetCommandQueueStateForTest();
     vi.unstubAllEnvs();
-    pluginMetadataSnapshot?.rebindForCurrentEnv();
   });
 
   return {

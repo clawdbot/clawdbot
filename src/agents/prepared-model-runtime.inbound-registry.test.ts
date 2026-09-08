@@ -34,7 +34,7 @@ let state: OpenClawTestState;
 describe("prepared reply dispatch runtime", () => {
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "prepared-model-runtime" });
-    resetPreparedModelRuntimeHarness(state);
+    await resetPreparedModelRuntimeHarness(state);
   });
 
   it("returns undefined while the Gateway lifecycle is inactive", async () => {

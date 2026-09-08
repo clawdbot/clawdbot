@@ -194,7 +194,8 @@ async function fixture(
         const request = await decodeClaudeCliNodeRunParams(frame.paramsJSON);
         let seq = 0;
         endpoint = createNodeDuplexEndpoint({
-          sendFrame: (text) => {
+          sendFrame: (payload) => {
+            const text = JSON.stringify(payload);
             expect(Buffer.byteLength(text)).toBeLessThanOrEqual(16 * 1024);
             progress(text, seq++);
           },

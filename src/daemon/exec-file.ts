@@ -1,7 +1,8 @@
-/** Child-process wrapper used by daemon installers to preserve stdout/stderr on failure. */
+/** Native service control/inspection only; payload launchers own their full environment. */
 import { extractErrorCode } from "../infra/errors.js";
 import { createSanitizedCommandError } from "../process/exec-result.js";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
+import { resolveServiceManagerEnv } from "./service-process-env.js";
 
 export type ExecResult = Pick<SpawnResult, "stdout" | "stderr"> & {
   code: number;
@@ -25,7 +26,7 @@ export async function execFileUtf8(
     const { stdout, stderr, code, termination, signal } = await runCommandWithTimeout(
       [command, ...args],
       {
-        baseEnv: options.env,
+        baseEnv: resolveServiceManagerEnv(options.env),
         cwd: options.cwd,
         killSignal: options.killSignal,
         maxOutputBytes: 1024 * 1024,

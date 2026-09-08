@@ -1,4 +1,9 @@
 import {
+  getActiveDiagnosticTraceContext,
+  runWithDiagnosticTraceContext,
+  type DiagnosticTraceContext,
+} from "../infra/diagnostic-trace-context.js";
+import {
   captureGatewayRootWorkAdmissionContinuationScope,
   type GatewayRootWorkAdmissionContinuationScope,
 } from "../process/gateway-work-admission.js";
@@ -28,6 +33,7 @@ export type PendingInvoke = {
   deadlineAtMs?: number;
   hardTimer?: ReturnType<typeof setTimeout>;
   idleTimer?: ReturnType<typeof setTimeout>;
+  idleTraceContext?: DiagnosticTraceContext;
   idleTimeoutMs?: number;
   onProgress?: (chunk: string) => void;
   receivedProgress?: boolean;
@@ -304,33 +310,34 @@ export class NodeInvokeStreamController {
     if (pending.idleTimer) {
       clearTimeout(pending.idleTimer);
     }
+    pending.idleTraceContext = undefined;
     pending.removeAbortListener?.();
     pending.removeAbortListener = undefined;
     pending.admissionContinuation?.release();
     pending.admissionContinuation = undefined;
   }
 
-  private createIdleTimer(requestId: string, pending: PendingInvoke) {
-    return setTimeout(() => {
-      if (!this.takePending(requestId, pending)) {
-        return;
-      }
-      this.sendInvokeCancel(requestId, pending);
-      pending.resolve({
-        ok: false,
-        error: { code: "IDLE_TIMEOUT", message: "node invoke produced no progress" },
-      });
-    }, pending.idleTimeoutMs);
-  }
-
   private resetIdleTimer(requestId: string, pending: PendingInvoke): void {
     if (!pending.idleTimeoutMs) {
       return;
     }
-    if (pending.idleTimer) {
-      clearTimeout(pending.idleTimer);
-    }
-    pending.idleTimer = this.createIdleTimer(requestId, pending);
+    // Refresh retains the timer's first async scope; cancellation diagnostics
+    // must still belong to the latest progress frame that renewed its deadline.
+    pending.idleTraceContext = getActiveDiagnosticTraceContext();
+    pending.idleTimer =
+      pending.idleTimer?.refresh() ??
+      setTimeout(() => {
+        runWithDiagnosticTraceContext(pending.idleTraceContext, () => {
+          if (!this.takePending(requestId, pending)) {
+            return;
+          }
+          this.sendInvokeCancel(requestId, pending);
+          pending.resolve({
+            ok: false,
+            error: { code: "IDLE_TIMEOUT", message: "node invoke produced no progress" },
+          });
+        });
+      }, pending.idleTimeoutMs);
   }
 
   private sendInvokeCancel(requestId: string, pending: PendingInvoke): void {

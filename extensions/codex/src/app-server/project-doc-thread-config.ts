@@ -21,7 +21,8 @@ export function buildCodexProjectDocThreadConfig(config?: JsonObject): JsonObjec
 
 export type CodexNativeProjectInstructionSourceIdentitySnapshot = {
   identities: ReadonlyMap<string, Stats>;
-  environmentCwds: readonly string[];
+  candidatePaths: ReadonlySet<string>;
+  globalCandidatePaths: ReadonlySet<string>;
 };
 
 /**
@@ -31,6 +32,7 @@ export type CodexNativeProjectInstructionSourceIdentitySnapshot = {
  */
 export async function snapshotCodexNativeProjectInstructionSourceIdentities(params: {
   cwd: string;
+  codexHome?: string;
   config?: JsonObject;
   environmentSelection?: readonly CodexTurnEnvironmentParams[];
   readNativeConfig?: (cwd: string) => Promise<unknown>;
@@ -80,9 +82,21 @@ export async function snapshotCodexNativeProjectInstructionSourceIdentities(para
       }
     }
   }
+  const globalCandidatePaths = new Set<string>();
+  const configuredHome = params.codexHome;
+  if (configuredHome) {
+    const lexicalHome = path.resolve(configuredHome);
+    const resolvedHome = await fs.realpath(lexicalHome).catch(() => lexicalHome);
+    // The native home can retain its lexical spelling (for example, ~/.codex).
+    for (const codexHome of new Set([lexicalHome, resolvedHome])) {
+      for (const filename of CODEX_NATIVE_PROJECT_DOC_FILENAMES) {
+        globalCandidatePaths.add(path.join(codexHome, filename));
+      }
+    }
+  }
   const identities = new Map<string, CodexProjectDocIdentity>();
   await forEachWithConcurrency(
-    [...candidatePaths],
+    [...new Set([...candidatePaths, ...globalCandidatePaths])],
     CODEX_PROJECT_DOC_PREFLIGHT_CONCURRENCY,
     async (filePath) => {
       try {
@@ -96,7 +110,7 @@ export async function snapshotCodexNativeProjectInstructionSourceIdentities(para
       }
     },
   );
-  return { identities, environmentCwds };
+  return { identities, candidatePaths, globalCandidatePaths };
 }
 
 function isJsonObject(value: unknown): value is JsonObject {
@@ -116,7 +130,6 @@ export async function captureCodexNativeProjectInstructions(params: {
   sourceIdentitiesBeforeRequest: CodexNativeProjectInstructionSourceIdentitySnapshot;
 }): Promise<string | undefined> {
   const files = await readCodexNativeProjectInstructionFiles({
-    environmentCwds: params.sourceIdentitiesBeforeRequest.environmentCwds,
     instructionSources: params.instructionSources,
     maxBytes: params.config?.project_doc_max_bytes,
     sourceIdentitiesBeforeRequest: params.sourceIdentitiesBeforeRequest,
@@ -137,24 +150,25 @@ export async function captureCodexNativeProjectInstructions(params: {
 }
 
 async function readCodexNativeProjectInstructionFiles(params: {
-  environmentCwds: readonly string[];
   instructionSources: readonly string[];
   maxBytes?: unknown;
   sourceIdentitiesBeforeRequest: CodexNativeProjectInstructionSourceIdentitySnapshot;
 }): Promise<CodexNativeProjectInstructionFile[]> {
   let remaining = normalizeProjectDocMaxBytes(params.maxBytes);
-  if (remaining === 0) {
-    return [];
-  }
   const files: CodexNativeProjectInstructionFile[] = [];
   const seen = new Set<string>();
-  for (const source of params.instructionSources) {
+  for (const [index, source] of params.instructionSources.entries()) {
     const filePath = path.resolve(source);
-    if (
-      remaining === 0 ||
-      seen.has(filePath) ||
-      !params.environmentCwds.some((cwd) => isProjectInstructionSource(filePath, cwd))
-    ) {
+    // Native root threads report optional global instructions first, outside the
+    // project budget. Preserve a later project occurrence of the same file.
+    if (index === 0 && params.sourceIdentitiesBeforeRequest.globalCandidatePaths.has(filePath)) {
+      await readCodexProjectDoc(filePath, 0, params.sourceIdentitiesBeforeRequest);
+      continue;
+    }
+    if (!params.sourceIdentitiesBeforeRequest.candidatePaths.has(filePath)) {
+      throw new Error(`Codex-selected project instruction source was not preflighted: ${filePath}`);
+    }
+    if (remaining === 0 || seen.has(filePath)) {
       continue;
     }
     seen.add(filePath);
@@ -200,8 +214,8 @@ function resolveCodexProjectDocCandidateFilenames(config?: JsonObject): string[]
   const configured = config?.project_doc_fallback_filenames;
   if (Array.isArray(configured)) {
     for (const value of configured) {
-      if (typeof value === "string" && value.length > 0) {
-        filenames.add(value);
+      if (typeof value === "string" && value.trim()) {
+        filenames.add(value.trim());
       }
     }
   }
@@ -309,14 +323,6 @@ async function forEachWithConcurrency<T>(
         }
       }
     }),
-  );
-}
-
-function isProjectInstructionSource(filePath: string, cwd: string): boolean {
-  const relative = path.relative(path.dirname(filePath), cwd);
-  return (
-    relative === "" ||
-    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
   );
 }
 

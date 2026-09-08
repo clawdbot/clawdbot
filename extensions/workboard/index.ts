@@ -10,6 +10,7 @@ import {
   syncWorkboardAgentEnded,
   syncWorkboardSubagentEnded,
 } from "./src/lifecycle-sync.js";
+import { registerWorkboardStoreLifecycle } from "./src/store-lifecycle.js";
 import { WorkboardStore } from "./src/store.js";
 import { createWorkboardTools } from "./src/tools.js";
 import {
@@ -23,20 +24,7 @@ export default definePluginEntry({
   description: "Dashboard workboard for agent-owned issues and sessions.",
   register(api) {
     const store = WorkboardStore.openSqlite();
-    api.lifecycle.registerRuntimeLifecycle({
-      id: "workboard-sqlite-store",
-      cleanup: ({ reason, sessionKey, runId }) => {
-        // Session cleanup shares this hook, but only registry retirement owns the whole store.
-        if (
-          sessionKey === undefined &&
-          runId === undefined &&
-          (reason === "disable" || reason === "restart")
-        ) {
-          return store.close();
-        }
-        return undefined;
-      },
-    });
+    const changeEvents = createWorkboardChangeEventService(store);
     const automationNudge = createWorkboardAutomationNudgeService({
       store,
       gateway: api.runtime.gateway,
@@ -46,6 +34,11 @@ export default definePluginEntry({
       worktrees: api.runtime.worktrees,
       readSessions: async (options) =>
         await readWorkboardLifecycleSessions(api.runtime.gateway, options),
+    });
+    registerWorkboardStoreLifecycle(api, store, () => {
+      changeEvents.stop();
+      automationNudge.stop();
+      lifecycleSync.stop();
     });
     api.session.controls.registerControlUiDescriptor({
       surface: "tab",
@@ -76,7 +69,7 @@ export default definePluginEntry({
     });
     registerWorkboardGatewayMethods({ api, store });
     registerWorkboardCommand({ api, store });
-    api.registerService(createWorkboardChangeEventService(store));
+    api.registerService(changeEvents);
     api.registerService(automationNudge);
     api.registerService(lifecycleSync);
     api.on("gateway_start", () => lifecycleSync.onGatewayStart());

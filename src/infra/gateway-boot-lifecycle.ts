@@ -1,23 +1,26 @@
 // Persists gateway boot outcomes for supervisor crash-loop decisions.
 import { randomUUID } from "node:crypto";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
-import {
-  formatLegacyAgentMediaMigrationRequiredMessage,
-  GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
-} from "../state/openclaw-agent-db-migration-required.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { pathMayExistSync } from "./path-existence.js";
+import { GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON } from "./startup-maintenance-required.js";
+
+// Retain the released media-only tag while its bounded boot history expires.
+const maintenanceStartupReasons = [
+  GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON,
+  "gateway.agent_media_migration_required",
+];
 
 // Supervisors usually restart immediately. Three unclean boots in this window
 // means the gateway should come up without auto-start sidecars so operators
@@ -112,6 +115,12 @@ export function inspectGatewayCrashLoopBreaker(
       kysely
         .selectFrom("gateway_boot_lifecycle")
         .select((eb) => eb.fn.countAll<number>().as("count"))
+        .where((eb) =>
+          eb.or([
+            eb("startup_reason", "is", null),
+            eb("startup_reason", "not in", maintenanceStartupReasons),
+          ]),
+        )
         .where((eb) =>
           eb.or([
             eb.and([eb("completed_at_ms", "is", null), eb("started_at_ms", ">=", windowStartMs)]),
@@ -274,53 +283,31 @@ export function completeGatewayBootLifecycle(
   }
 }
 
-export function repairGatewayAgentMediaMigrationStartupFailures(params: {
-  databasePaths: readonly string[];
-  env?: NodeJS.ProcessEnv;
-}): number {
-  if (params.databasePaths.length === 0) {
+export function repairGatewayMaintenanceStartupFailures(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  if (!pathMayExistSync(resolveOpenClawStateSqlitePath(env))) {
     return 0;
   }
   try {
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
         const kysely = getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db);
-        const legacyMessages = [
-          ...new Set(
-            params.databasePaths.flatMap((pathname) =>
-              Array.from({ length: OPENCLAW_AGENT_SCHEMA_VERSION }, (_, schemaVersion) => {
-                const message = formatLegacyAgentMediaMigrationRequiredMessage(
-                  pathname,
-                  schemaVersion,
-                );
-                return [
-                  message,
-                  truncateUtf16Safe(message, GATEWAY_BOOT_REASON_MAX_UTF16_CODE_UNITS),
-                ];
-              }).flat(),
-            ),
-          ),
-        ];
         const result = executeSqliteQuerySync(
           db,
           kysely
             .updateTable("gateway_boot_lifecycle")
             .set({ outcome: "startup_failure_repaired" })
             .where("outcome", "=", "startup_failed")
-            .where((eb) =>
-              eb.or([
-                eb("startup_reason", "=", GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON),
-                eb("reason", "in", legacyMessages),
-              ]),
-            ),
+            .where("startup_reason", "in", maintenanceStartupReasons),
         );
         return Number(result.numAffectedRows ?? 0);
       },
-      { env: params.env ?? process.env },
+      { env },
     );
   } catch (err) {
     gatewayLifecycleLog.warn(
-      `failed to repair media-migration startup history; fail-open: ${String(err)}`,
+      `failed to repair maintenance startup history; fail-open: ${String(err)}`,
     );
     return 0;
   }

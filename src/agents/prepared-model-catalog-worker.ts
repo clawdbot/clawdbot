@@ -4,6 +4,7 @@ import {
   serializeConfigResolutionFacts,
 } from "../config/resolution-facts.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
+import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { WorkerTaskError, WorkerTaskPool } from "../infra/worker-task-pool.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
@@ -22,11 +23,16 @@ import {
   type PreparedModelRuntimeAuth,
   type PreparedModelRuntimeAuthScope,
 } from "./prepared-model-runtime-auth.js";
-import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
+import type {
+  PreparedModelRuntimeAgentFacts,
+  PreparedModelRuntimeCatalogFacts,
+} from "./prepared-model-runtime.catalog-contract.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.facts.js";
 import { markPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
+import { registerPreparedModelRuntimeClose } from "./prepared-model-runtime.lifecycle.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
+import type { AuthStorageData } from "./sessions/auth-storage.js";
 
 export type PreparedModelCatalogWorkerInput = Readonly<{
   kind: "catalog";
@@ -58,6 +64,8 @@ export type PreparedModelWorkerResult =
       kind: "catalog";
       generationFingerprint: string;
       snapshot: ModelCatalogSnapshot;
+      configuredRuntimeModels: PreparedModelRuntimeCatalogFacts["configuredRuntimeModels"];
+      credentials: Readonly<AuthStorageData>;
       authStore: AuthProfileStore;
       authModes: PreparedAgentCredentialModes;
     }>
@@ -190,7 +198,9 @@ export function createPreparedModelCatalogWorkerInput(params: {
 
 type PreparedModelCatalogWorker = Readonly<{
   loadAuth: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
-  loadCatalog: () => Promise<ModelCatalogSnapshot>;
+  loadCatalog: () => Promise<
+    Pick<PreparedModelRuntimeCatalogFacts, "modelCatalog" | "configuredRuntimeModels">
+  >;
 }>;
 
 export function createPreparedModelCatalogWorker(
@@ -208,6 +218,7 @@ export function createPreparedModelCatalogWorker(
     );
   let generationPoll: NodeJS.Timeout | undefined;
   let stoppedError: Error | undefined;
+  let releaseProcessLifetime: (() => void) | undefined;
   let expectedFingerprint: string | undefined;
   const captures = new Map<AbortController, Promise<PreparedSyntheticAuthFacts>>();
   const assertCurrent = () => {
@@ -229,11 +240,7 @@ export function createPreparedModelCatalogWorker(
     );
   const createPool = () =>
     new WorkerTaskPool<PreparedModelWorkerRequest, PreparedModelWorkerResult>({
-      workerUrl: resolveRuntimeWorkerUrl({
-        currentModuleUrl: import.meta.url,
-        sourceWorkerName: "prepared-model-catalog.worker",
-        distWorkerPath: "agents/prepared-model-catalog.worker.js",
-      }),
+      workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog),
       maxWorkers: 1,
       // Recreating this worker would import changed plugin code under the old generation.
       // Only the lifecycle owner may retire it; crashes close the generation permanently.
@@ -267,6 +274,8 @@ export function createPreparedModelCatalogWorker(
     // Native probes live in the parent; drain them before retiring the compute worker.
     await Promise.allSettled(captures.values());
     await pool?.close(stoppedError);
+    releaseProcessLifetime?.();
+    releaseProcessLifetime = undefined;
   };
   const request = async (
     command: PreparedModelWorkerCommand,
@@ -280,6 +289,7 @@ export function createPreparedModelCatalogWorker(
     );
     try {
       assertCurrent();
+      releaseProcessLifetime ??= registerPreparedModelRuntimeClose(stop);
       generationPoll ??= setInterval(() => {
         if (!params.isCurrent()) {
           void stop(superseded());
@@ -360,8 +370,9 @@ export function createPreparedModelCatalogWorker(
       setPreparedModelFullCatalogAuth(modelCatalog, {
         authStore: message.authStore,
         authModes: message.authModes,
+        credentials: message.credentials,
       });
-      return modelCatalog;
+      return { modelCatalog, configuredRuntimeModels: message.configuredRuntimeModels };
     },
     loadAuth: async ({ providerIds, profileIds }) => {
       const normalizedProviderIds = [...new Set(providerIds)].toSorted((left, right) =>

@@ -461,6 +461,7 @@ describe("ollama setup", () => {
     const modelIds = models?.map((m) => m.id);
 
     expect(modelIds).toEqual(["minimax-m2.7", "minimax-m3", "kimi-k3", "glm-5.1", "glm-5.2"]);
+    expect(models?.every((model) => model.contextTokens === undefined)).toBe(true);
     expect(models).toEqual(
       expect.arrayContaining(
         [
@@ -531,7 +532,7 @@ describe("ollama setup", () => {
       (m) => m.id === "llama3:8b",
     );
 
-    expect(model?.contextWindow).toBe(65536);
+    expect(model).toMatchObject({ contextWindow: 65_536, contextTokens: 32_768 });
     expect(result.defaultModel).toBe("ollama/llama3:8b");
   });
 

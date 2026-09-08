@@ -238,23 +238,23 @@ function formatStartupMigrationCheckpoint(params: {
 function readMigrationCheckpoints(
   env: NodeJS.ProcessEnv,
   metaKeys: MigrationCheckpointMetaKey[],
-): Array<string | null> {
+): Array<{ metaKey: string; appVersion: string | null }> {
   return withStartupMigrationCheckpointDatabase(env, (db) => {
     const stateDb = getNodeSqliteKysely<StartupMigrationCheckpointDatabase>(db);
     const result = executeSqliteQuerySync(
       db,
       stateDb
         .selectFrom("schema_meta")
-        .select("app_version as appVersion")
+        .select(["meta_key as metaKey", "app_version as appVersion"])
         .where("meta_key", "in", metaKeys),
     );
-    return result.rows.map((row) => row.appVersion);
+    return result.rows;
   });
 }
 
 export function readStartupMigrationVersion(env: NodeJS.ProcessEnv = process.env): string | null {
   return (
-    readMigrationCheckpoints(env, [STARTUP_MIGRATION_META_KEY])[0]?.split(
+    readMigrationCheckpoints(env, [STARTUP_MIGRATION_META_KEY])[0]?.appVersion?.split(
       STARTUP_MIGRATION_BUILD_SEPARATOR,
       1,
     )[0] ?? null
@@ -292,10 +292,9 @@ export function hasActiveStartupMigrationLease(
   );
 }
 
-function needsMigrationCheckpoint(
-  metaKeys: MigrationCheckpointMetaKey[],
+export function readMigrationCheckpointStatus(
   params: MigrationCheckpointParams = {},
-): boolean {
+): "stale" | "state-current" | "startup-current" {
   const env = params.env ?? process.env;
   const buildIdentity =
     params.buildIdentity === undefined
@@ -307,20 +306,18 @@ function needsMigrationCheckpoint(
     version: params.version ?? VERSION,
   });
   if (checkpoint === null) {
-    return true;
+    return "stale";
   }
-  return !readMigrationCheckpoints(env, metaKeys).includes(checkpoint);
-}
-
-export function needsStartupMigrationCheckpoint(params: MigrationCheckpointParams = {}): boolean {
-  return needsMigrationCheckpoint([STARTUP_MIGRATION_META_KEY], params);
-}
-
-export function needsStateMigrationCheckpoint(params: MigrationCheckpointParams = {}): boolean {
   // A legacy gateway checkpoint also proves state migrations completed. The inverse is false:
   // state-only commands never certify gateway plugin convergence.
-  // Read both keys in one admission: each connection validates the whole database.
-  return needsMigrationCheckpoint([STATE_MIGRATION_META_KEY, STARTUP_MIGRATION_META_KEY], params);
+  const current = readMigrationCheckpoints(env, [
+    STATE_MIGRATION_META_KEY,
+    STARTUP_MIGRATION_META_KEY,
+  ]).filter((row) => row.appVersion === checkpoint);
+  if (current.some((row) => row.metaKey === STARTUP_MIGRATION_META_KEY)) {
+    return "startup-current";
+  }
+  return current.length > 0 ? "state-current" : "stale";
 }
 
 export function acquireStartupMigrationLease(

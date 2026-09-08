@@ -230,10 +230,10 @@ openclaw_e2e_print_log() {
   fi
   if ! { tail -c "$max_bytes" "$path" 2>/dev/null | tail -n "$max_lines" || tail -n "$max_lines" "$path" || true; } | \
     node --input-type=module -e '
-      import fs from "node:fs";
+      import { text } from "node:stream/consumers";
       import { pathToFileURL } from "node:url";
       const { redactSensitiveText } = await import(pathToFileURL(process.argv[1]).href);
-      process.stdout.write(redactSensitiveText(fs.readFileSync(0, "utf8"), { mode: "tools" }));
+      process.stdout.write(redactSensitiveText(await text(process.stdin), { mode: "tools" }));
     ' "$redactor_module"; then
     echo "[failure log omitted: canonical redaction failed]"
   fi

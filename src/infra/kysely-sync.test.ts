@@ -7,6 +7,7 @@ import { withTestTimeout } from "../../test/helpers/promise.js";
 import { registerNodeSqliteKyselyQueryErrorHandler } from "./kysely-sync-cache-state.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
+  compileSqliteQueryBindings,
   enableNodeSqliteKyselyStatementCache,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -90,11 +91,11 @@ describe("kysely sync helpers", () => {
   it("binds changing values without confusing repeated bindings and literal parameters", () => {
     database = new DatabaseSync(":memory:");
     const db = getNodeSqliteKysely<SyncHelperTestDatabase>(database);
-    const select = prepareSqliteQuerySync<{
+    const { compiled, bind } = compileSqliteQueryBindings<{
       name: string | null;
       bytes: Uint8Array;
       count: bigint;
-    }>(database, (parameter) => {
+    }>((parameter) => {
       const name = parameter((input) => input.name);
       return db.selectNoFrom([
         name.as("name"),
@@ -104,9 +105,10 @@ describe("kysely sync helpers", () => {
         parameter((input) => input.count).as("count"),
       ]);
     });
+    const select = database.prepare(compiled.sql);
     for (const name of ["literal", "'); DROP TABLE items; --", null, "λ🦞"]) {
       const bytes = new Uint8Array([1, 2, 255]);
-      expect(select({ name, bytes, count: 42n }).rows).toEqual([
+      expect(select.all(...bind({ name, bytes, count: 42n }))).toEqual([
         { name, repeated: name, literal: "literal", bytes, count: 42 },
       ]);
     }
@@ -397,13 +399,15 @@ describe("kysely sync helpers", () => {
     expect(executeSqliteQuerySync(database, lengthOf("small")).rows).toEqual([{ value: 5 }]);
     expect(prepares.calls()).toBe(2);
 
-    const oversized = "x".repeat(64 * 1024 + 1);
-    expect(executeSqliteQuerySync(database, lengthOf(oversized)).rows).toEqual([
-      { value: oversized.length },
-    ]);
-    expect(prepares.calls()).toBe(3);
-    expect(executeSqliteQuerySync(database, lengthOf("small")).rows).toEqual([{ value: 5 }]);
-    expect(prepares.calls()).toBe(3);
+    for (const oversized of ["x".repeat(64 * 1024 + 1), "漢".repeat(24 * 1024)]) {
+      const before = prepares.calls();
+      expect(executeSqliteQuerySync(database, lengthOf(oversized)).rows).toEqual([
+        { value: oversized.length },
+      ]);
+      expect(prepares.calls()).toBe(before + 1);
+      expect(executeSqliteQuerySync(database, lengthOf("small")).rows).toEqual([{ value: 5 }]);
+      expect(prepares.calls()).toBe(before + 1);
+    }
 
     const oversizedSql = db.selectNoFrom(
       /* kysely-allow-raw: admission-gate test needs an oversized SQL text, only reachable via raw. */
@@ -411,7 +415,7 @@ describe("kysely sync helpers", () => {
     );
     expect(executeSqliteQuerySync(database, oversizedSql).rows).toEqual([{ value: 1 }]);
     expect(executeSqliteQuerySync(database, oversizedSql).rows).toEqual([{ value: 1 }]);
-    expect(prepares.calls()).toBe(5);
+    expect(prepares.calls()).toBe(6);
   });
 
   it("invalidates prepared statements when the database is deserialized", () => {

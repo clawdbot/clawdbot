@@ -11,12 +11,13 @@ async function captureProjectInstructions(
   params: Omit<
     Parameters<typeof captureCodexNativeProjectInstructions>[0],
     "sourceIdentitiesBeforeRequest"
-  >,
+  > & { codexHome?: string },
 ) {
   return captureCodexNativeProjectInstructions({
     ...params,
     sourceIdentitiesBeforeRequest: await snapshotCodexNativeProjectInstructionSourceIdentities({
       cwd: params.cwd,
+      codexHome: params.codexHome,
       config: params.config,
     }),
   });
@@ -26,8 +27,8 @@ describe("Codex native project-document snapshots", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let workspaceDir: string;
 
-  beforeEach(() => {
-    workspaceDir = tempDirs.make("codex-project-doc-snapshot-");
+  beforeEach(async () => {
+    workspaceDir = await fs.realpath(tempDirs.make("codex-project-doc-snapshot-"));
   });
 
   it("preserves Codex source selection and order while excluding global instructions", async () => {
@@ -48,6 +49,7 @@ describe("Codex native project-document snapshots", () => {
     await expect(
       captureProjectInstructions({
         cwd,
+        codexHome: path.dirname(globalInstructions),
         instructionSources: [globalInstructions, rootFallback, packageOverride, cwdFallback],
         config: { project_doc_fallback_filenames: ["PROJECT.md", "WORKSPACE.md"] },
       }),
@@ -71,6 +73,77 @@ describe("Codex native project-document snapshots", () => {
       ].join("\n"),
     );
   });
+
+  it.each([
+    { filename: "AGENTS.md", linkedHome: false, reportedViaAlias: false },
+    { filename: "AGENTS.override.md", linkedHome: false, reportedViaAlias: false },
+    { filename: "AGENTS.md", linkedHome: true, reportedViaAlias: false },
+    { filename: "AGENTS.md", linkedHome: true, reportedViaAlias: true },
+  ])(
+    "keeps global $filename outside the project budget (linked: $linkedHome, alias: $reportedViaAlias)",
+    async ({ filename, linkedHome, reportedViaAlias }) => {
+      const codexHome = path.join(workspaceDir, ".codex");
+      const globalInstructions = path.join(codexHome, filename);
+      const projectInstructions = path.join(workspaceDir, "AGENTS.md");
+      await fs.mkdir(codexHome);
+      await fs.writeFile(globalInstructions, "global policy that exceeds the project budget");
+      await fs.writeFile(projectInstructions, "project policy");
+      const homeAlias = path.join(workspaceDir, "home-alias");
+      if (linkedHome) {
+        await fs.symlink(codexHome, homeAlias, "junction");
+      }
+
+      const captured = await captureProjectInstructions({
+        cwd: workspaceDir,
+        codexHome: linkedHome ? homeAlias : codexHome,
+        instructionSources: [
+          reportedViaAlias ? path.join(homeAlias, filename) : globalInstructions,
+          projectInstructions,
+        ],
+        config: {
+          project_doc_fallback_filenames: [`.codex/${filename}`],
+          project_doc_max_bytes: 14,
+        },
+      });
+
+      expect(captured).toContain("project policy");
+      expect(captured).not.toContain("global policy");
+    },
+  );
+
+  it("retains a selected project occurrence of the global instruction file", async () => {
+    const codexHome = path.join(workspaceDir, ".codex");
+    const instructions = path.join(codexHome, "AGENTS.md");
+    await fs.mkdir(codexHome);
+    await fs.writeFile(instructions, "shared global and project policy");
+
+    const captured = await captureProjectInstructions({
+      cwd: workspaceDir,
+      codexHome,
+      instructionSources: [instructions, instructions],
+      config: { project_doc_fallback_filenames: [".codex/AGENTS.md"] },
+    });
+
+    expect(captured?.match(/shared global and project policy/gu)).toHaveLength(1);
+  });
+
+  it.each([4, 128 * 1024])(
+    "rejects a selected source outside preflight even with a %i-byte budget",
+    async (maxBytes) => {
+      const projectInstructions = path.join(workspaceDir, "AGENTS.md");
+      const unknownInstructions = path.join(workspaceDir, "UNSELECTED.md");
+      await fs.writeFile(projectInstructions, "known project policy");
+      await fs.writeFile(unknownInstructions, "unknown project policy");
+
+      await expect(
+        captureProjectInstructions({
+          cwd: workspaceDir,
+          instructionSources: [projectInstructions, unknownInstructions],
+          config: { project_doc_max_bytes: maxBytes },
+        }),
+      ).rejects.toThrow("was not preflighted");
+    },
+  );
 
   it("does not rediscover project files omitted by Codex", async () => {
     const cwd = path.join(workspaceDir, "nested");
@@ -99,23 +172,37 @@ describe("Codex native project-document snapshots", () => {
     );
   });
 
-  it("preflights fallback candidates selected by the effective native config", async () => {
+  it.each([
+    { label: "plain filename", filename: "WORKFLOW.md", configured: "WORKFLOW.md" },
+    {
+      label: "configured subpath",
+      filename: ".config/WORKFLOW.md",
+      configured: ".config/WORKFLOW.md",
+    },
+    { label: "padded filename", filename: "WORKFLOW.md", configured: "  WORKFLOW.md\t" },
+    {
+      label: "padded configured subpath",
+      filename: ".config/WORKFLOW.md",
+      configured: " \t.config/WORKFLOW.md\n",
+    },
+  ])("preflights the native-configured $label", async ({ filename, configured }) => {
     const cwd = path.join(workspaceDir, "packages", "worker");
     const rootMarker = path.join(workspaceDir, ".workspace-root");
-    const instructions = path.join(workspaceDir, "WORKFLOW.md");
+    const instructions = path.join(workspaceDir, filename);
     await fs.mkdir(cwd, { recursive: true });
+    await fs.mkdir(path.dirname(instructions), { recursive: true });
     await fs.writeFile(rootMarker, "");
     await fs.writeFile(instructions, "native configured authority");
     const readNativeConfig = vi.fn(async () => ({
       config: {
-        project_doc_fallback_filenames: ["WORKFLOW.md"],
+        project_doc_fallback_filenames: ["", " \t", configured],
         project_root_markers: [".workspace-root"],
       },
       layers: [
         {
           name: { type: "user" },
           config: {
-            project_doc_fallback_filenames: ["WORKFLOW.md"],
+            project_doc_fallback_filenames: ["", " \t", configured],
             project_root_markers: [".workspace-root"],
           },
         },
@@ -197,15 +284,37 @@ describe("Codex native project-document snapshots", () => {
     );
   });
 
-  it("fails closed if a Codex-selected source disappears before capture", async () => {
-    const missingInstructions = path.join(workspaceDir, "AGENTS.md");
+  it.each(["AGENTS.md", ".config/WORKFLOW.md"])(
+    "fails closed if selected %s disappears before capture",
+    async (filename) => {
+      const missingInstructions = path.join(workspaceDir, filename);
+
+      await expect(
+        captureProjectInstructions({
+          cwd: workspaceDir,
+          instructionSources: [missingInstructions],
+          config: { project_doc_fallback_filenames: [filename] },
+        }),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it("rejects a configured subpath first created after preflight", async () => {
+    const instructions = path.join(workspaceDir, ".config", "WORKFLOW.md");
+    const config = { project_doc_fallback_filenames: [".config/WORKFLOW.md"] };
+    const sourceIdentitiesBeforeRequest =
+      await snapshotCodexNativeProjectInstructionSourceIdentities({ cwd: workspaceDir, config });
+    await fs.mkdir(path.dirname(instructions));
+    await fs.writeFile(instructions, "late project instructions");
 
     await expect(
-      captureProjectInstructions({
+      captureCodexNativeProjectInstructions({
         cwd: workspaceDir,
-        instructionSources: [missingInstructions],
+        instructionSources: [instructions],
+        config,
+        sourceIdentitiesBeforeRequest,
       }),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    ).rejects.toThrow("was not present before native startup");
   });
 
   it("fails closed when a selected local source changed after native startup began", async () => {

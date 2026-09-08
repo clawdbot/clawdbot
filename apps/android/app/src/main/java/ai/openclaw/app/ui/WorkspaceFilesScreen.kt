@@ -14,6 +14,7 @@ import android.content.Context
 import android.content.Intent
 import android.text.format.Formatter
 import android.util.Base64
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -432,23 +433,24 @@ private fun shareWorkspaceFile(
 ) {
   // A FileProvider grant can outlive the share sheet. Unique directories keep
   // a later same-basename export from replacing bytes behind an older grant.
-  val directory = File(context.cacheDir, "workspace-files/${UUID.randomUUID()}").apply { mkdirs() }
-  // Server names are plain basenames; keep the guard so a hostile gateway
-  // cannot steer the temp write outside the export directory.
-  val safeName = file.name.substringAfterLast('/').ifEmpty { "file" }
-  val target = File(directory, safeName)
-  if (file.isBase64) {
-    val bytes = runCatching { Base64.decode(file.content, Base64.DEFAULT) }.getOrNull() ?: return
-    target.writeBytes(bytes)
-  } else {
-    target.writeText(file.content)
+  val directory = File(context.cacheDir, "workspace-files/${UUID.randomUUID()}")
+  try {
+    directory.mkdirs()
+    // Server names are plain basenames; keep the guard so a hostile gateway
+    // cannot steer the temp write outside the export directory.
+    val target = File(directory, file.name.substringAfterLast('/').ifEmpty { "file" })
+    target.writeBytes(if (file.isBase64) Base64.decode(file.content, Base64.DEFAULT) else file.content.toByteArray())
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", target)
+    val send =
+      Intent(Intent.ACTION_SEND).apply {
+        type = file.mimeType.ifEmpty { "application/octet-stream" }
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+      }
+    context.startActivity(Intent.createChooser(send, file.name))
+  } catch (_: Exception) {
+    // Only this unpublished attempt is disposable; older URI grants still own their files.
+    runCatching { directory.deleteRecursively() }
+    Toast.makeText(context, nativeString("Could not share file"), Toast.LENGTH_SHORT).show()
   }
-  val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", target)
-  val send =
-    Intent(Intent.ACTION_SEND).apply {
-      type = file.mimeType.ifEmpty { "application/octet-stream" }
-      putExtra(Intent.EXTRA_STREAM, uri)
-      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    }
-  context.startActivity(Intent.createChooser(send, file.name))
 }

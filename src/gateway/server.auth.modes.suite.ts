@@ -60,14 +60,13 @@ export function registerAuthModesSuite(): void {
       ws.close();
     });
 
-    test("rejects token credentials in password mode", async () => {
+    test("accepts the configured password in the token field", async () => {
       const ws = await openWs(port);
       const res = await connectReq(ws, {
         skipDefaultAuth: true,
         token: "secret",
       });
-      expect(res.ok).toBe(false);
-      expect(res.error?.message ?? "").toContain("unauthorized");
+      expect(res.ok).toBe(true);
       ws.close();
     });
 
@@ -109,6 +108,7 @@ export function registerAuthModesSuite(): void {
       const ws = await openWs(port);
       const res = await connectReq(ws, { token: "secret" });
       expect(res.ok).toBe(true);
+      expect(res.payload).toMatchObject({ auth: { method: "token" } });
       ws.close();
     });
 
@@ -120,14 +120,13 @@ export function registerAuthModesSuite(): void {
       ws.close();
     });
 
-    test("rejects password credentials in token mode", async () => {
+    test("accepts the configured token in the password field", async () => {
       const ws = await openWs(port);
       const res = await connectReq(ws, {
         skipDefaultAuth: true,
         password: "secret", // pragma: allowlist secret
       });
-      expect(res.ok).toBe(false);
-      expect(res.error?.message ?? "").toContain("unauthorized");
+      expect(res.ok).toBe(true);
       ws.close();
     });
 
@@ -208,15 +207,14 @@ export function registerAuthModesSuite(): void {
       {
         mode: "token" as const,
         envKey: "OPENCLAW_GATEWAY_TOKEN" as const,
-        expected:
-          "gateway auth mode is token, but no token was configured (set gateway.auth.token or OPENCLAW_GATEWAY_TOKEN)",
+        expected: "gateway auth token is blank",
       },
       {
         mode: "password" as const,
         envKey: "OPENCLAW_GATEWAY_PASSWORD" as const,
-        expected: "gateway auth mode is password, but no password was configured",
+        expected: "gateway auth password is blank",
       },
-    ])("rejects $mode mode before startup when its credential is missing", async (testCase) => {
+    ])("rejects $mode mode before startup when its credential is empty", async (testCase) => {
       const previous = process.env[testCase.envKey];
       delete process.env[testCase.envKey];
       // Use an explicit empty override so suite-level credentials cannot satisfy

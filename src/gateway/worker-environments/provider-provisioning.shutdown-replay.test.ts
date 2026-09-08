@@ -133,17 +133,18 @@ describe("worker node provisioning shutdown replay", () => {
         isCurrentNodePlacement: () => true,
         workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
         runLocalBarrier: async ({ startDispatch }) => startDispatch(),
-        runRecoveryBarrier: async ({ run }) => await run("/gateway/workspace"),
+        runRecoveryBarrier: async ({ run }) =>
+          await run({ kind: "local", path: "/gateway/workspace" }),
         runActivationBarrier: async ({ activate }) => activate(),
         runMoveBarrier: async ({ begin }) => begin(),
         resolveMoveDestination: async () => undefined,
         runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
         runReclaimBarrier: async ({ begin, reclaim }) =>
-          await reclaim("/gateway/workspace", begin()),
+          await reclaim({ kind: "local", path: "/gateway/workspace" }, begin()),
         runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-        resolveWorkspacePath: async () => "/gateway/workspace",
+        resolveWorkspace: async () => ({ kind: "local", path: "/gateway/workspace" }),
         reportWorkspaceResultConflict: async () => {},
-        resolveWorkspaceResultConflict: async () => undefined,
+        resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
       });
     const firstDispatch = createDispatch(first);
     const uninstallFirstGuard = first.installReconcileEnvironmentGuard(

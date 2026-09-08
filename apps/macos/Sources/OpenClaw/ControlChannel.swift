@@ -777,10 +777,7 @@ final class ControlChannel {
                 params: ["keys": OpenClawKit.AnyCodable(["ui.accent"])],
                 timeoutMs: 8000,
                 ifCurrentServerLease: serverLease)
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  json["status"] as? String == "ok"
-            else { return nil }
-            return ColorHexSupport.profileAccentHex(entries: json["entries"] as? [String: Any])
+            return try GatewayUserPreferences.decodeProfileAccentHex(data)
         } catch {
             return nil
         }

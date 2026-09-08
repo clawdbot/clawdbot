@@ -173,7 +173,7 @@ class MockWebSocket {
   }
 }
 
-vi.mock("ws", () => ({
+vi.mock("../../packages/gateway-client/src/websocket.js", () => ({
   WebSocket: MockWebSocket,
 }));
 

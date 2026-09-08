@@ -1,6 +1,9 @@
 // Model auth status methods report provider credential health, profile expiry,
 // usage windows, cleanup actions, and auth-state refreshes.
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  findNormalizedProviderKey,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
@@ -64,6 +67,7 @@ import type {
   ModelProviderCapability,
 } from "./models-auth-status.types.js";
 import { getProviderUsageRuntimeSnapshot } from "./provider-usage-runtime.js";
+import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 export type {
@@ -290,6 +294,7 @@ function mapProvider(
   apiKeys: ReadonlyMap<string, ModelAuthStatusProvider["apiKey"]>,
   logoutProfileIds: ReadonlySet<string>,
   configBoundProfileIds: ReadonlySet<string>,
+  configBoundAuthProviders: ReadonlySet<string>,
   externalProfileIds: ReadonlySet<string>,
   externalCliProfileIds: ReadonlySet<string>,
   includeProfileIdentity: boolean,
@@ -303,13 +308,17 @@ function mapProvider(
     providerAuthKey: authProviderKey,
   });
   const runtimeStore: RuntimeAuthProfileStore = store;
+  const storedOrderKey =
+    findNormalizedProviderKey(store.order, authProviderKey) ??
+    findNormalizedProviderKey(store.order, providerKey);
+  const localOrderStored =
+    storedOrderKey !== undefined &&
+    runtimeStore.runtimeLocalOrderProviderIds?.includes(storedOrderKey);
   const localProfileIds = new Set(
     runtimeStore.runtimeLocalProfileIds ??
       Object.keys(store.profiles).filter((profileId) => !externalProfileIds.has(profileId)),
   );
-  const providerOrderLocked = prov.profiles.some((profile) =>
-    configBoundProfileIds.has(profile.profileId),
-  );
+  const providerOrderLocked = configBoundAuthProviders.has(authProviderKey);
   const configuredOrderLocked = profileOrder.order !== undefined && !profileOrder.fromStore;
   const usageProfile =
     prov.profiles.find((profile) => profile.type === "oauth" || profile.type === "token") ??
@@ -380,7 +389,7 @@ function mapProvider(
       };
     }),
     ...(profileOrder.order !== undefined ? { profileOrder: profileOrder.order } : {}),
-    ...(profileOrder.fromStore ? { profileOrderStored: true } : {}),
+    ...(profileOrder.fromStore && localOrderStored ? { profileOrderStored: true } : {}),
     ...(providerOrderLocked
       ? { profileOrderLocked: "provider-config" as const }
       : configuredOrderLocked
@@ -472,7 +481,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selection.message));
       return;
     }
-    try {
+    await respondUnavailableOnThrow(respond, async () => {
       const cfg = context.getRuntimeConfig();
       const scope = resolveModelAuthAgentScope(cfg, params.agentId);
       if (!scope.ok) {
@@ -558,9 +567,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         abortedRunIds,
       };
       respond(true, result, undefined);
-    } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
-    }
+    });
   },
   "models.authStatus": async ({ params, respond, context, client }) => {
     const now = Date.now();
@@ -574,7 +581,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           ? tryResolveAmbientOwnerAgentId(cfg)
           : params.agentId,
       );
-    try {
+    await respondUnavailableOnThrow(respond, async () => {
       let cfg = context.getRuntimeConfig();
       let scope = resolveScope(cfg);
       if (!scope.ok) {
@@ -691,6 +698,13 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           .map(([profileId]) => profileId),
       );
       const configBoundProfileIds = resolveConfigBoundProfileIds(cfg, store, authAliasLookupParams);
+      // Priority mutations cover the whole auth owner, including profiles under aliases.
+      // Every alias must advertise that same lock while profile source/logout stays individual.
+      const configBoundAuthProviders = new Set(
+        Object.entries(store.profiles)
+          .filter(([profileId]) => configBoundProfileIds.has(profileId))
+          .map(([, profile]) => resolveProviderIdForAuth(profile.provider, authAliasLookupParams)),
+      );
       const providers = authHealth.providers.map((prov) =>
         mapProvider(
           prov,
@@ -702,6 +716,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           apiKeys,
           logoutProfileIds,
           configBoundProfileIds,
+          configBoundAuthProviders,
           externalProfileIds,
           externalCliProfileIds,
           includeProfileIdentity,
@@ -714,8 +729,6 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       });
       const result: ModelAuthStatusResult = { ts: now, providers, providerCapabilities };
       respond(true, result, undefined);
-    } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
-    }
+    });
   },
 };

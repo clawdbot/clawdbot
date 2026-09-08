@@ -1,119 +1,44 @@
 ---
 name: taskflow-inbox-triage
-description: "Example TaskFlow pattern for inbox triage, intent routing, waiting on replies, and later summaries."
+description: "Preview synthetic inbox routing with a real TaskFlow approval pause, and identify the adapters needed for live triage."
 metadata: { "openclaw": { "emoji": "📥" } }
 ---
 
 # TaskFlow inbox triage
 
-This is a concrete example of how to think about TaskFlow without turning the core runtime into a DSL.
+Use `skills/taskflow/examples/inbox-triage.lobster` through the managed Lobster run/approval/resume procedure in `skills/taskflow/SKILL.md`. The default batch is synthetic and already classified. The workflow routes all items into `business`, `personal` and `later` ID lists, suspends for actual approval, then returns those lists without sending anything.
 
-## Goal
+## Input and result
 
-Triage inbox items with one owner flow:
-
-- business -> post to Slack and wait for reply
-- personal -> notify the owner now
-- everything else -> keep for end-of-day summary
-
-## Pattern
-
-1. Create one flow for the inbox batch.
-2. Run one detached task to classify new items.
-3. Persist the routing state in `stateJson`.
-4. Move to `waiting` only when an outside reply is required.
-5. Resume the flow when classification or human input completes.
-6. Finish when the batch has been routed.
-
-## Suggested `stateJson` shape
+Each item has a nonempty `id` (at most 80 characters) and `route` (`business`, `personal` or `later`). The batch is capped at 20 items. Invalid input fails visibly; an empty batch yields three empty lists. Override the defaults with `argsJson` on the initial run, for example:
 
 ```json
 {
-  "businessThreads": [],
-  "personalItems": [],
-  "eodSummary": []
+  "items": [
+    { "id": "demo-business-1", "route": "business" },
+    { "id": "demo-personal-1", "route": "personal" },
+    { "id": "demo-later-1", "route": "later" },
+    { "id": "demo-business-2", "route": "business" }
+  ]
 }
 ```
 
-Suggested `waitJson` when blocked on Slack:
+Pass this object serialized as the `argsJson` string. Use synthetic IDs when trying the example. Approval confirms the preview only; it does not authorize or perform real delivery.
 
-```json
-{
-  "kind": "reply",
-  "channel": "slack",
-  "threadKey": "slack:thread-1"
-}
-```
+## Connect real inbox work explicitly
 
-## Minimal runtime calls
+A real controller needs an inbox reader and classifier that produce the bounded input above, plus adapters for these routes:
 
-```ts
-const taskFlow = api.runtime.tasks.managedFlows.fromToolContext(ctx);
+| Route      | Real controller responsibility                                                                                    |
+| ---------- | ----------------------------------------------------------------------------------------------------------------- |
+| `business` | Post through an authorized Slack adapter, persist the returned thread ID, then wait for a correlated human reply. |
+| `personal` | Notify the owner through an authorized channel adapter and record the delivery outcome.                           |
+| `later`    | Retain a bounded summary reference for an explicitly scheduled end-of-day run.                                    |
 
-const created = taskFlow.createManaged({
-  controllerId: "my-plugin/inbox-triage",
-  goal: "triage inbox",
-  currentStep: "classify",
-  stateJson: {
-    businessThreads: [],
-    personalItems: [],
-    eodSummary: [],
-  },
-});
+These adapters are **not supplied** by the example. Classify every item before routing it; do not decide a mixed batch from its first element. Use a directly available classification tool or a real adapter, not an assumed embedded `openclaw.invoke` bridge. Keep approvals before real side effects.
 
-const child = taskFlow.runTask({
-  flowId: created.flowId,
-  runtime: "acp",
-  childSessionKey: "agent:main:subagent:classifier",
-  task: "Classify inbox messages",
-  status: "running",
-  startedAt: Date.now(),
-  lastEventAt: Date.now(),
-});
+For business replies, the controller registers the event listener, calls `setWaiting` with bounded thread correlation in `waitJson`, and resumes only after the matching reply arrives. A Lobster approval token, echoed waiting JSON or a `setWaiting` call alone does not install that listener. Embedded Lobster input/`ask` requests are not supported.
 
-if (!child.created) {
-  throw new Error(child.reason);
-}
+If classification uses detached work, launch it through the [public requester-bound plugin path](https://docs.openclaw.ai/plugins/sdk-runtime) before linking it with `runTask`. Wait for actual completion before interpreting results; `pending` or an observation timeout is not terminal failure. On failure, record a failed/blocked flow outcome and report it. Do not synthesize a child after launch or linkage is refused.
 
-const waiting = taskFlow.setWaiting({
-  flowId: created.flowId,
-  expectedRevision: created.revision,
-  currentStep: "await_business_reply",
-  stateJson: {
-    businessThreads: ["slack:thread-1"],
-    personalItems: [],
-    eodSummary: [],
-  },
-  waitJson: {
-    kind: "reply",
-    channel: "slack",
-    threadKey: "slack:thread-1",
-  },
-});
-
-if (!waiting.applied) {
-  throw new Error(waiting.code);
-}
-
-const resumed = taskFlow.resume({
-  flowId: waiting.flow.flowId,
-  expectedRevision: waiting.flow.revision,
-  status: "running",
-  currentStep: "route_items",
-  stateJson: waiting.flow.stateJson,
-});
-
-if (!resumed.applied) {
-  throw new Error(resumed.code);
-}
-
-taskFlow.finish({
-  flowId: resumed.flow.flowId,
-  expectedRevision: resumed.flow.revision,
-  stateJson: resumed.flow.stateJson,
-});
-```
-
-## Related example
-
-- `skills/taskflow/examples/inbox-triage.lobster`
+Persist only the IDs, small summaries and cursor needed to continue. After restart or a revision conflict, reload the owner-bound flow and reconcile before applying the next transition. Check every mutation, including `finish`; do not report success from an unchecked result. See [Task Flow](https://docs.openclaw.ai/automation/taskflow) for controller-driven resumption and cancellation.

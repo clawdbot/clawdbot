@@ -365,6 +365,8 @@ const TalkCatalogProviderSchema = closedObject({
   aliases: Type.Optional(Type.Array(NonEmptyString)),
   models: Type.Optional(Type.Array(Type.String())),
   voices: Type.Optional(Type.Array(Type.String())),
+  activeVoices: Type.Optional(Type.Array(Type.String())),
+  activeVoiceSelectionPolicy: Type.Optional(Type.Literal("allowlist-default")),
   voicesByModel: Type.Optional(Type.Record(Type.String(), Type.Array(Type.String()))),
   defaultModel: Type.Optional(Type.String()),
   modes: Type.Optional(Type.Array(TalkModeSchema)),
@@ -571,6 +573,16 @@ export const TalkConfigResultSchema = closedObject({
         seamColor: Type.Optional(Type.String()),
       }),
     ),
+    clientHints: Type.Optional(
+      closedObject({
+        realtime: Type.Optional(
+          closedObject({
+            modelSource: Type.Optional(Type.Literal("gateway")),
+            gatewayRelaySupported: Type.Optional(Type.Boolean()),
+          }),
+        ),
+      }),
+    ),
   }),
 });
 
@@ -692,6 +704,24 @@ export const ChannelsStatusResultSchema = closedObject({
   eventLoop: Type.Optional(ChannelEventLoopHealthSchema),
   partial: Type.Optional(Type.Boolean()),
   warnings: Type.Optional(Type.Array(Type.String())),
+  statusIssues: Type.Optional(
+    Type.Array(
+      closedObject({
+        channel: NonEmptyString,
+        accountId: NonEmptyString,
+        kind: Type.Union([
+          Type.Literal("intent"),
+          Type.Literal("permissions"),
+          Type.Literal("config"),
+          Type.Literal("auth"),
+          Type.Literal("runtime"),
+        ]),
+        message: Type.String(),
+        fix: Type.Optional(Type.String()),
+      }),
+      { maxItems: 50 },
+    ),
+  ),
 });
 
 /** Logs out one channel account. */

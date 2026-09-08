@@ -753,23 +753,31 @@ describe("gateway server cron", () => {
       expect(compactJobs).toHaveLength(1);
       expect(compactJobs?.[0]).toMatchObject({
         id: dailyJobId,
+        effectiveAgentId: "main",
         name: "daily",
         enabled: true,
         scheduleKind: "every",
+        schedule: { kind: "every", everyMs: 60_000 },
+        lastRunAt: null,
         lastRunStatus: null,
       });
       expect(Object.keys(compactJobs?.[0] ?? {}).toSorted()).toEqual(
         [
+          "effectiveAgentId",
           "enabled",
           "id",
           "lastRunAtMs",
+          "lastRunAt",
           "lastRunError",
           "lastRunStatus",
           "name",
           "nextRunAtMs",
+          "nextRunAt",
           "scheduleKind",
+          "schedule",
         ].toSorted(),
       );
+      expect(Date.parse(String(compactJobs?.[0]?.nextRunAt))).toBe(compactJobs?.[0]?.nextRunAtMs);
       expect(
         (compactListRes.payload as { deliveryPreviews?: unknown } | null)?.deliveryPreviews,
       ).toBeUndefined();
@@ -1527,6 +1535,7 @@ describe("gateway server cron", () => {
       const agentIds = Object.keys(cronState.getRuntimeConfig().agents?.entries ?? {});
       expect(agentIds).toContain("main");
       expect(agentIds).toContain("ops");
+      expect(cronState.cron.getDefaultAgentId()).toBe("main");
 
       const before = await directCronReq(cronState, "cron.get", { id: jobId });
       const updateRes = await directCronReq(cronState, "cron.update", {
@@ -1550,6 +1559,21 @@ describe("gateway server cron", () => {
         name: "renamed after default drift",
         agentId: "ops",
       });
+
+      const afterRename = await directCronReq(cronState, "cron.get", { id: jobId });
+      for (const bindingPatch of [
+        { agentId: "ops" },
+        { sessionTarget: "main" },
+        { payload: { kind: "systemEvent", text: "new work" } },
+      ]) {
+        const retargeted = await directCronReq(cronState, "cron.update", {
+          id: jobId,
+          patch: { name: "must not persist binding", ...bindingPatch },
+        });
+        expect(retargeted.ok).toBe(false);
+        expect(retargeted.error?.message).toContain('sessionTarget "main" is only valid');
+        expect(await directCronReq(cronState, "cron.get", { id: jobId })).toEqual(afterRename);
+      }
     } finally {
       await cleanupCronTestRun({ cronState, prevSkipCron });
     }

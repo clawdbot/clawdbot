@@ -284,6 +284,9 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     async removeAgentJobsTransactional(agentId, commit) {
       return await (await load()).state.cron.removeAgentJobsTransactional(agentId, commit);
     },
+    async quiesceJobs(jobs, commitGuard) {
+      await (await load()).state.cron.quiesceJobs(jobs, commitGuard);
+    },
     async run(id, mode, opts) {
       return await (await load()).state.cron.run(id, mode, opts);
     },
@@ -356,8 +359,8 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
       // Nothing to stop before the heavy cron service is built.
       await loaded?.state.stopStreamWatchers();
     },
-    async reconcileSystemJobs(cfg) {
-      return await (await load()).state.reconcileSystemJobs(cfg);
+    async reconcileSystemJobs() {
+      return await (await load()).state.reconcileSystemJobs();
     },
   };
 }

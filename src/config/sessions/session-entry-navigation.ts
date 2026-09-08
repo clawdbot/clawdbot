@@ -191,13 +191,13 @@ export class SessionEntryNavigation<T extends SessionNavigationEntry> {
   }
 
   protected resolveCanonicalParentId(parentId: string | null): string | null {
-    const seen = new Set<string>();
+    let seen: Set<string> | undefined;
     let currentId = parentId;
     while (currentId && !this.byId.has(currentId)) {
-      if (seen.has(currentId)) {
+      if (seen?.has(currentId)) {
         return null;
       }
-      seen.add(currentId);
+      (seen ??= new Set()).add(currentId);
       currentId = this.opaqueParentsById.get(currentId) ?? null;
     }
     return currentId;

@@ -41,17 +41,18 @@ function createDispatch(
       runnerAvailability: { read: () => undefined, version: () => 0 },
       workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
       runLocalBarrier: async ({ startDispatch }) => startDispatch(),
-      runRecoveryBarrier: async ({ run }) => await run(support.testState.root),
+      runRecoveryBarrier: async ({ run }) =>
+        await run({ kind: "local", path: support.testState.root }),
       runActivationBarrier: async ({ activate }) => activate(),
       runMoveBarrier: async ({ begin }) => begin(),
       resolveMoveDestination: async () => undefined,
       runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
       runReclaimBarrier: async ({ begin, reclaim }) =>
-        await reclaim(support.testState.root, begin()),
+        await reclaim({ kind: "local", path: support.testState.root }, begin()),
       runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-      resolveWorkspacePath: async () => support.testState.root,
+      resolveWorkspace: async () => ({ kind: "local", path: support.testState.root }),
       reportWorkspaceResultConflict: async () => {},
-      resolveWorkspaceResultConflict: async () => undefined,
+      resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
     }),
     (_request, run) => run(),
   );

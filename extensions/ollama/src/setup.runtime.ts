@@ -30,6 +30,7 @@ import { readProviderBaseUrl } from "./provider-base-url.js";
 import {
   buildOllamaBaseUrlSsrFPolicy,
   buildOllamaProvider,
+  capLocalOllamaProviderContext,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
   isOllamaCloudModel,
@@ -217,12 +218,12 @@ function applyOllamaProviderConfig(
       mode: cfg.models?.mode ?? "merge",
       providers: {
         ...cfg.models?.providers,
-        ollama: {
+        ollama: capLocalOllamaProviderContext({
           baseUrl,
           api: "ollama",
           apiKey,
           models: buildOllamaModelsConfig(modelNames, discoveredModelsByName, defaultModels),
-        },
+        }),
       },
     },
   };
@@ -500,9 +501,28 @@ export async function validateOllamaNonInteractive(
       `No Ollama models are available at ${baseUrl}.\nPull a model first, then re-run setup.`,
     );
   }
-  if (requestedModel && !findAvailableOllamaModelName(requestedModel, availableModelNames)) {
+  if (requestedModel) {
+    const availableName = findAvailableOllamaModelName(requestedModel, availableModelNames);
+    if (!availableName) {
+      return fail(
+        `Ollama model ${requestedModel} was not found at ${baseUrl}.\nAvailable models: ${availableModelNames.join(", ")}`,
+      );
+    }
+    const listedModel = discovery.models.find((model) => model.name === availableName);
+    const inspectedModel = await queryOllamaModelShowInfo(baseUrl, availableName);
+    if (
+      isOllamaEmbeddingOnlyModel({
+        name: availableName,
+        capabilities: inspectedModel.capabilities ?? listedModel?.capabilities,
+      })
+    ) {
+      return fail(
+        `Ollama model ${availableName} only supports embeddings. Choose a chat model instead.`,
+      );
+    }
+  } else if (discovery.models.every(isOllamaEmbeddingOnlyModel)) {
     return fail(
-      `Ollama model ${requestedModel} was not found at ${baseUrl}.\nAvailable models: ${availableModelNames.join(", ")}`,
+      `No Ollama chat models are available at ${baseUrl}.\nPull a chat model first, then re-run setup.`,
     );
   }
   return true;
@@ -618,7 +638,14 @@ export async function configureOllamaNonInteractive(params: {
   }
 
   if (!requestedCloudModel) {
-    await inspectAvailableModel(defaultModelId);
+    const selectedModel = await inspectAvailableModel(defaultModelId);
+    if (isOllamaEmbeddingOnlyModel(selectedModel)) {
+      params.runtime.error(
+        `Ollama model ${defaultModelId} only supports embeddings. Choose a chat model instead.`,
+      );
+      params.runtime.exit(1);
+      return params.nextConfig;
+    }
   }
 
   const config = applyOllamaProviderConfig(

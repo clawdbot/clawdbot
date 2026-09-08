@@ -1,6 +1,6 @@
 import { consume } from "@lit/context";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { html, nothing, type PropertyValues } from "lit";
+import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import "./openclaw-mascot.ts";
 import type { RouteId } from "../app-route-paths.ts";
@@ -24,6 +24,7 @@ import {
   resolveUiDefaultAgentId,
 } from "../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT } from "../pages/chat/chat-history-events.ts";
 import { buildHomeWorkContext, subscribeChatWorkContext } from "../pages/chat/chat-work-context.ts";
@@ -82,13 +83,38 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
     agentsList?: ApplicationContext["agents"]["state"]["agentsList"];
     hello?: ApplicationContext["gateway"]["snapshot"]["hello"];
   } = {};
-  private contextCleanup: (() => void) | null = null;
-  private subscribedStore: CustodianSessionStore | null = null;
-  private storeCleanup: (() => void) | null = null;
+
+  constructor() {
+    super();
+    void new SubscriptionsController(this)
+      .watch(
+        () => this.store,
+        (store, notify) => store.subscribe(notify),
+      )
+      .watch(
+        () => this.context,
+        (context, notify) => subscribeChatWorkContext(context, notify),
+      )
+      .watch(
+        () => this.context?.agentSelection,
+        (selection, notify) => selection.subscribe(notify),
+      )
+      .watch(
+        () => this.context?.sessions,
+        (sessions, notify) => sessions.subscribe(notify),
+      )
+      .watch(
+        () => this.context?.agents,
+        (agents, notify) => agents.subscribe(notify),
+      )
+      .watch(
+        () => this.context?.gateway,
+        (gateway, notify) => gateway.subscribe(notify),
+      );
+  }
 
   override connectedCallback(): void {
     super.connectedCallback();
-    this.subscribeToStore();
     document.addEventListener(CHAT_ROUTE_READY_EVENT, this.startHomeAfterPrimaryChat);
     document.addEventListener(
       CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
@@ -110,33 +136,11 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
     window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     window.removeEventListener(HOME_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     this.claimInput("page");
-    this.contextCleanup?.();
-    this.contextCleanup = null;
-    this.storeCleanup?.();
-    this.storeCleanup = null;
-    this.subscribedStore = null;
     super.disconnectedCallback();
   }
 
-  override willUpdate(changed: PropertyValues): void {
+  override willUpdate(): void {
     const wasOpen = this.dockLayout.open;
-    if (changed.has("context") && this.context) {
-      this.contextCleanup?.();
-      const cleanups = [
-        subscribeChatWorkContext(this.context, () => this.requestUpdate()),
-        // The sidebar switcher owns agent choice; the dock follows it.
-        this.context.agentSelection.subscribe(() => this.requestUpdate()),
-        // Snapshot changes need not change route facts; keep the open Home reference current.
-        this.context.sessions.subscribe(() => this.requestUpdate()),
-        this.context.agents.subscribe(() => this.requestUpdate()),
-        this.context.gateway.subscribe(() => this.requestUpdate()),
-      ];
-      this.contextCleanup = () => {
-        for (const cleanup of cleanups) {
-          cleanup();
-        }
-      };
-    }
     const scope = this.context?.gateway.connection.gatewayUrl ?? "";
     if (scope !== this.targetScope) {
       this.targetScope = scope;
@@ -157,9 +161,6 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
         agentsList: this.context.agents.state.agentsList ?? this.homeDefaults.agentsList,
         hello: this.context.gateway.snapshot.hello,
       };
-    }
-    if (changed.has("store")) {
-      this.subscribeToStore();
     }
     this.dockLayout.setSuppressed(this.suppressed);
     if (
@@ -325,15 +326,6 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
         }
       }
     }
-  }
-
-  private subscribeToStore(): void {
-    if (!this.isConnected || this.subscribedStore === this.store) {
-      return;
-    }
-    this.storeCleanup?.();
-    this.subscribedStore = this.store;
-    this.storeCleanup = this.store.subscribe(() => this.requestUpdate());
   }
 
   private openHomePage(): void {

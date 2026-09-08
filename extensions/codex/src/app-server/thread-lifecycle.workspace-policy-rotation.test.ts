@@ -33,6 +33,12 @@ describe("Codex app-server rotated workspace policy", () => {
     const attempt = createParams("/tmp/openclaw-codex-rotated-policy.jsonl", workspaceDir);
     let startCount = 0;
     const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start") {
         startCount += 1;
         return threadStartResult(`thread-${startCount}`);
@@ -66,8 +72,17 @@ describe("Codex app-server rotated workspace policy", () => {
       nativeProjectDocsDisabledOnResume: true,
     });
 
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/start"]);
-    const replacementRequest = request.mock.calls[1]?.[1] as
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+    ]);
+    const replacementRequest = request.mock.calls.findLast(
+      ([method]) => method === "thread/start",
+    )?.[1] as
       | { config?: { project_doc_max_bytes?: number }; developerInstructions?: string }
       | undefined;
     expect(replacementRequest?.config?.project_doc_max_bytes).toBe(0);

@@ -17,8 +17,6 @@ describe("process supervisor byte activity", () => {
       const run = await supervisor.spawn({
         mode: "child",
         argv: [process.execPath, "-e", `process.${stream}.write(Buffer.from([0xe2]))`],
-        sessionId: "decoder-eof",
-        backendId: "decoder-eof",
         stdinMode: "pipe-closed",
         noOutputTimeoutMs: 1_000,
         // Withhold the timer callback while real child pipes close after the deadline.
@@ -56,8 +54,6 @@ describe("process supervisor byte activity", () => {
       const run = await supervisor.spawn({
         mode: "child",
         argv: [process.execPath, "-e", script],
-        sessionId: "byte-activity",
-        backendId: "byte-activity",
         stdinMode: "pipe-open",
         noOutputTimeoutMs: 1_500,
         onStdout: (chunk) => {

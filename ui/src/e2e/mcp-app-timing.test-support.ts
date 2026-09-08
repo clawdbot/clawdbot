@@ -33,7 +33,7 @@ export async function waitForMcpAppTimingEvents(
 
 export function assertMcpAppTimingEvents(
   events: McpAppFixtureEvent[],
-  spec: { callDelayMs: number; refresh: boolean },
+  spec: { callDelayMs: number },
 ): void {
   expect(events.filter((event) => event.event === "tool-start")).toHaveLength(1);
   expect(events.filter((event) => event.event === "tool-complete")).toHaveLength(1);
@@ -69,27 +69,25 @@ export function assertMcpAppTimingEvents(
   expect(complete.monotonicMs - call.monotonicMs).toBeLessThan(10_000);
   expect(complete.monotonicMs - start.monotonicMs).toBeGreaterThanOrEqual(spec.callDelayMs - 100);
   expect(complete.monotonicMs - start.monotonicMs).toBeLessThan(10_000);
-  if (spec.refresh) {
-    expect(
-      events.filter((event) => event.event === "incoming" && event.method === "tools/list"),
-    ).toHaveLength(1);
-    expect(events.filter((event) => event.event === "notification-sent")).toHaveLength(1);
-    const ready = events.find((event) => event.event === "list-response-ready");
-    const sent = events.find((event) => event.event === "list-response-send");
-    const written = events.find(
-      (event) => event.event === "response-written" && event.method === "tools/list",
-    );
-    const incoming = events.find(
-      (event) => event.event === "incoming" && event.method === "tools/list",
-    );
-    if (!ready || !sent || !written || !incoming) {
-      throw new Error("Missing correlated catalog response events");
-    }
-    expect(written.id).toBe(incoming.id);
-    expect(ready.id).toBe(incoming.id);
-    expect(written.monotonicMs - incoming.monotonicMs).toBeLessThan(10_000);
-    expect(sent.monotonicMs - ready.monotonicMs).toBeGreaterThanOrEqual(7900);
-    expect(sent.monotonicMs - ready.monotonicMs).toBeLessThan(10_000);
-    expect(start.monotonicMs).toBeGreaterThanOrEqual(written.monotonicMs);
+  expect(
+    events.filter((event) => event.event === "incoming" && event.method === "tools/list"),
+  ).toHaveLength(1);
+  expect(events.filter((event) => event.event === "notification-sent")).toHaveLength(1);
+  const ready = events.find((event) => event.event === "list-response-ready");
+  const sent = events.find((event) => event.event === "list-response-send");
+  const written = events.find(
+    (event) => event.event === "response-written" && event.method === "tools/list",
+  );
+  const incoming = events.find(
+    (event) => event.event === "incoming" && event.method === "tools/list",
+  );
+  if (!ready || !sent || !written || !incoming) {
+    throw new Error("Missing correlated catalog response events");
   }
+  expect(written.id).toBe(incoming.id);
+  expect(ready.id).toBe(incoming.id);
+  expect(written.monotonicMs - incoming.monotonicMs).toBeLessThan(10_000);
+  expect(sent.monotonicMs - ready.monotonicMs).toBeGreaterThanOrEqual(7900);
+  expect(sent.monotonicMs - ready.monotonicMs).toBeLessThan(10_000);
+  expect(start.monotonicMs).toBeGreaterThanOrEqual(written.monotonicMs);
 }

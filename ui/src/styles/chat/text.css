@@ -529,8 +529,8 @@
   text-decoration: none;
 }
 
-/* GitHub links carry the brand mark so a bare URL and a "[#3434]" shorthand read
-   as the same destination. Painted as a masked ::before rather than markup: it
+/* GitHub links carry a brand mark or an issue/pull-request icon. Painted as a
+   masked ::before rather than markup: it
    stays out of the accessibility tree and out of copied text, and currentColor
    keeps it on the link color in every theme. Sized in em so it tracks
    --chat-text-size (14px default) and the user's text-scale setting. */
@@ -568,6 +568,47 @@
    on word boundaries. */
 .chat-text :where(a.markdown-bare-url) {
   line-break: anywhere;
+}
+
+/* Item references share the titled session chip's surface. The whole chip is
+   atomic so its in-flow icon cannot wrap away from the number. */
+.chat-text a.markdown-github-item {
+  display: inline-block;
+  position: static;
+  padding: 0.08em 0.45em 0.08em 0.4em;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent-subtle) 72%, var(--bg-muted));
+  color: var(--link);
+  font-weight: 600;
+  line-height: 1.25;
+  text-decoration: none;
+  vertical-align: baseline;
+  white-space: nowrap;
+  line-break: auto;
+}
+
+.chat-text a.markdown-github-item:hover,
+.chat-text a.markdown-github-item:focus-visible {
+  background: color-mix(in srgb, var(--accent-subtle) 92%, var(--bg-muted));
+  text-decoration: underline;
+}
+
+.chat-text a.markdown-github-item::before {
+  position: static;
+  display: inline-block;
+  margin-inline-end: 0.3em;
+  vertical-align: -0.12em;
+  mask: var(--github-item-icon) center / contain no-repeat;
+  -webkit-mask: var(--github-item-icon) center / contain no-repeat;
+}
+
+/* GitHub Octicons issue-opened-16 and git-pull-request-16 (MIT). */
+.chat-text a.markdown-github-item[data-github-kind="issue"]::before {
+  --github-item-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z'/%3E%3Cpath d='M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z'/%3E%3C/svg%3E");
+}
+
+.chat-text a.markdown-github-item[data-github-kind="pull"]::before {
+  --github-item-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z'/%3E%3C/svg%3E");
 }
 
 :is(.chat-text, .sidebar-markdown, .chat-reply-attribution) a.markdown-session-link {

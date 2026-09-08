@@ -1,4 +1,3 @@
-// Imessage plugin module implements shared behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import {
   adaptScopedAccountAccessor,
@@ -101,7 +100,7 @@ export function createIMessagePluginBase(params: {
       effects: true,
       groupManagement: true,
     },
-    reload: { configPrefixes: ["channels.imessage"] },
+    reload: { configPrefixes: ["channels.imessage"], noopPrefixes: ["messages.inbound"] },
     configSchema: IMessageChannelConfigSchema,
     config: {
       ...imessageConfigAdapter,

@@ -3,7 +3,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { consumeReplyUsageState } from "../auto-reply/reply/reply-usage-state.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { onInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
 import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -797,6 +799,9 @@ describe("runBtwSideQuestion", () => {
       id: "claude-sonnet-4-6",
       api: "anthropic-messages",
     });
+    resolveModelAsyncMock.mockImplementation(async () => ({
+      model: resolveModelWithRegistryMock(),
+    }));
     ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
     ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValue({ version: 1, profiles: {} });
     getApiKeyForModelMock.mockImplementation(async (params: { profileId?: string } = {}) => ({
@@ -1135,14 +1140,25 @@ describe("runBtwSideQuestion", () => {
       },
       order: { openai: ["openai:work"] },
     });
-    resolveModelAsyncMock.mockResolvedValue({
-      model: {
-        provider: "openai",
-        id: "gpt-5.5",
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-      },
-    });
+    resolveModelAsyncMock.mockImplementation(
+      async (
+        _provider: string,
+        _modelId: string,
+        _agentDir: string,
+        _config: unknown,
+        options?: { authProfileMode?: string },
+      ) => ({
+        model:
+          options?.authProfileMode === "token"
+            ? {
+                provider: "openai",
+                id: "gpt-5.5",
+                api: "openai-chatgpt-responses",
+                baseUrl: "https://chatgpt.com/backend-api/codex",
+              }
+            : resolveModelWithRegistryMock(),
+      }),
+    );
     getApiKeyForModelMock.mockResolvedValue({
       apiKey: "subscription-token",
       mode: "token",
@@ -1248,6 +1264,98 @@ describe("runBtwSideQuestion", () => {
       }),
     );
   });
+
+  it.each(
+    ["harness", "direct", "direct-block"].flatMap((mode) =>
+      [false, true, undefined].map((enabled) => ({ mode, enabled })),
+    ),
+  )(
+    "exposes $mode side-question usage with diagnostics enabled: $enabled",
+    async ({ mode, enabled }) => {
+      const tokens = { input: 13, output: 9, cacheRead: 7, cacheWrite: 3 };
+      const usage = { ...tokens, total: 41 };
+      const cost = { input: 0.1, output: 0.1, cacheRead: 0.03, cacheWrite: 0.02, total: 0.25 };
+      const text = "Side answer.";
+      const onBlockReply = vi.fn().mockResolvedValue(undefined);
+      if (mode === "harness") {
+        registerCodexSideQuestionHarness().mockResolvedValue({ text, usage: { ...usage, cost } });
+      } else {
+        const done = createDoneEvent(text);
+        done.message.usage = { ...tokens, totalTokens: 41, cost };
+        streamSimpleMock.mockReturnValue(
+          makeAsyncEvents([
+            ...(mode === "direct-block"
+              ? [
+                  { type: "text_delta", delta: text },
+                  { type: "text_end", content: text, contentIndex: 0 },
+                ]
+              : []),
+            done,
+          ]),
+        );
+      }
+      const runId = `btw-usage-reply-${mode}-${enabled}`;
+      const authorityRunId = `btw-usage-authority-${mode}-${enabled}`;
+      const sessionEntry = createSessionEntry({ inputTokens: 200, cacheRead: 100 });
+      const originalEntry = structuredClone(sessionEntry);
+      const diagnostics: unknown[] = [];
+      const unsubscribe = onInternalDiagnosticEvent((event) => {
+        if (event.type === "model.usage") {
+          diagnostics.push(event);
+        }
+      });
+      try {
+        await expect(
+          runSideQuestion({
+            cfg: { diagnostics: { enabled } },
+            sessionEntry,
+            authorityRunId,
+            ...(mode === "direct-block"
+              ? {
+                  blockReplyChunking: {
+                    minChars: 1,
+                    maxChars: 200,
+                    breakPreference: "paragraph" as const,
+                  },
+                  resolvedBlockStreamingBreak: "text_end" as const,
+                }
+              : {}),
+            opts: { runId, onBlockReply },
+          }),
+        ).resolves.toEqual(mode === "direct-block" ? undefined : { text });
+        if (mode === "direct-block") {
+          expect(onBlockReply).toHaveBeenCalledExactlyOnceWith({
+            text,
+            btw: { question: DEFAULT_QUESTION },
+          });
+        }
+        expect.soft(consumeReplyUsageState(runId)).toMatchObject({
+          usage,
+          sessionId: "session-1",
+          turnUsd: 0.25,
+        });
+        expect(consumeReplyUsageState(authorityRunId)).toBeUndefined();
+        expect(sessionEntry).toEqual(originalEntry);
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect.soft(diagnostics).toEqual(
+          enabled !== false
+            ? [
+                expect.objectContaining({
+                  type: "model.usage",
+                  sessionId: "session-1",
+                  usage: { ...usage, promptTokens: 23 },
+                  costUsd: 0.25,
+                }),
+              ]
+            : [],
+        );
+      } finally {
+        unsubscribe();
+      }
+    },
+  );
 
   it("keeps an unprofiled subscription token on the OpenClaw BTW path", async () => {
     const supports = vi.fn(supportsPreparedOpenAIAuth);
@@ -2246,7 +2354,7 @@ describe("runBtwSideQuestion", () => {
       resolveModelAsyncMock.mock.calls.map(
         (call) => (call[4] as { authProfileId?: string }).authProfileId,
       ),
-    ).toEqual(["openai:subscription", "openai:platform"]);
+    ).toEqual([undefined, "openai:subscription", "openai:platform"]);
     expectRecordFields(mockArg(streamSimpleMock, 0, 0), {
       name: "Platform model",
       api: "openai-responses",
@@ -2482,6 +2590,7 @@ describe("runBtwSideQuestion", () => {
     expect(result).toEqual({ text: "Ollama Cloud answer." });
     const registerParams = expectRecordFields(mockArg(registerProviderStreamForModelMock, 0, 0), {
       workspaceDir: "/tmp/workspace",
+      wrapProviderStream: true,
     });
     expectRecordFields(registerParams.model, {
       provider: "ollama",

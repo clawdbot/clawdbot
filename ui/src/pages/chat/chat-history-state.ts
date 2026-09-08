@@ -2,14 +2,17 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { SessionMessageSubscription } from "../../lib/sessions/index.ts";
 import {
+  areUiSessionKeysEquivalent,
   isUiSelectedGlobalSessionKey,
   uiConversationMatches,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { clearChatPendingInputs } from "./chat-pending-inputs.ts";
+import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
+import { peekChatRouteStartup } from "./route-startup.ts";
 
 type ChatHistoryLoadRequest = {
   sessionKey: string;
@@ -27,7 +30,14 @@ type ChatHistoryLoadState =
       key: string;
       promise: Promise<ChatHistoryResult | undefined>;
     } & ChatHistoryLoadRequest)
-  | { phase: "committed"; key: string }
+  | {
+      phase: "committed";
+      client: GatewayBrowserClient;
+      connectionEpoch: number;
+      sessionKey: string;
+      requestAgentId: string | undefined;
+      sessionInfo: ChatHistoryResult["sessionInfo"];
+    }
   | ({ phase: "failed"; message: string; retryable: boolean } & ChatHistoryLoadRequest);
 
 type ChatHistoryPaneRequests = {
@@ -37,6 +47,17 @@ type ChatHistoryPaneRequests = {
   subscriptionError?: string;
   pendingSubscriptionReleases: Set<SessionMessageSubscription>;
   historyLoad: ChatHistoryLoadState;
+  acceptedHistory?: Extract<ChatHistoryLoadState, { phase: "committed" }>;
+  initialSnapshotHydration?: InitialChatSnapshotHydration;
+};
+
+export type InitialChatSnapshotHydration = {
+  sessionKey: string;
+  startedBeforeReady: boolean;
+  promise: Promise<void>;
+  readyAt?: number;
+  wait?: Promise<boolean>;
+  cancel?: () => void;
 };
 
 const chatHistoryPaneRequests = new WeakMap<object, ChatHistoryPaneRequests>();
@@ -56,6 +77,67 @@ export function chatHistoryRequests(owner: object): ChatHistoryPaneRequests {
   return requests;
 }
 
+export function retireInitialChatSnapshot(state: ChatState): void {
+  const requests = chatHistoryRequests(state);
+  const hydration = requests.initialSnapshotHydration;
+  delete requests.initialSnapshotHydration;
+  hydration?.cancel?.();
+}
+
+export function synchronizeInitialChatSnapshotConnection(state: ChatState): void {
+  const hydration = chatHistoryRequests(state).initialSnapshotHydration;
+  if (!hydration) {
+    return;
+  }
+  if (state.connected) {
+    hydration.readyAt ??= Date.now();
+  } else if (hydration.readyAt !== undefined) {
+    retireInitialChatSnapshot(state);
+  }
+}
+
+export function waitForInitialChatSnapshot(state: ChatState): Promise<boolean> | undefined {
+  const requests = chatHistoryRequests(state);
+  const hydration = requests.initialSnapshotHydration;
+  if (!hydration) {
+    return undefined;
+  }
+  if (
+    !hydration.startedBeforeReady ||
+    (state.client && peekChatRouteStartup(state.client, state.sessionKey)) ||
+    !areUiSessionKeysEquivalent(state.sessionKey, hydration.sessionKey)
+  ) {
+    retireInitialChatSnapshot(state);
+    return undefined;
+  }
+  if (hydration.wait) {
+    return hydration.wait;
+  }
+  const readyAt = (hydration.readyAt ??= Date.now());
+  // The connection owns the budget; mounting offline must not spend it.
+  const remaining = Math.max(0, 300 - (Date.now() - readyAt));
+  if (remaining === 0) {
+    retireInitialChatSnapshot(state);
+    return undefined;
+  }
+  hydration.wait = new Promise<boolean>((resolve) => {
+    const finish = (current: boolean) => {
+      clearTimeout(timer);
+      if (requests.initialSnapshotHydration === hydration) {
+        delete requests.initialSnapshotHydration;
+      }
+      resolve(current);
+    };
+    hydration.cancel = () => finish(false);
+    const timer = setTimeout(() => finish(true), remaining);
+    void hydration.promise.then(
+      () => finish(true),
+      () => finish(true),
+    );
+  });
+  return hydration.wait;
+}
+
 function isChatHistoryLoading(load: ChatHistoryLoadState): boolean {
   return load.phase === "pending-connection" || load.phase === "in-flight";
 }
@@ -65,6 +147,9 @@ export function setChatHistoryLoad(state: ChatState, load: ChatHistoryLoadState)
   const requests = chatHistoryRequests(state);
   const wasLoading = isChatHistoryLoading(requests.historyLoad);
   requests.historyLoad = load;
+  if (load.phase === "committed") {
+    requests.acceptedHistory = load;
+  }
   if (wasLoading !== isChatHistoryLoading(load)) {
     state.transcriptLoadingChanged?.();
   }
@@ -79,10 +164,7 @@ export function getChatHistoryLoadState(state: ChatState): ChatHistoryLoadState 
   const requestAgentId = isUiSelectedGlobalSessionKey(state, state.sessionKey)
     ? resolveUiSelectedSessionAgentId(state)
     : undefined;
-  const current =
-    load.phase === "committed"
-      ? load.key === `${state.sessionKey}\u0000${requestAgentId ?? ""}`
-      : load.sessionKey === state.sessionKey && load.requestAgentId === requestAgentId;
+  const current = load.sessionKey === state.sessionKey && load.requestAgentId === requestAgentId;
   if (!current) {
     // Lazy repair of a load left behind by a session switch; the switch's own
     // load reports its edge, so this stays a silent write (readers see idle).
@@ -108,8 +190,20 @@ export function getChatHistoryLoadState(state: ChatState): ChatHistoryLoadState 
   return requests.historyLoad;
 }
 
-export function getChatHistoryVersion(state: ChatState): number {
-  return chatHistoryRequests(state).historyVersion;
+/** Same-session refreshes retain the accepted transcript's identity until replacement commits. */
+export function getAcceptedChatHistorySession(state: ChatState) {
+  const accepted = chatHistoryRequests(state).acceptedHistory;
+  return accepted &&
+    state.connected &&
+    state.client === accepted.client &&
+    state.connectionEpoch === accepted.connectionEpoch &&
+    state.sessionKey === accepted.sessionKey &&
+    (!isUiSelectedGlobalSessionKey(state, state.sessionKey) ||
+      resolveUiSelectedSessionAgentId(state) === accepted.requestAgentId) &&
+    accepted.sessionInfo?.sessionId &&
+    state.currentSessionId === accepted.sessionInfo.sessionId
+    ? accepted.sessionInfo
+    : undefined;
 }
 
 type ChatHistoryRequestOwnership = {
@@ -161,11 +255,14 @@ export function acceptsHistoryResult(
 }
 
 export function resetChatHistoryProjection(state: ChatState, agentId?: string): void {
+  retireInitialChatSnapshot(state);
+  retirePullRequestRefreshes(state);
   clearChatPendingInputs(state);
   const requests = chatHistoryRequests(state);
   // A destructive reset keeps the session key, so invalidate both the old
   // snapshot owner and its coalesced request before creating the next epoch.
   requests.historyVersion += 1;
+  delete requests.acceptedHistory;
   setChatHistoryLoad(state, { phase: "idle" });
   state.chatLoading = false;
   const scope = readChatSessionProjectionScope(state, { agentId });

@@ -20,6 +20,7 @@ vi.mock("./src/app-server/run-attempt.js", () => ({
 }));
 
 import { createCodexAppServerAgentHarness } from "./harness.js";
+import codexPluginPackage from "./package.json" with { type: "json" };
 import { buildCodexRuntimeModelParams } from "./src/app-server/model-runtime.js";
 import {
   createCodexTestBindingStore,
@@ -650,25 +651,36 @@ describe("Codex agent harness reset()", () => {
 });
 
 describe("Codex agent harness dispose()", () => {
-  it("uses the preloaded shared-client lifecycle seam", async () => {
-    const sharedDisposer = Symbol.for("openclaw.codexAppServerClientDisposer");
-    const state = globalThis as typeof globalThis & {
-      [sharedDisposer]?: () => Promise<void>;
-    };
-    const previous = state[sharedDisposer];
-    const dispose = vi.fn(async () => {});
-    state[sharedDisposer] = dispose;
-    const harness = createCodexAppServerAgentHarness({
-      bindingStore: testCodexAppServerBindingStore,
-    });
+  it("runs this build's shared-client disposer and ignores a bare-name one", async () => {
+    // The disposer slot is keyed by plugin version like the client table: an old build's
+    // harness must close that build's clients even after a newer build's module evaluated.
+    const versionedSlot = Symbol.for(
+      `openclaw.codexAppServerClientDisposer@${codexPluginPackage.version}`,
+    );
+    const bareSlot = Symbol.for("openclaw.codexAppServerClientDisposer");
+    const globalState = globalThis as Record<symbol, unknown>;
+    const previous = { versioned: globalState[versionedSlot], bare: globalState[bareSlot] };
+    const versioned = vi.fn(async () => {});
+    const bare = vi.fn(async () => {});
+    globalState[versionedSlot] = versioned;
+    globalState[bareSlot] = bare;
     try {
+      const harness = createCodexAppServerAgentHarness({
+        bindingStore: createCodexTestBindingStore(),
+      });
       await harness.dispose?.();
-      expect(dispose).toHaveBeenCalledOnce();
+      expect(versioned).toHaveBeenCalledTimes(1);
+      expect(bare).not.toHaveBeenCalled();
     } finally {
-      if (previous) {
-        state[sharedDisposer] = previous;
-      } else {
-        delete state[sharedDisposer];
+      for (const [slot, value] of [
+        [versionedSlot, previous.versioned],
+        [bareSlot, previous.bare],
+      ] as const) {
+        if (value === undefined) {
+          delete globalState[slot];
+        } else {
+          globalState[slot] = value;
+        }
       }
     }
   });

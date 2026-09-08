@@ -120,6 +120,7 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
 };
 
 export type DiscordMessagePreflightParams = DiscordMessagePreflightSharedFields & {
+  isPolicyCurrent?: () => boolean;
   dmEnabled: boolean;
   groupDmEnabled: boolean;
   groupDmChannels?: string[];
@@ -131,6 +132,7 @@ export type DiscordMessagePreflightParams = DiscordMessagePreflightSharedFields 
   threadBindings: DiscordThreadBindingLookup;
   discordRestFetch?: typeof fetch;
   avatarResolver?: DiscordAvatarResolver;
+  precedingMessages?: readonly DiscordMessageEvent["message"][];
   data: DiscordMessageEvent;
   client: Client;
 };

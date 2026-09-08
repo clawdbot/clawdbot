@@ -17,7 +17,6 @@ import {
   readTaskRecord,
   upsertTaskRunRowInDatabase,
 } from "../../../tasks/task-registry.store.sqlite.js";
-import type { TaskRecord } from "../../../tasks/task-registry.types.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { publishSubagentRunsAfterAtomicStore } from "./subagent-registry-state.js";
 import {
@@ -63,7 +62,8 @@ export function commitSubagentTaskReplacement(params: {
   source: SubagentRunRecord;
   successor: SubagentRunRecord;
   task: PreparedCanonicalTaskActivation;
-}): TaskRecord {
+  canReconcileAcceptedReceipt?: () => boolean;
+}): void {
   assertReplacementCorrelation(params);
   const changedRows = params.changedRunIds.flatMap((runId) => {
     const entry = params.runs.get(runId);
@@ -81,6 +81,15 @@ export function commitSubagentTaskReplacement(params: {
     (database) => {
       const storedSource = readSubagentRun(database, params.source.runId);
       const storedTask = readTaskRecord(database.db, params.task.current.taskId);
+      const storedReceipt = storedSource?.execution.restartRecovery;
+      if (
+        (storedReceipt?.phase === "attempted" || storedReceipt?.phase === "consumed") &&
+        params.canReconcileAcceptedReceipt?.()
+      ) {
+        // Acceptance was witnessed by this live owner, but its write failed.
+        // Reconcile only that phase; every other field must still match below.
+        storedReceipt.phase = "accepted";
+      }
       if (!storedSource || !isDeepStrictEqual(bindSubagentRunRecord(storedSource), sourceRow)) {
         throw new Error("replacement subagent source changed before commit");
       }
@@ -112,7 +121,7 @@ export function commitSubagentTaskReplacement(params: {
   subagentRuns.commitOwnership(params.successor);
   const deferredObserverEvents: Array<() => void> = [];
   publishSubagentRunsAfterAtomicStore(params.runs, params.changedRunIds, deferredObserverEvents);
-  const task = publishTaskRecordAfterAtomicStore(params.task.next, {
+  publishTaskRecordAfterAtomicStore(params.task.next, {
     syncTaskFlow: false,
     deferredObserverEvents,
   });
@@ -125,5 +134,4 @@ export function commitSubagentTaskReplacement(params: {
       break;
     }
   }
-  return task;
 }

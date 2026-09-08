@@ -12,7 +12,6 @@ import "../../plugins/control-ui-contributions.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   availableSidebarSlots,
-  sidebarPanelActions,
   sidebarPanelDefinitions,
   sidebarPanelTemplates,
 } from "./chat-pane-embedded-panels.ts";
@@ -121,6 +120,10 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const chat = renderChat({
       ...chatProps,
       presented: this.active && this.presented,
+      transcriptVisible:
+        this.presented &&
+        this.visuallyPresented &&
+        isSidebarSlotVisible(sidebarLayout, "conversation"),
       browserTabPreviewsActive: this.active && this.presented,
       historyState: catalog ? undefined : state,
       header: nothing,
@@ -214,7 +217,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     });
     const availableSlots = availableSidebarSlots(panelDefinitions);
     const panelTemplates = sidebarPanelTemplates(panelDefinitions);
-    const panelActions = sidebarPanelActions(panelDefinitions);
+    const panelActions = sidebarPanelTemplates(panelDefinitions, "headerAction");
     // Main panel actions share the task toolbar. Content roots stay in the
     // sidebar region so changing their presentation never reconnects them.
     const header = this.compact
@@ -253,13 +256,14 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       panelActions,
       narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
       panelTemplates,
+      header: html`${header}${recovery}`,
       primary,
       requestUpdate: state.requestUpdate!,
     });
-    return html`<div class="chat-pane-layout">${header}${recovery}${content}</div>
-      ${renderChatImageLightbox(
-        state.imageLightbox,
-        state.handleCloseImage,
-      )}${this.renderResetConfirmation()}`;
+    return html`${content}
+    ${renderChatImageLightbox(
+      state.imageLightbox,
+      state.handleCloseImage,
+    )}${this.renderResetConfirmation()}`;
   }
 }

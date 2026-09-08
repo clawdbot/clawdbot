@@ -18,7 +18,6 @@ import {
   getPluginToolSideEffectOwnerKey,
   isSubagentSessionKey,
   isToolResultError,
-  resolveAttemptSpawnWorkspaceDir,
   resolveEmbeddedAttemptToolConstructionPlan,
   resolveModelAuthMode,
   sanitizeToolResult,
@@ -104,15 +103,10 @@ interface CopilotToolBridgeInput {
    */
   sandbox?: SandboxContext | null;
   /**
-   * Pre-computed `spawnWorkspaceDir` for subagent inheritance. The caller
-   * derives this from the *original* workspace via
-   * `resolveAttemptSpawnWorkspaceDir({ sandbox, resolvedWorkspace })`.
-   * When omitted, the bridge falls back to computing it from the
-   * (possibly sandbox-effective) `workspaceDir` it sees; production
-   * callers should pass it explicitly so `ro`/`none` sandboxes are
-   * handled correctly.
+   * Spawn workspace prepared by the attempt from the original workspace.
+   * Undefined keeps normal workspace wiring for absent or rw sandboxes.
    */
-  spawnWorkspaceDir?: string;
+  spawnWorkspaceDir: string | undefined;
   abortSignal?: AbortSignal;
   /**
    * Full PI-parity attempt parameters. When set, the bridge forwards
@@ -157,6 +151,7 @@ interface CopilotToolBridge {
   cleanup?: () => void;
   codeModeEngaged?: boolean;
   promptToolPolicy: {
+    requireExplicitMessageTarget?: boolean;
     apply: (params?: { toolsAllow?: string[]; forceToolNames?: readonly string[] }) => {
       tools: SdkTool[];
       callableToolNames: string[];
@@ -325,6 +320,7 @@ export async function createCopilotToolBridge(
     // as unset and telemetry cannot tell "off" from "harness did not report".
     codeModeEngaged: toolSurfaceRuntime.codeModeControlsEnabled,
     promptToolPolicy: {
+      requireExplicitMessageTarget: toolOptions.requireExplicitMessageTarget,
       apply: (params: { toolsAllow?: string[]; forceToolNames?: readonly string[] } = {}) => {
         const result = compactedTools.promptToolPolicy.apply({
           ...params,
@@ -375,21 +371,8 @@ function buildOpenClawCodingToolsOptions(
   const workspaceDir = input.workspaceDir ?? a.workspaceDir;
   const cwd = input.cwd ?? a.cwd;
   const agentDir = input.agentDir ?? a.agentDir;
-  // Sandbox forwarded from the caller (attempt.ts derives it via
-  // `resolveSandboxContext`). Wrapped tools that opt into sandbox-aware
-  // behavior now see the same policy PI provides. Spawn workspace falls
-  // through to the caller-provided value when supplied; otherwise we
-  // derive it locally from the (possibly sandbox-effective) workspaceDir
-  // — sufficient for legacy/test fixtures that didn't pre-compute it.
+  // Sandbox and spawn workspace are prepared by the attempt owner.
   const sandbox = input.sandbox ?? undefined;
-  const spawnWorkspaceDir =
-    input.spawnWorkspaceDir ??
-    (workspaceDir
-      ? resolveAttemptSpawnWorkspaceDir({
-          sandbox,
-          resolvedWorkspace: workspaceDir,
-        })
-      : undefined);
 
   const model = a.model;
   const modelHasVision = Array.isArray(model?.input) && model.input.includes("image");
@@ -422,24 +405,6 @@ function buildOpenClawCodingToolsOptions(
           },
         }
       : {}),
-    toolBindings: a.toolBindings,
-    chatType: a.chatType,
-    agentAccountId: a.agentAccountId,
-    messageTo: a.messageTo,
-    messageThreadId: a.messageThreadId,
-    nativeChannelId: a.chatId,
-    messageActionTurnCapability: a.messageActionTurnCapability,
-    groupId: a.groupId,
-    groupChannel: a.groupChannel,
-    groupSpace: a.groupSpace,
-    memberRoleIds: a.memberRoleIds,
-    spawnedBy: a.spawnedBy,
-    senderId: a.senderId,
-    senderName: a.senderName,
-    senderUsername: a.senderUsername,
-    senderE164: a.senderE164,
-    senderIsOwner: a.senderIsOwner,
-    scheduledToolPolicy: a.scheduledToolPolicy,
     allowGatewaySubagentBinding: a.allowGatewaySubagentBinding,
     sessionKey: sandboxSessionKey,
     runSessionKey,
@@ -450,7 +415,7 @@ function buildOpenClawCodingToolsOptions(
     workspaceDir,
     cwd,
     sandbox,
-    spawnWorkspaceDir,
+    spawnWorkspaceDir: input.spawnWorkspaceDir,
     config: toolSurfaceRuntime?.config ?? a.config,
     abortSignal: input.abortSignal,
     modelProvider: input.modelProvider,
@@ -468,16 +433,9 @@ function buildOpenClawCodingToolsOptions(
     modelAuthMode: resolveModelAuthMode(input.modelProvider, a.config, undefined, {
       workspaceDir,
     }),
-    currentChannelId: a.currentChannelId,
-    currentMessagingTarget: a.currentMessagingTarget,
-    currentThreadTs: a.currentThreadTs,
-    currentMessageId: a.currentMessageId,
-    replyToMode: a.replyToMode,
-    hasRepliedRef: a.hasRepliedRef,
     modelHasVision,
     requireExplicitMessageTarget:
       a.requireExplicitMessageTarget ?? isSubagentSessionKey(liveSessionKey),
-    sourceReplyDeliveryMode: a.sourceReplyDeliveryMode,
     disableMessageTool: a.disableMessageTool,
     forceMessageTool: a.forceMessageTool,
     enableHeartbeatTool: a.enableHeartbeatTool,
@@ -558,6 +516,7 @@ function convertOpenClawToolToSdkTool(
     input.attemptParams.observeToolTerminal?.({
       toolCallId: invocation.toolCallId,
       toolName: sourceTool.name,
+      result: error,
       arguments: executedArgs,
       executionStarted,
       outcome: "failure",
@@ -653,6 +612,7 @@ function convertOpenClawToolToSdkTool(
     input.attemptParams.observeToolTerminal?.({
       toolCallId: invocation.toolCallId,
       toolName: sourceTool.name,
+      result,
       arguments: preparedArgs,
       executionStarted: true,
       outcome: resultIsError ? "failure" : "success",
@@ -718,6 +678,7 @@ async function executeCatalogTool(
     input.attemptParams?.observeToolTerminal?.({
       toolCallId: params.toolCallId,
       toolName: params.toolName,
+      result,
       arguments: preparedArgs,
       executionStarted,
       outcome: isError ? "failure" : "success",
@@ -746,6 +707,7 @@ async function executeCatalogTool(
       input.attemptParams?.observeToolTerminal?.({
         toolCallId: params.toolCallId,
         toolName: params.toolName,
+        result: error,
         arguments: preparedArgs,
         executionStarted,
         outcome: "failure",

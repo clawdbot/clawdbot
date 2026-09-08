@@ -1,4 +1,5 @@
 import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
+import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/session-suspension.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { listLoadedChannelPluginsForRegistry } from "../channels/plugins/registry-loaded.js";
@@ -20,6 +21,7 @@ import {
 } from "../skills/runtime/remote.js";
 import type { RestartRecoveryCandidate } from "./chat-abort.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
+import { retireDeviceTokenClients } from "./device-token-client-lifecycle.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import { disposeNodeConnectionNotifications } from "./node-connection-notifications.js";
 import { clearNodeWakeState } from "./node-wake-state.js";
@@ -133,7 +135,7 @@ export async function prepareGatewayLifecycle(params: {
       if (change.availabilityChanged) {
         workerPlacementRuntime?.runnerAvailability.markChanged();
       }
-      if (change.inventoryChanged) {
+      if (change.inventoryChanged || change.availabilityChanged) {
         void workerPlacementRuntime?.scheduleNodeWorkspaceRetention(nodeId);
       }
     },
@@ -163,6 +165,13 @@ export async function prepareGatewayLifecycle(params: {
     broadcast,
     rateLimiter: authRateLimiter,
     nodeReapprovalCoordinator,
+    onDeviceTokensReplaced: (deviceId, roles) => {
+      const context = runtime.resolvePluginGatewayContext();
+      if (!context) {
+        throw new Error("Gateway request context is unavailable during device setup");
+      }
+      retireDeviceTokenClients(context, deviceId, roles, "device-token-rotated");
+    },
     onNodeConnected: (session) => {
       upsertPresence(session.nodeId, {
         host: session.displayName ?? session.clientId ?? session.nodeId,
@@ -375,27 +384,28 @@ export async function prepareGatewayLifecycle(params: {
     postReadyState.maintenanceTimer = null;
   };
   let deliveryRecoveryStopPromise: Promise<void> | null = null;
-  const stopDeliveryRecoveryForClose = () => {
-    deliveryRecoveryStopPromise ??= runtimeState.stopDeliveryRecovery();
-    return deliveryRecoveryStopPromise;
-  };
+  const stopDeliveryRecoveryForClose = () =>
+    (deliveryRecoveryStopPromise ??= runtimeState.stopDeliveryRecovery());
   let mediaCleanupStopPromise: ReturnType<typeof runtimeState.stopMediaCleanup> | null = null;
-  const stopMediaCleanupForClose = () => {
-    mediaCleanupStopPromise ??= runtimeState.stopMediaCleanup();
-    return mediaCleanupStopPromise;
-  };
+  const stopMediaCleanupForClose = () =>
+    (mediaCleanupStopPromise ??= runtimeState.stopMediaCleanup());
   // Connect, RPC, and maintenance refreshes share a Gateway owner, not a socket lifetime.
   const healthWork = new AsyncWorkScope();
   const markClosePreludeStarted = (options?: GatewayCloseOptions) => {
     if (lifecycle.closePreludeStarted) {
       return;
     }
+    const notice = resolveGatewayShutdownNotice(options);
     lifecycle.closePreludeStarted = true;
+    // Publish the exact cancellation before withdrawing capabilities or running
+    // disposal callbacks; startup can otherwise fail before restart marking.
+    runtime.connectionWork.beginClose(
+      notice.restartExpectedMs !== undefined ? createAgentRunRestartAbortError() : undefined,
+    );
     requestEntryLifetime.beginClose();
     mentionInbox.dispose();
     healthWork.beginClose();
-    broadcast("shutdown", resolveGatewayShutdownNotice(options));
-    runtime.connectionWork.beginClose();
+    broadcast("shutdown", notice);
     connectionDependentSidecarStopOwner.beginClose();
     // Keep late general sidecars owned until received work drains. Fence background
     // producers now, before their plugin/channel and shared-state dependencies can close.
@@ -410,10 +420,8 @@ export async function prepareGatewayLifecycle(params: {
     clearPostReadyMaintenanceTimer();
   };
   let configReloaderStopPromise: Promise<void> | null = null;
-  const stopConfigReloaderForClose = () => {
-    configReloaderStopPromise ??= runtimeState.configReloader.stop();
-    return configReloaderStopPromise;
-  };
+  const stopConfigReloaderForClose = () =>
+    (configReloaderStopPromise ??= runtimeState.configReloader.stop());
   const beginClosePrelude = async (options?: GatewayCloseOptions) => {
     fenceSessionSuspensionWritesForGatewayShutdown();
     markClosePreludeStarted(options);
@@ -595,6 +603,7 @@ export async function prepareGatewayLifecycle(params: {
     };
   };
   const closeOnStartupFailure = async () => {
+    runtime.startupTrace.close();
     const close = await prepareClose({ reason: "gateway startup failed" });
     await runGatewayShutdownSteps({
       steps: [
@@ -611,7 +620,7 @@ export async function prepareGatewayLifecycle(params: {
         { name: "gateway lifetime sidecars", run: stopRegisteredGatewayLifetimeSidecars },
         { name: "post-ready sidecars", run: stopRegisteredPostReadySidecars },
         { name: "gateway close prelude", run: runClosePrelude },
-        { name: "late sidecar cleanup", run: sealAndJoinRegisteredSidecarStops },
+        { name: "late sidecar cleanup", run: sealAndJoinRegisteredSidecarStops, required: true },
         {
           name: "gateway close",
           run: close,

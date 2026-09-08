@@ -1,6 +1,7 @@
 /** Agent-run result projections shared by execution owners and diagnostic probes. */
 import { isReplyPayloadTerminalContent, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { isSilentReplyPayloadText } from "../auto-reply/tokens.js";
+import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "./agent-run-terminal-outcome.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 
 /** Adds an owner-bounded, redacted diagnostic without discarding returned work. */
@@ -31,6 +32,10 @@ export function appendAgentRunFailure(
 export type AgentRunResultView = {
   payloads?: Array<ReplyPayload & { visible?: boolean }>;
   meta?: {
+    aborted?: boolean;
+    stopReason?: string;
+    timeoutPhase?: EmbeddedAgentRunResult["meta"]["timeoutPhase"];
+    providerStarted?: boolean;
     executionTrace?: { winnerProvider?: string; winnerModel?: string };
     finalAssistantVisibleText?: string;
     finalAssistantRawText?: string;
@@ -60,19 +65,18 @@ export function extractAgentRunText(result: AgentRunResultView): string | undefi
 
 export function extractAgentRunTerminalError(result: AgentRunResultView): string | undefined {
   const errorPayload = result.payloads?.find((payload) => payload.isError === true)?.text?.trim();
-  const livenessState = result.meta?.livenessState?.trim().toLowerCase();
-  if (
-    !errorPayload &&
-    !result.meta?.error &&
-    livenessState !== "blocked" &&
-    livenessState !== "abandoned"
-  ) {
+  const error = result.meta?.error?.message?.trim() || errorPayload;
+  const outcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({
+    phase: errorPayload || result.meta?.error ? "error" : "end",
+    data: { ...result.meta, error },
+  });
+  if (outcome.status === "ok") {
     return undefined;
   }
   return (
-    result.meta?.error?.message?.trim() ||
-    errorPayload ||
-    (livenessState ? `Inference ended in the ${livenessState} state.` : "Inference failed.")
+    error ||
+    outcome.error ||
+    (outcome.status === "timeout" ? "Inference timed out." : `Inference ${outcome.reason}.`)
   );
 }
 

@@ -9,15 +9,11 @@ import {
 } from "./tool-result-error.js";
 import { ToolAuthorizationError, ToolInputError } from "./tools/common.js";
 
-const undiciErrors = (
-  createRequire(import.meta.url)("undici") as {
-    errors: {
-      ConnectTimeoutError: new (message: string) => Error;
-      HeadersTimeoutError: new (message: string) => Error;
-      BodyTimeoutError: new (message: string) => Error;
-    };
-  }
-).errors;
+// Bun's built-in Undici shim does not carry the installed package's error codes.
+const requireUndiciPackage = createRequire(
+  createRequire(import.meta.url).resolve("undici/package.json"),
+);
+const undiciErrors = (requireUndiciPackage("./index.js") as typeof import("undici")).errors;
 
 describe("isToolResultError", () => {
   it("keeps completed results with nonzero exit codes nonfatal", () => {

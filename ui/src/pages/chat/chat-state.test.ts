@@ -2551,7 +2551,6 @@ describe("ChatStateController render lifecycle", () => {
           allowExternalEmbedUrls: false,
           assistantIdentity: { name: "Assistant" },
           embedSandboxMode: "scripts",
-          localMediaPreviewRoots: [],
         },
       },
       chatSubmissions: createChatSubmissions(),
@@ -3115,7 +3114,7 @@ describe("ChatStateController render lifecycle", () => {
 
   it("forces one PR-chips refresh per PR link seen in the live stream", () => {
     vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation(() => 1);
-    const refreshSessionPullRequests = vi.fn(() => Promise.resolve());
+    const refreshSessionPullRequests = vi.fn(() => true);
     const state = createStreamEventState({
       refreshSessionPullRequests,
     });
@@ -3455,7 +3454,7 @@ describe("session pull request refresh", () => {
     },
   ])("$name", ({ text, activeRunId, runId, stream, sessionKey, refresh }) => {
     vi.useFakeTimers();
-    const refreshSessionPullRequests = vi.fn(async () => undefined);
+    const refreshSessionPullRequests = vi.fn(() => true);
     const state = createFinalReplyState(refreshSessionPullRequests);
     if (activeRunId) {
       state.chatRunId = activeRunId;
@@ -3494,7 +3493,6 @@ describe("image lightbox lifecycle", () => {
           allowExternalEmbedUrls: false,
           assistantIdentity: { name: "Assistant" },
           embedSandboxMode: "scripts",
-          localMediaPreviewRoots: [],
         },
       },
       chatSubmissions: createChatSubmissions(),
@@ -3545,7 +3543,6 @@ describe("image lightbox lifecycle", () => {
           allowExternalEmbedUrls: false,
           assistantIdentity: { name: "Assistant" },
           embedSandboxMode: "scripts",
-          localMediaPreviewRoots: [],
         },
       },
       chatSubmissions: createChatSubmissions(),
@@ -3612,7 +3609,6 @@ describe("loadPageAssistantIdentity", () => {
           assistantIdentity: { name: "Assistant" },
           chatMessageMaxWidth: null,
           embedSandboxMode: "scripts",
-          localMediaPreviewRoots: [],
         },
       },
       gateway: { snapshot: { client, connected: true, hello: null } },

@@ -22,10 +22,6 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.resolve(
-  process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim() || ".artifacts/control-ui-e2e",
-  "logs-lifecycle",
-);
 const viewport = { height: 900, width: 1_440 };
 
 function logLine(message: string, level: "error" | "info" | "warn", second: number) {
@@ -42,9 +38,8 @@ async function capture(page: Page, name: string) {
   if (!captureUiProof) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
   await writeFile(
-    path.join(proofDir, name),
+    path.join(suite.artifactDir, name),
     await takeControlUiViewportScreenshot(page, page.locator(".logs-card"), [
       page.locator(".log-message").first(),
     ]),
@@ -140,7 +135,7 @@ suite.define(() => {
             locale: "en-US",
             serviceWorkers: "block",
             viewport,
-            ...(captureUiProof ? { recordVideo: { dir: proofDir, size: viewport } } : {}),
+            ...(captureUiProof ? { recordVideo: { dir: suite.artifactDir, size: viewport } } : {}),
           },
           async ({ page }) => {
             const pageErrors: string[] = [];
@@ -150,7 +145,9 @@ suite.define(() => {
             await page.goto(url.toString());
             const confirmation = page.locator("openclaw-gateway-url-confirmation");
             await confirmation.waitFor();
-            await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
+            await confirmation
+              .getByRole("button", { name: `Switch to 127.0.0.1:${port}`, exact: true })
+              .click();
             await waitForControlUiGatewayReady(page);
             await expect.poll(() => visibleMessages(page)).toEqual(["source A only"]);
 

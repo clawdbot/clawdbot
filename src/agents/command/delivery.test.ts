@@ -11,6 +11,7 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { buildRestartRecoveryTerminalDeliveryEvidence } from "../agent-command-restart-recovery.js";
+import { hasVisibleAgentPayload } from "../embedded-agent-runner/message-visibility.js";
 import { createAgentRunRestartAbortError } from "../run-termination.js";
 import { deliverAgentCommandResult } from "./delivery.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -281,6 +282,35 @@ describe("deliverAgentCommandResult payload normalization", () => {
 
   afterEach(() => {
     setActivePluginRegistry(emptyRegistry);
+  });
+
+  it.each([
+    {
+      name: "only a tool failure",
+      payloads: [{ text: "Yield failed", isError: true }],
+      visible: false,
+    },
+    {
+      name: "a final reply after a tool failure",
+      payloads: [
+        { text: "Yield failed", isError: true },
+        { text: "Both child results are ready." },
+      ],
+      visible: true,
+    },
+  ])("preserves completion visibility for $name", async ({ payloads, visible }) => {
+    const delivered = await deliverAgentCommandResultForTest({
+      payloads,
+      opts: { deliver: false },
+      omitReplyTarget: true,
+    });
+    expect(
+      hasVisibleAgentPayload(delivered, {
+        includeErrorPayloads: false,
+        includeReasoningPayloads: false,
+        requireTerminalContent: true,
+      }),
+    ).toBe(visible);
   });
 
   it("rechecks delivery ownership after asynchronous payload preparation", async () => {
@@ -822,6 +852,16 @@ describe("deliverAgentCommandResult payload normalization", () => {
       delivered.payloads[0],
       "[[buttons: Release menu | Choose an action | Retry:retry, Ignore:ignore]]",
     );
+  });
+
+  it("preserves settled continuation through empty command output normalization", async () => {
+    const delivered = await deliverAgentCommandResultForTest({
+      omitReplyTarget: true,
+      opts: { deliver: false },
+      payloads: [],
+      result: { requesterContinuationSettled: true },
+    });
+    expect(delivered.requesterContinuationSettled).toBe(true);
   });
 
   it("preserves committed message-tool delivery evidence when automatic delivery is disabled", async () => {

@@ -4,7 +4,7 @@ read_when:
   - You want to inspect internal hooks on a local or remote Gateway
   - You want to enable or disable a hook in local config
   - You need hook command flags or JSON report fields
-title: "Hooks"
+title: "Hooks CLI"
 doc-schema-version: 1
 ---
 

@@ -1,9 +1,7 @@
 import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../sessions/session-lifecycle-admission.js";
 import { waitForChatAbortControllerRemoval } from "./chat-abort-lifecycle-internal.js";
-import {
-  abortChatRunsForSessionKeyWithPartials,
-  createChatAbortOps,
-} from "./server-methods/chat-abort-runtime.js";
+import { createChatAbortOps } from "./chat-abort-ops.js";
+import { abortChatRunsForSessionKeyWithPartials } from "./server-methods/chat-abort-runtime.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 export type WorkerPlacementSessionWorkCancellation = (request: {

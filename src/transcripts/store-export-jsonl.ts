@@ -1,7 +1,12 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import type { DatabaseSync } from "node:sqlite";
 import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
-import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  iterateSqliteQuerySync,
+} from "../infra/kysely-sync.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
@@ -15,6 +20,20 @@ import {
 } from "./store-sqlite.js";
 
 const TRANSCRIPT_EXPORT_ROW_BATCH_SIZE = 64;
+
+export function transcriptJsonlDigest(
+  database: DatabaseSync,
+  session: TranscriptSessionDescriptor,
+): string {
+  const query = meetingTranscriptUtteranceQuery(database, session)
+    .selectAll()
+    .orderBy("sequence", "asc");
+  const digest = createHash("sha256");
+  for (const row of iterateSqliteQuerySync(database, query)) {
+    digest.update(`${JSON.stringify(utteranceFromRow(row))}\n`);
+  }
+  return digest.digest("hex");
+}
 
 export async function writeTranscriptJsonlArtifact(params: {
   sessionDir: string;

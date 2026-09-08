@@ -63,6 +63,51 @@ struct ConfigureRemoteCommandTests {
         }
     }
 
+    @Test @MainActor func `configure remote clears host defaults only when target changes`() async throws {
+        let configURL = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-configure-retarget-\(UUID().uuidString).json")
+        let suite = "ConfigureRemoteCommandTests.retarget.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            try? FileManager().removeItem(at: configURL)
+            defaults.removePersistentDomain(forName: suite)
+        }
+
+        try await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configURL.path]) {
+            try configureRemote(
+                .init(
+                    sshTarget: "alice@first.example",
+                    identity: "/tmp/first-identity",
+                    projectRoot: "/srv/first",
+                    cliPath: "/opt/first/openclaw"),
+                defaultsSuites: [suite])
+            try configureRemote(.init(sshTarget: "alice@first.example"), defaultsSuites: [suite])
+            #expect(defaults.string(forKey: "openclaw.remoteIdentity") == "/tmp/first-identity")
+            #expect(defaults.string(forKey: "openclaw.remoteProjectRoot") == "/srv/first")
+            #expect(defaults.string(forKey: "openclaw.remoteCliPath") == "/opt/first/openclaw")
+
+            try configureRemote(
+                .init(sshTarget: "alice@second.example", cliPath: "/opt/second/openclaw"),
+                defaultsSuites: [suite])
+            #expect(defaults.string(forKey: "openclaw.remoteIdentity") == nil)
+            #expect(defaults.string(forKey: "openclaw.remoteProjectRoot") == nil)
+            #expect(defaults.string(forKey: "openclaw.remoteCliPath") == "/opt/second/openclaw")
+
+            try configureRemote(.init(directUrl: "wss://third.example"), defaultsSuites: [suite])
+            #expect(defaults.string(forKey: "openclaw.remoteTarget") == nil)
+            #expect(defaults.string(forKey: "openclaw.remoteIdentity") == nil)
+            #expect(defaults.string(forKey: "openclaw.remoteProjectRoot") == nil)
+            #expect(defaults.string(forKey: "openclaw.remoteCliPath") == nil)
+
+            try configureRemote(
+                .init(directUrl: "wss://third.example", projectRoot: "/srv/third"), defaultsSuites: [suite])
+            try configureRemote(.init(directUrl: "wss://third.example"), defaultsSuites: [suite])
+            #expect(defaults.string(forKey: "openclaw.remoteProjectRoot") == "/srv/third")
+            try configureRemote(.init(directUrl: "wss://fourth.example"), defaultsSuites: [suite])
+            #expect(defaults.string(forKey: "openclaw.remoteProjectRoot") == nil)
+        }
+    }
+
     @Test @MainActor func `configure remote preserves existing optional credentials when flags omitted`() async throws {
         let configURL = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-configure-remote-preserve-\(UUID().uuidString).json")

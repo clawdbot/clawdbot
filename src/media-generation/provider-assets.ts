@@ -35,6 +35,8 @@ export async function downloadGeneratedVideoAsset(params: {
   index?: number;
   maxBytes?: number;
   validateBinaryResponse?: boolean;
+  /** Zero preserves deadline-only downloads without adding an idle timeout. */
+  chunkTimeoutMs?: number;
   metadata?: Record<string, unknown>;
   fetchResponse?: GeneratedVideoResponseFactory;
 }): Promise<GeneratedVideoAsset> {
@@ -64,6 +66,7 @@ export async function downloadGeneratedVideoAsset(params: {
     const maxBytes = params.maxBytes ?? maxBytesForKind("video");
     const readOptions = {
       maxBytes,
+      chunkTimeoutMs: params.chunkTimeoutMs,
       timeoutMs,
       onTimeout: ({ timeoutMs: bodyTimeoutMs }: { timeoutMs: number }) =>
         new Error(`${params.label} timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`),

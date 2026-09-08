@@ -257,7 +257,7 @@ Compat overrides for stricter OpenAI-compatible backends:
 
 ## Smaller or stricter backends
 
-If the model loads cleanly but full agent turns misbehave, work top-down: confirm transport first, then narrow the surface.
+If the model loads cleanly but full agent turns misbehave, confirm transport first, then inspect tool use and the context budget.
 
 1. **Confirm the local model responds** - no tools, no agent context:
 
@@ -271,11 +271,11 @@ If the model loads cleanly but full agent turns misbehave, work top-down: confir
    openclaw infer model run --gateway --model <provider/model> --prompt "Reply with exactly: pong" --json
    ```
 
-3. **Try lean mode** if both probes pass but real agent turns fail with malformed tool calls or oversized prompts: set `agents.defaults.experimental.localModelLean: true`. It drops heavyweight browser, cron, message, media-generation, voice, and PDF tools unless explicitly required, and defaults larger tool catalogs behind structured Tool Search controls while keeping `exec` directly visible. See [Experimental Features -> Local model lean mode](/concepts/experimental-features#local-model-lean-mode) for details and how to confirm it's on.
+3. **Check Tool Search** if both probes pass but real agent turns fail with malformed tool calls or oversized prompts. Local Ollama models, LM Studio, and managed local services automatically use structured [Tool Search](/tools/tool-search) when `tools.toolSearch` is unset. Other backends can enable it with `tools.toolSearch: { mode: "tools" }`. This defers schemas while preserving policy-approved capabilities. Leave `localModelLean` unset or set it to `false` so optional tools remain available. Check the server's actual context allocation and memory use as well.
 
 4. **Disable tools entirely as a last resort** by setting `models.providers.<provider>.models[].compat.supportsTools: false` for that model - the agent then runs without tool calls.
 
-5. **Past that, the bottleneck is upstream.** If the backend still fails only on larger OpenClaw runs after lean mode and `supportsTools: false`, the remaining issue is usually the model or server itself - context window, GPU memory, kv-cache eviction, or a backend bug - not OpenClaw's transport layer.
+5. **Inspect the failing request and server logs.** Check the chat template, context window, memory pressure, and server errors. A successful text-only probe does not prove that the model can reliably complete a multi-step agent task.
 
 ## Troubleshooting
 
@@ -285,7 +285,7 @@ If the model loads cleanly but full agent turns misbehave, work top-down: confir
 - **Context errors?** OpenClaw derives context-window preflight thresholds from the detected model window or the per-model `models.providers.<provider>.models[].contextTokens` cap, warning below 20% with an **8k** floor and hard-blocking below 10% with a **4k** floor. Lower that model entry's `contextTokens` or raise the server/model context limit.
 - **`messages[].content ... expected a string`?** Add `compat.requiresStringContent: true` on that model entry.
 - **`validation.keys`, or "message entries only allow `role` and `content`"?** Add `compat.strictMessageKeys: true` on that model entry.
-- **Direct `/v1/chat/completions` calls work, but `openclaw infer model run --local` fails on Gemma or another local model?** Check the provider URL, model ref, auth marker, and server logs first - `model run` skips agent tools entirely. If `model run` succeeds but larger agent turns fail, reduce the tool surface with `localModelLean` or `compat.supportsTools: false`.
+- **Direct `/v1/chat/completions` calls work, but `openclaw infer model run --local` fails on Gemma or another local model?** Check the provider URL, model ref, auth marker, and server logs first - `model run` skips agent tools entirely. If `model run` succeeds but larger agent turns fail, check Tool Search and the allocated context. Use `compat.supportsTools: false` only for a model that cannot reliably call tools.
 - **Tool calls show up as raw JSON/XML/ReAct text, or the provider returns an empty `tool_calls` array?** Do not add a proxy that blindly converts assistant text into tool execution - fix the server's chat template/parser first. If the model only works when tool use is forced, add the `params.extra_body.tool_choice: "required"` override above and use that model entry only for sessions where a tool call is expected every turn.
 - **Safety**: local models skip provider-side filters. Keep agents narrow and compaction on to limit prompt-injection blast radius.
 

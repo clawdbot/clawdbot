@@ -22,9 +22,10 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import {
   NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
 } from "../../shared/device-bootstrap-profile.js";
 import { isLoopbackHost } from "../net.js";
-import { formatForLog } from "../ws-log.js";
+import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -65,7 +66,7 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    try {
+    await respondUnavailableOnThrow(respond, async () => {
       if (
         params.joinUrl === true &&
         params.bootstrapProfile !== undefined &&
@@ -93,7 +94,9 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
               bootstrapProfile:
                 params.joinUrl === true || params.bootstrapProfile === "node"
                   ? NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE
-                  : PAIRING_SETUP_BOOTSTRAP_PROFILE,
+                  : params.bootstrapProfile === "voice-node"
+                    ? VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE
+                    : PAIRING_SETUP_BOOTSTRAP_PROFILE,
             }
           : {}),
         // Lets Tailscale serve/funnel URLs resolve, mirroring the `openclaw qr` CLI.
@@ -144,9 +147,7 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
         },
         undefined,
       );
-    } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
-    }
+    });
   },
   // Recovery path for the best-effort device.pair.setup.completed broadcast: a
   // client that missed the frame must not present a redeemed setup as expired.
@@ -161,7 +162,7 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    try {
+    await respondUnavailableOnThrow(respond, async () => {
       const completion = await readDevicePairSetupCompletion({ setupId: params.setupId });
       // Retention bookkeeping stays server-side; the wire shape matches the
       // corresponding success or delivery-uncertain broadcast.
@@ -180,8 +181,6 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
           })()
         : {};
       respond(true, result, undefined);
-    } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
-    }
+    });
   },
 };

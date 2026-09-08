@@ -384,7 +384,7 @@ describe("session menu", () => {
 
     for (const [view, labels] of [
       ["open-in", ["Back", "New tab", "New window", "Cursor", "VS Code", "Windsurf", "Zed"]],
-      ["copy", ["Back", "Session link", "Conversation as Markdown", "Session ID"]],
+      ["copy", ["Back", "Session link", "Preview link", "Conversation as Markdown", "Session ID"]],
       ["assign-owner", ["Back", "Me", "Research owner"]],
       ["icon", ["Back"]],
       ["group", ["Back", "Research", "Operations", "New group"]],
@@ -553,6 +553,7 @@ describe("session menu", () => {
     expect(copyGroup.getAttribute("aria-keyshortcuts")).toBe("C");
     expect(menuItemLabels(copyGroup)).toEqual([
       "Session link",
+      "Preview link",
       "Conversation as Markdown",
       "Session ID",
     ]);
@@ -588,6 +589,7 @@ describe("session menu", () => {
     for (const kind of [
       "copy-session-id",
       "copy-session-link",
+      "copy-session-preview-link",
       "copy-markdown",
       "open-new-tab",
       "open-new-window",

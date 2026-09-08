@@ -8,7 +8,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import { respondWithCachedSessionList } from "../../gateway/server-methods/sessions-list-cache.js";
-import { listSessionsFromStoreAsync } from "../../gateway/session-utils-list.js";
+import { listSessionFixture } from "../../gateway/session-list.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { handleDirectiveOnly } from "./directive-handling.impl.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
@@ -46,7 +46,7 @@ it.each([
             response = payload;
           },
           run: async () =>
-            await listSessionsFromStoreAsync({
+            await listSessionFixture({
               cfg,
               storePath,
               store: { [scope.sessionKey]: readEntry() },

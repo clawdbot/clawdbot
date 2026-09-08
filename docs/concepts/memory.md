@@ -219,6 +219,10 @@ OpenClaw runs a silent turn that reminds the agent to save important context
 to memory files. This is on by default; set
 `agents.defaults.compaction.memoryFlush.enabled: false` to turn it off.
 
+The flush uses a private copy of the conversation, so its housekeeping messages
+never appear in later user turns, even if interrupted. Its writes to memory files
+are still saved normally.
+
 Memory flushing requires writable workspace access. Sessions whose sandbox
 requires read-only or no workspace access skip the flush, including sessions
 with a persisted sandbox requirement that overrides the agent's configuration.

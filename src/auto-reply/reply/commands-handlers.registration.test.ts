@@ -33,7 +33,7 @@ describe("command handler registration", () => {
         { SenderId: "registry-sender", CommandInterpretationSuppressed: suppressed },
       );
       params.skillCommands = [];
-      expect(params.command.isAuthorizedSender).toBe(true);
+      expect(params.command.isAuthorizedSender).toBe(!suppressed);
       expect(params.command.senderIsOwner).toBe(false);
       return withPluginRuntimeRegistryScope(registry, () => handleCommands(params));
     };

@@ -3,7 +3,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { isRetryableDeliveryNotSentError } from "../../infra/delivery-recovery.shared.js";
+import {
+  isDeliveryRecoveryOwnedRetry,
+  isRetryableDeliveryNotSentError,
+  resolveDeliveryNotSentRetryability,
+} from "../../infra/delivery-recovery.shared.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -31,8 +35,10 @@ import {
 import { getHumanDelay, getHumanDelayMax } from "./reply-dispatch-delay.js";
 import {
   createReplyDispatchSettledCounts,
+  isReplyDispatchDeliveryPending,
   REPLY_DISPATCH_OUTCOME_COUNTS,
   resolveReplyDispatchDeliveryOutcome,
+  resolveReplyDispatchErrorOutcome,
   shouldRetryReplyDispatch,
   type ReplyDispatchDeliveryOutcome,
 } from "./reply-dispatch-outcome.js";
@@ -71,6 +77,7 @@ type ReplyDispatchDeliveryOutcomeTracker = {
   promise: Promise<ReplyDispatchDeliveryOutcome>;
   resolve: (outcome: ReplyDispatchDeliveryOutcome) => void;
   tracked: boolean;
+  pending: boolean;
 };
 
 type ReplyDispatchDeliverer = (
@@ -85,13 +92,6 @@ const silentReplyLogger = createSubsystemLogger("silent-reply/dispatcher");
 const deliveryOutcomeTrackers = new WeakMap<ReplyPayload, ReplyDispatchDeliveryOutcomeTracker>();
 const undeliveredFallbacks = new WeakMap<ReplyPayload, ReplyPayload>();
 const conversationContextsByDispatcher = new WeakMap<ReplyDispatcher, string>();
-const replyDispatcherPreparers = new WeakMap<
-  ReplyDispatcher,
-  {
-    owner: object;
-    normalize: (kind: ReplyDispatchKind, payload: ReplyPayload) => NormalizeReplyOutcome;
-  }
->();
 
 /** Associate this turn's finalized prompt with its exact dispatcher without changing the SDK. */
 export function bindReplyDispatcherConversationContext(
@@ -105,6 +105,7 @@ export function bindReplyDispatcherConversationContext(
 export function captureReplyDispatchDeliveryOutcome(payload: ReplyPayload): {
   promise: Promise<ReplyDispatchDeliveryOutcome>;
   isTracked: () => boolean;
+  hasPendingDelivery: () => boolean;
 } {
   // Nested dispatch observers share the next enqueue's receipt. Enqueue consumes
   // it so a later send of the same payload owns a separate settlement.
@@ -117,10 +118,15 @@ export function captureReplyDispatchDeliveryOutcome(payload: ReplyPayload): {
       }),
       resolve: (outcome) => resolveOutcome(outcome),
       tracked: false,
+      pending: false,
     };
     deliveryOutcomeTrackers.set(payload, tracker);
   }
-  return { promise: tracker.promise, isTracked: () => tracker.tracked };
+  return {
+    promise: tracker.promise,
+    isTracked: () => tracker.tracked,
+    hasPendingDelivery: () => tracker.pending,
+  };
 }
 
 /** Attach a text alternative that is delivered only when the primary payload is proven unsent. */
@@ -157,7 +163,7 @@ export type ReplyDispatcherOptions = {
   onHeartbeatStrip?: () => void;
   onIdle?: () => Promise<void> | void;
   onError?: ReplyDispatchErrorHandler;
-  /** Let a durable ingress owner retry when every attempted send proves no recipient visibility. */
+  /** Let ingress retry proven-unsent work only when outbound recovery holds no delivery. */
   propagateRetryableNoSendFailure?: boolean;
   // AIDEV-NOTE: onSkip lets channels detect silent/empty drops (e.g. Telegram empty-response fallback).
   onSkip?: ReplyDispatchSkipHandler;
@@ -229,19 +235,9 @@ export function prepareReplyPayloadForDispatcher(
   kind: ReplyDispatchKind,
   payload: ReplyPayload,
 ): NormalizeReplyOutcome {
-  const preparer = replyDispatcherPreparers.get(dispatcher);
-  if (!preparer) {
-    return { kind: "deliver", payload };
-  }
-  const outcome = preparer.normalize(kind, payload);
-  return outcome.kind === "deliver"
-    ? {
-        kind: "deliver",
-        payload: setReplyPayloadMetadata(outcome.payload, {
-          replyDispatcherNormalizationOwner: preparer.owner,
-        }),
-      }
-    : outcome;
+  return dispatcher.prepareReplyPayload
+    ? dispatcher.prepareReplyPayload(kind, payload)
+    : { kind: "deliver", payload };
 }
 
 export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDispatcher {
@@ -269,6 +265,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     final: createReplyDispatchSettledCounts(),
   };
   let retryableNoSendError: Error | undefined;
+  let hasPendingDelivery = false;
   let sendChain: Promise<void> = Promise.resolve();
   let settlementChain: Promise<void> = Promise.resolve();
   let pendingFinalizations = 0;
@@ -312,12 +309,10 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     anyVisibleDelivered: Object.values(settledCounts).some(
       (counts) => counts.delivered > 0 || counts.failedAfterSend > 0,
     ),
+    ...(hasPendingDelivery ? { hasPendingDelivery: true } : {}),
   });
 
-  const { unregister } = registerDispatcher({
-    pending: () => pending,
-    waitForIdle,
-  });
+  const unregister = registerDispatcher(() => pending);
 
   const reportObserverError = (err: unknown, info: ReplyDispatchRuntimeInfo) => {
     void Promise.resolve(options.onError?.(err, info)).catch(() => undefined);
@@ -372,11 +367,38 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
   const deliverOnce = async (payload: ReplyPayload, info: ReplyDispatchRuntimeInfo) => {
     let deliverPayload: ReplyPayload | null = payload;
     let deliveryStarted = false;
+    let pendingDelivery = false;
     const custody = getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion;
-    const settleCustody = (state: "delivered" | "unknown") =>
+    const settleCustody = (state: "delivered" | "suppressed" | "unknown") =>
       custody
         ? settlePendingFinalDelivery({ kind: "pending-final", ...custody }, state, ["queued"])
         : undefined;
+    const settleFailure = async (error: unknown): Promise<ReplyDispatchDeliveryOutcome> => {
+      const retryableNoSend = isRetryableDeliveryNotSentError(error);
+      const queueHeld = isDeliveryRecoveryOwnedRetry(error);
+      pendingDelivery ||=
+        queueHeld ||
+        (deliveryStarted &&
+          !retryableNoSend &&
+          resolveDeliveryNotSentRetryability(error) !== false);
+      hasPendingDelivery ||= pendingDelivery;
+      const outcome = deliveryStarted
+        ? resolveReplyDispatchErrorOutcome(error)
+        : "failed-before-deliver";
+      if (retryableNoSend) {
+        retryableNoSendError ??= toErrorObject(error, "reply delivery failed before dispatch");
+      }
+      if (custody && deliveryStarted && !queueHeld) {
+        // Proven no-send restores replayable custody, including after direct
+        // admission marked it unknown. An external queue keeps its own marker.
+        await settlePendingFinalDelivery(
+          { kind: "pending-final", ...custody },
+          outcome === "failed-deliver" ? "unknown" : "prepared",
+          outcome === "failed-deliver" ? ["queued"] : ["queued", "unknown"],
+        );
+      }
+      return outcome;
+    };
     try {
       if (beforeDeliver) {
         try {
@@ -420,45 +442,41 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           : undefined;
       pendingFinalizations += finalization ? 1 : 0;
       return {
+        get pendingDelivery() {
+          return pendingDelivery;
+        },
         settlement: (async (): Promise<ReplyDispatchDeliveryOutcome> => {
           try {
             const finalized = finalization ? await finalization : undefined;
-            await settleCustody("delivered");
-            const outcome =
+            const settledResult =
               finalization && isRecord(result) && isRecord(finalized)
                 ? { ...result, ...finalized, finalization: undefined }
                 : result;
-            return resolveReplyDispatchDeliveryOutcome(outcome);
-          } catch {
-            await settleCustody("unknown");
-            return "failed-deliver";
+            const outcome = resolveReplyDispatchDeliveryOutcome(settledResult);
+            pendingDelivery = isReplyDispatchDeliveryPending(settledResult);
+            hasPendingDelivery ||= pendingDelivery;
+            await settleCustody(
+              pendingDelivery || outcome === "failed-deliver"
+                ? "unknown"
+                : outcome === "channel-transform"
+                  ? "suppressed"
+                  : "delivered",
+            );
+            return outcome;
+          } catch (error) {
+            // The channel lifecycle owns deferred error observers; custody uses the same rules.
+            return await settleFailure(error);
           } finally {
             pendingFinalizations -= finalization ? 1 : 0;
           }
         })(),
       };
     } catch (error) {
-      const retryableNoSend = isRetryableDeliveryNotSentError(error);
-      if (retryableNoSend) {
-        retryableNoSendError ??= toErrorObject(error, "reply delivery failed before dispatch");
-      }
-      const outcome: ReplyDispatchDeliveryOutcome =
-        deliveryStarted && !retryableNoSend ? "failed-deliver" : "failed-before-deliver";
-      if (custody && deliveryStarted) {
-        // Proven no-send keeps the marker replayable for restart recovery —
-        // including after direct custody escalated queued→unknown pre-I/O,
-        // since the error proves the send never crossed the wire. Anything
-        // else after platform I/O started fails closed as "unknown".
-        await settlePendingFinalDelivery(
-          { kind: "pending-final", ...custody },
-          outcome === "failed-deliver" ? "unknown" : "prepared",
-          outcome === "failed-deliver" ? ["queued"] : ["queued", "unknown"],
-        );
-      }
+      const outcome = await settleFailure(error);
       try {
         await options.onError?.(error, info);
       } catch {}
-      return { settlement: Promise.resolve(outcome) };
+      return { settlement: Promise.resolve(outcome), pendingDelivery };
     }
   };
 
@@ -527,16 +545,17 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     const dispatchInfo = buildReplyDispatchRuntimeInfo(normalized, kind);
     const delivery = startSerializedDelivery(normalized, dispatchInfo, shouldDelay);
     void enqueueSettlement(async () => {
+      let attempt: Awaited<typeof delivery> | undefined;
       try {
-        const attempt = await delivery;
+        attempt = await delivery;
         deliveryOutcome = await attempt.settlement;
-        if (deliveryFallback && shouldRetryReplyDispatch(deliveryOutcome)) {
-          const fallbackAttempt = await startSerializedDelivery(
-            deliveryFallback,
-            dispatchInfo,
-            false,
-          );
-          deliveryOutcome = await fallbackAttempt.settlement;
+        if (
+          deliveryFallback &&
+          !attempt.pendingDelivery &&
+          shouldRetryReplyDispatch(deliveryOutcome)
+        ) {
+          attempt = await startSerializedDelivery(deliveryFallback, dispatchInfo, false);
+          deliveryOutcome = await attempt.settlement;
         }
         settledCounts[kind][REPLY_DISPATCH_OUTCOME_COUNTS[deliveryOutcome]] += 1;
       } catch (err: unknown) {
@@ -546,7 +565,11 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         } catch {}
         deliveryOutcome = "failed-before-deliver";
       } finally {
-        deliveryOutcomeTracker?.resolve(deliveryOutcome);
+        if (deliveryOutcomeTracker) {
+          // Publish pending state before block/final observers consume this exact enqueue's outcome.
+          deliveryOutcomeTracker.pending = attempt?.pendingDelivery === true;
+          deliveryOutcomeTracker.resolve(deliveryOutcome);
+        }
         try {
           options.onDeliverySettled?.(dispatchInfo);
         } catch (err: unknown) {
@@ -586,6 +609,17 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
   };
 
   const dispatcher: ReplyDispatcher = {
+    prepareReplyPayload: (kind, payload) => {
+      const outcome = normalizeForDispatch(kind, payload, true);
+      return outcome.kind === "deliver"
+        ? {
+            kind: "deliver",
+            payload: setReplyPayloadMetadata(outcome.payload, {
+              replyDispatcherNormalizationOwner: dispatcher,
+            }),
+          }
+        : outcome;
+    },
     sendToolResult: (payload) => enqueue("tool", payload),
     sendBlockReply: (payload) => enqueue("block", payload),
     sendFinalReply: (payload) => enqueue("final", payload),
@@ -601,6 +635,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       const receipt = buildReceipt();
       if (
         options.propagateRetryableNoSendFailure === true &&
+        !hasPendingDelivery &&
         !receipt.anyVisibleDelivered &&
         retryableNoSendError !== undefined
       ) {
@@ -626,10 +661,6 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
             })
         : undefined,
   };
-  replyDispatcherPreparers.set(dispatcher, {
-    owner: dispatcher,
-    normalize: (kind, payload) => normalizeForDispatch(kind, payload, true),
-  });
   return dispatcher;
 }
 

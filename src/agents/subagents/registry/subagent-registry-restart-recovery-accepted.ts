@@ -1,4 +1,5 @@
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
+import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { resolveInternalSessionEffectsTarget } from "../../internal-session-effects.js";
 import { isRestartRecoveryLifecycleCurrent } from "./subagent-registry-restart-recovery-helpers.js";
 import {
@@ -44,6 +45,15 @@ export async function reconcileAcceptedRecovery(params: {
       target: { runId: owner.runId, entry: owner },
     };
   }
+  const resolveGatewayContext = params.gatewayRuntime
+    ? getGatewayContextResolver(params.gatewayRuntime)
+    : undefined;
+  const ownsRecoveryGateway = () =>
+    resolveGatewayContext?.()?.recoveryRuntime === params.gatewayRuntime &&
+    params.gatewayRuntime !== undefined;
+  if (!ownsRecoveryGateway()) {
+    return { status: "deferred" };
+  }
   if (params.runId !== params.receipt.idempotencyKey) {
     let remapped = false;
     let remapError: unknown;
@@ -62,6 +72,10 @@ export async function reconcileAcceptedRecovery(params: {
           }),
           task: params.entry.task,
           restartRecovery: params.receipt,
+          preserveRequesterSettleWake: true,
+          // A replacement execution belongs to the Gateway that accepted it.
+          // Its predecessor must retain its closed resolver for stale callbacks.
+          gatewayContextResolver: resolveGatewayContext,
           persistenceFailure: "return-false",
         });
     } catch (error) {
@@ -94,7 +108,8 @@ export async function reconcileAcceptedRecovery(params: {
   const ownsAcceptedTarget = () =>
     params.isCurrent(owner.runId, owner) &&
     owner.execution.restartRecovery === params.receipt &&
-    isRestartRecoveryLifecycleCurrent(params.receipt);
+    isRestartRecoveryLifecycleCurrent(params.receipt) &&
+    ownsRecoveryGateway();
 
   if (
     !params.currentSessionId ||
@@ -191,7 +206,8 @@ export async function reconcileAcceptedRecovery(params: {
   const ownsSettledTarget = () =>
     params.isCurrent(owner.runId, owner) &&
     owner.execution.restartRecovery === undefined &&
-    isRestartRecoveryLifecycleCurrent(params.receipt);
+    isRestartRecoveryLifecycleCurrent(params.receipt) &&
+    ownsRecoveryGateway();
   const ownsPendingNoticeTarget = () =>
     ownsSettledTarget() && owner.resumptionNotice?.idempotencyKey === params.receipt.idempotencyKey;
   if (noticeRequired) {

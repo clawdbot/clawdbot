@@ -180,6 +180,9 @@ suite.define(() => {
 
         const detect = await gateway.waitForRequest("openclaw.setup.detect");
         expect(detect.params).toEqual({ agentId: "main" });
+        await page.locator('[data-candidate-kind="openai-api-key"] button').waitFor();
+        expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(0);
+        await page.locator('[data-candidate-kind="openai-api-key"] button').click();
         const activate = await gateway.waitForRequest("openclaw.setup.activate.start");
         expect(activate.params).toEqual({
           sessionId: expect.any(String),
@@ -780,8 +783,11 @@ suite.define(() => {
         await expect.poll(() => manualProviderHasFocus(lastProviderId)).toBe(true);
         await page.keyboard.press("Home");
         await expect.poll(() => manualProviderHasFocus(firstProviderId)).toBe(true);
-        await page.keyboard.press("ArrowDown");
-        await page.keyboard.press("ArrowDown");
+        const zaiIndex = providerIds.indexOf("zai-cn");
+        expect(zaiIndex).toBeGreaterThan(0);
+        for (let index = 0; index < zaiIndex; index += 1) {
+          await page.keyboard.press("ArrowDown");
+        }
         await expect.poll(() => manualProviderHasFocus("zai-cn")).toBe(true);
         await armProviderHide();
         await page.keyboard.press("Enter");

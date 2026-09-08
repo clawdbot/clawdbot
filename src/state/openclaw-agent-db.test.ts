@@ -7,22 +7,25 @@ import type { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
-  beginAgentDeletion,
-  claimCompletedAgentDeletion,
-} from "../agents/agent-lifecycle-registry.js";
-import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import * as nodeSqlite from "../infra/node-sqlite.js";
 import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.test-support.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { VERSION } from "../version.js";
 import {
   assertAgentDeletionPathFence,
+  beginAgentDeletionJournal,
+  claimCompletedAgentDeletionJournal,
+  completeAgentDeletionJournalInDatabase,
   prepareAgentDeletionPathFence,
+  removeAgentDeletionJournal,
+  updateAgentDeletionJournalDatabasePaths,
+  updateAgentDeletionJournalCleanupPaths,
 } from "./agent-deletion-journal.js";
 import { AGENT_MEDIA_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
@@ -58,6 +61,7 @@ import {
   settleOpenClawAgentDatabaseWorkerClose,
   withAgentDatabaseMaintenanceLease,
 } from "./openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -846,6 +850,29 @@ afterEach(() => {
 });
 
 describe("openclaw agent database", () => {
+  it.each([false, true])(
+    "keeps agent state writable without SQLite extension support (incognito=%s)",
+    (incognito) => {
+      const options = { agentId: "worker-1", env: { OPENCLAW_STATE_DIR: createTempStateDir() } };
+      const capability = vi
+        .spyOn(nodeSqlite, "supportsNodeSqliteExtensionLoading")
+        .mockReturnValue(false);
+      try {
+        const { db } = openOpenClawAgentDatabase({
+          ...options,
+          ...(incognito ? { path: resolveIncognitoOpenClawAgentSqlitePath(options) } : {}),
+        });
+        db.prepare("UPDATE schema_meta SET updated_at = ? WHERE meta_key = 'primary'").run(123);
+        expect(
+          db.prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'").get(),
+        ).toEqual({ updated_at: 123 });
+        expect(() => db.enableLoadExtension(true)).toThrow();
+      } finally {
+        capability.mockRestore();
+      }
+    },
+  );
+
   it("uses the canonical state schema for deletion journal reads and updates", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -869,7 +896,10 @@ describe("openclaw agent database", () => {
       workspaceDir: path.join(stateDir, "workspace-deleted"),
       sessionsDir: path.join(stateDir, "sessions-deleted"),
     };
-    const deletion = beginAgentDeletion(entry, { env });
+    const deletion = beginAgentDeletionJournal(
+      { ...entry, operationId: "deletion", deleteFiles: true },
+      { env },
+    );
     const databasePaths = [path.join(entry.agentDir, "openclaw-agent.sqlite")];
     const cleanupPaths = [
       {
@@ -884,13 +914,20 @@ describe("openclaw agent database", () => {
         done: false,
       },
     ];
-    deletion.fenceDatabasePaths(databasePaths);
-    deletion.fenceCleanupPaths(cleanupPaths);
+    updateAgentDeletionJournalDatabasePaths(deletion.agentId, deletion.operationId, databasePaths, {
+      env,
+    });
+    updateAgentDeletionJournalCleanupPaths(deletion.agentId, deletion.operationId, cleanupPaths, {
+      env,
+    });
 
-    const recovery = beginAgentDeletion(entry, { env });
-    expect(recovery.entry.databasePaths).toEqual(databasePaths);
-    expect(recovery.entry.cleanupPaths).toEqual(cleanupPaths);
-    recovery.rollback();
+    const recovery = beginAgentDeletionJournal(
+      { ...entry, operationId: "recovery", deleteFiles: true },
+      { env },
+    );
+    expect(recovery.databasePaths).toEqual(databasePaths);
+    expect(recovery.cleanupPaths).toEqual(cleanupPaths);
+    removeAgentDeletionJournal(recovery.agentId, recovery.operationId, { env });
   });
 
   it("fences registration and lease claims beneath another agent's pending deletion", () => {
@@ -910,8 +947,10 @@ describe("openclaw agent database", () => {
       env,
     });
     registerOpenClawAgentDatabase({ agentId: "deleted", path: registeredSidecarPath, env });
-    const deletion = beginAgentDeletion(
+    const deletion = beginAgentDeletionJournal(
       {
+        operationId: "deletion",
+        deleteFiles: true,
         agentId: "deleted",
         agentDir: linkedAgentDir,
         workspaceDir: path.join(stateDir, "workspace-deleted"),
@@ -933,7 +972,7 @@ describe("openclaw agent database", () => {
         ).toThrow("deletion owns");
       }
     } finally {
-      deletion.rollback();
+      removeAgentDeletionJournal(deletion.agentId, deletion.operationId, { env });
     }
 
     expect(() =>
@@ -958,8 +997,10 @@ describe("openclaw agent database", () => {
       path: foreignDatabasePath,
       env,
     });
-    const deletion = beginAgentDeletion(
+    const deletion = beginAgentDeletionJournal(
       {
+        operationId: "deletion",
+        deleteFiles: true,
         agentId: "deleted",
         agentDir: path.join(stateDir, "agents", "deleted", "agent"),
         workspaceDir,
@@ -971,7 +1012,7 @@ describe("openclaw agent database", () => {
     expect(() => assertNoOpenClawAgentDatabaseLeases("deleted", { env })).toThrow("deletion owns");
     releaseOpenClawAgentDatabaseLease(leaseId, { env });
     expect(() => assertNoOpenClawAgentDatabaseLeases("deleted", { env })).not.toThrow();
-    deletion.rollback();
+    removeAgentDeletionJournal(deletion.agentId, deletion.operationId, { env });
   });
 
   it("rejects a database claim prepared before deletion cleanup completes", () => {
@@ -979,8 +1020,10 @@ describe("openclaw agent database", () => {
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const agentDir = path.join(stateDir, "agents", "deleted", "agent");
     const databasePath = path.join(agentDir, "survivor.sqlite");
-    const deletion = beginAgentDeletion(
+    const deletion = beginAgentDeletionJournal(
       {
+        operationId: "deletion",
+        deleteFiles: true,
         agentId: "deleted",
         agentDir,
         workspaceDir: path.join(stateDir, "workspace-deleted"),
@@ -993,11 +1036,19 @@ describe("openclaw agent database", () => {
       { env },
     );
 
-    deletion.finish();
+    runOpenClawStateWriteTransaction(
+      (sharedStateDatabase) =>
+        completeAgentDeletionJournalInDatabase(
+          sharedStateDatabase,
+          deletion.agentId,
+          deletion.operationId,
+        ),
+      { env },
+    );
 
     expect(() =>
       runOpenClawStateWriteTransaction(
-        (database) => assertAgentDeletionPathFence(database.db, fence),
+        (database) => assertAgentDeletionPathFence(database, fence),
         { env },
       ),
     ).toThrow("deletion journal changed");
@@ -2265,6 +2316,10 @@ describe("openclaw agent database", () => {
       openOpenClawAgentDatabase({ agentId: "worker-2", env, path: database.path }),
     ).toThrow("initialization close failed");
     close.mockRestore();
+    expect(inspectOpenClawAgentDatabaseOwner(database.path)).toEqual({
+      status: "owned",
+      agentId: "worker-1",
+    });
     expect(() => assertNoOpenClawAgentDatabaseLeases("worker-2", { env })).toThrow(
       "database is still open",
     );
@@ -3016,12 +3071,14 @@ describe("openclaw agent database", () => {
     const second = openOpenClawAgentDatabase({ agentId: "worker-2", env, path: secondPath });
 
     expect(closeOpenClawAgentDatabaseByPath(path.join(stateDir, "missing.sqlite"))).toBe(false);
+    expect(closeOpenClawAgentDatabaseByPath(firstPath, "worker-2")).toBe(false);
     expect(first.db.isOpen).toBe(true);
     expect(second.db.isOpen).toBe(true);
 
     expect(
       closeOpenClawAgentDatabaseByPath(
         path.join(stateDir, "relocated", "nested", "..", "first.sqlite"),
+        "worker-1",
       ),
     ).toBe(true);
     expect(first.db.isOpen).toBe(false);
@@ -3146,8 +3203,10 @@ describe("openclaw agent database", () => {
     const original = openOpenClawAgentDatabase({ agentId: "worker-1", env });
     const originalInode = fs.statSync(original.path).ino;
     const archivedDir = path.join(stateDir, "trash", "worker-1-agent");
-    const deletion = beginAgentDeletion(
+    const deletion = beginAgentDeletionJournal(
       {
+        operationId: "deletion",
+        deleteFiles: true,
         agentId: "worker-1",
         agentDir: path.dirname(original.path),
         workspaceDir: path.join(stateDir, "workspace-worker-1"),
@@ -3157,7 +3216,6 @@ describe("openclaw agent database", () => {
     );
     try {
       expect(disposeOpenClawAgentDatabaseByPath(original.path, { env })).toBe(true);
-      deletion.commit();
       expect(original.db.isOpen).toBe(false);
       expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([]);
       fs.mkdirSync(path.dirname(archivedDir), { recursive: true });
@@ -3166,8 +3224,16 @@ describe("openclaw agent database", () => {
         "agent worker-1 is deleted",
       );
 
-      deletion.finish();
-      expect(claimCompletedAgentDeletion("worker-1", deletion.entry.operationId, { env })).toBe(
+      runOpenClawStateWriteTransaction(
+        (sharedStateDatabase) =>
+          completeAgentDeletionJournalInDatabase(
+            sharedStateDatabase,
+            deletion.agentId,
+            deletion.operationId,
+          ),
+        { env },
+      );
+      expect(claimCompletedAgentDeletionJournal("worker-1", deletion.operationId, { env })).toBe(
         true,
       );
       const recreated = openOpenClawAgentDatabase({ agentId: "worker-1", env });
@@ -3178,7 +3244,15 @@ describe("openclaw agent database", () => {
         expect.objectContaining({ agentId: "worker-1", path: recreated.path }),
       ]);
     } finally {
-      deletion.finish();
+      runOpenClawStateWriteTransaction(
+        (sharedStateDatabase) =>
+          completeAgentDeletionJournalInDatabase(
+            sharedStateDatabase,
+            deletion.agentId,
+            deletion.operationId,
+          ),
+        { env },
+      );
     }
   });
 
@@ -3187,8 +3261,10 @@ describe("openclaw agent database", () => {
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const agentDir = path.join(stateDir, "agents", "worker-1", "agent");
     const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
-    const deletion = beginAgentDeletion(
+    const deletion = beginAgentDeletionJournal(
       {
+        operationId: "deletion",
+        deleteFiles: true,
         agentId: "worker-1",
         agentDir,
         workspaceDir: path.join(stateDir, "workspace-worker-1"),
@@ -3196,7 +3272,15 @@ describe("openclaw agent database", () => {
       },
       { env },
     );
-    deletion.finish();
+    runOpenClawStateWriteTransaction(
+      (sharedStateDatabase) =>
+        completeAgentDeletionJournalInDatabase(
+          sharedStateDatabase,
+          deletion.agentId,
+          deletion.operationId,
+        ),
+      { env },
+    );
 
     expect(() =>
       registerOpenClawAgentDatabase({ agentId: "worker-1", path: databasePath, env }),
@@ -3206,7 +3290,9 @@ describe("openclaw agent database", () => {
     ).not.toThrow();
     unregisterOpenClawAgentDatabase({ agentId: "worker-2", path: databasePath, env });
 
-    expect(claimCompletedAgentDeletion("worker-1", deletion.entry.operationId, { env })).toBe(true);
+    expect(claimCompletedAgentDeletionJournal("worker-1", deletion.operationId, { env })).toBe(
+      true,
+    );
     expect(() =>
       registerOpenClawAgentDatabase({ agentId: "worker-1", path: databasePath, env }),
     ).not.toThrow();
@@ -3222,8 +3308,10 @@ describe("openclaw agent database", () => {
       path: databasePath,
       env,
     });
-    const deletion = beginAgentDeletion(
+    const deletion = beginAgentDeletionJournal(
       {
+        operationId: "deletion",
+        deleteFiles: true,
         agentId: "worker-1",
         agentDir: path.dirname(databasePath),
         workspaceDir: path.join(stateDir, "workspace-worker-1"),
@@ -3242,7 +3330,7 @@ describe("openclaw agent database", () => {
       expect(() => assertNoOpenClawAgentDatabaseLeases("worker-1", { env })).not.toThrow();
     } finally {
       releaseOpenClawAgentDatabaseLease(leaseId, { env });
-      deletion.rollback();
+      removeAgentDeletionJournal(deletion.agentId, deletion.operationId, { env });
     }
   });
 
@@ -3793,8 +3881,9 @@ describe("openclaw agent database", () => {
     ).toEqual({ name: "route_context_json" });
   });
 
-  it("installs same-version session additions before maintenance index repair", () => {
+  it("installs same-version session additions before maintenance index repair", async () => {
     const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
 
     const { DatabaseSync } = requireNodeSqlite();
@@ -3823,10 +3912,13 @@ describe("openclaw agent database", () => {
       drifted.close();
     }
 
-    migrateOpenClawAgentDatabaseForMaintenance({
-      agentId: "worker-1",
-      pathname: databasePath,
-    });
+    materializeSharedStateDatabase(env);
+    await withAgentDatabaseMaintenanceLease({ env }, (maintenance) =>
+      migrateOpenClawAgentDatabaseForMaintenance(
+        { agentId: "worker-1", pathname: databasePath },
+        maintenance,
+      ),
+    );
 
     const repaired = new DatabaseSync(databasePath, { readOnly: true });
     try {
@@ -3983,12 +4075,14 @@ describe("openclaw agent database", () => {
     await expect(
       migrateAndOpenLegacyAgentDatabaseForTest({ agentId: "worker-1", env }),
     ).rejects.toThrow(/missing table auth_profile_store/iu);
-    expect(() =>
-      migrateOpenClawAgentDatabaseForMaintenance({
-        agentId: "worker-1",
-        pathname: databasePath,
-      }),
-    ).toThrow(/missing table auth_profile_store/iu);
+    await expect(
+      withAgentDatabaseMaintenanceLease({ env }, (maintenance) =>
+        migrateOpenClawAgentDatabaseForMaintenance(
+          { agentId: "worker-1", pathname: databasePath },
+          maintenance,
+        ),
+      ),
+    ).rejects.toThrow(/missing table auth_profile_store/iu);
 
     const after = new DatabaseSync(databasePath, { readOnly: true });
     try {
@@ -4062,7 +4156,7 @@ describe("openclaw agent database", () => {
     ).toEqual({ name: "session_suggestions" });
   });
 
-  it("rejects an inline unique constraint hidden behind a SQLite autoindex", () => {
+  it("rejects an inline unique constraint hidden behind a SQLite autoindex", async () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
@@ -4090,12 +4184,14 @@ describe("openclaw agent database", () => {
     expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
       /unexpected unique index on cache_entries/iu,
     );
-    expect(() =>
-      migrateOpenClawAgentDatabaseForMaintenance({
-        agentId: "worker-1",
-        pathname: databasePath,
-      }),
-    ).toThrow(/unexpected unique index on cache_entries/iu);
+    await expect(
+      withAgentDatabaseMaintenanceLease({ env }, (maintenance) =>
+        migrateOpenClawAgentDatabaseForMaintenance(
+          { agentId: "worker-1", pathname: databasePath },
+          maintenance,
+        ),
+      ),
+    ).rejects.toThrow(/unexpected unique index on cache_entries/iu);
     const after = new DatabaseSync(databasePath, { readOnly: true });
     try {
       expect(
@@ -4533,12 +4629,11 @@ describe("openclaw agent database", () => {
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
     const databasePath = database.path;
+    const expectedOwner = { status: "owned", agentId: "worker-1" };
+    expect(inspectOpenClawAgentDatabaseOwner(databasePath)).toEqual(expectedOwner);
     closeOpenClawAgentDatabasesForTest();
 
-    expect(inspectOpenClawAgentDatabaseOwner(databasePath)).toEqual({
-      status: "owned",
-      agentId: "worker-1",
-    });
+    expect(inspectOpenClawAgentDatabaseOwner(databasePath)).toEqual(expectedOwner);
   });
 
   it.each([null, "", "   "])(

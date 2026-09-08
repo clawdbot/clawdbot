@@ -2,6 +2,7 @@ import http from "node:http";
 import net from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
+import { mockIpv4OnlyLocalhostLookup } from "../../test/helpers/loopback-dns.js";
 import { invokeNodeWorkerPortalStream } from "./portal-stream-command.js";
 
 const TICKET = "a".repeat(48);
@@ -81,6 +82,9 @@ describe("node worker portal stream command", () => {
   ])(
     "attaches %s loopback through Gateway context %j and closes on cancellation",
     async (host, contextPath) => {
+      if (host === "::1") {
+        mockIpv4OnlyLocalhostLookup();
+      }
       const peers = new Set<net.Socket>();
       const local = net.createServer((socket) => {
         peers.add(socket);

@@ -28,9 +28,9 @@ export function isRestartRecoveryLifecycleCurrent(
   );
 }
 
-export function isRetiredRunningSubagent(entry: SubagentRunRecord): boolean {
+export function isRetiredSubagentExecution(entry: SubagentRunRecord): boolean {
   return (
-    entry.execution.status === "running" &&
+    (entry.execution.status === "running" || entry.execution.status === "interrupted") &&
     typeof entry.execution.lifecycleGeneration === "string" &&
     !agentEvents.isAgentEventLifecycleGenerationCurrent(entry.execution.lifecycleGeneration)
   );

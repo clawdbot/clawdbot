@@ -161,6 +161,69 @@ struct GatewayConnectionTests {
         await conn.shutdown()
     }
 
+    @Test(arguments: [false, true], ["current", "endpoint", "socket"])
+    func `bound request denials retain their captured authority`(
+        serverBound: Bool,
+        replacement: String) async throws
+    {
+        let gate = GatewayConnectionSuspensionGate()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                if sendIndex == 2 {
+                    await gate.suspend()
+                    let response = """
+                    {"type":"res","id":"\(id)","ok":false,"error":{"code":"INVALID_REQUEST",
+                    "message":"Session access denied","details":{"code":"SESSION_PARTICIPATION_REQUIRED"}}}
+                    """
+                    socket.emitReceiveSuccess(.data(Data(response.utf8)))
+                } else {
+                    socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+                }
+            })
+        })
+        let (conn, cfg) = try self.makeConnection(session: session, token: "initial-test-token")
+        let lease = try await conn.acquireServerLease()
+        let params = ["sessionKey": AnyCodable("agent:main:main")]
+        let request = Task {
+            if serverBound {
+                try await conn.request(method: "progressCard.get", params: params, ifCurrentServerLease: lease)
+            } else {
+                try await conn.request(method: "progressCard.get", params: params, ifCurrentRoute: lease.route)
+            }
+        }
+        await gate.waitUntilStarted()
+        if replacement == "endpoint" {
+            cfg.setToken("replacement-test-token")
+        } else if replacement == "socket" {
+            await conn._test_handleDisconnect(socketGeneration: lease.socketGeneration)
+        }
+        await gate.open()
+        // Logical route requests deliberately survive same-route socket retirement;
+        // server leases additionally require the exact connected physical socket.
+        let stale = replacement == "endpoint" || (serverBound && replacement == "socket")
+        do {
+            _ = try await request.value
+            Issue.record("expected the bound request to fail")
+        } catch is CancellationError {
+            #expect(stale)
+        } catch let error as GatewayResponseError {
+            #expect(!stale)
+            #expect(error.method == "progressCard.get")
+            #expect(error.code == "INVALID_REQUEST")
+            #expect(error.details["code"]?.stringValue == "SESSION_PARTICIPATION_REQUIRED")
+        } catch {
+            await conn.shutdown()
+            throw error
+        }
+        #expect(!Task.isCancelled)
+        #expect(session.snapshotMakeCount() == 1)
+        #expect(session.latestTask()?.snapshotSendCount() == 3)
+        await conn.shutdown()
+    }
+
     @Test func `server lease preserves caller cancellation after dispatch`() async throws {
         let requestSent = AsyncStream<Void>.makeStream()
         let session = GatewayTestWebSocketSession(

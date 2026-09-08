@@ -15,7 +15,6 @@ vi.mock("../../logging/console.js", () => ({
   routeLogsToStderr: mocks.routeLogsToStderr,
 }));
 vi.mock("../banner.js", () => ({ emitCliBanner: vi.fn() }));
-vi.mock("../cli-name.js", () => ({ resolveCliName: () => "openclaw" }));
 vi.mock("./config-guard.js", () => ({ ensureConfigReady: mocks.ensureConfigReady }));
 vi.mock("../plugin-registry.js", () => ({ ensurePluginRegistryLoaded: vi.fn() }));
 

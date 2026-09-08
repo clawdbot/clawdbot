@@ -105,6 +105,12 @@ Sessions in these stores support the same view, continue, and archive actions,
 and the selected OpenClaw agent still owns the resulting connection; `homes`
 only adds catalog sources.
 
+Fresh native terminal sessions use the primary local profile, shown as
+`Local Codex`, or an eligible paired node. Additional local homes are session
+discovery and resume sources, not separate fresh-start destinations. The selected
+working directory controls Codex's project configuration without changing its home
+or login. See [Native CLI starts](/web/control-ui/sessions-and-sidebar#start-a-native-coding-cli).
+
 Only existing directories are included. Equivalent paths are canonicalized and
 deduplicated against the automatic homes, and automatic homes keep priority
 under the 100-source catalog cap. Changes require a Gateway restart.
@@ -276,6 +282,29 @@ managed stdio or the local Unix control socket for production workloads.
 | `serviceTier`                    | unset                                                  | Native Codex app-server preference only. Any non-empty string passes through for forward compatibility; documented values are `"priority"` and `"flex"`. `null` clears the override, and legacy `"fast"` normalizes to `"priority"`. This is neither the shared Fast-mode setting nor a direct embedded OpenAI setting. A shared Fast run control supersedes it with `priority` or `null`, or decides per model call in auto mode. |
 | `networkProxy`                   | disabled                                               | Opt into Codex permissions-profile networking for app-server commands. OpenClaw defines the selected `permissions.<profile>.network` config and selects it with `default_permissions` instead of sending `sandbox`.                                                                                                                                                                                                                |
 | `experimental.sandboxExecServer` | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with the supported Codex app-server so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                                                                                                                                                               |
+
+`appServer.args` accepts an array (recommended) or a quoted argument string.
+`OPENCLAW_CODEX_APP_SERVER_ARGS` uses the same string parsing on every platform:
+single and double quotes group words, backslashes and `#` stay literal, and an
+unfinished quote groups the remaining text. This preserves the string grammar
+shipped in `v2026.9.1`; strings do not use shell escaping.
+
+Use array entries for values containing embedded quotes, such as
+`'model="gpt-5.6-luna"'`. For a directory containing a literal backslash, both
+forms below pass the same path to Codex:
+
+```json5 validate=false
+args: "app-server --listen stdio:// -c log_dir=/tmp/openclaw\\logs"
+```
+
+```json5 validate=false
+args: ["app-server", "--listen", "stdio://", "-c", "log_dir=/tmp/openclaw\\logs"]
+```
+
+The `\\` in JSON5 encodes one backslash. Array entries preserve embedded quotes
+and backslashes, but surrounding whitespace is trimmed and empty entries are
+omitted. Strings also omit empty quoted arguments. Account for these limits
+before converting existing strings to arrays.
 
 `appServer.serviceTier` is used only when no shared Fast-mode run control is
 supplied. On Codex harness turns, shared Fast on sends `priority`, Fast off
@@ -518,8 +547,8 @@ until they can be bound to the active placement.
 The managed placement workspace is not an OS sandbox: approved processes and
 files have the node account's full access. Use a separate least-privilege node
 account when isolation is required.
-See [Run Codex on a paired device](/plugins/codex-harness#run-codex-on-a-paired-device)
-and [Run Codex on a cloud worker](/plugins/codex-harness#run-codex-on-a-cloud-worker).
+See [Run Codex on a paired device](/plugins/codex-harness/placement#run-codex-on-a-paired-device)
+and [Run Codex on a cloud worker](/plugins/codex-harness/placement#run-codex-on-a-cloud-worker).
 
 ## Auth and environment isolation
 
@@ -779,10 +808,25 @@ approvals, dynamic tools, and cancellation retain their independent deadlines.
 
 On receipt of the exact native terminal event, OpenClaw starts an absolute
 two-minute local-settlement budget before asynchronous transcript and media
-projection. Later notifications do not reset it. After separately bounded
-abort cleanup, queued projection gets a five-second drain grace. These local
-bounds still apply to unlimited runs, so blocked projection cannot keep the
-session lane occupied indefinitely.
+projection. Later notifications do not reset it. Presentation callbacks start
+in order and join at settlement without blocking native notification processing.
+If the native turn completed successfully with a complete final answer, expiry
+preserves that answer as a degraded success. OpenClaw retires unfinished
+projection and stale writes, then persists the answer through the existing
+transcript owner, preserving write ordering and hooks.
+Recovered replies retain native network-result provenance even when the
+corresponding tool projection did not settle or a message-write hook replaces
+the message.
+
+The `turn.settlement_warning` trajectory event records the pending presentation
+callback, transcript/checkpoint write, or media projection stage, together with
+the elapsed time and budget. Newly persisted recovered replies also carry the
+settlement warning. Final persistence retains its best-effort policy and the
+existing five-second drain grace; if the writer remains unavailable, OpenClaw
+records `turn.settlement_persistence_unavailable` and delivers the completed
+text without leaving a stale write behind. Expiry without a native completed answer remains a timeout.
+After separately bounded abort cleanup, queued projection gets a five-second
+drain grace. These local bounds also apply to unlimited runs.
 
 Stop and execution-budget expiry interrupt the affected native attempt and
 bound cleanup before releasing its lane. A quiet turn or a local settlement
@@ -1012,11 +1056,14 @@ file later changes, appears, or disappears, OpenClaw disables fresh native
 discovery for that existing thread and replays the complete frozen hierarchy.
 For an experimental sandbox exec-server thread, Codex reads the hierarchy inside
 the selected execution environment and app-server exposes only source paths, not
-the authoritative bytes. OpenClaw therefore records environment-owned project
-instructions, allows warm reuse only while that same environment-backed thread
-is live, and rejects every physical cold resume or replacement before provider
-I/O, including replacement under the same environment fingerprint. Continue the
-live sandbox thread or start a new session.
+the authoritative bytes. When Codex reports a nonempty instruction-source
+selection, OpenClaw records environment-owned project instructions, allows warm
+reuse only while that same environment-backed thread is live, and rejects
+physical cold resume or replacement of that thread before provider I/O,
+including replacement under the same environment fingerprint. Continue the live
+sandbox thread or start a new session. If Codex selects no instruction sources,
+OpenClaw records a frozen-empty snapshot instead. That thread can cold-resume in
+the sandbox or on the host with native project-document discovery disabled.
 When execution uses another folder or ordinary policy restrictions remove native
 filesystem discovery from the outset, OpenClaw carries only the configured
 workspace's bounded root `AGENTS.md` snapshot; the execution folder's native
@@ -1045,9 +1092,15 @@ Codex harness forwards the other bootstrap files as developer instructions:
   should use `memory_search` or `memory_get` when durable memory is relevant.
   If tools are disabled, memory search is unavailable, or the active
   workspace differs from the agent memory workspace, `MEMORY.md` uses the
-  normal bounded turn-context path instead.
-- `BOOTSTRAP.md`, when present, is forwarded as OpenClaw turn input reference
-  context.
+  bounded turn input reference path instead.
+- `BOOTSTRAP.md`, when present, uses the same turn input reference path.
+  These references are introduced on the first turn of a new native thread,
+  after a cold resume (including a Gateway restart), after native compaction,
+  or when their rendered content changes. Unchanged references are omitted
+  on subsequent warm turns once the complete reference block has been submitted.
+  If prompt fitting drops or truncates the block, a later turn introduces it again.
+  Tracking is process-local; reference content
+  remains ordinary user input in native history.
 
 ## Environment overrides
 

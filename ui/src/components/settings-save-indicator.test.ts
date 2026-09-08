@@ -20,6 +20,7 @@ function props(overrides: Partial<SettingsSaveIndicatorProps> = {}): SettingsSav
     applying: false,
     applyDisabled: false,
     onRetry: vi.fn(),
+    onSave: vi.fn(),
     onReload: vi.fn(),
     onApply: vi.fn(),
     ...overrides,
@@ -104,6 +105,17 @@ describe("settings save indicator", () => {
     expect(button("Retry")).toBeUndefined();
     button("Reload")?.click();
     expect(onReload).toHaveBeenCalledOnce();
+  });
+
+  it("submits the paused draft through Save instead of retrying a failed patch", async () => {
+    const onSave = vi.fn();
+    const onRetry = vi.fn();
+    await update(props({ status: "paused", onSave, onRetry }));
+
+    button("Save")?.click();
+
+    expect(onSave).toHaveBeenCalledOnce();
+    expect(onRetry).not.toHaveBeenCalled();
   });
 
   it("applies pending changes and reports the in-flight state", async () => {

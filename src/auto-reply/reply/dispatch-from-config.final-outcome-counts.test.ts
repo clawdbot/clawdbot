@@ -1,6 +1,9 @@
 // Tests settled dispatcher outcome accounting for dispatch-from-config runs.
 import { describe, expect, it } from "vitest";
-import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
+import {
+  OutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+} from "../../infra/outbound/deliver-types.js";
 import { createReplyTurnLedger } from "./dispatch-from-config.turn-ledger.js";
 import {
   attachReplyDispatchUndeliveredFallback,
@@ -9,6 +12,43 @@ import {
 } from "./reply-dispatcher.js";
 
 describe("settled dispatcher final outcomes", () => {
+  it.each([
+    { visibleReplySent: false, deferred: false },
+    { visibleReplySent: true, deferred: false },
+    { visibleReplySent: false, deferred: true },
+    { visibleReplySent: true, deferred: true },
+  ])(
+    "keeps identityless delivery pending in the exact receipt ($visibleReplySent, $deferred)",
+    async ({ visibleReplySent, deferred }) => {
+      const attempted: string[] = [];
+      const uncertain = {
+        visibleReplySent,
+        suppression: { reason: "adapter_returned_no_identity" },
+      };
+      const payload = { text: "primary" };
+      attachReplyDispatchUndeliveredFallback(payload, { text: "alternative" });
+      const capture = captureReplyDispatchDeliveryOutcome(payload);
+      const dispatcher = createReplyDispatcher({
+        deliver: async (reply) => {
+          attempted.push(reply.text ?? "");
+          return deferred ? { finalization: Promise.resolve(uncertain) } : uncertain;
+        },
+      });
+      dispatcher.sendFinalReply(payload);
+      dispatcher.markComplete();
+      const receipt = await dispatcher.waitForIdle();
+
+      expect(attempted).toEqual(["primary"]);
+      expect(receipt).toMatchObject({
+        anyVisibleDelivered: false,
+        hasPendingDelivery: true,
+        counts: { final: { delivered: 0, deliveredNotVisible: 1 } },
+      });
+      await expect(capture.promise).resolves.toBe("delivered-not-visible");
+      expect(capture.hasPendingDelivery()).toBe(true);
+    },
+  );
+
   it.each(["channel_transform", "no_visible_result"])(
     "keeps %s distinct when a payload has an undelivered alternative",
     async (reason) => {
@@ -65,6 +105,43 @@ describe("settled dispatcher final outcomes", () => {
     expect(receipt?.counts.final).toMatchObject({ delivered: 1, deliveredNotVisible: 1 });
   });
 
+  it("shares pending custody within one enqueue and isolates reuse of the same payload", async () => {
+    let attempts = 0;
+    const dispatcher = createReplyDispatcher({
+      deliver: async () => {
+        if (attempts++ === 0) {
+          throw Object.assign(
+            new OutboundDeliveryError("queued", {
+              cause: new PlatformMessageNotDispatchedError("offline", { cause: undefined }),
+            }),
+            { queueCustody: "held" as const },
+          );
+        }
+      },
+    });
+    const ledger = createReplyTurnLedger(dispatcher);
+    const payload = { text: "same object" };
+    const first = captureReplyDispatchDeliveryOutcome(payload);
+    const nested = captureReplyDispatchDeliveryOutcome(payload);
+    const firstSend = ledger.sendQueued("block", payload);
+    const next = captureReplyDispatchDeliveryOutcome(payload);
+    await expect(firstSend.outcome).resolves.toBe("recovery-owned");
+
+    const secondSend = ledger.sendQueued("final", payload);
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+    await expect(first.promise).resolves.toBe("recovery-owned");
+    await expect(nested.promise).resolves.toBe("recovery-owned");
+    await expect(next.promise).resolves.toBe("delivered");
+    expect([
+      first.hasPendingDelivery(),
+      nested.hasPendingDelivery(),
+      firstSend.hasPendingDelivery?.(),
+      next.hasPendingDelivery(),
+      secondSend.hasPendingDelivery?.(),
+    ]).toEqual([true, true, true, false, false]);
+  });
+
   it("rethrows an opted-in proven no-send failure when nothing was visible", async () => {
     const error = new PlatformMessageNotDispatchedError("offline before dispatch", {
       cause: new Error("offline"),
@@ -81,6 +158,62 @@ describe("settled dispatcher final outcomes", () => {
 
     await expect(dispatcher.waitForIdle()).rejects.toBe(error);
   });
+
+  it.each(["caller-first", "recovery-first", "attached-fallback"] as const)(
+    "keeps recovery exclusive across %s attempts without claiming visibility",
+    async (order) => {
+      const noSend = new PlatformMessageNotDispatchedError("not dispatched", {
+        cause: new Error("offline"),
+      });
+      const recovery = new OutboundDeliveryError("retained for recovery", { cause: noSend });
+      recovery.queueCustody = "held";
+      const attempts: string[] = [];
+      const dispatcher = createReplyDispatcher({
+        propagateRetryableNoSendFailure: true,
+        deliver: async (payload) => {
+          attempts.push(payload.text ?? "");
+          throw payload.text === "recovery" ? recovery : noSend;
+        },
+      });
+      const ledger = createReplyTurnLedger(dispatcher);
+      const callerPayload = { text: "caller" };
+      const recoveryPayload = { text: "recovery" };
+      const payloads =
+        order === "recovery-first"
+          ? [recoveryPayload, callerPayload]
+          : [callerPayload, recoveryPayload];
+      if (order === "attached-fallback") {
+        attachReplyDispatchUndeliveredFallback(callerPayload, recoveryPayload);
+        payloads.pop();
+      }
+      const outcomes = payloads.map((payload) =>
+        Promise.resolve(ledger.sendQueued("final", payload).outcome),
+      );
+      dispatcher.markComplete();
+      const receipt = await dispatcher.waitForIdle();
+
+      expect(attempts).toEqual(
+        order === "recovery-first" ? ["recovery", "caller"] : ["caller", "recovery"],
+      );
+      expect(await Promise.all(outcomes)).toEqual(
+        order === "attached-fallback"
+          ? ["recovery-owned"]
+          : order === "recovery-first"
+            ? ["recovery-owned", "failed-before-deliver"]
+            : ["failed-before-deliver", "recovery-owned"],
+      );
+      expect(receipt?.counts.final).toEqual({
+        delivered: 0,
+        deliveredNotVisible: 0,
+        cancelled: 0,
+        failedBeforeSend: payloads.length,
+        failedAfterSend: 0,
+      });
+      expect(receipt?.anyVisibleDelivered).toBe(false);
+      expect(ledger.canAttemptFallback()).toBe(false);
+      expect(ledger.hasObservedDelivery()).toBe(false);
+    },
+  );
 
   it("keeps non-visible, pre-send, and post-send outcomes distinct", async () => {
     const dispatcher = createReplyDispatcher({
@@ -113,4 +246,49 @@ describe("settled dispatcher final outcomes", () => {
       anyVisibleDelivered: true,
     });
   });
+
+  it.each([
+    { finalFirst: false, queueCustody: "held" },
+    { finalFirst: true, queueCustody: "held" },
+    { finalFirst: false, queueCustody: "released" },
+    { finalFirst: true, queueCustody: "released" },
+  ] as const)(
+    "does not retry a turn when siblings retain custody ($queueCustody, finalFirst=$finalFirst)",
+    async ({ finalFirst, queueCustody }) => {
+      const error = new PlatformMessageNotDispatchedError("offline before dispatch", {
+        cause: new Error("offline"),
+      });
+      const finalError = Object.assign(new OutboundDeliveryError(error.message, { cause: error }), {
+        queueCustody,
+      });
+      const dispatcher = createReplyDispatcher({
+        deliver: async (_payload, info) => {
+          throw info.kind === "final" ? finalError : error;
+        },
+        propagateRetryableNoSendFailure: true,
+      });
+      if (finalFirst) {
+        dispatcher.sendFinalReply({ text: "answer" });
+      }
+      dispatcher.sendBlockReply({ text: "progress" });
+      if (!finalFirst) {
+        dispatcher.sendFinalReply({ text: "answer" });
+      }
+      dispatcher.markComplete();
+
+      if (queueCustody === "held") {
+        await expect(dispatcher.waitForIdle()).resolves.toMatchObject({
+          anyVisibleDelivered: false,
+          hasPendingDelivery: true,
+          counts: { block: { failedBeforeSend: 1 }, final: { failedBeforeSend: 1 } },
+        });
+        const ledger = createReplyTurnLedger(dispatcher);
+        await ledger.settleQueued();
+        expect(ledger.hasPendingDelivery()).toBe(true);
+        expect(ledger.hasObservedDelivery()).toBe(false);
+      } else {
+        await expect(dispatcher.waitForIdle()).rejects.toBe(finalFirst ? finalError : error);
+      }
+    },
+  );
 });

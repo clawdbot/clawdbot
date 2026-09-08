@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   catalog: vi.fn(),
 }));
 
-vi.mock("../agents/auth-profiles/store.js", () => ({
+vi.mock("../agents/auth-profiles/store-runtime.js", () => ({
   loadAuthProfileStoreForRuntime: () => ({ version: 1, profiles: {} }),
 }));
 vi.mock("../agents/model-auth-availability.js", () => ({
@@ -51,6 +51,7 @@ vi.mock("../system-agent/inference-route.js", () => ({
       model: split.model.slice(slash + 1),
       modelLabel: split.model,
       runConfig: config,
+      sourceConfig: config,
       agentId,
       agentDir: `/isolated/${agentId}`,
       ...(split.profile ? { authProfileId: split.profile } : {}),

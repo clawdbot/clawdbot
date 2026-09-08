@@ -45,7 +45,6 @@ type PluginSdkHostFacts = {
   privateSubpaths?: string[];
   workspaceExports: Map<string, WorkspacePackageAliasEntry[]>;
   subpathsByOwner: Map<string, string[]>;
-  aliasesByOwner: Map<string, PluginSdkAliasMap>;
   bundledAliasesByMode: Map<string, PluginSdkAliasMap>;
   workspaceAliasesByMode: Map<string, PluginSdkAliasMap>;
 };
@@ -54,7 +53,6 @@ function createPluginSdkHostFacts(): PluginSdkHostFacts {
   return {
     workspaceExports: new Map(),
     subpathsByOwner: new Map(),
-    aliasesByOwner: new Map(),
     bundledAliasesByMode: new Map(),
     workspaceAliasesByMode: new Map(),
   };
@@ -86,9 +84,12 @@ export function createPluginCacheSdk() {
       WeakMap<PluginSdkAliasMap, WeakMap<PluginSdkAliasMap, PluginSdkAliasMap>>
     >(),
     native: {
-      sdkProviders: new Map<string, () => void>(),
+      sdkProviders: new Map<
+        string,
+        { resolveAlias: (specifier: string) => string | undefined; order?: number }
+      >(),
+      nextSdkProviderOrder: 0,
       aliases: new Map<string, Array<{ parentRoot: string; target: string }>>(),
-      aliasesByMap: new WeakMap<PluginSdkAliasMap, Array<readonly [string, string]>>(),
       registeredHosts: new Set<string>(),
       hostRoots: new Map<string, string>(),
       nearestPackageRoots: new Map<string, string>(),

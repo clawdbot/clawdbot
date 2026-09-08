@@ -9,7 +9,7 @@ import {
   buildBootstrapInjectionStats,
   analyzeBootstrapBudget,
 } from "../agents/bootstrap-budget.js";
-import { resolveBootstrapContextForRun } from "../agents/bootstrap-files.js";
+import { resolveBootstrapContextForDiagnostics } from "../agents/bootstrap-files-diagnostics.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
@@ -56,7 +56,7 @@ export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
   for (const { agentId, workspaceDir } of workspaces) {
     const bootstrapMaxChars = resolveBootstrapMaxChars(cfg, agentId);
     const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(cfg, agentId);
-    const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
+    const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForDiagnostics({
       workspaceDir,
       config: cfg,
       agentId,

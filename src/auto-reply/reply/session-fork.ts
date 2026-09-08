@@ -169,6 +169,7 @@ export async function forkSessionEntryFromParent(
   const storePath = resolveParentForkStorePath(params);
   return await forkSessionEntryFromParentTarget({
     agentId: params.agentId,
+    commitGuard: params.commitGuard,
     decisionSkipPatch: params.decisionSkipPatch,
     fallbackEntry: params.fallbackEntry,
     parentTarget: normalizeForkTarget({

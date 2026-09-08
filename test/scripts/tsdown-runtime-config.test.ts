@@ -134,7 +134,7 @@ describe("tsdown config", () => {
     const plugin = createStateSchemaInlinePlugin(rootDir);
     let cacheKeyGenerator: ((context: { id: string }) => string | undefined) | undefined;
     plugin.configureVitest({
-      experimental_defineCacheKeyGenerator: (generator) => {
+      defineCacheKeyGenerator: (generator) => {
         cacheKeyGenerator = generator;
       },
     });
@@ -181,6 +181,9 @@ describe("tsdown config", () => {
     );
     expect(workerGraph?.plugins).toContainEqual(
       expect.objectContaining({ name: STATE_SCHEMA_INLINE_PLUGIN_NAME }),
+    );
+    expect(entrySources(unifiedGraph)["native-hook-relay/entry"]).toBe(
+      "src/cli/native-hook-relay-entry.ts",
     );
     expect(inlinePlugins).toHaveLength(2);
   });

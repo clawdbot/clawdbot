@@ -21,7 +21,6 @@ import {
   ensureTaskRegistryReady,
   getTasksByRunId,
   taskRegistryLog,
-  persistTaskRegistry,
   pickPreferredRunIdTask,
   readTaskRegistryRevision,
   rebuildRunIdIndex,
@@ -37,6 +36,7 @@ import {
   type TaskRegistryDeliveryRuntime,
   type TaskRegistryGlobalWithRuntimeOverrides,
 } from "./task-registry-state.js";
+import { getTaskRegistryProcessState } from "./task-registry.process-state.js";
 import { getTaskRegistryStore, resetTaskRegistryRuntimeForTests } from "./task-registry.store.js";
 import type { TaskRecord, TaskStatus } from "./task-registry.types.js";
 import { resolveTaskSessionAgentId } from "./task-session-identity.js";
@@ -196,6 +196,11 @@ export async function listTaskRecordPage(params: {
       // Yield only when another batch exists; completed pages keep their revision.
       if (scannedCount > 0) {
         await yieldToEventLoop();
+        // A carried revision cannot recover; skip unrelated reads once it is stale.
+        // Cursorless scans still finish their attempt before retrying.
+        if (params.expectedRevision !== undefined && revision !== readTaskRegistryRevision()) {
+          return err("cursor_stale");
+        }
       }
       const batch: TaskRecord[] = [];
       while (!current.done && batch.length < 32 && scannedCount < scanLimit) {
@@ -450,18 +455,15 @@ export function deleteTaskRecordById(taskId: string): boolean {
   return true;
 }
 
-export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
+export function resetTaskRegistryForTests() {
+  getTaskRegistryProcessState().runOwners.clear();
   clearTaskRegistryMemory();
   resetTaskRegistryRestoreState();
   resetTaskRegistryRuntimeForTests();
   resetTaskRegistryListenerState();
   deliveryRuntimeLoader.clear();
   controlRuntimeLoader.clear();
-  if (opts?.persist !== false) {
-    persistTaskRegistry();
-  }
-  // Always close the sqlite handle so Windows temp-dir cleanup can remove the
-  // state directory even when a test intentionally skips persisting the reset.
+  // Close the default SQLite handle too, even when a custom store was configured.
   getTaskRegistryStore().close?.();
 }
 

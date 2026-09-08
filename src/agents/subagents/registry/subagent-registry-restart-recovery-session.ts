@@ -11,7 +11,7 @@ import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import { listAgentRunsForSession } from "../../../infra/agent-run-registry.js";
 import { isSessionWorkAdmissionActive } from "../../../sessions/session-lifecycle-admission.js";
-import { isRetiredRunningSubagent } from "./subagent-registry-restart-recovery-helpers.js";
+import { isRetiredSubagentExecution } from "./subagent-registry-restart-recovery-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const RECOVERY_RESUMED_NOTICE = "Resumed your interrupted task after the Gateway restart.";
@@ -39,7 +39,7 @@ export async function loadSubagentRecoverySession(params: {
     sessionEntry?.abortedLastRun === true ||
     sessionEntry?.status !== "running" ||
     sessionEntry.lifecycleRunId !== params.entry.runId ||
-    !isRetiredRunningSubagent(params.entry)
+    !isRetiredSubagentExecution(params.entry)
   ) {
     return { agentId, storePath, sessionEntry };
   }
@@ -47,7 +47,7 @@ export async function loadSubagentRecoverySession(params: {
   const target = { sessionKey, sessionId };
   const isCurrent = () =>
     params.isOwnerCurrent() &&
-    isRetiredRunningSubagent(params.entry) &&
+    isRetiredSubagentExecution(params.entry) &&
     listAgentRunsForSession(target).length === 0 &&
     !isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId]);
   const interrupted = await patchSessionEntryCore(

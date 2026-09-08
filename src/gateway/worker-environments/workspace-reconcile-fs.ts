@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { FsSafeError, type Root } from "../../infra/fs-safe.js";
 import type { createStagedInputPathMatcher } from "../../media/staged-inputs.js";
 import { runCommandBuffered } from "../../process/exec.js";
 import { readWorkspaceFileSnapshotWithLimit } from "./workspace-actual-manifest.js";
@@ -13,6 +14,35 @@ const PATCH_TIMEOUT_MS = 10 * 60_000;
 
 export function localPath(root: string, relative: string): string {
   return path.join(root, ...relative.split("/"));
+}
+
+export async function removeEmptyWorkspaceDirectory(root: Root, entryPath: string): Promise<void> {
+  let children: string[];
+  try {
+    children = await root.list(entryPath);
+  } catch (error) {
+    if (error instanceof FsSafeError && ["not-found", "path-alias"].includes(error.code)) {
+      return;
+    }
+    throw error;
+  }
+  if (children.length > 0) {
+    // Conflicted descendants deliberately keep their containing directory
+    // even when the cloud result removed that directory.
+    return;
+  }
+  try {
+    await root.remove(entryPath);
+  } catch (error) {
+    if (error instanceof FsSafeError && ["not-found", "path-alias"].includes(error.code)) {
+      return;
+    }
+    const racedChildren = await root.list(entryPath).catch(() => undefined);
+    if (racedChildren?.length) {
+      return;
+    }
+    throw error;
+  }
 }
 
 type WorkspaceFileSnapshot =

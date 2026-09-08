@@ -78,6 +78,77 @@ describe("GitHub publication selection admission", () => {
   installGitHubPublicationTestHarness();
   afterEach(() => vi.unstubAllGlobals());
 
+  it.each(
+    ["options", "publish", "status", "confirm"].flatMap((method) =>
+      [
+        { sessionKey: "agent:main:main", agentId: "research" },
+        { sessionKey: "agent:main:main", agentId: "main" },
+        { sessionKey: "global", agentId: "---" },
+        { sessionKey: "global", agentId: "retired" },
+        { sessionKey: "agent:research:main", agentId: "research", fixedOwner: "ops" },
+        { sessionKey: "agent:research:main", agentId: "research", fixedOwner: "retired" },
+      ].map(({ sessionKey, agentId, fixedOwner }) => ({ method, sessionKey, agentId, fixedOwner })),
+    ),
+  )(
+    "rejects explicit publication owner $agentId for $sessionKey at $method admission (fixed owner: $fixedOwner)",
+    async ({ method, sessionKey, agentId, fixedOwner }) => {
+      const fixture = await createPersonalPublicationFixture();
+      fixture.config.agents = {
+        ownership: "explicit",
+        entries: { ops: {}, research: {} },
+        ...(fixedOwner ? { defaults: { sessionStore: { agentId: fixedOwner } } } : {}),
+      };
+      if (fixedOwner) {
+        fixture.config.session = { scope: "global", store: "/synthetic/fixed.sqlite" };
+      }
+      fixture.client.connect.scopes = ["operator.admin"];
+      const publish = vi.spyOn(fixture.coordinator, "requestPersonalForSession");
+      const confirm = vi.spyOn(fixture.coordinator, "confirmPersonal");
+      const stopEffect = () => {
+        throw new Error("Publication effect reached before owner validation");
+      };
+      publish.mockImplementation(stopEffect);
+      confirm.mockImplementation(stopEffect);
+      const params = {
+        sessionKey,
+        agentId,
+        ...(method === "publish"
+          ? {
+              idempotencyKey: "invalid-owner",
+              selection: {
+                source: "personal",
+                generation: fixture.generation,
+                account: personalPublicationAccount,
+              },
+            }
+          : {}),
+        ...(method === "status" || method === "confirm" ? { requestId: fixture.generation } : {}),
+        ...(method === "confirm"
+          ? {
+              generation: fixture.generation,
+              account: personalPublicationAccount,
+              requestDigest: "a".repeat(64),
+            }
+          : {}),
+      };
+      const response = await callPersonalPublicationRpc(
+        fixture,
+        `sessions.github.${method}`,
+        params,
+      );
+      expect
+        .soft(response)
+        .toMatchObject([
+          false,
+          undefined,
+          { code: "INVALID_REQUEST", message: expect.stringMatching(/agent/i) },
+        ]);
+      expect.soft(publish).not.toHaveBeenCalled();
+      expect.soft(confirm).not.toHaveBeenCalled();
+      expect(commands).toEqual([]);
+    },
+  );
+
   it.each(["local", "deferred", "claim"] as const)(
     "records a fresh %s selection rejection before any durable request or Git effect",
     async (surface) => {

@@ -163,6 +163,16 @@ describe("buildControlUiCatalogSharePath", () => {
 
 describe("buildControlUiSessionPath", () => {
   it.each([
+    [
+      "case-sensitive literal",
+      { sessionKey: "Agent:Ops:Matrix:Channel:!Room:Org:Thread:$Event", exactKey: true },
+      "/chat/ops/Matrix/Channel/!Room/Org/Thread/%24Event",
+    ],
+    [
+      "opaque catalog",
+      { sessionKey: "agent:ops:catalog:fixture:Host:Thread" },
+      "/chat/ops/catalog/fixture/Host/Thread",
+    ],
     ["scoped main", { sessionKey: "agent:main:main" }, "/chat/main"],
     ["unscoped main", { sessionKey: "main", fallbackAgentId: "research" }, "/chat/research"],
     [
@@ -176,6 +186,36 @@ describe("buildControlUiSessionPath", () => {
       "/chat/research/main",
     ],
     ["global", { sessionKey: "global", fallbackAgentId: "ops" }, "/chat/ops"],
+    [
+      "global under a configured main key",
+      { sessionKey: "global", fallbackAgentId: "ops", mainKey: "workspace", exactKey: true },
+      "/chat/ops",
+    ],
+    [
+      "qualified global with a conflicting fallback agent",
+      { sessionKey: "agent:research:global", fallbackAgentId: "main" },
+      "/chat/research/~key/global",
+    ],
+    [
+      "qualified global under a configured main key",
+      { sessionKey: "agent:research:global", mainKey: "workspace" },
+      "/chat/research/~key/global",
+    ],
+    [
+      "qualified global casing",
+      { sessionKey: "AGENT:RESEARCH:GlObAl" },
+      "/chat/research/~key/GlObAl",
+    ],
+    [
+      "global as the configured main key",
+      { sessionKey: "agent:research:global", mainKey: "global", exactKey: true },
+      "/chat/research",
+    ],
+    [
+      "global as a literal rest prefix",
+      { sessionKey: "agent:research:global:notes" },
+      "/chat/research/global/notes",
+    ],
     [
       "literal segments",
       { sessionKey: "telegram:group:12345", fallbackAgentId: "research" },
@@ -216,14 +256,17 @@ describe("buildControlUiSessionPath", () => {
     },
   );
 
-  it("preserves base paths and namespaces", () => {
+  it.each([
+    ["agent:ops:telegram:12345", "/control/dashboard/ops/telegram/12345"],
+    ["agent:research:global", "/control/dashboard/research/~key/global"],
+  ])("preserves base paths and namespaces for %s", (sessionKey, expected) => {
     expect(
       buildControlUiSessionPath({
         namespace: "dashboard",
-        sessionKey: "agent:ops:telegram:12345",
+        sessionKey,
         basePath: " /control/// ",
       }),
-    ).toBe("/control/dashboard/ops/telegram/12345");
+    ).toBe(expected);
   });
 
   it.each([
@@ -249,6 +292,9 @@ describe("buildControlUiSessionPath", () => {
     { sessionKey: "agent::control-link" },
     { sessionKey: "agent:main:" },
     { sessionKey: "agent:main:telegram::12345" },
+    { sessionKey: "agent:ops:room::part" },
+    { sessionKey: "agent:ops::main" },
+    { sessionKey: "agent:ops:cron:" },
   ] satisfies readonly ChatParams[])("rejects invalid input %#", (params) => {
     expect(buildChatPath(params)).toBeNull();
   });

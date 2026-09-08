@@ -4,8 +4,8 @@ import Testing
 
 @MainActor
 struct QuickChatRecentsTests {
-    @Test func `menu builds new-message target and five newest session rows`() throws {
-        let now = Date(timeIntervalSince1970: 10_000)
+    @Test func `menu builds new-message target and five newest session rows`() {
+        let now = Date(timeIntervalSince1970: 10000)
         let rows = (0..<6).map { index in
             Self.row(
                 key: "agent:main:session:\(index)",
@@ -29,8 +29,8 @@ struct QuickChatRecentsTests {
         #expect(items.last?.title == "Session 4 — 6m ago")
     }
 
-    @Test func `menu checkmarks the selected recent session`() throws {
-        let now = Date(timeIntervalSince1970: 10_000)
+    @Test func `menu checkmarks the selected recent session`() {
+        let now = Date(timeIntervalSince1970: 10000)
         let row = Self.row(
             key: "agent:main:session:one",
             displayName: "One",
@@ -62,9 +62,6 @@ struct QuickChatRecentsTests {
             sessionId: nil,
             thinkingLevel: nil,
             verboseLevel: nil,
-            systemSent: false,
-            abortedLastRun: false,
-            tokens: SessionTokenStats(input: 0, output: 0, total: 0, contextTokens: 0),
-            model: nil)
+            tokens: SessionTokenStats(total: 0, contextTokens: 0))
     }
 }

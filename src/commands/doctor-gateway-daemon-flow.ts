@@ -330,7 +330,6 @@ export async function maybeRepairGatewayDaemon(params: {
     if (
       isLocalDarwinGateway &&
       (serviceRuntime?.missingGuiSession ||
-        serviceRuntime?.missingSupervision ||
         serviceRuntime?.cachedLabel ||
         serviceRuntime?.systemLaunchDaemon)
     ) {

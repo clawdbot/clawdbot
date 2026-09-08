@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -38,6 +39,8 @@ import {
   repairCronRuntimeAuthorityRows,
   replaceCronRuntimeAuthorityRows,
 } from "./store/runtime-authority-store.js";
+import { tryParseJsonObject } from "./store/scalar-codec.js";
+import type { CronJobRow } from "./store/schema.js";
 import type { CronStoreTransactionHooks } from "./store/transaction-hooks.types.js";
 import type {
   CronQuarantinedJob,
@@ -102,10 +105,41 @@ export function resolveCronJobsStorePathFromConfig(
 
 /** Loads cron jobs plus config/runtime sidecars from the SQLite-backed store. */
 export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promise<LoadedCronStore> {
+  return loadMutableCronStore(storePath);
+}
+
+function isRetiredCollectionReview(row: CronJobRow): boolean {
+  return (
+    row.payload_kind === "skillCollectionReview" ||
+    asRecord(tryParseJsonObject(row.job_json)?.payload).kind === "skillCollectionReview"
+  );
+}
+
+function loadMutableCronStore(storePath: string): LoadedCronStore {
   const resolvedStorePath = path.resolve(storePath);
   const storeKey = cronStoreKey(resolvedStorePath);
   const database = openOpenClawStateDatabase().db;
-  const rows = loadCronRows(database, storeKey);
+  let rows = loadCronRows(database, storeKey);
+  const retiredIds = new Set(rows.filter(isRetiredCollectionReview).map((row) => row.job_id));
+  if (retiredIds.size > 0) {
+    // Retire generated jobs before runtime validation, including databases already
+    // on v16. Gateway convergence recreates them with the isolated agent-turn target.
+    const removed = runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        const current = loadCronRows(db, storeKey, retiredIds).filter(isRetiredCollectionReview);
+        for (const row of current) {
+          deleteCronJobRowInDatabase(db, storeKey, row.job_id);
+        }
+        return current.length;
+      },
+      {},
+      { operationLabel: "cron.retire-collection-review" },
+    );
+    if (removed > 0) {
+      noteCronJobsStoreCommit(storeKey);
+    }
+    rows = loadCronRows(database, storeKey);
+  }
   const jobsFingerprint = fingerprintCronJobRows(rows);
   if (rows.length > 0) {
     const loaded = loadedCronStoreFromRows(rows);
@@ -235,24 +269,7 @@ export async function loadCronJobsStore(storePath: string): Promise<CronStoreFil
 
 /** Synchronously loads only the persisted cron job store payload. */
 export function loadCronJobsStoreSync(storePath: string): CronStoreFile {
-  const resolvedStorePath = path.resolve(storePath);
-  const storeKey = cronStoreKey(resolvedStorePath);
-  const database = openOpenClawStateDatabase().db;
-  const rows = loadCronRows(database, storeKey);
-  if (rows.length > 0) {
-    const loaded = loadedCronStoreFromRows(rows);
-    const authority = loadCronRuntimeAuthorities({
-      db: database,
-      storeKey,
-      jobs: loaded.store.jobs,
-    });
-    repairLoadedCronRuntimeAuthority({
-      storeKey,
-      jobIds: authority.repairJobIds,
-    });
-    return loaded.store;
-  }
-  return { version: 1, jobs: [] };
+  return loadMutableCronStore(storePath).store;
 }
 
 type SaveCronStoreOptions = {

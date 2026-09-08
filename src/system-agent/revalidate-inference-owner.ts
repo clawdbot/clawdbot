@@ -4,12 +4,16 @@ import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding
 import type { AgentHarnessPluginSelection } from "../agents/harness/runtime-plugin-load-plan.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-reader.js";
+import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { getPluginRegistryForContext } from "../plugins/runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
+import { parseRef } from "./setup-inference-plan-helpers.js";
 import {
   createSystemAgentVerifiedInferenceBinding,
   type SystemAgentVerifiedInferenceBinding,
@@ -26,6 +30,7 @@ export function loadSetupInferencePluginGeneration(params: {
   config: OpenClawConfig;
   workspaceDir: string;
   selection: AgentHarnessPluginSelection;
+  pendingPluginInstalls?: Record<string, PluginInstallRecord>;
   resolvePluginMetadataSnapshot?: typeof resolvePluginMetadataSnapshot;
 }) {
   // Revalidation must select the probed artifacts: switching a built Gateway
@@ -36,6 +41,17 @@ export function loadSetupInferencePluginGeneration(params: {
   // The install lease may have cached absence before writing the package.
   // This post-mutation owner must capture new facts without retiring that lease's cache.
   return withPluginCache(createPluginCache(), () => {
+    const index = params.pendingPluginInstalls
+      ? loadInstalledPluginIndex({
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          env: process.env,
+          installRecords: {
+            ...loadInstalledPluginIndexInstallRecordsSync(),
+            ...params.pendingPluginInstalls,
+          },
+        })
+      : undefined;
     const generation = {
       config: params.config,
       metadataSnapshot: (params.resolvePluginMetadataSnapshot ?? resolvePluginMetadataSnapshot)({
@@ -43,6 +59,7 @@ export function loadSetupInferencePluginGeneration(params: {
         env: process.env,
         workspaceDir: params.workspaceDir,
         allowCurrent: false,
+        ...(index ? { index } : {}),
       }),
     };
     const pluginRegistry = withPluginRuntimeGenerationScope(generation, () =>
@@ -64,6 +81,7 @@ export function loadSetupInferencePluginGeneration(params: {
 export async function revalidateSetupInferenceOwner(params: {
   route: SystemAgentConfiguredRoute;
   auth: AgentExecutionAuthBinding;
+  ownerPluginIds?: readonly string[];
   deps: RevalidationDeps;
 }): Promise<SystemAgentVerifiedInferenceBinding> {
   const configuredHarnessId =
@@ -84,9 +102,10 @@ export async function revalidateSetupInferenceOwner(params: {
       deps: params.deps,
     });
   if (
-    params.route.runner === "embedded" &&
-    successfulHarnessId &&
-    successfulHarnessId !== "openclaw"
+    params.ownerPluginIds?.length ||
+    (params.route.runner === "embedded" &&
+      successfulHarnessId &&
+      successfulHarnessId !== "openclaw")
   ) {
     const workspaceDir = resolveAgentWorkspaceDir(
       params.route.runConfig,
@@ -97,9 +116,13 @@ export async function revalidateSetupInferenceOwner(params: {
       config: params.route.runConfig,
       workspaceDir,
       selection: {
-        provider: params.route.provider,
+        provider: parseRef(params.route.modelLabel).provider,
         modelId: params.route.model,
-        runtime: successfulHarnessId,
+        ...(params.route.runner === "cli"
+          ? { runtime: params.route.provider }
+          : successfulHarnessId
+            ? { runtime: successfulHarnessId }
+            : {}),
         agentId: params.route.agentId,
       },
       resolvePluginMetadataSnapshot: params.deps.resolvePluginMetadataSnapshot,

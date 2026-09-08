@@ -31,7 +31,7 @@ vi.mock("../infra/secure-random.js", async (importOriginal) => ({
   generateSecureInt: randomMock,
 }));
 vi.mock("../process/supervisor/index.js", () => ({
-  getProcessSupervisor: () => ({ spawn: supervisorSpawnMock, getRecord: vi.fn() }),
+  getProcessSupervisor: () => ({ spawn: supervisorSpawnMock }),
 }));
 
 const QUEUE_KEY = "agent:main:notify-ack";

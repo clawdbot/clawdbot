@@ -633,6 +633,28 @@ describe("registerPluginCommand", () => {
     });
   });
 
+  it.each(["active_memory", "active-memory"])(
+    "prefers exact spelling %s even when its command rejects arguments",
+    (name) => {
+      const alternate = name.replace(/[_-]/g, name.includes("_") ? "-" : "_");
+      for (const [commandName, acceptsArgs] of [
+        [alternate, true],
+        [name, false],
+      ] as const) {
+        expect(
+          registerPluginCommand(commandName, {
+            name: commandName,
+            description: "Exact spelling selection",
+            acceptsArgs,
+            handler: async () => ({ text: "ok" }),
+          }),
+        ).toEqual({ ok: true });
+      }
+      expect(matchPluginCommand(`/${name}`)?.command.name).toBe(name);
+      expect(matchPluginCommand(`/${name} status`)).toBeNull();
+    },
+  );
+
   it("matches plugin slash commands when users insert whitespace after the slash", () => {
     registerPluginCommand("device-pair", {
       name: "pair",

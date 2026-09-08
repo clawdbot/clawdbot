@@ -136,6 +136,10 @@ export class CronService implements CronServiceContract {
     return await mutationOps.removeAgentJobsTransactional(this.state, agentId, commit);
   }
 
+  async quiesceJobs(jobs: readonly { id: string; revision: string }[], commitGuard: () => void) {
+    await mutationOps.quiesceJobs(this.state, jobs, commitGuard);
+  }
+
   async run(
     id: string,
     mode?: CronRunMode,
@@ -232,7 +236,9 @@ export class CronService implements CronServiceContract {
   }
 
   getDefaultAgentId(): string | undefined {
-    return this.state.deps.defaultAgentId;
+    return this.state.deps.resolveDefaultAgentId
+      ? this.state.deps.resolveDefaultAgentId()
+      : this.state.deps.defaultAgentId;
   }
 
   wake(opts: { mode: CronWakeMode; text: string; sessionKey?: string; agentId?: string }) {

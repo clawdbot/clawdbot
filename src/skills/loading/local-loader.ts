@@ -7,12 +7,9 @@ import {
   readFileDescriptorBoundedSync,
 } from "../../infra/boundary-file-read.js";
 import type { ParsedSkillFrontmatter } from "../types.js";
-import { parseSkillFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
-import {
-  createSyntheticSourceInfo,
-  resolveSkillDisplayName,
-  type Skill,
-} from "./skill-contract.js";
+import { parseSkillFrontmatter } from "./frontmatter.js";
+import type { Skill } from "./skill-contract.js";
+import { materializeSkill } from "./skill-materializer.js";
 
 export type LoadedLocalSkill = {
   skill: Skill;
@@ -21,6 +18,7 @@ export type LoadedLocalSkill = {
 };
 
 export type LocalSkillLoadDiagnostic = {
+  kind: "read" | "invalid";
   path: string;
   message: string;
 };
@@ -49,7 +47,11 @@ function readSkillFileSync(params: {
         opened.error instanceof Error
           ? opened.error.message
           : `failed to open skill file (${opened.reason})`;
-      params.onDiagnostic?.({ path: params.filePath, message });
+      params.onDiagnostic?.({
+        kind: opened.reason === "validation" ? "invalid" : "read",
+        path: params.filePath,
+        message,
+      });
     }
     return null;
   }
@@ -59,7 +61,11 @@ function readSkillFileSync(params: {
       : readFileDescriptorBoundedSync(opened.fd, params.maxBytes).toString("utf8");
   } catch (error) {
     const message = error instanceof Error ? error.message : "failed to read skill file";
-    params.onDiagnostic?.({ path: params.filePath, message });
+    params.onDiagnostic?.({
+      kind: error instanceof RangeError ? "invalid" : "read",
+      path: params.filePath,
+      message,
+    });
     return null;
   } finally {
     fs.closeSync(opened.fd);
@@ -91,7 +97,7 @@ export function loadSingleSkillDirectory(params: {
     frontmatter = parseSkillFrontmatter(raw);
   } catch (error) {
     const message = error instanceof Error ? error.message : "failed to parse skill frontmatter";
-    params.onDiagnostic?.({ path: skillFilePath, message });
+    params.onDiagnostic?.({ kind: "invalid", path: skillFilePath, message });
     return null;
   }
 
@@ -100,32 +106,55 @@ export function loadSingleSkillDirectory(params: {
   const description = frontmatter.description?.trim();
   if (!name || !description) {
     params.onDiagnostic?.({
+      kind: "invalid",
       path: skillFilePath,
       message: !name ? "name is required" : "description is required",
     });
     return null;
   }
-  const invocation = resolveSkillInvocationPolicy(frontmatter);
   const filePath = path.resolve(skillFilePath);
   const baseDir = path.resolve(params.skillDir);
 
   return {
-    skill: {
+    skill: materializeSkill({
+      content: raw,
+      frontmatter,
       name,
-      displayName: resolveSkillDisplayName(raw, name),
       description,
       filePath,
       baseDir,
       source: params.source,
-      sourceInfo: createSyntheticSourceInfo(filePath, {
-        source: params.source,
-        baseDir,
-        scope: "project",
-        origin: "top-level",
-      }),
-      disableModelInvocation: invocation.disableModelInvocation,
-    },
+      sourceOptions: { source: params.source, scope: "project", origin: "top-level" },
+    }),
     frontmatter,
     content: raw,
   };
+}
+
+export function readSkillFrontmatterSafe(params: {
+  rootDir: string;
+  filePath: string;
+  maxBytes?: number;
+  rejectHardlinks?: boolean;
+}): Record<string, string> | null {
+  let rootRealPath: string;
+  try {
+    rootRealPath = fs.realpathSync(path.resolve(params.rootDir));
+  } catch {
+    return null;
+  }
+  const raw = readSkillFileSync({
+    rootRealPath,
+    filePath: path.resolve(params.filePath),
+    maxBytes: params.maxBytes,
+    rejectHardlinks: params.rejectHardlinks,
+  });
+  if (raw === null) {
+    return null;
+  }
+  try {
+    return parseSkillFrontmatter(raw);
+  } catch {
+    return null;
+  }
 }

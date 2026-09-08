@@ -292,7 +292,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   if (configSnapshot.valid && cfg.gateway?.mode === undefined) {
     const baseConfig = configSnapshot.sourceConfig ?? configSnapshot.config;
     await replaceConfigFile({
-      nextConfig: { ...baseConfig, gateway: { ...baseConfig.gateway, mode: "local" } },
+      sourceConfig: { ...baseConfig, gateway: { ...baseConfig.gateway, mode: "local" } },
       snapshot: configSnapshot,
       writeOptions: {
         baseSnapshot: configSnapshot,
@@ -324,13 +324,9 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
 
   const tokenResolution = await resolveGatewayInstallToken({
     config: cfg,
-    configSnapshot,
-    configWriteOptions,
     env: installEnv,
     explicitToken: opts.token,
-    autoGenerateWhenMissing: true,
-    persistGeneratedToken: true,
-    persistence: { readConfigFileSnapshotForWrite, replaceConfigFile },
+    generateIfMissing: { snapshot: configSnapshot, writeOptions: configWriteOptions },
   });
   if (tokenResolution.unavailableReason) {
     fail(`Gateway install blocked: ${tokenResolution.unavailableReason}`);

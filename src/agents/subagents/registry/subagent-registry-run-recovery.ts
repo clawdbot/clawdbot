@@ -1,3 +1,8 @@
+import {
+  resolveAgentIdFromSessionKey,
+  resolveSessionStorePathCore,
+} from "../../../config/sessions.js";
+import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 /** Owns steer replacement and restart-recovery receipt transitions. */
 import {
@@ -27,7 +32,10 @@ import type {
   SubagentRestartRecoveryReceipt,
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
-import { nextSubagentRunGeneration } from "./subagent-run-generation.js";
+import {
+  compareSubagentRunGeneration,
+  nextSubagentRunGeneration,
+} from "./subagent-run-generation.js";
 import {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
@@ -36,6 +44,11 @@ import {
 const log = createSubsystemLogger("agents/subagent-registry");
 
 export class SubagentRecoveryManager extends SubagentWaitManager {
+  private readonly unpersistedAcceptances = new WeakMap<
+    SubagentRunRecord,
+    SubagentRestartRecoveryReceipt
+  >();
+
   readonly replaceSubagentRunAfterSteer = (replaceParams: {
     previousRunId: string;
     nextRunId: string;
@@ -95,6 +108,17 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       source.childSessionKey,
     );
     const cfg = this.options.getRuntimeConfig();
+    const acceptedReceipt = this.unpersistedAcceptances.get(source);
+    const acceptanceSessionTarget =
+      acceptedReceipt && this.currentRunOwnsSession(source)
+        ? {
+            storePath: resolveSessionStorePathCore(cfg.session?.store, {
+              agentId: resolveAgentIdFromSessionKey(source.childSessionKey),
+            }),
+            sessionKey: source.childSessionKey,
+            clone: false,
+          }
+        : undefined;
     const spawnMode = source.spawnMode === "session" ? "session" : "run";
     const runTimeoutSeconds = replaceParams.runTimeoutSeconds ?? source.runTimeoutSeconds ?? 0;
     const waitTimeoutMs = this.options.resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
@@ -125,19 +149,18 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     const sourceRequesterSettleWake = replaceParams.preserveRequesterSettleWake
       ? source.requesterSettleWake
       : undefined;
-    const inheritedRequesterSettleWake: RequesterSettleWakeState | undefined =
-      sourceRequesterSettleWake
+    const remapRequesterSettleWake = (
+      wake: RequesterSettleWakeState,
+    ): RequesterSettleWakeState => ({
+      ...wake,
+      ...(wake.batchRunIds
         ? {
-            ...sourceRequesterSettleWake,
-            ...(sourceRequesterSettleWake.batchRunIds
-              ? {
-                  batchRunIds: sourceRequesterSettleWake.batchRunIds
-                    .map((runId) => (runId === previousRunId ? nextRunId : runId))
-                    .toSorted(),
-                }
-              : {}),
+            batchRunIds: wake.batchRunIds
+              .map((runId) => (runId === previousRunId ? nextRunId : runId))
+              .toSorted(),
           }
-        : undefined;
+        : {}),
+    });
     const next: SubagentRunRecord = normalizeSubagentRunState({
       ...source,
       runId: nextRunId,
@@ -155,7 +178,9 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       browserCleanupDispatchedAt: undefined,
       deleteCleanupDispatchedAt: undefined,
       wakeOnDescendantSettle: undefined,
-      requesterSettleWake: inheritedRequesterSettleWake,
+      requesterSettleWake: sourceRequesterSettleWake
+        ? remapRequesterSettleWake(sourceRequesterSettleWake)
+        : undefined,
       execution: {
         status: "running",
         startedAt: now,
@@ -213,13 +238,36 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     }
     this.options.runs.set(nextRunId, next);
     const killReconciliationSnapshots = this.markOlderKillReconciliationsSuperseded(next);
+    const wakeSnapshots = new Map<SubagentRunRecord, RequesterSettleWakeState>();
+    // Every member carries the frozen cohort. Remap them atomically with the
+    // successor so a settled sibling cannot drop a still-running replacement.
+    for (const memberRunId of sourceRequesterSettleWake?.batchRunIds ?? []) {
+      const member = this.options.runs.get(memberRunId);
+      const wake = member?.requesterSettleWake;
+      if (
+        !member ||
+        member === next ||
+        member.requesterSessionKey !== source.requesterSessionKey ||
+        member.requesterAgentId !== source.requesterAgentId ||
+        !wake?.batchRunIds?.includes(previousRunId) ||
+        wake.rearmGeneration !== sourceRequesterSettleWake?.rearmGeneration
+      ) {
+        continue;
+      }
+      wakeSnapshots.set(member, wake);
+      member.requesterSettleWake = remapRequesterSettleWake(wake);
+    }
     const changedRunIds = [
       previousRunId,
       nextRunId,
       ...[...killReconciliationSnapshots.keys()].map((entry) => entry.runId),
+      ...[...wakeSnapshots.keys()].map((entry) => entry.runId),
     ];
     const rollbackReplacement = () => {
       this.restoreKillReconciliationSnapshots(killReconciliationSnapshots);
+      for (const [member, wake] of wakeSnapshots) {
+        member.requesterSettleWake = wake;
+      }
       this.options.runs.delete(nextRunId);
       this.options.runs.set(previousRunId, source);
     };
@@ -247,6 +295,40 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
         void this.waitForSubagentCompletion(nextRunId, waitTimeoutMs, next);
       }
     };
+    const canReconcileAcceptedReceipt = () => {
+      // Staging replaces the map entry before commit. Only this exact
+      // live acceptance may bridge its failed write, never a restored copy.
+      if (
+        !acceptedReceipt ||
+        !acceptanceSessionTarget ||
+        this.unpersistedAcceptances.get(source) !== acceptedReceipt ||
+        source.execution.restartRecovery !== acceptedReceipt ||
+        replaceParams.restartRecovery !== acceptedReceipt ||
+        acceptedReceipt.idempotencyKey !== nextRunId ||
+        !acceptedReceipt.lifecycleGeneration ||
+        !isAgentEventLifecycleGenerationCurrent(acceptedReceipt.lifecycleGeneration) ||
+        this.options.runs.get(nextRunId) !== next ||
+        source.generation !== sourceSnapshot.generation ||
+        source.createdAt !== sourceSnapshot.createdAt ||
+        typeof source.execution.endedAt === "number" ||
+        source.killIntent ||
+        source.killReconciliation ||
+        source.pauseReason === "sessions_yield" ||
+        source.suppressAnnounceReason === "steer-restart" ||
+        Array.from(this.options.getRunsForChildSession(source.childSessionKey)).some(
+          (candidate) =>
+            candidate !== next && compareSubagentRunGeneration(candidate, sourceSnapshot) > 0,
+        )
+      ) {
+        return false;
+      }
+      const session = loadSessionEntryReadOnly(acceptanceSessionTarget);
+      return (
+        session?.sessionId === acceptedReceipt.sessionId &&
+        (acceptedReceipt.sessionLifecycleRevision === undefined ||
+          session.lifecycleRevision === acceptedReceipt.sessionLifecycleRevision)
+      );
+    };
     const persistReplacement = (): void => {
       if (taskActivation) {
         commitSubagentTaskReplacement({
@@ -255,6 +337,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
           source: sourceSnapshot,
           successor: next,
           task: taskActivation,
+          canReconcileAcceptedReceipt,
         });
         return;
       }
@@ -277,6 +360,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       }
       throw error;
     }
+    this.unpersistedAcceptances.delete(source);
     // Atomic publication can synchronously trigger another replacement. Do not
     // start stale cleanup or completion work after that newer owner takes over.
     if (this.options.runs.get(nextRunId) !== next) {
@@ -473,13 +557,14 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     if (receipt.phase !== "consumed") {
       return receipt;
     }
-    const accepted = { ...receipt, phase: "accepted" as const };
+    const accepted = Object.freeze({ ...receipt, phase: "accepted" as const });
     entry.execution.restartRecovery = accepted;
     try {
       this.options.persistOrThrow(runId);
     } catch (error) {
       // Gateway acceptance is irreversible. Keep the in-memory fact and let the
       // caller immediately attempt the strict successor remap.
+      this.unpersistedAcceptances.set(entry, accepted);
       log.warn("failed to persist accepted subagent restart recovery receipt", {
         error,
         runId,

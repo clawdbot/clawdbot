@@ -1,7 +1,5 @@
-import {
-  sessionCatalogPaging,
-  type SessionCatalogTranscriptItem,
-} from "openclaw/plugin-sdk/session-catalog";
+import type { SessionCatalogTranscriptItem } from "openclaw/plugin-sdk/session-catalog";
+import { sessionCatalogPaging } from "openclaw/plugin-sdk/session-catalog-paging";
 import { z } from "zod";
 import type { CodexThreadItem, CodexThreadTurnsListResponse } from "./app-server/protocol.js";
 import {

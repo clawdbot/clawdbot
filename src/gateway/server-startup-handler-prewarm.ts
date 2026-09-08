@@ -22,15 +22,13 @@ async function prewarmGatewaySessionListData(cfg: OpenClawConfig, agentId: strin
       import("../config/sessions/combined-store-gateway.js"),
       import("./session-utils-list.js"),
     ]);
-  const { durableStorePath, storePath, store } = loadCombinedSessionStoreForGatewayCore(cfg, {
+  const loaded = loadCombinedSessionStoreForGatewayCore(cfg, {
     agentId,
     projection: "list",
   });
   await listSessionsFromStoreAsync({
     cfg,
-    durableStorePath,
-    storePath,
-    store,
+    ...loaded,
     opts: {
       agentId,
       configuredAgentsOnly: true,

@@ -664,9 +664,13 @@ export function createResumeHarness(
       if (method === "thread/resume") {
         // Resume must echo the requested thread; a different id is rejected as
         // an unsafe subscription.
-        return threadStartResult((params as { threadId?: string })?.threadId ?? "thread-existing", {
-          instructionSources,
-        });
+        const resumeParams = params as { threadId?: string; modelProvider?: string };
+        return {
+          ...threadStartResult(resumeParams.threadId ?? "thread-existing", {
+            instructionSources,
+          }),
+          ...(resumeParams.modelProvider ? { modelProvider: resumeParams.modelProvider } : {}),
+        };
       }
       if (method === "turn/start") {
         return turnStartResult();

@@ -8,6 +8,7 @@ import type { LogsTailParams } from "./schema/logs-chat.js";
 import type { PortalCloseParams, PortalListParams, PortalOpenParams } from "./schema/portals.js";
 import type * as GitHubSchema from "./schema/session-github-publication.js";
 import type { UiCommandParams } from "./schema/ui-command.js";
+import type { UpdateRunsGetParams, UpdateRunsListParams } from "./schema/update-runs.js";
 import type * as UsersSchema from "./schema/users.js";
 
 /** Schema-derived payload ownership for statically validated core Gateway methods. */
@@ -37,6 +38,8 @@ export type GatewayCoreRequestParams = {
   "sessions.github.options": Static<typeof GitHubSchema.SessionGitHubOptionsParamsSchema>;
   "sessions.github.status": Static<typeof GitHubSchema.SessionGitHubStatusParamsSchema>;
   "sessions.github.confirm": GitHubSchema.SessionGitHubConfirmParams;
+  "update.runs.get": UpdateRunsGetParams;
+  "update.runs.list": UpdateRunsListParams;
   "users.authConnect.catalog": UsersSchema.UsersAuthConnectCatalogParams;
   "users.authConnect.start": UsersSchema.UsersAuthConnectStartParams;
   "users.authConnect.answer": UsersSchema.UsersAuthConnectAnswerParams;

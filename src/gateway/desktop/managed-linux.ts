@@ -299,8 +299,6 @@ export function createManagedLinuxDesktop(
   ) => {
     try {
       return await supervisor.spawn({
-        sessionId: "host-desktop-managed-linux",
-        backendId: binary === "Xtigervnc" ? "managed-vnc" : "managed-session",
         scopeKey,
         mode: "child",
         argv,

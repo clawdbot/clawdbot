@@ -11,6 +11,7 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
+import { readSessionEntryInstanceId } from "./session-accessor.sqlite-entry-identity.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 
 type SessionMemberDatabase = Pick<OpenClawAgentKyselyDatabase, "session_members">;
@@ -127,26 +128,10 @@ function assertAuthorizedSessionInstance(
   sessionKey: string,
   expectedSessionId: string | undefined,
 ): void {
-  const row =
-    database.db /* sqlite-allow-raw: sync TOCTOU re-read of canonical entry identity inside a write transaction; Kysely async execution is forbidden in synchronous commit sections */
-      .prepare("SELECT current_session_id, entry_json FROM session_nodes WHERE session_key = ?")
-      .get(sessionKey) as { current_session_id?: string; entry_json?: string } | undefined;
-  let entrySessionId: string | undefined;
-  try {
-    const entry = row?.entry_json ? (JSON.parse(row.entry_json) as unknown) : undefined;
-    const candidate =
-      entry && typeof entry === "object" && !Array.isArray(entry)
-        ? (entry as { sessionId?: unknown }).sessionId
-        : undefined;
-    entrySessionId = typeof candidate === "string" ? candidate : undefined;
-  } catch {
-    entrySessionId = undefined;
-  }
+  const sessionId = readSessionEntryInstanceId(database, sessionKey);
   if (
-    !row ||
-    entrySessionId === undefined ||
-    row.current_session_id !== entrySessionId ||
-    (expectedSessionId !== undefined && entrySessionId !== expectedSessionId)
+    sessionId === undefined ||
+    (expectedSessionId !== undefined && sessionId !== expectedSessionId)
   ) {
     throw new Error("session changed before sharing mutation");
   }

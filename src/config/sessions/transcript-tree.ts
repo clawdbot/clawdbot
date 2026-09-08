@@ -138,17 +138,17 @@ function resolveCanonicalParentId<T>(
   parentId: string | null,
   byId: Pick<ReadonlyMap<string, SessionTranscriptTreeNode<T>>, "get">,
 ): string | null {
-  const seen = new Set<string>();
+  let seen: Set<string> | undefined;
   let currentId = parentId;
   while (currentId !== null) {
-    if (seen.has(currentId)) {
+    if (seen?.has(currentId)) {
       return currentId;
     }
-    seen.add(currentId);
     const parent = byId.get(currentId);
     if (!parent || !isSessionTranscriptLeafControl(parent.entry)) {
       return currentId;
     }
+    (seen ??= new Set()).add(currentId);
     // Leaf controls are omitted from selected paths, so descendants must point
     // through the marker to its normalized visible parent.
     currentId = parent.parentId;
@@ -427,17 +427,17 @@ export function mergeSessionTranscriptVisiblePathWithOpaqueAppendPath<T>(params:
 } {
   const nodes = mergeSessionTranscriptTreePaths([params.visiblePath]);
   const selectedIds = new Set(nodes.map((node) => node.id));
-  const opaqueSuffix: SessionTranscriptTreeNode<T>[] = [];
-  for (let index = params.appendPath.length - 1; index >= 0; index -= 1) {
-    const node = params.appendPath[index];
+  let opaqueStart = params.appendPath.length;
+  for (; opaqueStart > 0; opaqueStart -= 1) {
+    const node = params.appendPath[opaqueStart - 1];
     if (!node || selectedIds.has(node.id) || isCanonicalSessionTranscriptEntry(node.entry)) {
       break;
     }
-    opaqueSuffix.unshift(node);
   }
 
   let selectedParentId = nodes.at(-1)?.id ?? null;
-  for (const node of opaqueSuffix) {
+  for (let index = opaqueStart; index < params.appendPath.length; index += 1) {
+    const node = params.appendPath[index]!;
     nodes.push({ ...node, selectedParentId });
     selectedIds.add(node.id);
     selectedParentId = node.id;

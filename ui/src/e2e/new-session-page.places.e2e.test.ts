@@ -163,6 +163,7 @@ suite.define(() => {
                 home: "/home/peter",
                 entries: [
                   { name: "packages", path: PICKED },
+                  { name: "tools", path: `${WORKSPACE}/tools` },
                   { name: ".git", path: `${WORKSPACE}/.git`, hidden: true },
                 ],
               },
@@ -591,6 +592,62 @@ suite.define(() => {
       });
       expect(create.params).not.toHaveProperty("cwd");
       expect(create.params).not.toHaveProperty("execNode");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("filters folders live without reloading and opens the highlighted match", async () => {
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      methodResponses: {
+        "fs.listDir": {
+          cases: [
+            {
+              match: { path: WORKSPACE },
+              response: {
+                path: WORKSPACE,
+                home: WORKSPACE,
+                entries: [
+                  { name: "packages", path: PICKED },
+                  { name: "tools", path: `${WORKSPACE}/tools` },
+                  { name: ".git", path: `${WORKSPACE}/.git`, hidden: true },
+                ],
+              },
+            },
+            {
+              match: { path: PICKED },
+              response: { path: PICKED, parent: WORKSPACE, home: WORKSPACE, entries: [] },
+            },
+          ],
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      const place = page.locator("wa-popover.new-session-page__project-popover");
+      await page.locator("#new-session-project-trigger").click();
+      await place.getByRole("button", { name: "Browse folders" }).click();
+      await gateway.waitForRequest("fs.listDir");
+      const input = place.locator("input.new-session-page__browser-path");
+      await expect.poll(() => input.inputValue()).toBe(WORKSPACE);
+      const requestsBefore = await gateway.getRequests("fs.listDir");
+      await input.fill(`${WORKSPACE}/pa`);
+      await expect
+        .poll(() => place.locator(".new-session-page__browser-entry").allTextContents())
+        .toEqual([expect.stringMatching(/^\s*packages\s*$/)]);
+      await page.screenshot({ path: path.join(suite.artifactDir, "folder-live-prefix.png") });
+      expect(await gateway.getRequests("fs.listDir")).toHaveLength(requestsBefore.length);
+      await input.press("Enter");
+      await gateway.waitForRequest("fs.listDir", { match: { path: PICKED } });
+      await expect.poll(() => input.inputValue()).toBe(PICKED);
+      await input.fill(`${WORKSPACE}/zzz`);
+      await place.getByText("No matching folders", { exact: true }).waitFor();
+      await page.screenshot({ path: path.join(suite.artifactDir, "folder-live-no-matches.png") });
     } finally {
       await context.close();
     }

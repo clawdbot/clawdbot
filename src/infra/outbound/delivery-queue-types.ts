@@ -4,7 +4,7 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import type {
   ChannelMessageUnknownSendReconciliationResult,
   OutboundReplyFacts,
-  RenderedMessageBatchPlanItem,
+  RenderedMessageBatchPlan,
 } from "../../channels/message/types.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { PluginHookReplyPayloadSendingContext } from "../../plugins/hook-types.js";
@@ -17,16 +17,7 @@ import type { IndexedOutboundAuditTerminal } from "./outbound-audit.js";
 import type { PreparedOutboundBatch } from "./prepared-batch.js";
 import type { OutboundSessionContext } from "./session-context.js";
 
-export type QueuedRenderedMessageBatchPlan = {
-  payloadCount: number;
-  textCount: number;
-  mediaCount: number;
-  voiceCount: number;
-  presentationCount: number;
-  interactiveCount: number;
-  channelDataCount: number;
-  items: readonly RenderedMessageBatchPlanItem[];
-};
+export type QueuedRenderedMessageBatchPlan = RenderedMessageBatchPlan;
 
 export type QueuedReplyPayloadSendingHook = {
   kind: ReplyDispatchKind;

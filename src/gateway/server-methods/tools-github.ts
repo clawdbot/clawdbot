@@ -15,6 +15,7 @@ import {
   resolveGitHubToolIdentityStatus,
   resolveManagedGitHubProfileDir,
 } from "../../agents/github-tool-identity.js";
+import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { consumeGitHubSetupHandoff } from "../../secrets/store/secret-store.js";
 import { GitHubCliUnavailableError } from "../github-cli-preflight.js";
 import { updateGitHubToolIdentityConfig } from "../github-tool-identity-config.js";
@@ -41,7 +42,8 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
     respond(
       true,
       await resolveGitHubToolIdentityStatus({
-        config: context.getRuntimeConfig(),
+        config: resolved.cfg,
+        sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? resolved.cfg,
         agentId: resolved.agentId,
         selectedScope: params.selectedScope,
       }),

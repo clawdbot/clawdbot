@@ -1,4 +1,5 @@
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
+import type { RuntimeContextFragment } from "../../agents/internal-runtime-context.js";
 import type { TranscriptSenderIdentity } from "../../chat/sender-identity.js";
 import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
@@ -32,6 +33,8 @@ export type GatewayClient = {
   connect: ConnectParams;
   /** Transport-owned revocation marker; retained callers have no authority after invalidation. */
   invalidated?: boolean;
+  /** Host-owned transport retirement notification; does not cancel ordinary admitted RPCs. */
+  connectionSignal?: AbortSignal;
   connId?: string;
   presenceKey?: string;
   clientIp?: string;
@@ -81,6 +84,7 @@ export type GatewayClient = {
     pluginSubagentRequester?: PluginSubagentRequesterContext;
     /** Host-owned exact media set for a scoped automatic recovery delivery. */
     internalDeliveryMediaUrls?: string[];
+    runtimeContextFragments?: RuntimeContextFragment[];
     internalDeliverySuppressText?: boolean;
     /** Plugin-owned tools authorized for this internal subagent run. */
     runtimePluginToolGrant?: RuntimePluginToolGrant;

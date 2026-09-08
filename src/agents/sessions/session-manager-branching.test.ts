@@ -18,15 +18,15 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../config/sessions/transcript-write-context.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
+import { SessionManager } from "./session-manager.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
 describe("SessionManager branch replacement", () => {
-  it.each(["memory", "sqlite"])(
-    "preserves opaque parents and labels in a %s branch",
-    async (mode) => {
+  it.each(["memory", "sqlite"].flatMap((mode) => [3, 4].map((version) => ({ mode, version }))))(
+    "preserves projection version $version, opaque parents, and labels in a $mode branch",
+    async ({ mode, version }) => {
       const dir = tempDirs.make("openclaw-session-manager-branch-");
       const scope = {
         agentId: "main",
@@ -35,7 +35,7 @@ describe("SessionManager branch replacement", () => {
         storePath: path.join(dir, "sessions.json"),
       };
       const entries = [
-        { type: "session", version: CURRENT_SESSION_VERSION, id: scope.sessionId, cwd: dir },
+        { type: "session", version, id: scope.sessionId, cwd: dir },
         {
           type: "message",
           id: "user",
@@ -73,7 +73,7 @@ describe("SessionManager branch replacement", () => {
 
       const branchId = await manager.createBranchedSession("reply");
       const expected = [
-        expect.objectContaining({ id: manager.getSessionId(), type: "session" }),
+        expect.objectContaining({ id: manager.getSessionId(), type: "session", version }),
         entries[1],
         entries[2],
         entries[3],
@@ -93,6 +93,16 @@ describe("SessionManager branch replacement", () => {
         expect(branchId).toBeUndefined();
         expect(manager.getSessionTarget()).toBeUndefined();
       }
+      manager.appendCompaction("summary", "user", 1);
+      manager.appendResetBoundary("reset", "reply");
+      const reopened =
+        mode === "sqlite"
+          ? SessionManager.openBounded(
+              { ...scope, sessionId: manager.getSessionId() },
+              { maxBytes: 4096, maxEvents: 2 },
+            )
+          : SessionManager.fromEntries(manager.getPersistedEntries());
+      expect(reopened.getHeader()?.version).toBe(version);
     },
   );
 

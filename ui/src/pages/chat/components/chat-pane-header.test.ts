@@ -442,6 +442,17 @@ describe("chat pane header", () => {
     expect(container.querySelector(".chat-pane__header--centered")).toBeNull();
   });
 
+  it.each([false, true])("keeps the public indicator visible in narrow=%s headers", (narrow) => {
+    const { container } = mountHeader({
+      narrow,
+      publicAccessIndicator: html`<span class="chat-pane__public-share-indicator">Public</span>`,
+    });
+
+    expect(container.querySelector(".chat-pane__public-share-indicator")?.textContent).toBe(
+      "Public",
+    );
+  });
+
   it("replaces the header owner avatar when visibility is available", () => {
     const actor = {
       type: "human" as const,

@@ -997,7 +997,7 @@ describe("Codex install helpers", () => {
     const result = runCodexOnDemandAssertions(root);
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Unexpected non-whitespace character after JSON");
+    expect(result.stderr).toMatch(/SyntaxError:.*JSON/u);
   });
 
   it("accepts SQLite-backed session and Codex binding state in the npm live assertion", () => {

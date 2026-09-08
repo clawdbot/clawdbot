@@ -22,11 +22,12 @@ export async function readSessionTranscriptModelContextAsync(
   target: SessionTranscriptRuntimeTarget,
   admission: SessionModelContextWorkerInput["admission"],
   signal?: AbortSignal,
+  through?: SessionModelContextWorkerInput["through"],
 ): Promise<ReturnType<typeof readSessionTranscriptModelContext>> {
   signal?.throwIfAborted();
   // Incognito SQLite is process memory; another isolate cannot read that database.
   if (isIncognitoSessionKey(target.sessionKey)) {
-    return readSessionTranscriptModelContext(target);
+    return readSessionTranscriptModelContext(target, through);
   }
-  return modelContextReads.run({ target, admission }, { timeoutMs: 60_000, signal });
+  return modelContextReads.run({ target, admission, through }, { timeoutMs: 60_000, signal });
 }

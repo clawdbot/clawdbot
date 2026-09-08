@@ -13,6 +13,12 @@ import type {
 } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import {
+  beginPanelRefresh,
+  completePanelRefresh,
+  createPanelRefreshStatus,
+  failPanelRefresh,
+} from "../../components/panel-refresh-status.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
@@ -32,6 +38,7 @@ import {
   loadChatMetadata,
   peekChatMetadata,
   revalidateChatMetadata,
+  subscribeChatMetadata,
 } from "../../lib/chat/chat-metadata-store.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import {
@@ -43,6 +50,7 @@ import {
   type CronState,
 } from "../../lib/cron/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import {
   canCallGatewayMethod,
   type GatewayMethodOperatorScope,
@@ -96,7 +104,8 @@ class AgentsPage
   @state() toolsEffectiveError: string | null = null;
   @state() toolsEffectiveResult: ToolsEffectiveResult | null = null;
   @state() chatModelCatalog: ModelCatalogEntry[] = [];
-  @state() chatModelCatalogError: string | null = null;
+  @state() chatModelCatalogStatus = createPanelRefreshStatus();
+  private chatModelCatalogPending: Promise<unknown> | null = null;
   @state() agentFilesLoading = false;
   @state() agentFilesError: string | null = null;
   @state() agentFilesList: AgentsFilesListResult | null = null;
@@ -124,11 +133,9 @@ class AgentsPage
   private agentIdentitySource: ApplicationContext["agentIdentity"] | null = null;
   private hasBoundSessions = false;
   private sessionsSource: ApplicationContext["sessions"] | null = null;
-  private chatModelCatalogAgentId: string | null = null;
-  private chatModelCatalogRequest: {
-    client: GatewayBrowserClient;
-    generation: number;
-    agentId: string;
+  private chatModelCatalogSubscription: {
+    isCurrent: () => boolean;
+    unsubscribe: () => void;
   } | null = null;
   private normalizedLocation = "";
   private githubProfileId: string | null = null;
@@ -139,17 +146,32 @@ class AgentsPage
   });
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
-    onIdentityChange: () => this.resetForClientChange(),
+    onIdentityChange: () => this.resetForSourceChange(),
     invalidateRequests: (change) => {
       if (change.identityChanged) {
         return;
       }
       this.invalidateTransientRequests();
-      this.chatModelCatalog = [];
-      this.chatModelCatalogAgentId = null;
-      this.chatModelCatalogError = null;
+      this.resetModelCatalog();
     },
-    onSnapshot: () => this.syncGatewayState(),
+    onSnapshot: ({ becameAvailable, becameConnected }) => {
+      this.syncGatewayState();
+      if (becameAvailable && !becameConnected) {
+        const subscription = this.chatModelCatalogSubscription;
+        void Promise.resolve(this.chatModelCatalogPending).then(() => {
+          const snapshot = this.gateway.snapshot;
+          const status = this.chatModelCatalogStatus;
+          if (
+            subscription?.isCurrent() &&
+            snapshot &&
+            isGatewayAvailable(snapshot) &&
+            (status.awaitingGateway || status.error !== null)
+          ) {
+            this.ensureModelCatalog({ refresh: true });
+          }
+        });
+      }
+    },
     ensureInitialData: () => this.ensureInitialData(),
   });
   private readonly subscriptions = new SubscriptionsController(this)
@@ -160,7 +182,7 @@ class AgentsPage
         this.hasBoundAgents = true;
         this.agentsSource = agents;
         if (resetForSourceBind) {
-          this.resetForAgentsSourceChange();
+          this.resetForSourceChange();
         }
         this.syncAgentState(agents);
         this.ensureInitialData();
@@ -361,16 +383,7 @@ class AgentsPage
     }
   }
 
-  private resetForClientChange() {
-    this.agentsList = null;
-    this.agentsSelectedId = null;
-    this.chatModelCatalog = [];
-    this.chatModelCatalogAgentId = null;
-    this.chatModelCatalogError = null;
-    this.resetSelectionState();
-  }
-
-  private resetForAgentsSourceChange() {
+  private resetForSourceChange() {
     this.agentsList = null;
     this.agentsSelectedId = null;
     this.resetSelectionState();
@@ -584,61 +597,80 @@ class AgentsPage
     });
   }
 
+  private resetModelCatalog() {
+    this.chatModelCatalogSubscription?.unsubscribe();
+    this.chatModelCatalogSubscription = null;
+    this.chatModelCatalog = [];
+    this.chatModelCatalogStatus = createPanelRefreshStatus();
+    this.chatModelCatalogPending = null;
+  }
+
   private ensureModelCatalog(options: { refresh?: boolean } = {}) {
     const client = this.client;
     const agentId = this.resolveSelectedAgentId();
     if (!client || !this.connected || !agentId) {
       return;
     }
-    if (!options.refresh) {
+    if (!this.chatModelCatalogSubscription?.isCurrent()) {
+      this.resetModelCatalog();
+      const generation = this.requestGeneration;
+      const gateway = this.context?.gateway;
+      const agents = this.context?.agents;
+      const subscription = {
+        isCurrent: () =>
+          this.chatModelCatalogSubscription === subscription &&
+          this.context?.gateway === gateway &&
+          this.isCurrentRequest(client, generation, agentId, { agents }),
+        unsubscribe: subscribeChatMetadata(client, { agentId }, (update) => {
+          if (!subscription.isCurrent()) {
+            return;
+          }
+          if (update.type === "invalidated") {
+            this.chatModelCatalogPending = null;
+            this.ensureModelCatalog({ refresh: true });
+          } else if (update.type === "error") {
+            this.chatModelCatalogStatus = failPanelRefresh(
+              this.chatModelCatalogStatus,
+              update.error,
+              this.gateway.snapshot,
+            );
+          } else {
+            this.chatModelCatalogStatus =
+              update.type === "loading"
+                ? beginPanelRefresh(this.chatModelCatalogStatus)
+                : completePanelRefresh();
+            if (update.type === "result") {
+              this.chatModelCatalog = update.result.models ?? [];
+            }
+          }
+        }),
+      };
+      this.chatModelCatalogSubscription = subscription;
       const cached = peekChatMetadata(client, { agentId });
       if (cached) {
         this.chatModelCatalog = cached.models ?? [];
-        this.chatModelCatalogAgentId = agentId;
-        this.chatModelCatalogError = null;
-        return;
+        this.chatModelCatalogStatus = completePanelRefresh();
       }
     }
-    const generation = this.requestGeneration;
-    const previousRequest = this.chatModelCatalogRequest;
     if (
-      previousRequest?.client === client &&
-      previousRequest.generation === generation &&
-      previousRequest.agentId === agentId
+      this.chatModelCatalogPending ||
+      (!options.refresh && this.chatModelCatalogStatus.hasLoaded)
     ) {
       return;
     }
-    if (this.chatModelCatalogAgentId !== agentId) {
-      this.chatModelCatalog = [];
-    }
-    const request = { client, generation, agentId };
-    this.chatModelCatalogRequest = request;
-    this.chatModelCatalogError = null;
-    // Chat metadata carries the selected agent's already-prepared startup models
-    // without initiating the live discovery reserved for explicit picker use.
+    // The store owns current publications and pending reads. A superseded promise
+    // must not overwrite its newer result or erase retained choices on failure.
     const metadataRequest = options.refresh
       ? revalidateChatMetadata(client, { agentId })
       : loadChatMetadata(client, { agentId });
-    void metadataRequest
-      .then((result) => {
-        if (this.isCurrentRequest(client, generation, agentId)) {
-          const models = result.models ?? [];
-          this.chatModelCatalog = models;
-          this.chatModelCatalogAgentId = agentId;
-          this.chatModelCatalogError = null;
-        }
-      })
-      .catch((error: unknown) => {
-        if (this.isCurrentRequest(client, generation, agentId)) {
-          this.chatModelCatalogAgentId = null;
-          this.chatModelCatalogError = formatUiError(error);
-        }
-      })
+    const pending = metadataRequest
+      .catch(() => undefined)
       .finally(() => {
-        if (this.chatModelCatalogRequest === request) {
-          this.chatModelCatalogRequest = null;
+        if (this.chatModelCatalogPending === pending) {
+          this.chatModelCatalogPending = null;
         }
       });
+    this.chatModelCatalogPending = pending;
   }
 
   private async loadAgentsAndCommit() {
@@ -742,9 +774,7 @@ class AgentsPage
 
   private resetSelectionState() {
     this.gateway.invalidate();
-    this.chatModelCatalog = [];
-    this.chatModelCatalogAgentId = null;
-    this.chatModelCatalogError = null;
+    this.resetModelCatalog();
     this.agentFilesList = null;
     this.agentFilesError = null;
     this.agentFileActive = null;
@@ -1004,7 +1034,7 @@ class AgentsPage
           runtimeSessionKey: this.sessionKey,
           runtimeSessionMatchesSelectedAgent: selectedAgentId === this.chatAgentId(),
           modelCatalog: this.chatModelCatalog,
-          modelCatalogError: this.chatModelCatalogError,
+          modelCatalogStatus: this.chatModelCatalogStatus,
           pinnedAgentIds: this.context.navigation.snapshot.pinnedAgentIds,
           onTogglePinnedAgent: (agentId) => togglePinnedAgent(this.context.navigation, agentId),
           onRefresh: () => this.refreshAgents(),
@@ -1151,7 +1181,7 @@ class AgentsPage
           // Availability facts (provider keys added/removed, new models) go
           // stale in the per-agent cache; opening the picker re-reads them,
           // mirroring the chat composer's on-open refresh.
-          onModelCatalogRetry: () => this.ensureModelCatalog({ refresh: true }),
+          onModelCatalogOpen: () => this.ensureModelCatalog({ refresh: true }),
           onModelFallbacksChange: (agentId, fallbacks) => {
             if (this.canCall("config.set", "operator.admin")) {
               stageAgentModelFallbacks(this.context.runtimeConfig, agentId, fallbacks);

@@ -84,11 +84,6 @@ export function isAssistantCommentaryCompletionNotification(
   );
 }
 
-/** A retryable native error is not a terminal outcome for bounded operations. */
-export function isRetryableErrorNotification(value: JsonValue | undefined): boolean {
-  return isJsonObject(value) && value.willRetry === true;
-}
-
 /** Returns true for terminal app-server thread status strings. */
 export function isTerminalTurnStatus(status: string | undefined): boolean {
   return status === "completed" || status === "interrupted" || status === "failed";

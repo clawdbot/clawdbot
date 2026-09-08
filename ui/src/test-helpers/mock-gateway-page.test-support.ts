@@ -1,4 +1,3 @@
-import { Script } from "node:vm";
 import { JSDOM } from "jsdom";
 import { it } from "vitest";
 
@@ -41,9 +40,8 @@ export const mockGatewayTest = it.extend<{ gatewayPage: MockGatewayPage }>({
       await use({
         window: dom.window as unknown as Window & typeof globalThis,
         execute: (script) => {
-          new Script(script, { filename: `mock-gateway:${task.name}` }).runInContext(
-            dom.getInternalVMContext(),
-          );
+          // outside-only supplies the private realm's eval; never use the host's eval.
+          dom.window.eval(`${script}\n//# sourceURL=mock-gateway:${encodeURIComponent(task.name)}`);
         },
         connect: (url = "ws://mock-gateway") => {
           const socket = new dom.window.WebSocket(url);

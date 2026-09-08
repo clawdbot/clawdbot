@@ -4,7 +4,7 @@ import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
 } from "openclaw/plugin-sdk/session-catalog";
-import { sessionCatalogPaging } from "openclaw/plugin-sdk/session-catalog";
+import { sessionCatalogPaging } from "openclaw/plugin-sdk/session-catalog-paging";
 import {
   isRecord,
   normalizeBoundedOptionalString as optionalPiString,

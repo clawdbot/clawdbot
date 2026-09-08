@@ -15,7 +15,6 @@ import {
   terminalizeBoundDeliveryQueueEntry,
   type DeliveryQueueDatabase,
   type DeliveryQueueReadMode,
-  type DeliveryQueueSqliteRow,
   type UpsertDeliveryQueueEntryParams,
   upsertBoundDeliveryQueueEntryInDatabase,
 } from "./delivery-queue-sqlite-bound.js";
@@ -36,13 +35,7 @@ export type {
 
 // Generic durable delivery queue storage shared by session and outbound queues.
 // Queue-specific wrappers own payload shape; this layer owns SQLite state.
-type QueueStatus = "pending" | "failed" | "completed";
-type DeliveryQueueStatusRow = {
-  queue_name: string;
-  status?: QueueStatus;
-  entry_json: string | null;
-  recovery_state: string | null;
-};
+type QueueStatus = NonNullable<UpsertDeliveryQueueEntryParams["status"]>;
 
 type TerminalizePendingDeliveryQueueEntryResult =
   | { status: "terminalized"; retained: boolean }
@@ -106,7 +99,7 @@ export function expireStagingAndLoadDeliveryQueueEntries(params: {
           deliveryQueueEntriesQuery(database, queueNames, "unfinished")
             .orderBy("enqueued_at", "asc")
             .orderBy("id", "asc"),
-        ).rows as DeliveryQueueSqliteRow[];
+        ).rows;
       return {
         entryRows: read(params.queueNames),
         stagingRows: read([params.stagingQueueName]),
@@ -188,7 +181,7 @@ export function getDeliveryQueueEntryOwnersInDatabase(
             )
             .where("queue_name", "in", queueNames)
             .where("id", "=", id),
-        ).rows as DeliveryQueueStatusRow[];
+        ).rows;
       let rows = readExact();
       let pruned = false;
       for (const row of rows) {
@@ -215,7 +208,8 @@ export function getDeliveryQueueEntryOwnersInDatabase(
                 [
                   row.queue_name,
                   {
-                    status: row.status,
+                    // Preserve the status API and ownership of unknown stored statuses.
+                    status: row.status as QueueStatus,
                     ...(row.status === "failed" && row.recovery_state === "settlement_pending"
                       ? { settlementPending: true as const }
                       : {}),
@@ -245,7 +239,7 @@ export function loadDeliveryQueueEntries(
     deliveryQueueEntriesQuery(database, [queueName], mode)
       .orderBy("enqueued_at", "asc")
       .orderBy("id", "asc"),
-  ).rows as DeliveryQueueSqliteRow[];
+  ).rows;
   return rows
     .map(inflateDeliveryQueueRow)
     .filter((entry): entry is DeliveryQueueEntryState => entry != null);

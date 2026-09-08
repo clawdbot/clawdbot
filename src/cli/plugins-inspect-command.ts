@@ -8,13 +8,22 @@ import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
 import { resolvePluginControlPlaneWorkspace } from "../plugins/control-plane-workspace.js";
 import { createInstalledPluginOwnershipResolver } from "../plugins/installed-plugin-package-ownership.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
-import { tracePluginLifecyclePhase } from "../plugins/plugin-lifecycle-trace.js";
+import {
+  tracePluginLifecyclePhase,
+  tracePluginLifecyclePhaseAsync,
+} from "../plugins/plugin-lifecycle-trace.js";
+import { formatPluginTrustDiagnostic } from "../plugins/plugin-trust.js";
+import type {
+  PluginCompatibilityNotice,
+  PluginInspectReport,
+  PluginStatusReport,
+} from "../plugins/status.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { quietPluginJsonLogger } from "./plugins-json-logger.js";
-import { formatPluginBundleFormat } from "./plugins-list-format.js";
+import { formatPluginBundleFormat, formatPluginStatus } from "./plugins-list-format.js";
 
 /** Options accepted by `openclaw plugins inspect`. */
 export type PluginInspectOptions = {
@@ -137,7 +146,7 @@ export async function runPluginsInspectCommand(
 ): Promise<void> {
   const {
     buildAllPluginInspectReports,
-    buildPluginDiagnosticsReport,
+    withPluginDiagnosticsReportForInspection,
     buildPluginInspectReport,
     buildPluginSnapshotReport,
     formatPluginCompatibilityNotice,
@@ -171,59 +180,42 @@ export async function runPluginsInspectCommand(
       failPluginInspect("Pass either a plugin id or --all, not both.", opts.json);
       return;
     }
-    const report = runtimeInspect
-      ? tracePluginLifecyclePhase(
-          "runtime plugin registry load",
-          () => buildPluginDiagnosticsReport(runtimeReportParams),
-          { command: "inspect", all: true },
-        )
-      : tracePluginLifecyclePhase(
-          "plugin registry snapshot",
-          () => buildPluginSnapshotReport(reportParams),
-          { command: "inspect", all: true },
-        );
-    writeGlobalPluginDiagnostics(report.diagnostics);
-    const inspectAll = buildAllPluginInspectReports({
-      config: cfg,
-      ...loggerParams,
-      report,
-    });
-    const inspectAllWithInstall = inspectAll.map((inspect) => ({
-      ...inspect,
-      install: resolveInstallRecord(inspect.plugin.id),
-    }));
+    const formatReport = (report: PluginStatusReport): string => {
+      writeGlobalPluginDiagnostics(report.diagnostics);
+      const inspectAll = buildAllPluginInspectReports({
+        config: cfg,
+        ...loggerParams,
+        report,
+      });
+      const inspectAllWithInstall = inspectAll.map((inspect) => ({
+        ...inspect,
+        install: resolveInstallRecord(inspect.plugin.id),
+      }));
 
-    if (opts.json) {
-      defaultRuntime.writeJson(inspectAllWithInstall);
-      return;
-    }
-
-    const tableWidth = getTerminalTableWidth();
-    const rows = inspectAll.map((inspect) => ({
-      Name: inspect.plugin.name || inspect.plugin.id,
-      ID: inspect.plugin.name && inspect.plugin.name !== inspect.plugin.id ? inspect.plugin.id : "",
-      Status:
-        inspect.plugin.status === "loaded"
-          ? theme.success("loaded")
-          : inspect.plugin.status === "disabled"
-            ? theme.warn("disabled")
-            : theme.error("error"),
-      Shape: inspect.shape,
-      Capabilities: formatCapabilityKinds(inspect.capabilities),
-      Compatibility:
-        inspect.compatibility.length > 0
-          ? inspect.compatibility
-              .map((entry) => (entry.severity === "warn" ? `warn:${entry.code}` : entry.code))
-              .join(", ")
-          : "none",
-      Bundle: inspect.bundleCapabilities.length > 0 ? inspect.bundleCapabilities.join(", ") : "-",
-      Hooks: formatHookSummary({
-        typedHookCount: inspect.typedHooks.length,
-        customHookCount: inspect.customHooks.length,
-      }),
-    }));
-    defaultRuntime.log(
-      renderTable({
+      if (opts.json) {
+        return JSON.stringify(inspectAllWithInstall, null, 2);
+      }
+      const tableWidth = getTerminalTableWidth();
+      const rows = inspectAll.map((inspect) => ({
+        Name: inspect.plugin.name || inspect.plugin.id,
+        ID:
+          inspect.plugin.name && inspect.plugin.name !== inspect.plugin.id ? inspect.plugin.id : "",
+        Status: formatPluginStatus(inspect.plugin, runtimeInspect),
+        Shape: inspect.shape,
+        Capabilities: formatCapabilityKinds(inspect.capabilities),
+        Compatibility:
+          inspect.compatibility.length > 0
+            ? inspect.compatibility
+                .map((entry) => (entry.severity === "warn" ? `warn:${entry.code}` : entry.code))
+                .join(", ")
+            : "none",
+        Bundle: inspect.bundleCapabilities.length > 0 ? inspect.bundleCapabilities.join(", ") : "-",
+        Hooks: formatHookSummary({
+          typedHookCount: inspect.typedHooks.length,
+          customHookCount: inspect.customHooks.length,
+        }),
+      }));
+      return renderTable({
         width: tableWidth,
         columns: [
           { key: "Name", header: "Name", minWidth: 14, flex: true },
@@ -236,8 +228,26 @@ export async function runPluginsInspectCommand(
           { key: "Hooks", header: "Hooks", minWidth: 20, flex: true },
         ],
         rows,
-      }).trimEnd(),
-    );
+      }).trimEnd();
+    };
+    const output = runtimeInspect
+      ? await tracePluginLifecyclePhaseAsync(
+          "runtime plugin registry load",
+          () => withPluginDiagnosticsReportForInspection(runtimeReportParams, formatReport),
+          { command: "inspect", all: true },
+        )
+      : formatReport(
+          tracePluginLifecyclePhase(
+            "plugin registry snapshot",
+            () => buildPluginSnapshotReport(reportParams),
+            { command: "inspect", all: true },
+          ),
+        );
+    if (opts.json) {
+      defaultRuntime.writeStdout(output);
+    } else {
+      defaultRuntime.log(output);
+    }
     return;
   }
 
@@ -282,39 +292,57 @@ export async function runPluginsInspectCommand(
     failPluginInspect(formatMissingPluginMessage({ id, includeSearch: true }), opts.json);
     return;
   }
-  const report = runtimeInspect
-    ? tracePluginLifecyclePhase(
+  const formatReport = (report: PluginStatusReport): string | undefined => {
+    writeGlobalPluginDiagnostics(report.diagnostics);
+    const inspect = buildPluginInspectReport({
+      id: targetPlugin.id,
+      config: cfg,
+      ...loggerParams,
+      report,
+    });
+    if (inspect) {
+      return formatPluginInspection(
+        inspect,
+        resolveInstallRecord(inspect.plugin.id),
+        opts,
+        formatPluginCompatibilityNotice,
+      );
+    }
+    return undefined;
+  };
+  const output = runtimeInspect
+    ? await tracePluginLifecyclePhaseAsync(
         "runtime plugin registry load",
         () =>
-          buildPluginDiagnosticsReport({
-            ...runtimeReportParams,
-            onlyPluginIds: [targetPlugin.id],
-          }),
+          withPluginDiagnosticsReportForInspection(
+            { ...runtimeReportParams, onlyPluginIds: [targetPlugin.id] },
+            formatReport,
+          ),
         { command: "inspect", pluginId: targetPlugin.id },
       )
-    : snapshotReport;
-  writeGlobalPluginDiagnostics(report.diagnostics);
-  const inspect = buildPluginInspectReport({
-    id: targetPlugin.id,
-    config: cfg,
-    ...loggerParams,
-    report,
-  });
-  if (!inspect) {
+    : formatReport(snapshotReport);
+  if (output === undefined) {
     failPluginInspect(
       formatMissingPluginMessage({ id, listCommand: "openclaw plugins list --json" }),
       opts.json,
     );
-    return;
+  } else if (opts.json) {
+    defaultRuntime.writeStdout(output);
+  } else {
+    defaultRuntime.log(output);
   }
-  const install = resolveInstallRecord(inspect.plugin.id);
+}
+
+function formatPluginInspection(
+  inspect: PluginInspectReport,
+  install: PluginInstallRecord | undefined,
+  opts: PluginInspectOptions,
+  formatPluginCompatibilityNotice: (notice: PluginCompatibilityNotice) => string,
+): string {
+  const runtimeInspect = opts.runtime === true;
 
   if (opts.json) {
-    defaultRuntime.writeJson({
-      ...inspect,
-      install,
-    });
-    return;
+    return JSON.stringify({ ...inspect, install }, null, 2);
   }
 
   const lines: string[] = [];
@@ -326,7 +354,7 @@ export async function runPluginsInspectCommand(
     lines.push(inspect.plugin.description);
   }
   lines.push("");
-  lines.push(`${theme.muted("Status:")} ${inspect.plugin.status}`);
+  lines.push(`${theme.muted("Status:")} ${formatPluginStatus(inspect.plugin, runtimeInspect)}`);
   if (inspect.plugin.failurePhase) {
     lines.push(`${theme.muted("Failure phase:")} ${inspect.plugin.failurePhase}`);
   }
@@ -341,6 +369,9 @@ export async function runPluginsInspectCommand(
   }
   lines.push(`${theme.muted("Source:")} ${shortenHomeInString(inspect.plugin.source)}`);
   lines.push(`${theme.muted("Origin:")} ${inspect.plugin.origin}`);
+  if (inspect.plugin.trust) {
+    lines.push(`${theme.muted("Trust:")} ${formatPluginTrustDiagnostic(inspect.plugin.trust)}`);
+  }
   if (inspect.plugin.version) {
     lines.push(`${theme.muted("Version:")} ${inspect.plugin.version}`);
   }
@@ -442,5 +473,5 @@ export async function runPluginsInspectCommand(
       inspect.plugin.status === "error" ? theme.error("Error:") : theme.muted("Reason:");
     lines.push("", `${label} ${inspect.plugin.error}`);
   }
-  defaultRuntime.log(lines.join("\n"));
+  return lines.join("\n");
 }

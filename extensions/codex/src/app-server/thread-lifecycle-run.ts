@@ -2,6 +2,8 @@ import { isDeepStrictEqual } from "node:util";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isIncognitoSessionKey } from "../incognito-session.js";
 import { closeCodexStartupClientBestEffort } from "./attempt-client-cleanup.js";
+import { normalizeCodexAppServerBindingModelProvider } from "./auth-profile.js";
+import { resolveCodexAppServerLocalHomeDir } from "./auth-start-options.js";
 import { resolveCodexAppServerClientInstanceId } from "./client.js";
 import { applyCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
@@ -11,10 +13,9 @@ import {
   mergeCodexThreadConfigs,
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
-import {
-  normalizeCodexAppServerBindingModelProvider,
-  type CodexAppServerPendingSupervisionBranch,
-  type CodexAppServerThreadBinding,
+import type {
+  CodexAppServerPendingSupervisionBranch,
+  CodexAppServerThreadBinding,
 } from "./session-binding.js";
 import {
   isTransientWebSearchRestriction,
@@ -34,12 +35,12 @@ import {
   withCodexThreadLifecycleBinding,
 } from "./thread-lifecycle-adoption.js";
 import * as lifecycleErrors from "./thread-lifecycle-errors.js";
-import { captureAgentInstructions } from "./thread-lifecycle-instructions.js";
-import { resumeExistingCodexThread, startFreshCodexThread } from "./thread-lifecycle-io.js";
+import { resumeExistingCodexThread } from "./thread-lifecycle-io.js";
 import {
   prepareCodexThreadLifecyclePreflight,
   resolveCodexThreadAgentDir,
 } from "./thread-lifecycle-preflight.js";
+import { startFreshCodexThread } from "./thread-lifecycle-start.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
@@ -165,6 +166,12 @@ export async function startOrResumeThread(
         bindingIdentity,
         binding: pendingBinding,
         attempt: params.params,
+        codexHome:
+          params.client.getRuntimeIdentity?.()?.codexHome ??
+          resolveCodexAppServerLocalHomeDir(
+            params.appServer.start,
+            resolveCodexThreadAgentDir(params),
+          ),
         cwd: params.cwd,
         dynamicTools: params.dynamicTools,
         appServer: params.appServer,

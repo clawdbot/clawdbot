@@ -375,6 +375,12 @@ enum CLIInstaller {
                         "or retry after the channel is updated.")
                 return false
             }
+            do {
+                try self.installBundledMacCLI(prefix: prefix)
+            } catch {
+                await statusHandler("Install failed: \(error.localizedDescription)")
+                return false
+            }
             let parsed = self.parseInstallEvents(response.stdout)
             let installedVersion = parsed.last { $0.event == "done" }?.version
             let summary = installedVersion.map { "Installed openclaw \($0)." } ?? "Installed openclaw."
@@ -393,6 +399,21 @@ enum CLIInstaller {
         let fallback = response.errorMessage ?? "install failed"
         await statusHandler("Install failed: \(detail.isEmpty ? fallback : detail)")
         return false
+    }
+
+    private static func installBundledMacCLI(prefix: String) throws {
+        let fileManager = FileManager.default
+        let source = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/openclaw-mac")
+        guard fileManager.isExecutableFile(atPath: source.path) else {
+            throw CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: source.path])
+        }
+        let destination = URL(fileURLWithPath: prefix).appendingPathComponent("bin/openclaw-mac")
+        if let existing = try? fileManager.destinationOfSymbolicLink(atPath: destination.path) {
+            if existing == source.path { return }
+            try fileManager.removeItem(at: destination)
+        }
+        // Creation fails on an existing non-link so installation preserves operator-owned files.
+        try fileManager.createSymbolicLink(at: destination, withDestinationURL: source)
     }
 
     static func channelInstallIsCompatible(

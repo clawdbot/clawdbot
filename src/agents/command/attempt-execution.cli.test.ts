@@ -35,7 +35,7 @@ import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { createTestPreparedRunAdmission } from "../admitted-run-context.test-support.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../auth-profiles/runtime-snapshots.js";
-import { saveAuthProfileStore } from "../auth-profiles/store.js";
+import { saveAuthProfileStore } from "../auth-profiles/store-runtime.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { buildCliRunResult } from "../cli-runner/cli-run-settlement.js";
@@ -834,6 +834,36 @@ describe("CLI attempt execution", () => {
       chatType: "channel",
     });
   });
+
+  it.each(["cli", "embedded"] as const)(
+    "preserves recovered dashboard authoring through the %s runtime without inline capability",
+    async (runtime) => {
+      const sessionKey = "agent:main:dashboard:recovered";
+      const sessionEntry = makeSessionEntry("recovered-dashboard-session");
+      const sessionStore = { [sessionKey]: sessionEntry };
+      await writeSessionStoreSeed(sessionStore);
+      runCliAgentMock.mockResolvedValueOnce(makeCliResult("recovered"));
+      runEmbeddedAgentMock.mockResolvedValueOnce({ meta: { durationMs: 1 } });
+
+      await runAgentAttempt({
+        providerOverride: runtime === "cli" ? "claude-cli" : "openai",
+        modelOverride: runtime === "cli" ? "opus" : "gpt-5.4",
+        sessionEntry,
+        sessionKey,
+        sessionStore,
+        storePath,
+        workspaceDir: tmpDir,
+        agentDir,
+        opts: { pinnedWidgetAuthoring: true },
+        runContext: { replyToMode: "all" },
+      });
+
+      const run = runtime === "cli" ? firstRunCliAgentArg() : firstEmbeddedAgentArg();
+      expect(run.pinnedWidgetAuthoring).toBe(true);
+      expect(run.clientCaps).toBeUndefined();
+      expect(run.replyToMode).toBe("all");
+    },
+  );
 
   async function runClaudeCliAttempt(params: {
     sessionKey: string;

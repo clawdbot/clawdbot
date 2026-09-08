@@ -1,5 +1,5 @@
 import { removeProviderAuthProfilesWithLock as removeProviderAuthProfilesWithLockStrict } from "../agents/auth-profiles/profiles.js";
-import { updateAuthProfileStoreWithLock as updateAuthProfileStoreWithLockStrict } from "../agents/auth-profiles/store.js";
+import { updateAuthProfileStoreWithLock as updateAuthProfileStoreWithLockStrict } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { upsertAuthProfileWithLock as upsertAuthProfileWithLockStrict } from "../agents/auth-profiles/upsert-with-lock.js";
 

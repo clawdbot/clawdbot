@@ -1,7 +1,7 @@
 import {
   PENDING_FINAL_DELIVERY_CLEAR_PATCH,
   sanitizePendingFinalDeliveryText,
-} from "../../auto-reply/reply/pending-final-delivery.js";
+} from "../../auto-reply/reply/pending-final-delivery-state.js";
 import type {
   InternalSessionEntry as SessionEntry,
   MainRestartRecoveryState,
@@ -374,7 +374,7 @@ export function transitionMainSessionRecovery(
         isMainRestartRecoveryCandidate(entry, command.sessionKey) &&
         !entry.mainRestartRecovery
       ) {
-        // Rows interrupted by an older shipped version acquire identity before scanning.
+        // Acquire recovery identity before scanning interrupted rows.
         entry.mainRestartRecovery = createCycle(command.cycleId);
       }
       let state = entry.mainRestartRecovery;

@@ -15,6 +15,7 @@ import {
   chatHistoryRequests,
   getChatHistoryLoadState,
   setChatHistoryLoad,
+  waitForInitialChatSnapshot,
 } from "./chat-history-state.ts";
 import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 import type { ChatRunStartupPhase } from "./chat-run-startup.ts";
@@ -33,7 +34,7 @@ export async function loadChatHistory(
   state: ChatState,
   opts: LoadChatHistoryOptions = {},
 ): Promise<ChatHistoryResult | undefined> {
-  const sessionKey = state.sessionKey;
+  let sessionKey = state.sessionKey;
   const requestAgentId = isUiSelectedGlobalSessionKey(state, sessionKey)
     ? resolveUiSelectedSessionAgentId(state)
     : undefined;
@@ -48,6 +49,42 @@ export async function loadChatHistory(
   const method = startup ? "chat.startup" : "chat.history";
   const client = state.client;
   const connectionEpoch = state.connectionEpoch;
+  const hydration = startup ? waitForInitialChatSnapshot(state) : undefined;
+  if (hydration) {
+    const version = requests.historyVersion;
+    state.chatLoading = true;
+    state.requestUpdate?.();
+    const current = await hydration;
+    if (
+      !current ||
+      !state.connected ||
+      state.client !== client ||
+      state.connectionEpoch !== connectionEpoch ||
+      !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
+      (isUiSelectedGlobalSessionKey(state, sessionKey) &&
+        resolveUiSelectedSessionAgentId(state) !== requestAgentId)
+    ) {
+      return undefined;
+    }
+    sessionKey = state.sessionKey;
+    if (requests.historyVersion !== version) {
+      const active = requests.historyLoad;
+      if (active.phase === "idle") {
+        return undefined;
+      }
+      if (
+        active.phase === "in-flight" &&
+        opts.supersedeInFlight !== true &&
+        active.startup &&
+        active.client === client &&
+        active.connectionEpoch === connectionEpoch &&
+        active.sessionKey === sessionKey &&
+        active.requestAgentId === requestAgentId
+      ) {
+        return active.promise;
+      }
+    }
+  }
   const deltaCursor = state.chatMessagesBySession
     ? readChatSessionSnapshot(state.chatMessagesBySession, state, {
         sessionKey,
@@ -100,7 +137,11 @@ export async function loadChatHistory(
       if (result) {
         setChatHistoryLoad(state, {
           phase: "committed",
-          key: `${sessionKey}\u0000${requestAgentId ?? ""}`,
+          client,
+          connectionEpoch,
+          sessionKey,
+          requestAgentId,
+          sessionInfo: result.sessionInfo,
         });
       } else if (
         state.sessionKey === sessionKey &&
@@ -190,6 +231,7 @@ export type ChatEventPayload = {
   agentId?: string;
   state: "status" | "delta" | "final" | "aborted" | "error";
   phase?: ChatRunStartupPhase;
+  retry?: NonNullable<Extract<ChatEvent, { state: "status" }>["retry"]>;
   message?: unknown;
   deltaText?: string;
   replace?: boolean;

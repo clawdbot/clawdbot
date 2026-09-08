@@ -34,7 +34,13 @@ const profileContext = vi.hoisted(() => ({
   })),
 }));
 const browserRuntime = vi.hoisted(() => ({
-  profiles: new Map<string, { running: { headless?: boolean; headlessSource?: string } | null }>(),
+  profiles: new Map<
+    string,
+    {
+      running: { headless?: boolean; headlessSource?: string } | null;
+      externalBrowserMode?: { browserWebSocketUrl: string; headless: Promise<boolean | undefined> };
+    }
+  >(),
 }));
 const pwMocks = vi.hoisted(() => ({
   connected: false,
@@ -245,16 +251,40 @@ describe("browser agent snapshot timeout routing", () => {
       expectedHeadless: true,
     },
     {
-      name: "untracked browser without authoritative launch state",
+      name: "observed headed external browser",
+      configuredHeadless: true,
+      running: null,
+      externalHeadless: false,
+      expectedHeadless: false,
+    },
+    {
+      name: "observed headless external browser",
+      configuredHeadless: false,
+      running: null,
+      externalHeadless: true,
+      expectedHeadless: true,
+    },
+    {
+      name: "external browser without authoritative launch state",
       configuredHeadless: false,
       running: null,
       expectedHeadless: undefined,
     },
   ])(
     "passes the actual launch mode for $name",
-    async ({ configuredHeadless, running, expectedHeadless }) => {
+    async ({ configuredHeadless, running, externalHeadless, expectedHeadless }) => {
       profileContext.profile.headless = configuredHeadless;
-      browserRuntime.profiles.set(profileContext.profile.name, { running });
+      browserRuntime.profiles.set(profileContext.profile.name, {
+        running,
+        ...(typeof externalHeadless === "boolean"
+          ? {
+              externalBrowserMode: {
+                browserWebSocketUrl: "ws://127.0.0.1:18800/devtools/browser/test-browser",
+                headless: Promise.resolve(externalHeadless),
+              },
+            }
+          : {}),
+      });
       cdpMocks.captureScreenshot.mockResolvedValueOnce(Buffer.from("png"));
       const handler = getScreenshotHandler();
       const response = createBrowserRouteResponse();

@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.core.test.shard.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "../../.artifacts/tsgo-cache/core-test-state-logging.tsbuildinfo"
+  },
+  "include": [
+    "../../src/state/**/*.test.ts",
+    "../../src/state/**/*.test.tsx",
+    "../../src/logging/**/*.test.ts",
+    "../../src/logging/**/*.test.tsx"
+  ]
+}

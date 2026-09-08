@@ -6,6 +6,22 @@ describe("Checkout chip state", () => {
   it.each([
     {
       destination: "remote",
+      repository: true,
+      worktree: false,
+      worktreeAvailable: true,
+      baseRef: "release",
+      label: "Remote checkout from release",
+    },
+    {
+      destination: "remote",
+      repository: true,
+      worktree: false,
+      worktreeAvailable: true,
+      baseRef: "",
+      label: "Remote checkout",
+    },
+    {
+      destination: "remote",
       worktree: true,
       worktreeAvailable: true,
       headBranch: "main",
@@ -72,12 +88,13 @@ describe("Checkout chip state", () => {
   );
 
   it.each([
-    { worktree: false, remotePlacement: false },
-    { worktree: true, remotePlacement: false },
-    { worktree: true, remotePlacement: true },
+    { worktree: false, remotePlacement: false, repository: false },
+    { worktree: true, remotePlacement: false, repository: false },
+    { worktree: true, remotePlacement: true, repository: false },
+    { worktree: false, remotePlacement: true, repository: true },
   ])(
     "offers explicit checkout choices (worktree=$worktree, remote=$remotePlacement)",
-    ({ worktree, remotePlacement }) => {
+    ({ worktree, remotePlacement, repository }) => {
       const container = document.createElement("div");
       const onSelectWorktree = vi.fn();
       const onBaseRefInput = vi.fn();
@@ -86,6 +103,7 @@ describe("Checkout chip state", () => {
         renderCheckoutChip({
           state: { label: worktree ? "New worktree from main" : "feature" },
           remotePlacement,
+          repository,
           folderLabel: "OpenClaw",
           worktree,
           worktreeAvailable: true,
@@ -107,6 +125,20 @@ describe("Checkout chip state", () => {
         }),
         container,
       );
+
+      if (repository) {
+        expect(container.querySelector('[data-value="checkout"]')).toBeNull();
+        expect(container.querySelector('[data-value="worktree"]')).toBeNull();
+        const inputs = container.querySelectorAll<HTMLInputElement>("input");
+        expect(inputs).toHaveLength(1);
+        inputs[0]!.value = "release/next";
+        inputs[0]!.dispatchEvent(new Event("input"));
+        expect(onBaseRefInput).toHaveBeenCalledWith("release/next");
+        expect(container.textContent).toContain(
+          "Clones OpenClaw on the selected runner. No Gateway checkout is created.",
+        );
+        return;
+      }
 
       const current = container.querySelector<HTMLButtonElement>('[data-value="checkout"]')!;
       const isolated = container.querySelector<HTMLButtonElement>('[data-value="worktree"]')!;

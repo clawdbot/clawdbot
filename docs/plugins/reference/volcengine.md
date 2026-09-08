@@ -2,21 +2,25 @@
 summary: "Adds Volcengine, Volcengine Plan model provider support to OpenClaw."
 read_when:
   - You are installing, configuring, or auditing the volcengine plugin
-title: "Volcengine plugin"
+title: "Volcengine plugin reference"
 ---
 
-# Volcengine plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 Adds Volcengine, Volcengine Plan model provider support to OpenClaw.
 
 ## Distribution
 
 - Package: `@openclaw/volcengine-provider`
-- Install route: npm; ClawHub: `clawhub:@openclaw/volcengine-provider`
+- Install route: npm or ClawHub: `clawhub:@openclaw/volcengine-provider`
 
 ## Surface
 
-providers: `volcengine`, `volcengine-plan`; contracts: `speechProviders`
+- Providers: `volcengine`, `volcengine-plan`
+- Contracts: `speechProviders`
 
 ## Related docs
 

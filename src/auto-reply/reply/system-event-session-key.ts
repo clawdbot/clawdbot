@@ -1,21 +1,26 @@
-const REPLY_SYSTEM_EVENT_SESSION_KEY = Symbol("openclaw.reply.systemEventSessionKey");
+import type { SystemEvent } from "../../infra/system-events.js";
 
-/** Attach route-owned system-event state without widening public reply option contracts. */
-export function withReplySystemEventSessionKey<T extends object>(
+const REPLY_SYSTEM_EVENT_CONTEXT = Symbol("openclaw.reply.systemEventContext");
+
+type ReplySystemEventContext = {
+  sessionKey: string;
+  events?: readonly SystemEvent[];
+};
+
+/** Carry the queue and its optional prepared selection through internal option spreads. */
+export function withReplySystemEventContext<T extends object>(
   options: T,
-  sessionKey: string,
+  context: ReplySystemEventContext,
 ): T {
-  return {
-    ...options,
-    [REPLY_SYSTEM_EVENT_SESSION_KEY]: sessionKey,
-  };
+  return { ...options, [REPLY_SYSTEM_EVENT_CONTEXT]: context };
 }
 
-/** Read route-owned system-event state after it crosses internal reply-option spreads. */
-export function getReplySystemEventSessionKey(options: object | undefined): string | undefined {
-  if (!options) {
-    return undefined;
-  }
-  const value = (options as Record<PropertyKey, unknown>)[REPLY_SYSTEM_EVENT_SESSION_KEY];
-  return typeof value === "string" ? value : undefined;
+/** An absent selection means an ordinary turn may inspect the current queue. */
+export function getReplySystemEventContext(
+  options: object | undefined,
+): ReplySystemEventContext | undefined {
+  // SAFETY: only this module-private symbol and its typed producer establish the value.
+  return (options as { [REPLY_SYSTEM_EVENT_CONTEXT]?: ReplySystemEventContext } | undefined)?.[
+    REPLY_SYSTEM_EVENT_CONTEXT
+  ];
 }

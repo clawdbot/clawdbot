@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { Socket } from "node:net";
 import {
   adaptMessagePresentationForChannel,
   type MessagePresentation,
@@ -60,6 +61,11 @@ async function listenLoopback(
       response.end(String(error));
     });
   });
+  const sockets = new Set<Socket>();
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+  });
   server.on("clientError", (_err, socket) => socket.destroy());
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -76,9 +82,11 @@ async function listenLoopback(
     server,
     port: address.port,
     close: async () => {
-      server.closeAllConnections?.();
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
+        for (const socket of sockets) {
+          socket.destroy();
+        }
       });
     },
   };
@@ -282,7 +290,7 @@ describe("Row-overflow table delivery through production outbound adapter over l
     const payload = { text: "Deployment details. ".repeat(1_500), presentation };
     const prepared =
       delivery === "reply"
-        ? prepareLineReplyPayload(payload)
+        ? await prepareLineReplyPayload(payload)
         : await lineOutboundAdapter.renderPresentation!({
             payload,
             presentation: adaptMessagePresentationForChannel({

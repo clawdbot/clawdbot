@@ -17,6 +17,10 @@ describe("legacy config migration end to end", () => {
     });
     expect(duplicate.next).toEqual({
       agents: {
+        defaults: {
+          systemAgent: { agentId: "main" },
+          heartbeat: { agentId: "main" },
+        },
         entries: {
           main: { name: "first", workspace: resolveDefaultAgentWorkspaceDir() },
           "main-2": { name: "second" },

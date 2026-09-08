@@ -31,19 +31,10 @@ if [[ ! -d "$usr_lib" ]]; then
   exit 1
 fi
 
-case "$(uname -s)/$(uname -m)" in
-  Linux/x86_64 | Linux/amd64) ;;
-  *)
-    echo "unsupported AppImage host: $(uname -s)/$(uname -m)" >&2
-    exit 1
-    ;;
-esac
-
+arch=$("$tools_helper" architecture)
+runtime=$("$tools_helper" runtime-path)
 "$tools_helper" verify post-build
-cache_root=${XDG_CACHE_HOME:?XDG_CACHE_HOME is required}
-plugin="$cache_root/tauri/linuxdeploy-plugin-appimage.AppImage"
-runtime="$cache_root/tauri/.appimage-runtime-x86_64"
-arch=x86_64
+plugin="$(dirname -- "$runtime")/linuxdeploy-plugin-appimage.AppImage"
 
 mapfile -d '' forbidden_libraries < <(
   find "$usr_lib" \( -type f -o -type l \) \

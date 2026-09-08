@@ -1,4 +1,4 @@
-import { isToolExecutionAllowed } from "./tool-policy-shared.js";
+import { createToolExecutionMatcher } from "./tool-policy-shared.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 type ToolDefinition = Pick<AnyAgentTool, "name" | "parameters" | "description">;
@@ -55,16 +55,17 @@ export function finalizeAgentToolAvailability<T extends ToolDefinition>(
   // The caller supplies its winning definitions, including non-native shadows.
   // A missing, quarantined, or execution-denied dependency cannot enable a mode.
   const winners = new Map(tools.map((tool) => [tool.name, tool]));
-  const callableTools = new Map(
-    [...winners.values()]
-      .filter(
-        (tool) =>
-          !availabilityBindings.get(tool)?.executionDenied &&
-          (!options?.toolExecutionAllow ||
-            isToolExecutionAllowed(options.toolExecutionAllow, tool.name)),
-      )
-      .map((tool) => [tool.name, tool]),
-  );
+  const executionAllowed = options?.toolExecutionAllow
+    ? createToolExecutionMatcher(options.toolExecutionAllow)
+    : undefined;
+  const callableTools = new Map<string, T>();
+  for (const callableTool of [...winners.values()].filter(
+    (tool) =>
+      !availabilityBindings.get(tool)?.executionDenied &&
+      (!executionAllowed || executionAllowed(tool.name)),
+  )) {
+    callableTools.set(callableTool.name, callableTool);
+  }
   for (const tool of tools) {
     const binding = availabilityBindings.get(tool)?.binding;
     if (binding) {

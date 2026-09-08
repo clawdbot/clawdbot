@@ -200,28 +200,28 @@ describe("auditGatewayServiceConfig", () => {
     expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(false);
   });
 
-  it("flags version-managed node paths", async () => {
+  it.each([
+    [".nvm/versions/node/v22.0.0/bin", true, true],
+    [".NVM/versions/node/v22.0.0/bin", true, false],
+    [".local/share/mise/installs/node/22/bin", true, false],
+    ["Library/Application Support/fnm/aliases/default/bin", true, false],
+    [".nvs/node/22/bin", false, false],
+    [".local/share/pnpm", false, true],
+    [".nvm/../system/bin", false, false],
+    [".local/share/mise/.nvm/bin", true, true],
+  ] as const)("audits runtime and PATH for %s", async (directory, runtime, nonMinimal) => {
+    const bin = `/Users/test/${directory}`;
     const audit = await auditGatewayServiceConfig({
       env: { HOME: "/tmp" },
       platform: "darwin",
       command: {
-        programArguments: ["/Users/test/.nvm/versions/node/v22.0.0/bin/node", "gateway"],
-        environment: {
-          PATH: "/usr/bin:/bin:/Users/test/.nvm/versions/node/v22.0.0/bin",
-        },
+        programArguments: [`${bin}/node`, "gateway"],
+        environment: { PATH: `/usr/bin:/bin:${bin}` },
       },
     });
-    expect(
-      audit.issues.some(
-        (issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeNodeVersionManager,
-      ),
-    ).toBe(true);
-    expect(
-      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayPathNonMinimal),
-    ).toBe(true);
-    expect(
-      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayPathMissingDirs),
-    ).toBe(true);
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeNodeVersionManager)).toBe(runtime);
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPathNonMinimal)).toBe(nonMinimal);
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPathMissingDirs)).toBe(true);
   });
 
   it("accepts Linux minimal PATH with user directories", async () => {
@@ -604,6 +604,20 @@ describe("auditGatewayServiceConfig", () => {
 
   it.each([
     {
+      name: "detects a control-group drop-in over a mixed base unit",
+      unit: ["KillMode=mixed"],
+      manager: ["KillMode=control-group"],
+      code: SERVICE_AUDIT_CODES.systemdKillModeControlGroup,
+      expected: true,
+    },
+    {
+      name: "accepts effective mixed mode over an older base unit",
+      unit: ["KillMode=control-group"],
+      manager: ["KillMode=mixed"],
+      code: SERVICE_AUDIT_CODES.systemdKillModeControlGroup,
+      expected: false,
+    },
+    {
       name: "uses manager KillMode instead of the base unit",
       unit: [
         "After=network-online.target",
@@ -699,7 +713,7 @@ describe("auditGatewayServiceConfig", () => {
     }
   });
 
-  it.each(["process", "none"])(
+  it.each(["process", "none", "control-group", ""])(
     `warns when KillMode is %s in explicit unit file`,
     async (killMode) => {
       const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-killmode-"));
@@ -720,7 +734,11 @@ describe("auditGatewayServiceConfig", () => {
               environment: { PATH: "/usr/bin:/bin" },
             },
           });
-          expect(hasIssue(audit, SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone)).toBe(true);
+          const code =
+            killMode === "process" || killMode === "none"
+              ? SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone
+              : SERVICE_AUDIT_CODES.systemdKillModeControlGroup;
+          expect(hasIssue(audit, code)).toBe(true);
           expect(execSystemctlUser).toHaveBeenCalledWith({ HOME: home }, expect.any(Array), 10_000);
         }
       } finally {
@@ -738,7 +756,7 @@ describe("auditGatewayServiceConfig", () => {
           `After=basic.target ${continuation}network-online.target`,
           `Wants=basic.target ${continuation}network-online.target`,
           `RestartSec=${continuation}5s`,
-          `KillMode=${continuation}control-group`,
+          `KillMode=${continuation}mixed`,
         ]);
         const audit = await auditGatewayServiceConfig({
           env: { HOME: home },

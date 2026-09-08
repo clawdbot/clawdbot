@@ -19,6 +19,8 @@ Use `openclaw onboard` or `openclaw setup` for the full guided first-run journey
 
 Before `openclaw configure` changes local credentials or configuration, OpenClaw compares the selected CLI state/config paths with the local Gateway or its installed service. A proven mismatch stops before the write. A remote Gateway or an authenticated path that cannot be verified produces a warning instead.
 
+This comparison also applies when `OPENCLAW_HOME` relocates the CLI's default state directory. The installed service's recorded environment determines its paths, including while the Gateway is stopped; the CLI's path overrides do not replace them. If the service definition or its recorded paths cannot be verified, OpenClaw warns and leaves configuration available. Inspect the service with `openclaw gateway status --deep` before relying on local changes to reach it.
+
 `--section <section>`: repeatable section filter. Available sections:
 
 `workspace`, `model`, `web`, `gateway`, `daemon`, `channels`, `plugins`, `skills`, `health`
@@ -39,6 +41,17 @@ Gateway, daemon, health, and web settings do not require an agent owner. Workspa
 </Note>
 
 ## Gateway section
+
+First-run `openclaw onboard` and `openclaw setup` generate a Gateway secret in
+token mode without a token/password picker. They preserve existing password
+mode; use their `--gateway-auth password` or `--gateway-password <value>` flags
+to choose a password explicitly. Tailscale Funnel still requires password mode.
+The local `configure` Gateway section retains its auth-mode picker for targeted
+reconfiguration. The mode selects the configured secret; clients may send it
+in either `auth.token` or `auth.password`.
+
+Remote configuration asks for one **Gateway secret** and stores it as
+`gateway.remote.token`, whether the remote Gateway calls it a token or password.
 
 For **Trusted Proxy** auth, enter comma-separated IPv4 or IPv6 addresses or CIDR ranges, such as `10.0.0.1, ::1, 10.0.0.0/24`. The wizard rejects malformed addresses and empty entries before saving; surrounding whitespace is ignored.
 

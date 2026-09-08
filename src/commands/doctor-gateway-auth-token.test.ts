@@ -365,7 +365,6 @@ describe("shouldRequireGatewayTokenForInstall", () => {
       env: {} as NodeJS.ProcessEnv,
     });
 
-    expect(resolved.token).toBeUndefined();
     expect(resolved.unavailableReason).toBe(
       "gateway.auth.mode=none cannot be used with gateway.tailscale.mode=serve; configure token, password, or trusted-proxy auth before exposing the gateway through Tailscale",
     );

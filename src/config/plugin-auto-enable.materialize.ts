@@ -8,6 +8,7 @@ import { findChatChannelMeta } from "../channels/chat-meta.js";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.types.js";
+import { isNativeSessionCatalogOptOutOnly } from "../plugins/native-session-catalog-config.js";
 import { isOfficialExternalPluginId } from "../plugins/official-external-plugin-catalog.js";
 import { shouldSkipPreferredPluginAutoEnable } from "./plugin-auto-enable.prefer-over.js";
 import type {
@@ -90,12 +91,6 @@ function disableImplicitPreferredOverPlugin(params: {
   // Otherwise registry alias normalization can fold the stale channel id back
   // onto the external owner and override its explicit enabled entry.
   if (!params.manifestRegistry.plugins.some((plugin) => plugin.id === params.pluginId)) {
-    return params.config;
-  }
-  if (
-    !normalizeChatChannelId(params.pluginId) &&
-    !isKnownPluginId(params.pluginId, params.manifestRegistry)
-  ) {
     return params.config;
   }
   const existingEntry = params.config.plugins?.entries?.[params.pluginId];
@@ -231,6 +226,7 @@ function materializeConfiguredPluginEntryAllowlist(params: {
   )) {
     const entry = entries[pluginId];
     if (
+      isNativeSessionCatalogOptOutOnly(pluginId, entry) ||
       !hasMaterialPluginEntryConfig(entry) ||
       isPluginDenied(next, pluginId) ||
       isPluginExplicitlyDisabled(next, pluginId) ||

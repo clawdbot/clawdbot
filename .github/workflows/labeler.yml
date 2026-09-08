@@ -1,7 +1,7 @@
 name: Labeler
 
 on:
-  pull_request_target: # zizmor: ignore[dangerous-triggers] maintainer-owned triage workflow; no untrusted checkout or PR code execution
+  pull_request_target: # zizmor: ignore[dangerous-triggers] maintainer-owned triage workflow; trusted base checkout only, no untrusted PR code execution
     types: [opened, synchronize, reopened, edited]
   issues:
     types: [opened, edited]
@@ -41,6 +41,10 @@ jobs:
       pull-requests: write
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         id: app-token
         continue-on-error: true
@@ -79,6 +83,11 @@ jobs:
             if (!pullRequest) {
               return;
             }
+
+            const { pathToFileURL } = require("node:url");
+            const { addLabelsWithinCap } = await import(
+              pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/github/labeler-label-cap.mjs`).href
+            );
 
             const sizeLabels = ["size: XS", "size: S", "size: M", "size: L", "size: XL"];
             const labelColor = "b76e79";
@@ -137,7 +146,6 @@ jobs:
               per_page: 100,
             });
 
-            let remainingLabelCount = currentLabels.length;
             for (const label of currentLabels) {
               const name = label.name ?? "";
               if (!sizeLabels.includes(name)) {
@@ -152,28 +160,16 @@ jobs:
                 issue_number: pullRequest.number,
                 name,
               });
-              remainingLabelCount -= 1;
             }
 
-            // actions/labeler already caps its result at GitHub's 100-label limit.
-            // Its optional area-label limit skips all new matches; it reserves no slots here.
-            if (remainingLabelCount >= 100 && !currentLabels.some((label) => label.name === targetSizeLabel)) {
-              core.warning(`Skipping ${targetSizeLabel}: PR #${pullRequest.number} already has 100 labels.`);
-              return;
-            }
-            try {
-              await github.rest.issues.addLabels({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: pullRequest.number,
-                labels: [targetSizeLabel],
-              });
-            } catch (error) {
-              if (error?.status !== 422 || !/cannot have more than 100 labels/i.test(error.message ?? "")) {
-                throw error;
-              }
-              core.warning(`Skipping ${targetSizeLabel}: ${error.message}`);
-            }
+            await addLabelsWithinCap({
+              github,
+              core,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issueNumber: pullRequest.number,
+              labels: [targetSizeLabel],
+            });
       - name: Apply maintainer or trusted-contributor label
         if: ${{ github.event.action != 'edited' }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
@@ -206,9 +202,16 @@ jobs:
             }
 
             if (isMaintainer) {
-              await github.rest.issues.addLabels({
-                ...context.repo,
-                issue_number: context.payload.pull_request.number,
+              const { pathToFileURL } = require("node:url");
+              const { addLabelsWithinCap } = await import(
+                pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/github/labeler-label-cap.mjs`).href
+              );
+              await addLabelsWithinCap({
+                github,
+                core,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issueNumber: context.payload.pull_request.number,
                 labels: ["maintainer"],
               });
               return;
@@ -283,10 +286,16 @@ jobs:
             const hasLabel = currentLabels.some((label) => label.name === labelName);
 
             if (matchesBetaBlocker && !hasLabel) {
-              await github.rest.issues.addLabels({
+              const { pathToFileURL } = require("node:url");
+              const { addLabelsWithinCap } = await import(
+                pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/github/labeler-label-cap.mjs`).href
+              );
+              await addLabelsWithinCap({
+                github,
+                core,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: pullRequest.number,
+                issueNumber: pullRequest.number,
                 labels: [labelName],
               });
               return;
@@ -473,10 +482,16 @@ jobs:
             if (openPrCount > activePrLimit) {
               await ensureLabelExists();
               if (!labelNames.has(activePrLimitLabel)) {
-                await github.rest.issues.addLabels({
+                const { pathToFileURL } = require("node:url");
+                const { addLabelsWithinCap } = await import(
+                  pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/github/labeler-label-cap.mjs`).href
+                );
+                await addLabelsWithinCap({
+                  github,
+                  core,
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  issue_number: pullRequest.number,
+                  issueNumber: pullRequest.number,
                   labels: [activePrLimitLabel],
                 });
               }
@@ -505,6 +520,10 @@ jobs:
       pull-requests: write
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         id: app-token
         continue-on-error: true
@@ -542,6 +561,11 @@ jobs:
             const perPage = Number.isFinite(parsedPerPage) ? Math.min(100, Math.max(1, parsedPerPage)) : 50;
             const processAll = maxPrs <= 0;
             const maxCount = processAll ? Number.POSITIVE_INFINITY : Math.max(1, maxPrs);
+
+            const { pathToFileURL } = require("node:url");
+            const { addLabelsWithinCap } = await import(
+              pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/github/labeler-label-cap.mjs`).href
+            );
 
             const sizeLabels = ["size: XS", "size: S", "size: M", "size: L", "size: XL"];
             const betaBlockerLabel = "beta-blocker";
@@ -688,13 +712,17 @@ jobs:
               }
 
               if (!labelNames.has(targetSizeLabel)) {
-                await github.rest.issues.addLabels({
+                const added = await addLabelsWithinCap({
+                  github,
+                  core,
                   owner,
                   repo,
-                  issue_number: pullRequest.number,
+                  issueNumber: pullRequest.number,
                   labels: [targetSizeLabel],
                 });
-                labelNames.add(targetSizeLabel);
+                if (added) {
+                  labelNames.add(targetSizeLabel);
+                }
               }
             }
 
@@ -713,13 +741,17 @@ jobs:
                 return;
               }
 
-              await github.rest.issues.addLabels({
+              const added = await addLabelsWithinCap({
+                github,
+                core,
                 owner,
                 repo,
-                issue_number: pullRequest.number,
+                issueNumber: pullRequest.number,
                 labels: [label],
               });
-              labelNames.add(label);
+              if (added) {
+                labelNames.add(label);
+              }
             }
 
             async function applyBetaBlockerTitleLabel(pullRequest, labelNames) {
@@ -727,13 +759,17 @@ jobs:
 
               if (matchesBetaBlocker) {
                 if (!labelNames.has(betaBlockerLabel)) {
-                  await github.rest.issues.addLabels({
+                  const added = await addLabelsWithinCap({
+                    github,
+                    core,
                     owner,
                     repo,
-                    issue_number: pullRequest.number,
+                    issueNumber: pullRequest.number,
                     labels: [betaBlockerLabel],
                   });
-                  labelNames.add(betaBlockerLabel);
+                  if (added) {
+                    labelNames.add(betaBlockerLabel);
+                  }
                 }
                 return;
               }
@@ -809,9 +845,14 @@ jobs:
   label-issues:
     if: github.event_name == 'issues'
     permissions:
+      contents: read
       issues: write
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         id: app-token
         continue-on-error: true
@@ -859,9 +900,16 @@ jobs:
             }
 
             if (isMaintainer) {
-              await github.rest.issues.addLabels({
-                ...context.repo,
-                issue_number: context.payload.issue.number,
+              const { pathToFileURL } = require("node:url");
+              const { addLabelsWithinCap } = await import(
+                pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/github/labeler-label-cap.mjs`).href
+              );
+              await addLabelsWithinCap({
+                github,
+                core,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issueNumber: context.payload.issue.number,
                 labels: ["maintainer"],
               });
               return;
@@ -935,10 +983,16 @@ jobs:
             const hasLabel = currentLabels.some((label) => label.name === labelName);
 
             if (matchesBetaBlocker && !hasLabel) {
-              await github.rest.issues.addLabels({
+              const { pathToFileURL } = require("node:url");
+              const { addLabelsWithinCap } = await import(
+                pathToFileURL(`${process.env.GITHUB_WORKSPACE}/scripts/github/labeler-label-cap.mjs`).href
+              );
+              await addLabelsWithinCap({
+                github,
+                core,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: issue.number,
+                issueNumber: issue.number,
                 labels: [labelName],
               });
               return;

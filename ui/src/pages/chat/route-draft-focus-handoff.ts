@@ -1,3 +1,4 @@
+import type { BoardFace } from "../../lib/board/settings.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { SessionChatRouteData } from "./route-loader.ts";
 
@@ -14,10 +15,12 @@ type PendingHandoff = {
 
 export type ChatPaneElement = HTMLElement & {
   active?: boolean;
+  conversationPresented?: boolean;
   discardStagedAttachments?: () => void;
   paneId?: string;
   prepareForEviction?: () => void;
   presented?: boolean;
+  routeFace?: BoardFace;
   sessionKey?: string;
   transcriptLoading?: boolean;
   transcriptReady?: boolean;

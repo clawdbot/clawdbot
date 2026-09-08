@@ -51,7 +51,7 @@ export function handlePreambleProgress(host: ToolStreamHost, payload: AgentEvent
     return true;
   }
   if (progress.text) {
-    reconcileChatRunStartup(host, { state: "activity", runId: payload.runId });
+    reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
   }
   const persisted =
     progress.itemId &&

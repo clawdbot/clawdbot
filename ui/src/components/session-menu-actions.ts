@@ -19,6 +19,7 @@ export type SessionMenuData = {
   label: string;
   sessionId: string | null;
   isChild?: boolean;
+  pinnable?: boolean;
   pinned: boolean;
   unread: boolean;
   archived: boolean;
@@ -32,6 +33,7 @@ export type SessionManagementAction =
   | { kind: "open-in"; editor: EditorId; path: string }
   | { kind: "copy-session-id" }
   | { kind: "copy-session-link" }
+  | { kind: "copy-session-preview-link" }
   | { kind: "copy-markdown" }
   | { kind: "open-new-tab" }
   | { kind: "open-new-window" }
@@ -126,6 +128,7 @@ export class SessionMenuActions {
       case "open-in":
         return batch || !state.worktreePath;
       case "copy-session-link":
+      case "copy-session-preview-link":
       case "open-new-tab":
       case "open-new-window":
         return batch || !state.navigationAllowed;
@@ -139,7 +142,7 @@ export class SessionMenuActions {
       case "copy-session-id":
         return batch || !session.sessionId;
       case "toggle-pin":
-        return batch || session.isChild === true || session.archived;
+        return batch || session.pinnable === false || session.isChild === true || session.archived;
       case "rename":
       case "set-icon":
       case "set-color":
@@ -184,6 +187,7 @@ export class SessionMenuActions {
     if (
       value === "copy-session-id" ||
       value === "copy-session-link" ||
+      value === "copy-session-preview-link" ||
       value === "copy-markdown" ||
       value === "open-new-tab" ||
       value === "open-new-window" ||
@@ -347,7 +351,7 @@ export class SessionMenuActions {
     const count = String(selectionCount);
     return html`
       ${
-        batch || session.isChild
+        batch || session.pinnable === false || session.isChild
           ? nothing
           : this.renderItem(
               "toggle-pin",
@@ -508,9 +512,20 @@ export class SessionMenuActions {
     return html`
       ${
         state.navigationAllowed
-          ? this.renderItem("copy-session-link", t("sessionsView.copySessionLink"), icons.link, {
-              inline,
-            })
+          ? html`
+              ${this.renderItem(
+                "copy-session-link",
+                t("sessionsView.copySessionLink"),
+                icons.link,
+                { inline },
+              )}
+              ${this.renderItem(
+                "copy-session-preview-link",
+                t("sessionsView.copySessionPreviewLink"),
+                icons.link,
+                { inline },
+              )}
+            `
           : nothing
       }
       ${this.renderItem("copy-markdown", t("sessionsView.copyMarkdown"), icons.fileText, {

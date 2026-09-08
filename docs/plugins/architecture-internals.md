@@ -129,6 +129,54 @@ hashing. Activation and runtime service generations can change while their
 package metadata stays fixed. Account health and authentication state are not
 part of the immutable package inventory.
 
+The same cache generation prepares installed-index scope lookups, compiled model
+matching patterns, parsed install-record projections, and manifest fingerprints
+once per immutable index. Mutable management indexes remain uncached. Lookup
+methods and install-record results remain caller-owned; enablement and trust are
+evaluated from the current operation's policy rather than stored in these facts.
+
+Outside a retained generation, reusing a loaded plugin requires the
+selected ID, origin, root, entry point, and artifact-selection inputs to agree.
+The loader records source/build selection and any executed setup entry on the loaded owner. Explicit manifest
+and discovery source selections, including admitted sidecars, also participate in the loader cache key. Raw
+discovery additionally needs matching load identity before active reuse because
+its manifest winners have not been established. Retained generations remain
+authoritative, including empty selections. Source/build views may share an owner
+only when the loader resolves them to the same execution root and entry under
+the retained preference. Path names or matching
+entry stems alone do not establish ownership. Runtime reuse and loading share
+the existing lifecycle-owned artifact facts and final execution step, including
+executed setup entries. Discovery and artifact identity retain their selected paths.
+
+Bounded loaded-owner lookups retain the owner's artifact policy when no preference
+is specified. An explicit preference is checked; exact loader requests apply the
+full cache identity and cold-load defaults.
+
+Provider lookup uses an explicit caller workspace first, then the workspace
+recorded by its metadata snapshot, including an explicitly shared-root scope.
+Only narrowed metadata views without a workspace field inherit the active
+workspace. The registry's existing load context retains its workspace so a request or active
+registry from another workspace cannot replace a prepared selection.
+
+Provider hooks share the canonical provider registry selection. Declared providers
+reserve their names, while provider-triggered helpers still activate beside them.
+Required load owners and eligible hook receivers are captured separately in that
+selection. Declared provider owners need matching physical records and provider
+registrations before reuse; activation-only helpers may have no provider rows,
+but need a successfully completed runtime registration pass. A setup-only pass
+cannot prove their runtime contributions are complete. References without a
+static owner select only their matching runtime aliases within the requested scope.
+Loaded aliases can identify owners to reload, but only the selected registry's
+current registrations determine alias receivers.
+Loaded-only failover inspection never discovers or activates plugins. When it uses
+registry-owned metadata, the caller's discovery and policy inputs must match the
+recorded fingerprint. The loader captures normalized registration inputs, including
+paired source config, once; later metadata updates preserve that record. Ordinary
+lookups reuse callbacks only when those inputs match; retained generations stay
+authoritative. Model-reference parsing reads the same declared-owner facts
+from the registry or retained request scope, so a failed declared provider cannot
+be replaced by another provider's hook alias.
+
 Provider auth aliases are normalized and indexed with the snapshot. Lookups
 select among those prepared candidates using the current workspace trust config;
 they do not cache trust decisions or credentials. Callers supplying a partial
@@ -249,6 +297,12 @@ OpenClaw still owns the generic agent loop, failover, transcript handling, and
 tool policy. These hooks are the extension surface for provider-specific
 behavior without needing a whole custom inference transport.
 
+Hook lookup uses the prepared generation or a matching loaded registry first.
+On a miss, provider/model-scoped discovery reuses the loader's registry cache;
+explicit runtime-discovery invalidation clears that lookup rather than leaving
+another provider cache holding old hooks. Attempt-prepared provider handles
+retain their selected plugin, while each hook receives the current call context.
+
 Use manifest `setup.providers[].envVars` when the provider has env-based
 credentials that generic auth/status/model-picker paths should see without
 loading plugin runtime. Use manifest `providerAuthAliases`
@@ -293,6 +347,7 @@ listed here.
 | `prepareExtraParams`              | Request-param normalization before generic stream option wrappers                                              | Provider needs default request params or per-provider param cleanup                                                                           |
 | `createStreamFn`                  | Fully replace the normal stream path with a custom transport                                                   | Provider needs a custom wire protocol, not just a wrapper                                                                                     |
 | `wrapStreamFn`                    | Stream wrapper after generic wrappers are applied                                                              | Provider needs request headers/body/model compat wrappers without a custom transport                                                          |
+| `reconcileLocalService`           | Reconcile provider-owned state after local-service health and before every request                             | A managed local router must reload durable provider state without moving provider policy into core                                            |
 | `resolveTransportTurnState`       | Attach native per-turn headers, metadata, or WebSocket policy                                                  | Provider wants generic transports to send provider-native turn identity or tune WebSocket headers and fallback cool-down                      |
 | `resolveWebSocketSessionPolicy`   | Deprecated compatibility hook for WebSocket policy                                                             | Existing plugins migrate WebSocket fields into `resolveTransportTurnState`                                                                    |
 | `formatApiKey`                    | Auth-profile formatter: stored profile becomes the runtime `apiKey` string                                     | Provider stores extra auth metadata and needs a custom runtime token shape                                                                    |
@@ -317,11 +372,23 @@ listed here.
 | `validateReplayTurns`             | Final replay-turn validation or reshaping before the embedded runner                                           | Provider transport needs stricter turn validation after generic sanitation                                                                    |
 | `onModelSelected`                 | Run provider-owned post-selection side effects                                                                 | Provider needs telemetry or provider-owned state when a model becomes active                                                                  |
 
+`reconcileLocalService` runs only for configured local services, including a
+healthy process reused from outside the current Gateway process. Keep it cheap,
+idempotent, and abort-aware. A rejection blocks the provider request and
+releases its lease without classifying the healthy process as a startup failure.
+
 Normalization dispatch is hook-specific:
 
-- `normalizeModelId` uses the matched provider hook's non-empty result. If none
-  is returned, OpenClaw applies manifest-declared model-ID normalization; it does
-  not try other providers' normalization hooks.
+- Model references apply manifest-declared model-ID normalization once before
+  `normalizeModelId` dispatch. The matched provider hook can refine that prepared
+  model ID; an empty result keeps it unchanged. OpenClaw does not try other
+  providers' normalization hooks or reapply manifest rules afterward.
+  Reference parsing reads the selected runtime registry without activating
+  plugins. Executable normalization requires a prepared runtime owner; reads
+  without one use static manifest policies only.
+  A directly registered provider owns its ID; compatibility aliases match only
+  when no literal provider exists, preserving alias-only routes and explicit
+  API-owner eligibility.
 - `normalizeTransport` tries the matched provider first. Only if that does not
   change `api` or `baseUrl` and the provider has no `models.providers.<id>` entry
   does it try other transport hooks, stopping at the first change.

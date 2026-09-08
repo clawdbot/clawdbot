@@ -22,6 +22,7 @@ import {
   type DeferredEmbeddedRunLifecycleManager,
 } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
+import { appendCurrentInboundContext } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { renderRateLimitOrOverloadedCopy } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
@@ -505,6 +506,8 @@ async function executeAgentTurnInternalLoop(
 
   return {
     kind: "completed",
+    maintenanceAuthProfile: fallbackCycleState.maintenanceAuthProfile,
+    compactionRequestBudget: fallbackCycleState.compactionRequestBudget,
     result: runResult,
     fallbackProvider,
     fallbackModel,
@@ -587,15 +590,19 @@ async function executeAgentTurnOutcome(params: AgentTurnParams): Promise<AgentTu
   const modelContextLease = runtime
     ? leaseMcpAppModelContextForTurn({
         runtime,
-        prompt: executionParams.commandBody,
-        transcriptPrompt: executionParams.transcriptCommandBody,
       })
     : undefined;
   const turnParams = modelContextLease
     ? {
         ...executionParams,
-        commandBody: modelContextLease.prompt,
-        transcriptCommandBody: modelContextLease.transcriptPrompt,
+        followupRun: {
+          ...executionParams.followupRun,
+          currentInboundContext: appendCurrentInboundContext(
+            executionParams.followupRun.currentInboundContext,
+            [modelContextLease.context],
+            modelContextLease.legacyText,
+          ),
+        },
       }
     : executionParams;
   // Keep committed facts outside cleanup so a restart cannot erase them.
@@ -670,6 +677,8 @@ async function executeAgentTurnOutcome(params: AgentTurnParams): Promise<AgentTu
       runId,
       outcome: {
         kind: "settled",
+        maintenanceAuthProfile: internal.maintenanceAuthProfile,
+        compactionRequestBudget: internal.compactionRequestBudget,
         ...terminalStatus,
         result: internal.result,
         resolved: { provider, model },
@@ -695,6 +704,10 @@ async function executeAgentTurnOutcome(params: AgentTurnParams): Promise<AgentTu
 
 /** Runs the agent turn and records its execution and message-tool delivery outcomes. */
 export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTurnExecutionResult> {
+  params.opts?.onRunVerbosityResolved?.({
+    verboseLevelOverride: params.followupRun.run.verboseLevelOverride,
+    resolvedVerboseLevel: params.resolvedVerboseLevel,
+  });
   if (params.replyOperation) {
     // Cancellation stops execution, but the exact owner must finish committed accounting first.
     retainReplyOperationUntilComplete(params.replyOperation);

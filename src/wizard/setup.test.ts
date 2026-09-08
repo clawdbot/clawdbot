@@ -171,8 +171,9 @@ function providerPluginStub(
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const ensureWorkspaceAndSessions = vi.hoisted(() => vi.fn(async () => {}));
 const ensureOnboardingConfig = vi.hoisted(() =>
-  vi.fn(async ({ config }: { config: OpenClawConfig }) => ({
+  vi.fn(async ({ config, baseConfig }: { config: OpenClawConfig; baseConfig: OpenClawConfig }) => ({
     config,
+    configBase: baseConfig,
     agentId: "main",
     bootstrapPending: true,
   })),
@@ -183,7 +184,7 @@ const replaceConfigFile = vi.hoisted(() =>
       nextConfig: OpenClawConfig;
       snapshot?: { hash?: string };
       baseHash?: string;
-    }) => ({ config: params.nextConfig }),
+    }) => ({ nextConfig: params.nextConfig }),
   ),
 );
 const resolveGatewayPort = vi.hoisted(() =>
@@ -505,7 +506,6 @@ vi.mock("../daemon/systemd.js", () => ({
 vi.mock("../infra/control-ui-assets.js", () => ({
   CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS: 600_000,
   ensureControlUiAssetsBuilt,
-  isControlUiStartupAssetsReady: vi.fn(() => true),
 }));
 
 vi.mock("../plugins/status.js", () => ({
@@ -656,7 +656,7 @@ describe("runSetupWizard", () => {
     replaceConfigFile.mockReset();
     replaceConfigFile.mockImplementation(async (params) => {
       authoredConfig = structuredClone(params.nextConfig);
-      return { config: params.nextConfig };
+      return { nextConfig: params.nextConfig };
     });
     probeGatewayReachable.mockReset();
     probeGatewayReachable.mockResolvedValue({ ok: false });
@@ -693,8 +693,9 @@ describe("runSetupWizard", () => {
 
   it("prompts for and stages the named first agent on a fresh install", async () => {
     const prompter = buildWizardPrompter({ text: vi.fn(async () => "robby") });
-    ensureOnboardingConfig.mockImplementationOnce(async ({ config }) => ({
+    ensureOnboardingConfig.mockImplementationOnce(async ({ config, baseConfig }) => ({
       config,
+      configBase: baseConfig,
       agentId: "robby",
       bootstrapPending: true,
       createdAgent: true,
@@ -903,7 +904,7 @@ describe("runSetupWizard", () => {
       expect(params.baseHash).toBe(diskHash);
       diskConfig = structuredClone(params.nextConfig);
       diskHash = `hash-${Number(diskHash.slice(5)) + 1}`;
-      return { config: diskConfig };
+      return { nextConfig: diskConfig };
     });
     setupChannels.mockImplementationOnce(async (config) => {
       diskConfig = {
@@ -943,7 +944,7 @@ describe("runSetupWizard", () => {
       }
       diskConfig = structuredClone(params.nextConfig);
       diskHash = `committed-${writeAttempts}`;
-      return { config: diskConfig, persistedHash: diskHash };
+      return { nextConfig: diskConfig, persistedHash: diskHash };
     });
 
     await runWizard({ workspace: "/tmp/conflicting-onboarding-workspace" });
@@ -1818,7 +1819,7 @@ describe("runSetupWizard", () => {
       }
       diskConfig = structuredClone(params.nextConfig);
       diskHash = `pending-${writeAttempts + 1}`;
-      return { config: diskConfig, persistedHash: diskHash };
+      return { nextConfig: diskConfig, persistedHash: diskHash };
     });
 
     const workspaceDir = await makeCaseDir("plugin-install-migration-");
@@ -2964,7 +2965,7 @@ describe("runSetupWizard", () => {
 
   it.each([
     { provider: "openai", explicitLean: undefined, expectedLean: undefined },
-    { provider: "managed-local", explicitLean: undefined, expectedLean: true },
+    { provider: "managed-local", explicitLean: undefined, expectedLean: undefined },
     { provider: "managed-local", explicitLean: false, expectedLean: false },
     { provider: "managed-local", explicitLean: true, expectedLean: true },
   ])(
@@ -2979,7 +2980,7 @@ describe("runSetupWizard", () => {
       );
       replaceConfigFile.mockImplementation(async ({ nextConfig }) => {
         readConfigFileSnapshot.mockResolvedValue(configSnapshot(nextConfig));
-        return { config: nextConfig };
+        return { nextConfig };
       });
       applyAuthChoice.mockImplementationOnce(async (args) => ({
         config: {
@@ -3029,8 +3030,8 @@ describe("runSetupWizard", () => {
       expect(persistedWizardConfigs().at(-1)?.agents?.defaults?.experimental?.localModelLean).toBe(
         expectedLean,
       );
-      expect(persistedWizardConfigs().at(-1)?.wizard?.localModelLeanAutoModel).toBe(
-        managed && explicitLean === undefined ? modelRef : undefined,
+      expect(persistedWizardConfigs().at(-1)?.wizard ?? {}).not.toHaveProperty(
+        "localModelLeanAutoModel",
       );
     },
   );

@@ -73,7 +73,18 @@ async function queryUsage(options: {
         durableTargets: [],
         storePath: "(multiple)",
         store: Object.fromEntries(options.rows.map(({ key, entry }) => [key, entry])),
-        agentIdBySessionKey: new Map(options.rows.map(({ key, agentId }) => [key, agentId])),
+        targetsBySessionKey: new Map(
+          options.rows.map(({ key, agentId }) => [
+            key,
+            {
+              agentId,
+              storeTarget: {
+                agentId,
+                storePath: path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite"),
+              },
+            },
+          ]),
+        ),
       };
       vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue(fixtureStore);
       vi.mocked(discoverAllSessions).mockImplementation(async ({ agentId }) =>

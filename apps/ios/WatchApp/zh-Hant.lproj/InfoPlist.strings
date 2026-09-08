@@ -1,2 +1,4 @@
 /* OpenClaw source: "OpenClaw connects this Apple Watch directly to your Gateway on trusted local networks." */
 "NSLocalNetworkUsageDescription" = "OpenClaw 會在受信任的區域網路上，將這支 Apple Watch 直接連線至您的 Gateway.";
+/* OpenClaw source: "OpenClaw uses the microphone for voice conversations you start on Apple Watch." */
+"NSMicrophoneUsageDescription" = "OpenClaw 會使用麥克風，讓您在 Apple Watch 上發起語音對話。";

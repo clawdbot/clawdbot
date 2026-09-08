@@ -7,7 +7,6 @@ import type { RuntimeAuthMaterialization } from "../../agents/auth-profiles/runt
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { createAgentHarnessCatalogEvaluator } from "../../agents/harness/model-catalog-readiness.js";
 import {
-  applyCliRuntimeModelAuthAvailability,
   createModelAuthAvailabilityResolver,
   type ModelAuthAvailabilityResolver,
   type ModelAuthAvailabilityEvaluation,
@@ -55,6 +54,7 @@ function createModelsListAuthResolver(params: {
   const agentDir = resolveAgentDir(params.cfg, params.agentId);
   return createModelAuthAvailabilityResolver({
     cfg: params.cfg,
+    agentId: params.agentId,
     authStore: params.preparedAuthStore,
     agentDir,
     workspaceDir: params.workspaceDir,
@@ -75,10 +75,7 @@ function createModelsListAuthResolver(params: {
 }
 
 function createModelsListEntryEvaluator(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
   authResolver: ModelAuthAvailabilityResolver;
-  metadataSnapshot: PluginMetadataSnapshot;
   providerOutcomes?: readonly ProviderCatalogOutcome[];
   preferredProfileId?: string;
   preferredProfilesByProvider?: ReadonlyMap<string, string>;
@@ -102,7 +99,7 @@ function createModelsListEntryEvaluator(params: {
       const preferredProfileId = params.preferredProfileId ?? defaultProfileId;
       // New sessions capture personal defaults with the same strength as explicit account pins.
       const pinnedProfileId = params.pinnedProfileId ?? defaultProfileId;
-      const evaluation = params.authResolver.evaluateModelAuth(entry.provider, {
+      const resolved = params.authResolver.evaluateRuntimeModelAuth(entry.provider, {
         modelId: identity?.id ?? entry.id,
         ...(normalizeProviderId(entry.provider) === "openai"
           ? {}
@@ -113,17 +110,6 @@ function createModelsListEntryEvaluator(params: {
           api: variant.api,
           baseUrl: variant.baseUrl,
         })),
-      });
-      const resolved = applyCliRuntimeModelAuthAvailability({
-        authResolver: params.authResolver,
-        evaluation,
-        cfg: params.cfg,
-        agentId: params.agentId,
-        metadataSnapshot: params.metadataSnapshot,
-        provider: entry.provider,
-        modelId: entry.id,
-        preferredProfileId,
-        pinnedProfileId,
       });
       const provider = normalizeProviderId(entry.provider);
       // Stored credentials prove presence, not acceptance. Apply the live rejection only to the
@@ -241,6 +227,21 @@ export function createModelsListAuthProjection(params: ModelsListAuthProjectionP
     preferredProfilesByProvider.has(normalizeProviderId(entry.provider))
       ? host
       : nativeEvaluator(entry, host);
+  // Store revisions do not advance when a token or failure window expires.
+  // Retire the captured host evaluation so its caller prepares fresh facts.
+  const preparedAt = Date.now();
+  const authValidUntil = Math.min(
+    ...[
+      ...Object.values(authStore.profiles).map((profile) =>
+        profile.type === "token" ? profile.expires : undefined,
+      ),
+      ...Object.values(authStore.usageStats ?? {}).flatMap((stats) => [
+        stats.blockedUntil,
+        stats.cooldownUntil,
+        stats.disabledUntil,
+      ]),
+    ].filter((deadline): deadline is number => deadline !== undefined && deadline > preparedAt),
+  );
   const authResolver = createModelsListAuthResolver({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -254,10 +255,7 @@ export function createModelsListAuthProjection(params: ModelsListAuthProjectionP
     routeResolverFactory: params.routeResolverFactory,
   });
   const evaluateStoredEntry = createModelsListEntryEvaluator({
-    cfg: params.cfg,
-    agentId: params.agentId,
     authResolver,
-    metadataSnapshot,
     providerOutcomes: params.snapshot.providerOutcomes,
     preferredProfilesByProvider,
     ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
@@ -284,7 +282,9 @@ export function createModelsListAuthProjection(params: ModelsListAuthProjectionP
     authModes: params.preparedRuntimeAuthModes,
     authMaterializations: params.preparedRuntimeAuthMaterializations,
     pluginRegistry: params.pluginRegistry,
-    isCurrent: params.isCurrent ?? (() => params.observationConfig === undefined),
+    isCurrent: () =>
+      Date.now() < authValidUntil &&
+      (params.isCurrent?.() ?? params.observationConfig === undefined),
     observationConfig: params.observationConfig,
   };
 }

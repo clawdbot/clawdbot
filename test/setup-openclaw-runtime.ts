@@ -365,7 +365,7 @@ afterEach(async () => {
   resetFileLockStateForTest();
   resetContextWindowCacheForTest();
   resetModelsJsonReadyCacheForTest();
-  resetPreparedModelRuntimeSnapshotsForTest();
+  await resetPreparedModelRuntimeSnapshotsForTest();
   await installDefaultPluginRegistry();
 });
 

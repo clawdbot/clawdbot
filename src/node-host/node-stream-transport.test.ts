@@ -148,7 +148,11 @@ describe.each([false, true])("node stream TLS (managed proxy: %s)", (managed) =>
       });
       try {
         if (correctPin) {
-          await expect.poll(() => frames).toEqual([JSON.stringify({ ok: true }), "stream-echo"]);
+          if (closeMode === "target-eof") {
+            await running;
+          } else {
+            await expect.poll(() => frames).toEqual([JSON.stringify({ ok: true }), "stream-echo"]);
+          }
           expect(failure).toBeUndefined();
           expect(accessHeaders).toEqual(["fixture-client-secret"]);
           if (closeMode === "owner-abort") {
@@ -163,6 +167,7 @@ describe.each([false, true])("node stream TLS (managed proxy: %s)", (managed) =>
             }
           }
           await running;
+          expect(frames).toEqual([JSON.stringify({ ok: true }), "stream-echo"]);
           await expect
             .poll(async () => {
               await logCapture.flush();

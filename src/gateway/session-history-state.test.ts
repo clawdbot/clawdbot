@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, test, vi } from "vitest";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
+import { projectChatDisplayMessagesWithState } from "./chat-display-projection.js";
 import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
 import * as sessionTranscriptReaders from "./session-transcript-readers.js";
 
@@ -384,6 +385,26 @@ describe("SessionHistorySseState", () => {
     expect(oldest.nextCursor).toBeUndefined();
   });
 
+  test("closes interleaved pages across unsequenced rows without admitting older duplicate groups", () => {
+    const messages = [1, 2, 2, 3, undefined, 4, 3, 4].map((seq, index) => ({
+      role: "assistant" as const,
+      content: textContent(`Projected row ${index}`),
+      __openclaw: seq === undefined ? undefined : { seq },
+    }));
+    const { history } = buildSessionHistorySnapshot({
+      rawMessages: [],
+      projection: {
+        ...projectChatDisplayMessagesWithState([]),
+        messages,
+      },
+      limit: 1,
+    });
+
+    expect(history.messages).toEqual(messages.slice(3));
+    expect(history.nextCursor).toBe("3");
+    expect(history.hasMore).toBe(true);
+  });
+
   test("keeps commentary fallback rows reachable across cursor pages and SSE state", () => {
     const rawMessages = [
       userTextMessage("check the workspace", 1),
@@ -745,36 +766,39 @@ describe("SessionHistorySseState", () => {
     expect(snapshot.rawTranscriptSeq).toBe(2);
   });
 
-  test("drops subagent announce inter-session user messages from projected history", () => {
-    const snapshot = buildSessionHistorySnapshot({
-      rawMessages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: [
-                "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce isUser=false",
-                "This content was routed by OpenClaw from another session or internal tool.",
-                "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-                "subagent completion payload",
-                "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-              ].join("\n"),
+  test.each(["subagent_announce", "subagent_settle"])(
+    "drops %s inter-session user messages from projected history",
+    (sourceTool) => {
+      const snapshot = buildSessionHistorySnapshot({
+        rawMessages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: [
+                  `[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=${sourceTool} isUser=false`,
+                  "This content was routed by OpenClaw from another session or internal tool.",
+                  "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+                  "subagent completion payload",
+                  "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+                ].join("\n"),
+              },
+            ],
+            provenance: {
+              kind: "inter_session",
+              sourceSessionKey: "agent:main:subagent:child",
+              sourceTool,
             },
-          ],
-          provenance: {
-            kind: "inter_session",
-            sourceSessionKey: "agent:main:subagent:child",
-            sourceTool: "subagent_announce",
+            __openclaw: { seq: 1 },
           },
-          __openclaw: { seq: 1 },
-        },
-        assistantTextMessage("clean child result", 2),
-      ],
-    });
+          assistantTextMessage("clean child result", 2),
+        ],
+      });
 
-    expectOnlyAssistantText(snapshot, "clean child result", 2);
-  });
+      expectOnlyAssistantText(snapshot, "clean child result", 2);
+    },
+  );
 
   test("drops generated media completion wakes while retaining final media", () => {
     const assistantReply = {

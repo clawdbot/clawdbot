@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "rounds": 7,
+  "thresholds": {
+    "overallWallRatio": 1.05,
+    "criticalLaneWallRatio": 1.1,
+    "criticalLaneWallDeltaMs": 1000,
+    "improvementRatio": 0.95,
+    "improvementPairCount": 5
+  },
+  "lanes": [
+    {
+      "id": "core-unit",
+      "critical": true,
+      "config": "test/vitest/vitest.unit-fast.config.ts",
+      "files": [
+        "packages/markdown-core/src/chunk-text.test.ts",
+        "packages/media-core/src/mime.test.ts",
+        "src/acp/commands.test.ts",
+        "src/agents/agent-run-terminal-outcome.test.ts"
+      ]
+    },
+    {
+      "id": "gateway-core",
+      "critical": true,
+      "config": "test/vitest/vitest.gateway-core.config.ts",
+      "files": [
+        "src/gateway/call.test.ts",
+        "src/gateway/http-common.test.ts",
+        "src/gateway/method-scopes.test.ts",
+        "src/gateway/probe.close-drain.test.ts"
+      ]
+    },
+    {
+      "id": "ui-jsdom",
+      "critical": true,
+      "config": "test/vitest/vitest.ui.config.ts",
+      "files": [
+        "ui/src/app/connection-bootstrap.test.ts",
+        "ui/src/app/control-ui-auth.test.ts",
+        "ui/src/app/gateway-readiness.test.ts",
+        "ui/src/app/native-route-memory.test.ts"
+      ]
+    },
+    {
+      "id": "worker-lifecycle",
+      "critical": true,
+      "config": "test/vitest/vitest.tooling-isolated.config.ts",
+      "files": [
+        "test/scripts/vitest-fork-shutdown.test.ts"
+      ]
+    }
+  ]
+}

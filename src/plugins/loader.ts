@@ -9,9 +9,9 @@ export {
 } from "./loader-cache.js";
 export { loadOpenClawPluginCliRegistry } from "./loader-cli-registry.js";
 export {
-  getRuntimePluginRegistryForLoadOptions,
   resolveRuntimePluginRegistry,
-} from "./loader-runtime-registry.js";
+  acquirePluginRegistryForInspection,
+} from "./loader-runtime-load.js";
 
 /** Loads a caller-owned registry value without changing the process-wide active registry. */
 export function loadPluginRegistryHandle(options: PluginLoadOptions = {}) {

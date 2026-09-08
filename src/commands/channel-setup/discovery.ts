@@ -10,7 +10,7 @@ import { isStaticallyChannelConfigured } from "../../config/channel-configured-s
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { InstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
-import { listManifestChannelContributionIds } from "../../plugins/manifest-contribution-ids.js";
+import { listPluginContributionIds } from "../../plugins/plugin-registry.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import {
   listSetupDiscoveryChannelPluginCatalogEntries,
@@ -52,12 +52,13 @@ export function listManifestInstalledChannelIds(params: {
   }).config;
   const workspaceDir = resolveWorkspaceDir(resolvedConfig, params.workspaceDir);
   return new Set(
-    listManifestChannelContributionIds({
+    listPluginContributionIds({
+      contribution: "channels",
       config: resolvedConfig,
       workspaceDir,
       env: params.env ?? process.env,
       ...(params.index ? { index: params.index } : {}),
-    }).map((channelId) => channelId as ChannelChoice),
+    }),
   );
 }
 

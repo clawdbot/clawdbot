@@ -4,6 +4,7 @@ import {
   createAgentRunRestartAbortError,
   createAgentRunSupersededAbortError,
 } from "../../run-termination.js";
+import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import {
   isEmbeddedRunTerminalAbort,
   isEmbeddedRunTerminalInterrupted,
@@ -31,14 +32,7 @@ function makeAssistant(stopReason: AssistantMessage["stopReason"]): AssistantMes
     api: "responses",
     provider: "openai",
     model: "gpt-5.4",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     role: "assistant",
     content: [],
     timestamp: 0,
@@ -336,13 +330,14 @@ describe("embedded run attempt terminal outcome", () => {
     expect(
       resolveEmbeddedRunAttemptTerminalOutcome({
         attempt: makeAttempt({
-          terminal: { kind: "failed", source: "prompt", error: new Error("prompt failed") },
+          terminal: { kind: "failed", source: "prompt", error: new Error("database is locked") },
         }),
         assistant: makeAssistant("stop"),
       }),
     ).toMatchObject({
       reason: "failed",
       status: "error",
+      error: "database is locked",
     });
     const nullFailure = resolveEmbeddedRunAttemptTerminalOutcome({
       attempt: makeAttempt({
@@ -399,6 +394,26 @@ describe("embedded run attempt terminal outcome", () => {
         }),
         assistant: makeAssistant("stop"),
       }),
-    ).toMatchObject({ reason: "failed", status: "error" });
+    ).toMatchObject({ reason: "failed", status: "error", error: "settlement failed" });
+  });
+
+  it("preserves nested failure details without exposing credentials", () => {
+    const credential = "sk-test-" + "x".repeat(32);
+    const outcome = resolveEmbeddedRunAttemptTerminalOutcome({
+      attempt: makeAttempt({
+        terminal: {
+          kind: "failed",
+          source: "prompt",
+          error: new Error("request failed", {
+            cause: new Error(`database is locked; api_key=${credential}`),
+          }),
+        },
+      }),
+      assistant: undefined,
+    });
+
+    expect(outcome.error).toContain("request failed");
+    expect(outcome.error).toContain("database is locked");
+    expect(outcome.error).not.toContain(credential);
   });
 });

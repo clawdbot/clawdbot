@@ -14,7 +14,7 @@ import {
   fixedStoreRuntimeConfig,
   loadGatewaySessionRowMock,
   ownerGoal,
-  resolveEmbeddedAgentRunProgressStateMock,
+  resolveEmbeddedAgentSessionProgressStateMock,
   runtimeConfigState,
   sessionRow,
   subscribePluginSessionsChanged,
@@ -24,7 +24,7 @@ import { GatewayClientRegistry } from "./server/client-registry.js";
 describe("createLifecycleEventBroadcastHandler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    resolveEmbeddedAgentRunProgressStateMock.mockReturnValue(undefined);
+    resolveEmbeddedAgentSessionProgressStateMock.mockReturnValue(undefined);
     loadGatewaySessionRowMock.mockReturnValue(sessionRow);
     runtimeConfigState.value = {};
     sessionRow.key = "agent:main:main";
@@ -45,6 +45,35 @@ describe("createLifecycleEventBroadcastHandler", () => {
     );
     expect(loadGatewaySessionRowMock).not.toHaveBeenCalled();
   });
+
+  it.each(["swarm", "run-capacity"])(
+    "prepares collector counts only for a committed parent invalidation (%s)",
+    (reason) => {
+      const broadcastToConnIds = vi.fn();
+      loadGatewaySessionRowMock.mockImplementation((_key, options) => ({
+        ...sessionRow,
+        ...(options?.includeSwarmSummary ? { swarm: undefined } : {}),
+      }));
+      const handler = createLifecycleEventBroadcastHandler({
+        broadcastToConnIds,
+        sessionEventSubscribers: { getAll: () => new Set(["observer"]) },
+        chatAbortControllers: new Map(),
+      });
+
+      handler({ sessionKey: sessionRow.key, agentId: "main", reason });
+
+      expect(loadGatewaySessionRowMock).toHaveBeenCalledExactlyOnceWith(sessionRow.key, {
+        agentId: "main",
+        ...(reason === "swarm" ? { includeSwarmSummary: true } : {}),
+      });
+      const payload = broadcastToConnIds.mock.calls[0]?.[1];
+      if (reason === "swarm") {
+        expect(payload).toHaveProperty("swarm", null);
+      } else {
+        expect(payload).not.toHaveProperty("swarm");
+      }
+    },
+  );
 
   it.each(["phase", "log"] as const)("projects swarm %s payload fields", (kind) => {
     const broadcastToConnIds = vi.fn();

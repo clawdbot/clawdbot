@@ -1,4 +1,5 @@
 import type { WorkerSessionPlacementState } from "./placement-state.js";
+import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
 
 export const FORCED_WORKER_ABANDONMENT_ERROR =
   "Worker result abandoned by forced operator teardown";
@@ -92,12 +93,6 @@ export type PersistedTurnClaim =
       generation: number;
       ownerEpoch: number;
     };
-
-export type WorkerWorkspaceResultConflict = {
-  paths: string[];
-  stagedResultRef: string;
-  totalCount?: number;
-};
 
 type PersistedLocalTurnClaim = Extract<PersistedTurnClaim, { owner: "local" }>;
 

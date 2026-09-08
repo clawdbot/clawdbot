@@ -21,7 +21,7 @@ Content type is `text/plain; version=0.0.4; charset=utf-8`, the standard
 Prometheus exposition format.
 
 <Warning>
-The route uses Gateway authentication (operator scope, trusted-operator surface). Do not expose it as a public unauthenticated `/metrics` endpoint. Scrape it through the same auth path you use for other operator APIs.
+The route uses Gateway authentication (operator scope, trusted-operator surface) and requires the caller's effective scopes to include `operator.read` (implied by `operator.write` or `operator.admin`). Do not expose it as a public unauthenticated `/metrics` endpoint. Scrape it through the same auth path you use for other operator APIs.
 </Warning>
 
 For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [OpenTelemetry export](/gateway/opentelemetry).
@@ -86,13 +86,15 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 </Steps>
 
 <Note>
-`diagnostics.enabled` defaults to `true`; set it to `false` only in tightly constrained environments. If it is `false`, the plugin still registers the HTTP route, but no diagnostic events flow into the exporter, so the response is empty.
+`diagnostics.enabled` defaults to `true`; set it to `false` only in tightly constrained environments. When it is `false` at exporter startup, the plugin still registers the HTTP route, but no diagnostic events or runtime identity are recorded, so the response is empty.
 </Note>
 
 ## Metrics exported
 
 | Metric                                               | Type      | Labels                                                                                    |
 | ---------------------------------------------------- | --------- | ----------------------------------------------------------------------------------------- |
+| `openclaw_gateway_build_info`                        | gauge     | `process_instance_id`, optional `build_id`                                                |
+| `openclaw_gc_duration_seconds`                       | histogram | none                                                                                      |
 | `openclaw_gateway_rpc_requests_total`                | counter   | `method`                                                                                  |
 | `openclaw_gateway_rpc_first_response_seconds`        | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_handler_seconds`               | histogram | `method`                                                                                  |
@@ -182,18 +184,45 @@ coverage of every core method can fill the cap, so a zero value matters when
 interpreting totals or latency percentiles. Async diagnostic queue saturation can
 also drop observations, reported by `openclaw_diagnostic_async_queue_dropped_total`.
 
+### Runtime identity
+
+`openclaw_gateway_build_info` has value `1` and identifies the process serving
+the scrape. Its `process_instance_id` is the same process-owned UUID returned by
+`system.info`; it changes when the process restarts, including when a PID is
+reused. `build_id` matches the loaded build reported by `hello.server.buildId`
+and is omitted when that provenance is unavailable. Updating files on disk does
+not change the running process's identity.
+
+When diagnostics are enabled, the exporter captures these facts at service startup,
+before recording events.
+The metric uses one aggregate sample under the existing cap. Older hosts without
+the optional runtime-identity capability omit it. The UUID is confined to this
+info metric; it is not added to RPC or other metric labels.
+
+Use the info sample from the same scrape to attribute new measurements and split
+counter intervals at process changes. It is not a health signal, a request ID,
+or an exporter epoch: restarting the exporter in the same process resets its
+counters while retaining the process identity. It cannot relabel older samples
+or establish complete diagnostic-loss coverage.
+
 ### Event-loop observation windows
+
+`openclaw_liveness_cpu_core_ratio` measures whole-process CPU usage in core
+equivalents, including worker and native threads, and can exceed `1`. Interpret
+it alongside main-thread delay and utilization; see
+[CPU pressure and event-loop delay](/gateway/health#cpu-pressure-and-event-loop-delay).
 
 The event-loop histogram records the maximum delay from each completed Gateway
 health-monitor window. The counter sums the seconds represented by those
-windows. Both are cumulative: a readiness or status read can complete a window
-before Prometheus scrapes it, and a later healthy window does not erase the
-earlier observation. Repeated scrapes and cached health reads add no samples.
+windows. Both are cumulative: a later healthy window does not erase an earlier
+high-delay observation. Readiness, status, and scrape requests consume completed
+observations without advancing or resetting the sampling window.
 
-Windows are defined by existing health readers, not by the scrape interval or a
-new timer. Normally a window completes after at least one second; a delay
-warning can complete it sooner. Histogram counts are window counts, not stall
-counts. Histogram quantiles describe window maxima, not the native event-loop
+The monitor samples elapsed event-loop intervals every 20 milliseconds and
+completes a window after at least one second, or sooner for a delay warning.
+It preserves the pending interval across ordinary window resets, so reading
+health before an overdue sample cannot erase that delay. Histogram counts are window counts, not stall
+counts. Histogram quantiles describe window maxima, not the sampled event-loop
 delay distribution or its overall p99. These metrics have no request labels or
 trace attribution and do not identify the JavaScript function that blocked.
 
@@ -202,7 +231,30 @@ metrics exporter is running; it does not backfill earlier windows. Intentional
 monitor resets discard the unfinished window. Diagnostic queue drops, the
 exporter's series cap, and process restarts can also lose observations. Watch
 the existing drop counters and the represented-duration counter when assessing
-coverage. Readiness decisions and persistent liveness warnings are unchanged.
+coverage. Readiness decisions and persistent liveness-warning thresholds are unchanged.
+
+### Garbage collection duration
+
+`openclaw_gc_duration_seconds` records elapsed garbage collection (GC) duration
+reported by Node.js for the hosting JavaScript isolate. Each observation is one
+GC entry, not CPU time, allocated bytes, or a guaranteed stop-the-world pause.
+Compare its bucket counts with event-loop window maxima to investigate GC as a
+possible contributor to stalls; matching scrape intervals do not prove causality.
+
+Collection uses the existing diagnostics enablement and starts when the
+diagnostics heartbeat observes an interested consumer, such as a metrics exporter. A consumer added
+after heartbeat startup may wait until the next 30-second tick, or longer if the
+event loop is stalled. Entries preceding observer activation are not backfilled.
+Demand is checked when entries are delivered, so a brief consumer gap before the
+next heartbeat can still yield delayed observations. Losing the last
+consumer suppresses new exports; the observer disconnects at the next heartbeat.
+Disabling diagnostics or stopping the heartbeat disconnects it immediately.
+
+The histogram is absent until the first observation, so absence does not prove
+zero GC. Queue drops, the series cap, observation gaps and process restarts limit
+coverage. Diagnostics disable/re-enable preserves the exporter's existing
+counters; restarting the exporter resets them as usual. No extra timer, GC
+trigger, trace attribution or application payload is collected.
 
 ## Label policy
 
@@ -278,6 +330,10 @@ increase(openclaw_gateway_event_loop_delay_max_seconds_count[5m])
 
 # Seconds represented by exported event-loop windows
 increase(openclaw_gateway_event_loop_observed_seconds_total[5m])
+
+# Observed GC entries whose elapsed duration exceeded one second
+increase(openclaw_gc_duration_seconds_count[5m])
+  - increase(openclaw_gc_duration_seconds_bucket{le="1"}[5m])
 ```
 
 <Tip>
@@ -317,6 +373,9 @@ OpenClaw supports both surfaces independently. You can run either, both, or neit
   </Accordion>
   <Accordion title="401 / unauthorized">
     The endpoint requires the Gateway operator scope (`auth: "gateway"` with `gatewayRuntimeScopeSurface: "trusted-operator"`). Use the same token or password Prometheus uses for any other Gateway operator route. There is no public unauthenticated mode.
+  </Accordion>
+  <Accordion title="403 `missing scope: operator.read`">
+    The caller authenticated, but its effective operator scopes do not include `operator.read`. This happens when an identity-bearing auth mode such as `trusted-proxy` maps the scraper to a [named role](/gateway/operator-scopes) whose scope ceiling excludes reads. Grant the scraper role `operator.read` (or `operator.write` / `operator.admin`, which imply it).
   </Accordion>
   <Accordion title="`openclaw_prometheus_series_dropped_total` is climbing">
     A new attribute is exceeding the **2048**-series cap. Inspect recent metrics for an unexpectedly high-cardinality label and fix it at the source. The exporter intentionally drops new series instead of silently rewriting labels.

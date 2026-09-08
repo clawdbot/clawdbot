@@ -394,6 +394,14 @@ def checkout_harness(sha):
     if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
         raise GitFailure(1)
     harness = os.path.join(workspace, ".ci-harness")
+    # This owner creates the harness, not candidate source. Keep strict source-status
+    # checks useful without hiding tracked edits or similarly named nested paths.
+    exclude = os.path.join(workspace, git_output(workspace, "rev-parse", "--git-path", "info/exclude").strip())
+    os.makedirs(os.path.dirname(exclude), exist_ok=True)
+    with open(exclude, "a+b") as output:
+        output.seek(0)
+        if output.read().splitlines()[-1:] != [b"/.ci-harness/"]:
+            output.write(b"\n/.ci-harness/\n")
     os.makedirs(harness, exist_ok=True)
     if sha == os.environ["WORKFLOW_SHA"]:
         # Export the workflow revision from the freshly populated index, replacing

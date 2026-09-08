@@ -1,5 +1,6 @@
-// @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+// @vitest-environment node
+import { contextBudgetStatusFixture } from "../../../../src/config/sessions/context-budget.test-support.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
@@ -1756,3 +1757,22 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+it("reports the last-run prompt budget through /usage", async () => {
+  const request = vi.fn(async () => ({
+    sessions: [
+      row("agent:main:main", {
+        totalTokens: 160_000,
+        contextTokens: 200_000,
+        contextBudgetStatus: contextBudgetStatusFixture(),
+      }),
+    ],
+  }));
+  const result = await executeSlashCommand(
+    createTestGatewayClient(request),
+    "agent:main:main",
+    "usage",
+    "",
+  );
+  expect(result.content).toContain("Prompt budget (last run): **89%** of 180k");
+});

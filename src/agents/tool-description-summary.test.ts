@@ -106,4 +106,16 @@ describe("tool description summaries", () => {
     expect(description).toBe("abcd...");
     expect(hasDanglingSurrogate(description)).toBe(false);
   });
+
+  it.each<[string, number, string]>([
+    ["ab\n\ncd\nef", 6, "ab\n\ncd"],
+    ["ab\n \n\t\ncd\nef", 6, "ab\n\ncd"],
+    ["  ab  \r\n\r\n  cd  \r\nef", 6, "ab\n\ncd"],
+    ["ab\n\nACTIONS:\nLater detail.", 320, "ab"],
+  ])(
+    "preserves verbose paragraph spacing and stopping for %j",
+    (rawDescription, maxLen, expected) => {
+      expect(describeToolForVerbose({ rawDescription, maxLen, fallback: "Tool" })).toBe(expected);
+    },
+  );
 });

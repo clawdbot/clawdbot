@@ -51,6 +51,52 @@ openclaw logs --follow
 - Embedded-run `continue_normal` decisions log at `debug`; retry, profile-rotation, model-fallback, and error decisions remain warnings.
 - Trace logging also includes diagnostic timing summaries for selected hot paths, such as plugin tool factory preparation. See [/tools/plugin#slow-plugin-tool-setup](/tools/plugin#slow-plugin-tool-setup).
 
+### SQLite session writes
+
+Failed SQLite session writes include a bounded, redacted `error` summary in
+their structured file-log record, with cause and error-code details when
+available. Long summaries are truncated; the record retains its write timing
+and store fields.
+
+### Slow agent database opens
+
+A completed physical agent-database open taking at least one second emits
+`slow OpenClaw agent database open`. The record retains total elapsed time and
+the `open`, `validation`, `configuration`, `schema`, and `registration` phases.
+For a yielded integrity check, it also includes `integrityGateMs` and
+`integrityGateOutcome` (`healthy` or `failed`). The gate includes the check plus
+any driver waits, scheduling, and ownership revalidation. When admission uses a
+separate integrity Worker, its lifetime is included. This does not isolate
+native-check or CPU time.
+
+When canonical-index validation completes, `canonicalIndexMs` reports the
+subsequent synchronous inspection and any repair or rechecks, and
+`repairedIndexCount` counts indexes successfully repaired by that operation.
+A healthy initial integrity check can still require an index-definition repair;
+a failed initial check can be recovered by a successful repair. Fields are
+absent when their stage does not run, including the yielded-check fields for a
+fresh empty database. These details cover portions of `validation`, not extra
+time to add to it. The summary is emitted only at registration; earlier failures
+and live cache hits produce no summary. The details add no index names or
+database contents.
+
+### Slow cron list pages
+
+A cron list page taking at least one second emits `cron: slow list page` through
+its existing logger, subject to the file log level. The structured record names
+`operation: "cron.listPage"` and reports `elapsedMs`, `waitToCallbackMs`,
+`callbackMs`, and `completionDelayMs`, plus available source, matched, and returned
+row counts, the outcome, and emitter `pid`, `threadId`, and `isMainThread`. Fast
+pages emit no such record.
+
+These are wall times, not CPU time: waiting includes scheduling delays, callback
+time includes awaited work, and completion delay covers settlement after the
+callback finishes. Each source page is measured separately; caller visibility
+filtering and delivery previews outside that page are not included. Existing
+trace context is retained when present. Emitter identity identifies the logging process/isolate, not the owner of work
+awaited by the callback. The diagnostic adds no job identifiers,
+job contents, or request parameters.
+
 ## Console capture
 
 The CLI captures `console.log/info/warn/error/debug/trace`, writes them to file logs, and still prints to stdout/stderr.

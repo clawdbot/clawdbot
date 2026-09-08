@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Builds OpenClaw packages and plugin SDK artifacts with cache-aware orchestration.
 
-import { spawnSync, type SpawnSyncOptions } from "node:child_process";
+import type { SpawnSyncOptions } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import prettyMilliseconds from "pretty-ms";
 import {
@@ -10,7 +10,7 @@ import {
   restoreBuildStepCacheOutputs,
   type BuildCacheStep,
 } from "./lib/build-artifact-cache.mts";
-import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
+import { readCurrentGitCommit, resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
   distArtifactEntryArgs,
@@ -223,7 +223,7 @@ export const BUILD_ALL_PROFILES: Record<string, string[]> = {
   ],
   gatewayWatch: ["tsdown", ...RUNTIME_STEP_LABELS],
   qaRuntime: [...ASSET_RUNTIME_STEP_LABELS],
-  sourcePerformance: [...ASSET_RUNTIME_STEP_LABELS, ...BUILD_METADATA_STEP_LABELS],
+  sourcePerformance: [...ASSET_RUNTIME_STEP_LABELS, "write-build-info"],
   cliStartup: ["tsdown", ...RUNTIME_STEP_LABELS, "write-cli-startup-metadata"],
 };
 
@@ -276,7 +276,6 @@ export const BUILD_ALL_PROFILE_STEP_ENV: Record<string, Record<string, NodeJS.Pr
   sourcePerformance: {
     tsdown: {
       OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
-      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
     },
   },
   cliStartup: {
@@ -368,14 +367,6 @@ export function resolveBuildAllSteps(
       const merged: BuildAllStep = Object.assign({}, step, { env: mergedEnv });
       return merged;
     });
-}
-
-function readCurrentGitCommit() {
-  const result = spawnSync("git", ["rev-parse", "HEAD"], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  return result.status === 0 ? result.stdout.trim() : null;
 }
 
 /** Pin one source identity for every child process that contributes to this build. */

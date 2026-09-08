@@ -12,6 +12,7 @@ import { assertGatewayConfigEnvSelectionUnchanged } from "../config/gateway-env-
 import {
   getRuntimeConfigSourceSnapshot,
   readConfigFileSnapshot,
+  readConfigFileSnapshotWithPluginMetadata,
   setAppliedRuntimeConfigSnapshot,
 } from "../config/io.js";
 import { normalizeStateDirEnv } from "../config/paths.js";
@@ -43,6 +44,7 @@ import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import { getTotalQueueSize } from "../process/command-queue.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
+import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
@@ -81,21 +83,59 @@ export async function prepareGatewayServerBootstrap(input: {
   formatRuntimeGatewayAuthTokenWarning: () => string;
 }) {
   const { port, opts, log, logSecrets, loadWorkerEnvironmentStartupModule } = input;
+  const { assertConfiguredWorkspaceStateReady } = await import("../agents/workspace-state-dirs.js");
+  // Derive defaults and admit exactly the snapshot that bootstrap will consume.
+  process.env.OPENCLAW_GATEWAY_PORT = String(port);
+  const envBeforeStartupConfigLoad = { ...process.env };
   const formatRuntimeGatewayAuthTokenWarning = input.formatRuntimeGatewayAuthTokenWarning;
   const traceOriginAt = opts.processStartedAt ?? opts.startupStartedAt;
   const startupElapsedMs =
     typeof traceOriginAt === "number" ? Math.max(0, Date.now() - traceOriginAt) : 0;
   const startupTrace = createGatewayStartupTrace(log, performance.now() - startupElapsedMs);
+  using startupTraceOwner = {
+    transferred: false,
+    [Symbol.dispose]() {
+      if (!this.transferred) {
+        startupTrace.close();
+      }
+    },
+  };
   if (startupElapsedMs > 0) {
     startupTrace.mark("process.bootstrap");
   }
-  await startupTrace.measure("state.ownership", async () => {
+  const startupConfigSnapshotRead = await withArtifactPreservingStateReads(async () => {
+    if (!resumeGatewayRestartTraceFromEnv(process.env, [["source", "env"]])) {
+      const restartHandoff = readGatewayRestartHandoffSync();
+      resumeGatewayRestartTraceFromHandoff(restartHandoff?.restartTrace, [
+        ["source", restartHandoff?.source],
+        ["restartKind", restartHandoff?.restartKind],
+        ["supervisorMode", restartHandoff?.supervisorMode],
+      ]);
+    }
+    const read =
+      opts.startupConfigSnapshotRead ??
+      (await startupTrace.measure("config.snapshot.read", () =>
+        readConfigFileSnapshotWithPluginMetadata({
+          observe: false,
+          measure: (name, run) => startupTrace.measure(name, run),
+        }),
+      ));
+    assertConfiguredWorkspaceStateReady({
+      cfg: captureConfigOverrideApplier()(read.snapshot.config),
+    });
+    return read;
+  });
+  const inspectStateOwnership = async (signal?: AbortSignal) => {
     normalizeStateDirEnv(process.env);
     await assertOpenClawStateWriteAllowedAtPath({
       databasePath: resolveOpenClawStateSqlitePath(process.env),
       env: process.env,
+      signal,
     });
-  });
+  };
+  await startupTrace.measure("state.ownership", () =>
+    opts.startupOperation ? opts.startupOperation(inspectStateOwnership) : inspectStateOwnership(),
+  );
   const [
     {
       OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
@@ -111,14 +151,19 @@ export async function prepareGatewayServerBootstrap(input: {
       import("../state/openclaw-state-db-contract.js"),
     ]),
   );
-  const databaseSchemas = await startupTrace.measure("state.schema-preflight", () =>
+  const inspectDatabaseSchemas = (signal?: AbortSignal) =>
     preflightOpenClawDatabaseSchemas({
+      signal,
       env: process.env,
       supportedVersions: {
         state: stateDatabase.OPENCLAW_STATE_SCHEMA_VERSION,
         agent: agentDatabase.OPENCLAW_AGENT_SCHEMA_VERSION,
       },
-    }),
+    });
+  const databaseSchemas = await startupTrace.measure("state.schema-preflight", () =>
+    opts.startupOperation
+      ? opts.startupOperation(inspectDatabaseSchemas)
+      : inspectDatabaseSchemas(),
   );
   if (databaseSchemas.incompatible.length > 0) {
     for (const database of databaseSchemas.incompatible) {
@@ -152,8 +197,6 @@ export async function prepareGatewayServerBootstrap(input: {
     isVitestRuntimeEnv() && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
   const ambientEnvTriggers = opts.ambientEnvTriggers ?? "suppress";
 
-  // Ensure all default port derivations (browser/canvas) see the actual runtime port.
-  process.env.OPENCLAW_GATEWAY_PORT = String(port);
   logAcceptedEnvOption({
     key: "OPENCLAW_RAW_STREAM",
     description: "raw stream logging enabled",
@@ -162,14 +205,6 @@ export async function prepareGatewayServerBootstrap(input: {
     key: "OPENCLAW_RAW_STREAM_PATH",
     description: "raw stream log path override",
   });
-  if (!resumeGatewayRestartTraceFromEnv(process.env, [["source", "env"]])) {
-    const restartHandoff = readGatewayRestartHandoffSync();
-    resumeGatewayRestartTraceFromHandoff(restartHandoff?.restartTrace, [
-      ["source", restartHandoff?.source],
-      ["restartKind", restartHandoff?.restartKind],
-      ["supervisorMode", restartHandoff?.supervisorMode],
-    ]);
-  }
   if (!minimalTestGateway) {
     await startupTrace.measure("runtime.agent-cli", () => prepareGatewayAgentCliShim());
   }
@@ -182,15 +217,12 @@ export async function prepareGatewayServerBootstrap(input: {
   });
   const { loadGatewayStartupConfigSnapshot } = await startupConfigModulePromise;
 
-  const envBeforeStartupConfigLoad = { ...process.env };
   const startupConfigLoad = await startupTrace.measure("config.snapshot", () =>
     loadGatewayStartupConfigSnapshot({
       minimalTestGateway,
       log,
       measure: (name, run) => startupTrace.measure(name, run),
-      ...(opts.startupConfigSnapshotRead
-        ? { initialSnapshotRead: opts.startupConfigSnapshotRead }
-        : {}),
+      initialSnapshotRead: startupConfigSnapshotRead,
     }),
   );
   const configSnapshot = startupConfigLoad.snapshot;
@@ -291,7 +323,7 @@ export async function prepareGatewayServerBootstrap(input: {
     trustedProxyDeviceAutoApprove.scopes?.some((scope) => scope.trim() === ADMIN_SCOPE)
   ) {
     log.warn(
-      "SECURITY WARNING: gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin; every proxy-authenticated user can auto-approve a new browser device with full admin, and requests without scopes receive full admin automatically. Remove operator.admin and grant admin per identity via gateway.auth.identityScopes instead.",
+      "SECURITY WARNING: gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin; every proxy-authenticated user can auto-approve a new operator device with full admin, and requests without scopes receive full admin automatically. Remove operator.admin and grant admin per identity via gateway.auth.identityScopes instead.",
     );
   }
   const resolvedStartupAuthOverride = startupAuthOverride
@@ -405,7 +437,6 @@ export async function prepareGatewayServerBootstrap(input: {
     ]);
     return next;
   };
-  const { assertConfiguredWorkspaceStateReady } = await import("../agents/workspace-state-dirs.js");
   const prepareReloadCandidate = (params: {
     runtimeConfig: OpenClawConfig;
     sourceConfig: OpenClawConfig;
@@ -552,6 +583,7 @@ export async function prepareGatewayServerBootstrap(input: {
     ]);
   }
 
+  startupTraceOwner.transferred = true;
   return {
     opts,
     minimalTestGateway,

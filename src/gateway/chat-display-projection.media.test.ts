@@ -1,8 +1,43 @@
 import { describe, expect, it } from "vitest";
 import { applyAssistantDeliveryDirectives } from "../config/sessions/transcript-assistant-delivery.js";
+import { projectChatDisplayMessages } from "./chat-display-projection.js";
+import { buildSessionHistorySnapshot } from "./session-history-state.js";
 import { projectSessionMessagePayload } from "./session-transcript-message.js";
 
 describe("assistant media directive display projection", () => {
+  it.each(
+    [false, true].flatMap((recovered) =>
+      [[], [{ type: "thinking", thinking: "Internal reasoning" }]].map((content) => ({
+        recovered,
+        content,
+      })),
+    ),
+  )(
+    "preserves error-turn media (later reply=$recovered, content=$content)",
+    ({ recovered, content }) => {
+      const user = { role: "user", content: "hello" };
+      const reply = {
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "I agree with that product direction." }],
+        __openclaw: { runId: "run-retry" },
+      };
+      const mediaReply = {
+        role: "assistant",
+        content,
+        stopReason: "error",
+        __openclaw: {
+          runId: "run-retry",
+          media: [{ path: "media://inbound/synthetic-image", contentType: "image/png" }],
+        },
+      };
+      const rawMessages = [user, mediaReply, ...(recovered ? [reply] : [])];
+      const expected = [user, { ...mediaReply, content: [] }, ...(recovered ? [reply] : [])];
+      expect(projectChatDisplayMessages(rawMessages)).toEqual(expected);
+      expect(buildSessionHistorySnapshot({ rawMessages }).history.messages).toEqual(expected);
+    },
+  );
+
   it("withholds relative MEDIA directives until managed attachment blocks replace them", () => {
     const { payload } = projectSessionMessagePayload({
       sessionKey: "agent:main:main",

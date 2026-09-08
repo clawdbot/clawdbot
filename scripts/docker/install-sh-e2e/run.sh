@@ -280,13 +280,11 @@ run_agent_turn() {
   local session_id="$2"
   local prompt="$3"
   local out_json="$4"
-  # Installer E2E validates install + onboard + embedded agent tooling. It does
-  # not need a paired Gateway control-plane hop, which is flaky/non-deterministic
-  # in the isolated container and already covered by gateway-specific lanes.
+  # The profile Gateway is already running and owns this state directory. Route
+  # agent turns through it so the smoke matches the supported ownership model.
   set +e
   timeout --kill-after=15s "${AGENT_TURN_TIMEOUT_SECONDS}s" \
     openclaw --profile "$profile" agent \
-    --local \
     --session-id "$session_id" \
     --message "$prompt" \
     --thinking off \
@@ -597,7 +595,7 @@ assert_session_used_tools() {
   node - <<'NODE' "$jsonl" "$@" || scan_status="$?"
 const fs = require("node:fs");
 const jsonl = process.argv[2];
-const required = new Set(process.argv.slice(3));
+const required = process.argv.slice(3).map((spec) => spec.split("|").filter(Boolean));
 
 const seen = new Set();
 const head = [];
@@ -631,7 +629,9 @@ const maxDepth = readPositiveIntEnv("OPENCLAW_INSTALL_E2E_SESSION_SCAN_DEPTH", 6
 const maxNodes = readPositiveIntEnv("OPENCLAW_INSTALL_E2E_SESSION_SCAN_NODES", 100000);
 
 function missingTools() {
-  return [...required].filter((t) => !seen.has(t));
+  return required
+    .filter((group) => !group.some((tool) => seen.has(tool)))
+    .map((group) => group.join("|"));
 }
 
 function walk(node, depth, state) {
@@ -1057,7 +1057,7 @@ run_profile() {
   assert_session_used_tools "$profile" "$TURN2B_SESSION_ID" read
   assert_session_used_tools "$profile" "$TURN3_SESSION_ID" exec
   assert_session_used_tools "$profile" "$TURN3B_SESSION_ID" write
-  assert_session_used_tools "$profile" "$TURN4_SESSION_ID" image write
+  assert_session_used_tools "$profile" "$TURN4_SESSION_ID" "image|view_image" write
   phase_mark_passed "Verify tool usage via session transcript ($profile)"
 
   cleanup_profile

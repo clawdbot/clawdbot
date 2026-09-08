@@ -4,9 +4,21 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-profile.js";
+import { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config-runtime.js";
 import { createCodexSupervisionTools } from "./supervision-tools.js";
 
 type CodexSupervisionToolsOptions = Parameters<typeof createCodexSupervisionTools>[0];
+
+function createTestSupervisionTools(
+  options: Omit<CodexSupervisionToolsOptions, "resolveAuthProfileId" | "resolveRuntimeOptions">,
+) {
+  return createCodexSupervisionTools({
+    ...options,
+    resolveAuthProfileId: resolveCodexAppServerAuthProfileIdForAgent,
+    resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
+  });
+}
 
 const LEGACY_CODEX_SUPERVISOR_ENDPOINTS_ENV = "OPENCLAW_CODEX_SUPERVISOR_ENDPOINTS";
 const LEGACY_CODEX_SUPERVISOR_RAW_TRANSCRIPTS_ENV =
@@ -54,7 +66,7 @@ function createTools(
   request: EndpointRequest,
   overrides: Partial<CodexSupervisionToolsOptions> = {},
 ) {
-  return createCodexSupervisionTools({
+  return createTestSupervisionTools({
     getPluginConfig: () => ({
       supervision: {
         enabled: true,
@@ -84,7 +96,7 @@ describe("Codex supervision compatibility tools", () => {
       transports.push(endpoint.configured?.transport);
       return {};
     });
-    const tools = createCodexSupervisionTools({
+    const tools = createTestSupervisionTools({
       getPluginConfig: () => ({ supervision: { enabled: true } }),
       senderIsOwner: true,
       env: { [LEGACY_CODEX_SUPERVISOR_ENDPOINTS_ENV]: "local" },
@@ -98,7 +110,7 @@ describe("Codex supervision compatibility tools", () => {
 
   it("defaults the local compatibility endpoint to shared user-home stdio", async () => {
     requestCodexAppServerJsonMock.mockResolvedValue({ data: [], nextCursor: null });
-    const tools = createCodexSupervisionTools({
+    const tools = createTestSupervisionTools({
       getPluginConfig: () => ({ supervision: { enabled: true } }),
       senderIsOwner: true,
       env: {},
@@ -115,7 +127,7 @@ describe("Codex supervision compatibility tools", () => {
 
   it("preserves the shipped stdio endpoint working directory", async () => {
     requestCodexAppServerJsonMock.mockResolvedValue({ data: [], nextCursor: null });
-    const tools = createCodexSupervisionTools({
+    const tools = createTestSupervisionTools({
       getPluginConfig: () => ({
         supervision: {
           enabled: true,
@@ -147,7 +159,7 @@ describe("Codex supervision compatibility tools", () => {
   });
 
   it("rejects unauthenticated remote compatibility endpoints before connecting", async () => {
-    const tools = createCodexSupervisionTools({
+    const tools = createTestSupervisionTools({
       getPluginConfig: () => ({
         supervision: {
           enabled: true,
@@ -171,7 +183,7 @@ describe("Codex supervision compatibility tools", () => {
 
   it("retains the five shipped tool names and policy gates", async () => {
     const { request } = createRequest({ id: "thread-1", status: { type: "idle" } });
-    const tools = createCodexSupervisionTools({
+    const tools = createTestSupervisionTools({
       getPluginConfig: () => ({ supervision: { enabled: true } }),
       senderIsOwner: true,
       request,
@@ -197,7 +209,7 @@ describe("Codex supervision compatibility tools", () => {
 
   it("denies non-owner execution before reading endpoint or session data", async () => {
     const request = vi.fn();
-    const tools = createCodexSupervisionTools({
+    const tools = createTestSupervisionTools({
       getPluginConfig: () => ({ supervision: { enabled: true } }),
       senderIsOwner: false,
       request,
@@ -235,7 +247,7 @@ describe("Codex supervision compatibility tools", () => {
       }
       throw new Error(`unexpected method: ${method}`);
     });
-    const tools = createCodexSupervisionTools({
+    const tools = createTestSupervisionTools({
       getPluginConfig: () => ({
         supervision: {
           enabled: true,
@@ -596,7 +608,7 @@ describe("Codex supervision compatibility tools", () => {
       pluginConfig = { supervision: { enabled: false } };
       return { data: [], nextCursor: "next-page" };
     });
-    const tools = createCodexSupervisionTools({
+    const tools = createTestSupervisionTools({
       getPluginConfig: () => pluginConfig,
       senderIsOwner: true,
       request,
@@ -624,7 +636,7 @@ describe("Codex supervision compatibility tools", () => {
       pluginConfig = { supervision: { enabled: true, endpoints: [] } };
       return { data: [], nextCursor: "next-page" };
     });
-    const tools = createCodexSupervisionTools({
+    const tools = createTestSupervisionTools({
       getPluginConfig: () => pluginConfig,
       senderIsOwner: true,
       request,
@@ -649,7 +661,7 @@ describe("Codex supervision compatibility tools", () => {
       pluginConfig = { supervision: { enabled: true, allowRawTranscripts: false } };
       throw new Error("turns not materialized yet");
     });
-    const tools = createCodexSupervisionTools({
+    const tools = createTestSupervisionTools({
       getPluginConfig: () => pluginConfig,
       senderIsOwner: true,
       request,
@@ -692,7 +704,7 @@ describe("Codex supervision compatibility tools", () => {
         },
       };
     });
-    const tools = createCodexSupervisionTools({
+    const tools = createTestSupervisionTools({
       getPluginConfig: () => pluginConfig,
       senderIsOwner: true,
       request,
@@ -734,7 +746,7 @@ describe("Codex supervision compatibility tools", () => {
         thread: { id: "thread-1", status: { type: "idle" } },
       };
     });
-    const tools = createCodexSupervisionTools({
+    const tools = createTestSupervisionTools({
       getPluginConfig: () => pluginConfig,
       getRuntimeConfig: () => runtimeConfig,
       senderIsOwner: true,
@@ -799,7 +811,7 @@ describe("Codex supervision compatibility tools", () => {
         thread: { id: "thread-1", status: { type: "idle" } },
       };
     });
-    const tools = createCodexSupervisionTools({
+    const tools = createTestSupervisionTools({
       getPluginConfig: () => pluginConfig,
       getRuntimeConfig: () => runtimeConfig,
       senderIsOwner: true,
@@ -828,7 +840,7 @@ describe("Codex supervision compatibility tools", () => {
         thread: { id: "thread-1", status: { type: "idle" } },
       };
     });
-    const tools = createCodexSupervisionTools({
+    const tools = createTestSupervisionTools({
       getPluginConfig: () => pluginConfig,
       senderIsOwner: true,
       request,
@@ -861,7 +873,7 @@ describe("Codex supervision compatibility tools", () => {
         },
       };
     });
-    const tools = createCodexSupervisionTools({
+    const tools = createTestSupervisionTools({
       getPluginConfig: () => pluginConfig,
       senderIsOwner: true,
       request,
@@ -906,7 +918,7 @@ describe("Codex supervision compatibility tools", () => {
         },
       };
     });
-    const tools = createCodexSupervisionTools({
+    const tools = createTestSupervisionTools({
       getPluginConfig: () => pluginConfig,
       senderIsOwner: true,
       request,
@@ -1008,7 +1020,7 @@ describe("Codex supervision compatibility tools", () => {
       status: { type: "active" },
       turns: [{ id: "turn-1", status: "inProgress" }],
     });
-    const tools = createCodexSupervisionTools({
+    const tools = createTestSupervisionTools({
       getPluginConfig: () => ({ supervision: { enabled: true } }),
       senderIsOwner: true,
       env: {

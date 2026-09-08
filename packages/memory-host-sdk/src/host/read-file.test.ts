@@ -1,4 +1,5 @@
 // Memory Host SDK tests cover read file behavior.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -53,6 +54,97 @@ describe("readMemoryFile", () => {
       await fs.rm(tmpRoot, { recursive: true, force: true });
     }
   });
+
+  it.each(["EACCES", "EIO"] as const)(
+    "scopes extra-path %s errors to the requested file",
+    async (code) => {
+      const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-read-file-"));
+      try {
+        const workspaceDir = path.join(tmpRoot, "workspace");
+        const extraDir = path.join(tmpRoot, "extra");
+        const target = path.join(extraDir, "note.md");
+        const healthyDir = path.join(tmpRoot, "healthy");
+        const healthyTarget = path.join(healthyDir, "note.md");
+        const blockedTarget = path.join(healthyDir, "blocked.md");
+        await fs.mkdir(workspaceDir, { recursive: true });
+        await fs.mkdir(extraDir, { recursive: true });
+        await fs.mkdir(healthyDir, { recursive: true });
+        await fs.writeFile(target, "secret", "utf-8");
+        await fs.writeFile(healthyTarget, "healthy", "utf-8");
+        await fs.writeFile(blockedTarget, "blocked", "utf-8");
+
+        const scanError = Object.assign(new Error(`${code}: extra path unreadable`), { code });
+        const realLstat = fs.lstat;
+        const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+          if ([extraDir, blockedTarget].includes(path.resolve(String(args[0])))) {
+            throw scanError;
+          }
+          return await realLstat(...args);
+        });
+        // fs-safe checks child metadata synchronously; configured-root admission remains async.
+        const realLstatSync = fsSync.lstatSync;
+        const lstatSyncSpy = vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+          if (path.resolve(String(args[0])) === blockedTarget) {
+            throw scanError;
+          }
+          return realLstatSync(...args);
+        });
+        try {
+          await expect(
+            readMemoryFile({
+              workspaceDir,
+              extraPaths: [extraDir, healthyDir],
+              relPath: target,
+            }),
+          ).rejects.toMatchObject({
+            code,
+            message: `${code}: extra path unreadable`,
+          });
+          await expect(
+            readMemoryFile({
+              workspaceDir,
+              extraPaths: [extraDir, healthyDir],
+              relPath: healthyTarget,
+            }),
+          ).resolves.toMatchObject({ text: "healthy" });
+          await expect(
+            readMemoryFile({
+              workspaceDir,
+              extraPaths: [extraDir, healthyDir],
+              relPath: blockedTarget,
+            }),
+          ).rejects.toMatchObject({ code, message: `${code}: extra path unreadable` });
+          await expect(
+            readMemoryFile({
+              workspaceDir,
+              extraPaths: [extraDir, target],
+              relPath: target,
+            }),
+          ).resolves.toMatchObject({ text: "secret" });
+          for (const relPath of [
+            path.join(tmpRoot, "outside.md"),
+            path.join(extraDir, "note.txt"),
+          ]) {
+            await expect(
+              readMemoryFile({ workspaceDir, extraPaths: [extraDir], relPath }),
+            ).rejects.toThrow("path required");
+          }
+          await expect(
+            readMemoryFile({
+              workspaceDir,
+              extraPaths: [{ path: extraDir, pattern: "runbooks/**/*.md" }],
+              relPath: target,
+            }),
+          ).rejects.toThrow("path required");
+        } finally {
+          lstatSyncSpy.mockRestore();
+          lstatSpy.mockRestore();
+        }
+      } finally {
+        await fs.rm(tmpRoot, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("rejects extra path reads through symlinked directory components", async () => {
     const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-read-file-"));

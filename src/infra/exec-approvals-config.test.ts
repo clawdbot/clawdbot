@@ -128,6 +128,7 @@ describe("exec approvals node host allowlist check", () => {
       kind: "executable" as const,
       rawExecutable: "head",
       resolvedPath: "/usr/bin/head",
+      resolvedRealPath: "/usr/bin/head",
       executableName: "head",
     };
     // Not in allowlist

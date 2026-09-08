@@ -7,7 +7,8 @@ import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocket, WebSocketServer } from "ws";
+import { WebSocket } from "ws";
+import { WebSocketServer } from "../../packages/gateway-client/src/websocket.test-support.js";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runVitestShutdownCommand } from "../../test/helpers/vitest-shutdown-command.js";
@@ -21,6 +22,7 @@ import {
 
 afterEach(() => {
   vi.doUnmock("ws");
+  vi.doUnmock("../../packages/gateway-client/src/websocket.js");
   vi.doUnmock("./server.js");
   vi.doUnmock("../test-utils/ports.js");
   vi.doUnmock("../infra/device-pairing.js");
@@ -33,6 +35,7 @@ type PeerBehavior =
   | "no challenge"
   | "no response"
   | "reject auth"
+  | "reject auth without close"
   | "transport error"
   | "upgrade then transport error"
   | "hello then transport error"
@@ -45,6 +48,7 @@ type AcquisitionPeer = {
   errors: Error[];
   unownedErrors: Error[];
   requests: ReturnType<typeof parseMinimalGatewayRequestFrame>[];
+  receivedUpgrade: () => boolean;
   isListening: () => boolean;
   failTransport: () => Promise<Error>;
   close: () => Promise<void>;
@@ -59,10 +63,13 @@ async function withAcquisitionPeer(
   const errors: Error[] = [];
   const unownedErrors: Error[] = [];
   const transportFailure = createDeferred<Error>();
+  const rejectAuth = behavior === "reject auth" || behavior === "reject auth without close";
   // Observe the real dependency; keep otherwise-unhandled errors local to this case.
   // Counting the remaining listeners makes a removed owner handler observable.
-  vi.doMock("ws", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("ws")>();
+  const observeWebSocket = async () => {
+    const actual = await vi.importActual<
+      typeof import("../../packages/gateway-client/src/websocket.js")
+    >("../../packages/gateway-client/src/websocket.js");
     class ObservedWebSocket extends actual.WebSocket {
       constructor(...args: ConstructorParameters<typeof WebSocket>) {
         super(...args);
@@ -77,10 +84,18 @@ async function withAcquisitionPeer(
         });
       }
     }
-    return { ...actual, default: ObservedWebSocket, WebSocket: ObservedWebSocket };
-  });
+    return {
+      ...actual,
+      default: ObservedWebSocket,
+      WebSocket: ObservedWebSocket,
+      WebSocketServer,
+    };
+  };
+  vi.doMock("ws", observeWebSocket);
+  vi.doMock("../../packages/gateway-client/src/websocket.js", observeWebSocket);
   const sockets = new Set<Socket>();
   const requests: ReturnType<typeof parseMinimalGatewayRequestFrame>[] = [];
+  let receivedUpgrade = false;
   const server = createServer();
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
   server.on("connection", (socket) => {
@@ -88,6 +103,7 @@ async function withAcquisitionPeer(
     socket.once("close", () => sockets.delete(socket));
   });
   server.on("upgrade", (request, socket, head) => {
+    receivedUpgrade = true;
     if (behavior === "hold upgrade") {
       return;
     }
@@ -138,17 +154,24 @@ async function withAcquisitionPeer(
             JSON.stringify({
               type: "res",
               id: frame.id,
-              ok: behavior !== "reject auth",
-              ...(behavior === "reject auth"
+              ok: !rejectAuth,
+              ...(rejectAuth
                 ? { error: { code: "UNAUTHORIZED", message: "synthetic auth rejection" } }
                 : { payload: buildMinimalGatewayHelloOkPayload() }),
             }),
           );
+          if (behavior === "reject auth without close") {
+            ws.pause();
+          }
         }
       });
     });
   });
   const close = async () => {
+    // Release a withheld close handshake only after acquisition has entered server cleanup.
+    for (const peer of wss.clients) {
+      peer.resume();
+    }
     if (server.listening) {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
@@ -169,6 +192,7 @@ async function withAcquisitionPeer(
       errors,
       unownedErrors,
       requests,
+      receivedUpgrade: () => receivedUpgrade,
       isListening: () => server.listening,
       failTransport: () => {
         for (const socket of sockets) {
@@ -223,7 +247,7 @@ function mockPeerGateway(peer: AcquisitionPeer, close = peer.close) {
 
 type CompositeAcquisitionCase = {
   helper: "raw" | "GatewayClient";
-  failure: "construction" | "open" | "authentication";
+  failure: "construction" | "open" | "authentication" | "authentication without close";
   shutdown: "joined" | "rejected";
 };
 
@@ -240,11 +264,13 @@ export async function verifyCompositeAcquisition({
     },
     async (state) => {
       const behavior =
-        failure === "open"
-          ? "reject upgrade"
-          : failure === "authentication"
-            ? "reject auth"
-            : "reply";
+        failure === "authentication without close"
+          ? "reject auth without close"
+          : failure === "open"
+            ? "reject upgrade"
+            : failure === "authentication"
+              ? "reject auth"
+              : "reply";
       await withAcquisitionPeer(behavior, async (peer) => {
         const closing = createDeferred();
         const release = createDeferred();
@@ -260,6 +286,16 @@ export async function verifyCompositeAcquisition({
         const { startServerWithClient, startConnectedServerWithClient } =
           await import("./test-helpers.server.js");
         const { startGatewayWithClient } = await import("./test-helpers.e2e.js");
+        const { GatewayClient } = await import("./client.js");
+        // oxlint-disable-next-line typescript/unbound-method -- The observer calls the original on its acquired client.
+        const stopAndWait = GatewayClient.prototype.stopAndWait;
+        let clientStopSettled = false;
+        const stopSpy = vi
+          .spyOn(GatewayClient.prototype, "stopAndWait")
+          .mockImplementation(async function (this: InstanceType<typeof GatewayClient>, options) {
+            await stopAndWait.call(this, options);
+            clientStopSettled = true;
+          });
         const selector = helper === "raw" ? "OPENCLAW_GATEWAY_TOKEN" : "OPENCLAW_GATEWAY_PORT";
         const ownedSelector = helper === "raw" ? "synthetic-owned-token" : String(peer.port);
         const previousSelector = process.env[selector];
@@ -283,7 +319,13 @@ export async function verifyCompositeAcquisition({
           expect(first).toBe("closing");
           expect(process.env[selector]).toBe(ownedSelector);
           expect(peer.isListening()).toBe(true);
-          expect(peer.clients.every((client) => peer.closed.has(client))).toBe(true);
+          // GatewayClient owns a bounded stop; raw helpers promise the transport close event.
+          if (helper === "GatewayClient") {
+            expect(peer.clients).toHaveLength(1);
+            expect(clientStopSettled).toBe(true);
+          } else {
+            expect(peer.clients.every((client) => peer.closed.has(client))).toBe(true);
+          }
           release.resolve();
           const result = await acquisition;
           const originalError = result instanceof AggregateError ? result.errors[0] : result;
@@ -309,6 +351,7 @@ export async function verifyCompositeAcquisition({
         } finally {
           release.resolve();
           await acquisition;
+          stopSpy.mockRestore();
         }
       });
     },
@@ -458,7 +501,12 @@ describe("raw Gateway helper acquisition ownership", () => {
             : helper === "webchat"
               ? connectWebchatClient({ port: peer.port })
               : helper === "shared auth"
-                ? openAuthenticatedGatewayWs(peer.port, "synthetic-token")
+                ? openAuthenticatedGatewayWs(
+                    peer.port,
+                    "synthetic-token",
+                    // Webchat retains the default opening deadline; this helper also accepts a budget.
+                    behavior === "hold upgrade" ? 1_000 : undefined,
+                  )
                 : connectDeviceAuthReq({
                     url: `ws://127.0.0.1:${peer.port}`,
                     token: "synthetic-token",
@@ -480,6 +528,9 @@ describe("raw Gateway helper acquisition ownership", () => {
         expect(peer.unownedErrors).toEqual([]);
         expect(failure).toBeInstanceOf(Error);
         expect(failure).toMatchObject({ message: expect.stringContaining(error) });
+        if (behavior === "hold upgrade") {
+          expect(peer.receivedUpgrade(), "the peer must receive the withheld upgrade").toBe(true);
+        }
         if (behavior === "no response") {
           expect(failure).toMatchObject({ message: "timeout" });
         }
@@ -572,6 +623,8 @@ describe("raw Gateway helper acquisition ownership", () => {
     { helper: "raw", failure: "authentication", shutdown: "rejected" },
     { helper: "GatewayClient", failure: "authentication", shutdown: "joined" },
     { helper: "GatewayClient", failure: "authentication", shutdown: "rejected" },
+    { helper: "GatewayClient", failure: "authentication without close", shutdown: "joined" },
+    { helper: "GatewayClient", failure: "authentication without close", shutdown: "rejected" },
   ] as const)(
     "$helper retains server ownership after $failure failure and $shutdown shutdown",
     async (scenario, context) => {

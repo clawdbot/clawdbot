@@ -178,6 +178,28 @@ try {
 `,
         );
         expect(result.status, result.stdout + result.stderr).toBe(0);
+        if (!kind.includes("Windows")) {
+          return;
+        }
+        const dist = path.join(root, "dist");
+        fs.mkdirSync(dist, { recursive: true });
+        // An installed alias exposes live output to topology scanning. Its physical
+        // owner must still be excluded when the writer starts through a short cwd.
+        fs.symlinkSync(dist, path.join(root, "node_modules/fixture-published"), "junction");
+        const cold = runWriter(alias);
+        expect(cold.status, cold.stdout + cold.stderr).toBe(0);
+        expect(declarationCacheRecords(root).flatMap((record) => record.inputs ?? [])).toContain(
+          localInput,
+        );
+        const published = treeHashes(dist);
+        const cache = path.join(root, ".artifacts/build-all-cache");
+        const cached = treeHashes(cache);
+        const warm = runWriter(alias);
+        expect(warm.status, warm.stdout + warm.stderr).toBe(0);
+        expect(warm.stdout + warm.stderr).not.toContain("[tsdown-build] invocation");
+        expect(treeHashes(dist)).toEqual(published);
+        expect(treeHashes(cache)).toEqual(cached);
+        expectStagingClean(root);
       },
     );
   }
@@ -249,7 +271,7 @@ let finishedRuntime;
 const runtimeDone = new Promise(resolve => { finishedRuntime = resolve; });
 const bundles = await build({
   ...config, config: false, cwd: root, clean: false, logLevel: "silent",
-  dts: ${dts ? "{ enabled: true, cjsReexport: false, newContext: true }" : owner === "AI" ? "{ enabled: false }" : "false"}, format: ["esm", "cjs"], concurrency: 1,
+  dts: ${dts ? '{ enabled: true, entry: ["src/shared.ts"], cjsReexport: false, newContext: true }' : owner === "AI" ? "{ enabled: false }" : "false"}, format: ["esm", "cjs"], concurrency: 1,
   entry: ${JSON.stringify(dts ? "src/shared.ts" : outside)},
   outDir: "override-output", outExtensions: undefined, fixedExtension: true,
   inputOptions: async (input, format, context) => {
@@ -287,7 +309,7 @@ try {
     let starts = 0;
     const objectOptions = await build({
       ...config, config: false, cwd: root, clean: false, logLevel: "silent",
-      dts: true, format: "cjs", entry: "src/shared.ts", outDir: "object-options-output",
+      dts: { cwd: path.join(root, "src"), entry: ["shared.ts"] }, format: "cjs", entry: "src/shared.ts", outDir: "object-options-output",
       inputOptions: { plugins: [{ name: "fixture-object-options", buildStart() { starts++; } }] },
     });
     try {

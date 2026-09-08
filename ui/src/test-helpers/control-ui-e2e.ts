@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { createServer as createNetServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { HelloOk } from "@openclaw/gateway-protocol";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import type { ConsoleMessage, Frame, Locator, Page, Request } from "playwright";
@@ -12,7 +13,12 @@ import type { InlineConfig, Plugin, PreviewServer, ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import { controlUiPluginAssetRoot } from "../../../src/gateway/control-ui-plugin-assets-contract.js";
-import type { ModelCatalogEntry, UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import type {
+  AgentsListResult,
+  ModelCatalogEntry,
+  UpdateAvailable,
+  UpdateScheduleState,
+} from "../api/types.ts";
 import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
@@ -210,6 +216,36 @@ export async function waitForControlUiRoute(page: Page, target: ControlUiRouteTa
 }
 
 /**
+ * Click a control inside a board widget document once pointer events reach it.
+ *
+ * Board widget frames stay `inert` and transparent until the sandbox reports
+ * the document rendered, and Linux Chromium keeps routing pointer events to the
+ * outer iframe element instead of into the revealed cross-origin document until
+ * that reveal reaches its compositor. Playwright's actionability checks read the
+ * DOM, and its hit-target interceptor reports a click that reached no frame as
+ * delivered, so a click issued in that window is a silent no-op. Hover until the
+ * widget document itself observes the pointer, then click; a control that never
+ * observes it fails loudly instead.
+ */
+export async function clickBoardWidgetControl(page: Page, control: Locator): Promise<void> {
+  const deadline = Date.now() + controlUiE2eWaitTimeoutMs;
+  for (;;) {
+    // Leave and re-enter: a stationary pointer keeps the browser's stale
+    // routing decision, while a fresh move re-runs hit testing.
+    await page.mouse.move(0, 0);
+    await control.hover();
+    if (await control.evaluate((element) => element.matches(":hover"))) {
+      break;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error("Board widget control never received pointer events.");
+    }
+    await page.waitForTimeout(100);
+  }
+  await control.click();
+}
+
+/**
  * Wait for the settled in-app confirmation modal. Control UI routes destructive
  * confirms through `showConfirmDialog`, so no native browser dialog ever fires;
  * waiting for full opacity keeps the click from landing mid-animation.
@@ -310,6 +346,8 @@ export const defaultControlUiFeatureMethods = [
   "tools.github.authorize.cancel",
   "update.hold",
   "update.run",
+  "update.runs.get",
+  "update.runs.list",
   "update.status",
   "worktrees.branches",
 ] as const;
@@ -364,6 +402,8 @@ export type ControlUiMockGatewayScenario = {
   controlUiBuildSource?: "bundled" | "configured";
   serverVersion?: string;
   deviceToken?: string;
+  authMethod?: HelloOk["auth"]["method"];
+  authMode?: HelloOk["snapshot"]["authMode"] | null;
   featureMethods?: string[];
   /** Simulate a legacy Gateway that predates the advertised method catalog. */
   omitFeatureMethods?: boolean;
@@ -431,7 +471,7 @@ export type ControlUiMockGatewayScenario = {
   operatorScopes?: string[];
   /** Selected fixture and event default; use controlUiSessionUrl to select it in the UI. */
   sessionKey?: string;
-  sessionScope?: "agent" | "global";
+  sessionScope?: AgentsListResult["scope"];
   mainSessionKey?: string;
   /** Initial gateway-owned custom group catalog (sessions.groups.*), in order. */
   sessionGroups?: string[];
@@ -441,8 +481,6 @@ export type ControlUiMockGatewayScenario = {
   cliAgentsEnabled?: boolean;
   workspace?: string;
   workspaceGit?: boolean;
-  /** Local media preview roots served in the bootstrap config; tilde sources expand against these. */
-  localMediaPreviewRoots?: string[];
 };
 
 type NormalizedControlUiMockGatewayScenario = Required<
@@ -1011,6 +1049,8 @@ function normalizeScenario(
     controlUiBuildSource: scenario.controlUiBuildSource ?? "bundled",
     serverVersion: scenario.serverVersion?.trim() || "e2e",
     deviceToken: scenario.deviceToken?.trim() || "e2e-device-token",
+    authMethod: scenario.authMethod ?? "token",
+    authMode: scenario.authMode ?? null,
     // Baseline scenarios represent a current Gateway. Tests for unsupported or
     // mixed-version methods provide an explicit narrower catalog.
     featureMethods: scenario.featureMethods ?? [...defaultControlUiFeatureMethods],
@@ -1052,14 +1092,13 @@ function normalizeScenario(
           ]),
     sessionArchiveFiltering: scenario.sessionArchiveFiltering ?? false,
     sessionKey,
-    sessionScope: scenario.sessionScope ?? "agent",
+    sessionScope: scenario.sessionScope ?? "per-sender",
     sessionGroups: scenario.sessionGroups ?? [],
     sessionGroupDefaults: scenario.sessionGroupDefaults ?? {},
     terminalEnabled: scenario.terminalEnabled ?? false,
     cliAgentsEnabled: scenario.cliAgentsEnabled ?? false,
     workspace: scenario.workspace ?? "",
     workspaceGit: scenario.workspaceGit ?? false,
-    localMediaPreviewRoots: scenario.localMediaPreviewRoots ?? [],
   };
 }
 
@@ -1087,7 +1126,6 @@ export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewa
     basePath: normalizedScenario.basePath,
     devGitBranch: normalizedScenario.devGitBranch || undefined,
     embedSandbox: "scripts",
-    localMediaPreviewRoots: normalizedScenario.localMediaPreviewRoots,
     serverVersion: normalizedScenario.serverVersion,
     serverBuildId: normalizedScenario.serverBuildId,
     terminalEnabled: normalizedScenario.terminalEnabled,
@@ -1509,6 +1547,136 @@ function installControlUiMockGateway(
     return value;
   }
 
+  type CommittedChatInput = {
+    sessionId: string;
+    runId: string;
+    message: Record<string, unknown> & { __openclaw: { id: string; seq: number } };
+  };
+  const chatInputsStorageKey = "openclaw.control-ui-e2e.chatInputs";
+  let committedChatInputs: CommittedChatInput[] = [];
+  let historyMessagesOverridden = false;
+  try {
+    const stored = window.sessionStorage.getItem(chatInputsStorageKey);
+    if (stored) {
+      committedChatInputs = JSON.parse(stored) as CommittedChatInput[];
+    }
+  } catch {
+    // The current page's mock still works without persistent browser storage.
+  }
+
+  function sourceIdempotencyKey(message: unknown): unknown {
+    if (!isRecord(message) || message.role !== "user") {
+      return undefined;
+    }
+    const metadata = isRecord(message["__openclaw"]) ? message["__openclaw"] : undefined;
+    return metadata?.idempotencyKey ?? message.idempotencyKey;
+  }
+
+  function messageSequence(message: unknown): number {
+    const metadata =
+      isRecord(message) && isRecord(message["__openclaw"]) ? message["__openclaw"] : null;
+    return typeof metadata?.seq === "number" && Number.isSafeInteger(metadata.seq)
+      ? metadata.seq
+      : 0;
+  }
+
+  function chatHistoryMessages(key: string): unknown[] {
+    const row = sessions.read(key);
+    const messages = [
+      ...(scenario.sessionTranscripts[row.key]?.messages ?? scenario.historyMessages),
+    ];
+    if (historyMessagesOverridden && !scenario.sessionTranscripts[row.key]) {
+      return messages;
+    }
+    for (const source of committedChatInputs.filter((entry) => entry.sessionId === row.sessionId)) {
+      if (messages.some((message) => sourceIdempotencyKey(message) === `${source.runId}:user`)) {
+        continue;
+      }
+      const next = messages.findIndex(
+        (message) => messageSequence(message) > source.message["__openclaw"].seq,
+      );
+      messages.splice(next < 0 ? messages.length : next, 0, source.message);
+    }
+    return messages;
+  }
+
+  function commitDefaultChatInput(params: unknown): CommittedChatInput | undefined {
+    if (
+      !isRecord(params) ||
+      typeof params.idempotencyKey !== "string" ||
+      typeof params.message !== "string" ||
+      (!params.intent && params.message.trimStart().startsWith("/"))
+    ) {
+      return undefined;
+    }
+    const row = sessions.read(
+      typeof params.sessionKey === "string" ? params.sessionKey : scenario.sessionKey,
+    );
+    const existing = committedChatInputs.find(
+      (entry) => entry.sessionId === row.sessionId && entry.runId === params.idempotencyKey,
+    );
+    if (existing) {
+      return existing;
+    }
+    const sequence =
+      Math.max(
+        0,
+        ...chatHistoryMessages(row.key).map(messageSequence),
+        ...committedChatInputs
+          .filter((source) => source.sessionId === row.sessionId)
+          .map((source) => source.message["__openclaw"].seq),
+      ) + 1;
+    const media = Array.isArray(params.attachments)
+      ? params.attachments.filter(isRecord).map((attachment) => ({
+          kind:
+            typeof attachment.mimeType === "string" && attachment.mimeType.startsWith("image/")
+              ? "image"
+              : "file",
+          contentType: attachment.mimeType,
+          fileName: attachment.fileName,
+          url: `data:${typeof attachment.mimeType === "string" ? attachment.mimeType : "application/octet-stream"};base64,${typeof attachment.content === "string" ? attachment.content : ""}`,
+        }))
+      : [];
+    const source: CommittedChatInput = {
+      sessionId: String(row.sessionId),
+      runId: params.idempotencyKey,
+      message: {
+        role: "user",
+        content: params.message,
+        timestamp: Date.now(),
+        idempotencyKey: `${params.idempotencyKey}:user`,
+        __openclaw: {
+          id: `mock-user:${params.idempotencyKey}`,
+          seq: sequence,
+          ...(media.length ? { media } : {}),
+          ...(Array.isArray(params.mentions) ? { humanMentions: params.mentions } : {}),
+          ...(typeof params.replyToId === "string" ? { replyToId: params.replyToId } : {}),
+        },
+      },
+    };
+    committedChatInputs.push(source);
+    if (media.length) {
+      // Attachment turns ACK before their source receipt; publish actual source
+      // consumption as a separate event after the response reaches the browser.
+      window.queueMicrotask(() => {
+        emitGatewayEvent(MockWebSocket.latest, "session.message", {
+          sessionKey: row.key,
+          sessionId: row.sessionId,
+          clientRunId: source.runId,
+          messageId: source.message["__openclaw"].id,
+          messageSeq: source.message["__openclaw"].seq,
+          message: source.message,
+        });
+      });
+    }
+    try {
+      window.sessionStorage.setItem(chatInputsStorageKey, JSON.stringify(committedChatInputs));
+    } catch {
+      // Committed fixture source remains available in the current page.
+    }
+    return source;
+  }
+
   /** Transcript fields a scenario configured on chat.history, replayed onto the
    * chat.startup payload so both bootstrap paths serve the same conversation. */
   function configuredHistoryTranscript(): Record<string, unknown> {
@@ -1601,6 +1769,28 @@ function installControlUiMockGateway(
     if (isRecord(response) && (response["__mockError"] || response.ok === false)) {
       return response;
     }
+    if (
+      method === "sessions.catalog.startTerminal" &&
+      isRecord(response) &&
+      typeof response.sessionId === "string" &&
+      typeof response.agentId === "string" &&
+      typeof response.shell === "string" &&
+      typeof response.cwd === "string" &&
+      typeof response.confined === "boolean"
+    ) {
+      terminalSessions.set(response.sessionId, {
+        sessionId: response.sessionId,
+        agentId: response.agentId,
+        shell: response.shell,
+        cwd: response.cwd,
+        confined: response.confined,
+        attached: true,
+        owner: "conn",
+        createdAtMs: Date.now(),
+        buffer: "",
+        seq: 0,
+      });
+    }
     if (isRecord(params) && typeof params.id === "string") {
       const kind =
         method === "approval.resolve"
@@ -1611,6 +1801,27 @@ function installControlUiMockGateway(
       if (typeof kind === "string") {
         pendingApprovals.get(`${kind}.approval.list`)?.delete(params.id);
       }
+    }
+    if (
+      (method === "chat.history" || method === "chat.startup") &&
+      isRecord(params) &&
+      Array.isArray(params.inputRunIds) &&
+      isRecord(response) &&
+      !hasOwn(response, "inputReceipts")
+    ) {
+      const info = isRecord(response.sessionInfo) ? response.sessionInfo : undefined;
+      const sessionId = info?.sessionId ?? response.sessionId;
+      const inputRunIds = params.inputRunIds;
+      return {
+        ...response,
+        inputReceipts: committedChatInputs
+          .filter((source) => source.sessionId === sessionId && inputRunIds.includes(source.runId))
+          .map((source) => ({
+            runId: source.runId,
+            state: "consumed",
+            consumedByEventId: source.message["__openclaw"].id,
+          })),
+      };
     }
     if (method === "sessions.patch" && isRecord(params) && typeof params.key === "string") {
       if (
@@ -1893,6 +2104,7 @@ function installControlUiMockGateway(
             : {
                 auth: {
                   deviceToken: connectedDeviceToken,
+                  method: scenario.authMethod,
                   recoveryMigrationAllowed: true as const,
                   recoveryScope: "e2e-recovery-scope",
                   role: "operator",
@@ -1926,6 +2138,7 @@ function installControlUiMockGateway(
             hasMultipleSessionSharingIdentities: scenario.hasMultipleSessionSharingIdentities,
           },
           snapshot: {
+            ...(scenario.authMode ? { authMode: scenario.authMode } : {}),
             suspension: { phase: scenario.gatewaySuspensionPhase },
             ...presenceSnapshot(params),
             ...(scenario.updateAvailable ? { updateAvailable: scenario.updateAvailable } : {}),
@@ -2073,10 +2286,20 @@ function installControlUiMockGateway(
         return { artifacts: [] };
       case "artifacts.download":
         return null;
+      case "sessions.resolve":
+        return sessions.resolve(isRecord(params) ? params : {});
       case "chat.history":
       case "chat.startup": {
-        const key =
-          isRecord(params) && typeof params.sessionKey === "string"
+        const resolution =
+          method === "chat.startup" && isRecord(params) && typeof params.shortId === "string"
+            ? sessions.resolve(params)
+            : undefined;
+        if (resolution && !resolution.ok) {
+          return { resolution, messages: [] };
+        }
+        const key = resolution?.ok
+          ? resolution.key
+          : isRecord(params) && typeof params.sessionKey === "string"
             ? params.sessionKey
             : scenario.sessionKey;
         const row = sessions.read(key);
@@ -2086,12 +2309,13 @@ function installControlUiMockGateway(
             ? scenario.sessionInfo
             : null;
         return {
-          messages: scenario.historyMessages,
+          ...(resolution ? { resolution } : {}),
           sessionId: row.sessionId,
           ...(info || override ? { sessionInfo: { ...info, ...override } } : {}),
           thinkingLevel: null,
           ...(scenario.inFlightRun ? { inFlightRun: scenario.inFlightRun } : {}),
           ...scenario.sessionTranscripts[row.key],
+          messages: chatHistoryMessages(row.key),
           ...(method === "chat.startup"
             ? {
                 metadata: { models: scenario.models },
@@ -2120,16 +2344,36 @@ function installControlUiMockGateway(
           transcription: { providers: [] },
           realtime: { ready: true, providers: [] },
         };
-      case "chat.send":
+      case "chat.send": {
+        // The default fixture starts execution. Its original source is canonical
+        // before ACK; explicit responses and held requests model other outcomes.
+        const source = commitDefaultChatInput(params);
         return {
           runId:
             isRecord(params) && typeof params.idempotencyKey === "string"
               ? params.idempotencyKey
               : "control-ui-e2e-run",
           status: "started",
+          ...(source &&
+          (!isRecord(params) ||
+            !Array.isArray(params.attachments) ||
+            params.attachments.length === 0)
+            ? {
+                messageId: source.message["__openclaw"].id,
+                messageSeq: source.message["__openclaw"].seq,
+              }
+            : {}),
         };
+      }
       case "chat.abort":
         return { aborted: true };
+      case "skills.proposals.list":
+        return {
+          schema: "openclaw.skill-workshop.proposals-manifest.v1",
+          updatedAt: new Date().toISOString(),
+          proposals: [],
+          installedSkills: [],
+        };
       case "skills.status":
         return {
           workspaceDir: "/tmp/control-ui-mock/workspace",
@@ -2339,7 +2583,7 @@ function installControlUiMockGateway(
     let data = "";
     let session: MockTerminalSession | undefined;
     if (
-      method === "terminal.open" &&
+      (method === "terminal.open" || method === "sessions.catalog.startTerminal") &&
       isRecord(response) &&
       typeof response.sessionId === "string"
     ) {
@@ -2614,6 +2858,9 @@ function installControlUiMockGateway(
           ...(mockError ? { error: mockError } : { payload: resolvedPayload }),
           type: "res",
         });
+        if (!mockError) {
+          emitTerminalOutput(response.socket, response.method, response.params, resolvedPayload);
+        }
       }
     },
     suspendLatest() {
@@ -2694,6 +2941,7 @@ function installControlUiMockGateway(
       scenario.hasMultipleSessionSharingIdentities = policy.hasMultipleSessionSharingIdentities;
     },
     setHistoryMessages(messages) {
+      historyMessagesOverridden = true;
       scenario.historyMessages = Array.isArray(messages) ? messages : [];
       const configuredHistory = scenario.methodResponses["chat.history"];
       if (isRecord(configuredHistory) && !responseCases(configuredHistory)) {

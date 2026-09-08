@@ -15,7 +15,6 @@ import type {
   DispatchFromConfigParams,
   DispatchFromConfigResult,
 } from "./dispatch-from-config.types.js";
-import { commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
 import { REPLY_ADMISSION_TICKET, reserveReplyAdmissionTicket } from "./reply-admission-ticket.js";
 import "./dispatch-from-config.events.js";
 
@@ -138,9 +137,9 @@ async function dispatchReplyFromConfigInner(
       }
       if (inboundDedupeClaim.status === "claimed") {
         if (errorState.turnAdoptionState?.adopted || errorState.inboundDedupeReplayUnsafe) {
-          commitInboundDedupe(inboundDedupeClaim.key);
+          inboundDedupeClaim.commit();
         } else {
-          releaseInboundDedupe(inboundDedupeClaim.key);
+          inboundDedupeClaim.release();
         }
       }
       if (err instanceof DispatchSessionRefreshRequiredError) {

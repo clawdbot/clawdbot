@@ -136,6 +136,68 @@ async function validatePackageExtensionEntry(params: {
   return { ok: true, exists: true };
 }
 
+async function validatePackageEntryForInstall(params: {
+  packageDir: string;
+  entry: string;
+  runtimeEntry?: string;
+  entryKind: "extension" | "setup";
+  allowSourceTypeScriptEntries?: boolean;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const sourceEntry = await validatePackageExtensionEntry({
+    packageDir: params.packageDir,
+    entry: params.entry,
+    label: `${params.entryKind} entry`,
+    requireExisting: false,
+  });
+  if (!sourceEntry.ok) {
+    return sourceEntry;
+  }
+
+  if (params.runtimeEntry) {
+    const runtimeResult = await validatePackageExtensionEntry({
+      packageDir: params.packageDir,
+      entry: params.runtimeEntry,
+      label: `runtime ${params.entryKind} entry`,
+      requireExisting: true,
+    });
+    return runtimeResult.ok ? { ok: true } : runtimeResult;
+  }
+
+  const builtEntryCandidates = listBuiltRuntimeEntryCandidates(params.entry);
+  for (const builtEntry of builtEntryCandidates) {
+    const builtResult = await validatePackageExtensionEntry({
+      packageDir: params.packageDir,
+      entry: builtEntry,
+      label: `inferred runtime ${params.entryKind} entry`,
+      requireExisting: false,
+    });
+    if (!builtResult.ok) {
+      return builtResult;
+    }
+    if (builtResult.exists) {
+      return { ok: true };
+    }
+  }
+
+  if (
+    sourceEntry.exists &&
+    (!isTypeScriptPackageEntry(params.entry) || params.allowSourceTypeScriptEntries)
+  ) {
+    return { ok: true };
+  }
+  if (builtEntryCandidates.length > 0) {
+    return {
+      ok: false,
+      error: missingCompiledRuntimeEntryMessage({
+        label: "package install",
+        entry: params.entry,
+        candidates: builtEntryCandidates,
+      }),
+    };
+  }
+  return { ok: false, error: `${params.entryKind} entry not found: ${params.entry}` };
+}
+
 /** Validates package extension/setup entries before installing a plugin package. */
 export async function validatePackageExtensionEntriesForInstall(params: {
   packageDir: string;
@@ -152,87 +214,16 @@ export async function validatePackageExtensionEntriesForInstall(params: {
   }
 
   for (const [index, entry] of params.extensions.entries()) {
-    const sourceEntry = await validatePackageExtensionEntry({
+    const result = await validatePackageEntryForInstall({
       packageDir: params.packageDir,
       entry,
-      label: "extension entry",
-      requireExisting: false,
+      runtimeEntry: runtimeResolution.runtimeExtensions[index],
+      entryKind: "extension",
+      allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
     });
-    if (!sourceEntry.ok) {
-      return sourceEntry;
+    if (!result.ok) {
+      return result;
     }
-
-    const runtimeEntry = runtimeResolution.runtimeExtensions[index];
-    if (runtimeEntry) {
-      const runtimeResult = await validatePackageExtensionEntry({
-        packageDir: params.packageDir,
-        entry: runtimeEntry,
-        label: "runtime extension entry",
-        requireExisting: true,
-      });
-      if (!runtimeResult.ok) {
-        return runtimeResult;
-      }
-      continue;
-    }
-
-    let foundBuiltEntry = false;
-    const builtEntryCandidates = listBuiltRuntimeEntryCandidates(entry);
-    for (const builtEntry of builtEntryCandidates) {
-      const builtResult = await validatePackageExtensionEntry({
-        packageDir: params.packageDir,
-        entry: builtEntry,
-        label: "inferred runtime extension entry",
-        requireExisting: false,
-      });
-      if (!builtResult.ok) {
-        return builtResult;
-      }
-      if (builtResult.exists) {
-        foundBuiltEntry = true;
-        break;
-      }
-    }
-
-    if (foundBuiltEntry) {
-      continue;
-    }
-
-    if (
-      sourceEntry.exists &&
-      isTypeScriptPackageEntry(entry) &&
-      params.allowSourceTypeScriptEntries
-    ) {
-      continue;
-    }
-
-    if (sourceEntry.exists && isTypeScriptPackageEntry(entry)) {
-      return {
-        ok: false,
-        error: missingCompiledRuntimeEntryMessage({
-          label: "package install",
-          entry,
-          candidates: builtEntryCandidates,
-        }),
-      };
-    }
-
-    if (sourceEntry.exists) {
-      continue;
-    }
-
-    if (builtEntryCandidates.length > 0) {
-      return {
-        ok: false,
-        error: missingCompiledRuntimeEntryMessage({
-          label: "package install",
-          entry,
-          candidates: builtEntryCandidates,
-        }),
-      };
-    }
-
-    return { ok: false, error: `extension entry not found: ${entry}` };
   }
 
   const packageManifest = getPackageManifestMetadata(params.manifest);
@@ -245,86 +236,13 @@ export async function validatePackageExtensionEntriesForInstall(params: {
     };
   }
   if (setupEntry) {
-    const sourceEntry = await validatePackageExtensionEntry({
+    return await validatePackageEntryForInstall({
       packageDir: params.packageDir,
       entry: setupEntry,
-      label: "setup entry",
-      requireExisting: false,
+      runtimeEntry: runtimeSetupEntry,
+      entryKind: "setup",
+      allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
     });
-    if (!sourceEntry.ok) {
-      return sourceEntry;
-    }
-
-    if (runtimeSetupEntry) {
-      const runtimeResult = await validatePackageExtensionEntry({
-        packageDir: params.packageDir,
-        entry: runtimeSetupEntry,
-        label: "runtime setup entry",
-        requireExisting: true,
-      });
-      if (!runtimeResult.ok) {
-        return runtimeResult;
-      }
-      return { ok: true };
-    }
-
-    let foundBuiltSetupEntry = false;
-    const builtSetupCandidates = listBuiltRuntimeEntryCandidates(setupEntry);
-    for (const builtEntry of builtSetupCandidates) {
-      const builtResult = await validatePackageExtensionEntry({
-        packageDir: params.packageDir,
-        entry: builtEntry,
-        label: "inferred runtime setup entry",
-        requireExisting: false,
-      });
-      if (!builtResult.ok) {
-        return builtResult;
-      }
-      if (builtResult.exists) {
-        foundBuiltSetupEntry = true;
-        break;
-      }
-    }
-
-    if (foundBuiltSetupEntry) {
-      return { ok: true };
-    }
-
-    if (
-      sourceEntry.exists &&
-      isTypeScriptPackageEntry(setupEntry) &&
-      params.allowSourceTypeScriptEntries
-    ) {
-      return { ok: true };
-    }
-
-    if (sourceEntry.exists && isTypeScriptPackageEntry(setupEntry)) {
-      return {
-        ok: false,
-        error: missingCompiledRuntimeEntryMessage({
-          label: "package install",
-          entry: setupEntry,
-          candidates: builtSetupCandidates,
-        }),
-      };
-    }
-
-    if (sourceEntry.exists) {
-      return { ok: true };
-    }
-
-    if (builtSetupCandidates.length > 0) {
-      return {
-        ok: false,
-        error: missingCompiledRuntimeEntryMessage({
-          label: "package install",
-          entry: setupEntry,
-          candidates: builtSetupCandidates,
-        }),
-      };
-    }
-
-    return { ok: false, error: `setup entry not found: ${setupEntry}` };
   }
 
   return { ok: true };

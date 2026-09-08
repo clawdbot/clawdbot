@@ -1,10 +1,10 @@
 // Matrix plugin module implements approval handler behavior.
-import type {
-  ChannelApprovalCapabilityHandlerContext,
-  PendingApprovalView,
-  ResolvedApprovalView,
+import {
+  createChannelApprovalNativeRuntimeAdapter,
+  type ChannelApprovalCapabilityHandlerContext,
+  type PendingApprovalView,
+  type ResolvedApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import {
   buildExecApprovalPendingReplyPayload,
@@ -14,10 +14,9 @@ import {
 import {
   buildApprovalPendingReplyPayload,
   buildPluginApprovalResolvedReplyPayload,
-} from "openclaw/plugin-sdk/approval-runtime";
-import type {
-  ExecApprovalRequest,
-  PluginApprovalRequest,
+  formatChannelApprovalResolvedLabel,
+  type ExecApprovalRequest,
+  type PluginApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import {
   listMessageReceiptPlatformIds,
@@ -394,18 +393,7 @@ function buildResolvedApprovalText(view: ResolvedApprovalView): string {
       }).text ?? ""
     );
   }
-  const decisionLabel =
-    view.approvalKind === "system-agent" && view.terminalStatus === "cancelled"
-      ? "Cancelled"
-      : view.approvalKind === "system-agent" && view.applicationStatus === "applied"
-        ? "Applied"
-        : view.approvalKind === "system-agent" && view.applicationStatus === "not-applied"
-          ? "Not applied"
-          : view.decision === "allow-once"
-            ? "Allowed once"
-            : view.decision === "allow-always"
-              ? "Allowed always"
-              : "Denied";
+  const decisionLabel = formatChannelApprovalResolvedLabel(view);
   return [
     `${view.approvalKind === "system-agent" ? "OpenClaw change" : "Exec approval"}: ${decisionLabel}`,
     "",

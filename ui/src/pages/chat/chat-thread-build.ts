@@ -318,6 +318,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   const projections: ChatProjection[] = buildPendingInputItems(
     pendingInputs,
     props.searchOpen ? props.searchQuery : undefined,
+    props.queue,
   ).map((item) => ({ item }));
   if (compaction && compactionKey && !hasPersistedCompaction) {
     const timestamp = compaction.startedAt ?? compaction.completedAt ?? Date.now();

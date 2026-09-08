@@ -71,10 +71,7 @@ export async function readGatewayAvatarThumbnail(
   source: GatewayAvatarImageSource,
 ): Promise<HttpImageRepresentation> {
   const revision = gatewayAvatarImageRevision(source);
-  let pending = thumbnailCache.get(revision);
-  if (!pending) {
-    pending = createAvatarThumbnail(source);
-  }
+  const pending = thumbnailCache.get(revision) ?? createAvatarThumbnail(source);
   thumbnailCache.delete(revision);
   thumbnailCache.set(revision, pending);
   // Original animation/vector bytes remain bounded by AVATAR_MAX_BYTES; limit

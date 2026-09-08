@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./parse": "./src/parse.ts",
+    "./public-share": "./src/public-share.ts",
     "./share-build": "./src/share-build.ts"
   },
   "dependencies": {

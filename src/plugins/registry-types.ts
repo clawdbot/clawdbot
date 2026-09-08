@@ -32,6 +32,7 @@ import type {
   PluginConfigUiHint,
   PluginDiagnostic,
   PluginFormat,
+  PluginManifestNativeSessionCatalogSetup,
 } from "./manifest-types.js";
 import type {
   PluginManifestContracts,
@@ -42,6 +43,7 @@ import type {
   PluginManifestMcpServer,
 } from "./manifest.js";
 import type { PluginKind } from "./plugin-kind.types.js";
+import type { PluginProviderRegistration } from "./provider-plugin.types.js";
 import type {
   ContextEngineRegistration,
   MemoryCorpusSupplementRegistration,
@@ -90,7 +92,6 @@ type PluginLogger = import("./types.js").PluginLogger;
 type PluginOrigin = import("./types.js").PluginOrigin;
 type PluginTextTransformRegistration = import("./types.js").PluginTextTransformRegistration;
 type MigrationProviderPlugin = import("./types.js").MigrationProviderPlugin;
-type ProviderPlugin = import("./types.js").ProviderPlugin;
 type RealtimeTranscriptionProviderPlugin = import("./types.js").RealtimeTranscriptionProviderPlugin;
 type RealtimeVoiceProviderPlugin = import("./types.js").RealtimeVoiceProviderPlugin;
 type SpeechProviderPlugin = import("./types.js").SpeechProviderPlugin;
@@ -126,6 +127,8 @@ type PluginCliRegistration = {
 
 /** Gateway HTTP route registered by a plugin runtime. */
 export type PluginHttpRouteRegistration = {
+  /** Retired ingress awaiting a lifecycle replacement; responds with Retry-After. */
+  handoff?: true;
   pluginId?: string;
   path: string;
   handler: OpenClawPluginHttpRouteHandler;
@@ -169,14 +172,6 @@ type PluginChannelSetupRegistration = {
   origin?: PluginOrigin;
   source: string;
   enabled: boolean;
-  rootDir?: string;
-};
-
-type PluginProviderRegistration = {
-  pluginId: string;
-  pluginName?: string;
-  provider: ProviderPlugin;
-  source: string;
   rootDir?: string;
 };
 
@@ -463,6 +458,7 @@ type PluginConversationBindingResolvedHandlerRegistration = {
 
 export type PluginRecord = {
   id: string;
+  nativeSessionCatalog?: PluginManifestNativeSessionCatalogSetup;
   name: string;
   packageVersion?: string;
   version?: string;
@@ -478,6 +474,7 @@ export type PluginRecord = {
   origin: PluginOrigin;
   workspaceDir?: string;
   trustedOfficialInstall?: boolean;
+  trust?: import("./plugin-trust.js").PluginTrust;
   enabled: boolean;
   explicitlyEnabled?: boolean;
   activated?: boolean;
@@ -604,6 +601,8 @@ export type PluginRegistryParams = {
   coreGatewayHandlers?: GatewayRequestHandlers;
   coreGatewayMethodNames?: readonly string[];
   runtime: PluginRuntime;
+  /** Synchronous factory binding supplied by loaders or direct registry composition roots. */
+  resolveCapabilityCatalogContext?: () => import("./capability-catalog-context.types.js").PluginCapabilityCatalogContext;
   /** Process-owner policy for registering catalogs that may fall back to HOME. */
   allowProcessHomeSessionCatalogs?: boolean;
   hostServices?: {

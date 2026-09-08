@@ -412,6 +412,42 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
     ]);
   });
 
+  it.each([
+    {
+      label: "indented top-level text",
+      spec: { text: "    body  " },
+      expected: "    body  ",
+    },
+    {
+      label: "distinct Markdown after exact duplicate removal",
+      spec: {
+        text: "    code",
+        blocks: [
+          { type: "text", text: "    code" },
+          { type: "text", text: "code" },
+        ],
+      },
+      expected: "    code\n\ncode",
+    },
+    {
+      label: "blank-only text",
+      spec: { text: " \n\t " },
+      expected: "",
+    },
+  ] satisfies Array<{
+    label: string;
+    spec: Parameters<typeof sendDiscordComponentMessage>[1];
+    expected: string;
+  }>)("preserves $label through the classic file downgrade", async ({ spec, expected }) => {
+    await sendDiscordComponentMessage("channel:chan-1", spec, {
+      cfg: DISCORD_TEST_CFG,
+      token: "t",
+      mediaUrl: "https://example.com/report.pdf",
+    });
+    expect(sendMessageDiscordMock).toHaveBeenCalledOnce();
+    expect(readMockCall(sendMessageDiscordMock, 0)[1]).toBe(expected);
+  });
+
   it("forwards first-chunk reply fanout through classic media downgrades", async () => {
     await sendDiscordComponentMessage(
       "channel:chan-1",

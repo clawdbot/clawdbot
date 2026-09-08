@@ -336,10 +336,7 @@ describe("model-selection plugin runtime normalization", () => {
       ["stored-legacy", "stored-modern"],
       ["fallback-legacy", "fallback-modern"],
     ]);
-    normalizeProviderModelIdWithPluginMock.mockImplementation(({ context, plugins }) => {
-      if (plugins) {
-        expect(plugins.length).toBeGreaterThan(0);
-      }
+    normalizeProviderModelIdWithPluginMock.mockImplementation(({ context }) => {
       const modelId = (context as { modelId?: string }).modelId ?? "";
       return aliases.get(modelId);
     });
@@ -398,37 +395,5 @@ describe("model-selection plugin runtime normalization", () => {
         ([call]) => (call as { context?: { modelId?: string } }).context?.modelId,
       ),
     ).toEqual(expect.arrayContaining(["configured-legacy", "stored-legacy", "fallback-legacy"]));
-  });
-
-  it("forwards manifestPlugins to the runtime normalization call so it can skip the slot-or-load disk walk", async () => {
-    normalizeProviderModelIdWithPluginMock.mockReturnValue(undefined);
-    const preparedPlugins = [
-      {
-        modelIdNormalization: {
-          providers: {
-            custom: { prefixWhenBare: "prepared" },
-          },
-        },
-      },
-    ];
-    const { normalizeModelRef } = await import("./model-ref-shared.js");
-    normalizeModelRef("custom", "my-model", { manifestPlugins: preparedPlugins });
-    expect(normalizeProviderModelIdWithPluginMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "custom",
-        plugins: preparedPlugins,
-      }),
-    );
-  });
-
-  it("omits plugins from the runtime call when no manifestPlugins are prepared (preserves current behavior)", async () => {
-    normalizeProviderModelIdWithPluginMock.mockReturnValue(undefined);
-    const { normalizeModelRef } = await import("./model-ref-shared.js");
-    normalizeModelRef("custom", "my-model");
-    const callArgs = normalizeProviderModelIdWithPluginMock.mock.calls[0]?.[0] as
-      | { plugins?: unknown }
-      | undefined;
-    expect(callArgs).toBeDefined();
-    expect(callArgs?.plugins).toBeUndefined();
   });
 });

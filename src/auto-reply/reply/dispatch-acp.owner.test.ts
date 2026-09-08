@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { getAcpSessionManager, testing } from "../../acp/control-plane/manager.js";
 import { disposeAcpSessionManagerInstance } from "../../acp/control-plane/manager.lifecycle.js";
@@ -6,7 +7,15 @@ import {
   unregisterAcpRuntimeBackend,
 } from "../../acp/runtime/registry.js";
 import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import {
+  listSessionPendingInputs,
+  loadSessionEntryReadOnly,
+  loadTranscriptEvents,
+} from "../../config/sessions/session-accessor.js";
+import {
+  createUserTurnTranscriptRecorder,
+  type UserTurnTranscriptRecorder,
+} from "../../sessions/user-turn-transcript.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { tryDispatchAcpReplyCore } from "./dispatch-acp.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
@@ -33,6 +42,8 @@ it.each(
       await state.writeConfig(cfg);
       const agentId = sessionKey === "global" ? "work" : "free-harness";
       let turns = 0;
+      let recorder: UserTurnTranscriptRecorder | undefined;
+      let sourceCommittedBeforeEffect = false;
       const recordProcessed = vi.fn();
       const claim = unconfirmedQuestion
         ? registerPendingAgentQuestion({
@@ -43,6 +54,7 @@ it.each(
             ],
             answer: Promise.resolve({ status: "pending" }),
             gatewayCall: async () => {
+              sourceCommittedBeforeEffect = recorder?.hasPersisted() === true;
               throw new Error("resolve response lost");
             },
           })
@@ -60,6 +72,7 @@ it.each(
             };
           },
           async *runTurn({ handle }) {
+            sourceCommittedBeforeEffect = recorder?.hasPersisted() === true;
             turns += 1;
             yield { type: "text_delta", text: `${handle.agentId} reply` };
             yield { type: "done" };
@@ -86,6 +99,19 @@ it.each(
           agent: "fixture",
           mode: "persistent",
         });
+        const entry = loadSessionEntryReadOnly({ agentId, sessionKey });
+        if (!entry) {
+          throw new Error("ACP fixture did not create its canonical session");
+        }
+        const target = { agentId, sessionKey, sessionId: entry.sessionId };
+        recorder = createUserTurnTranscriptRecorder({
+          input: { text: "hello", timestamp: 100, idempotencyKey: "acp-input:user" },
+          target: { ...target, sessionEntry: entry, config: cfg },
+        });
+        expect(
+          await recorder.stageApproved?.({ runId: "acp-input", assertCurrent: () => {} }),
+        ).toBe(true);
+        expect(listSessionPendingInputs(target).items).toHaveLength(1);
         const sourceOwner = sessionKey === "global" ? "work" : "main";
         const result = await tryDispatchAcpReplyCore({
           cfg,
@@ -103,6 +129,7 @@ it.each(
           shouldSendFullToolDetails: false,
           shouldRouteToOriginating: false,
           bypassForCommand: false,
+          userTurnTranscriptRecorder: recorder,
           recordProcessed,
           markIdle: () => {},
         });
@@ -110,6 +137,20 @@ it.each(
         await dispatcher.waitForIdle();
         expect(result).not.toBeNull();
         expect(turns).toBe(unconfirmedQuestion ? 0 : 1);
+        expect(sourceCommittedBeforeEffect).toBe(true);
+        expect(listSessionPendingInputs(target).items).toEqual([]);
+        const transcript = await loadTranscriptEvents(target);
+        expect(
+          transcript.filter((event) => {
+            const transcriptEntry = asOptionalRecord(event);
+            const message = asOptionalRecord(transcriptEntry?.message);
+            return (
+              transcriptEntry?.type === "message" &&
+              message?.role === "user" &&
+              message.idempotencyKey === "acp-input:user"
+            );
+          }),
+        ).toHaveLength(1);
         if (unconfirmedQuestion) {
           expect(delivered).toEqual([expect.stringContaining("confirmation was lost")]);
           expect(result?.queuedFinal).toBe(true);
@@ -122,6 +163,7 @@ it.each(
         }
         expect(loadSessionEntryReadOnly({ agentId: "main", sessionKey })).toBeUndefined();
       } finally {
+        recorder?.finishPendingInput?.("interrupted");
         claim?.dispose();
         dispatcher.markComplete();
         await dispatcher.waitForIdle();

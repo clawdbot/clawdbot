@@ -420,18 +420,24 @@ export function renderExpandedToolCardContent(
       ? renderCopyButton(serializeDiff(view.diff), t("common.copy"))
       : nothing;
 
-  // Command calls render terminal-style: `$ command` + raw output. Remaining
-  // args (workdir, timeout, env…) stay visible as key-value rows so identical
-  // commands in different contexts remain distinguishable in the audit trail.
-  if (view.kind === "command" && view.command && !card.preview) {
+  // Code-mode hooks pair code/command aliases; code selects plain source.
+  // Source stays visible before serialized inputText arrives, and only the
+  // rendered field leaves the remaining execution-context arguments.
+  if (view.kind === "command" && (view.command || view.code) && !card.preview) {
     const argsRecord = asNullableRecord(card.args);
+    const sourceKey = view.code ? "code" : "command";
     const extraArgs = Object.fromEntries(
-      Object.entries(argsRecord ?? {}).filter(([key]) => key !== "command"),
+      Object.entries(argsRecord ?? {}).filter(([key]) => key !== sourceKey),
     );
     return html`
       <div class="chat-tool-card chat-tool-card--flush ${isError ? "chat-tool-card--error" : ""}">
         <div class="chat-tool-card__actions">${sidebarAction}</div>
-        ${renderTerminalBlock(view.command, card.outputText)}
+        ${
+          view.code
+            ? html`${renderToolDataBlock({ label: t("chat.toolCards.toolInput"), text: view.code })}
+              ${hasOutput ? renderToolDataBlock({ text: card.outputText! }) : nothing}`
+            : renderTerminalBlock(view.command!, card.outputText)
+        }
         ${Object.keys(extraArgs).length > 0 ? renderArgsKeyValueList(extraArgs) : nothing}
         ${renderToolOutcome(outcome, card.exitCode)}
       </div>

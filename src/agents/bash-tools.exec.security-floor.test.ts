@@ -86,7 +86,7 @@ function writeFullAskExecApprovalsFixture(root: string): void {
   });
 }
 
-function mockPendingApprovalGateway(): string[] {
+function mockApprovalGateway(decision: "allow-once" | "deny" | null = null): string[] {
   const calls: string[] = [];
   vi.mocked(callGatewayTool).mockImplementation(async (method) => {
     calls.push(method);
@@ -94,7 +94,7 @@ function mockPendingApprovalGateway(): string[] {
       return { status: "accepted", id: "approval-id" };
     }
     if (method === "exec.approval.waitDecision") {
-      return { decision: null };
+      return { decision };
     }
     return { ok: true };
   });
@@ -225,6 +225,7 @@ describe("exec security floor", () => {
   it("honors per-call ask hardening for trusted callers without messageProvider", async () => {
     const root = tempRoot ?? os.tmpdir();
     const binDir = installAllowlistedGogFixture(root);
+    const calls = mockApprovalGateway("deny");
     const tool = createExecTool({
       host: "gateway",
       security: "allowlist",
@@ -238,8 +239,9 @@ describe("exec security floor", () => {
       ask: "always",
     });
 
-    expect(callGatewayTool).toHaveBeenCalled();
-    expect(result.details.status).toBe("approval-pending");
+    expect(calls).toEqual(["exec.approval.request", "exec.approval.waitDecision"]);
+    expect(result.details).toMatchObject({ status: "failed", timedOut: false });
+    expect((result.content[0] as { text?: string }).text).toContain("user-denied");
   });
 
   it("ignores model-supplied deny security when configured security is allowlist", async () => {
@@ -488,7 +490,7 @@ describe("exec security floor", () => {
 
   it("preserves host ask floors for elevated full gateway exec", async () => {
     writeFullAskExecApprovalsFixture(tempRoot ?? os.tmpdir());
-    const calls = mockPendingApprovalGateway();
+    const calls = mockApprovalGateway();
     const tool = createExecTool({
       host: "gateway",
       security: "full",
@@ -502,8 +504,9 @@ describe("exec security floor", () => {
       elevated: true,
     });
 
-    expect(result.details.status).toBe("approval-pending");
-    expect(calls).toContain("exec.approval.request");
+    expect(result.details).toMatchObject({ status: "failed", timedOut: true });
+    expect((result.content[0] as { text?: string }).text).toContain("approval-timeout");
+    expect(calls).toEqual(["exec.approval.request", "exec.approval.waitDecision"]);
   });
 
   it("does not prompt explicit full sessions despite host ask floors", async () => {
@@ -528,31 +531,29 @@ describe("exec security floor", () => {
     "honors ask-only tightening without restoring full-session host floors (approved=%s)",
     async (approved) => {
       writeDenyExecApprovalsFixture(tempRoot ?? os.tmpdir());
-      const calls = mockPendingApprovalGateway();
-      if (approved) {
-        vi.mocked(callGatewayTool).mockImplementation(async (method) => {
-          calls.push(method);
-          return { decision: "allow-once" };
-        });
-      }
+      const calls = mockApprovalGateway(approved ? "allow-once" : null);
       const tool = createExecTool({
         host: "gateway",
         security: "full",
         ask: "always",
         bypassHostApprovalFloors: true,
-        messageProvider: approved ? "webchat" : undefined,
         approvalRunningNoticeMs: 0,
       });
 
       const result = await tool.execute("call-session-full-tightened-ask", { command: "echo ok" });
 
-      expect(result.details.status).toBe(approved ? "completed" : "approval-pending");
-      expect(calls).toContain("exec.approval.request");
+      expect(result.details).toMatchObject(
+        approved ? { status: "completed", exitCode: 0 } : { status: "failed", timedOut: true },
+      );
+      expect((result.content[0] as { text?: string }).text).toContain(
+        approved ? "ok" : "approval-timeout",
+      );
+      expect(calls).toEqual(["exec.approval.request", "exec.approval.waitDecision"]);
     },
   );
 
   it("honors normalized auto mode before elevated full bypass", async () => {
-    const calls = mockPendingApprovalGateway();
+    const calls = mockApprovalGateway();
     const autoReviewer = createAskingAutoReviewer();
     const tool = createExecTool({
       host: "gateway",
@@ -574,14 +575,15 @@ describe("exec security floor", () => {
         reason: "allowlist-miss",
       }),
     );
-    expect(result.details.status).toBe("approval-pending");
-    expect(calls).toContain("exec.approval.request");
+    expect(result.details).toMatchObject({ status: "failed", timedOut: true });
+    expect((result.content[0] as { text?: string }).text).toContain("approval-timeout");
+    expect(calls).toEqual(["exec.approval.request", "exec.approval.waitDecision"]);
   });
 
   it.each(["on-miss", "off"] as const)(
     "keeps auto review enabled when legacy ask=%s does not strengthen auto mode",
     async (ask) => {
-      const calls = mockPendingApprovalGateway();
+      const calls = mockApprovalGateway();
       const autoReviewer = createAskingAutoReviewer();
       const tool = createExecTool({
         host: "gateway",
@@ -602,8 +604,9 @@ describe("exec security floor", () => {
           reason: "allowlist-miss",
         }),
       );
-      expect(result.details.status).toBe("approval-pending");
-      expect(calls).toContain("exec.approval.request");
+      expect(result.details).toMatchObject({ status: "failed", timedOut: true });
+      expect((result.content[0] as { text?: string }).text).toContain("approval-timeout");
+      expect(calls).toEqual(["exec.approval.request", "exec.approval.waitDecision"]);
     },
   );
 

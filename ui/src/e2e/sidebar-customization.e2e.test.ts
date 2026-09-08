@@ -781,7 +781,9 @@ suite.define(() => {
 
         const activity = home.locator(".sidebar-home-session-states");
         const editor = sidebar.locator(".sidebar-nav__head-action");
-        await expect.poll(() => activity.locator(".session-run-spinner").count()).toBe(1);
+        await expect
+          .poll(() => home.locator(".session-glyph--running .session-glyph__ring").count())
+          .toBe(1);
         await expect.poll(() => activity.locator(".session-row-badge--attention").count()).toBe(1);
 
         await page.mouse.move(900, 400);

@@ -22,6 +22,7 @@ import {
   entryMatches,
   localPath,
   readWorkspaceFileSnapshot,
+  removeEmptyWorkspaceDirectory,
 } from "./workspace-reconcile-fs.js";
 export {
   MAX_RECONCILIATION_ENTRIES,
@@ -307,32 +308,7 @@ export async function applyWorkspaceDirectoryChanges(params: {
       // A concurrent local replacement or chmod wins and becomes a conflict.
       continue;
     }
-    let children: string[];
-    try {
-      children = await workspaceRoot.list(entryPath);
-    } catch (error) {
-      if (error instanceof FsSafeError && ["not-found", "path-alias"].includes(error.code)) {
-        continue;
-      }
-      throw error;
-    }
-    if (children.length > 0) {
-      // Conflicted descendants deliberately keep their containing directory
-      // even when the cloud result removed that directory.
-      continue;
-    }
-    try {
-      await workspaceRoot.remove(entryPath);
-    } catch (error) {
-      if (error instanceof FsSafeError && ["not-found", "path-alias"].includes(error.code)) {
-        continue;
-      }
-      const racedChildren = await workspaceRoot.list(entryPath).catch(() => undefined);
-      if (racedChildren?.length) {
-        continue;
-      }
-      throw error;
-    }
+    await removeEmptyWorkspaceDirectory(workspaceRoot, entryPath);
   }
 }
 

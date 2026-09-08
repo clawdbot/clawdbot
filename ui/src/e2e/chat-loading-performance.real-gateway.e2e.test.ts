@@ -1,4 +1,3 @@
-// Synthetic transcript and image bytes through the shipped UI and real Gateway.
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -24,6 +23,7 @@ const transcriptLength = 900;
 const avifAvatar =
   "data:image/avif;base64,AAAAHGZ0eXBhdmlmAAAAAG1pZjFhdmlmbWlhZgAAANZtZXRhAAAAAAAAACFoZGxyAAAAAAAAAABwaWN0AAAAAAAAAAAAAAAAAAAAACJpbG9jAAAAAERAAAEAAQAAAAAA+gABAAAAAAAAACgAAAAjaWluZgAAAAAAAQAAABVpbmZlAgAAAAABAABhdjAxAAAAAA5waXRtAAAAAAABAAAAVmlwcnAAAAA4aXBjbwAAAAxhdjFDgUBsAAAAABRpc3BlAAAAAAAAAAEAAAABAAAAEHBpeGkAAAAAAwwMDAAAABZpcG1hAAAAAAAAAAEAAQOBAgMAAAAwbWRhdBIACghYAAa0BDQbhDIaGUeHhiGJpppmgAAAkD+bDGFLK02PUUVOpCA=";
 const viewport = { width: 1440, height: 900 };
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 let instance: OpenClawTestInstance | undefined;
 let config: OpenClawConfig;
 let originalAvatarBytes = 0;
@@ -254,7 +254,7 @@ suite.define(() => {
         viewport,
         serviceWorkers: "block",
         locale: "en-US",
-        recordVideo: { dir: artifactDir, size: viewport },
+        ...(captureUiProof ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
       },
       async ({ page, context }) => {
         await page.addInitScript(() => {
@@ -413,7 +413,9 @@ suite.define(() => {
           .locator("openclaw-assistant-panel .chat-thread")
           .getByText("Synthetic Home message 900.", { exact: false })
           .waitFor();
-        await page.screenshot({ path: path.join(artifactDir, "01-restored-home-fixture.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifactDir, "01-restored-home-fixture.png") });
+        }
 
         startedAt = Date.now();
         measuring = true;
@@ -452,7 +454,9 @@ suite.define(() => {
             (image) => image.complete && image.naturalWidth > 0,
           ),
         );
-        await page.screenshot({ path: path.join(artifactDir, "02-selected-and-home-ready.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifactDir, "02-selected-and-home-ready.png") });
+        }
         const startupMetrics = structuredClone(rpc);
         const images = await page
           .locator(".sidebar-agent-card__avatar img")
@@ -536,7 +540,9 @@ suite.define(() => {
             hasText: "Synthetic loading proof message 1.",
           })
           .waitFor();
-        await page.screenshot({ path: path.join(artifactDir, "03-older-history-loaded.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifactDir, "03-older-history-loaded.png") });
+        }
         const paginationMetrics = structuredClone(rpc.slice(startupMetrics.length));
         const captureNarrowReload = async (stage: string, homeOpen: boolean) => {
           await page.setViewportSize({ width: 1050, height: 900 });
@@ -577,7 +583,9 @@ suite.define(() => {
             narrowHomeCommitted,
           ]);
           const performance = await readPerformanceSample(page);
-          await page.screenshot({ path: path.join(artifactDir, `${stage}.png`) });
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(artifactDir, `${stage}.png`) });
+          }
           return {
             width: 1050,
             homeOpen,
@@ -623,7 +631,7 @@ suite.define(() => {
           ),
         );
 
-        // Capture baseline evidence before these repair assertions fail on the old bundle.
+        // Save measurements before asserting budgets so failures retain their evidence.
         const selectedStartup = startupMetrics.find(
           (metric) => metric.method === "chat.startup" && metric.resolvedKey === selectedKey,
         );
@@ -746,7 +754,9 @@ suite.define(() => {
             contentType: response.headers()["content-type"],
             ...dimensions,
           });
-          await page.screenshot({ path: path.join(artifactDir, `${fixture.stage}.png`) });
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(artifactDir, `${fixture.stage}.png`) });
+          }
           await writeFile(
             path.join(artifactDir, "avatar-format-evidence.json"),
             JSON.stringify(avatarFormats, null, 2),

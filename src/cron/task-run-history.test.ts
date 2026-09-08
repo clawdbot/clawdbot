@@ -2,10 +2,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { FAILOVER_REASONS } from "../../packages/gateway-protocol/src/failover-reasons.js";
-import { saveTaskRegistryStateToSqlite } from "../tasks/task-registry.store.sqlite.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { seedTaskRegistryRowsForTests } from "../test-utils/task-registry-sqlite.js";
 import type { CronRunLogEntry } from "./run-log-types.js";
 import { CronService } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
@@ -312,12 +312,11 @@ describe("cron task run history", () => {
             nextRunAtMs: 5_000,
           },
         ];
-        saveTaskRegistryStateToSqlite({
-          tasks: new Map(
+        seedTaskRegistryRowsForTests(
+          new Map(
             entries.map((entry, index) => [`task-${index}`, taskFromEntry(entry, index, storeKey)]),
-          ),
-          deliveryStates: new Map(),
-        });
+          ).values(),
+        );
         const ledger = readCronTaskRunHistoryPage({ storeKey, jobId: JOB_ID, limit: 50 });
         const expected = entries
           .map((entry, index) => cronTaskRecordToRunLogEntry(taskFromEntry(entry, index, storeKey)))
@@ -373,8 +372,8 @@ describe("cron task run history", () => {
             durationMs: 0,
           },
         ];
-        saveTaskRegistryStateToSqlite({
-          tasks: new Map([
+        seedTaskRegistryRowsForTests(
+          new Map([
             ...entries.map(
               (entry, index) => [`task-${index}`, taskFromEntry(entry, index, storeKey)] as const,
             ),
@@ -404,9 +403,8 @@ describe("cron task run history", () => {
                 detail: { kind: "cron-run", status: "ok" },
               },
             ] as const,
-          ]),
-          deliveryStates: new Map(),
-        });
+          ]).values(),
+        );
 
         expect(
           readCronTaskRunHistoryPage({ storeKey, jobId: JOB_ID, limit: 1, offset: 1 }),
@@ -451,13 +449,12 @@ describe("cron task run history", () => {
           status: "error",
           error: "store b",
         };
-        saveTaskRegistryStateToSqlite({
-          tasks: new Map([
+        seedTaskRegistryRowsForTests(
+          new Map([
             ["store-a", { ...taskFromEntry(entryA, 1, storeA), taskId: "store-a" }],
             ["store-b", { ...taskFromEntry(entryB, 2, storeB), taskId: "store-b" }],
-          ]),
-          deliveryStates: new Map(),
-        });
+          ]).values(),
+        );
 
         expect(readCronTaskRunHistoryPage({ storeKey: storeA, jobId: JOB_ID })).toMatchObject({
           entries: [expect.objectContaining({ summary: "store a" })],
@@ -473,7 +470,14 @@ describe("cron task run history", () => {
     );
   });
 
-  it("allowlists the legacy wire record", () => {
+  it.each([
+    { status: "ok", expectedStatus: "ok" },
+    { status: "error", expectedStatus: "error" },
+    { status: "skipped", expectedStatus: "skipped" },
+    { status: "invalid", expectedStatus: undefined },
+    { status: null, expectedStatus: undefined },
+    { status: undefined, expectedStatus: undefined },
+  ])("allowlists the legacy wire record with status $status", ({ status, expectedStatus }) => {
     const storeKey = "/internal/cron/store";
     const task = taskFromEntry(
       { ts: 100, jobId: JOB_ID, action: "finished", status: "ok" },
@@ -484,15 +488,21 @@ describe("cron task run history", () => {
     task.terminalSummary = "legacy summary";
     task.detail = {
       kind: "cron-run",
-      status: "ok",
+      ...(status === undefined ? {} : { status }),
       storeKey,
       internalFutureField: "secret",
       triggerState: { secret: true },
       delivery: "malformed",
       failureNotificationDelivery: { status: "invalid", internal: "secret" },
     };
+    Object.freeze(task.detail);
+    Object.freeze(task);
     const entry = cronTaskRecordToRunLogEntry(task);
     expect(entry).not.toBeNull();
+    expect(entry?.status).toBe(expectedStatus);
+    for (const key of ["delivered", "deliveryStatus", "deliveryError", "sessionId", "sessionKey"]) {
+      expect(Object.hasOwn(entry ?? {}, key)).toBe(true);
+    }
     expect(Object.hasOwn(entry ?? {}, "storeKey")).toBe(false);
     expect(Object.hasOwn(entry ?? {}, "internalFutureField")).toBe(false);
     expect(Object.hasOwn(entry ?? {}, "triggerState")).toBe(false);

@@ -14,6 +14,7 @@ import {
   visibleChatBubbleTexts,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -21,11 +22,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 suite.define(() => {
   it("renders a real imported Claude transcript once without exposing its unredacted secret", async () => {
     const homeDir = tempDirs.make("openclaw-cli-history-redaction-");
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
 
     try {
       const page = await context.newPage();

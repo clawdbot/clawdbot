@@ -38,7 +38,7 @@ import {
   buildSidebarSessionNavigationState,
   collectCategorizedChildRootRows,
   collectPromotedMainChildRows,
-  collectSidebarSessionCandidateRows,
+  collectSidebarSessionRowsByKey,
   compareSidebarSessionRowsByMode,
   collectKnownSidebarSessionCatalogIds,
   collectKnownSidebarSessionGroups,
@@ -223,6 +223,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     if (isSessionRouteId(this.activeRouteId)) {
       void this.sessionData.loadActiveSessionLineage(activeRouteKey);
     }
+    const revalidating = new Set<string>();
     const pending = [...this.visibleSessionRowsInOrder()];
     while (pending.length > 0) {
       const session = pending.shift();
@@ -232,25 +233,19 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       pending.push(...session.children);
       if (
         session.childSessionKeys.length > 0 &&
-        (session.visuallyActive || this.isSessionChildrenExpanded(session)) &&
-        !this.sessionData.loadedChildSessionKeys.has(session.key) &&
-        !this.sessionData.childSessionErrorsByParent.has(session.key) &&
-        !this.sessionData.loadingChildSessionKeys.has(session.key)
+        (session.visuallyActive || this.isSessionChildrenExpanded(session))
       ) {
+        revalidating.add(session.key);
         // Selected collapsed rows need child liveness so delegated work does not look finished.
         void this.sessionData.loadChildSessions(session.key);
       }
     }
     const mainRow = this.mainSessionRow();
-    if (
-      mainRow &&
-      (mainRow.childSessions?.length ?? 0) > 0 &&
-      !this.sessionData.loadedChildSessionKeys.has(mainRow.key) &&
-      !this.sessionData.childSessionErrorsByParent.has(mainRow.key) &&
-      !this.sessionData.loadingChildSessionKeys.has(mainRow.key)
-    ) {
+    if (mainRow && (mainRow.childSessions?.length ?? 0) > 0) {
+      revalidating.add(mainRow.key);
       void this.sessionData.loadChildSessions(mainRow.key);
     }
+    this.sessionData.retireStaleChildSessions(revalidating);
   }
 
   setSessionOwnerFilter = (ownerId: string | null, involvingMe = false) =>
@@ -659,10 +654,11 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     ) {
       scopedRootRows.push(lineageRoot);
     }
-    const sessionCandidateRows = collectSidebarSessionCandidateRows({
+    const sessionRowsByKey = collectSidebarSessionRowsByKey({
       rows,
       childRowsByParent: childSessionRowsByParent,
     });
+    const sessionCandidateRows = [...sessionRowsByKey.values()];
     const categorizedChildRows = collectCategorizedChildRootRows({
       rows: sessionCandidateRows,
       scopedRoots: scopedRootRows,
@@ -692,8 +688,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     // renders as its live row inside the Coding catalog, never as a thread.
     const projected = projectSessionTree({
       roots: orderedRootRows.filter((row) => !adopted.has(row.key)),
-      agentRows: rows,
-      childRowsByParent: childSessionRowsByParent,
+      rowsByKey: sessionRowsByKey,
       loadingChildKeys: this.sessionData.loadingChildSessionKeys,
       knownSessionAttention: this.attention.knownSessionAttention(),
       toSidebarSession: navigationState.toSidebarSession,

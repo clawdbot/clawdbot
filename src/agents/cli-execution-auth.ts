@@ -3,7 +3,7 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
-import { loadAuthProfileStoreForRuntime } from "./auth-profiles/store.js";
+import { loadAuthProfileStoreForRuntime } from "./auth-profiles/store-runtime.js";
 import { resolveCliBackendConfig, resolveCliRuntimeCanonicalProvider } from "./cli-backends.js";
 import { resolveBundledCliBackendAuthPolicy } from "./cli-runner/cli-backend-auth-policy.js";
 

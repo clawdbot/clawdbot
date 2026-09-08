@@ -1,7 +1,43 @@
+import { APIError } from "openai/core/error";
 import { describe, expect, it } from "vitest";
 import { configureProviderErrorRedactor, projectProviderError } from "./provider-error.js";
 
 describe("projectProviderError", () => {
+  it.each([
+    ["335", 7],
+    ["8500", 8.5],
+  ])(
+    "preserves SDK retry timing without exposing unrelated headers (%s ms)",
+    (milliseconds, seconds) => {
+      const error = new APIError(
+        429,
+        { message: "rate limited" },
+        undefined,
+        new Headers({
+          "retry-after": "7",
+          "retry-after-ms": milliseconds,
+          authorization: "Bearer synthetic-credential",
+        }),
+      );
+      const projection = projectProviderError(error);
+      expect(projection.errorMessage).toContain(`Retry-After: ${seconds} seconds`);
+      expect(projection.errorBody).toBe('{"message":"rate limited"}');
+      expect(JSON.stringify(projection)).not.toContain("synthetic-credential");
+    },
+  );
+
+  it("reserves room for retry timing after truncating a long SDK message", () => {
+    const error = new APIError(
+      429,
+      undefined,
+      "x".repeat(5000),
+      new Headers({ "retry-after": "7" }),
+    );
+    const projection = projectProviderError(error);
+    expect(projection.errorMessage).toHaveLength(4096);
+    expect(projection.errorMessage).toMatch(/; Retry-After: 7 seconds$/);
+  });
+
   it.each([
     {
       name: "JSON body",
@@ -298,11 +334,12 @@ describe("projectProviderError", () => {
     expect(JSON.stringify(projected)).not.toContain(leaked);
   });
 
-  it("preserves a harmless JSON response-body string byte-for-byte", () => {
-    const body = '{"message": "safe", "nested": [1, 2]}';
-
-    expect(projectProviderError({ status: 500, body }).errorBody).toBe(body);
-  });
+  it.each(['{"message": "safe", "nested": [1, 2]}', 'prefix "notjson[1]" middle {"a":1} suffix'])(
+    "preserves harmless diagnostic JSON byte-for-byte: %s",
+    (body) => {
+      expect(projectProviderError({ status: 500, body }).errorBody).toBe(body);
+    },
+  );
 
   it.each([
     {

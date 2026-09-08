@@ -34,7 +34,7 @@ import {
   readSessionIdentitySnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
+import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import {
   getSessionKysely,
   resolveSqliteScope,
@@ -342,10 +342,20 @@ export async function mutateSessionGoal(
         options.operation,
         goal,
       );
-      return { result, replayed: false, previousIdentity, currentIdentity, next };
+      return {
+        result,
+        replayed: false,
+        next,
+        publish: prepareSessionIdentityPublication(
+          database,
+          resolved.agentId,
+          previousIdentity,
+          currentIdentity,
+        ),
+      };
     }, databaseOptions);
     if (committed.next) {
-      emitCommittedSessionIdentityDiff(committed.previousIdentity, committed.currentIdentity);
+      committed.publish();
     }
     return { result: committed.result, replayed: committed.replayed, sessionEntry: committed.next };
   });

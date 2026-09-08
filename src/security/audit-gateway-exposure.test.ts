@@ -535,7 +535,7 @@ describe("security audit gateway exposure findings", () => {
       severity: "critical",
       title: "Trusted-proxy device auto-approval allows full admin",
       detail:
-        "gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin, so every proxy-authenticated user can auto-approve a new browser device with full admin; requests without scopes receive full admin automatically.",
+        "gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin, so every proxy-authenticated user can auto-approve a new operator device with full admin; requests without scopes receive full admin automatically.",
       remediation:
         "Remove operator.admin and approve admin access manually, or grant admin per identity via gateway.auth.identityScopes.",
     });

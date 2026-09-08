@@ -3,12 +3,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { openNodeSqliteDatabase, tryAcquireExclusiveSqliteCoordinator } from "./node-sqlite.js";
-import { ensurePrivateSqliteCoordinatorDirectory } from "./sqlite-coordinator.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import {
+  ensurePrivateSqliteCoordinatorDirectory,
+  tryAcquireExclusiveSqliteCoordinator,
+} from "./sqlite-coordinator.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const loader = new URL("../../scripts/tsx.mjs", import.meta.url).href;
-const moduleUrl = new URL("./node-sqlite.ts", import.meta.url).href;
+const moduleUrl = new URL("./sqlite-coordinator.ts", import.meta.url).href;
 
 function observeDirectory(directory: string) {
   // Stat only: opening and closing the coordinator in this process could drop

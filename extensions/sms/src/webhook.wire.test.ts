@@ -1,6 +1,6 @@
 // Sms tests cover webhook responses as the sender receives them on the wire.
-import { createServer } from "node:http";
-import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { postRawWebhook, withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSmsWebhookHandler } from "./webhook.js";
 import {
@@ -43,104 +43,78 @@ describe("createSmsWebhookHandler over a real connection", () => {
       ingress: { enqueue: enqueueSmsIngress },
       delivery,
     });
-    const server = createServer((req, res) => {
-      void handler(req, res);
-    });
-    try {
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", () => {
-          server.removeListener("error", reject);
-          resolve();
+    await withServer(
+      (req, res) => {
+        void handler(req, res);
+      },
+      async (baseUrl) => {
+        // Declared and sent in one write: the shape whose rejection used to race the flush.
+        const result = await postRawWebhook({
+          url: `${baseUrl}/sms`,
+          body: "x".repeat(32 * 1024 + 1),
+          headers: {
+            "content-type": "application/x-www-form-urlencoded",
+            "x-twilio-signature": "unused",
+          },
         });
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected the SMS webhook test server to have a TCP address");
-      }
 
-      // Declared and sent in one write: the shape whose rejection used to race the flush.
-      const result = await postRawWebhook({
-        url: `http://127.0.0.1:${address.port}/sms`,
-        body: "x".repeat(32 * 1024 + 1),
-        headers: {
-          "content-type": "application/x-www-form-urlencoded",
-          "x-twilio-signature": "unused",
-        },
-      });
-
-      expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
-      expect(result.headers.connection).toBe("close");
-      expect(result.body).toBe("Payload too large");
-      expect(result.closedByServer).toBe(true);
-      expect(delivery.record).not.toHaveBeenCalled();
-      expect(enqueueSmsIngress).not.toHaveBeenCalled();
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+        expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
+        expect(result.headers.connection).toBe("close");
+        expect(result.body).toBe("Payload too large");
+        expect(result.closedByServer).toBe(true);
+        expect(delivery.record).not.toHaveBeenCalled();
+        expect(enqueueSmsIngress).not.toHaveBeenCalled();
+      },
+    );
   });
 
   it("delivers a retryable 500 before closing a timed-out callback upload", async () => {
-    vi.useFakeTimers();
     const handler = createSmsWebhookHandler({
       cfg: {},
       account: createSmsTestAccount(),
       ingress: { enqueue: enqueueSmsIngress },
     });
     let routeError: unknown;
-    const server = createServer((req, res) => {
-      void handler(req, res).catch((error: unknown) => {
-        routeError = error;
-        res.statusCode = 500;
-        res.setHeader("content-type", "text/plain; charset=utf-8");
-        res.end("Internal Server Error");
-      });
-    });
-    try {
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", () => {
-          server.removeListener("error", reject);
-          resolve();
+    const requestReceived = createDeferred<void>();
+    await withServer(
+      (req, res) => {
+        void handler(req, res).catch((error: unknown) => {
+          routeError = error;
+          res.statusCode = 500;
+          res.setHeader("content-type", "text/plain; charset=utf-8");
+          res.end("Internal Server Error");
         });
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected the SMS webhook test server to have a TCP address");
-      }
-      const requestReceived = new Promise<void>((resolve) => {
-        server.once("connection", (socket) => socket.once("data", () => resolve()));
-      });
-      const resultPromise = postRawWebhook({
-        url: `http://127.0.0.1:${address.port}/sms`,
-        body: "x",
-        contentLength: 2,
-        idleTimeoutMs: 10_000,
-        headers: {
-          "content-type": "application/x-www-form-urlencoded",
-          "x-twilio-signature": "unused",
-        },
-      });
+        // Observe after the body reader is installed; Bun's socket wrapper omits raw data events.
+        req.once("data", () => requestReceived.resolve());
+      },
+      async (baseUrl) => {
+        vi.useFakeTimers();
+        try {
+          const resultPromise = postRawWebhook({
+            url: `${baseUrl}/sms`,
+            body: "x",
+            contentLength: 2,
+            idleTimeoutMs: 10_000,
+            headers: {
+              "content-type": "application/x-www-form-urlencoded",
+              "x-twilio-signature": "unused",
+            },
+          });
 
-      await requestReceived;
-      await vi.advanceTimersByTimeAsync(6_000);
-      const result = await resultPromise;
+          await requestReceived.promise;
+          await vi.advanceTimersByTimeAsync(6_000);
+          const result = await resultPromise;
 
-      expect(routeError).toBeUndefined();
-      expect(result.statusLine).toBe("HTTP/1.1 500 Internal Server Error");
-      expect(result.headers.connection).toBe("close");
-      expect(result.body).toBe("Internal Server Error");
-      expect(result.closedByServer).toBe(true);
-      expect(enqueueSmsIngress).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+          expect(routeError).toBeUndefined();
+          expect(result.statusLine).toBe("HTTP/1.1 500 Internal Server Error");
+          expect(result.headers.connection).toBe("close");
+          expect(result.body).toBe("Internal Server Error");
+          expect(result.closedByServer).toBe(true);
+          expect(enqueueSmsIngress).not.toHaveBeenCalled();
+        } finally {
+          vi.useRealTimers();
+        }
+      },
+    );
   });
 });

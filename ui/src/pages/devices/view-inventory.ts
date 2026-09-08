@@ -333,7 +333,11 @@ function renderEntryDetails(entry: DeviceInventoryEntry, props: DevicesProps) {
           tokens.length > 0
             ? html`<dt class="settings-row__desc">${t("devices.inventory.tokens")}</dt>
                 <dd class="device-entry__tokens">
-                  <table class="device-token-table" aria-label=${t("devices.inventory.tokens")}>
+                  <table
+                    class="device-token-table settings-table--stacked"
+                    role="table"
+                    aria-label=${t("devices.inventory.tokens")}
+                  >
                     <thead>
                       <tr>
                         <th scope="col">${t("devices.inventory.tokenRole")}</th>
@@ -398,6 +402,14 @@ function renderInventoryEntry(entry: DeviceInventoryEntry, props: DevicesProps) 
           deviceId: entry.id,
           desktopEnvironment,
           pendingRequestId,
+          onEditAlias: entry.device
+            ? () =>
+                props.onDeviceRename({
+                  id: entry.id,
+                  name: entry.name,
+                  operatorLabel: entry.device?.operatorLabel,
+                })
+            : undefined,
           onRemove: () => props.onInventoryRemove(toRemovalRequest(entry)),
         })}
       </div>
@@ -528,11 +540,11 @@ function renderTokenRow(
   );
   return html`
     <tr>
-      <td>${tokenSummary.role}</td>
-      <td>${status}</td>
-      <td>${scopes}</td>
-      <td>${when}</td>
-      <td>
+      <td data-label=${t("devices.inventory.tokenRole")}>${tokenSummary.role}</td>
+      <td data-label=${t("devices.inventory.tokenStatus")}>${status}</td>
+      <td data-label=${t("devices.inventory.scopesLabel")}>${scopes}</td>
+      <td data-label=${t("devices.inventory.tokenAge")}>${when}</td>
+      <td data-label=${t("devices.inventory.actions")}>
         <div class="device-entry__token-actions">
           <button
             class="btn btn--sm"

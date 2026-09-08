@@ -29,6 +29,7 @@ export default defineSingleProviderPluginEntry({
         ensureModelAllowlistEntry({ cfg, modelRef: VOLCENGINE_DEFAULT_MODEL_REF }),
     },
     ...buildOpenAICompatibleProviderFamilyCatalog({
+      discoveryMode: "strict",
       credentialProviderId: PROVIDER_ID,
       entries: VOLCENGINE_PROVIDER_CATALOG.entries,
       staticCatalog: VOLCENGINE_PROVIDER_CATALOG.staticCatalog,

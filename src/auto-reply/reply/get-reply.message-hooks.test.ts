@@ -1065,16 +1065,15 @@ describe("getReplyFromConfig message hooks", () => {
     expect.soft(mocks.triggerInternalHook).not.toHaveBeenCalled();
   });
 
-  it("continues dispatching URL messages when link understanding fails before reply routing", async () => {
+  it.each([false, true])("keeps URL input after link failure (literal: %s)", async (suppressed) => {
+    const ctx = buildTextCtx("read https://example.test/page", {
+      CommandInterpretationSuppressed: suppressed,
+    });
     mocks.applyLinkUnderstanding.mockRejectedValueOnce(
       new Error("Cannot find module '/tmp/openclaw/dist/link-understanding/apply.runtime-old.js'"),
     );
 
-    const reply = await getReplyFromConfig(
-      buildTextCtx("read https://example.test/page"),
-      undefined,
-      withFastReplyConfig({}),
-    );
+    const reply = await getReplyFromConfig(ctx, undefined, withFastReplyConfig({}));
 
     expect(reply).toEqual({ text: "ok" });
     expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();

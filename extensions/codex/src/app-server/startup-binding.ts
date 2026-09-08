@@ -274,9 +274,11 @@ async function readCodexAppServerRolloutTokenSnapshot(
         bytesRead += result.bytesRead;
       }
       let lineEnd = bytesRead;
-      for (let index = bytesRead - 1; index >= 0; index -= 1) {
-        if (chunk[index] !== 0x0a) {
-          continue;
+      // Negative Buffer offsets wrap from the end, so stop when byte zero is consumed.
+      while (lineEnd > 0) {
+        const index = chunk.lastIndexOf(0x0a, lineEnd - 1);
+        if (index < 0) {
+          break;
         }
         const lineFragment = chunk.subarray(index + 1, lineEnd);
         const line =

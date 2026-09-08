@@ -45,9 +45,9 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   npm publication, or `pnpm release:candidate`. Keep normal CI, npm
   qualification, Docker, Package Acceptance, performance, and soak gates intact.
 - macOS app signing/notarization/appcast and Windows Hub asset promotion run
-  in parallel with or after npm publication and never delay npm. Their own
-  qualification and artifact gates still apply; Windows Hub assets remain a
-  GitHub release finalization requirement.
+  in parallel with or after npm publication and never delay npm or GitHub
+  finalization. Their own qualification and artifact gates still apply; track
+  selected platforms through verified assets and updater evidence separately.
 - Do not set GitHub secrets from unvalidated 1Password candidates. If a candidate returns 401/403, leave the existing secret alone and report the exact missing provider.
 - Use `$one-password` for secret reads/writes: one persistent tmux session, targeted items only, no secret output.
 - Watch one parent run plus compact child summaries. Avoid broad `gh run view` polling loops; REST quota is easy to burn.
@@ -114,10 +114,11 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
 - Use one release operator, one transition-only watcher, and at most one
   investigator for the current failed surface. Do not build audit-review-plan
   trees around a single workflow transition.
-- For regular beta/stable releases, treat the product-complete pre-changelog
-  commit as the Code SHA. Full product validation and performance evidence bind
-  to that SHA. The later Release SHA may reuse those results only when it is a
-  descendant whose complete changed path set is exactly `CHANGELOG.md`.
+- For regular beta/stable releases, Code SHA may already contain final notes
+  and serve as Release SHA. One successful fresh full parent may qualify both
+  roles and their exact publication bytes. If notes change afterward, a later
+  Release SHA may reuse product evidence only when its complete delta from
+  Code SHA is exactly `CHANGELOG.md`; its changed bytes still need qualification.
 - Extended-stable validates one exact branch tip; it does not reuse the regular
   Code-SHA/Release-SHA evidence model.
 - In a sparse worktree or Testbox source sync, first confirm `package.json`,
@@ -148,7 +149,8 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
 
 Record Validation SHA, Tooling SHA/ref, target context ref, parent run id,
 attempt, and phase before watching or recovering Full Release Validation. Keep
-Code SHA and Release SHA separately in the lifecycle ledger. Record the
+Code SHA and Release SHA as lifecycle roles in the ledger; they may name the
+same commit. Record the
 immutable Release Publish parent receipt separately from tag provenance.
 
 For the core and plugin npm mutations enforced by this foundation, re-read the
@@ -235,6 +237,20 @@ trusted dispatch helper. Record the target SHA with the successful production
 build, precompressed-asset verification, and startup/largest-asset budget results;
 any failure blocks fanout. Do not substitute a dev server or raise budgets to admit
 the target.
+
+For local full E2E proof, prepare the frozen, dependency-ready proof checkout
+with private QA entries in the initial build:
+
+```bash
+OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build
+```
+
+Then run the selected E2E command with its normal readiness checks enabled.
+`scripts/lib/vitest-build-prerequisites.mts` requests private QA entries;
+`scripts/run-node.mts` triggers another full build when they are absent. This
+preflight avoids rebuilding solely for `missing_private_qa_dist`. Keep the flag
+scoped to this task-owned proof checkout and command. Publication package and
+image bytes remain owned by the release workflows and their sealed artifacts.
 
 Before full release validation:
 
@@ -326,8 +342,13 @@ enabled after proving the workflow commit is still on trusted `main` lineage.
 Pass `-f reuse_evidence=false` only when the operator intentionally needs a
 fresh full run.
 
-After the Code SHA is green, commit only `CHANGELOG.md` and run the same helper
-against the Release SHA. The parent must report
+If final notes were already committed before fresh full qualification, retain
+that Code SHA as Release SHA and use the same successful parent/attempt and
+its exact prepared bytes for candidate and publication checks. Required gates,
+final channel-specific SDK review and acknowledgement still apply.
+
+Only if notes change after qualification, commit exactly `CHANGELOG.md` and
+optionally run the helper against the new Release SHA with reuse. That parent must report
 `policy=changelog-only-release-v1`, `evidenceSha=<code-sha>`, and
 `changedPaths=["CHANGELOG.md"]`; it should reuse the product matrix instead of
 dispatching child lanes. Npm preflight and package/install acceptance still run

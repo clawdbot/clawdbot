@@ -4,6 +4,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderModelRouteAuthRequirement } from "../../plugin-sdk/provider-model-types.js";
 import { resolveProviderModelRoutes } from "../../plugins/provider-model-routes.js";
+import { shouldPreserveUnavailableSessionAuthProfileOverride } from "../../sessions/auth-profile-preservation.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { resolveUserProfileAuthLink } from "../../state/user-model-accounts.js";
@@ -12,7 +13,7 @@ import {
   isStoredCredentialCompatibleWithAuthProvider,
   resolveAuthProfileOrderWithMetadata,
 } from "../auth-profiles/order.js";
-import { ensureAuthProfileStore, hasAnyAuthProfileStoreSource } from "../auth-profiles/store.js";
+import { hasAnyAuthProfileStoreSource } from "../auth-profiles/store.js";
 import {
   isActiveUnusableWindow,
   isModelScopedCooldownReason,
@@ -21,6 +22,7 @@ import { isProfileInCooldown } from "../auth-profiles/usage.js";
 import { splitTrailingAuthProfile } from "../model-ref-profile.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
 import { resolveProviderModelRouteAuthRequirement } from "../provider-model-route-auth.js";
+import { ensureAuthProfileStore } from "./store-runtime.js";
 
 const sessionAccessorLoader = createLazyImportLoader(
   () => import("../../config/sessions/session-accessor.js"),
@@ -344,6 +346,20 @@ async function resolveSessionAuthProfileOverride(params: {
         "This session's personal model account is unavailable. Select another account for this session, or reconnect your account and start a new session.",
       );
     }
+    if (
+      providers.some((candidateProvider) =>
+        shouldPreserveUnavailableSessionAuthProfileOverride({
+          cfg,
+          agentDir,
+          entry: sessionEntry,
+          store,
+          currentProvider: sessionEntry.providerOverride ?? provider,
+          provider: candidateProvider,
+        }),
+      )
+    ) {
+      return { profileId: currentProfileId, store };
+    }
     await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
     current = undefined;
   }
@@ -353,8 +369,7 @@ async function resolveSessionAuthProfileOverride(params: {
     current = undefined;
   }
 
-  // Explicit user pins and person-linked pins are strict until the profile
-  // disappears or changes provider.
+  // Explicit and person-linked pins remain strict while their provider is compatible.
   if ((source === "user" || source === "user-link") && current) {
     return { profileId: current, store };
   }
@@ -574,6 +589,7 @@ export async function resolveSessionAuthSelection(params: {
         })
       : store;
   if (
+    !rotatedPinnedProfileId &&
     profileId === configuredProfileId &&
     !isProfileForProvider({
       cfg: params.cfg,

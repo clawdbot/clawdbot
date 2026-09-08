@@ -495,17 +495,8 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
   }
 
   /* Lists */
-  .list-item {
-    padding: 10px;
-    border-radius: var(--radius-md);
-  }
-
   .list-title {
     font-size: 13px;
-  }
-
-  .list-sub {
-    font-size: 12px; /* was 11px */
   }
 
   /* Code blocks */

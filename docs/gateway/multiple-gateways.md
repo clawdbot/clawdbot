@@ -17,7 +17,7 @@ The simplest rescue-bot setup:
 - Run the rescue bot on `--profile rescue`, with its own Telegram bot token.
 - Put the rescue bot on a different base port, e.g. `19789`.
 
-This keeps the rescue bot able to debug or apply config changes if the primary bot is down. Leave at least 20 ports between base ports so derived browser/CDP ports never collide.
+This keeps the rescue bot able to debug or apply config changes if the primary bot is down. Leave at least 120 ports between base ports so derived browser/CDP ports never collide. Each instance reaches base + 110: its browser control port is base + 2, and that port's CDP range runs to base + 110.
 
 ```bash
 # Rescue bot (separate Telegram bot, separate profile, port 19789)

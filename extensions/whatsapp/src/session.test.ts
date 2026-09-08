@@ -1031,7 +1031,9 @@ describe("web session", () => {
             fsSync.constants.O_NOFOLLOW |
             fsSync.constants.O_NONBLOCK,
         );
-        expect(parentHandle.chmod).toHaveBeenCalledWith(0o700);
+        // fs-safe 0.8.0 skips the directory chmod when the dir already has the
+        // target mode; the fixture starts at 0o700, so no chmod is dispatched.
+        expect(parentHandle.chmod).not.toHaveBeenCalled();
         expect(parentHandle.close).toHaveBeenCalledTimes(1);
         expect(fsSync.statSync(authDir).mode & 0o777).toBe(0o700);
       }

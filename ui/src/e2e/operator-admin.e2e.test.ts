@@ -374,6 +374,7 @@ suite.define(() => {
         "skills.proposals.list": {
           proposals: [proposal],
           schema: "openclaw.skill-workshop.proposals-manifest.v1",
+          installedSkills: [],
           updatedAt: proposal.updatedAt,
         },
         "skills.proposals.historyStatus": {
@@ -462,7 +463,7 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}skills/workshop`);
       await gateway.waitForRequest("skills.proposals.list");
-      await page.locator("#skill-workshop-mode-tab-board").click();
+      await page.locator("#skill-workshop-mode-tab-suggestions").click();
       const actionButtons = page.locator(".sw-action-bar button");
       const evaluate = actionButtons.nth(0);
       const apply = actionButtons.nth(1);

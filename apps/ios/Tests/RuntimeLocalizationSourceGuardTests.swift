@@ -22,8 +22,9 @@ struct RuntimeLocalizationSourceGuardTests {
             (LegacyContentState(statusText: "Disconnected", isDisconnected: true), .disconnected, nil),
             (LegacyContentState(statusText: "Idle", isIdle: true), .idle, nil),
             (LegacyContentState(statusText: "Reconnecting...", isConnecting: true), .reconnecting, nil),
-            (LegacyContentState(statusText: "Ansluter igen...", isConnecting: true), .reconnecting, nil),
+            (LegacyContentState(statusText: "Connecting...", isConnecting: true), .connecting, nil),
             (LegacyContentState(statusText: "Approval needed"), .approvalNeeded, nil),
+            (LegacyContentState(statusText: "Action required"), .actionRequired, nil),
             (LegacyContentState(statusText: "Backend supplied attention"), .attention, "Backend supplied attention"),
             (
                 LegacyContentState(statusText: "Backend supplied connection detail", isConnecting: true),
@@ -46,9 +47,6 @@ struct RuntimeLocalizationSourceGuardTests {
         let manager = try Self.source("Sources/LiveActivity/LiveActivityManager.swift")
         let widget = try Self.source("ActivityWidget/OpenClawLiveActivity.swift")
         let project = try Self.source("project.yml")
-        let dreaming = try Self.source("Sources/Design/AgentProDreamingDestination.swift")
-        let skillWorkshop = try Self.source("Sources/Design/IPadSkillWorkshopScreen.swift")
-        let workboard = try Self.source("Sources/Design/IPadWorkboardScreen.swift")
         let talkManager = try Self.source("Sources/Voice/TalkModeManager.swift")
         let watchInbox = try Self.source("WatchApp/Sources/WatchInboxView.swift")
         let chat = try Self.sharedSource("OpenClawChatUI/ChatMessageViews.swift")
@@ -65,16 +63,12 @@ struct RuntimeLocalizationSourceGuardTests {
               - path: Resources/Localizable.xcstrings
                 buildPhase: resources
         """))
-        #expect(dreaming.contains("parts.formatted(.list(type: .and, width: .short))"))
         #expect(chat.contains("private var title: LocalizedStringResource"))
         #expect(chat.contains("private var accessibilityText: LocalizedStringResource"))
         #expect(chat.contains("Text(self.accessibilityText)"))
         #expect(watchInbox.contains("case localized(LocalizedStringResource)"))
         #expect(!watchInbox.contains("WatchTextValue: ExpressibleByStringLiteral"))
         #expect(watchInbox.contains("accessory: .verbatim(self.store.talkSummaryText)"))
-        let localizedDefaultAgent = "String(localized: \"Default agent\")"
-        #expect(skillWorkshop.components(separatedBy: localizedDefaultAgent).count == 3)
-        #expect(workboard.components(separatedBy: localizedDefaultAgent).count == 5)
         #expect(talkManager.contains("var gatewayTalkActiveModeTitle: String = .init(localized: \"Not active\")"))
         #expect(!talkManager.contains("gatewayTalkActiveModeTitle = \""))
     }

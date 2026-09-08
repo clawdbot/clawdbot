@@ -2,10 +2,13 @@
 summary: "Persistent wiki compiler and Obsidian-friendly knowledge vault for OpenClaw."
 read_when:
   - You are installing, configuring, or auditing the memory-wiki plugin
-title: "Memory Wiki plugin"
+title: "Memory Wiki plugin reference"
 ---
 
-# Memory Wiki plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 Persistent wiki compiler and Obsidian-friendly knowledge vault for OpenClaw.
 
@@ -16,7 +19,9 @@ Persistent wiki compiler and Obsidian-friendly knowledge vault for OpenClaw.
 
 ## Surface
 
-CLI commands: `openclaw wiki`; contracts: `tools`; skills
+- CLI commands: `openclaw wiki`
+- Contracts: `tools`
+- Skills
 
 ## Related docs
 

@@ -26,7 +26,6 @@ import {
   recordTaskProgressByRunId,
 } from "../../tasks/runtime-internal.js";
 import { reloadTaskRegistryFromStore } from "../../tasks/task-registry.js";
-import { saveTaskRegistryStateToSqlite } from "../../tasks/task-registry.store.sqlite.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import {
   resetTaskRegistryControlRuntimeForTests,
@@ -34,6 +33,7 @@ import {
   setTaskRegistryControlRuntimeForTests,
 } from "../../tasks/task-runtime.test-helpers.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { seedTaskRegistryRowsForTests } from "../../test-utils/task-registry-sqlite.js";
 import {
   createContext,
   createSnapshotTask,
@@ -228,13 +228,7 @@ describe("tasks gateway handlers", () => {
       lastEventAt: base - 2_000,
       endedAt: base - 3_000,
     });
-    saveTaskRegistryStateToSqlite({
-      tasks: new Map([
-        [justFinished.taskId, justFinished],
-        [finishedEarlier.taskId, finishedEarlier],
-      ]),
-      deliveryStates: new Map(),
-    });
+    seedTaskRegistryRowsForTests([justFinished, finishedEarlier]);
     reloadTaskRegistryFromStore();
 
     const { payload } = await runTaskHandler("tasks.list", {});
@@ -267,13 +261,7 @@ describe("tasks gateway handlers", () => {
       lastEventAt: base - 4_000,
       endedAt: base - 500,
     });
-    saveTaskRegistryStateToSqlite({
-      tasks: new Map([
-        [laterActivity.taskId, laterActivity],
-        [laterCompletion.taskId, laterCompletion],
-      ]),
-      deliveryStates: new Map(),
-    });
+    seedTaskRegistryRowsForTests([laterActivity, laterCompletion]);
     reloadTaskRegistryFromStore();
 
     const { payload } = await runTaskHandler("tasks.list", {});
@@ -403,13 +391,7 @@ describe("tasks gateway handlers", () => {
       runId: "run-a",
       lastEventAt: sharedActivityAt,
     });
-    saveTaskRegistryStateToSqlite({
-      tasks: new Map([
-        [laterId.taskId, laterId],
-        [earlierId.taskId, earlierId],
-      ]),
-      deliveryStates: new Map(),
-    });
+    seedTaskRegistryRowsForTests([laterId, earlierId]);
     reloadTaskRegistryFromStore();
 
     const { payload } = await runTaskHandler("tasks.list", {});
@@ -899,7 +881,7 @@ describe("tasks gateway handlers", () => {
     expect(terminal.payload?.task?.progressSummary).toBe("Milestone remains authoritative");
   });
 
-  it("cancels running task records and returns the updated task", async () => {
+  it("does not report cancellation for an ordinary task without a live owner", async () => {
     const task = createTaskRecord({
       runtime: "cli",
       requesterSessionKey: "agent:main:main",
@@ -918,10 +900,10 @@ describe("tasks gateway handlers", () => {
 
     expect(calls[0]?.[0]).toBe(true);
     expect(payload?.found).toBe(true);
-    expect(payload?.cancelled).toBe(true);
+    expect(payload?.cancelled).toBe(false);
     expect(payload?.task?.id).toBe(task.taskId);
-    expect(payload?.task?.status).toBe("cancelled");
-    expect(payload?.task?.error).toBe("user stopped task");
+    expect(payload?.task?.status).toBe("running");
+    expect(payload?.task?.error).toBeUndefined();
   });
 
   it("cancels ACP tasks through the live Gateway handler and control runtime", async () => {
@@ -944,13 +926,7 @@ describe("tasks gateway handlers", () => {
       startedAt: 1_011,
       lastEventAt: 1_011,
     });
-    saveTaskRegistryStateToSqlite({
-      tasks: new Map([
-        [task.taskId, task],
-        [siblingTask.taskId, siblingTask],
-      ]),
-      deliveryStates: new Map(),
-    });
+    seedTaskRegistryRowsForTests([task, siblingTask]);
     reloadTaskRegistryFromStore();
     cancelSessionMock.mockResolvedValue(undefined);
 

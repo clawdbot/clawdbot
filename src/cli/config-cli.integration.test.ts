@@ -13,7 +13,8 @@ const configRuntime = await import("../config/config.js");
 const { clearConfigCache } = configRuntime;
 const { REDACTED_SENTINEL } = await import("../config/redact-snapshot.js");
 const runtimeSchema = await import("../config/runtime-schema.js");
-const { runConfigGet, runConfigSet, runConfigUnset } = await import("./config-cli.js");
+const { runConfigGet, runConfigPatch, runConfigSet, runConfigUnset } =
+  await import("./config-cli.js");
 const { withConfigFileHarness } = useConfigCliIntegrationHarness();
 
 function installRuntimeSchemaReadHook(hook: () => void | Promise<void>): void {
@@ -125,6 +126,52 @@ describe("config cli integration", () => {
       },
     );
   });
+
+  it.each(["root", "agent"])(
+    "repairs a stale deployment patch at %s scope without changing policy",
+    async (scope) => {
+      const configForExec = (exec: Record<string, string>) =>
+        scope === "root"
+          ? { tools: { exec } }
+          : { agents: { entries: { worker: { tools: { exec } } } } };
+      const migrated = configForExec({ mode: "ask" });
+      const migratedRaw = JSON.stringify(migrated) + "\n";
+      await withConfigFileHarness(
+        "openclaw-config-cli-patch-exec-mode-migrated-",
+        migratedRaw,
+        async ({ configPath, tempDir }) => {
+          const patchPath = path.join(tempDir, "patch.json5");
+          fs.writeFileSync(
+            patchPath,
+            JSON.stringify(configForExec({ security: "allowlist", ask: "on-miss" })),
+          );
+          const output = createTestRuntime();
+
+          await expect(
+            runConfigPatch({ cliOptions: { file: patchPath }, runtime: output.runtime }),
+          ).rejects.toThrow("__exit__:1");
+
+          expect(fs.readFileSync(configPath, "utf8")).toBe(migratedRaw);
+          const errors = output.errors.join("\n");
+          expect(errors).toContain(
+            scope === "root" ? "tools.exec.mode:" : "agents.entries.worker.tools.exec.mode:",
+          );
+          expect(errors).toContain('Replace security/ask with mode="ask"');
+          expect(errors).toContain("at this scope");
+
+          fs.writeFileSync(
+            patchPath,
+            JSON.stringify({ ...migrated, messages: { ackReaction: "✅" } }),
+          );
+          await runConfigPatch({ cliOptions: { file: patchPath }, runtime: output.runtime });
+          expect(JSON5.parse(fs.readFileSync(configPath, "utf8"))).toMatchObject({
+            ...migrated,
+            messages: { ackReaction: "✅" },
+          });
+        },
+      );
+    },
+  );
 
   it("conflicts when a top-level include changes after config set starts", async () => {
     await withConfigFileHarness(

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   cleanupProvisionalSession,
   terminateAcceptedCollectorRun,
@@ -110,6 +111,26 @@ describe("subagent spawn cleanup identity", () => {
       },
       timeoutMs: 60_000,
     });
+  });
+
+  it("stops accepted-run cleanup when its Gateway request owner is retired", async () => {
+    const callGateway = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Gateway request owner is retired"))
+      .mockResolvedValue({ aborted: false, runIds: [] });
+
+    await withPluginRuntimeGatewayRequestScope(
+      { resolveGatewayContext: () => undefined, isWebchatConnect: () => false },
+      () =>
+        terminateAcceptedCollectorRun({
+          childSessionKey: "agent:main:subagent:child",
+          gatewayRunId: "gateway-run",
+          sessionCleanup: "preserve",
+          callGateway,
+        }),
+    );
+
+    expect(callGateway).toHaveBeenCalledOnce();
   });
 
   it("stops cleanup when guarded deletion observes a successor lifecycle", async () => {

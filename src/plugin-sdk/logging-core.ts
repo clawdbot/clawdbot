@@ -20,4 +20,4 @@ export {
   redactSensitiveText,
   redactToolPayloadText,
 } from "../logging/redact.js";
-export { redactIdentifier } from "../logging/redact-identifier.js";
+export { redactIdentifier } from "@openclaw/normalization-core/node-crypto";

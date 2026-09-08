@@ -70,6 +70,7 @@ type PendingSupervisionMaterializationParams = {
     pendingSupervisionBranch: CodexAppServerPendingSupervisionBranch;
   };
   attempt: EmbeddedRunAttemptParams;
+  codexHome: string;
   cwd: string;
   dynamicTools: CodexDynamicToolSpec[];
   appServer: CodexAppServerRuntimeOptions;
@@ -269,6 +270,7 @@ export async function materializePendingSupervisionBranch(
       ? await params.lifecycleTiming.measure("project-instructions-preflight", () =>
           snapshotCodexNativeProjectInstructionSourceIdentities({
             cwd: params.cwd,
+            codexHome: params.codexHome,
             config: startParams.config,
             environmentSelection: params.environmentSelection,
             readNativeConfig: (cwd) =>

@@ -5,7 +5,6 @@ import android.net.ConnectivityManager
 import android.net.DnsResolver
 import android.net.Network
 import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Build
@@ -144,9 +143,9 @@ class GatewayDiscovery(
     val cm = connectivity ?: return
     cm.activeNetwork?.let(availableNetworks::add)
     try {
-      // Track all networks so wide-area DNS can prefer VPN/split-DNS answers
-      // even when Android's active network is not the VPN.
-      cm.registerNetworkCallback(NetworkRequest.Builder().build(), networkCallback)
+      // Track app-visible networks, including VPNs, so wide-area DNS can prefer split-DNS
+      // answers even when Android's active network is not the VPN.
+      cm.registerNetworkCallback(gatewayNetworkRequest(), networkCallback)
     } catch (_: Throwable) {
       // ignore (best-effort)
     }

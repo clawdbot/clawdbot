@@ -258,7 +258,7 @@ describe("connection live-text delivery", () => {
       } else {
         peer.complete(release === "send error" ? new Error("connection closed") : undefined);
       }
-      expect(getBufferedAmount(peer.client.connId)).toBe(0);
+      expect(getBufferedAmount(peer.client.connId)).toBe(release === "send error" ? undefined : 0);
       expect(getEventListeners(owner.signal, "abort")).toHaveLength(0);
       owner.abort();
       peer.complete();

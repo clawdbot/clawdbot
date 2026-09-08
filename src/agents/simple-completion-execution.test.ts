@@ -1,5 +1,6 @@
 import { reasoningTagTextPolicy } from "@openclaw/ai/internal/openai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { findSourceImportBackedges } from "../../test/helpers/source-import-closure.js";
 import type { Model } from "../llm/types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -13,7 +14,7 @@ vi.mock("@openclaw/ai/transports", async (importOriginal) => ({
   prepareModelForSimpleCompletion: mocks.prepareModel,
 }));
 
-import { completeWithPreparedSimpleCompletionModel } from "./simple-completion-runtime.js";
+import { completeWithPreparedSimpleCompletionModel } from "./simple-completion-execution.js";
 
 const context = { messages: [{ role: "user" as const, content: "pong", timestamp: 1 }] };
 
@@ -43,6 +44,17 @@ beforeEach(() => {
   mocks.complete.mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
   mocks.prepareModel.mockReset();
   mocks.prepareModel.mockImplementation((params: { model: unknown }) => params.model);
+});
+
+describe("prepared completion import boundary", () => {
+  it.each([
+    "src/agents/host-prepared-isolated-completion.ts",
+    "src/plugin-sdk/simple-completion-runtime.ts",
+  ])("%s does not import model/auth preparation", (entry) => {
+    expect(findSourceImportBackedges(entry, ["src/agents/simple-completion-runtime.ts"])).toEqual(
+      [],
+    );
+  });
 });
 
 describe("completeWithPreparedSimpleCompletionModel", () => {

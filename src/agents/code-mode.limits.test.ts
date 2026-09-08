@@ -211,6 +211,7 @@ describe("Code Mode runtime and output limits", () => {
           const retained = new Uint8Array(16 * 1024 * 1024);
           retained[0] = 7;
           text("accepted inline");
+          await yield_control();
           await snapshot_fresh({});
           return retained[0];`,
       };

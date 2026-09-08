@@ -12,10 +12,10 @@ import {
   loadPersistedSharedAuthProfileStore,
 } from "../agents/auth-profiles/persisted.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
+import { saveAuthProfileStoreIfPersistenceSnapshotMatches } from "../agents/auth-profiles/store-runtime.js";
 import {
   captureAuthProfileStorePersistenceSnapshot,
   restoreAuthProfileStorePersistenceSnapshot,
-  saveAuthProfileStoreIfPersistenceSnapshotMatches,
 } from "../agents/auth-profiles/store.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import {

@@ -8,6 +8,7 @@ import {
   applySessionEntryReplacements,
   listSessionEntriesReadOnly,
 } from "../../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartRecoveryCandidate } from "../../gateway/chat-abort.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
@@ -28,16 +29,18 @@ import {
   normalizeMainSessionRecoveryRunFences,
   transitionMainSessionRecovery,
 } from "./main-session-recovery-state.js";
+import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-store.js";
 import {
-  discoverRestartRecoveryStorePaths,
+  discoverRestartRecoveryStoreTargets,
   hasCurrentProcessOwner,
   mainSessionRecoveryLog,
   normalizeFiniteTimestamp,
   normalizeStringSet,
-  resolveRestartRecoveryStorePaths,
 } from "./main-session-restart-recovery-shared.js";
+import { captureYieldedMainSessionContinuation } from "./main-session-restart-recovery-target.js";
 
 async function markRecoveryStore(params: {
+  agentId?: string;
   storePath: string;
   sessionKey?: string;
   assertCommitAllowed?: () => void;
@@ -54,14 +57,22 @@ async function markRecoveryStore(params: {
         runs?: RestartRecoveryRun[];
       }
     | { action: "retire_terminal" }
+    | { action: "restore_yielded"; isCurrent: () => boolean }
     | undefined;
 }) {
+  const yieldOwners: Array<() => boolean> = [];
   return await applySessionEntryReplacements<{ marked: number; skipped: number }>({
+    agentId: params.agentId,
     storePath: params.storePath,
     sessionKeys: params.sessionKey ? [params.sessionKey] : undefined,
     statuses: params.statuses,
     requireWriteSuccess: true,
-    assertCommitAllowed: params.assertCommitAllowed,
+    assertCommitAllowed: () => {
+      params.assertCommitAllowed?.();
+      if (yieldOwners.some((isCurrent) => !isCurrent())) {
+        throw new Error("Yielded requester continuation changed before recovery handoff");
+      }
+    },
     update: (entries) => {
       const replacements: Array<{ sessionKey: string; entry: SessionEntry }> = [];
       const counts = { marked: 0, skipped: 0 };
@@ -71,6 +82,13 @@ async function markRecoveryStore(params: {
           continue;
         }
         if (!isMainRestartRecoveryCandidate(entry, sessionKey)) {
+          counts.skipped++;
+          continue;
+        }
+        if (plan.action === "restore_yielded") {
+          yieldOwners.push(plan.isCurrent);
+          transitionMainSessionRecovery(entry, { kind: "clear" });
+          replacements.push({ sessionKey, entry });
           counts.skipped++;
           continue;
         }
@@ -124,13 +142,29 @@ export async function markRestartAbortedMainSessions(params: {
     return result;
   }
 
-  const storePaths = new Set<string>();
+  const storeTargets = new Map<
+    string,
+    Pick<MainSessionRecoveryStoreTarget, "agentId" | "storePath">
+  >();
+  const addStoreTarget = (
+    target: Pick<MainSessionRecoveryStoreTarget, "agentId" | "storePath">,
+  ) => {
+    const resolved = resolveSqliteTargetFromSessionStorePath(target.storePath, {
+      agentId: target.agentId,
+    });
+    // One logical scope can name multiple flat-store databases. Alias scopes still
+    // retain their own admission checks even when they reach the same database.
+    const key = JSON.stringify([target.storePath, resolved.path]);
+    if (!storeTargets.has(key)) {
+      storeTargets.set(key, target);
+    }
+  };
   const stateDir = params.stateDir ?? resolveStateDir(process.env);
   const configs = [params.cfg, ...(params.additionalCfgs ?? [])].filter(Boolean);
   for (const cfg of configs.length > 0 ? configs : [undefined]) {
     try {
-      for (const storePath of await discoverRestartRecoveryStorePaths({ cfg, stateDir })) {
-        storePaths.add(storePath);
+      for (const target of await discoverRestartRecoveryStoreTargets({ cfg, stateDir })) {
+        addStoreTarget(target);
       }
     } catch (err) {
       if (!cfg) {
@@ -143,12 +177,13 @@ export async function markRestartAbortedMainSessions(params: {
   }
 
   for (const storePath of activeAdmissions.targets.keys()) {
-    storePaths.add(storePath);
+    addStoreTarget({ storePath });
   }
-  for (const storePath of storePaths) {
+  for (const target of storeTargets.values()) {
+    const { storePath } = target;
     // Preselect read-only: ID-only admissions can own multiple persisted keys.
     // The per-key replacement below rereads the row and revalidates its owner.
-    const sessionKeys = listSessionEntriesReadOnly({ storePath, projection: "list", clone: false })
+    const sessionKeys = listSessionEntriesReadOnly({ ...target, projection: "list", clone: false })
       .filter(
         ({ sessionKey, entry }) =>
           activeRuns.some(
@@ -161,7 +196,7 @@ export async function markRestartAbortedMainSessions(params: {
       let isCurrent: (() => boolean) | undefined;
       try {
         const storeResult = await markRecoveryStore({
-          storePath,
+          ...target,
           sessionKey: selectedSessionKey,
           assertCommitAllowed: () => {
             if (isCurrent && !isCurrent()) {
@@ -188,6 +223,17 @@ export async function markRestartAbortedMainSessions(params: {
               sessionId: entry.sessionId,
             });
             if (matchingActiveRuns.length === 0 && !matchedActiveAdmission) {
+              return undefined;
+            }
+            if (
+              captureYieldedMainSessionContinuation({
+                storeAgentId: target.agentId,
+                cfg: params.cfg,
+                entry,
+                sessionKey,
+                storePath,
+              })
+            ) {
               return undefined;
             }
             const wasRunning = entry.status === "running";
@@ -252,6 +298,7 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
   updatedBeforeMs?: number;
 }): Promise<{ marked: number; skipped: number }> {
   const result = { marked: 0, skipped: 0 };
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const providedActiveSessionIds =
     params.activeSessionIds === undefined ? undefined : normalizeStringSet(params.activeSessionIds);
   const providedActiveSessionKeys =
@@ -267,17 +314,21 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
   const resolveActiveSessionKeys = () =>
     providedActiveSessionKeys ?? normalizeStringSet(listActiveEmbeddedRunSessionKeys());
 
-  // Check each store path once at startup so rows added later in that same path remain current.
-  // Add paths only after every marking write succeeds so a failed scan retries safely.
-  const storePaths = (await resolveRestartRecoveryStorePaths(params)).filter(
-    (storePath) => !params.startupCheckedStorePaths?.has(storePath),
+  // A flat locator can name multiple agent stores; checkpoint each owner once.
+  // Publish checkpoints only after every marking write succeeds so failed scans retry safely.
+  const storeTargets = (
+    await discoverRestartRecoveryStoreTargets({ ...params, statuses: ["running"] })
+  ).filter(
+    (target) =>
+      !params.startupCheckedStorePaths?.has(JSON.stringify([target.agentId, target.storePath])),
   );
-  for (const storePath of storePaths) {
+  for (const target of storeTargets) {
     const storeResult = await markRecoveryStore({
-      storePath,
+      ...target,
       statuses: ["running"],
+      assertCommitAllowed: () => assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration),
       plan: (entry, sessionKey) => {
-        if (entry.status !== "running" || entry.abortedLastRun === true) {
+        if (entry.status !== "running") {
           return undefined;
         }
         const updatedAt = normalizeFiniteTimestamp(entry.updatedAt);
@@ -288,14 +339,42 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
         ) {
           return undefined;
         }
-        if (
+        const hasLiveOwner = () =>
           hasCurrentProcessOwner({
             activeSessionIds: resolveActiveSessionIds(),
             activeSessionKeys: resolveActiveSessionKeys(),
             entry,
             sessionKey,
-          })
-        ) {
+          });
+        if (hasLiveOwner()) {
+          return undefined;
+        }
+        const continuation = captureYieldedMainSessionContinuation({
+          storeAgentId: target.agentId,
+          cfg: params.cfg,
+          entry,
+          sessionKey,
+          storePath: target.storePath,
+        });
+        if (continuation) {
+          // A newer foreground start clears endedAt. Only an unclaimed waiting cycle
+          // may hand its interruption marker back to the exact durable child batch.
+          const state = entry.mainRestartRecovery;
+          if (
+            entry.abortedLastRun === true &&
+            !state?.reservation &&
+            !state?.foregroundClaims &&
+            !state?.tombstone &&
+            !entry.restartRecoveryDeliveryRunId
+          ) {
+            return {
+              action: "restore_yielded",
+              isCurrent: () => continuation() && !hasLiveOwner(),
+            };
+          }
+          return undefined;
+        }
+        if (entry.abortedLastRun === true) {
           return undefined;
         }
         return isMainRestartRecoveryAggregateTerminalOnly(entry)
@@ -306,7 +385,9 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
     result.marked += storeResult.marked;
     result.skipped += storeResult.skipped;
   }
-  storePaths.forEach((storePath) => params.startupCheckedStorePaths?.add(storePath));
+  storeTargets.forEach((target) =>
+    params.startupCheckedStorePaths?.add(JSON.stringify([target.agentId, target.storePath])),
+  );
 
   if (result.marked > 0) {
     mainSessionRecoveryLog.warn(

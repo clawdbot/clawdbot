@@ -17,6 +17,20 @@ type PackageRemoveAction = {
 
 type PackageRemoveBlocker = { code: string; message: string };
 
+export function filterReferencedCleanup(
+  cleanup: ClawReferencedCleanup | undefined,
+  kind: "package" | "mcp",
+): ClawReferencedCleanup | undefined {
+  return cleanup
+    ? {
+        ...cleanup,
+        selected: (cleanup.selected ?? []).filter(
+          (selector) => selector.startsWith("mcp:") === (kind === "mcp"),
+        ),
+      }
+    : undefined;
+}
+
 export function projectClawPackageRemovePlan(params: {
   decisions: ClawPackageRemovalDecision[];
   inspections: ClawPackageInspection[];

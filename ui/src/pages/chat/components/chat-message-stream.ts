@@ -30,7 +30,7 @@ type StreamMessageOptions = Pick<
   | "onRequestUpdate"
   | "canvasPluginSurfaceUrl"
   | "resourceBasePath"
-  | "localMediaPreviewRoots"
+  | "mediaPolicyKey"
   | "connectionEpoch"
   | "assistantAttachmentAuthToken"
   | "resolveArtifactDownload"
@@ -40,6 +40,7 @@ type StreamMessageOptions = Pick<
   | "embedSandboxMode"
   | "allowExternalEmbedUrls"
   | "fetchLinkFavicon"
+  | "githubRepo"
   | "onOpenWorkspaceFile"
 >;
 

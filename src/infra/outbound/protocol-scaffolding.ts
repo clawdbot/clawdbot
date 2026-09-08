@@ -67,6 +67,10 @@ function isPromptDataTagLine(line: string, kind: "open" | "close"): boolean {
 }
 
 function unwrapPromptDataWrapperLines(text: string): string {
+  // Both removable tag forms contain "<", including headers followed by an opener.
+  if (!text.includes("<")) {
+    return text;
+  }
   const lines = text.split(/\r?\n/);
   let changed = false;
   const output: string[] = [];

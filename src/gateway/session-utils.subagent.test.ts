@@ -27,9 +27,9 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { listSessionFixture } from "./session-list.test-support.js";
 import { buildSingleRowStoreChildSessionsByKey } from "./session-utils-projection.js";
 import {
-  listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGatewayCore,
   resolveGatewayModelSupportsImages,
 } from "./session-utils.js";
@@ -64,7 +64,7 @@ describe("session list subagent metadata", () => {
   } as OpenClawConfig;
 
   test("searches channel-derived display names before row enrichment", async () => {
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store: {
@@ -108,7 +108,7 @@ describe("session list subagent metadata", () => {
     };
     const existsSpy = vi.spyOn(fs, "existsSync").mockReturnValue(false);
     try {
-      const result = await listSessionsFromStoreAsync({
+      const result = await listSessionFixture({
         cfg,
         storePath: "/tmp/sessions.json",
         store,
@@ -156,7 +156,7 @@ describe("session list subagent metadata", () => {
       startedAt: now - 4_000,
     });
 
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store: { [childSessionKey]: entry },
@@ -218,7 +218,7 @@ describe("session list subagent metadata", () => {
     });
 
     const listForOwner = async (ownerSessionKey: string) =>
-      await listSessionsFromStoreAsync({
+      await listSessionFixture({
         cfg,
         storePath: "/tmp/sessions.json",
         store,
@@ -234,7 +234,7 @@ describe("session list subagent metadata", () => {
     ]);
     expect((await listForOwner(staleParentKey)).sessions).toEqual([]);
 
-    const all = await listSessionsFromStoreAsync({
+    const all = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store,
@@ -330,7 +330,7 @@ describe("session list subagent metadata", () => {
       model: "openai/gpt-5.4",
     });
 
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store,
@@ -397,7 +397,7 @@ describe("session list subagent metadata", () => {
       model: "openai/gpt-5.4",
     });
 
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store,
@@ -483,7 +483,7 @@ describe("session list subagent metadata", () => {
       startedAt: now - 1_500,
     });
 
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store,
@@ -572,7 +572,7 @@ describe("session list subagent metadata", () => {
       startedAt: now - 1_500,
     });
 
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store,
@@ -661,7 +661,7 @@ describe("session list subagent metadata", () => {
       startedAt: now - 1_500,
     });
 
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store,
@@ -709,7 +709,7 @@ describe("session list subagent metadata", () => {
       startedAt: now - 1_500,
     });
 
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store,
@@ -757,7 +757,7 @@ describe("session list subagent metadata", () => {
       startedAt: now - 1_500,
     });
 
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store,
@@ -801,7 +801,7 @@ describe("session list subagent metadata", () => {
       sessionKey: "agent:main:subagent:followup",
     });
 
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store,
@@ -854,7 +854,7 @@ describe("session list subagent metadata", () => {
       model: "openai/gpt-5.4",
     });
 
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store,
@@ -913,7 +913,7 @@ describe("session list subagent metadata", () => {
         },
         async () => {
           saveSubagentRegistryToSqlite(canonicalSubagentRunFixtures(persistedRuns));
-          const result = await listSessionsFromStoreAsync({
+          const result = await listSessionFixture({
             cfg,
             storePath: "/tmp/sessions.json",
             store: {
@@ -1006,7 +1006,7 @@ describe("session list subagent metadata", () => {
         },
         async () => {
           saveSubagentRegistryToSqlite(canonicalSubagentRunFixtures(persistedRuns));
-          return await listSessionsFromStoreAsync({
+          return await listSessionFixture({
             cfg,
             storePath: "/tmp/sessions.json",
             store,
@@ -1041,7 +1041,7 @@ describe("session list subagent metadata", () => {
           OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1",
         },
         async () =>
-          await listSessionsFromStoreAsync({
+          await listSessionFixture({
             cfg,
             storePath: "/tmp/sessions.json",
             store: {
@@ -1078,7 +1078,7 @@ describe("session list subagent metadata", () => {
       } as SessionEntry,
     };
 
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store,
@@ -1106,7 +1106,7 @@ describe("session list subagent metadata", () => {
       } as SessionEntry,
     };
 
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store,
@@ -1136,7 +1136,7 @@ describe("session list subagent metadata", () => {
       } as SessionEntry,
     };
 
-    const all = await listSessionsFromStoreAsync({
+    const all = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store,
@@ -1145,7 +1145,7 @@ describe("session list subagent metadata", () => {
     const main = all.sessions.find((session) => session.key === "agent:main:main");
     expect(main?.childSessions).toBeUndefined();
 
-    const filtered = await listSessionsFromStoreAsync({
+    const filtered = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store,
@@ -1172,7 +1172,7 @@ describe("session list subagent metadata", () => {
       } as SessionEntry,
     };
 
-    const all = await listSessionsFromStoreAsync({
+    const all = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store,
@@ -1181,7 +1181,7 @@ describe("session list subagent metadata", () => {
     const main = all.sessions.find((session) => session.key === "agent:main:main");
     expect(main?.childSessions).toBeUndefined();
 
-    const filtered = await listSessionsFromStoreAsync({
+    const filtered = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store,
@@ -1220,7 +1220,7 @@ describe("session list subagent metadata", () => {
       outcome: { status: "ok" },
     });
 
-    const all = await listSessionsFromStoreAsync({
+    const all = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store,
@@ -1229,7 +1229,7 @@ describe("session list subagent metadata", () => {
     const main = all.sessions.find((session) => session.key === "agent:main:main");
     expect(main?.childSessions).toBeUndefined();
 
-    const filtered = await listSessionsFromStoreAsync({
+    const filtered = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store,
@@ -1286,7 +1286,7 @@ describe("session list subagent metadata", () => {
       startedAt: now - 900,
     });
 
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store,
@@ -1314,7 +1314,7 @@ describe("session list subagent metadata", () => {
       } as SessionEntry,
     };
 
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store,
@@ -1355,7 +1355,7 @@ describe("session list subagent metadata", () => {
       model: "openai/gpt-5.4",
     });
 
-    const result = await listSessionsFromStoreAsync({
+    const result = await listSessionFixture({
       cfg,
       storePath: "/tmp/sessions.json",
       store,

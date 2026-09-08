@@ -27,6 +27,7 @@ import {
 import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 
 export function createAgentAdmissionController(params: {
+  assertAdmissionCurrent?: () => void;
   cfg: OpenClawConfig;
   runId: string;
   lifecycleGeneration: string;
@@ -71,6 +72,7 @@ export function createAgentAdmissionController(params: {
   };
 
   const assertAllowed = (commitOutcome = true) => {
+    params.assertAdmissionCurrent?.();
     const resolvedSessionKey = params.getResolvedSessionKey();
     const requestedSessionKey = params.getRequestedSessionKey();
     const latest = readGatewayDedupeEntry({

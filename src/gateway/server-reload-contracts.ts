@@ -144,6 +144,7 @@ export type GatewayReloadHandlerParams = {
   getPluginRegistry: () => PluginRegistry;
   startChannel: GatewayChannelManager["startChannel"];
   stopChannel: GatewayChannelManager["stopChannel"];
+  releaseChannelRouteHandoffs: GatewayChannelManager["releaseChannelRouteHandoffs"];
   pruneInactiveChannelAccountState: (activeChannelIds: ReadonlySet<ChannelKind>) => void;
   getChannelAutostartSuppression?: GatewayChannelManager["getAutostartSuppression"];
   stopPostReadySidecars?: () => Promise<void> | void;
@@ -177,7 +178,10 @@ export type GatewayReloadHandlerParams = {
 
 export type ManagedGatewayConfigReloaderParams = Omit<
   GatewayReloadHandlerParams,
-  "assertRestartReady" | "logReload" | "pruneInactiveChannelAccountState"
+  | "assertRestartReady"
+  | "logReload"
+  | "pruneInactiveChannelAccountState"
+  | "releaseChannelRouteHandoffs"
 > & {
   configRevisionProjector: import("./config-revision-token.js").GatewayConfigRevisionProjector;
   minimalTestGateway: boolean;

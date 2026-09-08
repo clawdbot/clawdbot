@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions/types.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
+import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   consumeSessionWorkAdmissionHandoff,
   type SessionWorkAdmissionLease,
@@ -56,11 +57,15 @@ const dispatchAgent = vi.fn(async (payload: Record<string, unknown>, _timeoutMs?
   };
 });
 const gatewayRuntime: GatewayRecoveryRuntime = {
-  abortAgent: vi.fn(),
   dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
   waitForAgent: vi.fn(),
   sendRecoveryNotice: vi.fn(async () => ({ suppressed: false })),
 };
+const gatewayContext = {
+  recoveryRuntime: gatewayRuntime,
+  resolveGatewayContext: () => gatewayContext as never,
+};
+bindGatewayContextResolver(gatewayRuntime, gatewayContext.resolveGatewayContext);
 type RecoveryParams = Parameters<typeof recoverInterruptedSubagentRow>[0];
 const replaceRun = vi.fn<RecoveryParams["replaceRun"]>(() => true);
 const clearAcceptedRecovery = vi.fn<RecoveryParams["clearAcceptedRecovery"]>((params) => {

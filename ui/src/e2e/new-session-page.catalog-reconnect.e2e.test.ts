@@ -6,6 +6,11 @@ import {
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  TERMINAL_START_FEATURE_METHODS,
+  cliAgentCatalog,
+} from "./new-session-page.native-terminal.test-support.ts";
 import {
   REFRESHED_RESEARCH_WORKSPACE,
   SESSION_LIST_DEFAULTS,
@@ -27,40 +32,6 @@ function requestHasParam(request: { params?: unknown }, key: string, value: unkn
     !Array.isArray(request.params) &&
     (request.params as Record<string, unknown>)[key] === value,
   );
-}
-
-const TERMINAL_START_FEATURE_METHODS = [
-  "chat.metadata",
-  "chat.startup",
-  "sessions.catalog.list",
-  "sessions.catalog.startTerminal",
-  "sessions.create",
-  "sessions.title.prepare",
-  "sessions.dispatch",
-  "terminal.open",
-  "worktrees.create",
-] as const;
-
-function cliAgentCatalog(startTerminal: boolean) {
-  return {
-    id: "claude",
-    label: "Claude Code",
-    capabilities: {
-      continueSession: true,
-      archive: false,
-      ...(startTerminal ? { startTerminal: true } : {}),
-    },
-    hosts: [
-      {
-        hostId: "gateway:local",
-        label: "Local Claude Code",
-        kind: "gateway",
-        connected: true,
-        canStartTerminal: startTerminal,
-        sessions: [],
-      },
-    ],
-  };
 }
 
 suite.define(() => {
@@ -250,11 +221,7 @@ suite.define(() => {
       startTerminal: false,
     },
   ])("blocks native submission visibly when $label", async (testCase) => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       cliAgentsEnabled: testCase.cliAgentsEnabled,
@@ -310,13 +277,6 @@ suite.define(() => {
         : {}),
     });
     const page = await context.newPage();
-    await page.addInitScript(() => {
-      const proofWindow = window as typeof window & { terminalToggleProof?: unknown[] };
-      proofWindow.terminalToggleProof = [];
-      window.addEventListener("openclaw:terminal-toggle", (event) => {
-        proofWindow.terminalToggleProof?.push((event as CustomEvent).detail);
-      });
-    });
     const worktreePath = "/home/peter/.openclaw/worktrees/terminal-e2e";
     const config = { tools: { web: { search: { provider: "brave" } } } };
     const gateway = await installMockGateway(page, {
@@ -440,14 +400,13 @@ suite.define(() => {
         methods.indexOf("sessions.catalog.startTerminal"),
       );
       await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("");
+      const panel = page.locator("openclaw-terminal-panel");
+      await panel.locator(".tabstrip-tab.is-live").waitFor();
+      await panel.locator(".tp-host canvas").waitFor({ state: "visible" });
       await expect
-        .poll(() =>
-          page.evaluate(() => {
-            const proofWindow = window as typeof window & { terminalToggleProof?: unknown[] };
-            return proofWindow.terminalToggleProof;
-          }),
-        )
-        .toContainEqual({ open: true, terminalSessionId: "terminal-cli-1", agentOwned: false });
+        .poll(() => panel.locator(".tabstrip-tab.is-live").getAttribute("title"))
+        .toContain(worktreePath);
+      expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
 
       await expect
         .poll(() => page.getByRole("button", { name: "Start in terminal" }).isEnabled())
@@ -477,11 +436,7 @@ suite.define(() => {
   });
 
   it("shows the terminal-start server error without rewriting it", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const serverMessage = "cwd is no longer available; choose another folder and retry";
     await installMockGateway(page, {
@@ -584,6 +539,7 @@ suite.define(() => {
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
         await gateway.resolveDeferred("sessions.catalog.startTerminal");
         await expect.poll(() => message.inputValue()).toBe("");
+        await page.locator("openclaw-terminal-panel .tabstrip-tab.is-live").waitFor();
         expect(await gateway.getRequests("sessions.title.prepare")).toHaveLength(1);
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       } finally {
@@ -593,11 +549,7 @@ suite.define(() => {
   );
 
   it("navigates to a created session while canonical session refresh is pending", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const sessionKey = "agent:main:refresh-overlap-e2e";
     const listResponse = {
@@ -668,11 +620,7 @@ suite.define(() => {
   });
 
   it("resolves a pending catalog target after reconnect without clearing the draft", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       cliAgentsEnabled: true,
@@ -728,7 +676,13 @@ suite.define(() => {
             },
           ],
         },
-        "sessions.catalog.startTerminal": { sessionId: "claude-reconnect" },
+        "sessions.catalog.startTerminal": {
+          sessionId: "claude-reconnect",
+          agentId: "research",
+          shell: "claude",
+          cwd: "/home/peter/research",
+          confined: false,
+        },
       },
     });
 
@@ -797,11 +751,7 @@ suite.define(() => {
   });
 
   it("clears the draft after a genuine new-session route navigation settles", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page, {
       methodResponses: {
@@ -845,11 +795,7 @@ suite.define(() => {
   });
 
   it("preserves a manually selected agent across a same-client reconnect", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       methodResponses: {

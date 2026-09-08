@@ -36,13 +36,13 @@ import { resolveTelegramReplyId } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { mergeTelegramPartialDeliveryError } from "./chunk-delivery.js";
 import { canonicalizeTelegramPresentationPayload } from "./interactive-fallback.js";
+import { createLaneDeliveryStateTracker } from "./lane-delivery-state.js";
 import {
-  createLaneDeliveryStateTracker,
   createLaneTextDeliverer,
   type DraftLaneState,
   type LaneDeliveryResult,
   type LaneName,
-} from "./lane-delivery.js";
+} from "./lane-delivery-text-deliverer.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import {
   createTelegramPromptContextProjectionSequence,
@@ -463,11 +463,11 @@ async function deliverTelegramProgressModeFinalAnswer(
   assertPlatformSendAuthorized?: () => void,
   bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T,
 ): Promise<LaneDeliveryResult> {
-  const afterAcceptedDraft = turn.answerLane.stream?.hasConsumedReplyTarget?.() === true;
+  const afterAcceptedDraft = turn.answerLane.stream?.hasConsumedReplyTarget() === true;
   // Seal pending preview updates before the durable final send. This bounds
   // final latency to one in-flight edit and prevents stale progress overtaking it.
   await cleanupProgressWithoutBlockingFinal("discard", async () => {
-    await turn.answerLane.stream?.discard?.();
+    await turn.answerLane.stream?.discard();
   });
   if (payload.isError === true) {
     await cleanupProgressWithoutBlockingFinal("teardown", async () => {

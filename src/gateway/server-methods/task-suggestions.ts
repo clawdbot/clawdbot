@@ -3,7 +3,6 @@ import path from "node:path";
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   type ErrorShape,
   type TaskSuggestion,
   type TaskSuggestionsAcceptParams,
@@ -13,7 +12,6 @@ import {
   validateTaskSuggestionsDismissParams,
   validateTaskSuggestionsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -48,13 +46,7 @@ import type {
   GatewayRequestHandlers,
   RespondFn,
 } from "./types.js";
-
-function invalidParams(method: string, errors: Parameters<typeof formatValidationErrors>[0]) {
-  return errorShape(
-    ErrorCodes.INVALID_REQUEST,
-    `invalid ${method} params: ${formatValidationErrors(errors)}`,
-  );
-}
+import { assertValidParams } from "./validation.js";
 
 type TaskSuggestionAcceptanceResult =
   | { ok: true; result: TaskSuggestionsAcceptResult }
@@ -262,6 +254,11 @@ async function createSuggestedTaskSession(params: {
 }): Promise<TaskSuggestionAcceptanceResult> {
   let sessionResponse: Parameters<RespondFn> | undefined;
   const { agentId } = params;
+  // Starting a follow-up authorizes the task, not a change of workspace.
+  const task =
+    params.mode === "local"
+      ? `Start by addressing this task in the current folder. If an isolated Git worktree is needed, explain why and ask the user before creating or switching to it.\n\n${params.suggestion.prompt}`
+      : params.suggestion.prompt;
   const sessionKey = buildDashboardSessionKey(agentId);
   const fail = (key: string, error: NonNullable<Parameters<RespondFn>[2]>) =>
     failSuggestedTaskSession({
@@ -279,7 +276,7 @@ async function createSuggestedTaskSession(params: {
         agentId,
         parentSessionKey: params.suggestion.sessionKey,
         label: params.suggestion.title,
-        ...(params.mode === "cloud" ? {} : { task: params.suggestion.prompt }),
+        ...(params.mode === "cloud" ? {} : { task }),
         ...(params.mode === "local" ? {} : { worktree: true }),
         cwd: params.suggestion.cwd,
       },
@@ -404,7 +401,7 @@ async function deliverSuggestedTaskToSourceSession(params: {
     return fail(
       errorShape(
         ErrorCodes.INVALID_REQUEST,
-        "source session no longer exists; start it in a worktree instead",
+        "source session no longer exists; start it in a new session instead",
       ),
     );
   }
@@ -444,12 +441,9 @@ async function deliverSuggestedTaskToSourceSession(params: {
 
 export const taskSuggestionsHandlers: GatewayRequestHandlers = {
   "taskSuggestions.list": ({ params, respond, context, client }) => {
-    if (!validateTaskSuggestionsListParams(params)) {
-      respond(
-        false,
-        undefined,
-        invalidParams("taskSuggestions.list", validateTaskSuggestionsListParams.errors),
-      );
+    if (
+      !assertValidParams(params, validateTaskSuggestionsListParams, "taskSuggestions.list", respond)
+    ) {
       return;
     }
     const requestedSessionKey = params.sessionKey;
@@ -490,12 +484,14 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
     );
   },
   "taskSuggestions.create": ({ params, respond, context }) => {
-    if (!validateTaskSuggestionsCreateParams(params)) {
-      respond(
-        false,
-        undefined,
-        invalidParams("taskSuggestions.create", validateTaskSuggestionsCreateParams.errors),
-      );
+    if (
+      !assertValidParams(
+        params,
+        validateTaskSuggestionsCreateParams,
+        "taskSuggestions.create",
+        respond,
+      )
+    ) {
       return;
     }
     if (!path.isAbsolute(params.cwd)) {
@@ -503,14 +499,6 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
         false,
         undefined,
         errorShape(ErrorCodes.INVALID_REQUEST, "task suggestion cwd must be absolute"),
-      );
-      return;
-    }
-    if (!insideGitCheckout(params.cwd)) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "task suggestion cwd must be inside a git checkout"),
       );
       return;
     }
@@ -547,14 +535,18 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
   },
   "taskSuggestions.accept": async (options) => {
     const { params, respond } = options;
-    if (!validateTaskSuggestionsAcceptParams(params)) {
-      respond(
-        false,
-        undefined,
-        invalidParams("taskSuggestions.accept", validateTaskSuggestionsAcceptParams.errors),
-      );
+    if (
+      !assertValidParams(
+        params,
+        validateTaskSuggestionsAcceptParams,
+        "taskSuggestions.accept",
+        respond,
+      )
+    ) {
       return;
     }
+    // Shipped RPC clients omit mode for an explicit worktree choice. Bundled
+    // clients always send local; retain this wire contract for those callers.
     const mode = params.mode ?? "worktree";
     const config = options.context.getRuntimeConfig();
     if (hasOperatorBoundary(options.client, config)) {
@@ -677,12 +669,14 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
     }
   },
   "taskSuggestions.dismiss": ({ params, respond, context, client }) => {
-    if (!validateTaskSuggestionsDismissParams(params)) {
-      respond(
-        false,
-        undefined,
-        invalidParams("taskSuggestions.dismiss", validateTaskSuggestionsDismissParams.errors),
-      );
+    if (
+      !assertValidParams(
+        params,
+        validateTaskSuggestionsDismissParams,
+        "taskSuggestions.dismiss",
+        respond,
+      )
+    ) {
       return;
     }
     const config = context.getRuntimeConfig();

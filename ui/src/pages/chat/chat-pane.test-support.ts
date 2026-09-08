@@ -25,10 +25,14 @@ import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { loadSettings } from "../../app/settings.ts";
+import type { MarkdownRenderOptions } from "../../components/markdown-render-options.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import type { TaskSuggestionAcceptMode } from "../../lib/task-suggestion-acceptance.ts";
 import "./chat-pane.ts";
+import {
+  createTestGatewayClient,
+  type GatewayRequestHandler,
+} from "../../test-helpers/gateway-client.ts";
 import {
   gatewayHelloForMethods,
   SESSION_MUTATION_TEST_METHODS,
@@ -81,18 +85,15 @@ export type TestChatPane = HTMLElement & {
   disconnectedCallback: () => void;
   discardStagedAttachments?: () => void;
   resumeStagedAttachments?: () => void;
-  acceptTaskSuggestion: (
-    suggestion: TaskSuggestion,
-    mode: TaskSuggestionAcceptMode,
-    cloudProfileId?: string,
-  ) => Promise<void>;
+  acceptTaskSuggestion: (suggestion: TaskSuggestion) => Promise<void>;
   copyTaskSuggestionPrompt: (suggestion: TaskSuggestion) => Promise<void>;
   handleDocumentKeydown: (event: KeyboardEvent) => void;
   handleTaskSuggestionEvent: (event: TaskSuggestionEvent) => void;
   refreshTaskSuggestions: () => Promise<void>;
-  refreshSessionPullRequests: (options?: { refresh?: boolean }) => Promise<void>;
+  refreshSessionPullRequests: (options?: { refresh?: boolean }) => boolean;
   sessionPullRequests: ControlUiSessionPullRequest[];
   sessionPullRequestsBranch: ControlUiSessionBranch | undefined;
+  githubRepo: MarkdownRenderOptions["githubRepo"];
   taskSuggestions: TaskSuggestion[];
   presencePayload?: { presence: unknown[] };
   sessionSuggestionAddOperation: symbol | undefined;
@@ -182,13 +183,21 @@ export type TestChatPane = HTMLElement & {
 };
 
 type GatewayBrowserClientFixtureOverrides = Omit<Partial<GatewayBrowserClient>, "request"> & {
-  request?: (method: string, params?: unknown) => unknown;
+  request?: GatewayRequestHandler;
 };
 
 export function createGatewayBrowserClientFixture(
   overrides: GatewayBrowserClientFixtureOverrides = {},
 ): GatewayBrowserClient {
-  return overrides as typeof overrides & GatewayBrowserClient;
+  const {
+    request = (method) => (method === "sessions.describe" ? { session: null } : {}),
+    ...properties
+  } = overrides;
+  const client = createTestGatewayClient(request);
+  for (const [key, value] of Object.entries(properties)) {
+    Object.defineProperty(client, key, { configurable: true, writable: true, value });
+  }
+  return client;
 }
 
 function withLivePreferences(context: Omit<ApplicationContext, "theme">): ApplicationContext {
@@ -235,7 +244,6 @@ export function createInitializationContext(): ApplicationContext {
           avatarReason: null,
         },
         serverVersion: null,
-        localMediaPreviewRoots: [],
         embedSandboxMode: "strict",
         allowExternalEmbedUrls: false,
         terminalEnabled: false,
@@ -345,7 +353,7 @@ export function createSessionContext(
     chatSubmissions: createChatSubmissions(),
     chatAttachmentHandoff: createChatAttachmentHandoff(),
     nativeChatDrafts: { subscribe: () => () => undefined },
-    placementStartup: { get: vi.fn(() => null), pause: vi.fn() },
+    placementStartup: { get: vi.fn(() => null), hasPendingTurn: () => false, pause: vi.fn() },
     sessions,
   } as unknown as Omit<ApplicationContext, "theme">);
 }
@@ -410,6 +418,11 @@ export function createTestChatPane(params: {
   pane.state = state;
   pane.connectedClient = params.client;
   pane.connectionGeneration = 4;
+  onTestFinished(async () => {
+    pane.disconnectedCallback();
+    // Let lazy pane imports observe disconnect before Vitest removes their environment.
+    await vi.dynamicImportSettled();
+  });
   return {
     pane,
     requestUpdate,
@@ -481,6 +494,10 @@ class RenderTestChatPane extends ChatPane {
 
   override applySessionsState(state: ApplicationContext["sessions"]["state"]) {
     super.applySessionsState(state);
+  }
+
+  override refreshSessionPullRequests(options: { refresh?: boolean } = {}) {
+    return super.refreshSessionPullRequests(options);
   }
 }
 

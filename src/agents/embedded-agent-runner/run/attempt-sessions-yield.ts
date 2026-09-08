@@ -1,6 +1,7 @@
 import type { AssistantMessage, AssistantMessageEventStreamLike } from "../../../llm/types.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { buildSessionsYieldContextMessage } from "../../sessions-yield-context.js";
 import type { SessionManager } from "../../sessions/index.js";
 /**
  * Handles sessions-yield interruption, persistence, and artifact cleanup.
@@ -9,12 +10,6 @@ import { isRunnerAbortError } from "../abort.js";
 import { waitForEmbeddedAbortSettle } from "./attempt-subscription-cleanup.js";
 
 const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "openclaw.sessions_yield_interrupt";
-const SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE = "openclaw.sessions_yield";
-
-// Persist a hidden context reminder so the next turn knows why the runner stopped.
-function buildSessionsYieldContextMessage(message: string): string {
-  return `${message}\n\n[Context: The previous turn ended intentionally via sessions_yield while waiting for a follow-up event.]`;
-}
 
 export async function waitForSessionsYieldAbortSettle(params: {
   settlePromise: Promise<void> | null;
@@ -113,15 +108,9 @@ export async function persistSessionsYieldContextMessage(
   },
   message: string,
 ) {
-  await activeSession.sendCustomMessage(
-    {
-      customType: SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE,
-      content: buildSessionsYieldContextMessage(message),
-      display: false,
-      details: { source: "sessions_yield", message },
-    },
-    { triggerTurn: false },
-  );
+  await activeSession.sendCustomMessage(buildSessionsYieldContextMessage(message), {
+    triggerTurn: false,
+  });
 }
 
 // Remove the synthetic yield interrupt + aborted assistant entry from the live transcript.
@@ -131,7 +120,7 @@ export function stripSessionsYieldArtifacts(activeSession: {
   messages: AgentMessage[];
   agent: { state: { messages: AgentMessage[] } };
   sessionManager: Pick<SessionManager, "removeTrailingEntries">;
-}) {
+}): boolean {
   const strippedMessages = activeSession.messages.slice();
 
   // The tool-calling assistant turn and synthetic abort artifacts form one
@@ -149,7 +138,7 @@ export function stripSessionsYieldArtifacts(activeSession: {
 
   const removedMessages = activeSession.messages.slice(strippedMessages.length);
   if (removedMessages.length === 0) {
-    return;
+    return false;
   }
 
   // The interrupt marker can settle independently in live and persisted state.
@@ -157,7 +146,7 @@ export function stripSessionsYieldArtifacts(activeSession: {
   let remainingAssistantCount = removedMessages.filter(
     (message) => message.role === "assistant",
   ).length;
-  activeSession.sessionManager.removeTrailingEntries(
+  const removedEntries = activeSession.sessionManager.removeTrailingEntries(
     (entry) => {
       if (
         entry.type === "custom_message" &&
@@ -184,4 +173,5 @@ export function stripSessionsYieldArtifacts(activeSession: {
     },
   );
   activeSession.agent.state.messages = strippedMessages;
+  return removedEntries > 0;
 }

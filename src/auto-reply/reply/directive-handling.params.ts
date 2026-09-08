@@ -44,6 +44,7 @@ type HandleDirectiveOnlyCoreParams = {
 
 /** Full directive-only command handler inputs. */
 export type HandleDirectiveOnlyParams = HandleDirectiveOnlyCoreParams & {
+  onRejection?: () => void;
   ctx?: MsgContext;
   messageProvider?: string;
   currentThinkLevel?: ThinkLevel;

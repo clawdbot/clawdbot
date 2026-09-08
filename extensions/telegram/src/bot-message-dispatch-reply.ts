@@ -385,7 +385,9 @@ export async function deliverReply(
         buttons: telegramButtons,
       };
       turn.activeAnswerDraftIsToolProgressOnly = false;
-      turn.progressCompositor.reset();
+      if (!suppressProgressAnswerBlock) {
+        turn.progressCompositor.resetActivity();
+      }
       blockDelivered = true;
       continue;
     }
@@ -402,7 +404,7 @@ export async function deliverReply(
         turn.rotateAnswerLaneWhenQueuedBlocksSettle = false;
       }
       turn.activeAnswerDraftIsToolProgressOnly = false;
-      turn.progressCompositor.reset();
+      turn.progressCompositor.resetActivity();
     }
     const isAskUserPayload = effectivePayload.channelData?.askUser !== undefined;
     const result =

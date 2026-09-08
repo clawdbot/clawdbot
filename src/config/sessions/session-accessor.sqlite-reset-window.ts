@@ -279,6 +279,55 @@ export function resolveTranscriptBoundaryWindow(
   return window;
 }
 
+export type ClosedResetInterval = {
+  startExclusiveActivePosition: number;
+  endInclusiveActivePosition: number;
+};
+
+function selectActiveResetRows(projection: CurrentTranscriptProjection) {
+  return getActiveTranscriptKysely(projection.database)
+    .selectFrom("session_transcript_active_events as active")
+    .innerJoin("transcript_event_identities as identity", (join) =>
+      join
+        .onRef("identity.session_id", "=", "active.session_id")
+        .onRef("identity.seq", "=", "active.event_seq"),
+    )
+    .select("active.active_position")
+    .where("active.session_id", "=", projection.resolved.sessionId)
+    .where("identity.event_type", "=", "reset");
+}
+
+/** Closed interval (previous reset, this reset] for an active-path event outside the latest window. */
+export function resolveClosedResetInterval(
+  projection: CurrentTranscriptProjection,
+  target: { activePosition: number; eventType: string },
+): ClosedResetInterval | undefined {
+  const closing =
+    target.eventType === "reset"
+      ? { active_position: target.activePosition }
+      : executeSqliteQueryTakeFirstSync(
+          projection.database.db,
+          selectActiveResetRows(projection)
+            .where("active.active_position", ">", target.activePosition)
+            .orderBy("active.active_position", "asc")
+            .limit(1),
+        );
+  if (!closing) {
+    return undefined;
+  }
+  const opening = executeSqliteQueryTakeFirstSync(
+    projection.database.db,
+    selectActiveResetRows(projection)
+      .where("active.active_position", "<", closing.active_position)
+      .orderBy("active.active_position", "desc")
+      .limit(1),
+  );
+  return {
+    startExclusiveActivePosition: opening?.active_position ?? -1,
+    endInclusiveActivePosition: closing.active_position,
+  };
+}
+
 export function resolveVisibleMessagePositions(
   projection: CurrentTranscriptProjection,
 ): VisibleMessagePositions {
@@ -354,6 +403,55 @@ export function* iterateVisibleMessageRange(
       range.query.select(["active.event_seq", "active.message_position", "event.event_json"]),
     )) {
       yield parseActiveTranscriptMessageRow(row);
+    }
+  }
+}
+
+export function hasUnindexedVisibleMessages(
+  projection: CurrentTranscriptProjection,
+  start: number,
+  endExclusive: number,
+): boolean {
+  return selectVisibleMessageRanges(projection, start, endExclusive).some(
+    (range) =>
+      executeSqliteQueryTakeFirstSync(
+        projection.database.db,
+        range.query
+          .leftJoin("transcript_event_identities as identity", (join) =>
+            join
+              .onRef("identity.session_id", "=", "active.session_id")
+              .onRef("identity.seq", "=", "active.event_seq"),
+          )
+          .select("active.event_seq")
+          .where("identity.seq", "is", null)
+          .limit(1),
+      ) !== undefined,
+  );
+}
+
+/** Validate the whole selected history without materializing ordinary payloads in JavaScript. */
+export function assertVisibleMessageRangeJson(
+  projection: CurrentTranscriptProjection,
+  start: number,
+  endExclusive: number,
+): void {
+  for (const range of selectVisibleMessageRanges(projection, start, endExclusive)) {
+    for (const row of iterateSqliteQuerySync(
+      projection.database.db,
+      range.query
+        .select(["active.event_seq", "active.message_position", "event.event_json"])
+        .where((eb) => {
+          // The raw check rejects extra values; the enclosing array cannot end at a NUL.
+          const enclosed = eb(eb.val("["), "||", eb("event.event_json", "||", eb.val("]")));
+          return eb.or([
+            eb(eb.fn<number>("json_valid", ["event.event_json"]), "=", 0),
+            eb(eb.fn<number>("json_valid", [enclosed]), "=", 0),
+          ]);
+        }),
+    )) {
+      // SQLite's nesting limit is stricter than JSON.parse. Keep readable deep
+      // rows and let the existing parser own actual malformed-row failures.
+      parseActiveTranscriptMessageRow(row);
     }
   }
 }

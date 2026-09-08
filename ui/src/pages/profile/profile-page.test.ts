@@ -9,10 +9,11 @@ import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { i18n, t } from "../../i18n/index.ts";
+import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
-import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { ModelAccounts } from "./model-accounts.ts";
+import { createConnectedContext } from "./profile-page.test-support.ts";
 import { ProfilePage } from "./profile-page.ts";
 
 const PROFILE_PAGE_TEST_TAG = "test-openclaw-profile-page";
@@ -88,87 +89,7 @@ function createContext(
   } as unknown as ApplicationContext<RouteId>;
 }
 
-function createConnectedContext(
-  request: GatewayBrowserClient["request"],
-  selfUser: AuthenticatedUser | null = null,
-) {
-  let snapshot: ApplicationGatewaySnapshot = {
-    client: createTestGatewayClient(request),
-    phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
-    assistantAgentId: "main",
-    sessionKey: "agent:main:main",
-    lastError: null,
-    lastErrorCode: null,
-    selfUser,
-  };
-  const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
-  const subscribe = () => () => undefined;
-  const context = {
-    runtimeConfig: { subscribe, state: {}, ensureLoaded: async () => undefined },
-    gateway: {
-      get snapshot() {
-        return snapshot;
-      },
-      connection: {
-        gatewayUrl: window.location.origin.replace(/^http/u, "ws"),
-        token: "",
-        bootstrapToken: "",
-        password: "",
-      },
-      subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-      updateSelfUser(patch: Partial<Omit<AuthenticatedUser, "id">>) {
-        if (!snapshot.selfUser) {
-          return;
-        }
-        snapshot = { ...snapshot, selfUser: { ...snapshot.selfUser, ...patch } };
-        for (const listener of listeners) {
-          listener(snapshot);
-        }
-      },
-    },
-    agents: {
-      state: { agentsList: null },
-      ensureList: async () => null,
-      subscribe,
-    },
-    agentIdentity: {
-      get: () => null,
-      ensure: async () => undefined,
-      subscribe,
-    },
-    config: {
-      current: {
-        assistantIdentity: {
-          name: "OpenClaw",
-          avatar: null,
-          avatarSource: null,
-          avatarStatus: null,
-          avatarReason: null,
-        },
-      },
-      subscribe,
-    },
-    basePath: "",
-    navigate: vi.fn(),
-  } as unknown as ApplicationContext<RouteId>;
-  return {
-    context,
-    emitConnected(connected: boolean) {
-      snapshot = { ...snapshot, phase: connected ? "connected" : "reconnecting" };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
-    },
-  };
-}
-
-function stubProfileAvatarProcessing() {
+function stubProfileAvatarProcessing(decode = vi.fn<() => Promise<void>>(async () => undefined)) {
   class StubUrl extends URL {
     static override createObjectURL = vi.fn(() => "blob:avatar");
     static override revokeObjectURL = vi.fn();
@@ -178,7 +99,7 @@ function stubProfileAvatarProcessing() {
     src = "";
     naturalWidth = 512;
     naturalHeight = 256;
-    decode = vi.fn(async () => undefined);
+    decode = decode;
   }
   vi.stubGlobal("URL", StubUrl);
   vi.stubGlobal("Image", StubImage);
@@ -295,6 +216,53 @@ it.each([
     expect(harness.context.navigate).toHaveBeenCalledWith("usage");
   },
 );
+
+it("shows the authenticated user in the profile hero when the default agent differs", async () => {
+  const profile: UserProfile = {
+    id: "profile-1",
+    displayName: "Ada",
+    avatarMime: null,
+    mergedInto: null,
+    createdAt: 1,
+    updatedAt: 2,
+    emails: ["ada@example.test"],
+    githubIdentity: null,
+    hasAvatar: false,
+  };
+  const request = vi.fn(async (method: string) => {
+    if (method === "users.self") {
+      return { profile };
+    }
+    throw new Error(`unexpected method: ${method}`);
+  });
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: profile.id,
+    email: profile.emails[0],
+    name: profile.displayName ?? undefined,
+  });
+  (harness.context.agents as unknown as { state: unknown }).state = {
+    agentsList: {
+      defaultId: "clipper",
+      agents: [{ id: "clipper", name: "Clipper" }],
+    },
+  };
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+
+  await waitForFast(() =>
+    expect(page.querySelector(".profile-hero__name")?.textContent).toBe("Ada"),
+  );
+
+  expect(page.querySelector(".profile-hero__handle")?.textContent).toContain("ada@example.test");
+  expect(page.querySelector(".profile-hero")?.textContent).not.toContain("Clipper");
+
+  harness.context.gateway.updateSelfUser?.({ name: "Ada Lovelace" });
+  await waitForFast(() =>
+    expect(page.querySelector(".profile-hero__name")?.textContent).toBe("Ada Lovelace"),
+  );
+});
 
 it("loads and updates co-author consent separately from verified GitHub identity", async () => {
   const profile: UserProfile = {
@@ -574,6 +542,7 @@ it("fetches a protected hero avatar with the current Control UI credential", asy
   vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
   const harness = createConnectedContext(vi.fn() as GatewayBrowserClient["request"]);
   harness.context.gateway.connection.token = "profile-token";
+  setAvatarGatewayOrigin(harness.context.gateway.connection.gatewayUrl, ["profile-token"]);
   const agentsState = harness.context.agents.state as unknown as {
     agentsList: {
       defaultId: string;
@@ -595,7 +564,8 @@ it("fetches a protected hero avatar with the current Control UI credential", asy
   const page = mountProfilePage(harness.context);
 
   await waitForFast(() => {
-    expect(fetchMock).toHaveBeenCalledWith("/avatar/main", {
+    expect(fetchMock).toHaveBeenCalledWith(new URL("/avatar/main", window.location.origin).href, {
+      credentials: "include",
       headers: { Authorization: "Bearer profile-token" },
       signal: expect.any(AbortSignal),
     });
@@ -605,41 +575,8 @@ it("fetches a protected hero avatar with the current Control UI credential", asy
   });
 
   page.remove();
-  await waitForFast(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:hero-avatar"));
-});
-
-it("retries the identity bootstrap when users.self returns no profile", async () => {
-  const profile = { ...modelAccountProfile };
-  let identityRequests = 0;
-  const request = vi.fn(async (method: string) => {
-    if (method === "users.self") {
-      identityRequests += 1;
-      return identityRequests === 1 ? {} : { profile };
-    }
-    throw new Error(`unexpected method: ${method}`);
-  });
-  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
-    id: "profile-1",
-    email: "ada@example.test",
-    name: "Ada",
-  });
-  const page = mountProfilePage(harness.context);
-
-  await waitForFast(() => expect(page.querySelector(".profile-identity-empty")).not.toBeNull());
-  const emptyState = page.querySelector<HTMLElement>(".profile-identity-empty");
-  const setIdentityButton = emptyState?.querySelector<HTMLButtonElement>("button");
-  expect(emptyState?.textContent).toContain(t("profilePage.identity.notSet"));
-  expect(setIdentityButton?.textContent?.trim()).toBe(t("profilePage.identity.setIdentity"));
-  expect(page.textContent).not.toContain("Cannot read properties of undefined");
-
-  setIdentityButton?.click();
-
-  await waitForFast(() =>
-    expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(2),
-  );
-  await waitForFast(() =>
-    expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe("Ada"),
-  );
+  setAvatarGatewayOrigin(null);
+  expect(revokeObjectURL).toHaveBeenCalledWith("blob:hero-avatar");
 });
 
 it("keeps identity refresh single-flight and allows retry after settlement", async () => {
@@ -747,6 +684,91 @@ it("replaces an in-flight identity request after a same-client reconnect", async
   expect(selfCalls()).toHaveLength(2);
 });
 
+it.each([
+  { stage: "preprocessing", outcome: "success" },
+  { stage: "preprocessing", outcome: "failure" },
+  { stage: "mutation", outcome: "success" },
+  { stage: "mutation", outcome: "failure" },
+])("retires avatar $stage $outcome without disturbing a newer save", async ({ stage, outcome }) => {
+  let profile = { ...modelAccountProfile };
+  const staleDecode = createDeferred();
+  const staleMutation = createDeferred<{ profile: UserProfile; avatarRevision: string }>();
+  const currentMutation = createDeferred<{ profile: UserProfile; avatarRevision: string }>();
+  const decode = vi.fn<() => Promise<void>>(async () => undefined);
+  if (stage === "preprocessing") {
+    decode.mockImplementationOnce(() => staleDecode.promise);
+  }
+  stubProfileAvatarProcessing(decode);
+  let avatarRequests = 0;
+  const request = vi.fn(async (method: string) => {
+    if (method === "users.self") {
+      return { profile };
+    }
+    if (method === "users.listModelAccounts") {
+      return { profileId: profile.id, accounts: [], links: [] };
+    }
+    if (method === "users.setAvatar") {
+      avatarRequests += 1;
+      return stage === "mutation" && avatarRequests === 1
+        ? staleMutation.promise
+        : currentMutation.promise;
+    }
+    throw new Error(`unexpected method: ${method}`);
+  });
+  const avatarBefore = "/api/users/profile-1/avatar?v=before";
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: profile.id,
+    name: profile.displayName ?? undefined,
+    avatarUrl: avatarBefore,
+  });
+  const page = mountProfilePage(harness.context);
+  const nameInput = () => page.querySelector<HTMLInputElement>(".identity-name-control input");
+  await waitForFast(() => expect(nameInput()?.disabled).toBe(false));
+  selectProfileAvatar(page);
+  await waitForFast(() =>
+    expect(stage === "preprocessing" ? decode.mock.calls.length : avatarRequests).toBe(1),
+  );
+
+  harness.emitConnected(false);
+  harness.emitConnected(true);
+  await waitForFast(() => expect(nameInput()?.disabled).toBe(false));
+  nameInput()!.value = "Current draft";
+  nameInput()!.dispatchEvent(new Event("input", { bubbles: true }));
+  selectProfileAvatar(page);
+  const expectedAvatarRequests = stage === "preprocessing" ? 1 : 2;
+  await waitForFast(() => expect(avatarRequests).toBe(expectedAvatarRequests));
+
+  if (outcome === "failure") {
+    (stage === "preprocessing" ? staleDecode : staleMutation).reject(new Error("Retired save"));
+  } else if (stage === "preprocessing") {
+    staleDecode.resolve();
+  } else {
+    staleMutation.resolve({
+      profile: { ...profile, displayName: "Retired identity" },
+      avatarRevision: "retired",
+    });
+  }
+  // Settle the retired promise chain while the replacement RPC remains pending.
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  await page.updateComplete;
+
+  expect(avatarRequests).toBe(expectedAvatarRequests);
+  expect(nameInput()?.disabled).toBe(true);
+  expect(nameInput()?.value).toBe("Current draft");
+  expect(page.querySelector('[role="alert"]')).toBeNull();
+  expect(harness.context.gateway.snapshot.selfUser?.avatarUrl).toBe(avatarBefore);
+  expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(2);
+
+  profile = { ...profile, hasAvatar: true, avatarMime: "image/png", updatedAt: 3 };
+  currentMutation.resolve({ profile, avatarRevision: "current" });
+  await waitForFast(() => expect(nameInput()?.disabled).toBe(false));
+  expect(nameInput()?.value).toBe("Current draft");
+  expect(harness.context.gateway.snapshot.selfUser?.avatarUrl).toContain("?v=current");
+  expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(3);
+});
+
 it("bootstraps and refreshes the connected user's profile through users.self", async () => {
   let avatarRevision = "avatar-content-hash-png";
   let publishAvatarPresence: (() => void) | undefined;
@@ -754,13 +776,8 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
     ...modelAccountProfile,
     emails: ["ada@example.test", "ada@work.test"],
   };
-  let omitNextProfile = false;
   const request = vi.fn(async (method: string, params?: unknown) => {
     if (method === "users.self") {
-      if (omitNextProfile) {
-        omitNextProfile = false;
-        return {};
-      }
       return { profile };
     }
     if (method === "users.listModelAccounts") {
@@ -879,7 +896,6 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
     ).toContain(`/api/users/profile-1/avatar?v=${avatarRevision}`),
   );
 
-  omitNextProfile = true;
   request.mockClear();
   page.querySelector<HTMLButtonElement>(".profile-refresh")?.click();
   await waitForFast(() =>
@@ -893,8 +909,6 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
   expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe(
     "Unsaved draft",
   );
-  expect(page.querySelector(".profile-identity-empty")).toBeNull();
-
   const pageWithState = page as ProfilePageElement & {
     identityBusy: "display-name" | "avatar" | null;
   };

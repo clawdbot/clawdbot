@@ -6,6 +6,7 @@ import {
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const rosterMatch = { includeGlobal: true };
@@ -13,11 +14,7 @@ type PermissionTestApp = HTMLElement & { runtime?: { context: ApplicationContext
 
 suite.define(() => {
   it("keeps a saved permission mode when its list refresh fails", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const session = {
       key: "agent:main:permission-refresh",
@@ -28,7 +25,12 @@ suite.define(() => {
       updatedAt: 1,
     };
     const gateway = await installMockGateway(page, {
-      methodResponses: { "sessions.list": chatSessionListResponse([session]) },
+      sessions: [session],
+      methodResponses: {
+        "sessions.list": {
+          cases: [{ match: { spawnedBy: session.key }, response: chatSessionListResponse([]) }],
+        },
+      },
       sessionKey: session.key,
     });
 
@@ -44,6 +46,17 @@ suite.define(() => {
       await pane.locator('[data-chat-permission-option="workspace"]').click();
       await gateway.waitForRequest("sessions.patch");
       await gateway.waitForRequest("sessions.list", { after: listRequests, match: rosterMatch });
+      // Swarm hydration can finish here; the parent must not appear in its own child query.
+      await page.evaluate(async (key) => {
+        const app = document.querySelector("openclaw-app") as PermissionTestApp;
+        await app.runtime?.context.sessions.list({
+          spawnedBy: key,
+          includeGlobal: false,
+          includeUnknown: false,
+          configuredAgentsOnly: true,
+          limit: 10_000,
+        });
+      }, session.key);
       await gateway.rejectDeferred("sessions.list", {
         code: "UNAVAILABLE",
         message: "Roster refresh unavailable",
@@ -65,11 +78,7 @@ suite.define(() => {
   });
 
   it("keeps a newer permission event after an older patch response arrives", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const session = {
       key: "agent:main:permission-ordering",
@@ -80,7 +89,12 @@ suite.define(() => {
       updatedAt: 1,
     };
     const gateway = await installMockGateway(page, {
-      methodResponses: { "sessions.list": chatSessionListResponse([session]) },
+      sessions: [session],
+      methodResponses: {
+        "sessions.list": {
+          cases: [{ match: { spawnedBy: session.key }, response: chatSessionListResponse([]) }],
+        },
+      },
       sessionKey: session.key,
     });
 

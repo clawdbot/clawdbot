@@ -8,7 +8,7 @@ import { loadMcpToolGrants } from "../../infra/exec-approvals-mcp.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { resolveProjectedMcpCodexToolApprovalMode } from "../mcp-codex-tool-approval.js";
-import { retainBeforeToolCallForNativeHookRelay } from "./host-capability.js";
+import { retainBeforeToolCallForNativeHookRelay } from "./host-private-capabilities.js";
 import {
   clearNativeHookRelayBridgesForTests,
   NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
@@ -181,7 +181,7 @@ function registerNativeHookRelayInternal(
   const allowedEvents = normalizeAllowedEvents(params.allowedEvents);
   const stateDbPath = resolveOpenClawStateSqlitePath();
   const deliverReplacedRegistrationUnregister = unregisterNativeHookRelay(relayId, undefined, {
-    deferBridgeRecordRemovalMs: NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
+    deferListenerCloseMs: NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
     deferOnUnregister: true,
   });
   let partialRegistration: ActiveNativeHookRelayRegistration | undefined;
@@ -300,7 +300,7 @@ function registerNativeHookRelayInternal(
 function unregisterNativeHookRelay(
   relayId: string,
   expectedRegistration?: ActiveNativeHookRelayRegistration,
-  options?: { deferBridgeRecordRemovalMs?: number; deferOnUnregister?: boolean },
+  options?: { deferListenerCloseMs?: number; deferOnUnregister?: boolean },
 ): (() => void) | undefined {
   if (expectedRegistration && relays.get(relayId) !== expectedRegistration) {
     return undefined;
