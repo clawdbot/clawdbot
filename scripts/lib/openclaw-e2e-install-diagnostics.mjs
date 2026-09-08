@@ -56,6 +56,13 @@ function writeSidecar(file, bytes) {
     return { size: bytes.length };
   });
 }
+function trimUtf8Start(bytes) {
+  let offset = 0;
+  while (offset < bytes.length && (bytes[offset] & 0xc0) === 0x80) {
+    offset += 1;
+  }
+  return bytes.subarray(offset);
+}
 async function capture(file) {
   const maxBytes = readLimit("OPENCLAW_E2E_LOG_TAIL_BYTES", 262144);
   const maxLines = readLimit("OPENCLAW_E2E_LOG_TAIL_LINES", 120);
@@ -66,6 +73,7 @@ async function capture(file) {
       tail = tail.subarray(tail.length - maxBytes);
     }
   }
+  tail = trimUtf8Start(tail);
   const text = tail.toString("utf8");
   const trailingNewline = text.endsWith("\n");
   const lines = text.split("\n");
@@ -73,7 +81,11 @@ async function capture(file) {
     lines.pop();
   }
   const bounded = maxLines ? lines.slice(-maxLines).join("\n") + (trailingNewline ? "\n" : "") : "";
-  writeSidecar(file, Buffer.from(bounded));
+  let bytes = Buffer.from(bounded);
+  if (bytes.length > maxBytes) {
+    bytes = trimUtf8Start(bytes.subarray(bytes.length - maxBytes));
+  }
+  writeSidecar(file, bytes);
 }
 function readSidecar(file) {
   return useSidecar(file, fs.constants.O_RDONLY, (fd, before) => {
@@ -113,6 +125,10 @@ async function main() {
     await capture(file);
   } else if (mode === "clear") {
     writeSidecar(file, Buffer.alloc(0));
+  } else if (mode === "owner") {
+    const stat = fs.lstatSync(file);
+    requireInvariant(validSidecar(stat, stat.uid));
+    process.stdout.write(String(stat.uid));
   } else if (mode === "publish") {
     const { redactSensitiveText } = await import("../../src/logging/redact.ts");
     process.stdout.write(formatInstallDiagnostics(file, redactSensitiveText));

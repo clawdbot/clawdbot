@@ -1,13 +1,6 @@
 // Docker E2E Observability tests cover docker e2e observability script behavior.
 import { spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  readdirSync,
-  readFileSync,
-  statSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -74,6 +67,34 @@ describe("Docker E2E observability", () => {
     for (const line of result.stdout.trimEnd().split("\n")) {
       expect(line.startsWith(installDiagnosticsPrefix)).toBe(true);
     }
+  });
+
+  it("keeps captured UTF-8 tails publishable within the byte limit", () => {
+    const tempDir = tempDirs.make("openclaw-install-diagnostics-utf8-");
+    const diagnosticsPath = path.join(tempDir, "install.log");
+    writeFileSync(diagnosticsPath, "", { mode: 0o622 });
+    chmodSync(diagnosticsPath, 0o622);
+    const env = {
+      ...process.env,
+      OPENCLAW_E2E_INSTALL_DIAGNOSTICS_UID: String(process.getuid?.() ?? 0),
+      OPENCLAW_E2E_LOG_TAIL_BYTES: "4",
+    };
+
+    const capture = spawnSync(
+      process.execPath,
+      [installDiagnosticsScript, "capture", diagnosticsPath],
+      { encoding: "utf8", env, input: "éabc" },
+    );
+    const published = spawnSync(
+      process.execPath,
+      ["--import", tsxPreload, installDiagnosticsScript, "publish", diagnosticsPath],
+      { encoding: "utf8", env },
+    );
+
+    expect(capture.status, capture.stderr).toBe(0);
+    expect(readFileSync(diagnosticsPath)).toEqual(Buffer.from("abc"));
+    expect(published.status, published.stderr).toBe(0);
+    expect(published.stdout).toBe(`${installDiagnosticsPrefix}abc\n`);
   });
 
   it("uses only the fixed omission marker for unsafe input or redaction failure", () => {
@@ -166,13 +187,19 @@ export async function load(url, context, nextLoad) {
     expect(scenario).not.toContain("openclaw-install-diagnostics.log");
   });
 
-  it("resolves the wrapper sidecar owner without stat dialect output", () => {
+  it("resolves the wrapper sidecar owner inside the container namespace", () => {
     const tempDir = tempDirs.make("openclaw-typed-onboarding-owner-");
     const script = readFileSync(typedOnboardingScript, "utf8");
-    const start = script.indexOf("install_diagnostics_dir=");
-    const end = script.indexOf("\n\nPACKAGE_TGZ=", start);
+    const startMarker = '-i "$IMAGE_NAME" bash -c \'\n';
+    const endMarker = "\n' bash bash scripts/e2e/lib/release-typed-onboarding/scenario.sh";
+    const start = script.indexOf(startMarker);
+    const end = script.indexOf(endMarker, start);
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
+    const containerSetup = script.slice(start + startMarker.length, end);
+    const diagnosticsPath = path.join(tempDir, "install.log");
+    writeFileSync(diagnosticsPath, "", { mode: 0o622 });
+    chmodSync(diagnosticsPath, 0o622);
     const statPath = path.join(tempDir, "stat");
     writeFileSync(
       statPath,
@@ -193,27 +220,24 @@ export async function load(url, context, nextLoad) {
       "/bin/bash",
       [
         "-c",
-        `${script.slice(start, end)}
-printf '%s' "$install_diagnostics_uid"`,
+        containerSetup,
+        "bash",
+        "/bin/bash",
+        "-c",
+        'printf "%s" "$OPENCLAW_E2E_INSTALL_DIAGNOSTICS_UID"',
       ],
       {
         encoding: "utf8",
         env: {
           ...process.env,
-          OPENCLAW_TEST_UID: String(uid),
+          OPENCLAW_E2E_INSTALL_DIAGNOSTICS: diagnosticsPath,
+          OPENCLAW_E2E_INSTALL_DIAGNOSTICS_UID: String(uid + 1),
           PATH: `${tempDir}:${process.env.PATH}`,
-          TMPDIR: tempDir,
         },
       },
     );
 
     expect(result.status, result.stderr).toBe(0);
-    const diagnosticsDir = readdirSync(tempDir).find((entry) =>
-      entry.startsWith("openclaw-typed-onboarding-install-diagnostics."),
-    );
-    expect(diagnosticsDir).toBeDefined();
-    const diagnosticsPath = path.join(tempDir, diagnosticsDir!, "install.log");
-    expect(statSync(diagnosticsPath).uid).toBe(uid);
     expect(result.stdout).toBe(String(uid));
   });
 

@@ -47,10 +47,6 @@ chmod 700 "$install_diagnostics_dir"
 install_diagnostics_path="$install_diagnostics_dir/install.log"
 : >"$install_diagnostics_path"
 chmod 622 "$install_diagnostics_path"
-install_diagnostics_uid="$(
-  node -e 'process.stdout.write(String(require("node:fs").statSync(process.argv[1]).uid))' \
-    "$install_diagnostics_path"
-)"
 
 PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz release-typed-onboarding "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
 if [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] && [ -z "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ]; then
@@ -75,14 +71,18 @@ echo "Running release typed onboarding Docker E2E..."
 if docker_e2e_run_with_harness \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_E2E_INSTALL_DIAGNOSTICS=/tmp/openclaw-install-diagnostics.log \
-  -e "OPENCLAW_E2E_INSTALL_DIAGNOSTICS_UID=$install_diagnostics_uid" \
   -e "OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE=$OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   -v "$install_diagnostics_path:/tmp/openclaw-install-diagnostics.log:rw" \
   -v "$ROOT_DIR/scripts/lib/openclaw-e2e-install-diagnostics.mjs:/app/scripts/lib/openclaw-e2e-install-diagnostics.mjs:ro" \
   -v "$SCENARIO_PATH:/app/scripts/e2e/lib/release-typed-onboarding/scenario.sh:ro" \
-  -i "$IMAGE_NAME" bash scripts/e2e/lib/release-typed-onboarding/scenario.sh >"$run_log" 2>&1; then
+  -i "$IMAGE_NAME" bash -c '
+export OPENCLAW_E2E_INSTALL_DIAGNOSTICS_UID="$(
+  node scripts/lib/openclaw-e2e-install-diagnostics.mjs owner "$OPENCLAW_E2E_INSTALL_DIAGNOSTICS"
+)"
+exec "$@"
+' bash bash scripts/e2e/lib/release-typed-onboarding/scenario.sh >"$run_log" 2>&1; then
   :
 else
   status=$?
