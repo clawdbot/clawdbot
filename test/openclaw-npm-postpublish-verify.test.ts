@@ -1223,6 +1223,55 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
     }
   });
 
+  it.each([
+    {
+      name: "marker text inside JavaScript data",
+      source: [
+        "const marker = `//#region extensions/discord/src/voice.js`;",
+        'const voice = require("@discordjs/voice");',
+        "export { marker, voice };",
+        "",
+      ].join("\n"),
+    },
+    {
+      name: "marker text inside a block comment",
+      source: [
+        "/*",
+        "//#region extensions/discord/src/voice.js",
+        "*/",
+        'const voice = require("@discordjs/voice");',
+        "export { voice };",
+        "",
+      ].join("\n"),
+    },
+    {
+      name: "an unclosed extension region before a root region",
+      source: [
+        "//#region extensions/discord/src/voice.js",
+        "const extensionValue = true;",
+        "//#region src/root-runtime.js",
+        'const voice = require("@discordjs/voice");',
+        "//#endregion",
+        "export { extensionValue, voice };",
+        "",
+      ].join("\n"),
+    },
+  ])("does not trust $name", ({ source }) => {
+    const { installRoot, packageRoot } = makeCompanionImportFixture({
+      companions: [{ id: "discord", dependencies: { "@discordjs/voice": "0.19.2" } }],
+      fileName: "untrusted-region.js",
+      source,
+    });
+
+    try {
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        "installed package root is missing declared runtime dependency '@discordjs/voice' for dist importers: untrusted-region.js. Add it to package.json dependencies/optionalDependencies.",
+      ]);
+    } finally {
+      rmSync(installRoot, { recursive: true, force: true });
+    }
+  });
+
   it("accepts optional or externalized runtime imports", () => {
     const packageRoot = makeInstalledPackageRoot();
 

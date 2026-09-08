@@ -109,6 +109,7 @@ const OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS = new Set([
 ]);
 const require = createRequire(import.meta.url);
 const acorn = require("acorn") as typeof import("acorn");
+type AcornComment = import("acorn").Comment;
 
 type DistJavaScriptFileListResult =
   | { files: string[]; limitExceeded: false }
@@ -668,14 +669,24 @@ function collectInstalledPluginSdkDeclarationErrors(packageRoot: string): string
 }
 
 type ParsedImportSpecifiersResult =
-  | { ok: true; imports: PackageRootImportOccurrence[] }
+  | {
+      ok: true;
+      imports: PackageRootImportOccurrence[];
+      comments: AcornComment[];
+    }
   | { ok: false; error: string };
 
 function extractJavaScriptImportSpecifiers(source: string): ParsedImportSpecifiersResult {
   try {
+    const comments: AcornComment[] = [];
     // Keep strict JavaScript validation: TypeScript accepts some invalid JS bindings/contexts.
-    acorn.parse(source, { allowHashBang: true, ecmaVersion: "latest", sourceType: "module" });
-    return { ok: true, imports: collectPackageRootImportOccurrences(source) };
+    acorn.parse(source, {
+      allowHashBang: true,
+      ecmaVersion: "latest",
+      onComment: comments,
+      sourceType: "module",
+    });
+    return { ok: true, comments, imports: collectPackageRootImportOccurrences(source) };
   } catch (error) {
     return { ok: false, error: formatErrorMessage(error) };
   }
@@ -725,6 +736,7 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
     const extensionOwners = collectGeneratedExtensionImportOwners(
       file.source,
       parsedSpecifiers.imports,
+      parsedSpecifiers.comments,
     );
     for (const runtimeImport of parsedSpecifiers.imports) {
       const specifier = runtimeImport.specifier;
@@ -766,27 +778,47 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
 function collectGeneratedExtensionImportOwners(
   source: string,
   imports: PackageRootImportOccurrence[],
+  comments: AcornComment[],
 ): Map<number, string | undefined> {
-  const markers = source.matchAll(/^[\t ]*\/\/#(region|endregion)(?:[\t ]+([^\r\n]*?))?[\t ]*$/gmu);
-  const events = [...markers];
   const owners = new Map<number, string | undefined>();
-  const stack: Array<string | undefined> = [];
-  let eventIndex = 0;
-  for (const runtimeImport of imports.toSorted((left, right) => left.start - right.start)) {
-    while (
-      eventIndex < events.length &&
-      (events[eventIndex]?.index ?? Infinity) < runtimeImport.start
+  const markers = comments.flatMap((comment) => {
+    if (
+      comment.type !== "Line" ||
+      source.slice(source.lastIndexOf("\n", comment.start - 1) + 1, comment.start).trim() !== ""
     ) {
-      const event = events[eventIndex++];
-      if (!event) {
-        break;
-      }
-      if (event[1] === "endregion") {
+      return [];
+    }
+    const match = comment.value.match(/^#(region|endregion)(?:[\t ]+([^\r\n]*?))?[\t ]*$/u);
+    return match
+      ? [
+          {
+            kind: match[1],
+            owner: match[2]?.match(/^extensions\/([a-z0-9][a-z0-9-]*)\//u)?.[1],
+            start: comment.start,
+          },
+        ]
+      : [];
+  });
+  let depth = 0;
+  for (const marker of markers) {
+    depth += marker.kind === "region" ? 1 : -1;
+    if (depth < 0) {
+      return owners;
+    }
+  }
+  if (depth !== 0) {
+    return owners;
+  }
+  const stack: Array<string | undefined> = [];
+  let markerIndex = 0;
+  for (const runtimeImport of imports.toSorted((left, right) => left.start - right.start)) {
+    while (markerIndex < markers.length && markers[markerIndex]!.start < runtimeImport.start) {
+      const marker = markers[markerIndex++]!;
+      if (marker.kind === "region") {
+        stack.push(marker.owner);
+      } else {
         stack.pop();
-        continue;
       }
-      const extensionId = event[2]?.match(/^extensions\/([a-z0-9][a-z0-9-]*)\//u)?.[1];
-      stack.push(extensionId ?? stack.at(-1));
     }
     owners.set(runtimeImport.start, stack.at(-1));
   }
