@@ -260,7 +260,7 @@ describe("onboard recommendations command", () => {
     const runtime = makeRuntime();
     const clear = vi.fn(() => true);
 
-    refreshOnboardRecommendationsCommand(runtime, { clear });
+    refreshOnboardRecommendationsCommand({}, runtime, { clear });
 
     expect(clear).toHaveBeenCalledOnce();
     expect(runtime.log).toHaveBeenCalledWith(

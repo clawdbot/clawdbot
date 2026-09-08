@@ -1,5 +1,10 @@
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveConfiguredAgentId,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
   createOnboardingRecommendationsStore,
@@ -16,7 +21,17 @@ type OnboardRecommendationsDeps = {
 };
 
 type AcknowledgeOnboardRecommendationsOptions = {
+  agent?: string;
   retry?: readonly string[];
+};
+
+type OnboardRecommendationsOptions = {
+  agent?: string;
+  json?: boolean;
+};
+
+type RefreshOnboardRecommendationsOptions = {
+  agent?: string;
 };
 
 const SAFE_INSTALL_ID_RE = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/iu;
@@ -27,15 +42,20 @@ type BootstrapRecommendation = {
   tier: "recommended" | "optional";
 };
 
-function createDefaultOnboardingRecommendationsStore(): OnboardingRecommendationsStore {
+function createDefaultOnboardingRecommendationsStore(
+  requestedAgentId?: string,
+): OnboardingRecommendationsStore {
   const cfg = getRuntimeConfig();
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  const agentId = requestedAgentId
+    ? resolveConfiguredAgentId(cfg, normalizeAgentId(requestedAgentId))
+    : resolveDefaultAgentId(cfg);
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   return createOnboardingRecommendationsStore({ workspaceDir });
 }
 
-function createDefaultStoreAccessor(): () => OnboardingRecommendationsStore {
+function createDefaultStoreAccessor(agentId?: string): () => OnboardingRecommendationsStore {
   let store: OnboardingRecommendationsStore | undefined;
-  return () => (store ??= createDefaultOnboardingRecommendationsStore());
+  return () => (store ??= createDefaultOnboardingRecommendationsStore(agentId));
 }
 
 function isLegacyBareClawHubId(match: OnboardingRecommendationsRecord["matches"][number]): boolean {
@@ -72,11 +92,11 @@ function bootstrapRecommendations(
 }
 
 export function onboardRecommendationsCommand(
-  opts: { json?: boolean },
+  opts: OnboardRecommendationsOptions,
   runtime: RuntimeEnv,
   deps: OnboardRecommendationsDeps = {},
 ): void {
-  const defaultStore = createDefaultStoreAccessor();
+  const defaultStore = createDefaultStoreAccessor(opts.agent);
   const stored = (deps.read ?? defaultStore().read)();
   const hasLegacyClawHubId = stored?.matches.some(isLegacyBareClawHubId);
   if (hasLegacyClawHubId && stored && stored.acceptedAt == null) {
@@ -116,7 +136,7 @@ export function acknowledgeOnboardRecommendationsCommand(
   runtime: RuntimeEnv,
   deps: OnboardRecommendationsDeps = {},
 ): void {
-  const defaultStore = createDefaultStoreAccessor();
+  const defaultStore = createDefaultStoreAccessor(opts.agent);
   const retryIds = [...new Set(opts.retry ?? [])];
   if (retryIds.length > 0) {
     const record = (deps.read ?? defaultStore().read)();
@@ -153,10 +173,11 @@ export function acknowledgeOnboardRecommendationsCommand(
 }
 
 export function refreshOnboardRecommendationsCommand(
+  opts: RefreshOnboardRecommendationsOptions,
   runtime: RuntimeEnv,
   deps: OnboardRecommendationsDeps = {},
 ): void {
-  const defaultStore = createDefaultStoreAccessor();
+  const defaultStore = createDefaultStoreAccessor(opts.agent);
   const cleared = (deps.clear ?? defaultStore().clear)();
   runtime.log(
     cleared
