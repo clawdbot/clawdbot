@@ -11,10 +11,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import { readPresenceEntries, type PresencePayload } from "../app/user-profile.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { isGatewayAvailable } from "../lib/gateway-availability.ts";
-import {
-  CATALOG_SESSION_CONTINUED_EVENT,
-  type CatalogSessionContinuedDetail,
-} from "../lib/sessions/catalog-key.ts";
+import type { CatalogSessionContinuedDetail } from "../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { preserveRosterPresentationMetadata } from "../lib/sessions/reconcile.ts";
 import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
@@ -56,6 +53,7 @@ import {
   subscribeSidebarAgentSessionCaches,
   subscribeFilteredSidebarSessions,
   subscribeSessionDataGatewayEvents,
+  subscribeSessionCatalogBrowserEvents,
 } from "./session-data-controller-events.ts";
 import { SessionDataScrollController } from "./session-data-scroll-controller.ts";
 
@@ -99,6 +97,8 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   private activeSessionLineageRequest: { readonly sourceRevision: number } | null = null;
   private activeSessionLineageRetryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private reconnectListRevision: number | null = null;
+  private cachedSessionResult: SessionsListResult | null = null;
+  private stopCatalogBrowserEvents: (() => void) | null = null;
   private gatewaySource: ApplicationContext<RouteId>["gateway"] | null = null;
   private gatewayConnectionRevision = 0;
   private gatewayClient: GatewayBrowserClient | null = null;
@@ -181,7 +181,10 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   hostConnected(): void {
     this.subscriptions.hostConnected();
-    this.connectSessionCatalogListeners();
+    this.stopCatalogBrowserEvents = subscribeSessionCatalogBrowserEvents(
+      this.handleCatalogSessionContinued as EventListener,
+      this.handleSessionCatalogPageActivation,
+    );
   }
 
   hostUpdate(): void {
@@ -200,7 +203,8 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   hostDisconnected(): void {
     this.retireFilteredSessions();
-    this.disconnectSessionCatalogListeners();
+    this.stopCatalogBrowserEvents?.();
+    this.stopCatalogBrowserEvents = null;
     this.host.dismissTransientMenus();
     this.invalidateSessionMutations();
     this.gatewaySource = null;
@@ -224,26 +228,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   sessionCatalogGatewayClient(): GatewayBrowserClient | null {
     return this.gatewayClient;
-  }
-
-  connectSessionCatalogListeners(): void {
-    // The chat pane announces catalog adoptions so the catalog row binds to
-    // the new session key before the next catalog poll.
-    document.addEventListener(
-      CATALOG_SESSION_CONTINUED_EVENT,
-      this.handleCatalogSessionContinued as EventListener,
-    );
-    document.addEventListener("visibilitychange", this.handleSessionCatalogPageActivation);
-    globalThis.addEventListener("focus", this.handleSessionCatalogPageActivation);
-  }
-
-  disconnectSessionCatalogListeners(): void {
-    document.removeEventListener(
-      CATALOG_SESSION_CONTINUED_EVENT,
-      this.handleCatalogSessionContinued as EventListener,
-    );
-    document.removeEventListener("visibilitychange", this.handleSessionCatalogPageActivation);
-    globalThis.removeEventListener("focus", this.handleSessionCatalogPageActivation);
   }
 
   retireSessionCatalogData(): void {
@@ -384,6 +368,14 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   }
 
   private readonly updateSessions = (sessions: SessionCapability) => {
+    const snapshot = sessions.state;
+    if (this.cachedSessionResult && !snapshot.resultCached) {
+      // A filtered live list can replace the cached projection before the primary list lands.
+      if (this.sessionsResult === this.cachedSessionResult) {
+        this.clearSessionCache();
+      }
+      this.cachedSessionResult = null;
+    }
     if (this.childSessionCanonicalListRevision !== sessions.canonicalListRevision) {
       this.childSessionCanonicalListRevision = sessions.canonicalListRevision;
       const routeKey = this.activeSessionLineageRouteKey;
@@ -406,7 +398,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       this.resetChildSessionState(true);
       this.requestSessionDataUpdate();
     }
-    const snapshot = sessions.state;
     if (hasSidebarListFilter(this.host)) {
       return;
     }
@@ -422,11 +413,12 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     const waitingForReconnectList =
       this.reconnectListRevision !== null &&
       sessions.canonicalListRevision < this.reconnectListRevision;
-    if (!sameGatewayDisconnected && !waitingForReconnectList) {
+    if (snapshot.resultCached || (!sameGatewayDisconnected && !waitingForReconnectList)) {
       // Keep the result and agent scope paired until the first canonical list
       // after reconnect; chat startup may publish a partial reconciliation first.
       this.reconnectListRevision = null;
       publishSidebarSessionList(this, snapshot);
+      this.cachedSessionResult = snapshot.resultCached ? snapshot.result : null;
     }
     this.sessionsLoading = snapshot.loading;
     this.requestSessionDataUpdate();
@@ -502,6 +494,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   private clearSessionCache(): void {
     this.childSessionCanonicalListRevision = null;
     this.reconnectListRevision = null;
+    this.cachedSessionResult = null;
     this.sessionsResult = null;
     this.sessionsAgentId = null;
     this.sessionResultsByAgent = {};
