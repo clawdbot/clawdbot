@@ -55,6 +55,12 @@ const RESTORE_VERIFY_TIMEOUT_MS = 60_000;
 const RESTORE_VERIFY_POLL_MS = 1_000;
 const RESTORE_EXTRACT_TIMEOUT_MS = 30 * 60_000;
 
+function missingContainerRecoveryHint(
+  record: Pick<FleetCellRecord, "tenantId" | "runtime">,
+): string {
+  return `remove the stale registration without purging data (openclaw fleet rm ${record.tenantId} --force), under the same original OS user and group identity and the same Docker or Podman rootless/rootful context, recreate a stopped cell with the original full provisioning profile (openclaw fleet create ${record.tenantId} --runtime ${record.runtime} --image <image> --port <port> --memory <memory> --cpus <cpus> --pids-limit <pids-limit> --network <bridge|internal> [--disk <disk>] [--env KEY=VALUE ...] --no-start; replace every placeholder with the original value, omit only options that were not originally set, and if any value is unknown recover it from the original provisioning command or deployment record before continuing; do not use create defaults), then retry fleet restore`;
+}
+
 type FleetBackupManifest = {
   schemaVersion: 1;
   kind: "openclaw-fleet-cell-backup";
@@ -469,7 +475,7 @@ export async function restoreFleetCell(params: {
   );
   if (inspectionResult.kind === "missing") {
     throw new Error(
-      `Fleet cell container is missing for ${params.record.tenantId}; remove the stale registration without purging data (openclaw fleet rm ${params.record.tenantId} --force), recreate a stopped cell with the intended image (openclaw fleet create ${params.record.tenantId} --no-start --image <image>), then retry fleet restore.`,
+      `Fleet cell container is missing for ${params.record.tenantId}; ${missingContainerRecoveryHint(params.record)}.`,
     );
   }
   const inspection = assertManagedInspection(params.record, inspectionResult);
@@ -779,19 +785,34 @@ export async function restoreFleetCell(params: {
       // A --force restore stopped a running cell but failed before removal.
       // Restart the same managed generation so an aborted restore does not
       // strand a healthy tenant stopped; the original error stays primary.
+      let missingContainerError: Error | undefined;
       try {
-        const current = assertManagedInspection(
-          params.record,
-          await params.containers.inspect(params.record.runtime, params.record.containerName),
+        const currentInspection = await params.containers.inspect(
+          params.record.runtime,
+          params.record.containerName,
         );
-        if (
-          !current.running &&
-          current.labels[FLEET_ATTEMPT_LABEL] === inspection.labels[FLEET_ATTEMPT_LABEL]
-        ) {
-          await params.containers.start(params.record.runtime, params.record.containerName);
+        if (currentInspection.kind === "missing") {
+          missingContainerError = new Error(
+            `${errorMessage(error)}. The previous cell container is missing; ${missingContainerRecoveryHint(params.record)}.`,
+            { cause: error },
+          );
+        } else {
+          const current = assertManagedInspection(params.record, currentInspection);
+          if (
+            !current.running &&
+            current.labels[FLEET_ATTEMPT_LABEL] === inspection.labels[FLEET_ATTEMPT_LABEL]
+          ) {
+            await params.containers.start(params.record.runtime, params.record.containerName);
+          }
         }
       } catch {
-        // Best-effort recovery; the container remains stopped but intact.
+        throw new Error(
+          `${errorMessage(error)}. The previous cell could not be restarted or verified; run \`openclaw fleet start ${params.record.tenantId}\` before retrying fleet restore.`,
+          { cause: error },
+        );
+      }
+      if (missingContainerError) {
+        throw missingContainerError;
       }
     }
     throw error;
