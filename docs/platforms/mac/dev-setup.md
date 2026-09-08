@@ -18,6 +18,13 @@ the Xcode requirements below.
   Software Update.
 - **Node.js 24.16+ or 26.1+ & pnpm** for the gateway, CLI, and packaging scripts.
 
+macOS shell tooling uses the system `/bin/bash` (3.2); Homebrew Bash is not
+required. Run scripts directly or with `/bin/bash`. Bash 5.3+ can stall on a
+heredoc before its reader starts, leaving packaging or signing logs empty under
+pipe-buffer pressure. Portable script entrypoints switch to `/bin/bash` on
+macOS; streamed installers must use `curl ... | /bin/bash` because consumed stdin
+cannot be replayed.
+
 ## 1. Install dependencies
 
 ```bash

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
 # Both direct packaging and restart publish only a completely verified bundle.
 replace_mac_app_bundle() {

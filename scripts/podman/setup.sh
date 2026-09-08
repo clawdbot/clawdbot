@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # One-time host setup for rootless OpenClaw in Podman. Uses the current
 # non-root user throughout, builds or pulls the image into that user's Podman
 # store, writes config under ~/.openclaw by default, and uses the repo-local
@@ -159,9 +163,9 @@ for arg in "$@"; do
   esac
 done
 if [[ -n "${OPENCLAW_PODMAN_QUADLET:-}" ]]; then
-  case "${OPENCLAW_PODMAN_QUADLET,,}" in
-    1|yes|true) INSTALL_QUADLET=true ;;
-    0|no|false) INSTALL_QUADLET=false ;;
+  case "$OPENCLAW_PODMAN_QUADLET" in
+    1|[yY][eE][sS]|[tT][rR][uU][eE]) INSTALL_QUADLET=true ;;
+    0|[nN][oO]|[fF][aA][lL][sS][eE]) INSTALL_QUADLET=false ;;
   esac
 fi
 if [[ "$INSTALL_QUADLET" == true && "$PLATFORM_NAME" != "Linux" ]]; then

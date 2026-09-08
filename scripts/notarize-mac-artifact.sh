@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
 # Notarize a macOS artifact (zip/dmg/pkg) and optionally staple the app bundle.

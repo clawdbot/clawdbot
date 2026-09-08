@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
 usage() {
@@ -125,7 +125,7 @@ if [[ -z "${APP_STORE_REVISION}" ]]; then
 fi
 
 if [[ -z "${TEAM_ID}" ]]; then
-  TEAM_ID="$(IOS_ALLOW_KEYCHAIN_TEAM_FALLBACK=1 bash "${TEAM_HELPER}" --require-canonical)"
+  TEAM_ID="$(IOS_ALLOW_KEYCHAIN_TEAM_FALLBACK=1 /bin/bash "${TEAM_HELPER}" --require-canonical)"
 fi
 
 if [[ -z "${TEAM_ID}" ]]; then
@@ -145,7 +145,7 @@ fi
 
 source "${ROOT_DIR}/scripts/lib/build-metadata.sh"
 RELEASE_GIT_COMMIT="$(OPENCLAW_REQUIRE_BUILD_METADATA=1 openclaw_resolve_git_commit "${ROOT_DIR}")"
-bash "${RELEASE_SOURCE_HELPER}" --root "${ROOT_DIR}" --expected-commit "${RELEASE_GIT_COMMIT}"
+/bin/bash "${RELEASE_SOURCE_HELPER}" --root "${ROOT_DIR}" --expected-commit "${RELEASE_GIT_COMMIT}"
 export GIT_COMMIT="${RELEASE_GIT_COMMIT}"
 
 prepare_build_dir
@@ -168,7 +168,7 @@ fi
 
 (
   OPENCLAW_REQUIRE_BUILD_METADATA=1 \
-    bash "${VERSION_HELPER}" --version "${RELEASE_VERSION}" --revision "${APP_STORE_REVISION}" --build-number "${BUILD_NUMBER}"
+    /bin/bash "${VERSION_HELPER}" --version "${RELEASE_VERSION}" --revision "${APP_STORE_REVISION}" --build-number "${BUILD_NUMBER}"
 )
 node "${ROOT_DIR}/scripts/ios-write-swift-filelist.mjs"
 

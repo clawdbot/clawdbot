@@ -20,6 +20,9 @@ import { createMacScriptTest, type MacScriptFixture } from "./mac-script-fixture
 
 const it = createMacScriptTest();
 const scriptPath = "scripts/codesign-mac-app.sh";
+// Exercise the shebang on POSIX while retaining Git Bash support on Windows.
+const codesignCommand = process.platform === "win32" ? "bash" : scriptPath;
+const codesignArgs = process.platform === "win32" ? [scriptPath] : [];
 // Signing integration exercises the real Darwin mutation fence, not a sandbox mock.
 const macIt = it.runIf(process.platform === "darwin");
 
@@ -39,7 +42,7 @@ async function runCodesignWithoutAllocation(
     `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(allocation)}, 'called');\nprocess.exit(91);\n`,
   );
   await chmod(allocator, 0o755);
-  const result = await mac.run("bash", [scriptPath, ...args], {
+  const result = await mac.run(codesignCommand, [...codesignArgs, ...args], {
     cwd: process.cwd(),
     encoding: "utf8",
     env: {
@@ -122,7 +125,7 @@ describe("codesign-mac-app temp file hygiene", () => {
       await writeFile(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
       await installFakeCodesign(binDir);
 
-      const result = await mac.run("bash", [scriptPath, app], {
+      const result = await mac.run(codesignCommand, [...codesignArgs, app], {
         cwd: process.cwd(),
         encoding: "utf8",
         env: {
@@ -230,7 +233,7 @@ describe("codesign-mac-app temp file hygiene", () => {
         }
         await installElevationFakeCodesign(binDir);
 
-        const result = await mac.run("bash", [scriptPath, app], {
+        const result = await mac.run(codesignCommand, [...codesignArgs, app], {
           cwd: process.cwd(),
           encoding: "utf8",
           env: {
@@ -259,7 +262,7 @@ describe("codesign-mac-app temp file hygiene", () => {
         await writeFile(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
         await installElevationFakeCodesign(binDir);
 
-        const result = await mac.run("bash", [scriptPath, app], {
+        const result = await mac.run(codesignCommand, [...codesignArgs, app], {
           cwd: process.cwd(),
           encoding: "utf8",
           env: {
@@ -291,7 +294,7 @@ describe("codesign-mac-app temp file hygiene", () => {
         await writeFile(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
         await installElevationFakeCodesign(binDir);
 
-        const result = await mac.run("bash", [scriptPath, app], {
+        const result = await mac.run(codesignCommand, [...codesignArgs, app], {
           cwd: process.cwd(),
           encoding: "utf8",
           env: {
@@ -319,7 +322,7 @@ describe("codesign-mac-app temp file hygiene", () => {
       await writeFile(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
       await installElevationFakeCodesign(binDir);
 
-      const result = await mac.run("bash", [scriptPath, app], {
+      const result = await mac.run(codesignCommand, [...codesignArgs, app], {
         cwd: process.cwd(),
         encoding: "utf8",
         env: {
@@ -351,7 +354,7 @@ describe("codesign-mac-app temp file hygiene", () => {
       await writeFile(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
       await installTransientFakeCodesign(binDir);
 
-      const result = await mac.run("bash", [scriptPath, app], {
+      const result = await mac.run(codesignCommand, [...codesignArgs, app], {
         cwd: process.cwd(),
         encoding: "utf8",
         env: {
@@ -392,7 +395,7 @@ describe("codesign-mac-app temp file hygiene", () => {
           await writeFile(path.join(binDir, command), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
         }
 
-        const result = await mac.run("bash", [scriptPath, app], {
+        const result = await mac.run(codesignCommand, [...codesignArgs, app], {
           cwd: process.cwd(),
           encoding: "utf8",
           env: {
@@ -482,7 +485,7 @@ describe("codesign-mac-app temp file hygiene", () => {
         const fakeSecurity = path.join(binDir, "security");
         await writeFile(
           fakeSecurity,
-          `#!/usr/bin/env bash
+          `#!/bin/bash
 printf '%s\\n' \\
   '  1) 63A99BFF1D40E5A75C8A32B84BE99D1DDA6A44E1 "Developer ID Application: Example Corp (ABCDE12345)"' \\
   '  2) 11AA22BB33CC44DD55EE66FF77008899AABBCCDD "Apple Development: Example Developer (ABCDE12345)"'
@@ -490,7 +493,7 @@ printf '%s\\n' \\
         );
         await chmod(fakeSecurity, 0o755);
 
-        const result = await mac.run("bash", [scriptPath, app], {
+        const result = await mac.run(codesignCommand, [...codesignArgs, app], {
           cwd: process.cwd(),
           encoding: "utf8",
           env: {

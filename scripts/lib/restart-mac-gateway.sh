@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
 verify_gateway_port_listening() {
   local port="$1"

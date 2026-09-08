@@ -1,4 +1,15 @@
 #!/usr/bin/env bash
+
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  if [[ ${BASH_SOURCE[0]:-} == "$0" ]]; then
+    exec /bin/bash "$0" "$@"
+  fi
+  # Sourced and stdin installers cannot replay their caller or consumed input.
+  printf '%s\n' 'Run this installer with /bin/bash on macOS (including curl | /bin/bash).' >&2
+  return 1 2>/dev/null || exit 1
+fi
+
 set -euo pipefail
 
 # OpenClaw CLI installer (non-interactive, no onboarding)

@@ -1,11 +1,11 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT_DIR="$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/AppIcons"
 MODE="${1:---write}"
 if [[ "$MODE" != "--write" && "$MODE" != "--check" ]]; then
-  echo "Usage: bash scripts/generate-mac-app-icons.sh [--write|--check]" >&2
+  echo "Usage: /bin/bash scripts/generate-mac-app-icons.sh [--write|--check]" >&2
   exit 1
 fi
 WORK_DIR="$(mktemp -d)"
@@ -55,7 +55,7 @@ for style in paper-light paper-dark heritage-light heritage-dark clawmark-light 
     --development-region en --target-device mac --minimum-deployment-target 15.0 --platform macosx
   if [[ "$MODE" == "--check" ]]; then
     if ! cmp -s "$WORK_DIR/$style/compiled/Icon.icns" "$OUTPUT_DIR/$style.icns"; then
-      echo "Stale $style icon. Run bash scripts/generate-mac-app-icons.sh with the current Xcode toolchain." >&2
+      echo "Stale $style icon. Run /bin/bash scripts/generate-mac-app-icons.sh with the current Xcode toolchain." >&2
       exit 1
     fi
   else

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
 REQUIRED_SWIFT_TOOLS_MAJOR=6
 REQUIRED_SWIFT_TOOLS_MINOR=3

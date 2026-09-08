@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
 # Create a styled DMG containing the app bundle + /Applications symlink.
