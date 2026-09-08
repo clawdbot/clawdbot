@@ -61,8 +61,9 @@ suite.define(() => {
     }
 
     async function submitNewGroupDialog(page: typeof tab1.page, name: string) {
-      await submitInputDialog(page, name);
-      await page.locator(`[data-session-section="category:${name}"]`).waitFor({ state: "visible" });
+      // The deferred Gateway response keeps the dialog open, so the stale
+      // submission must not wait for the dialog to close.
+      await submitInputDialog(page, name, { waitForClose: false });
     }
 
     const tab1 = await openTab("agent:main:tab-one", "Tab one session");
@@ -71,14 +72,35 @@ suite.define(() => {
     try {
       // Hold both callers at the same empty catalog before either mutates.
       // The old read-modify-write replacement lost one name here; the atomic
-      // add must keep both.
+      // add must keep both. Deferring both add responses keeps the mock from
+      // persisting or broadcasting either group until both stale submissions
+      // are in flight, so the regression fails on lost data rather than on
+      // which RPC the UI selected.
       await openNewGroupDialog(tab1.page);
       await openNewGroupDialog(tab2.page);
 
-      await submitNewGroupDialog(tab1.page, "Alpha");
-      await captureUiProof(suite, tab1.page, "concurrent-groups-tab1-alpha.png");
+      await tab1.gateway.deferNext("sessions.groups.add");
+      await tab2.gateway.deferNext("sessions.groups.add");
 
+      await submitNewGroupDialog(tab1.page, "Alpha");
       await submitNewGroupDialog(tab2.page, "Beta");
+
+      // The submissions are async after Enter; only release once both stale
+      // requests have reached the mock.
+      await tab1.gateway.waitForRequest("sessions.groups.add");
+      await tab2.gateway.waitForRequest("sessions.groups.add");
+      await tab1.gateway.resolveDeferred("sessions.groups.add");
+      await tab2.gateway.resolveDeferred("sessions.groups.add");
+
+      await tab1.page.locator('[data-session-section="category:Alpha"]').waitFor({
+        state: "visible",
+        timeout: 10_000,
+      });
+      await captureUiProof(suite, tab1.page, "concurrent-groups-tab1-alpha.png");
+      await tab2.page.locator('[data-session-section="category:Beta"]').waitFor({
+        state: "visible",
+        timeout: 10_000,
+      });
       await captureUiProof(suite, tab2.page, "concurrent-groups-tab2-beta.png");
 
       // Each tab must eventually observe the group created in the other tab.

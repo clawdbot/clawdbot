@@ -96,8 +96,6 @@ const TRAIN_2026_8_METHODS = [
   "sessions.patchMany",
   "sessions.goal.update",
   "sessions.goal.clear",
-  "sessions.groups.add",
-  "sessions.groups.reorder",
   "sessions.groups.update",
   "sessions.groups.defaults",
   "sessions.recover",
@@ -198,9 +196,9 @@ describe("core gateway method release trains", () => {
     expect(methods.find((method) => method.name === "sessions.catalog.startTerminal")?.since).toBe(
       "2026.8",
     );
-    expect(methods.find((method) => method.name === "sessions.groups.add")?.since).toBe("2026.8");
+    expect(methods.find((method) => method.name === "sessions.groups.add")?.since).toBe("2026.9");
     expect(methods.find((method) => method.name === "sessions.groups.reorder")?.since).toBe(
-      "2026.8",
+      "2026.9",
     );
     expect(methods.find((method) => method.name === "worker.desktop.observe")?.since).toBe(
       "2026.8",
