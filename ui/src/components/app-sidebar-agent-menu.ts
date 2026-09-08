@@ -9,6 +9,7 @@ import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
+import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import {
   formatKeyboardShortcutCombo,
@@ -23,6 +24,7 @@ import {
 } from "../pages/debug/debug-overlay-contract.ts";
 import { renderAgentSelectAvatar, renderAgentSelectCopy } from "./agent-select.ts";
 import { icons, type IconName } from "./icons.ts";
+import { identityAvatarImage } from "./identity-avatar-view.ts";
 import "./sidebar-build-chip.ts";
 import "./viewer-facepile.ts";
 import {
@@ -235,6 +237,7 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
   const active = agentId === params.activeId;
   const unread = active ? 0 : params.agentUnreadCount(agentId);
   const option = { value: agentId, label, agent };
+  const avatarUrl = resolveAgentAvatarUrl(agent, identity);
   return html`
     <wa-dropdown-item
       class="sidebar-customize-menu__item sidebar-agent-menu__agent-switch agent-select__option ${
@@ -248,7 +251,16 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
     >
       <span class="sidebar-agent-menu__agent-tile">
         <span class="sidebar-agent-menu__agent-avatar">
-          ${renderAgentSelectAvatar(option, identity)}
+          ${
+            avatarUrl
+              ? html`<img
+                  class="agent-select__avatar"
+                  src=${identityAvatarImage(avatarUrl, avatarUrl)}
+                  alt=""
+                  loading="lazy"
+                />`
+              : renderAgentSelectAvatar(option, identity)
+          }
         </span>
         ${renderAgentSelectCopy(option)}
         <span class="sidebar-agent-menu__agent-status">
