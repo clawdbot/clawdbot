@@ -352,6 +352,7 @@ class RichObservationTest(unittest.TestCase):
         client.next_update = lambda timeout: pending.pop(0) if pending else None
         instance = SimpleNamespace(
             client=client, authorize=lambda *_: None, resolve_chat=lambda *_: -1001,
+            check_group_write_access=Mock(return_value=True),
         )
         events = []
         with patch.object(driver, "load_config", return_value=({}, {})), \
