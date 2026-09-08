@@ -954,26 +954,54 @@ describe("resolvePluginProviders", () => {
     ).toEqual(["ollama"]);
   });
 
-  it("loads usage hooks only for manifest-declared providers", () => {
-    setManifestPlugins([
-      createManifestProviderPlugin({
-        id: "usage-owner",
-        providerIds: ["usage-provider"],
-        enabledByDefault: true,
-        contracts: { usageProviders: ["usage-provider"] },
-      }),
-      createManifestProviderPlugin({
-        id: "regular-provider",
-        providerIds: ["regular-provider"],
-        enabledByDefault: true,
-      }),
-    ]);
+  it.each([
+    { competingOwner: false, enabled: false, accountUsage: ["usage-provider"] },
+    { competingOwner: true, enabled: true, accountUsage: [] },
+    { competingOwner: true, enabled: false, accountUsage: ["usage-provider"] },
+  ])(
+    "loads usage contracts with competing owner $competingOwner / enabled $enabled",
+    ({ competingOwner, enabled, accountUsage }) => {
+      setManifestPlugins([
+        createManifestProviderPlugin({
+          id: "usage-owner",
+          providerIds: ["usage-provider"],
+          enabledByDefault: true,
+          contracts: {
+            usageProviders: ["usage-provider"],
+            accountUsageProviders: ["usage-provider", "undeclared"],
+          },
+        }),
+        ...(competingOwner
+          ? [
+              createManifestProviderPlugin({
+                id: "legacy-owner",
+                providerIds: ["usage-provider"],
+                enabledByDefault: true,
+              }),
+            ]
+          : []),
+        createManifestProviderPlugin({
+          id: "regular-provider",
+          providerIds: ["regular-provider"],
+          enabledByDefault: true,
+        }),
+      ]);
 
-    expect(
-      resolveUsageHookProviderPluginContracts({ config: {}, env: {} as NodeJS.ProcessEnv }),
-    ).toEqual([{ pluginId: "usage-owner", providerIds: ["usage-provider"] }]);
-    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
-  });
+      expect(
+        resolveUsageHookProviderPluginContracts({
+          config: { plugins: { entries: { "legacy-owner": { enabled } } } },
+          env: {},
+        }),
+      ).toEqual([
+        {
+          pluginId: "usage-owner",
+          providerIds: ["usage-provider"],
+          accountUsageProviderIds: accountUsage,
+        },
+      ]);
+      expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("resolves external auth hook plugin ids from manifest contracts without runtime loading", () => {
     setManifestPlugins([

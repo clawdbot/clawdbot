@@ -162,7 +162,19 @@ export async function loadProviderUsageSummary(
   let authStore = opts.authStore;
   const getAuthStore = () =>
     (authStore ??= ensureAuthProfileStore(opts.agentDir, { allowKeychainPrompt: false }));
+  const accountUsageProviders = new Set(
+    opts.authProfile || opts.providerOnly
+      ? listProviderUsagePluginDescriptors({ config, workspaceDir: opts.workspaceDir, env })
+          .filter((descriptor) => descriptor.supportsAccountUsage)
+          .map((descriptor) => descriptor.provider)
+      : [],
+  );
   const tasks = descriptors.map(async ({ provider }) => {
+    // Legacy hooks may resolve ambient credentials and cannot claim a selected account.
+    if (opts.authProfile && !accountUsageProviders.has(provider)) {
+      return undefined;
+    }
+    const providerOnly = opts.providerOnly && accountUsageProviders.has(provider);
     let providerWorkStarted = false;
     const work = async () => {
       if (opts.authProfile && opts.isAuthProfileCurrent?.() === false) {
@@ -182,7 +194,7 @@ export async function loadProviderUsageSummary(
           (
             await resolveProviderAuths({
               providers: [provider],
-              providerOnly: opts.providerOnly,
+              providerOnly,
               agentDir: opts.agentDir,
               config,
               env,
@@ -199,7 +211,7 @@ export async function loadProviderUsageSummary(
       }
       // Provider billing must not fall back to an account quota already fetched
       // by its exact-profile owner. Plugins classify credentials before any HTTP.
-      if (!auth || (opts.providerOnly && auth.authProfileId)) {
+      if (!auth || (providerOnly && auth.authProfileId)) {
         return undefined;
       }
       // Auth resolution may await secret refresh. Recheck the owning cache generation
@@ -216,7 +228,9 @@ export async function loadProviderUsageSummary(
         workspaceDir: opts.workspaceDir,
         timeoutMs,
         fetchFn,
-        ...(opts.authProfile ? { isAuthProfileCurrent: opts.isAuthProfileCurrent } : {}),
+        ...(opts.authProfile
+          ? { isAuthProfileCurrent: opts.isAuthProfileCurrent ?? (() => true) }
+          : {}),
       });
     };
     // The timeout controls the caller's wait, not the real in-flight cap. A

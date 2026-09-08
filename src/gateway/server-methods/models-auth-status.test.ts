@@ -355,9 +355,9 @@ function resetAuthStatusMocks(): void {
     providers: [],
   });
   mocks.listProviderUsagePluginDescriptors.mockReturnValue([
-    { provider: "anthropic", displayName: "Claude" },
-    { provider: "deepseek", displayName: "DeepSeek" },
-    { provider: "openai", displayName: "OpenAI" },
+    { provider: "anthropic", displayName: "Claude", supportsAccountUsage: true },
+    { provider: "deepseek", displayName: "DeepSeek", supportsAccountUsage: true },
+    { provider: "openai", displayName: "OpenAI", supportsAccountUsage: true },
   ]);
   mocks.loadProviderUsageSummary.mockResolvedValue(emptyUsageSummary());
   mocks.refreshActiveProviderAuthRuntimeSnapshot.mockResolvedValue(false);
@@ -788,7 +788,7 @@ describe("models.authStatus", () => {
       mocks.buildAuthHealthSummary.mockImplementation(actualAuthHealth.buildAuthHealthSummary);
 
       mocks.listProviderUsagePluginDescriptors.mockReturnValue([
-        { provider: "minimax", displayName: "MiniMax" },
+        { provider: "minimax", displayName: "MiniMax", supportsAccountUsage: true },
       ]);
       mocks.loadProviderUsageSummary.mockImplementation(async (options = {}) => ({
         updatedAt: 0,
@@ -1688,7 +1688,7 @@ describe("models.authStatus", () => {
       providers: [{ provider: "openrouter", status: "ok", profiles: [oauthProfile] }],
     });
     mocks.listProviderUsagePluginDescriptors.mockReturnValue([
-      { provider: "openrouter", displayName: "OpenRouter" },
+      { provider: "openrouter", displayName: "OpenRouter", supportsAccountUsage: true },
     ]);
     mocks.loadProviderUsageSummary.mockImplementationOnce(async (options) => {
       await usageBlocked;
@@ -1794,6 +1794,36 @@ describe("models.authStatus", () => {
 
     expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
     expect(result.providers[0]?.profiles[0]?.usageRefreshPending).toBeUndefined();
+  });
+
+  it("shows legacy plugin usage without attributing it to a saved login", async () => {
+    mocks.listProviderUsagePluginDescriptors.mockReturnValue([
+      { provider: "openai", displayName: "OpenAI" },
+    ]);
+    mocks.buildAuthHealthSummary.mockReturnValue(createOpenAiCodexOauthHealthSummary());
+    mocks.loadProviderUsageSummary.mockResolvedValue({
+      updatedAt: 0,
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [{ label: "Month", usedPercent: 42 }],
+        },
+      ],
+    });
+    await waitForFast(async () => {
+      const result = await readAuthStatus();
+      expect(result.providers[0]?.usage?.windows[0]?.usedPercent).toBe(42);
+      expect(result.providers[0]?.usageProfileId).toBeUndefined();
+      expect(result.providers[0]?.profiles.every((profile) => profile.usage === undefined)).toBe(
+        true,
+      );
+    });
+    expect(
+      mocks.loadProviderUsageSummary.mock.calls.every(
+        ([options]) => options?.authProfile === undefined,
+      ),
+    ).toBe(true);
   });
 
   it("routes claude-cli OAuth profiles to Anthropic usage with plan and billing", async () => {
@@ -2091,7 +2121,7 @@ describe("models.authStatus", () => {
     >("../../agents/auth-health.js");
     mocks.buildAuthHealthSummary.mockImplementation(buildAuthHealthSummary);
     mocks.listProviderUsagePluginDescriptors.mockReturnValue([
-      { provider, displayName: "OpenRouter" },
+      { provider, displayName: "OpenRouter", supportsAccountUsage: true },
     ]);
     setPreparedAuthStore({
       version: 1,
@@ -2175,7 +2205,7 @@ describe("models.authStatus", () => {
         }),
       );
       mocks.listProviderUsagePluginDescriptors.mockReturnValue([
-        { provider: "openrouter", displayName: "OpenRouter" },
+        { provider: "openrouter", displayName: "OpenRouter", supportsAccountUsage: true },
       ]);
       mocks.buildAuthHealthSummary.mockReturnValue({
         now: 0,
@@ -2342,7 +2372,9 @@ describe("models.authStatus", () => {
         },
       });
     }
-    mocks.listProviderUsagePluginDescriptors.mockReturnValue([{ provider, displayName: provider }]);
+    mocks.listProviderUsagePluginDescriptors.mockReturnValue([
+      { provider, displayName: provider, supportsAccountUsage: true },
+    ]);
     setPreparedAuthStore({
       version: 1,
       profiles:

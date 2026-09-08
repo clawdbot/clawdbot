@@ -402,7 +402,8 @@
   ],
   "contracts": {
     "mediaUnderstandingProviders": ["anthropic"],
-    "usageProviders": ["anthropic"]
+    "usageProviders": ["anthropic"],
+    "accountUsageProviders": ["anthropic"]
   },
   "mediaUnderstandingProviderMetadata": {
     "anthropic": {

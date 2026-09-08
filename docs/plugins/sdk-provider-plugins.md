@@ -787,6 +787,12 @@ catalog, API-key auth, and dynamic model resolution.
         API-key/OAuth fallback. Return `null` or `undefined` when the provider did
         not handle the request and OpenClaw should continue with generic fallback.
 
+        To support per-account usage, also declare the provider id in
+        `contracts.accountUsageProviders`. Without this opt-in, OpenClaw keeps
+        provider-wide usage collection and does not attribute results to a saved
+        login. If multiple eligible plugins own the same provider, all must opt
+        in. Declare it only after both hooks honor the following contract.
+
         When `ctx.authProfileId` is present, the request is for one saved
         account. The auth resolver helpers are pinned to that exact profile and
         do not rotate to another credential. Use those helpers instead of a

@@ -533,27 +533,75 @@ describe("provider-runtime", () => {
 
   it("auto-discovers only usage providers declared by their owning plugin", () => {
     resolveUsageHookProviderPluginContractsMock.mockReturnValue([
-      { pluginId: "multi-provider", providerIds: ["declared"] },
-    ]);
-    const usageHooks = {
-      auth: [],
-      resolveUsageAuth: vi.fn(async () => ({ token: "usage-token" })),
-      fetchUsageSnapshot: vi.fn(async () => ({
-        provider: "declared",
-        displayName: "Declared",
-        windows: [],
-      })),
-    };
-    resolvePluginProvidersMock.mockReturnValue([
-      { ...usageHooks, id: "declared", label: "Declared" },
-      { ...usageHooks, id: "undeclared", label: "Undeclared" },
+      {
+        pluginId: "multi-provider",
+        providerIds: ["declared", "legacy"],
+        accountUsageProviderIds: ["declared"],
+      },
     ]);
 
     expect(listProviderUsagePluginDescriptors({ env: process.env })).toEqual([
-      { provider: "declared", displayName: "declared" },
+      { provider: "declared", displayName: "declared", supportsAccountUsage: true },
+      { provider: "legacy", displayName: "legacy" },
     ]);
     // Manifest contracts answer discovery; descriptor listing must not load plugin runtime.
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("does not lend a bundled account capability to a legacy override", async () => {
+    const resolveUsageAuth = vi.fn(async () => ({ token: "synthetic-organization" }));
+    const fetchUsageSnapshot = vi.fn(async () => ({
+      provider: "openrouter",
+      displayName: "Legacy",
+      windows: [],
+    }));
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "openrouter",
+        pluginId: "zz-legacy-usage",
+        label: "Legacy",
+        auth: [],
+        resolveUsageAuth,
+        fetchUsageSnapshot,
+      },
+    ]);
+    resolveUsageHookProviderPluginContractsMock.mockReturnValue([
+      {
+        pluginId: "openrouter",
+        providerIds: ["openrouter"],
+        accountUsageProviderIds: ["openrouter"],
+      },
+      { pluginId: "zz-legacy-usage", providerIds: ["openrouter"] },
+    ]);
+    const context = {
+      config: {},
+      env: {},
+      provider: "openrouter",
+      authProfileId: "openrouter:login",
+      resolveApiKeyFromConfigAndStore: () => undefined,
+      resolveOAuthToken: async () => null,
+    };
+    expect(await resolveProviderUsageAuthWithPlugin({ provider: "openrouter", context })).toEqual({
+      handled: true,
+    });
+    expect(resolveUsageAuth).not.toHaveBeenCalled();
+    await resolveProviderUsageSnapshotWithPlugin({
+      provider: "openrouter",
+      context: {
+        ...context,
+        token: "synthetic-selected",
+        timeoutMs: 1000,
+        fetchFn: vi.fn(),
+        isAuthProfileCurrent: () => true,
+      },
+    });
+    expect(fetchUsageSnapshot).not.toHaveBeenCalled();
+    expect(
+      await resolveProviderUsageAuthWithPlugin({
+        provider: "openrouter",
+        context: { ...context, authProfileId: undefined },
+      }),
+    ).toEqual({ token: "synthetic-organization" });
   });
 
   it("matches providers by hook alias for runtime hook lookup", () => {

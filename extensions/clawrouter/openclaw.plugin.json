@@ -6,7 +6,8 @@
   "enabledByDefault": true,
   "providers": ["clawrouter"],
   "contracts": {
-    "usageProviders": ["clawrouter"]
+    "usageProviders": ["clawrouter"],
+    "accountUsageProviders": ["clawrouter"]
   },
   "setup": {
     "providers": [

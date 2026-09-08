@@ -648,6 +648,11 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         store,
       });
       const activeUsageProviderIds = new Set(providerUsageRuntime.providerIds);
+      const accountUsageProviderIds = new Set(
+        providerUsageRuntime.descriptors
+          .filter((descriptor) => descriptor.supportsAccountUsage)
+          .map((descriptor) => descriptor.provider),
+      );
       for (const provider of apiKeys.keys()) {
         providerWideUsageIds.add(provider);
       }
@@ -667,10 +672,14 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           profile.type === "oauth" ||
           profile.type === "token" ||
           (credential?.type === "api_key" && Boolean(credential.metadata?.authFlow));
-        if (isLogin) {
+        if (isLogin && accountUsageProviderIds.has(providerId)) {
           usageTargets.push({ profileId: profile.profileId, providerId });
         }
-        if (providerWideUsageIds.has(providerId) || (profile.type === "api_key" && !isLogin)) {
+        if (
+          !accountUsageProviderIds.has(providerId) ||
+          providerWideUsageIds.has(providerId) ||
+          (profile.type === "api_key" && !isLogin)
+        ) {
           usageProviderIds.add(providerId);
         }
       }

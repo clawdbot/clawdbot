@@ -239,6 +239,51 @@ describe("provider-usage.load", () => {
     },
   );
 
+  it("keeps legacy hooks provider-wide and never invokes them for a selected account", async () => {
+    const legacy = [{ provider: "anthropic", displayName: "Claude" }];
+    const runtime = await import("../plugins/provider-runtime.js");
+    vi.spyOn(runtime, "listProviderUsagePluginDescriptors").mockReturnValue(legacy);
+    resolveProviderUsageAuthWithPluginMock.mockImplementation(async ({ context }) => {
+      const token = context.env.ANTHROPIC_ADMIN_KEY ?? (await context.resolveOAuthToken())?.token;
+      return token ? { token } : { handled: true };
+    });
+    resolveProviderUsageSnapshotWithPluginMock.mockImplementation(async ({ context }) => ({
+      provider: "anthropic",
+      displayName: "Claude",
+      windows: [{ label: context.token, usedPercent: 42 }],
+    }));
+    const options = {
+      config: {},
+      env: { ANTHROPIC_ADMIN_KEY: "synthetic-organization" },
+      authStore: {
+        version: 1,
+        profiles: {
+          "anthropic:login": { type: "token", provider: "anthropic", token: "synthetic-login" },
+        },
+      },
+    } satisfies Parameters<typeof loadProviderUsageSummary>[0];
+    const account = await loadProviderUsageSummary({
+      ...options,
+      authProfile: { provider: "anthropic", profileId: "anthropic:login" },
+    });
+    expect(account.providers).toEqual([]);
+    expect(resolveProviderUsageAuthWithPluginMock).not.toHaveBeenCalled();
+    expect(resolveProviderUsageSnapshotWithPluginMock).not.toHaveBeenCalled();
+
+    for (const [env, expected] of [
+      [options.env, "synthetic-organization"],
+      [{}, "synthetic-login"],
+    ] as const) {
+      const summary = await loadProviderUsageSummary({
+        ...options,
+        env,
+        providers: ["anthropic"],
+        providerOnly: true,
+      });
+      expect(summary.providers[0]?.windows).toEqual([{ label: expected, usedPercent: 42 }]);
+    }
+  });
+
   it("does not fetch an account fallback for provider-only billing", async () => {
     resolveProviderUsageAuthWithPluginMock.mockResolvedValueOnce({
       token: "account-token",
