@@ -25,6 +25,12 @@ title: "Usage tracking"
 
 `openclaw channels list` no longer prints provider usage; it points users to `openclaw status` or `openclaw models list` instead.
 
+`/usage cost` warns that the **Today** and **Last 30d** totals may be incomplete
+if their aggregate cache is refreshing, partial, or stale, and suggests running
+the command again later. The **Session** total is loaded separately. The CLI
+`openclaw gateway usage-cost` also reports the recorded cache state before its
+totals.
+
 ## Usage date ranges
 
 The Gateway methods `usage.cost` and `sessions.usage` interpret date ranges in

@@ -298,6 +298,11 @@ openclaw gateway usage-cost --all-agents
 openclaw gateway usage-cost --json
 ```
 
+Human-readable output warns that totals may be incomplete when the usage cache is
+refreshing, partial, or stale. The command returns the available snapshot from
+one request; run it again later to check for refreshed totals. JSON output preserves
+the `cacheStatus` object so scripts can inspect the same state.
+
 <ParamField path="--days <days>" type="number" default="30">
   Number of days to include.
 </ParamField>

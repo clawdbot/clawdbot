@@ -5,7 +5,11 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
 import { DEFAULT_AGENT_ID, isUnscopedSessionKeySentinel } from "../../routing/session-key.js";
-import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
+import {
+  formatCostUsageCachePrefix,
+  formatTokenCount,
+  formatUsd,
+} from "../../utils/usage-format.js";
 
 export async function formatSessionUsageCostSummary(params: {
   cfg: OpenClawConfig;
@@ -67,5 +71,7 @@ export async function formatSessionUsageCostSummary(params: {
   const last30Suffix = summary.totals.missingCostEntries > 0 ? " (partial)" : "";
   const last30Line = `Last 30d ${last30Cost ?? "n/a"}${last30Suffix}`;
 
-  return `💸 Usage cost\n${sessionLine}\n${todayLine}\n${last30Line}`;
+  // Only the date-range rows use aggregate freshness; the session total is loaded separately.
+  const cachePrefix = formatCostUsageCachePrefix(summary.cacheStatus);
+  return `💸 Usage cost\n${sessionLine}\n${cachePrefix}${todayLine}\n${last30Line}`;
 }

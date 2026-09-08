@@ -15,15 +15,24 @@ import {
 } from "../../test/helpers/openclaw-test-instance.js";
 import { isProcessAlive, waitForPidFile } from "../../test/helpers/process-wait.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { reloadSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { connectGatewayClient } from "../gateway/test-helpers.e2e.js";
+import {
+  acquireSessionCostUsageRefreshLock,
+  isSessionCostUsageRefreshRunning,
+} from "../infra/session-cost-usage-cache.sqlite.js";
+import { listUsageCountedTranscriptStats } from "../infra/session-cost-usage-collection.js";
 import { runExec } from "../process/exec.js";
-import { withEnv } from "../test-utils/env.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { sleep } from "../utils/sleep.js";
 import { GatewayChatClient } from "./gateway-chat.js";
 import { extractTextFromMessage } from "./tui-formatters.js";
@@ -1220,22 +1229,87 @@ describe("TUI PTY real backends", () => {
     LOCAL_TEST_TIMEOUT_MS,
   );
 
-  it(
-    "prints local usage costs without submitting a model request",
-    async ({ onTestFinished }) => {
-      const fixture = await startLocalModeTui(onTestFinished);
-      try {
-        await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
-        await fixture.run.write("/usage cost\r", { delay: false });
-        await fixture.run.waitForOutput("Usage cost", LOCAL_OUTPUT_TIMEOUT_MS);
-        await fixture.run.waitForOutput("Last 30d", LOCAL_OUTPUT_TIMEOUT_MS);
-        expect(fixture.mockModel.requests()).toHaveLength(0);
-      } finally {
-        await fixture.cleanup();
-      }
-    },
-    LOCAL_TEST_TIMEOUT_MS,
-  );
+  for (const cacheState of ["fresh", "refreshing"] as const) {
+    it(
+      `prints ${cacheState} local usage costs without submitting a model request`,
+      async ({ onTestFinished }) => {
+        const agentId = "main";
+        const sessionKey = `agent:${agentId}:usage-cost-${cacheState}-unpersisted`;
+        const cleanupState: { run?: () => Promise<void> } = {};
+        const finish = (dispose: () => Promise<void>) =>
+          runQaGatewayFixture(async () => await cleanupState.run?.(), dispose);
+        const fixture = await startLocalModeTui(
+          (dispose) => onTestFinished(() => finish(dispose)),
+          { cliArgs: ["tui", "--local", "--session", sessionKey] },
+        );
+        const databasePath = resolveOpenClawAgentSqlitePath({ agentId, env: fixture.env });
+        const selectedSession = { agentId, sessionKey, storePath: databasePath };
+        let refreshOwner: ReturnType<typeof acquireSessionCostUsageRefreshLock> | undefined;
+        // Repeated teardown must not reopen the removed root through release().
+        cleanupState.run = createIdempotentCleanup(() =>
+          runQaGatewayFixture(
+            async () => withEnv(fixture.env, () => refreshOwner?.release()),
+            () => fixture.run.dispose(),
+            () =>
+              withEnvAsync(fixture.env, () =>
+                cleanupSessionStateForTest({ stateDir: fixture.stateDir }),
+              ),
+          ),
+        );
+
+        await runQaGatewayFixture(
+          async () => {
+            await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
+            withEnv(fixture.env, () => {
+              // An empty existing row still makes the direct Session reader wait.
+              expect(loadSessionEntry(selectedSession)).toBeUndefined();
+              if (cacheState === "refreshing") {
+                refreshOwner = acquireSessionCostUsageRefreshLock(agentId, databasePath);
+                expect(refreshOwner.acquired).toBe(true);
+              }
+              expect(isSessionCostUsageRefreshRunning(agentId, databasePath)).toBe(
+                cacheState === "refreshing",
+              );
+            });
+            expect(
+              await withEnvAsync(fixture.env, () =>
+                listUsageCountedTranscriptStats(agentId, {
+                  storePath: databasePath,
+                  sessionsDir: path.join(fixture.stateDir, "agents", agentId, "sessions"),
+                }),
+              ),
+            ).toEqual([]);
+
+            await fixture.run.write("/usage cost\r", { delay: false });
+            const rows = await waitForSynchronizedFrameRows(
+              fixture.run,
+              (frame) => frame.some((row) => row.includes("Last 30d")),
+              LOCAL_OUTPUT_TIMEOUT_MS,
+            );
+            const text = rows.join(" ").replace(/\s+/gu, " ");
+            const expected = [
+              "Session n/a",
+              ...(cacheState === "refreshing"
+                ? ["Usage totals may be incomplete (refreshing). Run this command again later."]
+                : []),
+              "Today $0.0000",
+              "Last 30d $0.0000",
+            ].join(" ");
+            expect(text).toContain(expected);
+            expect(fixture.mockModel.requests()).toHaveLength(0);
+            withEnv(fixture.env, () => {
+              expect(loadSessionEntry(selectedSession)).toBeUndefined();
+              expect(isSessionCostUsageRefreshRunning(agentId, databasePath)).toBe(
+                cacheState === "refreshing",
+              );
+            });
+          },
+          () => finish(fixture.cleanup),
+        );
+      },
+      LOCAL_TEST_TIMEOUT_MS,
+    );
+  }
 
   it(
     "drives and steers the real local backend with a mocked model endpoint",
