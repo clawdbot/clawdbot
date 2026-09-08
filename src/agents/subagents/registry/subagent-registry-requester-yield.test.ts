@@ -26,7 +26,11 @@ function makeRun(runId: string, requesterTurnYielded = true): SubagentRunRecord 
 }
 
 function accepted(entry: SubagentRunRecord) {
-  return { runId: entry.runId, childSessionKey: entry.childSessionKey };
+  return {
+    runId: entry.runId,
+    childSessionKey: entry.childSessionKey,
+    expectsCompletionMessage: entry.expectsCompletionMessage,
+  };
 }
 
 describe("settleRequesterTurnAfterSessionSpawns", () => {
@@ -78,6 +82,33 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     expect(first.requesterTurnRunId).toBeUndefined();
     expect(schedule).toHaveBeenCalledOnce();
   });
+
+  it.each([true, false])(
+    "does not transfer a partial accepted completion batch (yielded: %s)",
+    (requesterYielded) => {
+      const first = makeRun("run-a");
+      const missing = makeRun("run-b");
+      const runs = new Map([[first.runId, first]]);
+      const before = structuredClone(runs);
+      const persistOrThrow = vi.fn();
+      const schedule = vi.fn();
+
+      expect(
+        settleRequesterTurnAfterSessionSpawns({
+          requesterSessionKey: REQUESTER,
+          requesterTurnRunId: REQUESTER_TURN,
+          requesterYielded,
+          acceptedSessionSpawns: [accepted(first), accepted(missing)],
+          runs,
+          persistOrThrow,
+          schedule,
+        }),
+      ).toBe(false);
+      expect(runs).toEqual(before);
+      expect(persistOrThrow).not.toHaveBeenCalled();
+      expect(schedule).not.toHaveBeenCalled();
+    },
+  );
 
   it("retires a completed yielded batch whose requester already produced its final", () => {
     const entry = makeRun("run-child");
@@ -185,7 +216,9 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         requesterSessionKey: REQUESTER,
         requesterTurnRunId: REQUESTER_TURN,
         requesterYielded: true,
-        acceptedSessionSpawns: [{ runId: originalRunId, childSessionKey: sessionKey }],
+        acceptedSessionSpawns: [
+          { runId: originalRunId, childSessionKey: sessionKey, expectsCompletionMessage: true },
+        ],
         runs,
         persistOrThrow,
         schedule,
