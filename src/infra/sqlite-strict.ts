@@ -33,7 +33,7 @@ type PreservedSchemaObject = {
 };
 
 type CanonicalStrictTable = {
-  columns: string[];
+  columns: Array<{ name: string; type: string }>;
   createSql: string;
   name: string;
   rowidAlias: string | null;
@@ -78,14 +78,17 @@ function readTableColumns(db: DatabaseSync, tableName: string): TableColumnRow[]
     .all() as TableColumnRow[];
 }
 
-function readVisibleColumns(db: DatabaseSync, tableName: string): string[] {
+function readVisibleColumns(
+  db: DatabaseSync,
+  tableName: string,
+): Array<{ name: string; type: string }> {
   return readTableColumns(db, tableName)
     .filter((row) => Number(row.hidden ?? 0) === 0)
     .map((row) => {
-      if (typeof row.name !== "string" || row.name.length === 0) {
-        throw new Error(`SQLite table ${tableName} has an invalid column name`);
+      if (typeof row.name !== "string" || row.name.length === 0 || typeof row.type !== "string") {
+        throw new Error(`SQLite table ${tableName} has an invalid column`);
       }
-      return row.name;
+      return { name: row.name, type: row.type.toUpperCase() };
     });
 }
 
@@ -321,8 +324,12 @@ export function migrateSqliteSchemaToStrictInTransaction(
     if (currentTableRows.has(migrationTable)) {
       throw new Error(`SQLite STRICT migration table already exists: ${migrationTable}`);
     }
-    const currentColumns = readVisibleColumns(db, table.name);
-    assertMatchingColumns(table.name, currentColumns, table.columns);
+    const currentColumns = readVisibleColumns(db, table.name).map((column) => column.name);
+    assertMatchingColumns(
+      table.name,
+      currentColumns,
+      table.columns.map((column) => column.name),
+    );
     const currentTableRow = currentTableRows.get(table.name);
     if (!currentTableRow) {
       throw new Error(`SQLite table ${table.name} disappeared during STRICT migration`);
@@ -337,15 +344,21 @@ export function migrateSqliteSchemaToStrictInTransaction(
       ? readAutoincrementHighWater(db, table.name)
       : null;
     db.exec(rewriteCreateTableName(table.createSql, migrationTable));
-    const columns = table.columns.map(quoteSqliteIdentifier);
+    const insertColumns = table.columns.map((column) => quoteSqliteIdentifier(column.name));
+    const selectColumns = table.columns.map((column) => {
+      const identifier = quoteSqliteIdentifier(column.name);
+      return column.type === "TEXT" ? `CAST(${identifier} AS TEXT)` : identifier;
+    });
     if (table.rowidAlias) {
-      columns.unshift(quoteSqliteIdentifier(table.rowidAlias));
+      insertColumns.unshift(quoteSqliteIdentifier(table.rowidAlias));
+      selectColumns.unshift(quoteSqliteIdentifier(table.rowidAlias));
     }
-    const copyColumns = columns.join(", ");
+    // CAST can merge distinct legacy storage classes. ABORT overrides table
+    // conflict policies so migration rolls back instead of dropping rows.
     try {
       db.exec(
-        `INSERT INTO ${quoteSqliteIdentifier(migrationTable)} (${copyColumns}) ` +
-          `SELECT ${copyColumns} FROM ${quoteSqliteIdentifier(table.name)};`,
+        `INSERT OR ABORT INTO ${quoteSqliteIdentifier(migrationTable)} (${insertColumns.join(", ")}) ` +
+          `SELECT ${selectColumns.join(", ")} FROM ${quoteSqliteIdentifier(table.name)};`,
       );
     } catch (error) {
       throw new Error(`Failed migrating SQLite table ${table.name} to STRICT`, { cause: error });

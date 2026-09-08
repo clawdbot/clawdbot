@@ -414,4 +414,49 @@ describe("migrateSqliteSchemaToStrict", () => {
       value: null,
     });
   });
+
+  it("normalizes BLOB values in TEXT columns during STRICT migration", () => {
+    const database = createDatabase();
+    database.exec("CREATE TABLE entries (id TEXT PRIMARY KEY, value TEXT NOT NULL);");
+    database
+      .prepare("INSERT INTO entries (id, value) VALUES (?, ?)")
+      .run("entry-1", Buffer.from("legacy-text"));
+    expect(database.prepare("SELECT typeof(value) AS storage_type FROM entries").get()).toEqual({
+      storage_type: "blob",
+    });
+
+    migrateSqliteSchemaToStrict(
+      database,
+      "CREATE TABLE IF NOT EXISTS entries (id TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;",
+    );
+
+    expect(readStrictFlag(database, "entries")).toBe(1);
+    expect(
+      database.prepare("SELECT value, typeof(value) AS storage_type FROM entries").get(),
+    ).toEqual({ value: "legacy-text", storage_type: "text" });
+  });
+
+  it("rolls back normalized collisions instead of replacing rows", () => {
+    const database = createDatabase();
+    database.exec("CREATE TABLE entries (id INTEGER PRIMARY KEY, value TEXT NOT NULL);");
+    database.prepare("INSERT INTO entries (id, value) VALUES (?, ?)").run(1, "duplicate");
+    database
+      .prepare("INSERT INTO entries (id, value) VALUES (?, ?)")
+      .run(2, Buffer.from("duplicate"));
+
+    expect(() =>
+      migrateSqliteSchemaToStrict(
+        database,
+        "CREATE TABLE IF NOT EXISTS entries (id INTEGER PRIMARY KEY, value TEXT NOT NULL UNIQUE ON CONFLICT REPLACE) STRICT;",
+      ),
+    ).toThrow("Failed migrating SQLite table entries to STRICT");
+
+    expect(readStrictFlag(database, "entries")).toBe(0);
+    expect(
+      database.prepare("SELECT id, typeof(value) AS storage_type FROM entries ORDER BY id").all(),
+    ).toEqual([
+      { id: 1, storage_type: "text" },
+      { id: 2, storage_type: "blob" },
+    ]);
+  });
 });
