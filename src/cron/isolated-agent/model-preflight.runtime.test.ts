@@ -1,6 +1,7 @@
 // Runtime model preflight tests cover provider/model checks before cron execution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { mockFirstObjectArg } from "../../test-utils/mock-call-assertions.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -20,20 +21,6 @@ function mockReachableResponse(status = 200) {
     response: { status },
     release: vi.fn(async () => {}),
   });
-}
-
-function requireFetchPreflightRequest(): {
-  url?: string;
-  timeoutMs?: number;
-  auditContext?: string;
-} {
-  const request = fetchWithSsrFGuardMock.mock.calls[0]?.[0] as
-    | { url?: string; timeoutMs?: number; auditContext?: string }
-    | undefined;
-  if (!request) {
-    throw new Error("Expected cron model preflight fetch request");
-  }
-  return request;
 }
 
 describe("preflightCronModelProvider", () => {
@@ -96,7 +83,7 @@ describe("preflightCronModelProvider", () => {
     });
 
     expect(result).toEqual({ status: "available" });
-    const request = requireFetchPreflightRequest();
+    const request = mockFirstObjectArg(fetchWithSsrFGuardMock);
     expect(request.url).toBe(`http://${host}:8000/v1/models`);
     expect(request.timeoutMs).toBe(2500);
   });
@@ -291,7 +278,7 @@ describe("preflightCronModelProvider", () => {
     expect(second.baseUrl).toBe("http://localhost:11434");
     expect(second.retryAfterMs).toBe(300000);
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
-    const request = requireFetchPreflightRequest();
+    const request = mockFirstObjectArg(fetchWithSsrFGuardMock);
     expect(request.url).toBe("http://localhost:11434/api/tags");
     expect(request.auditContext).toBe("cron-model-provider-preflight");
   });
