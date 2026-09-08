@@ -71,6 +71,51 @@ describe("renderMarkdownWithMarkers semantic annotations", () => {
     ).toBe("<blockquote><code>user[Thu 2026-07-02]</code> continue</blockquote>");
   });
 
+  it("preserves equal-bound annotation and link order", () => {
+    const opened: string[] = [];
+    const rendered = renderMarkdownWithMarkers(
+      {
+        text: "x",
+        styles: [],
+        annotations: (["user", "assistant"] as const).map((role) => ({
+          start: 0,
+          end: 1,
+          type: "assistant_transcript_role" as const,
+          kind: "angle_role_header" as const,
+          role,
+        })),
+        links: ["first", "second"].map((href) => ({ start: 0, end: 1, href })),
+      },
+      {
+        styleMarkers: {},
+        annotationMarkers: {
+          assistant_transcript_role: {
+            open: (span) => {
+              opened.push(span.role);
+              return `<role name="${span.role}">`;
+            },
+            close: "</role>",
+          },
+        },
+        escapeText: (text) => text,
+        buildLink: (link) => {
+          opened.push(link.href);
+          return {
+            start: link.start,
+            end: link.end,
+            open: `<link href="${link.href}">`,
+            close: "</link>",
+          };
+        },
+      },
+    );
+
+    expect(rendered).toBe(
+      '<role name="user"><role name="assistant"><link href="first"><link href="second">x</link></link></role></role>',
+    );
+    expect(opened).toEqual(["first", "second", "user", "assistant"]);
+  });
+
   it("renders many independently styled annotations without cross-product scans", () => {
     const markdown = Array.from(
       { length: 256 },

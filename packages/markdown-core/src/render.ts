@@ -292,15 +292,14 @@ export function renderMarkdownWithMarkers(
   // Links and styles share one stack so equal-end spans close in exact reverse open order.
   const stack: { open: string; close: string; end: number }[] = [];
   type OpeningItem =
-    | { end: number; open: string; close: string; kind: "annotation"; index: number }
-    | { end: number; open: string; close: string; kind: "link"; index: number }
+    | { end: number; open: string; close: string; kind: "annotation" }
+    | { end: number; open: string; close: string; kind: "link" }
     | {
         end: number;
         open: string;
         close: string;
         kind: "style";
         style: MarkdownStyle;
-        index: number;
       };
   let out = "";
 
@@ -325,7 +324,7 @@ export function renderMarkdownWithMarkers(
 
     const openingAnnotations = annotationStarts.get(pos);
     if (openingAnnotations) {
-      for (const [index, span] of openingAnnotations.entries()) {
+      for (const span of openingAnnotations) {
         const marker = annotationMarkers[span.type];
         if (!marker) {
           continue;
@@ -335,14 +334,13 @@ export function renderMarkdownWithMarkers(
           open: typeof marker.open === "function" ? marker.open(span) : marker.open,
           close: marker.close,
           kind: "annotation",
-          index,
         });
       }
     }
 
     const openingLinks = linkStarts.get(pos);
     if (openingLinks && openingLinks.length > 0) {
-      for (const [index, link] of openingLinks.entries()) {
+      for (const link of openingLinks) {
         // A renderer can collapse a link to terminal text. Emit the insertion
         // before new spans open; it must never enter the reopenable marker stack.
         if (link.start === link.end) {
@@ -354,14 +352,13 @@ export function renderMarkdownWithMarkers(
           open: link.open,
           close: link.close,
           kind: "link",
-          index,
         });
       }
     }
 
     const openingStyles = startsAt.get(pos);
     if (openingStyles) {
-      for (const [index, span] of openingStyles.entries()) {
+      for (const span of openingStyles) {
         const marker = styleMarkers[span.style];
         if (!marker) {
           continue;
@@ -372,7 +369,6 @@ export function renderMarkdownWithMarkers(
           close: marker.close,
           kind: "style",
           style: span.style,
-          index,
         });
       }
     }
@@ -393,7 +389,8 @@ export function renderMarkdownWithMarkers(
         if (a.kind === "style" && b.kind === "style") {
           return (STYLE_RANK.get(a.style) ?? 0) - (STYLE_RANK.get(b.style) ?? 0);
         }
-        return a.index - b.index;
+        // Stable sorting preserves source order for equal annotations and links.
+        return 0;
       });
 
       // Open outer spans first (larger end) so LIFO closes stay valid for same-start overlaps.
