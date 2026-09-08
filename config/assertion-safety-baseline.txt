@@ -2883,7 +2883,7 @@ src/gateway/server/ws-connection/message-handler.ts	10
 src/gateway/session-compaction-checkpoints.ts	7
 src/gateway/session-companion-context.ts	6
 src/gateway/session-companion-rpc.ts	3
-src/gateway/session-history-state.ts	3
+src/gateway/session-history-state.ts	2
 src/gateway/session-lifecycle-state.ts	1
 src/gateway/session-observer-rpc.ts	1
 src/gateway/session-recovery-service.ts	2

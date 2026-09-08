@@ -113,7 +113,7 @@ export function buildSkillExperienceReviewPrompt(
           SKILL_WORKSHOP_MAINTENANCE_PROMPT,
         ]
       : [
-          "Only skill_workshop executes in this draft-only review. Choose the smallest useful change: inspect pending proposals and revise the best match; otherwise read and patch the governing Workshop skill, preferring one actually used. Create a class-level skill only when none covers the procedure. Follow the tool's read and prepare_patch contracts; use a full-body update only for restructuring. Keep reusable scripts, templates and references in support_files linked from the procedure.",
+          "Only skill_workshop executes in this draft-only review. Choose the smallest useful change: inspect pending proposals and revise the best match; otherwise, if an existing Workshop-generated skill governs the procedure, read and patch it, preferring one actually used. Read or prepare_patch only a Workshop-generated skill identified in the inventory, used-skill receipt, or tool results; do not guess a skill name from the tool name. Create a class-level skill only when none covers the procedure. Follow the tool's read and prepare_patch contracts; use a full-body update only for restructuring. Keep reusable scripts, templates and references in support_files linked from the procedure.",
           "Finish with at most one create, patch, update or revise, after any needed preparation calls; otherwise answer NO_REPLY. The mutation stages a pending proposal, not a direct publication.",
         ]),
     ...(candidate.turnAborted === true

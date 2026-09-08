@@ -204,6 +204,32 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+describe("config.patch effective change receipt", () => {
+  it.each([
+    { nextToken: "synthetic-old-token", expectedPaths: [] },
+    {
+      nextToken: "synthetic-new-token",
+      expectedPaths: ["channels.matrix.accounts.sut.accessToken"],
+    },
+  ])(
+    "reports persisted secret changes without values: $expectedPaths",
+    async ({ nextToken, expectedPaths }) => {
+      storedConfig = {
+        channels: { matrix: { accounts: { sut: { accessToken: "synthetic-old-token" } } } },
+      };
+      const { respond } = await invokeConfigPatch({
+        raw: { channels: { matrix: { accounts: { sut: { accessToken: nextToken } } } } },
+        baseHash: "base-hash",
+      });
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ changedPaths: expectedPaths }),
+        undefined,
+      );
+    },
+  );
+});
+
 describe("config application settlement", () => {
   it.each(
     (["config.patch", "config.apply"] as const).flatMap((method) =>
