@@ -498,6 +498,22 @@ const CronJobStatePatchSchema = closedObject({
   streamLastExitAtMs: Type.Optional(CronDateTimestampMsSchema),
 });
 
+/** Optional zero-token shell gate before payload execution (#112371). */
+export const CronJobPrecheckSchema = closedObject({
+  kind: Type.Optional(Type.Literal("exec")),
+  command: NonEmptyString,
+  cwd: Type.Optional(Type.String()),
+  timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: 300_000 })),
+  contract: Type.Optional(
+    Type.Union([Type.Literal("exit-code"), Type.Literal("stdout-prefix"), Type.Literal("dual")]),
+  ),
+  workExitCodes: Type.Optional(Type.Array(Type.Integer())),
+  noWorkExitCodes: Type.Optional(Type.Array(Type.Integer())),
+  workStdoutPrefix: Type.Optional(Type.String()),
+  noWorkStdoutPrefix: Type.Optional(Type.String()),
+  onError: Type.Optional(Type.Union([Type.Literal("fail"), Type.Literal("skip")])),
+});
+
 /** Persisted cron job definition returned by scheduler list/get APIs. */
 export const CronJobSchema = closedObject({
   id: NonEmptyString,
@@ -521,6 +537,8 @@ export const CronJobSchema = closedObject({
   sessionTarget: CronSessionTargetSchema,
   wakeMode: CronWakeModeSchema,
   payload: CronReportedPayloadSchema,
+  /** Host-shell admission gate (separate from condition `trigger`; see docs/automation/cron-jobs.md). Binding: keep both contracts. */
+  precheck: Type.Optional(CronJobPrecheckSchema),
   delivery: Type.Optional(CronDeliverySchema),
   failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
   state: CronJobStateSchema,
@@ -607,6 +625,8 @@ export const CronAddParamsSchema = closedObject({
   sessionTarget: CronSessionTargetSchema,
   wakeMode: CronWakeModeSchema,
   payload: CronPayloadSchema,
+  /** Host-shell admission gate (same shape as CronJob / CronJobPatch). */
+  precheck: Type.Optional(CronJobPrecheckSchema),
   delivery: Type.Optional(CronDeliverySchema),
   failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
 });
@@ -648,6 +668,7 @@ const CronJobPatchSchema = closedObject({
   sessionTarget: Type.Optional(CronSessionTargetSchema),
   wakeMode: Type.Optional(CronWakeModeSchema),
   payload: Type.Optional(CronPayloadPatchSchema),
+  precheck: Type.Optional(Type.Union([CronJobPrecheckSchema, Type.Null()])),
   delivery: Type.Optional(CronDeliveryPatchSchema),
   failureAlert: Type.Optional(
     Type.Union([Type.Literal(false), CronFailureAlertPatchSchema, Type.Null()]),

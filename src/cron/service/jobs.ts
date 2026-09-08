@@ -7,6 +7,7 @@ import {
 import type { CronConfig } from "../../config/types.cron.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
+import { normalizeCronJobPrecheck } from "../job-precheck-normalize.js";
 import { assertCronJobStateTimestamps } from "../persisted-shape.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { normalizeCronScriptPayload } from "../script-payload.js";
@@ -43,6 +44,7 @@ import {
   assertScriptPayloadSupport,
   assertStreamScheduleSupport,
   assertSupportedJobSpec,
+  assertPrecheckSupport,
   assertTriggerSupport,
 } from "./jobs-validation.js";
 import { normalizeOptionalAgentId, normalizeRequiredName } from "./normalize.js";
@@ -125,22 +127,6 @@ function normalizeDeclarativeLabel(
   return normalized;
 }
 
-type JobValidationContext =
-  | { kind: "create"; cronConfig?: CronConfig; defaultAgentId?: string; nowMs: number }
-  | {
-      kind: "patch";
-      patch: CronJobPatch;
-      defaultAgentId?: string;
-      nowMs?: number;
-      cronConfig?: CronConfig;
-    }
-  | {
-      kind: "declarative";
-      input: CronJobCreate;
-      defaultAgentId?: string;
-      nowMs: number;
-      cronConfig?: CronConfig;
-    };
 
 function validateFullJob(
   job: CronStoredJob,
@@ -164,11 +150,18 @@ function validateFullJob(
     context.kind !== "patch" ||
     context.patch.enabled === true ||
     context.patch.schedule?.kind === "stream";
+  const precheckTouched =
+    context.kind === "create"
+      ? Boolean(job.precheck?.command)
+      : context.kind === "patch"
+        ? "precheck" in context.patch && context.patch.precheck != null
+        : Boolean(context.input.precheck?.command);
   const validateCapabilities = () => {
     assertTriggerSupport(job, {
       cronConfig,
       validateAuthoredTrigger: triggerTouched,
     });
+    assertPrecheckSupport(job, { cronConfig, requireEnabled: precheckTouched });
     assertScriptPayloadSupport(job, {
       cronConfig,
       requireEnabled: scriptTouched,
@@ -264,6 +257,15 @@ export function createJob(
       input.payload.kind === "script"
         ? normalizeCronScriptPayload(structuredClone(input.payload))
         : structuredClone(input.payload),
+    ...(input.precheck
+      ? (() => {
+          const precheck = normalizeCronJobPrecheck(input.precheck);
+          if (!precheck) {
+            throw new Error("invalid cron job precheck");
+          }
+          return { precheck };
+        })()
+      : {}),
     delivery: resolveInitialCronDelivery(input),
     failureAlert: input.failureAlert,
     ...(input.trigger ? { trigger: structuredClone(input.trigger) } : {}),
@@ -375,6 +377,17 @@ export function applyJobPatch(
     job.payload = mergeCronPayload(job.payload, patch.payload);
     if (job.payload.kind === "script") {
       job.payload = normalizeCronScriptPayload(job.payload);
+    }
+  }
+  if ("precheck" in patch) {
+    if (patch.precheck === null || patch.precheck === undefined) {
+      delete job.precheck;
+    } else {
+      const precheck = normalizeCronJobPrecheck(patch.precheck);
+      if (!precheck) {
+        throw new Error("invalid cron job precheck");
+      }
+      job.precheck = precheck;
     }
   }
   if (cronJobUsesToolRuntime(job) && (!previouslyUsedToolRuntime || explicitlyClearsToolsAllow)) {
@@ -514,6 +527,17 @@ export function applyDeclarativeJobSpec(
     job.trigger = structuredClone(input.trigger);
   } else {
     delete job.trigger;
+  }
+  // Converge host-shell precheck with the declaration (add/change/clear), same
+  // ownership model as trigger — omitting precheck clears a prior gate.
+  if (input.precheck) {
+    const precheck = normalizeCronJobPrecheck(input.precheck);
+    if (!precheck) {
+      throw new Error("invalid cron job precheck");
+    }
+    job.precheck = precheck;
+  } else {
+    delete job.precheck;
   }
   if (cronJobUsesToolRuntime(job) && job.payload.toolsAllow === undefined) {
     if (previousToolsAllow !== undefined) {

@@ -1401,6 +1401,79 @@ describe("cron stagger defaults", () => {
     });
   });
 
+  it("converges precheck on declarative updates (add/change/clear)", () => {
+    const now = Date.now();
+    const job = createJob(createMockState(now), {
+      name: "declared precheck",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "work" },
+    });
+
+    applyDeclarativeJobSpec(
+      job,
+      {
+        name: job.name,
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "work" },
+        precheck: { kind: "exec", command: "exit 2" },
+      },
+      { enabledExplicit: false, nowMs: now, cronConfig: { triggers: { enabled: true } } },
+    );
+    expect(job.precheck).toEqual({ kind: "exec", command: "exit 2" });
+
+    applyDeclarativeJobSpec(
+      job,
+      {
+        name: job.name,
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "work" },
+        precheck: { kind: "exec", command: "exit 0" },
+      },
+      { enabledExplicit: false, nowMs: now, cronConfig: { triggers: { enabled: true } } },
+    );
+    expect(job.precheck).toEqual({ kind: "exec", command: "exit 0" });
+
+    applyDeclarativeJobSpec(
+      job,
+      {
+        name: job.name,
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "work" },
+      },
+      { enabledExplicit: false, nowMs: now, cronConfig: { triggers: { enabled: true } } },
+    );
+    expect(job.precheck).toBeUndefined();
+  });
+
+  it("rejects saving a precheck while cron.triggers.enabled is false", () => {
+    const now = Date.now();
+    const state = createMockState(now);
+    state.deps.cronConfig = { triggers: { enabled: false } };
+    expect(() =>
+      createJob(state, {
+        name: "blocked precheck",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "work" },
+        precheck: { kind: "exec", command: "exit 0" },
+      }),
+    ).toThrow(/cron precheck is a host-shell command and is disabled/);
+  });
+
   it("preserves staggering when declarative convergence keeps the cron expression", () => {
     const now = Date.now();
     const job = createJob(createMockState(now), {

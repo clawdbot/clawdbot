@@ -184,3 +184,39 @@ Agent-turn jobs default to the creating conversation when the create request car
 
   </Accordion>
 </AccordionGroup>
+
+## Job precheck gate (zero-token skip)
+
+Optional **shell precheck** on any job ([#112371](https://github.com/openclaw/openclaw/issues/112371)) runs **before** the payload (including before an `agentTurn` model session). When the gate reports no work, the run is recorded as `skipped` with reason `precheck-no-work` and **no model call** is started. Skipped precheck runs use the consecutive-skip counter (not execution-error backoff).
+
+```json
+{
+  "precheck": {
+    "kind": "exec",
+    "command": "bash ~/.openclaw/scripts/inbox-has-mail.sh",
+    "timeoutMs": 30000
+  },
+  "payload": { "kind": "agentTurn", "message": "Triage unread mail…" }
+}
+```
+
+**Default exit-code contract**
+
+| Exit  | Meaning                                                   |
+| ----- | --------------------------------------------------------- |
+| `0`   | Work exists → run payload                                 |
+| `2`   | No work → `skipped` / `precheck-no-work`                  |
+| other | Precheck error (`status=error`), unless `onError: "skip"` |
+
+Stdout prefixes `WORK_NEEDED` / `NO_WORK` at the start of stdout override the exit code when present.
+
+```bash
+openclaw automations add --name inbox-poll --cron "*/15 * * * *" \
+  --session isolated \
+  --precheck-command 'bash ~/.openclaw/scripts/inbox-has-mail.sh' \
+  --message 'Triage unread inbox…'
+```
+
+Host-shell authorization reuses the same surface as exec / system-run (`cron.triggers.enabled` plus exec security). Denied prechecks record `status=error` with reason `precheck-policy-denied` and do not start a payload/model turn.
+
+`openclaw automations stats` rolls up skipped-vs-ran and token totals (`precheckSkipped`, `modelRuns`, `tokens`).

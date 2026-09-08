@@ -44,6 +44,19 @@ describe("resolveCronJobConfigRevision", () => {
     );
   });
 
+  it("ignores delivery writeback and enabled toggles (mid-run fences)", () => {
+    const original = makeJob();
+    expect(
+      resolveCronJobConfigRevision({
+        ...original,
+        delivery: { mode: "announce", channel: "telegram", to: "rewritten-target" },
+      }),
+    ).toBe(resolveCronJobConfigRevision(original));
+    expect(resolveCronJobConfigRevision({ ...original, enabled: false })).toBe(
+      resolveCronJobConfigRevision(original),
+    );
+  });
+
   it("changes for definition updates and same-id recreation", () => {
     const original = makeJob();
 
@@ -100,7 +113,9 @@ describe("resolveCronJobConfigRevision", () => {
     );
   });
 
-  it("distinguishes inherited and explicitly cleared delivery fields", () => {
+  it("ignores delivery field presence/clearing in the config fence", () => {
+    // Delivery is mid-run writeback (announce target); fencing it supersedes
+    // catch-up finalization. Own-undefined failureDestination must not diverge.
     const inherited = makeJob();
     const explicitlyCleared: CronJob = {
       ...inherited,
@@ -111,10 +126,15 @@ describe("resolveCronJobConfigRevision", () => {
         failureDestination: { channel: undefined },
       },
     };
+    const retargeted: CronJob = {
+      ...inherited,
+      delivery: { mode: "announce", channel: "discord", to: "other" },
+    };
 
-    expect(resolveCronJobConfigRevision(explicitlyCleared)).not.toBe(
+    expect(resolveCronJobConfigRevision(explicitlyCleared)).toBe(
       resolveCronJobConfigRevision(inherited),
     );
+    expect(resolveCronJobConfigRevision(retargeted)).toBe(resolveCronJobConfigRevision(inherited));
   });
 
   it("is stable across the SQLite store round-trip", async () => {

@@ -34,6 +34,7 @@ type CronJobForEdit = CronJob & { configRevision?: string };
 
 async function readCronJobForEdit(opts: GatewayRpcOpts, id: string): Promise<CronJobForEdit> {
   try {
+    // SAFETY: Gateway cron.get returns the job object shape used by edit path.
     return (await callGatewayFromCli("cron.get", opts, { id })) as CronJobForEdit;
   } catch (error) {
     if (!isUnknownCronGetMethodError(error)) {
@@ -52,6 +53,59 @@ async function readCronJobForEdit(opts: GatewayRpcOpts, id: string): Promise<Cro
     }
     return existing;
   }
+}
+
+function asPlainRecord(value: object): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value));
+}
+
+function readPrecheckField(existingPrecheck: unknown): {
+  command?: string;
+  timeoutMs?: number;
+  cwd?: string;
+} {
+  if (!existingPrecheck || typeof existingPrecheck !== "object") {
+    return {};
+  }
+  const rec = asPlainRecord(existingPrecheck);
+  const command = "command" in rec ? normalizeOptionalString(rec.command) : undefined;
+  const timeoutMs =
+    "timeoutMs" in rec && typeof rec.timeoutMs === "number" ? rec.timeoutMs : undefined;
+  const cwd = "cwd" in rec ? normalizeOptionalString(rec.cwd) : undefined;
+  return {
+    ...(command ? { command } : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    ...(cwd ? { cwd } : {}),
+  };
+}
+
+/** Keep schema-supported precheck settings across partial CLI edits (ClawSweeper P1). */
+function mergeCronEditPrecheckPatch(params: {
+  existingPrecheck: unknown;
+  command: string;
+  timeoutMs?: number;
+  cwd?: string;
+}): Record<string, unknown> {
+  const base =
+    params.existingPrecheck && typeof params.existingPrecheck === "object"
+      ? asPlainRecord(params.existingPrecheck)
+      : {};
+  const next: Record<string, unknown> = {
+    ...base,
+    kind: "exec",
+    command: params.command,
+  };
+  if (params.timeoutMs !== undefined) {
+    next.timeoutMs = params.timeoutMs;
+  } else {
+    delete next.timeoutMs;
+  }
+  if (params.cwd) {
+    next.cwd = params.cwd;
+  } else {
+    delete next.cwd;
+  }
+  return next;
 }
 
 export function registerCronEditCommand(cron: Command) {
@@ -288,6 +342,56 @@ export function registerCronEditCommand(cron: Command) {
               ...(pacingMin ? { min: pacingMin } : {}),
               ...(pacingMax ? { max: pacingMax } : {}),
             };
+          }
+
+          const precheckCommand = normalizeOptionalString(opts.precheckCommand);
+          const precheckTimeoutRaw = normalizeOptionalString(opts.precheckTimeoutMs);
+          const precheckCwd = normalizeOptionalString(opts.precheckCwd);
+          const hasPrecheckAncillary =
+            precheckTimeoutRaw !== undefined || precheckCwd !== undefined;
+          if (opts.clearPrecheck && (precheckCommand || hasPrecheckAncillary)) {
+            throw new Error(
+              "Use --clear-precheck alone, or --precheck-command/--precheck-timeout-ms/--precheck-cwd without --clear-precheck",
+            );
+          }
+          if (opts.clearPrecheck) {
+            patch.precheck = null;
+          } else if (precheckCommand || hasPrecheckAncillary) {
+            const parsePositiveTimeoutMs = (raw: string): number => {
+              const timeoutMs = parseStrictPositiveInteger(raw);
+              if (timeoutMs === undefined) {
+                throw new Error("Invalid --precheck-timeout-ms (must be a positive integer).");
+              }
+              return timeoutMs;
+            };
+            // Validate CLI-supplied timeout before any gateway read so bad flags fail closed.
+            const cliTimeoutMs =
+              precheckTimeoutRaw !== undefined
+                ? parsePositiveTimeoutMs(precheckTimeoutRaw)
+                : undefined;
+            // Partial CLI edits must merge onto the full existing gate (ClawSweeper P1).
+            // Always load existing when any precheck flag is set so contract/codes/prefixes/onError survive.
+            const existingPrecheck = (await readExistingCronJob()).precheck;
+            const existingFields = readPrecheckField(existingPrecheck);
+            if (!precheckCommand && hasPrecheckAncillary && !existingFields.command) {
+              throw new Error(
+                "--precheck-timeout-ms/--precheck-cwd require an existing precheck gate or --precheck-command",
+              );
+            }
+            const baseCommand = precheckCommand ?? existingFields.command;
+            if (!baseCommand) {
+              throw new Error(
+                "--precheck-timeout-ms/--precheck-cwd require an existing precheck gate or --precheck-command",
+              );
+            }
+            const timeoutMs = cliTimeoutMs ?? existingFields.timeoutMs;
+            const cwd = precheckCwd !== undefined ? precheckCwd : existingFields.cwd;
+            patch.precheck = mergeCronEditPrecheckPatch({
+              existingPrecheck,
+              command: baseCommand,
+              timeoutMs,
+              cwd,
+            });
           }
           if (opts.clearTrigger) {
             patch.trigger = null;

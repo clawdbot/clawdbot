@@ -425,6 +425,32 @@ export function registerCronAddCommand(cron: Command) {
               sessionTarget,
               wakeMode,
               payload: resolvedPayload,
+              ...(() => {
+                const precheckCommand = normalizeOptionalString(opts.precheckCommand);
+                const timeoutRaw = normalizeOptionalString(opts.precheckTimeoutMs);
+                const precheckCwd = normalizeOptionalString(opts.precheckCwd);
+                const hasAncillary = timeoutRaw !== undefined || precheckCwd !== undefined;
+                if (!precheckCommand) {
+                  if (hasAncillary) {
+                    throw new Error(
+                      "--precheck-timeout-ms/--precheck-cwd require --precheck-command on cron add",
+                    );
+                  }
+                  return {};
+                }
+                const timeoutMs = parseStrictPositiveInteger(opts.precheckTimeoutMs);
+                if (timeoutRaw !== undefined && timeoutMs === undefined) {
+                  throw new Error("Invalid --precheck-timeout-ms (must be a positive integer).");
+                }
+                return {
+                  precheck: {
+                    kind: "exec" as const,
+                    command: precheckCommand,
+                    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+                    ...(precheckCwd ? { cwd: precheckCwd } : {}),
+                  },
+                };
+              })(),
               delivery: deliveryMode
                 ? {
                     mode: deliveryMode,

@@ -520,3 +520,65 @@ describe("applyJobPatch failure alert merge", () => {
     expect(projectCronJobThroughStorageCodec(job).failureAlert).toBeUndefined();
   });
 });
+
+describe("precheck producer-side normalization", () => {
+  const mockState = {
+    deps: {
+      nowMs: () => Date.now(),
+      defaultAgentId: "main",
+      cronConfig: { triggers: { enabled: true } },
+    },
+  } as never;
+
+  const baseCreate = {
+    name: "precheck-gate",
+    enabled: true,
+    schedule: { kind: "every" as const, everyMs: 60_000 },
+    sessionTarget: "isolated" as const,
+    wakeMode: "now" as const,
+    payload: { kind: "agentTurn" as const, message: "hello" },
+  };
+
+  it("rejects overlapping exit codes on create before persist", () => {
+    expect(() =>
+      createJob(mockState, {
+        ...baseCreate,
+        precheck: {
+          kind: "exec",
+          command: "exit 0",
+          workExitCodes: [0, 2],
+          noWorkExitCodes: [2],
+        },
+      } as CronJobCreate),
+    ).toThrow(/must not overlap/);
+  });
+
+  it("rejects empty exit-code lists on patch before persist", () => {
+    const job = makeJob({
+      precheck: { kind: "exec", command: "exit 0", noWorkExitCodes: [2] },
+    });
+    expect(() =>
+      applyJobPatch(job, {
+        precheck: { kind: "exec", command: "exit 0", workExitCodes: [] },
+      } as CronJobPatch),
+    ).toThrow(/workExitCodes must be a non-empty array/);
+  });
+
+  it("normalizes a valid precheck on create", () => {
+    const job = createJob(mockState, {
+      ...baseCreate,
+      precheck: {
+        kind: "exec",
+        command: "  echo NO_WORK  ",
+        workExitCodes: [0],
+        noWorkExitCodes: [2],
+      },
+    } as CronJobCreate);
+    expect(job.precheck).toEqual({
+      kind: "exec",
+      command: "echo NO_WORK",
+      workExitCodes: [0],
+      noWorkExitCodes: [2],
+    });
+  });
+});

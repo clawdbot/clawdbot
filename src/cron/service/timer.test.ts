@@ -7,6 +7,7 @@ import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/servic
 import { createCronServiceState as createCronServiceStateBase } from "../../cron/service/state.js";
 import { onTimer } from "../../cron/service/timer.test-support.js";
 import { loadCronStore } from "../../cron/store.js";
+import { cronStoreKey } from "../../cron/store/key.js";
 import type { CronJob } from "../../cron/types.js";
 import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";

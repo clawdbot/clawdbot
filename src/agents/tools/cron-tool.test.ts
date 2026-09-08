@@ -1311,6 +1311,24 @@ describe("cron tool", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it("rejects host-shell precheck from the agent cron tool on add", async () => {
+    const tool = createTestCronTool();
+
+    await expect(
+      tool.execute("call-precheck-add", {
+        action: "add",
+        job: {
+          name: "precheck-gated",
+          schedule: { at: new Date(123).toISOString() },
+          sessionTarget: "isolated",
+          payload: { kind: "agentTurn", message: "work" },
+          precheck: { command: "test -f /tmp/work" },
+        },
+      }),
+    ).rejects.toThrow("automation precheck host-shell gates cannot be created, edited, or cleared");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("allows script payloads without treating them as shell commands", async () => {
     const tool = createTestCronTool();
 
@@ -2943,6 +2961,36 @@ describe("cron tool", () => {
       method: "cron.get",
       params: { id: "job-command" },
     });
+  });
+
+  it("rejects host-shell precheck from the agent cron tool on update", async () => {
+    const tool = createTestCronTool();
+
+    await expect(
+      tool.execute("call-precheck-update", {
+        action: "update",
+        id: "job-4",
+        job: {
+          precheck: { command: "test -f /tmp/work" },
+        },
+      }),
+    ).rejects.toThrow("automation precheck host-shell gates cannot be created, edited, or cleared");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects clearing precheck via null from the agent cron tool on update", async () => {
+    const tool = createTestCronTool();
+
+    await expect(
+      tool.execute("call-precheck-clear-null", {
+        action: "update",
+        id: "job-4",
+        job: {
+          precheck: null,
+        },
+      }),
+    ).rejects.toThrow("automation precheck host-shell gates cannot be created, edited, or cleared");
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("allows non-payload updates to triggered command jobs", async () => {

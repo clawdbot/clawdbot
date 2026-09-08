@@ -329,6 +329,16 @@ function validateCurrentJob(params: {
   if (params.resolveAgentId(job) !== params.handle.agentId) {
     throw new CronRunReceiptRevisionError(params.handle.receiptId);
   }
+  // Fence host-shell precheck / payload against post-admission config mutation
+  // (e.g. precheck command changed or cleared after claim). Receipts store
+  // configRevision at claim time; without this check, assertRunCurrent only
+  // verified job existence + agent identity (ClawSweeper P1 on #112375).
+  if (resolveCronJobConfigRevision(job) !== params.handle.configRevision) {
+    throw new CronRunReceiptRevisionError(
+      params.handle.receiptId,
+      "cron job configuration changed",
+    );
+  }
   return job;
 }
 

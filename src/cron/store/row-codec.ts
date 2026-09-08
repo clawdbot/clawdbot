@@ -5,6 +5,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { normalizeCronJobPrecheck } from "../job-precheck.js";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
@@ -103,8 +104,9 @@ function normalizeCronJobForSqlite(job: CronStoreFile["jobs"][number]): CronStor
     ...normalized,
     createdAtMs,
     updatedAtMs,
+    // SAFETY: state validated as record; CronJobState is the persisted shape.
     state: isRecord(normalized.state) ? (normalized.state as CronJobState) : {},
-  } as CronStoredJob;
+  } as CronStoredJob; // SAFETY: normalized job fields match CronStoredJob
 }
 
 function countUnpersistableCronJobs(store: CronStoreFile): number {
@@ -160,6 +162,18 @@ function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronSt
     // Legacy destination-only config remains untouched for doctor; runtime defaults to announce.
     runtimeConfig.delivery = deliveryFromJson({ ...runtimeConfig.delivery, mode: "announce" });
   }
+  const rawPrecheck = runtimeConfig.precheck;
+  if (rawPrecheck !== undefined && rawPrecheck !== null) {
+    try {
+      const precheck = normalizeCronJobPrecheck(rawPrecheck);
+      if (!precheck) {
+        throw new Error("invalid-precheck");
+      }
+      runtimeConfig.precheck = precheck;
+    } catch {
+      throw new Error("invalid-precheck");
+    }
+  }
   return {
     ...runtimeConfig,
     id: row.job_id,
@@ -178,6 +192,7 @@ export function projectCronJobThroughStorageCodec(job: CronStoredJob): CronStore
   if (!normalized) {
     throw new Error(`cannot project invalid cron job ${job.id}`);
   }
+  // SAFETY: bindCronJobRow returns the sqlite row binding for a normalized job.
   const row = bindCronJobRow("config-revision", normalized, 0) as CronJobRow;
   const projected = rowToCronJob(row, tryParseJsonObject(row.job_json) ?? {});
   if (!projected) {
@@ -472,7 +487,17 @@ export function loadedCronStoreFromRows(rows: CronJobRow[]): LoadedCronStore {
       });
       continue;
     }
-    const job = rowToCronJob(row, parsedJobJson);
+    let job: CronStoredJob | null = null;
+    let precheckInvalid = false;
+    try {
+      job = rowToCronJob(row, parsedJobJson);
+    } catch (err) {
+      if (err instanceof Error && err.message === "invalid-precheck") {
+        precheckInvalid = true;
+      } else {
+        throw err;
+      }
+    }
     const configJob = decodeCronJobConfig(parsedJobJson);
     const runtimeEntry = {
       updatedAtMs: normalizeNumber(row.runtime_updated_at_ms) ?? normalizeNumber(row.updated_at),
@@ -483,7 +508,9 @@ export function loadedCronStoreFromRows(rows: CronJobRow[]): LoadedCronStore {
     if (!job) {
       invalidConfigRows.push({
         sourceIndex: index,
-        reason: getInvalidPersistedCronJobReason(configJob) ?? "invalid-payload",
+        reason: precheckInvalid
+          ? "invalid-precheck"
+          : (getInvalidPersistedCronJobReason(configJob) ?? "invalid-payload"),
         job: configJob,
         ...(runtimeEntry.state ? { state: runtimeEntry.state } : {}),
         ...(runtimeEntry.updatedAtMs !== undefined
