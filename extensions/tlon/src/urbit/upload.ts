@@ -33,9 +33,10 @@ export async function uploadImageFromUrl(imageUrl: string, maxBytes?: number): P
     const contentType = fetched.contentType || "image/png";
     const blob = new Blob([bufferToBlobPart(fetched.buffer)], { type: contentType });
 
-    // Extract filename from URL or use a default
+    // Prefer the fetch helper's Content-Disposition name; URL path is fallback.
     const urlPath = new URL(imageUrl).pathname;
-    const fileName = urlPath.split("/").pop() || `upload-${Date.now()}.png`;
+    const fileName =
+      fetched.fileName?.trim() || urlPath.split("/").pop()?.trim() || `upload-${Date.now()}.png`;
 
     // Upload to Tlon storage
     const result = await uploadFile({
