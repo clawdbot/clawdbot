@@ -8,6 +8,7 @@ import {
 import { html, nothing, type LitElement } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   SESSION_COMPOSER_FOCUS_PARAM,
   SESSION_NAVIGATION_KEY_PARAM,
@@ -36,19 +37,6 @@ type RouterOutletElement = LitElement & {
   retryContext?: TestContext;
   retentionScope?: object;
 };
-
-type Deferred<T> = {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-};
-
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((promiseResolve) => {
-    resolve = promiseResolve;
-  });
-  return { promise, resolve };
-}
 
 function location(pathname: string, search = ""): RouteLocation {
   return { pathname, search, hash: "" };
@@ -473,7 +461,7 @@ describe("openclaw-router-outlet chat ownership", () => {
       fallbackAgentId: "main",
       row: { key: nextSessionKey, displayName: "Next retained board" },
     });
-    const nextData = deferred<ChatRouteData>();
+    const nextData = createDeferred<ChatRouteData>();
     const teardown = vi.fn(async () => undefined);
     const render = ownedRenderer(teardown);
     const chatModule = await routeModule("chat", render);
@@ -533,7 +521,7 @@ describe("openclaw-router-outlet chat ownership", () => {
       `?${new URLSearchParams({ draft: "ship it", [SESSION_COMPOSER_FOCUS_PARAM]: "1" })}`,
     );
     const initial = { ...sessionData(sessionKey, "chat"), canonicalLocation: canonical };
-    const nextData = deferred<ChatRouteData>();
+    const nextData = createDeferred<ChatRouteData>();
     let loadCount = 0;
     const teardown = vi.fn(async () => undefined);
     const module = await routeModule("chat", ownedRenderer(teardown));
@@ -571,7 +559,7 @@ describe("openclaw-router-outlet chat ownership", () => {
     const firstKey = "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001";
     const secondKey = "agent:main:dashboard:12345678-0bbb-4000-8000-000000000002";
     const pathname = "/chat/main/deploy-monitor-12345678";
-    const nextData = deferred<ChatRouteData>();
+    const nextData = createDeferred<ChatRouteData>();
     let loadCount = 0;
     const teardown = vi.fn(async () => undefined);
     const module = await routeModule("chat", ownedRenderer(teardown));
@@ -636,7 +624,7 @@ describe("openclaw-router-outlet chat ownership", () => {
     },
   ])("retains an unresolved route until $label replaces it", async ({ result }) => {
     const sessionKey = "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001";
-    const nextData = deferred<ChatRouteData>();
+    const nextData = createDeferred<ChatRouteData>();
     let loadCount = 0;
     const teardown = vi.fn(async () => undefined);
     const module = await routeModule("chat", ownedRenderer(teardown));

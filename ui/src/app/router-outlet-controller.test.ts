@@ -1,25 +1,13 @@
 // @vitest-environment node
 import { createRouter, definePage, type RouteLocation } from "@openclaw/uirouter";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { RouterOutletController, selectRenderedRouteMatch } from "./router-outlet-controller.ts";
 
 type RouteId = "first" | "second";
 type TestContext = { label: string };
 type TestModule = { render: (data: TestData | undefined) => unknown };
 type TestData = { label: string };
-
-type Deferred<T> = {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-};
-
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((promiseResolve) => {
-    resolve = promiseResolve;
-  });
-  return { promise, resolve };
-}
 
 function location(pathname: string): RouteLocation {
   return { pathname, search: "", hash: "" };
@@ -42,8 +30,8 @@ afterEach(() => {
 describe("RouterOutletController pending presentation", () => {
   it("delays a cold-start fallback until the route has been pending for one second", async () => {
     vi.useFakeTimers();
-    const routeModule = deferred<TestModule>();
-    const routeData = deferred<TestData>();
+    const routeModule = createDeferred<TestModule>();
+    const routeData = createDeferred<TestData>();
     const router = createRouter<RouteId, TestContext, TestModule, TestData>({
       routes: [
         definePage({
@@ -79,8 +67,8 @@ describe("RouterOutletController pending presentation", () => {
 
   it("carries the last settled match through a cold and module-loaded navigation", async () => {
     vi.useFakeTimers();
-    const secondModule = deferred<TestModule>();
-    const secondData = deferred<TestData>();
+    const secondModule = createDeferred<TestModule>();
+    const secondData = createDeferred<TestData>();
     const router = createRouter<RouteId, TestContext, TestModule, TestData>({
       routes: [
         definePage({
@@ -139,8 +127,8 @@ describe("RouterOutletController pending presentation", () => {
 
   it("restarts a canceled pending delay after reconnect", async () => {
     vi.useFakeTimers();
-    const routeModule = deferred<TestModule>();
-    const routeData = deferred<TestData>();
+    const routeModule = createDeferred<TestModule>();
+    const routeData = createDeferred<TestData>();
     const router = createRouter<RouteId, TestContext, TestModule, TestData>({
       routes: [
         definePage({
@@ -230,7 +218,7 @@ describe("RouterOutletController not-found boundary", () => {
   });
 
   it("keeps a navigation started by an earlier not-found subscriber", async () => {
-    const secondModule = deferred<TestModule>();
+    const secondModule = createDeferred<TestModule>();
     const router = createRouter<RouteId, TestContext, TestModule, TestData>({
       routes: [
         definePage({
