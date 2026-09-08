@@ -7,7 +7,10 @@ import type {
   CliBackendNormalizeConfigContext,
   CliBackendResolveExecutionArgsContext,
 } from "openclaw/plugin-sdk/cli-backend";
-import { resolveExecModePolicy } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import {
+  applyExecPolicyLayer,
+  resolveExecModePolicy,
+} from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { requiresClaudeMandatoryAdaptiveThinking } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
@@ -152,12 +155,20 @@ function isOpenClawRequestedYolo(context?: CliBackendNormalizeConfigContext): bo
   const agentExec = context?.agentId
     ? resolveAgentConfig(context.config ?? {}, context.agentId)?.tools?.exec
     : undefined;
-  const exec = agentExec ?? context?.config?.tools?.exec;
+  // Layer global then per-agent field by field, the same way the exec-policy
+  // owner does (`resolveExecToolConfig`, `resolveExecDefaults`). Replacing the
+  // global block wholesale would let a partial agent block that omits
+  // `security` inherit the permissive default instead of a restrictive global
+  // setting, and this value becomes Claude's `--permission-mode`.
+  const exec = applyExecPolicyLayer(
+    applyExecPolicyLayer({}, context?.config?.tools?.exec),
+    agentExec,
+  );
   return (
     resolveExecModePolicy({
-      mode: exec?.mode,
-      security: exec?.security ?? "full",
-      ask: exec?.ask ?? "off",
+      mode: exec.mode,
+      security: exec.security ?? "full",
+      ask: exec.ask ?? "off",
     }).mode === "full"
   );
 }
