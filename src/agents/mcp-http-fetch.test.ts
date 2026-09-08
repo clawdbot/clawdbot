@@ -1,5 +1,8 @@
+import fs from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import os from "node:os";
+import path from "node:path";
 import { parseErrorResponse } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 /**
@@ -183,6 +186,54 @@ describe("MCP HTTP fetch helpers", () => {
       getDispatcherConnectOptions(fetchCalls[1]?.init)?.["rejectUnauthorized"],
     ).toBeUndefined();
   });
+
+  it("loads bounded client certificate and key files", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-mcp-tls-"));
+    const clientCert = path.join(root, "client.crt");
+    const clientKey = path.join(root, "client.key");
+    fs.writeFileSync(clientCert, "client-certificate\n", "utf8");
+    fs.writeFileSync(clientKey, "client-key\n", "utf8");
+
+    try {
+      const fetch = buildMcpHttpFetch({
+        clientCert,
+        clientKey,
+        resourceUrl: "https://mcp.example.com/mcp",
+      });
+
+      await fetch("https://mcp.example.com/token");
+
+      expect(getDispatcherConnectOptions(fetchCalls[0]?.init)).toMatchObject({
+        cert: "client-certificate",
+        key: "client-key",
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["clientCert", "clientKey"] as const)(
+    "rejects oversized %s files before dispatch",
+    async (field) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-mcp-tls-"));
+      const oversized = path.join(root, field);
+      fs.writeFileSync(oversized, "x".repeat(64 * 1024 + 1), "utf8");
+
+      try {
+        const fetch = buildMcpHttpFetch({
+          [field]: oversized,
+          resourceUrl: "https://mcp.example.com/mcp",
+        });
+
+        await expect(fetch("https://mcp.example.com/token")).rejects.toThrow(
+          `exceeds ${64 * 1024} bytes`,
+        );
+        expect(fetchCalls).toHaveLength(0);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("uses configured env proxy for ordinary MCP HTTP requests", async () => {
     vi.stubEnv("https_proxy", "http://proxy.example:8080");

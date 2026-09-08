@@ -3,7 +3,6 @@
  * Adds SSRF protection, scoped TLS/client-cert dispatchers, response cleanup,
  * and same-origin header handling around the MCP SDK fetch contract.
  */
-import fs from "node:fs";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { wrapGuardedBodyStream } from "../infra/net/guarded-body-stream.js";
@@ -12,6 +11,7 @@ import {
   type PinnedDispatcherPolicy,
 } from "../infra/net/ssrf.js";
 import { loadUndiciRuntimeDeps } from "../infra/net/undici-runtime.js";
+import { readSecretFileSync } from "../infra/secret-file.js";
 
 /** Default MCP HTTP fetch backed by lazy-loaded undici runtime deps. */
 const fetchWithUndici: FetchLike = async (url, init) =>
@@ -26,6 +26,14 @@ const fetchWithUndiciGuard = async (
 ): Promise<Response> => await fetchWithUndici(input instanceof Request ? input.url : input, init);
 
 const MCP_HTTP_MAX_REDIRECTS = 20;
+const MCP_CLIENT_TLS_FILE_MAX_BYTES = 64 * 1024;
+
+function readMcpClientTlsFile(filePath: string, label: string): string {
+  return readSecretFileSync(filePath, label, {
+    maxBytes: MCP_CLIENT_TLS_FILE_MAX_BYTES,
+    rejectHardlinks: false,
+  });
+}
 
 function resolveFetchRequest(input: RequestInfo | URL, init?: RequestInit) {
   if (input instanceof Request) {
@@ -114,8 +122,12 @@ export function buildMcpHttpFetch(params: {
     }
     customConnect ??= {
       ...(params.sslVerify === false ? { rejectUnauthorized: false } : {}),
-      ...(params.clientCert ? { cert: fs.readFileSync(params.clientCert, "utf-8") } : {}),
-      ...(params.clientKey ? { key: fs.readFileSync(params.clientKey, "utf-8") } : {}),
+      ...(params.clientCert
+        ? { cert: readMcpClientTlsFile(params.clientCert, "MCP client certificate") }
+        : {}),
+      ...(params.clientKey
+        ? { key: readMcpClientTlsFile(params.clientKey, "MCP client key") }
+        : {}),
     };
     return { mode: "direct", connect: customConnect };
   };
