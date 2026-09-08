@@ -19,8 +19,15 @@ const DEFAULT_INBOUND_DEDUPE_MAX = 5000;
  */
 const INBOUND_DEDUPE_CACHE_KEY = Symbol.for("openclaw.inboundDedupeCache");
 const INBOUND_DEDUPE_INFLIGHT_KEY = Symbol.for("openclaw.inboundDedupeClaims");
+// Separate cache so a delivered final is remembered per inbound even after the
+// run-admission claim has committed and been evicted.
+const INBOUND_FINAL_DELIVERY_CACHE_KEY = Symbol.for("openclaw.inboundFinalDeliveryClaims");
 
 const inboundDedupeCache = resolveGlobalDedupeCache(INBOUND_DEDUPE_CACHE_KEY, {
+  ttlMs: DEFAULT_INBOUND_DEDUPE_TTL_MS,
+  maxSize: DEFAULT_INBOUND_DEDUPE_MAX,
+});
+const inboundFinalDeliveryCache = resolveGlobalDedupeCache(INBOUND_FINAL_DELIVERY_CACHE_KEY, {
   ttlMs: DEFAULT_INBOUND_DEDUPE_TTL_MS,
   maxSize: DEFAULT_INBOUND_DEDUPE_MAX,
 });
@@ -122,4 +129,27 @@ export function claimInboundDedupe(
 export function resetInboundDedupe(): void {
   inboundDedupeCache.clear();
   inboundDedupeInFlight.clear();
+  inboundFinalDeliveryCache.clear();
+}
+
+/**
+ * Idempotency for the final reply of one physical inbound, independent of the
+ * per-attempt run context. A hard mid-turn harness failure re-runs the same turn
+ * through model fallback; each attempt rebuilds delivery closures, so the
+ * per-attempt "already delivered" flags reset and a recovered attempt would
+ * re-emit the final. Keyed on the shared inbound key, the first attempt to reach
+ * delivery claims it; any later attempt for the same inbound sees `already` and
+ * must skip its final send. Fails open (`unkeyed`) when the inbound has no stable
+ * key, so it never blocks a first delivery.
+ */
+export function claimInboundFinalDelivery(ctx: MsgContext): "claimed" | "already" | "unkeyed" {
+  const key = buildInboundDedupeKey(ctx);
+  if (!key) {
+    return "unkeyed";
+  }
+  if (inboundFinalDeliveryCache.peek(key)) {
+    return "already";
+  }
+  inboundFinalDeliveryCache.check(key);
+  return "claimed";
 }

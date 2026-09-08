@@ -2,7 +2,11 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../templating.js";
-import { claimInboundDedupe, resetInboundDedupe } from "./inbound-dedupe.js";
+import {
+  claimInboundDedupe,
+  claimInboundFinalDelivery,
+  resetInboundDedupe,
+} from "./inbound-dedupe.js";
 
 const sharedInboundContext: MsgContext = {
   Provider: "discord",
@@ -23,6 +27,47 @@ function claim(ctx: MsgContext) {
   }
   return result;
 }
+
+describe("inbound final-delivery idempotency", () => {
+  afterEach(() => {
+    resetInboundDedupe();
+    vi.useRealTimers();
+  });
+
+  it("claims the first final delivery and marks a fallback re-run's final as already delivered", () => {
+    // First delivery attempt for this inbound wins the claim.
+    expect(claimInboundFinalDelivery(sharedInboundContext)).toBe("claimed");
+    // A model-fallback re-run of the SAME inbound must be told the final was
+    // already delivered so it suppresses its duplicate send.
+    expect(claimInboundFinalDelivery(sharedInboundContext)).toBe("already");
+    expect(claimInboundFinalDelivery(sharedInboundContext)).toBe("already");
+  });
+
+  it("claims independently per distinct inbound message id", () => {
+    expect(claimInboundFinalDelivery({ ...sharedInboundContext, MessageSid: "msg-a" })).toBe(
+      "claimed",
+    );
+    expect(claimInboundFinalDelivery({ ...sharedInboundContext, MessageSid: "msg-b" })).toBe(
+      "claimed",
+    );
+    expect(claimInboundFinalDelivery({ ...sharedInboundContext, MessageSid: "msg-a" })).toBe(
+      "already",
+    );
+  });
+
+  it("fails open when the inbound has no stable dedupe key", () => {
+    // No MessageSid ⇒ no key ⇒ must never block a first delivery.
+    const keyless: MsgContext = { ...sharedInboundContext, MessageSid: undefined };
+    expect(claimInboundFinalDelivery(keyless)).toBe("unkeyed");
+    expect(claimInboundFinalDelivery(keyless)).toBe("unkeyed");
+  });
+
+  it("resetInboundDedupe clears the final-delivery claim", () => {
+    expect(claimInboundFinalDelivery(sharedInboundContext)).toBe("claimed");
+    resetInboundDedupe();
+    expect(claimInboundFinalDelivery(sharedInboundContext)).toBe("claimed");
+  });
+});
 
 describe("inbound dedupe", () => {
   afterEach(() => {

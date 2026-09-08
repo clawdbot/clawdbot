@@ -24,6 +24,7 @@ import {
   clearPendingFinalDeliveryAfterSuccess,
   suppressPendingFinalDelivery,
 } from "./dispatch-from-config.pending-final.js";
+import { claimInboundFinalDelivery } from "./inbound-dedupe.js";
 import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatcher.js";
 
 type ExecuteDispatchReadyState = Extract<
@@ -108,8 +109,39 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       await state.progressState.progressCallbackStartTail;
     }
     await state.flushPendingCommentaryProgress();
+    // Per-inbound final-delivery idempotency across model-fallback re-entries.
+    // A hard mid-turn harness failure re-runs the same turn on a fallback model;
+    // the per-attempt delivery closures reset, so a recovered attempt would
+    // re-emit a final already delivered for this inbound. Only claim when this
+    // attempt actually intends to deliver a visible final (delivery not
+    // suppressed and at least one deliverable reply), so suppressed/silent turns
+    // never consume the claim and a genuine first delivery is never blocked.
+    const intendsVisibleFinal =
+      !suppressDelivery &&
+      replies.some(
+        (reply) =>
+          !(reply.isReasoning === true && !state.reasoningPayloadsEnabled) &&
+          !(reply.isCommentary === true && !state.commentaryPayloadsEnabled) &&
+          hasOutboundReplyContent(reply, { trimText: true }),
+      );
+    const inboundFinalAlreadyDelivered =
+      intendsVisibleFinal && claimInboundFinalDelivery(ctx) === "already";
     for (const [replyIndex, reply] of replies.entries()) {
       throwIfDispatchOperationAborted();
+      // A prior attempt for this same inbound already delivered its final; a
+      // fallback re-run must not re-emit it. Suppress via the normal path.
+      if (inboundFinalAlreadyDelivered) {
+        logVerbose(
+          [
+            "dispatch-from-config: final reply suppressed by inbound-final-delivery-dedupe",
+            `(session=${state.acpDispatchSessionKey ?? sessionKey ?? "unknown"}`,
+            `provider=${ctx.Provider ?? "unknown"}`,
+            `message=${ctx.MessageSidFull ?? ctx.MessageSid ?? "unknown"})`,
+          ].join(" "),
+        );
+        await suppressPendingFinalDelivery(reply);
+        continue;
+      }
       // Durable reasoning is a channel-owned lane; generic channels keep the
       // historical suppression unless they explicitly opt in.
       if (reply.isReasoning === true && !state.reasoningPayloadsEnabled) {
