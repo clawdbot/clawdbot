@@ -1,0 +1,296 @@
+#
+# riscv64-specific Dockerfile.
+#
+# Why a separate file (not a `--platform linux/riscv64` build of the main
+# Dockerfile):
+#   1. The official `node:24-bookworm` image has no riscv64 variant, so the
+#      runtime pulls a Node build from unofficial-builds.nodejs.org instead.
+#   2. The JS bundler (rolldown, via tsdown / `pnpm build:docker`) has no
+#      riscv64 native binary, so TypeScript bundling MUST run on the build
+#      host's architecture. Its output is pure JS and architecture-independent.
+#
+# Design: build `dist/` on $BUILDPLATFORM (host arch, has rolldown), then
+# install runtime native addons (sharp, esbuild, ...) NATIVELY on riscv64 and
+# copy only the arch-independent `dist/` across. This keeps native-addon ABI
+# correct while sidestepping the rolldown gap.
+#
+# Keep the builder stages below in sync with the main Dockerfile.
+
+ARG OPENCLAW_EXTENSIONS=""
+ARG OPENCLAW_BUNDLED_PLUGIN_DIR=extensions
+ARG OPENCLAW_DOCKER_BUILD_NODE_OPTIONS="--max-old-space-size=8192"
+ARG OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=""
+ARG OPENCLAW_DOCKER_BUILD_SKIP_DTS=1
+ARG OPENCLAW_NODE_BOOKWORM_IMAGE="docker.io/library/node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584"
+ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.4.0@sha256:5ff609364c049b54eb0ff560ec96319729a972078ef2c755d758f0c6ef89c2d6"
+# riscv64 Node from unofficial-builds; track the major of OPENCLAW_NODE_BOOKWORM_IMAGE.
+ARG NODE_VERSION=24.18.0
+# SHA256 of node-v${NODE_VERSION}-linux-riscv64.tar.xz, from
+# https://unofficial-builds.nodejs.org/download/release/v${NODE_VERSION}/SHASUMS256.txt
+# Bump this together with NODE_VERSION. unofficial-builds are outside the official
+# Node.js signing chain, so this checksum is the immutability/tamper-evidence anchor.
+ARG NODE_RISCV64_SHA256=bee0030a531192c09f36eba54231415fbd4fc8da032f1024c41a91c8d87ea41b
+
+# ── Stage 1: workspace dependency manifests (host arch) ─────────────
+FROM --platform=$BUILDPLATFORM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS workspace-deps
+ARG OPENCLAW_EXTENSIONS
+ARG OPENCLAW_BUNDLED_PLUGIN_DIR
+COPY scripts/lib/docker-plugin-selection.mjs /tmp/docker-plugin-selection.mjs
+COPY scripts/lib/root-package-bundled-plugin-excludes.mjs /tmp/root-package-bundled-plugin-excludes.mjs
+COPY packages /tmp/packages
+COPY ${OPENCLAW_BUNDLED_PLUGIN_DIR} /tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}
+RUN mkdir -p /out/packages "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}" && \
+    for manifest in /tmp/packages/*/package.json; do \
+      [ -f "$manifest" ] || continue; \
+      pkg_dir="${manifest%/package.json}"; \
+      pkg_name="${pkg_dir##*/}"; \
+      mkdir -p "/out/packages/$pkg_name" && \
+      cp "$manifest" "/out/packages/$pkg_name/package.json"; \
+    done && \
+    node /tmp/docker-plugin-selection.mjs "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}" "$OPENCLAW_EXTENSIONS" \
+      > /out/openclaw-selected-plugin-dirs && \
+    while IFS= read -r ext; do \
+      ext_dir="/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext"; \
+      if [ -f "$ext_dir/package.json" ]; then \
+        mkdir -p "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext" && \
+        cp "$ext_dir/package.json" "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json"; \
+      fi; \
+    done < /out/openclaw-selected-plugin-dirs
+
+# ── Stage 2: Build pure-JS artifacts (host arch, needs rolldown) ────
+FROM --platform=$BUILDPLATFORM ${OPENCLAW_BUN_IMAGE} AS bun-binary
+FROM --platform=$BUILDPLATFORM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build
+ARG OPENCLAW_BUNDLED_PLUGIN_DIR
+ARG OPENCLAW_DOCKER_BUILD_NODE_OPTIONS
+ARG OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB
+ARG OPENCLAW_DOCKER_BUILD_SKIP_DTS
+
+COPY --from=bun-binary /usr/local/bin/bun /usr/local/bin/bun
+RUN corepack enable
+WORKDIR /app
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY node-version.mjs ./
+COPY openclaw.mjs ./
+COPY ui/package.json ./ui/package.json
+COPY patches ./patches
+COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-warning.mjs scripts/windows-cmd-helpers.mjs scripts/prepare-git-hooks.mjs ./scripts/
+COPY scripts/lib/guard-inventory-utils.mjs ./scripts/lib/guard-inventory-utils.mjs
+COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs
+COPY scripts/lib/package-lifecycle-marker.mjs ./scripts/lib/package-lifecycle-marker.mjs
+
+COPY --from=workspace-deps /out/packages/ ./packages/
+COPY --from=workspace-deps /out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/
+COPY --from=workspace-deps /out/openclaw-selected-plugin-dirs /tmp/openclaw-selected-plugin-dirs
+
+RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
+    NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile \
+      --config.supportedArchitectures.os=linux \
+      --config.supportedArchitectures.cpu="$(node -p 'process.arch')" \
+      --config.supportedArchitectures.libc=glibc
+
+# Public source provenance supplied by release automation, mirroring the main
+# Dockerfile. Kept after the dependency layer so a new timestamp does not
+# invalidate the install cache.
+ARG GIT_COMMIT=""
+ARG OPENCLAW_BUILD_TIMESTAMP=""
+ARG OPENCLAW_DOCKER_BUILD_VERSION=""
+ENV GIT_COMMIT=${GIT_COMMIT} \
+    OPENCLAW_BUILD_TIMESTAMP=${OPENCLAW_BUILD_TIMESTAMP}
+
+COPY . .
+
+RUN pnpm_config_verify_deps_before_run=false pnpm canvas:a2ui:bundle || \
+    (echo "A2UI bundle: creating stub (non-fatal)" && \
+     mkdir -p extensions/canvas/src/host/a2ui && \
+     echo "/* A2UI bundle unavailable in this build */" > extensions/canvas/src/host/a2ui/a2ui.bundle.js && \
+     echo "stub" > extensions/canvas/src/host/a2ui/.bundle.hash && \
+     rm -rf vendor/a2ui apps/shared/OpenClawKit/Tools/CanvasA2UI)
+
+ENV OPENCLAW_PREFER_PNPM=1
+RUN set -eu; \
+    if [ -n "$OPENCLAW_DOCKER_BUILD_VERSION" ]; then \
+      pnpm pkg set "version=$OPENCLAW_DOCKER_BUILD_VERSION"; \
+    fi; \
+    if [ -z "$OPENCLAW_BUILD_TIMESTAMP" ]; then \
+      OPENCLAW_BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
+      export OPENCLAW_BUILD_TIMESTAMP; \
+    fi; \
+    OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS="$(cat /tmp/openclaw-selected-plugin-dirs)" \
+    OPENCLAW_RUN_NODE_SKIP_DTS_BUILD="$OPENCLAW_DOCKER_BUILD_SKIP_DTS" \
+    OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB="$OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB" \
+    NODE_OPTIONS="$OPENCLAW_DOCKER_BUILD_NODE_OPTIONS" \
+    pnpm_config_verify_deps_before_run=false pnpm build:docker; \
+    pnpm_config_verify_deps_before_run=false pnpm ui:build
+
+# ── Stage 2b: production deps resolved FOR riscv64, ON the build host ──
+# pnpm 12 is a Rust rewrite that publishes binaries only for x86_64/arm64
+# (see get-pnpm platformPackageName), so pnpm cannot run on riscv64 at all.
+# Resolve the production tree here instead, using pnpm's supportedArchitectures
+# to select riscv64 artifacts, and copy the result into the runtime stage.
+FROM --platform=$BUILDPLATFORM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS production-deps
+ARG OPENCLAW_BUNDLED_PLUGIN_DIR
+RUN corepack enable
+WORKDIR /app
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY node-version.mjs ./
+COPY openclaw.mjs ./
+COPY ui/package.json ./ui/package.json
+COPY patches ./patches
+COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-warning.mjs scripts/windows-cmd-helpers.mjs scripts/prepare-git-hooks.mjs ./scripts/
+COPY scripts/lib/guard-inventory-utils.mjs ./scripts/lib/guard-inventory-utils.mjs
+COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs
+COPY scripts/lib/package-lifecycle-marker.mjs ./scripts/lib/package-lifecycle-marker.mjs
+COPY --from=workspace-deps /out/packages/ ./packages/
+COPY --from=workspace-deps /out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/
+COPY --from=workspace-deps /out/openclaw-selected-plugin-dirs /tmp/openclaw-selected-plugin-dirs
+
+# @matrix-org/matrix-sdk-crypto-nodejs has no riscv64 prebuild and is only
+# needed by the (unselected) matrix extension. Skip its native build script.
+RUN sed -i 's#\("@matrix-org/matrix-sdk-crypto-nodejs":\)[[:space:]]*true#\1 false#' pnpm-workspace.yaml
+
+RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
+    NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile --prod \
+      --config.supportedArchitectures.os=linux \
+      --config.supportedArchitectures.cpu=riscv64 \
+      --config.supportedArchitectures.libc=glibc
+
+# ── Stage 3: riscv64 runtime (native) ───────────────────────────────
+FROM debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd AS runtime
+ARG NODE_VERSION
+ARG NODE_RISCV64_SHA256
+ARG OPENCLAW_BUNDLED_PLUGIN_DIR
+
+LABEL org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
+  org.opencontainers.image.url="https://openclaw.ai" \
+  org.opencontainers.image.documentation="https://docs.openclaw.ai/install/docker" \
+  org.opencontainers.image.licenses="MIT" \
+  org.opencontainers.image.title="OpenClaw" \
+  org.opencontainers.image.description="OpenClaw gateway and CLI runtime container image (linux/riscv64)"
+
+# Runtime utilities mirroring the main runtime image -- libgomp1 for managed
+# llama.cpp's OpenMP and openssh-client for the sandbox backend -- plus xz-utils
+# to unpack the Node tarball and cmake/g++/make so native addons without a
+# riscv64 prebuilt (e.g. node-llama-cpp) can compile from source.
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      ca-certificates curl git hostname libgomp1 lsof openssh-client openssl procps python3 tini xz-utils \
+      cmake g++ make && \
+    tarball="node-v${NODE_VERSION}-linux-riscv64.tar.xz" && \
+    curl -fsSLO "https://unofficial-builds.nodejs.org/download/release/v${NODE_VERSION}/${tarball}" && \
+    echo "${NODE_RISCV64_SHA256}  ${tarball}" | sha256sum -c - && \
+    tar -xJf "${tarball}" --strip-components=1 -C /usr/local && \
+    rm -f "${tarball}" && \
+    node --version && \
+    update-ca-certificates && \
+    apt-get clean && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* && \
+    groupadd --gid 1000 node && \
+    useradd --uid 1000 --gid node --shell /bin/bash --create-home node
+
+# Bun has no riscv64 binary; provide a stub so any script that probes for bun in
+# PATH gets an explicit error instead of a silent, confusing fallback.
+RUN printf '%s\n' '#!/bin/sh' 'echo "bun is not available on riscv64" >&2' 'exit 1' \
+      > /usr/local/bin/bun && chmod 755 /usr/local/bin/bun
+
+WORKDIR /app
+RUN chown node:node /app
+
+# Production dependencies come from the production-deps stage: pnpm 12 has no
+# riscv64 binary, so nothing installs here. The tree is already resolved for
+# linux/riscv64/glibc; only its native addons are architecture-bearing, and the
+# check below refuses the image if any of them is not riscv64.
+COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY --chown=node:node node-version.mjs ./
+COPY --chown=node:node openclaw.mjs ./
+COPY --chown=node:node ui/package.json ./ui/package.json
+COPY --chown=node:node patches ./patches
+COPY --chown=node:node scripts ./scripts
+COPY --from=workspace-deps --chown=node:node /out/packages/ ./packages/
+COPY --from=workspace-deps --chown=node:node /out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/
+COPY --from=production-deps --chown=node:node /app/node_modules ./node_modules
+
+# Cross-resolved trees are the one place a wrong-architecture addon reaches the
+# image silently: a .node built for the build host loads fine there and fails
+# only at runtime here. Walk the LINKED graph (following symlinks, skipping the
+# flat .pnpm store, which also holds unlinked per-platform packages that are
+# never loaded) and reject any native addon that is not RISC-V.
+#
+# tree-sitter-bash is the one allowed exception: it ships x64/arm64 prebuilds and
+# no riscv64 one, but the runtime loads its WebAssembly build, not the native
+# binding -- see src/infra/command-explainer/tree-sitter-runtime.ts resolving
+# "tree-sitter-bash/tree-sitter-bash.wasm". A new package arriving with a real
+# native addon fails this check on purpose, so the gap gets looked at.
+RUN node -e '                                                              \
+  const fs = require("fs"), p = require("path");                           \
+  const ALLOW = new Set(["tree-sitter-bash"]);                             \
+  const seen = new Set(), bad = []; let checked = 0;                        \
+  const walk = (dir) => {                                                  \
+    let rp; try { rp = fs.realpathSync(dir); } catch { return; }           \
+    if (seen.has(rp)) return; seen.add(rp);                                \
+    let es; try { es = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; } \
+    for (const e of es) {                                                  \
+      if (e.name === ".pnpm") continue;                                    \
+      const f = p.join(dir, e.name);                                       \
+      let st; try { st = fs.statSync(f); } catch { continue; }             \
+      if (st.isDirectory()) { walk(f); continue; }                         \
+      if (!e.name.endsWith(".node") || st.size < 20) continue;             \
+      const b = Buffer.alloc(20); const fd = fs.openSync(f, "r");          \
+      fs.readSync(fd, b, 0, 20, 0); fs.closeSync(fd);                      \
+      if (b.readUInt32BE(0) !== 0x7f454c46) continue;                      \
+      const real = fs.realpathSync(f);                                     \
+      const pkg = (real.split("/node_modules/").pop() || "").split("/")[0]; \
+      checked++;                                                           \
+      if (b.readUInt16LE(18) !== 243 && !ALLOW.has(pkg))                    \
+        bad.push(real + " e_machine=" + b.readUInt16LE(18));               \
+    }                                                                      \
+  };                                                                       \
+  walk("/app/node_modules");                                               \
+  console.log("linked native addons checked: " + checked);                 \
+  if (bad.length) {                                                        \
+    console.error("non-riscv64 linked addons:\n" + bad.join("\n"));       \
+    process.exit(1);                                                       \
+  }                                                                        \
+'
+
+USER node
+
+# Bring in the rest of the source tree (runtime reads templates/skills/docs).
+COPY --chown=node:node . .
+
+# Copy the cross-built, architecture-independent JS artifacts. The workspace
+# packages (e.g. @openclaw/ai) are symlinked into node_modules by the native
+# install, so their built dist/ must be present in the source tree too.
+COPY --from=build --chown=node:node /app/dist ./dist
+COPY --from=build --chown=node:node /app/packages ./packages
+COPY --from=build --chown=node:node /app/extensions/canvas/src/host/a2ui/ ./extensions/canvas/src/host/a2ui/
+
+# Expose the CLI without npm global writes.
+USER root
+RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw && chmod 755 /app/openclaw.mjs && \
+    install -d -m 0755 -o node -g node /home/node/.config && \
+    install -d -m 0700 -o node -g node \
+      /home/node/.openclaw /home/node/.openclaw/workspace /home/node/.config/openclaw
+
+ENV NODE_ENV=production
+ENV OPENCLAW_PREFER_PNPM=1
+# Browser automation is unavailable on riscv64 (no Playwright Chromium build).
+ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
+
+USER node
+
+# The canonical image runs dist/docker-healthcheck.js. Measured on a Banana Pi
+# F3 it costs ~14.3s (3 runs) because it loads the bundled runtime config and
+# reads the SQLite gateway lock, so it cannot finish inside main's 10s timeout
+# -- Docker records `ExitCode: -1, Health check exceeded timeout`. Raised to 45s
+# it completes but still exits 1 unpredictably while /healthz and /readyz serve
+# correctly, so the container reports unhealthy for a working gateway.
+#
+# This probe reads the port from the documented env var and issues one request:
+# ~0.7s cold, and it never failed across the runs measured. It does NOT see a
+# bare `--port` flag passed without OPENCLAW_GATEWAY_PORT; that limitation is
+# stated in docs/install/docker.md rather than left for an operator to discover.
+HEALTHCHECK --interval=3m --timeout=30s --start-period=120s --retries=3 \
+  CMD node -e 'const p=process.env.OPENCLAW_GATEWAY_PORT||18789; fetch(`http://127.0.0.1:${p}/healthz`).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))'
+ENTRYPOINT ["tini", "-s", "--"]
+CMD ["node", "openclaw.mjs", "gateway"]

@@ -667,6 +667,80 @@ scripts/sandbox-setup.sh
 
 For npm installs without a source checkout, see [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup) for inline `docker build` commands.
 
+## RISC-V (linux/riscv64)
+
+Experimental riscv64 images are published from a dedicated `Dockerfile.riscv64`
+under their own `-riscv64` tag:
+
+```bash
+docker pull ghcr.io/openclaw/openclaw:<version>-riscv64
+```
+
+This tag is best-effort. It is produced by a separate, manually dispatched
+`Docker RISC-V` workflow rather than by the release pipeline, so a given release
+may ship without it. It is **not** folded into the default
+`:<version>`/`:latest` tags, which stay amd64+arm64; pull the `-riscv64` tag
+explicitly on RISC-V hardware. Unlike those tags, the riscv64 image is pushed
+directly instead of being promoted from a sealed, attested OCI payload, so it
+carries no provenance attestation.
+
+The riscv64 build differs from amd64/arm64 for two reasons:
+
+- **Base image**: the official `node:24-bookworm` image has no riscv64 variant,
+  so the runtime is built on `debian:trixie-slim` with Node.js from
+  [unofficial-builds](https://unofficial-builds.nodejs.org).
+- **Cross-built JS**: rolldown (the bundler) ships no riscv64 binary, so the
+  JavaScript bundle is built on the host architecture and only native addons are
+  installed natively on riscv64. The build is therefore QEMU-emulated in CI,
+  which is slow enough that it runs outside the release pipeline.
+
+### Quick start (riscv64)
+
+The gateway detects a container environment and binds to `0.0.0.0`, which it
+refuses to do without authentication. Provide a token (or password):
+
+```bash
+docker run -d \
+  --name openclaw \
+  -e OPENCLAW_GATEWAY_TOKEN=<your-token> \
+  -p 18789:18789 \
+  ghcr.io/openclaw/openclaw:<version>-riscv64 \
+  node openclaw.mjs gateway --allow-unconfigured
+```
+
+The gateway is ready when the logs show `[gateway] ready`; `GET /healthz` then
+returns `{"ok":true,"status":"live"}` and `GET /readyz` returns
+`{"ready":true,"failing":[]}`.
+
+### riscv64 notes
+
+- **Health check reads `OPENCLAW_GATEWAY_PORT`.** The riscv64 image uses a
+  lightweight probe instead of the `dist/docker-healthcheck.js` used by the
+  amd64/arm64 images. That script costs about 14 seconds on a Banana Pi F3
+  because it loads the bundled runtime config and reads the gateway lock, which
+  does not fit the container health-check timeout, and it returned failures on
+  that hardware while the gateway was serving `/healthz` normally. The
+  replacement issues a single request in well under a second. The tradeoff: it
+  reads the port from `OPENCLAW_GATEWAY_PORT` and does not see a `--port` flag
+  passed on its own, so set the environment variable when running the gateway on
+  a non-default port, or the container reports unhealthy while working.
+
+- **Authentication is required in containers.** Because the gateway binds to a
+  non-loopback address inside a container, set `OPENCLAW_GATEWAY_TOKEN` or
+  `OPENCLAW_GATEWAY_PASSWORD` (or pass `--token`/`--password`). Without one the
+  gateway logs `Refusing to bind gateway to auto without auth` and exits.
+- **No slim or browser variant.** Only the full runtime is built for riscv64.
+- **No browser automation.** Chromium has no riscv64 build, so Playwright-based
+  browser control is unavailable even though the browser plugin loads.
+- **Startup.** On a SpaceMiT K1 the gateway reaches `[gateway] ready` in roughly
+  10-20 seconds with the bundled plugins loaded.
+
+### Verified hardware
+
+| Board            | SoC                   | Result                                                    |
+| ---------------- | --------------------- | --------------------------------------------------------- |
+| Banana Pi BPI-F3 | SpaceMiT K1 (riscv64) | Gateway starts and serves `/healthz` + `/readyz` natively |
+
 ## Troubleshooting
 
 <AccordionGroup>
