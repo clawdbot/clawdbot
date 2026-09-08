@@ -935,7 +935,10 @@ export async function runGatewayLoop(params: {
           } else {
             params.completeBoot?.(
               isRestart
-                ? { outcome: "planned_restart", reason: "gateway.restart.external" }
+                ? {
+                    outcome: "planned_restart",
+                    reason: acceptedRequest.restartReason ?? "gateway.restart.external",
+                  }
                 : {
                     outcome: shutdownFailed ? "forced_stop" : "clean_stop",
                     reason: shutdownFailed ? "gateway.stop_close_failed" : "gateway.stop",
@@ -1086,8 +1089,10 @@ export async function runGatewayLoop(params: {
     void (async () => {
       const { consumeGatewayRestartIntentPayloadSync } = await loadGatewayLifecycleRuntimeModule();
       const restartIntent = consumeGatewayRestartIntentPayloadSync();
+      // SIGTERM hands replacement to the caller (e.g. systemctl restart).
+      // Drain as a restart, then exit even when in-process respawn is configured.
       request(
-        restartIntent ? "restart" : "stop",
+        restartIntent ? "external-restart" : "stop",
         "SIGTERM",
         restartIntent?.reason,
         restartIntent ?? undefined,
