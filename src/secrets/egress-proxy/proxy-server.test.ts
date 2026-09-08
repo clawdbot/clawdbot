@@ -277,8 +277,13 @@ describe("secret egress proxy", () => {
     },
   );
 
-  it("activates Node environment proxy support for registered Gateway runs", () => {
-    expect(proxyEnv.NODE_USE_ENV_PROXY).toBe("1");
+  it("routes every HTTP proxy alias through registered Gateway runs", () => {
+    expect(proxyEnv).toMatchObject({
+      HTTPS_PROXY: proxyEnv.HTTP_PROXY,
+      https_proxy: proxyEnv.HTTP_PROXY,
+      http_proxy: proxyEnv.HTTP_PROXY,
+      NODE_USE_ENV_PROXY: "1",
+    });
   });
 
   it("survives a client that resets a refused tunnel instead of crashing the Gateway", async () => {
