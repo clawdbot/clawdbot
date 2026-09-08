@@ -324,6 +324,7 @@ export function createTelegramInboundProcessing({
                 contentType: media.contentType,
                 ...(media.fileName ? { fileName: media.fileName } : {}),
                 kind: media.kind,
+                fileUniqueId: media.fileUniqueId,
                 stickerMetadata: media.stickerMetadata,
               }
             : { kind: nativeMedia.kind, unavailable },
