@@ -403,6 +403,48 @@ describe("sessions lifecycle commands", () => {
     );
   });
 
+  it("explains that retained delete archives can remain searchable", async () => {
+    mocks.callGateway
+      .mockResolvedValueOnce(listResult([{ key: "agent:main:active", sessionId: "session-1" }]))
+      .mockResolvedValueOnce({
+        ok: true,
+        key: "agent:main:active",
+        deleted: true,
+        archived: ["/state/session-1.jsonl.deleted.123"],
+      });
+    const runtime = createRuntime();
+
+    await sessionsDeleteCommand({ keys: ["agent:main:active"], yes: true }, runtime);
+
+    expect(runtime.log).toHaveBeenCalledWith("Deleted session agent:main:active.");
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Archived transcript: /state/session-1.jsonl.deleted.123",
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Archived transcripts can remain eligible for memory search"),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("openclaw memory forget --session agent:main:active"),
+    );
+  });
+
+  it("does not print memory forget guidance when no delete archive is retained", async () => {
+    mocks.callGateway
+      .mockResolvedValueOnce(listResult([{ key: "agent:main:active", sessionId: "session-1" }]))
+      .mockResolvedValueOnce({
+        ok: true,
+        key: "agent:main:active",
+        deleted: true,
+        archived: [],
+      });
+    const runtime = createRuntime();
+
+    await sessionsDeleteCommand({ keys: ["agent:main:active"], yes: true }, runtime);
+
+    expect(runtime.log).toHaveBeenCalledWith("Deleted session agent:main:active.");
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("openclaw memory forget"));
+  });
+
   it("prints the preserved worktree cleanup reason without claiming source changes", async () => {
     mocks.callGateway
       .mockResolvedValueOnce(listResult([{ key: "agent:main:active", sessionId: "session-1" }]))
