@@ -29,6 +29,7 @@ describe("createComputerTool schema", () => {
     for (const params of [
       { computerAllowed: false, modelHasVision: true },
       { computerAllowed: true, modelHasVision: false },
+      { computerAllowed: true, modelHasVision: true, embeddedMode: true },
       { computerAllowed: true, modelHasVision: true, computerTransport: sessionTransport },
       { computerAllowed: true, modelHasVision: true, computerTransport: null },
     ]) {

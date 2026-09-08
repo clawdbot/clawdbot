@@ -5,6 +5,7 @@ import type { SessionPermissionMode } from "../../../../packages/gateway-protoco
  */
 import { messageToolOwnsVisibleReply } from "../../../auto-reply/source-reply-delivery-mode.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
 import {
   isCodeModeDiagnosticEnabled,
   logCodeModeDiagnostic,
@@ -225,6 +226,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       computerAllowed,
       modelHasVision: attempt.model.input?.includes("image") ?? true,
       computerTransport,
+      embeddedMode: isEmbeddedMode(),
       signal: params.runAbortController.signal,
     })
   )?.prepared;

@@ -29,10 +29,12 @@ function shouldLoadPairedComputerUseAvailability(params: {
   computerAllowed: boolean;
   modelHasVision?: boolean;
   computerTransport?: ComputerToolTransport | null;
+  embeddedMode?: boolean;
 }): boolean {
   return (
     params.computerAllowed &&
     params.modelHasVision !== false &&
+    params.embeddedMode !== true &&
     params.computerTransport === undefined
   );
 }
@@ -42,6 +44,7 @@ export async function loadPairedComputerUseAvailabilityForSurface(params: {
   computerAllowed: boolean;
   modelHasVision?: boolean;
   computerTransport?: ComputerToolTransport | null;
+  embeddedMode?: boolean;
   signal?: AbortSignal;
 }): Promise<PairedComputerUseAvailability | undefined> {
   if (!shouldLoadPairedComputerUseAvailability(params)) {
