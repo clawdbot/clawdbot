@@ -10,7 +10,11 @@ import {
   stopHoverMarqueeFromEvent,
 } from "../lib/hover-marquee.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
-import { presenceMatchesProfile, type PresenceViewer } from "../lib/presence-users.ts";
+import {
+  presenceMatchesProfile,
+  presenceUserLabel,
+  type PresenceViewer,
+} from "../lib/presence-users.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
   resolveSessionPreferredFace,
@@ -217,6 +221,7 @@ function renderSessions(
 
 export function renderPersonActivityCard(input: PersonCardInput) {
   const { user } = input;
+  const label = presenceUserLabel(user, t("presence.card.person"));
   // Presence projections always have entries; roster-only owners have no live facts.
   const offline = (user.entries?.length ?? 0) === 0;
   const entries = user.entries ?? [];
@@ -260,7 +265,7 @@ export function renderPersonActivityCard(input: PersonCardInput) {
         presenceMatchesProfile(user, actor?.identity),
       ),
   );
-  const activity = personActivityLink(user.identity?.id, input.routing, user.name);
+  const activity = personActivityLink(user.identity?.id, input.routing, label.name);
   return html`<div class="person-activity-card">
     <header class="person-activity-card__header">
       <openclaw-viewer-avatar
@@ -270,7 +275,7 @@ export function renderPersonActivityCard(input: PersonCardInput) {
         aria-hidden="true"
       ></openclaw-viewer-avatar>
       <div>
-        <h2>${user.name ?? user.email ?? t("presence.card.person")}</h2>
+        <h2>${label.name}</h2>
         <span
           class="person-activity-card__status ${
             offline ? "person-activity-card__status--offline" : ""
@@ -285,6 +290,7 @@ export function renderPersonActivityCard(input: PersonCardInput) {
         >
       </div>
     </header>
+    ${label.isSharedOwner ? html`<p class="person-activity-card__hint person-activity-card__muted">${t("presence.sharedOwner.hint")}</p>` : nothing}
     ${
       offline
         ? nothing

@@ -99,6 +99,9 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.x"
   OPENCLAW_BUILD_PRIVATE_QA: "1"
+  # Package-candidate builds run after shard concurrency starts and need the same explicit
+  # heap authority as the initial private-QA build on Blacksmith runners.
+  OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: "8192"
   OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
   OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
   OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000"

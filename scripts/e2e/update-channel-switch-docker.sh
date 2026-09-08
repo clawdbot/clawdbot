@@ -198,11 +198,14 @@ set +e
 dirty_json="$(openclaw update "${dev_channel_args[@]}" --yes --json --no-restart)"
 dirty_status=$?
 set -e
-if [ "$dirty_status" -eq 0 ] && [ "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" != "1" ]; then
-  echo "Git update unexpectedly admitted ordinary untracked user notes" >&2
+# Historical update CLIs can report a blocked structured result with exit zero.
+# The assertion proves the update was rejected and no checkout state changed.
+if [ "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" != "1" ] && [ "$dirty_status" -ne 1 ]; then
+  echo "expected current dirty-worktree update to exit 1, got $dirty_status" >&2
   exit 1
 fi
-UPDATE_JSON="$dirty_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs   assert-dirty-update "$git_root" "$fixture_sha"
+UPDATE_JSON="$dirty_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs \
+  assert-dirty-update "$git_root" "$fixture_sha"
 node -e "require(\"node:fs\").unlinkSync(process.argv[1])" "$git_root/operator-update-notes.tmp"
 
 echo "==> package -> git dev channel"

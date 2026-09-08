@@ -595,6 +595,8 @@ default `all`:
 | `store.vector.enabled`       | `boolean` | `true`  | Use sqlite-vec for vector queries |
 | `store.vector.extensionPath` | `string`  | bundled | Override sqlite-vec path          |
 
+For Bun on macOS, install Homebrew SQLite to enable extension loading; see [Bun SQLite setup](/install/bun#caveats) for automatic discovery and the `OPENCLAW_SQLITE_LIBRARY` library override.
+
 When sqlite-vec is unavailable, OpenClaw falls back to in-process cosine similarity automatically.
 
 ---

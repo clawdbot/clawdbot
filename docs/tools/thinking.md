@@ -77,10 +77,11 @@ title: "Thinking levels"
 - `auto` keeps the session/config mode as auto but resolves each new model call independently. Calls that start before the auto cutoff have fast mode enabled; later retry, fallback, tool-result, or continuation calls start with fast mode disabled. The cutoff defaults to 60 seconds; set `agents.defaults.models["<provider>/<model>"].params.fastAutoOnSeconds` on the active model to change it.
 - For `openai/*`, fast mode maps to OpenAI API Fast mode (formerly Priority processing). OpenClaw currently sends `service_tier=priority` on supported Responses requests.
 - On Codex harness turns, the shared runtime control supersedes a configured native app-server tier: Fast on sends `priority`, Fast off sends `null` to clear the OpenClaw-owned tier, and auto decides for each model call. A configured Codex tier is used only when no shared Fast-mode run control is supplied. See [Codex harness](/plugins/codex-harness/commands#shared-fast-mode-and-codex-fast-mode).
-- For direct public `anthropic/*` requests, including OAuth-authenticated traffic sent to `api.anthropic.com`, fast mode maps to Anthropic service tiers: `/fast on` sets `service_tier=auto`, `/fast off` sets `service_tier=standard_only`.
+- For direct API-key `anthropic/*` requests, Opus 5 and Opus 4.8 use native `speed=fast`. Other supported models use Priority Tier: on sets `service_tier=auto`, off sets `service_tier=standard_only`. Sonnet 5 supports neither mapping; OAuth requests receive neither field.
 - For `minimax/*` on the Anthropic-compatible path, `/fast on` (or `params.fastMode: true`) rewrites `MiniMax-M2.7` to `MiniMax-M2.7-highspeed`.
 - Explicit Anthropic `serviceTier` / `service_tier` model params override the fast-mode default when both are set. OpenClaw still skips Anthropic service-tier injection for non-Anthropic proxy base URLs.
 - `/status` reports the resolved OpenClaw policy (`on`, `off`, or `auto`) and the selected runtime. It does not report the upstream service tier actually honored or returned for a completed request. See [OpenAI Fast mode](/providers/openai#advanced-configuration) for provider details.
+- The Control UI disables Fast choices confirmed to have no effect on the selected request. Existing saved preferences remain visible and clearable. When applicability is unknown, controls retain their existing behavior; availability does not promise vendor entitlement or faster responses.
 
 ## Verbose directives (/verbose or /v)
 

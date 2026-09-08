@@ -94,6 +94,18 @@ describe("extractErrorHttpStatus", () => {
 });
 
 describe("HTTP status consumers", () => {
+  it.each(["500 ", "500: ", "HTTP 502: "])(
+    "preserves distinct validation type and code after %s",
+    (prefix) => {
+      const error = {
+        type: "invalid_request_error",
+        code: "unknown_parameter",
+        message: "Unsupported parameter: timeout",
+      };
+      expect(parseApiErrorInfo(`${prefix}${JSON.stringify({ error })}`)).toMatchObject(error);
+    },
+  );
+
   it("does not return raw HTML after an HTTP reason phrase", () => {
     const raw = [
       "HTTP 502 Bad Gateway",

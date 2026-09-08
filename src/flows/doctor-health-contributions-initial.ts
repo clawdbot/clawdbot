@@ -282,10 +282,10 @@ export function resolveInitialDoctorHealthContributions(params: {
       healthChecks: {
         description: "Low disk space around the OpenClaw state directory is a finding.",
         defaultEnabled: false,
-        async detect(ctx) {
+        async detect() {
           const { collectDiskSpaceHealthFindings } =
             await import("../commands/doctor-disk-space.js");
-          return collectDiskSpaceHealthFindings(ctx.cfg);
+          return collectDiskSpaceHealthFindings();
         },
       },
       run: runDiskSpaceHealth,

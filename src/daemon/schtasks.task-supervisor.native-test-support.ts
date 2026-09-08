@@ -1,8 +1,10 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect } from "vitest";
+import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
 import { readWindowsProcessSnapshot } from "./schtasks-process.js";
 
 const WAIT_INTERVAL_MS = 200;
@@ -61,6 +63,33 @@ export async function waitForProcessExit(pid: number): Promise<void> {
   throw new Error(`Timed out waiting for Scheduled Task process ${pid} to exit`);
 }
 
+export function stopGatewayTaskWithPowerShell(taskName: string): void {
+  const encodedTaskName = Buffer.from(taskName, "utf8").toString("base64");
+  const script = [
+    "$ErrorActionPreference='Stop'",
+    `$taskName=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedTaskName}'))`,
+    "Stop-ScheduledTask -TaskName $taskName -TaskPath '\\' -ErrorAction Stop",
+  ].join("; ");
+  const result = spawnSync(
+    getWindowsPowerShellExePath(),
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-EncodedCommand",
+      Buffer.from(script, "utf16le").toString("base64"),
+    ],
+    { encoding: "utf8", timeout: 5_000, windowsHide: true },
+  );
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `Stop-ScheduledTask failed for ${taskName}: ${result.stderr.trim() || `PowerShell exited ${result.status ?? "without status"}`}`,
+    );
+  }
+}
+
 export function createGatewayTaskSupervisorProbe(rootDir: string): GatewayTaskSupervisorProbe {
   return {
     childPidPath: path.join(rootDir, "child-pid.txt"),
@@ -93,6 +122,7 @@ export async function writeGatewayTaskSupervisorProbe(params: {
       '  "USERPROFILE", "HOME", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA",',
       '  "OPENCLAW_PROFILE", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH",',
       '  "OPENCLAW_GATEWAY_PORT", "OPENCLAW_SERVICE_KIND", "OPENCLAW_SERVICE_MARKER",',
+      '  "OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER",',
       '  "TSX_TSCONFIG_PATH",',
       "]);",
       "for (const key of Object.keys(process.env)) if (!allowedEnv.has(key.toUpperCase())) delete process.env[key];",

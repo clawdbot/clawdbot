@@ -23,7 +23,7 @@ import {
   type TelegramRichBlocksDegradationReason,
 } from "./rich-block-model.js";
 import { findTelegramHtmlIslands, renderTelegramHtmlIsland } from "./rich-blocks-html-map.js";
-import { parseHtmlFragment, parseInlineHtmlIslands, type HtmlNode } from "./rich-blocks-html.js";
+import { htmlNodesToRichText, parseHtmlFragment, type HtmlNode } from "./rich-blocks-html.js";
 import {
   collectMarkdownRichListSources,
   renderMarkdownRichListSource,
@@ -148,9 +148,6 @@ function collectTelegramLinkActions(
  * Spans that partially overlap are split at shared boundaries (IR contract).
  */
 function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number): RichText {
-  if (rangeEnd <= rangeStart) {
-    return "";
-  }
   const slice = sliceMarkdownIR(ir, rangeStart, rangeEnd);
   const text = slice.text;
   if (!text) {
@@ -160,6 +157,7 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
   type Active = { start: number; end: number } & (
     | { kind: "style"; style: InlineStyleKind }
     | { kind: "annotation" }
+    | { kind: "html"; wrap: (text: RichText) => RichText }
     | { kind: "link"; target: { kind: "url"; href: string } | { kind: "anchor"; name: string } }
   );
   const spans: Active[] = [];
@@ -178,13 +176,45 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
         : { start: link.start, end: link.end, kind: "link", target: link.action },
     );
   }
+  type Leaf = { start: number; end: number } & (
+    | { kind: "text" }
+    | { kind: "atom"; value: RichText }
+  );
+  const leaves: Leaf[] = [];
+  const nodes = text.includes("<") ? parseHtmlFragment(slice) : [];
+  const hasElement = (children: readonly HtmlNode[]): boolean =>
+    children.some((node) => node.kind === "element" && (node.closed || hasElement(node.children)));
+  if (hasElement(nodes)) {
+    // Keep HTML wrappers and atomic islands on the same source axis as Markdown.
+    // One sweep can then apply annotation dominance without breaking authored HTML.
+    const recordText = ({ start, end }: { start: number; end: number }) => {
+      leaves.push({ kind: "text", start, end });
+      return "";
+    };
+    htmlNodesToRichText(nodes, {
+      text: recordText,
+      literal: recordText,
+      wrap: ({ start, end }, wrap, children) => {
+        spans.push({ kind: "html", start, end, wrap });
+        return children();
+      },
+      atom: ({ start, end }, value) => {
+        // An indivisible replacement must not hide a protected source annotation.
+        const annotated = slice.annotations?.some((span) => span.start < end && span.end > start);
+        leaves.push(annotated ? { kind: "text", start, end } : { kind: "atom", start, end, value });
+        return "";
+      },
+    });
+  } else {
+    leaves.push({ kind: "text", start: 0, end: text.length });
+  }
   const rank = (span: Active) =>
-    span.kind === "style" ? INLINE_STYLE_RANK[span.style] : span.kind === "link" ? 50 : 0;
+    span.kind === "style" ? INLINE_STYLE_RANK[span.style] : span.kind === "annotation" ? 0 : 50;
   spans.sort(
     (left, right) => left.start - right.start || right.end - left.end || rank(left) - rank(right),
   );
   const points = [
-    ...new Set([0, text.length, ...spans.flatMap((span) => [span.start, span.end])]),
+    ...new Set([...spans, ...leaves].flatMap((span) => [span.start, span.end])),
   ].toSorted((left, right) => left - right);
   const stack: Active[] = [];
   const root: RichText[] = [];
@@ -192,8 +222,12 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
 
   for (let i = 0; i < points.length - 1; i += 1) {
     const start = points[i] ?? 0;
-    const end = points[i + 1] ?? start;
-    const covering = spans.filter((span) => span.start <= start && span.end > start);
+    const leaf = leaves.find((entry) => entry.start <= start && entry.end > start);
+    if (!leaf || (leaf.kind === "atom" && leaf.start !== start)) {
+      continue;
+    }
+    const end = leaf.kind === "atom" ? leaf.end : (points[i + 1] ?? start);
+    const covering = spans.filter((span) => span.start <= start && span.end >= end);
     const annotation = covering.find((span) => span.kind === "annotation");
     // Dominance applies only to the covered range. Surrounding formatting resumes
     // after a transcript header. Code is already literal in IR; its merged range
@@ -210,41 +244,24 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
     for (const item of active.slice(shared)) {
       const container: RichText[] = [];
       const node: RichText =
-        item.kind === "link"
-          ? item.target.kind === "url"
-            ? { type: "url", text: container, url: item.target.href }
-            : { type: "anchor_link", text: container, anchor_name: item.target.name }
-          : { type: item.kind === "annotation" ? "code" : item.style, text: container };
+        item.kind === "html"
+          ? item.wrap(container)
+          : item.kind === "link"
+            ? item.target.kind === "url"
+              ? { type: "url", text: container, url: item.target.href }
+              : { type: "anchor_link", text: container, anchor_name: item.target.name }
+            : { type: item.kind === "annotation" ? "code" : item.style, text: container };
       frameStack.at(-1)?.push(node);
       stack.push(item);
       frameStack.push(container);
     }
     if (end > start) {
       // Unlike Bot API HTML mode, rich paragraphs preserve bare newlines verbatim.
-      frameStack.at(-1)?.push(text.slice(start, end));
+      frameStack.at(-1)?.push(leaf.kind === "atom" ? leaf.value : text.slice(start, end));
     }
   }
 
-  return normalizeRichText(applyInlineHtmlIslands(root));
-}
-
-// Inline islands (<sup>, <tg-math>, <tg-emoji>, …) live in plain string leaves;
-// code spans keep their content literal.
-function applyInlineHtmlIslands(node: RichText): RichText {
-  if (typeof node === "string") {
-    return parseInlineHtmlIslands(node);
-  }
-  if (Array.isArray(node)) {
-    return node.map(applyInlineHtmlIslands);
-  }
-  if (
-    node.type === "code" ||
-    node.type === "mathematical_expression" ||
-    node.type === "custom_emoji"
-  ) {
-    return node;
-  }
-  return { ...node, text: applyInlineHtmlIslands(node.text) };
+  return normalizeRichText(root);
 }
 
 function pushParagraph(
@@ -298,13 +315,7 @@ function cellToRichText(cell: MarkdownTableCell | undefined): RichText | undefin
   if (!cell?.text) {
     return undefined;
   }
-  const ir: MarkdownIR = {
-    text: cell.text,
-    styles: cell.styles,
-    links: cell.links,
-    ...(cell.annotations ? { annotations: cell.annotations } : {}),
-  };
-  const rich = irRangeToRichText(ir, 0, cell.text.length);
+  const rich = irRangeToRichText(cell, 0, cell.text.length);
   return rich === "" ? undefined : rich;
 }
 
@@ -393,6 +404,50 @@ function collectStructuralSegments(
   return segments;
 }
 
+function preserveLiteralHtmlOwners(
+  ir: MarkdownIR,
+  segments: readonly StructuralSegment[],
+  htmlNodes: readonly HtmlNode[],
+): void {
+  const islands = new Set<HtmlNode>(findTelegramHtmlIslands(htmlNodes));
+  const owners: Array<{ start: number; end: number }> = [];
+  htmlNodesToRichText(
+    htmlNodes.filter((node) => !islands.has(node)),
+    {
+      text: () => "",
+      literal: (range) => {
+        owners.push(range);
+        return "";
+      },
+      wrap: (_range, _wrap, children) => children(),
+      atom: () => "",
+    },
+  );
+  if (!owners.length) {
+    return;
+  }
+  // Markdown block slices must not reactivate tags whose HTML ancestor is literal.
+  ir.htmlTags = ir.htmlTags?.filter(
+    (tag) => !owners.some((owner) => tag.start >= owner.start && tag.end <= owner.end),
+  );
+  for (const segment of segments) {
+    if (
+      segment.kind !== "table" ||
+      !owners.some((owner) => segment.start > owner.start && segment.start < owner.end)
+    ) {
+      continue;
+    }
+    // A preceding zero-width table may share the opener's offset; only body tables belong to it.
+    for (const row of [segment.table.headerCells, ...segment.table.rowCells]) {
+      for (const cell of row) {
+        if (cell.htmlTags) {
+          cell.htmlTags = [];
+        }
+      }
+    }
+  }
+}
+
 function emitSegments(
   ir: MarkdownIR,
   segments: readonly StructuralSegment[],
@@ -401,6 +456,7 @@ function emitSegments(
   degradationReasons: Set<TelegramRichBlocksDegradationReason>,
   htmlNodes: readonly HtmlNode[] = [],
 ): InputRichBlock[] {
+  preserveLiteralHtmlOwners(ir, segments, htmlNodes);
   const containerRank = (segment: StructuralSegment) =>
     segment.kind === "blockquote" ? 0 : segment.kind === "list" ? 1 : 2;
   const orderedSegments = [
@@ -568,10 +624,7 @@ export function markdownToTelegramRichBlocks(
   });
 
   let degradationReasons = new Set<TelegramRichBlocksDegradationReason>();
-  const htmlNodes = parseHtmlFragment(
-    ir.text,
-    ir.styles.filter((span) => span.style === "code" || span.style === "code_block"),
-  );
+  const htmlNodes = parseHtmlFragment(ir);
   const segments = collectStructuralSegments(ir, tables, htmlNodes);
   const hasMarkdownLists = segments.some((segment) => segment.kind === "list");
   const flattenedSegments = segments.filter((segment) => segment.kind !== "list");

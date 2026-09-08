@@ -14,6 +14,8 @@ import {
   normalizeAnthropicProviderConfigForProvider,
 } from "./config-defaults.js";
 
+export { resolveFastModeSupport } from "./fast-mode-policy.js";
+
 /** Profile ids that native Claude auth has retired from OpenClaw ownership. */
 export const deprecatedProfileIds = [CLAUDE_CLI_PROFILE_ID] as const;
 

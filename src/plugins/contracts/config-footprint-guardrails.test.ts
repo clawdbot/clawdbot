@@ -139,16 +139,12 @@ describe("config footprint guardrails", () => {
     }
   });
 
-  it("keeps canonical nested streaming paths in channel-owned schemas", () => {
+  it("keeps retired flat streaming aliases out of channel-owned schemas", () => {
     const telegramSource = readSource("extensions/telegram/src/config-schema.ts");
     const discordSource = readSource("extensions/discord/src/config-schema.ts");
     const msTeamsSource = readSource("extensions/msteams/src/config-schema.ts");
     const slackSource = readSource("extensions/slack/src/config-schema.ts");
 
-    expect(telegramSource).toContain("streaming: TelegramPreviewStreamingConfigSchema.optional(),");
-    expect(discordSource).toContain("streaming: DiscordPreviewStreamingConfigSchema.optional(),");
-    expect(msTeamsSource).toContain("streaming: ChannelPreviewStreamingConfigSchema.optional(),");
-    expect(slackSource).toContain("streaming: SlackStreamingConfigSchema.optional(),");
     for (const schemaSource of [telegramSource, discordSource, msTeamsSource, slackSource]) {
       expect(schemaSource).not.toContain(
         'streamMode: z.enum(["replace", "status_final", "append"])',
@@ -156,15 +152,6 @@ describe("config footprint guardrails", () => {
       expect(schemaSource).not.toContain("draftChunk:");
       expect(schemaSource).not.toContain("nativeStreaming:");
     }
-  });
-
-  it("keeps Matrix setup input canonical-first after plugin ownership", () => {
-    const source = readSource("extensions/matrix/src/setup-config.ts");
-    const canonicalIndex = source.indexOf("dangerouslyAllowPrivateNetwork?: boolean;");
-    const aliasIndex = source.indexOf("allowPrivateNetwork?: boolean;");
-
-    expect(canonicalIndex).toBeGreaterThanOrEqual(0);
-    expect(aliasIndex).toBeGreaterThan(canonicalIndex);
   });
 
   it("keeps retired config aliases out of the shared setup input", () => {

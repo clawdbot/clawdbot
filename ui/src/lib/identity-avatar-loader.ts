@@ -187,12 +187,26 @@ export class IdentityAvatarController implements ReactiveController {
     }
   }
 
+  imageErrorHandler(value: string): () => void {
+    const route = this.routes.get(value);
+    return () => {
+      // An old image may fail after its view or Gateway context was replaced.
+      if (
+        !route?.url ||
+        !this.connected ||
+        this.generation !== identityAvatarGeneration ||
+        this.routes.get(value) !== route
+      ) {
+        return;
+      }
+      route.url = null;
+      this.host.requestUpdate();
+    };
+  }
+
   resolve(value: string): string | null {
     if (!this.connected) {
       return null;
-    }
-    if (!value.startsWith("/")) {
-      return value;
     }
     if (this.generation !== identityAvatarGeneration) {
       for (const route of this.routes.values()) {
@@ -202,7 +216,7 @@ export class IdentityAvatarController implements ReactiveController {
       this.generation = identityAvatarGeneration;
     }
     this.activeRoutes?.add(value);
-    const result = resolveAvatarImageUrl(value);
+    const result = value.startsWith("/") ? resolveAvatarImageUrl(value) : value;
     const cached = this.routes.get(value);
     if (cached && cached.result === result) {
       return cached.url;

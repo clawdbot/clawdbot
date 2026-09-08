@@ -3162,7 +3162,7 @@ docker_e2e_docker_run_cmd run demo
     );
     expect(upgradeSurvivor).toContain('DOCKER_E2E_HARNESS_ROOT_DIR="$HARNESS_ROOT_DIR"');
     expect(upgradeSurvivor).toContain(
-      '-v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/run.sh:/tmp/openclaw-upgrade-survivor-run.sh:ro"',
+      '-v "$UPGRADE_RUNNER:/tmp/openclaw-upgrade-survivor-run.sh:ro"',
     );
     expect(upgradeSurvivor).toContain(
       'timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" bash /tmp/openclaw-upgrade-survivor-run.sh',
@@ -5892,14 +5892,13 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     );
   });
 
-  it("uses each authorized frozen release's shipped scenario assertions", () => {
+  it("uses each authorized frozen release's shipped scenario contract files", () => {
     for (const [runnerPath, assertionPath] of [
       [CODEX_ON_DEMAND_DOCKER_E2E_PATH, "scripts/e2e/lib/codex-on-demand/assertions.mjs"],
       [
         NPM_ONBOARD_CHANNEL_AGENT_DOCKER_E2E_PATH,
         "scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs",
       ],
-      [UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "scripts/e2e/lib/upgrade-survivor/assertions.mjs"],
       [
         PLUGIN_UPDATE_CORRUPT_DOCKER_E2E_PATH,
         "scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh",
@@ -5910,6 +5909,35 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
       expect(runner).toContain(`openclaw_resolve_frozen_target_file`);
       expect(runner).toContain(`${assertionPath}:ro`);
     }
+
+    const codexRunner = readFileSync(CODEX_ON_DEMAND_DOCKER_E2E_PATH, "utf8");
+    expectTextToIncludeAll(codexRunner, [
+      "scripts/e2e/lib/codex-on-demand/doctor-checks.mjs",
+      'if [ -n "$CODEX_DOCTOR_CHECKS" ]',
+      "OPENCLAW_CODEX_DOCTOR_CHECKS_ENABLED=$CODEX_DOCTOR_CHECKS_ENABLED",
+      'if [ "$OPENCLAW_CODEX_DOCTOR_CHECKS_ENABLED" = "1" ]',
+    ]);
+
+    const onboardingRunner = readFileSync(NPM_ONBOARD_CHANNEL_AGENT_DOCKER_E2E_PATH, "utf8");
+    expectTextToIncludeAll(onboardingRunner, [
+      "scripts/e2e/lib/fixtures/mock-openai-config.mjs",
+      "ONBOARD_MOCK_OPENAI_CONFIG",
+      '-v "$ONBOARD_MOCK_OPENAI_CONFIG:/app/scripts/e2e/lib/fixtures/mock-openai-config.mjs:ro"',
+    ]);
+
+    const upgradeRunner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
+    expectTextToIncludeAll(upgradeRunner, [
+      "scripts/e2e/lib/upgrade-survivor",
+      'UPGRADE_RUNNER="$UPGRADE_SCENARIO_DIR/run.sh"',
+      '-v "$UPGRADE_SCENARIO_DIR:/app/scripts/e2e/lib/upgrade-survivor:ro"',
+      '-v "$UPGRADE_RUNNER:/tmp/openclaw-upgrade-survivor-run.sh:ro"',
+    ]);
+    expect(upgradeRunner).not.toContain("UPGRADE_ASSERTION_ARGS");
+
+    const updateRunner = readFileSync(UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH, "utf8");
+    expect(updateRunner).toContain('assert-dirty-update "$git_root" "$fixture_sha"');
+    expect(updateRunner).toContain('[ "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" != "1" ]');
+    expect(updateRunner).toContain('[ "$dirty_status" -ne 1 ]');
   });
 
   it("serves the version-matched Codex candidate during package onboarding", () => {

@@ -34,6 +34,7 @@ import {
   shouldSkipPluginValidationForDoctorConfigPreflight,
 } from "./doctor-config-preflight.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
+import { createWorkspaceAliasMigrationRepair } from "./doctor-workspace-alias.js";
 import { cronCodexRuntimePolicyTargetKey } from "./doctor/cron/store-migration.js";
 import { emitDoctorNotes, sanitizeDoctorNote } from "./doctor/emit-notes.js";
 import { finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
@@ -173,6 +174,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         recoverCorruptTargetStore: shouldRepair,
         doctorOnlyStateMigrations: shouldRepair,
         preparePluginMetadataSnapshot: true,
+        beforeWorkspaceStateMigration: createWorkspaceAliasMigrationRepair(
+          params.prompter,
+          progress.done,
+        ),
         measure: async (name, run) => {
           progress.setLabel(`${name.slice(name.lastIndexOf(".") + 1).replaceAll("-", " ")}…`);
           return await run();

@@ -13,6 +13,14 @@ TARGET_ROOT_DIR="$(cd "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" && pwd)"
 CODEX_ASSERTIONS="$(openclaw_resolve_frozen_target_file "$TARGET_ROOT_DIR" \
   scripts/e2e/lib/codex-on-demand/assertions.mjs \
   "$ROOT_DIR/scripts/e2e/lib/codex-on-demand/assertions.mjs")"
+CODEX_DOCTOR_CHECKS="$(openclaw_resolve_frozen_target_file "$TARGET_ROOT_DIR" \
+  scripts/e2e/lib/codex-on-demand/doctor-checks.mjs \
+  "$ROOT_DIR/scripts/e2e/lib/codex-on-demand/doctor-checks.mjs" \
+  "")"
+CODEX_DOCTOR_CHECKS_ENABLED=0
+if [ -n "$CODEX_DOCTOR_CHECKS" ]; then
+  CODEX_DOCTOR_CHECKS_ENABLED=1
+fi
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-codex-on-demand-e2e" OPENCLAW_CODEX_ON_DEMAND_E2E_IMAGE)"
 DOCKER_TARGET="${OPENCLAW_CODEX_ON_DEMAND_DOCKER_TARGET:-bare}"
@@ -71,12 +79,21 @@ fi
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
 run_log="$(docker_e2e_run_log codex-on-demand)"
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 codex-on-demand empty)"
+CODEX_CONTRACT_MOUNT_ARGS=(
+  -v "$CODEX_ASSERTIONS:/app/scripts/e2e/lib/codex-on-demand/assertions.mjs:ro"
+)
+if [ -n "$CODEX_DOCTOR_CHECKS" ]; then
+  CODEX_CONTRACT_MOUNT_ARGS+=(
+    -v "$CODEX_DOCTOR_CHECKS:/app/scripts/e2e/lib/codex-on-demand/doctor-checks.mjs:ro"
+  )
+fi
 
 echo "Running Codex on-demand Docker E2E..."
 if ! docker_e2e_run_with_harness \
   -v "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}/extensions/codex/package.json:/tmp/openclaw-candidate-codex-package.json:ro" \
-  -v "$CODEX_ASSERTIONS:/app/scripts/e2e/lib/codex-on-demand/assertions.mjs:ro" \
+  "${CODEX_CONTRACT_MOUNT_ARGS[@]}" \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+  -e "OPENCLAW_CODEX_DOCTOR_CHECKS_ENABLED=$CODEX_DOCTOR_CHECKS_ENABLED" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'; then
@@ -154,7 +171,9 @@ openclaw onboard --non-interactive --accept-risk \
 openclaw plugins list --json >/tmp/openclaw-plugins-list.json
 openclaw plugins inspect codex --runtime --json >/tmp/openclaw-codex-inspect.json
 node scripts/e2e/lib/codex-on-demand/assertions.mjs
-node scripts/e2e/lib/codex-on-demand/doctor-checks.mjs
+if [ "$OPENCLAW_CODEX_DOCTOR_CHECKS_ENABLED" = "1" ]; then
+  node scripts/e2e/lib/codex-on-demand/doctor-checks.mjs
+fi
 
 echo "Codex on-demand Docker E2E passed"
 EOF

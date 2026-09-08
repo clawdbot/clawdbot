@@ -12,7 +12,11 @@ import {
   type QaSeedScenarioWithSource,
 } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
-import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
+import {
+  runLoadedScenarioFlow,
+  assertTelegramRichObservationFlow,
+  telegramRichObservationCases,
+} from "./scenario-flow-runner.test-support.js";
 import type { QaSuiteStep } from "./suite-types.js";
 
 function readWebchatTranscriptWaitFlow() {
@@ -299,6 +303,11 @@ const planningEvidenceFixtures = readQaScenarioPack()
   .map(createPlanningEvidenceFixture);
 
 describe("scenario-flow-runner", () => {
+  it.each(telegramRichObservationCases)(
+    "correlates Telegram rich observations without crossing account IDs: %s",
+    assertTelegramRichObservationFlow,
+  );
+
   it("ignores stale provider prompt mismatches when the current run matches", async () => {
     const currentObservation = {
       egress: "responses-sdk",

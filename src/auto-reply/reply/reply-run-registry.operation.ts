@@ -24,11 +24,13 @@ import {
 import {
   abortFrozenOperations,
   attachedBackendByOperation,
+  clearReplyOperationByOperation,
   clearReplyRunState,
   createUserAbortError,
   evictReplyOperationByOperation,
   expireReplyOperationByOperation,
   flushReplyOperationAfterClear,
+  forceClearReplyOperation,
   getAttachedBackend,
   hasCommittedReplyOperationOutcome,
   isReplyOperationAbortable,
@@ -148,6 +150,7 @@ export function createReplyOperation(params: {
     finalizationLease.clear();
     expireReplyOperationByOperation.delete(operation);
     evictReplyOperationByOperation.delete(operation);
+    clearReplyOperationByOperation.delete(operation);
     detachUpstreamAbort();
     const registeredBarrier = afterClearBarrier
       ? registerFollowupAdmissionBarrier(
@@ -564,6 +567,7 @@ export function createReplyOperation(params: {
     },
   };
 
+  clearReplyOperationByOperation.set(operation, clearState);
   expireReplyOperationByOperation.set(operation, (reason, options) => {
     if (
       replyRunState.activeRunsByKey.get(currentSessionKey) !== operation ||
@@ -727,13 +731,4 @@ export function createReplyOperation(params: {
   }
 
   return operation;
-}
-
-export function forceClearReplyOperation(operation: ReplyOperation, cause?: unknown): boolean {
-  if (replyRunState.activeRunsByKey.get(operation.key) !== operation) {
-    return false;
-  }
-  operation.fail("run_failed", cause);
-  operation.complete();
-  return true;
 }

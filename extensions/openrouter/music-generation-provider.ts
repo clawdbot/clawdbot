@@ -240,9 +240,6 @@ async function readOpenRouterStreamChunk(
         }, timeoutMs);
       }),
     ]);
-  } catch (error) {
-    await reader.cancel().catch(() => {});
-    throw error;
   } finally {
     if (timeoutId) {
       clearTimeout(timeoutId);
@@ -298,9 +295,6 @@ async function readOpenRouterAudioStream(
         }
         if (processOpenRouterSseLine(line.trim(), result)) {
           flushOpenRouterMusicAudio(result);
-          // Once [DONE] is observed, the generated result is authoritative.
-          // Cancellation is cleanup and must not replace it with a transport error.
-          await reader.cancel().catch(() => {});
           return {
             audioBuffer: Buffer.concat(result.audioBuffers, result.audioBytes),
             transcript: result.transcriptChunks.join(""),
@@ -328,10 +322,10 @@ async function readOpenRouterAudioStream(
       audioBuffer: Buffer.concat(result.audioBuffers, result.audioBytes),
       transcript: result.transcriptChunks.join(""),
     };
-  } catch (error) {
-    await reader.cancel().catch(() => {});
-    throw error;
   } finally {
+    // A capture tee can keep cancellation pending until its sibling finishes.
+    // Release the reader without waiting so the request owner can abort transport.
+    void reader.cancel().catch(() => {});
     try {
       reader.releaseLock();
     } catch {}

@@ -3253,7 +3253,7 @@ export const en: TranslationMap & {
     workerDesktop: {
       title: "Cloud Worker Desktop",
       description:
-        "Watch and control node-carried desktops from capable Crabbox AWS or Hetzner profiles with desktop: true.",
+        "Watch and control node-carried desktops from capable Crabbox AWS, Azure, or Hetzner profiles with desktop: true.",
     },
   },
   aboutPage: {
@@ -3349,6 +3349,10 @@ export const en: TranslationMap & {
     },
   },
   presence: {
+    sharedOwner: {
+      name: "Shared owner",
+      hint: "Connected with the Gateway token or over a tunnel, not a personal sign-in.",
+    },
     rosterTitle: "Online",
     idle: "Idle",
     offline: "Offline",

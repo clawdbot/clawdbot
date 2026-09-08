@@ -278,6 +278,8 @@ export type EmbeddedAgentRunResult = {
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
   // Child sessions successfully accepted by sessions_spawn during the run.
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
+  /** An asynchronous tool task started during this run; its owner tracks completion. */
+  asyncWorkStarted?: true;
   /** Completed core yield settlement, not a requester-visible final reply. */
   requesterContinuationSettled?: true;
   // Structured heartbeat outcome recorded by the heartbeat response tool.

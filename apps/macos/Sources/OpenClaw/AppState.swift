@@ -73,7 +73,7 @@ final class AppState {
         case failed
     }
 
-    @ObservationIgnored private var gatewayConfigSyncState = GatewayConfigSyncState.current
+    private var gatewayConfigSyncState = GatewayConfigSyncState.current
     @ObservationIgnored private var gatewayConfigSyncTask: Task<Void, Never>?
     @ObservationIgnored private(set) var gatewayRoutingGeneration: UInt64 = 0
     #if DEBUG
@@ -414,6 +414,11 @@ final class AppState {
 
     var remoteTokenDirty: Bool {
         self.dirtyGatewayConfigFields.contains(.remoteToken)
+    }
+
+    var gatewayConfigSyncFailure: String? {
+        guard self.gatewayConfigSyncState == .failed else { return nil }
+        return String(localized: "Could not save Gateway settings. Check your connection settings and try again.")
     }
 
     var gatewayConfigConflict: GatewayConfigConflict? {
@@ -835,6 +840,7 @@ extension AppState {
     }
 
     private static func gatewayConfigFieldsPersisted(by draft: GatewayConfigSyncDraft) -> Set<GatewayConfigField> {
+        if draft.clearsPrimaryGateway { return draft.dirtyFields }
         var fields = draft.dirtyFields.intersection([.mode, .remoteTransport, .remoteUrl, .remoteToken])
         if draft.remoteTransport == .ssh {
             fields.formUnion(draft.dirtyFields.intersection([
@@ -848,19 +854,22 @@ extension AppState {
 
     private func reconcileGatewayConfigOwnership(_ root: [String: Any]) -> Set<GatewayConfigField> {
         let diskSnapshot = Self.gatewayConfigSnapshot(root)
+        let draft = self.gatewayConfigDraft()
         let desiredRoot = Self.syncedGatewayRoot(
             currentRoot: root,
-            draft: self.gatewayConfigDraft()).root
+            draft: draft).root
         let desiredSnapshot = Self.gatewayConfigSnapshot(desiredRoot)
         let priorConflicts = self.conflictedGatewayConfigFields
 
         // Dirty fields retain the user's pending UI value. A disk value that moved
         // from the last observed baseline is a conflict, never write authorization.
-        let persistedFields = Self.gatewayConfigFieldsPersisted(by: self.gatewayConfigDraft())
+        let persistedFields = Self.gatewayConfigFieldsPersisted(by: draft)
+        let remoteClearPending = draft.clearsPrimaryGateway && (root["gateway"] as? [String: Any])?["remote"] != nil
         var externallyPersistedFields: Set<GatewayConfigField> = []
         for field in persistedFields {
             if diskSnapshot[field] == desiredSnapshot[field] {
-                externallyPersistedFields.insert(field)
+                // Missing mode alone does not complete a clear while remote settings remain.
+                if field != .mode || !remoteClearPending { externallyPersistedFields.insert(field) }
             } else if diskSnapshot[field] != self.lastObservedGatewayConfig[field] {
                 self.conflictedGatewayConfigFields.insert(field)
             }
@@ -1160,11 +1169,12 @@ extension AppState {
         currentRoot: [String: Any],
         draft: GatewayConfigSyncDraft,
         primaryGateway: PrimaryGatewayConfiguration? = nil)
-        -> (root: [String: Any], changed: Bool)
+        -> (root: [String: Any], changed: Bool, removesGatewayMode: Bool)
     {
         var root = currentRoot
         var gateway = root["gateway"] as? [String: Any] ?? [:]
         var changed = false
+        var removesGatewayMode = false
 
         let desiredMode: String? = switch draft.connectionMode {
         case .local:
@@ -1183,7 +1193,7 @@ extension AppState {
                     changed = true
                 }
             } else if currentMode != nil {
-                gateway.removeValue(forKey: "mode")
+                removesGatewayMode = gateway.removeValue(forKey: "mode") != nil
                 changed = true
             }
         }
@@ -1223,14 +1233,19 @@ extension AppState {
             changed = true
         }
 
-        guard changed else { return (currentRoot, false) }
+        // A retained remote URL would infer remote mode again on reload.
+        if draft.clearsPrimaryGateway, gateway.removeValue(forKey: "remote") != nil {
+            changed = true
+        }
+
+        guard changed else { return (currentRoot, false, false) }
 
         if gateway.isEmpty {
             root.removeValue(forKey: "gateway")
         } else {
             root["gateway"] = gateway
         }
-        return (root, true)
+        return (root, true, removesGatewayMode)
     }
 
     private func syncGatewayConfigIfNeeded() {
@@ -1274,6 +1289,7 @@ extension AppState {
     }
 
     private static func gatewayDraftCanPersist(_ draft: GatewayConfigSyncDraft) -> Bool {
+        if draft.clearsPrimaryGateway { return true }
         let ownsRemoteRoute = draft.dirtyFields.contains(.remoteTransport) ||
             draft.dirtyFields.contains(.remoteUrl) ||
             draft.dirtyFields.contains(.remoteTarget)
@@ -1318,7 +1334,7 @@ extension AppState {
         let changed = Self.configFingerprint(currentRoot) != Self.configFingerprint(replacement.root)
         self.gatewayConfigSyncTask?.cancel()
         self.setGatewayConfigSyncState(.pending)
-        guard !changed || self.gatewayConfigSaver(replacement.root, configuration.isClear) else {
+        guard !changed || self.gatewayConfigSaver(replacement.root, replacement.removesGatewayMode) else {
             self.setGatewayConfigSyncState(previousSyncState)
             throw PrimaryGatewayControlError.persistenceFailed
         }
@@ -1339,7 +1355,7 @@ extension AppState {
                 }
             }
         }
-        self.onboardingSeen = !configuration.isClear
+        self.onboardingSeen = self.connectionMode != .unconfigured
         if self.onboardingSeen {
             self.ifNotPreview {
                 AppDefaults.standard.set(currentOnboardingVersion, forKey: onboardingVersionKey)
@@ -1381,18 +1397,22 @@ extension AppState {
             currentRoot: currentRoot,
             draft: draft,
             primaryGateway: primaryGateway)
-        guard !synced.changed || self.gatewayConfigSaver(synced.root, false) else {
+        guard !synced.changed || self.gatewayConfigSaver(synced.root, synced.removesGatewayMode) else {
             self.setGatewayConfigSyncState(primaryGateway == nil ? .failed : previousSyncState)
-            Self.logger.warning("gateway config sync rejected to protect persisted gateway auth/mode")
+            let write = primaryGateway == nil ? "connection draft sync" : "primary Gateway replacement"
+            Self.logger
+                .warning("\(write) failed: configuration saver rejected the write; see config log for the reason")
             return false
         }
         self.acknowledgeGatewayConfigPersistence(draft, root: synced.root)
-        if primaryGateway != nil {
+        if primaryGateway != nil || draft.clearsPrimaryGateway {
             // Publish the selection only after its endpoint and credentials commit.
             if synced.changed, !self.isPreview {
                 WebChatManager.shared.resetPrimaryConnections()
             }
-            self.applyGatewayConfigView(synced.root, forcing: Self.gatewayConfigFieldsPersisted(by: draft))
+            let fields = draft.clearsPrimaryGateway
+                ? Set(GatewayConfigField.allCases) : Self.gatewayConfigFieldsPersisted(by: draft)
+            self.applyGatewayConfigView(synced.root, forcing: fields)
         }
         self.lastConfigFingerprint = Self.configFingerprint(synced.root)
         self.setGatewayConfigSyncState(.current)
@@ -1558,11 +1578,11 @@ extension AppState {
 
     static func _testSyncedGatewayRoot(
         currentRoot: [String: Any],
-        draft: GatewayConfigSyncDraft) -> [String: Any]
+        draft: GatewayConfigSyncDraft) -> (root: [String: Any], changed: Bool, removesGatewayMode: Bool)
     {
         self.syncedGatewayRoot(
             currentRoot: currentRoot,
-            draft: draft).root
+            draft: draft)
     }
 
     static func _testGatewayDraftCanPersist(_ draft: GatewayConfigSyncDraft) -> Bool {

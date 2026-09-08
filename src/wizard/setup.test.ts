@@ -12,6 +12,7 @@ import {
 } from "../agents/auth-profiles/oauth-test-utils.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
+import { committedConfigFiles } from "../commands/committed-config.test-support.js";
 import { ConfigMutationConflictError } from "../config/config.js";
 import { createConfigIO as createRealConfigIO } from "../config/io.factory.js";
 import { coerceConfig } from "../config/io.read-helpers.js";
@@ -448,7 +449,7 @@ vi.mock("../config/config.js", async (importActual) => {
             writeOptions: params.writeOptions,
             afterWrite: { mode: "auto" },
           });
-          return { nextConfig: committed.config };
+          return committedConfigFiles.write(committed.config, snapshot.path);
         } catch (error) {
           if (
             !(error instanceof actual.ConfigMutationConflictError) ||
@@ -614,6 +615,7 @@ describe("runSetupWizard", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    committedConfigFiles.clear();
     promptAuthChoiceGrouped.mockReset();
     promptAuthChoiceGrouped.mockResolvedValue("skip");
     applyAuthChoice.mockReset();

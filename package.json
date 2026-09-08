@@ -2213,6 +2213,7 @@
     "@openclaw/crabline": "0.1.20",
     "@openclaw/session-url-contract": "workspace:*",
     "@opentelemetry/sdk-node": "0.221.0",
+    "@pnpm/parse-overrides": "1001.0.4",
     "@shikijs/core": "4.4.3",
     "@shikijs/engine-javascript": "4.4.3",
     "@shikijs/engine-oniguruma": "4.4.3",

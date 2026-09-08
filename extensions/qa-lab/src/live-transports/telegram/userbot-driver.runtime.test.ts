@@ -32,6 +32,21 @@ describe("Telegram userbot driver runtime", () => {
       },
     ];
     const editedEntities = [{ offset: 3, length: 5, type: { "@type": "textEntityTypeBold" } }];
+    const richMessage = {
+      "@type": "richMessage",
+      is_full: true,
+      is_rtl: false,
+      blocks: [
+        {
+          "@type": "pageBlockParagraph",
+          text: {
+            "@type": "richTextUrl",
+            url: "https://example.com/qa",
+            text: { "@type": "richTextMathematicalExpression", expression: "x" },
+          },
+        },
+      ],
+    };
     fs.writeFileSync(
       scriptPath,
       [
@@ -39,6 +54,7 @@ describe("Telegram userbot driver runtime", () => {
         "import sys",
         `entities = json.loads(${JSON.stringify(JSON.stringify(entities))})`,
         `edited_entities = json.loads(${JSON.stringify(JSON.stringify(editedEntities))})`,
+        `rich_message = json.loads(${JSON.stringify(JSON.stringify(richMessage))})`,
         "print(json.dumps({'type':'ready','chatId':-1001,'user':{'id':100}}), flush=True)",
         "for line in sys.stdin:",
         "    request = json.loads(line)",
@@ -47,6 +63,9 @@ describe("Telegram userbot driver runtime", () => {
         "    print(json.dumps({'type':'update','update':update}), flush=True)",
         "    for replacement in [edited_entities, []]:",
         "        update = {**update, 'kind':'edit', 'entities':replacement, 'contentType':'messageVideo'}",
+        "        print(json.dumps({'type':'update','update':update}), flush=True)",
+        "    for rich in [rich_message, {**rich_message, 'is_full':False}, None]:",
+        "        update = {**update, 'richMessage':rich, 'text':'x', 'entities':[], 'contentType':'messageRichMessage' if rich else 'messageText'}",
         "        print(json.dumps({'type':'update','update':update}), flush=True)",
         "    result = {'chatId':-1001,'messageId':message_id,'senderId':100,'timestamp':1000,'text':request['text'],'entities':entities,'contentType':'messageText'}",
         "    print(json.dumps({'type':'response','id':request['id'],'result':result}), flush=True)",
@@ -72,7 +91,7 @@ describe("Telegram userbot driver runtime", () => {
         text,
         entities,
       });
-      await vi.waitFor(() => expect(updates).toHaveLength(3));
+      await vi.waitFor(() => expect(updates).toHaveLength(6));
       expect(updates).toMatchObject([
         {
           kind: "message",
@@ -90,7 +109,16 @@ describe("Telegram userbot driver runtime", () => {
           entities: editedEntities,
         },
         { kind: "edit", messageId: 12, contentType: "messageVideo", text, entities: [] },
+        { kind: "edit", messageId: 12, contentType: "messageRichMessage", richMessage },
+        {
+          kind: "edit",
+          messageId: 12,
+          contentType: "messageRichMessage",
+          richMessage: { ...richMessage, is_full: false },
+        },
+        { kind: "edit", messageId: 12, contentType: "messageText", text: "x", entities: [] },
       ]);
+      expect(updates[5]).not.toHaveProperty("richMessage");
       expect(() => driver.assertHealthy()).not.toThrow();
     } finally {
       await driver.close();

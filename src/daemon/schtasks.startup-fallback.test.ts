@@ -705,7 +705,7 @@ describe("Windows startup fallback", () => {
       expect(startupScript).toContain("WScript.Shell");
       expect(startupScript).toContain("gateway.cmd");
       expect(startupScript).toContain(
-        `WScript.Quit CreateObject("WScript.Shell").Run("""${result.scriptPath}""", 0, True)`,
+        `WScript.Quit shell.Run("""${result.scriptPath}""", 0, True)`,
       );
       expectStartupFallbackSpawn();
     });

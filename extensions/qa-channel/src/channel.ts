@@ -243,6 +243,24 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
       },
     },
     threading: {
+      resolveReplyTransport: ({
+        currentMessageId,
+        replyToId,
+        replyToIsExplicit,
+        replyDelivery,
+      }) => {
+        if (
+          !currentMessageId ||
+          replyToId !== undefined ||
+          replyToIsExplicit ||
+          (replyDelivery && replyDelivery.replyToMode !== "all")
+        ) {
+          return null;
+        }
+        // Correlate queued replies like the inbound callback, without restoring
+        // references that an earlier first/off/batched policy may have removed.
+        return { replyToId: currentMessageId };
+      },
       matchesToolContextTarget: ({ target, toolContext }) =>
         matchesQaToolContextTarget(target, toolContext),
       resolveAutoThreadId: ({ to, toolContext }) =>

@@ -137,6 +137,12 @@ through a generated `gateway.vbs` WScript wrapper, so the background Gateway
 does not open a visible console window. If task creation is denied, OpenClaw
 falls back to a per-user Startup-folder login item.
 
+The hidden launcher owns the supervised Gateway process tree. Ending the task
+with `schtasks /end /tn "OpenClaw Gateway"`, `Stop-ScheduledTask`, or Task
+Scheduler's **End** action terminates the Gateway and its descendants. After
+updating an older installation, run `openclaw gateway install --force` to
+regenerate the launcher if the update did not refresh it.
+
 Gateway status and Doctor read the Scheduled Task's numeric current state, independently of the Windows display language or console code page. A previous task exit result does not prove whether it is running now. Queued or unknown tasks do not count as safely stopped for Doctor maintenance. Stop a queued task through its service owner; if inspection is inaccessible, restore Task Scheduler inspection permissions before retrying.
 
 Gateway startup creates private SQLite staging directories through Windows APIs,
@@ -274,6 +280,20 @@ Notes:
 - Use `listenaddress=0.0.0.0` for LAN access, `127.0.0.1` for local-only access.
 
 ## Troubleshooting
+
+### The Scheduled Task stops before the Gateway is ready
+
+Run `openclaw gateway status --json`, then inspect the local [Gateway log](/gateway/logging).
+Entries from `gateway/task-supervisor` record the child exit code, signal, and
+the last 8,192 characters of stderr, including failures before Gateway logging
+starts. Child stdout is discarded. A failed child or supervisor exits nonzero;
+an intentional clean stop still exits zero. A successful task result alone does
+not prove the Gateway is healthy.
+
+Task Scheduler's [`RestartOnFailure` policy](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-tsch/2ff4aa5a-7bc4-449f-bbb1-27475645867f)
+retries failed start conditions or action launches. Do not rely on it to restart
+a Gateway that launches successfully and then exits with an error, such as an
+occupied port. Fix the logged cause, then run `openclaw gateway start`.
 
 ### The tray icon does not appear
 

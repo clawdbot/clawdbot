@@ -28,15 +28,16 @@ The variables below are the supported environment contract for operators. Undocu
 
 ### Paths and instances
 
-| Variable                 | Purpose                                                           |
-| ------------------------ | ----------------------------------------------------------------- |
-| `OPENCLAW_HOME`          | Override the home directory used for OpenClaw path defaults.      |
-| `OPENCLAW_STATE_DIR`     | Override the mutable state directory.                             |
-| `OPENCLAW_CONFIG_PATH`   | Override the active config file path.                             |
-| `OPENCLAW_WORKSPACE_DIR` | Override the default agent workspace.                             |
-| `OPENCLAW_PROFILE`       | Select a named profile and its isolated defaults.                 |
-| `OPENCLAW_GIT_DIR`       | Override the source checkout used by development-channel updates. |
-| `OPENCLAW_INCLUDE_ROOTS` | Allow `$include` to resolve from additional roots.                |
+| Variable                  | Purpose                                                               |
+| ------------------------- | --------------------------------------------------------------------- |
+| `OPENCLAW_HOME`           | Override the home directory used for OpenClaw path defaults.          |
+| `OPENCLAW_STATE_DIR`      | Override the mutable state directory.                                 |
+| `OPENCLAW_CONFIG_PATH`    | Override the active config file path.                                 |
+| `OPENCLAW_WORKSPACE_DIR`  | Override the default agent workspace.                                 |
+| `OPENCLAW_PROFILE`        | Select a named profile and its isolated defaults.                     |
+| `OPENCLAW_GIT_DIR`        | Override the source checkout used by development-channel updates.     |
+| `OPENCLAW_INCLUDE_ROOTS`  | Allow `$include` to resolve from additional roots.                    |
+| `OPENCLAW_SQLITE_LIBRARY` | Override the SQLite library for [Bun on macOS](/install/bun#caveats). |
 
 ### Gateway and authentication
 

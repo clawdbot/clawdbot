@@ -302,6 +302,36 @@ describe("ClawRouter usage", () => {
     expect(cancelled).toBe(true);
   });
 
+  it("releases a rejected response while a capture clone retains its body", async () => {
+    const cancel = vi.fn();
+    const response = new Response(new ReadableStream({ cancel }), { status: 503 });
+    const capture = response.clone();
+    const release = vi.fn(async () => {
+      await capture.body?.cancel();
+    });
+    const fetchGuard = mockFetchGuard(response);
+    fetchGuard.mockResolvedValue({
+      response,
+      finalUrl: "https://clawrouter.example/v1/usage",
+      release,
+    });
+    const outcome = fetchClawRouterUsage({
+      token: "proxy-key",
+      timeoutMs: 5000,
+      fetchGuard,
+    }).catch((error: unknown) => error);
+
+    try {
+      await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
+      expect(await outcome).toEqual(new Error("ClawRouter usage request failed (HTTP 503)"));
+      expect(cancel).toHaveBeenCalledOnce();
+    } finally {
+      // Settle both native tee branches even when the release-order assertion fails.
+      await capture.body?.cancel();
+      await outcome;
+    }
+  });
+
   it("observes peer closure when a real loopback server returns non-OK", async () => {
     let responseClosed = false;
     const { baseUrl, requests } = await startUsageServer((_req, res) => {

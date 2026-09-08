@@ -533,7 +533,10 @@ describe("sessions view", () => {
     expect(container.querySelectorAll(".session-data-row")).toHaveLength(1);
   });
 
-  it("offers person grouping and labels owner sections from their durable profile", async () => {
+  it.each([
+    ["profile-ada", "Ada Lovelace", "Ada Lovelace"],
+    ["gateway-owner", "Saved owner name", "Shared owner"],
+  ])("offers person grouping and labels the durable profile %s", async (id, name, expected) => {
     const container = document.createElement("div");
     render(
       renderSessions({
@@ -546,9 +549,9 @@ describe("sessions view", () => {
               owner: {
                 actor: {
                   type: "human",
-                  id: "profile-ada",
-                  label: "Ada Lovelace",
-                  identity: { type: "profile", id: "profile-ada" },
+                  id,
+                  label: name,
+                  identity: { type: "profile", id },
                 },
               },
             },
@@ -570,7 +573,7 @@ describe("sessions view", () => {
       [...container.querySelectorAll(".session-group-row__label")].map((label) =>
         label.textContent?.trim(),
       ),
-    ).toEqual(["Ada Lovelace", "Ungrouped"]);
+    ).toEqual([expected, "Ungrouped"]);
   });
 
   it("hides the person grouping option without the identity capability", async () => {

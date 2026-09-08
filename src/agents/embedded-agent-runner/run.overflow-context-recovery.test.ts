@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type { AssistantMessage } from "../../llm/types.js";
+import { buildAssistantFailoverSignal } from "../embedded-agent-helpers/assistant-message-failures.js";
+import { classifyFailoverSignal } from "../failover/classify.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
@@ -62,8 +64,12 @@ vi.mock("./run/session-bootstrap.js", async () => {
 });
 
 type RecoveryInput = Parameters<typeof recoverEmbeddedRunOverflow>[0];
-type RecoveryInputOverrides = Omit<Partial<RecoveryInput>, "attempt"> & {
+type RecoveryInputOverrides = Omit<
+  Partial<RecoveryInput>,
+  "attempt" | "assistantOverflowCandidate"
+> & {
   attempt?: Partial<EmbeddedRunAttemptResult>;
+  assistantOverflowCandidate?: AssistantMessage;
 };
 type CompactionResult = Awaited<ReturnType<RecoveryInput["contextEngine"]["compact"]>>;
 
@@ -105,6 +111,7 @@ function makeAssistantMessage(
 }
 
 function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
+  const { assistantOverflowCandidate, ...restOverrides } = overrides;
   const promptError = Object.hasOwn(overrides, "promptError")
     ? overrides.promptError
     : overflowError();
@@ -177,6 +184,17 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
     aborted: false,
     signalOwnedInterruption: false,
     promptError,
+    assistantOverflowCandidate: assistantOverflowCandidate
+      ? {
+          message: assistantOverflowCandidate,
+          classification:
+            assistantOverflowCandidate.stopReason === "error"
+              ? classifyFailoverSignal(buildAssistantFailoverSignal(assistantOverflowCandidate), {
+                  providerPlugin: null,
+                })
+              : null,
+        }
+      : undefined,
     toolResultPromptProjectionState: {
       replacements: new Map(),
       frozen: new Set(),
@@ -218,7 +236,7 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
     markOwnedTranscriptRetry: vi.fn(),
     armPostCompactionGuard: vi.fn(),
     usageAccumulator: createUsageAccumulator(),
-    ...overrides,
+    ...restOverrides,
     attempt,
   };
   return input;
@@ -269,6 +287,25 @@ describe("recoverEmbeddedRunOverflow", () => {
 
     expect(result).toEqual({ action: "none" });
     expect(mocks.compact).not.toHaveBeenCalled();
+  });
+
+  it("does not compact a validation rejection naming context_length_exceeded", async () => {
+    const assistantOverflowCandidate = makeAssistantMessage({
+      stopReason: "error",
+      errorMessage: "500 Unsupported parameter: context_length_exceeded",
+    });
+    assistantOverflowCandidate.errorType = "invalid_request_error";
+    assistantOverflowCandidate.errorCode = "unknown_parameter";
+    const input = makeInput({
+      promptError: null,
+      assistantOverflowCandidate,
+      assistantErrorText: assistantOverflowCandidate.errorMessage,
+    });
+
+    expect(await recoverEmbeddedRunOverflow(input)).toEqual({ action: "none" });
+    expect(mocks.compact).not.toHaveBeenCalled();
+    expect(mocks.markProviderPromptRejected).not.toHaveBeenCalled();
+    expect(mocks.truncateOversizedToolResults).not.toHaveBeenCalled();
   });
 
   it.each([

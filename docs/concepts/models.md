@@ -330,6 +330,11 @@ only for providers declared by installed plugin manifests. It cannot supply API
 base URLs or request headers, and a catalog older than the installed release's
 build stamp is ignored.
 
+The Gateway reports when a checked catalog needs a restart to become active,
+including a bundle downloaded by another process. Repeated checks of the same
+source and generation do not repeat the notice. Checking for an update does not
+activate the downloaded rows or prices.
+
 The hosted file is published from the public
 [`openclaw/catalog`](https://github.com/openclaw/catalog) GitHub repository.
 At publish time, it also hydrates model ids and metadata from models.dev for

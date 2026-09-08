@@ -110,6 +110,8 @@ export function renderSidebarAgentMenuForController(controller: SidebarMenusCont
     identities,
     pinnedAgentIds: host.pinnedAgentIds,
     connected: host.connected,
+    resolveAvatarUrl: (url) => controller.agentMenuAvatars.resolve(url),
+    avatarErrorHandler: (url) => controller.agentMenuAvatars.imageErrorHandler(url),
     openMode: controller.agentMenuInteractionState === "open-hover" ? "hover" : "click",
     agentUnreadCount: (agentId) => host.agentUnreadCount(agentId),
     onPointerEnter: () => controller.handleAgentMenuPointerEnter(),

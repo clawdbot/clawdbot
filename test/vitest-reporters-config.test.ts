@@ -39,16 +39,15 @@ describe("Vitest reporter contracts", () => {
             const root = config.startsWith("ui/") ? path.resolve("ui") : process.cwd();
             const imported = (await import(pathToFileURL(path.resolve(config)).href)).default;
             const options = { root, config: false };
-            const normal = await resolveConfig(options, imported);
-            const cli = parseCLI(["vitest", "--reporter=json"]).options;
-            let cliConfig = imported;
+            let reporterConfig = imported;
             if (config === "vitest.config.ts") {
-              // The default resolution validates the full matrix in both environments.
-              // Reporter CLI overrides do not propagate to child projects.
-              cliConfig = { ...imported, test: { ...imported.test } };
-              delete cliConfig.test.projects;
+              // The project-config suite owns full root graph resolution.
+              reporterConfig = { ...imported, test: { ...imported.test } };
+              delete reporterConfig.test.projects;
             }
-            const override = await resolveConfig({ ...cli, ...options }, cliConfig);
+            const normal = await resolveConfig(options, reporterConfig);
+            const cli = parseCLI(["vitest", "--reporter=json"]).options;
+            const override = await resolveConfig({ ...cli, ...options }, reporterConfig);
             defaults.push({ config, reporters: normal.test.reporters, cli: override.test.reporters });
           }
           const customConfig = {
@@ -75,7 +74,12 @@ describe("Vitest reporter contracts", () => {
         `,
         {
           imports: ["tsx"],
-          env: { ...process.env, AI_AGENT: "vitest-reporter-test", GITHUB_ACTIONS: githubActions },
+          env: {
+            ...process.env,
+            AI_AGENT: "vitest-reporter-test",
+            GITHUB_ACTIONS: githubActions,
+            OPENCLAW_VITEST_INCLUDE_FILE: undefined,
+          },
           timeout: DEFAULT_VITEST_TEST_TIMEOUT_MS,
         },
       );

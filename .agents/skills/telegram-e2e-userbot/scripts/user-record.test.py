@@ -23,6 +23,44 @@ class FakeClient:
 
 
 class CallbackScenarioTest(unittest.TestCase):
+    def test_records_partial_rich_revisions_raw_without_fetching_full_content(self):
+        client = FakeClient()
+        rich = {
+            "@type": "richMessage", "is_full": False, "is_rtl": False,
+            "blocks": [{"@type": "pageBlockParagraph", "text": {
+                "@type": "richTextPlain", "text": "partial send",
+            }}],
+        }
+        replacement = {
+            **rich, "blocks": [{"@type": "pageBlockParagraph", "text": {
+                "@type": "richTextPlain", "text": "partial edit",
+            }}],
+        }
+        updates = [
+            {"@type": "updateNewMessage", "message": {
+                "id": 42 << 20, "chat_id": -1001,
+                "sender_id": {"@type": "messageSenderUser", "user_id": 42},
+                "content": {"@type": "messageRichMessage", "message": rich},
+            }},
+            {"@type": "updateMessageContent", "chat_id": -1001,
+             "message_id": 42 << 20,
+             "new_content": {"@type": "messageRichMessage", "message": replacement}},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "events.jsonl"
+            recorder = record.EventRecorder(client, -1001, target, 42)
+            try:
+                for update in updates:
+                    recorder.ingest(update)
+            finally:
+                recorder.close()
+            events = [json.loads(line) for line in target.read_text().splitlines()]
+        self.assertEqual([event["kind"] for event in events], ["message", "edit"])
+        self.assertEqual([event["text"] for event in events], ["partial send", "partial edit"])
+        self.assertEqual([event["richMessageIsFull"] for event in events], [False, False])
+        self.assertEqual([event["raw"] for event in events], updates)
+        self.assertEqual(client.requests, [])
+
     def test_waits_for_prior_gateway_barriers(self):
         actions = [
             {"type": "patchConfig", "atMs": 0},

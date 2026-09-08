@@ -14,6 +14,7 @@ import { normalizeMediaFacts } from "../media/media-facts.js";
 import type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
+  PluginHookInboundMessageMetadata,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSentEvent,
@@ -27,65 +28,6 @@ import type {
   MessageTranscribedHookContext,
 } from "./internal-hooks.js";
 import { projectMessageHookMediaFacts, type MessageHookMediaFact } from "./message-hook-media.js";
-
-type CanonicalInboundMessageHookContext = {
-  from: string;
-  to?: string;
-  content: string;
-  body?: string;
-  bodyForAgent?: string;
-  transcript?: string;
-  timestamp?: number;
-  channelId: string;
-  accountId?: string;
-  conversationId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  runId?: string;
-  messageId?: string;
-  senderId?: string;
-  senderName?: string;
-  senderUsername?: string;
-  senderE164?: string;
-  replyToId?: string;
-  replyToIdFull?: string;
-  replyToBody?: string;
-  replyToSender?: string;
-  replyToIsQuote?: boolean;
-  provider?: string;
-  surface?: string;
-  threadId?: string | number;
-  threadParentId?: string | number;
-  media?: MessageHookMediaFact[];
-  originalMedia?: MessageHookMediaFact[];
-  // `mediaPath(s)` are files OpenClaw has already staged locally. `mediaUrl(s)`
-  // are provider/media-server references that may not exist on this host.
-  mediaPath?: string;
-  mediaUrl?: string;
-  mediaType?: string;
-  mediaPaths?: string[];
-  mediaUrls?: string[];
-  mediaTypes?: string[];
-  mediaRemoteHost?: string;
-  mediaStagingPending?: boolean;
-  originalMediaPath?: string;
-  originalMediaUrl?: string;
-  originalMediaType?: string;
-  originalMediaPaths?: string[];
-  originalMediaUrls?: string[];
-  originalMediaTypes?: string[];
-  originatingChannel?: string;
-  originatingTo?: string;
-  guildId?: string;
-  channelName?: string;
-  isGroup: boolean;
-  groupId?: string;
-  topicName?: string;
-  location?: PluginHookInboundClaimEvent["location"];
-  providerUpdate?: PluginHookInboundClaimEvent["providerUpdate"];
-  trace?: DiagnosticTraceContext;
-  callDepth?: number;
-};
 
 type CanonicalSentMessageHookContext = {
   to: string;
@@ -138,13 +80,13 @@ function projectHookMediaState(canonical: CanonicalInboundMessageHookContext) {
   };
 }
 
-export function deriveInboundMessageHookContext(
+function deriveInboundMessageHookContextBase(
   ctx: FinalizedMsgContext,
   overrides?: {
     content?: string;
     messageId?: string;
   },
-): CanonicalInboundMessageHookContext {
+) {
   const content =
     overrides?.content ??
     readNonBlankString(ctx.BodyForCommands) ??
@@ -175,7 +117,7 @@ export function deriveInboundMessageHookContext(
     Number.isFinite(ctx.LocationLat) &&
     typeof ctx.LocationLon === "number" &&
     Number.isFinite(ctx.LocationLon);
-  const locationSource =
+  const locationSource: NonNullable<PluginHookInboundClaimEvent["location"]>["source"] =
     ctx.LocationSource === "pin" || ctx.LocationSource === "place" || ctx.LocationSource === "live"
       ? ctx.LocationSource
       : undefined;
@@ -268,6 +210,28 @@ export function deriveInboundMessageHookContext(
         }
       : {}),
   };
+}
+
+type DerivedInboundMessageHookContext = ReturnType<typeof deriveInboundMessageHookContextBase>;
+type CanonicalInboundMessageHookContext = Pick<
+  DerivedInboundMessageHookContext,
+  "from" | "content" | "channelId" | "isGroup"
+> &
+  Partial<DerivedInboundMessageHookContext> &
+  Partial<Pick<PluginHookMessageContext, "runId" | "trace" | "callDepth">> &
+  Partial<PluginHookInboundMessageMetadata> & {
+    originalMedia?: MessageHookMediaFact[];
+    mediaRemoteHost?: string;
+  };
+
+export function deriveInboundMessageHookContext(
+  ctx: FinalizedMsgContext,
+  overrides?: {
+    content?: string;
+    messageId?: string;
+  },
+): CanonicalInboundMessageHookContext {
+  return deriveInboundMessageHookContextBase(ctx, overrides);
 }
 
 export function buildCanonicalSentMessageHookContext(params: {

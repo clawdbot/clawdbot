@@ -1,6 +1,8 @@
 import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  captureRemoteModelCatalogStartupSnapshot,
+  checkRemoteModelCatalogUpdate,
   getRemoteModelCatalogPricing,
   getRemoteModelCatalogProviderOverlay,
 } from "./remote-overlay.js";
@@ -37,6 +39,83 @@ afterEach(() => {
 });
 
 describe("remote model catalog overlay", () => {
+  it("inspects pending generations without replacing the startup snapshot, rows, or prices", () => {
+    const sourceUrl = "https://catalog.openclaw.ai/models/v1/catalog.json";
+    const snapshot = captureRemoteModelCatalogStartupSnapshot();
+    const overlay = getRemoteModelCatalogProviderOverlay({}, "anthropic");
+    const pricing = getRemoteModelCatalogPricing({});
+    expect(checkRemoteModelCatalogUpdate({}, { sourceUrl, generatedAt: 200 })).toBe("unchanged");
+    expect(mocks.read).toHaveBeenCalledOnce();
+
+    mocks.read.mockReturnValue({
+      source_url: sourceUrl,
+      bundle_json: JSON.stringify({
+        ...bundle,
+        generatedAt: 300,
+        providers: { anthropic: { models: [{ id: "downloaded" }] } },
+        pricing: { "openai/gpt-external": { input: 5, output: 20 } },
+      }),
+    });
+    expect(checkRemoteModelCatalogUpdate({}, { sourceUrl, generatedAt: 300 })).toBe(
+      "restart-required",
+    );
+    expect(captureRemoteModelCatalogStartupSnapshot()).toBe(snapshot);
+    expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toBe(overlay);
+    expect(getRemoteModelCatalogPricing({})).toBe(pricing);
+  });
+
+  it.each([{ enabled: false }, { url: "https://mirror.example.test/catalog.json" }])(
+    "rejects a check superseded by config %j without reading stored data",
+    (catalogRefresh) => {
+      expect(
+        checkRemoteModelCatalogUpdate(
+          { models: { catalogRefresh } },
+          { sourceUrl: "https://catalog.openclaw.ai/models/v1/catalog.json", generatedAt: 300 },
+        ),
+      ).toBe("superseded");
+      expect(mocks.read).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { sourceUrl: "https://mirror.example.test/catalog.json", generatedAt: 300 },
+    { sourceUrl: "https://catalog.openclaw.ai/models/v1/catalog.json", generatedAt: 400 },
+  ])("rejects a stored check superseded by %j", ({ sourceUrl, generatedAt }) => {
+    const snapshot = captureRemoteModelCatalogStartupSnapshot();
+    mocks.read.mockReturnValue({
+      source_url: sourceUrl,
+      bundle_json: JSON.stringify({ ...bundle, generatedAt }),
+    });
+    expect(
+      checkRemoteModelCatalogUpdate(
+        {},
+        {
+          sourceUrl: "https://catalog.openclaw.ai/models/v1/catalog.json",
+          generatedAt: 300,
+        },
+      ),
+    ).toBe("superseded");
+    expect(captureRemoteModelCatalogStartupSnapshot()).toBe(snapshot);
+  });
+
+  it("reports failed inspection without replacing a valid startup snapshot", () => {
+    const snapshot = captureRemoteModelCatalogStartupSnapshot();
+    mocks.read.mockReturnValue({
+      source_url: "https://catalog.openclaw.ai/models/v1/catalog.json",
+      bundle_json: "{",
+    });
+    expect(() =>
+      checkRemoteModelCatalogUpdate(
+        {},
+        {
+          sourceUrl: "https://catalog.openclaw.ai/models/v1/catalog.json",
+          generatedAt: 300,
+        },
+      ),
+    ).toThrow(SyntaxError);
+    expect(captureRemoteModelCatalogStartupSnapshot()).toBe(snapshot);
+  });
+
   it("loads a newer compatible bundle once", () => {
     expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toHaveProperty("models");
     expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toHaveProperty("models");

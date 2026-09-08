@@ -7,14 +7,19 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const SCRIPT = resolve("scripts/resolve-fs-safe-native-contract.mjs");
 const tempDirectories = useAutoCleanupTempDirTracker(afterEach);
 
-function commitSource(version: string, defaults: string, remoteBranch?: string) {
+function commitSource(
+  fsSafeVersion: string,
+  defaults: string,
+  remoteBranch?: string,
+  productVersion = "2026.6.33",
+) {
   const root = tempDirectories.make("openclaw-fs-safe-contract-");
   execFileSync("git", ["init", "-q"], { cwd: root });
   execFileSync("git", ["config", "user.email", "test@openclaw.local"], { cwd: root });
   execFileSync("git", ["config", "user.name", "OpenClaw test"], { cwd: root });
   writeFileSync(
     join(root, "package.json"),
-    `${JSON.stringify({ dependencies: { "@openclaw/fs-safe": version } })}\n`,
+    `${JSON.stringify({ version: productVersion, dependencies: { "@openclaw/fs-safe": fsSafeVersion } })}\n`,
   );
   const defaultsPath = join(root, "src/infra/fs-safe-defaults.ts");
   mkdirSync(dirname(defaultsPath), { recursive: true });
@@ -52,6 +57,16 @@ describe("resolve-fs-safe-native-contract", () => {
     expect(resolveContract(root, ref)).toBe("not-applicable");
   });
 
+  it("reports the exact 2026.7.33 Python-only 0.4.1 contract as not applicable", () => {
+    const { root, ref } = commitSource(
+      "0.4.1",
+      legacyDefaults,
+      "extended-stable/2026.7.33",
+      "2026.7.33",
+    );
+    expect(resolveContract(root, ref)).toBe("not-applicable");
+  });
+
   it("keeps the current native consumer contract strict", () => {
     const { root, ref } = commitSource(
       "0.8.1",
@@ -72,6 +87,13 @@ describe("resolve-fs-safe-native-contract", () => {
     );
     const unknownDependency = commitSource("0.3.1", legacyDefaults, "extended-stable/2026.6.33");
     expect(resolveContract(unknownDependency.root, unknownDependency.ref)).toBe("required");
+    const unknownProduct = commitSource(
+      "0.4.1",
+      legacyDefaults,
+      "extended-stable/2026.8.33",
+      "2026.8.33",
+    );
+    expect(resolveContract(unknownProduct.root, unknownProduct.ref)).toBe("required");
   });
 
   it("uses only sparse-materialized fs-safe ownership sources for an authorized legacy target", () => {
@@ -86,7 +108,7 @@ case "$1" in
   show)
     case "$2" in
       ${ref}:package.json)
-        printf '%s\\n' '{"dependencies":{"@openclaw/fs-safe":"0.3.0"}}' ;;
+        printf '%s\\n' '{"version":"2026.6.33","dependencies":{"@openclaw/fs-safe":"0.3.0"}}' ;;
       ${ref}:src/infra/fs-safe-defaults.ts)
         printf '%s\\n' 'import { configureFsSafePython } from "@openclaw/fs-safe/config";' ;;
       *) echo "unmaterialized source: $2" >&2; exit 128 ;;

@@ -48,6 +48,43 @@ describe("block HTML islands", () => {
     expect(serialized).not.toContain("<details>");
   });
 
+  it.each(
+    [
+      ["details", "<details><summary>More</summary><p>", "</p></details>", "More\n"],
+      ["list items", "<ul><li>", "</li></ul>", "• "],
+      ["blockquotes", "<blockquote>", "</blockquote>", ""],
+    ].flatMap(([container, open, close, prefix]) =>
+      [
+        ["styled text", "Download", "Download"],
+        ["entities decoded once", "A &amp; &#38; &amp;amp;", "A & & &amp;"],
+        ["escaped entity", String.raw`\&amp;`, "&amp;"],
+        ["parsed whitespace", "A   B\nC&nbsp;D", "A   B\nC\u00a0D"],
+      ].map(([label, source, expected]) => ({
+        container,
+        open,
+        close,
+        prefix,
+        label,
+        source,
+        expected,
+      })),
+    ),
+  )(
+    "keeps inline HTML links across Markdown styles inside $container ($label)",
+    ({ open, close, prefix, source, expected }) => {
+      const { blocks, plainText } = markdownToTelegramRichBlocks(
+        `${open}<a href="https://example.com">**${source}**</a>${close}`,
+      );
+
+      expect(JSON.stringify(blocks)).toContain('"type":"url"');
+      expect(JSON.stringify(blocks)).toContain('"url":"https://example.com"');
+      expect(JSON.stringify(blocks)).toContain('"type":"bold"');
+      expect(plainText).toBe(`${prefix}${expected}`);
+      expect(plainText).not.toContain("<a ");
+      expect(plainText).not.toContain("</a>");
+    },
+  );
+
   it.each([
     ["headings", "# Steps", "heading"],
     ["fenced code", "```bash\nopenclaw doctor\n```", "pre"],
@@ -472,6 +509,28 @@ describe("block HTML islands", () => {
     expect(blocks.map((block) => block.type)).toEqual(["paragraph", "divider", "paragraph"]);
   });
 
+  it.each([
+    { attributes: "href=https://example.com/?x&#61;1", url: "https://example.com/?x=1" },
+    {
+      attributes: 'href="https://example.com/?q=&quot;hi&quot;"',
+      url: 'https://example.com/?q="hi"',
+    },
+    {
+      attributes: "href='https://example.com/?q=&#39;hi&#39;'",
+      url: "https://example.com/?q='hi'",
+    },
+    { attributes: 'href="https://example.com/**path**"', url: "https://example.com/**path**" },
+  ])("preserves authored attribute data: $attributes", ({ attributes, url }) => {
+    for (const skipEntityDetection of [true, false]) {
+      expect(
+        markdownToTelegramRichBlocks(`<a ${attributes}>**label**</a>`, { skipEntityDetection })
+          .blocks,
+      ).toEqual([
+        { type: "paragraph", text: { type: "url", url, text: { type: "bold", text: "label" } } },
+      ]);
+    }
+  });
+
   it("leaves unsupported or unclosed HTML as literal text", () => {
     const blocks = blocksFor("<details><summary>oops</summary> and <custom>tag</custom>");
     expect(blocks.every((block) => block.type === "paragraph")).toBe(true);
@@ -524,16 +583,46 @@ describe("block HTML islands", () => {
   });
 
   it.each(["custom", "constructor"])(
-    "keeps the entire subtree of unsupported <%s> wrappers literal",
+    "keeps unsupported <%s> HTML literal without discarding Markdown spans",
     (tag) => {
-      const markdown = `a <${tag}><sup>x</sup></${tag}> here`;
-      const { blocks, plainText } = markdownToTelegramRichBlocks(markdown);
-      expect(plainText).toBe(markdown);
-      const serialized = JSON.stringify(blocks);
-      expect(serialized).toContain("<sup>x</sup>");
-      expect(serialized).not.toContain('"superscript"');
+      for (const close of [`</${tag}>`, ""]) {
+        const markdown = `a <${tag}><sup>**x**</sup>${close} here`;
+        const { blocks, plainText } = markdownToTelegramRichBlocks(markdown);
+        expect(plainText).toBe(`a <${tag}><sup>x</sup>${close} here`);
+        expect(blocks).toMatchObject([
+          { type: "paragraph", text: expect.arrayContaining([{ type: "bold", text: "x" }]) },
+        ]);
+      }
     },
   );
+
+  it.each([
+    { body: "> <sup>**x**</sup>", kind: "blockquote" },
+    { body: "| Header |\n| --- |\n| <sup>**x**</sup> |", kind: "table" },
+  ])("keeps unsupported HTML ownership across a Markdown $kind", ({ body, kind }) => {
+    const { blocks, plainText } = markdownToTelegramRichBlocks(`<custom>\n\n${body}\n\n</custom>`);
+    expect(plainText).toContain("<sup>x</sup>");
+    const block = blocks.find((value) => value.type === kind);
+    expect(block).toBeDefined();
+    const text =
+      block?.type === "blockquote" && block.blocks[0]?.type === "paragraph"
+        ? block.blocks[0].text
+        : block?.type === "table"
+          ? block.cells[1]?.[0]?.text
+          : undefined;
+    expect(text).toEqual(expect.arrayContaining([{ type: "bold", text: "x" }]));
+  });
+
+  it("keeps HTML active in a table before an unsupported wrapper", () => {
+    const blocks = blocksFor("| Header |\n| --- |\n| <sup>**x**</sup> |\n\n<custom>after</custom>");
+    expect(blocks[0]).toMatchObject({
+      type: "table",
+      cells: [
+        [{ text: "Header" }],
+        [{ text: { type: "superscript", text: { type: "bold", text: "x" } } }],
+      ],
+    });
+  });
 
   it("counts rowspan carryover toward the table column limit", () => {
     const secondRow = Array.from({ length: 20 }, (_, i) => `<td>c${i}</td>`).join("");

@@ -153,6 +153,37 @@ it("preserves complete grapheme clusters in emoji avatar fallback", async () => 
   }
 });
 
+it("keeps a failed avatar on its fallback until the image changes", async () => {
+  const invalidAvatar = "data:image/gif;base64,bm90LWFuLWltYWdl";
+  const replacementAvatar = "data:image/png;base64,cmVwbGFjZW1lbnQ=";
+  const element = await createAgentSelect({
+    identityById: { alpha: createIdentity("alpha", { avatar: invalidAvatar }) },
+  });
+  const failedImage = element.querySelector<HTMLImageElement>("img.agent-select__avatar");
+  expect(failedImage).not.toBeNull();
+  failedImage?.dispatchEvent(new Event("error"));
+  await element.updateComplete;
+  expect(element.querySelector("img.agent-select__avatar")).toBeNull();
+  expect(element.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar")).toBe(
+    "A",
+  );
+
+  element.accessibleLabel = "Choose another agent";
+  await element.updateComplete;
+  expect(element.querySelector("img.agent-select__avatar")).toBeNull();
+
+  element.identityById = { alpha: createIdentity("alpha", { avatar: replacementAvatar }) };
+  await element.updateComplete;
+  expect(element.querySelector("img.agent-select__avatar")?.getAttribute("src")).toBe(
+    replacementAvatar,
+  );
+  failedImage?.dispatchEvent(new Event("error"));
+  await element.updateComplete;
+  expect(element.querySelector("img.agent-select__avatar")?.getAttribute("src")).toBe(
+    replacementAvatar,
+  );
+});
+
 it("fetches local avatars with the bearer credential when token auth is active", async () => {
   const createObjectURL = vi.fn(() => "blob:agent-avatar");
   const revokeObjectURL = vi.fn();
