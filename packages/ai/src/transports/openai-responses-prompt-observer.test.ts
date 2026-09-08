@@ -462,10 +462,13 @@ describe("OpenAI Responses provider prompt observer", () => {
     "retries encrypted reasoning rejected by the SDK %s drain without dropping compaction",
     async (failureShape) => {
       const identity = { sessionId: "sdk-drain-session", authProfileId: "sdk-drain-profile" };
-      const model = createModel();
+      const model = createModel({
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      });
       const context = createCompactionContext(model, identity, true);
       const onResponse = vi.fn();
-      const options = { apiKey: "test-key", ...identity, onResponse };
+      const options = { apiKey: createJwt(), ...identity, onResponse };
       const observations: ResponsesPromptObservation[] = [];
       responsesPromptObserver.set(options, (observation) => observations.push(observation));
       const failureMessage =
@@ -488,7 +491,10 @@ describe("OpenAI Responses provider prompt observer", () => {
         })(),
         response: new Response(null, {
           status: 200,
-          headers: { "x-request-id": "req_rejected" },
+          headers: {
+            "openai-model": "gpt-5.4-stale-rejected-attempt",
+            "x-request-id": "req_rejected",
+          },
         }),
       };
       const recoveredResponse = completedSdkResponse("resp_recovered");
@@ -505,7 +511,9 @@ describe("OpenAI Responses provider prompt observer", () => {
       for await (const event of stream) {
         eventTypes.push(event.type);
       }
-      expect(await stream.result()).toMatchObject({ stopReason: "stop" });
+      const result = await stream.result();
+      expect(result).toMatchObject({ stopReason: "stop" });
+      expect(result.responseModel).toBeUndefined();
 
       expect(sdkState.requests).toHaveLength(2);
       expect(requestHasCompaction(sdkState.requests[0])).toBe(true);

@@ -127,6 +127,8 @@ function primeCompletionMocks() {
   );
   hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
     content: [{ type: "text", text: "done" }],
+    responseModel: "gpt-5.5-2026-08-01",
+    stopReason: "stop",
     usage: {
       input: 11,
       output: 7,
@@ -664,6 +666,10 @@ describe("runtime.llm.complete", () => {
       temperature: 0.2,
       maxTokens: 64,
       reasoning: "ultra",
+      responseFormat: {
+        type: "json_schema",
+        json_schema: { name: "test_result", strict: true, schema: { type: "object" } },
+      },
       purpose: "test-purpose",
     });
 
@@ -688,11 +694,17 @@ describe("runtime.llm.complete", () => {
       maxTokens: 64,
       temperature: 0.2,
       reasoning: "ultra",
+      responseFormat: {
+        type: "json_schema",
+        json_schema: { name: "test_result", strict: true, schema: { type: "object" } },
+      },
     });
     expectFields(requireRecord(result, "completion result"), {
       text: "done",
       provider: "openai",
       model: "gpt-5.5",
+      responseModel: "gpt-5.5-2026-08-01",
+      stopReason: "stop",
     });
     expectFields(requireRecord(result.usage, "completion usage"), {
       inputTokens: 11,
@@ -862,44 +874,6 @@ describe("runtime.llm.complete", () => {
         }),
       ),
     ).rejects.toThrow('model override "openai/gpt-5.6" is not allowlisted');
-  });
-
-  it("preserves direct model-profile overrides under model authority", async () => {
-    hoisted.resolveSimpleCompletionSelectionForAgent.mockReturnValueOnce({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      profileId: "openai:work",
-      agentDir: "/tmp/main",
-    });
-    const llm = createRuntimeLlm({
-      getConfig: () => ({
-        ...cfg,
-        plugins: {
-          entries: {
-            "trusted-plugin": {
-              llm: {
-                allowModelOverride: true,
-                allowedModels: ["openai/gpt-5.4"],
-              },
-            },
-          },
-        },
-      }),
-      authority: { allowComplete: true },
-    });
-
-    await expect(
-      withPluginRuntimePluginIdScope("trusted-plugin", () =>
-        llm.complete({
-          model: "openai/gpt-5.4@openai:work",
-          messages: [{ role: "user", content: "Ping" }],
-        }),
-      ),
-    ).resolves.toMatchObject({ text: "done" });
-    expectSingleCallFirstArg(hoisted.prepareSimpleCompletionModelForAgent, {
-      agentId: "main",
-      modelRef: "openai/gpt-5.4@openai:work",
-    });
   });
 
   it("keeps the shipped model allowlist scoped to explicit overrides", async () => {

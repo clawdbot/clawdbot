@@ -23,6 +23,7 @@ import {
 } from "../transports/openai-responses-compaction-replay.js";
 import { responsesPromptObserver } from "../transports/openai-responses-contracts.js";
 import { ResponsesStreamFailure } from "../transports/openai-responses-debug.js";
+import { resolveOpenAIResponsesTextFormat } from "../transports/openai-responses-params-internal.js";
 import { createResponsesPromptEgressObserver } from "../transports/openai-responses-prompt-observer-internal.js";
 import {
   commitResponsesEncryptedContentAttempt,
@@ -34,6 +35,7 @@ import { processResponsesStream } from "../transports/openai-responses-stream-in
 import {
   createOpenAIProviderAcceptanceHook,
   createOpenAIResponseHook,
+  createResponseModelTracker,
 } from "../transports/openai-transport-shared.js";
 import {
   assignTransportErrorDetails,
@@ -158,7 +160,7 @@ interface RequestBody {
   temperature?: number;
   reasoning?: { effort?: string; summary?: string };
   service_tier?: ResponseCreateParamsStreaming["service_tier"];
-  text?: { verbosity?: string };
+  text?: ResponseCreateParamsStreaming["text"];
   include?: string[];
   prompt_cache_key?: string;
   [key: string]: unknown;
@@ -537,7 +539,7 @@ export const streamOpenAICodexResponses: StreamFunction<
       }
 
       const hookedResponseStream = withProviderResponseHook({
-        stream: mapCodexEvents(parseOpenAIChatGptResponsesSse(response)),
+        stream: mapCodexEvents(parseOpenAIChatGptResponsesSse(response), response.headers),
         signal: firstEventAbort.signal,
         abort: firstEventAbort.abort,
         hook: createOpenAIProviderAcceptanceHook(options, response, model),
@@ -659,6 +661,13 @@ function buildRequestBody(
         ? undefined
         : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
   };
+
+  if (options?.responseFormat !== undefined) {
+    body.text = {
+      ...body.text,
+      format: resolveOpenAIResponsesTextFormat(options.responseFormat),
+    };
+  }
 
   if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
     body.temperature = options.temperature;
@@ -792,8 +801,12 @@ function extractCodexEventError(event: Record<string, unknown>): {
 
 async function* mapCodexEvents(
   events: AsyncIterable<Record<string, unknown>>,
+  initialResponseHeaders?: Headers,
 ): AsyncGenerator<ResponseStreamEvent> {
+  const responseModelTracker = createResponseModelTracker();
+  responseModelTracker.begin(initialResponseHeaders);
   for await (const event of events) {
+    responseModelTracker.observeEvent(event);
     const type = typeof event.type === "string" ? event.type : undefined;
     if (!type) {
       continue;
@@ -814,7 +827,11 @@ async function* mapCodexEvents(
     ) {
       const response = (event as { response?: { status?: unknown } }).response;
       const normalizedResponse = response
-        ? { ...response, status: normalizeCodexStatus(response.status) }
+        ? {
+            ...response,
+            status: normalizeCodexStatus(response.status),
+            model: responseModelTracker.resolve(),
+          }
         : response;
       yield {
         ...event,

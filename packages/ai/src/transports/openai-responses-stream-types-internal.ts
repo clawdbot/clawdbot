@@ -79,4 +79,5 @@ export type ResponsesStreamOptions = FirstStreamEventInternalOptions & {
   ) => void;
   signal?: AbortSignal;
   reasoningReplayMetadata?: OpenAIResponsesReasoningReplayMetadata;
+  resolveResponseModel?: () => string | undefined;
 };

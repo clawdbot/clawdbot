@@ -20,6 +20,8 @@ openclaw channels add
 
 The wizard asks for the relay URL (default `https://reefwire.ai`), your email, the setup session, a unique unlisted handle, an inbound friend-request policy (`code-only` is recommended), and the guard model configuration.
 
+For OpenAI guards, choose either an existing host-managed OAuth profile or an API-key environment variable. OAuth access and refresh tokens remain inside OpenClaw's auth broker and are never copied into Reef configuration.
+
 3. Restart the Gateway and confirm the channel connects:
 
 ```bash
@@ -54,6 +56,81 @@ A friendship you requested is adopted automatically once the peer accepts; inbou
 
 Reef lives under `channels.reef`:
 
+### OpenAI OAuth
+
+The interactive wizard writes both the Reef guard selection and the exact host LLM authorization it needs. For manual configuration, use this shape:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-5.6-terra": { agentRuntime: { id: "codex" } },
+      },
+    },
+    entries: {
+      main: {},
+    },
+  },
+  channels: {
+    reef: {
+      enabled: true,
+      relayUrl: "https://reefwire.ai",
+      handle: "myclaw",
+      email: "you@example.com",
+      requestPolicy: "code-only",
+      guard: {
+        provider: "openai",
+        authMode: "oauth",
+        authProfileId: "openai:default",
+        pinnedModel: "gpt-5.6-terra",
+        policyVersion: "reef-v1",
+        timeoutMs: 120000,
+      },
+    },
+  },
+  plugins: {
+    entries: {
+      reef: {
+        llm: {
+          allowModelOverride: true,
+          allowedModels: ["openai/gpt-5.6-terra"],
+          allowedCompletionModels: ["openai/gpt-5.6-terra"],
+        },
+      },
+    },
+  },
+}
+```
+
+If `plugins.allow` already restricts plugin loading, preserve every existing entry and add both `reef` and `codex`. Do not replace the allowlist with only these two entries. The wizard adds `codex` to an existing allowlist automatically.
+
+```json5
+{
+  plugins: {
+    allow: ["<existing-plugin-id>", "reef", "codex"],
+  },
+}
+```
+
+The selected profile must resolve to OAuth, and its id cannot contain `/`. The model must use the bundled `codex` agent runtime as shown above; the interactive wizard writes a shared exact model binding when needed and preserves other model metadata. Reef requests low reasoning for this narrow classifier and the wizard uses a 120-second fail-closed deadline to accommodate OAuth refresh and provider cold starts. Reef receives only the structured verdict plus provider/model/terminal evidence; the host rejects a profile with another auth mode before dispatch and never returns credentials through the plugin runtime. ChatGPT OAuth must provide concrete provider model evidence; Reef fails closed when that evidence is absent.
+
+The wizard checks runtime policy for the agent that will run the guard, including
+an explicitly configured system agent. It asks before replacing a conflicting
+inherited runtime and preserves an already-effective Codex policy. If an
+agent-specific exact model policy prevents the shared Codex binding, choose a
+different guard model or update that agent's policy explicitly; setup does not
+overwrite the agent-specific choice.
+
+### API key
+
+The existing API-key configuration remains supported:
+
+Before rolling back to an OpenClaw version without Reef OAuth support, restore
+the API-key guard configuration below. Remove `authMode` and `authProfileId`;
+older versions reject those fields. This feature does not change Reef's stored
+identity, keys, or message-state format.
+
 ```json5
 {
   channels: {
@@ -84,7 +161,8 @@ Reef lives under `channels.reef`:
 - Private Ed25519/X25519 keys, the encrypted replay guard, review state, delivery dedupe, audit chain, and approved peer pins live in the shared `state/openclaw.sqlite` plugin state and never leave the machine. `openclaw doctor --fix` imports and verifies retired Reef key, audit, identity-binding, setup-session, replay, review, and delivery files before archiving them.
 - Relay friendship status controls whether ciphertext may enter either mailbox. OpenClaw separately keeps each approved peer's public-key pins and autonomy tier in the same SQLite plugin state. `channels.reef` has no friendship allowlist to edit.
 - A normal OpenClaw pairing approval becomes an identity-, key-, and revocation-bound one-time handoff. Reef consumes it before accepting the relay edge or writing the verified peer pins, and the relay activates only if that exact peer key snapshot is still current. A stale approval cannot authorize changed keys or undo a local removal. Removing a friend clears local trust first, then blocks the relay edge.
-- `pinnedModel` must be an immutable model id: a dated snapshot, or one of the documented undated ids (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`). Floating aliases are rejected, and every guard response must echo the exact configured id.
+- `pinnedModel` must be an immutable model id: a dated snapshot, or one of the documented undated ids (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`). Floating aliases are rejected. Dated pins require an exact provider-attested response model. A documented undated pin accepts the same provider-attested id or that id plus a provider date suffix. Missing or mismatched provider model evidence fails closed.
+- `authMode: "oauth"` is OpenAI-only. `authProfileId` names the exact OpenAI profile owned by the host; no fallback to another credential or provider is allowed.
 - `apiKeyEnv` names an environment variable visible to the Gateway process. The guard fails closed: a missing key or provider error fails the send immediately, and inbound messages wait un-delivered at the relay and retry until the guard is back — a provider outage never rejects a peer's message.
 
 ## Adding a friend
@@ -164,7 +242,7 @@ When a peer's inbound guard rejects a delivered message, Reef verifies the signe
 ## Troubleshooting
 
 - `channels status` shows `running` but not `connected`: the relay WebSocket is reconnecting; check network reachability of the relay URL.
-- Inbound messages stall while sends fail with `guard_failure`: the guard provider call is failing — most commonly `apiKeyEnv` is unset in the Gateway environment or the key has no credits. Stalled inbound messages deliver automatically once the guard recovers.
+- Inbound messages stall while sends fail with `guard_failure`: the guard provider call is failing — most commonly `apiKeyEnv` is unset, the configured OAuth profile is unavailable or not OAuth, or the selected account cannot use the pinned model. Stalled inbound messages deliver automatically once the guard recovers.
 - Pairing request never appears: the recipient's channel reconciles with the relay every 30 seconds; check `openclaw pairing list reef` after that, and confirm the requester used a fresh code (codes expire after 15 minutes).
 - Pairing fails with a Reef protocol compatibility error: update OpenClaw and the Reef relay together, then approve the fresh pairing challenge again.
 

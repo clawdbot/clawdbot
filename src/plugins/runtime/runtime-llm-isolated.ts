@@ -48,6 +48,15 @@ export function assertSupportedExecutionMode(params: LlmCompleteParams): void {
       'Plugin LLM completion execution.mode must be "isolated-agent-runtime" when execution is provided.',
     );
   }
+  if (
+    ("requiredAuthMode" in params && params.requiredAuthMode !== undefined) ||
+    ("responseFormat" in params && params.responseFormat !== undefined)
+  ) {
+    throw completionError(
+      "LLM_ISOLATED_INPUT_REJECTED",
+      "Isolated agent-runtime completion does not support requiredAuthMode or responseFormat; use direct completion for provider controls.",
+    );
+  }
 }
 
 function resolveIsolatedTimeoutMs(value: number | undefined): number {

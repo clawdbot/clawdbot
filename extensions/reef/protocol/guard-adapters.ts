@@ -21,6 +21,25 @@ interface AdapterOptions {
   rules?: GuardRules;
 }
 
+interface HostOpenAiGuardOptions {
+  pinnedModel: string;
+  timeoutMs?: number;
+  rules?: GuardRules;
+  complete: (request: {
+    systemPrompt: string;
+    input: string;
+    maxTokens: number;
+    responseFormat: Record<string, unknown>;
+    signal: AbortSignal;
+  }) => Promise<{
+    text: string;
+    provider: string;
+    model: string;
+    responseModel?: string;
+    stopReason?: string;
+  }>;
+}
+
 const verdictSchema = {
   type: "object",
   additionalProperties: false,
@@ -32,6 +51,27 @@ const verdictSchema = {
   },
   required: ["decision", "category", "reason", "policyVersion"],
 } as const;
+
+const OPENAI_DATED_MODEL_ID = /-(?:\d{8}|\d{4}-\d{2}-\d{2})$/;
+const OPENAI_DATED_MODEL_SUFFIX = /^-(?:\d{8}|\d{4}-\d{2}-\d{2})$/;
+
+function matchesOpenAiPinnedModel(responseModel: string | undefined, pinnedModel: string): boolean {
+  // The locally requested logical model is not provider attestation. Reef must
+  // fail closed when the managed OAuth route omits concrete model evidence.
+  if (responseModel === undefined) {
+    return false;
+  }
+  if (responseModel === pinnedModel) {
+    return true;
+  }
+  // Dated pins stay exact. The documented undated OpenAI ids may be realized as
+  // the same id plus a provider-attested date suffix on the managed OAuth route.
+  return (
+    !OPENAI_DATED_MODEL_ID.test(pinnedModel) &&
+    responseModel.startsWith(pinnedModel) &&
+    OPENAI_DATED_MODEL_SUFFIX.test(responseModel.slice(pinnedModel.length))
+  );
+}
 
 export function createOpenAiGuard(options: AdapterOptions): GuardAdapter {
   assertPinnedModel(options.pinnedModel);
@@ -90,6 +130,41 @@ export function createOpenAiGuard(options: AdapterOptions): GuardAdapter {
         throw new Error("guard must return one OpenAI output object");
       }
       return attachProviderModel(parseStrictJson(outputTexts[0]!, true), envelope.model);
+    },
+  };
+  return admitGuardAdapter(raw, options.timeoutMs);
+}
+
+export function createHostOpenAiGuard(options: HostOpenAiGuardOptions): GuardAdapter {
+  assertPinnedModel(options.pinnedModel);
+  assertGuardRules(options.rules);
+  const raw: RawGuardAdapter = {
+    providerId: "openai",
+    pinnedModel: options.pinnedModel,
+    async classifyRaw(request, signal) {
+      const result = await options.complete({
+        systemPrompt: `${instructionFor(request, options.rules)} The object must exactly match this schema: ${JSON.stringify(verdictSchema)}`,
+        input: JSON.stringify(request),
+        maxTokens: 512,
+        responseFormat: {
+          type: "json_schema",
+          json_schema: {
+            name: "reef_guard_verdict",
+            strict: true,
+            schema: verdictSchema,
+          },
+        },
+        signal,
+      });
+      if (
+        result.provider !== "openai" ||
+        result.model !== options.pinnedModel ||
+        !matchesOpenAiPinnedModel(result.responseModel, options.pinnedModel) ||
+        result.stopReason !== "stop"
+      ) {
+        throw new Error("invalid host OpenAI guard response");
+      }
+      return attachProviderModel(parseStrictJson(result.text, true), options.pinnedModel);
     },
   };
   return admitGuardAdapter(raw, options.timeoutMs);

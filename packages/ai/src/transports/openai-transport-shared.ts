@@ -21,6 +21,16 @@ export { sortPromptCacheToolsByName as sortTransportToolsByName } from "../utils
 
 const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
 const MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
+const OPENAI_RESPONSE_MODEL_HEADER_NAMES = new Set(["openai-model", "x-openai-model"]);
+const OPENAI_RESPONSE_MODEL_EVENT_TYPES = new Set([
+  "response.created",
+  "response.in_progress",
+  "response.completed",
+  "response.done",
+  "response.incomplete",
+  "response.failed",
+]);
+const OPENAI_DATED_MODEL_SUFFIX = /-(?:\d{8}|\d{4}-\d{2}-\d{2})$/;
 
 export const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
 export const log = {
@@ -36,6 +46,120 @@ export const log = {
 };
 
 export type { OpenAICompletionsOptions } from "../provider-options.js";
+
+const OPENAI_RESPONSE_MODEL_CONFLICT = "Conflicting OpenAI response model attestations";
+
+function splitOpenAIResponseModelHeader(value: string | null | undefined): string[] {
+  return value
+    ? value
+        .split(",")
+        .map((part) => part.trim())
+        .filter(Boolean)
+    : [];
+}
+
+function readOpenAIResponseModelHeaders(headers: Headers): string[] {
+  return [...OPENAI_RESPONSE_MODEL_HEADER_NAMES].flatMap((name) =>
+    splitOpenAIResponseModelHeader(headers.get(name)),
+  );
+}
+
+function readOpenAIResponseModelHeaderRecord(headers: unknown): string[] {
+  if (!isRecord(headers)) {
+    return [];
+  }
+  return Object.entries(headers)
+    .filter(([name]) => OPENAI_RESPONSE_MODEL_HEADER_NAMES.has(name.toLowerCase()))
+    .flatMap(([, value]) =>
+      typeof value === "string" ? splitOpenAIResponseModelHeader(value) : [],
+    );
+}
+
+function readOpenAIResponseModelEvent(event: unknown): string[] {
+  if (!isRecord(event)) {
+    return [];
+  }
+  const response = isRecord(event.response) ? event.response : undefined;
+  return [
+    ...(OPENAI_RESPONSE_MODEL_EVENT_TYPES.has(String(event.type)) &&
+    typeof response?.model === "string" &&
+    response.model.trim()
+      ? [response.model.trim()]
+      : []),
+    ...readOpenAIResponseModelHeaderRecord(response?.headers),
+    ...readOpenAIResponseModelHeaderRecord(event.headers),
+  ];
+}
+
+function reconcileOpenAIResponseModels(
+  current: string | undefined,
+  observed: string,
+): string | undefined {
+  if (!current || current === observed) {
+    return observed;
+  }
+  const currentBase = current.replace(OPENAI_DATED_MODEL_SUFFIX, "");
+  const observedBase = observed.replace(OPENAI_DATED_MODEL_SUFFIX, "");
+  if (currentBase !== observedBase) {
+    return undefined;
+  }
+  // Prefer dated provider evidence when the lifecycle event reports the
+  // documented undated id and a response header reports its concrete release.
+  if (currentBase === current && observedBase !== observed) {
+    return observed;
+  }
+  if (observedBase === observed && currentBase !== current) {
+    return current;
+  }
+  return undefined;
+}
+
+export function createResponseModelTracker(enabled = true) {
+  let responseModel: string | undefined;
+  const observe = (models: readonly string[]) => {
+    for (const model of models) {
+      const reconciled = reconcileOpenAIResponseModels(responseModel, model);
+      if (!reconciled) {
+        throw new Error(OPENAI_RESPONSE_MODEL_CONFLICT);
+      }
+      responseModel = reconciled;
+    }
+  };
+  const begin = (headers?: Headers) => {
+    responseModel = undefined;
+    if (enabled && headers) {
+      observe(readOpenAIResponseModelHeaders(headers));
+    }
+  };
+  const observeEvent = (event: unknown) => {
+    if (enabled) {
+      observe(readOpenAIResponseModelEvent(event));
+    }
+    return responseModel;
+  };
+  const resolve = () => responseModel;
+  return {
+    begin,
+    observeEvent,
+    resolve,
+    track(
+      response: Pick<Response, "headers"> | undefined,
+      stream: AsyncIterable<unknown>,
+    ): AsyncIterable<unknown> {
+      if (!enabled) {
+        return stream;
+      }
+      return (async function* () {
+        begin(response?.headers);
+        for await (const event of stream) {
+          observeEvent(event);
+          yield event;
+        }
+      })();
+    },
+    terminalOptions: enabled ? { resolveResponseModel: resolve } : {},
+  };
+}
 
 export function resolveOpenAIClientBaseUrl(
   model: Pick<Model, "provider" | "baseUrl">,

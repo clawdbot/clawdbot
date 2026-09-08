@@ -16,6 +16,42 @@ const RelayUrlSchema = z
     "Reef relay URL must be an HTTP(S) origin without credentials, path, query, or hash",
   )
   .url();
+export const OpenAiOAuthProfileIdSchema = z.string().regex(/^openai:[^\s:/][^\s/]*$/);
+
+const GuardCommonSchema = {
+  pinnedModel: z.string().min(1),
+  policyVersion: z.string().min(1),
+  timeoutMs: z.number().int().min(100).max(120_000),
+  rules: z
+    .object({
+      outbound: GuardRuleTextSchema.optional(),
+      inbound: GuardRuleTextSchema.optional(),
+    })
+    .strict()
+    .optional(),
+} as const;
+
+const GuardSchema = z.union([
+  z
+    .object({
+      provider: z.literal("openai"),
+      authMode: z.literal("oauth"),
+      // Direct plugin completions encode the profile as a trailing model-ref
+      // suffix, whose grammar deliberately excludes '/'. Reject values that
+      // cannot round-trip through that host boundary.
+      authProfileId: OpenAiOAuthProfileIdSchema,
+      ...GuardCommonSchema,
+    })
+    .strict(),
+  z
+    .object({
+      provider: z.enum(["anthropic", "openai"]),
+      authMode: z.literal("api-key").optional(),
+      apiKeyEnv: z.string().regex(/^[A-Z_][A-Z0-9_]*$/),
+      ...GuardCommonSchema,
+    })
+    .strict(),
+]);
 
 export const ReefChannelConfigSchema = z
   .object({
@@ -24,23 +60,7 @@ export const ReefChannelConfigSchema = z
     relayUrl: RelayUrlSchema.default("https://reefwire.ai"),
     handle: HandleSchema.optional(),
     email: z.email().optional(),
-    guard: z
-      .object({
-        provider: z.enum(["anthropic", "openai"]),
-        pinnedModel: z.string().min(1),
-        apiKeyEnv: z.string().regex(/^[A-Z_][A-Z0-9_]*$/),
-        policyVersion: z.string().min(1),
-        timeoutMs: z.number().int().min(100).max(120_000),
-        rules: z
-          .object({
-            outbound: GuardRuleTextSchema.optional(),
-            inbound: GuardRuleTextSchema.optional(),
-          })
-          .strict()
-          .optional(),
-      })
-      .strict()
-      .optional(),
+    guard: GuardSchema.optional(),
     stateDir: z.string().min(1).optional(),
     requestPolicy: z.enum(["code-only", "friends-of-friends", "open"]).default("code-only"),
     // Upgrade-only snapshot. Runtime trust is SQLite-backed; doctor imports valid rows.

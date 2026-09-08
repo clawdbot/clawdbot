@@ -35,4 +35,12 @@ describe("simple stream max-token clamp", () => {
     expect(clampMaxTokensToModel(makeModel(), undefined)).toBeUndefined();
     expect(buildBaseOptions(makeModel()).maxTokens).toBeUndefined();
   });
+
+  it("preserves constrained-output requests", () => {
+    const responseFormat = {
+      type: "json_schema",
+      json_schema: { name: "result", strict: true, schema: { type: "object" } },
+    };
+    expect(buildBaseOptions(makeModel(), { responseFormat })).toMatchObject({ responseFormat });
+  });
 });
