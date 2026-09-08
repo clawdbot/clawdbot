@@ -5,7 +5,11 @@ import {
 } from "../../infra/node-commands.js";
 import type { WorkerDesktopApp, WorkerDesktopEndpoint } from "../../plugins/types.js";
 import type { NodeDesktopStreamBroker } from "../desktop/node-stream-broker.js";
-import type { DesktopObserveRequester } from "../desktop/observe-requester.js";
+import {
+  isDesktopObserveRequesterCurrent,
+  watchDesktopObserveRequesterGone,
+  type DesktopObserveRequester,
+} from "../desktop/observe-requester.js";
 import {
   DesktopSessionStaleOwnerError,
   type DesktopSessionRegistry,
@@ -275,7 +279,14 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
     };
     // Publish ownership before discovery can yield so drain/destroy can abort this attempt.
     activeStreams.add(active);
+    let unwatchRequester = () => {};
     try {
+      if (!isDesktopObserveRequesterCurrent(request.requester)) {
+        throw new Error("desktop observe requester is no longer current");
+      }
+      unwatchRequester = watchDesktopObserveRequesterGone(request.requester, () => {
+        void stopStream(active);
+      });
       await claimOwner(binding);
       active.controller.signal.throwIfAborted();
       await options.desktopRegistry.activate({
@@ -325,10 +336,19 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
       });
       void invocationFinished.catch(() => undefined);
       const attached = await Promise.race([active.ticket.attached, invocationFinished]);
-      active.stream = attached.stream;
-      if (!bindingIsCurrent(binding, capturedRuntime, node)) {
-        throw new Error("Worker environment node desktop owner changed before attachment");
+      if (
+        active.stopped ||
+        !isDesktopObserveRequesterCurrent(request.requester) ||
+        !bindingIsCurrent(binding, capturedRuntime, node)
+      ) {
+        attached.stream.destroy();
+        throw new Error(
+          active.stopped || !isDesktopObserveRequesterCurrent(request.requester)
+            ? "desktop observe requester is no longer current"
+            : "Worker environment node desktop owner changed before attachment",
+        );
       }
+      active.stream = attached.stream;
       if (attached.auth !== "vnc-password" || !attached.vncPassword) {
         throw new Error("Worker environment node desktop did not provide VNC authentication");
       }
@@ -347,6 +367,9 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
         throw new Error("Worker environment node desktop owner changed before publication");
       }
       active.reservationTransferred = true;
+      if (active.stopped || !isDesktopObserveRequesterCurrent(request.requester)) {
+        throw new Error("desktop observe requester is no longer current");
+      }
       const issuedAtMs = Date.now();
       const minted = mintDesktopObserverToken({
         sourceKey: binding.environmentId,
@@ -369,7 +392,12 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
         Math.max(0, minted.expiresAtMs - Date.now()),
       );
       active.unclaimedTimer.unref?.();
-      void active.invocation.finally(() => retireStream(active)).catch(() => undefined);
+      void active.invocation
+        .finally(() => {
+          unwatchRequester();
+          retireStream(active);
+        })
+        .catch(() => undefined);
       return {
         transport: "rfb",
         wsPath: `${DESKTOP_OBSERVE_PATH}?token=${minted.token}`,
@@ -377,6 +405,7 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
         control: request.control,
       };
     } catch (error) {
+      unwatchRequester();
       await stopStream(active);
       throw error;
     }

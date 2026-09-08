@@ -6,7 +6,11 @@ import type { NodeRegistry, NodeSession } from "../node-registry.js";
 import { DesktopCredentialsRequiredError } from "./host-source-errors.js";
 import type { NodeDesktopStreamBroker } from "./node-stream-broker.js";
 import { mintDesktopObserverToken } from "./observe-bridge.js";
-import type { DesktopObserveRequester } from "./observe-requester.js";
+import {
+  isDesktopObserveRequesterCurrent,
+  watchDesktopObserveRequesterGone,
+  type DesktopObserveRequester,
+} from "./observe-requester.js";
 import type { RfbPreauthDescriptor } from "./rfb-preauth.js";
 import type { DesktopSessionRegistry } from "./session-registry.js";
 
@@ -194,7 +198,18 @@ export function createNodeDesktopService(params: {
         throw new Error("node desktop observer limit reached");
       }
       session.active.add(active);
+      const stopForRequesterGone = () => {
+        void stopActiveStream(active).then(() => session.active.delete(active));
+      };
+      let unwatchRequester = () => {};
       try {
+        if (!isDesktopObserveRequesterCurrent(request.requester)) {
+          throw new Error("desktop observe requester is no longer current");
+        }
+        unwatchRequester = watchDesktopObserveRequesterGone(
+          request.requester,
+          stopForRequesterGone,
+        );
         active.ticket = params.streamBroker.mint({
           nodeId: request.nodeId,
           connId: node.connId,
@@ -220,9 +235,17 @@ export function createNodeDesktopService(params: {
         void invocationFinished.catch(() => undefined);
 
         const attached = await Promise.race([active.ticket.attached, invocationFinished]);
-        if (active.stopped || sessions.get(request.nodeId) !== session) {
+        if (
+          active.stopped ||
+          sessions.get(request.nodeId) !== session ||
+          !isDesktopObserveRequesterCurrent(request.requester)
+        ) {
           attached.stream.destroy();
-          throw new Error("node desktop session was superseded before attachment");
+          throw new Error(
+            !isDesktopObserveRequesterCurrent(request.requester) || active.stopped
+              ? "desktop observe requester is no longer current"
+              : "node desktop session was superseded before attachment",
+          );
         }
         active.stream = attached.stream;
         assertAuthorized();
@@ -261,6 +284,13 @@ export function createNodeDesktopService(params: {
           throw new Error("node desktop session was superseded before publication");
         }
         active.reservationTransferred = true;
+        if (
+          active.stopped ||
+          !isDesktopObserveRequesterCurrent(request.requester) ||
+          sessions.get(request.nodeId) !== session
+        ) {
+          throw new Error("desktop observe requester is no longer current");
+        }
         const minted = mintDesktopObserverToken({
           sourceKey,
           ownerEpoch: session.ownerEpoch,
@@ -280,6 +310,7 @@ export function createNodeDesktopService(params: {
         active.unclaimedTimer.unref?.();
         void active.invocation
           .finally(() => {
+            unwatchRequester();
             retireActiveStream(active);
             session.active.delete(active);
           })
@@ -293,6 +324,7 @@ export function createNodeDesktopService(params: {
           preauthenticated: true,
         };
       } catch (error) {
+        unwatchRequester();
         await stopActiveStream(active);
         session.active.delete(active);
         throw error;
