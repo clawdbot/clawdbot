@@ -6949,8 +6949,9 @@ process.exit(73);
     const runner = readFileSync(GATEWAY_NETWORK_DOCKER_E2E_PATH, "utf8");
     expect(runner).toContain('[[ "$FROZEN_CONTEXT" == "1" ]]');
     expect(runner).toContain("scripts/e2e/lib/gateway-network/client.mjs");
-    expect(runner).toContain('-v "$LEGACY_GATEWAY_LIB:/tmp/openclaw-selected-e2e-lib:ro"');
-    expect(runner).toContain("node /tmp/openclaw-selected-e2e-lib/gateway-network/client.mjs");
+    expect(runner).toContain('-v "$LEGACY_GATEWAY_LIB:/app/scripts/e2e/lib:ro"');
+    expect(runner).toContain("node /app/scripts/e2e/lib/gateway-network/client.mjs");
+    expect(runner).not.toContain("/tmp/openclaw-selected-e2e-lib");
     expect(runner).not.toContain("/tmp/openclaw-gateway-network-client.mjs");
   });
 

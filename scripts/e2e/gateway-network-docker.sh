@@ -106,11 +106,11 @@ if [[ -n "$LEGACY_GATEWAY_LIB" ]]; then
     "${DOCKER_E2E_HARNESS_ARGS[@]}" \
     --network "$NET_NAME" \
     "${CLIENT_LIMIT_ENV_ARGS[@]}" \
-    -v "$LEGACY_GATEWAY_LIB:/tmp/openclaw-selected-e2e-lib:ro" \
+    -v "$LEGACY_GATEWAY_LIB:/app/scripts/e2e/lib:ro" \
     -e "GW_URL=ws://$GW_NAME:$PORT" \
     -e "GW_TOKEN=$TOKEN" \
     "$IMAGE_NAME" \
-    node /tmp/openclaw-selected-e2e-lib/gateway-network/client.mjs
+    node /app/scripts/e2e/lib/gateway-network/client.mjs
   echo "OK"
   exit 0
 fi
