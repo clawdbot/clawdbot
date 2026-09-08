@@ -59,17 +59,25 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   const first = normalizeLowercaseStringOrEmpty(tokens[0]);
   const second = normalizeLowercaseStringOrEmpty(tokens[1]);
 
-  if (DECISION_ALIASES[first]) {
+  // Decision tokens are chat-supplied, so inherited keys such as "constructor"
+  // or "__proto__" must not read through to Object.prototype.
+  const firstDecision = Object.hasOwn(DECISION_ALIASES, first)
+    ? DECISION_ALIASES[first]
+    : undefined;
+  if (firstDecision) {
     return {
       ok: true,
-      decision: DECISION_ALIASES[first],
+      decision: firstDecision,
       id: tokens.slice(1).join(" ").trim(),
     };
   }
-  if (DECISION_ALIASES[second]) {
+  const secondDecision = Object.hasOwn(DECISION_ALIASES, second)
+    ? DECISION_ALIASES[second]
+    : undefined;
+  if (secondDecision) {
     return {
       ok: true,
-      decision: DECISION_ALIASES[second],
+      decision: secondDecision,
       id: expectDefined(tokens[0], "tokens entry at 0"),
     };
   }
