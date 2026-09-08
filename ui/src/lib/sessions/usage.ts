@@ -10,6 +10,7 @@ export type SessionUsageQuery = {
   scope: "instance" | "family";
   timeZone: "local" | "utc";
   agentId?: string;
+  limit?: number;
 };
 
 function formatUtcOffset(timezoneOffsetMinutes: number): string {
@@ -40,7 +41,7 @@ function buildSessionUsageParams(query: SessionUsageQuery, key?: string): Record
     ...(query.agentId ? { agentId: query.agentId } : key ? {} : { agentScope: "all" }),
     ...buildSessionUsageDateParams(query.timeZone),
     groupBy: query.scope,
-    ...(key ? { key, limit: 1 } : { limit: 1000 }),
+    ...(key ? { key, limit: 1 } : { limit: query.limit ?? 1000 }),
     includeContextWeight: false,
   };
 }

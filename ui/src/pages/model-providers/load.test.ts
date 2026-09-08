@@ -266,6 +266,28 @@ describe("loadModelProvidersData", () => {
     });
   });
 
+  it("requests one detail row and returns complete provider cost aggregates", async () => {
+    const byProvider = [
+      { provider: "openai", count: 3, totals: { totalCost: 4.2, totalTokens: 1_500_000 } },
+    ];
+    const request = vi.fn().mockResolvedValue({ aggregates: { byProvider } });
+    const signal = new AbortController().signal;
+
+    await expect(
+      loadModelProviderCost({ request } as unknown as GatewayBrowserClient, signal),
+    ).resolves.toBe(byProvider);
+    expect(request).toHaveBeenCalledWith(
+      "sessions.usage",
+      expect.objectContaining({
+        agentScope: "all",
+        groupBy: "family",
+        limit: 1,
+        includeContextWeight: false,
+      }),
+      { signal },
+    );
+  });
+
   it.each(["before dispatch", "while pending"] as const)(
     "retires both supplemental requests when aborted %s",
     async (when) => {
