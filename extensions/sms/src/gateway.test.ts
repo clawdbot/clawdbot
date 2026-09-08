@@ -1,5 +1,6 @@
 // Sms tests cover gateway plugin behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { registerPluginHttpRoute as registerPluginHttpRouteType } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { collectSmsStartupWarnings, startSmsGatewayAccount } from "./gateway.js";
@@ -252,20 +253,9 @@ describe("startSmsGatewayAccount", () => {
       channelRuntime: {} as SmsChannelRuntime,
     });
 
-    type RegisteredRoute = {
-      path?: string;
-      match?: string;
-      handler: (
-        req: IncomingMessage,
-        res: ServerResponse,
-      ) => Promise<boolean | void> | boolean | void;
-    };
-    const route = registerPluginHttpRoute.mock.calls[0]?.[0] as RegisteredRoute | undefined;
+    const route = expectDefined(registerPluginHttpRoute.mock.calls[0]?.[0], "SMS webhook route");
     expect(route).toMatchObject({ path: "/webhooks/sms" });
     expect(route?.match).toBeUndefined();
-    if (!route) {
-      throw new Error("SMS route was not registered");
-    }
 
     const getReq = { method: "GET" } as IncomingMessage;
     const getRes = {} as ServerResponse;
@@ -293,16 +283,7 @@ describe("startSmsGatewayAccount", () => {
       account: createAccount("default"),
       channelRuntime: {} as SmsChannelRuntime,
     });
-    type RegisteredRoute = {
-      handler: (
-        req: IncomingMessage,
-        res: ServerResponse,
-      ) => Promise<boolean | void> | boolean | void;
-    };
-    const route = registerPluginHttpRoute.mock.calls[0]?.[0] as RegisteredRoute | undefined;
-    if (!route) {
-      throw new Error("SMS route was not registered");
-    }
+    const route = expectDefined(registerPluginHttpRoute.mock.calls[0]?.[0], "SMS webhook route");
 
     tryHandleHostedSmsMediaRequest.mockResolvedValueOnce(false);
     const tokenlessGet = { method: "GET", url: "/webhooks/sms" } as IncomingMessage;
