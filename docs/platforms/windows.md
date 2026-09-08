@@ -93,6 +93,16 @@ openclaw devices approve <requestId>
 openclaw nodes status
 ```
 
+Device approval admits the connection only, and the paused node does not
+reconnect on its own after `PAIRING_REQUIRED`. Restart node mode in the app
+(or restart the app) so it reconnects, then approve the node's declared
+command surface, or the node stays connected with no usable commands:
+
+```powershell
+openclaw nodes pending
+openclaw nodes approve <requestId>
+```
+
 The Gateway only forwards commands the node declares and server policy
 allows. Privacy-sensitive commands such as `screen.record`, `camera.snap`,
 and `camera.clip` need explicit `gateway.nodes.commands.allow` opt-in.

@@ -100,26 +100,29 @@ If you see `NODE_BACKGROUND_UNAVAILABLE`, bring the node app to the foreground a
 
 ## Pairing versus approvals
 
-Three separate gates control whether a node command succeeds:
+Four separate gates control whether a node command succeeds:
 
 1. **Device pairing**: can this node connect to the gateway?
-2. **Gateway node command policy**: is the RPC command ID allowed by `gateway.nodes.commands.allow` / `gateway.nodes.commands.deny` and platform defaults?
-3. **Exec approvals**: can this node run a specific shell command locally?
+2. **Node command surface approval**: has an operator approved the commands this node declared (`openclaw nodes pending` / `openclaw nodes approve <requestId>`)? A connected, device-paired node with this request pending has no effective commands.
+3. **Gateway node command policy**: is the RPC command ID allowed by `gateway.nodes.commands.allow` / `gateway.nodes.commands.deny` and platform defaults?
+4. **Exec approvals**: can this node run a specific shell command locally?
 
-Node pairing is an identity/trust gate, not a per-command approval surface. For `system.run`, the per-node policy lives in that node's exec approvals file (`openclaw approvals get --node ...`), not in the gateway pairing record.
+Device pairing is an identity/trust gate; the command surface approval, stored on the same paired-device record, is the per-command gate. For `system.run`, the shell allowlist and ask policy live in that node's exec approvals file (`openclaw approvals get --node ...`), not in the pairing record.
 
 Quick checks:
 
 ```bash
 openclaw devices list
+openclaw nodes pending
 openclaw nodes status
 openclaw approvals get --node <idOrNameOrIp>
 openclaw approvals allowlist add --node <idOrNameOrIp> "/usr/bin/uname"
 ```
 
-- Pairing missing: approve the node device first.
+- Pairing missing: approve the node device first. A headless node host paused on `PAIRING_REQUIRED` must be restarted after approval.
+- Node paired and connected but `nodes describe` lists no commands: approve the pending surface request shown by `openclaw nodes pending`.
 - `nodes describe` missing a command: check the gateway node command policy and whether the node actually declared that command on connect.
-- Pairing fine but `system.run` fails: fix exec approvals/allowlist on that node.
+- Surface approved but `system.run` fails: fix exec approvals/allowlist on that node.
 
 For approval-backed `host=node` runs, the gateway also binds execution to the prepared canonical `systemRunPlan`. If a later caller mutates the command, cwd, or session metadata before the approved run is forwarded, the gateway rejects the run as an approval mismatch instead of trusting the edited payload.
 
@@ -150,6 +153,7 @@ openclaw logs --follow
 If still stuck:
 
 - Re-approve device pairing.
+- Approve a pending command surface request (`openclaw nodes pending`).
 - Re-open the node app (foreground).
 - Re-grant OS permissions.
 - Recreate/adjust the exec approval policy.
