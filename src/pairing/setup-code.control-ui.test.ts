@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { encodePairingSetupCode } from "../../../src/pairing/setup-code.js";
-import { classifyGatewaySecret } from "./gateway-secret-shape.ts";
+import { classifyGatewaySecret } from "../../ui/src/lib/gateway-secret-shape.ts";
+import { encodePairingSetupCode } from "./setup-code.js";
 
 const setupCode = encodePairingSetupCode({
   url: "wss://gateway.example/日本語",
