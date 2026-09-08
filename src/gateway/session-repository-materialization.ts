@@ -1,6 +1,7 @@
 import os from "node:os";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { gitNullConfigPath } from "../infra/git-exec.js";
 import {
   readProjectCheckoutRemoteHead,
   ProjectCloneError,
@@ -180,7 +181,7 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
   const git = (args: string[]) =>
     command(["git", "-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", ...args], {
       cwd: root,
-      env: { GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_SYSTEM: os.devNull },
+      env: { GIT_CONFIG_GLOBAL: gitNullConfigPath(), GIT_CONFIG_SYSTEM: gitNullConfigPath() },
     });
   const alignPublication = async () => {
     if (published?.pushed_head_commit) {

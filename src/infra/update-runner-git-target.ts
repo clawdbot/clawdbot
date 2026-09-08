@@ -6,6 +6,7 @@ import {
   parsePackageOpenClawSchemaVersions,
   type OpenClawSchemaVersions,
 } from "../state/openclaw-schema-versions.js";
+import { gitNullConfigPath } from "./git-exec.js";
 import { isBetaTag, isStableTag, type UpdateChannel } from "./update-channels.js";
 import { compareSemverStrings } from "./update-check.js";
 import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
@@ -96,7 +97,7 @@ export async function withGitTargetInspectionRoot<T>(
               env: {
                 ...options.env,
                 GIT_CONFIG_NOSYSTEM: "1",
-                GIT_CONFIG_GLOBAL: os.devNull,
+                GIT_CONFIG_GLOBAL: gitNullConfigPath(),
                 GIT_CONFIG_COUNT: "0",
               },
             }

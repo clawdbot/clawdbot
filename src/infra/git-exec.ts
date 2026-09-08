@@ -135,3 +135,16 @@ export async function requireGitCommandBuffer(
   }
   return result.stdout;
 }
+
+/**
+ * Null device path that Git for Windows can open as a config file.
+ *
+ * `os.devNull` returns `\.\nul` on Windows, which Git rejects with
+ * "unable to access '\.\nul': Invalid argument" (exit 128) when passed via
+ * `GIT_CONFIG_GLOBAL` or `GIT_CONFIG_SYSTEM` — it must open and parse those
+ * files. "NUL" is the path Git for Windows understands. Config *values* such
+ * as `core.hooksPath` accept the device path and need no change.
+ */
+export function gitNullConfigPath(): string {
+  return process.platform === "win32" ? "NUL" : "/dev/null";
+}

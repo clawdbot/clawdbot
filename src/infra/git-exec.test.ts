@@ -1,3 +1,7 @@
+import { spawnSync } from "node:child_process";
+import fsSync from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as execRunner from "../process/exec-runner.js";
 import * as processExec from "../process/exec.js";
@@ -6,6 +10,7 @@ import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   createGitCommandError,
   executeGitCommand,
+  gitNullConfigPath,
   normalizeGitPathForFilesystem,
   requireGitCommand,
   requireGitCommandBuffer,
@@ -288,4 +293,67 @@ describe("required Git output", () => {
     await expect(requireGitCommandRaw("/repo", ["status"])).resolves.toBe("complete\n");
     await expect(requireGitCommand("/repo", ["status"])).resolves.toBe("complete");
   });
+});
+
+describe("gitNullConfigPath", () => {
+  it("returns the Git-openable null path for the execution host", () => {
+    const originalPlatform = process.platform;
+    try {
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      // Git for Windows cannot open the device-namespace path that
+      // os.devNull returns; "NUL" is the path it understands.
+      expect(gitNullConfigPath()).toBe("NUL");
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      expect(gitNullConfigPath()).toBe("/dev/null");
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    }
+  });
+
+  it("is accepted by the real git binary as GIT_CONFIG_GLOBAL on this host", () => {
+    const repo = fsSync.mkdtempSync(path.join(os.tmpdir(), "git-null-config-"));
+    try {
+      fsSync.writeFileSync(path.join(repo, "file.txt"), "x");
+      const baseEnv = {
+        ...process.env,
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_COUNT: "0",
+        GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+      };
+      const init = spawnSync("git", ["init", "-q", repo], { env: baseEnv, encoding: "utf8" });
+      expect(init.status).toBe(0);
+      const log = spawnSync("git", ["-C", repo, "log", "--oneline", "-1"], {
+        env: baseEnv,
+        encoding: "utf8",
+      });
+      // Empty repo: git may exit non-zero for "no commits", but config parsing
+      // must not fail with the device-namespace access error (exit 128).
+      expect(log.stderr).not.toContain("unable to access");
+    } finally {
+      fsSync.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform !== "win32")(
+    "documents the defect: os.devNull as GIT_CONFIG_GLOBAL exits 128 on Windows",
+    () => {
+      const repo = fsSync.mkdtempSync(path.join(os.tmpdir(), "git-null-config-"));
+      try {
+        const result = spawnSync("git", ["-C", repo, "log", "--oneline", "-1"], {
+          env: {
+            ...process.env,
+            GIT_CONFIG_NOSYSTEM: "1",
+            GIT_CONFIG_COUNT: "0",
+            GIT_CONFIG_GLOBAL: os.devNull,
+          },
+          encoding: "utf8",
+        });
+        // Red evidence for issue #141279: the device-namespace path that
+        // os.devNull returns is rejected by Git for Windows.
+        expect(result.stderr).toContain("unable to access");
+      } finally {
+        fsSync.rmSync(repo, { recursive: true, force: true });
+      }
+    },
+  );
 });

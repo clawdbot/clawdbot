@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { gitNullConfigPath } from "../infra/git-exec.js";
 import { GitHubPublicationWorkspaceChangedError } from "./github-publication-failure.js";
 
 type GitCommandOptions = { cwd?: string; env?: NodeJS.ProcessEnv; input?: string };
@@ -206,8 +207,8 @@ export async function updateGitHubPublicationBranchAndIndex(params: {
     recoveryPath = publicationRecoveryPath(indexPath, params.requestId);
     const gitEnv = {
       ...params.env,
-      GIT_CONFIG_GLOBAL: os.devNull,
-      GIT_CONFIG_SYSTEM: os.devNull,
+      GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+      GIT_CONFIG_SYSTEM: gitNullConfigPath(),
     };
     await params.run([...HARDENED_GIT, "read-tree", params.headCommit], {
       cwd: params.cwd,
