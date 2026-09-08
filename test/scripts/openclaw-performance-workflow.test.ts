@@ -327,6 +327,50 @@ describe("OpenClaw performance workflow", () => {
     expect(workflow).toContain("Kova live OpenAI GPT 5.6 agent turn");
   });
 
+  posixIt("scopes the elevated status CLI ceiling to OpenClaw 2026.7.33", () => {
+    const compatibility = findStep("Apply OpenClaw 2026.7.33 Kova compatibility");
+    const surfaceNames = ["cross-platform-smoke", "fresh-install", "gateway-performance"];
+
+    for (const [version, expectedCeiling] of [
+      ["2026.7.33", 250],
+      ["2026.7.34", 200],
+    ] as const) {
+      const root = tempDirs.make(`openclaw-kova-733-${version}-`);
+      const target = join(root, "openclaw");
+      const kova = join(root, "kova");
+      mkdirSync(join(kova, "surfaces"), { recursive: true });
+      mkdirSync(target, { recursive: true });
+      writeFileSync(join(target, "package.json"), JSON.stringify({ version }));
+      for (const name of surfaceNames) {
+        writeFileSync(
+          join(kova, "surfaces", `${name}.json`),
+          JSON.stringify({ roleThresholds: { "status-cli": { maxCpuPercent: 200 } } }),
+        );
+      }
+
+      const result = spawnSync("bash", ["-c", compatibility.run ?? ""], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GITHUB_WORKSPACE: target,
+          KOVA_SRC: kova,
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      for (const name of surfaceNames) {
+        const surface = JSON.parse(
+          readFileSync(join(kova, "surfaces", `${name}.json`), "utf8"),
+        ) as { roleThresholds: { "status-cli": { maxCpuPercent: number } } };
+        expect(surface.roleThresholds["status-cli"].maxCpuPercent).toBe(expectedCeiling);
+      }
+    }
+
+    const steps = readWorkflow().jobs?.kova?.steps ?? [];
+    expect(steps.findIndex((step) => step.name === compatibility.name)).toBe(
+      steps.findIndex((step) => step.name === "Kova version and plan sanity") - 1,
+    );
+  });
+
   it("keeps live credentials away from custom Kova refs", () => {
     const resolveTarget = findStep("Resolve OpenClaw target ref", "resolve_target");
     const decideLane = findStep("Decide lane");
@@ -1338,7 +1382,8 @@ printf '%s\\n' \
     expect(workflowText).not.toContain("OCM_INTERNAL_NPM_BIN");
     expect(workflowText).not.toContain("OPENCLAW_OCM_NPM_WRAPPER");
     expect(workflowText).not.toContain("OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS");
-    expect(steps[installIndex + 1]?.name).toBe("Kova version and plan sanity");
+    expect(steps[installIndex + 1]?.name).toBe("Apply OpenClaw 2026.7.33 Kova compatibility");
+    expect(steps[installIndex + 2]?.name).toBe("Kova version and plan sanity");
   });
 
   it("fails selected live Kova lanes when live auth is missing", () => {
