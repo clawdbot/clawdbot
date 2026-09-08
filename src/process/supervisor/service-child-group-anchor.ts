@@ -5,6 +5,7 @@ import { Socket } from "node:net";
 import { pipeline, type Readable } from "node:stream";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
+import { shouldRequestLineageCleanup } from "./service-child-group-anchor-policy.js";
 import { hasLiveOwnedProcessGroupMembers } from "./service-child-group-ownership.js";
 import {
   encodeServiceChildMessage,
@@ -280,7 +281,7 @@ export function runServiceChildGroupAnchor(): void {
           if (!rootExit) {
             await Promise.race([rootExited.promise, delay(LINEAGE_EXIT_OBSERVATION_MS)]);
           }
-          if (state !== "active") {
+          if (!shouldRequestLineageCleanup(state, Boolean(rootExit))) {
             return;
           }
           if (rootExit && rootSettlementStarted) {
@@ -358,6 +359,12 @@ export function runServiceChildGroupAnchor(): void {
       rootResultDelivery = send({ type: "root-result", code, signal });
       rootExited.resolve();
       void settleRoot();
+      // Lineage EOF may have happened while the root was still alive. In that case the
+      // EOF observer intentionally leaves cleanup alone so valid roots can survive
+      // closefrom(); resume the existing bounded cleanup path once the root exits.
+      if (lineageClosed && state === "active") {
+        void requestCleanup("lineage-lost");
+      }
     });
   };
 

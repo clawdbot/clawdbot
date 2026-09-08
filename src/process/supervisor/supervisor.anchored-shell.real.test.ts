@@ -164,6 +164,27 @@ async function expectPending(promise: Promise<void>) {
 }
 
 describe("supervisor anchored shell real process ownership", () => {
+  it.skipIf(process.platform === "win32")(
+    "keeps the root command alive when it closes its inherited lineage descriptor",
+    async () => {
+      const supervisor = createProcessSupervisor();
+      const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
+        'require("node:fs").closeSync(3); setTimeout(() => process.stdout.write("SURVIVED\\n"), 300)',
+      )}`;
+      const run = await supervisor.spawn({ mode: "anchored-shell", command });
+      try {
+        await expect(run.wait()).resolves.toMatchObject({
+          exitCode: 0,
+          exitSignal: null,
+          stdout: "SURVIVED\n",
+        });
+        await run.waitForExtinction!();
+      } finally {
+        await supervisor.shutdown();
+      }
+    },
+  );
+
   it.skipIf(process.platform !== "win32")(
     "keeps anchored Windows commands console-free",
     async () => {
