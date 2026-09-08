@@ -42,12 +42,12 @@ describe("managed OpenCode session affinity", () => {
     "openai-responses",
     "anthropic-messages",
     "google-generative-ai",
-  ] as const)("forwards conversation identity through %s", (api) => {
+  ] as const)("forwards conversation identity through %s", async (api) => {
     const selectedModel = model(api);
     const stream = createBoundaryAwareStreamFnForModel(selectedModel);
     expect(stream).toBeTypeOf("function");
 
-    stream?.(
+    await stream?.(
       selectedModel,
       { messages: [] },
       {
