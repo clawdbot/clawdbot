@@ -197,8 +197,7 @@ async function updateCommandInternal(
     });
 
   if (requestedChannel === "extended-stable" && installKind === "git") {
-    await refuseUpdate("unsupported_git_channel");
-    return;
+    return await refuseUpdate("unsupported_git_channel");
   }
 
   const preparedConfig = await createConfigIO({
@@ -219,11 +218,10 @@ async function updateCommandInternal(
 
   if (opts.channel && !configSnapshot.valid) {
     const issues = formatConfigIssueLines(configSnapshot.issues, "-");
-    await refuseUpdate(
+    return await refuseUpdate(
       "invalid-config",
       ["Config is invalid; cannot set update channel.", ...issues].join("\n"),
     );
-    return;
   }
 
   const channel =
@@ -236,8 +234,7 @@ async function updateCommandInternal(
           installKind,
         }).channel);
   if (channel === "extended-stable" && installKind === "git") {
-    await refuseUpdate("unsupported_git_channel");
-    return;
+    return await refuseUpdate("unsupported_git_channel");
   }
   // An effective dev channel (stored or explicit) selects the git flow — the
   // documented dev contract is a git checkout. Exception: --tag is a one-run
@@ -263,13 +260,12 @@ async function updateCommandInternal(
 
   const unsupportedMainTag = updateInstallKind === "package" && explicitTag === "main";
   if ((channel === "extended-stable" && explicitTag) || unsupportedMainTag) {
-    await refuseUpdate(
+    return await refuseUpdate(
       unsupportedMainTag ? "unsupported-package-target" : EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
       unsupportedMainTag
         ? "`--tag main` cannot update a package install. Run `openclaw update --channel dev` to switch to the supported Git checkout and build flow."
         : undefined,
     );
-    return;
   }
   let tag = explicitTag ?? channelToNpmTag(channel);
   let currentVersion: string | null = null;
@@ -354,8 +350,7 @@ async function updateCommandInternal(
       });
       const npmLifecycleGate = resolveNpmLifecyclePolicyGate(packageInstallTarget);
       if (npmLifecycleGate.error) {
-        await refuseUpdate("npm lifecycle policy preflight", npmLifecycleGate.error);
-        return;
+        return await refuseUpdate("npm lifecycle policy preflight", npmLifecycleGate.error);
       }
     }
     const npmMetadataCommand =
@@ -368,8 +363,7 @@ async function updateCommandInternal(
         packageName: installedPackageName,
       });
       if (extendedStable.status === "failed") {
-        await refuseUpdate(extendedStable.reason);
-        return;
+        return await refuseUpdate(extendedStable.reason);
       }
       targetVersion = extendedStable.version;
       tag = extendedStable.version;
@@ -431,11 +425,10 @@ async function updateCommandInternal(
         env: packageInstallEnv,
       });
       if (targetMetadata.error || targetMetadata.version !== targetVersion) {
-        await refuseUpdate(
+        return await refuseUpdate(
           "target-metadata-preflight",
           `Update refused: could not inspect exact package target openclaw@${targetVersion}: ${targetMetadata.error ?? `registry returned version ${targetMetadata.version ?? "unknown"}`}.`,
         );
-        return;
       }
       packageTargetSchemaVersions = targetMetadata.schemaVersions;
       // Runtime and schema checks must use the same exact package that will be
@@ -593,8 +586,7 @@ async function updateCommandInternal(
       fallbackNodeRunner: canRefreshManagedServiceNode ? resolveNodeRunner() : undefined,
     });
     if (!runtimePreflight.ok) {
-      await refuseUpdate("node-runtime-preflight", runtimePreflight.error);
-      return;
+      return await refuseUpdate("node-runtime-preflight", runtimePreflight.error);
     }
     const runtimeSelection = runtimePreflight.value;
     packageUpdateNodeRunner = runtimeSelection.nodeRunner;
