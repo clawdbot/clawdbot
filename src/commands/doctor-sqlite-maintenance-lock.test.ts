@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireGatewayLock, GatewayLockError } from "../infra/gateway-lock.js";
 import {
@@ -89,27 +90,21 @@ describe("doctor SQLite maintenance lock", () => {
 
   it("prevents Gateway startup until maintenance releases ownership", async () => {
     const fixture = await createLockFixture();
-    let allowMaintenanceToFinish: (() => void) | undefined;
-    const maintenanceMayFinish = new Promise<void>((resolve) => {
-      allowMaintenanceToFinish = resolve;
-    });
-    let markMaintenanceStarted: (() => void) | undefined;
-    const maintenanceStarted = new Promise<void>((resolve) => {
-      markMaintenanceStarted = resolve;
-    });
+    const maintenanceMayFinish = createDeferred();
+    const maintenanceStarted = createDeferred();
     const maintenance = withDoctorSqliteMaintenanceLock(
       {
         env: fixture.env,
         operation: "session SQLite compaction",
         run: async () => {
-          markMaintenanceStarted?.();
-          await maintenanceMayFinish;
+          maintenanceStarted.resolve();
+          await maintenanceMayFinish.promise;
           return "done";
         },
       },
       { lockOptions: fixture.lockOptions },
     );
-    await maintenanceStarted;
+    await maintenanceStarted.promise;
 
     await expect(
       acquireGatewayLock({
@@ -124,7 +119,7 @@ describe("doctor SQLite maintenance lock", () => {
       }),
     ).rejects.toBeInstanceOf(GatewayLockError);
 
-    allowMaintenanceToFinish?.();
+    maintenanceMayFinish.resolve();
     await expect(maintenance).resolves.toBe("done");
 
     const gatewayLock = await acquireGatewayLock({
