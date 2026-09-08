@@ -7,7 +7,11 @@ import {
 } from "../../agents/harness/user-input-bridge.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { settleReplyDispatcher } from "../dispatch-dispatcher.js";
-import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  markCommandReplyForDelivery,
+  setReplyPayloadMetadata,
+} from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
@@ -347,6 +351,148 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       config: emptyConfig,
       beforeMessageWrite: expect.any(Function),
     });
+  });
+
+  it("mirrors successfully delivered Telegram command replies into the parent transcript", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      sessionKey: "agent:main",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const deliver = vi.fn();
+    const dispatcher = createReplyDispatcher({ deliver });
+    const commandReply = markCommandReplyForDelivery({ text: "Subagents: none" }) as ReplyPayload;
+    const replyResolver = vi.fn(async () => commandReply satisfies ReplyPayload);
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "agent:main",
+        MessageSid: "telegram-command-1",
+        CommandSource: "text",
+        CommandAuthorized: true,
+        CommandBody: "/subagents list",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+    await settleReplyDispatcher({ dispatcher });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ text: "Subagents: none" }), {
+      kind: "final",
+    });
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main",
+        text: "Subagents: none",
+        idempotencyKey: "channel-final:telegram-command-1:0",
+      }),
+    );
+  });
+
+  it("does not mirror ordinary Telegram agent replies", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      sessionKey: "agent:main",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
+    const replyResolver = vi.fn(async () => ({ text: "agent answer" }) satisfies ReplyPayload);
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "agent:main",
+        MessageSid: "telegram-agent-1",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+    await settleReplyDispatcher({ dispatcher });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
+  it("does not mirror a command reply when final delivery is cancelled", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      sessionKey: "agent:main",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createReplyDispatcher({
+      deliver: vi.fn(),
+      beforeDeliver: async () => null,
+    });
+    const commandReply = markCommandReplyForDelivery({ text: "Subagents: none" }) as ReplyPayload;
+    const replyResolver = vi.fn(async () => commandReply satisfies ReplyPayload);
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "agent:main",
+        MessageSid: "telegram-command-cancelled",
+        CommandSource: "text",
+        CommandAuthorized: true,
+        CommandBody: "/subagents list",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+    const receipt = await settleReplyDispatcher({ dispatcher });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(receipt?.counts.final.cancelled).toBeGreaterThan(0);
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
+  it("does not mirror an empty command reply", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      sessionKey: "agent:main",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
+    const commandReply = markCommandReplyForDelivery({ text: "   " }) as ReplyPayload;
+    const replyResolver = vi.fn(async () => commandReply satisfies ReplyPayload);
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "agent:main",
+        MessageSid: "telegram-command-empty",
+        CommandSource: "text",
+        CommandAuthorized: true,
+        CommandBody: "/subagents list",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+    await settleReplyDispatcher({ dispatcher });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 
   it("mirrors post-hook internal source reply payloads into the active transcript", async () => {
