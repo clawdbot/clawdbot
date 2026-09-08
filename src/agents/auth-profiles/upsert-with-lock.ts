@@ -4,7 +4,12 @@ import { AUTH_STORE_VERSION } from "./constants.js";
 import { normalizeAuthProfileCredential } from "./credential-normalize.js";
 import { withOAuthProfileLock, withOAuthProfileLocks } from "./oauth-profile-lock.js";
 import { isOAuthRefreshFence, isSameOAuthRefreshGeneration } from "./oauth-refresh-marker.js";
-import { loadPersistedAuthProfileStore, loadPersistedSharedAuthProfileStore } from "./persisted.js";
+import {
+  loadPersistedAuthProfileStore,
+  loadPersistedSharedAuthProfileStore,
+  mergeAuthProfileStores,
+} from "./persisted.js";
+import { getRuntimeAuthProfileStoreSnapshotAtDatabasePath } from "./runtime-snapshots.js";
 import {
   deletePersistedAuthProfileStoreRaw,
   inspectPersistedAuthProfileStateRaw,
@@ -237,8 +242,18 @@ export async function persistAuthProfileBatch(
             }
           }
           if (appliedProfiles.size > 0) {
+            const runtimeStore = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(
+              owner.databasePath,
+            );
+            // Preserve inherited and resolved runtime rows while persistence filtering keeps
+            // this transaction scoped to the canonical local owner.
+            const publicationStore = runtimeStore
+              ? mergeAuthProfileStores(runtimeStore, next, {
+                  preserveBaseRuntimeExternalProfiles: true,
+                })
+              : next;
             saveAuthProfileStoreWithPreparedOwner(
-              next,
+              publicationStore,
               params.agentDir,
               { filterExternalAuthProfiles: false, syncExternalCli: false },
               database,
@@ -343,9 +358,9 @@ type AuthProfileUpsertParams = {
   stateDir?: string;
 };
 
-async function upsertAuthProfileWithLockCore(
+/** Upserts an auth profile under the store lock, returning null on store write failure. */
+export async function upsertAuthProfileWithLock(
   params: AuthProfileUpsertParams,
-  resetFailureState: boolean,
 ): Promise<AuthProfileStore | null> {
   const credential = normalizeAuthProfileCredential(params.credential);
   const observed = loadAuthProfileWriteAuthority(params, params.profileId);
@@ -367,7 +382,7 @@ async function upsertAuthProfileWithLockCore(
             observed,
             current: currentAuthority,
             incoming: credential,
-            allowOAuthGenerationReplacement: resetFailureState,
+            allowOAuthGenerationReplacement: false,
           }) ||
           restoresFencedOAuthRefreshGeneration({
             profileId: params.profileId,
@@ -379,10 +394,6 @@ async function upsertAuthProfileWithLockCore(
           return false;
         }
         store.profiles[params.profileId] = credential;
-        const existingStats = store.usageStats?.[params.profileId];
-        if (resetFailureState && existingStats) {
-          store.usageStats![params.profileId] = resetAuthProfileFailureState(existingStats);
-        }
         return true;
       },
     });
@@ -398,28 +409,11 @@ async function upsertAuthProfileWithLockCore(
   return rejectedFencedGeneration ? null : updated;
 }
 
-/** Upserts an auth profile under the store lock, returning null on store write failure. */
-export async function upsertAuthProfileWithLock(
-  params: AuthProfileUpsertParams,
-): Promise<AuthProfileStore | null> {
-  return await upsertAuthProfileWithLockCore(params, false);
-}
-
 /** Upserts an auth profile under the store lock, failing when the store cannot be written. */
 export async function upsertAuthProfileWithLockOrThrow(
   params: Parameters<typeof upsertAuthProfileWithLock>[0],
 ): Promise<void> {
   const updated = await upsertAuthProfileWithLock(params);
-  if (!updated) {
-    throwAuthProfileUpdateError();
-  }
-}
-
-/** Replaces one completed-login credential and clears only its existing failure state. */
-export async function upsertAuthProfileAfterLoginWithLockOrThrow(
-  params: AuthProfileUpsertParams,
-): Promise<void> {
-  const updated = await upsertAuthProfileWithLockCore(params, true);
   if (!updated) {
     throwAuthProfileUpdateError();
   }

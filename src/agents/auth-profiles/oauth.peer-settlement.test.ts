@@ -31,7 +31,7 @@ import { removeAuthProfilesWithLock } from "./profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
-import { upsertAuthProfileAfterLoginWithLockOrThrow } from "./upsert-with-lock.js";
+import { persistAuthProfileBatch } from "./upsert-with-lock.js";
 
 const {
   refreshProviderOAuthCredentialWithPluginMock,
@@ -453,17 +453,23 @@ describe("OAuth refresh peer settlement", () => {
         agentDir: ownerAgentDir,
       });
       await started;
-      await upsertAuthProfileAfterLoginWithLockOrThrow({
-        profileId,
+      await persistAuthProfileBatch({
         agentDir: ownerAgentDir,
-        credential: {
-          type: "oauth",
-          provider,
-          access: "relogin-a-access",
-          refresh: "relogin-a-refresh",
-          expires: Date.now() + 60 * 60 * 1000,
-          accountId: "acct-a",
-        },
+        profiles: [
+          {
+            profileId,
+            credential: {
+              type: "oauth",
+              provider,
+              access: "relogin-a-access",
+              refresh: "relogin-a-refresh",
+              expires: Date.now() + 60 * 60 * 1000,
+              accountId: "acct-a",
+            },
+          },
+        ],
+        resetFailureState: true,
+        allowOAuthGenerationReplacement: true,
       });
       finishRefresh?.();
 

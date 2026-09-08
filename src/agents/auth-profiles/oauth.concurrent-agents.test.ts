@@ -31,7 +31,7 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import { resolveAuthProfileDatabasePath, writePersistedAuthProfileStoreRaw } from "./sqlite.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
 import { resolvePersistedAuthProfileOwnerAgentDir } from "./store.js";
-import { upsertAuthProfileAfterLoginWithLockOrThrow } from "./upsert-with-lock.js";
+import { persistAuthProfileBatch } from "./upsert-with-lock.js";
 
 const {
   refreshProviderOAuthCredentialWithPluginMock,
@@ -164,10 +164,11 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
       if (nativeCredential?.type !== "oauth") {
         throw new Error("expected native MiniMax OAuth credential");
       }
-      await upsertAuthProfileAfterLoginWithLockOrThrow({
-        profileId: MINIMAX_CLI_PROFILE_ID,
-        credential: nativeCredential,
+      await persistAuthProfileBatch({
         agentDir: mainAgentDir,
+        profiles: [{ profileId: MINIMAX_CLI_PROFILE_ID, credential: nativeCredential }],
+        resetFailureState: true,
+        allowOAuthGenerationReplacement: true,
       });
       expect(loadPersistedAuthProfileStore(mainAgentDir)?.profiles[MINIMAX_CLI_PROFILE_ID]).toEqual(
         nativeCredential,
@@ -817,12 +818,13 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
         throw new Error("expected original OAuth credential");
       }
       await expect(
-        upsertAuthProfileAfterLoginWithLockOrThrow({
-          profileId,
+        persistAuthProfileBatch({
           agentDir: mainAgentDir,
-          credential: originalCredential,
+          profiles: [{ profileId, credential: originalCredential }],
+          resetFailureState: true,
+          allowOAuthGenerationReplacement: true,
         }),
-      ).rejects.toThrow("Failed to update auth profile store");
+      ).rejects.toThrow("Refused to restore fenced OAuth refresh generation");
       const ownerFence = loadPersistedAuthProfileStore(mainAgentDir)?.profiles[profileId];
       expect(ownerFence?.type === "oauth" && isOAuthRefreshFence(ownerFence)).toBe(true);
 
@@ -974,17 +976,23 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
         agentDir: peers[0],
       });
       await started;
-      await upsertAuthProfileAfterLoginWithLockOrThrow({
-        profileId,
+      await persistAuthProfileBatch({
         agentDir: mainAgentDir,
-        credential: {
-          type: "oauth",
-          provider,
-          access: "relogin-access",
-          refresh: "relogin-refresh",
-          expires: Date.now() + 60 * 60 * 1000,
-          accountId: "acct-a",
-        },
+        profiles: [
+          {
+            profileId,
+            credential: {
+              type: "oauth",
+              provider,
+              access: "relogin-access",
+              refresh: "relogin-refresh",
+              expires: Date.now() + 60 * 60 * 1000,
+              accountId: "acct-a",
+            },
+          },
+        ],
+        resetFailureState: true,
+        allowOAuthGenerationReplacement: true,
       });
       expect(loadPersistedAuthProfileStore(mainAgentDir)?.profiles[profileId]).toMatchObject({
         access: "relogin-access",

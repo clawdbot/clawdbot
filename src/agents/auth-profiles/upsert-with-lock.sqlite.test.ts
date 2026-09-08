@@ -19,11 +19,7 @@ import {
 } from "./sqlite.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store-runtime.js";
 import type { ApiKeyCredential, OAuthCredential } from "./types.js";
-import {
-  persistAuthProfileBatch,
-  upsertAuthProfileAfterLoginWithLockOrThrow,
-  upsertAuthProfileWithLockOrThrow,
-} from "./upsert-with-lock.js";
+import { persistAuthProfileBatch, upsertAuthProfileWithLockOrThrow } from "./upsert-with-lock.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -93,46 +89,36 @@ describe("auth profile batch persistence", () => {
       };
       const fence = createOAuthRefreshFence({ profileId, credential });
 
-      for (const write of [
-        () =>
-          upsertAuthProfileAfterLoginWithLockOrThrow({
-            agentDir,
-            profileId,
-            credential,
-          }),
-        async () => {
-          await persistAuthProfileBatch({
-            agentDir,
-            profiles: [{ profileId, credential }],
-          });
-        },
-      ]) {
-        saveAuthProfileStore({ version: 1, profiles: { [profileId]: credential } }, agentDir);
-        let queuedWrite: Promise<void> | undefined;
-        await withOAuthProfileLock({ profileId, provider: credential.provider }, async () => {
-          queuedWrite = write();
-          await updateAuthProfileStoreWithLock({
-            agentDir,
-            updater: (store) => {
-              store.profiles[profileId] = fence;
-              return true;
-            },
-          });
-          await updateAuthProfileStoreWithLock({
-            agentDir,
-            updater: (store) => {
-              store.profiles[profileId] = rotated;
-              return true;
-            },
-          });
+      saveAuthProfileStore({ version: 1, profiles: { [profileId]: credential } }, agentDir);
+      let queuedWrite: Promise<void> | undefined;
+      await withOAuthProfileLock({ profileId, provider: credential.provider }, async () => {
+        queuedWrite = persistAuthProfileBatch({
+          agentDir,
+          profiles: [{ profileId, credential }],
+          resetFailureState: true,
+          allowOAuthGenerationReplacement: true,
+        }).then(() => undefined);
+        await updateAuthProfileStoreWithLock({
+          agentDir,
+          updater: (store) => {
+            store.profiles[profileId] = fence;
+            return true;
+          },
         });
+        await updateAuthProfileStoreWithLock({
+          agentDir,
+          updater: (store) => {
+            store.profiles[profileId] = rotated;
+            return true;
+          },
+        });
+      });
 
-        expect(queuedWrite).toBeDefined();
-        await expect(queuedWrite!).rejects.toThrow(
-          /Failed to update auth profile store|Refused to restore fenced OAuth refresh generation/,
-        );
-        expect(loadPersistedAuthProfileStore(agentDir)?.profiles[profileId]).toEqual(rotated);
-      }
+      expect(queuedWrite).toBeDefined();
+      await expect(queuedWrite!).rejects.toThrow(
+        "Refused to restore fenced OAuth refresh generation",
+      );
+      expect(loadPersistedAuthProfileStore(agentDir)?.profiles[profileId]).toEqual(rotated);
     });
   });
 
@@ -190,49 +176,39 @@ describe("auth profile batch persistence", () => {
           expires: Date.now() + 60_000,
         };
 
-        for (const [index, write] of [
-          (agentDir: string) =>
-            upsertAuthProfileAfterLoginWithLockOrThrow({
-              agentDir,
-              profileId,
-              credential,
-            }),
-          async (agentDir: string) => {
-            await persistAuthProfileBatch({
-              agentDir,
-              profiles: [{ profileId, credential }],
-            });
-          },
-        ].entries()) {
-          const peerAgentDir = path.join(root, "agents", `peer-${index}`, "agent");
-          fs.mkdirSync(peerAgentDir, { recursive: true });
-          saveAuthProfileStore({ version: 1, profiles: { [profileId]: credential } }, mainAgentDir);
-          let queuedWrite: Promise<void> | undefined;
-          await withOAuthProfileLock({ profileId, provider: credential.provider }, async () => {
-            queuedWrite = write(peerAgentDir);
-            await updateAuthProfileStoreWithLock({
-              agentDir: mainAgentDir,
-              updater: (store) => {
-                store.profiles[profileId] = fence;
-                return true;
-              },
-            });
-            await updateAuthProfileStoreWithLock({
-              agentDir: mainAgentDir,
-              updater: (store) => {
-                store.profiles[profileId] = rotated;
-                return true;
-              },
-            });
+        const peerAgentDir = path.join(root, "agents", "peer", "agent");
+        fs.mkdirSync(peerAgentDir, { recursive: true });
+        saveAuthProfileStore({ version: 1, profiles: { [profileId]: credential } }, mainAgentDir);
+        let queuedWrite: Promise<void> | undefined;
+        await withOAuthProfileLock({ profileId, provider: credential.provider }, async () => {
+          queuedWrite = persistAuthProfileBatch({
+            agentDir: peerAgentDir,
+            profiles: [{ profileId, credential }],
+            resetFailureState: true,
+            allowOAuthGenerationReplacement: true,
+          }).then(() => undefined);
+          await updateAuthProfileStoreWithLock({
+            agentDir: mainAgentDir,
+            updater: (store) => {
+              store.profiles[profileId] = fence;
+              return true;
+            },
           });
+          await updateAuthProfileStoreWithLock({
+            agentDir: mainAgentDir,
+            updater: (store) => {
+              store.profiles[profileId] = rotated;
+              return true;
+            },
+          });
+        });
 
-          expect(queuedWrite).toBeDefined();
-          await expect(queuedWrite!).rejects.toThrow(
-            /Failed to update auth profile store|Refused to restore fenced OAuth refresh generation/,
-          );
-          expect(loadPersistedAuthProfileStore(peerAgentDir)?.profiles[profileId]).toBeUndefined();
-          expect(loadPersistedAuthProfileStore(mainAgentDir)?.profiles[profileId]).toEqual(rotated);
-        }
+        expect(queuedWrite).toBeDefined();
+        await expect(queuedWrite!).rejects.toThrow(
+          "Refused to restore fenced OAuth refresh generation",
+        );
+        expect(loadPersistedAuthProfileStore(peerAgentDir)?.profiles[profileId]).toBeUndefined();
+        expect(loadPersistedAuthProfileStore(mainAgentDir)?.profiles[profileId]).toEqual(rotated);
       },
     );
     closeOpenClawAgentDatabasesForTest();
@@ -263,43 +239,32 @@ describe("auth profile batch persistence", () => {
           refresh: "fresh-login-refresh",
         };
 
-        for (const [index, write] of [
-          (agentDir: string) =>
-            upsertAuthProfileAfterLoginWithLockOrThrow({
-              agentDir,
-              stateDir: root,
-              profileId,
-              credential: incoming,
-            }),
-          async (agentDir: string) => {
-            await persistAuthProfileBatch({
-              agentDir,
-              stateDir: root,
-              profiles: [{ profileId, credential: incoming }],
-            });
-          },
-        ].entries()) {
-          const peerAgentDir = path.join(root, "agents", `new-peer-${index}`, "agent");
-          fs.mkdirSync(peerAgentDir, { recursive: true });
-          saveAuthProfileStore({ version: 1, profiles: {} }, mainAgentDir);
-          let queuedWrite: Promise<void> | undefined;
-          await withOAuthProfileLock({ profileId, provider: incoming.provider }, async () => {
-            queuedWrite = write(peerAgentDir);
-            saveAuthProfileStore(
-              { version: 1, profiles: { [profileId]: authoritative } },
-              mainAgentDir,
-            );
-          });
+        const peerAgentDir = path.join(root, "agents", "new-peer", "agent");
+        fs.mkdirSync(peerAgentDir, { recursive: true });
+        saveAuthProfileStore({ version: 1, profiles: {} }, mainAgentDir);
+        let queuedWrite: Promise<void> | undefined;
+        await withOAuthProfileLock({ profileId, provider: incoming.provider }, async () => {
+          queuedWrite = persistAuthProfileBatch({
+            agentDir: peerAgentDir,
+            stateDir: root,
+            profiles: [{ profileId, credential: incoming }],
+            resetFailureState: true,
+            allowOAuthGenerationReplacement: true,
+          }).then(() => undefined);
+          saveAuthProfileStore(
+            { version: 1, profiles: { [profileId]: authoritative } },
+            mainAgentDir,
+          );
+        });
 
-          expect(queuedWrite).toBeDefined();
-          await expect(queuedWrite!).rejects.toThrow(
-            /Failed to update auth profile store|Refused to restore fenced OAuth refresh generation/,
-          );
-          expect(loadPersistedAuthProfileStore(peerAgentDir)?.profiles[profileId]).toBeUndefined();
-          expect(loadPersistedAuthProfileStore(mainAgentDir)?.profiles[profileId]).toEqual(
-            authoritative,
-          );
-        }
+        expect(queuedWrite).toBeDefined();
+        await expect(queuedWrite!).rejects.toThrow(
+          "Refused to restore fenced OAuth refresh generation",
+        );
+        expect(loadPersistedAuthProfileStore(peerAgentDir)?.profiles[profileId]).toBeUndefined();
+        expect(loadPersistedAuthProfileStore(mainAgentDir)?.profiles[profileId]).toEqual(
+          authoritative,
+        );
       },
     );
     closeOpenClawAgentDatabasesForTest();
@@ -567,10 +532,11 @@ describe("auth profile batch persistence", () => {
         agentDir,
       );
 
-      await upsertAuthProfileAfterLoginWithLockOrThrow({
+      await persistAuthProfileBatch({
         agentDir,
-        profileId: targetId,
-        credential: apiKey("sk-fresh"),
+        profiles: [{ profileId: targetId, credential: apiKey("sk-fresh") }],
+        resetFailureState: true,
+        allowOAuthGenerationReplacement: true,
       });
 
       expect(loadPersistedAuthProfileStore(agentDir)).toEqual({
@@ -629,10 +595,11 @@ describe("auth profile batch persistence", () => {
       `);
 
       await expect(
-        upsertAuthProfileAfterLoginWithLockOrThrow({
+        persistAuthProfileBatch({
           agentDir,
-          profileId,
-          credential: apiKey("sk-fresh"),
+          profiles: [{ profileId, credential: apiKey("sk-fresh") }],
+          resetFailureState: true,
+          allowOAuthGenerationReplacement: true,
         }),
       ).rejects.toThrow("injected completed login state failure");
 

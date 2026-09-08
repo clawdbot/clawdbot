@@ -33,7 +33,6 @@ import {
   removeAuthProfilesAcrossOwnerStores,
   removeProviderAuthProfilesWithLock,
   setAuthProfileOrder,
-  upsertAuthProfileAfterLoginWithLockOrThrow,
   upsertAuthProfileWithLock,
 } from "./profiles.js";
 import { getRuntimeExternalCliProfileIds } from "./runtime-external-profile-references.js";
@@ -63,6 +62,7 @@ import {
 } from "./store.js";
 import { testing as storeTesting } from "./store.test-support.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
+import { persistAuthProfileBatch } from "./upsert-with-lock.js";
 
 vi.mock("../provider-auth-aliases.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../provider-auth-aliases.js")>();
@@ -244,15 +244,21 @@ describe("promoteAuthProfileInOrder", () => {
           getRuntimeAuthProfileStoreSnapshot(customAgentDir)?.profiles["openai:default"],
         ).toMatchObject({ access: "old" });
 
-        await upsertAuthProfileAfterLoginWithLockOrThrow({
-          profileId: "openai:default",
-          credential: {
-            type: "oauth",
-            provider: "openai",
-            access: "new",
-            refresh: "refresh-new",
-            expires: Date.now() + 60_000,
-          },
+        await persistAuthProfileBatch({
+          profiles: [
+            {
+              profileId: "openai:default",
+              credential: {
+                type: "oauth",
+                provider: "openai",
+                access: "new",
+                refresh: "refresh-new",
+                expires: Date.now() + 60_000,
+              },
+            },
+          ],
+          resetFailureState: true,
+          allowOAuthGenerationReplacement: true,
         });
 
         expect(
@@ -316,16 +322,22 @@ describe("promoteAuthProfileInOrder", () => {
           throw new Error("external auth hook must not run during postcommit rebuild");
         });
         try {
-          await upsertAuthProfileAfterLoginWithLockOrThrow({
+          await persistAuthProfileBatch({
             agentDir: customAgentDir,
-            profileId: "openai:local",
-            credential: {
-              type: "oauth",
-              provider: "openai",
-              access: "local-new",
-              refresh: "local-refresh-new",
-              expires: Date.now() + 120_000,
-            },
+            profiles: [
+              {
+                profileId: "openai:local",
+                credential: {
+                  type: "oauth",
+                  provider: "openai",
+                  access: "local-new",
+                  refresh: "local-refresh-new",
+                  expires: Date.now() + 120_000,
+                },
+              },
+            ],
+            resetFailureState: true,
+            allowOAuthGenerationReplacement: true,
           });
         } finally {
           externalAuthTesting.resetResolveExternalAuthProfilesForTest();
@@ -1647,10 +1659,11 @@ describe("promoteAuthProfileInOrder", () => {
           }
         }
         const fresh = { ...expired, token: "synthetic-fresh", expires: Date.now() + 60_000 };
-        await upsertAuthProfileAfterLoginWithLockOrThrow({
+        await persistAuthProfileBatch({
           agentDir: selectedDir,
-          profileId,
-          credential: fresh,
+          profiles: [{ profileId, credential: fresh }],
+          resetFailureState: true,
+          allowOAuthGenerationReplacement: true,
         });
         closeOpenClawAgentDatabasesForTest();
         closeOpenClawStateDatabaseForTest();
@@ -1722,10 +1735,11 @@ describe("promoteAuthProfileInOrder", () => {
       expect(loadPersistedAuthProfileStore(agentDir)).toBeNull();
 
       const credential = { type: "token" as const, provider: "openai", token: "synthetic-fresh" };
-      await upsertAuthProfileAfterLoginWithLockOrThrow({
+      await persistAuthProfileBatch({
         agentDir,
-        profileId: "openai:default",
-        credential,
+        profiles: [{ profileId: "openai:default", credential }],
+        resetFailureState: true,
+        allowOAuthGenerationReplacement: true,
       });
       expect(loadPersistedAuthProfileStore()?.profiles["openai:default"]).toEqual(credential);
       expect(loadPersistedAuthProfileStore(agentDir)).toBeNull();

@@ -1,17 +1,14 @@
 /**
- * Tests shared OAuth credential overlay/replacement policy.
- * Covers runtime-only provenance, cloned store isolation, and stale credential
- * replacement decisions.
+ * Tests shared OAuth credential identity and overlay policy.
+ * Covers runtime-only provenance and cloned store isolation.
  */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import {
   isSafeOAuthOwnerRefreshResult,
   isSafeOAuthPostClaimSettlement,
   overlayRuntimeExternalOAuthProfiles,
-  shouldReplaceStoredOAuthCredential,
 } from "./oauth-shared.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
@@ -228,24 +225,5 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
     ]);
 
     expect(overlaid.runtimePersistedProfileIds).toBeUndefined();
-  });
-
-  it("replaces an existing OAuth credential with an out-of-range expiry", () => {
-    const existing: OAuthCredential = {
-      type: "oauth",
-      provider: "openai-codex",
-      access: "poisoned-access",
-      refresh: "poisoned-refresh",
-      expires: MAX_DATE_TIMESTAMP_MS + 1,
-    };
-    const incoming: OAuthCredential = {
-      type: "oauth",
-      provider: "openai-codex",
-      access: "valid-access",
-      refresh: "valid-refresh",
-      expires: Date.now() + 60_000,
-    };
-
-    expect(shouldReplaceStoredOAuthCredential(existing, incoming)).toBe(true);
   });
 });

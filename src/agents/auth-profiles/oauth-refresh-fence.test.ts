@@ -19,7 +19,7 @@ import { loadPersistedAuthProfileStore } from "./persisted.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import * as authProfileStoreRuntime from "./store-runtime.js";
 import type { OAuthCredential } from "./types.js";
-import { upsertAuthProfileAfterLoginWithLockOrThrow } from "./upsert-with-lock.js";
+import { persistAuthProfileBatch } from "./upsert-with-lock.js";
 
 const { ensureAuthProfileStoreWithoutExternalProfiles, saveAuthProfileStore } =
   authProfileStoreRuntime;
@@ -553,14 +553,20 @@ describe("OAuth refresh generation fence", () => {
       await observerEntered;
       await observerReadFence;
       watchObserverReads = false;
-      const relogin = upsertAuthProfileAfterLoginWithLockOrThrow({
-        profileId,
-        credential: createCredential({
-          access: "account-b-access",
-          refresh: "account-b-refresh",
-          expires: Date.now() + 600_000,
-          accountId: "acct-b",
-        }),
+      const relogin = persistAuthProfileBatch({
+        profiles: [
+          {
+            profileId,
+            credential: createCredential({
+              access: "account-b-access",
+              refresh: "account-b-refresh",
+              expires: Date.now() + 600_000,
+              accountId: "acct-b",
+            }),
+          },
+        ],
+        resetFailureState: true,
+        allowOAuthGenerationReplacement: true,
       });
       await relogin;
 
