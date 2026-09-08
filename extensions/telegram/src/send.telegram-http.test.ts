@@ -19,8 +19,8 @@ import { afterAll, assert, beforeAll, beforeEach, describe, expect, it } from "v
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { defaultTelegramBotDeps } from "./bot-deps.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
-import { apiThrottler } from "./bot.runtime.js";
 import { createTelegramBot } from "./bot.js";
+import { apiThrottler } from "./bot.runtime.js";
 import { deliverReplies } from "./bot/delivery.js";
 import { setTelegramRuntime } from "./runtime.js";
 import {
