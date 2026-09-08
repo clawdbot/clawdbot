@@ -275,6 +275,15 @@ Notes:
 
 ## Troubleshooting
 
+### The Scheduled Task stops before the Gateway is ready
+
+Run `openclaw gateway status --json`, then inspect the local [Gateway log](/gateway/logging).
+Entries from `gateway/task-supervisor` record the child exit code, signal, and
+the last 8,192 characters of stderr, including failures before Gateway logging
+starts. Child stdout is discarded. A failed child or supervisor exits nonzero
+so Task Scheduler can apply its failure policy; an intentional clean stop still
+exits zero. A successful task result alone does not prove the Gateway is healthy.
+
 ### The tray icon does not appear
 
 Check Task Manager for `OpenClaw.Tray.WinUI.exe`. If it is running, open the
