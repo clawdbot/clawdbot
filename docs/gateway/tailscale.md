@@ -56,7 +56,7 @@ Connect a native or CLI client from another Tailnet device:
 
 - WebSocket: `ws://<tailscale-ip>:18789`
 
-Do not use the direct plain-HTTP address for the browser Control UI. Remote plain HTTP cannot create browser device identity, and token/password auth does not replace it. Use Tailscale Serve for the Control UI.
+The browser Control UI also works over the direct plain-HTTP address: device identity is generated and signed with pure-JS Ed25519, so pairing does not depend on a secure context, and token/password auth does not replace it. Plain HTTP remains a downgraded transport that exposes the page and the shared secret to on-path observers. Loading the Control UI from the Tailnet address itself is a private same-origin request and needs no allowlist; only public or cross-origin browser deployments have to list their origin in `gateway.controlUi.allowedOrigins`. Prefer Tailscale Serve for the Control UI; see [Insecure HTTP](/web/control-ui#insecure-http).
 
 <Note>
 When a bindable Tailnet IPv4 is present, the Gateway also requires `http://127.0.0.1:18789` for authenticated same-host clients. If no Tailnet address is available at startup, it falls back to loopback only; restart after Tailscale becomes available to add direct Tailnet access. Neither path adds LAN or public exposure.
@@ -92,12 +92,12 @@ openclaw gateway --tailscale funnel --auth password
 
 `gateway.auth.mode` controls the handshake:
 
-| Mode                                                   | Use case                                                                            |
-| ------------------------------------------------------ | ----------------------------------------------------------------------------------- |
-| `none`                                                 | Private ingress only                                                                |
-| `token` (default when `OPENCLAW_GATEWAY_TOKEN` is set) | Shared token                                                                        |
-| `password`                                             | Shared secret via `OPENCLAW_GATEWAY_PASSWORD` or config                             |
-| `trusted-proxy`                                        | Identity-aware reverse proxy; see [Trusted Proxy Auth](/gateway/trusted-proxy-auth) |
+| Mode                                                   | Use case                                                                                                                                          |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `none`                                                 | Private ingress only                                                                                                                              |
+| `token` (default unless only a password is configured) | Shared token via `OPENCLAW_GATEWAY_TOKEN` or config; with no credential the Gateway mints a runtime-only token, see [Control UI](/web/control-ui) |
+| `password`                                             | Shared secret via `OPENCLAW_GATEWAY_PASSWORD` or config                                                                                           |
+| `trusted-proxy`                                        | Identity-aware reverse proxy; see [Trusted Proxy Auth](/gateway/trusted-proxy-auth)                                                               |
 
 ### Tailscale identity headers (Serve only)
 
