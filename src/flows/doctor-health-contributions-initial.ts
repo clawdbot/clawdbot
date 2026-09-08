@@ -291,6 +291,23 @@ export function resolveInitialDoctorHealthContributions(params: {
       run: runDiskSpaceHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:project-clone-shape",
+      label: "Project clones",
+      healthChecks: {
+        description: "Partial and shallow registry-owned project clones need manual repair.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { collectProjectCloneShapeHealthFindings } =
+            await import("../commands/doctor-project-clone-shape.js");
+          return await collectProjectCloneShapeHealthFindings(ctx.cfg);
+        },
+      },
+      async run(ctx) {
+        const { noteProjectCloneShape } = await import("../commands/doctor-project-clone-shape.js");
+        await noteProjectCloneShape(ctx.cfg);
+      },
+    }),
+    createDoctorHealthContribution({
       id: "doctor:db-bloat",
       label: "SQLite database size",
       run: runDatabaseBloatHealth,

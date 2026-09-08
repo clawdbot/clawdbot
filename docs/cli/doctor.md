@@ -16,6 +16,11 @@ When Gateway status reports degraded SecretRef owners, doctor prints a **Secret 
 
 When channel ingress events are dead-lettered, doctor names each affected channel account and points to [`openclaw channels dead-letters list`](/cli/channels#inbound-dead-letters) for inspection and recovery.
 
+Doctor warns when a registry-owned project clone is partial or shallow. It names
+the clone, shallow state, and partial-clone config keys, including URL-keyed
+remote twins. It prints manual repair commands; `--fix` does not fetch or repack
+these clones. Agent workspaces and manually registered checkouts are excluded.
+
 When the Gateway has exporter health facts, doctor reports the latest trusted
 per-signal state and transport under **Telemetry exporters**. The summary is
 redacted and does not include endpoint values, headers, certificates, payloads,
@@ -308,6 +313,16 @@ manifests, and workspace migration blockers. If both kinds remain, Doctor report
 both next steps. Do not delete preserved backups to clear the warning.
 
 ## Structured health checks
+
+To inspect registry clone shape, run
+`openclaw doctor --lint --only core/doctor/project-clone-shape --json`.
+This check also runs in ordinary Doctor and `--lint --all`. Unreadable clones
+produce a skipped-inspection warning without aborting the remaining checks.
+Repair guidance removes all partial-clone filters, refetches from origin
+(unshallowing only when needed), fetches missing objects by ID, clears promisor
+settings and `extensions.partialclone`, then repacks. See the
+[repair sequence](/gateway/doctor#11e-project-clone-shape) before running these
+network and disk operations manually.
 
 Modern doctor checks use a small split contract:
 

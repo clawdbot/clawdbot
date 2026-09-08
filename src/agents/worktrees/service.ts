@@ -1318,7 +1318,28 @@ export class ManagedWorktreeService {
     );
     const gitBytes = await estimateWorktreeGitBytes(record.repoRoot, record.snapshotRef);
     this.requireAllocationSpace(record.path, repository, 2 * (gitBytes + provisionedBytes));
-    const parent = await requireGit(record.repoRoot, ["rev-parse", `${record.snapshotRef}^`]);
+    let parent: string;
+    try {
+      parent = await requireGit(record.repoRoot, ["rev-parse", `${record.snapshotRef}^`]);
+    } catch (error) {
+      const shallow = await runGit(record.repoRoot, ["rev-parse", "--is-shallow-repository"]);
+      if (shallow.code !== 0 || shallow.stdout.trim() !== "true") {
+        throw error;
+      }
+      const snapshot = await runGit(record.repoRoot, [
+        "rev-parse",
+        "--verify",
+        `${record.snapshotRef}^{commit}`,
+      ]);
+      if (snapshot.code !== 0) {
+        throw error;
+      }
+      // Origin cannot deepen a local-only snapshot that a later fetch made shallow.
+      throw new Error(
+        `Cannot restore snapshot ${snapshot.stdout.trim()} in ${record.repoRoot}: shallow clone boundary; run \`git fetch --unshallow\` in ${record.repoRoot}. If the snapshot remains shallow, recover its parent from the original repository before retrying.`,
+        { cause: error },
+      );
+    }
     params.commitGuard?.();
     await fs.mkdir(path.dirname(record.path), { recursive: true });
     params.commitGuard?.();

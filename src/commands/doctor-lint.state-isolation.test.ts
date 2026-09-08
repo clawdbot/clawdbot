@@ -317,59 +317,64 @@ describe("doctor lint state isolation", () => {
     },
   );
 
-  it("restores the private view after an auth detector throws", async () => {
-    await withOpenClawTestState({ prefix: "openclaw-doctor-lint-auth-throw-" }, async (state) => {
-      await state.writeConfig({ memory: { search: { enabled: false } } });
-      const sourceConfigPath = process.env.OPENCLAW_CONFIG_PATH;
-      const observedStates: Array<string | undefined> = [];
-      mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([
-        {
-          id: "core/doctor/auth-profiles",
-          kind: "core",
-          description: "checks source auth state",
-          async detect() {
-            observedStates.push(process.env.OPENCLAW_STATE_DIR);
-            throw new Error("synthetic auth detector failure");
+  it.each([
+    {
+      privateCheckId: "core/doctor/runtime-tool-schemas",
+      extraIds: ["memory-core/managed-local-embedding-setup"],
+    },
+    { privateCheckId: "core/doctor/project-clone-shape", extraIds: [] },
+  ])(
+    "restores the private view for $privateCheckId after an auth detector throws",
+    async ({ privateCheckId, extraIds }) => {
+      await withOpenClawTestState({ prefix: "openclaw-doctor-lint-auth-throw-" }, async (state) => {
+        await state.writeConfig({ memory: { search: { enabled: false } } });
+        const sourceConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+        const observedStates: Array<string | undefined> = [];
+        mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([
+          {
+            id: "core/doctor/auth-profiles",
+            kind: "core",
+            description: "checks source auth state",
+            async detect() {
+              observedStates.push(process.env.OPENCLAW_STATE_DIR);
+              throw new Error("synthetic auth detector failure");
+            },
           },
-        },
-        {
-          id: "core/doctor/runtime-tool-schemas",
-          kind: "core",
-          description: "checks private runtime state",
-          async detect() {
-            observedStates.push(process.env.OPENCLAW_STATE_DIR);
-            return [];
+          {
+            id: privateCheckId,
+            kind: "core",
+            description: "checks private runtime state",
+            async detect() {
+              observedStates.push(process.env.OPENCLAW_STATE_DIR);
+              return [];
+            },
           },
-        },
-      ]);
-      const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-      try {
-        await expect(
-          runDoctorLintCli(runtime, {
-            json: true,
-            onlyIds: [
-              "core/doctor/auth-profiles",
-              "memory-core/managed-local-embedding-setup",
-              "core/doctor/runtime-tool-schemas",
-            ],
-          }),
-        ).resolves.toBe(1);
-        expect(observedStates[0]).toBe(state.stateDir);
-        expect(observedStates[1]).toEqual(expect.any(String));
-        expect(observedStates[1]).not.toBe(state.stateDir);
-        expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0])).findings).toEqual([
-          expect.objectContaining({
-            checkId: "core/doctor/auth-profiles",
-            message: "health check threw: synthetic auth detector failure",
-          }),
         ]);
-        expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
-        expect(process.env.OPENCLAW_CONFIG_PATH).toBe(sourceConfigPath);
-      } finally {
-        stdout.mockRestore();
-      }
-    });
-  });
+        const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+        try {
+          await expect(
+            runDoctorLintCli(runtime, {
+              json: true,
+              onlyIds: ["core/doctor/auth-profiles", ...extraIds, privateCheckId],
+            }),
+          ).resolves.toBe(1);
+          expect(observedStates[0]).toBe(state.stateDir);
+          expect(observedStates[1]).toEqual(expect.any(String));
+          expect(observedStates[1]).not.toBe(state.stateDir);
+          expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0])).findings).toEqual([
+            expect.objectContaining({
+              checkId: "core/doctor/auth-profiles",
+              message: "health check threw: synthetic auth detector failure",
+            }),
+          ]);
+          expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
+          expect(process.env.OPENCLAW_CONFIG_PATH).toBe(sourceConfigPath);
+        } finally {
+          stdout.mockRestore();
+        }
+      });
+    },
+  );
 
   it("keeps runtime schema OAuth inspection off the writable source state", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-lint-oauth-"));
