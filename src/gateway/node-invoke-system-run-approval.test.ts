@@ -735,6 +735,33 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expect(forwarded.sessionKey).toBe("agent:main:main");
   });
 
+  test("rejects a plan that omits the session identity stored in its approval binding", () => {
+    const sessionKey = "agent:main:discord:channel:123";
+    const record = makeRecord(echoSafeCommand, echoSafeArgv);
+    record.request.systemRunPlan = {
+      argv: echoSafeArgv,
+      cwd: null,
+      commandText: echoSafeCommand,
+      agentId: null,
+      sessionKey: null,
+    };
+    record.request.systemRunBinding = systemRunApprovalBinding(echoSafeArgv, {
+      agentId: "main",
+      sessionKey,
+    });
+
+    const result = sanitizeApprovedRun({
+      rawParams: { command: echoSafeArgv, agentId: "main", sessionKey },
+      record,
+    });
+
+    expectRejectedForwardingResult(
+      result,
+      "APPROVAL_REQUEST_MISMATCH",
+      "approval id does not match request",
+    );
+  });
+
   test("forwards a validated shell preview for legacy node allowlist matching", () => {
     const argv = ["/bin/sh", "-lc", "/bin/hostname"];
     const record = makeRecord('/bin/sh -lc "/bin/hostname"', argv);
@@ -976,6 +1003,38 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     const result = sanitizeApprovedChatReplay({
       record: makeChatRecord(wecomContext),
       rawParams: wecomContext,
+    });
+
+    expectAllowOnceForwardingResult(result);
+  });
+
+  test("rejects trusted backend Discord replay when the raw target does not match the canonical target", () => {
+    const discordContext = {
+      sessionKey: "agent:main:discord:channel:123",
+      turnSourceChannel: "discord",
+      turnSourceTo: "channel:123",
+      turnSourceAccountId: "default",
+      turnSourceThreadId: "456",
+    } satisfies Omit<Partial<ApprovedRunParamOverrides>, "command" | "rawCommand">;
+    const result = sanitizeApprovedChatReplay({
+      record: makeChatRecord(discordContext),
+      rawParams: { ...discordContext, turnSourceTo: "123" },
+    });
+
+    expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
+  });
+
+  test("accepts trusted backend Discord replay when the canonical target matches", () => {
+    const discordContext = {
+      sessionKey: "agent:main:discord:channel:123",
+      turnSourceChannel: "discord",
+      turnSourceTo: "channel:123",
+      turnSourceAccountId: "default",
+      turnSourceThreadId: "456",
+    } satisfies Omit<Partial<ApprovedRunParamOverrides>, "command" | "rawCommand">;
+    const result = sanitizeApprovedChatReplay({
+      record: makeChatRecord(discordContext),
+      rawParams: discordContext,
     });
 
     expectAllowOnceForwardingResult(result);

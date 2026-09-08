@@ -1296,6 +1296,33 @@ describe("executeNodeHostCommand", () => {
     expect(resolveExecHostApprovalContextMock).toHaveBeenCalledTimes(2);
   });
 
+  it("folds requested identity into the systemRunPlan when the node omits it", async () => {
+    const sessionKey = "agent:main:discord:channel:123";
+    const agentId = "main";
+    parsePreparedSystemRunPayloadMock.mockReturnValue({
+      plan: { ...preparedPlan, sessionKey: null, agentId: null },
+      execPolicy: { security: "full", ask: "off" },
+    });
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "always",
+      askFallback: "deny",
+    });
+
+    const result = await executeNodeHostCommand(
+      createNodeHostRequest({ sessionKey, agentId, turnSourceChannel: "discord" }),
+    );
+
+    expect(result.details?.status).toBe("completed");
+    const registeredPlan = requireRegisteredApprovalRequest().systemRunPlan;
+    expect(registeredPlan).toEqual(expect.objectContaining({ sessionKey, agentId }));
+    await vi.waitFor(() => expect(callGatewayToolMock).toHaveBeenCalledTimes(3));
+    const runParams = requireRunParams(requireGatewayCommand("system.run"));
+    expect(runParams.systemRunPlan).toEqual(registeredPlan);
+    expect(runParams.sessionKey).toBe(sessionKey);
+  });
+
   it("forwards cancellation without removing detached node approval scopes", async () => {
     const abortController = new AbortController();
     resolveExecHostApprovalContextMock.mockReturnValue({

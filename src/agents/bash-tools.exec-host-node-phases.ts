@@ -469,14 +469,23 @@ export async function prepareNodeSystemRun(params: {
   if (!prepared) {
     throw new Error("invalid system.run.prepare response");
   }
+  // The plan is the approval binding fact and goes verbatim to both registration and
+  // replay: fold the identity fallbacks into it here so a Companion that omits
+  // cwd/agentId/sessionKey cannot leave the record bound to values the replay never sends.
+  const plan: SystemRunApprovalPlan = {
+    ...prepared.plan,
+    cwd: prepared.plan.cwd ?? params.request.workdir ?? null,
+    agentId: prepared.plan.agentId ?? params.request.agentId ?? null,
+    sessionKey: prepared.plan.sessionKey ?? params.request.sessionKey ?? null,
+  };
   return {
-    plan: prepared.plan,
-    argv: prepared.plan.argv,
-    rawCommand: prepared.plan.commandText,
-    transportRawCommand: prepared.plan.commandText,
-    cwd: prepared.plan.cwd ?? params.request.workdir,
-    agentId: prepared.plan.agentId ?? params.request.agentId,
-    sessionKey: prepared.plan.sessionKey ?? params.request.sessionKey,
+    plan,
+    argv: plan.argv,
+    rawCommand: plan.commandText,
+    transportRawCommand: plan.commandText,
+    cwd: plan.cwd ?? undefined,
+    agentId: plan.agentId ?? undefined,
+    sessionKey: plan.sessionKey ?? undefined,
     ...(prepared.execPolicy ? { execPolicy: prepared.execPolicy } : {}),
     allowAlwaysCoverage: prepared.allowAlwaysCoverage,
   };
