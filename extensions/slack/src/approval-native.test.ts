@@ -10,6 +10,9 @@ import {
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { slackApprovalCapability } from "./approval-native.js";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
+
+type SlackInstallationStateRegistration = ReturnType<typeof registerSlackInstallationState>;
 
 function buildConfig(
   overrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["slack"]>>,
@@ -31,8 +34,12 @@ function buildConfig(
 }
 
 const tempDirs: string[] = [];
+const installationStates: SlackInstallationStateRegistration[] = [];
 
 afterEach(() => {
+  for (const installationState of installationStates.splice(0)) {
+    installationState.release();
+  }
   closeOpenClawAgentDatabasesForTest();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -100,8 +107,56 @@ async function resolvePluginOriginTarget(sessionKey: string) {
 }
 
 describe("slack native approval adapter", () => {
-  it("subscribes the native runtime to exec and plugin approval events", () => {
-    expect(slackApprovalCapability.nativeRuntime?.eventKinds).toEqual(["exec", "plugin"]);
+  it("reports each configured account as a raw route candidate", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          accounts: {
+            default: {
+              botToken: "xoxb-default",
+              appToken: "xapp-default",
+              execApprovals: { enabled: true, approvers: ["U123APPROVER"] },
+            },
+            ops: {
+              botToken: "xoxb-ops",
+              appToken: "xapp-ops",
+              execApprovals: { enabled: true, approvers: ["U123APPROVER"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const request = {
+      id: "req-unbound",
+      request: { command: "echo hi", turnSourceChannel: "slack" },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    };
+
+    expect(
+      slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
+        cfg,
+        accountId: "default",
+        approvalKind: "exec",
+        request,
+      }),
+    ).toBe(true);
+    expect(
+      slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
+        cfg,
+        accountId: "ops",
+        approvalKind: "exec",
+        request,
+      }),
+    ).toBe(true);
+  });
+
+  it("subscribes the native runtime to all approval events", () => {
+    expect(slackApprovalCapability.nativeRuntime?.eventKinds).toEqual([
+      "exec",
+      "plugin",
+      "system-agent",
+    ]);
   });
 
   it("keeps approval availability enabled when approvers exist but native delivery is off", () => {
@@ -175,27 +230,23 @@ describe("slack native approval adapter", () => {
     });
   });
 
-  it("describes the correct Slack exec-approval setup path", () => {
+  it.each([
+    [undefined, "channels.slack"],
+    ["default", "channels.slack"],
+    ["work", "channels.slack.accounts.work"],
+  ])("describes explicit Slack exec-approval setup for account %s", (accountId, prefix) => {
     const text = slackApprovalCapability.describeExecApprovalSetup?.({
       channel: "slack",
       channelLabel: "Slack",
+      accountId,
     });
 
-    expect(text).toContain("`channels.slack.execApprovals.approvers`");
-    expect(text).toContain("`commands.ownerAllowFrom`");
+    expect(text).toContain(
+      `Configure \`${prefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\``,
+    );
+    expect(text).toContain(`set \`${prefix}.execApprovals.enabled\` to \`auto\` or \`true\``);
+    expect(text).toContain("Unset or `false` disables native exec approval delivery.");
     expect(text).not.toContain("`channels.slack.dm.allowFrom`");
-  });
-
-  it("describes the named-account Slack exec-approval setup path", () => {
-    const text = slackApprovalCapability.describeExecApprovalSetup?.({
-      channel: "slack",
-      channelLabel: "Slack",
-      accountId: "work",
-    });
-
-    expect(text).toContain("`channels.slack.accounts.work.execApprovals.approvers`");
-    expect(text).toContain("`commands.ownerAllowFrom`");
-    expect(text).not.toContain("`channels.slack.execApprovals.approvers`");
   });
 
   it("does not reuse exec setup copy for plugin approval setup", () => {
@@ -215,6 +266,101 @@ describe("slack native approval adapter", () => {
       to: "channel:C123",
       threadId: "1712345678.123456",
     });
+  });
+
+  it("preserves the Grid team on approval origin and approver DM targets", async () => {
+    const cfg = buildConfig();
+    installationStates.push(registerSlackInstallationState("default", "enterprise"));
+    const request = {
+      ...createExecApprovalRequest(),
+      request: {
+        ...createExecApprovalRequest().request,
+        turnSourceTo: "team:T123:channel:C123",
+      },
+    };
+
+    expect(
+      slackApprovalCapability.native?.resolveOriginTarget?.({
+        cfg,
+        accountId: "default",
+        approvalKind: "exec",
+        request,
+      }),
+    ).toEqual({
+      to: "team:T123:channel:C123",
+      threadId: "1712345678.123456",
+    });
+    expect(
+      slackApprovalCapability.native?.resolveApproverDmTargets?.({
+        cfg,
+        accountId: "default",
+        approvalKind: "exec",
+        request,
+      }),
+    ).toEqual([{ to: "team:T123:user:U123APPROVER" }]);
+  });
+
+  it("selects plugin approver DMs for the validated Grid workspace", async () => {
+    const cfg = buildConfig({
+      allowFrom: ["team:T11111111:user:U111OWNER", "U222OWNER"],
+      execApprovals: { enabled: "auto", target: "dm" },
+    });
+    installationStates.push(registerSlackInstallationState("default", "enterprise"));
+    const request = {
+      id: "plugin:req-1",
+      request: {
+        title: "Plugin approval",
+        description: "Allow access",
+        turnSourceChannel: "slack",
+        turnSourceAccountId: "default",
+        turnSourceTo: "team:T11111111:channel:C11111111",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    };
+
+    expect(
+      slackApprovalCapability.native?.resolveApproverDmTargets?.({
+        cfg,
+        accountId: "default",
+        approvalKind: "plugin",
+        request,
+      }),
+    ).toEqual([{ to: "team:T11111111:user:U111OWNER" }, { to: "team:T11111111:user:U222OWNER" }]);
+    expect(
+      slackApprovalCapability.native?.resolveApproverDmTargets?.({
+        cfg,
+        accountId: "default",
+        approvalKind: "plugin",
+        request: {
+          ...request,
+          request: { ...request.request, turnSourceTo: "team:T22222222:channel:C22222222" },
+        },
+      }),
+    ).toEqual([{ to: "team:T22222222:user:U222OWNER" }]);
+    expect(
+      slackApprovalCapability.native?.resolveApproverDmTargets?.({
+        cfg,
+        accountId: "default",
+        approvalKind: "plugin",
+        request: {
+          ...request,
+          request: { ...request.request, turnSourceTo: "channel:C11111111" },
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it("does not enable Grid approval delivery without a trusted team-qualified origin", () => {
+    installationStates.push(registerSlackInstallationState("default", "enterprise"));
+    const capabilities = slackApprovalCapability.native?.describeDeliveryCapabilities({
+      cfg: buildConfig(),
+      accountId: "default",
+      approvalKind: "exec",
+      request: createExecApprovalRequest(),
+    });
+
+    expect(capabilities?.enabled).toBe(false);
   });
 
   it("resolves approver dm targets", async () => {
@@ -767,7 +913,7 @@ describe("slack native approval adapter", () => {
     );
 
     expect(target).toEqual({
-      to: "channel:team:T123:channel:C08GQH53EJM",
+      to: "team:T123:channel:C08GQH53EJM",
       threadId: undefined,
     });
   });

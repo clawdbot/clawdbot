@@ -106,6 +106,15 @@ describe("detectRespawnSupervisor", () => {
         "win32",
       ),
     ).toBeNull();
+    expect(
+      detectRespawnSupervisor(
+        {
+          OPENCLAW_SERVICE_MARKER: "other",
+          OPENCLAW_SERVICE_KIND: "gateway",
+        },
+        "win32",
+      ),
+    ).toBeNull();
   });
 
   it("ignores service markers on non-Windows platforms and unknown platforms", () => {

@@ -1,0 +1,33 @@
+title: CLI plugin install sources
+
+scenario:
+  id: cli-plugin-install-sources
+  surface: cli
+  category: cli.plugin-and-channel-setup
+  coverage:
+    primary:
+      - cli.plugin-install-sources
+  objective: Verify the plugin CLI installs supported bundled, local, archive, npm, ClawHub, marketplace, file, and Git sources through executable commands.
+  successCriteria:
+    - The plugin CLI installs a bundled plugin, tarball archive, local directory, file package, npm package, and Git source.
+    - Local directory installation preserves vendored dependencies.
+    - Invalid npm metadata fails without creating an install record.
+    - Moving and exact Git references update and resolve to the expected commits.
+    - Hermetic ClawHub and marketplace fixtures install, update, inspect, and uninstall plugins.
+    - QA evidence fails when any required source-class assertion marker is absent.
+  docsRefs:
+    - docs/cli/plugins.md
+  codeRefs:
+    - src/cli/plugins-cli.ts
+    - src/plugins/install.ts
+    - src/plugins/install-source-info.ts
+    - scripts/e2e/lib/plugins/sweep.sh
+    - scripts/e2e/lib/bundled-plugin-install-uninstall/sweep.sh
+  execution:
+    kind: script
+    path: scripts/e2e/qa-plugin-install-sources.mjs
+    summary: Runs the hermetic plugin source sweep plus the packaged bundled-plugin install/uninstall lane and emits bounded QA evidence.
+    timeoutMs: 1800000
+    args:
+      - --artifact-base
+      - ${outputDir}

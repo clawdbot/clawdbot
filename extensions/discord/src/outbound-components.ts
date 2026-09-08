@@ -4,6 +4,7 @@ import {
   createLazyRuntimeModule,
   createLazyRuntimeNamedExport,
 } from "openclaw/plugin-sdk/lazy-runtime";
+import { resolveAskUserQuestionOptionIndices } from "openclaw/plugin-sdk/reply-payload";
 import { readDiscordComponentSpec, type DiscordComponentMessageSpec } from "./components.js";
 
 type DiscordComponentSendFn = typeof import("./send.components.js").sendDiscordComponentMessage;
@@ -134,6 +135,7 @@ export async function buildDiscordPresentationPayload(params: {
 }): Promise<typeof params.payload | null> {
   const componentSpec = (await loadDiscordSharedInteractive()).buildDiscordPresentationComponents(
     params.presentation,
+    { questionOptionIndices: resolveAskUserQuestionOptionIndices(params.payload) },
   );
   if (!componentSpec) {
     return null;

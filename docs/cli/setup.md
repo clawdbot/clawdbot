@@ -5,7 +5,7 @@ read_when:
   - You're doing first-run setup with the onboarding wizard
   - You want to set the default workspace path
   - You need the baseline-only setup flag for scripts
-title: "Setup"
+title: "Setup CLI"
 ---
 
 # `openclaw setup`
@@ -37,10 +37,17 @@ Guided inference detection runs on the Gateway host on macOS or Linux. The CLI
 and macOS app call the same Gateway-owned detector, which checks configured
 models, supported CLI logins, API-key environment variables, and already
 installed Ollama or LM Studio models. Local models are never downloaded by this
-automatic pass. Detected local runtimes are auto-tested after CLI and API-key
-candidates; when several local models are available, OpenClaw prefers the
-strongest tool-calling instruct family. The selected candidate must answer a
-real completion before its provider and model configuration is saved.
+discovery pass. Both CLI onboarding and the macOS app wait for you to choose a
+connection before testing it. A failed or cancelled attempt never selects another
+provider automatically. A selected candidate must answer a real completion before
+its provider and model configuration is saved.
+
+Initial Claude Code and Codex detection checks executable versions without
+running auth-status commands or starting an app server. Readable Codex
+credentials are reported as stored evidence; the active login remains
+unverified during detection. Stored credentials do not
+receive verified-subscription priority over environment API keys.
+
 Pi and OpenCode CLIs may also be reported for context when they cannot serve as
 the reusable inference route for guided setup. Gemini CLI and Antigravity are
 not offered as detected setup routes.
@@ -63,34 +70,39 @@ entry for the same inference-gated OpenClaw assistant.
 
 ## Options
 
-| Flag                       | Description                                                                                          |
-| -------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `-m, --message <text>`     | Run one OpenClaw request.                                                                            |
-| `--yes`                    | Approve persistent config writes for one `--message` request.                                        |
-| `--workspace <dir>`        | Workspace proposal; existing fleets require classic confirmation and are preserved noninteractively. |
-| `--baseline`               | Create baseline config/workspace/session folders without onboarding.                                 |
-| `--wizard`                 | Force interactive onboarding.                                                                        |
-| `--tui`                    | Use the terminal hatch instead of the browser handoff.                                               |
-| `--non-interactive`        | Run onboarding without prompts.                                                                      |
-| `--accept-risk`            | Acknowledge full-system agent access risk; required with `--non-interactive`.                        |
-| `--mode <mode>`            | Onboarding mode: `local` or `remote`.                                                                |
-| `--flow <flow>`            | Onboard flow: `quickstart`, `advanced`, `manual`, or `import`.                                       |
-| `--reset`                  | Reset config + credentials + sessions before onboarding (workspace only with `--reset-scope full`).  |
-| `--reset-scope <scope>`    | Reset scope: `config`, `config+creds+sessions`, or `full`.                                           |
-| `--import-from <provider>` | Migration provider to run during onboarding.                                                         |
-| `--import-source <path>`   | Source agent home for `--import-from`.                                                               |
-| `--import-secrets`         | Import supported secrets during onboarding migration.                                                |
-| `--remote-url <url>`       | Remote Gateway WebSocket URL.                                                                        |
-| `--remote-token <token>`   | Remote Gateway token (optional).                                                                     |
-| `--json`                   | Configured system: OpenClaw overview. Onboarding route: onboarding summary.                          |
+| Flag                           | Description                                                                                          |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `-m, --message <text>`         | Run one OpenClaw request.                                                                            |
+| `--yes`                        | Approve persistent config writes for one `--message` request.                                        |
+| `--workspace <dir>`            | Workspace proposal; existing fleets require classic confirmation and are preserved noninteractively. |
+| `--baseline`                   | Create baseline config/workspace/session folders without onboarding.                                 |
+| `--wizard`                     | Force interactive onboarding.                                                                        |
+| `--tui`                        | Use the terminal hatch instead of the browser handoff.                                               |
+| `--non-interactive`            | Run onboarding without prompts.                                                                      |
+| `--accept-risk`                | Acknowledge full-system agent access risk; required with `--non-interactive`.                        |
+| `--mode <mode>`                | Onboarding mode: `local` or `remote`.                                                                |
+| `--flow <flow>`                | Onboard flow: `quickstart`, `advanced`, `manual`, or `import`.                                       |
+| `--reset`                      | Reset config + credentials + sessions before onboarding (workspace only with `--reset-scope full`).  |
+| `--reset-scope <scope>`        | Reset scope: `config`, `config+creds+sessions`, or `full`.                                           |
+| `--import-from <provider>`     | Migration provider to run during onboarding.                                                         |
+| `--import-source <path>`       | Source agent home for `--import-from`.                                                               |
+| `--import-secrets`             | Import supported secrets during onboarding migration.                                                |
+| `--remote-url <url>`           | Remote Gateway WebSocket URL.                                                                        |
+| `--remote-token <token>`       | Remote Gateway token (optional).                                                                     |
+| `--remote-password <password>` | Remote Gateway password (optional).                                                                  |
+| `--json`                       | Configured system: OpenClaw overview. Onboarding route: onboarding summary.                          |
 
 `--classic` and `--non-interactive` are mutually exclusive: classic opens the
 prompted wizard, while noninteractive setup uses the automation path.
-In interactive onboarding, `--remote-url` and `--remote-token` prefill the
-remote Gateway step and take precedence over stored remote values for that run.
-Changing the URL does not reuse stored credentials unless you also pass a token.
-The token remains masked and uses the wizard's selected plaintext or SecretRef
-storage mode.
+In interactive onboarding, `--remote-url`, `--remote-token`, and
+`--remote-password` prefill the remote Gateway step and take precedence over
+stored remote values for that run. Pass either a token or a password, not both.
+Changing the URL does not reuse stored credentials unless you also provide a new
+token or password. The credential remains masked and uses the wizard's selected
+plaintext or SecretRef storage mode. `--gateway-token`, `--gateway-token-ref-env`,
+and `--gateway-password` configure a local Gateway and are not valid in remote
+mode. For remote token SecretRefs, set `OPENCLAW_GATEWAY_TOKEN` and use
+`--remote-token` with `--secret-input-mode ref`.
 
 ### Baseline mode
 
@@ -113,6 +125,7 @@ openclaw setup --baseline
 openclaw setup --workspace ~/.openclaw/workspace
 openclaw setup --import-from hermes --import-source ~/.hermes
 openclaw setup --non-interactive --accept-risk --mode remote --remote-url wss://gateway-host:18789 --remote-token <token>
+openclaw setup --non-interactive --accept-risk --mode remote --remote-url wss://gateway-host:18789 --remote-password <password>
 ```
 
 ## Notes

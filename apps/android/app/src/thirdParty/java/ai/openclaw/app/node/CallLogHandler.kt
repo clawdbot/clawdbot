@@ -157,7 +157,10 @@ internal fun escapeCallLogSqlLikeLiteral(value: String): String =
           append('\\')
           append(ch)
         }
-        else -> append(ch)
+
+        else -> {
+          append(ch)
+        }
       }
     }
   }

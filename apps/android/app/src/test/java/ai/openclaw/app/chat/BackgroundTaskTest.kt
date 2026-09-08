@@ -11,7 +11,10 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
+@RunWith(RobolectricTestRunner::class)
 class BackgroundTaskTest {
   private val json = Json { ignoreUnknownKeys = true }
 
@@ -47,12 +50,25 @@ class BackgroundTaskTest {
   }
 
   @Test
+  fun runningTaskPrefersLiveActivityOverProgressSummary() {
+    val task =
+      parseBackgroundTasks(
+        json,
+        """{"tasks":[{"id":"task-activity","status":"running","runtime":"subagent","lastActivity":"Editing timeline rows","progressSummary":"Initial milestone"}]}""",
+      ).single()
+
+    assertEquals("Editing timeline rows", task.output)
+  }
+
+  @Test
   fun listsActiveAndRecentTasksWithoutRequestingPrompts() =
     runTest {
       val calls = mutableListOf<Pair<String, String?>>()
       val controller =
         ChatController(
           scope = backgroundScope,
+          commandOutbox = backgroundScope.createChatCommandOutbox(),
+          cacheScope = { ChatCacheScope("gateway-test", 1L) },
           json = json,
           requestGateway = { method, params ->
             calls += method to params
@@ -82,6 +98,8 @@ class BackgroundTaskTest {
       val controller =
         ChatController(
           scope = backgroundScope,
+          commandOutbox = backgroundScope.createChatCommandOutbox(),
+          cacheScope = { ChatCacheScope("gateway-test", 1L) },
           json = json,
           requestGateway = { method, params ->
             assertEquals("tasks.get", method)

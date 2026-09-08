@@ -11,6 +11,7 @@ export type TerminalPanelTab = {
   status: "connecting" | "live" | "exited";
   exitReason?: string;
   exitCode?: number | null;
+  exitSignal?: number | null;
   /** Set for PTYs an agent opened; surfaces an "agent" pill on the tab. */
   agentOwned?: boolean;
 };
@@ -37,6 +38,9 @@ function terminalTabStatusLabel(tab: TerminalPanelTab): string | null {
   if (tab.exitReason === "detached") {
     return t("terminal.detached");
   }
+  if (typeof tab.exitSignal === "number" && tab.exitSignal > 0) {
+    return t("terminal.exitedSignal", { signal: String(tab.exitSignal) });
+  }
   return tab.exitReason === "process_exit" && typeof tab.exitCode === "number"
     ? t("terminal.exitedCode", { code: String(tab.exitCode) })
     : t("terminal.exited");
@@ -47,7 +51,7 @@ export function renderTerminalPanelTabs(params: {
   activeId: string | null;
   booting: boolean;
   onSelect: (id: string) => void;
-  onClose: (id: string) => void;
+  onClose: (id: string) => void | Promise<void>;
   onNew: () => void;
 }) {
   const tabs: PanelTabStripTab[] = params.tabs.map((tab) => {

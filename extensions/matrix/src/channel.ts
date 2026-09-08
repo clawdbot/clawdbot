@@ -1,5 +1,4 @@
 // Matrix plugin module implements channel behavior.
-import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import {
   adaptScopedAccountAccessor,
   createScopedDmSecurityResolver,
@@ -9,13 +8,10 @@ import type {
   ChannelThreadingToolContext,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
-import {
-  createChannelMessageAdapterFromOutbound,
-  createRuntimeOutboundDelegates,
-} from "openclaw/plugin-sdk/channel-outbound";
+import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createAllowlistProviderOpenWarningCollector,
-  projectAccountConfigWarningCollector,
+  createConditionalWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { createScopedAccountReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
@@ -45,8 +41,9 @@ import {
 import { matrixMessageActions } from "./actions.js";
 import { matrixApprovalCapability } from "./approval-native.js";
 import { createMatrixPairingText, createMatrixProbeAccount } from "./channel-account-paths.js";
-import { DEFAULT_ACCOUNT_ID, matrixConfigAdapter } from "./config-adapter.js";
-import { MatrixChannelConfigSchema } from "./config-schema.js";
+import { createMatrixMessageAdapter } from "./channel-message-adapter.js";
+import { matrixPluginBase } from "./channel.setup.js";
+import { DEFAULT_ACCOUNT_ID } from "./config-adapter.js";
 import {
   legacyConfigRules as MATRIX_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig as normalizeMatrixCompatibilityConfig,
@@ -61,6 +58,7 @@ import {
   resolveMatrixAccountConfig,
   type ResolvedMatrixAccount,
 } from "./matrix/accounts.js";
+import { resolveMatrixConversationRouteOwner } from "./matrix/conversation-route-owner.js";
 import { normalizeMatrixUserId } from "./matrix/monitor/allowlist.js";
 import type { MatrixProbe } from "./matrix/probe.js";
 import {
@@ -76,16 +74,6 @@ import { matrixResolverAdapter } from "./resolver.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveMatrixOutboundSessionRoute } from "./session-route.js";
 import {
-  namedAccountPromotionKeys,
-  resolveSingleAccountPromotionTarget,
-  singleAccountKeysToMove,
-} from "./setup-contract.js";
-import {
-  createMatrixSetupWizardProxy,
-  matrixSetupAdapter,
-  matrixSetupContract,
-} from "./setup-core.js";
-import {
   defaultTopLevelPlacement,
   resolveMatrixInboundConversation,
 } from "./thread-binding-api.js";
@@ -93,28 +81,12 @@ import type { CoreConfig } from "./types.js";
 // Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
 let matrixStartupLock: Promise<void> = Promise.resolve();
 
-const loadMatrixSetupWizard = createLazyRuntimeNamedExport(
-  () => import("./setup-surface.js"),
-  "matrixSetupWizard",
-);
 const loadMatrixChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
   "matrixChannelRuntime",
 );
 
 const loadMatrixDoctorModule = createLazyRuntimeModule(() => import("./doctor.js"));
-
-const meta = {
-  id: "matrix",
-  label: "Matrix",
-  selectionLabel: "Matrix (plugin)",
-  docsPath: "/channels/matrix",
-  docsLabel: "matrix",
-  blurb: "open protocol; configure a homeserver + access token.",
-  order: 70,
-  markdownCapable: true,
-  quickstartAllowFrom: true,
-};
 
 function buildMatrixTrafficStatusSummary(
   snapshot?: {
@@ -212,7 +184,7 @@ const resolveMatrixDmPolicy = createScopedDmSecurityResolver<ResolvedMatrixAccou
   normalizeEntry: (raw) => normalizeMatrixUserId(raw),
 });
 
-const collectMatrixSecurityWarnings =
+const collectMatrixGroupPolicyWarnings =
   createAllowlistProviderOpenWarningCollector<ResolvedMatrixAccount>({
     providerConfigPresent: (cfg) => (cfg as CoreConfig).channels?.matrix !== undefined,
     resolveGroupPolicy: (account) => account.config.groupPolicy,
@@ -230,11 +202,11 @@ function resolveMatrixAccountConfigPath(accountId: string, field: string): strin
     : `channels.matrix.accounts.${accountId}.${field}`;
 }
 
-function collectMatrixSecurityWarningsForAccount(params: {
+function collectMatrixGroupPolicyWarningsForAccount(params: {
   account: ResolvedMatrixAccount;
   cfg: CoreConfig;
 }): string[] {
-  const warnings = collectMatrixSecurityWarnings(params);
+  const warnings = collectMatrixGroupPolicyWarnings(params);
   if (params.account.accountId !== DEFAULT_ACCOUNT_ID) {
     const groupPolicyPath = resolveMatrixAccountConfigPath(params.account.accountId, "groupPolicy");
     const groupsPath = resolveMatrixAccountConfigPath(params.account.accountId, "groups");
@@ -249,8 +221,26 @@ function collectMatrixSecurityWarningsForAccount(params: {
         .replace("channels.matrix.groupAllowFrom", groupAllowFromPath),
     );
   }
-  if (params.account.config.autoJoin !== "always") {
-    return warnings;
+  return warnings;
+}
+
+const collectMatrixOpenGroupFindings = createConditionalWarningCollector.findings({
+  collectWarnings: collectMatrixGroupPolicyWarningsForAccount,
+  checkId: "channels.matrix.groups.open",
+  severity: "critical",
+  title: "Matrix security warning",
+});
+
+function collectMatrixSecurityWarningsForAccount(params: {
+  account: ResolvedMatrixAccount;
+  cfg: CoreConfig;
+}) {
+  const findings = collectMatrixOpenGroupFindings(params);
+  if (
+    params.account.accountId !== DEFAULT_ACCOUNT_ID ||
+    params.account.config.autoJoin !== "always"
+  ) {
+    return findings;
   }
   const autoJoinPath = resolveMatrixAccountConfigPath(params.account.accountId, "autoJoin");
   const autoJoinAllowlistPath = resolveMatrixAccountConfigPath(
@@ -258,7 +248,7 @@ function collectMatrixSecurityWarningsForAccount(params: {
     "autoJoinAllowlist",
   );
   return [
-    ...warnings,
+    ...findings,
     `- Matrix invites: autoJoin="always" joins any invited room before message policy applies. Set ${autoJoinPath}="allowlist" + ${autoJoinAllowlistPath} (or ${autoJoinPath}="off") to restrict joins.`,
   ];
 }
@@ -373,6 +363,8 @@ const matrixChannelOutbound: ChannelOutboundAdapter = {
       replyTo: true,
       thread: true,
       messageSendingHooks: true,
+      afterCommit: true,
+      reconcileUnknownSend: true,
     },
   },
   presentationCapabilities: {
@@ -419,60 +411,23 @@ const matrixChannelOutbound: ChannelOutboundAdapter = {
   }),
 };
 
-const matrixMessageAdapter = createChannelMessageAdapterFromOutbound({
-  id: "matrix",
+const matrixMessageAdapter = createMatrixMessageAdapter({
   outbound: matrixChannelOutbound,
-  live: {
-    capabilities: {
-      draftPreview: true,
-      previewFinalization: true,
-      progressUpdates: true,
-      quietFinalization: true,
-    },
-    finalizer: {
-      capabilities: {
-        finalEdit: true,
-        normalFallback: true,
-        discardPending: true,
-        previewReceipt: true,
-      },
-    },
-  },
+  getRuntime: loadMatrixChannelRuntime,
 });
 
 export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
   createChatChannelPlugin<ResolvedMatrixAccount, MatrixProbe>({
     base: {
-      id: "matrix",
-      meta,
-      setupWizard: createMatrixSetupWizardProxy(async () => ({
-        matrixSetupWizard: await loadMatrixSetupWizard(),
-      })),
+      ...matrixPluginBase,
+      meta: { ...matrixPluginBase.meta, markdownCapable: true },
       capabilities: {
-        chatTypes: ["direct", "group", "thread"],
-        polls: true,
-        reactions: true,
-        threads: true,
-        media: true,
+        ...matrixPluginBase.capabilities,
         tts: {
           voice: {
             synthesisTarget: "voice-note",
           },
         },
-      },
-      reload: { configPrefixes: ["channels.matrix"] },
-      configSchema: MatrixChannelConfigSchema,
-      config: {
-        ...matrixConfigAdapter,
-        isConfigured: (account) => account.configured,
-        describeAccount: (account) =>
-          describeAccountSnapshot({
-            account,
-            configured: account.configured,
-            extra: {
-              baseUrl: account.homeserver,
-            },
-          }),
       },
       approvalCapability: matrixApprovalCapability,
       groups: {
@@ -481,6 +436,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
       },
       conversationBindings: {
         supportsCurrentConversationBinding: true,
+        bindingStore: "adapter",
         defaultTopLevelPlacement,
         setIdleTimeoutBySessionKey: ({ targetSessionKey, accountId, idleTimeoutMs }) =>
           setMatrixThreadBindingIdleTimeoutBySessionKey({
@@ -500,11 +456,16 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
         targetPrefixes: ["matrix"],
         targetIdComparison: "case-sensitive",
         normalizeTarget: normalizeMatrixMessagingTarget,
+        inferTargetChatType: ({ to }) => {
+          const target = resolveMatrixTargetIdentity(to);
+          return target ? (target.kind === "user" ? "direct" : "channel") : undefined;
+        },
         resolveInboundConversation: ({ to, conversationId, threadId }) =>
           resolveMatrixInboundConversation({ to, conversationId, threadId }),
         resolveDeliveryTarget: ({ conversationId, parentConversationId }) =>
           resolveMatrixDeliveryTarget({ conversationId, parentConversationId }),
         resolveOutboundSessionRoute: (params) => resolveMatrixOutboundSessionRoute(params),
+        resolveConversationRouteOwner: resolveMatrixConversationRouteOwner,
         targetResolver: {
           looksLikeId: (raw) => {
             const trimmed = raw.trim();
@@ -543,18 +504,6 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
       secrets: {
         secretTargetRegistryEntries,
         collectRuntimeConfigAssignments,
-      },
-      setup: {
-        ...matrixSetupAdapter,
-        singleAccountKeysToMove,
-        namedAccountPromotionKeys,
-        resolveSingleAccountPromotionTarget,
-      },
-      setupContract: {
-        ...matrixSetupContract,
-        singleAccountKeysToMove,
-        namedAccountPromotionKeys,
-        resolveSingleAccountPromotionTarget,
       },
       bindings: {
         compileConfiguredBinding: ({ conversationId }) =>
@@ -674,10 +623,8 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
     },
     security: {
       resolveDmPolicy: resolveMatrixDmPolicy,
-      collectWarnings: projectAccountConfigWarningCollector(
-        (cfg) => cfg as CoreConfig,
-        collectMatrixSecurityWarningsForAccount,
-      ),
+      collectWarnings: ({ account, cfg }) =>
+        collectMatrixSecurityWarningsForAccount({ account, cfg: cfg as CoreConfig }),
     },
     pairing: {
       text: createMatrixPairingText(

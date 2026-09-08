@@ -31,7 +31,10 @@ import {
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { resetTelegramReplyFenceForTest as resetTelegramReplyFenceForTests } from "./runtime.test-support.js";
-import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
+import {
+  createTelegramSendChatActionHandler,
+  type TelegramSendChatActionHandler,
+} from "./sendchataction-401-backoff.js";
 
 type RecordedWireCall = Parameters<WireRecorder["recordWireCall"]>[0];
 type BufferedDispatcherParams = Parameters<
@@ -183,6 +186,7 @@ function createTraceTelegramDeps(captured: CapturedDispatch): TelegramBotDeps {
       providers: [],
       resolvedDefault: { provider: "openai", model: "gpt-test" },
       modelNames: new Map<string, string>(),
+      modelCatalog: [],
     })) as unknown as TelegramBotDeps["buildModelsProviderData"],
     listSkillCommandsForAgents:
       (() => []) as unknown as TelegramBotDeps["listSkillCommandsForAgents"],
@@ -204,13 +208,15 @@ async function setupTelegramTrace(recorder: WireRecorder) {
     wireFaults: [],
   };
   const api = createRecordingTelegramApi(state);
-  // Real per-account handler so typing choreography (401 backoff, cooldowns)
-  // runs the production path over the recording API.
-  const sendChatActionHandler = createTelegramSendChatActionHandler({
-    sendChatActionFn: (chatId, action, threadParams) =>
-      api.sendChatAction(chatId, action, threadParams) as Promise<true>,
-    logger: () => {},
-  });
+  const chatActions = createTelegramSendChatActionHandler({ logger: () => {} });
+  const sendChatActionHandler: TelegramSendChatActionHandler = {
+    sendChatAction: (chatId, action, threadParams) =>
+      chatActions.sendChatAction(chatId, action, threadParams, () =>
+        api.sendChatAction(chatId, action, threadParams),
+      ),
+    isSuspended: chatActions.isSuspended,
+    reset: chatActions.reset,
+  };
   // Real context construction (route, thread spec, typing cue, turn record);
   // ingress/spool stays out of scope — the context build is the delivery-side
   // boundary the dispatcher consumes.

@@ -1,41 +1,41 @@
 // Doctor-only import for retired workspace setup and attestation files.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { TextDecoder } from "node:util";
 import { root, type Root } from "@openclaw/fs-safe";
-import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import {
   LEGACY_WORKSPACE_ATTESTATION_DIRNAME,
-  LEGACY_WORKSPACE_ATTESTATION_HEADER,
   LEGACY_WORKSPACE_ATTESTATION_MAX_BYTES,
   LEGACY_WORKSPACE_STATE_CURRENT_FILENAME,
   WORKSPACE_DOCTOR_CLAIM_SUFFIX,
+  legacyWorkspaceSiblingAttestationMayExist,
   resolveLegacyWorkspaceSourcePaths,
 } from "../agents/workspace-legacy-state.js";
-import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-store.js";
+import { listWorkspaceStateDirs } from "../agents/workspace-state-dirs.js";
+import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import { resolveLegacyStateDirs } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "./errors.js";
-import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
+import { resolveUserPath } from "./home-dir.js";
+import { pathMayExistSync } from "./path-existence.js";
+import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
-  legacyMigrationPathMayExist as pathMayExist,
+  LegacyMigrationSourceClaim,
   legacyMigrationSourceOrClaimMayExist as sourceOrClaimMayExist,
   legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
 } from "./state-migrations.source-snapshot.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 import {
-  markSourceRemoved,
+  markLegacyMigrationSourceRemoved,
   readReceipt,
   type MigrationReceipt,
 } from "./state-migrations.workspace-setup-receipts.js";
-import { listSandboxWorkspaceDirs } from "./state-migrations.workspace-setup-sandbox.js";
 import {
   canonicalCoversParsedSource,
   importAndRecordReceipt,
   parseSource,
-  type ParsedSource,
   type SourceSnapshot,
 } from "./state-migrations.workspace-setup-store.js";
 import type {
@@ -45,8 +45,6 @@ import type {
 
 const SETUP_MAX_BYTES = 64 * 1024;
 const CLAIM_SUFFIX = WORKSPACE_DOCTOR_CLAIM_SUFFIX;
-const MIGRATION_LOCK_TIMEOUT_MS = 250;
-const MIGRATION_LOCK_POLL_INTERVAL_MS = 25;
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
 async function readBoundedRegularFile(params: {
@@ -111,10 +109,62 @@ async function readBoundedRegularFile(params: {
       sha256: createHash("sha256").update(buffer).digest("hex"),
       size: after.size,
       raw,
+      buffer,
     };
   } finally {
     await opened[Symbol.asyncDispose]();
   }
+}
+
+async function archiveWorkspaceSetupSource(
+  sourceRoot: Root,
+  source: LegacyWorkspaceStateSource,
+  snapshot: SourceSnapshot,
+  existingArchivePath?: string,
+): Promise<string> {
+  const archivePath =
+    existingArchivePath ?? `${source.sourcePath}.migrated.${snapshot.sha256}.${randomUUID()}`;
+  const relativePath = path.relative(source.rootDir, archivePath);
+  // The receipt publishes only a verified backup. A crash during creation leaves
+  // an unreferenced artifact, so the next attempt can safely use a fresh name.
+  if (!existingArchivePath) {
+    await sourceRoot.create(relativePath, snapshot.buffer, { mode: 0o600 });
+  }
+  const archived = await readBoundedRegularFile({
+    sourceRoot,
+    relativePath,
+    sourcePath: archivePath,
+    maxBytes: SETUP_MAX_BYTES,
+  });
+  if (archived.sha256 !== snapshot.sha256) {
+    throw new Error(`workspace setup backup differs from the claimed source: ${archivePath}`);
+  }
+  return archivePath;
+}
+
+function createLegacySourceClaim(
+  sourceRoot: Root,
+  source: LegacyWorkspaceStateSource,
+): LegacyMigrationSourceClaim<SourceSnapshot> {
+  return new LegacyMigrationSourceClaim({
+    stateRoot: sourceRoot,
+    stateDir: source.rootDir,
+    sourcePath: source.sourcePath,
+    label: "workspace",
+    claimSuffix: CLAIM_SUFFIX,
+    formatError: formatErrorMessage,
+    readSnapshot: (sourcePath) =>
+      readBoundedRegularFile({
+        sourceRoot,
+        relativePath:
+          sourcePath === source.sourcePath
+            ? source.relativePath
+            : `${source.relativePath}${CLAIM_SUFFIX}`,
+        sourcePath,
+        maxBytes:
+          source.kind === "setup" ? SETUP_MAX_BYTES : LEGACY_WORKSPACE_ATTESTATION_MAX_BYTES,
+      }),
+  });
 }
 
 function createLegacySource(
@@ -132,39 +182,6 @@ function createLegacySource(
     throw new Error("legacy workspace source is outside its migration root");
   }
   return { ...params, rootDir, relativePath, sourcePath };
-}
-
-function siblingAttestationNeedsDoctor(filePath: string): boolean {
-  try {
-    const before = fs.lstatSync(filePath);
-    if (!before.isFile()) {
-      return false;
-    }
-    const noFollow = typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0;
-    let fd: number;
-    try {
-      fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow);
-    } catch {
-      // An unreadable regular file could be an owned marker. Doctor must surface it.
-      return true;
-    }
-    try {
-      const opened = fs.fstatSync(fd);
-      if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) {
-        return true;
-      }
-      const expected = Buffer.from(`${LEGACY_WORKSPACE_ATTESTATION_HEADER}\n`, "utf8");
-      const bytes = Buffer.alloc(expected.length);
-      const read = fs.readSync(fd, bytes, 0, bytes.length, 0);
-      return read === expected.length && bytes.equals(expected);
-    } catch {
-      return true;
-    } finally {
-      fs.closeSync(fd);
-    }
-  } catch {
-    return false;
-  }
 }
 
 function listOrphanAttestationSources(params: {
@@ -261,8 +278,8 @@ function addLegacyWorkspaceSources(params: {
   }
   for (const [index, sourcePath] of paths.siblingAttestationPaths.entries()) {
     if (
-      !pathMayExist(`${sourcePath}${CLAIM_SUFFIX}`) &&
-      !siblingAttestationNeedsDoctor(sourcePath)
+      !pathMayExistSync(`${sourcePath}${CLAIM_SUFFIX}`) &&
+      !legacyWorkspaceSiblingAttestationMayExist(sourcePath)
     ) {
       continue;
     }
@@ -308,16 +325,21 @@ export function detectLegacyWorkspaceState(params: {
     }
   };
 
-  for (const workspaceDir of listAgentWorkspaceDirs(params.cfg)) {
-    addLegacyWorkspaceSources({ workspaceDir, env, homedir, add });
+  const workspaceDirs = new Set(
+    listWorkspaceStateDirs({
+      cfg: params.cfg,
+      env,
+      homedir,
+      stateDir: params.stateDir,
+    }),
+  );
+  // Explicit fleets may use only subdirectories of this still-configured root.
+  // Doctor must discover its retired state without making it a runtime workspace.
+  const sharedWorkspace = params.cfg.agents?.defaults?.workspace?.trim();
+  if (sharedWorkspace) {
+    workspaceDirs.add(resolveUserPath(sharedWorkspace, env, homedir));
   }
-
-  for (const workspaceDir of listSandboxWorkspaceDirs({
-    cfg: params.cfg,
-    env,
-    homedir,
-    stateDir: params.stateDir,
-  })) {
+  for (const workspaceDir of workspaceDirs) {
     addLegacyWorkspaceSources({ workspaceDir, env, homedir, add });
   }
 
@@ -331,6 +353,13 @@ export function detectLegacyWorkspaceState(params: {
       left.sourcePath.localeCompare(right.sourcePath),
   );
   return { sources, hasLegacy: sources.length > 0 };
+}
+
+function formatLegacyWorkspaceReadWarning(
+  source: LegacyWorkspaceStateSource,
+  error: unknown,
+): string {
+  return `Failed reading legacy workspace state at ${source.sourcePath}: ${formatErrorMessage(error)}`;
 }
 
 function assertConfiguredWorkspaceIdentity(source: LegacyWorkspaceStateSource): void {
@@ -349,86 +378,43 @@ function assertConfiguredWorkspaceIdentity(source: LegacyWorkspaceStateSource): 
   }
 }
 
-async function restoreClaim(params: {
-  sourceRoot: Root;
-  source: LegacyWorkspaceStateSource;
-}): Promise<string | null> {
-  const claimRelativePath = `${params.source.relativePath}${CLAIM_SUFFIX}`;
-  try {
-    if (!(await params.sourceRoot.exists(claimRelativePath))) {
-      return null;
-    }
-    if (await params.sourceRoot.exists(params.source.relativePath)) {
-      return `source path already exists: ${params.source.sourcePath}`;
-    }
-    await params.sourceRoot.move(claimRelativePath, params.source.relativePath);
-    return null;
-  } catch (error) {
-    return formatErrorMessage(error);
-  }
-}
-
 async function cleanupReceiptSource(params: {
   sourceRoot: Root;
+  sourceClaim: LegacyMigrationSourceClaim<SourceSnapshot>;
   source: LegacyWorkspaceStateSource;
   receipt: MigrationReceipt;
   env: NodeJS.ProcessEnv;
+  hasSource: boolean;
+  hasClaim: boolean;
 }): Promise<MigrationMessages> {
   try {
     assertConfiguredWorkspaceIdentity(params.source);
-    const candidates = [
-      {
-        relativePath: params.source.relativePath,
-        sourcePath: params.source.sourcePath,
-      },
-      {
-        relativePath: `${params.source.relativePath}${CLAIM_SUFFIX}`,
-        sourcePath: `${params.source.sourcePath}${CLAIM_SUFFIX}`,
-      },
-    ];
-    const existing = [];
-    for (const candidate of candidates) {
-      if (await params.sourceRoot.exists(candidate.relativePath)) {
-        existing.push(candidate);
-      }
-    }
-    if (existing.length === 0) {
+    const sourceClaim = params.sourceClaim;
+    const { hasSource, hasClaim } = params;
+    if (!hasSource && !hasClaim) {
       if (!params.receipt.removedSource) {
-        markSourceRemoved(params.receipt.sourceKey, params.env);
+        markLegacyMigrationSourceRemoved(params.receipt.sourceKey, params.env);
       }
       return { changes: [], warnings: [] };
     }
-    if (existing.length > 1) {
+    if (hasSource && hasClaim) {
       return {
         changes: [],
         warnings: ["Workspace state is in SQLite, but source and interrupted claim both exist."],
       };
     }
-    let active = existing[0]!;
-    let snapshot = await readBoundedRegularFile({
-      sourceRoot: params.sourceRoot,
-      relativePath: active.relativePath,
-      sourcePath: active.sourcePath,
-      maxBytes:
-        params.source.kind === "setup" ? SETUP_MAX_BYTES : LEGACY_WORKSPACE_ATTESTATION_MAX_BYTES,
-    });
+    let snapshot = await sourceClaim.read(hasClaim);
     let claimedByThisRun = false;
-    if (active.relativePath === params.source.relativePath) {
-      const claim = candidates[1]!;
-      await params.sourceRoot.move(active.relativePath, claim.relativePath);
-      const claimed = await readBoundedRegularFile({
-        sourceRoot: params.sourceRoot,
-        relativePath: claim.relativePath,
-        sourcePath: claim.sourcePath,
-        maxBytes:
-          params.source.kind === "setup" ? SETUP_MAX_BYTES : LEGACY_WORKSPACE_ATTESTATION_MAX_BYTES,
-      });
-      if (!snapshotsMatch(snapshot, claimed)) {
-        await restoreClaim({ sourceRoot: params.sourceRoot, source: params.source });
-        throw new Error("legacy workspace source changed before Doctor could claim it");
+    if (hasSource) {
+      try {
+        snapshot = await sourceClaim.claim({
+          snapshot,
+          mismatchMessage: "legacy workspace source changed before Doctor could claim it",
+        });
+      } catch (error) {
+        await sourceClaim.restore();
+        throw error;
       }
-      active = claim;
-      snapshot = claimed;
       claimedByThisRun = true;
     }
     const parsed = parseSource(params.source, snapshot);
@@ -438,39 +424,60 @@ async function cleanupReceiptSource(params: {
       !canonicalCoversParsedSource({ source: params.source, parsed, env: params.env })
     ) {
       if (claimedByThisRun) {
-        await restoreClaim({ sourceRoot: params.sourceRoot, source: params.source });
+        await sourceClaim.restore();
       }
       return {
         changes: [],
         warnings: ["Workspace state is in SQLite, but the retired source now conflicts."],
       };
     }
-    const unchanged = await readBoundedRegularFile({
-      sourceRoot: params.sourceRoot,
-      relativePath: active.relativePath,
-      sourcePath: active.sourcePath,
-      maxBytes:
-        params.source.kind === "setup" ? SETUP_MAX_BYTES : LEGACY_WORKSPACE_ATTESTATION_MAX_BYTES,
-    });
+    const notices: string[] = [];
+    if (parsed.kind === "setup") {
+      const archivePath = await archiveWorkspaceSetupSource(
+        params.sourceRoot,
+        params.source,
+        snapshot,
+        params.receipt.archivePath,
+      );
+      if (!params.receipt.archivePath) {
+        // Receipts written before setup backups still need an archive before cleanup.
+        const imported = importAndRecordReceipt({
+          source: params.source,
+          snapshot,
+          parsed,
+          env: params.env,
+          previousReceipt: params.receipt,
+          archivePath,
+        });
+        notices.push(
+          `Archived legacy workspace setup state at ${archivePath}.`,
+          ...imported.differences,
+        );
+      }
+    }
+    const unchanged = await sourceClaim.read(true);
     if (!snapshotsMatch(snapshot, unchanged)) {
       if (claimedByThisRun) {
-        await restoreClaim({ sourceRoot: params.sourceRoot, source: params.source });
+        await sourceClaim.restore();
       }
       throw new Error("legacy workspace claim changed before cleanup");
     }
     assertConfiguredWorkspaceIdentity(params.source);
-    await params.sourceRoot.remove(active.relativePath);
-    markSourceRemoved(params.receipt.sourceKey, params.env);
+    await sourceClaim.remove({ skipSourceCheck: true });
+    markLegacyMigrationSourceRemoved(params.receipt.sourceKey, params.env);
     return {
       changes: [],
       warnings: [],
-      notices: ["Discarded retired workspace state already covered by its SQLite receipt."],
+      notices: [
+        ...notices,
+        "Discarded retired workspace state already covered by its SQLite receipt.",
+      ],
     };
   } catch (error) {
     return {
       changes: [],
       warnings: [
-        `Workspace state is in SQLite, but legacy cleanup failed: ${formatErrorMessage(error)}`,
+        `Workspace state is in SQLite, but legacy cleanup failed at ${params.source.sourcePath}: ${formatErrorMessage(error)}`,
       ],
     };
   }
@@ -482,6 +489,7 @@ async function migrateOneSource(params: {
   beforeClaim?: (source: LegacyWorkspaceStateSource) => void;
   removeSource?: (sourcePath: string) => Promise<void> | void;
 }): Promise<MigrationMessages> {
+  let sourceClaim: LegacyMigrationSourceClaim<SourceSnapshot>;
   let sourceRoot: Root;
   try {
     assertConfiguredWorkspaceIdentity(params.source);
@@ -489,35 +497,37 @@ async function migrateOneSource(params: {
       hardlinks: "reject",
       symlinks: "reject",
     });
+    sourceClaim = createLegacySourceClaim(sourceRoot, params.source);
   } catch (error) {
     return {
       changes: [],
-      warnings: [`Failed reading legacy workspace state: ${formatErrorMessage(error)}`],
+      warnings: [formatLegacyWorkspaceReadWarning(params.source, error)],
     };
   }
   const receipt = readReceipt(params.source, params.env);
-  if (receipt) {
-    return cleanupReceiptSource({
-      sourceRoot,
-      source: params.source,
-      receipt,
-      env: params.env,
-    });
-  }
-
-  const sourcePath = params.source.sourcePath;
-  const claimPath = `${sourcePath}${CLAIM_SUFFIX}`;
-  const claimRelativePath = `${params.source.relativePath}${CLAIM_SUFFIX}`;
   let hasSource: boolean;
   let hasClaim: boolean;
   try {
-    hasSource = await sourceRoot.exists(params.source.relativePath);
-    hasClaim = await sourceRoot.exists(claimRelativePath);
+    hasSource = await sourceClaim.exists();
+    hasClaim = await sourceClaim.exists(true);
   } catch (error) {
     return {
       changes: [],
-      warnings: [`Failed reading legacy workspace state: ${formatErrorMessage(error)}`],
+      warnings: [formatLegacyWorkspaceReadWarning(params.source, error)],
     };
+  }
+  // One artifact after verified removal is a new generation, including a source
+  // already renamed before a crash. Collisions keep the stricter receipt check.
+  if (receipt && !(receipt.removedSource && hasSource !== hasClaim)) {
+    return cleanupReceiptSource({
+      sourceRoot,
+      sourceClaim,
+      source: params.source,
+      receipt,
+      env: params.env,
+      hasSource,
+      hasClaim,
+    });
   }
   if (hasSource && hasClaim) {
     return {
@@ -527,120 +537,105 @@ async function migrateOneSource(params: {
       ],
     };
   }
-  const activePath = hasSource ? sourcePath : hasClaim ? claimPath : null;
-  const activeRelativePath = hasSource
-    ? params.source.relativePath
-    : hasClaim
-      ? claimRelativePath
-      : null;
-  if (!activePath || !activeRelativePath) {
+  if (!hasSource && !hasClaim) {
     return { changes: [], warnings: [] };
   }
 
-  let snapshot: SourceSnapshot;
-  let parsed: ParsedSource;
-  let claimedByThisRun = false;
+  let operation = `reading legacy workspace state at ${params.source.sourcePath}`;
+  let claimAttempted = false;
+  let imported: ReturnType<typeof importAndRecordReceipt> | undefined;
+  let archivePath: string | undefined;
   try {
-    snapshot = await readBoundedRegularFile({
-      sourceRoot,
-      relativePath: activeRelativePath,
-      sourcePath: activePath,
-      maxBytes:
-        params.source.kind === "setup" ? SETUP_MAX_BYTES : LEGACY_WORKSPACE_ATTESTATION_MAX_BYTES,
-    });
-    parsed = parseSource(params.source, snapshot);
-  } catch (error) {
-    return {
-      changes: [],
-      warnings: [`Failed reading legacy workspace state: ${formatErrorMessage(error)}`],
-    };
-  }
+    let snapshot = await sourceClaim.read(!hasSource);
+    // Empty reserved hashed markers have no importable state. The runtime gate is
+    // presence-only, so leaving them in place blocks agent turns forever.
+    // Nonempty, linked, sibling, and unreadable sources stay fail-closed.
+    const discardEmptyAttestation =
+      params.source.kind === "attestation" &&
+      path.basename(path.dirname(params.source.sourcePath)) ===
+        LEGACY_WORKSPACE_ATTESTATION_DIRNAME &&
+      snapshot.size === 0;
+    const parsed = discardEmptyAttestation ? undefined : parseSource(params.source, snapshot);
+    operation = discardEmptyAttestation
+      ? `discarding empty reserved workspace attestation at ${params.source.sourcePath}`
+      : "migrating legacy workspace state";
 
-  if (activePath === sourcePath) {
-    try {
-      params.beforeClaim?.(params.source);
-      assertConfiguredWorkspaceIdentity(params.source);
-      await sourceRoot.move(params.source.relativePath, claimRelativePath);
-      const claimed = await readBoundedRegularFile({
-        sourceRoot,
-        relativePath: claimRelativePath,
-        sourcePath: claimPath,
-        maxBytes:
-          params.source.kind === "setup" ? SETUP_MAX_BYTES : LEGACY_WORKSPACE_ATTESTATION_MAX_BYTES,
+    if (hasSource) {
+      // A failed claim may already have renamed the source; restore it on any
+      // pre-import failure, but retain committed imports for receipt-based retry.
+      claimAttempted = true;
+      snapshot = await sourceClaim.claim({
+        snapshot,
+        beforeClaim: () => {
+          params.beforeClaim?.(params.source);
+          assertConfiguredWorkspaceIdentity(params.source);
+        },
+        mismatchMessage: "legacy workspace source changed before Doctor could claim it",
       });
-      if (!snapshotsMatch(snapshot, claimed)) {
-        throw new Error("legacy workspace source changed before Doctor could claim it");
-      }
-      snapshot = claimed;
-      claimedByThisRun = true;
-    } catch (error) {
-      const restoreError = await restoreClaim({ sourceRoot, source: params.source });
-      return {
-        changes: [],
-        warnings: [
-          `Failed migrating legacy workspace state: ${formatErrorMessage(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
-        ],
-      };
     }
-  }
 
-  let result: ReturnType<typeof importAndRecordReceipt>;
-  try {
-    assertConfiguredWorkspaceIdentity(params.source);
-    result = importAndRecordReceipt({
-      source: params.source,
-      snapshot,
-      parsed,
-      env: params.env,
-    });
-  } catch (error) {
-    const restoreError = claimedByThisRun
-      ? await restoreClaim({ sourceRoot, source: params.source })
-      : null;
-    return {
-      changes: [],
-      warnings: [
-        `Failed migrating legacy workspace state: ${formatErrorMessage(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
-      ],
-    };
-  }
+    if (parsed) {
+      if (parsed.kind === "setup") {
+        archivePath = await archiveWorkspaceSetupSource(sourceRoot, params.source, snapshot);
+      }
+      assertConfiguredWorkspaceIdentity(params.source);
+      imported = importAndRecordReceipt({
+        source: params.source,
+        snapshot,
+        parsed,
+        env: params.env,
+        previousReceipt: receipt ?? undefined,
+        archivePath,
+      });
+    }
 
-  try {
-    if (await sourceRoot.exists(params.source.relativePath)) {
+    if (await sourceClaim.exists()) {
       throw new Error("legacy workspace source reappeared during import");
     }
-    const unchanged = await readBoundedRegularFile({
-      sourceRoot,
-      relativePath: claimRelativePath,
-      sourcePath: claimPath,
-      maxBytes:
-        params.source.kind === "setup" ? SETUP_MAX_BYTES : LEGACY_WORKSPACE_ATTESTATION_MAX_BYTES,
-    });
+    const unchanged = await sourceClaim.read(true);
     if (!snapshotsMatch(snapshot, unchanged)) {
       throw new Error("legacy workspace claim changed after import");
     }
-    if (params.removeSource) {
-      await params.removeSource(claimPath);
-    } else {
-      await sourceRoot.remove(claimRelativePath);
+    assertConfiguredWorkspaceIdentity(params.source);
+    await sourceClaim.remove({ removeSource: params.removeSource, skipSourceCheck: true });
+    if (imported) {
+      markLegacyMigrationSourceRemoved(imported.sourceKey, params.env);
     }
-    markSourceRemoved(result.sourceKey, params.env);
   } catch (error) {
+    if (imported) {
+      return {
+        changes: [],
+        warnings: [
+          `Workspace state is in SQLite, but legacy cleanup failed at ${params.source.sourcePath}: ${formatErrorMessage(error)}`,
+        ],
+      };
+    }
+    const restoreError = claimAttempted ? await sourceClaim.restore() : null;
     return {
       changes: [],
       warnings: [
-        `Workspace state is in SQLite, but legacy cleanup failed: ${formatErrorMessage(error)}`,
+        `Failed ${operation}: ${formatErrorMessage(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
       ],
     };
   }
 
-  const label = parsed.kind === "setup" ? "workspace setup state" : "workspace attestation";
+  if (!imported) {
+    return {
+      changes: [`Discarded empty reserved workspace attestation at ${params.source.sourcePath}.`],
+      warnings: [],
+    };
+  }
+  const label = params.source.kind === "setup" ? "workspace setup state" : "workspace attestation";
   return {
     changes: [
-      result.imported ? `Migrated ${label} to SQLite.` : `Verified canonical SQLite ${label}.`,
+      imported.imported ? `Migrated ${label} to SQLite.` : `Verified canonical SQLite ${label}.`,
     ],
     warnings: [],
-    notices: ["Removed retired workspace state after verified SQLite import."],
+    notices: [
+      ...(archivePath ? [`Archived legacy workspace setup state at ${archivePath}.`] : []),
+      ...imported.differences,
+      "Removed retired workspace state after verified SQLite import.",
+    ],
   };
 }
 
@@ -652,63 +647,32 @@ export async function migrateLegacyWorkspaceState(params: {
   beforeClaim?: (source: LegacyWorkspaceStateSource) => void;
   removeSource?: (sourcePath: string) => Promise<void> | void;
 }): Promise<MigrationMessages> {
-  if (!params.detected?.hasLegacy) {
+  const detected = params.detected;
+  if (!detected?.hasLegacy) {
     return { changes: [], warnings: [] };
   }
-  const env = { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir };
-  let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
-  try {
-    lock = await acquireGatewayLock({
-      allowInTests: true,
-      env,
-      pollIntervalMs: MIGRATION_LOCK_POLL_INTERVAL_MS,
-      role: "sqlite-maintenance",
-      timeoutMs: MIGRATION_LOCK_TIMEOUT_MS,
-    });
-  } catch (error) {
-    const detail =
-      error instanceof GatewayLockError
-        ? "the Gateway or another SQLite maintenance command owns this state directory"
-        : formatErrorMessage(error);
-    return {
-      changes: [],
-      warnings: [
-        `Failed migrating legacy workspace state: ${detail}. Stop the Gateway and run \`openclaw doctor --fix\` again.`,
-      ],
-    };
-  }
-  if (!lock) {
-    return {
-      changes: [],
-      warnings: ["Failed migrating legacy workspace state: exclusive state ownership unavailable."],
-    };
-  }
-
-  const changes: string[] = [];
-  const warnings: string[] = [];
-  const notices: string[] = [];
-  let releaseError: unknown;
-  try {
-    for (const source of params.detected.sources) {
-      const result = await migrateOneSource({
-        source,
-        env,
-        ...(params.beforeClaim ? { beforeClaim: params.beforeClaim } : {}),
-        ...(params.removeSource ? { removeSource: params.removeSource } : {}),
-      });
-      changes.push(...result.changes);
-      warnings.push(...result.warnings);
-      notices.push(...(result.notices ?? []));
-    }
-  } finally {
-    try {
-      await lock.release();
-    } catch (error) {
-      releaseError = error;
-    }
-  }
-  if (releaseError) {
-    warnings.push(`Workspace migration lock release failed: ${formatErrorMessage(releaseError)}`);
-  }
-  return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
+  return await withLegacyMigrationStateLock({
+    stateDir: params.stateDir,
+    env: params.env,
+    label: "legacy workspace state",
+    releaseLabel: "Workspace",
+    formatAcquireError: formatErrorMessage,
+    run: async (env) => {
+      const changes: string[] = [];
+      const warnings: string[] = [];
+      const notices: string[] = [];
+      for (const source of detected.sources) {
+        const result = await migrateOneSource({
+          source,
+          env,
+          ...(params.beforeClaim ? { beforeClaim: params.beforeClaim } : {}),
+          ...(params.removeSource ? { removeSource: params.removeSource } : {}),
+        });
+        changes.push(...result.changes);
+        warnings.push(...result.warnings);
+        notices.push(...(result.notices ?? []));
+      }
+      return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
+    },
+  });
 }

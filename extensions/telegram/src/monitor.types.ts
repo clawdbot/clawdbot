@@ -10,6 +10,7 @@ import type { TelegramBotInfo } from "./bot-info.js";
 export type MonitorTelegramOpts = {
   token?: string;
   accountId?: string;
+  ownerAgentId?: string;
   config?: OpenClawConfig;
   runtime?: RuntimeEnv;
   channelRuntime?: ChannelRuntimeSurface;
@@ -24,9 +25,6 @@ export type MonitorTelegramOpts = {
   webhookCertPath?: string;
   botInfo?: TelegramBotInfo;
   setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
-  isolatedIngress?: {
-    enabled?: boolean;
-  };
 };
 
 export type TelegramMonitorFn = (opts?: MonitorTelegramOpts) => Promise<void>;

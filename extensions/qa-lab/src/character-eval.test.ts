@@ -97,6 +97,7 @@ async function makeSuiteResult(params: {
   resultStatus?: "pass" | "fail";
   summaryStatus?: "pass" | "fail";
   summaryFailedCount?: number;
+  runStatus?: "running" | "completed";
 }) {
   const resultStatus = params.resultStatus ?? "pass";
   const summaryStatus = params.summaryStatus ?? resultStatus;
@@ -107,6 +108,7 @@ async function makeSuiteResult(params: {
     summaryPath,
     `${JSON.stringify(
       {
+        run: { status: params.runStatus ?? "completed" },
         counts: {
           total: 1,
           passed: summaryFailedCount > 0 ? 0 : 1,
@@ -132,6 +134,7 @@ async function makeSuiteResult(params: {
     summaryPath,
     report: "# report",
     watchUrl: "http://127.0.0.1:43124",
+    startedScenarioIds: ["character-vibes"],
     scenarios: [
       {
         name: "Character vibes",
@@ -255,6 +258,66 @@ describe("runQaCharacterEval", () => {
     expect(report).not.toContain("Judge Raw Reply");
   });
 
+  it("isolates artifacts for model refs with colliding readable slugs", async () => {
+    const firstModel = "ollama/qwen3.5:9b";
+    const secondModel = "ollama/qwen3.5/9b";
+    const models = [firstModel, secondModel];
+    let releaseSecondRun: () => void = () => {};
+    let releaseFirstRun: () => void = () => {};
+    const firstRunWritten = new Promise<void>((resolve) => {
+      releaseSecondRun = resolve;
+    });
+    const secondRunWritten = new Promise<void>((resolve) => {
+      releaseFirstRun = resolve;
+    });
+    const runSuite = vi.fn(async (params: CharacterRunSuiteParams) => {
+      const markerPath = path.join(params.outputDir, "model-marker.txt");
+      await fs.mkdir(params.outputDir, { recursive: true });
+      if (params.primaryModel === secondModel) {
+        await firstRunWritten;
+      }
+      await fs.writeFile(markerPath, `${params.primaryModel}\n`, "utf8");
+      const result = await makeReplySuiteResult(params);
+      if (params.primaryModel === firstModel) {
+        releaseSecondRun();
+        await secondRunWritten;
+      } else {
+        releaseFirstRun();
+      }
+      return result;
+    });
+
+    const result = await runQaCharacterEval({
+      repoRoot: tempRoot,
+      outputDir: path.join(tempRoot, "character"),
+      models,
+      candidateConcurrency: 2,
+      judgeModels: ["openai/gpt-5.6-luna"],
+      runSuite,
+      runJudge: makeRunJudge([
+        { model: firstModel, rank: 1, score: 8, summary: "first" },
+        { model: secondModel, rank: 2, score: 7, summary: "second" },
+      ]),
+    });
+
+    expect(runSuite).toHaveBeenCalledTimes(2);
+    expect.soft(new Set(result.runs.map((run) => run.outputDir)).size).toBe(models.length);
+    expect
+      .soft(
+        new Set(result.runs.flatMap((run) => ("summaryPath" in run ? [run.summaryPath] : []))).size,
+      )
+      .toBe(models.length);
+    await expect
+      .soft(
+        Promise.all(
+          result.runs.map((run) =>
+            fs.readFile(path.join(run.outputDir, "model-marker.txt"), "utf8"),
+          ),
+        ),
+      )
+      .resolves.toEqual(models.map((model) => `${model}\n`));
+  });
+
   it("creates a unique default output directory under repo artifacts", async () => {
     const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
       makeSuiteResult({
@@ -333,6 +396,70 @@ describe("runQaCharacterEval", () => {
     const report = await fs.readFile(result.reportPath, "utf8");
     expect(report).toContain("Judge model labels: blind");
     expect(report).toContain("1. codex-cli/test-model - 9.1 - Better vibes.");
+  });
+
+  it.each([
+    {
+      description: "a missing candidate",
+      rankings: [{ model: "openai/gpt-5.6-luna", rank: 1, score: 8, summary: "ok" }],
+    },
+    {
+      description: "a duplicated candidate",
+      rankings: [
+        { model: "openai/gpt-5.6-luna", rank: 1, score: 8, summary: "ok" },
+        { model: "openai/gpt-5.6-luna", rank: 2, score: 7, summary: "again" },
+      ],
+    },
+    {
+      description: "duplicated ranks",
+      rankings: [
+        { model: "openai/gpt-5.6-luna", rank: 1, score: 8, summary: "ok" },
+        { model: "moonshot/kimi-k2.5", rank: 1, score: 7, summary: "ok" },
+      ],
+    },
+    {
+      description: "a missing rank",
+      rankings: [
+        { model: "openai/gpt-5.6-luna", rank: 1, score: 8, summary: "ok" },
+        { model: "moonshot/kimi-k2.5", rank: 3, score: 7, summary: "ok" },
+      ],
+    },
+    {
+      description: "a fractional rank",
+      rankings: [
+        { model: "openai/gpt-5.6-luna", rank: 1, score: 8, summary: "ok" },
+        { model: "moonshot/kimi-k2.5", rank: 1.5, score: 7, summary: "ok" },
+      ],
+    },
+    {
+      description: "a non-positive rank",
+      rankings: [
+        { model: "openai/gpt-5.6-luna", rank: 0, score: 8, summary: "ok" },
+        { model: "moonshot/kimi-k2.5", rank: 1, score: 7, summary: "ok" },
+      ],
+    },
+    {
+      description: "an unknown candidate",
+      rankings: [
+        { model: "openai/gpt-5.6-luna", rank: 1, score: 8, summary: "ok" },
+        { model: "unknown/candidate", rank: 2, score: 7, summary: "unknown" },
+      ],
+    },
+  ])("marks a judge with $description as failed", async ({ rankings }) => {
+    const result = await runQaCharacterEval({
+      repoRoot: tempRoot,
+      outputDir: path.join(tempRoot, "character"),
+      models: ["openai/gpt-5.6-luna", "moonshot/kimi-k2.5"],
+      judgeModels: ["openai/gpt-5.6-luna"],
+      runSuite: makeRunSuite(),
+      runJudge: makeRunJudge(rankings),
+    });
+
+    expect(result.runs.map((run) => run.status)).toEqual(["pass", "pass"]);
+    expect(result.judgments[0]).toMatchObject({
+      rankings: [],
+      error: "judge reply must rank every candidate exactly once with consecutive ranks",
+    });
   });
 
   it("defaults to the character eval model panel when no models are provided", async () => {
@@ -468,31 +595,57 @@ describe("runQaCharacterEval", () => {
     await resultPromise;
   });
 
-  it("marks raw provider error transcripts as failed output", async () => {
+  it.each([
+    {
+      title: "marks raw provider error transcripts as failed output",
+      transcript:
+        "USER Alice: Are you awake?\n\nASSISTANT OpenClaw QA: 400 model `qwen3.6-plus` is not supported.",
+      model: "qwen/qwen3.6-plus",
+      expectedReason: "model unsupported error leaked into transcript",
+    },
+    {
+      title: "marks generic channel fallback transcripts as failed output",
+      transcript:
+        "ASSISTANT OpenClaw QA: ⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.",
+      model: "qa/generic-fallback-model",
+      expectedReason: "generic request failure leaked into transcript",
+    },
+    {
+      title: "marks idle-timeout fallback transcripts as failed output",
+      transcript:
+        "ASSISTANT OpenClaw QA: The model did not produce a response before the LLM idle timeout. Please try again, or increase `agents.defaults.llm.idleTimeoutSeconds` in your config.",
+      model: "google/gemini-test",
+      expectedReason: "LLM timeout leaked into transcript",
+    },
+    {
+      title: "marks leaked harness coordination transcripts as failed output",
+      transcript:
+        "ASSISTANT OpenClaw QA: checking thread context; then post a tight progress reply here.\nQA_LEAK_OK",
+      model: "codex/gpt-5.6-luna",
+      expectedReason: "internal harness/meta text leaked into transcript",
+    },
+  ])("$title", async ({ transcript, model, expectedReason }) => {
     const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
       makeSuiteResult({
         outputDir: params.outputDir,
         model: params.primaryModel,
-        transcript:
-          "USER Alice: Are you awake?\n\nASSISTANT OpenClaw QA: 400 model `qwen3.6-plus` is not supported.",
+        transcript,
       }),
     );
-    const runJudge = makeRunJudge([
-      { model: "qwen/qwen3.6-plus", rank: 1, score: 0.5, summary: "failed" },
-    ]);
+    const runJudge = makeRunJudge([{ model, rank: 1, score: 0.5, summary: "failed" }]);
 
     const result = await runQaCharacterEval({
       repoRoot: tempRoot,
       outputDir: path.join(tempRoot, "character"),
-      models: ["qwen/qwen3.6-plus"],
+      models: [model],
       judgeModels: ["openai/gpt-5.6-luna"],
       runSuite,
       runJudge,
     });
 
     expectFirstRunFailure(result, {
-      model: "qwen/qwen3.6-plus",
-      error: "model unsupported error leaked into transcript",
+      model,
+      error: expectedReason,
     });
   });
 
@@ -523,6 +676,62 @@ describe("runQaCharacterEval", () => {
     expect(result.runs[0]?.error).toBeUndefined();
   });
 
+  it("rejects a candidate whose suite summary is still running", async () => {
+    const model = "openai/gpt-5.6-luna";
+    const result = await runQaCharacterEval({
+      repoRoot: tempRoot,
+      outputDir: path.join(tempRoot, "character"),
+      models: [model],
+      judgeModels: [model],
+      runSuite: async (params) =>
+        makeSuiteResult({
+          outputDir: params.outputDir,
+          model,
+          transcript: "USER Alice: hi\n\nASSISTANT openclaw: partial reply",
+          runStatus: "running",
+        }),
+      runJudge: makeRunJudge([{ model, rank: 1, score: 0.5, summary: "failed" }]),
+    });
+
+    expect(result.runs[0]).toMatchObject({
+      model,
+      status: "fail",
+      error: expect.stringContaining("still running"),
+    });
+  });
+
+  it.each([
+    { description: "user-only conversation", transcript: "USER Alice: hello?" },
+    { description: "report-only fallback", transcript: "# Character scenario report" },
+  ])("rejects a passing suite with a $description", async ({ transcript }) => {
+    const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
+      makeSuiteResult({
+        outputDir: params.outputDir,
+        model: params.primaryModel,
+        transcript,
+      }),
+    );
+    const runJudge = makeRunJudge([
+      { model: "openai/gpt-5.6-luna", rank: 1, score: 0.5, summary: "no reply" },
+    ]);
+
+    const result = await runQaCharacterEval({
+      repoRoot: tempRoot,
+      outputDir: path.join(tempRoot, "character"),
+      models: ["openai/gpt-5.6-luna"],
+      judgeModels: ["openai/gpt-5.6-luna"],
+      runSuite,
+      runJudge,
+    });
+
+    expectFirstRunFailure(result, {
+      model: "openai/gpt-5.6-luna",
+      error: "candidate transcript did not contain an assistant reply",
+    });
+    expect(result.runs[0]?.stats.assistantTurns).toBe(0);
+    expect(result.runs[0]?.transcript).toBe(transcript);
+  });
+
   it("marks raw tool failure transcripts as failed output", async () => {
     const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
       makeSuiteResult({
@@ -547,90 +756,6 @@ describe("runQaCharacterEval", () => {
     expectFirstRunFailure(result, {
       model: "qwen/qwen3.5-plus",
       error: "tool failure leaked into transcript",
-    });
-  });
-
-  it("marks generic channel fallback transcripts as failed output", async () => {
-    const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
-      makeSuiteResult({
-        outputDir: params.outputDir,
-        model: params.primaryModel,
-        transcript:
-          "ASSISTANT OpenClaw QA: ⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.",
-      }),
-    );
-    const runJudge = makeRunJudge([
-      { model: "qa/generic-fallback-model", rank: 1, score: 0.5, summary: "failed" },
-    ]);
-
-    const result = await runQaCharacterEval({
-      repoRoot: tempRoot,
-      outputDir: path.join(tempRoot, "character"),
-      models: ["qa/generic-fallback-model"],
-      judgeModels: ["openai/gpt-5.6-luna"],
-      runSuite,
-      runJudge,
-    });
-
-    expectFirstRunFailure(result, {
-      model: "qa/generic-fallback-model",
-      error: "generic request failure leaked into transcript",
-    });
-  });
-
-  it("marks idle-timeout fallback transcripts as failed output", async () => {
-    const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
-      makeSuiteResult({
-        outputDir: params.outputDir,
-        model: params.primaryModel,
-        transcript:
-          "ASSISTANT OpenClaw QA: The model did not produce a response before the LLM idle timeout. Please try again, or increase `agents.defaults.llm.idleTimeoutSeconds` in your config.",
-      }),
-    );
-    const runJudge = makeRunJudge([
-      { model: "google/gemini-test", rank: 1, score: 0.5, summary: "failed" },
-    ]);
-
-    const result = await runQaCharacterEval({
-      repoRoot: tempRoot,
-      outputDir: path.join(tempRoot, "character"),
-      models: ["google/gemini-test"],
-      judgeModels: ["openai/gpt-5.6-luna"],
-      runSuite,
-      runJudge,
-    });
-
-    expectFirstRunFailure(result, {
-      model: "google/gemini-test",
-      error: "LLM timeout leaked into transcript",
-    });
-  });
-
-  it("marks leaked harness coordination transcripts as failed output", async () => {
-    const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
-      makeSuiteResult({
-        outputDir: params.outputDir,
-        model: params.primaryModel,
-        transcript:
-          "ASSISTANT OpenClaw QA: checking thread context; then post a tight progress reply here.\nQA_LEAK_OK",
-      }),
-    );
-    const runJudge = makeRunJudge([
-      { model: "codex/gpt-5.6-luna", rank: 1, score: 0.5, summary: "failed" },
-    ]);
-
-    const result = await runQaCharacterEval({
-      repoRoot: tempRoot,
-      outputDir: path.join(tempRoot, "character"),
-      models: ["codex/gpt-5.6-luna"],
-      judgeModels: ["openai/gpt-5.6-luna"],
-      runSuite,
-      runJudge,
-    });
-
-    expectFirstRunFailure(result, {
-      model: "codex/gpt-5.6-luna",
-      error: "internal harness/meta text leaked into transcript",
     });
   });
 
@@ -662,6 +787,7 @@ describe("runQaCharacterEval", () => {
     const runSuite = makeRunSuite();
     const runJudge = makeRunJudge([
       { model: "openai/gpt-5.6-luna", rank: 1, score: 8, summary: "ok" },
+      { model: "moonshot/kimi-k2.5", rank: 2, score: 7, summary: "ok" },
     ]);
 
     await runQaCharacterEval({
@@ -708,7 +834,10 @@ describe("runQaCharacterEval", () => {
     });
     const runJudge = vi.fn(async (_params: CharacterRunJudgeParams) =>
       JSON.stringify({
-        rankings: [{ model: "openai/gpt-5.6-luna", rank: 1, score: 8, summary: "ok" }],
+        rankings: [
+          { model: "openai/gpt-5.6-luna", rank: 1, score: 8, summary: "ok" },
+          { model: "codex-cli/test-model", rank: 2, score: 0, summary: "failed" },
+        ],
       }),
     );
 

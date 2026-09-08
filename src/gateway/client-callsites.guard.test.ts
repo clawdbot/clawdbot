@@ -10,12 +10,15 @@ const GATEWAY_CLIENT_CONSTRUCTOR_PATTERN = /new\s+GatewayClient\s*\(/;
 
 const ALLOWED_GATEWAY_CLIENT_CALLSITES = new Set([
   "extensions/google-meet/src/voice-call-gateway.ts",
+  "extensions/qa-lab/src/gateway-rpc-client.ts",
   "src/acp/server.ts",
+  // Account wizards retain one socket so each RPC shares the same admission lifetime.
+  "src/commands/models/accounts-gateway.ts",
   "src/gateway/call.ts",
   "src/gateway/gateway-cli-backend.live-helpers.ts",
   "src/gateway/operator-approvals-client.ts",
   "src/gateway/probe.ts",
-  "src/node-host/runner.ts",
+  "src/node-host/gateway-candidate-connection.ts",
   "src/tui/gateway-chat.ts",
 ]);
 

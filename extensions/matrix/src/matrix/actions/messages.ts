@@ -1,5 +1,6 @@
 import type { Direction } from "matrix-js-sdk/lib/models/event-timeline.js";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveMatrixReplacementContent } from "../media-text.js";
 import { fetchMatrixPollMessageSummary, resolveMatrixPollRootEventId } from "../poll-summary.js";
 import { isPollEventType, isPollStartType } from "../poll-types.js";
 import { editMessageMatrix, sendMessageMatrix } from "../send.js";
@@ -44,18 +45,7 @@ function resolveLatestMatrixReplacements(events: readonly MatrixRawEvent[]) {
   for (const event of events) {
     const targetId = resolveMatrixReplacementTarget(event);
     const original = targetId ? originals.get(targetId) : undefined;
-    const newContent = event.content["m.new_content"];
-    if (
-      !targetId ||
-      !original ||
-      event.sender !== original.sender ||
-      event.type !== original.type ||
-      event.state_key !== undefined ||
-      event.unsigned?.redacted_because ||
-      !newContent ||
-      typeof newContent !== "object" ||
-      Array.isArray(newContent)
-    ) {
+    if (!targetId || !original || !resolveMatrixReplacementContent(original, event)) {
       continue;
     }
 
@@ -88,6 +78,7 @@ export async function sendMatrixMessage(
   return await sendMessageMatrix(to, content, {
     cfg: opts.cfg,
     mediaUrl: opts.mediaUrl,
+    ...(opts.mediaAccess ? { mediaAccess: opts.mediaAccess } : {}),
     mediaLocalRoots: opts.mediaLocalRoots,
     replyToId: opts.replyToId,
     threadId: opts.threadId,
@@ -107,11 +98,10 @@ export async function editMatrixMessage(
   if (!opts.cfg) {
     throw new Error("Matrix message actions require a resolved runtime config.");
   }
-  const trimmed = content.trim();
-  if (!trimmed) {
+  if (!content.trim()) {
     throw new Error("Matrix edit requires content");
   }
-  const eventId = await editMessageMatrix(roomId, messageId, trimmed, {
+  const eventId = await editMessageMatrix(roomId, messageId, content.trimEnd(), {
     cfg: opts.cfg,
     accountId: opts.accountId ?? undefined,
     client: opts.client,

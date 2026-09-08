@@ -1,12 +1,19 @@
 // Discord provider module implements model/runtime integration.
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
-import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import {
+  createRuntimeConfigReader,
+  getRuntimeConfig,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  logVerbose,
+  warn,
+  createSubsystemLogger,
+  createNonExitingRuntime,
+  type RuntimeEnv,
+} from "openclaw/plugin-sdk/runtime-env";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveOpenProviderRuntimeGroupPolicy,
@@ -20,12 +27,14 @@ import { GatewayCloseCodes } from "../internal/gateway.js";
 import { parseApplicationIdFromToken } from "../probe.js";
 import { normalizeDiscordToken } from "../token.js";
 import { resolveDiscordVoiceEnabled } from "../voice/config.js";
+import { setDiscordTranscriptsVoiceManager } from "../voice/transcripts-source.js";
 import { createDiscordAutoPresenceController } from "./auto-presence.js";
 import { resolveDiscordSlashCommandConfig } from "./commands.js";
 import type { MutableDiscordGateway } from "./gateway-handle.js";
 import { createDiscordGatewayPlugin } from "./gateway-plugin.js";
 import { createDiscordGatewaySupervisor } from "./gateway-supervisor.js";
 import { registerDiscordListener } from "./listeners.js";
+import { createDiscordLivePolicyReader } from "./live-policy.js";
 import { discordProviderRuntime } from "./provider-runtime.js";
 import { probeDiscordAcpBindingHealth } from "./provider.acp.js";
 import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
@@ -42,12 +51,13 @@ import {
 } from "./provider.startup.js";
 import { resolveDiscordRestFetch } from "./rest-fetch.js";
 import { formatDiscordStartupStatusMessage } from "./startup-status.js";
-import type { DiscordMonitorStatusSink } from "./status.js";
+import { createDiscordReadyStatusPatch, type DiscordMonitorStatusSink } from "./status.js";
 
 export type MonitorDiscordOpts = {
   token?: string;
   accountId?: string;
   config?: OpenClawConfig;
+  readConfig?: () => OpenClawConfig;
   runtime?: RuntimeEnv;
   channelRuntime?: ChannelRuntimeSurface;
   abortSignal?: AbortSignal;
@@ -60,7 +70,7 @@ export type MonitorDiscordOpts = {
 
 const DEFAULT_DISCORD_MEDIA_MAX_MB = 100;
 
-type DiscordVoiceManager = import("../voice/manager.js").DiscordVoiceManager;
+type DiscordVoiceManager = import("../voice/voice-runtime.js").DiscordVoiceManager;
 
 function logDiscordStartupPhase(
   params: Omit<Parameters<typeof logDiscordStartupPhaseBase>[0], "isVerbose">,
@@ -84,6 +94,7 @@ function isDiscordDisallowedIntentsError(err: unknown): boolean {
 export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const startupStartedAt = Date.now();
   const cfg = opts.config ?? getRuntimeConfig();
+  const readConfig = opts.readConfig ?? createRuntimeConfigReader(cfg);
   const account = discordProviderRuntime.resolveDiscordAccount({
     cfg,
     accountId: opts.accountId,
@@ -182,6 +193,17 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   });
   guildEntries = allowlistResolved.guildEntries;
   allowFrom = allowlistResolved.allowFrom ?? [];
+  const readPolicy = createDiscordLivePolicyReader({
+    cfg,
+    readConfig,
+    accountId: account.accountId,
+    discordConfig: discordCfg,
+    token,
+    runtime,
+    discordRestFetch,
+    abortSignal: opts.abortSignal,
+    resolvedAllowlist: allowlistResolved,
+  });
 
   if (discordProviderRuntime.shouldLogVerbose()) {
     logDiscordResolvedConfig({
@@ -214,12 +236,29 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       ? discordCfg.applicationId.trim()
       : undefined;
   const parsedApplicationId = configuredApplicationId ?? parseApplicationIdFromToken(token);
-  const applicationId =
-    parsedApplicationId ??
-    (await discordProviderRuntime.fetchDiscordApplicationId(token, 4000, discordRestFetch));
-  if (!applicationId) {
-    throw new Error("Failed to resolve Discord application id");
+  const applicationIdProbe = parsedApplicationId
+    ? ({ kind: "resolved", applicationId: parsedApplicationId } as const)
+    : await discordProviderRuntime.probeDiscordApplicationId(token, 4000, discordRestFetch);
+  if (applicationIdProbe.kind !== "resolved") {
+    const at = Date.now();
+    const terminal = applicationIdProbe.kind === "rejected";
+    const probeError = formatErrorMessage(applicationIdProbe.error);
+    const message = `Failed to resolve Discord application id: ${probeError}`;
+    opts.setStatus?.({
+      connected: false,
+      lifecycle: terminal ? "blocked" : "recovering",
+      terminalDisconnect: terminal ? true : undefined,
+      lastEventAt: at,
+      lastDisconnect: {
+        at,
+        ...(applicationIdProbe.status !== null ? { status: applicationIdProbe.status } : {}),
+        error: probeError,
+      },
+      lastError: message,
+    });
+    throw new Error(message, { cause: applicationIdProbe.error });
   }
+  const applicationId = applicationIdProbe.applicationId;
   logDiscordStartupPhase({
     runtime,
     accountId: account.accountId,
@@ -233,9 +272,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     runtime,
     nativeEnabled,
     nativeSkillsEnabled,
+    voiceEnabled,
     listSkillCommandsForAgents: discordProviderRuntime.listSkillCommandsForAgents,
     listNativeCommandSpecsForConfig: discordProviderRuntime.listNativeCommandSpecsForConfig,
-    getPluginCommandSpecs: discordProviderRuntime.getPluginCommandSpecs,
   });
   const voiceManagerRef: { current: DiscordVoiceManager | null } = { current: null };
   const threadBindings = threadBindingsEnabled
@@ -257,6 +296,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         const probe = await probeDiscordAcpBindingHealth({
           cfg,
           sessionKey,
+          agentId: session.agentId,
           storedState: session.acp?.state,
           lastActivityAt: session.acp?.lastActivityAt,
           providerSessionRuntime: discordProviderSessionRuntime,
@@ -288,7 +328,10 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   let earlyGatewayEmitter = gatewaySupervisor?.emitter;
   let onEarlyGatewayDebug: ((msg: unknown) => void) | undefined;
   try {
+    // SAFETY: Gateway startup supplies the full plugin channel runtime; the surface type is the minimal external view.
+    const pluginChannelRuntime = opts.channelRuntime as PluginRuntime["channel"] | undefined;
     const { commands, components, modals } = createDiscordProviderInteractionSurface({
+      readPolicy,
       cfg,
       discordConfig: discordCfg,
       accountId: account.accountId,
@@ -307,7 +350,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       allowFrom,
       dmPolicy,
       runtime,
-      channelRuntime: opts.channelRuntime,
+      channelRuntime: pluginChannelRuntime,
       abortSignal: opts.abortSignal,
       createNativeCommand: discordProviderRuntime.createDiscordNativeCommand,
     });
@@ -396,6 +439,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         DiscordVoiceStateUpdateListener,
       } = await discordProviderRuntime.loadDiscordVoiceRuntime();
       voiceManager = new DiscordVoiceManager({
+        readPolicy,
         client,
         cfg,
         discordConfig: discordCfg,
@@ -403,7 +447,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         runtime,
         botUserId,
       });
-      const { setDiscordTranscriptsVoiceManager } = await import("../voice/transcripts-source.js");
       setDiscordTranscriptsVoiceManager({
         accountId: account.accountId,
         manager: voiceManager,
@@ -415,12 +458,14 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       registerDiscordListener(client.listeners, new DiscordVoiceStateUpdateListener(voiceManager));
     }
     const messageHandler = discordProviderSessionRuntime.createDiscordMessageHandler({
+      readPolicy,
       client,
       cfg,
       discordConfig: discordCfg,
       accountId: account.accountId,
       token,
       runtime,
+      buildContext: pluginChannelRuntime?.inbound.buildContext,
       setStatus: opts.setStatus,
       abortSignal: opts.abortSignal,
       botUserId,
@@ -447,6 +492,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         }
       : undefined;
     registerDiscordMonitorListeners({
+      readPolicy,
       cfg,
       client,
       accountId: account.accountId,
@@ -482,7 +528,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       }),
     );
     if (lifecycleGateway?.isConnected) {
-      opts.setStatus?.(createConnectedChannelStatusPatch());
+      opts.setStatus?.(createDiscordReadyStatusPatch());
     }
 
     lifecycleStarted = true;

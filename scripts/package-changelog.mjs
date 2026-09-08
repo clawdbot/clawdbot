@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { compactReleaseNotes } from "./lib/release-notes-compaction.mjs";
 
 const CHANGELOG_PATH = "CHANGELOG.md";
 const PACKAGE_JSON_PATH = "package.json";
@@ -39,23 +40,27 @@ function splitLines(content) {
   return content.replace(/^\uFEFF/u, "").split(/\r?\n/u);
 }
 
-function parseLevelTwoHeading(line) {
-  const releaseMatch = RELEASE_HEADING_PATTERN.exec(line);
-  if (releaseMatch) {
-    return releaseMatch[1];
-  }
-  return /^##\s+Unreleased(?:\s+.*)?$/u.test(line) ? UNRELEASED_HEADING : null;
-}
-
 function findLevelTwoHeadings(lines) {
   return lines.flatMap((line, index) => {
-    const version = parseLevelTwoHeading(line);
-    return version ? [{ index, version }] : [];
+    const version =
+      RELEASE_HEADING_PATTERN.exec(line)?.[1] ??
+      (/^##\s+Unreleased(?:\s+.*)?$/u.test(line) ? UNRELEASED_HEADING : null);
+    return version ? [{ index, version, unreleased: /\s+\(Unreleased\)$/u.test(line) }] : [];
   });
 }
 
 function extractPreamble(lines, firstHeadingIndex) {
   return lines.slice(0, firstHeadingIndex).join("\n").trimEnd();
+}
+
+function assertMeaningfulReleaseBody(section, version) {
+  const body = section.split(/\r?\n/u).slice(1).join("\n").trim();
+  const bodyBytes = Buffer.byteLength(body, "utf8");
+  if (bodyBytes < MIN_RELEASE_SECTION_BODY_BYTES) {
+    throw new Error(
+      `Packaged changelog section for ${version} is only ${bodyBytes} body bytes, which is below the ${MIN_RELEASE_SECTION_BODY_BYTES} byte safety minimum.`,
+    );
+  }
 }
 
 /**
@@ -65,8 +70,14 @@ export function extractCurrentPackageChangelog(content, packageVersion, options 
   const targetVersions = resolvePackageChangelogVersions(packageVersion, options);
   const lines = splitLines(content);
   const headings = findLevelTwoHeadings(lines);
+  // Keep numbered drafts exact-matchable; their marker only widens the allowed draft fallback.
   const heading = targetVersions
-    .map((version) => headings.find((entry) => entry.version === version))
+    .map((version) =>
+      headings.find(
+        (entry) =>
+          entry.version === version || (version === UNRELEASED_HEADING && entry.unreleased),
+      ),
+    )
     .find((entry) => entry !== undefined);
   if (!heading) {
     throw new Error(
@@ -80,14 +91,20 @@ export function extractCurrentPackageChangelog(content, packageVersion, options 
     .slice(heading.index, nextHeading?.index ?? lines.length)
     .join("\n")
     .trimEnd();
-  const releaseBody = releaseSection.split(/\r?\n/u).slice(1).join("\n").trim();
-  const releaseBodyBytes = Buffer.byteLength(releaseBody, "utf8");
-  if (releaseBodyBytes < MIN_RELEASE_SECTION_BODY_BYTES) {
-    throw new Error(
-      `Packaged changelog section for ${heading.version} is only ${releaseBodyBytes} body bytes, which is below the ${MIN_RELEASE_SECTION_BODY_BYTES} byte safety minimum.`,
+  assertMeaningfulReleaseBody(releaseSection, heading.version);
+  let packaged = `${preamble}\n\n${releaseSection}\n`;
+  if (Buffer.byteLength(packaged, "utf8") > MAX_PACKAGED_CHANGELOG_BYTES) {
+    // Keep every editorial note; only the audited record moves behind its immutable source link.
+    const compacted = compactReleaseNotes(
+      releaseSection,
+      "openclaw/openclaw",
+      `v${packageVersion}`,
     );
+    if (compacted) {
+      assertMeaningfulReleaseBody(compacted.editorialNotes, heading.version);
+      packaged = `${preamble}\n\n${compacted.body}\n`;
+    }
   }
-  const packaged = `${preamble}\n\n${releaseSection}\n`;
   const packagedBytes = Buffer.byteLength(packaged, "utf8");
   if (packagedBytes > MAX_PACKAGED_CHANGELOG_BYTES) {
     throw new Error(

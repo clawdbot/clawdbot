@@ -4,7 +4,7 @@ import type { UiCommand, UiCommandParams } from "../../../packages/gateway-proto
 // The tool returns the Gateway result unchanged, so the wire schema remains the single owner.
 import { UiCommandResultSchema } from "../../../packages/gateway-protocol/src/schema/ui-command.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readStringParam, ToolInputError } from "./common.js";
+import { jsonResult, readToolStringParam, ToolInputError } from "./common.js";
 import { callInProcessGatewayTool, type InProcessGatewayCaller } from "./in-process-gateway.js";
 
 const ACTIONS = [
@@ -34,6 +34,7 @@ const ScreenToolSchema = Type.Object(
 
 type ScreenToolOptions = {
   agentSessionKey?: string;
+  agentId?: string;
   callGateway?: InProcessGatewayCaller;
 };
 
@@ -41,15 +42,15 @@ function resolveSessionKey(
   params: Record<string, unknown>,
   agentSessionKey: string | undefined,
 ): string {
-  const sessionKey = readStringParam(params, "sessionKey") ?? agentSessionKey?.trim();
+  const sessionKey = readToolStringParam(params, "sessionKey") ?? agentSessionKey?.trim();
   if (!sessionKey) {
     throw new ToolInputError("sessionKey required");
   }
-  return sessionKey;
+  return sessionKey === "current" && agentSessionKey?.trim() ? agentSessionKey.trim() : sessionKey;
 }
 
 function readDock(params: Record<string, unknown>): "bottom" | "right" | undefined {
-  const dock = readStringParam(params, "dock");
+  const dock = readToolStringParam(params, "dock");
   if (dock === undefined || dock === "bottom" || dock === "right") {
     return dock;
   }
@@ -107,10 +108,11 @@ export function createScreenTool(opts: ScreenToolOptions = {}): AnyAgentTool {
     requiredClientCaps: [GATEWAY_CLIENT_CAPS.UI_COMMANDS],
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
-      const action = readStringParam(params, "action", { required: true });
+      const action = readToolStringParam(params, "action", { required: true });
       const payload: UiCommandParams = {
         command: commandForAction(action, params, opts.agentSessionKey),
         ...(opts.agentSessionKey ? { sessionKey: opts.agentSessionKey } : {}),
+        ...(opts.agentId ? { agentId: opts.agentId } : {}),
       };
       return jsonResult(await gatewayCall("ui.command", payload));
     },

@@ -11,9 +11,11 @@ import {
 } from "openclaw/plugin-sdk/proxy-capture";
 import { danger, warn } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import * as ws from "ws";
+import type * as ws from "ws";
 import * as discordGateway from "../internal/gateway.js";
+import { WebSocket } from "../internal/ws-runtime.js";
 import { createDiscordDnsLookup } from "../network-config.js";
 import { validateDiscordProxyUrl } from "../proxy-fetch.js";
 import { resolveDiscordVoiceEnabled } from "../voice/config.js";
@@ -27,7 +29,6 @@ import {
   type DiscordGatewayFetchInit,
 } from "./gateway-metadata.js";
 
-const DISCORD_GATEWAY_HANDSHAKE_TIMEOUT_MS = 30_000;
 const DISCORD_GATEWAY_POLICY_VIOLATION_CLOSE_CODE = 1008;
 const DISCORD_GATEWAY_WS_RECEIVER_LIMIT_CODE = "WS_ERR_TOO_MANY_BUFFERED_PARTS";
 const DISCORD_GATEWAY_CLOSE_REASON_LOG_MAX_CHARS = 240;
@@ -78,8 +79,7 @@ function readStringProperty(value: object, key: string): string | undefined {
 }
 
 function readNumberProperty(value: object, key: string): number | undefined {
-  const property = (value as Record<string, unknown>)[key];
-  return typeof property === "number" && Number.isFinite(property) ? property : undefined;
+  return asFiniteNumber((value as Record<string, unknown>)[key]);
 }
 
 function describeDiscordGatewayTransportError(error: Error): DiscordGatewayTransportErrorDetails {
@@ -171,11 +171,14 @@ export function resolveDiscordGatewayIntents(params?: ResolveDiscordGatewayInten
   const voiceStatesEnabled = intentsConfig?.voiceStates ?? voiceEnabled ?? false;
   let intents =
     discordGateway.GatewayIntents.Guilds |
+    discordGateway.GatewayIntents.GuildExpressions |
     discordGateway.GatewayIntents.GuildMessages |
-    discordGateway.GatewayIntents.MessageContent |
     discordGateway.GatewayIntents.DirectMessages |
     discordGateway.GatewayIntents.GuildMessageReactions |
     discordGateway.GatewayIntents.DirectMessageReactions;
+  if (intentsConfig?.messageContent !== false) {
+    intents |= discordGateway.GatewayIntents.MessageContent;
+  }
   if (voiceStatesEnabled) {
     intents |= discordGateway.GatewayIntents.GuildVoiceStates;
   }
@@ -259,10 +262,9 @@ function createGatewayPlugin(params: {
       // Avoid Node's undici-backed global WebSocket here. We have seen late
       // close-path crashes during Discord gateway teardown; the ws transport is
       // already our proxy path and behaves predictably for lifecycle cleanup.
-      const WebSocketCtor = params.testing?.webSocketCtor ?? ws.default;
+      const WebSocketCtor = params.testing?.webSocketCtor ?? WebSocket;
       const socket = new WebSocketCtor(url, {
         ...discordGateway.DISCORD_GATEWAY_WS_CLIENT_OPTIONS,
-        handshakeTimeout: DISCORD_GATEWAY_HANDSHAKE_TIMEOUT_MS,
         ...(params.wsAgent ? { agent: params.wsAgent } : {}),
       });
       let lastTransportError: DiscordGatewayTransportErrorDetails | undefined;

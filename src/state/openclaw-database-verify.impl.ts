@@ -1,7 +1,10 @@
 import { fork, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import { toStructuredErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   confirmOpenClawAgentDatabaseIntegrity,
@@ -25,23 +28,6 @@ export const OPENCLAW_DATABASE_VERIFY_INTERVAL_MS = 24 * 60 * 60_000;
 const log = createSubsystemLogger("state/database-verify");
 const DATABASE_VERIFY_CHILD_ARG = "--openclaw-database-verify-child";
 
-function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
-}
-
-function resolveDatabaseVerifyWorkerUrl(currentModuleUrl = import.meta.url): URL {
-  const currentPath = fileURLToPath(currentModuleUrl);
-  const normalized = currentPath.replaceAll(path.sep, "/");
-  const distMarker = "/dist/";
-  const distIndex = normalized.lastIndexOf(distMarker);
-  if (distIndex >= 0) {
-    const distRoot = currentPath.slice(0, distIndex + distMarker.length);
-    return pathToFileURL(path.join(distRoot, "state", "openclaw-database-verify.worker.js"));
-  }
-  const extension = path.extname(currentPath) || ".js";
-  return new URL(`./openclaw-database-verify.worker${extension}`, currentModuleUrl);
-}
-
 function isVerifyResult(value: unknown): value is OpenClawDatabaseVerifyResult {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -59,7 +45,8 @@ export function runDatabaseVerifyWorker(
   targets: readonly OpenClawDatabaseVerifyTarget[],
   options: { onWorker?: (worker: ChildProcess | undefined) => void; workerUrl?: URL } = {},
 ): Promise<OpenClawDatabaseVerifyResult[]> {
-  const workerUrl = options.workerUrl ?? resolveDatabaseVerifyWorkerUrl();
+  const workerUrl =
+    options.workerUrl ?? resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.databaseVerify);
   const execArgv = workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined;
   let worker: ChildProcess;
   try {
@@ -70,7 +57,7 @@ export function runDatabaseVerifyWorker(
       stdio: ["ignore", "ignore", "ignore", "ipc"],
     });
   } catch (error) {
-    return Promise.reject(toError(error));
+    return Promise.reject(toStructuredErrorObject(error));
   }
   options.onWorker?.(worker);
 
@@ -96,7 +83,7 @@ export function runDatabaseVerifyWorker(
       }
       settle(() => {
         if (protocolError) {
-          reject(protocolError);
+          reject(toStructuredErrorObject(protocolError));
         } else if (completedExit.code !== 0) {
           reject(
             new Error(
@@ -122,7 +109,7 @@ export function runDatabaseVerifyWorker(
       }
       result = message;
     });
-    worker.once("error", (error) => settle(() => reject(toError(error))));
+    worker.once("error", (error) => settle(() => reject(toStructuredErrorObject(error))));
     worker.once("disconnect", () => {
       disconnected = true;
       settleAfterExitAndDisconnect();
@@ -137,7 +124,7 @@ export function runDatabaseVerifyWorker(
         return;
       }
       worker.kill();
-      settle(() => reject(toError(error)));
+      settle(() => reject(toStructuredErrorObject(error)));
     });
   });
 }

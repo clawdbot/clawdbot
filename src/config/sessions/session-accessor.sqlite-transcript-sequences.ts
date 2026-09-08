@@ -5,28 +5,28 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import type {
-  SessionTranscriptTurnWriteContext,
+  SessionTranscriptWriteScope,
   TranscriptMessageAppendResult,
 } from "./session-accessor.sqlite-contract.js";
+import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
 import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-transcript-store.js";
 
 // Append results are public SDK contracts. Keep commit-only cursor metadata
 // attached to their object lifetime without changing the returned message shape.
 const committedTranscriptMessageSequences = new WeakMap<object, number>();
 
 /** Reads the visible-message sequence captured from the final active branch. */
-export function readCommittedSqliteTranscriptMessageSequence(
+export function readCommittedTranscriptMessageSequence(
   message: TranscriptMessageAppendResult<unknown>,
 ): number | undefined {
   return committedTranscriptMessageSequences.get(message);
 }
 
 /** Captures atomic turn cursors from the final projection before SQLite commits. */
-export function rememberCommittedSqliteTranscriptMessageSequencesInTransaction(
+export function rememberCommittedTranscriptMessageSequencesInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
   messages: readonly TranscriptMessageAppendResult<unknown>[],
@@ -75,21 +75,22 @@ export function rememberCommittedSqliteTranscriptMessageSequencesInTransaction(
   }
 }
 
-/** Resolves final cursors while an ordinary turn still owns its writer lock. */
-export function rememberCommittedSqliteTranscriptMessageSequences(
-  scope: SessionTranscriptTurnWriteContext,
+/** Resolves final cursors while an ordinary turn still owns its writer transaction. */
+export function rememberCommittedTranscriptMessageSequences(
+  scope: SessionTranscriptWriteScope,
   messages: readonly TranscriptMessageAppendResult<unknown>[],
 ): void {
-  if (!scope.agentId || !scope.sessionId || !scope.sessionKey) {
+  if (messages.length === 0 || !scope.agentId || !scope.sessionId || !scope.sessionKey) {
     return;
   }
   const resolved = resolveSqliteTranscriptScope({
     agentId: scope.agentId,
+    ...(scope.env ? { env: scope.env } : {}),
     sessionId: scope.sessionId,
     sessionKey: scope.sessionKey,
     ...(scope.storePath ? { storePath: scope.storePath } : {}),
   });
-  rememberCommittedSqliteTranscriptMessageSequencesInTransaction(
+  rememberCommittedTranscriptMessageSequencesInTransaction(
     openOpenClawAgentDatabase(toDatabaseOptions(resolved)),
     resolved.sessionId,
     messages,

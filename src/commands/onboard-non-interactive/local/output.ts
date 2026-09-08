@@ -4,6 +4,9 @@
  * JSON success/failure payloads and human-readable gateway health diagnostics
  * are kept here so local and remote setup report failures consistently.
  */
+import { formatCliCommand } from "../../../cli/command-format.js";
+import type { GatewayServiceLoadState } from "../../../daemon/service-types.js";
+import { redactSecrets } from "../../../logging/redact.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../../runtime.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
@@ -11,7 +14,8 @@ import type { OnboardOptions } from "../../onboard-types.js";
 export type GatewayHealthFailureDiagnostics = {
   service?: {
     label: string;
-    loaded: boolean;
+    loaded: boolean | null;
+    loadState: GatewayServiceLoadState;
     loadedText: string;
     runtimeStatus?: string;
     state?: string;
@@ -44,6 +48,7 @@ export function logNonInteractiveOnboardingJson(params: {
     bind: string;
     authMode: string;
     tailscaleMode: string;
+    reachable?: boolean;
   };
   installDaemon?: boolean;
   daemonInstall?: {
@@ -99,7 +104,7 @@ function hasConnectionRefusedDetail(detail: string): boolean {
   return /\b(?:econnrefused|connection refused|connect refused)\b/i.test(detail);
 }
 
-function classifyGatewayHealthFailure(params: {
+export function classifyGatewayHealthFailure(params: {
   detail?: string;
   diagnostics?: GatewayHealthFailureDiagnostics;
 }): GatewayHealthFailureClassification | undefined {
@@ -114,13 +119,16 @@ function classifyGatewayHealthFailure(params: {
     return "auth-mismatch";
   }
   if (
-    /\b(?:runtime[- ]deps?|runtime dependencies|cannot find module|sqlite-vec|loadextension)\b/i.test(
+    /\b(?:runtime[- ]deps?|runtime dependencies|cannot find (?:module|package)|(?:err_)?module_not_found|sqlite-vec|loadextension)\b/i.test(
       combined,
     )
   ) {
     return "module-missing";
   }
-  if (params.diagnostics?.service?.loaded === false && hasConnectionRefusedDetail(detail)) {
+  if (
+    params.diagnostics?.service?.loadState.status === "not-loaded" &&
+    hasConnectionRefusedDetail(detail)
+  ) {
     return "service-missing";
   }
   const runtimeStatus = params.diagnostics?.service?.runtimeStatus;
@@ -146,17 +154,16 @@ function recoveryHintForGatewayHealthFailure(
 ): string | undefined {
   switch (classification) {
     case "auth-mismatch":
-      return "Fix: run `openclaw doctor --fix`.";
     case "module-missing":
-      return "Fix: run `openclaw doctor --fix`.";
+      return `Fix: run \`${formatCliCommand("openclaw doctor --fix")}\`.`;
     case "service-missing":
-      return "Fix: run `openclaw gateway install --force`.";
+      return `Fix: run \`${formatCliCommand("openclaw gateway install --force")}\`.`;
     case "service-stopped":
-      return "Fix: run `openclaw gateway restart`.";
+      return `Fix: run \`${formatCliCommand("openclaw gateway restart")}\`.`;
     case "startup-blocked":
-      return "Fix: run `openclaw gateway status --deep`.";
+      return `Fix: run \`${formatCliCommand("openclaw gateway status --deep")}\`.`;
     case "not-listening":
-      return "Fix: start `openclaw gateway run`, or run `openclaw gateway restart` for a managed gateway.";
+      return `Fix: start \`${formatCliCommand("openclaw gateway run")}\`, or run \`${formatCliCommand("openclaw gateway restart")}\` for a managed gateway.`;
     default:
       return undefined;
   }
@@ -183,51 +190,73 @@ export function logNonInteractiveOnboardingFailure(params: {
   };
   daemonRuntime?: string;
   diagnostics?: GatewayHealthFailureDiagnostics;
+  informational?: boolean;
 }) {
   const classification = classifyGatewayHealthFailure({
     detail: params.detail,
     diagnostics: params.diagnostics,
   });
-  const recoveryHint = recoveryHintForGatewayHealthFailure(classification);
-  const hints = [...(recoveryHint ? [recoveryHint] : []), ...(params.hints?.filter(Boolean) ?? [])];
-  const gatewayRuntime = formatGatewayRuntimeSummary(params.diagnostics);
+  const callerHints = params.hints?.filter(Boolean) ?? [];
+  // A caller-supplied Fix has phase context that the generic classification cannot know.
+  const recoveryHint = callerHints.some((hint) => hint.startsWith("Fix:"))
+    ? undefined
+    : recoveryHintForGatewayHealthFailure(classification);
+  const hints = [...(recoveryHint ? [recoveryHint] : []), ...callerHints];
+  const output = redactSecrets({
+    message: params.message,
+    detail: params.detail,
+    hints,
+    gateway: params.gateway,
+    daemonInstall: params.daemonInstall,
+    daemonRuntime: params.daemonRuntime,
+    diagnostics: params.diagnostics,
+  });
+  const gatewayRuntime = formatGatewayRuntimeSummary(output.diagnostics);
+  const service = output.diagnostics?.service;
+  const serviceLoadText = service
+    ? service.loadState.status === "loaded"
+      ? service.loadedText
+      : service.loadState.status.replace("-", " ")
+    : undefined;
 
   if (params.opts.json) {
     writeRuntimeJson(params.runtime, {
       ok: false,
       mode: params.mode,
       phase: params.phase,
-      message: params.message,
+      message: output.message,
       classification,
-      detail: params.detail,
-      gateway: params.gateway,
+      detail: output.detail,
+      gateway: output.gateway,
       installDaemon: Boolean(params.installDaemon),
-      daemonInstall: params.daemonInstall,
-      daemonRuntime: params.daemonRuntime,
-      diagnostics: params.diagnostics,
-      hints: hints.length > 0 ? hints : undefined,
+      daemonInstall: output.daemonInstall,
+      daemonRuntime: output.daemonRuntime,
+      diagnostics: output.diagnostics,
+      hints: output.hints.length > 0 ? output.hints : undefined,
     });
     return;
   }
 
   const lines = [
-    params.message,
+    output.message,
     classification ? `Classification: ${classification}` : undefined,
-    params.detail ? `Last probe: ${params.detail}` : undefined,
-    params.diagnostics?.service
-      ? `Service: ${params.diagnostics.service.label} (${params.diagnostics.service.loaded ? params.diagnostics.service.loadedText : "not loaded"})`
-      : undefined,
+    output.detail ? `Last probe: ${output.detail}` : undefined,
+    service ? `Service: ${service.label} (${serviceLoadText})` : undefined,
     gatewayRuntime ? `Runtime: ${gatewayRuntime}` : undefined,
-    params.diagnostics?.lastGatewayError
-      ? `Last gateway error: ${params.diagnostics.lastGatewayError}`
+    output.diagnostics?.lastGatewayError
+      ? `Last gateway error: ${output.diagnostics.lastGatewayError}`
       : undefined,
-    params.diagnostics?.inspectError
-      ? `Diagnostics warning: ${params.diagnostics.inspectError}`
+    output.diagnostics?.inspectError
+      ? `Diagnostics warning: ${output.diagnostics.inspectError}`
       : undefined,
-    hints.length > 0 ? hints.join("\n") : undefined,
+    output.hints.length > 0 ? output.hints.join("\n") : undefined,
   ]
     .filter(Boolean)
     .join("\n");
 
-  params.runtime.error(lines);
+  if (params.informational) {
+    params.runtime.log(lines);
+  } else {
+    params.runtime.error(lines);
+  }
 }

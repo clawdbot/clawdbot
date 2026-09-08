@@ -4,9 +4,13 @@ import type {
   PluginCommandContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveTelegramMiniAppUrls = vi.hoisted(() => vi.fn());
+const launchTickets = {
+  issue: vi.fn(() => "launch-ticket"),
+  consume: vi.fn(() => false),
+};
 
 vi.mock("./url.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./url.js")>()),
@@ -19,10 +23,13 @@ function registerDashboardCommand(
   api: Parameters<typeof registerTelegramMiniAppCommand>[0],
 ): OpenClawPluginCommandDefinition {
   const commands: OpenClawPluginCommandDefinition[] = [];
-  registerTelegramMiniAppCommand({
-    ...api,
-    registerCommand: (command) => commands.push(command),
-  });
+  registerTelegramMiniAppCommand(
+    {
+      ...api,
+      registerCommand: (command) => commands.push(command),
+    },
+    launchTickets,
+  );
   return expectDefined(commands[0], "registered Telegram dashboard command");
 }
 
@@ -40,6 +47,10 @@ function commandContext(overrides: Partial<PluginCommandContext>): PluginCommand
 }
 
 describe("registerTelegramMiniAppCommand", () => {
+  beforeEach(() => {
+    launchTickets.issue.mockClear();
+  });
+
   it("returns a DM-only message for group invocations", async () => {
     const command = registerDashboardCommand(
       createTestPluginApi({
@@ -65,6 +76,7 @@ describe("registerTelegramMiniAppCommand", () => {
       ),
     ).resolves.toEqual({ text: "open this in a DM with the bot" });
     expect(resolveTelegramMiniAppUrls).not.toHaveBeenCalled();
+    expect(launchTickets.issue).not.toHaveBeenCalled();
   });
 
   it("returns a web app button for owner DM invocations", async () => {
@@ -104,11 +116,12 @@ describe("registerTelegramMiniAppCommand", () => {
           {
             label: "Open dashboard",
             webApp: {
-              url: "https://host.tailnet.ts.net/__openclaw_tg_miniapp/?accountId=ops",
+              url: "https://host.tailnet.ts.net/__openclaw_tg_miniapp/?accountId=ops#launchTicket=launch-ticket",
             },
           },
         ],
       },
     ]);
+    expect(launchTickets.issue).toHaveBeenCalledWith({ accountId: "ops", userId: "123" });
   });
 });

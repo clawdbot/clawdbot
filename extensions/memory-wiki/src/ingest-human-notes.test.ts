@@ -39,6 +39,56 @@ describe("ingestMemoryWikiSource human notes", () => {
     expect(after).toContain(userNote);
   });
 
+  it.each([
+    {
+      name: "closing",
+      malformedNotes: "<!-- openclaw:human:start -->\nHANDWRITTEN NOTE MUST SURVIVE",
+      missingMarker: /openclaw:human:end/i,
+    },
+    {
+      name: "opening",
+      malformedNotes: "HANDWRITTEN NOTE MUST SURVIVE\n<!-- openclaw:human:end -->",
+      missingMarker: /openclaw:human:start/i,
+    },
+    {
+      name: "opening and closing",
+      malformedNotes: "HANDWRITTEN NOTE MUST SURVIVE",
+      missingMarker: /openclaw:human:start/i,
+    },
+  ])(
+    "preserves the source page when handwritten Notes are missing the $name marker",
+    async ({ malformedNotes, missingMarker }) => {
+      const rootDir = await createTempDir("memory-wiki-malformed-notes-");
+      const inputPath = path.join(rootDir, "roadmap.txt");
+      const { config } = await createVault({ rootDir: path.join(rootDir, "vault") });
+
+      await fs.writeFile(inputPath, "original source content\n", "utf8");
+      await ingestMemoryWikiSource({
+        config,
+        inputPath,
+        nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
+      });
+
+      const pagePath = path.join(config.vault.path, "sources", "roadmap.md");
+      const existingPage = (await fs.readFile(pagePath, "utf8")).replace(
+        "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
+        malformedNotes,
+      );
+      await fs.writeFile(pagePath, existingPage, "utf8");
+      await fs.writeFile(inputPath, "updated source content\n", "utf8");
+
+      await expect(
+        ingestMemoryWikiSource({
+          config,
+          inputPath,
+          nowMs: Date.UTC(2026, 3, 6, 12, 0, 0),
+        }),
+      ).rejects.toThrow(missingMarker);
+
+      await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(existingPage);
+    },
+  );
+
   it("preserves notes without corrupting source content that contains human markers", async () => {
     const rootDir = await createTempDir("memory-wiki-markers-");
     const inputPath = path.join(rootDir, "notes.txt");

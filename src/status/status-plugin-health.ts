@@ -1,5 +1,6 @@
 // Builds compact plugin health summaries for chat status surfaces.
 import type { PluginDiagnosticCode } from "../plugins/manifest-types.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 
 type StatusPluginDependencyStatus = {
   hasDependencies?: boolean;
@@ -82,22 +83,10 @@ export type StatusPluginHealthSnapshot = {
   }>;
 };
 
-/** Keeps the first record per key; later duplicates are dropped. */
-function dedupeBy<T>(items: readonly T[], keyOf: (item: T) => string): T[] {
-  const seen = new Map<string, T>();
-  for (const item of items) {
-    const key = keyOf(item);
-    if (!seen.has(key)) {
-      seen.set(key, item);
-    }
-  }
-  return [...seen.values()];
-}
-
 export function dedupePluginDiagnostics(
   diagnostics: readonly PluginDiagnosticRecord[],
 ): PluginDiagnosticRecord[] {
-  return dedupeBy(diagnostics, (entry) =>
+  return dedupeByKey(diagnostics, (entry) =>
     JSON.stringify([entry.level, entry.pluginId ?? "", entry.code ?? "", entry.message]),
   );
 }
@@ -107,7 +96,7 @@ export function dedupePluginDiagnostics(
 export function dedupeChannelPluginFailures(
   failures: readonly ChannelPluginFailureRecord[],
 ): ChannelPluginFailureRecord[] {
-  return dedupeBy(failures, (entry) =>
+  return dedupeByKey(failures, (entry) =>
     JSON.stringify([entry.channelId, entry.pluginId ?? "", entry.message]),
   );
 }
@@ -115,7 +104,7 @@ export function dedupeChannelPluginFailures(
 function dedupeCompatibilityNotices(
   notices: readonly PluginCompatibilityHealthNotice[],
 ): PluginCompatibilityHealthNotice[] {
-  return dedupeBy(notices, (entry) =>
+  return dedupeByKey(notices, (entry) =>
     JSON.stringify([entry.pluginId, entry.severity, entry.code ?? "", entry.message]),
   );
 }
@@ -263,11 +252,9 @@ function byLocale(left: string, right: string): number {
 export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot): string {
   const statusLoaded = snapshot.plugins.filter((plugin) => plugin.status === "loaded");
   // "Loaded" must mean runtime-confirmed loaded. When the snapshot carries runtime
-  // provenance, render that authoritative id set directly (it spans all live
-  // registry surfaces, so a plugin live only via a pinned surface still lists even
-  // when it is absent from the merged records); installed-but-not-active is then
-  // the status-loaded records the runtime did not load. Fall back to the raw
-  // status when provenance is absent (hand-built/compact snapshots).
+  // provenance, render that authoritative root-registry id set directly;
+  // installed-but-not-active is then the status-loaded records the runtime did
+  // not load. Fall back to the raw status when provenance is absent.
   const runtimeLoadedIds = snapshot.runtimeLoadedPluginIds;
   const runtimeLoaded = runtimeLoadedIds ? new Set(runtimeLoadedIds) : undefined;
   const loaded = (runtimeLoadedIds ?? statusLoaded.map((plugin) => plugin.id)).toSorted(byLocale);

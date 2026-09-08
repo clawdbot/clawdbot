@@ -51,8 +51,8 @@ export {
   extensionForMime,
   extractOriginalFilename,
   getFileExtension,
-  resolveChannelMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-runtime";
+export { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 // Deprecated media-legacy-projection surface; the re-export stays until the
 // compat record's removeAfter window expires (deleted in retirement PR 4).

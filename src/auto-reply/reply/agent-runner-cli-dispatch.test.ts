@@ -2,8 +2,10 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { withTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
+import { clearCliSessionInStore } from "../../agents/cli-session-store.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
-import { FailoverError } from "../../agents/failover-error.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
@@ -13,13 +15,20 @@ import {
   resetAgentEventsForTest,
 } from "../../infra/agent-events.js";
 import {
-  clearCliSessionBindingForRun,
   createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
-  runCliAgentWithLifecycle,
+  runCliAgentWithLifecycle as runCliAgentWithLifecycleProduction,
 } from "./agent-runner-cli-dispatch.js";
 
-type RunCliAgentWithLifecycleParams = Parameters<typeof runCliAgentWithLifecycle>[0];
+type ProductionLifecycleParams = Parameters<typeof runCliAgentWithLifecycleProduction>[0];
+type RunCliAgentWithLifecycleParams = Omit<ProductionLifecycleParams, "runParams"> & {
+  runParams: Omit<ProductionLifecycleParams["runParams"], "admittedRunContext">;
+};
+const runCliAgentWithLifecycle = (params: RunCliAgentWithLifecycleParams) =>
+  runCliAgentWithLifecycleProduction({
+    ...params,
+    runParams: withTestAdmittedRunContext(params.runParams),
+  });
 type ReasoningTextPayload = Parameters<
   NonNullable<RunCliAgentWithLifecycleParams["onReasoningText"]>
 >[0];
@@ -43,6 +52,57 @@ afterEach(() => {
 });
 
 describe("runCliAgentWithLifecycle", () => {
+  it("bridges completed CLI compaction lifecycles to reply callbacks", async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "compaction",
+        data: { phase: "start", backend: "claude-cli" },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "compaction",
+        data: { phase: "end", backend: "claude-cli", completed: false },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "compaction",
+        data: { phase: "start", backend: "claude-cli" },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "compaction",
+        data: { phase: "end", backend: "claude-cli", completed: true },
+      });
+      return { payloads: [], meta: { durationMs: 1 } };
+    });
+    const callbacks: string[] = [];
+
+    await runCliAgentWithLifecycle({
+      runId: "run-compaction-bridge",
+      provider: "claude-cli",
+      onCompactionStart: async () => {
+        callbacks.push("start");
+      },
+      onCompactionEnd: async (payload) => {
+        callbacks.push(payload?.completed === false ? "incomplete" : "end");
+      },
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "claude-cli",
+        model: "claude-opus-4-8",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-compaction-bridge",
+      },
+    });
+
+    expect(callbacks).toEqual(["start", "incomplete", "start", "end"]);
+  });
+
   it("bridges typed CLI plan events", async () => {
     cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
       emitAgentEvent({
@@ -455,6 +515,7 @@ describe("runCliAgentWithLifecycle", () => {
       await runCliAgentWithLifecycle({
         runId: "run-before-restart",
         lifecycleGeneration,
+        startedAt: 1_000,
         provider: "claude-cli",
         runParams: {
           sessionId: "session-1",
@@ -479,6 +540,7 @@ describe("runCliAgentWithLifecycle", () => {
       lifecycleEvents.every((event) => event.lifecycleGeneration === lifecycleGeneration),
     ).toBe(true);
     expect(lifecycleEvents.every((event) => event.agentId === "support")).toBe(true);
+    expect(lifecycleEvents.every((event) => event.data?.startedAt === 1_000)).toBe(true);
   });
 
   it("preserves restart ownership when the CLI resolves after cancellation", async () => {
@@ -535,7 +597,16 @@ describe("runCliAgentWithLifecycle", () => {
       }
     });
     cliDispatchState.runCliAgentMock.mockRejectedValueOnce(
-      new FailoverError("CLI produced no output", { reason: "timeout" }),
+      createCliTimeoutError(
+        { provider: "claude-cli", model: "claude", sessionId: "session-1" },
+        {
+          mode: "no-output",
+          timeoutSeconds: 1,
+          observedActivity: false,
+          activeToolCount: 0,
+          backgroundTaskCount: 0,
+        },
+      ),
     );
 
     await expect(
@@ -662,39 +733,62 @@ describe("keepCliSessionBindingOnlyWhenReused", () => {
   });
 });
 
-describe("clearCliSessionBindingForRun", () => {
-  it("clears the expected binding from active and stored session entries", async () => {
-    const activeEntry = {
-      sessionId: "openclaw-active",
-      updatedAt: 1,
-      cliSessionBindings: { "claude-cli": { sessionId: "stale-session" } },
-      cliSessionIds: { "claude-cli": "stale-session" },
-      claudeCliSessionId: "stale-session",
-    };
-    const storedEntry = structuredClone(activeEntry);
-    const storePath = path.join(tempDirs.make("cli-session-cleanup-"), "sessions.json");
-    await replaceSessionEntry({ storePath, sessionKey: "main" }, structuredClone(activeEntry));
+describe("clearCliSessionInStore", () => {
+  it.each(["current", "closed"])(
+    "clears active and stored entries only for a %s owner",
+    async (owner) => {
+      const activeEntry = {
+        sessionId: "openclaw-active",
+        updatedAt: 1,
+        cliSessionBindings: { "claude-cli": { sessionId: "stale-session" } },
+        cliSessionIds: { "claude-cli": "stale-session" },
+        claudeCliSessionId: "stale-session",
+      };
+      const storedEntry = structuredClone(activeEntry);
+      const storePath = path.join(tempDirs.make("cli-session-cleanup-"), "sessions.json");
+      await replaceSessionEntry({ storePath, sessionKey: "main" }, structuredClone(activeEntry));
 
-    await clearCliSessionBindingForRun({
-      provider: "claude-cli",
-      expectedSessionId: "stale-session",
-      sessionKey: "main",
-      sessionStore: { main: storedEntry },
-      storePath,
-      activeSessionEntry: activeEntry,
-    });
+      let open = true;
+      const clear = clearCliSessionInStore({
+        provider: "claude-cli",
+        expectedCliSessionId: "stale-session",
+        expectedSessionId: activeEntry.sessionId,
+        sessionKey: "main",
+        sessionStore: { main: storedEntry },
+        storePath,
+        activeSessionEntry: activeEntry,
+        assertCommitAllowed: () => {
+          if (!open) {
+            throw new Error("owner closed");
+          }
+        },
+      });
+      if (owner === "closed") {
+        open = false;
+        await expect(clear).rejects.toThrow("owner closed");
+        for (const entry of [
+          activeEntry,
+          storedEntry,
+          loadSessionEntry({ storePath, sessionKey: "main" }),
+        ]) {
+          expect(entry?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe("stale-session");
+        }
+        return;
+      }
+      await clear;
 
-    for (const entry of [activeEntry, storedEntry]) {
-      expect(entry.cliSessionBindings?.["claude-cli"]).toBeUndefined();
-      expect(entry.cliSessionIds?.["claude-cli"]).toBeUndefined();
-      expect(entry.claudeCliSessionId).toBeUndefined();
-      expect(entry.updatedAt).toBeGreaterThan(1);
-    }
-    const persisted = loadSessionEntry({ storePath, sessionKey: "main" });
-    expect(persisted?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
-    expect(persisted?.cliSessionIds?.["claude-cli"]).toBeUndefined();
-    expect(persisted?.claudeCliSessionId).toBeUndefined();
-  });
+      for (const entry of [activeEntry, storedEntry]) {
+        expect(entry.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+        expect(entry.cliSessionIds?.["claude-cli"]).toBeUndefined();
+        expect(entry.claudeCliSessionId).toBeUndefined();
+        expect(entry.updatedAt).toBeGreaterThan(1);
+      }
+      const persisted = loadSessionEntry({ storePath, sessionKey: "main" });
+      expect(persisted?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+      expect(persisted?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+      expect(persisted?.claudeCliSessionId).toBeUndefined();
+    },
+  );
 
   it("does not clear a replacement binding adopted by another turn", async () => {
     const entry = {
@@ -705,9 +799,9 @@ describe("clearCliSessionBindingForRun", () => {
       claudeCliSessionId: "replacement-session",
     };
 
-    await clearCliSessionBindingForRun({
+    await clearCliSessionInStore({
       provider: "claude-cli",
-      expectedSessionId: "stale-session",
+      expectedCliSessionId: "stale-session",
       activeSessionEntry: entry,
     });
 
@@ -734,25 +828,32 @@ describe("createCliToolSummaryTracker", () => {
     result: { content: [{ type: "text", text: "Wed Jun 10 2026" }] },
   };
 
-  it("delivers a tool summary for a result using meta captured at start", async () => {
-    const deliver = vi.fn();
-    const tracker = createCliToolSummaryTracker({
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      deliver,
-    });
-    await tracker.noteToolEvent(startEvent);
-    await tracker.noteToolEvent(resultEvent);
-    expect(deliver).toHaveBeenCalledTimes(1);
-    const payload = deliver.mock.calls[0]?.[0] as { text: string; isError?: boolean };
-    expect(payload.text).toContain("date -u");
-    expect(payload.text).not.toContain("Wed Jun 10 2026");
-    expect(payload.isError).toBeUndefined();
-  });
+  it.each(["exec", "server.exec"])(
+    "delivers a safe %s summary using metadata captured at start",
+    async (name) => {
+      const deliver = vi.fn();
+      const tracker = createCliToolSummaryTracker({
+        commandDetailsVisible: false,
+        shouldEmitToolResult: () => true,
+        shouldEmitToolOutput: () => false,
+        deliver,
+      });
+      await tracker.noteToolEvent({ ...startEvent, name });
+      const commandBearing = await tracker.noteToolEvent({ ...resultEvent, name });
+      expect(commandBearing).toBe(true);
+      expect(deliver).toHaveBeenCalledTimes(1);
+      const payload = deliver.mock.calls[0]?.[0] as { text: string; isError?: boolean };
+      expect(payload.text).toContain(name === "exec" ? "Exec" : "Server.exec");
+      expect(payload.text).not.toContain("date -u");
+      expect(payload.text).not.toContain("Wed Jun 10 2026");
+      expect(payload.isError).toBeUndefined();
+    },
+  );
 
   it("appends the tool output block when full verbose output is enabled", async () => {
     const deliver = vi.fn();
     const tracker = createCliToolSummaryTracker({
+      commandDetailsVisible: true,
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => true,
       deliver,
@@ -767,6 +868,7 @@ describe("createCliToolSummaryTracker", () => {
   it("renders top-level structured CLI results in full verbose output", async () => {
     const deliver = vi.fn();
     const tracker = createCliToolSummaryTracker({
+      commandDetailsVisible: true,
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => true,
       deliver,
@@ -785,6 +887,7 @@ describe("createCliToolSummaryTracker", () => {
   it("emits nothing while tool summaries are disabled", async () => {
     const deliver = vi.fn();
     const tracker = createCliToolSummaryTracker({
+      commandDetailsVisible: false,
       shouldEmitToolResult: () => false,
       shouldEmitToolOutput: () => false,
       deliver,
@@ -794,9 +897,70 @@ describe("createCliToolSummaryTracker", () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 
+  it("leaves plan tools to the authoritative plan event instead of summarizing arguments", async () => {
+    const deliver = vi.fn();
+    const tracker = createCliToolSummaryTracker({
+      commandDetailsVisible: true,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => true,
+      deliver,
+    });
+    await tracker.noteToolEvent({
+      name: "progress_card",
+      phase: "start",
+      args: {
+        markdown: '<progress aria-label="CI · 2/3" value="2" max="3"></progress>',
+      },
+      toolCallId: "plan-1",
+    });
+    await tracker.noteToolEvent({
+      name: "progress_card",
+      phase: "result",
+      args: undefined,
+      toolCallId: "plan-1",
+      isError: false,
+      result: { content: [{ type: "text", text: "Progress card updated" }] },
+    });
+
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "keeps card errors visible without arguments (full output: %s)",
+    async (fullOutput) => {
+      const deliver = vi.fn();
+      const tracker = createCliToolSummaryTracker({
+        commandDetailsVisible: false,
+        shouldEmitToolResult: () => true,
+        shouldEmitToolOutput: () => fullOutput,
+        deliver,
+      });
+      await tracker.noteToolEvent({
+        name: "progress_card",
+        phase: "start",
+        args: { markdown: '<progress aria-label="private" value="1" max="2"></progress>' },
+        toolCallId: "plan-error",
+      });
+      await tracker.noteToolEvent({
+        name: undefined,
+        phase: "result",
+        args: undefined,
+        toolCallId: "plan-error",
+        isError: true,
+        result: { content: [{ type: "text", text: "write failed" }] },
+      });
+
+      expect(deliver).toHaveBeenCalledWith({
+        text: fullOutput ? "🗺️ Progress Card\n```txt\nwrite failed\n```" : "🗺️ Progress Card",
+        isError: true,
+      });
+    },
+  );
+
   it("propagates tool errors on the summary payload", async () => {
     const deliver = vi.fn();
     const tracker = createCliToolSummaryTracker({
+      commandDetailsVisible: false,
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       deliver,
@@ -810,6 +974,7 @@ describe("createCliToolSummaryTracker", () => {
   it("summarizes results without a tracked start event", async () => {
     const deliver = vi.fn();
     const tracker = createCliToolSummaryTracker({
+      commandDetailsVisible: false,
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       deliver,

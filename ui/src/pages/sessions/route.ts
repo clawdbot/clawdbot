@@ -4,16 +4,31 @@ import { html } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
-  DEFAULT_SESSION_LIST_QUERY,
+  SESSIONS_PAGE_DEFAULT_LIMIT,
   type SessionArchivedFilter,
+  type SessionListOptions,
 } from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
-import type { SessionsRouteData } from "./sessions-page.ts";
+
+export type SessionsRouteData = {
+  expandedSessionKey: string | null;
+  statusFilter: SessionArchivedFilter;
+};
+
+type SessionsPageListFilters = {
+  activeMinutes?: number;
+  limit?: number;
+  includeGlobal: boolean;
+  includeUnknown: boolean;
+  statusFilter: SessionArchivedFilter;
+  deepLinkSessionKey?: string | null;
+  search?: string;
+};
 
 function routeOptions(location: RouteLocation) {
   const search = new URLSearchParams(location.search);
   const expandedSessionKey = search.get("session")?.trim() || null;
-  // The retired internal `showArchived` param is deliberately not read; dashboard
+  // The retired internal `showArchived` param is deliberately not read; Sessions
   // URLs are not a shipped contract and stale links fall back to the Active view.
   const requestedStatus = search.get("status");
   const statusFilter: SessionArchivedFilter =
@@ -21,38 +36,39 @@ function routeOptions(location: RouteLocation) {
   return { expandedSessionKey, statusFilter };
 }
 
+export function sessionsPageListQuery(
+  context: ApplicationContext,
+  filters: SessionsPageListFilters,
+): SessionListOptions {
+  const deepLinkSessionKey = filters.deepLinkSessionKey?.trim() || null;
+  const scopeAgentId =
+    parseAgentSessionKey(deepLinkSessionKey)?.agentId ??
+    context.agentSelection.state.scopeId?.trim();
+  const activeMinutes =
+    !deepLinkSessionKey && filters.statusFilter === "active" ? filters.activeMinutes : undefined;
+  return {
+    limit: deepLinkSessionKey ? SESSIONS_PAGE_DEFAULT_LIMIT : filters.limit,
+    ...(activeMinutes ? { activeMinutes } : {}),
+    ...(deepLinkSessionKey || filters.search?.trim()
+      ? { search: deepLinkSessionKey ?? filters.search!.trim() }
+      : {}),
+    includeGlobal: deepLinkSessionKey ? true : filters.includeGlobal,
+    includeUnknown: deepLinkSessionKey ? true : filters.includeUnknown,
+    includeDerivedTitles: false,
+    includeLastMessage: false,
+    archivedFilter: filters.statusFilter,
+    ...(scopeAgentId ? { agentId: scopeAgentId } : {}),
+  };
+}
+
 async function loadSessionsRoute(
   context: ApplicationContext,
   location: RouteLocation,
 ): Promise<SessionsRouteData> {
-  const gateway = context.gateway;
-  const gatewaySnapshot = gateway.snapshot;
-  const options = routeOptions(location);
-  const checkpointAgentId = parseAgentSessionKey(options.expandedSessionKey)?.agentId;
-  const scopeAgentId = checkpointAgentId ?? context.agentSelection.state.scopeId;
-  const [sessions] = await Promise.all([
-    context.sessions
-      .list({
-        ...DEFAULT_SESSION_LIST_QUERY,
-        search: options.expandedSessionKey ?? undefined,
-        includeGlobal: true,
-        includeUnknown: Boolean(options.expandedSessionKey),
-        archivedFilter: options.statusFilter,
-        ...(scopeAgentId ? { agentId: scopeAgentId } : {}),
-      })
-      .then(
-        (result) => ({ result, error: null }),
-        (error: unknown) => ({ result: null, error: String(error) }),
-      ),
-    context.runtimeConfig.ensureLoaded().catch(() => undefined),
-  ]);
-  return {
-    gateway,
-    gatewaySnapshot,
-    result: sessions.result,
-    error: sessions.error,
-    ...options,
-  };
+  await context.runtimeConfig.ensureLoaded().catch(() => undefined);
+  // The mounted page owns list issuance, including scope/status navigation
+  // during a search. Prefetching here bypasses its single in-flight request.
+  return routeOptions(location);
 }
 
 export const page = definePage({

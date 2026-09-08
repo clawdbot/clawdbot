@@ -10,7 +10,7 @@ import {
 } from "../secrets/ref-contract.js";
 
 /**
- * Returns the shared secret-input schema for plaintext values and env/file/exec refs.
+ * Returns the shared secret-input schema for plaintext values and env/file/exec/store refs.
  * Reusing this singleton preserves sensitive-path registration for config redaction.
  */
 export function buildSecretInputSchema() {
@@ -45,6 +45,18 @@ const secretInputSchema = z
             .regex(
               ENV_SECRET_REF_ID_RE,
               'Env secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (example: "OPENAI_API_KEY").',
+            ),
+        })
+        .strict(),
+      z
+        .object({
+          source: z.literal("store"),
+          provider: providerSchema,
+          id: z
+            .string()
+            .regex(
+              ENV_SECRET_REF_ID_RE,
+              'Store secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (example: "OPENAI_API_KEY").',
             ),
         })
         .strict(),

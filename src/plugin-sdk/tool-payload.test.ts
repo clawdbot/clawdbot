@@ -450,6 +450,17 @@ describe("stripPlainTextToolCallBlocks", () => {
     expect(stripPlainTextToolCallBlocks(text)).toBe(text);
   });
 
+  it("supports opt-in protected ranges without weakening strict defaults", () => {
+    const call = '[read]\n{"path":"example.txt"}\n[/read]';
+
+    expect(
+      stripPlainTextToolCallBlocks(call, {
+        resolveProtectedRanges: () => [{ start: 0, end: call.length }],
+      }),
+    ).toBe(call);
+    expect(stripPlainTextToolCallBlocks(call)).toBe("");
+  });
+
   it("strips legacy tool-prefixed XML parameter blocks without a function close", () => {
     expect(
       stripPlainTextToolCallBlocks(

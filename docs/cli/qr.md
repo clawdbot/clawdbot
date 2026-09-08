@@ -38,7 +38,7 @@ openclaw devices approve <requestId>
 - `--password <password>`: override the gateway password the bootstrap flow authenticates against
 - `--limited`: omit administrative Gateway access from the handed-off operator token
 - `--voice-node`: issue node credentials plus only `operator.read` and `operator.talk`
-- `--setup-code-only`: print only the setup code
+- `--setup-code-only`: print only the setup code; `--json` takes precedence and emits the JSON document instead
 - `--no-ascii`: skip ASCII QR rendering
 - `--json`: emit JSON (`setupCode`, `gatewayUrl`, optional `gatewayUrls`, `auth`, `access`, optional `accessDowngraded`, `urlSource`)
 
@@ -64,7 +64,15 @@ to get full access.
 
 Mobile pairing fails closed for Tailscale/public `ws://` gateway URLs: use Tailscale Serve/Funnel or a `wss://` gateway URL for those. Private LAN addresses and `.local` Bonjour hosts remain supported over plain `ws://`, with limited operator access as described above.
 
-When the selected Gateway URL comes from `gateway.bind=lan`, OpenClaw also checks persistent `tailscale serve status --json` routes. Any HTTPS Serve root that proxies the active Gateway's loopback port is included as a fallback. The QR command adds this fallback only for `lan`; `custom` and `tailnet` keep their explicitly advertised routes. Current iOS clients probe the advertised routes in order and save the first reachable one; the legacy `url` field remains unchanged for older clients.
+The QR command advertises Tailscale URLs only when OpenClaw owns the route through `gateway.tailscale.mode=serve|funnel`. Legacy external Serve routes that target the ordinary Gateway listener are not advertised because that listener rejects Tailscale-shaped proxy ingress.
+
+If an older setup used `gateway.bind=lan` with a persistent default HTTPS Serve
+route, run `openclaw doctor` to inspect it. Doctor does not migrate or clear the
+route because its status cannot prove who owns it, even with `--fix`; if you
+confirm it is stale, clear only its root handler, configure
+`gateway.bind=loopback` plus `gateway.tailscale.mode=serve` manually, and restart
+the Gateway. Custom Serve ports and retired named-Service routes require the
+same manual cleanup; Doctor prints the relevant guidance.
 
 With `--remote`, one of `gateway.remote.url` or `gateway.tailscale.mode=serve|funnel` is required.
 

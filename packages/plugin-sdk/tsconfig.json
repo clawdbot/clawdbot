@@ -14,10 +14,12 @@
   },
   "include": [
     "../../packages/ai/src/**/*.ts",
+    "../../packages/llm-core/src/**/*.ts",
     "../../packages/markdown-core/src/**/*.ts",
     "../../packages/media-core/src/**/*.ts",
     "../../packages/media-generation-core/src/**/*.ts",
     "../../packages/model-catalog-core/src/**/*.ts",
+    "../../packages/memory-host-sdk/src/**/*.ts",
     "../../packages/normalization-core/src/**/*.ts",
     "../../packages/retry/src/**/*.ts",
     "../../packages/acp-core/src/**/*.ts",

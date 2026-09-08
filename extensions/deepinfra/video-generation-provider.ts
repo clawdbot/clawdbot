@@ -11,6 +11,7 @@ import {
   readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
   resolveProviderOperationTimeoutMs,
+  sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   asSafeIntegerInRange,
@@ -29,7 +30,7 @@ import {
   normalizeDeepInfraBaseUrl,
   normalizeDeepInfraModelRef,
 } from "./media-models.js";
-import type { DeepInfraSurfaceModel } from "./provider-models.js";
+import type { DeepInfraSurfaceModel } from "./media-models.js";
 import { resolveDeepInfraVideoModelCapabilities } from "./surface-model-catalogs.js";
 
 // Per-poll request budget; the total operation budget comes from req.timeoutMs.
@@ -182,11 +183,7 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
     defaultModel,
     models: ids,
     resolveModelCapabilities: resolveDeepInfraVideoModelCapabilities,
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: "deepinfra",
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "deepinfra", ...ctx }),
     capabilities: {
       generate: {
         maxVideos: 1,
@@ -234,7 +231,6 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
         resolveProviderHttpRequestConfig({
           baseUrl: resolveDeepInfraVideoBaseUrl(req),
           defaultBaseUrl: DEEPINFRA_BASE_URL,
-          allowPrivateNetwork: false,
           defaultHeaders: {
             Authorization: `Bearer ${auth.apiKey}`,
             "Content-Type": "application/json",
@@ -242,6 +238,9 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
           provider: "deepinfra",
           capability: "video",
           transport: "http",
+          request: sanitizeConfiguredModelProviderRequest(
+            req.cfg?.models?.providers?.deepinfra?.request,
+          ),
         });
 
       const { response, release } = await postJsonRequest({

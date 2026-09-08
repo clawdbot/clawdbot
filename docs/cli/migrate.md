@@ -47,6 +47,9 @@ Running `openclaw migrate <provider>` with no other flags plans, previews, and (
 <ParamField path="--from <path>" type="string">
   Override the source state directory. Hermes follows `$HERMES_HOME` and the active profile, then uses the platform default (`~/.hermes` or `%LOCALAPPDATA%\hermes`). Codex defaults to `~/.codex` (or `$CODEX_HOME`), Claude defaults to `~/.claude`.
 </ParamField>
+<ParamField path="--agent <id>" type="string">
+  Import into a configured agent. Omit this only when the configured default agent is the intended owner. Invalid and unknown agent IDs are rejected.
+</ParamField>
 <ParamField path="--include-secrets" type="boolean">
   Import supported credentials without prompting. Interactive apply asks before importing detected auth credentials, with yes selected by default; non-interactive `--yes` requires `--include-secrets` to import them.
 </ParamField>
@@ -64,6 +67,9 @@ Running `openclaw migrate <provider>` with no other flags plans, previews, and (
 </ParamField>
 <ParamField path="--plugin <name>" type="string">
   Select one Codex plugin install item by plugin name or item id. Repeat the flag to migrate multiple Codex plugins. When omitted, interactive Codex migrations show a native Codex plugin checkbox selector and non-interactive migrations keep all planned plugins. Applies only to source-installed `openai-curated` Codex plugins discovered by the Codex app-server inventory.
+</ParamField>
+<ParamField path="--item <id>" type="string">
+  Select one exact migration item by its plan ID. Repeat the flag to migrate multiple items. For example, `--item auth:openai` limits a Codex migration to the detected OpenAI credential item.
 </ParamField>
 <ParamField path="--verify-plugin-apps" type="boolean">
   Codex only. Forces a fresh source Codex app-server `app/installed` snapshot read before planning native plugin activation. Off by default to keep migration planning fast.
@@ -132,6 +138,16 @@ The bundled Codex provider detects Codex CLI state at `~/.codex` by default, or 
 
 Use this provider when moving to the OpenClaw Codex harness and you want to promote useful personal Codex CLI assets deliberately. Local Codex app-server launches use a per-agent `CODEX_HOME`, so they do not read your personal `~/.codex` by default. The normal process `HOME` is still inherited, so Codex can see shared `$HOME/.agents/*` skills/plugin marketplace entries and subprocesses can find user-home config and tokens.
 
+Codex `auth.json` credentials are sensitive migration inputs. The default
+agent-scoped runtime does not consume a copied or mounted `auth.json` directly;
+import those credentials into the owning agent's OpenClaw auth store explicitly.
+Replace `<agent-id>` with that configured agent's ID:
+
+```bash
+openclaw migrate plan codex --from <codex-home> --agent <agent-id> --include-secrets --item auth:openai
+openclaw migrate apply codex --from <codex-home> --agent <agent-id> --include-secrets --item auth:openai --yes
+```
+
 Running `openclaw migrate codex` in an interactive terminal previews the full plan, then opens checkbox selectors before the final apply confirmation. Skill copy items are prompted first. Use `Toggle all on` or `Toggle all off` for bulk selection. Press Space to toggle rows, or Enter to activate the highlighted row and continue. Planned skills start checked, conflict skills start unchecked, and `Skip for now` skips skill copies for this run while still continuing to plugin selection. When source-installed curated Codex plugins are migratable and `--plugin` was not supplied, migration then prompts for native Codex plugin activation by plugin name. Plugin items start checked unless the target OpenClaw Codex plugin config already has that plugin. Existing target plugins start unchecked and show a conflict hint such as `conflict: plugin exists`; choose `Toggle all off` to migrate no native Codex plugins in that run, or `Skip for now` to stop before applying.
 
 For scripted or exact runs, select one or more skills or plugins explicitly:
@@ -145,6 +161,9 @@ openclaw migrate apply codex --yes --plugin google-calendar
 
 ### What Codex imports
 
+- ChatGPT OAuth or OpenAI API-key credentials from `$CODEX_HOME/auth.json`,
+  imported into the agent's OpenClaw auth store only when `--include-secrets`
+  is set.
 - Consolidated Codex `MEMORY.md` and `memory_summary.md` from
   `$CODEX_HOME/memories`, copied under `memory/imports/codex/` for indexed
   recall. Raw rollout memory is not imported.
@@ -183,8 +202,8 @@ The bundled Hermes provider follows `$HERMES_HOME` and the active profile, then 
 
 ### What Hermes imports
 
-- Default model configuration from `config.yaml`.
-- Configured model providers and custom OpenAI-compatible endpoints from `model`, `providers`, and `custom_providers`.
+- Default model configuration from `config.yaml`. `--agent <id>` applies the model to the selected agent without changing shared defaults or other agents.
+- Configured model providers and custom OpenAI-compatible endpoints from `model`, `providers`, and `custom_providers`, including supported Hermes transport aliases, camelCase fields, and model list metadata.
 - MCP server definitions from `mcp_servers` or `mcp.servers`. Exact OpenClaw mappings cover default Streamable HTTP routing, OAuth scope, boolean TLS verification, separate client certificate/key paths, and Hermes native/resource/prompt tool policy. Unsupported Hermes-only runtime or credential fields are reported for manual review.
 - `SOUL.md` and `AGENTS.md` into the OpenClaw agent workspace.
 - `memories/MEMORY.md` and `memories/USER.md` appended to workspace memory files.
@@ -192,8 +211,8 @@ The bundled Hermes provider follows `$HERMES_HOME` and the active profile, then 
   import page) instead copy these files under `memory/imports/hermes/` for
   indexed recall without touching existing workspace memory.
 - Memory config defaults for OpenClaw file memory, plus archive or manual-review items for external memory providers such as Honcho.
-- Skills that include a `SKILL.md` file anywhere under `skills/`; nested skills are flattened into the workspace skill directory.
-- Per-skill config values from `skills.config`.
+- Skills that include a `SKILL.md` file under active directories in `skills/`; nested skills are flattened into the workspace skill directory, and organization mirrors follow `_org/.active_org`.
+- Per-skill config values from `skills.config` and global disabled state from `skills.disabled`.
 - Current Hermes OpenAI Codex OAuth credentials and OpenCode OpenAI OAuth credentials when interactive credential migration is accepted, or when `--include-secrets` is set. Do not keep Hermes and OpenClaw using the same imported refresh grant.
 - Supported API keys and tokens from Hermes `.env` and OpenCode `auth.json` when interactive credential migration is accepted, or when `--include-secrets` is set.
 
@@ -226,6 +245,8 @@ Migration sources are plugins. A plugin declares its provider ids in `openclaw.p
 At runtime the plugin calls `api.registerMigrationProvider(...)`. The provider implements `detect`, `plan`, and `apply`. Core owns CLI orchestration, backup policy, prompts, JSON output, and conflict preflight. Core passes the reviewed plan into `apply(ctx, plan)`, and providers may rebuild the plan only when that argument is absent for compatibility. Migration items may set `applyPhase: "after-promotion"` for external activation effects that onboarding must defer until staged local data is durably published. Those providers must declare `deferredApply: { retrySafe: true }` and make each deferred effect safe to replay after an interrupted process; onboarding rejects undeclared deferred effects. An idempotent no-op should return a non-mutating item with `deferredCompletion: true` so recovery can record it as complete. Standalone `openclaw migrate` still applies the complete plan through its normal backup-backed flow.
 
 Provider plugins can use `openclaw/plugin-sdk/migration` for item construction and summary counts, plus `openclaw/plugin-sdk/migration-runtime` for conflict-aware file copies, archive-only report copies, cached config-runtime wrappers, and migration reports.
+
+In JSON mode, an apply that finishes with item errors or conflicts writes one complete migration report and exits with code `1`. Inspect `summary` and `items` to identify partial results.
 
 ## Onboarding integration
 

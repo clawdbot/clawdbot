@@ -10,8 +10,11 @@ import {
   sessionUpdatePayloads,
   expectSessionUpdate,
 } from "./translator.bridge-test-helpers.js";
-import { AcpGatewayAgent } from "./translator.js";
-import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
+import {
+  createAcpConnection,
+  createAcpGateway,
+  createAcpGatewayAgent,
+} from "./translator.test-helpers.js";
 
 vi.mock("./commands.js", () => ({
   getAvailableCommands: () => [],
@@ -22,7 +25,7 @@ describe("acp unsupported bridge session setup", () => {
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();
     const sessionUpdate = connection["__sessionUpdateMock"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(), {
+    const agent = createAcpGatewayAgent(connection, createAcpGateway(), {
       sessionStore,
     });
 
@@ -35,14 +38,13 @@ describe("acp unsupported bridge session setup", () => {
 
     expect(sessionStore.hasSession("docs-session")).toBe(false);
     expect(sessionUpdate).not.toHaveBeenCalled();
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("rejects per-session MCP servers on loadSession", async () => {
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();
     const sessionUpdate = connection["__sessionUpdateMock"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(), {
+    const agent = createAcpGatewayAgent(connection, createAcpGateway(), {
       sessionStore,
     });
 
@@ -55,14 +57,13 @@ describe("acp unsupported bridge session setup", () => {
 
     expect(sessionStore.hasSession("docs-session")).toBe(false);
     expect(sessionUpdate).not.toHaveBeenCalled();
-    sessionStore.clearAllSessionsForTest();
   });
 });
 
 describe("acp session UX bridge behavior", () => {
   it("uses a non-runtime namespace for generated bridge sessions", async () => {
     const sessionStore = createInMemorySessionStore();
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
       sessionStore,
     });
 
@@ -71,13 +72,11 @@ describe("acp session UX bridge behavior", () => {
 
     expect(sessionKey).toMatch(/^acp-bridge:/);
     expect(isAcpSessionKey(sessionKey)).toBe(false);
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("returns initial modes and thought-level config options for new sessions", async () => {
     const sessionStore = createInMemorySessionStore();
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
       sessionStore,
     });
 
@@ -101,8 +100,6 @@ describe("acp session UX bridge behavior", () => {
     // Unset session inherits the configured default → control reads "inherit", not "off".
     expectConfigOption(result.configOptions, "response_usage", { currentValue: "inherit" });
     expectConfigOption(result.configOptions, "elevated_level", { currentValue: "off" });
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("replays user text, assistant text, and hidden assistant thinking on loadSession", async () => {
@@ -165,7 +162,7 @@ describe("acp session UX bridge behavior", () => {
       }
       return { ok: true };
     }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
       sessionStore,
     });
 
@@ -229,8 +226,6 @@ describe("acp session UX bridge behavior", () => {
         },
       },
     });
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("falls back to an empty transcript when sessions.get fails during loadSession", async () => {
@@ -267,7 +262,7 @@ describe("acp session UX bridge behavior", () => {
       }
       return { ok: true };
     }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
       sessionStore,
     });
 
@@ -276,7 +271,5 @@ describe("acp session UX bridge behavior", () => {
     expect(result.modes?.currentModeId).toBe("adaptive");
     expectSessionUpdate(sessionUpdate, "agent:main:recover", "available_commands_update");
     expect(sessionUpdatePayloads(sessionUpdate, "user_message_chunk")).toEqual([]);
-
-    sessionStore.clearAllSessionsForTest();
   });
 });

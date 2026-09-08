@@ -1,12 +1,10 @@
 import { SESSION_VIEWER_PRESENCE_MAX_KEYS } from "../../../packages/gateway-protocol/src/schema/sessions-viewer-presence.js";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
+import { createGatewaySetSyncLifecycle } from "./gateway-set-sync-lifecycle.ts";
 import { resolveSessionKey } from "./sessions/index.ts";
 
 const SESSION_VIEWERS_SET_METHOD = "sessions.viewers.set";
-
-const RETRY_BASE_MS = 30_000;
-const RETRY_MAX_MS = 5 * 60_000;
 
 type SessionViewerPresenceStore = {
   watch: (owner: object, sessionKeys: readonly string[]) => void;
@@ -22,26 +20,9 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
   let lastSignature: string | null = null;
   let acknowledgedSignature: string | null = null;
   let acknowledgedGeneration = 0;
-  let retryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  let retryDelayMs = RETRY_BASE_MS;
   let requestGeneration = 0;
-  let syncScheduled = false;
-  let scheduleGeneration = 0;
-  let attached = false;
-  let stopGatewaySnapshots: (() => void) | null = null;
-  let visibilityDocument: Document | null = null;
 
   const isActive = () => watchedByOwner.size > 0;
-
-  const clearRetry = (resetDelay: boolean) => {
-    if (retryTimer !== null) {
-      globalThis.clearTimeout(retryTimer);
-      retryTimer = null;
-    }
-    if (resetDelay) {
-      retryDelayMs = RETRY_BASE_MS;
-    }
-  };
 
   const visibleSessionKeys = (): string[] => {
     const hello = gateway.snapshot.hello;
@@ -57,57 +38,30 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
     return [...keys].toSorted().slice(0, SESSION_VIEWER_PRESENCE_MAX_KEYS);
   };
 
-  const handleGatewaySnapshot = () => scheduleSync();
-  const handleVisibilityChange = () => {
-    clearRetry(true);
-    scheduleSync();
-  };
-
-  const attach = () => {
-    if (attached) {
-      return;
-    }
-    attached = true;
-    knownClient = gateway.snapshot.client;
-    lastHello = null;
-    lastSignature = null;
-    acknowledgedSignature = null;
-    acknowledgedGeneration = 0;
-    stopGatewaySnapshots = gateway.subscribe(handleGatewaySnapshot);
-    if (typeof document !== "undefined") {
-      document.addEventListener("visibilitychange", handleVisibilityChange);
-      visibilityDocument = document;
-    }
-  };
-
-  const detach = () => {
-    if (!attached) {
-      return;
-    }
-    attached = false;
-    stopGatewaySnapshots?.();
-    stopGatewaySnapshots = null;
-    visibilityDocument?.removeEventListener("visibilitychange", handleVisibilityChange);
-    visibilityDocument = null;
-    clearRetry(true);
-    requestGeneration += 1;
-    scheduleGeneration += 1;
-    syncScheduled = false;
-    lastHello = null;
-    lastSignature = null;
-    acknowledgedSignature = null;
-    acknowledgedGeneration = 0;
-  };
+  const lifecycle = createGatewaySetSyncLifecycle(gateway, {
+    sync,
+    onAttach: () => {
+      knownClient = gateway.snapshot.client;
+      lastHello = null;
+      lastSignature = null;
+      acknowledgedSignature = null;
+      acknowledgedGeneration = 0;
+    },
+    onDetach: () => {
+      requestGeneration += 1;
+      lastHello = null;
+      lastSignature = null;
+      acknowledgedSignature = null;
+      acknowledgedGeneration = 0;
+    },
+  });
+  const { retry } = lifecycle;
 
   function sync() {
-    syncScheduled = false;
-    if (!attached) {
-      return;
-    }
     const snapshot = gateway.snapshot;
     const client = snapshot.client;
     if (client !== knownClient) {
-      clearRetry(true);
+      retry.reset();
       knownClient = client;
       lastHello = null;
       lastSignature = null;
@@ -125,7 +79,7 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
       acknowledgedSignature = null;
       acknowledgedGeneration = 0;
       if (!isActive()) {
-        detach();
+        lifecycle.detach();
       }
       return;
     }
@@ -133,14 +87,17 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
       typeof document !== "undefined" && document.visibilityState === "hidden"
         ? []
         : visibleSessionKeys();
-    const signature = JSON.stringify(sessionKeys);
+    const agentId = sessionKeys.some((key) => !key.startsWith("agent:"))
+      ? snapshot.assistantAgentId
+      : undefined;
+    const signature = JSON.stringify({ agentId, sessionKeys });
     if (snapshot.hello === lastHello && signature === lastSignature) {
       if (
         !isActive() &&
         acknowledgedSignature === signature &&
         acknowledgedGeneration === requestGeneration
       ) {
-        detach();
+        lifecycle.detach();
       }
       return;
     }
@@ -148,20 +105,23 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
     lastSignature = signature;
     const currentGeneration = ++requestGeneration;
     const isCurrentRequest = () =>
-      attached &&
+      lifecycle.attached &&
       currentGeneration === requestGeneration &&
       snapshot.hello === lastHello &&
       signature === lastSignature;
-    clearRetry(false);
-    const request = client.request(SESSION_VIEWERS_SET_METHOD, { sessionKeys });
+    retry.cancel();
+    const request = client.request(SESSION_VIEWERS_SET_METHOD, {
+      ...(agentId ? { agentId } : {}),
+      sessionKeys,
+    });
     void request
       .then(() => {
         if (isCurrentRequest()) {
           acknowledgedSignature = signature;
           acknowledgedGeneration = currentGeneration;
-          retryDelayMs = RETRY_BASE_MS;
+          retry.reset();
           if (!isActive()) {
-            detach();
+            lifecycle.detach();
           }
         }
       })
@@ -170,28 +130,8 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
           return;
         }
         lastSignature = null;
-        const delayMs = retryDelayMs;
-        retryDelayMs = Math.min(retryDelayMs * 2, RETRY_MAX_MS);
-        retryTimer = globalThis.setTimeout(() => {
-          retryTimer = null;
-          if (attached) {
-            scheduleSync();
-          }
-        }, delayMs);
+        retry.schedule(lifecycle.schedule);
       });
-  }
-
-  function scheduleSync() {
-    if (!attached || syncScheduled) {
-      return;
-    }
-    syncScheduled = true;
-    const generation = scheduleGeneration;
-    globalThis.queueMicrotask(() => {
-      if (generation === scheduleGeneration) {
-        sync();
-      }
-    });
   }
 
   const watch = (owner: object, sessionKeys: readonly string[]) => {
@@ -209,12 +149,12 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
     } else {
       watchedByOwner.set(owner, next);
     }
-    clearRetry(true);
+    retry.reset();
     if (isActive()) {
-      attach();
-      scheduleSync();
-    } else if (attached) {
-      sync();
+      lifecycle.attach();
+      lifecycle.schedule();
+    } else if (lifecycle.attached) {
+      lifecycle.sync();
     }
   };
 

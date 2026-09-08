@@ -17,6 +17,9 @@ Moonshot and Kimi Coding are **separate providers**, each shipped as a separate 
 
 ## Built-in model catalog
 
+Moonshot and Kimi Coding setup save connection settings and aliases without copying generated catalog rows into your config.
+Explicit `models.mode: "replace"` keeps catalog seeding enabled; custom model rows stay intact.
+
 [//]: # "moonshot-kimi-k2-ids:start"
 
 | Model ref                           | Name                     | Reasoning        | Input              | Context   | Max output |
@@ -112,7 +115,7 @@ onboarding.
 
     ```json5
     {
-      env: { MOONSHOT_API_KEY: "sk-..." },
+      env: { vars: { MOONSHOT_API_KEY: "sk-..." } },
       agents: {
         defaults: {
           model: { primary: "moonshot/kimi-k3" },
@@ -244,7 +247,7 @@ onboarding.
 
     ```json5
     {
-      env: { KIMI_API_KEY: "sk-..." },
+      env: { vars: { KIMI_API_KEY: "sk-..." } },
       agents: {
         defaults: {
           model: { primary: "kimi/kimi-for-coding" },

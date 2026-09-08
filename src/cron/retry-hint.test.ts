@@ -20,6 +20,15 @@ describe("resolveCronExecutionRetryHint", () => {
     ).toEqual({ retryable: true, category: "rate_limit" });
   });
 
+  it("does not let transient error text override a permanent provider classification", () => {
+    expect(
+      resolveCronExecutionRetryHint({
+        error: "HTTP 429: all available credits have been exhausted",
+        classifiedReason: "billing",
+      }),
+    ).toEqual({ retryable: false });
+  });
+
   it("treats common network error codes as network when retryOn only includes network", () => {
     for (const code of [
       "EAI_AGAIN",
@@ -56,6 +65,57 @@ describe("resolveCronExecutionRetryHint", () => {
     }
   });
 
+  it("does not classify incidental 529 numbers as provider overload", () => {
+    for (const message of [
+      "529 lines of output",
+      "529 files missing",
+      "529 workers failed",
+      "context limit 529 exceeded",
+      "process exited with 529 lines of output",
+      "assertion failed: expected 529 got 0",
+      "process exited with code 529",
+      "killed worker pid 529 after deadline",
+      "ENOENT: no such file '/var/run/app-529.sock'",
+      "API error: 5291",
+      "HTTP/2 5291",
+    ]) {
+      expect(resolveCronExecutionRetryHint({ error: message, retryOn: ["overloaded"] })).toEqual({
+        retryable: false,
+      });
+      expect(resolveCronExecutionRetryHint({ error: message })).toEqual({ retryable: false });
+    }
+  });
+
+  it("classifies genuine HTTP and provider API overload errors", () => {
+    for (const message of [
+      "HTTP 529",
+      "HTTP/2 529",
+      "HTTP/1.1 529",
+      "received status 529 from upstream",
+      "response code: 529",
+      "statusCode: 529",
+      "status_code=529",
+      "responseCode: 529",
+      "API error: 529",
+      "APIError: 529",
+      "api_error: 529",
+      "Provider API error (529): request rejected",
+      "curl: (22) The requested URL returned error: 529",
+      "URL returned error: 529",
+      "529 API is busy",
+      "529 Please try again",
+      "529",
+      "overloaded_error",
+      "temporarily overloaded",
+      "capacity exceeded",
+    ]) {
+      expect(resolveCronExecutionRetryHint({ error: message, retryOn: ["overloaded"] })).toEqual({
+        retryable: true,
+        category: "overloaded",
+      });
+    }
+  });
+
   it("does not classify bare 5xx-looking numbers as server_error", () => {
     for (const message of [
       "context limit 512 exceeded",
@@ -86,6 +146,58 @@ describe("resolveCronExecutionRetryHint", () => {
       expect(resolveCronExecutionRetryHint({ error: message, retryOn: ["server_error"] })).toEqual({
         retryable: true,
         category: "server_error",
+      });
+    }
+  });
+
+  it("does not classify incidental 429 numbers or provider names as rate limits", () => {
+    for (const message of [
+      "context limit 1429 exceeded",
+      "process exited with 429 lines of output",
+      "assertion failed: expected 429 got 0",
+      "error 429 got 0",
+      "process exited with code 429",
+      "API error: 4291",
+      "APIError: 4291",
+      "HTTP/2 4291",
+      "requested URL returned error: 4291",
+      "ENOENT: no such file '/etc/cloudflare.toml'",
+      "Cloudflare API token is invalid",
+    ]) {
+      expect(resolveCronExecutionRetryHint({ error: message, retryOn: ["rate_limit"] })).toEqual({
+        retryable: false,
+      });
+    }
+  });
+
+  it("classifies genuine HTTP and provider API rate limits", () => {
+    for (const message of [
+      "HTTP 429 Too Many Requests",
+      "HTTP/2 429",
+      "HTTP/1.1 429",
+      "received status 429 from upstream",
+      "response code: 429",
+      "statusCode: 429",
+      "status_code=429",
+      "responseCode: 429",
+      "API error: 429",
+      "APIError: 429",
+      "api_error: 429",
+      "curl: (22) The requested URL returned error: 429",
+      "URL returned error: 429",
+      "Provider API error (429): Quota exceeded [code=quota_exceeded]",
+      "429 rate limit exceeded",
+      "429: quota exceeded",
+      "429: quota exhausted",
+      '{"error":{"type":"rate_limit_error"}}',
+      "rate_limit_exceeded",
+      "rate_limit_reached",
+      "resource has been exhausted",
+      "429",
+    ]) {
+      expect(resolveCronExecutionRetryHint({ error: message, retryOn: ["rate_limit"] })).toEqual({
+        retryable: true,
+        category: "rate_limit",
       });
     }
   });

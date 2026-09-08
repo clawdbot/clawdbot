@@ -47,7 +47,7 @@ describe("Matrix tool-progress timeout diagnostics", () => {
       events: [
         buildBoundaryEvent({
           eventId: "$replacement",
-          relatesTo: { eventId: "$preview", relType: "m.replace" },
+          replacesEventId: "$preview",
         }),
       ],
       previewEventId: "$preview",

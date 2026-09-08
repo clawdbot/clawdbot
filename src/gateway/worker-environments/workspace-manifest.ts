@@ -1,5 +1,12 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { isStagedInputPath, stagedInputDirectoriesFromEntries } from "../../media/staged-inputs.js";
+import {
+  MAX_WORKSPACE_INVENTORY_ENTRIES,
+  MAX_WORKSPACE_INVENTORY_PATH_BYTES,
+  MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
+  MAX_WORKSPACE_MANIFEST_BYTES,
+} from "./workspace-inventory-limits.js";
 import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 
 export type WorkerWorkspaceManifestEntry =
@@ -132,11 +139,14 @@ function validateAndProjectEntries(values: unknown[]): {
   entries: WorkerWorkspaceManifestEntry[];
   directories: string[];
 } {
-  if (values.length > 250_000) {
+  if (values.length > MAX_WORKSPACE_INVENTORY_ENTRIES) {
     throw new Error("Worker workspace manifest has too many entries");
   }
   const rawEntries = values.map(parseRawEntry);
+  const stagedInputs = stagedInputDirectoriesFromEntries(rawEntries);
   let previous = "";
+  let pathBytes = 0;
+  let totalBytes = 0;
   const byPath = new Map<string, RawManifestEntry>();
   for (const entry of rawEntries) {
     if (byPath.has(entry.path) || (previous && previous >= entry.path)) {
@@ -148,44 +158,90 @@ function validateAndProjectEntries(values: unknown[]): {
         throw new Error("Worker workspace manifest entry has a non-directory parent");
       }
     }
+    pathBytes += Buffer.byteLength(entry.path);
+    totalBytes +=
+      entry.type === "file"
+        ? entry.size
+        : entry.type === "symlink"
+          ? Buffer.byteLength(entry.target)
+          : 0;
+    if (pathBytes > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
+      throw new Error("Worker workspace manifest paths exceed their byte limit");
+    }
+    if (totalBytes > MAX_WORKSPACE_INVENTORY_TOTAL_BYTES) {
+      throw new Error("Worker workspace manifest exceeds its eligible byte limit");
+    }
     byPath.set(entry.path, entry);
     previous = entry.path;
   }
   return {
     entries: rawEntries.filter(
       (entry): entry is WorkerWorkspaceManifestEntry =>
-        entry.type !== "directory" && !isDerivedWorkspacePath(entry.path),
+        entry.type !== "directory" &&
+        !isDerivedWorkspacePath(entry.path, isStagedInputPath(entry.path, stagedInputs)),
     ),
     directories: rawEntries
-      .filter((entry) => entry.type === "directory" && !isDerivedWorkspacePath(entry.path))
+      .filter(
+        (entry) =>
+          entry.type === "directory" &&
+          !isDerivedWorkspacePath(entry.path, isStagedInputPath(entry.path, stagedInputs)),
+      )
       .map((entry) => entry.path),
   };
 }
 
 export function serializeWorkerWorkspaceManifest(manifest: WorkerWorkspaceManifest): string {
-  return JSON.stringify({
-    version: manifest.version,
-    baseCommit: manifest.baseCommit,
-    entries: [
-      ...(manifest.directories ?? [])
-        .filter((entryPath) => !isDerivedWorkspacePath(entryPath))
-        .map((entryPath) => ({
-          path: entryPath,
-          type: "directory" as const,
-          // Phase 1 projects directory permissions away. Keep recomputed
-          // manifests deterministic without creating a new mode contract.
-          mode: 0o700,
-        })),
-      ...manifest.entries.filter((entry) => !isDerivedWorkspacePath(entry.path)),
-    ].toSorted(compareManifestPaths),
-  });
+  const stagedInputs = stagedInputDirectoriesFromEntries(manifest.entries);
+  const entries = [
+    ...(manifest.directories ?? []).map((entryPath) => ({
+      path: entryPath,
+      type: "directory" as const,
+      // Phase 1 projects directory permissions away. Keep recomputed
+      // manifests deterministic without creating a new mode contract.
+      mode: 0o700,
+    })),
+    ...manifest.entries,
+  ]
+    .filter(
+      (entry) => !isDerivedWorkspacePath(entry.path, isStagedInputPath(entry.path, stagedInputs)),
+    )
+    .toSorted(compareManifestPaths);
+  if (entries.length > MAX_WORKSPACE_INVENTORY_ENTRIES) {
+    throw new Error("Worker workspace manifest has too many entries");
+  }
+  let pathBytes = 0;
+  let totalBytes = 0;
+  let entryBytes = 0;
+  const emptyBytes = Buffer.byteLength(
+    JSON.stringify({ version: manifest.version, baseCommit: manifest.baseCommit, entries: [] }),
+  );
+  for (const entry of entries) {
+    pathBytes += Buffer.byteLength(entry.path);
+    totalBytes +=
+      entry.type === "file"
+        ? entry.size
+        : entry.type === "symlink"
+          ? Buffer.byteLength(entry.target)
+          : 0;
+    entryBytes += Buffer.byteLength(JSON.stringify(entry));
+    if (pathBytes > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
+      throw new Error("Worker workspace manifest paths exceed their byte limit");
+    }
+    if (totalBytes > MAX_WORKSPACE_INVENTORY_TOTAL_BYTES) {
+      throw new Error("Worker workspace manifest exceeds its eligible byte limit");
+    }
+    if (emptyBytes + entryBytes + Math.max(0, entries.length - 1) > MAX_WORKSPACE_MANIFEST_BYTES) {
+      throw new Error("Worker workspace manifest exceeds the 64 MiB safety limit");
+    }
+  }
+  return JSON.stringify({ version: manifest.version, baseCommit: manifest.baseCommit, entries });
 }
 
 export function parseWorkerWorkspaceManifest(
   raw: string,
   expectedRef: string,
 ): WorkerWorkspaceManifest {
-  if (Buffer.byteLength(raw) > 64 * 1024 * 1024) {
+  if (Buffer.byteLength(raw) > MAX_WORKSPACE_MANIFEST_BYTES) {
     throw new Error("Worker workspace manifest exceeds the 64 MiB safety limit");
   }
   const match = MANIFEST_REF_PATTERN.exec(expectedRef);

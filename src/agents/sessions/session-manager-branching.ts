@@ -1,16 +1,10 @@
-import {
-  loadSessionEntry,
-  replaceSessionEntrySync,
-} from "../../config/sessions/session-accessor.js";
-import { projectCanonicalSessionEntryShape } from "../../config/sessions/store-entry-shape.js";
-import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
-import {
-  isJsonRecord,
-  parseOpaqueLeafEntry,
-  parseParentLinkedOpaqueEntry,
-} from "./session-manager-codec.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { replaceSessionWithBranchedTranscript } from "../../config/sessions/session-accessor.js";
+import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
+import { parseOpaqueLeafEntry, parseParentLinkedOpaqueEntry } from "./session-manager-codec.js";
+import type { SessionManagerPersistenceTarget } from "./session-manager-core.js";
 import { SessionManagerEntries } from "./session-manager-entries.js";
-import { createSessionId, generateSessionEntryId } from "./session-manager-id.js";
+import { createManagedSessionId, generateSessionEntryId } from "./session-manager-id.js";
 import type {
   LabelEntry,
   PreservedOpaqueFileEntry,
@@ -23,7 +17,6 @@ export class SessionManagerBranching extends SessionManagerEntries {
     entries: SessionEntry[];
     opaqueEntries: PreservedOpaqueFileEntry[];
     tailId: string | null;
-    usedIds: Set<string>;
   } {
     type BranchNode =
       | { type: "entry"; entry: SessionEntry }
@@ -33,7 +26,7 @@ export class SessionManagerBranching extends SessionManagerEntries {
     for (const opaqueEntry of this.opaqueFileEntries) {
       const leafEntry = parseOpaqueLeafEntry(opaqueEntry.record);
       const link = leafEntry ?? parseParentLinkedOpaqueEntry(opaqueEntry.record);
-      if (link && isJsonRecord(opaqueEntry.record)) {
+      if (link && isRecord(opaqueEntry.record)) {
         opaqueById.set(link.id, opaqueEntry.record);
       }
     }
@@ -73,19 +66,17 @@ export class SessionManagerBranching extends SessionManagerEntries {
 
     const entries: SessionEntry[] = [];
     const opaqueEntries: PreservedOpaqueFileEntry[] = [];
-    const usedIds = new Set<string>();
     let tailId: string | null = null;
     for (const node of reversedNodes.toReversed()) {
       if (node.type === "entry") {
         if (node.entry.type === "label") {
           continue;
         }
-        const branchEntry: SessionEntry =
-          node.entry.parentId === tailId
-            ? node.entry
-            : ({ ...node.entry, parentId: tailId } as SessionEntry);
+        // This is the selected path in a new session, not an inactive side branch.
+        // Its navigation controls are omitted, so copied entries must advance the leaf.
+        const branchEntry: SessionEntry = { ...node.entry, parentId: tailId };
+        delete branchEntry.appendMode;
         entries.push(branchEntry);
-        usedIds.add(branchEntry.id);
         tailId = branchEntry.id;
         continue;
       }
@@ -96,26 +87,27 @@ export class SessionManagerBranching extends SessionManagerEntries {
         index: entries.length + 1,
         record: { ...node.record, parentId: tailId },
       });
-      usedIds.add(node.id);
       tailId = node.id;
     }
-    return { entries, opaqueEntries, tailId, usedIds };
+    return { entries, opaqueEntries, tailId };
   }
 
-  createBranchedSession(leafId: string): string | undefined {
+  async createBranchedSession(leafId: string): Promise<string | undefined> {
+    this.assertTranscriptWriteActive();
+    this.ensureCompletePersistedHistory();
     const previousSessionId = this.sessionId;
     const branchPath = this.collectBranchedSessionPath(leafId);
     if (branchPath.entries.length === 0) {
       throw new Error(`Entry ${leafId} not found`);
     }
 
-    const newSessionId = createSessionId();
+    const newSessionId = createManagedSessionId();
     const timestamp = new Date().toISOString();
     const persistenceTarget = this.persistenceTarget;
 
     const header: SessionHeader = {
       type: "session",
-      version: CURRENT_SESSION_VERSION,
+      version: this.getHeader()?.version,
       id: newSessionId,
       timestamp,
       cwd: this.cwd,
@@ -138,49 +130,47 @@ export class SessionManagerBranching extends SessionManagerEntries {
     for (const { targetId, label, timestamp: labelTimestamp } of labelsToWrite) {
       const labelEntry: LabelEntry = {
         type: "label",
-        id: generateSessionEntryId(branchPath.usedIds),
+        id: generateSessionEntryId(),
         parentId,
         timestamp: labelTimestamp,
         targetId,
         label,
       };
-      branchPath.usedIds.add(labelEntry.id);
       labelEntries.push(labelEntry);
       parentId = labelEntry.id;
     }
 
-    this.fileEntries = [header, ...branchPath.entries, ...labelEntries];
-    this.opaqueFileEntries = branchPath.opaqueEntries;
-    this.sessionId = newSessionId;
-    if (persistenceTarget) {
-      const updatedAt = Date.now();
-      const previousEntry = loadSessionEntry({
-        agentId: persistenceTarget.agentId,
-        sessionKey: persistenceTarget.sessionKey,
-        storePath: persistenceTarget.storePath,
-      });
-      const canonicalPreviousEntry = previousEntry
-        ? projectCanonicalSessionEntryShape(previousEntry as unknown as Record<string, unknown>)
-        : { updatedAt };
-      this.persistenceTarget = { ...persistenceTarget, sessionId: newSessionId };
-      replaceSessionEntrySync(
-        {
-          agentId: persistenceTarget.agentId,
-          sessionKey: persistenceTarget.sessionKey,
-          storePath: persistenceTarget.storePath,
-        },
-        {
-          ...canonicalPreviousEntry,
-          sessionId: newSessionId,
-          updatedAt,
-        },
-      );
+    // Build leaf controls on a detached tree: queued or failed persistence must
+    // never expose a new in-memory identity paired with the old durable target.
+    const branch = new SessionManagerBranching(this.cwd, undefined, [
+      header,
+      ...branchPath.entries,
+      ...labelEntries,
+    ]);
+    branch.opaqueFileEntries = branchPath.opaqueEntries;
+    branch.buildIndex();
+    const adoptBranch = (
+      target?: SessionManagerPersistenceTarget,
+      version?: SessionTranscriptContextVersion,
+    ) => {
+      this.fileEntries = branch.fileEntries;
+      this.opaqueFileEntries = branch.opaqueFileEntries;
+      this.sessionId = newSessionId;
       this.buildIndex();
-      this.replacePersistedTranscript();
-      return newSessionId;
+      this.persistenceTarget = target;
+      this.transcriptVersion = version;
+      this.persistenceHeaderPending = false;
+    };
+    if (persistenceTarget) {
+      await replaceSessionWithBranchedTranscript(
+        persistenceTarget,
+        { sessionId: newSessionId, events: branch.getPersistedFileEntries() },
+        adoptBranch,
+        () => this.assertTranscriptWriteActive(),
+      );
+    } else {
+      adoptBranch();
     }
-
-    this.buildIndex();
-    return undefined;
+    return persistenceTarget ? newSessionId : undefined;
   }
 }

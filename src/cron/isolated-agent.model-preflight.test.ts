@@ -8,6 +8,7 @@ import {
   preflightCronModelProviderMock,
   resolveConfiguredModelRefMock,
   resolveCronSessionMock,
+  resolveSessionAuthSelectionMock,
   resetRunCronIsolatedAgentTurnHarness,
   runEmbeddedAgentMock,
   runWithModelFallbackMock,
@@ -113,9 +114,14 @@ describe("runCronIsolatedAgentTurn model provider preflight", () => {
         agents: {
           defaults: {
             model: {
-              primary: "ollama/qwen3:32b",
+              primary: "ollama/qwen3:32b@ollama:test-profile",
               fallbacks: ["openrouter/nvidia/nemotron-3-super-120b-a12b:free", "openai/gpt-5.4"],
             },
+          },
+        },
+        auth: {
+          profiles: {
+            "ollama:test-profile": { provider: "ollama", mode: "token" },
           },
         },
         models: {
@@ -166,6 +172,9 @@ describe("runCronIsolatedAgentTurn model provider preflight", () => {
     expect(runWithModelFallbackMock.mock.calls[0]?.[0]).toMatchObject({
       fallbacksOverride: ["openai/gpt-5.4"],
     });
+    expect(resolveSessionAuthSelectionMock.mock.calls[0]?.[0]).not.toHaveProperty(
+      "configuredProfileId",
+    );
     const warning = String(logWarnMock.mock.calls[0]?.[0] ?? "");
     expect(warning).toContain(unavailableReason);
     expect(warning).toContain(

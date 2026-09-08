@@ -42,6 +42,7 @@ vi.mock("./app-registration.js", () => ({
 }));
 
 import { feishuPlugin } from "./channel.js";
+import { setFeishuNamedAccountEnabled } from "./setup-core.js";
 
 const baseStatusContext = {
   accountOverrides: {},
@@ -71,6 +72,39 @@ afterAll(() => {
 });
 
 describe("feishu setup wizard", () => {
+  it.each(["", " Alert Account ", "default"])(
+    "preserves the exact named-account key %j without enabling the channel",
+    (accountId) => {
+      const result = setFeishuNamedAccountEnabled(
+        {
+          channels: {
+            feishu: {
+              enabled: false,
+              accounts: {
+                [accountId]: { appId: "kept", enabled: false },
+                sibling: { enabled: false },
+              },
+            },
+          },
+        },
+        accountId,
+        true,
+      );
+
+      expect(result).toEqual({
+        channels: {
+          feishu: {
+            enabled: false,
+            accounts: {
+              [accountId]: { appId: "kept", enabled: true },
+              sibling: { enabled: false },
+            },
+          },
+        },
+      });
+    },
+  );
+
   beforeEach(() => {
     probeFeishuMock.mockReset();
     probeFeishuMock.mockResolvedValue({ ok: false, error: "mocked" });

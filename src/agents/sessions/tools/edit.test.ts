@@ -34,6 +34,22 @@ describe("edit tool", () => {
     return filePath;
   }
 
+  async function statEditFile(absolutePath: string) {
+    try {
+      const stat = await fs.stat(absolutePath);
+      return {
+        type: stat.isFile() ? "file" : stat.isDirectory() ? "directory" : "other",
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+      } as const;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return null;
+      }
+      throw error;
+    }
+  }
+
   it("preserves a valid UTF-8 BOM when editing a real file", async () => {
     const filePath = await createTempFile(Buffer.from("\uFEFFheading\nprice: 5\n", "utf-8"));
     const tool = createEditTool(tmpDir);
@@ -107,6 +123,7 @@ describe("edit tool", () => {
     const operations: EditOperations = {
       access: async () => {},
       readFile: async () => Buffer.from(original),
+      statFile: async () => null,
       writeFile,
     };
     const tool = createEditTool("/remote/workspace", { operations });
@@ -167,6 +184,7 @@ describe("edit tool", () => {
         await fs.access(absolutePath);
       },
       readFile: (absolutePath) => fs.readFile(absolutePath),
+      statFile: statEditFile,
       writeFile: async (absolutePath, content) => {
         await fs.writeFile(absolutePath, content, "utf-8");
         throw new Error("Simulated post-write failure");
@@ -202,6 +220,7 @@ describe("edit tool", () => {
         await fs.access(absolutePath);
       },
       readFile: (absolutePath) => fs.readFile(absolutePath),
+      statFile: statEditFile,
       writeFile: async () => {
         throw new Error("Simulated write failure");
       },
@@ -220,6 +239,31 @@ describe("edit tool", () => {
     ).rejects.toThrow("Simulated write failure");
   });
 
+  it("rejects false success when a delegated write resolves without persisting", async () => {
+    const filePath = await createTempFile("old\n");
+    const operations: EditOperations = {
+      access: async (absolutePath) => {
+        await fs.access(absolutePath);
+      },
+      readFile: (absolutePath) => fs.readFile(absolutePath),
+      statFile: statEditFile,
+      writeFile: async () => {},
+    };
+    const tool = createEditTool(tmpDir, { operations });
+
+    await expect(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: "old", newText: "new" }],
+        },
+        undefined,
+      ),
+    ).rejects.toThrow("Edit verification failed");
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("old\n");
+  });
+
   it("recovers multi-edit post-write failures", async () => {
     const filePath = await createTempFile("alpha beta gamma delta\n");
     const operations: EditOperations = {
@@ -227,6 +271,7 @@ describe("edit tool", () => {
         await fs.access(absolutePath);
       },
       readFile: (absolutePath) => fs.readFile(absolutePath),
+      statFile: statEditFile,
       writeFile: async (absolutePath, content) => {
         await fs.writeFile(absolutePath, content, "utf-8");
         throw new Error("Simulated post-write failure");
@@ -345,43 +390,62 @@ describe("edit tool", () => {
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("after\n");
   });
 
-  it("renders previews through custom edit operations", async () => {
-    // Preview rendering must use injected operations so remote/sandbox files are
-    // shown without accidentally reading from the host filesystem.
-    const readFile = vi.fn(async () => Buffer.from("remote original\n"));
-    const operations: EditOperations = {
-      access: async () => {},
-      readFile,
-      writeFile: async () => {},
-    };
-    const tool = createEditToolDefinition("/workspace", { operations });
-    const args = {
-      path: "remote.txt",
-      edits: [{ oldText: "remote original", newText: "remote changed" }],
-    };
-    const context = {
-      args,
-      argsComplete: true,
-      cwd: "/workspace",
-      executionStarted: false,
-      expanded: false,
-      invalidate: vi.fn(),
-      isError: false,
-      isPartial: false,
-      lastComponent: undefined,
-      showImages: false,
-      state: {},
-      toolCallId: "call-preview",
-    };
+  it.each(["local", "injected"] as const)(
+    "renders @ previews through %s operations",
+    async (backend) => {
+      await createTempFile("plain sibling\n");
+      await fs.writeFile(path.join(tmpDir, "@demo.txt"), "local original\n");
+      const readFile = vi.fn(async () => Buffer.from("remote original\n"));
+      const operations: EditOperations = {
+        access: async () => {},
+        readFile,
+        statFile: async () => null,
+        writeFile: async () => {},
+      };
+      const tool = createEditToolDefinition(
+        tmpDir,
+        backend === "injected" ? { operations } : undefined,
+      );
+      const owner = backend === "injected" ? "remote" : "local";
+      const args = {
+        path: "@demo.txt",
+        edits: [{ oldText: `${owner} original`, newText: `${owner} changed` }],
+      };
+      const context = {
+        args,
+        argsComplete: true,
+        cwd: tmpDir,
+        executionStarted: false,
+        expanded: false,
+        invalidate: vi.fn(),
+        isError: false,
+        isPartial: false,
+        lastComponent: undefined,
+        showImages: false,
+        state: {},
+        toolCallId: "call-preview",
+      };
 
-    const component = tool.renderCall?.(args, testTheme, context);
-    await vi.waitFor(() => expect(context.invalidate).toHaveBeenCalled());
+      const component = tool.renderCall?.(args, testTheme, context);
+      await vi.waitFor(() => expect(context.invalidate).toHaveBeenCalled());
 
-    expect(readFile).toHaveBeenCalledWith(path.join("/workspace", "remote.txt"));
-    expect((component as { preview?: { diff?: string } } | undefined)?.preview?.diff).toContain(
-      "remote changed",
-    );
-  });
+      if (backend === "injected") {
+        expect(readFile).toHaveBeenCalledWith(path.join(tmpDir, "demo.txt"));
+      } else {
+        expect(readFile).not.toHaveBeenCalled();
+      }
+      const preview = (component as { preview?: { error?: string; diff?: string } } | undefined)
+        ?.preview;
+      expect(preview?.error).toBeUndefined();
+      expect(preview?.diff).toContain(`${owner} changed`);
+      await expect(fs.readFile(path.join(tmpDir, "@demo.txt"), "utf8")).resolves.toBe(
+        "local original\n",
+      );
+      await expect(fs.readFile(path.join(tmpDir, "demo.txt"), "utf8")).resolves.toBe(
+        "plain sibling\n",
+      );
+    },
+  );
 
   it("renders fuzzy Unicode previews from the original source bytes", async () => {
     const readFile = vi.fn(async () =>
@@ -392,6 +456,7 @@ describe("edit tool", () => {
     const operations: EditOperations = {
       access: async () => {},
       readFile,
+      statFile: async () => null,
       writeFile: async () => {},
     };
     const tool = createEditToolDefinition("/workspace", { operations });
@@ -431,6 +496,7 @@ describe("edit tool", () => {
     const operations: EditOperations = {
       access: async () => {},
       readFile,
+      statFile: async () => null,
       writeFile: async () => {},
     };
     const tool = createEditToolDefinition("/workspace", { operations });
@@ -472,6 +538,7 @@ describe("edit tool", () => {
     const operations: EditOperations = {
       access: async () => {},
       readFile,
+      statFile: async () => null,
       writeFile: async () => {},
     };
     const tool = createEditToolDefinition("/workspace", { operations });
@@ -505,7 +572,7 @@ describe("edit tool", () => {
     );
   });
 
-  it("returns terminal no-op when oldText equals newText", async () => {
+  it("returns a non-terminal no-op when oldText equals newText", async () => {
     const filePath = await createTempFile("unchanged content\n");
     const tool = createEditTool(tmpDir);
 
@@ -520,7 +587,7 @@ describe("edit tool", () => {
 
     const tc0 = expectDefined(result.content[0], "result.content[0] test invariant");
     expect("text" in tc0 ? tc0.text : "").toContain("No changes made");
-    expect((result as { terminate?: boolean }).terminate).toBe(true);
+    expect((result as { terminate?: boolean }).terminate).toBeUndefined();
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("unchanged content\n");
   });
 
@@ -529,6 +596,7 @@ describe("edit tool", () => {
     const operations: EditOperations = {
       access: async () => {},
       readFile,
+      statFile: async () => null,
       writeFile: async () => {},
     };
     const tool = createEditToolDefinition("/workspace", { operations });
@@ -564,6 +632,7 @@ describe("edit tool", () => {
     const operations: EditOperations = {
       access: async () => {},
       readFile,
+      statFile: async () => null,
       writeFile: async () => {},
     };
     const tool = createEditToolDefinition("/workspace", { operations });
@@ -617,6 +686,7 @@ describe("edit tool", () => {
         await fs.access(absolutePath);
       },
       readFile: (absolutePath) => fs.readFile(absolutePath),
+      statFile: statEditFile,
       writeFile: async () => {
         throw new Error("No changes made to the disk because it is full");
       },
@@ -648,7 +718,7 @@ describe("edit tool", () => {
       undefined,
     );
 
-    expect((result as { terminate?: boolean }).terminate).toBe(true);
+    expect((result as { terminate?: boolean }).terminate).toBeUndefined();
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("foo\n");
   });
 
@@ -671,7 +741,7 @@ describe("edit tool", () => {
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("bazbar\n");
   });
 
-  it("preserves unrelated whitespace beside a fuzzy-equivalent no-op", async () => {
+  it("applies exact formatting beside a disjoint content replacement", async () => {
     const filePath = await createTempFile("foo  \nkeep  \n");
     const tool = createEditTool(tmpDir);
 
@@ -687,7 +757,7 @@ describe("edit tool", () => {
       undefined,
     );
 
-    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("foo  \nchanged  \n");
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("foo\nchanged  \n");
   });
 
   it("rejects duplicate no-op entries", async () => {

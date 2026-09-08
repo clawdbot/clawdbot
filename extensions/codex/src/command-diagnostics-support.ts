@@ -8,6 +8,12 @@ import {
   type CodexDiagnosticsTarget,
   type PendingCodexDiagnosticsConfirmation,
 } from "./command-diagnostics-state.js";
+import {
+  CODEX_RESUME_SAFE_THREAD_ID_PATTERN,
+  escapeCodexChatText,
+  formatCodexDisplayText,
+  formatCodexTextForDisplay,
+} from "./command-formatters.js";
 import { splitArgs } from "./command-handler-args.js";
 
 type ParsedDiagnosticsArgs =
@@ -26,8 +32,6 @@ const CODEX_DIAGNOSTICS_CONFIRMATION_TTL_MS = 5 * 60_000;
 const CODEX_DIAGNOSTICS_CONFIRMATION_MAX_REQUESTS_PER_SCOPE = 100;
 const CODEX_DIAGNOSTICS_CONFIRMATION_MAX_SCOPES = 100;
 const CODEX_DIAGNOSTICS_SCOPE_FIELD_MAX_CHARS = 128;
-const CODEX_RESUME_SAFE_THREAD_ID_PATTERN = /^[A-Za-z0-9._:-]+$/;
-
 const {
   lastUploadByThread: lastCodexDiagnosticsUploadByThread,
   lastUploadByScope: lastCodexDiagnosticsUploadByScope,
@@ -305,7 +309,7 @@ function formatCodexDiagnosticsTargetBlock(
 ): string[] {
   const lines = [`Session ${index + 1}`];
   if (target.channel) {
-    lines.push(`Channel: ${formatCodexValueForDisplay(target.channel)}`);
+    lines.push(`Channel: ${formatCodexDisplayText(target.channel)}`);
   }
   if (target.sessionKey) {
     lines.push(`OpenClaw session key: ${formatCodexCopyableValueForDisplay(target.sessionKey)}`);
@@ -321,41 +325,14 @@ function formatCodexDiagnosticsTargetBlock(
 function formatCodexDiagnosticsTargetLine(target: CodexDiagnosticsTarget): string {
   const parts: string[] = [];
   if (target.channel) {
-    parts.push(`channel ${formatCodexValueForDisplay(target.channel)}`);
+    parts.push(`channel ${formatCodexDisplayText(target.channel)}`);
   }
   const sessionLabel = target.sessionId || target.sessionKey;
   if (sessionLabel) {
-    parts.push(`OpenClaw session ${formatCodexValueForDisplay(sessionLabel)}`);
+    parts.push(`OpenClaw session ${formatCodexDisplayText(sessionLabel)}`);
   }
-  parts.push(`Codex thread ${formatCodexThreadIdForDisplay(target.threadId)}`);
+  parts.push(`Codex thread ${formatCodexDisplayText(target.threadId)}`);
   return `- ${parts.join(", ")}`;
-}
-
-export function escapeCodexChatText(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll("@", "\uff20")
-    .replaceAll("`", "\uff40")
-    .replaceAll("[", "\uff3b")
-    .replaceAll("]", "\uff3d")
-    .replaceAll("(", "\uff08")
-    .replaceAll(")", "\uff09")
-    .replaceAll("*", "\u2217")
-    .replaceAll("_", "\uff3f")
-    .replaceAll("~", "\uff5e")
-    .replaceAll("|", "\uff5c");
-}
-
-export function formatCodexTextForDisplay(value: string): string {
-  let safe = "";
-  for (const character of value) {
-    const codePoint = character.codePointAt(0);
-    safe += codePoint != null && isUnsafeDisplayCodePoint(codePoint) ? "?" : character;
-  }
-  safe = safe.trim();
-  return safe || "<unknown>";
 }
 
 export function readCodexDiagnosticsTargetsCooldownMessage(
@@ -372,7 +349,7 @@ export function readCodexDiagnosticsTargetsCooldownMessage(
           cooldownMs / 1000,
         )}s.`;
       }
-      const displayThreadId = formatCodexThreadIdForDisplay(target.threadId);
+      const displayThreadId = formatCodexDisplayText(target.threadId);
       return `Codex diagnostics were already sent for thread ${displayThreadId} recently. Try again in ${Math.ceil(
         cooldownMs / 1000,
       )}s.`;
@@ -437,14 +414,6 @@ function addTag(tags: Record<string, string>, key: string, value: unknown): void
   if (typeof value === "string" && value.trim()) {
     tags[key] = value.trim();
   }
-}
-
-function formatCodexThreadIdForDisplay(threadId: string): string {
-  return escapeCodexChatText(formatCodexTextForDisplay(threadId));
-}
-
-function formatCodexValueForDisplay(value: string): string {
-  return escapeCodexChatText(formatCodexTextForDisplay(value));
 }
 
 function formatCodexCopyableValueForDisplay(value: string): string {
@@ -524,22 +493,6 @@ function formatCodexResumeCommandForDisplay(threadId: string): string {
     return "run codex resume and paste the thread id shown above";
   }
   return `\`codex resume ${safeThreadId}\``;
-}
-
-function isUnsafeDisplayCodePoint(codePoint: number): boolean {
-  return (
-    codePoint <= 0x001f ||
-    (codePoint >= 0x007f && codePoint <= 0x009f) ||
-    codePoint === 0x00ad ||
-    codePoint === 0x061c ||
-    codePoint === 0x180e ||
-    (codePoint >= 0x200b && codePoint <= 0x200f) ||
-    (codePoint >= 0x202a && codePoint <= 0x202e) ||
-    (codePoint >= 0x2060 && codePoint <= 0x206f) ||
-    codePoint === 0xfeff ||
-    (codePoint >= 0xfff9 && codePoint <= 0xfffb) ||
-    (codePoint >= 0xe0000 && codePoint <= 0xe007f)
-  );
 }
 
 function normalizeCodexDiagnosticsScopeField(value: string | undefined): string | undefined {

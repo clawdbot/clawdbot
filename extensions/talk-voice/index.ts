@@ -6,6 +6,7 @@ import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveActiveTalkProviderConfig } from "openclaw/plugin-sdk/talk-config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
@@ -95,20 +96,11 @@ function findVoice(voices: SpeechVoiceOption[], query: string): SpeechVoiceOptio
 }
 
 function asTrimmedString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function parsePositiveIntegerToken(value: unknown): number | undefined {
-  return parseStrictPositiveInteger(value);
+  return normalizeOptionalString(value) ?? "";
 }
 
 function resolveCommandLabel(channel: string): string {
   return channel === "discord" ? "/talkvoice" : "/voice";
-}
-
-function asProviderBaseUrl(value: unknown): string | undefined {
-  const trimmed = asTrimmedString(value);
-  return trimmed || undefined;
 }
 
 const TALK_ADMIN_SCOPE = "operator.admin";
@@ -156,7 +148,7 @@ export default definePluginEntry({
         const providerId = active.provider;
         const providerLabel = resolveProviderLabel(providerId);
         const apiKey = asTrimmedString(active.config.apiKey);
-        const baseUrl = asProviderBaseUrl(active.config.baseUrl);
+        const baseUrl = normalizeOptionalString(active.config.baseUrl);
 
         const currentVoiceId = asTrimmedString(active.config.voiceId);
 
@@ -171,7 +163,7 @@ export default definePluginEntry({
         }
 
         if (action === "list") {
-          const limit = parsePositiveIntegerToken(tokens[1]) ?? 12;
+          const limit = parseStrictPositiveInteger(tokens[1]) ?? 12;
           try {
             const voices = await api.runtime.tts.listVoices({
               provider: providerId,
@@ -237,7 +229,6 @@ export default definePluginEntry({
                       voiceId: chosen.id,
                     },
                   },
-                  ...(providerId === "elevenlabs" ? { voiceId: chosen.id } : {}),
                 },
               };
               Object.assign(draft, nextConfig);

@@ -1,40 +1,16 @@
-/**
- * Resolves retry, fallback, and terminal failover decisions for a run.
- */
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
+import { isCliTerminalStopCode } from "../../failover-error.js";
 
-/** Failover action selected for one embedded run failure decision point. */
-type RunFailoverDecision =
-  | {
-      action: "continue_normal";
-    }
-  | {
-      action: "rotate_profile" | "surface_error";
-      reason: FailoverReason | null;
-    }
-  | {
-      action: "fallback_model";
-      reason: FailoverReason;
-    }
-  | {
-      action: "return_error_payload";
-    };
-
-export type RetryLimitFailoverDecision = Extract<
-  RunFailoverDecision,
-  { action: "fallback_model" | "return_error_payload" }
->;
-
-type PromptFailoverDecision = Extract<
-  RunFailoverDecision,
-  { action: "rotate_profile" | "fallback_model" | "surface_error" }
->;
-
-export type AssistantFailoverDecision = Extract<
-  RunFailoverDecision,
-  { action: "continue_normal" | "rotate_profile" | "fallback_model" | "surface_error" }
->;
+type ProfileDecision = {
+  action: "rotate_profile" | "surface_error";
+  reason: FailoverReason | null;
+};
+type ModelFallbackDecision = { action: "fallback_model"; reason: FailoverReason };
+export type RetryLimitFailoverDecision = ModelFallbackDecision | { action: "return_error_payload" };
+type PromptFailoverDecision = ProfileDecision | ModelFallbackDecision;
+export type AssistantFailoverDecision = PromptFailoverDecision | { action: "continue_normal" };
+type RunFailoverDecision = RetryLimitFailoverDecision | AssistantFailoverDecision;
 
 type RetryLimitDecisionParams = {
   stage: "retry_limit";
@@ -45,7 +21,6 @@ type RetryLimitDecisionParams = {
 type PromptDecisionParams = {
   stage: "prompt";
   allowFormatRetry?: boolean;
-  aborted: boolean;
   externalAbort: boolean;
   fallbackConfigured: boolean;
   failoverCode?: string;
@@ -91,9 +66,6 @@ function isTerminalFormatFailure(params: {
 }
 
 function shouldRotatePrompt(params: PromptDecisionParams): boolean {
-  if (params.timedOutByRunBudget) {
-    return false;
-  }
   return (
     params.failoverFailure &&
     params.failoverReason !== "timeout" &&
@@ -117,9 +89,6 @@ function isConcreteNonTimeoutAssistantFailure(params: AssistantDecisionParams): 
 }
 
 function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
-  if (isTerminalFormatFailure(params)) {
-    return false;
-  }
   if (params.terminal.kind === "timeout" && params.terminal.source === "run_budget") {
     return false;
   }
@@ -151,7 +120,7 @@ export function mergeRetryFailoverReason(params: {
   failoverReason: FailoverReason | null;
   timedOut?: boolean;
 }): FailoverReason | null {
-  return params.failoverReason ?? (params.timedOut ? "timeout" : null) ?? params.previous;
+  return params.failoverReason ?? params.previous ?? (params.timedOut ? "timeout" : null);
 }
 
 export function resolveRunFailoverDecision(
@@ -181,21 +150,13 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
   }
 
   if (params.stage === "prompt") {
-    if (params.failoverCode === "cli_max_turns") {
-      // A CLI may have completed tool actions before reaching this terminal
-      // limit. Replaying against another profile/model could repeat effects.
-      return {
-        action: "surface_error",
-        reason: params.failoverReason,
-      };
-    }
-    if (params.externalAbort) {
-      return {
-        action: "surface_error",
-        reason: params.failoverReason,
-      };
-    }
-    if (params.timedOutByRunBudget) {
+    // Plugin harnesses can forward CLI terminal codes through failover normalization;
+    // normal CLI paths enforce the same stop in model-fallback-runner.
+    if (
+      isCliTerminalStopCode(params.failoverCode) ||
+      params.externalAbort ||
+      params.timedOutByRunBudget
+    ) {
       return {
         action: "surface_error",
         reason: params.failoverReason,
@@ -236,14 +197,9 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
   if (
     params.signalOwnedInterruption ||
     ((params.terminal.kind === "aborted" || params.terminal.kind === "timeout") &&
-      params.terminal.source === "external")
+      params.terminal.source === "external") ||
+    isTerminalFormatFailure(params)
   ) {
-    return {
-      action: "surface_error",
-      reason: params.failoverReason,
-    };
-  }
-  if (isTerminalFormatFailure(params)) {
     return {
       action: "surface_error",
       reason: params.failoverReason,

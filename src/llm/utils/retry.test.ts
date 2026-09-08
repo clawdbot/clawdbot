@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AssistantMessage } from "../types.js";
+import { failoverClassificationCorpus } from "../../agents/failover/failover-classification.corpus.cases.test-support.js";
+import { failoverRetryExpectations } from "../../agents/failover/failover-retry.expected.test-support.js";
+import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
+import {
+  PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
+  PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
+  type AssistantMessage,
+} from "../types.js";
 import { isRetryableAssistantError } from "./retry.js";
 
 function errorMessage(message: string): AssistantMessage {
@@ -9,14 +16,7 @@ function errorMessage(message: string): AssistantMessage {
     api: "test-api",
     provider: "test-provider",
     model: "test-model",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "error",
     errorMessage: message,
     timestamp: 1,
@@ -24,6 +24,83 @@ function errorMessage(message: string): AssistantMessage {
 }
 
 describe("isRetryableAssistantError", () => {
+  it("freezes one retry decision for every failover corpus row", () => {
+    expect(Object.keys(failoverRetryExpectations).toSorted()).toEqual(
+      failoverClassificationCorpus.map((row) => row.id).toSorted(),
+    );
+  });
+
+  it.each(failoverClassificationCorpus)(
+    "preserves the retry decision for $id [$source]",
+    ({ id, signal }) => {
+      const message = signal.message
+        ? errorMessage(signal.message)
+        : ({ ...errorMessage(""), errorMessage: undefined } as AssistantMessage);
+      message.provider = ("provider" in signal ? signal.provider : undefined) ?? "test-provider";
+
+      expect(isRetryableAssistantError(message)).toBe(
+        failoverRetryExpectations[id as keyof typeof failoverRetryExpectations],
+      );
+    },
+  );
+
+  it.each([PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE, PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE])(
+    "does not retry replay-unsafe provider outcome %s",
+    (errorCode) => {
+      expect(
+        isRetryableAssistantError({
+          ...errorMessage("The WebSocket closed after dispatch"),
+          errorCode,
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it("does not retry a structured provider refusal with transient-looking text", () => {
+    expect(
+      isRetryableAssistantError({
+        ...errorMessage("HTTP 503 temporary provider response"),
+        diagnostics: [
+          {
+            type: "provider_refusal",
+            timestamp: 0,
+            details: { provider: "anthropic", category: "cyber" },
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    { errorCode: "ERR_WEBSOCKET_NON_RETRYABLE_CLOSE", expected: false },
+    { errorCode: "ERR_WEBSOCKET_TRANSPORT", expected: true },
+  ])("honors structured WebSocket retry disposition $errorCode", ({ errorCode, expected }) => {
+    expect(
+      isRetryableAssistantError({
+        ...errorMessage("WebSocket closed: policy reason included ECONNRESET"),
+        errorCode,
+      }),
+    ).toBe(expected);
+  });
+
+  it("retries an incomplete terminal stream that retained visible partial text", () => {
+    expect(
+      isRetryableAssistantError({
+        ...errorMessage("Bedrock stream ended before messageStop"),
+        content: [{ type: "text", text: "I have" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("retries a structured transient Undici error", () => {
+    expect(
+      isRetryableAssistantError({
+        ...errorMessage("provider connection closed"),
+        errorCode: "UND_ERR_HEADERS_TIMEOUT",
+      }),
+    ).toBe(true);
+  });
+
   it.each([
     "An error occurred while processing your request. You can retry your request.",
     "The system encountered an unexpected error. Try your request again.",

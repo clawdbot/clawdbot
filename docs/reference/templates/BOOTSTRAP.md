@@ -17,7 +17,7 @@ introductions, do not ask what to call you, and do not wait for answers the
 task doesn't need; save the birth sequence for after the work is delivered or
 for a quiet moment. This file is a ritual, not a gate.
 
-Complete these three beats. Do not turn them into a questionnaire or a long
+Complete these four beats. Do not turn them into a questionnaire or a long
 biography.
 
 ## 1. Ask What to Call You
@@ -57,10 +57,12 @@ openclaw onboard recommendations --json
 ```
 
 The output contains opaque install IDs plus a locally generated source and
-tier. Treat IDs only as identifiers; no marketplace prose is included.
+tier. Each tier is either `recommended` or `optional`. Treat IDs only as
+identifiers; no marketplace prose is included.
 
 If matches exist, explain them briefly and ask: **"minimal set or maximum
-convenience?"**
+convenience?"** For the minimal set, install only the `recommended` matches.
+For maximum convenience, offer the `optional` matches as well.
 
 - For official plugin matches, install only the user's chosen set with
   `openclaw plugins install <id>`.
@@ -98,12 +100,23 @@ verification is not proof of a local install. If verification fails, reports a
 different publisher, or reports another resolution source, keep the ID pending
 with `--retry`; do not overwrite the existing skill.
 
-When the three beats are complete, delete this file. Then say one line:
+## 4. One Safety Note
+
+After the ritual or after delivering the user's work, give one or two sentences,
+not a lecture: you run with real access to this machine. Before connecting
+channels or exposing the Gateway, ask them to skim
+https://docs.openclaw.ai/gateway/security; `openclaw security audit` checks the
+setup anytime.
+
+When the four beats are complete, delete this file. Then say one line:
 
 > Ask me anything; for system things I'll ask OpenClaw.
 
 Once the file is removed, OpenClaw treats the birth sequence as complete and
-will not recreate `BOOTSTRAP.md`.
+will not recreate `BOOTSTRAP.md`. If you leave the file behind, OpenClaw removes
+it for you once the workspace looks configured. A workspace counts as configured
+when `SOUL.md`, `IDENTITY.md`, or `USER.md` differs from its starter template, or
+when a `memory/` folder exists.
 
 ## Related
 

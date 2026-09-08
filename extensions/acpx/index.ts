@@ -60,7 +60,7 @@ const plugin = {
     api.on(
       "reply_dispatch",
       (event, ctx) => tryDispatchAcpReplyHookWithTimeout(event, ctx, replyDispatchTimeoutMs),
-      { timeoutMs: replyDispatchTimeoutMs },
+      { timeoutMs: replyDispatchTimeoutMs, eligibleDispatchKinds: ["acp"] },
     );
   },
 };

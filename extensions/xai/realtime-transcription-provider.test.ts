@@ -1,25 +1,25 @@
 // Xai tests cover realtime transcription provider plugin behavior.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
+import { createRealtimeTranscriptionWebSocketSession } from "openclaw/plugin-sdk/realtime-transcription-session";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
-import { buildXaiRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
+import { createLazyXaiRealtimeTranscriptionProvider } from "./lazy-capability-provider-factories.js";
 
 const { isProviderAuthProfileConfiguredMock, resolveApiKeyForProviderMock } = vi.hoisted(() => ({
   isProviderAuthProfileConfiguredMock: vi.fn(() => false),
-  resolveApiKeyForProviderMock: vi.fn(
-    async (): Promise<{ apiKey: string | undefined }> => ({ apiKey: undefined }),
+  resolveApiKeyForProviderMock: vi.fn<PluginCapabilityCatalogContext["resolveApiKeyForProvider"]>(
+    async () => ({ apiKey: undefined, source: "test", mode: "oauth" }),
   ),
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
+const transcriptionHost = {
   isProviderAuthProfileConfigured: isProviderAuthProfileConfiguredMock,
-}));
-
-vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
-}));
+  createRealtimeTranscriptionWebSocketSession,
+};
 
 let cleanup: (() => Promise<void>) | undefined;
 
@@ -29,7 +29,11 @@ afterEach(async () => {
   isProviderAuthProfileConfiguredMock.mockReset();
   isProviderAuthProfileConfiguredMock.mockReturnValue(false);
   resolveApiKeyForProviderMock.mockReset();
-  resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: undefined });
+  resolveApiKeyForProviderMock.mockResolvedValue({
+    apiKey: undefined,
+    source: "test",
+    mode: "oauth",
+  });
   delete process.env.XAI_API_KEY;
   vi.unstubAllEnvs();
 });
@@ -38,9 +42,10 @@ async function createRealtimeSttServer(params?: {
   onRequest?: (url: URL, headers: Record<string, string | string[] | undefined>) => void;
   onBinary?: (audio: Buffer) => void;
   initialEvent?: unknown;
+  transcriptionEvents?: readonly Record<string, unknown>[];
 }) {
   const server = createServer();
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 });
   const clients = new Set<WebSocket>();
   const done = vi.fn();
   let resolveDone: (() => void) | undefined;
@@ -63,22 +68,23 @@ async function createRealtimeSttServer(params?: {
             : Buffer.from(data);
         if (isBinary) {
           params?.onBinary?.(buffer);
-          ws.send(
-            JSON.stringify({
+          const events = params?.transcriptionEvents ?? [
+            {
               type: "transcript.partial",
               text: "hello openclaw",
               is_final: false,
               speech_final: false,
-            }),
-          );
-          ws.send(
-            JSON.stringify({
+            },
+            {
               type: "transcript.partial",
               text: "hello openclaw final",
               is_final: true,
               speech_final: true,
-            }),
-          );
+            },
+          ];
+          for (const event of events) {
+            ws.send(JSON.stringify(event));
+          }
           return;
         }
         const event = JSON.parse(buffer.toString()) as { type?: string };
@@ -119,7 +125,7 @@ function requireFirstErrorArg(mock: ReturnType<typeof vi.fn>, label: string): Er
 
 describe("xai realtime transcription provider", () => {
   it("normalizes provider config for voice-call streaming", () => {
-    const provider = buildXaiRealtimeTranscriptionProvider();
+    const provider = createLazyXaiRealtimeTranscriptionProvider(transcriptionHost);
 
     expect(
       provider.resolveConfig?.({
@@ -161,7 +167,7 @@ describe("xai realtime transcription provider", () => {
       },
       onBinary: (audio) => binaryFrames.push(audio),
     });
-    const provider = buildXaiRealtimeTranscriptionProvider();
+    const provider = createLazyXaiRealtimeTranscriptionProvider(transcriptionHost);
     const onPartial = vi.fn();
     let resolveFinalTranscript: (() => void) | undefined;
     const finalTranscript = new Promise<void>((resolve) => {
@@ -208,6 +214,30 @@ describe("xai realtime transcription provider", () => {
     vi.unstubAllEnvs();
   });
 
+  it("preserves identical final transcripts from separate speech turns", async () => {
+    const server = await createRealtimeSttServer({
+      transcriptionEvents: [
+        { type: "transcript.partial", text: "yes", is_final: true, speech_final: true },
+        { type: "transcript.partial", text: "yes", is_final: true, speech_final: true },
+      ],
+    });
+    const onTranscript = vi.fn();
+    const onSpeechStart = vi.fn();
+    const session = createLazyXaiRealtimeTranscriptionProvider(transcriptionHost).createSession({
+      providerConfig: { apiKey: "xai-test-key", baseUrl: server.baseUrl },
+      onTranscript,
+      onSpeechStart,
+    });
+
+    await session.connect();
+    session.sendAudio(Buffer.from("two speech turns"));
+    await vi.waitFor(() => expect(onSpeechStart).toHaveBeenCalledTimes(2));
+    session.close();
+    await server.donePromise;
+
+    expect(onTranscript.mock.calls).toEqual([["yes"], ["yes"]]);
+  });
+
   it("rejects setup errors before the stream is ready", async () => {
     const server = await createRealtimeSttServer({
       initialEvent: {
@@ -217,7 +247,7 @@ describe("xai realtime transcription provider", () => {
         },
       },
     });
-    const provider = buildXaiRealtimeTranscriptionProvider();
+    const provider = createLazyXaiRealtimeTranscriptionProvider(transcriptionHost);
     const onError = vi.fn();
 
     const session = provider.createSession({
@@ -235,7 +265,7 @@ describe("xai realtime transcription provider", () => {
   });
 
   it("accepts xAI realtime aliases", () => {
-    const provider = buildXaiRealtimeTranscriptionProvider();
+    const provider = createLazyXaiRealtimeTranscriptionProvider(transcriptionHost);
     expect(provider.aliases).toContain("xai-realtime");
     expect(provider.aliases).toContain("grok-stt-streaming");
   });
@@ -243,7 +273,7 @@ describe("xai realtime transcription provider", () => {
   it("reports configured when an xAI auth profile exists, even without env or config apiKey", () => {
     delete process.env.XAI_API_KEY;
     isProviderAuthProfileConfiguredMock.mockReturnValue(true);
-    const provider = buildXaiRealtimeTranscriptionProvider();
+    const provider = createLazyXaiRealtimeTranscriptionProvider(transcriptionHost);
     expect(provider.isConfigured({ cfg: {}, providerConfig: {} })).toBe(true);
     expect(isProviderAuthProfileConfiguredMock).toHaveBeenCalledWith({
       provider: "xai",
@@ -254,14 +284,18 @@ describe("xai realtime transcription provider", () => {
   it("does not treat a blank environment api key as configured", () => {
     vi.stubEnv("XAI_API_KEY", "   ");
     isProviderAuthProfileConfiguredMock.mockReturnValue(false);
-    const provider = buildXaiRealtimeTranscriptionProvider();
+    const provider = createLazyXaiRealtimeTranscriptionProvider(transcriptionHost);
 
     expect(provider.isConfigured({ cfg: {}, providerConfig: {} })).toBe(false);
   });
 
   it("threads cfg into the lazy WebSocket bearer resolver", async () => {
     delete process.env.XAI_API_KEY;
-    resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "oauth-bearer" });
+    resolveApiKeyForProviderMock.mockResolvedValue({
+      apiKey: "oauth-bearer",
+      source: "test",
+      mode: "oauth",
+    });
     const upgradeHeaders: Array<Record<string, string | string[] | undefined>> = [];
     const server = await createRealtimeSttServer({
       onRequest: (_url, headers) => {
@@ -269,7 +303,7 @@ describe("xai realtime transcription provider", () => {
       },
     });
 
-    const provider = buildXaiRealtimeTranscriptionProvider();
+    const provider = createLazyXaiRealtimeTranscriptionProvider(transcriptionHost);
     const cfg = { agents: { defaults: {} } };
     const session = provider.createSession({
       cfg,

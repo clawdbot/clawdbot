@@ -7,7 +7,7 @@ import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../llm/types.js";
-import { extractAssistantText } from "../embedded-agent-utils.js";
+import { extractEmbeddedAssistantText } from "../embedded-agent-utils.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import { coerceToolModelConfig, type ToolModelConfig } from "./model-config.helpers.js";
@@ -62,7 +62,7 @@ function isImageReasoningFallbackSignature(value: unknown): boolean {
 
 /** Detects provider responses that contain only reasoning blocks and no usable image text. */
 export function hasImageReasoningOnlyResponse(message: AssistantMessage): boolean {
-  if (extractAssistantText(message).trim() || !Array.isArray(message.content)) {
+  if (extractEmbeddedAssistantText(message).trim() || !Array.isArray(message.content)) {
     return false;
   }
   let checkedBlocks = 0;
@@ -96,15 +96,16 @@ export function decodeDataUrl(
   kind: "image";
 } {
   const trimmed = dataUrl.trim();
-  const match = /^data:([^;,]+);base64,([a-z0-9+/=\r\n]+)$/i.exec(trimmed);
-  if (!match) {
+  // Capturing the full payload can exhaust the RegExp stack before the size guard.
+  const match = /^data:([^;,]+);base64,/i.exec(trimmed);
+  const b64 = match ? trimmed.slice(match[0].length) : "";
+  if (!match || !b64 || /[^a-z0-9+/=\r\n]/i.test(b64)) {
     throw new Error("Invalid data URL (expected base64 data: URL).");
   }
   const mimeType = normalizeLowercaseStringOrEmpty(match[1]);
   if (!mimeType.startsWith("image/")) {
     throw new Error(`Unsupported data URL type: ${mimeType || "unknown"}`);
   }
-  const b64 = (match[2] ?? "").trim();
   if (typeof opts?.maxBytes === "number" && estimateBase64DecodedBytes(b64) > opts.maxBytes) {
     // Estimate before decoding so oversized inline payloads do not allocate large buffers.
     throw new Error("Invalid data URL: payload exceeds size limit.");
@@ -134,7 +135,7 @@ export function coerceImageAssistantText(params: {
   if (errorMessage) {
     throw new Error(`Image model failed (${params.provider}/${params.model}): ${errorMessage}`);
   }
-  const text = extractAssistantText(params.message);
+  const text = extractEmbeddedAssistantText(params.message);
   if (text.trim()) {
     return text.trim();
   }
@@ -255,10 +256,7 @@ export function resolveProviderVisionModelFromConfig(params: {
   if (isMinimaxVlmProvider(params.provider)) {
     return null;
   }
-  const providerCfg = findNormalizedProviderValue(
-    params.cfg?.models?.providers,
-    params.provider,
-  ) as unknown as { models?: Array<{ id?: string; input?: string[] }> } | undefined;
+  const providerCfg = findNormalizedProviderValue(params.cfg?.models?.providers, params.provider);
   const models = providerCfg?.models ?? [];
   const picked = models.find((m) => Boolean((m?.id ?? "").trim()) && m.input?.includes("image"));
   const id = (picked?.id ?? "").trim();

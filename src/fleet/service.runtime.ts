@@ -204,7 +204,9 @@ export function createFleetService(options: FleetServiceOptions = {}) {
         throw new Error("Gateway token must not be empty.");
       }
       const token = gatewayToken ?? generateToken();
-      const environment = buildCellEnvironment(token, parseEnvAssignments(createOptions.env ?? []));
+      const userEnvironment = parseEnvAssignments(createOptions.env ?? []);
+      const environment = buildCellEnvironment(token, userEnvironment);
+      const userEnvironmentKeys = Object.keys(userEnvironment);
       const attemptId = generateAttemptId();
       await containers.assertLocal(runtime);
       if (network === "internal" && runtime === "docker") {
@@ -300,6 +302,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
               ...(diskSize ? { diskSize } : {}),
               pidsLimit: createOptions.pidsLimit ?? 512,
               environment,
+              userEnvironmentKeys,
               ...(containerUser ? { containerUser } : {}),
               selinuxRelabel: await selinuxEnabled(),
             };

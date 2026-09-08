@@ -440,6 +440,7 @@ describe("operator approval session events", () => {
         {
           id: "source-and-parent",
           status: "pending",
+          sourceSessionKey: SOURCE_SESSION_KEY,
           presentation: createPendingRecord({ id: "source-and-parent" }).presentation,
           urlPath: "/operator/approve/source-and-parent",
           createdAtMs: 1_000,
@@ -448,6 +449,7 @@ describe("operator approval session events", () => {
         {
           id: parentOnly.id,
           status: "pending",
+          sourceSessionKey: PARENT_SESSION_KEY,
           presentation: parentOnly.presentation,
           urlPath: "/operator/approve/parent-only",
           createdAtMs: 1_001,
@@ -541,12 +543,14 @@ describe("operator approval session events", () => {
         managerHolder.current?.reconcileDurableTerminal(record) ?? false,
     });
     const runtime = harness.runtime;
+    const onExpired = vi.fn();
     const manager = new ExecApprovalManager({
       approvalKind: "exec",
       persistence: { runtimeEpoch: "session-events", databaseOptions },
       resolveAllowedDecisions: () => ["allow-once", "deny"],
       resolveAudienceSessionKeys: () => [SOURCE_SESSION_KEY, PARENT_SESSION_KEY],
       onLifecycle: (event) => runtime.publish(event),
+      onExpired,
     });
     managerHolder.current = manager;
     harness.subscribers.subscribe("parent-reviewer", PARENT_SESSION_KEY, {
@@ -572,6 +576,14 @@ describe("operator approval session events", () => {
       truncated: false,
     });
     await expect(decisionPromise).resolves.toBeNull();
+    expect(onExpired).toHaveBeenCalledOnce();
+    expect(onExpired).toHaveBeenCalledWith(
+      expect.objectContaining({ id: record.id, status: "expired" }),
+      expect.objectContaining({
+        id: record.id,
+        request: expect.objectContaining({ command: "printf replay-expiry" }),
+      }),
+    );
     expect(harness.broadcastToConnIds).toHaveBeenCalledOnce();
     expect(harness.broadcastToConnIds).toHaveBeenCalledWith(
       "session.approval",

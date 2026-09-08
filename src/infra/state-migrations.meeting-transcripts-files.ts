@@ -10,18 +10,12 @@ import type {
   TranscriptSessionDescriptor,
   TranscriptUtterance,
 } from "../transcripts/provider-types.js";
+import { TRANSCRIPT_EXPORT_FILE_NAMES } from "../transcripts/store-artifacts.js";
 import type { TranscriptsSummary } from "../transcripts/summary.js";
 import { renderTranscriptsMarkdown } from "../transcripts/summary.js";
 import { sha256File, sha256Hex } from "./crypto-digest.js";
 import { assertNoSymlinkParents } from "./fs-safe-advanced.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-
-const TRANSCRIPT_EXPORT_FILE_NAMES = new Set([
-  "metadata.json",
-  "summary.json",
-  "summary.md",
-  "transcript.jsonl",
-]);
 
 export const LEGACY_UTTERANCE_INSERT_CHUNK_SIZE = 64;
 const LEGACY_UTTERANCE_STAGE_BATCH_SIZE = 256;

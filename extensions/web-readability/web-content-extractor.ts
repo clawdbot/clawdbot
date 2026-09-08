@@ -29,22 +29,20 @@ const HTML_VOID_TAGS = new Set([
 ]);
 
 const READABILITY_MODULE = "@mozilla/readability";
-const LINKEDOM_MODULE = "linkedom";
+// The public worker bundle avoids per-module DOM loading; sanitized HTML excludes canvas.
+const LINKEDOM_MODULE = "linkedom/worker";
 
 const loadReadabilityDeps = createLazyRuntimeModule(() =>
   Promise.all([
     import(READABILITY_MODULE) as Promise<typeof import("@mozilla/readability")>,
-    import(LINKEDOM_MODULE) as Promise<typeof import("linkedom")>,
+    import(LINKEDOM_MODULE) as Promise<typeof import("linkedom/worker")>,
   ]),
 );
 
 function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boolean {
   let depth = 0;
   const len = html.length;
-  for (let i = 0; i < len; i++) {
-    if (html.charCodeAt(i) !== 60) {
-      continue;
-    }
+  for (let i = html.indexOf("<"); i >= 0; i = html.indexOf("<", i + 1)) {
     const next = html.charCodeAt(i + 1);
     if (next === 33 || next === 63) {
       continue;
@@ -122,16 +120,17 @@ async function extractWithReadability(request: WebContentExtractionRequest) {
   try {
     const [{ Readability }, { parseHTML }] = await loadReadabilityDeps();
     const { document } = parseHTML(cleanHtml, { location: { href: request.url } });
-    const reader = new Readability(document);
+    const textMode = request.extractMode === "text";
+    // Text mode consumes textContent; skip serializing the HTML it would discard.
+    const reader = new Readability(document, textMode ? { serializer: () => "" } : undefined);
     const parsed = reader.parse();
-    if (!parsed?.content) {
+    if (!parsed) {
       return null;
     }
     const title = parsed.title || undefined;
-    const rendered =
-      request.extractMode === "text"
-        ? { text: normalizeWhitespace(parsed.textContent ?? ""), title }
-        : htmlToMarkdown(parsed.content);
+    const rendered = textMode
+      ? { text: normalizeWhitespace(parsed.textContent ?? ""), title }
+      : htmlToMarkdown(parsed.content ?? "");
     const text = stripInvisibleUnicode(rendered.text);
     return text ? { text, title: title ?? rendered.title } : null;
   } catch {

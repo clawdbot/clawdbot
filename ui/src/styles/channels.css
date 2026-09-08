@@ -2,7 +2,12 @@
    detail overlay, and the guided setup wizard dialog. Everything else uses the
    shared settings design language. */
 
-/* Row with a leading 44px art tile (mirrors the plugins hub row anatomy). */
+/* Compact refresh actions should not retain the spacing reserved for settings
+   headers with full-size controls. */
+.settings-section:has(.settings-section__actions .btn--xs.btn--icon) {
+  gap: var(--space-2);
+}
+
 .channels-empty {
   display: grid;
   place-items: center;
@@ -18,11 +23,12 @@
   text-align: left;
 }
 
+/* Row with a leading 44px art tile (mirrors the plugins hub row anatomy). */
 .channels-tile {
   display: grid;
-  width: 44px;
-  height: 44px;
-  flex: 0 0 44px;
+  width: var(--channels-art-size, 44px);
+  height: var(--channels-art-size, 44px);
+  flex: 0 0 var(--channels-art-size, 44px);
   place-items: center;
   overflow: hidden;
   border: 1px solid var(--border);
@@ -60,6 +66,12 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.channels-cover--icon img {
+  width: 96px;
+  height: 96px;
+  border-radius: var(--radius-lg);
 }
 
 .channels-cover--fallback {
@@ -171,7 +183,7 @@
 
 .channels-pairing-request__details summary {
   width: fit-content;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .channels-pairing-request__details .settings-kv {
@@ -201,7 +213,7 @@
   align-items: flex-start;
   gap: var(--space-2);
   color: var(--text);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .channels-pairing-dialog__option input {
@@ -265,6 +277,13 @@
   font-size: var(--control-ui-text-sm);
 }
 
+.channels-wizard__subtitle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
 .channels-wizard__body {
   display: grid;
   gap: var(--space-3);
@@ -288,18 +307,40 @@
   font-size: var(--control-ui-text-xs);
 }
 
+.channels-wizard__output {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.5;
+}
+
+.channels-wizard__output--code {
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+}
+
 .channels-wizard__message {
   color: var(--text-strong);
   font-weight: 620;
   line-height: 1.4;
 }
 
-.channels-wizard__options {
-  display: grid;
-  gap: var(--space-2);
+.channels-wizard__text,
+.channels-wizard__secret {
+  width: 100%;
+  margin-top: 10px;
 }
 
-wa-radio-group.channels-wizard__options::part(radios) {
+.channels-wizard__text {
+  display: flex;
+}
+
+.channels-wizard__text > .input {
+  min-height: 44px;
+}
+
+.channels-wizard__options {
   display: grid;
   gap: var(--space-2);
 }
@@ -314,7 +355,7 @@ wa-radio-group.channels-wizard__options::part(radios) {
   padding: var(--space-2) var(--space-3);
   background: var(--card);
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition:
     border-color var(--duration-fast) var(--ease-out),
     background var(--duration-fast) var(--ease-out);
@@ -349,6 +390,11 @@ wa-radio-group.channels-wizard__options::part(radios) {
   gap: var(--space-2);
 }
 
+.channels-wizard__link,
+.channels-wizard__link:hover {
+  text-decoration: none;
+}
+
 .channels-wizard__footer {
   display: flex;
   align-items: center;
@@ -376,7 +422,7 @@ wa-radio-group.channels-wizard__options::part(radios) {
 .channels-wizard__qr img {
   width: min(260px, 70vw);
   border-radius: var(--radius-md);
-  background: #fff;
+  background: var(--brand-logo-chip-bg);
   padding: var(--space-2);
 }
 
@@ -399,7 +445,7 @@ wa-radio-group.channels-wizard__options::part(radios) {
   color: inherit;
   font: inherit;
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .channels-item__detail:focus-visible {

@@ -6,14 +6,12 @@ import android.content.ContentResolver
 import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
+import android.database.Cursor
 import android.provider.CalendarContract
 import androidx.core.content.ContextCompat
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.TimeZone
@@ -51,15 +49,17 @@ private data class CalendarAddRange(
 
 /**
  * Normalized calendar event returned through gateway calendar commands.
+ * Null defaults keep absent optional fields out of the serialized payload.
  */
+@Serializable
 internal data class CalendarEventRecord(
   val identifier: String,
   val title: String,
   val startISO: String,
   val endISO: String,
   val isAllDay: Boolean,
-  val location: String?,
-  val calendarTitle: String?,
+  val location: String? = null,
+  val calendarTitle: String? = null,
 )
 
 /**
@@ -114,28 +114,7 @@ private object SystemCalendarDataSource : CalendarDataSource {
       if (cursor == null) return emptyList()
       val out = mutableListOf<CalendarEventRecord>()
       while (cursor.moveToNext() && out.size < request.limit) {
-        val id = cursor.getLong(0)
-        val title =
-          cursor
-            .getString(1)
-            ?.trim()
-            .orEmpty()
-            .ifEmpty { "(untitled)" }
-        val beginMs = cursor.getLong(2)
-        val endMs = cursor.getLong(3)
-        val isAllDay = cursor.getInt(4) == 1
-        val location = cursor.getString(5)?.trim()?.ifEmpty { null }
-        val calendarTitle = cursor.getString(6)?.trim()?.ifEmpty { null }
-        out +=
-          CalendarEventRecord(
-            identifier = id.toString(),
-            title = title,
-            startISO = Instant.ofEpochMilli(beginMs).toString(),
-            endISO = Instant.ofEpochMilli(endMs).toString(),
-            isAllDay = isAllDay,
-            location = location,
-            calendarTitle = calendarTitle,
-          )
+        out += cursor.toCalendarEventRecord()
       }
       return out
     }
@@ -223,12 +202,12 @@ private object SystemCalendarDataSource : CalendarDataSource {
   }
 
   private fun findDefaultCalendarId(resolver: ContentResolver): Long? {
-    val projection = arrayOf(CalendarContract.Calendars._ID)
     resolver
       .query(
         CalendarContract.Calendars.CONTENT_URI,
-        projection,
-        "${CalendarContract.Calendars.VISIBLE}=1",
+        arrayOf(CalendarContract.Calendars._ID),
+        "${CalendarContract.Calendars.VISIBLE}=1 AND " +
+          "${CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL}>=${CalendarContract.Calendars.CAL_ACCESS_CONTRIBUTOR}",
         null,
         // Prefer Android's primary visible calendar, then lowest id for deterministic fallback.
         "${CalendarContract.Calendars.IS_PRIMARY} DESC, ${CalendarContract.Calendars._ID} ASC",
@@ -261,30 +240,27 @@ private object SystemCalendarDataSource : CalendarDataSource {
         null,
       ).use { cursor ->
         if (cursor == null || !cursor.moveToFirst()) return null
-        return CalendarEventRecord(
-          identifier = cursor.getLong(0).toString(),
-          title =
-            cursor
-              .getString(1)
-              ?.trim()
-              .orEmpty()
-              .ifEmpty { "(untitled)" },
-          startISO = Instant.ofEpochMilli(cursor.getLong(2)).toString(),
-          endISO = Instant.ofEpochMilli(cursor.getLong(3)).toString(),
-          isAllDay = cursor.getInt(4) == 1,
-          location = cursor.getString(5)?.trim()?.ifEmpty { null },
-          calendarTitle = cursor.getString(6)?.trim()?.ifEmpty { null },
-        )
+        return cursor.toCalendarEventRecord()
       }
   }
+
+  // Instances and Events queries project the same seven fields in this order.
+  private fun Cursor.toCalendarEventRecord(): CalendarEventRecord =
+    CalendarEventRecord(
+      identifier = getLong(0).toString(),
+      title = getString(1)?.trim().orEmpty().ifEmpty { "(untitled)" },
+      startISO = Instant.ofEpochMilli(getLong(2)).toString(),
+      endISO = Instant.ofEpochMilli(getLong(3)).toString(),
+      isAllDay = getInt(4) == 1,
+      location = getString(5)?.trim()?.ifEmpty { null },
+      calendarTitle = getString(6)?.trim()?.ifEmpty { null },
+    )
 }
 
-class CalendarHandler private constructor(
+class CalendarHandler internal constructor(
   private val appContext: Context,
-  private val dataSource: CalendarDataSource,
+  private val dataSource: CalendarDataSource = SystemCalendarDataSource,
 ) {
-  constructor(appContext: Context) : this(appContext = appContext, dataSource = SystemCalendarDataSource)
-
   fun handleCalendarEvents(paramsJson: String?): GatewaySession.InvokeResult {
     if (!dataSource.hasReadPermission(appContext)) {
       return GatewaySession.InvokeResult.error(
@@ -300,14 +276,7 @@ class CalendarHandler private constructor(
         )
     return try {
       val events = dataSource.events(appContext, request)
-      GatewaySession.InvokeResult.ok(
-        buildJsonObject {
-          put(
-            "events",
-            buildJsonArray { events.forEach { add(eventJson(it)) } },
-          )
-        }.toString(),
-      )
+      GatewaySession.InvokeResult.ok(Json.encodeToString(mapOf("events" to events)))
     } catch (err: Throwable) {
       GatewaySession.InvokeResult.error(
         code = "CALENDAR_UNAVAILABLE",
@@ -343,11 +312,7 @@ class CalendarHandler private constructor(
     }
     return try {
       val event = dataSource.add(appContext, request)
-      GatewaySession.InvokeResult.ok(
-        buildJsonObject {
-          put("event", eventJson(event))
-        }.toString(),
-      )
+      GatewaySession.InvokeResult.ok(Json.encodeToString(mapOf("event" to event)))
     } catch (err: IllegalArgumentException) {
       val msg = err.message ?: "CALENDAR_INVALID: invalid request"
       val code = if (msg.startsWith("CALENDAR_NOT_FOUND")) "CALENDAR_NOT_FOUND" else "CALENDAR_INVALID"
@@ -367,12 +332,7 @@ class CalendarHandler private constructor(
       // Default calendar read is a one-week window, not the full calendar store.
       return CalendarEventsRequest(startMs = start.toEpochMilli(), endMs = end.toEpochMilli(), limit = DEFAULT_CALENDAR_LIMIT)
     }
-    val params =
-      try {
-        Json.parseToJsonElement(paramsJson).asObjectOrNull()
-      } catch (_: Throwable) {
-        null
-      } ?: return null
+    val params = parseJsonParamsObject(paramsJson) ?: return null
     val start = parseISO((params["startISO"] as? JsonPrimitive)?.content)
     val end = parseISO((params["endISO"] as? JsonPrimitive)?.content)
     val resolvedStart = start ?: Instant.now()
@@ -387,12 +347,7 @@ class CalendarHandler private constructor(
   }
 
   private fun parseAddRequest(paramsJson: String?): CalendarAddRequest? {
-    val params =
-      try {
-        paramsJson?.let { Json.parseToJsonElement(it).asObjectOrNull() }
-      } catch (_: Throwable) {
-        null
-      } ?: return null
+    val params = parseJsonParamsObject(paramsJson) ?: return null
     val start =
       parseISO((params["startISO"] as? JsonPrimitive)?.content)
         ?: return null
@@ -402,15 +357,15 @@ class CalendarHandler private constructor(
     val isAllDay = (params["isAllDay"] as? JsonPrimitive)?.content?.toBooleanStrictOrNull() ?: false
     val addRange = normalizeAddRange(start, end, isAllDay)
     return CalendarAddRequest(
-      title = (params["title"] as? JsonPrimitive)?.content?.trim().orEmpty(),
+      title = parseJsonString(params, "title")?.trim().orEmpty(),
       startMs = addRange.start.toEpochMilli(),
       endMs = addRange.end.toEpochMilli(),
       isAllDay = isAllDay,
       timeZoneId = if (isAllDay) "UTC" else TimeZone.getDefault().id,
-      location = (params["location"] as? JsonPrimitive)?.content?.trim()?.ifEmpty { null },
-      notes = (params["notes"] as? JsonPrimitive)?.content?.trim()?.ifEmpty { null },
+      location = parseJsonString(params, "location")?.trim()?.ifEmpty { null },
+      notes = parseJsonString(params, "notes")?.trim()?.ifEmpty { null },
       calendarId = (params["calendarId"] as? JsonPrimitive)?.content?.toLongOrNull(),
-      calendarTitle = (params["calendarTitle"] as? JsonPrimitive)?.content?.trim()?.ifEmpty { null },
+      calendarTitle = parseJsonString(params, "calendarTitle")?.trim()?.ifEmpty { null },
     )
   }
 
@@ -437,23 +392,5 @@ class CalendarHandler private constructor(
     } catch (_: Throwable) {
       null
     }
-  }
-
-  private fun eventJson(event: CalendarEventRecord): JsonObject =
-    buildJsonObject {
-      put("identifier", JsonPrimitive(event.identifier))
-      put("title", JsonPrimitive(event.title))
-      put("startISO", JsonPrimitive(event.startISO))
-      put("endISO", JsonPrimitive(event.endISO))
-      put("isAllDay", JsonPrimitive(event.isAllDay))
-      event.location?.let { put("location", JsonPrimitive(it)) }
-      event.calendarTitle?.let { put("calendarTitle", JsonPrimitive(it)) }
-    }
-
-  companion object {
-    internal fun forTesting(
-      appContext: Context,
-      dataSource: CalendarDataSource,
-    ): CalendarHandler = CalendarHandler(appContext = appContext, dataSource = dataSource)
   }
 }

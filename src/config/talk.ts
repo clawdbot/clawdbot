@@ -1,10 +1,13 @@
 // Normalizes talk-mode config for voice and channel interactions.
+import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
+import { asFiniteNumberInRange } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeFastMode,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { normalizeThinkLevel } from "../auto-reply/thinking.js";
-import { isRecord } from "../utils.js";
+import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type {
   ResolvedTalkConfig,
   TalkConfig,
@@ -21,20 +24,6 @@ function normalizeTalkSecretInput(value: unknown): TalkProviderConfig["apiKey"] 
     return trimmed.length > 0 ? trimmed : undefined;
   }
   return coerceSecretRef(value) ?? undefined;
-}
-
-function normalizeSilenceTimeoutMs(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
-    return undefined;
-  }
-  return value;
-}
-
-function normalizeVadThreshold(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) {
-    return undefined;
-  }
-  return value;
 }
 
 function normalizePositiveInteger(value: unknown): number | undefined {
@@ -71,7 +60,7 @@ function normalizeTalkProviderConfig(value: unknown): TalkProviderConfig | undef
     provider[key] = raw;
   }
 
-  return Object.keys(provider).length > 0 ? provider : undefined;
+  return provider;
 }
 
 function normalizeTalkProviders(value: unknown): Record<string, TalkProviderConfig> | undefined {
@@ -138,7 +127,7 @@ function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig | undef
   ) {
     normalized.transport = source.transport;
   }
-  const vadThreshold = normalizeVadThreshold(source.vadThreshold);
+  const vadThreshold = asFiniteNumberInRange(source.vadThreshold, { min: 0, max: 1 });
   if (vadThreshold !== undefined) {
     normalized.vadThreshold = vadThreshold;
   }
@@ -171,16 +160,28 @@ function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig | undef
 }
 
 function activeProviderFromTalk(talk: TalkConfig): string | undefined {
-  const provider = normalizeOptionalString(talk.provider);
-  const providers = talk.providers;
-  if (provider) {
-    if (providers && !Object.hasOwn(providers, provider)) {
-      return undefined;
-    }
-    return provider;
+  const providerIds = Object.keys(talk.providers ?? {});
+  const provider = normalizeOptionalString(
+    talk.provider ?? (providerIds.length === 1 ? providerIds[0] : undefined),
+  );
+  if (!provider || isBlockedObjectKey(provider.toLowerCase())) {
+    return undefined;
   }
-  const providerIds = providers ? Object.keys(providers) : [];
-  return providerIds.length === 1 ? providerIds[0] : undefined;
+  return talk.providers ? findNormalizedProviderKey(talk.providers, provider) : provider;
+}
+
+/** Resolve the explicitly selected or sole authored Talk speech provider. */
+export function resolveConfiguredTalkSpeechProviderId(
+  config: Pick<OpenClawConfig, "talk">,
+): string | undefined {
+  return config.talk ? activeProviderFromTalk(config.talk) : undefined;
+}
+
+/** Resolve the explicitly selected or sole authored Talk realtime provider. */
+export function resolveConfiguredTalkRealtimeProviderId(
+  config: Pick<OpenClawConfig, "talk">,
+): string | undefined {
+  return config.talk?.realtime ? activeProviderFromTalk(config.talk.realtime) : undefined;
 }
 
 /**
@@ -219,7 +220,7 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
   if (typeof consultFastMode === "boolean") {
     normalized.consultFastMode = consultFastMode;
   }
-  const silenceTimeoutMs = normalizeSilenceTimeoutMs(source.silenceTimeoutMs);
+  const silenceTimeoutMs = normalizePositiveInteger(source.silenceTimeoutMs);
   if (silenceTimeoutMs !== undefined) {
     normalized.silenceTimeoutMs = silenceTimeoutMs;
   }
@@ -261,17 +262,16 @@ export function normalizeTalkConfig(config: OpenClawConfig): OpenClawConfig {
 export function resolveActiveTalkProviderConfig(
   talk: TalkConfig | undefined,
 ): ResolvedTalkConfig | undefined {
+  const selectedProvider = resolveConfiguredTalkSpeechProviderId({ talk });
+  if (!selectedProvider || !talk) {
+    return undefined;
+  }
   const normalizedTalk = normalizeTalkSection(talk);
-  if (!normalizedTalk) {
-    return undefined;
-  }
-  const provider = activeProviderFromTalk(normalizedTalk);
-  if (!provider) {
-    return undefined;
-  }
+  const provider =
+    findNormalizedProviderKey(normalizedTalk?.providers, selectedProvider) ?? selectedProvider;
   return {
     provider,
-    config: normalizedTalk.providers?.[provider] ?? {},
+    config: normalizedTalk?.providers?.[provider] ?? {},
   };
 }
 

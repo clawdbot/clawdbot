@@ -1,15 +1,15 @@
 // Legacy provider runtime config migrations for plugin ids and bundled discovery policy.
 import {
   defineLegacyConfigMigration,
-  mergeMissing,
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
+import { mergeMissing } from "../../../config/merge-missing.js";
 import { isRecord } from "./legacy-config-record-shared.js";
 import {
   migrateLegacyXSearchConfig,
   resolveLegacyXSearchModelTarget,
-} from "./legacy-x-search-migrate.js";
+} from "./legacy-web-tools-migrate.js";
 
 const LEGACY_OPENAI_CODEX_PLUGIN_ID = "openai-codex";
 const OPENAI_PLUGIN_ID = "openai";

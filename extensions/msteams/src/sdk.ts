@@ -3,6 +3,7 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readSecretFile } from "openclaw/plugin-sdk/secret-file";
 import { normalizeBotFrameworkServiceUrl } from "./bot-framework-service-url.js";
 import type { MSTeamsCloudName } from "./cloud.js";
+import { resolveMSTeamsPrivateQaRuntime } from "./qa/private-runtime.js";
 import { MSTEAMS_REQUEST_TIMEOUT_MS } from "./request-timeout.js";
 import type { MSTeamsCredentials, MSTeamsFederatedCredentials } from "./token.js";
 import { buildOpenClawUserAgentFragment } from "./user-agent.js";
@@ -262,6 +263,7 @@ async function createMSTeamsApp(
   options?: CreateMSTeamsAppOptions,
 ): Promise<MSTeamsApp> {
   const { App, cloudFromName } = await loadSdkModules();
+  const privateQaRuntime = resolveMSTeamsPrivateQaRuntime();
   // Tag outbound SDK HTTP calls with a User-Agent fragment so the Teams
   // backend can identify OpenClaw traffic for usage telemetry. Teams SDK
   // 2.0.11+ preserves both its own `teams.ts[apps]/<sdk-version>` identifier
@@ -271,10 +273,20 @@ async function createMSTeamsApp(
     ? normalizeBotFrameworkServiceUrl(options.serviceUrl)
     : undefined;
   const appOptions: Record<string, unknown> = {
-    client: options?.httpClient ?? {
-      headers: { "User-Agent": buildOpenClawUserAgentFragment() },
-      timeout: MSTEAMS_REQUEST_TIMEOUT_MS,
-    },
+    client: privateQaRuntime?.client ??
+      options?.httpClient ?? {
+        headers: { "User-Agent": buildOpenClawUserAgentFragment() },
+        timeout: MSTEAMS_REQUEST_TIMEOUT_MS,
+      },
+    ...(privateQaRuntime
+      ? {
+          // Teams SDK prefers clientSecret over token and falls back to CLIENT_SECRET.
+          // Clear it explicitly so private QA cannot escape to real Azure auth.
+          clientSecret: "",
+          skipAuth: privateQaRuntime.skipAuth,
+          token: privateQaRuntime.token,
+        }
+      : {}),
     ...(options?.httpServerAdapter ? { httpServerAdapter: options.httpServerAdapter } : {}),
     ...(options?.messagingEndpoint ? { messagingEndpoint: options.messagingEndpoint } : {}),
     cloud: cloudFromName(cloud),
@@ -285,7 +297,8 @@ async function createMSTeamsApp(
   };
 
   if (creds.type === "federated") {
-    return await createFederatedApp(creds, App, appOptions);
+    // Teams SDK otherwise lets ambient CLIENT_SECRET override both federated modes.
+    return await createFederatedApp(creds, App, { clientSecret: "", ...appOptions });
   }
   return new App({
     clientId: creds.appId,
@@ -320,11 +333,8 @@ async function createFederatedApp(
   let privateKey: string;
   try {
     privateKey = await readSecretFile(creds.certificatePath, "Microsoft Teams certificate");
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to read certificate file at '${creds.certificatePath}': ${msg}`, {
-      cause: err,
-    });
+  } catch {
+    throw new Error("Failed to read certificate file: the configured credential is unavailable.");
   }
 
   return createCertificateApp(creds, privateKey, App, appOptions);

@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   normalizeStringEntries,
   normalizeUniqueStringEntries,
+  normalizeUniqueTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
 
 /**
@@ -24,23 +25,7 @@ export function findPathKey(env: Record<string, string>): string {
 
 /** Normalizes configured PATH prepends by trimming blanks and preserving first-seen order. */
 export function normalizePathPrepend(entries?: string[]) {
-  if (!Array.isArray(entries)) {
-    return [];
-  }
-  const seen = new Set<string>();
-  const normalized: string[] = [];
-  for (const entry of entries) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    const trimmed = entry.trim();
-    if (!trimmed || seen.has(trimmed)) {
-      continue;
-    }
-    seen.add(trimmed);
-    normalized.push(trimmed);
-  }
-  return normalized;
+  return normalizeUniqueTrimmedStringList(entries);
 }
 
 /** Merges prepended PATH entries ahead of the existing PATH while deduping normalized parts. */

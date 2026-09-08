@@ -1,12 +1,10 @@
-// Whatsapp plugin module owns inbound debounce batching and flush lifecycle.
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { getPrimaryIdentityId } from "../identity.js";
 import { requireWhatsAppInboundAdmission } from "./admission.js";
 import type { WhatsAppIngressLifecycle, WhatsAppReadReceiptTarget } from "./durable-receive.js";
 import { attachWhatsAppIngressLifecycle } from "./ingress-lifecycle.js";
-import { withDeprecatedWebInboundMessageFlatAliases } from "./message-aliases.js";
-import type { AdmittedWebInboundCallbackMessage, WebInboundMessageInput } from "./types.js";
+import type { AdmittedWebInboundCallbackMessage } from "./types.js";
 
 export type WhatsAppQueuedInboundMessage = AdmittedWebInboundCallbackMessage & {
   debounceKey?: string;
@@ -17,14 +15,13 @@ export type WhatsAppQueuedInboundMessage = AdmittedWebInboundCallbackMessage & {
 };
 
 export function createWhatsAppInboundMessageDebouncer(options: {
-  debounceMs?: number;
-  onMessage: (msg: WebInboundMessageInput) => Promise<void>;
-  shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
+  resolveDebounceMs: () => number;
+  onMessage: (msg: AdmittedWebInboundCallbackMessage) => Promise<void>;
+  shouldDebounce?: (msg: AdmittedWebInboundCallbackMessage) => boolean;
   markRead: (target: WhatsAppReadReceiptTarget | undefined) => Promise<void>;
   onPendingWorkChanged: () => void;
   onError: (error: unknown) => void;
 }) {
-  const debounceMs = Math.max(0, Math.trunc(options.debounceMs ?? 0));
   const pendingKeys = new Map<string, number>();
   const activeFlushes = new Set<Promise<void>>();
   // Close waits wake as soon as a queued key becomes flushable, avoiding
@@ -72,8 +69,9 @@ export function createWhatsAppInboundMessageDebouncer(options: {
       return timestampDiff !== 0 ? timestampDiff : (a.receiveOrder ?? 0) - (b.receiveOrder ?? 0);
     });
 
-  const debouncer = createInboundDebouncer<WhatsAppQueuedInboundMessage>({
-    debounceMs,
+  const debouncer = createInboundDebouncer<WhatsAppQueuedInboundMessage & { debounceMs: number }>({
+    debounceMs: options.resolveDebounceMs(),
+    resolveDebounceMs: (entry) => entry.debounceMs,
     buildKey: (msg) => msg.debounceKey ?? buildKey(msg),
     shouldDebounce,
     onFlush: (entries, createFlush) => {
@@ -121,7 +119,7 @@ export function createWhatsAppInboundMessageDebouncer(options: {
                 ? { ...last.group, mentions: combinedMentions }
                 : undefined;
             const combinedMessage: WhatsAppQueuedInboundMessage = attachWhatsAppIngressLifecycle(
-              withDeprecatedWebInboundMessageFlatAliases({
+              {
                 ...last,
                 turnAdoptionLifecycle: admissionLifecycle,
                 payload: {
@@ -131,7 +129,7 @@ export function createWhatsAppInboundMessageDebouncer(options: {
                 },
                 group: combinedGroup,
                 event: { ...last.event, isBatched: true },
-              }),
+              },
               admissionLifecycle,
             );
             await options.onMessage(combinedMessage);
@@ -156,11 +154,13 @@ export function createWhatsAppInboundMessageDebouncer(options: {
     onError: options.onError,
   });
 
-  const enqueue = async (message: WhatsAppQueuedInboundMessage) => {
+  const enqueue = async (input: WhatsAppQueuedInboundMessage) => {
+    // Use one timing fact for both queue admission and shutdown tracking.
+    const message = { ...input, debounceMs: options.resolveDebounceMs() };
     const key = buildKey(message);
     if (key) {
       message.debounceKey = key;
-      if (debounceMs > 0 && shouldDebounce(message)) {
+      if (message.debounceMs > 0 && shouldDebounce(message)) {
         message.debounceKeyTracked = true;
         trackKey(key);
         options.onPendingWorkChanged();

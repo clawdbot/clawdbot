@@ -53,7 +53,7 @@ function resolveLocalMediaPathForEmbedding(raw: string): string | null {
   if (/^https?:/i.test(trimmed)) {
     return null;
   }
-  if (trimmed.startsWith("file:")) {
+  if (/^file:/iu.test(trimmed)) {
     try {
       const p = safeFileURLToPath(trimmed);
       if (!path.isAbsolute(p)) {
@@ -211,44 +211,23 @@ function resolveReplyDirectivePrefix(payload: ReplyPayload): string {
   return "";
 }
 
-/**
- * Build Control UI / transcript `content` blocks for local TTS (or other) audio files
- * referenced by slash-command / agent replies when the webchat path only had text aggregation.
- */
-async function buildWebchatAudioContentBlocksFromReplyPayloads(
-  payloads: ReplyPayload[],
-  options?: WebchatAudioEmbeddingOptions,
-): Promise<Array<Record<string, unknown>>> {
-  const seen = new Set<string>();
-  const blocks: Array<Record<string, unknown>> = [];
-  for (const payload of payloads) {
-    if (payload.isReasoning === true) {
-      continue;
-    }
-    const parts = resolveSendableOutboundReplyParts(payload);
-    for (const raw of parts.mediaUrls) {
-      const media = await resolveReplyMediaAudioEmbedding(payload, raw, seen, options);
-      if (!media?.audioBlock) {
-        continue;
-      }
-      blocks.push(media.audioBlock);
-    }
-  }
-  return blocks;
-}
-
 export async function buildWebchatAssistantMessageFromReplyPayloads(
   payloads: ReplyPayload[],
   options?: WebchatAudioEmbeddingOptions,
-): Promise<{ content: Array<Record<string, unknown>>; transcriptText: string } | null> {
+): Promise<{
+  content: Array<Record<string, unknown>>;
+  transcriptText: string;
+  payloadTexts: Array<string | undefined>;
+} | null> {
   const content: Array<Record<string, unknown>> = [];
   const transcriptTextParts: string[] = [];
+  const payloadTexts: Array<string | undefined> = [];
   const seenAudio = new Set<string>();
   const seenImages = new Set<string>();
   let hasAudio = false;
   let hasImage = false;
 
-  for (const payload of payloads) {
+  for (const [payloadIndex, payload] of payloads.entries()) {
     if (payload.isReasoning === true) {
       continue;
     }
@@ -296,9 +275,11 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
     if (blockText) {
       const fullText = replyDirectivePrefix ? `${replyDirectivePrefix}${blockText}` : blockText;
       transcriptTextParts.push(fullText);
+      payloadTexts[payloadIndex] = fullText;
       content.push({ type: "text", text: fullText });
     } else if (replyDirectivePrefix) {
       transcriptTextParts.push(replyDirectivePrefix);
+      payloadTexts[payloadIndex] = replyDirectivePrefix;
       content.push({ type: "text", text: replyDirectivePrefix });
     }
     content.push(...payloadMediaBlocks);
@@ -313,8 +294,5 @@ export async function buildWebchatAssistantMessageFromReplyPayloads(
   if (transcriptTextParts.length === 0) {
     content.unshift({ type: "text", text: transcriptText });
   }
-  return { content, transcriptText };
+  return { content, transcriptText, payloadTexts };
 }
-
-const testing = { buildWebchatAudioContentBlocksFromReplyPayloads };
-export { testing as __testing };

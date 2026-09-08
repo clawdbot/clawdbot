@@ -1,9 +1,6 @@
 {
-  "extends": "../tsconfig.json",
+  "extends": "./tsconfig/tsconfig.test.root.json",
   "compilerOptions": {
-    "noEmit": true,
     "types": ["node", "vitest"]
-  },
-  "include": ["**/*.ts"],
-  "exclude": ["fixtures/**"]
+  }
 }

@@ -23,22 +23,6 @@ enum AppAppearancePreference: String, CaseIterable, Identifiable {
         self.rawValue
     }
 
-    var label: String {
-        switch self {
-        case .system: "System"
-        case .light: "Light"
-        case .dark: "Dark"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .system: "circle.lefthalf.filled"
-        case .light: "sun.max"
-        case .dark: "moon.stars"
-        }
-    }
-
     var colorScheme: ColorScheme? {
         switch self {
         case .system: nil
@@ -114,6 +98,10 @@ enum OpenClawBrand {
     static let statusSuccess = Color(uiColor: Self.uiStatusSuccess)
     static let statusWarning = Color(uiColor: Self.uiStatusWarning)
     static let statusError = Color(uiColor: Self.uiStatusError)
+    // Keep provider colors aligned with the Control UI brand tokens.
+    static let providerOpenAI = Color(red: 16 / 255.0, green: 163 / 255.0, blue: 127 / 255.0)
+    static let providerAnthropic = Color(red: 217 / 255.0, green: 119 / 255.0, blue: 87 / 255.0)
+    static let providerGoogle = Color(red: 66 / 255.0, green: 133 / 255.0, blue: 244 / 255.0)
     static let graphite = void
     static let graphiteElevated = obsidian
     static let activationCanvas = Color(uiColor: adaptiveUIColor(light: (255, 255, 255), dark: (18, 14, 15)))

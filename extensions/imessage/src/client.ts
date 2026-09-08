@@ -5,7 +5,10 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
+import { recoverIMessageBridge } from "./bridge-recovery.js";
+import { expandIMessageUserPath } from "./cli-path.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
+import { invalidateCachedIMessagePrivateApiStatus } from "./private-api-status.js";
 
 type IMessageRpcError = {
   code?: number;
@@ -30,9 +33,72 @@ type IMessageRpcNotification = {
 type IMessageRpcClientOptions = {
   cliPath?: string;
   dbPath?: string;
+  remoteHost?: string;
   runtime?: RuntimeEnv;
   onNotification?: (msg: IMessageRpcNotification) => void;
 };
+
+export class IMessageRpcRequestError extends Error {
+  constructor(
+    message: string,
+    readonly code?: number,
+    readonly data?: unknown,
+  ) {
+    super(message);
+    this.name = "IMessageRpcRequestError";
+  }
+}
+
+// A stalled bridge, as opposed to a rejected or merely slow request.
+//
+// Matches only imsg's own structured wait error, e.g.
+//   "Internal error: code=-32603 Timed out waiting for response to 'send-message'"
+// which imsg raises after publishing a request to the injected helper and
+// getting nothing back. That is first-hand evidence about the bridge.
+//
+// Deliberately excludes our own client-side timer ("imsg rpc timeout (...)"):
+// it fires when the local wrapper is slow or blocked while imsg itself is
+// healthy, so treating it as a dead bridge would evict a good capability cache
+// and point operators at `imsg launch`, the wrong repair. An ordinary rejection
+// (bad target, unknown chat) says nothing about bridge health either.
+// Module-private: request() is the only production caller, and the behavior is
+// covered through that boundary rather than by calling this directly.
+function isIMessageBridgeStall(error: unknown): boolean {
+  // Only an Error can carry a stall. Stringifying an arbitrary value here would
+  // render most objects as "[object Object]" and match nothing anyway.
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return error.message.includes("Timed out waiting for response");
+}
+
+const BRIDGE_STALL_GUIDANCE =
+  "The imsg private API bridge stopped responding. Run `imsg launch` to re-inject the dylib, " +
+  "then `openclaw channels status --probe` to refresh capability detection.";
+
+// Append the actionable cause without rewriting the error.
+//
+// Normal outbound sends never consult the private-API status cache (send.ts
+// builds a client and dispatches directly), so evicting that cache alone leaves
+// them repeating an opaque timeout. Decorating here reaches every caller.
+//
+// Preserve the class, code, data, and original message text: send.ts keys
+// delayed-send reconciliation off `data.disposition`/`data.retry_safe` and
+// matches `imsg rpc timeout (send)` by regex, so the original wording has to
+// survive as a prefix.
+function describeIMessageBridgeStall(error: unknown): unknown {
+  if (error instanceof IMessageRpcRequestError) {
+    return new IMessageRpcRequestError(
+      `${error.message} ${BRIDGE_STALL_GUIDANCE}`,
+      error.code,
+      error.data,
+    );
+  }
+  if (error instanceof Error) {
+    return new Error(`${error.message} ${BRIDGE_STALL_GUIDANCE}`, { cause: error });
+  }
+  return error;
+}
 
 type PendingRequest = {
   resolve: (value: unknown) => void;
@@ -42,6 +108,7 @@ type PendingRequest = {
 
 const PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR =
   "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.";
+const IMESSAGE_RPC_CLOSE_GRACE_MS = 500;
 
 function isTestEnv(): boolean {
   if (process.env.NODE_ENV === "test") {
@@ -59,29 +126,72 @@ function normalizeIMessageFullDiskAccessError(message: string): string | undefin
   return PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR;
 }
 
+function createLfLineFramer(onLine: (line: string) => void): {
+  write(chunk: Buffer | string): void;
+  flush(): void;
+} {
+  const decoder = new StringDecoder("utf8");
+  let buffer = "";
+  return {
+    write(chunk) {
+      buffer += typeof chunk === "string" ? chunk : decoder.write(chunk);
+      let newlineIndex = buffer.indexOf("\n");
+      while (newlineIndex !== -1) {
+        const line = buffer.slice(0, newlineIndex);
+        buffer = buffer.slice(newlineIndex + 1);
+        onLine(line);
+        newlineIndex = buffer.indexOf("\n");
+      }
+    },
+    flush() {
+      buffer += decoder.end();
+      if (!buffer) {
+        return;
+      }
+      const line = buffer;
+      buffer = "";
+      onLine(line);
+    },
+  };
+}
+
 export class IMessageRpcClient {
   private readonly cliPath: string;
+  // The private-API cache is keyed by the *configured* cliPath (see
+  // actions.ts, which passes `account.config.cliPath` to both the probe and
+  // this client), so invalidation has to use the same unexpanded string. Using
+  // the expanded one silently misses for any `~`-relative cliPath.
+  private readonly configuredCliPath: string;
   private readonly dbPath?: string;
   private readonly runtime?: RuntimeEnv;
   private readonly onNotification?: (msg: IMessageRpcNotification) => void;
   private readonly pending = new Map<string, PendingRequest>();
-  private readonly closed: Promise<void>;
-  private closedResolve: (() => void) | null = null;
+  private readonly terminal: Promise<Error>;
+  private terminalResolve: ((error: Error) => void) | null = null;
+  private readonly reaped: Promise<void>;
+  private reapedResolve: (() => void) | null = null;
+  private isReaped = false;
   private child: ChildProcessWithoutNullStreams | null = null;
-  private stdoutBuffer = "";
-  private readonly stdoutDecoder = new StringDecoder("utf8");
-  private stderrBuffer = "";
-  private readonly stderrDecoder = new StringDecoder("utf8");
+  private stopPromise: Promise<void> | null = null;
+  private readonly stdoutFramer = createLfLineFramer((line) => this.handleStdoutLine(line));
+  private readonly stderrFramer = createLfLineFramer((line) => this.handleStderrLine(line));
   private nextId = 1;
   private publicProcessError: string | null = null;
 
   constructor(opts: IMessageRpcClientOptions = {}) {
-    this.cliPath = opts.cliPath?.trim() || "imsg";
-    this.dbPath = opts.dbPath?.trim() ? resolveUserPath(opts.dbPath) : undefined;
+    this.configuredCliPath = opts.cliPath?.trim() || "imsg";
+    this.cliPath = expandIMessageUserPath(this.configuredCliPath);
+    const dbPath = opts.dbPath?.trim();
+    // An explicitly remote database belongs to the Messages Mac. Only local
+    // database paths are relative to the Gateway user's home directory.
+    this.dbPath = dbPath ? (opts.remoteHost?.trim() ? dbPath : resolveUserPath(dbPath)) : undefined;
     this.runtime = opts.runtime;
     this.onNotification = opts.onNotification;
-    this.closed = new Promise((resolve) => {
-      this.closedResolve = resolve;
+    this.terminal = new Promise((resolve) => {
+      this.terminalResolve = resolve;
+    });
+    this.reaped = new Promise((resolve) => {
+      this.reapedResolve = resolve;
     });
   }
 
@@ -105,81 +215,60 @@ export class IMessageRpcClient {
       if (this.child !== child) {
         return;
       }
-      this.handleStdoutChunk(chunk);
+      this.stdoutFramer.write(chunk);
     });
 
     child.stderr?.on("data", (chunk) => {
       if (this.child !== child) {
         return;
       }
-      this.handleStderrChunk(chunk);
+      this.stderrFramer.write(chunk);
     });
 
     // Every process/stdio error is terminal for this RPC transport. Settle the
     // client once and terminate a helper whose pipe failed; otherwise the
     // monitor can wait forever on an unusable child. #75438 covered stdin only.
-    const failFromProcessError = (err: unknown) => {
-      if (!this.finish(err instanceof Error ? err : new Error(String(err)))) {
-        return;
-      }
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        // The helper may already be gone.
-      }
-    };
+    const failFromProcessError = (err: unknown) => this.failTransport(err, child);
     child.on("error", failFromProcessError);
-    child.stdin.on("error", failFromProcessError);
-    child.stdout.on("error", failFromProcessError);
-    child.stderr.on("error", failFromProcessError);
+    for (const stream of [child.stdin, child.stdout, child.stderr]) {
+      stream.on("error", failFromProcessError);
+      stream.once("close", () => {
+        // Bun can close an errored stdio stream without emitting its error event.
+        const error = stream.errored;
+        if (error) {
+          failFromProcessError(error);
+        }
+      });
+    }
 
     child.on("close", (code, signal) => {
       if (this.child === child) {
         // Complete both byte streams before selecting the terminal error so a
         // final split diagnostic can still provide its public recovery guidance.
-        this.flushStdoutBuffer();
-        this.flushStderrBuffer();
+        this.stdoutFramer.flush();
+        this.stderrFramer.flush();
+        this.child = null;
       }
       this.finish(this.buildCloseError(code, signal));
+      this.markReaped();
     });
   }
 
   async stop(): Promise<void> {
-    if (!this.child) {
+    if (this.stopPromise) {
+      return await this.stopPromise;
+    }
+    const child = this.child;
+    if (!child) {
       return;
     }
-    this.stdoutBuffer = "";
-    this.stdoutDecoder.end();
-    this.stderrBuffer = "";
-    this.stderrDecoder.end();
-    this.child.stdin?.end();
-    const child = this.child;
-    this.child = null;
-
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    try {
-      await Promise.race([
-        this.closed,
-        new Promise<void>((resolve) => {
-          timeout = setTimeout(() => {
-            if (!child.killed) {
-              child.kill("SIGTERM");
-            }
-            resolve();
-          }, 500);
-        }),
-      ]);
-    } finally {
-      // A losing fallback still holds Node's event loop open; clear it when
-      // the child closes first so short-lived RPC clients can exit promptly.
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-    }
+    this.stopPromise = this.stopChild(child);
+    return await this.stopPromise;
   }
 
   async waitForClose(): Promise<void> {
-    await this.closed;
+    const error = await this.terminal;
+    throw error;
   }
 
   async request<T = unknown>(
@@ -218,46 +307,92 @@ export class IMessageRpcClient {
 
     // Reject the specific pending request on write error (e.g. EPIPE)
     // instead of letting it hang until timeout. (#75438)
-    this.child.stdin.write(line, (err) => {
-      if (err) {
-        const key = String(id);
-        const pending = this.pending.get(key);
-        if (pending) {
-          if (pending.timer) {
-            clearTimeout(pending.timer);
-          }
-          this.pending.delete(key);
-          pending.reject(err instanceof Error ? err : new Error(String(err)));
+    try {
+      this.child.stdin.write(line, (err) => {
+        if (err) {
+          this.failTransport(err, this.child);
         }
+      });
+    } catch (err) {
+      this.failTransport(err, this.child);
+    }
+    try {
+      return await response;
+    } catch (err) {
+      // Every private-API action funnels through here, so this is the one place
+      // that learns the bridge went away. Without it the cached "available"
+      // verdict never expires and each later send is dispatched into a dead
+      // bridge, surfacing an opaque -32603 instead of the actionable
+      // "run imsg launch" guidance. Clearing the entry makes the next action
+      // re-probe and report the real state.
+      if (isIMessageBridgeStall(err)) {
+        invalidateCachedIMessagePrivateApiStatus(this.configuredCliPath);
+        try {
+          await recoverIMessageBridge(this.configuredCliPath);
+        } catch (recoveryError) {
+          this.runtime?.error?.(
+            `imessage: automatic bridge recovery failed: ${formatErrorMessage(recoveryError)}`,
+          );
+        }
+        throw describeIMessageBridgeStall(err);
       }
-    });
-    return await response;
-  }
-
-  private handleStdoutChunk(chunk: Buffer | string) {
-    const text = typeof chunk === "string" ? chunk : this.stdoutDecoder.write(chunk);
-    this.stdoutBuffer += text;
-
-    let newlineIndex = this.stdoutBuffer.indexOf("\n");
-    while (newlineIndex !== -1) {
-      const line = this.stdoutBuffer.slice(0, newlineIndex);
-      this.stdoutBuffer = this.stdoutBuffer.slice(newlineIndex + 1);
-      this.handleStdoutLine(line);
-      newlineIndex = this.stdoutBuffer.indexOf("\n");
+      throw err;
     }
   }
 
-  private flushStdoutBuffer() {
-    const tail = this.stdoutDecoder.end();
-    if (tail) {
-      this.stdoutBuffer += tail;
+  private async stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
+    try {
+      child.stdin.end();
+    } catch (err) {
+      this.failTransport(err, child);
     }
-    if (!this.stdoutBuffer) {
+    if (await this.waitForReap(IMESSAGE_RPC_CLOSE_GRACE_MS)) {
       return;
     }
-    const line = this.stdoutBuffer;
-    this.stdoutBuffer = "";
-    this.handleStdoutLine(line);
+    this.signalChild(child, "SIGTERM");
+    if (await this.waitForReap(IMESSAGE_RPC_CLOSE_GRACE_MS)) {
+      return;
+    }
+    this.signalChild(child, "SIGKILL");
+    if (!(await this.waitForReap(IMESSAGE_RPC_CLOSE_GRACE_MS))) {
+      throw new Error("imsg rpc did not exit after SIGKILL");
+    }
+  }
+
+  private async waitForReap(timeoutMs: number): Promise<boolean> {
+    if (this.isReaped) {
+      return true;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        this.reaped.then(() => true),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
+  }
+
+  private signalChild(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
+    try {
+      child.kill(signal);
+    } catch {
+      // The helper may have exited between the grace timer and the signal.
+    }
+  }
+
+  private failTransport(err: unknown, child: ChildProcessWithoutNullStreams | null): void {
+    if (!this.finish(err instanceof Error ? err : new Error(String(err)))) {
+      return;
+    }
+    if (child) {
+      this.signalChild(child, "SIGTERM");
+    }
   }
 
   private handleStdoutLine(line: string) {
@@ -266,29 +401,6 @@ export class IMessageRpcClient {
       return;
     }
     this.handleLine(trimmed);
-  }
-
-  private handleStderrChunk(chunk: Buffer | string) {
-    const text = typeof chunk === "string" ? chunk : this.stderrDecoder.write(chunk);
-    this.stderrBuffer += text;
-
-    let newlineIndex = this.stderrBuffer.indexOf("\n");
-    while (newlineIndex !== -1) {
-      const line = this.stderrBuffer.slice(0, newlineIndex);
-      this.stderrBuffer = this.stderrBuffer.slice(newlineIndex + 1);
-      this.handleStderrLine(line);
-      newlineIndex = this.stderrBuffer.indexOf("\n");
-    }
-  }
-
-  private flushStderrBuffer() {
-    this.stderrBuffer += this.stderrDecoder.end();
-    if (!this.stderrBuffer) {
-      return;
-    }
-    const line = this.stderrBuffer;
-    this.stderrBuffer = "";
-    this.handleStderrLine(line);
   }
 
   private handleStderrLine(line: string) {
@@ -338,7 +450,9 @@ export class IMessageRpcClient {
           }
         }
         const msg = suffixes.length > 0 ? `${baseMessage}: ${suffixes.join(" ")}` : baseMessage;
-        pending.reject(new Error(msg));
+        pending.reject(
+          new IMessageRpcRequestError(msg, typeof code === "number" ? code : undefined, details),
+        );
         return;
       }
       pending.resolve(parsed.result);
@@ -379,14 +493,24 @@ export class IMessageRpcClient {
   }
 
   private finish(err: Error): boolean {
-    const resolve = this.closedResolve;
+    const resolve = this.terminalResolve;
     if (!resolve) {
       return false;
     }
-    this.closedResolve = null;
+    this.terminalResolve = null;
     this.failAll(err);
-    resolve();
+    resolve(err);
     return true;
+  }
+
+  private markReaped(): void {
+    if (this.isReaped) {
+      return;
+    }
+    this.isReaped = true;
+    const resolve = this.reapedResolve;
+    this.reapedResolve = null;
+    resolve?.();
   }
 }
 

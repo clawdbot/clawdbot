@@ -3,6 +3,8 @@
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
+import { captureEnv } from "../test-utils/env.js";
+import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 
 vi.mock("./client-start-readiness.js", () => ({
   startGatewayClientWhenEventLoopReady: async (client: { start: () => void }) => {
@@ -12,6 +14,7 @@ vi.mock("./client-start-readiness.js", () => ({
 }));
 
 describe("gateway cli backend live helpers", () => {
+  const gatewayStartupEnv = captureEnv([...GATEWAY_STARTUP_MUTATED_ENV_KEYS]);
   let liveHelpers: typeof import("./gateway-cli-backend.live-helpers.js");
 
   beforeAll(async () => {
@@ -24,6 +27,7 @@ describe("gateway cli backend live helpers", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    gatewayStartupEnv.restore();
     cliBackendsTesting.resetDepsForTest();
     delete process.env.OPENCLAW_SKIP_CHANNELS;
     delete process.env.OPENCLAW_SKIP_PROVIDERS;
@@ -39,7 +43,7 @@ describe("gateway cli backend live helpers", () => {
     delete process.env.ANTHROPIC_API_KEY_OLD;
   });
 
-  it("applies and restores live env including minimal gateway mode", async () => {
+  it("applies and restores live env including full gateway mode", async () => {
     const { applyCliBackendLiveEnv, restoreCliBackendLiveEnv, snapshotCliBackendLiveEnv } =
       liveHelpers;
 
@@ -53,9 +57,15 @@ describe("gateway cli backend live helpers", () => {
     process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "old-minimal";
     process.env.ANTHROPIC_API_KEY = "old-anthropic";
     process.env.ANTHROPIC_API_KEY_OLD = "old-anthropic-old";
+    process.env.PATH = "old-path";
+    process.env.OPENCLAW_GATEWAY_PORT = "old-port";
+    process.env.OPENCLAW_PATH_BOOTSTRAPPED = "old-bootstrap";
 
     const snapshot = snapshotCliBackendLiveEnv();
     applyCliBackendLiveEnv(new Set<string>());
+    process.env.PATH = "gateway-path";
+    process.env.OPENCLAW_GATEWAY_PORT = "gateway-port";
+    process.env.OPENCLAW_PATH_BOOTSTRAPPED = "1";
 
     expect(process.env.OPENCLAW_SKIP_CHANNELS).toBe("1");
     expect(process.env.OPENCLAW_SKIP_PROVIDERS).toBe("1");
@@ -64,7 +74,7 @@ describe("gateway cli backend live helpers", () => {
     expect(process.env.OPENCLAW_SKIP_CANVAS_HOST).toBe("1");
     expect(process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER).toBe("1");
     expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBe("old-bundled");
-    expect(process.env.OPENCLAW_TEST_MINIMAL_GATEWAY).toBe("1");
+    expect(process.env.OPENCLAW_TEST_MINIMAL_GATEWAY).toBe("0");
     expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
     expect(process.env.ANTHROPIC_API_KEY_OLD).toBeUndefined();
 
@@ -80,6 +90,9 @@ describe("gateway cli backend live helpers", () => {
     expect(process.env.OPENCLAW_TEST_MINIMAL_GATEWAY).toBe("old-minimal");
     expect(process.env.ANTHROPIC_API_KEY).toBe("old-anthropic");
     expect(process.env.ANTHROPIC_API_KEY_OLD).toBe("old-anthropic-old");
+    expect(process.env.PATH).toBe("old-path");
+    expect(process.env.OPENCLAW_GATEWAY_PORT).toBe("old-port");
+    expect(process.env.OPENCLAW_PATH_BOOTSTRAPPED).toBe("old-bootstrap");
   });
 
   it("defaults the model switch probe to Claude Sonnet -> Opus", async () => {
@@ -208,33 +221,15 @@ describe("gateway cli backend live helpers", () => {
       memoryToken,
     });
 
-    expect(probe.firstTurnPrompt).toBe(
-      "Do not inspect files or run tools. Reply with exactly: CLI-BACKEND-112233.",
-    );
-    expect(probe.resumePrompt).toBe(
-      "Do not inspect files or run tools. " +
-        "Return exactly two whitespace-separated tokens: CLI-RESUME-445566 followed by " +
-        "the exact opaque session token from the earlier turn. Do not add prose.",
-    );
+    expect(probe.firstTurnPrompt).toContain("public test label");
+    expect(probe.firstTurnPrompt).toContain("not a credential");
+    expect(probe.firstTurnPrompt).toContain("CLI-BACKEND-112233");
+    expect(probe.resumePrompt).toContain("public test label");
+    expect(probe.resumePrompt).toContain("CLI-RESUME-445566");
     expect(probe.firstTurnPrompt).not.toContain(memoryToken);
     expect(probe.resumePrompt).not.toContain(memoryToken);
     expect(probe.injectedContext).toContain(memoryToken);
     expect(probe.expectedResumeMarker).toBe("CLI-RESUME-445566");
-  });
-
-  it("finds only Claude-imported native session ids", () => {
-    const { resolveImportedClaudeCliSessionId } = liveHelpers;
-
-    expect(
-      resolveImportedClaudeCliSessionId([
-        null,
-        { __openclaw: "invalid" },
-        { __openclaw: { importedFrom: "codex-cli", cliSessionId: "wrong-provider" } },
-        { __openclaw: { importedFrom: "claude-cli", cliSessionId: 42 } },
-        { __openclaw: { importedFrom: "claude-cli", cliSessionId: "claude-session" } },
-      ]),
-    ).toBe("claude-session");
-    expect(resolveImportedClaudeCliSessionId([])).toBeUndefined();
   });
 
   it("retries Codex CLI timeout payloads only before the final attempt", async () => {

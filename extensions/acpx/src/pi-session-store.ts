@@ -1,9 +1,15 @@
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
+import { isPathStrictlyInside } from "openclaw/plugin-sdk/file-access-runtime";
 import type { SessionCatalogSession } from "openclaw/plugin-sdk/session-catalog";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeBoundedOptionalString as readBoundedString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { piAcpSessionStoreRoot, piSessionStore } from "./pi-session-paths.js";
+import { parsePiSessionTimestampMs } from "./pi-session-timestamp.js";
 
 const MAX_DISCOVERY_FILES = 10_000;
 const SUMMARY_SCAN_BATCH_SIZE = 100;
@@ -84,14 +90,6 @@ function cacheSummary(file: string, value: CachedSummary): void {
   }
 }
 
-function optionalString(value: unknown, maxLength: number): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed && trimmed.length <= maxLength ? trimmed : undefined;
-}
-
 async function discoverPiSessionFiles(
   env: NodeJS.ProcessEnv,
 ): Promise<{ root: string; files: string[] }> {
@@ -144,44 +142,30 @@ async function realpathOrResolve(value: string): Promise<string> {
   }
 }
 
-async function mapConcurrent<T, R>(
-  values: T[],
-  limit: number,
-  mapper: (value: T) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = [];
-  results.length = values.length;
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(limit, values.length) }, async () => {
-    while (nextIndex < values.length) {
-      const index = nextIndex++;
-      results[index] = await mapper(values[index]!);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
-
 async function scanPiFileCandidates(env: NodeJS.ProcessEnv): Promise<PiFileCandidate[]> {
   const { root, files } = await discoverPiSessionFiles(env);
   const configuredAcpRoot = piAcpSessionStoreRoot(env);
   const acpRoot = configuredAcpRoot ? await realpathOrResolve(configuredAcpRoot) : undefined;
-  const candidates = await mapConcurrent(files, IO_CONCURRENCY, async (file) => {
-    try {
-      const stats = await fs.stat(file);
-      return stats.isFile()
-        ? {
-            file,
-            storeRoot: root,
-            identity: `${String(stats.dev)}:${String(stats.ino)}:${String(stats.birthtimeMs)}`,
-            mtimeMs: stats.mtimeMs,
-            size: stats.size,
-            resumable: acpRoot ? pathIsWithin(acpRoot, file) : false,
-          }
-        : undefined;
-    } catch {
-      return undefined;
-    }
+  const { results: candidates } = await runTasksWithConcurrency({
+    tasks: files.map((file) => async () => {
+      try {
+        const stats = await fs.stat(file);
+        return stats.isFile()
+          ? {
+              file,
+              storeRoot: root,
+              identity: `${String(stats.dev)}:${String(stats.ino)}:${String(stats.birthtimeMs)}`,
+              mtimeMs: stats.mtimeMs,
+              size: stats.size,
+              resumable: acpRoot ? isPathStrictlyInside(acpRoot, file) : false,
+            }
+          : undefined;
+      } catch {
+        return undefined;
+      }
+    }),
+    limit: IO_CONCURRENCY,
+    throwOnError: true,
   });
   return candidates
     .filter((candidate): candidate is PiFileCandidate => candidate !== undefined)
@@ -220,16 +204,6 @@ async function piFileCandidates(env: NodeJS.ProcessEnv): Promise<PiFileCandidate
   }
 }
 
-function pathIsWithin(root: string, candidate: string): boolean {
-  const relative = path.relative(root, candidate);
-  return (
-    relative !== "" &&
-    relative !== ".." &&
-    !relative.startsWith(`..${path.sep}`) &&
-    !path.isAbsolute(relative)
-  );
-}
-
 function parsePiJsonLines(content: string): Record<string, unknown>[] {
   return content.split(/\r?\n/u).flatMap((line) => {
     if (!line.trim()) {
@@ -258,17 +232,6 @@ function textFromContent(content: unknown): string {
     .join("\n");
 }
 
-function timestampMs(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Date.parse(value);
-    return Number.isNaN(parsed) ? undefined : parsed;
-  }
-  return undefined;
-}
-
 function processSummaryLine(state: PiSummaryScanState, line: Buffer): void {
   const content = line.at(-1) === 0x0d ? line.subarray(0, -1) : line;
   const entry = parsePiJsonLines(content.toString("utf8"))[0];
@@ -285,14 +248,14 @@ function processSummaryLine(state: PiSummaryScanState, line: Buffer): void {
   }
   if (entry.type === "session_info") {
     // Latest metadata wins, including an explicit empty-name clear.
-    state.name = optionalString(entry.name, 1_000);
+    state.name = readBoundedString(entry.name, 1_000);
   } else if (
     !state.firstMessage &&
     entry.type === "message" &&
     isRecord(entry.message) &&
     entry.message.role === "user"
   ) {
-    state.firstMessage = optionalString(textFromContent(entry.message.content), 1_000);
+    state.firstMessage = readBoundedString(textFromContent(entry.message.content), 1_000);
   }
 }
 
@@ -419,10 +382,10 @@ async function readPiSessionSummary(
     const { header, name, firstMessage } = projectedState;
     const version =
       header?.type === "session" && typeof header.version === "number" ? header.version : 1;
-    const threadId = header?.type === "session" ? optionalString(header.id, 256) : undefined;
+    const threadId = header?.type === "session" ? readBoundedString(header.id, 256) : undefined;
     if (header && threadId && SESSION_ID_PATTERN.test(threadId)) {
-      const cwd = optionalString(header.cwd, 4_096);
-      const createdAt = timestampMs(header.timestamp);
+      const cwd = readBoundedString(header.cwd, 4_096);
+      const createdAt = parsePiSessionTimestampMs(header.timestamp);
       summary = {
         file: candidate.file,
         version,
@@ -484,7 +447,11 @@ export async function listPiSummaryPage(
     index += SUMMARY_SCAN_BATCH_SIZE
   ) {
     const batch = candidates.slice(index, index + SUMMARY_SCAN_BATCH_SIZE);
-    const summaries = await mapConcurrent(batch, IO_CONCURRENCY, readPiSessionSummary);
+    const { results: summaries } = await runTasksWithConcurrency({
+      tasks: batch.map((candidate) => () => readPiSessionSummary(candidate)),
+      limit: IO_CONCURRENCY,
+      throwOnError: true,
+    });
     for (const summary of summaries) {
       if (summary && summaryMatches(summary, needle)) {
         matches.push(summary);
@@ -506,11 +473,13 @@ async function findPiSummary(
 ): Promise<PiSessionSummary | undefined> {
   const candidates = await piFileCandidates(env);
   for (let index = 0; index < candidates.length; index += SUMMARY_SCAN_BATCH_SIZE) {
-    const summaries = await mapConcurrent(
-      candidates.slice(index, index + SUMMARY_SCAN_BATCH_SIZE),
-      IO_CONCURRENCY,
-      readPiSessionSummary,
-    );
+    const { results: summaries } = await runTasksWithConcurrency({
+      tasks: candidates
+        .slice(index, index + SUMMARY_SCAN_BATCH_SIZE)
+        .map((candidate) => () => readPiSessionSummary(candidate)),
+      limit: IO_CONCURRENCY,
+      throwOnError: true,
+    });
     const match = summaries.find((summary) => summary?.threadId === threadId);
     if (match) {
       return match;

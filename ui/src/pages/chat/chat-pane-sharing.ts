@@ -7,189 +7,39 @@ import type {
   TaskSuggestion,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import type {
-  GatewaySessionRow,
-  SessionMembersListResult,
-  SessionVisibility,
-} from "../../api/types.ts";
-import { hasMultiplePresenceIdentities } from "../../components/viewer-facepile.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { hasMultiplePresenceIdentities } from "../../lib/presence-users.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
-import {
-  areUiSessionKeysEquivalent,
-  parseAgentSessionKey,
-  uiSessionEventMatches,
-} from "../../lib/sessions/session-key.ts";
-import { ChatPaneBase } from "./chat-pane-base.ts";
-import {
-  CHAT_COMPOSER_TEXTAREA_SELECTOR,
-  type ChatPaneConnectionScope,
-} from "./chat-pane-shared.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
-import { resolveChatAgentId } from "./chat-state-route.ts";
-import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
+import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
+import { CHAT_COMPOSER_TEXTAREA_SELECTOR } from "./chat-pane-shared.ts";
+import { ChatPaneSharingActions } from "./chat-pane-sharing-actions.ts";
+import { selectedChatSessionRow } from "./chat-state-route.ts";
+import { clearTypingActorForSessionMessage } from "./chat-typing-presence.ts";
+import { canManageChatSessionSharing } from "./components/chat-session-sharing.ts";
 
-export abstract class ChatPaneSharing extends ChatPaneBase {
-  protected setSessionSharingState(cacheKey: string, state: ChatSessionSharingState): void {
-    this.sessionSharingStates = new Map(this.sessionSharingStates).set(cacheKey, state);
-  }
-
-  protected sessionSharingAgentId(sessionKey: string): string | undefined {
-    if (sessionKey !== "global") {
-      return parseAgentSessionKey(sessionKey)?.agentId;
-    }
-    return this.state ? resolveChatAgentId(this.state) : undefined;
-  }
-
-  protected sessionSharingCacheKey(sessionKey: string): string {
-    return `${this.sessionSharingAgentId(sessionKey) ?? ""}\0${sessionKey}`;
-  }
-
-  protected async loadSessionSharing(row: GatewaySessionRow, force = false): Promise<void> {
-    const state = this.state;
-    if (!state?.connected || !state.client) {
+export abstract class ChatPaneSharing extends ChatPaneSharingActions {
+  protected syncSelectedSessionSharing(session: GatewaySessionRow | undefined): void {
+    const sessionId = session?.sessionId?.trim();
+    if (!session || !sessionId || !this.presented || !canManageChatSessionSharing(session)) {
       return;
     }
-    const cacheKey = this.sessionSharingCacheKey(row.key);
-    const current = this.sessionSharingStates.get(cacheKey);
-    if (current?.loading && !force) {
-      return;
-    }
-    // Sharing data (membership + paired identities) is connection-scoped. A
-    // gateway/account change bumps the generation and clears this cache, so a
-    // request that resolves after the switch must be dropped rather than
-    // overwrite the new connection's menu with the previous account's data.
-    const generation = this.connectionGeneration;
-    this.setSessionSharingState(cacheKey, { ...current, loading: true, error: undefined });
-    try {
-      const result = await state.client.request<SessionMembersListResult>("session.members.list", {
-        sessionKey: row.key,
-        ...(this.sessionSharingAgentId(row.key)
-          ? { agentId: this.sessionSharingAgentId(row.key) }
-          : {}),
-      });
-      if (this.connectionGeneration !== generation) {
-        return;
-      }
-      this.setSessionSharingState(cacheKey, { loading: false, result });
-    } catch (error) {
-      if (this.connectionGeneration !== generation) {
-        return;
-      }
-      this.setSessionSharingState(cacheKey, { loading: false, error: String(error) });
-    }
-  }
-
-  protected async setSessionVisibility(
-    row: GatewaySessionRow,
-    visibility: SessionVisibility,
-  ): Promise<void> {
-    const scope = this.captureConnectionScope();
-    if (!scope || visibility === row.visibility) {
-      return;
-    }
-    const agentId = this.sessionSharingAgentId(row.key);
-    const cacheKey = this.sessionSharingCacheKey(row.key);
-    try {
-      await scope.client.request("session.visibility.set", {
-        sessionKey: row.key,
-        visibility,
-        ...(agentId ? { agentId } : {}),
-      });
-      if (!this.isConnectionScopeCurrent(scope)) {
-        return;
-      }
-      await scope.sessions.refreshReplacement(agentId);
-      if (!this.isConnectionScopeCurrent(scope)) {
-        return;
-      }
-      await this.loadSessionSharing(row, true);
-    } catch (error) {
-      if (!this.isConnectionScopeCurrent(scope)) {
-        return;
-      }
-      this.setSessionSharingState(cacheKey, {
-        ...(this.sessionSharingStates.get(cacheKey) ?? { loading: false }),
-        loading: false,
-        error: String(error),
-      });
-    }
-  }
-
-  protected async setSessionMember(
-    row: GatewaySessionRow,
-    identityId: string,
-    member: boolean,
-  ): Promise<void> {
-    const scope = this.captureConnectionScope();
-    if (!scope) {
-      return;
-    }
-    const agentId = this.sessionSharingAgentId(row.key);
-    const cacheKey = this.sessionSharingCacheKey(row.key);
-    try {
-      await scope.client.request(member ? "session.members.add" : "session.members.remove", {
-        sessionKey: row.key,
-        identityId,
-        ...(agentId ? { agentId } : {}),
-      });
-      if (!this.isConnectionScopeCurrent(scope)) {
-        return;
-      }
-      await this.loadSessionSharing(row, true);
-      if (!this.isConnectionScopeCurrent(scope)) {
-        return;
-      }
-      await scope.sessions.refreshReplacement(agentId);
-    } catch (error) {
-      if (!this.isConnectionScopeCurrent(scope)) {
-        return;
-      }
-      this.setSessionSharingState(cacheKey, {
-        ...(this.sessionSharingStates.get(cacheKey) ?? { loading: false }),
-        loading: false,
-        error: String(error),
-      });
-    }
-  }
-
-  protected captureConnectionScope(): ChatPaneConnectionScope | null {
-    const context = this.context;
-    const state = this.state;
-    const client = state?.client;
+    const cacheKey = this.sessionSharingCacheKey(session.key);
     if (
-      !this.isConnected ||
-      !state?.connected ||
-      !client ||
-      this.connectedClient !== client ||
-      context.gateway.snapshot.phase !== "connected" ||
-      context.gateway.snapshot.client !== client
+      this.sessionSharingHydrationTargets.get(cacheKey) === sessionId &&
+      this.sessionSharingStates.has(cacheKey)
     ) {
-      return null;
+      return;
     }
-    return {
-      context,
-      state,
-      client,
-      generation: this.connectionGeneration,
-      sessions: context.sessions,
-    };
-  }
-
-  protected isConnectionScopeCurrent(scope: ChatPaneConnectionScope): boolean {
-    return (
-      this.isConnected &&
-      this.context === scope.context &&
-      this.context.sessions === scope.sessions &&
-      this.state === scope.state &&
-      scope.state.connected &&
-      scope.state.client === scope.client &&
-      this.connectedClient === scope.client &&
-      scope.context.gateway.snapshot.phase === "connected" &&
-      scope.context.gateway.snapshot.client === scope.client &&
-      this.connectionGeneration === scope.generation
-    );
+    this.sessionSharingHydrationTargets.set(cacheKey, sessionId);
+    const states = new Map(this.sessionSharingStates);
+    states.delete(cacheKey);
+    this.sessionSharingStates = states;
+    // Selecting a new generation under the same key must supersede an older
+    // in-flight read. loadSessionSharing owns the connection and instance guards.
+    void this.loadSessionSharing(session, true);
   }
 
   protected suggestionMatchesCurrentSession(
@@ -212,15 +62,6 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
 
   protected hasMultipleIdentities(): boolean {
     return hasMultiplePresenceIdentities(this.presencePayload);
-  }
-
-  protected isCurrentSessionArchived(state: ChatPageHost): boolean {
-    return (
-      state.selectedChatSessionArchived ||
-      state.sessionsResult?.sessions.some(
-        (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
-      ) === true
-    );
   }
 
   protected resetSessionSuggestions(): void {
@@ -277,9 +118,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
   protected async loadSessionSuggestions(requestVersion: number): Promise<void> {
     const targetSignature = this.sessionSuggestionTargetSignature;
     const scope = this.captureConnectionScope();
-    const row = scope?.state.sessionsResult?.sessions.find((candidate) =>
-      areUiSessionKeysEquivalent(candidate.key, scope.state.sessionKey),
-    );
+    const row = scope ? selectedChatSessionRow(scope.state) : undefined;
     // Solo dormancy intentionally hides persisted rows too; when a second identity
     // returns, the presence transition below triggers a fresh authoritative list.
     if (
@@ -372,14 +211,18 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     ) {
       return;
     }
-    if (scope.state.chatAttachments.length > 0) {
-      scope.state.chatError = t("chat.sessionSuggestions.attachmentsUnsupported");
+    if (scope.state.chatMentions?.length || scope.state.chatAttachments.length > 0) {
+      scope.state.chatError = t(
+        scope.state.chatMentions?.length
+          ? "chat.mentions.unsupported"
+          : "chat.sessionSuggestions.attachmentsUnsupported",
+      );
       scope.state.lastError = scope.state.chatError;
       scope.state.requestUpdate?.();
       return;
     }
     const sessionKey = scope.state.sessionKey;
-    const operation = Symbol();
+    const operation = Symbol("session-suggestion-add");
     this.sessionSuggestionAddOperation = operation;
     this.requestUpdate();
     try {
@@ -398,8 +241,8 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       ) {
         return;
       }
-      if (scope.state.chatMessage === text) {
-        scope.state.handleChatDraftChange("");
+      if (scope.state.chatMessage === text && !scope.state.chatMentions?.length) {
+        scope.state.handleChatDraftChange("", []);
       }
       this.sessionSuggestions = [
         ...this.sessionSuggestions.filter((item) => item.id !== result.suggestion.id),
@@ -410,7 +253,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
         this.sessionSuggestionAddOperation === operation &&
         this.isConnectionScopeCurrent(scope)
       ) {
-        scope.state.chatError = error instanceof Error ? error.message : String(error);
+        scope.state.chatError = formatUiError(error);
         scope.state.lastError = scope.state.chatError;
       }
     } finally {
@@ -443,14 +286,20 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       this.isConnectionScopeCurrent(scope) &&
       scope.state.sessionKey === sessionKey &&
       this.sessionSuggestionTargetSignature === targetSignature;
-    const previousEditDraft = resolution === "edit" ? scope.state.chatMessage : undefined;
-    const editOperation = resolution === "edit" ? Symbol() : undefined;
+    const previousEditDraft =
+      resolution === "edit"
+        ? {
+            text: scope.state.chatMessage,
+            mentions: scope.state.chatMentions?.map((mention) => ({ ...mention })),
+          }
+        : undefined;
+    const editOperation = resolution === "edit" ? Symbol("session-suggestion-edit") : undefined;
     if (editOperation) {
       this.sessionSuggestionEditOperation = editOperation;
     }
     this.sessionSuggestionBusyIds.add(suggestion.id);
     if (resolution === "edit") {
-      scope.state.handleChatDraftChange(suggestion.text);
+      scope.state.handleChatDraftChange(suggestion.text, []);
       queueMicrotask(() =>
         this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR)?.focus({
           preventScroll: true,
@@ -489,11 +338,15 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
           resolution === "edit" &&
           error instanceof GatewayRequestError &&
           previousEditDraft !== undefined &&
-          scope.state.chatMessage === suggestion.text
+          scope.state.chatMessage === suggestion.text &&
+          !scope.state.chatMentions?.length
         ) {
-          scope.state.handleChatDraftChange(previousEditDraft);
+          scope.state.handleChatDraftChange(
+            previousEditDraft.text,
+            previousEditDraft.mentions ?? [],
+          );
         }
-        scope.state.chatError = error instanceof Error ? error.message : String(error);
+        scope.state.chatError = formatUiError(error);
         scope.state.lastError = scope.state.chatError;
       }
     } finally {
@@ -518,9 +371,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
   protected handleSessionTypingEvent(event: SessionTypingEvent): void {
     const selfId = this.context.gateway.snapshot.selfUser?.id;
     const state = this.state;
-    const selectedSession = state?.sessionsResult?.sessions.find((row) =>
-      areUiSessionKeysEquivalent(row.key, state.sessionKey),
-    );
+    const selectedSession = state ? selectedChatSessionRow(state) : undefined;
     if (
       !this.hasMultipleIdentities() ||
       event.actor.id === selfId ||
@@ -552,6 +403,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     this.typingActors.set(event.actor.id, {
       label: event.actor.label ?? event.actor.id,
       expiresAt,
+      ...(event.preview ? { preview: event.preview } : {}),
     });
     this.typingTimers.set(
       event.actor.id,
@@ -566,33 +418,46 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     this.requestUpdate();
   }
 
-  protected typingLabel(): string | null {
-    const names = [...this.typingActors.values()].map((actor) => actor.label).toSorted();
-    if (names.length === 0) {
-      return null;
+  protected clearTypingActorForSessionMessage(payload: unknown): void {
+    const state = this.state;
+    if (!state) {
+      return;
     }
-    return names.length === 1
-      ? t("chat.sessionSuggestions.typing", { name: names[0] ?? "" })
-      : t("chat.sessionSuggestions.typingMany", { names: names.join(", ") });
+    if (
+      clearTypingActorForSessionMessage(payload, this.typingActors, this.typingTimers, {
+        agentsList: this.context.agents.state.agentsList,
+        hello: this.context.gateway.snapshot.hello,
+        sessionKey: state.sessionKey,
+      })
+    ) {
+      this.requestUpdate();
+    }
   }
 
-  protected sendTypingState(typing: boolean): void {
+  protected typingActorViews(): { id: string; label: string; preview?: string }[] {
+    return [...this.typingActors]
+      .map(([id, { label, preview }]) => (preview ? { id, label, preview } : { id, label }))
+      .toSorted((left, right) => left.label.localeCompare(right.label));
+  }
+
+  protected sendTypingState(typing: boolean, preview?: string): void {
     const scope = this.captureConnectionScope();
     if (!scope || !this.hasMultipleIdentities()) {
       return;
     }
     const sessionKey = scope.state.sessionKey;
-    const sessionId = scope.state.sessionsResult?.sessions.find((row) =>
-      areUiSessionKeysEquivalent(row.key, sessionKey),
-    )?.sessionId;
+    const sessionId = selectedChatSessionRow(scope.state)?.sessionId;
     if (!sessionId) {
       return;
     }
+    const draft = typing ? preview?.trim() : undefined;
+    const draftPreview = draft ? Array.from(draft).slice(-300).join("") : undefined;
     void scope.client
       .request("session.typing", {
         sessionKey,
         sessionId,
         typing,
+        ...(draftPreview ? { preview: draftPreview } : {}),
         ...scopedAgentParamsForSession(scope.state, sessionKey),
       })
       .catch(() => undefined);

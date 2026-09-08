@@ -1,10 +1,15 @@
 // Resolves the diff base for merge commits when first-parent comparison is requested.
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import { requireOptionArgument } from "./arg-utils.runtime.mjs";
 
 const DEFAULT_GIT_OUTPUT_MAX_BUFFER = 16 * 1024 * 1024;
 
-/** Resolve the git base ref to use when diffing a merge head. */
+/**
+ * Resolve the git base ref to use when diffing a merge head.
+ * @param {{base: string, head?: string, cwd?: string, maxBuffer?: number, preferFirstParent?: boolean}} params
+ * @returns {string}
+ */
 export function resolveMergeHeadDiffBase({
   base,
   head = "HEAD",
@@ -24,15 +29,15 @@ export function resolveMergeHeadDiffBase({
     return base;
   }
 
-  const firstParent = resolveCommit({ ref: parents[0], cwd, maxBuffer });
-  const explicitBase = resolveCommit({ ref: base, cwd, maxBuffer });
-  if (!firstParent || firstParent === explicitBase) {
-    return base;
-  }
-
-  return firstParent;
+  // The merge parent is authoritative. Resolving a stale base in a partial
+  // clone can fetch unrelated history even when its result is discarded.
+  return resolveCommit({ ref: parents[0], cwd, maxBuffer }) || base;
 }
 
+/**
+ * @param {{ref: string, cwd: string, maxBuffer: number}} params
+ * @returns {string[]}
+ */
 function listCommitParents({ ref, cwd, maxBuffer }) {
   try {
     const output = execFileSync("git", ["rev-list", "--parents", "-n", "1", ref], {
@@ -47,6 +52,10 @@ function listCommitParents({ ref, cwd, maxBuffer }) {
   }
 }
 
+/**
+ * @param {{ref: string, cwd: string, maxBuffer: number}} params
+ * @returns {string}
+ */
 function resolveCommit({ ref, cwd, maxBuffer }) {
   try {
     return execFileSync("git", ["rev-parse", "--verify", `${ref}^{commit}`], {
@@ -60,15 +69,11 @@ function resolveCommit({ ref, cwd, maxBuffer }) {
   }
 }
 
-function readRefValue(argv, index, optionName) {
-  const value = argv[index + 1];
-  if (value === undefined || value === "" || value.startsWith("-")) {
-    throw new Error(`${optionName} requires a value`);
-  }
-  return value;
-}
-
-/** @internal Directly tested script implementation detail. */
+/**
+ * @internal Directly tested script implementation detail.
+ * @param {readonly string[]} argv
+ * @returns {{base: string, head: string, preferFirstParent: boolean}}
+ */
 export function parseArgs(argv) {
   const args = {
     base: "",
@@ -78,12 +83,12 @@ export function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--base") {
-      args.base = readRefValue(argv, index, "--base");
+      args.base = requireOptionArgument(argv, index, "--base");
       index += 1;
       continue;
     }
     if (arg === "--head") {
-      args.head = readRefValue(argv, index, "--head");
+      args.head = requireOptionArgument(argv, index, "--head");
       index += 1;
       continue;
     }

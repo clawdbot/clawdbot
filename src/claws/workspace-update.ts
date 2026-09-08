@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import { resolve, sep } from "node:path";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type { ClawAddPlan } from "./types.js";
 import type { ClawUpdatePlan } from "./update-plan.js";
+import { collectClawRollbackFailures } from "./update-rollback.js";
 import {
   CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION,
   deleteClawWorkspaceFileRecord,
@@ -69,14 +71,7 @@ export async function applyClawWorkspaceUpdate(
   const appliedPaths: string[] = [];
 
   const rollback = async () => {
-    const failures: string[] = [];
-    for (const revert of undo.toReversed()) {
-      try {
-        await revert();
-      } catch (error) {
-        failures.push(error instanceof Error ? error.message : String(error));
-      }
-    }
+    const failures = await collectClawRollbackFailures(undo.toReversed());
     if (failures.length > 0) {
       throw new ClawWorkspaceUpdateError(failures.join("; "), true);
     }
@@ -194,7 +189,7 @@ export async function applyClawWorkspaceUpdate(
       await rollback();
     } catch (rollbackError) {
       throw new ClawWorkspaceUpdateError(
-        `${error instanceof Error ? error.message : String(error)}; rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+        `${coerceErrorMessage(error)}; rollback failed: ${coerceErrorMessage(rollbackError)}`,
         true,
       );
     }

@@ -1,9 +1,14 @@
-// Verifies Swarm tools remain absent by default and appear only for gated runs.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { setEmbeddedMode } from "../infra/embedded-mode.js";
+import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
-function toolNames(options: NonNullable<Parameters<typeof createOpenClawTools>[0]>) {
+vi.mock("./openclaw-plugin-tools.js", () => ({
+  resolveOpenClawPluginToolsForOptions: () => [],
+}));
+
+function createSwarmTools(options: NonNullable<Parameters<typeof createOpenClawTools>[0]>) {
   const config = options.config ?? {};
   return createOpenClawTools({
     disableMessageTool: true,
@@ -14,49 +19,114 @@ function toolNames(options: NonNullable<Parameters<typeof createOpenClawTools>[0
       ...config,
       agents: config.agents ?? { entries: { main: { default: true } } },
     },
-  }).map((tool) => tool.name);
+  });
 }
 
-describe("openclaw-tools Swarm gating", () => {
-  it("registers agents_wait only when tools.swarm is enabled", () => {
-    const base = { agentSessionKey: "agent:main:main" };
-    expect(toolNames(base)).not.toContain("agents_wait");
-    expect(toolNames({ ...base, config: { tools: { swarm: true } } })).toContain("agents_wait");
+function createSwarmToolNames(options: NonNullable<Parameters<typeof createOpenClawTools>[0]>) {
+  return createSwarmTools(options).map((tool) => tool.name);
+}
+
+describe("Swarm registration", () => {
+  it.each([
+    { swarm: undefined, enabled: true },
+    { swarm: true, enabled: true },
+    { swarm: false, enabled: false },
+    { swarm: { enabled: false }, enabled: false },
+  ])("registers agents_wait with swarm=$swarm: $enabled", ({ swarm, enabled }) => {
+    const names = createSwarmToolNames({
+      agentSessionKey: "agent:main:main",
+      config: { tools: { swarm } },
+    });
+    expect(names.includes("agents_wait")).toBe(enabled);
   });
+
+  it.each([
+    { profile: "full", spawn: true, wait: true },
+    { profile: "coding", spawn: true, wait: true },
+    { profile: "messaging", spawn: true, wait: false },
+    { profile: "minimal", spawn: false, wait: false },
+  ] as const)(
+    "keeps default Swarm within the $profile tool profile",
+    ({ profile, spawn, wait }) => {
+      const tools = createOpenClawCodingTools({
+        sessionKey: "agent:main:main",
+        config: {
+          agents: { entries: { main: { default: true } } },
+          tools: { profile },
+        },
+      });
+      const names = new Set(tools.map((tool) => tool.name));
+      expect(names.has("sessions_spawn")).toBe(spawn);
+      expect(names.has("agents_wait")).toBe(wait);
+      if (spawn) {
+        const spawnTool = tools.find((tool) => tool.name === "sessions_spawn");
+        expect(spawnTool?.parameters).toHaveProperty("properties.fastMode");
+        for (const field of ["collect", "outputSchema", "groupId"]) {
+          if (wait) {
+            expect(spawnTool?.parameters).toHaveProperty(`properties.${field}`);
+          } else {
+            expect(spawnTool?.parameters).not.toHaveProperty(`properties.${field}`);
+          }
+        }
+        if (!wait) {
+          expect(JSON.stringify(spawnTool?.parameters)).not.toContain("collect=true");
+        }
+      }
+    },
+  );
 
   it("uses the effective requester agent override for the agents_wait gate", () => {
     const base = {
-      agentSessionKey: "agent:main:main",
+      agentSessionKey: "agent:worker:main",
       requesterAgentIdOverride: "worker",
     };
     expect(
-      toolNames({
+      createSwarmToolNames({
         ...base,
         config: {
           tools: { swarm: false },
           agents: {
-            list: [
-              { id: "main", default: true },
-              { id: "worker", tools: { swarm: true } },
-            ],
+            entries: { main: {}, worker: { tools: { swarm: true } } },
           },
         },
       }),
     ).toContain("agents_wait");
     expect(
-      toolNames({
+      createSwarmToolNames({
         ...base,
         config: {
           tools: { swarm: true },
           agents: {
-            list: [
-              { id: "main", default: true },
-              { id: "worker", tools: { swarm: false } },
-            ],
+            entries: { main: {}, worker: { tools: { swarm: false } } },
           },
         },
       }),
     ).not.toContain("agents_wait");
+  });
+
+  it("advertises sessions_spawn from agents_wait only when spawn is available", () => {
+    setEmbeddedMode(true);
+    try {
+      const createTools = (allowGatewaySubagentBinding: boolean) =>
+        createSwarmTools({
+          agentSessionKey: "agent:main:main",
+          allowGatewaySubagentBinding,
+          config: { tools: { swarm: true } },
+        });
+      const withoutSpawn = applyToolAvailabilityDescriptions(createTools(false));
+      const withSpawn = applyToolAvailabilityDescriptions(createTools(true));
+
+      expect(withoutSpawn.map((tool) => tool.name)).not.toContain("sessions_spawn");
+      expect(withoutSpawn.find((tool) => tool.name === "agents_wait")).toMatchObject({
+        description: expect.not.stringContaining("sessions_spawn"),
+      });
+      expect(withSpawn.map((tool) => tool.name)).toContain("sessions_spawn");
+      expect(withSpawn.find((tool) => tool.name === "agents_wait")).toMatchObject({
+        description: expect.stringContaining("sessions_spawn"),
+      });
+    } finally {
+      setEmbeddedMode(false);
+    }
   });
 
   it("injects structured_output only for schema-backed collector runs", () => {
@@ -65,9 +135,11 @@ describe("openclaw-tools Swarm gating", () => {
       runId: "collector-run",
       config: { tools: { swarm: true } },
     };
-    expect(toolNames({ ...base, swarmCollector: true })).not.toContain("structured_output");
+    expect(createSwarmToolNames({ ...base, swarmCollector: true })).not.toContain(
+      "structured_output",
+    );
     expect(
-      toolNames({
+      createSwarmToolNames({
         ...base,
         swarmCollector: true,
         swarmOutputSchema: { type: "object", properties: { answer: { type: "string" } } },

@@ -102,7 +102,7 @@ Full troubleshooting: [Discord troubleshooting](/channels/discord#troubleshootin
 | DMs blocked                            | `openclaw pairing list slack`             | Approve pairing or relax DM policy.                                                                                                                  |
 | Channel message ignored                | Check `groupPolicy` and channel allowlist | Allow the channel or switch policy to `open`.                                                                                                        |
 
-Full troubleshooting: [Slack troubleshooting](/channels/slack#troubleshooting)
+Full troubleshooting: [Slack troubleshooting](/channels/slack/troubleshooting#troubleshooting)
 
 ## iMessage
 
@@ -161,8 +161,9 @@ If the gateway process is healthy but a channel stays stopped after repeated
 unclean boots, the [crash-loop breaker](/gateway/restart-recovery#safety-valves-and-observability)
 may be suppressing channel auto-start. Use
 `openclaw gateway call channels.start --params '{"channel":"<id>"}'` to
-override, or wait for the unclean-boot window to drain and then restart the
-gateway.
+override immediately, or leave the healthy gateway running. After the full
+unclean-boot window drains, the same process rechecks the breaker and resumes
+deferred channel auto-start.
 
 ## Related
 

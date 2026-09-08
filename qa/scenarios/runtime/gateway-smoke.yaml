@@ -23,6 +23,7 @@ scenario:
     - test/e2e/qa-lab/runtime/gateway-smoke.e2e.test.ts
   execution:
     kind: script
+    parallelSafe: true
     path: test/e2e/qa-lab/runtime/gateway-mcp-real-transports.ts
     summary: Starts a real Gateway child and exercises the Gateway smoke client against its WebSocket and health RPC surfaces.
     args:

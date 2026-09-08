@@ -105,7 +105,7 @@ describe("qa suite runtime agent media helpers", () => {
     "ignores %s generated media paths returned by matching mock requests",
     async (artifactState) => {
       const tempRoot = await makeTempDir("qa-generated-image-invalid-request-");
-      const mediaDir = path.join(tempRoot, "state", "media", "tool-image-generation");
+      const mediaDir = path.join(tempRoot, "state", "media", "outbound");
       await fs.mkdir(mediaDir, { recursive: true });
       const freshMediaPath = path.join(mediaDir, "fresh-generated.png");
       await fs.writeFile(freshMediaPath, "fresh png", "utf8");
@@ -140,9 +140,9 @@ describe("qa suite runtime agent media helpers", () => {
     },
   );
 
-  it("falls back to generated image files under the gateway temp root", async () => {
+  it("falls back to generated image files in the canonical outbound media store", async () => {
     const tempRoot = await makeTempDir("qa-generated-image-");
-    const mediaDir = path.join(tempRoot, "state", "media", "tool-image-generation");
+    const mediaDir = path.join(tempRoot, "state", "media", "outbound");
     await fs.mkdir(mediaDir, { recursive: true });
     const mediaPath = path.join(mediaDir, "generated.png");
     await fs.writeFile(mediaPath, "png", "utf8");
@@ -194,7 +194,6 @@ describe("qa suite runtime agent media helpers", () => {
     const patchCall = firstPatchConfigCall();
     expect(patchCall.env).toBe(env);
     expect(patchCall.patch.plugins.allow).toStrictEqual([
-      "acpx",
       "memory-core",
       "openai",
       "qa-channel",
@@ -206,7 +205,7 @@ describe("qa suite runtime agent media helpers", () => {
   it("preserves plugins already allowed by the gateway when configuring media", async () => {
     readConfigSnapshotMock.mockResolvedValue({
       hash: "hash",
-      config: { plugins: { allow: ["openai", "anthropic", "qa-channel"] } },
+      config: { plugins: { allow: ["acpx", "openai", "anthropic", "qa-channel"] } },
     });
 
     await ensureImageGenerationConfigured({
@@ -218,8 +217,8 @@ describe("qa suite runtime agent media helpers", () => {
     expect(patchConfigMock).toHaveBeenCalledTimes(1);
     const patchCall = firstPatchConfigCall();
     expect(patchCall.patch.plugins.allow).toStrictEqual([
-      "acpx",
       "memory-core",
+      "acpx",
       "openai",
       "anthropic",
       "qa-channel",

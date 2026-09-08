@@ -14,7 +14,7 @@ describe("heartbeat event prompts", () => {
       name: "builds user-relay cron prompt by default",
       events: ["Cron: rotate logs"],
       expected: ["Cron: rotate logs", "Please relay this reminder to the user"],
-      unexpected: ["Handle this reminder internally", "Reply HEARTBEAT_OK."],
+      unexpected: ["Handle this reminder internally", "Reply NO_REPLY."],
     },
     {
       name: "builds internal-only cron prompt when delivery is disabled",
@@ -26,14 +26,14 @@ describe("heartbeat event prompts", () => {
     {
       name: "falls back to bare heartbeat reply when cron content is empty",
       events: ["", "   "],
-      expected: ["Reply HEARTBEAT_OK."],
+      expected: ["Reply NO_REPLY."],
       unexpected: ["Handle this reminder internally"],
     },
     {
       name: "uses internal empty-content fallback when delivery is disabled",
       events: ["", "   "],
       opts: { deliverToUser: false },
-      expected: ["Handle this internally", "HEARTBEAT_OK when nothing needs user-facing follow-up"],
+      expected: ["Handle this internally", "NO_REPLY when nothing needs user-facing follow-up"],
       unexpected: ["Please relay this reminder to the user"],
     },
   ])("$name", ({ events, opts, expected, unexpected }) => {
@@ -63,7 +63,7 @@ describe("heartbeat event prompts", () => {
       name: "builds internal-only exec prompt when delivery is disabled",
       events: ["Exec failed (node=abc id=123, code 1)\nUpload failed"],
       opts: { deliverToUser: false },
-      expected: ["user delivery is disabled", "Handle the result internally", "HEARTBEAT_OK only"],
+      expected: ["user delivery is disabled", "Handle the result internally", "NO_REPLY only"],
       unexpected: [
         "Upload failed",
         "system messages above",
@@ -74,14 +74,14 @@ describe("heartbeat event prompts", () => {
       name: "suppresses empty exec completion prompts",
       events: ["", "   "],
       opts: undefined,
-      expected: ["no command output was found", "Reply HEARTBEAT_OK only"],
+      expected: ["no command output was found", "Reply NO_REPLY only"],
       unexpected: ["Please relay the command output to the user", "system messages above"],
     },
     {
       name: "suppresses metadata-only successful exec completions",
       events: ["Exec completed (abc12345, code 0)"],
       opts: undefined,
-      expected: ["no command output was found", "Reply HEARTBEAT_OK only"],
+      expected: ["no command output was found", "Reply NO_REPLY only"],
       unexpected: ["Please relay the command output to the user", "abc12345"],
     },
     {
@@ -151,6 +151,8 @@ describe("heartbeat event classification", () => {
     { value: "  Cron: rotate logs  ", expected: true },
     { value: "", expected: false },
     { value: "   ", expected: false },
+    { value: "NO_REPLY", expected: false },
+    { value: "no_reply: actual reminder", expected: true },
     { value: "HEARTBEAT_OK", expected: false },
     { value: "heartbeat_ok: already handled", expected: false },
     { value: "heartbeat poll: noop", expected: false },

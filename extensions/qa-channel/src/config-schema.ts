@@ -26,6 +26,9 @@ const QaChannelAccountConfigSchema = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
+    configWrites: z.boolean().optional(),
+    mediaMaxMb: z.number().positive().optional(),
+    responsePrefix: z.string().optional(),
     baseUrl: z.string().url().optional(),
     botUserId: z.string().optional(),
     botDisplayName: z.string().optional(),
@@ -39,8 +42,9 @@ const QaChannelAccountConfigSchema = z
   })
   .strict();
 
-const QaChannelConfigSchema = buildMultiAccountChannelSchema(QaChannelAccountConfigSchema, {
-  accountSchema: QaChannelAccountConfigSchema.partial(),
-});
+const QaChannelConfigSchema = buildMultiAccountChannelSchema(
+  QaChannelAccountConfigSchema.extend({ historyLimit: z.number().int().min(0).optional() }),
+  { accountSchema: QaChannelAccountConfigSchema.partial() },
+);
 
 export const qaChannelPluginConfigSchema = buildChannelConfigSchema(QaChannelConfigSchema);

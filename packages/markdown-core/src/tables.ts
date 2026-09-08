@@ -1,45 +1,57 @@
-// Markdown Core module implements tables behavior.
-import { markdownToIRWithMeta } from "./ir.js";
-import { renderMarkdownWithMarkers } from "./render.js";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { getMarkdownTableSource, markdownToIRWithMeta, type MarkdownTableMeta } from "./ir.js";
+import { renderMarkdownCodeTable, renderMarkdownTableBullets } from "./table-layout.js";
 import type { MarkdownTableMode } from "./types.js";
 
-const MARKDOWN_STYLE_MARKERS = {
-  bold: { open: "**", close: "**" },
-  italic: { open: "_", close: "_" },
-  strikethrough: { open: "~~", close: "~~" },
-  code: { open: "`", close: "`" },
-  code_block: { open: "```\n", close: "```" },
-} as const;
+function renderTableSource(
+  table: MarkdownTableMeta,
+  mode: Exclude<MarkdownTableMode, "off">,
+): string {
+  if (mode !== "bullets") {
+    const text = renderMarkdownCodeTable(table.headers, table.rows);
+    let fenceLength = 3;
+    for (const run of text.matchAll(/`+/g)) {
+      fenceLength = Math.max(fenceLength, run[0].length + 1);
+    }
+    const fence = "`".repeat(fenceLength);
+    return `${fence}\n${text}${fence}`;
+  }
+  const source = expectDefined(getMarkdownTableSource(table), "Markdown table source");
+  const headers = table.headers.map((text, column) => ({ text, markdown: source.headers[column] }));
+  const rows = table.rows.map((row, index) =>
+    row.map((text, column) => ({ text, markdown: source.rows[index]?.[column] })),
+  );
+  let rendered = "";
+  renderMarkdownTableBullets(
+    headers,
+    rows,
+    (text) => {
+      rendered += text;
+    },
+    (cell, rowLabel) => {
+      rendered += rowLabel ? `**${cell.markdown}**` : cell.markdown;
+    },
+  );
+  return rendered.replace(/\n+$/u, "");
+}
 
-/** Converts markdown tables into the configured plaintext/code rendering mode. */
+/** Convert only parsed table ranges; unrelated Markdown retains its original source bytes. */
 export function convertMarkdownTables(markdown: string, mode: MarkdownTableMode): string {
-  if (!markdown || mode === "off") {
+  if (!markdown || mode === "off" || !markdown.includes("|")) {
     return markdown;
   }
-  const effectiveMode = mode === "block" ? "code" : mode;
-  const { ir, hasTables } = markdownToIRWithMeta(markdown, {
+  const { tables } = markdownToIRWithMeta(markdown, {
     linkify: false,
     autolink: false,
-    headingStyle: "none",
-    blockquotePrefix: "",
-    tableMode: effectiveMode,
+    tableMode: "block",
   });
-  if (!hasTables) {
-    return markdown;
+  let cursor = 0;
+  let result = "";
+  for (const table of tables) {
+    const source = expectDefined(getMarkdownTableSource(table), "Markdown table source");
+    const rendered = renderTableSource(table, mode).replaceAll("\n", "\n" + source.prefix);
+    result += markdown.slice(cursor, source.start) + rendered;
+    cursor = source.end;
   }
-  return renderMarkdownWithMarkers(ir, {
-    styleMarkers: MARKDOWN_STYLE_MARKERS,
-    escapeText: (text) => text,
-    buildLink: (link, text) => {
-      const href = link.href.trim();
-      if (!href) {
-        return null;
-      }
-      const label = text.slice(link.start, link.end);
-      if (!label) {
-        return null;
-      }
-      return { start: link.start, end: link.end, open: "[", close: `](${href})` };
-    },
-  });
+  return result + markdown.slice(cursor);
 }

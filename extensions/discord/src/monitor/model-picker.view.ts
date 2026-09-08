@@ -376,53 +376,27 @@ function buildPaginationRow(params: {
   if (params.totalPages <= 1) {
     return null;
   }
-  const prevButton = createModelPickerButton({
-    label: "◀ Prev",
-    style: ButtonStyle.Secondary,
-    disabled: !params.hasPrev,
-    customId: buildDiscordModelPickerCustomId({
-      command: params.command,
-      action: "nav",
-      view: params.view,
-      provider: params.provider,
-      runtime: params.runtime,
-      runtimeIndex: params.runtimeIndex,
-      page: Math.max(1, params.page - 1),
-      providerPage: params.providerPage,
-      modelIndex: params.modelIndex,
-      modelToken: params.modelToken,
-      providerBucket: params.providerBucket,
-      modelBucket: params.modelBucket,
-      userId: params.userId,
-    }),
-  });
+  const { page, totalPages, hasPrev, hasNext, ...navigationState } = params;
+  const createNavigationButton = (label: string, targetPage: number, enabled: boolean) =>
+    createModelPickerButton({
+      label,
+      disabled: !enabled,
+      customId: buildDiscordModelPickerCustomId({
+        ...navigationState,
+        action: "nav",
+        page: targetPage,
+      }),
+    });
   const indicatorButton = createModelPickerButton({
-    label: `Page ${params.page}/${params.totalPages}`,
-    style: ButtonStyle.Secondary,
+    label: `Page ${page}/${totalPages}`,
     disabled: true,
     customId: DISCORD_MODEL_PICKER_PAGE_INDICATOR_CUSTOM_ID,
   });
-  const nextButton = createModelPickerButton({
-    label: "Next ▶",
-    style: ButtonStyle.Secondary,
-    disabled: !params.hasNext,
-    customId: buildDiscordModelPickerCustomId({
-      command: params.command,
-      action: "nav",
-      view: params.view,
-      provider: params.provider,
-      runtime: params.runtime,
-      runtimeIndex: params.runtimeIndex,
-      page: Math.min(params.totalPages, params.page + 1),
-      providerPage: params.providerPage,
-      modelIndex: params.modelIndex,
-      modelToken: params.modelToken,
-      providerBucket: params.providerBucket,
-      modelBucket: params.modelBucket,
-      userId: params.userId,
-    }),
-  });
-  return new Row([prevButton, indicatorButton, nextButton]);
+  return new Row([
+    createNavigationButton("◀ Prev", Math.max(1, page - 1), hasPrev),
+    indicatorButton,
+    createNavigationButton("Next ▶", Math.min(totalPages, page + 1), hasNext),
+  ]);
 }
 
 function buildModelRows(params: {
@@ -614,10 +588,17 @@ function buildModelRows(params: {
     typeof params.pendingModelIndex === "number" &&
     params.pendingModelIndex > 0;
 
+  const modelActionState = {
+    command: params.command,
+    provider: params.modelPage.provider,
+    ...compactRuntime,
+    page: params.modelPage.page,
+    providerPage: providerPage.page,
+    userId: params.userId,
+  };
   const buttonRowItems: Button[] = [
     createModelPickerButton({
       label: "Providers",
-      style: ButtonStyle.Secondary,
       customId: buildDiscordModelPickerCustomId({
         command: params.command,
         action: "back",
@@ -629,31 +610,19 @@ function buildModelRows(params: {
     }),
     createModelPickerButton({
       label: "Cancel",
-      style: ButtonStyle.Secondary,
       customId: buildDiscordModelPickerCustomId({
-        command: params.command,
+        ...modelActionState,
         action: "cancel",
         view: "models",
-        provider: params.modelPage.provider,
-        ...compactRuntime,
-        page: params.modelPage.page,
-        providerPage: providerPage.page,
-        userId: params.userId,
       }),
     }),
     createModelPickerButton({
       label: "Reset to default",
-      style: ButtonStyle.Secondary,
       disabled: shouldDisableReset,
       customId: buildDiscordModelPickerCustomId({
-        command: params.command,
+        ...modelActionState,
         action: "reset",
         view: "models",
-        provider: params.modelPage.provider,
-        ...compactRuntime,
-        page: params.modelPage.page,
-        providerPage: providerPage.page,
-        userId: params.userId,
       }),
     }),
   ];
@@ -662,17 +631,11 @@ function buildModelRows(params: {
     buttonRowItems.push(
       createModelPickerButton({
         label: "Recents",
-        style: ButtonStyle.Secondary,
         customId: buildDiscordModelPickerCustomId({
-          command: params.command,
+          ...modelActionState,
           action: "recents",
           view: "recents",
-          provider: params.modelPage.provider,
-          ...compactRuntime,
-          page: params.modelPage.page,
-          providerPage: providerPage.page,
           modelBucket: activeModelBucket,
-          userId: params.userId,
         }),
       }),
     );
@@ -684,16 +647,11 @@ function buildModelRows(params: {
       style: ButtonStyle.Primary,
       disabled: !hasPendingSelection,
       customId: buildDiscordModelPickerCustomId({
-        command: params.command,
+        ...modelActionState,
         action: "submit",
         view: "models",
-        provider: params.modelPage.provider,
-        ...compactRuntime,
-        page: params.modelPage.page,
-        providerPage: providerPage.page,
         modelIndex: params.pendingModelIndex,
         modelToken: pendingModelToken,
-        userId: params.userId,
       }),
     }),
   );
@@ -915,44 +873,20 @@ export function renderDiscordModelPickerRecentsView(
   const defaultModelRef = `${params.data.resolvedDefault.provider}/${params.data.resolvedDefault.model}`;
   const rows: DiscordModelPickerRow[] = [];
 
-  // Dedupe: filter recents that match the default model.
-  const dedupedQuickModels = params.quickModels.filter((modelRef) => modelRef !== defaultModelRef);
-
-  // Default model button — slot 1.
-  rows.push(
-    new Row([
-      createModelPickerButton({
-        label: formatRecentsButtonLabel(defaultModelRef, "(default)"),
-        style: ButtonStyle.Secondary,
-        customId: buildDiscordModelPickerCustomId({
-          command: params.command,
-          action: "submit",
-          view: "recents",
-          recentSlot: 1,
-          modelToken: createModelRefToken(defaultModelRef),
-          provider: params.provider,
-          runtime: params.runtime,
-          runtimeIndex: params.runtimeIndex,
-          page: params.page,
-          providerPage: params.providerPage,
-          userId: params.userId,
-        }),
-      }),
-    ]),
-  );
-
-  // Recent model buttons — slot 2+.
-  for (const [i, modelRef] of dedupedQuickModels.entries()) {
+  const recentModels = [
+    defaultModelRef,
+    ...params.quickModels.filter((modelRef) => modelRef !== defaultModelRef),
+  ];
+  for (const [index, modelRef] of recentModels.entries()) {
     rows.push(
       new Row([
         createModelPickerButton({
-          label: formatRecentsButtonLabel(modelRef),
-          style: ButtonStyle.Secondary,
+          label: formatRecentsButtonLabel(modelRef, index === 0 ? "(default)" : undefined),
           customId: buildDiscordModelPickerCustomId({
             command: params.command,
             action: "submit",
             view: "recents",
-            recentSlot: i + 2,
+            recentSlot: index + 1,
             modelToken: createModelRefToken(modelRef),
             provider: params.provider,
             runtime: params.runtime,
@@ -970,7 +904,6 @@ export function renderDiscordModelPickerRecentsView(
   const backRow: Row<Button> = new Row([
     createModelPickerButton({
       label: "Back",
-      style: ButtonStyle.Secondary,
       customId: buildDiscordModelPickerCustomId({
         command: params.command,
         action: "back",

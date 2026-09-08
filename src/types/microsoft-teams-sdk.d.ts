@@ -10,6 +10,18 @@ declare module "@microsoft/teams.apps" {
 }
 
 declare module "@microsoft/teams.api" {
+  /** Outbound message activity subset used for durable reply quoting. */
+  export interface IMessageActivityInput extends Record<string, unknown> {
+    type?: "message";
+    text?: string;
+  }
+
+  export class MessageActivityInput implements IMessageActivityInput {
+    constructor(text?: string, value?: Record<string, unknown>);
+    static from(activity: IMessageActivityInput): MessageActivityInput;
+    prependQuote(messageId: string): this;
+  }
+
   /** Teams API client subset used for conversation activity sends. */
   export class Client {
     constructor(

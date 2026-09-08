@@ -22,6 +22,7 @@ import { toAIFriendlyError } from "./pw-tools-core.shared.js";
 
 export type InteractionTargetOptions = {
   cdpUrl: string;
+  browserFilesystemLocal?: boolean;
   targetId?: string;
 };
 
@@ -88,6 +89,57 @@ export function reconcileRemoteDialogAfterActionSettled(page: Page, signal?: Abo
 export function throwIfInteractionAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection");
+  }
+}
+
+export async function runCancellablePageInteraction<T>(
+  page: Page,
+  opts: GuardedInteractionOptions,
+  action: (signal: AbortSignal) => Promise<T>,
+  errorLabel?: string,
+): Promise<T> {
+  const cancellation = new AbortController();
+  const interruption = new AbortController();
+  const onAbort = () => {
+    // Dialogs interrupt the foreground call while the native action and its
+    // navigation guard remain live. Caller cancellation must join the native call.
+    const controller = isBrowserObservedDialogBlockedError(opts.signal?.reason)
+      ? interruption
+      : cancellation;
+    controller.abort(opts.signal?.reason);
+  };
+  opts.signal?.addEventListener("abort", onAbort, { once: true });
+  if (opts.signal?.aborted) {
+    onAbort();
+  }
+  const { abortPromise, cleanup } = createAbortPromiseWithListener(interruption.signal);
+  try {
+    const result = await awaitNavigationGuardedInteraction(
+      {
+        action: () => action(cancellation.signal),
+        cdpUrl: opts.cdpUrl,
+        page,
+        ...interactionNavigationPolicy(opts),
+        targetId: opts.targetId,
+      },
+      abortPromise,
+      opts.signal,
+      () => reconcileRemoteDialogAfterActionSettled(page, opts.signal),
+    );
+    throwIfInteractionAborted(opts.signal);
+    return result;
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.name === "AbortError" &&
+      error.cause === cancellation.signal.reason
+    ) {
+      throwIfInteractionAborted(cancellation.signal);
+    }
+    throw errorLabel === undefined ? error : toFriendlyInteractionError(error, errorLabel);
+  } finally {
+    opts.signal?.removeEventListener("abort", onAbort);
+    cleanup();
   }
 }
 

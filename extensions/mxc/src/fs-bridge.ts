@@ -1,13 +1,19 @@
 import path from "node:path";
-import { removePathWithinRoot, root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
+import {
+  isPathInside,
+  removePathWithinRoot,
+  root as fsRoot,
+} from "openclaw/plugin-sdk/file-access-runtime";
 import {
   createWritableRenameTargetResolver,
+  type DirectoryEntry,
   type SandboxBackendHandle,
   type SandboxFsBridge,
   type SandboxFsStat,
   type SandboxResolvedPath,
 } from "openclaw/plugin-sdk/sandbox";
-import { FsSafeError, isPathInside } from "openclaw/plugin-sdk/security-runtime";
+import { FsSafeError } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeMxcPathForComparison } from "./path-comparison.js";
 import {
   resolveMxcReadOnlySkillMounts,
   type MxcReadOnlySkillMount,
@@ -35,18 +41,26 @@ export function createMxcFsBridge(params: { sandbox: MxcFsBridgeContext }): Sand
 }
 
 class MxcFsBridge implements SandboxFsBridge {
-  private readonly defaultContainerRoot = path.resolve(this.sandbox.containerWorkdir);
+  // These must be assigned in the constructor body, not as field initializers.
+  // Plugin sources load through jiti, which evaluates field initializers before
+  // it assigns constructor parameter properties, so `this.sandbox` would still
+  // be undefined here and provisioning would crash reading containerWorkdir.
+  private readonly defaultContainerRoot: string;
 
-  private readonly protectedSkillMounts = resolveMxcProtectedSkillMounts(this.sandbox);
+  private readonly protectedSkillMounts: readonly MxcFsMount[];
 
-  private readonly workspaceMounts = resolveWorkspaceMounts(this.sandbox);
+  private readonly workspaceMounts: readonly MxcFsMount[];
 
   private readonly resolveRenameTargets = createWritableRenameTargetResolver(
     (target) => this.resolveTarget(target),
     (target, action) => this.ensureWritable(target, action),
   );
 
-  constructor(private readonly sandbox: MxcFsBridgeContext) {}
+  constructor(private readonly sandbox: MxcFsBridgeContext) {
+    this.defaultContainerRoot = path.resolve(sandbox.containerWorkdir);
+    this.protectedSkillMounts = resolveMxcProtectedSkillMounts(sandbox);
+    this.workspaceMounts = resolveWorkspaceMounts(sandbox);
+  }
 
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath {
     const target = this.resolveTarget(params);
@@ -65,6 +79,17 @@ class MxcFsBridge implements SandboxFsBridge {
       hardlinks: "reject",
       ...(params.maxBytes === undefined ? {} : { maxBytes: params.maxBytes }),
     })) as Buffer;
+  }
+
+  async readDirectory(params: {
+    filePath: string;
+    cwd?: string;
+    signal?: AbortSignal;
+  }): Promise<DirectoryEntry[]> {
+    const target = this.resolveTarget(params);
+    const root = await fsRoot(target.mount.hostRoot);
+    const entries = await root.list(target.mountRelativePath, { withFileTypes: true });
+    return entries.map(({ name, isDirectory }) => ({ name, isDirectory }));
   }
 
   async writeFile(params: {
@@ -242,7 +267,7 @@ function resolveWorkspaceMounts(sandbox: MxcFsBridgeContext): readonly MxcFsMoun
 
   if (
     sandbox.workspaceAccess === "ro" &&
-    normalizePathForComparison(agentWorkspaceDir) !== normalizePathForComparison(workspaceDir)
+    normalizeMxcPathForComparison(agentWorkspaceDir) !== normalizeMxcPathForComparison(workspaceDir)
   ) {
     mounts.push({
       hostRoot: agentWorkspaceDir,
@@ -276,9 +301,9 @@ function normalizeMxcProtectedSkillMount(mount: MxcReadOnlySkillMount): MxcFsMou
 function dedupeAndSortMounts(mounts: readonly MxcFsMount[]): readonly MxcFsMount[] {
   const deduped = new Map<string, MxcFsMount>();
   for (const mount of mounts) {
-    const key = `${normalizePathForComparison(mount.hostRoot)}::${normalizePathForComparison(
-      mount.containerRoot,
-    )}`;
+    const key = `${normalizeMxcPathForComparison(
+      mount.hostRoot,
+    )}::${normalizeMxcPathForComparison(mount.containerRoot)}`;
     if (!deduped.has(key)) {
       deduped.set(key, mount);
     }
@@ -298,10 +323,5 @@ function resolveRelativeParentPath(relativePath: string): string | null {
 }
 
 function isSameMountRoot(first: string, second: string): boolean {
-  return normalizePathForComparison(first) === normalizePathForComparison(second);
-}
-
-function normalizePathForComparison(value: string): string {
-  const resolved = path.resolve(value);
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  return normalizeMxcPathForComparison(first) === normalizeMxcPathForComparison(second);
 }

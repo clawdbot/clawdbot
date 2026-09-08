@@ -3,11 +3,8 @@ import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercio
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveCapabilityModelRefForProviders } from "../../packages/media-generation-core/src/capability-model-ref.js";
 import type { MediaGenerationNormalizationMetadataInput } from "../../packages/media-generation-core/src/normalization.js";
-import { listProfilesForProvider } from "../agents/auth-profiles.js";
-import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
-import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import {
   resolveAgentModelFallbackValues,
@@ -16,11 +13,11 @@ import {
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
+import { isProviderApiKeyConfigured } from "../plugin-sdk/provider-auth.js";
 import { getProviderEnvVars as getDefaultProviderEnvVars } from "../secrets/provider-env-vars.js";
 
 // Shared media-generation runtime helpers for provider fallback, request
 // timeout normalization, model selection, and capability value normalization.
-export type { MediaNormalizationEntry } from "../../packages/media-generation-core/src/normalization.js";
 export { hasMediaNormalizationEntry } from "../../packages/media-generation-core/src/normalization.js";
 
 type ParsedProviderModelRef = {
@@ -28,22 +25,94 @@ type ParsedProviderModelRef = {
   model: string;
 };
 
-/** Records one provider/model failure in the common fallback-attempt shape. */
-export function recordCapabilityCandidateFailure(params: {
-  attempts: FallbackAttempt[];
-  provider: string;
-  model: string;
-  error: unknown;
-}): void {
-  const described = isFailoverError(params.error) ? describeFailoverError(params.error) : undefined;
-  params.attempts.push({
-    provider: params.provider,
-    model: params.model,
-    error: described?.message ?? formatErrorMessage(params.error),
+function buildCapabilityCandidateFailure(
+  candidate: ParsedProviderModelRef,
+  error: unknown,
+): FallbackAttempt {
+  const described = isFailoverError(error) ? describeFailoverError(error) : undefined;
+  return {
+    provider: candidate.provider,
+    model: candidate.model,
+    error: described?.message ?? formatErrorMessage(error),
     reason: described?.reason,
     status: described?.status,
     code: described?.code,
+  };
+}
+
+type PreparedMediaGenerationCandidate<TResult> =
+  | string
+  | ((attempts: FallbackAttempt[]) => Promise<TResult>);
+
+/** Keeps provider lookup and capability preflight outside the generation fallback catch. */
+export async function runMediaGenerationCandidates<TProvider extends object, TResult>(params: {
+  candidates: readonly ParsedProviderModelRef[];
+  capability: "image" | "music" | "video";
+  getProvider: (providerId: string) => TProvider | undefined;
+  prepareCandidate: (
+    candidate: ParsedProviderModelRef,
+    provider: TProvider,
+  ) =>
+    | PreparedMediaGenerationCandidate<TResult>
+    | Promise<PreparedMediaGenerationCandidate<TResult>>;
+  /** Image/music skip records retain optional failure fields; video skip records do not. */
+  includeSkipFailureDetails?: boolean;
+  onMissingProvider?: (attempt: FallbackAttempt) => void;
+  onFailure?: (attempt: FallbackAttempt) => void;
+}): Promise<TResult> {
+  const attempts: FallbackAttempt[] = [];
+  let lastError: unknown;
+  for (const candidate of params.candidates) {
+    const provider = params.getProvider(candidate.provider);
+    const preparation = provider
+      ? params.prepareCandidate(candidate, provider)
+      : `No ${params.capability}-generation provider registered for ${candidate.provider}`;
+    // Image/music preflight is synchronous; only video's capability overlay yields.
+    const prepared = preparation instanceof Promise ? await preparation : preparation;
+    if (typeof prepared === "string") {
+      const attempt =
+        provider && params.includeSkipFailureDetails
+          ? buildCapabilityCandidateFailure(candidate, prepared)
+          : { provider: candidate.provider, model: candidate.model, error: prepared };
+      attempts.push(attempt);
+      lastError = new Error(prepared);
+      if (!provider) {
+        params.onMissingProvider?.(attempt);
+      }
+      continue;
+    }
+    try {
+      return await prepared(attempts);
+    } catch (error) {
+      lastError = error;
+      const attempt = buildCapabilityCandidateFailure(candidate, error);
+      attempts.push(attempt);
+      params.onFailure?.(attempt);
+    }
+  }
+  return throwCapabilityGenerationFailure({
+    capabilityLabel: `${params.capability} generation`,
+    attempts,
+    lastError,
   });
+}
+
+/** Reject edit requests before provider I/O, including providers with incomplete limits. */
+export function resolveReferenceImageCapabilityError(params: {
+  candidateRef: string;
+  inputImageCount: number;
+  edit?: { enabled: boolean; maxInputImages?: number };
+}): string | undefined {
+  if (params.inputImageCount === 0) {
+    return undefined;
+  }
+  if (!params.edit?.enabled) {
+    return `${params.candidateRef} does not support reference-image edit inputs`;
+  }
+  const maxInputImages = params.edit.maxInputImages ?? 10;
+  return params.inputImageCount > maxInputImages
+    ? `${params.candidateRef} supports at most ${maxInputImages} reference image${maxInputImages === 1 ? "" : "s"}, ${params.inputImageCount} requested`
+    : undefined;
 }
 
 const IMAGE_RESOLUTION_ORDER = ["1K", "2K", "4K"] as const;
@@ -111,17 +180,11 @@ function isCapabilityProviderConfigured(params: {
       agentDir: params.agentDir,
     });
   }
-  if (resolveEnvApiKey(params.provider.id)?.apiKey) {
-    return true;
-  }
-  const agentDir = normalizeOptionalString(params.agentDir);
-  if (!agentDir) {
-    return false;
-  }
-  const store = ensureAuthProfileStore(agentDir, {
-    allowKeychainPrompt: false,
+  return isProviderApiKeyConfigured({
+    provider: params.provider.id,
+    cfg: params.cfg,
+    agentDir: params.agentDir,
   });
-  return listProfilesForProvider(store, params.provider.id).length > 0;
 }
 
 function resolveAutoCapabilityFallbackRefs(params: {

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import YAML from "yaml";
+import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents.mjs";
 
 type RootPackageManifest = {
   dependencies?: Record<string, string>;
@@ -29,7 +30,9 @@ function readPnpmWorkspaceConfig(): PnpmWorkspaceConfig {
 
 function readPnpmLockfileConfig(): PnpmLockfileConfig {
   const lockfilePath = path.resolve(process.cwd(), "pnpm-lock.yaml");
-  return YAML.parse(fs.readFileSync(lockfilePath, "utf8")) as PnpmLockfileConfig;
+  return YAML.parse(
+    pnpmLockfileDocuments(fs.readFileSync(lockfilePath, "utf8")).dependencies,
+  ) as PnpmLockfileConfig;
 }
 
 function readPackageManifest(packagePath: string): RootPackageManifest {
@@ -37,6 +40,12 @@ function readPackageManifest(packagePath: string): RootPackageManifest {
 }
 
 describe("root package override guardrails", () => {
+  it("pins the active axios override to an exact version", () => {
+    const pnpmWorkspace = readPnpmWorkspaceConfig();
+
+    expect(pnpmWorkspace.overrides?.axios).toMatch(/^\d+\.\d+\.\d+$/u);
+  });
+
   it("keeps Bedrock runtime ownership in the Amazon provider plugin", () => {
     const manifest = readRootManifest();
     const pnpmWorkspace = readPnpmWorkspaceConfig();

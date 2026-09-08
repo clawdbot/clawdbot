@@ -21,7 +21,7 @@ import type {
 } from "./types.js";
 
 /** Parse HOOK.md frontmatter into the generic hook frontmatter record. */
-export function parseFrontmatter(content: string): ParsedHookFrontmatter {
+export function parseHookFrontmatter(content: string): ParsedHookFrontmatter {
   return parseFrontmatterBlock(content);
 }
 
@@ -48,7 +48,7 @@ function parseInstallSpec(input: unknown): HookInstallSpec | undefined {
 }
 
 /** Resolve OpenClaw hook metadata from the manifest block in HOOK.md frontmatter. */
-export function resolveOpenClawMetadata(
+export function resolveHookManifestMetadata(
   frontmatter: ParsedHookFrontmatter,
 ): OpenClawHookMetadata | undefined {
   const metadataObj = resolveOpenClawManifestBlock({ frontmatter });
@@ -82,6 +82,6 @@ export function resolveHookInvocationPolicy(
 }
 
 /** Resolve the config key for a hook, honoring metadata hookKey overrides. */
-export function resolveHookKey(hookName: string, entry?: HookEntry): string {
+export function resolveHookKey(hookName: string, entry?: Pick<HookEntry, "metadata">): string {
   return entry?.metadata?.hookKey ?? hookName;
 }

@@ -1,163 +1,78 @@
 /**
  * Runtime contract tests for auth profile forwarding.
- * Ensures CLI and embedded agent runtimes receive the selected auth profile
- * across provider aliases and plugin runtime manifests.
+ *
+ * Attempt-execution composition is covered in command/attempt-execution.cli.test.ts.
+ * This suite owns the provider-alias and runtime-plan matrix directly so each
+ * case does not need to load the full agent-attempt graph.
  */
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import {
   AUTH_PROFILE_RUNTIME_CONTRACT,
   createAuthAliasManifestRegistry,
   expectedForwardedAuthProfile,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionEntry } from "../config/sessions.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type * as ManifestRegistryModule from "../plugins/manifest-registry.js";
-import { runAgentAttempt as runAgentAttemptImpl } from "./command/attempt-execution.js";
-import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
-import type { EmbeddedAgentRunResult } from "./embedded-agent.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { resolveOpenAIRuntimeProvider } from "./openai-routing.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+import { buildAgentRuntimeAuthPlan } from "./runtime-plan/auth.js";
 
-type LoadPluginManifestRegistry = typeof ManifestRegistryModule.loadPluginManifestRegistry;
-type RunAgentAttemptParams = Parameters<typeof runAgentAttemptImpl>[0];
+const pluginMetadataMocks = vi.hoisted(() => ({
+  getCurrentPluginMetadataSnapshot: vi.fn(() => undefined),
+  loadPluginMetadataSnapshot: vi.fn(),
+}));
 
-const runAgentAttempt = (
-  params: Omit<RunAgentAttemptParams, "lifecycleGeneration"> &
-    Partial<Pick<RunAgentAttemptParams, "lifecycleGeneration">>,
-) =>
-  runAgentAttemptImpl({
-    ...params,
-    lifecycleGeneration: params.lifecycleGeneration ?? "test-generation",
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
+  getCurrentPluginMetadataSnapshot: pluginMetadataMocks.getCurrentPluginMetadataSnapshot,
+}));
+
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: pluginMetadataMocks.loadPluginMetadataSnapshot,
+}));
+
+const workspaceDir = "/tmp/openclaw-auth-contract";
+const authAliasMetadata = {
+  plugins: createAuthAliasManifestRegistry().plugins,
+};
+
+function authAliasLookupParams(config: OpenClawConfig = {}) {
+  return {
+    config,
+    workspaceDir,
+  };
+}
+
+function resolveContractPlan(params: {
+  provider: string;
+  authProfileProvider: string;
+  authProfileId: string;
+  cfg?: OpenClawConfig;
+  harnessRuntime?: string;
+  authProfileSource?: "auto" | "user";
+}) {
+  const config = params.cfg ?? {};
+  const aliasLookupParams = authAliasLookupParams(config);
+  const plan = buildAgentRuntimeAuthPlan({
+    provider: params.provider,
+    authProfileProvider: params.authProfileProvider,
+    sessionAuthProfileId: params.authProfileId,
+    sessionAuthProfileSource: params.authProfileSource,
+    config,
+    workspaceDir,
+    harnessRuntime: params.harnessRuntime,
   });
-
-const loadPluginManifestRegistry = vi.hoisted(() =>
-  vi.fn<LoadPluginManifestRegistry>(() => ({
-    plugins: [],
-    diagnostics: [],
-  })),
-);
-const runCliAgentMock = vi.hoisted(() => vi.fn());
-const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/manifest-registry.js")>();
   return {
-    ...actual,
-    loadPluginManifestRegistry,
-  };
-});
-
-vi.mock("../plugins/manifest-registry-installed.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/manifest-registry-installed.js")>();
-  return {
-    ...actual,
-    loadPluginManifestRegistryForInstalledIndex: loadPluginManifestRegistry,
-  };
-});
-
-vi.mock("../plugins/plugin-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/plugin-registry.js")>();
-  return {
-    ...actual,
-    loadPluginRegistrySnapshot: () => ({ plugins: [] }),
-  };
-});
-
-vi.mock("./cli-runner.js", () => ({
-  runCliAgent: runCliAgentMock,
-}));
-
-vi.mock("./model-selection.js", () => ({
-  isCliProvider: (provider: string) => {
-    const normalized = provider.trim().toLowerCase();
-    return (
-      normalized === AUTH_PROFILE_RUNTIME_CONTRACT.claudeCliProvider ||
-      normalized === AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider
-    );
-  },
-  normalizeProviderId: (provider: string) => provider.trim().toLowerCase(),
-}));
-
-vi.mock("./embedded-agent.js", () => ({
-  runEmbeddedAgent: runEmbeddedAgentMock,
-}));
-
-function mockCallArg(
-  mockFn: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
-  argIndex = 0,
-): unknown {
-  const call = mockFn.mock.calls[0];
-  if (!call) {
-    throw new Error("expected mock to be called");
-  }
-  return call[argIndex];
-}
-
-function capturedCliRunParams(): { authProfileId?: string } {
-  expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-  return mockCallArg(runCliAgentMock) as { authProfileId?: string };
-}
-
-function capturedEmbeddedRunParams(): RunEmbeddedAgentParams {
-  expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
-  return mockCallArg(runEmbeddedAgentMock) as RunEmbeddedAgentParams;
-}
-
-function makeCliResult(text: string): EmbeddedAgentRunResult {
-  return {
-    payloads: [{ text }],
-    meta: {
-      durationMs: 5,
-      finalAssistantVisibleText: text,
-      agentMeta: {
-        sessionId: AUTH_PROFILE_RUNTIME_CONTRACT.sessionId,
-        provider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
-        model: "gpt-5.4",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          total: 0,
-        },
-      },
-      executionTrace: {
-        winnerProvider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
-        winnerModel: "gpt-5.4",
-        fallbackUsed: false,
-        runner: "cli",
-      },
-    },
-  };
-}
-
-function makeEmbeddedResult(text: string): EmbeddedAgentRunResult {
-  return {
-    payloads: [{ text }],
-    meta: {
-      durationMs: 5,
-      finalAssistantVisibleText: text,
-      agentMeta: {
-        sessionId: AUTH_PROFILE_RUNTIME_CONTRACT.sessionId,
-        provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
-        model: "gpt-5.4",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          total: 0,
-        },
-      },
-      executionTrace: {
-        winnerProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
-        winnerModel: "gpt-5.4",
-        fallbackUsed: false,
-        runner: "embedded",
-      },
-    },
+    aliasLookupParams,
+    plan,
+    embeddedProvider: resolveOpenAIRuntimeProvider({
+      provider: params.provider,
+      harnessRuntime: params.harnessRuntime,
+      authProfileProvider: plan.authProfileProviderForAuth,
+      authProfileId: plan.forwardedAuthProfileId,
+      config,
+      workspaceDir,
+    }),
   };
 }
 
@@ -175,81 +90,11 @@ function providerRuntimeConfig(provider: string, runtime: string): OpenClawConfi
   } as OpenClawConfig;
 }
 
-async function runAuthContractAttempt(params: {
-  tmpDir: string;
-  storePath: string;
-  providerOverride: string;
-  authProfileProvider: string;
-  authProfileOverride: string;
-  cfg?: OpenClawConfig;
-  sessionHasHistory?: boolean;
-}) {
-  const cfg = params.cfg ?? ({} as OpenClawConfig);
-  const sessionEntry: SessionEntry = {
-    sessionId: AUTH_PROFILE_RUNTIME_CONTRACT.sessionId,
-    updatedAt: Date.now(),
-    authProfileOverride: params.authProfileOverride,
-    authProfileOverrideSource: "user",
-  };
-  const sessionStore: Record<string, SessionEntry> = {
-    [AUTH_PROFILE_RUNTIME_CONTRACT.sessionKey]: sessionEntry,
-  };
-  await fs.writeFile(params.storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
-
-  await runAgentAttempt({
-    providerOverride: params.providerOverride,
-    originalProvider: params.providerOverride,
-    modelOverride: "gpt-5.4",
-    cfg,
-    sessionEntry,
-    sessionId: sessionEntry.sessionId,
-    sessionKey: AUTH_PROFILE_RUNTIME_CONTRACT.sessionKey,
-    sessionAgentId: "main",
-    sessionFile: path.join(params.tmpDir, "session.jsonl"),
-    workspaceDir: params.tmpDir,
-    body: AUTH_PROFILE_RUNTIME_CONTRACT.workspacePrompt,
-    isFallbackRetry: false,
-    resolvedThinkLevel: "medium",
-    timeoutMs: 1_000,
-    runId: AUTH_PROFILE_RUNTIME_CONTRACT.runId,
-    opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
-    runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
-    spawnedBy: undefined,
-    messageChannel: undefined,
-    skillsSnapshot: undefined,
-    resolvedVerboseLevel: undefined,
-    agentDir: params.tmpDir,
-    onAgentEvent: vi.fn(),
-    authProfileProvider: params.authProfileProvider,
-    sessionStore,
-    storePath: params.storePath,
-    sessionHasHistory: params.sessionHasHistory ?? false,
-  });
-
-  return {
-    aliasLookupParams: {
-      config: cfg,
-      workspaceDir: params.tmpDir,
-    },
-  };
-}
-
 describe("Auth profile runtime contract - embedded OpenClaw and CLI adapter", () => {
-  let tmpDir: string;
-  let storePath: string;
-
-  beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-contract-"));
-    storePath = path.join(tmpDir, "sessions.json");
-    loadPluginManifestRegistry.mockReset().mockReturnValue(createAuthAliasManifestRegistry());
-    runCliAgentMock.mockReset();
-    runEmbeddedAgentMock.mockReset();
-    runCliAgentMock.mockResolvedValue(makeCliResult("ok"));
-    runEmbeddedAgentMock.mockResolvedValue(makeEmbeddedResult("ok"));
-  });
-
-  afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
+  beforeEach(() => {
+    clearPluginMetadataLifecycleCaches();
+    pluginMetadataMocks.getCurrentPluginMetadataSnapshot.mockClear();
+    pluginMetadataMocks.loadPluginMetadataSnapshot.mockReset().mockReturnValue(authAliasMetadata);
   });
 
   it.each([
@@ -264,27 +109,22 @@ describe("Auth profile runtime contract - embedded OpenClaw and CLI adapter", ()
       AUTH_PROFILE_RUNTIME_CONTRACT.codexHarnessProvider,
     ],
   ] as const)(
-    "resolves %s through the provider auth alias resolver using a mocked manifest",
+    "resolves %s through the provider auth alias resolver using contract metadata",
     (provider, expectedAuthProvider) => {
-      expect(
-        resolveProviderIdForAuth(provider, {
-          config: {} as OpenClawConfig,
-          workspaceDir: tmpDir,
-        }),
-      ).toBe(expectedAuthProvider);
+      expect(resolveProviderIdForAuth(provider, authAliasLookupParams())).toBe(
+        expectedAuthProvider,
+      );
     },
   );
 
-  it("forwards a legacy OpenAI Codex auth profile when the selected provider is codex-cli", async () => {
-    const { aliasLookupParams } = await runAuthContractAttempt({
-      tmpDir,
-      storePath,
-      providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
+  it("forwards a legacy OpenAI Codex auth profile to the codex-cli runtime plan", () => {
+    const { aliasLookupParams, plan } = resolveContractPlan({
+      provider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
       authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
-      authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
     });
 
-    expect(capturedCliRunParams().authProfileId).toBe(
+    expect(plan.forwardedAuthProfileId).toBe(
       expectedForwardedAuthProfile({
         provider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
         authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
@@ -294,16 +134,14 @@ describe("Auth profile runtime contract - embedded OpenClaw and CLI adapter", ()
     );
   });
 
-  it("forwards a legacy OpenAI Codex auth profile when the auth provider is the legacy codex-cli alias", async () => {
-    const { aliasLookupParams } = await runAuthContractAttempt({
-      tmpDir,
-      storePath,
-      providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
+  it("forwards a legacy OpenAI Codex auth profile from the codex-cli auth alias", () => {
+    const { aliasLookupParams, plan } = resolveContractPlan({
+      provider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
       authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
-      authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
     });
 
-    expect(capturedCliRunParams().authProfileId).toBe(
+    expect(plan.forwardedAuthProfileId).toBe(
       expectedForwardedAuthProfile({
         provider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
         authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
@@ -313,16 +151,14 @@ describe("Auth profile runtime contract - embedded OpenClaw and CLI adapter", ()
     );
   });
 
-  it("forwards OpenAI auth profiles into the Codex CLI alias", async () => {
-    const { aliasLookupParams } = await runAuthContractAttempt({
-      tmpDir,
-      storePath,
-      providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
+  it("forwards OpenAI auth profiles into the codex-cli runtime plan", () => {
+    const { aliasLookupParams, plan } = resolveContractPlan({
+      provider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
       authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
-      authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId,
+      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId,
     });
 
-    expect(capturedCliRunParams().authProfileId).toBe(
+    expect(plan.forwardedAuthProfileId).toBe(
       expectedForwardedAuthProfile({
         provider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
         authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
@@ -332,65 +168,45 @@ describe("Auth profile runtime contract - embedded OpenClaw and CLI adapter", ()
     );
   });
 
-  it("does not leak an OpenAI Codex auth profile into an unrelated CLI provider", async () => {
-    await runAuthContractAttempt({
-      tmpDir,
-      storePath,
-      providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.claudeCliProvider,
+  it("does not leak an OpenAI auth profile into an unrelated CLI provider", () => {
+    const { plan } = resolveContractPlan({
+      provider: AUTH_PROFILE_RUNTIME_CONTRACT.claudeCliProvider,
       authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
-      authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
     });
 
-    expect(capturedCliRunParams().authProfileId).toBeUndefined();
+    expect(plan.forwardedAuthProfileId).toBeUndefined();
   });
 
-  it("does not let a configured Codex harness leak OpenAI Codex auth into unrelated CLI providers", async () => {
-    await runAuthContractAttempt({
-      tmpDir,
-      storePath,
-      providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.claudeCliProvider,
+  it("does not let a configured Codex harness leak OpenAI auth into unrelated CLI providers", () => {
+    const { plan } = resolveContractPlan({
+      provider: AUTH_PROFILE_RUNTIME_CONTRACT.claudeCliProvider,
       authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
-      authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
-      cfg: {
-        models: {
-          providers: {
-            [AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider]: {
-              baseUrl: "https://api.openclaw.test/v1",
-              agentRuntime: { id: "codex" },
-              models: [],
-            },
-          },
-        },
-      } as OpenClawConfig,
+      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+      cfg: providerRuntimeConfig(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider, "codex"),
     });
 
-    expect(capturedCliRunParams().authProfileId).toBeUndefined();
+    expect(plan.forwardedAuthProfileId).toBeUndefined();
   });
 
-  it("forwards a legacy OpenAI Codex auth profile through the embedded OpenClaw path", async () => {
-    await runAuthContractAttempt({
-      tmpDir,
-      storePath,
-      providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
+  it("forwards a legacy OpenAI Codex auth profile through the embedded OpenClaw plan", () => {
+    const { plan } = resolveContractPlan({
+      provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
       authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
-      authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
     });
 
-    expect(capturedEmbeddedRunParams().authProfileId).toBe(
-      AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
-    );
+    expect(plan.forwardedAuthProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId);
   });
 
-  it("accepts the legacy codex-cli auth-provider alias on the embedded OpenAI path", async () => {
-    const { aliasLookupParams } = await runAuthContractAttempt({
-      tmpDir,
-      storePath,
-      providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
+  it("accepts the codex-cli auth-provider alias on the embedded OpenAI plan", () => {
+    const { aliasLookupParams, plan } = resolveContractPlan({
+      provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
       authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
-      authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
     });
 
-    expect(capturedEmbeddedRunParams().authProfileId).toBe(
+    expect(plan.forwardedAuthProfileId).toBe(
       expectedForwardedAuthProfile({
         provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
         authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
@@ -400,93 +216,78 @@ describe("Auth profile runtime contract - embedded OpenClaw and CLI adapter", ()
     );
   });
 
-  it("forwards an OpenAI auth profile through the explicit embedded OpenAI OpenClaw path", async () => {
-    await runAuthContractAttempt({
-      tmpDir,
-      storePath,
-      providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
+  it("forwards an OpenAI auth profile through an explicit OpenClaw plan", () => {
+    const { embeddedProvider, plan } = resolveContractPlan({
+      provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
       authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
-      authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId,
+      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId,
       cfg: providerRuntimeConfig(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider, "openclaw"),
+      harnessRuntime: "openclaw",
     });
 
-    const params = capturedEmbeddedRunParams();
-    expect(params.provider).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider);
-    expect(params.authProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId);
+    expect(embeddedProvider).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider);
+    expect(plan.forwardedAuthProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId);
   });
 
-  it("forwards a legacy OpenAI Codex auth profile through the default OpenAI harness path", async () => {
-    await runAuthContractAttempt({
-      tmpDir,
-      storePath,
-      providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
+  it("forwards a legacy OpenAI Codex auth profile through the default Codex harness plan", () => {
+    const { plan } = resolveContractPlan({
+      provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
       authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
-      authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+      harnessRuntime: "codex",
     });
 
-    expect(capturedEmbeddedRunParams().authProfileId).toBe(
-      AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
-    );
+    expect(plan.forwardedAuthProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId);
   });
 
-  it("routes explicit OpenAI OpenClaw runs with legacy Codex OAuth through OpenAI transport", async () => {
-    await runAuthContractAttempt({
-      tmpDir,
-      storePath,
-      providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
+  it("routes explicit OpenAI OpenClaw plans with legacy Codex OAuth through OpenAI transport", () => {
+    const { embeddedProvider, plan } = resolveContractPlan({
+      provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
       authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
-      authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
       cfg: providerRuntimeConfig(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider, "openclaw"),
+      harnessRuntime: "openclaw",
     });
 
-    const params = capturedEmbeddedRunParams();
-    expect(params.provider).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider);
-    expect(params.authProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId);
+    expect(embeddedProvider).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider);
+    expect(plan.forwardedAuthProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId);
   });
 
-  it("preserves OpenAI Codex auth profiles through the real codex/* harness startup path", async () => {
-    await runAuthContractAttempt({
-      tmpDir,
-      storePath,
-      providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.codexHarnessProvider,
+  it("preserves OpenAI Codex auth profiles through the codex/* harness plan", () => {
+    const { plan } = resolveContractPlan({
+      provider: AUTH_PROFILE_RUNTIME_CONTRACT.codexHarnessProvider,
       authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
-      authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
       cfg: providerRuntimeConfig(AUTH_PROFILE_RUNTIME_CONTRACT.codexHarnessProvider, "codex"),
+      harnessRuntime: "codex",
     });
 
-    expect(capturedEmbeddedRunParams().authProfileId).toBe(
-      AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
-    );
+    expect(plan.forwardedAuthProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId);
   });
 
-  it("validates openai/* forced through the Codex harness can use OpenAI Codex OAuth profiles", async () => {
-    await runAuthContractAttempt({
-      tmpDir,
-      storePath,
-      providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
+  it("allows openai/* forced through the Codex harness to use OpenAI Codex OAuth profiles", () => {
+    const { plan } = resolveContractPlan({
+      provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
       authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
-      authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
       cfg: providerRuntimeConfig(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider, "codex"),
+      harnessRuntime: "codex",
     });
 
-    expect(capturedEmbeddedRunParams().authProfileId).toBe(
-      AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
-    );
+    expect(plan.forwardedAuthProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId);
   });
 
-  it("preserves configured Codex harness when a skeleton session entry is considered history", async () => {
-    await runAuthContractAttempt({
-      tmpDir,
-      storePath,
-      providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
+  it("preserves the locked profile source after the session owner selects the Codex harness", () => {
+    const { plan } = resolveContractPlan({
+      provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
       authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
-      authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
-      sessionHasHistory: true,
+      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+      authProfileSource: "user",
       cfg: providerRuntimeConfig(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider, "codex"),
+      harnessRuntime: "codex",
     });
 
-    expect(capturedEmbeddedRunParams().authProfileId).toBe(
-      AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
-    );
+    expect(plan.forwardedAuthProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId);
+    expect(plan.forwardedAuthProfileSource).toBe("user");
   });
 });

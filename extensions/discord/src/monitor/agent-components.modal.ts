@@ -8,6 +8,7 @@ import {
   ensureComponentUserAllowed,
   formatModalSubmissionText,
   parseDiscordModalId,
+  replyUnavailableComponentInteraction,
   resolveAuthorizedComponentInteraction,
   resolveInteractionCustomId,
   resolveModalFieldValues,
@@ -31,14 +32,7 @@ export class DiscordComponentModal extends Modal {
     const modalId = parseDiscordModalId(data, resolveInteractionCustomId(interaction));
     if (!modalId) {
       logError("discord component modal: missing modal id");
-      try {
-        await interaction.reply({
-          content: "This form is no longer valid.",
-          ephemeral: true,
-        });
-      } catch {
-        // Interaction may have expired
-      }
+      await replyUnavailableComponentInteraction(interaction, "This form is no longer valid.");
       return;
     }
 
@@ -47,14 +41,7 @@ export class DiscordComponentModal extends Modal {
       consume: false,
     });
     if (!modalEntry) {
-      try {
-        await interaction.reply({
-          content: "This form has expired.",
-          ephemeral: true,
-        });
-      } catch {
-        // Interaction may have expired
-      }
+      await replyUnavailableComponentInteraction(interaction, "This form has expired.");
       return;
     }
 
@@ -70,6 +57,7 @@ export class DiscordComponentModal extends Modal {
     if (!authorized) {
       return;
     }
+    const ctx = authorized.ctx;
     const {
       interactionCtx,
       channelCtx,
@@ -103,14 +91,7 @@ export class DiscordComponentModal extends Modal {
       consume: !modalEntry.reusable,
     });
     if (!consumed) {
-      try {
-        await interaction.reply({
-          content: "This form has expired.",
-          ephemeral: true,
-        });
-      } catch {
-        // Interaction may have expired
-      }
+      await replyUnavailableComponentInteraction(interaction, "This form has expired.");
       return;
     }
 
@@ -121,7 +102,7 @@ export class DiscordComponentModal extends Modal {
         values: resolveModalFieldValues(field, interaction),
       }));
       const pluginDispatch = await dispatchPluginDiscordInteractiveEvent({
-        ctx: this.ctx,
+        ctx,
         interaction,
         interactionCtx,
         channelCtx,
@@ -144,7 +125,7 @@ export class DiscordComponentModal extends Modal {
 
     const eventText = formatModalSubmissionText(consumed, interaction);
     await dispatchDiscordComponentEvent({
-      ctx: this.ctx,
+      ctx,
       interaction,
       interactionCtx,
       channelCtx,

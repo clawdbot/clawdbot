@@ -24,22 +24,26 @@ export class BoundedBuffer<T> {
       this.size += valueSize;
       return true;
     }
-    if (this.overflow.mode === "latch") {
+    if (this.overflow.mode !== "drop-oldest") {
       this.closed = true;
-      return false;
-    }
-    if (this.overflow.mode === "fail-closed") {
-      this.values = [];
-      this.size = 0;
-      this.closed = true;
-      this.overflow.onOverflow();
+      if (this.overflow.mode === "fail-closed") {
+        this.drain();
+        this.overflow.onOverflow();
+      }
       return false;
     }
     this.values.push(value);
     this.size += valueSize;
-    while (this.size > this.capacity && this.values.length > 1) {
-      this.size -= this.measure(this.values.shift()!);
+    let dropped = 0;
+    // Leave the newest value for fitting; preserve the > comparison for NaN capacities.
+    for (const oldest of this.values) {
+      if (!(this.size > this.capacity) || dropped === this.values.length - 1) {
+        break;
+      }
+      this.size -= this.measure(oldest);
+      dropped += 1;
     }
+    this.values.splice(0, dropped);
     if (this.size > this.capacity) {
       const fitted = this.overflow.fit?.(value, this.capacity);
       this.values = fitted === undefined ? [] : [fitted];

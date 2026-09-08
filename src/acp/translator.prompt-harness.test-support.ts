@@ -4,13 +4,18 @@ import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { expect, vi } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
-import { AcpGatewayAgent } from "./translator.js";
-import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
+import type { AcpGatewayAgent } from "./translator.js";
+import {
+  createAcpConnection,
+  createAcpGateway,
+  createAcpGatewayAgent,
+} from "./translator.test-helpers.js";
 
 type PendingPromptHarness = {
   agent: AcpGatewayAgent;
   promptPromise: ReturnType<AcpGatewayAgent["prompt"]>;
   runId: string;
+  sessionUpdate: ReturnType<typeof vi.fn>;
 };
 
 // Shared prompt harness used by translator cancellation and lifecycle tests.
@@ -31,7 +36,8 @@ export function createSessionAgentHarness(
     sessionKey,
     cwd: options.cwd ?? "/tmp",
   });
-  const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+  const connection = createAcpConnection();
+  const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
     sessionStore,
   });
 
@@ -40,6 +46,7 @@ export function createSessionAgentHarness(
     sessionId,
     sessionKey,
     sessionStore,
+    sessionUpdate: connection["__sessionUpdateMock"],
   };
 }
 
@@ -77,7 +84,7 @@ export async function createPendingPromptHarness(): Promise<PendingPromptHarness
     return {};
   }) as GatewayClient["request"];
 
-  const { agent, sessionId } = createSessionAgentHarness(request);
+  const { agent, sessionId, sessionUpdate } = createSessionAgentHarness(request);
   const promptPromise = promptAgent(agent, sessionId);
 
   await vi.waitFor(() => {
@@ -88,6 +95,7 @@ export async function createPendingPromptHarness(): Promise<PendingPromptHarness
     agent,
     promptPromise,
     runId: runId!,
+    sessionUpdate,
   };
 }
 

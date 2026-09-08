@@ -1,5 +1,8 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { FailoverError } from "../failover/error.js";
+import { resolveBuiltInModelSuppressionFromManifest } from "../model-suppression.js";
 import {
   resolveProviderModelMaterializationAuthMode,
   resolveProviderModelRouteMaterializationAuthMode,
@@ -51,6 +54,8 @@ export async function materializePreparedRuntimeModel<Model extends RuntimeRoute
   provider: string;
   modelId: string;
   config?: OpenClawConfig;
+  workspaceDir?: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
   model?: Model;
   /** Re-resolve when a later auth candidate changes credential-scoped model metadata. */
   forceResolve?: boolean;
@@ -60,8 +65,32 @@ export async function materializePreparedRuntimeModel<Model extends RuntimeRoute
   ): Promise<{ model?: Model | null; error?: string }>;
 }): Promise<Model | undefined> {
   const route = params.plan.modelRoute;
+  const config = route
+    ? projectProviderModelRouteConfig({ provider: params.provider, config: params.config, route })
+    : params.config;
+  const validateFinalModel = (model: Model | undefined): Model | undefined => {
+    if (!model) {
+      return undefined;
+    }
+    const suppression = resolveBuiltInModelSuppressionFromManifest({
+      provider: model.provider ?? params.provider,
+      id: model.id ?? params.modelId,
+      baseUrl: model.baseUrl,
+      config,
+      workspaceDir: params.workspaceDir,
+      metadataSnapshot: params.metadataSnapshot,
+    });
+    if (suppression?.retirement) {
+      throw new FailoverError(suppression.errorMessage, {
+        reason: "model_not_found",
+        provider: model.provider ?? params.provider,
+        model: model.id ?? params.modelId,
+      });
+    }
+    return model;
+  };
   if (!route && !params.forceResolve) {
-    return params.model;
+    return validateFinalModel(params.model);
   }
   if (
     route &&
@@ -86,7 +115,7 @@ export async function materializePreparedRuntimeModel<Model extends RuntimeRoute
         route,
       }));
   if (callerModelMatches && !params.forceResolve) {
-    return params.model;
+    return validateFinalModel(params.model);
   }
   if (params.model && !callerModelMatches && params.rejectMismatchedModel) {
     throw new Error(
@@ -97,13 +126,7 @@ export async function materializePreparedRuntimeModel<Model extends RuntimeRoute
   }
 
   const resolved = await params.resolveModel({
-    config: route
-      ? projectProviderModelRouteConfig({
-          provider: params.provider,
-          config: params.config,
-          route,
-        })
-      : (params.config ?? {}),
+    config: config ?? {},
     authProfileId: params.plan.forwardedAuthProfileId,
     authProfileMode: route
       ? resolveProviderModelRouteMaterializationAuthMode({
@@ -132,5 +155,6 @@ export async function materializePreparedRuntimeModel<Model extends RuntimeRoute
           : `Unable to rematerialize ${params.provider}/${params.modelId} for its resolved auth profile.`),
     );
   }
-  return resolved.model;
+  // Validate only the final route: an API credential may replace retired subscription metadata.
+  return validateFinalModel(resolved.model);
 }

@@ -1,6 +1,6 @@
 // Creates compact SQLite snapshots only after verifying both source and output.
 import { createHash, randomUUID } from "node:crypto";
-import fsSync, { type BigIntStats, type Stats } from "node:fs";
+import fsSync, { type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
@@ -10,12 +10,18 @@ import {
   getPublishFileExclusiveFailureDetails,
   isHardlinkFallbackError,
   pinDirectory,
-  publishFileNoClobber,
+  publishFileExclusive,
   requireDirectorySync,
   syncDirectory,
 } from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
-import { sameFileIdentity, type FileIdentityStat } from "./fs-safe-advanced.js";
+import {
+  copyFileHandle,
+  hashFileDescriptorSync,
+  sameFileMutationFingerprint,
+  type FileMutationFingerprint,
+} from "./file-descriptor.js";
+import { sameFileIdentity } from "./fs-safe-advanced.js";
 import {
   openNodeSqliteDatabase,
   requireNodeSqlite,
@@ -101,30 +107,13 @@ async function copyFileExclusive(
   try {
     target = await fs.open(targetPath, "wx+", 0o600);
     targetIdentity = await target.stat();
-    const buffer = Buffer.allocUnsafe(1024 * 1024);
     const hash = createHash("sha256");
-    let offset = 0;
-    while (true) {
-      const { bytesRead } = await source.read(buffer, 0, buffer.length, offset);
-      if (bytesRead === 0) {
-        break;
-      }
-      hash.update(buffer.subarray(0, bytesRead));
-      let bytesWritten = 0;
-      while (bytesWritten < bytesRead) {
-        const result = await target.write(
-          buffer,
-          bytesWritten,
-          bytesRead - bytesWritten,
-          offset + bytesWritten,
-        );
-        if (result.bytesWritten === 0) {
-          throw new Error(`SQLite snapshot copy made no progress: ${targetPath}`);
-        }
-        bytesWritten += result.bytesWritten;
-      }
-      offset += bytesRead;
-    }
+    const offset = await copyFileHandle(source, target, {
+      noProgressMessage: `SQLite snapshot copy made no progress: ${targetPath}`,
+      onChunk: (chunk) => {
+        hash.update(chunk);
+      },
+    });
     await assertMutationFingerprintUnchanged(source, sourceFingerprint, targetPath);
     await target.sync();
     const currentIdentity = await fs.lstat(targetPath);
@@ -147,11 +136,6 @@ async function copyFileExclusive(
   }
 }
 
-type FileMutationFingerprint = Pick<
-  BigIntStats,
-  "birthtimeNs" | "ctimeNs" | "dev" | "ino" | "mtimeNs" | "size"
->;
-
 async function readMutationFingerprint(handle: FileHandle): Promise<FileMutationFingerprint> {
   const stat = await handle.stat({ bigint: true });
   return {
@@ -170,30 +154,9 @@ async function assertMutationFingerprintUnchanged(
   filePath: string,
 ): Promise<void> {
   const current = await readMutationFingerprint(handle);
-  if (
-    current.birthtimeNs !== expected.birthtimeNs ||
-    current.ctimeNs !== expected.ctimeNs ||
-    current.dev !== expected.dev ||
-    current.ino !== expected.ino ||
-    current.mtimeNs !== expected.mtimeNs ||
-    current.size !== expected.size
-  ) {
+  if (!sameFileMutationFingerprint(current, expected)) {
     throw new Error(`SQLite snapshot file changed while reading: ${filePath}`);
   }
-}
-
-function sameMutationFingerprint(
-  left: FileMutationFingerprint,
-  right: FileMutationFingerprint,
-): boolean {
-  return (
-    left.birthtimeNs === right.birthtimeNs &&
-    left.ctimeNs === right.ctimeNs &&
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.mtimeNs === right.mtimeNs &&
-    left.size === right.size
-  );
 }
 
 async function syncFile(filePath: string): Promise<void> {
@@ -301,17 +264,7 @@ function hashPublishedFileSync(filePath: string, expectedIdentity: Stats): Sqlit
       mtimeNs: initialStat.mtimeNs,
       size: initialStat.size,
     };
-    const hash = createHash("sha256");
-    const buffer = Buffer.allocUnsafe(1024 * 1024);
-    let offset = 0;
-    while (true) {
-      const bytesRead = fsSync.readSync(fileDescriptor, buffer, 0, buffer.length, offset);
-      if (bytesRead === 0) {
-        break;
-      }
-      hash.update(buffer.subarray(0, bytesRead));
-      offset += bytesRead;
-    }
+    const content = hashFileDescriptorSync(fileDescriptor);
     const finalStat = fsSync.fstatSync(fileDescriptor, { bigint: true });
     const finalFingerprint: FileMutationFingerprint = {
       birthtimeNs: finalStat.birthtimeNs,
@@ -321,11 +274,11 @@ function hashPublishedFileSync(filePath: string, expectedIdentity: Stats): Sqlit
       mtimeNs: finalStat.mtimeNs,
       size: finalStat.size,
     };
-    if (!sameMutationFingerprint(initialFingerprint, finalFingerprint)) {
+    if (!sameFileMutationFingerprint(initialFingerprint, finalFingerprint)) {
       throw new Error(`SQLite snapshot file changed while reading: ${filePath}`);
     }
     assertOpenFileIdentitySync(fileDescriptor, filePath, expectedIdentity);
-    return { sha256: hash.digest("hex"), sizeBytes: offset };
+    return content;
   } finally {
     fsSync.closeSync(fileDescriptor);
   }
@@ -348,12 +301,9 @@ function assertExpectedContent(
   }
 }
 
-type CleanupIdentity = FileIdentityStat &
-  Partial<Pick<Stats, "birthtimeMs" | "ctimeMs" | "mtimeMs" | "size">>;
-
 function removePublishedTargetIfOwned(
   filePath: string,
-  expectedIdentity: CleanupIdentity,
+  expectedIdentity: Stats,
   requireFingerprint = false,
 ): boolean {
   let currentIdentity: Stats;
@@ -364,15 +314,22 @@ function removePublishedTargetIfOwned(
   }
   const fingerprintMatches =
     !requireFingerprint ||
-    (typeof expectedIdentity.size === "number" &&
-      typeof expectedIdentity.mtimeMs === "number" &&
-      typeof expectedIdentity.ctimeMs === "number" &&
-      typeof expectedIdentity.birthtimeMs === "number" &&
-      expectedIdentity.size === currentIdentity.size &&
+    (expectedIdentity.size === currentIdentity.size &&
       expectedIdentity.mtimeMs === currentIdentity.mtimeMs &&
       expectedIdentity.ctimeMs === currentIdentity.ctimeMs &&
       expectedIdentity.birthtimeMs === currentIdentity.birthtimeMs);
-  if (!sameFileIdentity(expectedIdentity, currentIdentity) || !fingerprintMatches) {
+  // Unknown Windows identity can admit a read, but cannot authorize deletion.
+  const unknownIdentity =
+    process.platform === "win32" &&
+    [expectedIdentity.dev, expectedIdentity.ino, currentIdentity.dev, currentIdentity.ino].some(
+      (value) => value === 0,
+    );
+  if (
+    !currentIdentity.isFile() ||
+    unknownIdentity ||
+    !sameFileIdentity(expectedIdentity, currentIdentity) ||
+    !fingerprintMatches
+  ) {
     return false;
   }
   // Node has no cross-platform unlink-by-inode primitive. Keep the ownership
@@ -435,7 +392,6 @@ export async function publishVerifiedSqliteFile(
   let source: FileHandle | undefined;
   let target: FileHandle | undefined;
   let targetPinFileDescriptor: number | undefined;
-  let failedPublicationIdentity: FileIdentityStat | undefined;
   let publishedIdentity: Stats | undefined;
   try {
     stagingIdentity = await fs.lstat(stagingDir);
@@ -458,42 +414,25 @@ export async function publishVerifiedSqliteFile(
       throw new Error(`SQLite snapshot staging file changed during publication: ${stagedPath}`);
     }
     try {
-      const publication = await publishFileNoClobber(stagedPath, options.targetPath, {
+      const publication = await publishFileExclusive({
+        sourcePath: stagedPath,
+        targetPath: options.targetPath,
+        expectedSourceIdentity: currentStagedIdentity,
         strategy: options.requireAtomicPublication ? "link-required" : "link-or-copy",
-        durability: "fail-closed",
       });
       publishedIdentity = publication.identity;
+      // Keep the successful receipt before our durability policy can reject it;
+      // dependency failures retain their own cleanup instead of a lossy receipt.
+      requireDirectorySync(publication.directorySync, "File publication directory");
     } catch (error) {
       const details = getPublishFileExclusiveFailureDetails(error);
       const stagedAfterFailure = details?.targetCreated
         ? await fs.lstat(stagedPath).catch(() => undefined)
         : undefined;
-      const targetAfterFailure = details?.targetCreated
-        ? await fs.lstat(options.targetPath).catch(() => undefined)
-        : undefined;
       const stagedPathChanged =
         !stagedAfterFailure || !sameFileStatFingerprint(staged.identity, stagedAfterFailure);
-      if (
-        details?.targetCreated &&
-        details.cleanup !== "removed" &&
-        stagedAfterFailure &&
-        targetAfterFailure &&
-        sameFileIdentity(stagedAfterFailure, targetAfterFailure)
-      ) {
-        // fs-safe proves this call created the path; the SQLite layer can also
-        // prove it linked from the staged name, so cleanup remains owned.
-        failedPublicationIdentity = targetAfterFailure;
-      } else if (
-        details?.targetCreated &&
-        details.cleanup !== "removed" &&
-        details.targetIdentity &&
-        targetAfterFailure &&
-        sameFileIdentity(details.targetIdentity, targetAfterFailure)
-      ) {
-        // Copy fallback has a distinct inode; the receipt ties its created
-        // identity to the current path before fingerprint-guarded cleanup.
-        failedPublicationIdentity = targetAfterFailure;
-      }
+      // Failed-publication cleanup belongs to the publisher's opened identity.
+      // A later staging/target lookup cannot grant ownership of a replacement.
       if (options.requireAtomicPublication && isHardlinkFallbackError(error)) {
         throw new Error(
           `Atomic SQLite publication requires hard-link support in ${targetDirectory}.`,
@@ -570,11 +509,10 @@ export async function publishVerifiedSqliteFile(
         publishedIdentity = openedIdentity;
       }
     }
-    const cleanupIdentity = publishedIdentity ?? failedPublicationIdentity;
-    if (cleanupIdentity) {
+    if (publishedIdentity) {
       // Windows can reuse a deleted file's identity while our old handle is still pinned.
       // Require the full fingerprint so cleanup never unlinks a caller replacement.
-      const removed = removePublishedTargetIfOwned(options.targetPath, cleanupIdentity, true);
+      const removed = removePublishedTargetIfOwned(options.targetPath, publishedIdentity, true);
       if (removed) {
         await syncDirectory(targetDirectoryReceipt).catch(() => undefined);
       }

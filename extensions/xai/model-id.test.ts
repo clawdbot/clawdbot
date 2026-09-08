@@ -1,6 +1,6 @@
 // Xai tests cover model id plugin behavior.
 import { describe, expect, it } from "vitest";
-import { normalizeXaiModelId } from "./api.js";
+import { normalizeXaiModelId } from "./model-id.js";
 
 describe("normalizeXaiModelId", () => {
   it("normalizes family-specific aliases but preserves the global alias", () => {

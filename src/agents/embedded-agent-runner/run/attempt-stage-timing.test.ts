@@ -1,4 +1,5 @@
 // Coverage for embedded attempt startup stage timing diagnostics.
+import { isMainThread, threadId } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
 import {
   createEmbeddedRunStageTracker,
@@ -67,7 +68,26 @@ describe("embedded run stage timing", () => {
         ],
       }),
     ).toBe(
-      "embedded run startup stages: runId=r1 totalMs=80 stages=workspace:25ms@25ms,tools:55ms@80ms",
+      `embedded run startup stages: runId=r1 pid=${process.pid} threadId=${threadId} isMainThread=${isMainThread} totalMs=80 stages=workspace:25ms@25ms,tools:55ms@80ms`,
+    );
+  });
+
+  it("keeps orchestration startup stages ordered and cumulative", () => {
+    let clock = 0;
+    const tracker = createEmbeddedRunStageTracker({ now: () => clock });
+
+    clock = 2;
+    tracker.mark("workspace");
+    clock = 7;
+    tracker.mark("harness-selection");
+    clock = 18;
+    tracker.mark("prepared-runtime");
+    clock = 21;
+    tracker.mark("runtime-context");
+    tracker.mark("runtime-plugins");
+
+    expect(formatEmbeddedRunStageSummary("startup", tracker.snapshot())).toBe(
+      `startup pid=${process.pid} threadId=${threadId} isMainThread=${isMainThread} totalMs=21 stages=workspace:2ms@2ms,harness-selection:5ms@7ms,prepared-runtime:11ms@18ms,runtime-context:3ms@21ms,runtime-plugins:0ms@21ms`,
     );
   });
 
@@ -87,7 +107,7 @@ describe("embedded run stage timing", () => {
     tracker.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.dispatch);
 
     expect(formatEmbeddedRunStageSummary("startup", tracker.snapshot())).toBe(
-      "startup totalMs=91 stages=attempt-workspace:10ms@10ms,attempt-prompt:30ms@40ms,attempt-runtime-plan:50ms@90ms,attempt-dispatch:1ms@91ms",
+      `startup pid=${process.pid} threadId=${threadId} isMainThread=${isMainThread} totalMs=91 stages=attempt-workspace:10ms@10ms,attempt-prompt:30ms@40ms,attempt-runtime-plan:50ms@90ms,attempt-dispatch:1ms@91ms`,
     );
   });
 });

@@ -1,4 +1,6 @@
 // Matrix API module exposes the plugin public contract.
+import { chunkTextForOutbound as chunkTextForOutboundSdk } from "openclaw/plugin-sdk/text-chunking";
+
 export {
   type MatrixResolvedStringField,
   type MatrixResolvedStringValues,
@@ -53,7 +55,15 @@ export type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-ru
 export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 export type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 
+// This facade shipped distinct empty and whitespace behavior. Preserve that
+// contract while delegating fractional limits to the progress-safe SDK owner.
 export function chunkTextForOutbound(text: string, limit: number): string[] {
+  if (text.length === 0) {
+    return [""];
+  }
+  if (Number.isFinite(limit) && limit > 0 && !Number.isInteger(limit)) {
+    return chunkTextForOutboundSdk(text, limit);
+  }
   const chunks: string[] = [];
   let remaining = text;
   while (remaining.length > limit) {
@@ -63,7 +73,7 @@ export function chunkTextForOutbound(text: string, limit: number): string[] {
     chunks.push(remaining.slice(0, breakAt).trimEnd());
     remaining = remaining.slice(breakAt).trimStart();
   }
-  if (remaining.length > 0 || text.length === 0) {
+  if (remaining.length > 0) {
     chunks.push(remaining);
   }
   return chunks;

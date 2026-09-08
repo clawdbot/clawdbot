@@ -1,5 +1,11 @@
 import { isFallbackSummaryError } from "../../agents/model-fallback-attempt.js";
-import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
+import {
+  AGENT_RUN_RESTART_ABORT_STOP_REASON,
+  isAgentRunDirectAbortReason,
+  isAgentRunRestartAbortReason,
+  isAgentRunSupersededAbortReason,
+  resolveAgentRunErrorLifecycleFields,
+} from "../../agents/run-termination.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 
@@ -7,7 +13,7 @@ export function buildRestartLifecycleReplyText(): string {
   return "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
 }
 
-export function isReplyOperationUserAbort(replyOperation?: ReplyOperation): boolean {
+function isReplyOperationUserAbort(replyOperation?: ReplyOperation): boolean {
   if (
     replyOperation?.result?.kind === "aborted" &&
     replyOperation.result.code === "aborted_by_user"
@@ -15,10 +21,14 @@ export function isReplyOperationUserAbort(replyOperation?: ReplyOperation): bool
     return true;
   }
   const abortSignal = replyOperation?.abortSignal;
-  return abortSignal?.aborted === true && !isAgentRunRestartAbortReason(abortSignal.reason);
+  return (
+    abortSignal?.aborted === true &&
+    !isAgentRunRestartAbortReason(abortSignal.reason) &&
+    !isAgentRunSupersededAbortReason(abortSignal.reason)
+  );
 }
 
-export function isReplyOperationRestartAbort(replyOperation?: ReplyOperation): boolean {
+function isReplyOperationRestartAbort(replyOperation?: ReplyOperation): boolean {
   if (
     replyOperation?.result?.kind === "aborted" &&
     replyOperation.result.code === "aborted_for_restart"
@@ -27,6 +37,43 @@ export function isReplyOperationRestartAbort(replyOperation?: ReplyOperation): b
   }
   const abortSignal = replyOperation?.abortSignal;
   return abortSignal?.aborted === true && isAgentRunRestartAbortReason(abortSignal.reason);
+}
+
+export function resolveReplyOperationTerminationFields(
+  error: unknown,
+  signal: AbortSignal | undefined,
+  replyOperation?: ReplyOperation,
+) {
+  return {
+    ...resolveAgentRunErrorLifecycleFields(error, signal),
+    ...(isReplyOperationRestartAbort(replyOperation)
+      ? { aborted: true as const, stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON }
+      : {}),
+  };
+}
+
+export function isReplyOperationSuperseded(replyOperation?: ReplyOperation): boolean {
+  if (
+    replyOperation?.result?.kind === "aborted" &&
+    replyOperation.result.code === "aborted_for_supersession"
+  ) {
+    return true;
+  }
+  const abortSignal = replyOperation?.abortSignal;
+  return abortSignal?.aborted === true && isAgentRunSupersededAbortReason(abortSignal.reason);
+}
+
+export function resolveReplyOperationAbortReason(
+  replyOperation?: ReplyOperation,
+  error?: unknown,
+): "user" | "restart" | "superseded" | undefined {
+  return isAgentRunRestartAbortReason(error) || isReplyOperationRestartAbort(replyOperation)
+    ? "restart"
+    : isReplyOperationSuperseded(replyOperation)
+      ? "superseded"
+      : isAgentRunDirectAbortReason(error) || isReplyOperationUserAbort(replyOperation)
+        ? "user"
+        : undefined;
 }
 
 export function resolveRestartLifecycleError(

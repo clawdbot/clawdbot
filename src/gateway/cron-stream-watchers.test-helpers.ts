@@ -31,6 +31,19 @@ export function job(overrides: Partial<CronJob> = {}): CronJob {
   };
 }
 
+export function createCronStreamMatchingJob(match: string): CronJob {
+  return job({
+    schedule: {
+      kind: "stream",
+      command: ["stream-source"],
+      mode: "match",
+      match,
+      batchMs: 50,
+      maxBatchBytes: 1_024,
+    },
+  });
+}
+
 export function exitResult(overrides: Partial<RunExit> = {}): RunExit {
   return {
     reason: "exit",
@@ -51,11 +64,16 @@ export function fakeSupervisor() {
   const exits: Array<(result: RunExit) => void> = [];
   const spawn = vi.fn(async (input: SpawnInput) => {
     inputs.push(input);
+    const activity = { resultSettled: false, lastOutputAtMs: Date.now() };
     let resolveWait!: (result: RunExit) => void;
     const wait = new Promise<RunExit>((resolve) => {
-      resolveWait = resolve;
+      resolveWait = (result) => {
+        activity.resultSettled = true;
+        resolve(result);
+      };
     });
     const run: ManagedRun = {
+      activity,
       runId: `run-${runs.length + 1}`,
       startedAtMs: Date.now(),
       stdin: undefined,
@@ -68,12 +86,29 @@ export function fakeSupervisor() {
     return run;
   });
   const supervisor = {
+    acquireScopeCleanup: vi.fn(() => {
+      throw new Error("Cron stream fixture does not own a cleanup scope");
+    }),
     spawn,
     cancel: vi.fn(),
     cancelScope: vi.fn(),
-    getRecord: vi.fn(),
   } satisfies ProcessSupervisor;
   return { inputs, runs, exits, spawn, supervisor };
+}
+
+export function createCronStreamWatcherFixture<
+  Overrides extends Partial<Parameters<typeof createWatchers>[0]>,
+>(overrides: Overrides = {} as Overrides) {
+  const fake = fakeSupervisor();
+  const callbacks = {
+    getProcessSupervisor: () => fake.supervisor,
+    updateState: vi.fn(async (_jobId: string, _patch: Partial<CronJob["state"]>) => {}),
+    recordFailure: vi.fn(async () => {}),
+    fireBatch: vi.fn(async (_job: CronJob, _batch: string) => "fired" as const),
+    logger: { info: vi.fn(), warn: vi.fn() },
+    ...overrides,
+  };
+  return { fake, ...callbacks, watchers: createWatchers(callbacks) };
 }
 
 export async function settle(): Promise<void> {

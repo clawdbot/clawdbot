@@ -10,7 +10,7 @@ import { MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE } from "../../packages/memory-
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { ensureOpenClawAgentStandingIntentsSchema } from "./openclaw-agent-standing-intents-schema.js";
 
 const STANDING_SCHEMA_START = "CREATE TABLE IF NOT EXISTS standing_intents (";

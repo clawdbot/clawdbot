@@ -13,7 +13,7 @@ import {
   shouldSkipLiveModelExtraProbes,
   shouldSkipLiveModelFileProbe,
   shouldSkipLiveModelImageProbe,
-} from "./live-model-turn-probes.js";
+} from "./test-helpers/live-model-turn-probes.js";
 
 function createImageProbeRunner(responses: string[]) {
   const attempts: Array<1 | 2> = [];

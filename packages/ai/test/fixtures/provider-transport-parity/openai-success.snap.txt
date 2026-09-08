@@ -95,6 +95,9 @@
       "model": "gpt-5.5",
       "responseId": "chatcmpl-parity",
       "responseModel": "gpt-5.5-response",
+      "openclawDelivery": {
+        "textPhaseRequiresTerminal": true
+      },
       "usage": {
         "input": 6,
         "output": 4,
@@ -204,6 +207,10 @@
       "provider": "openai",
       "model": "gpt-5.5",
       "responseId": "chatcmpl-parity",
+      "responseModel": "gpt-5.5-response",
+      "openclawDelivery": {
+        "textPhaseRequiresTerminal": true
+      },
       "usage": {
         "input": 6,
         "output": 4,

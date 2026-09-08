@@ -2,12 +2,25 @@ import fsSync, { createWriteStream, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 
 const BACKUP_ARCHIVE_IDLE_TIMEOUT_MS = 5 * 60_000;
 
 type DestroyableArchiveStream = (NodeJS.ReadableStream | AsyncIterable<Uint8Array>) & {
   destroy(error?: Error): unknown;
+};
+
+type BackupTarEntryProgressStream = {
+  flowing: boolean;
+  on(event: "data", listener: (chunk: Buffer | string) => void): unknown;
+  pause(): unknown;
+};
+
+type BackupArchiveProgress = {
+  bytes?: number;
+  entryPath?: string;
+  phase: "entry" | "output" | "raw" | "traversal";
 };
 
 export type BackupArchiveCleanupReceipt = {
@@ -18,6 +31,21 @@ export type BackupArchiveCleanupReceipt = {
 export type PreparedBackupArchive = BackupArchiveCleanupReceipt & {
   identity: Stats;
 };
+
+export function observeBackupTarEntryProgress(
+  entry: BackupTarEntryProgressStream,
+  reportProgress: (bytes: number) => void,
+): void {
+  const wasFlowing = entry.flowing;
+  entry.on("data", (chunk) => {
+    reportProgress(typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length);
+  });
+  if (!wasFlowing) {
+    // node-tar calls onWriteEntry before emitting the header. Adding a Minipass
+    // data listener starts flow, so pause until Pack attaches its own consumer.
+    entry.pause();
+  }
+}
 
 // OpenClaw's one-user trust model treats hostile same-UID pathname rewrites as
 // trusted host mutation. Keep the check and unlink synchronous so cooperative
@@ -42,33 +70,59 @@ export function removePreparedBackupArchive(prepared: PreparedBackupArchive): bo
 
 export async function writeArchiveStreamToFile(params: {
   archivePath: string;
-  archiveStream: DestroyableArchiveStream;
-  idleTimeoutMs?: number;
-  onPartialArchive?: (receipt: BackupArchiveCleanupReceipt) => void;
+  createArchiveStream: (
+    reportProgress: (progress?: BackupArchiveProgress) => void,
+  ) => DestroyableArchiveStream;
+  onPartialArchive: (receipt: BackupArchiveCleanupReceipt) => void;
 }): Promise<PreparedBackupArchive> {
   // Own both stream lifecycles so a tar read error closes the output handle
   // before retry cleanup touches the partial archive. Exclusive creation also
   // refuses a pre-existing path instead of following a symlink.
-  const idleTimeoutMs = params.idleTimeoutMs ?? BACKUP_ARCHIVE_IDLE_TIMEOUT_MS;
   const controller = new AbortController();
+  let archiveStream: DestroyableArchiveStream | undefined;
   let openedIdentity: Stats | undefined;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let idleTimeoutError: Error | undefined;
-  const armIdleTimer = () => {
-    if (idleTimer) {
-      clearTimeout(idleTimer);
+  let lastEntryPath: string | undefined;
+  let lastProgress: BackupArchiveProgress | undefined;
+  let outputBytes = 0;
+  let producerBytes = 0;
+  let settled = false;
+  const reportProgress = (progress?: BackupArchiveProgress) => {
+    // One archive owns this watchdog. Late producer callbacks must not refresh
+    // its timer after cleanup has completed.
+    if (settled) {
+      return;
     }
-    idleTimer = setTimeout(() => {
-      idleTimeoutError = new Error(
-        `Backup archive write stalled: no data produced for ${idleTimeoutMs}ms`,
-      );
-      params.archiveStream.destroy(idleTimeoutError);
-      controller.abort(idleTimeoutError);
-    }, idleTimeoutMs);
+    if (progress) {
+      lastProgress = progress;
+      if (progress.entryPath) {
+        lastEntryPath = progress.entryPath;
+      }
+      if (progress.bytes) {
+        if (progress.phase === "output") {
+          outputBytes += progress.bytes;
+        } else if (progress.phase === "raw") {
+          producerBytes += progress.bytes;
+        }
+      }
+    }
+    idleTimer =
+      idleTimer?.refresh() ??
+      setTimeout(() => {
+        const entrySuffix = lastEntryPath
+          ? `, entry=${JSON.stringify(sliceUtf16Safe(lastEntryPath, -512))}`
+          : "";
+        idleTimeoutError = new Error(
+          `Backup archive write stalled: no progress observed for ${BACKUP_ARCHIVE_IDLE_TIMEOUT_MS}ms (phase=${lastProgress?.phase ?? "starting"}${entrySuffix}, rawBytes=${producerBytes}, outputBytes=${outputBytes})`,
+        );
+        archiveStream?.destroy(idleTimeoutError);
+        controller.abort(idleTimeoutError);
+      }, BACKUP_ARCHIVE_IDLE_TIMEOUT_MS);
   };
   const progress = new Transform({
     transform(chunk, _encoding, callback) {
-      armIdleTimer();
+      reportProgress({ phase: "output", bytes: chunk.length });
       callback(null, chunk);
     },
   });
@@ -86,10 +140,11 @@ export async function writeArchiveStreamToFile(params: {
     }
   });
   try {
-    const pipelinePromise = pipeline(params.archiveStream, progress, archiveWriteStream, {
+    archiveStream = params.createArchiveStream(reportProgress);
+    const pipelinePromise = pipeline(archiveStream, progress, archiveWriteStream, {
       signal: controller.signal,
     });
-    armIdleTimer();
+    reportProgress();
     await pipelinePromise;
     const currentIdentity = await fs.lstat(params.archivePath);
     if (
@@ -127,27 +182,11 @@ export async function writeArchiveStreamToFile(params: {
       (!cleanupReceipt.identity ||
         !removePreparedBackupArchive(cleanupReceipt as PreparedBackupArchive))
     ) {
-      params.onPartialArchive?.(cleanupReceipt);
-    }
-    if (cleanupReceipt && !cleanupReceipt.identity) {
-      // The outer cleanup owns the retry because this scope cannot safely
-      // unlink a pathname whose identity is temporarily unavailable.
-      if (!params.onPartialArchive) {
-        try {
-          const currentIdentity = fsSync.lstatSync(cleanupReceipt.archivePath);
-          if (currentIdentity.isFile()) {
-            removePreparedBackupArchive({
-              archivePath: cleanupReceipt.archivePath,
-              identity: currentIdentity,
-            });
-          }
-        } catch {
-          // No outer owner was provided; preserve the original write error.
-        }
-      }
+      params.onPartialArchive(cleanupReceipt);
     }
     throw idleTimeoutError ?? err;
   } finally {
+    settled = true;
     if (idleTimer) {
       clearTimeout(idleTimer);
     }

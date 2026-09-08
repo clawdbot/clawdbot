@@ -7,6 +7,7 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../../../agents/model-ref-shared.js";
 import { configuredModelRouteNeedsCodex } from "../../../config/codex-plugin-diagnostics.js";
+import { isLegacyCodexProviderId } from "../../../config/legacy-codex-provider.js";
 import type { AgentRuntimePolicyConfig } from "../../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
@@ -26,8 +27,6 @@ export function readLegacyDefaultsRuntime(defaults: unknown): AgentRuntimePolicy
   return asAgentRuntimePolicyConfig(asMutableRecord(defaults)?.agentRuntime);
 }
 
-const LEGACY_CODEX_PROVIDER_IDS = new Set(["codex", "openai-codex"]);
-
 export type LegacyCodexModelIdentity = string;
 
 // A namespace block ends at the separator; exact model blocks append the model id.
@@ -36,9 +35,7 @@ export function legacyCodexProviderIdentityKey(
   providerId: unknown,
 ): LegacyCodexModelIdentity | undefined {
   const normalized = normalizeString(providerId);
-  return normalized && LEGACY_CODEX_PROVIDER_IDS.has(normalized)
-    ? `${normalized}\u0000`
-    : undefined;
+  return normalized && isLegacyCodexProviderId(normalized) ? `${normalized}\u0000` : undefined;
 }
 
 function legacyCodexModelIdentityKey(params: {
@@ -46,11 +43,7 @@ function legacyCodexModelIdentityKey(params: {
   modelId: unknown;
 }): LegacyCodexModelIdentity | undefined {
   const providerId = normalizeString(params.providerId);
-  if (
-    !providerId ||
-    !LEGACY_CODEX_PROVIDER_IDS.has(providerId) ||
-    typeof params.modelId !== "string"
-  ) {
+  if (!providerId || !isLegacyCodexProviderId(providerId) || typeof params.modelId !== "string") {
     return undefined;
   }
   const modelId = splitTrailingAuthProfile(params.modelId).model.trim();
@@ -59,7 +52,7 @@ function legacyCodexModelIdentityKey(params: {
   }
   const slash = modelId.indexOf("/");
   const unscopedModelId =
-    slash > 0 && LEGACY_CODEX_PROVIDER_IDS.has(normalizeString(modelId.slice(0, slash)) ?? "")
+    slash > 0 && isLegacyCodexProviderId(normalizeString(modelId.slice(0, slash)) ?? "")
       ? modelId.slice(slash + 1).trim()
       : modelId;
   return unscopedModelId ? `${providerId}\u0000${unscopedModelId}` : undefined;
@@ -112,21 +105,13 @@ export function isBlockedLegacyCodexModelPair(params: {
   );
 }
 
-export function isLegacyCodexProviderId(provider: unknown): boolean {
-  const normalized = normalizeString(provider);
-  return normalized ? LEGACY_CODEX_PROVIDER_IDS.has(normalized) : false;
-}
-
 function readLegacyCodexModelId(model: unknown): string | undefined {
   if (typeof model !== "string") {
     return undefined;
   }
   const trimmed = model.trim();
   const slash = trimmed.indexOf("/");
-  if (
-    slash <= 0 ||
-    !LEGACY_CODEX_PROVIDER_IDS.has(normalizeString(trimmed.slice(0, slash)) ?? "")
-  ) {
+  if (slash <= 0 || !isLegacyCodexProviderId(normalizeString(trimmed.slice(0, slash)) ?? "")) {
     return undefined;
   }
   const modelId = trimmed.slice(slash + 1).trim();
@@ -140,7 +125,7 @@ export function isOpenAICodexModelRef(model: string | undefined): model is strin
 export function isOpenAICodexAuthProfileRef(profile: unknown): boolean {
   const normalized = normalizeString(profile);
   const separator = normalized?.indexOf(":") ?? -1;
-  return separator > 0 && LEGACY_CODEX_PROVIDER_IDS.has(normalized?.slice(0, separator) ?? "");
+  return separator > 0 && isLegacyCodexProviderId(normalized?.slice(0, separator) ?? "");
 }
 
 export function isProviderlessModelRef(model: unknown): model is string {
@@ -293,10 +278,10 @@ function resolveDefaultProviderForAliasContext(params: {
       DEFAULT_PROVIDER,
     );
     const parsed =
-      parseModelRef(
+      parseCodexRouteModelRef(
         primaryAliasRef ?? compatModelRef ?? legacyCodexModel ?? effectivePrimaryModelRef,
       ) ??
-      parseModelRef(
+      parseCodexRouteModelRef(
         resolveConfiguredBareModelRef({
           cfg: params.cfg,
           modelRef: effectivePrimaryModelRef,
@@ -305,7 +290,7 @@ function resolveDefaultProviderForAliasContext(params: {
       );
     return normalizeProviderId(parsed?.provider ?? DEFAULT_PROVIDER) || DEFAULT_PROVIDER;
   }
-  const implicit = parseModelRef(resolveImplicitDefaultAgentModelRef(params.cfg));
+  const implicit = parseCodexRouteModelRef(resolveImplicitDefaultAgentModelRef(params.cfg));
   return normalizeProviderId(implicit?.provider ?? DEFAULT_PROVIDER) || DEFAULT_PROVIDER;
 }
 
@@ -353,7 +338,7 @@ function resolveConfiguredBareModelRef(params: {
   const matches = new Set<string>();
   const pushModelMapMatches = (models: MutableRecord | undefined) => {
     for (const key of Object.keys(models ?? {})) {
-      const parsed = parseModelRef(key);
+      const parsed = parseCodexRouteModelRef(key);
       if (parsed?.modelId === modelId) {
         matches.add(`${parsed.provider}/${parsed.modelId}`);
       }
@@ -442,7 +427,9 @@ function concreteRuntimeId(runtime: string | undefined): string | undefined {
   return runtime && runtime !== "auto" && runtime !== "default" ? runtime : undefined;
 }
 
-export function parseModelRef(modelRef: string): { provider: string; modelId: string } | undefined {
+export function parseCodexRouteModelRef(
+  modelRef: string,
+): { provider: string; modelId: string } | undefined {
   const slash = modelRef.indexOf("/");
   if (slash <= 0 || slash >= modelRef.length - 1) {
     return undefined;
@@ -459,7 +446,7 @@ export function canonicalOpenAIModelUsesCodexRuntime(params: {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
 }): boolean {
-  const parsed = parseModelRef(params.modelRef);
+  const parsed = parseCodexRouteModelRef(params.modelRef);
   if (!parsed) {
     return false;
   }

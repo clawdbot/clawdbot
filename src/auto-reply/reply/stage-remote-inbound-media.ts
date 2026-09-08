@@ -20,9 +20,11 @@ const stageSandboxMediaRuntimeLoader = createLazyImportLoader(
 export async function stageRemoteInboundMediaIfNeeded(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
+  agentId?: string;
   sessionKey?: string;
   workspaceDir: string;
   remoteMediaMode?: "sandbox-or-cache" | "cache";
+  abortSignal?: AbortSignal;
 }): Promise<boolean> {
   if (
     !params.sessionKey ||
@@ -35,15 +37,8 @@ export async function stageRemoteInboundMediaIfNeeded(params: {
 
   const { stageSandboxMedia } = await stageSandboxMediaRuntimeLoader.load();
   const result = await stageSandboxMedia({
-    ctx: params.ctx,
+    ...params,
     sessionCtx: params.ctx,
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    workspaceDir: params.workspaceDir,
-    remoteMediaMode: params.remoteMediaMode,
   });
-  if (result.staged.size === 0) {
-    return false;
-  }
-  return true;
+  return result.staged.size > 0;
 }

@@ -3,6 +3,10 @@
  * app-server sessions.
  */
 import { existsSync } from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { reconcileCodexComputerUseStartArtifacts } from "./auth-bridge.js";
+import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { describeControlFailure } from "./capabilities.js";
 import {
   isCodexAppServerConnectionClosedError,
@@ -10,21 +14,23 @@ import {
   isCodexAppServerIndeterminateTransportError,
   type CodexAppServerClient,
 } from "./client.js";
-import {
-  killStaleComputerUseMcpChildren,
-  scopedRepairUnavailableStatus,
-  type CodexComputerUseRepairStatus,
-} from "./computer-use-process-repair.js";
+import { resolveCodexManagedBundledMarketplacePath } from "./computer-use-marketplace.js";
+import { assertNotSymlink } from "./computer-use-service-path.js";
 import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
   type CodexComputerUseConfig,
   type ResolvedCodexComputerUseConfig,
 } from "./config.js";
-import { resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath } from "./desktop-app-paths.js";
+import {
+  resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath,
+  resolveMacOSDesktopCodexBundledMarketplaceCandidates,
+} from "./desktop-app-paths.js";
+import { isManagedCodexDesktopCommand } from "./managed-binary.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import type {
   CodexListMcpServerStatusResponse,
+  CodexConfigReadResponse,
   CodexMcpServerStatus,
   CodexPluginDetail,
   CodexPluginListResponse,
@@ -35,9 +41,14 @@ import type {
 } from "./protocol.js";
 import { requestCodexAppServerJson } from "./request.js";
 import {
+  assertCodexAppServerClientStartSelectionCurrent,
   getLeasedSharedCodexAppServerClient,
+  isCodexAppServerStartSelectionChangedError,
+  readCodexAppServerClientDesktopGeneration,
+  readCodexAppServerClientProcessIdentity,
   releaseLeasedSharedCodexAppServerClient,
   resolveCodexNativeConfigFenceKey,
+  waitForCodexAppServerClientDesktopGenerationDrain,
 } from "./shared-client.js";
 
 /** Minimal app-server request function needed by Computer Use setup. */
@@ -68,6 +79,13 @@ type CodexComputerUseInstallationStatus =
 type CodexComputerUseExposureStatus = "skipped" | "missing" | "available";
 
 type CodexComputerUseLiveTestState = "skipped" | "passed" | "failed";
+
+type CodexComputerUseRepairStatus = {
+  attempted: boolean;
+  killedPids: number[];
+  message: string;
+  warnings: string[];
+};
 
 type CodexComputerUseStatusSection = {
   status: string;
@@ -137,7 +155,7 @@ export type CodexComputerUseSetupParams = {
   forceEnable?: boolean;
   defaultBundledMarketplacePath?: string;
   defaultBundledMarketplacePathCandidates?: readonly string[];
-  repairComputerUseMcpChildren?: () => Promise<CodexComputerUseRepairStatus>;
+  releaseNativeConfigFence?: () => void;
 };
 
 type CodexComputerUseInspectionParams = {
@@ -152,7 +170,16 @@ type CodexComputerUseInspectionParams = {
   installPlugin: boolean;
   defaultBundledMarketplacePath?: string;
   defaultBundledMarketplacePathCandidates?: readonly string[];
-  repairComputerUseMcpChildren?: () => Promise<CodexComputerUseRepairStatus>;
+  releaseNativeConfigFence?: () => void;
+  explicitManagedInstall?: ExplicitManagedComputerUseInstallContext;
+};
+
+type ExplicitManagedComputerUseInstallContext = {
+  client: CodexAppServerClient;
+  agentDir: string;
+  codexHome: string;
+  command: string;
+  desktopGeneration: NonNullable<ReturnType<typeof readCodexAppServerClientDesktopGeneration>>;
 };
 
 type MarketplaceRef =
@@ -184,8 +211,9 @@ type PluginInspection =
     };
 
 const CURATED_MARKETPLACE_POLL_INTERVAL_MS = 2_000;
+const BUNDLED_MARKETPLACE_NAME = "openai-bundled";
 const COMPUTER_USE_MARKETPLACE_NAME_PRIORITY = [
-  "openai-bundled",
+  BUNDLED_MARKETPLACE_NAME,
   "openai-curated",
   "openai-api-curated",
   "openai-curated-remote",
@@ -289,76 +317,90 @@ async function inspectCodexComputerUse(
   if (!params.installPlugin) {
     return await inspectCodexComputerUseWithoutFence(params);
   }
-  const runtime = params.client
-    ? undefined
-    : resolveCodexAppServerRuntimeOptions({
-        pluginConfig: params.pluginConfig,
-        managedCommandOrder: "desktop-first",
-      });
-  const fenceKey = resolveCodexNativeConfigFenceKey({
-    client: params.client,
-    startOptions: runtime?.start,
-    agentDir: params.agentDir,
-    config: params.config,
+  const resolvedRuntime = resolveCodexAppServerRuntimeOptions({
+    pluginConfig: params.pluginConfig,
+    managedCommandOrder: "desktop-first",
   });
-  if (!fenceKey) {
-    return await inspectCodexComputerUseWithoutFence(params);
-  }
-  const release = await acquireCodexNativeConfigFence(fenceKey, {
-    signal: params.signal,
-    timeoutMs: params.timeoutMs ?? runtime?.requestTimeoutMs,
-    timeoutMessage: "Codex Computer Use install timed out waiting for native config",
-    abortMessage: "Codex Computer Use install aborted waiting for native config",
-  });
-  let releaseFenceOnReturn = true;
+  const operationTimeoutMs = params.timeoutMs ?? resolvedRuntime.requestTimeoutMs;
+  const deadline = operationTimeoutMs > 0 ? Date.now() + operationTimeoutMs : undefined;
+  const remainingTimeoutMs = () =>
+    deadline === undefined ? operationTimeoutMs : Math.max(1, deadline - Date.now());
   let leasedClient: CodexAppServerClient | undefined;
   try {
     let client = params.client;
     if (!client && !params.request) {
-      if (!runtime) {
-        throw new Error("Computer Use install could not resolve its app-server runtime");
-      }
       client = await getLeasedSharedCodexAppServerClient({
-        startOptions: runtime.start,
+        startOptions: resolvedRuntime.start,
         pluginConfig: params.pluginConfig,
-        timeoutMs: params.timeoutMs ?? runtime.requestTimeoutMs,
+        timeoutMs: remainingTimeoutMs(),
         config: params.config,
         agentDir: params.agentDir,
         abandonSignal: params.signal,
       });
       leasedClient = client;
     }
-    try {
-      return await inspectCodexComputerUseWithoutFence({
-        ...params,
-        ...(client
-          ? {
-              client,
-              timeoutMs: params.timeoutMs ?? runtime?.requestTimeoutMs,
-            }
-          : {}),
+    const explicitManagedInstall =
+      client && !resolveCodexComputerUseConfig({ pluginConfig: params.pluginConfig }).autoInstall
+        ? await resolveExplicitManagedComputerUseInstallContext({ ...params, client })
+        : undefined;
+    if (explicitManagedInstall) {
+      await waitForCodexAppServerClientDesktopGenerationDrain({
+        client: explicitManagedInstall.client,
+        timeoutMs: remainingTimeoutMs(),
+        ...(params.signal ? { signal: params.signal } : {}),
       });
-    } catch (error) {
-      if (
-        client &&
-        (isCodexAppServerIndeterminateRequestCancellationError(error) ||
-          isCodexAppServerIndeterminateTransportError(error) ||
-          isCodexAppServerConnectionClosedError(error))
-      ) {
-        // Codex may still commit a config mutation after local cancellation.
-        // Transfer fence ownership to physical process exit before surfacing it.
-        releaseFenceOnReturn = false;
-        await client.closeAndRunAfterExit(release, "Computer Use config mutation");
+      assertCodexAppServerClientStartSelectionCurrent({ client: explicitManagedInstall.client });
+    }
+    const inspectionParams: CodexComputerUseInspectionParams = {
+      ...params,
+      ...(client ? { client } : {}),
+      timeoutMs: remainingTimeoutMs(),
+      ...(explicitManagedInstall ? { explicitManagedInstall } : {}),
+    };
+    const fenceKey = resolveCodexNativeConfigFenceKey({
+      client,
+      startOptions: resolvedRuntime.start,
+      agentDir: params.agentDir,
+      config: params.config,
+    });
+    if (!fenceKey) {
+      return await inspectCodexComputerUseWithoutFence(inspectionParams);
+    }
+    const release = await acquireCodexNativeConfigFence(fenceKey, {
+      signal: params.signal,
+      timeoutMs: remainingTimeoutMs(),
+      timeoutMessage: "Codex Computer Use install timed out waiting for native config",
+      abortMessage: "Codex Computer Use install aborted waiting for native config",
+    });
+    let releaseFenceOnReturn = true;
+    try {
+      try {
+        return await inspectCodexComputerUseWithoutFence({
+          ...inspectionParams,
+          releaseNativeConfigFence: release,
+        });
+      } catch (error) {
+        if (
+          client &&
+          (isCodexAppServerIndeterminateRequestCancellationError(error) ||
+            isCodexAppServerIndeterminateTransportError(error) ||
+            isCodexAppServerConnectionClosedError(error))
+        ) {
+          // Codex may still commit a config mutation after local cancellation.
+          // Transfer fence ownership to physical process exit before surfacing it.
+          releaseFenceOnReturn = false;
+          await client.closeAndRunAfterExit(release, "Computer Use config mutation");
+        }
+        throw error;
       }
-      throw error;
     } finally {
-      if (leasedClient) {
-        releaseLeasedSharedCodexAppServerClient(leasedClient);
+      if (releaseFenceOnReturn) {
+        release();
       }
     }
   } finally {
-    if (releaseFenceOnReturn) {
-      release();
+    if (leasedClient) {
+      releaseLeasedSharedCodexAppServerClient(leasedClient);
     }
   }
 }
@@ -367,24 +409,33 @@ async function inspectCodexComputerUseWithoutFence(
   params: CodexComputerUseInspectionParams,
 ): Promise<CodexComputerUseStatus> {
   const request = createComputerUseRequest(params);
-  const repairComputerUseMcpChildren =
-    params.repairComputerUseMcpChildren ??
-    (params.client
-      ? () => killStaleComputerUseMcpChildren({ ancestorPid: params.client?.getTransportPid() })
-      : undefined);
   if (params.installPlugin) {
+    if (!resolveCodexComputerUseConfig({ pluginConfig: params.pluginConfig }).autoInstall) {
+      await prepareExplicitManagedComputerUseInstall(params);
+    }
     await request<JsonValue>("experimentalFeature/enablement/set", {
       enablement: { plugins: true },
     } satisfies CodexRequestObject);
   }
 
+  const managedMarketplacePath = await resolveClientManagedBundledMarketplacePath(
+    params.client,
+    params.agentDir,
+  );
+  const managedCodexHome = managedMarketplacePath
+    ? params.client?.getRuntimeIdentity()?.codexHome
+    : undefined;
+  if (params.installPlugin && managedCodexHome) {
+    await assertNotSymlink(path.join(managedCodexHome, "config.toml"), "Codex config");
+  }
   const marketplace = await resolveMarketplaceRef({
     request,
     config: params.computerUseConfig,
     allowAdd: params.installPlugin,
     signal: params.signal,
-    defaultBundledMarketplacePath: params.defaultBundledMarketplacePath,
+    defaultBundledMarketplacePath: params.defaultBundledMarketplacePath ?? managedMarketplacePath,
     defaultBundledMarketplacePathCandidates: params.defaultBundledMarketplacePathCandidates,
+    managedCodexHome,
   });
   if (!marketplace.marketplace) {
     return unavailableStatus(
@@ -410,8 +461,92 @@ async function inspectCodexComputerUseWithoutFence(
     config: params.computerUseConfig,
     plugin: pluginInspection.plugin,
     installPlugin: params.installPlugin,
-    repairComputerUseMcpChildren,
+    releaseNativeConfigFence: params.releaseNativeConfigFence,
   });
+}
+
+async function prepareExplicitManagedComputerUseInstall(
+  params: CodexComputerUseInspectionParams,
+): Promise<void> {
+  const context = params.explicitManagedInstall;
+  if (!context) {
+    return;
+  }
+  await reconcileCodexComputerUseStartArtifacts({
+    startOptions: {
+      transport: "stdio",
+      command: context.command,
+      commandSource: "resolved-managed",
+      args: ["app-server"],
+      headers: {},
+      env: { CODEX_HOME: context.codexHome },
+    },
+    agentDir: context.agentDir,
+    pluginConfig: { computerUse: { ...params.computerUseConfig, autoInstall: true } },
+    ownsIsolatedCodexHome: true,
+    desktopGeneration: context.desktopGeneration,
+    forceCacheRefresh: true,
+    assertCurrent: () =>
+      assertCodexAppServerClientStartSelectionCurrent({ client: context.client }),
+  });
+}
+
+async function resolveExplicitManagedComputerUseInstallContext(
+  params: CodexComputerUseInspectionParams & { client: CodexAppServerClient },
+): Promise<ExplicitManagedComputerUseInstallContext | undefined> {
+  if (!params.agentDir) {
+    return undefined;
+  }
+  const codexHome = params.client.getRuntimeIdentity()?.codexHome;
+  const processIdentity = readCodexAppServerClientProcessIdentity(params.client);
+  const command =
+    processIdentity?.nativeCommand ??
+    (processIdentity && isManagedCodexDesktopCommand(processIdentity.command, "darwin")
+      ? processIdentity.command
+      : undefined);
+  if (!codexHome || !command) {
+    return undefined;
+  }
+  const desktopGeneration = readCodexAppServerClientDesktopGeneration(params.client);
+  if (!desktopGeneration) {
+    throw new Error(
+      "Codex Computer Use install requires a desktop-generation-bound client; reconnect and retry.",
+    );
+  }
+  const expectedHome = resolveCodexAppServerHomeDir(params.agentDir);
+  const [actualRealHome, expectedRealHome] = await Promise.all([
+    fs.realpath(codexHome).catch(() => undefined),
+    fs.realpath(expectedHome).catch(() => undefined),
+  ]);
+  if (!actualRealHome || actualRealHome !== expectedRealHome) {
+    return undefined;
+  }
+  return {
+    client: params.client,
+    agentDir: params.agentDir,
+    codexHome,
+    command,
+    desktopGeneration,
+  };
+}
+
+async function resolveClientManagedBundledMarketplacePath(
+  client: CodexAppServerClient | undefined,
+  agentDir: string | undefined,
+): Promise<string | undefined> {
+  const codexHome = client?.getRuntimeIdentity()?.codexHome;
+  if (!codexHome || !agentDir) {
+    return undefined;
+  }
+  const [actualRealHome, expectedRealHome] = await Promise.all([
+    fs.realpath(codexHome).catch(() => undefined),
+    fs.realpath(resolveCodexAppServerHomeDir(agentDir)).catch(() => undefined),
+  ]);
+  if (!actualRealHome || actualRealHome !== expectedRealHome) {
+    return undefined;
+  }
+  const managedPath = resolveCodexManagedBundledMarketplacePath(codexHome);
+  return existsSync(managedPath) ? managedPath : undefined;
 }
 
 async function ensureComputerUsePlugin(params: {
@@ -469,7 +604,7 @@ async function readComputerUseTools(params: {
   config: ResolvedCodexComputerUseConfig;
   plugin: CodexPluginDetail;
   installPlugin: boolean;
-  repairComputerUseMcpChildren?: () => Promise<CodexComputerUseRepairStatus>;
+  releaseNativeConfigFence?: () => void;
 }): Promise<CodexComputerUseStatus> {
   let server = await readMcpServerStatus(params.request, params.config.mcpServerName);
   let tools = Object.keys(server?.tools ?? {}).toSorted();
@@ -504,10 +639,11 @@ async function readComputerUseTools(params: {
     reason: "ready",
     message: "Computer Use is ready.",
   });
+  // The readiness thread reacquires this fence before loading native config.
+  params.releaseNativeConfigFence?.();
   const { liveTest, repair } = await runCodexComputerUseLiveTest({
     request: params.request,
     config: params.config,
-    repairComputerUseMcpChildren: params.repairComputerUseMcpChildren,
   });
   const compatibilityStartupAllowed = !liveTest.ok && !params.config.strictReadiness;
   return {
@@ -551,7 +687,6 @@ function isNonStrictLiveTestStartupAllowed(
 export async function runCodexComputerUseLiveTest(params: {
   request: CodexComputerUseRequest;
   config: ResolvedCodexComputerUseConfig;
-  repairComputerUseMcpChildren?: () => Promise<CodexComputerUseRepairStatus>;
 }): Promise<{ liveTest: CodexComputerUseLiveTestStatus; repair?: CodexComputerUseRepairStatus }> {
   const startedAt = Date.now();
   let lastError: unknown;
@@ -564,8 +699,6 @@ export async function runCodexComputerUseLiveTest(params: {
         {
           input: [],
           developerInstructions: COMPUTER_USE_LIVE_TEST_THREAD_NAME,
-          sandbox: "danger-full-access",
-          approvalPolicy: "never",
           ephemeral: true,
         },
         {
@@ -593,26 +726,24 @@ export async function runCodexComputerUseLiveTest(params: {
           attempts: attempt + 1,
           timeoutMs: params.config.liveTestTimeoutMs,
           retried: attempt > 0,
-          repaired: Boolean(repair?.attempted),
+          repaired: Boolean(repair?.attempted && repair.warnings.length === 0),
           durationMs: Math.max(0, Date.now() - startedAt),
           message: "Computer Use live test passed.",
         },
         ...(repair ? { repair } : {}),
       };
     } catch (error) {
+      if (isCodexAppServerStartSelectionChangedError(error)) {
+        throw error;
+      }
       lastError = error;
-      if (attempt >= COMPUTER_USE_LIVE_TEST_RETRY_COUNT) {
-        break;
-      }
-      if (params.config.autoRepair) {
-        repair = params.repairComputerUseMcpChildren
-          ? await params.repairComputerUseMcpChildren()
-          : scopedRepairUnavailableStatus();
-      }
     } finally {
       if (threadId) {
         await cleanupComputerUseProbeThread(params.request, threadId, params.config);
       }
+    }
+    if (attempt < COMPUTER_USE_LIVE_TEST_RETRY_COUNT && params.config.autoRepair) {
+      repair = await repairComputerUseMcpRuntime(params.request, params.config);
     }
   }
   const errorMessage = describeControlFailure(lastError);
@@ -624,13 +755,32 @@ export async function runCodexComputerUseLiveTest(params: {
       attempts: COMPUTER_USE_LIVE_TEST_RETRY_COUNT + 1,
       timeoutMs: params.config.liveTestTimeoutMs,
       retried: COMPUTER_USE_LIVE_TEST_RETRY_COUNT > 0,
-      repaired: Boolean(repair?.attempted),
+      repaired: Boolean(repair?.attempted && repair.warnings.length === 0),
       durationMs: Math.max(0, Date.now() - startedAt),
       message: `Computer Use live test failed after ${COMPUTER_USE_LIVE_TEST_RETRY_COUNT + 1} attempts: ${errorMessage}`,
       error: errorMessage,
     },
     ...(repair ? { repair } : {}),
   };
+}
+
+async function repairComputerUseMcpRuntime(
+  request: CodexComputerUseRequest,
+  config: ResolvedCodexComputerUseConfig,
+): Promise<CodexComputerUseRepairStatus> {
+  try {
+    // Codex owns MCP process lifetimes; signaling descendants can kill an active sibling.
+    await request("config/mcpServer/reload", undefined, { timeoutMs: config.liveTestTimeoutMs });
+    return {
+      attempted: true,
+      killedPids: [],
+      warnings: [],
+      message: "Reloaded Computer Use MCP servers through Codex app-server.",
+    };
+  } catch (error) {
+    const message = `Could not reload Computer Use MCP servers: ${describeControlFailure(error)}`;
+    return { attempted: true, killedPids: [], warnings: [message], message };
+  }
 }
 
 async function cleanupComputerUseProbeThread(
@@ -651,6 +801,7 @@ async function resolveMarketplaceRef(params: {
   signal?: AbortSignal;
   defaultBundledMarketplacePath?: string;
   defaultBundledMarketplacePathCandidates?: readonly string[];
+  managedCodexHome?: string;
 }): Promise<MarketplaceResolution> {
   let preferredMarketplaceName = params.config.marketplaceName;
   if (params.config.marketplaceSource && params.allowAdd) {
@@ -674,6 +825,14 @@ async function resolveMarketplaceRef(params: {
     bundledMarketplacePath &&
     shouldAddBundledComputerUseMarketplace(params)
   ) {
+    if (params.managedCodexHome) {
+      await migrateLegacyBundledMarketplaceSource({
+        request: params.request,
+        bundledMarketplacePath,
+        legacySources: params.defaultBundledMarketplacePathCandidates,
+        userConfigPath: path.join(params.managedCodexHome, "config.toml"),
+      });
+    }
     const added = await params.request<{ marketplaceName?: string }>("marketplace/add", {
       source: bundledMarketplacePath,
     } satisfies CodexRequestObject);
@@ -719,6 +878,43 @@ async function resolveMarketplaceRef(params: {
   }
   const marketplace = candidates[0];
   return marketplace ? { marketplace } : {};
+}
+
+async function migrateLegacyBundledMarketplaceSource(params: {
+  request: CodexComputerUseRequest;
+  bundledMarketplacePath: string;
+  legacySources?: readonly string[];
+  userConfigPath: string;
+}): Promise<void> {
+  const response = await params.request<
+    CodexConfigReadResponse & {
+      config: { marketplaces?: Record<string, { source_type?: string; source?: string }> };
+    }
+  >("config/read", { includeLayers: false });
+  const bundled = response.config.marketplaces?.[BUNDLED_MARKETPLACE_NAME];
+  const sourceOrigin = response.origins[`marketplaces.${BUNDLED_MARKETPLACE_NAME}.source`];
+  if (
+    bundled?.source_type !== "local" ||
+    !bundled.source ||
+    sourceOrigin?.name.type !== "user" ||
+    sourceOrigin.name.profile !== null ||
+    path.resolve(sourceOrigin.name.file) !== path.resolve(params.userConfigPath)
+  ) {
+    return;
+  }
+
+  // Codex hides a reserved marketplace whose old direct source violates its
+  // managed-root policy. Remove only sources OpenClaw previously provisioned.
+  const configuredSource = path.resolve(bundled.source);
+  if (configuredSource === path.resolve(params.bundledMarketplacePath)) {
+    return;
+  }
+  const legacySources =
+    params.legacySources ?? resolveMacOSDesktopCodexBundledMarketplaceCandidates();
+  if (!legacySources.some((source) => path.resolve(source) === configuredSource)) {
+    return;
+  }
+  await params.request("marketplace/remove", { marketplaceName: BUNDLED_MARKETPLACE_NAME });
 }
 
 async function listComputerUseMarketplaceCandidates(
@@ -767,6 +963,9 @@ function resolveBundledComputerUseMarketplacePath(params: {
     return existsSync(params.defaultBundledMarketplacePath)
       ? params.defaultBundledMarketplacePath
       : undefined;
+  }
+  if (!params.defaultBundledMarketplacePathCandidates) {
+    return undefined;
   }
   return resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath({
     candidates: params.defaultBundledMarketplacePathCandidates,

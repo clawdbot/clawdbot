@@ -7,7 +7,11 @@ import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/c
 import { createExecApprovalForwarder } from "./exec-approval-forwarder.js";
 import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
 
-afterEach(() => {
+const forwarders: ReturnType<typeof createExecApprovalForwarder>[] = [];
+
+afterEach(async () => {
+  await Promise.all(forwarders.map((forwarder) => forwarder.stop()));
+  forwarders.length = 0;
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -50,6 +54,7 @@ function createForwarder(params: {
     nowMs: () => 1000,
     resolveSessionTarget: params.resolveSessionTarget,
   });
+  forwarders.push(forwarder);
   return { deliver, forwarder };
 }
 
@@ -427,6 +432,7 @@ describe("plugin approval forwarding", () => {
       await registerPendingApproval(forwarder, deliver);
 
       await forwarder.handlePluginApprovalResolved!(makePluginResolved());
+      await flushPendingDelivery();
       expect(deliver).toHaveBeenCalled();
       const text = firstDeliveredPayload(deliver)?.text ?? "";
       expect(text).toContain("Plugin approval");
@@ -467,7 +473,7 @@ describe("plugin approval forwarding", () => {
       await forwarder.handlePluginApprovalRequested!(makePluginRequest());
       await flushPendingDelivery();
       expect(deliver).toHaveBeenCalled();
-      forwarder.stop();
+      await forwarder.stop();
       deliver.mockClear();
       // After stop, resolved should not deliver
       await forwarder.handlePluginApprovalResolved!({

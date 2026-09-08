@@ -10,11 +10,7 @@ import {
   parseRegistryNpmSpec,
 } from "../infra/npm-registry-spec.js";
 import { resolveUserPath } from "../utils.js";
-import {
-  resolveManagedNpmGenerationUseForInstall,
-  resolveManagedNpmRootForInstall,
-  resolveManagedNpmRootPackageDir,
-} from "./install-managed-npm-state.js";
+import { resolveManagedNpmInstallPlan } from "./install-managed-npm-state.js";
 import { installPluginFromManagedNpmRoot } from "./install-managed-npm.js";
 import {
   canResolveAroundCompatibilityError,
@@ -32,16 +28,16 @@ import {
   defaultLogger,
   emitSuccessfulPluginInstallSecurityEvent,
   loadPluginInstallRuntime,
-  resolveEffectiveInstallMode,
   runInstallSourceScan,
 } from "./install-shared.js";
+import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
   type InstallPluginResult,
+  type PluginInstallArtifactConsentHandler,
   type PluginInstallLogger,
   type PluginNpmIntegrityDriftParams,
 } from "./install-types.js";
-import { hasRetainedManagedNpmInstallMarker } from "./managed-npm-retention.js";
 
 export async function installPluginFromNpmSpec(
   params: InstallSafetyOverrides & {
@@ -49,12 +45,16 @@ export async function installPluginFromNpmSpec(
     extensionsDir?: string;
     npmDir?: string;
     timeoutMs?: number;
+    signal?: AbortSignal;
     logger?: PluginInstallLogger;
     mode?: "install" | "update";
     dryRun?: boolean;
     expectedPluginId?: string;
+    expectedReplacementPluginId?: string;
     expectedIntegrity?: string;
     onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
+    onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
+    beforePersistentApply?: () => void;
   },
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
@@ -82,7 +82,7 @@ export async function installPluginFromNpmSpec(
     };
   }
 
-  const metadataResult = await resolveNpmSpecMetadata({ spec, timeoutMs });
+  const metadataResult = await resolveNpmSpecMetadata({ spec, timeoutMs, signal: params.signal });
   if (!metadataResult.ok) {
     return {
       ok: false,
@@ -110,6 +110,7 @@ export async function installPluginFromNpmSpec(
           spec: parsedSpec,
           resolvedPrereleaseVersion: npmResolution.version,
           timeoutMs,
+          signal: params.signal,
           logger,
         })
       : null;
@@ -142,6 +143,7 @@ export async function installPluginFromNpmSpec(
       expectedPluginId,
       currentResolution: npmResolution,
       timeoutMs,
+      signal: params.signal,
       logger,
     });
     if (compatibleResolution) {
@@ -176,34 +178,13 @@ export async function installPluginFromNpmSpec(
     return { ok: false, error: driftResult.error };
   }
   const npmBaseDir = params.npmDir ? resolveUserPath(params.npmDir) : resolveDefaultPluginNpmDir();
-  const generationUse = await resolveManagedNpmGenerationUseForInstall({
+  const { policyMode } = await resolveManagedNpmInstallPlan({
     runtime,
     npmBaseDir,
     packageName: parsedSpec.name,
     requestedMode: mode,
     npmResolution,
   });
-  const npmRoot = resolveManagedNpmRootForInstall({
-    npmBaseDir,
-    packageName: parsedSpec.name,
-    npmResolution,
-    useGeneration: generationUse !== "none",
-  });
-  const installRoot = resolveManagedNpmRootPackageDir(npmRoot, parsedSpec.name);
-  const targetMode =
-    generationUse === "retained-install" && hasRetainedManagedNpmInstallMarker(installRoot)
-      ? "update"
-      : await resolveEffectiveInstallMode({
-          runtime,
-          requestedMode: mode,
-          targetPath: installRoot,
-        });
-  const policyMode =
-    generationUse === "update"
-      ? "update"
-      : generationUse === "retained-install"
-        ? "install"
-        : targetMode;
 
   const policyTempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npm-policy-"));
   try {
@@ -229,6 +210,8 @@ export async function installPluginFromNpmSpec(
       scan: async () =>
         await preflightPluginNpmInstallPolicy({
           config: params.config,
+          dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+          onInstallPolicyWarning: params.onInstallPolicyWarning,
           logger,
           mode: policyMode,
           packageName: parsedSpec.name,
@@ -246,32 +229,39 @@ export async function installPluginFromNpmSpec(
     await fs.rm(policyTempDir, { recursive: true, force: true });
   }
 
-  const result = await installPluginFromManagedNpmRoot({
-    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-    config: params.config,
-    packageName: parsedSpec.name,
-    dependencySpec: resolveManagedNpmRootDependencySpec({
-      parsedSpec,
-      resolution: npmResolution,
+  const result = await installPluginFromManagedNpmRoot(
+    copyPluginInstallTransactionRequest(params, {
+      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+      onInstallPolicyWarning: params.onInstallPolicyWarning,
+      trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+      config: params.config,
+      packageName: parsedSpec.name,
+      dependencySpec: resolveManagedNpmRootDependencySpec({
+        parsedSpec,
+        resolution: npmResolution,
+      }),
+      displaySpec: spec,
+      installPolicyRequest: {
+        kind: "plugin-npm",
+        requestedSpecifier: spec,
+        source: npmInstallPolicySource,
+      },
+      extensionsDir: params.extensionsDir,
+      npmDir: params.npmDir,
+      timeoutMs,
+      signal: params.signal,
+      logger,
+      mode,
+      dryRun,
+      skipPolicyPreflight: true,
+      expectedPluginId,
+      expectedReplacementPluginId: params.expectedReplacementPluginId,
+      onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
+      beforePersistentApply: params.beforePersistentApply,
+      npmResolution,
+      ...(driftResult.integrityDrift ? { integrityDrift: driftResult.integrityDrift } : {}),
     }),
-    displaySpec: spec,
-    installPolicyRequest: {
-      kind: "plugin-npm",
-      requestedSpecifier: spec,
-      source: npmInstallPolicySource,
-    },
-    extensionsDir: params.extensionsDir,
-    npmDir: params.npmDir,
-    timeoutMs,
-    logger,
-    mode,
-    dryRun,
-    skipPolicyPreflight: true,
-    expectedPluginId,
-    npmResolution,
-    ...(driftResult.integrityDrift ? { integrityDrift: driftResult.integrityDrift } : {}),
-  });
+  );
   emitSuccessfulPluginInstallSecurityEvent(result, {
     dryRun,
     mode: policyMode,

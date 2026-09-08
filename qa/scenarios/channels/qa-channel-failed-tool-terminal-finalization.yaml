@@ -1,0 +1,155 @@
+title: QA channel final reply after a failed read
+
+scenario:
+  id: qa-channel-failed-tool-terminal-finalization
+  surface: channel
+  coverage:
+    primary: [channels.qa-channel-final-reply]
+    secondary: [agent-runtime.failure-recovery-retry-policy]
+  regressionRefs:
+    - openclaw/openclaw#118274
+  gatewayConfigPatch:
+    tools:
+      codeMode:
+        enabled: true
+  objective: Verify a settled failed read receives one failure-honest ordinary continuation and one channel reply.
+  successCriteria:
+    - Code Mode dispatches exactly one missing-file read and records one failed exec result.
+    - The failed tool call is never replayed or described as successful.
+    - The model receives one ordinary continuation with its failed result and qa-channel delivers exactly one visible reply.
+  codeRefs:
+    - packages/agent-core/src/agent-loop.ts
+    - src/agents/embedded-agent-runner/extensions.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    isolationReason: Enables Code Mode and verifies one exact tool call and isolated qa-channel delivery.
+    channel: qa-channel
+    retryCount: 0
+    summary: Prove a real failed Code Mode read still produces one failure-honest qa-channel reply.
+    config:
+      requiredProviderMode: mock-openai
+      channelId: qa-failed-terminal
+      promptSnippet: Failed tool terminal recovery QA check
+      retryNeedle: The previous assistant turn completed its tool calls but did not produce a user-visible answer.
+      expectedMarker: QA-FAILED-TOOL-FINALIZED-OK
+      expectedReply: "The requested file could not be read: ENOENT. QA-FAILED-TOOL-FINALIZED-OK"
+
+flow:
+  steps:
+    - name: reports one failed Code Mode read without replaying it
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: failed-terminal qa-channel proof requires mock-openai
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: sessionKey
+          value:
+            expr: "`agent:qa:qa-channel:group:group:${config.channelId}`"
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.channelId
+              kind: group
+            senderId: qa-driver
+            senderName: QA Driver
+            text: "@openclaw Failed tool terminal recovery QA check: read the missing workspace file, then respond with exact marker: `QA-FAILED-TOOL-FINALIZED-OK`."
+          saveAs: inbound
+        - set: inboundEvents
+          value:
+            expr: "state.getSnapshot().events.filter((event) => event.kind === 'inbound-message' && event.accountId === transport.accountId && event.message.id === inbound.id)"
+        - assert:
+            expr: "inbound.accountId === transport.accountId && inboundEvents.length === 1 && Number.isSafeInteger(inboundEvents[0].cursor) && inboundEvents[0].cursor > 0"
+            message: expected one account-qualified inbound event cursor
+        - set: inboundCursor
+          value:
+            expr: inboundEvents[0].cursor
+        - call: waitForCondition
+          args:
+            - lambda:
+                expr: "state.getAcknowledgedPollCursor(transport.accountId) >= inboundCursor ? true : undefined"
+            - 60000
+        - set: settled
+          value:
+            expr: state.getSnapshot()
+        - set: deliveries
+          value:
+            expr: "settled.messages.filter((message) => message.direction === 'outbound' && !message.deleted)"
+        - assert:
+            expr: "deliveries.length === 1 && deliveries[0].text === config.expectedReply && deliveries[0].isError !== true"
+            message:
+              expr: "`expected exactly one failure-honest reply, got ${JSON.stringify(deliveries)}`"
+        - set: reply
+          value:
+            expr: deliveries[0]
+        - assert:
+            expr: "reply.accountId === transport.accountId && reply.conversation.kind === 'group' && reply.conversation.id === config.channelId && reply.threadId == null && reply.replyToId === inbound.id"
+            message:
+              expr: "`retained reply has the wrong route: ${JSON.stringify(reply)}`"
+        - set: deliveryEvents
+          value:
+            expr: |-
+              settled.events.filter((event) => event.cursor > inboundCursor &&
+                event.accountId === transport.accountId && "message" in event &&
+                event.message.direction === "outbound" && event.message.accountId === transport.accountId &&
+                event.message.conversation.kind === "group" && event.message.conversation.id === config.channelId &&
+                event.message.threadId == null && event.message.replyToId === inbound.id)
+        - assert:
+            # This mock's completed text produces a preview; its tool-backed final replaces it.
+            expr: |-
+              deliveryEvents.some((preview) => preview.kind === "outbound-message" && preview.message.id !== reply.id &&
+                deliveryEvents.some((deleted) => deleted.kind === "message-deleted" && deleted.message.id === preview.message.id && deleted.cursor > preview.cursor &&
+                  deliveryEvents.some((final) => final.kind === "outbound-message" && final.message.id === reply.id && final.cursor > deleted.cursor)))
+            message: retained reply lacks its ordered preview send/delete/replacement chain
+        - set: scenarioRequests
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet))"
+        - set: readPlans
+          value:
+            expr: "scenarioRequests.filter((request) => request.plannedToolName === 'read')"
+        - set: continuations
+          value:
+            expr: "scenarioRequests.filter((request) => request.toolOutputCallId === readPlans[0]?.plannedToolCallId)"
+        - assert:
+            expr: "readPlans.length === 1 && readPlans[0].plannedWireToolName === 'exec'"
+            message:
+              expr: "`expected one Code Mode read plan, got ${JSON.stringify(readPlans)}`"
+        - assert:
+            expr: "scenarioRequests.length === 2 && continuations.length === 1 && !String(continuations[0].allInputText ?? '').includes(config.retryNeedle)"
+            message:
+              expr: "`expected one failure-honest continuation, got ${JSON.stringify(continuations)}`"
+        - set: readExecCalls
+          value:
+            expr: "(Array.isArray(continuations[0].body?.input) ? continuations[0].body.input : []).filter((item) => item?.type === 'function_call' && item.name === 'exec' && String(item.arguments ?? '').includes('qa-failed-terminal-missing-file.txt'))"
+        - set: failedExecOutputs
+          value:
+            expr: "(Array.isArray(continuations[0].body?.input) ? continuations[0].body.input : []).filter((item) => item?.type === 'function_call_output' && item.call_id === readExecCalls[0]?.call_id && /ENOENT|no such file/i.test(typeof item.output === 'string' ? item.output : JSON.stringify(item.output ?? '')))"
+        - assert:
+            expr: "readExecCalls.length === 1 && failedExecOutputs.length === 1 && continuations[0].toolOutputCallId === readExecCalls[0].call_id"
+            message:
+              expr: "`continuation did not preserve the normalized parent exec/result pairing: calls=${JSON.stringify(readExecCalls.map((item) => item.call_id))} outputs=${JSON.stringify(failedExecOutputs.map((item) => item.call_id))}`"
+        - assert:
+            expr: "['exec', 'wait'].every((name) => continuations[0].body?.tools?.some((tool) => tool.name === name))"
+            message: failed-read continuation lost its ordinary Code Mode tool surface
+        - call: readSessionTranscriptSummary
+          saveAs: transcript
+          args:
+            - ref: env
+            - ref: sessionKey
+        - assert:
+            expr: "transcript.assistantToolCallCounts.exec === 1 && transcript.completedToolCallCounts.exec === 1 && !transcript.successfulToolCallCounts.exec"
+            message:
+              expr: "`expected exactly one settled failed exec result, got ${JSON.stringify(transcript)}`"
+      detailsExpr: "`${reply.text}; calls=${String(transcript.assistantToolCallCounts.exec)} failed=${String(transcript.completedToolCallCounts.exec)} continuations=${String(continuations.length)}`"

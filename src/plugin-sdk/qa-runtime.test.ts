@@ -3,7 +3,7 @@ import { createServer } from "node:net";
  * Tests QA runtime command loading and private CLI gating.
  */
 import { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupTempDirs,
   expectPrivateQaLabRuntimeSurfaceLoad,
@@ -27,8 +27,11 @@ describe("plugin-sdk qa-runtime", () => {
   const originalPrivateQaCli = process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
   const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 
-  beforeEach(() => {
+  beforeAll(() => {
     vi.resetModules();
+  });
+
+  beforeEach(() => {
     loadBundledPluginPublicSurfaceModuleSync.mockReset();
     resolveOpenClawPackageRootSync.mockReset().mockReturnValue(null);
     delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
@@ -85,6 +88,7 @@ describe("plugin-sdk qa-runtime", () => {
   }
 
   it("stays cold until the runtime seam is used", async () => {
+    vi.resetModules();
     const module = await import("./qa-runtime.js");
 
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
@@ -116,6 +120,18 @@ describe("plugin-sdk qa-runtime", () => {
     const module = await import("./qa-runtime.js");
 
     expect(module.isQaRuntimeAvailable()).toBe(false);
+  });
+
+  it("rethrows non-absence loader failures that mention the qa-lab runtime path", async () => {
+    loadBundledPluginPublicSurfaceModuleSync.mockImplementation(() => {
+      throw new Error("Failed to evaluate qa-lab/runtime-api.js: invalid runtime export");
+    });
+
+    const module = await import("./qa-runtime.js");
+
+    expect(() => module.isQaRuntimeAvailable()).toThrow(
+      "Failed to evaluate qa-lab/runtime-api.js: invalid runtime export",
+    );
   });
 
   it("runs a plugin-owned transport through the private QA suite host", async () => {
@@ -168,6 +184,10 @@ describe("plugin-sdk qa-runtime", () => {
         run,
       })
       .register(qa);
+
+    await qa.parseAsync(["node", "openclaw", "telegram"]);
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ fastMode: undefined }));
+    run.mockClear();
 
     await qa.parseAsync([
       "node",
@@ -222,29 +242,6 @@ describe("plugin-sdk qa-runtime", () => {
       credentialSource: "convex",
       credentialRole: "maintainer",
     });
-  });
-
-  it("builds shared live-lane artifact errors", async () => {
-    const module = await import("./qa-runtime.js");
-
-    expect(
-      module.buildQaLiveLaneArtifactsError({
-        heading: "Matrix QA failed.",
-        details: ["cleanup: ok"],
-        artifacts: {
-          report: "/tmp/report.md",
-          summary: "/tmp/summary.json",
-        },
-      }),
-    ).toBe(
-      [
-        "Matrix QA failed.",
-        "cleanup: ok",
-        "Artifacts:",
-        "- report: /tmp/report.md",
-        "- summary: /tmp/summary.json",
-      ].join("\n"),
-    );
   });
 
   it("shares Docker health parsing across array and jsonl compose output", async () => {

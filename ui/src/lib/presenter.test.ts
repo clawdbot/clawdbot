@@ -1,7 +1,8 @@
 // Control UI tests cover cron schedule presentation.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { CronJob } from "../api/types.ts";
-import { formatCronSchedule } from "./presenter.ts";
+import { i18n } from "../i18n/index.ts";
+import { formatCronPayload, formatCronSchedule } from "./presenter.ts";
 
 function job(schedule: CronJob["schedule"]): CronJob {
   return {
@@ -14,12 +15,42 @@ function job(schedule: CronJob["schedule"]): CronJob {
     sessionTarget: "main",
     wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "test" },
+    state: {},
   };
 }
 
 describe("formatCronSchedule", () => {
-  it("formats every schedules", () => {
-    expect(formatCronSchedule(job({ kind: "every", everyMs: 60_000 }))).toBe("Every 1m");
+  afterEach(async () => {
+    await i18n.setLocale("en");
+  });
+
+  it.each([
+    { everyMs: 60_000, expected: "Every 1m" },
+    { everyMs: 450, expected: "Every 450ms" },
+    { everyMs: 90_000, expected: "Every 1m 30s" },
+    { everyMs: 3_661_001, expected: "Every 1h 1m 1s 1ms" },
+    { everyMs: 604_800_000, expected: "Every 7d" },
+  ])("preserves configured duration precision for every $everyMs ms", ({ everyMs, expected }) => {
+    expect(formatCronSchedule(job({ kind: "every", everyMs }))).toBe(expected);
+  });
+
+  it("localizes configured duration precision", async () => {
+    await i18n.setLocale("fr");
+    const expected = [
+      { value: 1, unit: "minute" },
+      { value: 30, unit: "second" },
+      { value: 1, unit: "millisecond" },
+    ]
+      .map(({ value, unit }) =>
+        new Intl.NumberFormat("fr", {
+          style: "unit",
+          unit,
+          unitDisplay: "narrow",
+          maximumFractionDigits: 0,
+        }).format(value),
+      )
+      .join(" ");
+    expect(formatCronSchedule(job({ kind: "every", everyMs: 90_001 }))).toBe(`Every ${expected}`);
   });
 
   it("formats cron schedules", () => {
@@ -36,5 +67,16 @@ describe("formatCronSchedule", () => {
     expect(formatCronSchedule(job({ kind: "on-exit", command: "./watch.sh", cwd: "/repo" }))).toBe(
       "On exit: ./watch.sh (cwd: /repo)",
     );
+  });
+});
+
+describe("formatCronPayload", () => {
+  it("formats a Workshop review as an agent turn", () => {
+    expect(
+      formatCronPayload({
+        ...job({ kind: "every", everyMs: 60_000 }),
+        payload: { kind: "agentTurn", message: "Review the Workshop collection." },
+      }),
+    ).toBe("Agent: Review the Workshop collection.");
   });
 });

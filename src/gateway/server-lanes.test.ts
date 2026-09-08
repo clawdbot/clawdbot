@@ -2,12 +2,16 @@
  * Gateway server lane configuration tests.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  createBackgroundWorkOwner,
+  getBackgroundWorkSnapshot,
+} from "../process/background-work.js";
 import { enqueueCommandInLane, setCommandLaneConcurrency } from "../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
 import { CommandLane } from "../process/lanes.js";
-import { createDeferred } from "../test-utils/deferred.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 
 function applyConfigLaneConcurrency(
@@ -127,64 +131,23 @@ describe("applyGatewayLaneConcurrency", () => {
     expect(started).toBe(true);
   });
 
-  it("does not resume cleanup-held built-in lanes during live config publication", async () => {
-    const { seedClearedLaneResumeForTest } =
-      await import("../agents/session-suspension.test-support.js");
-    seedClearedLaneResumeForTest(CommandLane.Main, {
-      resumeConcurrency: 3,
-      resumeAtMs: Date.now() + 100,
+  it("preserves shared background capacity across gateway lane publication", async () => {
+    const owner = createBackgroundWorkOwner({ owner: "plugin:reload-test", maxConcurrent: 3 });
+    const gates = Array.from({ length: 3 }, () => createDeferred());
+    const active = gates.map((gate) => owner.enqueue(async () => await gate.promise));
+    let nextStarted = false;
+    const next = owner.enqueue(async () => {
+      nextStarted = true;
     });
-    setCommandLaneConcurrency(CommandLane.Main, 0);
-
-    applyConfigLaneConcurrency({ agents: { defaults: { maxConcurrent: 3 } } } as OpenClawConfig);
-
-    let started = false;
-    const mainRun = enqueueCommandInLane(
-      CommandLane.Main,
-      async () => {
-        started = true;
-      },
-      { warnAfterMs: 10_000 },
-    );
-    await Promise.resolve();
-
-    expect(started).toBe(false);
-
-    setCommandLaneConcurrency(CommandLane.Main, 1);
-    await mainRun;
-    expect(started).toBe(true);
-  });
-
-  it("does not resume an unexpired shared nested lane during gateway startup", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    const { seedClearedLaneResumeForTest } =
-      await import("../agents/session-suspension.test-support.js");
-    seedClearedLaneResumeForTest(CommandLane.Nested, {
-      resumeConcurrency: 1,
-      resumeAtMs: 1_100,
-    });
-    setCommandLaneConcurrency(CommandLane.Nested, 0);
-
-    applyConfigLaneConcurrency({} as OpenClawConfig, { gatewayStart: true });
-
-    let started = false;
-    const nestedRun = enqueueCommandInLane(
-      CommandLane.Nested,
-      async () => {
-        started = true;
-      },
-      { warnAfterMs: 10_000 },
-    );
-    await Promise.resolve();
-
-    expect(started).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(99);
-    expect(started).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(1);
-    await nestedRun;
-    expect(started).toBe(true);
+    try {
+      applyConfigLaneConcurrency({ hooks: { enabled: true } });
+      applyConfigLaneConcurrency({ hooks: { enabled: false } });
+      expect(getBackgroundWorkSnapshot()).toMatchObject({ activeCount: 3, queuedCount: 1 });
+      expect(nextStarted).toBe(false);
+    } finally {
+      gates.forEach((gate) => gate.resolve());
+      await Promise.all([...active, next]);
+    }
+    expect(nextStarted).toBe(true);
   });
 });

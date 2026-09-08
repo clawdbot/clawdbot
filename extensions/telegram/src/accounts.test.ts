@@ -1,7 +1,10 @@
 // Telegram tests cover accounts plugin behavior.
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { readConfigFileSnapshotForWrite } from "openclaw/plugin-sdk/config-mutation";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { withEnv } from "openclaw/plugin-sdk/test-env";
+import { withEnv, withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createTelegramActionGate,
@@ -151,7 +154,7 @@ describe("resolveTelegramAccount", () => {
 
   it("preserves normalized agent-bound accounts and default-agent selection", () => {
     const cfg = {
-      agents: { list: [{ id: "primary", default: true }] },
+      agents: { entries: { primary: { default: true } } },
       channels: {
         telegram: {
           botToken: "tok-default",
@@ -250,6 +253,50 @@ describe("resolveDefaultTelegramAccountId", () => {
   afterEach(() => {
     warnMock.mockClear();
     resetMissingDefaultWarnFlag();
+  });
+
+  it("selects an account without requiring an ambient agent during legacy repair", () => {
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: {}, research: {} } },
+      channels: {
+        telegram: {
+          defaultAccount: "work",
+          accounts: { alerts: {}, work: {} },
+        },
+      },
+    };
+
+    expect(resolveDefaultTelegramAccountId(cfg)).toBe("work");
+  });
+
+  it("preserves a loaded legacy owner's account until explicit fleet ownership is applied", async () => {
+    await withTempHome(
+      async (home) => {
+        const config: OpenClawConfig = {
+          agents: { entries: { main: { default: true }, research: {} } },
+          channels: {
+            telegram: {
+              defaultAccount: "alerts",
+              accounts: { alerts: {}, work: {} },
+            },
+          },
+          bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "work" } }],
+        };
+        await fs.writeFile(path.join(home, ".openclaw", "openclaw.json"), JSON.stringify(config));
+        const { snapshot } = await readConfigFileSnapshotForWrite();
+
+        expect(snapshot.valid).toBe(true);
+        expect(resolveDefaultTelegramAccountId(snapshot.config)).toBe("work");
+        snapshot.config.agents!.ownership = "explicit";
+        expect(resolveDefaultTelegramAccountId(snapshot.config)).toBe("alerts");
+      },
+      {
+        env: {
+          OPENCLAW_CONFIG_PATH: (home) => path.join(home, ".openclaw", "openclaw.json"),
+          TELEGRAM_BOT_TOKEN: "",
+        },
+      },
+    );
   });
 
   it("warns when accounts.default is missing in multi-account setup (#32137)", () => {
@@ -666,22 +713,34 @@ describe("resolveTelegramAccount groups inheritance (#30673)", () => {
     expect(resolved.config.groups).toEqual({ "-100123": { requireMention: false } });
   });
 
-  it("does NOT inherit channel-level groups to secondary account in multi-account setup", () => {
+  it("inherits channel-level groups to secondary account when no account map is configured", () => {
     const resolved = resolveTelegramAccount({
       cfg: createMultiAccountGroupsConfig(),
       accountId: "dev",
     });
 
-    expect(resolved.config.groups).toBeUndefined();
+    expect(resolved.config.groups).toEqual({ "-100123": { requireMention: false } });
   });
 
-  it("does NOT inherit channel-level groups to default account in multi-account setup", () => {
+  it("inherits channel-level groups to default account when no account map is configured", () => {
     const resolved = resolveTelegramAccount({
       cfg: createMultiAccountGroupsConfig(),
       accountId: "default",
     });
 
-    expect(resolved.config.groups).toBeUndefined();
+    expect(resolved.config.groups).toEqual({ "-100123": { requireMention: false } });
+  });
+
+  it("keeps an explicit empty account groups map isolated in multi-account setup", () => {
+    const cfg = createMultiAccountGroupsConfig();
+    if (!cfg.channels?.telegram?.accounts?.dev) {
+      throw new Error("expected dev Telegram account");
+    }
+    cfg.channels.telegram.accounts.dev.groups = {};
+
+    const resolved = resolveTelegramAccount({ cfg, accountId: "dev" });
+
+    expect(resolved.config.groups).toEqual({});
   });
 
   it("uses account-level groups even in multi-account setup", () => {

@@ -1,5 +1,6 @@
 import { compareProviderAuthChoiceGroups } from "../plugins/provider-auth-choice-order.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
+import type { ProviderInstallCatalogEntry } from "../plugins/provider-install-catalog.js";
 
 export type SetupInferenceManualProvider = {
   /** Provider-auth choice id sent back to `openclaw.setup.activate`. */
@@ -24,9 +25,45 @@ export type SetupInferenceAuthOption = {
   groupLabel?: string;
   icon?: string;
   website?: string;
-  kind: "oauth" | "device-code";
+  kind: "oauth" | "device-code" | "install" | "custom";
   featured: boolean;
 };
+
+export function listSetupInferenceInstallOptions(
+  entries: readonly ProviderInstallCatalogEntry[],
+  installedChoices: readonly ProviderAuthChoiceMetadata[],
+): SetupInferenceAuthOption[] {
+  const installed = new Set(installedChoices.map((choice) => choice.choiceId));
+  const options = new Map<string, SetupInferenceAuthOption>();
+  for (const entry of entries) {
+    if (
+      installed.has(entry.choiceId) ||
+      options.has(entry.choiceId) ||
+      !supportsSetupTextInference(entry.onboardingScopes)
+    ) {
+      continue;
+    }
+    options.set(entry.choiceId, {
+      id: entry.choiceId,
+      brandId: entry.providerId,
+      label: entry.choiceLabel,
+      ...(entry.choiceHint?.trim() ? { hint: entry.choiceHint.trim() } : {}),
+      ...(entry.groupLabel?.trim() ? { groupLabel: entry.groupLabel.trim() } : {}),
+      kind: "install",
+      featured: false,
+    });
+  }
+  return [...options.values()].toSorted(
+    (a, b) =>
+      Number(b.featured) - Number(a.featured) ||
+      compareProviderAuthChoiceGroups(
+        { id: a.brandId ?? a.id, label: a.groupLabel ?? a.label },
+        { id: b.brandId ?? b.id, label: b.groupLabel ?? b.label },
+      ) ||
+      a.label.localeCompare(b.label, "en") ||
+      a.id.localeCompare(b.id, "en"),
+  );
+}
 
 export type SetupInferencePrepareOption = {
   /** Provider-auth choice id sent to `openclaw.setup.prepare.start`. */
@@ -35,6 +72,7 @@ export type SetupInferencePrepareOption = {
   brandId?: string;
   label: string;
   hint?: string;
+  actionLabel?: string;
   icon?: string;
   website?: string;
 };
@@ -92,8 +130,8 @@ export function listSetupInferenceAuthOptions(
       !id ||
       choices.has(id) ||
       !supportsSetupTextInference(choice.onboardingScopes) ||
-      choice.assistantVisibility === "manual-only" ||
-      !choice.appGuidedAuth
+      (!choice.appGuidedAuth &&
+        (choice.appGuidedSecret === true || choice.appGuidedDiscovery === true))
     ) {
       continue;
     }
@@ -107,7 +145,7 @@ export function listSetupInferenceAuthOptions(
         ...(choice.groupLabel?.trim() ? { groupLabel: choice.groupLabel.trim() } : {}),
         ...(choice.icon ? { icon: choice.icon } : {}),
         ...(choice.website ? { website: choice.website } : {}),
-        kind: choice.appGuidedAuth,
+        kind: choice.appGuidedAuth ?? "install",
         featured: choice.onboardingFeatured === true,
       },
     });
@@ -133,6 +171,47 @@ export function listSetupInferenceAuthOptions(
     .map(({ option }) => option);
 }
 
+export function listSetupInferenceEnableOptions(
+  choices: readonly ProviderAuthChoiceMetadata[],
+): SetupInferenceAuthOption[] {
+  return choices
+    .filter((choice) => supportsSetupTextInference(choice.onboardingScopes))
+    .map((choice) => {
+      const option: SetupInferenceAuthOption = {
+        id: choice.choiceId,
+        brandId: choice.providerId,
+        label: choice.choiceLabel,
+        kind: "install",
+        featured: choice.onboardingFeatured === true,
+      };
+      const hint = choice.choiceHint?.trim();
+      const groupLabel = choice.groupLabel?.trim();
+      if (hint) {
+        option.hint = hint;
+      }
+      if (groupLabel) {
+        option.groupLabel = groupLabel;
+      }
+      if (choice.icon) {
+        option.icon = choice.icon;
+      }
+      if (choice.website) {
+        option.website = choice.website;
+      }
+      return option;
+    })
+    .toSorted(
+      (a, b) =>
+        Number(b.featured) - Number(a.featured) ||
+        compareProviderAuthChoiceGroups(
+          { id: a.brandId ?? a.id, label: a.groupLabel ?? a.label },
+          { id: b.brandId ?? b.id, label: b.groupLabel ?? b.label },
+        ) ||
+        a.label.localeCompare(b.label, "en") ||
+        a.id.localeCompare(b.id, "en"),
+    );
+}
+
 export function listSetupInferencePrepareOptions(
   authChoices: readonly ProviderAuthChoiceMetadata[],
 ): SetupInferencePrepareOption[] {
@@ -146,7 +225,6 @@ export function listSetupInferencePrepareOptions(
       !id ||
       choices.has(id) ||
       !supportsSetupTextInference(choice.onboardingScopes) ||
-      choice.assistantVisibility === "manual-only" ||
       choice.appGuidedDiscovery !== true
     ) {
       continue;
@@ -158,6 +236,9 @@ export function listSetupInferencePrepareOptions(
         brandId: choice.providerId,
         label: choice.choiceLabel,
         ...(choice.choiceHint?.trim() ? { hint: choice.choiceHint.trim() } : {}),
+        ...(choice.appGuidedActionLabel?.trim()
+          ? { actionLabel: choice.appGuidedActionLabel.trim() }
+          : {}),
         ...(choice.icon ? { icon: choice.icon } : {}),
         ...(choice.website ? { website: choice.website } : {}),
       },

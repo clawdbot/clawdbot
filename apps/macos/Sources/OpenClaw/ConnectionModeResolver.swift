@@ -15,7 +15,7 @@ struct EffectiveConnectionMode: Equatable {
 enum ConnectionModeResolver {
     static func resolve(
         root: [String: Any],
-        defaults: UserDefaults = .standard) -> EffectiveConnectionMode
+        defaults: UserDefaults = AppDefaults.standard) -> EffectiveConnectionMode
     {
         let gateway = root["gateway"] as? [String: Any]
         let configModeRaw = (gateway?["mode"] as? String) ?? ""

@@ -1,6 +1,18 @@
 // Imessage tests cover monitor reply cache plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadFreshIMessageReplyCacheForTest } from "./test-support/runtime.js";
+import {
+  IMESSAGE_REPLY_CACHE_COUNTER_KEY,
+  IMESSAGE_REPLY_CACHE_COUNTER_MAX_ENTRIES,
+  IMESSAGE_REPLY_CACHE_COUNTER_NAMESPACE,
+  IMESSAGE_REPLY_CACHE_MAX_ENTRIES,
+  IMESSAGE_REPLY_CACHE_NAMESPACE,
+  IMESSAGE_REPLY_CACHE_TTL_MS,
+  resolveIMessageReplyCacheEntryKey,
+} from "./state-contract.js";
+import {
+  createIMessagePluginStateSyncStoreForTest,
+  loadFreshIMessageReplyCacheForTest,
+} from "./test-support/runtime.js";
 
 type ReplyCacheModule = typeof import("./monitor-reply-cache.js");
 let findLatestIMessageEntryForChat: ReplyCacheModule["findLatestIMessageEntryForChat"];
@@ -329,7 +341,7 @@ describe("findLatestIMessageEntryForChat", () => {
   });
 });
 
-describe("hydrate-on-resolve (post-restart short-id persistence)", () => {
+describe("SQLite reply-cache hydration", () => {
   it("hydrates SQLite state before resolving a short id whose mapping predates this run", async () => {
     // Issue-then-restart contract: a shortId we issued before a gateway
     // restart must still resolve afterwards. The first resolve call after
@@ -380,6 +392,58 @@ describe("hydrate-on-resolve (post-restart short-id persistence)", () => {
       }),
     ).toBe("guid-with-undefined-optionals");
   });
+
+  it.each([
+    { name: "missing", counter: undefined },
+    { name: "lagging", counter: 6 },
+  ])(
+    "allocates above live SQLite short ids with a $name counter after reload",
+    async ({ counter }) => {
+      const context = { accountId: "default", chatId: 42, timestamp: Date.now() };
+      const entries = [
+        { shortId: "1", messageId: "00000000-0000-4000-8000-000000000001" },
+        { shortId: "7", messageId: "00000000-0000-4000-8000-000000000007" },
+      ];
+      const store = createIMessagePluginStateSyncStoreForTest<
+        ReturnType<ReplyCacheModule["rememberIMessageReplyCache"]>
+      >({
+        namespace: IMESSAGE_REPLY_CACHE_NAMESPACE,
+        maxEntries: IMESSAGE_REPLY_CACHE_MAX_ENTRIES,
+      });
+      for (const entry of entries) {
+        store.register(
+          resolveIMessageReplyCacheEntryKey(entry.messageId),
+          { ...context, ...entry },
+          {
+            ttlMs: IMESSAGE_REPLY_CACHE_TTL_MS,
+          },
+        );
+      }
+      if (counter !== undefined) {
+        createIMessagePluginStateSyncStoreForTest<{ counter: number }>({
+          namespace: IMESSAGE_REPLY_CACHE_COUNTER_NAMESPACE,
+          maxEntries: IMESSAGE_REPLY_CACHE_COUNTER_MAX_ENTRIES,
+        }).register(IMESSAGE_REPLY_CACHE_COUNTER_KEY, { counter });
+      }
+
+      await loadReplyCache({ preservePersistentState: true });
+
+      // Allocate first so a resolver cannot pre-hydrate the cache.
+      const issued = rememberIMessageReplyCache({
+        ...context,
+        messageId: "00000000-0000-4000-8000-000000000008",
+      });
+      expect(issued.shortId).toBe("8");
+      for (const entry of [...entries, issued]) {
+        expect(
+          resolveIMessageMessageId(entry.shortId, {
+            requireKnownShortId: true,
+            chatContext: { chatId: context.chatId },
+          }),
+        ).toBe(entry.messageId);
+      }
+    },
+  );
 
   it("does not reuse short ids after cached rows expire", async () => {
     vi.useFakeTimers();
@@ -513,27 +577,5 @@ describe("current-message chat binding", () => {
         chatContext: { chatId: 42 },
       }),
     ).toBe(false);
-  });
-});
-
-describe("hydrate counter advancement (rowid-collision protection)", () => {
-  it("advances the short-id counter past a corrupt persisted line so new allocations don't collide", () => {
-    // Direct hydrate isn't easy to invoke without disk fixtures; instead
-    // verify the public contract: after rememberIMessageReplyCache fires,
-    // the next allocation never re-uses an existing live shortId.
-    const a = rememberIMessageReplyCache({
-      accountId: "default",
-      messageId: "msg-a",
-      chatIdentifier: "+12069106512",
-      timestamp: Date.now(),
-    });
-    const b = rememberIMessageReplyCache({
-      accountId: "default",
-      messageId: "msg-b",
-      chatIdentifier: "+12069106512",
-      timestamp: Date.now(),
-    });
-    expect(a.shortId).not.toBe(b.shortId);
-    expect(Number.parseInt(b.shortId, 10)).toBeGreaterThan(Number.parseInt(a.shortId, 10));
   });
 });

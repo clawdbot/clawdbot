@@ -1,3 +1,10 @@
+import {
+  resolveClaudeFable5ModelIdentity,
+  resolveClaudeModelIdentity,
+  resolveClaudeMythos5ModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
+} from "openclaw/plugin-sdk/claude-model-runtime";
 /**
  * Thinking-level policy for Claude models on Amazon Bedrock. It maps Bedrock
  * model ids to the provider SDK thinking levels that are actually supported.
@@ -6,13 +13,6 @@ import type {
   ProviderRuntimeModel,
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  resolveClaudeFable5ModelIdentity,
-  resolveClaudeModelIdentity,
-  resolveClaudeMythos5ModelIdentity,
-  resolveClaudeOpus5ModelIdentity,
-  resolveClaudeSonnet5ModelIdentity,
-} from "openclaw/plugin-sdk/provider-model-shared";
 
 const BASE_CLAUDE_THINKING_LEVELS = [
   { id: "off" },
@@ -28,8 +28,8 @@ function isOpus5BedrockModelRef(modelRef: string): boolean {
   );
 }
 
-function isOpus48BedrockModelRef(modelRef: string): boolean {
-  return /(?:^|[/.:])(?:(?:us|eu|ap|apac|au|jp|global)\.)?(?:anthropic\.)?claude-opus-4[.-]8(?:$|[-.:/])/i.test(
+function isOpus47Or48BedrockModelRef(modelRef: string): boolean {
+  return /(?:^|[/.:])(?:(?:us|eu|ap|apac|au|jp|global)\.)?(?:anthropic\.)?claude-opus-4[.-][78](?:$|[-.:/])/i.test(
     modelRef,
   );
 }
@@ -40,20 +40,9 @@ function isOpus46BedrockModelRef(modelRef: string): boolean {
   );
 }
 
-/** Return whether a Bedrock model ref names Claude Opus 4.7. */
-function isOpus47BedrockModelRef(modelRef: string): boolean {
-  return /(?:^|[/.:])(?:(?:us|eu|ap|apac|au|jp|global)\.)?(?:anthropic\.)?claude-opus-4[.-]7(?:$|[-.:/])/i.test(
-    modelRef,
-  );
-}
-
 /** Return whether a Bedrock model ref names Claude Opus 4.7 or newer. */
 export function isOpus47OrNewerBedrockModelRef(modelRef: string): boolean {
-  return (
-    isOpus5BedrockModelRef(modelRef) ||
-    isOpus47BedrockModelRef(modelRef) ||
-    isOpus48BedrockModelRef(modelRef)
-  );
+  return isOpus5BedrockModelRef(modelRef) || isOpus47Or48BedrockModelRef(modelRef);
 }
 
 function isMythosPreviewBedrockModelRef(modelRef: string): boolean {
@@ -150,13 +139,7 @@ export function resolveBedrockClaudeThinkingProfile(
       defaultLevel: "high",
     };
   }
-  if (modelRefs.some(isOpus48BedrockModelRef)) {
-    return {
-      levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "xhigh" }, { id: "adaptive" }, { id: "max" }],
-      defaultLevel: "off",
-    };
-  }
-  if (modelRefs.some(isOpus47BedrockModelRef)) {
+  if (modelRefs.some(isOpus47Or48BedrockModelRef)) {
     return {
       levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "xhigh" }, { id: "adaptive" }, { id: "max" }],
       defaultLevel: "off",

@@ -4,12 +4,15 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
-import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
+import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding-metadata.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
-import { loadSessionStoreEntry, resolveStorePath } from "./dispatch-from-config.runtime.js";
+import {
+  loadSessionStoreEntry,
+  resolveSessionStorePathCore,
+} from "./dispatch-from-config.runtime.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { isSlackDirectRoutedThreadTurn } from "./routed-delivery-thread.js";
 
@@ -55,6 +58,7 @@ export function resolveSessionStoreLookup(
   ctx: FinalizedMsgContext,
   cfg: OpenClawConfig,
 ): {
+  agentId?: string;
   sessionKey?: string;
   storePath?: string;
   entry?: SessionEntry;
@@ -66,26 +70,21 @@ export function resolveSessionStoreLookup(
     return {};
   }
   const agentId = resolveSessionAgentId({ sessionKey, config: cfg, fallbackAgentId: ctx.AgentId });
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
+  const target = { agentId, sessionKey, storePath };
   try {
     const entry = loadSessionStoreEntry({
-      agentId,
-      storePath,
-      sessionKey,
+      ...target,
       readConsistency: "latest",
       clone: false,
     });
     return {
-      sessionKey,
-      storePath,
+      ...target,
       entry,
       store: entry ? { [sessionKey]: entry } : undefined,
     };
   } catch {
-    return {
-      sessionKey,
-      storePath,
-    };
+    return target;
   }
 }
 
@@ -116,6 +115,6 @@ export function resolveBoundAcpDispatchSessionKey(params: {
   if (isPluginOwnedSessionBindingRecord(binding)) {
     return undefined;
   }
-  getSessionBindingService().touch(binding.bindingId);
+  getSessionBindingService().touch(binding.bindingId, undefined, binding.conversation);
   return targetSessionKey;
 }

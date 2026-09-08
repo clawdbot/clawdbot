@@ -42,10 +42,8 @@ describe("buildXiaomiSpeechProvider", () => {
   });
 
   describe("isConfigured", () => {
-    const savedEnv = { ...process.env };
-
     afterEach(() => {
-      process.env = { ...savedEnv };
+      vi.unstubAllEnvs();
     });
 
     it("returns true when apiKey is in provider config", () => {
@@ -55,17 +53,17 @@ describe("buildXiaomiSpeechProvider", () => {
     });
 
     it("returns false when no apiKey is available", () => {
-      delete process.env.XIAOMI_API_KEY;
+      vi.stubEnv("XIAOMI_API_KEY", undefined);
       expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(false);
     });
 
     it("returns true when XIAOMI_API_KEY env var is set", () => {
-      process.env.XIAOMI_API_KEY = "sk-env";
+      vi.stubEnv("XIAOMI_API_KEY", "sk-env");
       expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
     });
 
     it.each(["", "   "])("returns false when XIAOMI_API_KEY is blank", (apiKey) => {
-      process.env.XIAOMI_API_KEY = apiKey;
+      vi.stubEnv("XIAOMI_API_KEY", apiKey);
       expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(false);
     });
   });
@@ -383,12 +381,7 @@ describe("buildXiaomiSpeechProvider", () => {
 
     it("caps oversized TTS request timeouts before scheduling or fetching", async () => {
       const audio = Buffer.from("fake-mp3-audio").toString("base64");
-      const timeoutSpy = vi
-        .spyOn(globalThis, "setTimeout")
-        .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
-      const clearTimeoutSpy = vi
-        .spyOn(globalThis, "clearTimeout")
-        .mockImplementation(() => undefined);
+      const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
       vi.mocked(globalThis.fetch).mockResolvedValueOnce(
         new Response(JSON.stringify({ choices: [{ message: { audio: { data: audio } } }] }), {
           status: 200,
@@ -408,7 +401,6 @@ describe("buildXiaomiSpeechProvider", () => {
         expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
       } finally {
         timeoutSpy.mockRestore();
-        clearTimeoutSpy.mockRestore();
       }
     });
 

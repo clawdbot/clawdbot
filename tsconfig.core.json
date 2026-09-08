@@ -10,12 +10,15 @@
   },
   "include": ["src/**/*", "packages/**/*"],
   "exclude": [
+    "packages/mermaid-renderer/**",
     "node_modules",
     "dist",
     "**/dist/**",
     "**/*.test.ts",
     "**/*.test.tsx",
     "**/*.test-compat.d.ts",
+    "src/plugin-sdk/control-ui.ts",
+    "src/plugin-sdk/control-ui-components.ts",
     "test/**"
   ]
 }

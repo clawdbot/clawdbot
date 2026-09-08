@@ -3,7 +3,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { registerAgentRunContext, resetAgentEventsForTest } from "../infra/agent-events.js";
+import { resetAgentEventsForTest } from "../infra/agent-events.js";
+import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 
 const hoisted = vi.hoisted(() => ({
   loadConfigMock: vi.fn<() => OpenClawConfig>(),
@@ -18,7 +19,7 @@ vi.mock("./session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
   return {
     ...actual,
-    loadCombinedSessionStoreForGateway: (
+    loadCombinedSessionStoreForGatewayCore: (
       cfg: OpenClawConfig,
       opts?: { agentId?: string; configuredAgentsOnly?: boolean },
     ) => hoisted.loadCombinedSessionStoreForGatewayMock(cfg, opts),
@@ -134,6 +135,20 @@ describe("resolveSessionKeyForRun", () => {
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
       agentId: "work",
     });
+  });
+
+  it("keeps qualified global main run ownership before collapsing its key", () => {
+    mockCombinedSessionStore(
+      {
+        session: { scope: "global" },
+        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+      },
+      {},
+    );
+    registerAgentRunContext("qualified-global-run", { sessionKey: "agent:research:main" });
+
+    expect(resolveSessionKeyForRun("qualified-global-run", { agentId: "research" })).toBe("main");
+    expect(resolveSessionKeyForRun("qualified-global-run", { agentId: "ops" })).toBeUndefined();
   });
 
   it("does not overwrite active run context when a scoped lookup finds another agent store entry", () => {

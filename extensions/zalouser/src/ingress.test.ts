@@ -1,6 +1,6 @@
+import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 // Zalouser tests cover durable socket admission, recovery, and replay semantics.
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
-import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createZalouserIngressMonitor, type ZalouserIngressLifecycle } from "./ingress.js";
 import {
@@ -231,7 +231,7 @@ describe("Zalouser durable ingress", () => {
     });
   });
 
-  it("settles deferred bookkeeping when the adoption watchdog aborts a claim", async () => {
+  it("releases deferred bookkeeping for retry when the adoption watchdog aborts a claim", async () => {
     await withZalouserIngressTestQueue(async (queue) => {
       let deferredLifecycle: ZalouserIngressLifecycle | undefined;
       const dispatch = vi.fn(async (_message, lifecycle: ZalouserIngressLifecycle) => {
@@ -244,10 +244,21 @@ describe("Zalouser durable ingress", () => {
         runtime: runtime(),
         queue,
         dispatch,
+        pollIntervalMs: 60_000,
         adoptionStallTimeoutMs: 10,
       });
       await ingress.receive(createRawZalouserMessage({ msgId: "deferred-timeout" }));
-      await waitForZalouserIngressVerdict(queue, "deferred-timeout", "failed");
+      await vi.waitFor(async () => {
+        expect(await queue.listClaims()).toEqual([]);
+        expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
+        expect(await queue.listPending({ limit: "all" })).toMatchObject([
+          {
+            id: "deferred-timeout",
+            attempts: 1,
+            lastError: expect.stringContaining("handler-timeout"),
+          },
+        ]);
+      });
       expect(deferredLifecycle?.abortSignal.aborted).toBe(true);
 
       await ingress.stop();

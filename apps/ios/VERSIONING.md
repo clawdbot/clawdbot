@@ -2,7 +2,7 @@
 
 OpenClaw iOS releases retain their gateway association while allowing multiple
 public App Store releases for one gateway version. The release planner derives
-the active release identity from the repository and App Store Connect.
+the active release identity from the mobile gateway version and App Store Connect.
 
 ## Goals
 
@@ -44,17 +44,13 @@ exact versions again; all future uploads use the appended single-digit format.
 
 ## Release commands
 
-Inspect the read-only release plan:
+Prepare the shared mobile release, inspect the live iOS plan, finalize the
+shared release notes, commit the five release artifacts, then upload:
 
 ```bash
-pnpm ios:release:plan -- --json
-```
-
-Cut `## Unreleased` notes into the planned encoded version, commit the result,
-then upload:
-
-```bash
-pnpm ios:release:cut
+node --import tsx scripts/mobile-release-version.ts --prepare --version 2026.8.2 --write
+pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
+node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
 pnpm ios:release:upload
 ```
 
@@ -126,17 +122,17 @@ Production revision builds do not fall back to the gateway heading or
 `## Unreleased`. Local version checks without `--revision` retain the existing
 gateway/`Unreleased` fallback for development.
 
-The cutter moves new notes into that exact heading and is idempotent:
+The mobile cutter moves new notes into that exact heading and is idempotent:
 
 ```bash
-pnpm ios:release:cut
+node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --check
 ```
 
 ## Source of truth and generated files
 
 Source files:
 
-- root `package.json`: default gateway version for local builds and release planning
+- `apps/mobile/version.json`: default gateway version for mobile builds and release planning
 - App Store Connect versions and build uploads: revision/build lifecycle state
 - explicit release arguments: checked overrides only
 - `apps/ios/CHANGELOG.md`: exact App Store release notes
@@ -154,9 +150,12 @@ The canonical implementation is split across:
 - `scripts/lib/ios-version.ts`: validation, encoding, and release-note rendering
 - `scripts/lib/ios-release-plan.ts`: deterministic revision/build selection and
   changelog cutting
+- `scripts/lib/mobile-version.ts`: canonical mobile gateway version parsing and reading
+- `scripts/mobile-release-version.ts`: shared Android preparation and iOS finalization
 - `scripts/ios-version.ts`: JSON, shell, and single-field queries
 - `scripts/ios-release-plan.ts`: pure planner CLI used by the Fastlane adapter
-- `scripts/ios-release-{plan,cut}.sh`: public planning and cutting entry points
+- `scripts/ios-release-plan.sh`: public read-only planning entry point
+- `scripts/ios-release-cut.{sh,ts}`: retired compatibility entry points
 - `scripts/ios-sync-versioning.ts`: release-note validation
 - `scripts/ios-release-upload.sh`: guarded upload entry point
 - `apps/ios/fastlane/Fastfile`: remote preflight, build allocation, metadata,
@@ -181,13 +180,19 @@ Connect accepts the upload. Existing refs are immutable.
 
 ## Normal workflow
 
-1. Inspect the plan:
+1. Prepare the mobile gateway and Android release artifacts:
 
 ```bash
-pnpm ios:release:plan -- --json
+node --import tsx scripts/mobile-release-version.ts --prepare --version 2026.8.2 --write
 ```
 
-2. Cut and commit release notes when the plan reports `needs-cut`.
+2. Capture the live iOS plan, then finalize and commit the five release artifacts:
+
+```bash
+pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
+node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
+```
+
 3. Upload the planned build:
 
 ```bash

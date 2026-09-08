@@ -23,6 +23,7 @@ type DoctorSqliteCompactResult = {
 type DoctorSqliteCompactOptions = {
   afterSuccess?: () => void;
   busyTimeoutMs?: number;
+  operation?: "import-finalize";
   sqlitePath: string;
   validateBeforeMutation?: (database: DatabaseSync) => void;
 };
@@ -50,7 +51,13 @@ export function compactDoctorSqliteFile(
     assertSqliteIntegrity(database, options.sqlitePath);
     checkpointTruncate(database, options.sqlitePath);
     database.exec("PRAGMA auto_vacuum = INCREMENTAL;");
-    database.exec("VACUUM;");
+    // NONE databases need a full rewrite to add pointer maps. Existing auto-vacuum
+    // stores can release free pages without repacking; explicit compact still repacks.
+    database.exec(
+      options.operation === "import-finalize" && before.autoVacuum !== 0
+        ? "PRAGMA incremental_vacuum;"
+        : "VACUUM;",
+    );
     checkpointTruncate(database, options.sqlitePath);
     const { integrityCheck } = assertSqliteIntegrity(database, options.sqlitePath);
     const after = readCompactSnapshot(database, options.sqlitePath);

@@ -1,4 +1,5 @@
 export {
+  runMemoryForget,
   runMemoryIndex,
   runMemoryPromote,
   runMemoryPromoteExplain,
@@ -10,3 +11,4 @@ export {
   runMemorySessionBackfill,
 } from "./cli-rem.runtime.js";
 export { runMemoryStatus } from "./cli-status.runtime.js";
+export { runMemoryReset } from "./cli-reset.runtime.js";

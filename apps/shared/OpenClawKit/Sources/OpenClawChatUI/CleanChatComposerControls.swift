@@ -11,14 +11,20 @@ struct CleanChatComposerSurface: ViewModifier {
     let cornerRadius: CGFloat
 
     func body(content: Content) -> some View {
+        self.platformSurface(content)
+            .overlay(
+                RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+                    .strokeBorder(OpenClawChatTheme.composerBorder, lineWidth: 1))
+            .shadow(color: .black.opacity(0.05), radius: 8, y: 4)
+    }
+
+    @ViewBuilder
+    private func platformSurface(_ content: Content) -> some View {
         #if os(macOS)
         content
             .background(
                 RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
                     .fill(OpenClawChatTheme.composerField))
-            .overlay(
-                RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
-                    .strokeBorder(OpenClawChatTheme.composerBorder, lineWidth: 1))
         #else
         if #available(iOS 26.0, *) {
             content
@@ -28,25 +34,80 @@ struct CleanChatComposerSurface: ViewModifier {
                 .background(
                     .regularMaterial,
                     in: RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
-                        .strokeBorder(OpenClawChatTheme.composerBorder, lineWidth: 1))
         }
         #endif
     }
 }
 
 enum CleanChatComposerMetrics {
-    static let controlHeight: CGFloat = 44
+    static let surfaceCornerRadius: CGFloat = 20
+    static let restingMinHeight: CGFloat = 104
+    static let controlTouchSize: CGFloat = 44
+    static let primaryVisualSize: CGFloat = 32
+    static let editorInlineInset: CGFloat = 14
+    static let editorBlockInset: CGFloat = 6
+    static let footerInlineInset: CGFloat = 8
+    static let footerBlockInset: CGFloat = 6
+    static let rowGap: CGFloat = 4
+    static let footerControlGap: CGFloat = 0
+    static let regularModelWidth: CGFloat = 82
+    static let compactModelWidth: CGFloat = controlTouchSize
 }
 
 struct CompactChatAttachmentLabel: View {
     var body: some View {
         Image(systemName: "plus")
-            .font(OpenClawChatTypography.display(size: 15, weight: .semibold, relativeTo: .subheadline))
+            .font(OpenClawChatTypography.display(size: 20, weight: .semibold, relativeTo: .body))
             .foregroundStyle(.secondary)
-            .frame(width: 44, height: 44)
+            .frame(
+                width: CleanChatComposerMetrics.controlTouchSize,
+                height: CleanChatComposerMetrics.controlTouchSize)
             .contentShape(Rectangle())
+    }
+}
+
+struct CleanChatContextUsageLabel: View {
+    let usage: OpenClawChatContextUsage
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(OpenClawChatTheme.muted.opacity(0.2), lineWidth: 2.5)
+            Circle()
+                .trim(from: 0, to: max(0.02, self.usage.fractionUsed ?? 0))
+                .stroke(self.tint, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+        }
+        .frame(width: 18, height: 18)
+        .frame(
+            width: CleanChatComposerMetrics.controlTouchSize,
+            height: CleanChatComposerMetrics.controlTouchSize)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Context usage")
+        .accessibilityValue(self.accessibilityValue)
+    }
+
+    private var tint: Color {
+        guard let percent = self.usage.percentUsed else { return OpenClawChatTheme.muted }
+        if percent >= 90 { return OpenClawChatTheme.danger }
+        #if os(macOS)
+        if percent >= 75 { return OpenClawChatTheme.warning }
+        #else
+        if percent >= 80 { return OpenClawChatTheme.warning }
+        #endif
+        return OpenClawChatTheme.success
+    }
+
+    private var accessibilityValue: String {
+        if let percent = self.usage.percentUsed {
+            return String(
+                format: String(localized: "%@ percent of the context window used"),
+                percent.formatted())
+        }
+        return String(
+            format: String(localized: "%@ tokens used"),
+            self.usage.usedTokens.formatted())
     }
 }
 
@@ -105,11 +166,26 @@ struct OpenClawChatAttachmentsStrip: View {
 }
 
 #if !os(macOS)
-struct OpenClawChatAttachmentMenu: View {
+struct OpenClawChatAttachmentMenu<ExtraItems: View>: View {
     @Binding var showsPhotoPicker: Bool
     @Binding var showsFileImporter: Bool
     @Binding var showsCameraPicker: Bool
     let isAttachmentInputEnabled: Bool
+    let extraItems: ExtraItems
+
+    init(
+        showsPhotoPicker: Binding<Bool>,
+        showsFileImporter: Binding<Bool>,
+        showsCameraPicker: Binding<Bool>,
+        isAttachmentInputEnabled: Bool,
+        @ViewBuilder extraItems: () -> ExtraItems)
+    {
+        self._showsPhotoPicker = showsPhotoPicker
+        self._showsFileImporter = showsFileImporter
+        self._showsCameraPicker = showsCameraPicker
+        self.isAttachmentInputEnabled = isAttachmentInputEnabled
+        self.extraItems = extraItems()
+    }
 
     var body: some View {
         Menu {
@@ -123,6 +199,7 @@ struct OpenClawChatAttachmentMenu: View {
                     Image(systemName: "photo.on.rectangle")
                 }
             }
+            .disabled(!self.isAttachmentInputEnabled)
 
             #if canImport(UIKit)
             Button {
@@ -135,7 +212,9 @@ struct OpenClawChatAttachmentMenu: View {
                     Image(systemName: "camera")
                 }
             }
-            .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
+            .disabled(
+                !self.isAttachmentInputEnabled ||
+                    !UIImagePickerController.isSourceTypeAvailable(.camera))
             #endif
 
             Button {
@@ -148,15 +227,17 @@ struct OpenClawChatAttachmentMenu: View {
                     Image(systemName: "folder")
                 }
             }
+            .disabled(!self.isAttachmentInputEnabled)
 
+            Divider()
+            self.extraItems
         } label: {
             CompactChatAttachmentLabel()
         }
-        .help("Add attachment")
-        .accessibilityLabel("Add attachment")
+        .help("Composer options")
+        .accessibilityLabel("Composer options")
         .accessibilityIdentifier("chat-attachment-picker")
         .buttonStyle(.plain)
-        .disabled(!self.isAttachmentInputEnabled)
     }
 }
 

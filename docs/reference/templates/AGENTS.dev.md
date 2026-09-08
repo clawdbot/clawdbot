@@ -28,14 +28,16 @@ and notes are backed up.
 
 ```bash
 git init
-git add AGENTS.md
+git add AGENTS.md SOUL.md IDENTITY.md USER.md memory/
 git commit -m "Add agent workspace"
 ```
 
 ## Safety defaults
 
 - Don't exfiltrate secrets or private data.
-- Don't run destructive commands unless explicitly asked.
+- Don't run destructive commands without asking.
+- Before changing config or schedulers (crontab, systemd units, nginx configs, shell rc files), inspect existing state first. Preserve and merge by default.
+- Prefer `trash` over `rm` - recoverable beats gone forever.
 - Be concise in chat; write longer output to files in this workspace.
 
 ## Existing solutions preflight
@@ -45,13 +47,13 @@ Before proposing or building a custom system, feature, workflow, tool, integrati
 ## Daily memory (recommended)
 
 - Keep a short daily log at memory/YYYY-MM-DD.md (create memory/ if needed).
-- On session start, read today + yesterday if present.
+- Use runtime-provided startup context first. Read today + yesterday yourself only when the startup context does not already include them.
 - Before writing memory files, read them first; write only concrete updates, never empty placeholders.
 - Capture durable facts, preferences, and decisions; avoid secrets.
 
-## Heartbeats (optional)
+## Automations (optional)
 
-- The heartbeat monitor's cron scratch can hold a tiny checklist for heartbeat runs; keep it small.
+- A scheduled automation's scratch can hold a tiny task checklist; keep it small.
 
 ## Tools
 

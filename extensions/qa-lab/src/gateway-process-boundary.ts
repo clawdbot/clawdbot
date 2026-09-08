@@ -1,11 +1,14 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
+import { QA_CHILD_STDOUT_MAX_BYTES } from "./child-output.js";
+import { runQaScenarioCommandLifecycle } from "./test-file-scenario-command-lifecycle.js";
 
 const PROCESS_BOUNDARY_VERSION = 1;
 const PROCESS_BOUNDARY_START_TIMEOUT_MS = 30_000;
@@ -236,8 +239,7 @@ function parseQaGatewayProcessRuntimeProof(value: unknown): QaGatewayProcessRunt
 async function assertContainedPath(root: string, target: string, label: string) {
   const rootPath = await fs.realpath(root);
   const targetPath = await fs.realpath(target);
-  const relative = path.relative(rootPath, targetPath);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (!isPathInside(rootPath, targetPath)) {
     throw new Error(`${label} escaped its trusted root`);
   }
   return targetPath;
@@ -300,45 +302,30 @@ async function runBoundaryLauncherCommand(params: {
   launcherPath: string;
   timeoutMs: number;
 }) {
-  const child = spawn(params.launcherPath, params.args, {
+  // The proxy gets its own process group; the verified SUT identity and its
+  // UID-quiescence checks remain owned by the launcher, never this cleanup.
+  const result = await runQaScenarioCommandLifecycle({
+    command: params.launcherPath,
+    args: [...params.args],
+    cwd: process.cwd(),
+    timeoutMs: params.timeoutMs,
     env: {
       HOME: process.env.HOME,
       LANG: process.env.LANG ?? "C.UTF-8",
       PATH: process.env.PATH,
     },
-    stdio: ["ignore", "pipe", "pipe"],
   });
-  const stdout: Buffer[] = [];
-  const stderr: Buffer[] = [];
-  child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
-  child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<never>((_resolve, reject) => {
-    timeout = setTimeout(() => {
-      child.kill("SIGKILL");
-      reject(new Error(`process-boundary ${params.label} proxy timed out`));
-    }, params.timeoutMs);
-  });
-  let exitCode: number;
-  try {
-    exitCode = await Promise.race([
-      new Promise<number>((resolve, reject) => {
-        child.once("error", reject);
-        child.once("close", (code) => resolve(code ?? 1));
-      }),
-      timeoutPromise,
-    ]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
-  if (exitCode !== 0) {
+  if (result.exitCode !== 0) {
     throw new Error(
-      `process-boundary ${params.label} proxy exited ${exitCode}: ${Buffer.concat(stderr).toString("utf8").trim()}`,
+      `process-boundary ${params.label} proxy exited ${result.exitCode}${result.stderrTruncated ? " (stderr truncated)" : ""}: ${result.failureMessage ?? result.stderr.trim()}`,
     );
   }
-  return Buffer.concat(stdout).toString("utf8");
+  if (result.stdoutTruncated) {
+    throw new Error(
+      `process-boundary ${params.label} proxy stdout exceeded ${QA_CHILD_STDOUT_MAX_BYTES} bytes`,
+    );
+  }
+  return result.stdout;
 }
 
 async function runBoundaryVerification(params: {
@@ -791,6 +778,13 @@ export async function createQaGatewayProcessBoundaryController(params: {
     signal,
     markReady,
     markExited,
+    cleanupTempRoot: () =>
+      runBoundaryLauncherCommand({
+        args: ["--cleanup-temp-root", tempRoot],
+        label: "temp-root cleanup",
+        launcherPath: params.launcherPath,
+        timeoutMs: PROCESS_BOUNDARY_CONTROL_TIMEOUT_MS,
+      }),
     evidencePath,
     retainCredentialLeasePath,
     retainCredentialLease,

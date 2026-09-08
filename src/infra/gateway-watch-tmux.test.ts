@@ -1,11 +1,12 @@
 // Covers gateway watch tmux script helpers.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildGatewayWatchTmuxCommand,
   resolveGatewayWatchTmuxSessionName,
   runGatewayWatchTmuxMain,
   runGatewayWatchServiceHandoff,
-} from "../../scripts/gateway-watch-tmux.mjs";
+} from "../../scripts/gateway-watch-tmux.mts";
 
 const createOutput = () => {
   const chunks: string[] = [];
@@ -19,12 +20,7 @@ const createOutput = () => {
   };
 };
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function spawnCall(mock: unknown, callIndex: number) {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
@@ -95,6 +91,7 @@ describe("gateway-watch tmux wrapper", () => {
       args: ["gateway", "--force", "--raw-stream-path", "a b.jsonl"],
       cwd: "/repo with spaces/openclaw",
       env: {
+        OPENCLAW_DEV_SOURCE_ROOT: "/selected checkout",
         OPENCLAW_GATEWAY_PORT: "19001",
         OPENCLAW_GATEWAY_RESTART_TRACE: "1",
         OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
@@ -113,6 +110,7 @@ describe("gateway-watch tmux wrapper", () => {
     expect(command).toContain("'OPENCLAW_GATEWAY_WATCH_SESSION=openclaw-gateway-watch-main'");
     expect(command).toContain("'\\''-u'\\'' '\\''NO_COLOR'\\''");
     expect(command).toContain("'FORCE_COLOR=1'");
+    expect(command).toContain("'OPENCLAW_DEV_SOURCE_ROOT=/selected checkout'");
     expect(command).toContain("'OPENCLAW_GATEWAY_PORT=19001'");
     expect(command).toContain("'OPENCLAW_GATEWAY_RESTART_TRACE=1'");
     expect(command).toContain("'OPENCLAW_GATEWAY_STARTUP_TRACE=1'");
@@ -126,11 +124,11 @@ describe("gateway-watch tmux wrapper", () => {
     expect(command).toContain("--force");
     expect(command).toContain("'a b.jsonl'");
     expect(command).not.toContain("scripts/run-node.mjs");
-    expect(command).toContain("scripts/gateway-watch-tmux.mjs");
+    expect(command).toContain("scripts/gateway-watch-tmux.mts");
     expect(command).toContain("--handoff-managed-service");
   });
 
-  it("runs managed service handoff before watching", () => {
+  it("runs managed service handoff before watching and clears an omitted development selector", () => {
     const command = buildGatewayWatchTmuxCommand({
       args: ["gateway", "--force"],
       cwd: "/repo",
@@ -139,11 +137,13 @@ describe("gateway-watch tmux wrapper", () => {
       sessionName: "openclaw-gateway-watch-main",
     });
 
-    expect(command).toContain("scripts/gateway-watch-tmux.mjs");
+    expect(command).toContain("scripts/gateway-watch-tmux.mts");
+    expect(command).toContain("'\\''-u'\\'' '\\''OPENCLAW_DEV_SOURCE_ROOT'\\''");
+    expect(command).not.toContain("OPENCLAW_DEV_SOURCE_ROOT=");
     expect(command).toMatch(
-      /gateway-watch-tmux\.mjs.*handoff-managed-service.*&& exec.*scripts\/watch-node\.mjs/,
+      /gateway-watch-tmux\.mts.*handoff-managed-service.*&& exec.*scripts\/watch-node\.mjs/,
     );
-    expect(command.indexOf("scripts/gateway-watch-tmux.mjs")).toBeLessThan(
+    expect(command.indexOf("scripts/gateway-watch-tmux.mts")).toBeLessThan(
       command.indexOf("scripts/watch-node.mjs"),
     );
   });
@@ -522,7 +522,7 @@ describe("gateway-watch tmux wrapper", () => {
       "-c",
       "/repo",
     ]);
-    expect(String(launchArgs[6])).toContain("scripts/gateway-watch-tmux.mjs");
+    expect(String(launchArgs[6])).toContain("scripts/gateway-watch-tmux.mts");
     expect(String(launchArgs[6])).toContain("scripts/watch-node.mjs");
     expect(
       expectSpawn(spawnSync, 4, "tmux", [

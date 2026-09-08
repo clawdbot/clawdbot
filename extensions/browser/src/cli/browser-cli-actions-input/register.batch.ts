@@ -3,7 +3,6 @@
  */
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveBrowserActExecutionBudgetMs } from "../../browser/act-policy.js";
 import type { BrowserActRequest } from "../../browser/client-actions.types.js";
 import { BROWSER_TAB_REFERENCE_HELP, type BrowserParentOpts } from "../browser-cli-shared.js";
 import { danger, defaultRuntime } from "../core-api.js";
@@ -28,6 +27,11 @@ export function registerBrowserBatchCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
+      if (opts.actions !== undefined && opts.actionsFile !== undefined) {
+        defaultRuntime.error(danger("Specify only one of --actions or --actions-file"));
+        defaultRuntime.exit(1);
+        return;
+      }
       if (!opts.actions && !opts.actionsFile) {
         defaultRuntime.error(danger("Provide --actions, --actions-file, or --actions-file -"));
         defaultRuntime.exit(1);
@@ -69,8 +73,7 @@ export function registerBrowserBatchCommands(
         }>({
           parent,
           profile,
-          body,
-          timeoutMs: resolveBrowserActExecutionBudgetMs(request),
+          body: request,
         });
       } catch (err) {
         defaultRuntime.error(danger(String(err)));

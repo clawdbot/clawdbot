@@ -1,22 +1,22 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../../agents/memory-search.js";
-import { getRuntimeConfig } from "../../config/config.js";
 import { createEmbeddingProvider } from "../../plugin-sdk/memory-core-bundled-runtime.js";
 import { listEmbeddingProviders } from "../../plugins/embedding-provider-runtime.js";
-import { listMemoryEmbeddingProviders } from "../../plugins/memory-embedding-providers.js";
+import { listRegisteredMemoryEmbeddingProviderAdapters } from "../../plugins/memory-embedding-provider-runtime.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { getMemoryEmbeddingCommandSecretTargetIds } from "../command-secret-targets.js";
 import { collectOption } from "../program/helpers.js";
 import type { CapabilityEnvelope } from "./metadata.js";
+import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
 import {
-  emitJsonOrText,
-  formatEnvelopeForText,
   providerHasGenericConfig,
-  providerSummaryText,
+  registerLocalProvidersCommand,
   requireProviderModelOverride,
+  resolveCapabilityAgentOption,
+  resolveCapabilityProviderAgentId,
   resolveLocalCapabilityRuntimeConfig,
 } from "./shared.js";
 
@@ -39,6 +39,7 @@ async function runMemoryEmbeddingCreate(params: {
   texts: string[];
   provider?: string;
   model?: string;
+  agent?: string;
 }) {
   const modelRef = requireProviderModelOverride(params.model);
   const cfg = await resolveLocalCapabilityRuntimeConfig({
@@ -47,9 +48,10 @@ async function runMemoryEmbeddingCreate(params: {
   });
   const requestedProvider =
     normalizeOptionalString(params.provider) || modelRef?.provider || "auto";
+  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer embedding create");
   const result = await createEmbeddingProvider({
     config: cfg,
-    agentDir: resolveAgentDir(cfg, resolveDefaultAgentId(cfg)),
+    agentDir: resolveAgentDir(cfg, agentId),
     provider: requestedProvider,
     fallback: "none",
     model: modelRef?.model ?? "",
@@ -62,7 +64,7 @@ async function runMemoryEmbeddingCreate(params: {
   let operationError: unknown;
   let operationFailed = false;
   try {
-    embeddings = await provider.embedBatch(params.texts);
+    embeddings = await provider.embedBatch(params.texts, { inputType: "document" });
   } catch (err) {
     operationError = err;
     operationFailed = true;
@@ -99,19 +101,27 @@ async function runMemoryEmbeddingCreate(params: {
 }
 
 export function registerEmbeddingCapabilityCommands(capability: Command): void {
-  const embedding = capability.command("embedding").description("Embedding providers");
+  const embedding = capability
+    .command("embedding")
+    .description("Embedding providers")
+    .option("--agent <id>", "Agent whose model and auth state should be used");
 
   embedding
     .command("create")
     .description("Create embeddings")
-    .requiredOption("--text <text>", "Input text", collectOption, [])
+    .requiredOption("--text <text>", "Input text", collectOption)
     .option("--provider <id>", "Provider id")
     .option("--model <provider/model>", "Model override")
+    .option(
+      "--agent <id>",
+      "Agent whose saved provider auth is used (default: agents.defaults.systemAgent.agentId, then the sole agent)",
+    )
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const result = await runMemoryEmbeddingCreate({
           texts: opts.text as string[],
+          agent: resolveCapabilityAgentOption(command, opts.agent),
           provider: opts.provider as string | undefined,
           model: opts.model as string | undefined,
         });
@@ -119,63 +129,60 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
       });
     });
 
-  embedding
-    .command("providers")
-    .description("List embedding providers")
-    .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const cfg = getRuntimeConfig();
-        const agentId = resolveDefaultAgentId(cfg);
-        const resolvedMemory = resolveMemorySearchConfig(cfg, agentId);
-        const selectedProvider = resolvedMemory?.provider;
-        const providers = new Map(
-          listMemoryEmbeddingProviders().map((provider) => [
-            provider.id,
-            {
-              id: provider.id,
-              defaultModel: provider.defaultModel,
-              transport: provider.transport,
-              autoSelectPriority: provider.autoSelectPriority,
-            },
-          ]),
-        );
-        for (const provider of listEmbeddingProviders(cfg)) {
-          if (providers.has(provider.id)) {
-            continue;
-          }
-          providers.set(provider.id, {
+  registerLocalProvidersCommand(
+    embedding,
+    "List embedding providers",
+    (cfg, agentId) => {
+      const resolvedMemory = resolveMemorySearchConfig(cfg, agentId);
+      const selectedProvider = resolvedMemory?.provider;
+      const providers = new Map(
+        listRegisteredMemoryEmbeddingProviderAdapters().map((provider) => [
+          provider.id,
+          {
             id: provider.id,
             defaultModel: provider.defaultModel,
             transport: provider.transport,
-            autoSelectPriority: undefined,
-          });
+            autoSelectPriority: provider.autoSelectPriority,
+          },
+        ]),
+      );
+      for (const provider of listEmbeddingProviders(cfg)) {
+        if (providers.has(provider.id)) {
+          continue;
         }
-        if (selectedProvider && !providers.has(selectedProvider)) {
-          providers.set(selectedProvider, {
-            id: selectedProvider,
-            defaultModel: resolvedMemory?.model || undefined,
-            transport: providerHasGenericConfig({ cfg, providerId: selectedProvider })
-              ? "remote"
-              : undefined,
-            autoSelectPriority: undefined,
-          });
-        }
-        const result = Array.from(providers.values()).map((provider) => ({
-          available: true,
-          configured:
-            provider.id === selectedProvider ||
-            providerHasGenericConfig({
-              cfg,
-              providerId: provider.id,
-            }),
-          selected: provider.id === selectedProvider,
+        providers.set(provider.id, {
           id: provider.id,
           defaultModel: provider.defaultModel,
           transport: provider.transport,
-          autoSelectPriority: provider.autoSelectPriority,
-        }));
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, providerSummaryText);
-      });
-    });
+          autoSelectPriority: undefined,
+        });
+      }
+      if (selectedProvider && !providers.has(selectedProvider)) {
+        providers.set(selectedProvider, {
+          id: selectedProvider,
+          defaultModel: resolvedMemory?.model || undefined,
+          transport: providerHasGenericConfig({ cfg, providerId: selectedProvider, agentId })
+            ? "remote"
+            : undefined,
+          autoSelectPriority: undefined,
+        });
+      }
+      return Array.from(providers.values()).map((provider) => ({
+        available: true,
+        configured:
+          provider.id === selectedProvider ||
+          providerHasGenericConfig({
+            cfg,
+            providerId: provider.id,
+            agentId,
+          }),
+        selected: provider.id === selectedProvider,
+        id: provider.id,
+        defaultModel: provider.defaultModel,
+        transport: provider.transport,
+        autoSelectPriority: provider.autoSelectPriority,
+      }));
+    },
+    providerSummaryText,
+  );
 }

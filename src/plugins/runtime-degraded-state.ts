@@ -1,5 +1,4 @@
-import fs from "node:fs";
-import path from "node:path";
+import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 
 /** Boot-stable quarantine state for configured plugins whose payload failed verification. */
 
@@ -101,14 +100,7 @@ export function pluginInstallPathMatchesRoot(
   if (!installPath) {
     return false;
   }
-  const canonicalize = (value: string) => {
-    try {
-      return fs.realpathSync(value);
-    } catch {
-      return path.resolve(value);
-    }
-  };
-  return canonicalize(installPath) === canonicalize(rootDir);
+  return resolveRealpathOrAbsolute(installPath) === resolveRealpathOrAbsolute(rootDir);
 }
 
 /** Matches install-record and discovered roots across symlink/path aliases. */

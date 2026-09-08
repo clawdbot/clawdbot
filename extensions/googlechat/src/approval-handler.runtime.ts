@@ -1,12 +1,16 @@
-import type {
-  ChannelApprovalCapabilityHandlerContext,
-  ExpiredApprovalView,
-  PendingApprovalView,
-  ResolvedApprovalView,
+import {
+  createChannelApprovalNativeRuntimeAdapter,
+  type ChannelApprovalCapabilityHandlerContext,
+  type ChannelApprovalKind,
+  type ExpiredApprovalView,
+  type PendingApprovalView,
+  type ResolvedApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
-import type { ExecApprovalDecision } from "openclaw/plugin-sdk/approval-runtime";
+import {
+  formatChannelApprovalResolvedLabel,
+  type ExecApprovalDecision,
+} from "openclaw/plugin-sdk/approval-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -14,13 +18,13 @@ import { resolveGoogleChatAccount, type ResolvedGoogleChatAccount } from "./acco
 import { sendGoogleChatMessage, updateGoogleChatMessage } from "./api.js";
 import {
   buildGoogleChatApprovalActionParameters,
-  createGoogleChatApprovalToken,
+  googleChatApprovalControls,
   GOOGLECHAT_APPROVAL_ACTION,
   registerGoogleChatApprovalCardBinding,
   registerGoogleChatManualApprovalFollowupSuppression,
   unregisterGoogleChatManualApprovalFollowupSuppression,
-  unregisterGoogleChatApprovalCardBindings,
 } from "./approval-card-actions.js";
+import { escapeGoogleChatApprovalCardText as escapeGoogleChatText } from "./approval-card-text.js";
 import {
   isGoogleChatNativeApprovalClientEnabled,
   shouldHandleGoogleChatNativeApprovalRequest,
@@ -43,7 +47,7 @@ type GoogleChatApprovalActionToken = {
 
 type GoogleChatPendingDelivery = {
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   expiresAtMs: number;
   cardsV2: GoogleChatCardV2[];
   actionTokens: GoogleChatApprovalActionToken[];
@@ -87,10 +91,6 @@ function resolveHandlerAccount(
   return account;
 }
 
-function escapeGoogleChatText(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
 function truncateText(text: string, maxChars = MAX_TEXT_PARAGRAPH_CHARS): string {
   return text.length <= maxChars ? text : `${truncateUtf16Safe(text, maxChars - 3)}...`;
 }
@@ -101,14 +101,6 @@ function buildMetadataText(metadata: readonly { label: string; value: string }[]
       (item) => `<b>${escapeGoogleChatText(item.label)}:</b> ${escapeGoogleChatText(item.value)}`,
     )
     .join("<br>");
-}
-
-function formatDecision(decision: ExecApprovalDecision): string {
-  return decision === "allow-once"
-    ? "Allowed once"
-    : decision === "allow-always"
-      ? "Allowed always"
-      : "Denied";
 }
 
 function buildMainTextWidget(text: string) {
@@ -165,6 +157,18 @@ function buildPluginPendingSections(view: PendingApprovalView) {
   ];
 }
 
+function buildSystemAgentPendingSections(view: PendingApprovalView) {
+  if (view.approvalKind !== "system-agent") {
+    return [];
+  }
+  return [
+    {
+      header: "Change",
+      widgets: [buildMainTextWidget(view.operationSummary)],
+    },
+  ];
+}
+
 function buildMetadataSection(
   view: PendingApprovalView | ResolvedApprovalView | ExpiredApprovalView,
 ) {
@@ -185,7 +189,7 @@ function buildActionSection(params: { actionFunction: string; view: PendingAppro
 } {
   const { actionFunction, view } = params;
   const actionTokens = view.actions.map((action) => ({
-    token: createGoogleChatApprovalToken(),
+    token: googleChatApprovalControls.createToken(),
     decision: action.decision,
   }));
   return {
@@ -225,7 +229,11 @@ function buildPendingPayload(params: {
   const { actionFunction, nowMs, view } = params;
   const { section: actionSection, actionTokens } = buildActionSection({ actionFunction, view });
   const title =
-    view.approvalKind === "plugin" ? "Plugin Approval Required" : "Exec Approval Required";
+    view.approvalKind === "plugin"
+      ? "Plugin Approval Required"
+      : view.approvalKind === "system-agent"
+        ? "OpenClaw Change Requires Approval"
+        : "Exec Approval Required";
   const subtitle = `Expires in ${Math.max(0, Math.ceil((view.expiresAtMs - nowMs) / 1000))}s`;
   const card: GoogleChatCardV2 = {
     cardId: GOOGLECHAT_APPROVAL_CARD_ID,
@@ -234,6 +242,7 @@ function buildPendingPayload(params: {
       sections: [
         ...buildExecPendingSections(view),
         ...buildPluginPendingSections(view),
+        ...buildSystemAgentPendingSections(view),
         ...buildMetadataSection(view),
         actionSection,
       ],
@@ -260,13 +269,18 @@ function resolveApprovalActionFunction(params: ChannelApprovalCapabilityHandlerC
 
 function buildResolvedPayload(view: ResolvedApprovalView): GoogleChatFinalDelivery {
   const resolvedBy = normalizeOptionalString(view.resolvedBy);
+  const decisionLabel = formatChannelApprovalResolvedLabel(view);
   const card: GoogleChatCardV2 = {
     cardId: GOOGLECHAT_APPROVAL_CARD_ID,
     card: {
       header: {
-        title: `${view.approvalKind === "plugin" ? "Plugin" : "Exec"} Approval: ${formatDecision(
-          view.decision,
-        )}`,
+        title: `${
+          view.approvalKind === "plugin"
+            ? "Plugin"
+            : view.approvalKind === "system-agent"
+              ? "OpenClaw Change"
+              : "Exec"
+        } Approval: ${decisionLabel}`,
         subtitle: resolvedBy ? `Resolved by ${resolvedBy}` : "Resolved",
       },
       sections: buildMetadataSection(view),
@@ -282,7 +296,13 @@ function buildExpiredPayload(view: ExpiredApprovalView): GoogleChatFinalDelivery
     cardId: GOOGLECHAT_APPROVAL_CARD_ID,
     card: {
       header: {
-        title: `${view.approvalKind === "plugin" ? "Plugin" : "Exec"} Approval Expired`,
+        title: `${
+          view.approvalKind === "plugin"
+            ? "Plugin"
+            : view.approvalKind === "system-agent"
+              ? "OpenClaw Change"
+              : "Exec"
+        } Approval Expired`,
         subtitle: "This approval request expired before it was resolved.",
       },
       sections: buildMetadataSection(view),
@@ -300,7 +320,7 @@ export const googleChatApprovalNativeRuntime = createChannelApprovalNativeRuntim
   readonly string[],
   GoogleChatFinalDelivery
 >({
-  eventKinds: ["exec", "plugin"],
+  eventKinds: ["exec", "plugin", "system-agent"],
   availability: {
     isConfigured: ({ cfg, accountId }) =>
       isGoogleChatNativeApprovalClientEnabled({ cfg, accountId }),
@@ -402,10 +422,10 @@ export const googleChatApprovalNativeRuntime = createChannelApprovalNativeRuntim
       return tokens.length > 0 ? tokens : null;
     },
     unbindPending: ({ binding }) => {
-      unregisterGoogleChatApprovalCardBindings(binding);
+      googleChatApprovalControls.unregister(binding);
     },
     cancelDelivered: ({ entry }) => {
-      unregisterGoogleChatApprovalCardBindings(
+      googleChatApprovalControls.unregister(
         entry.actionTokens.map((actionToken) => actionToken.token),
       );
     },

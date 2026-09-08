@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import {
   inspectMattermostAccount,
+  isMattermostConfigured,
   listMattermostAccountIds,
   resolveDefaultMattermostAccountId,
   resolveMattermostAccount,
@@ -113,6 +114,31 @@ describe("Mattermost account SecretRef inspection", () => {
     provider: "default",
     id: "OPENCLAW_TEST_MISSING_MATTERMOST_TOKEN",
   };
+
+  it.each([
+    { botToken: "bot-token", baseUrl: "https://mm.example.com", configured: true },
+    { botToken: unresolvedRef, baseUrl: "https://mm.example.com", configured: true },
+    { botToken: undefined, baseUrl: "https://mm.example.com", configured: false },
+    { botToken: "bot-token", baseUrl: undefined, configured: false },
+  ])("reports configured=$configured for token $botToken and URL $baseUrl", (entry) => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          accounts: {
+            work: { botToken: entry.botToken, baseUrl: entry.baseUrl, dmPolicy: "allowlist" },
+          },
+        },
+      },
+    };
+    const account = inspectMattermostAccount({ cfg, accountId: "work" });
+    expect(isMattermostConfigured(account)).toBe(entry.configured);
+    expect(account).toMatchObject({
+      accountId: "work",
+      enabled: true,
+      configured: entry.configured,
+      dmPolicy: "allowlist",
+    });
+  });
 
   it("keeps direct account resolution strict", () => {
     expect(() =>

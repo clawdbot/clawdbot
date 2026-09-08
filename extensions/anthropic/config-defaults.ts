@@ -1,3 +1,4 @@
+import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 /**
  * Anthropic config defaulting helpers. They seed default Anthropic/Claude CLI
  * model refs and cache-retention params based on configured auth mode.
@@ -8,10 +9,16 @@ import {
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  normalizeAnthropicProviderId,
+  parseAnthropicModelRef,
   resolveClaudeCliAnthropicModelRefs,
   resolveKnownAnthropicModelRef,
 } from "./claude-model-refs.js";
-import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "./cli-constants.js";
+import {
+  CLAUDE_CLI_BACKEND_ID,
+  CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
+  CLAUDE_CLI_PROFILE_ID,
+} from "./cli-constants.js";
 
 const ANTHROPIC_PROVIDER_API = "anthropic-messages";
 const ANTHROPIC_API_KEY_DEFAULT_ALLOWLIST_REFS = [
@@ -19,18 +26,13 @@ const ANTHROPIC_API_KEY_DEFAULT_ALLOWLIST_REFS = [
   "anthropic/claude-sonnet-4-6",
 ] as const;
 
-function normalizeProviderId(provider: string): string {
-  const normalized = normalizeLowercaseStringOrEmpty(provider);
-  if (normalized === "bedrock" || normalized === "aws-bedrock") {
-    return "amazon-bedrock";
-  }
-  return normalized;
-}
-
 function resolveAnthropicDefaultAuthMode(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): "api_key" | "oauth" | null {
+  if (usesRetiredClaudeCliProviderEntry(config)) {
+    return "oauth";
+  }
   const profiles = config.auth?.profiles ?? {};
   const anthropicProfiles = Object.entries(profiles).filter(
     ([, profile]) =>
@@ -84,6 +86,14 @@ function resolveAnthropicDefaultAuthMode(
   return null;
 }
 
+function usesRetiredClaudeCliProviderEntry(config: OpenClawConfig): boolean {
+  return Object.entries(config.models?.providers ?? {}).some(
+    ([provider, entry]) =>
+      normalizeAnthropicProviderId(provider) === "anthropic" &&
+      entry.apiKey === CLAUDE_CLI_PROFILE_ID,
+  );
+}
+
 function resolveModelPrimaryValue(
   value: string | { primary?: string; fallbacks?: string[] } | undefined,
 ): string | undefined {
@@ -97,29 +107,6 @@ function resolveModelPrimaryValue(
   }
   const trimmed = primary.trim();
   return trimmed || undefined;
-}
-
-function parseProviderModelRef(
-  raw: string,
-  defaultProvider: string,
-): { provider: string; model: string } | null {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const slashIndex = trimmed.indexOf("/");
-  if (slashIndex <= 0) {
-    return { provider: defaultProvider, model: trimmed };
-  }
-  const provider = trimmed.slice(0, slashIndex).trim();
-  const model = trimmed.slice(slashIndex + 1).trim();
-  if (!provider || !model) {
-    return null;
-  }
-  return {
-    provider: normalizeProviderId(provider),
-    model,
-  };
 }
 
 function isAnthropicCacheRetentionTarget(
@@ -140,12 +127,12 @@ function usesClaudeCliModelSelection(config: OpenClawConfig): boolean {
       | { primary?: string; fallbacks?: string[] }
       | undefined,
   );
-  const parsedPrimary = primary ? parseProviderModelRef(primary, "anthropic") : null;
+  const parsedPrimary = primary ? parseAnthropicModelRef(primary) : null;
   if (parsedPrimary?.provider === CLAUDE_CLI_BACKEND_ID) {
     return true;
   }
   return Object.entries(config.agents?.defaults?.models ?? {}).some(([key, entry]) => {
-    const parsed = parseProviderModelRef(key, "anthropic");
+    const parsed = parseAnthropicModelRef(key);
     if (parsed?.provider === CLAUDE_CLI_BACKEND_ID) {
       return true;
     }
@@ -158,6 +145,9 @@ function usesClaudeCliModelSelection(config: OpenClawConfig): boolean {
 }
 
 function usesSelectedClaudeCliAuthProfile(config: OpenClawConfig): boolean {
+  if (usesRetiredClaudeCliProviderEntry(config)) {
+    return true;
+  }
   const profiles = config.auth?.profiles ?? {};
   const orderedProfileIds = [
     ...(config.auth?.order?.anthropic ?? []),
@@ -218,10 +208,13 @@ function collectClaudeCliRuntimeRefsFromConfig(config: OpenClawConfig): string[]
       model: config.agents?.defaults?.model as ClaudeCliModelSelection,
       models: config.agents?.defaults?.models,
     },
-    ...(config.agents?.list ?? []).map((agent) => ({
-      model: agent.model as ClaudeCliModelSelection,
-      models: agent.models,
-    })),
+    ...listAgentIds(config).map((agentId) => {
+      const agent = resolveAgentConfig(config, agentId);
+      return {
+        model: agent?.model as ClaudeCliModelSelection,
+        models: agent?.models,
+      };
+    }),
   ];
   const refs = new Set<string>();
   for (const { model, models } of selections) {
@@ -256,7 +249,7 @@ function normalizeAnthropicProviderConfig<T extends { api?: string; models?: unk
 export function normalizeAnthropicProviderConfigForProvider<
   T extends { api?: string; models?: unknown[] },
 >(params: { provider: string; providerConfig: T }): T {
-  const provider = normalizeProviderId(params.provider);
+  const provider = normalizeAnthropicProviderId(params.provider);
   if (provider !== "anthropic" && provider !== CLAUDE_CLI_BACKEND_ID) {
     return params.providerConfig;
   }
@@ -305,7 +298,7 @@ export function applyAnthropicConfigDefaults(params: {
     let modelsMutated = false;
 
     for (const [key, entry] of Object.entries(nextModels)) {
-      const parsed = parseProviderModelRef(key, "anthropic");
+      const parsed = parseAnthropicModelRef(key);
       if (!isAnthropicCacheRetentionTarget(parsed)) {
         continue;
       }
@@ -327,7 +320,7 @@ export function applyAnthropicConfigDefaults(params: {
       ),
     );
     if (primary) {
-      const parsedPrimary = parseProviderModelRef(primary, "anthropic");
+      const parsedPrimary = parseAnthropicModelRef(primary);
       if (parsedPrimary && isAnthropicCacheRetentionTarget(parsedPrimary)) {
         const key = `${parsedPrimary.provider}/${parsedPrimary.model}`;
         const entry = nextModels[key];
@@ -344,7 +337,7 @@ export function applyAnthropicConfigDefaults(params: {
     }
 
     const hasAnthropicApiKeyModel = Object.keys(nextModels).some((key) =>
-      isAnthropicCacheRetentionTarget(parseProviderModelRef(key, "anthropic")),
+      isAnthropicCacheRetentionTarget(parseAnthropicModelRef(key)),
     );
     if (hasAnthropicApiKeyModel) {
       for (const ref of ANTHROPIC_API_KEY_DEFAULT_ALLOWLIST_REFS) {

@@ -2,8 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { asBoolean, parseBooleanValue } from "./boolean.js";
-import { chunkItems } from "./chunk-items.js";
-import { splitShellArgs } from "./shell-argv.js";
+import { splitCommandArgs, splitShellArgs } from "./shell-argv.js";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "./zod-parse.js";
 
 describe("asBoolean", () => {
@@ -56,8 +55,8 @@ describe("parseBooleanValue", () => {
 
 describe("splitShellArgs", () => {
   it("splits whitespace and respects quotes", () => {
-    expect(splitShellArgs(`qmd --foo "bar baz"`)).toEqual(["qmd", "--foo", "bar baz"]);
-    expect(splitShellArgs(`qmd --foo 'bar baz'`)).toEqual(["qmd", "--foo", "bar baz"]);
+    expect(splitShellArgs(`search --foo "bar baz"`)).toEqual(["search", "--foo", "bar baz"]);
+    expect(splitShellArgs(`search --foo 'bar baz'`)).toEqual(["search", "--foo", "bar baz"]);
   });
 
   it("supports backslash escapes inside double quotes", () => {
@@ -77,14 +76,32 @@ describe("splitShellArgs", () => {
   });
 });
 
-describe("chunkItems", () => {
-  it("splits items into fixed-size chunks", () => {
-    expect(chunkItems([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
+describe("splitCommandArgs", () => {
+  it.each([
+    {
+      input: String.raw`program some\path 'a"b' #literal`,
+      expected: ["program", String.raw`some\path`, 'a"b', "#literal"],
+    },
+    {
+      input: String.raw`program "C:\some path\file.py" \\server\share\ #literal`,
+      expected: ["program", String.raw`C:\some path\file.py`, "\\\\server\\share\\", "#literal"],
+    },
+    { input: 'program "unfinished', expected: null },
+    { input: "program 'unfinished", expected: null },
+    { input: "program unfinished\\", expected: ["program", "unfinished\\"] },
+  ])("parses quote-only process arguments: $input", ({ input, expected }) => {
+    expect(splitCommandArgs(input)).toEqual(expected);
   });
 
-  it("keeps one row when the requested size is not positive", () => {
-    expect(chunkItems([1, 2, 3], 0)).toEqual([[1, 2, 3]]);
-  });
+  it.each(['program "unfinished', "program 'unfinished"])(
+    "allows unfinished quotes when requested: %s",
+    (raw) => {
+      expect(splitCommandArgs(raw, { allowUnclosedQuotes: true })).toEqual([
+        "program",
+        "unfinished",
+      ]);
+    },
+  );
 });
 
 describe("zod parse helpers", () => {

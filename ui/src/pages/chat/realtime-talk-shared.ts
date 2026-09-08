@@ -1,4 +1,4 @@
-// Control UI chat module implements realtime talk shared behavior.
+import type { TalkClientToolCallResult } from "../../../../packages/gateway-protocol/src/schema/channels.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../../../src/talk/agent-consult-tool.js";
 import {
   buildRealtimeVoiceAgentCancelProviderResult,
@@ -10,21 +10,43 @@ import {
 import type { RealtimeVoiceAgentControlMode } from "../../../../src/talk/agent-run-control-shared.js";
 import type { TalkEvent } from "../../../../src/talk/talk-events.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
+// Control UI chat module implements realtime talk shared behavior.
+import { formatUiError } from "../../lib/format-error.ts";
+import type { RealtimeTalkInputController } from "./realtime-talk-input.ts";
 
 export type RealtimeTalkStatus = "idle" | "connecting" | "listening" | "thinking" | "error";
 export type RealtimeTalkEvent = TalkEvent;
+
+export type RealtimeTalkTranscript = {
+  role: "user" | "assistant";
+  text: string;
+  final: boolean;
+  itemId?: string;
+  order?: number;
+};
+
+export type RealtimeTalkTranscriptItem =
+  | {
+      type: "created";
+      itemId: string;
+      previousItemId?: string | null;
+      role: "user" | "assistant" | null;
+    }
+  | { type: "settled"; itemId: string };
 
 export type RealtimeTalkCallbacks = {
   onStatus?: (status: RealtimeTalkStatus, detail?: string) => void;
   onVideoCapability?: (capable: boolean) => void;
   onInputLevel?: (level: number) => void;
-  onTranscript?: (entry: { role: "user" | "assistant"; text: string; final: boolean }) => void;
+  onTranscript?: (entry: RealtimeTalkTranscript) => void;
+  onTranscriptOrder?: (items: ReadonlyArray<{ itemId: string; order: number }>) => void;
+  onTranscriptItem?: (item: RealtimeTalkTranscriptItem) => void;
   onTalkEvent?: (event: RealtimeTalkEvent) => void;
   onVideoStream?: (stream: MediaStream | null) => void;
   onVideoError?: (error: unknown) => void;
 };
 
-type RealtimeTalkEventInput<TPayload = unknown> = {
+export type RealtimeTalkEventInput<TPayload = unknown> = {
   type: RealtimeTalkEvent["type"];
   payload?: TPayload;
   turnId?: string;
@@ -49,6 +71,7 @@ export type RealtimeTalkWebRtcSdpSessionResult = {
   clientSecret: string;
   offerUrl?: string;
   offerHeaders?: Record<string, string>;
+  offerResponseMaxBytes?: number;
   model?: string;
   voice?: string;
   expiresAt?: number;
@@ -104,9 +127,12 @@ export type RealtimeTalkSessionResult =
   | RealtimeTalkGatewayRelaySessionResult
   | RealtimeTalkManagedRoomSessionResult;
 
+export type RealtimeTalkTransportStartResult = "ready" | "cancelled";
+
 export type RealtimeTalkTransport = {
-  start(): Promise<void>;
-  stop(): void;
+  start(): Promise<RealtimeTalkTransportStartResult>;
+  activate?: () => void;
+  stop(options?: { emitClosed?: boolean }): void;
   setVideoEnabled?: (enabled: boolean) => Promise<void>;
   switchCamera?: (videoDeviceId: string | undefined) => Promise<void>;
 };
@@ -117,7 +143,7 @@ export type RealtimeTalkTransportContext = {
   voiceSessionId?: string;
   flushTranscriptWrites?: () => Promise<void>;
   callbacks: RealtimeTalkCallbacks;
-  inputDeviceId?: string;
+  input: Pick<RealtimeTalkInputController, "stream" | "adopt" | "stop">;
   videoDeviceId?: string;
   consultThinkingLevel?: string;
   consultFastMode?: boolean;
@@ -455,7 +481,7 @@ export async function steerRealtimeTalkActiveConsult(params: {
   } catch (error) {
     params.emitTalkEvent?.({
       type: "tool.error",
-      payload: { message: error instanceof Error ? error.message : String(error) },
+      payload: { message: formatUiError(error) },
       final: true,
     });
   }
@@ -468,7 +494,11 @@ export async function submitRealtimeTalkAgentControl(params: {
   callId: string;
   sessionId?: string;
   emitTalkEvent?: (input: RealtimeTalkEventInput) => void;
+  signal?: AbortSignal;
 }): Promise<void> {
+  if (params.signal?.aborted) {
+    return;
+  }
   let result: unknown;
   let talkEvent: RealtimeTalkEventInput;
   try {
@@ -486,6 +516,9 @@ export async function submitRealtimeTalkAgentControl(params: {
             text: parsed.text,
             mode: parsed.mode,
           });
+    if (params.signal?.aborted) {
+      return;
+    }
     talkEvent = {
       type: "tool.progress",
       callId: params.callId,
@@ -499,7 +532,7 @@ export async function submitRealtimeTalkAgentControl(params: {
           : undefined,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatUiError(error);
     talkEvent = {
       type: "tool.error",
       callId: params.callId,
@@ -507,8 +540,14 @@ export async function submitRealtimeTalkAgentControl(params: {
       final: true,
     };
     result = { error: message };
+    if (params.signal?.aborted || isAbortError(error)) {
+      return;
+    }
   }
   await params.submit(params.callId, result);
+  if (params.signal?.aborted) {
+    return;
+  }
   params.emitTalkEvent?.(talkEvent);
 }
 
@@ -547,7 +586,7 @@ export async function submitRealtimeTalkConsult(params: {
 }): Promise<void> {
   const { ctx, callId, submit } = params;
   ctx.callbacks.onStatus?.("thinking");
-  let runId: string | undefined;
+  let run: TalkClientToolCallResult | undefined;
   let aborted = false;
   let submitted = false;
   let submissionCompleted = false;
@@ -566,8 +605,12 @@ export async function submitRealtimeTalkConsult(params: {
   };
   const abortRun = () => {
     aborted = true;
-    if (runId) {
-      void ctx.client.request("chat.abort", { sessionKey: ctx.sessionKey, runId });
+    if (run) {
+      void ctx.client.request("chat.abort", {
+        sessionKey: run.agentSessionKey,
+        agentId: run.agentId,
+        runId: run.runId,
+      });
     }
   };
   if (params.signal?.aborted) {
@@ -579,21 +622,20 @@ export async function submitRealtimeTalkConsult(params: {
     const args =
       typeof params.args === "string" ? JSON.parse(params.args || "{}") : (params.args ?? {});
     await ctx.flushTranscriptWrites?.();
-    const response = await ctx.client.request<{ runId?: string; idempotencyKey?: string }>(
-      "talk.client.toolCall",
-      {
-        sessionKey: ctx.sessionKey,
-        ...(ctx.voiceSessionId ? { voiceSessionId: ctx.voiceSessionId } : {}),
-        callId,
-        name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-        args,
-        ...(params.relaySessionId ? { relaySessionId: params.relaySessionId } : {}),
-      },
-    );
-    runId = response.runId ?? response.idempotencyKey;
-    if (!runId) {
-      throw new Error("OpenClaw realtime tool call did not return a run id");
+    if (params.signal?.aborted) {
+      await submitAbortResult();
+      return;
     }
+    // Cancellation must not hide the acknowledgement that owns the Gateway run.
+    // Once the run id arrives, abortRun() can cancel the exact started consult.
+    run = await ctx.client.request<TalkClientToolCallResult>("talk.client.toolCall", {
+      sessionKey: ctx.sessionKey,
+      ...(ctx.voiceSessionId ? { voiceSessionId: ctx.voiceSessionId } : {}),
+      callId,
+      name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+      args,
+      ...(params.relaySessionId ? { relaySessionId: params.relaySessionId } : {}),
+    });
     if (params.signal?.aborted) {
       abortRun();
       await submitAbortResult();
@@ -601,7 +643,7 @@ export async function submitRealtimeTalkConsult(params: {
     }
     const result = await waitForChatResult({
       client: ctx.client,
-      runId,
+      runId: run.runId,
       timeoutMs: 120_000,
       emitTalkEvent: params.emitTalkEvent,
       signal: params.signal,
@@ -616,7 +658,7 @@ export async function submitRealtimeTalkConsult(params: {
       return;
     }
     await submitOnce({
-      error: error instanceof Error ? error.message : String(error),
+      error: formatUiError(error),
     });
   } finally {
     params.signal?.removeEventListener("abort", abortRun);
@@ -628,9 +670,10 @@ export async function submitRealtimeTalkConsult(params: {
 
 function isAbortError(error: unknown): boolean {
   return (
-    typeof DOMException !== "undefined" &&
-    error instanceof DOMException &&
-    error.name === "AbortError"
+    (typeof DOMException !== "undefined" &&
+      error instanceof DOMException &&
+      error.name === "AbortError") ||
+    (typeof error === "object" && error !== null && "name" in error && error.name === "AbortError")
   );
 }
 

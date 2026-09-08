@@ -71,10 +71,13 @@ openclaw models set ollama-cloud/kimi-k2.6
 ```
 
 Hosted ids in the live catalog include `deepseek-v4-flash`, `glm-5.2`,
-`gpt-oss:20b`, `kimi-k2.6`, and `minimax-m2.7`. When live discovery returns
-nothing, OpenClaw falls back to the bundled rows `minimax-m2.7`, `glm-5.1`,
-and `glm-5.2`. The retiring `kimi-k2.5` model is hidden from model pickers but
-remains selectable by exact reference until Ollama retires it on July 31, 2026.
+`gpt-oss:20b`, `kimi-k3`, and `minimax-m3`. Failed discovery keeps the last
+successful inventory for the same credentials. Without a prior inventory,
+OpenClaw offers bundled suggestions and records the discovery failure. A
+successful empty response clears discovered models; later failures preserve
+that empty result. Retired `kimi-k2.5` remains marked
+deprecated for existing exact references, but is no longer a current hosted
+model.
 
 Model ids are cloud catalog ids, not local pull names. If a model name works in
 a local Ollama host but is absent from the hosted catalog, use the `ollama`

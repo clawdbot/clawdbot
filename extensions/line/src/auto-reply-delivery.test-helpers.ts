@@ -1,9 +1,19 @@
 // Shared fixtures for LINE auto-reply delivery tests.
-import { vi } from "vitest";
+import type { messagingApi } from "@line/bot-sdk";
+import { vi, type Mock } from "vitest";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineSendReceipt } from "./send-receipt.js";
 
 export type LineAutoReplyDeps = Parameters<typeof deliverLineAutoReply>[0]["deps"];
+
+type LineAutoReplyTestDeps = {
+  deps: LineAutoReplyDeps;
+  replyMessageLine: Mock<LineAutoReplyDeps["replyMessageLine"]>;
+  buildMediaMessage: (
+    ...args: Parameters<LineAutoReplyDeps["buildMediaMessage"]>
+  ) => Promise<messagingApi.Message>;
+  pushMessagesLine: Mock<LineAutoReplyDeps["pushMessagesLine"]>;
+};
 
 export const LINE_TEST_CFG = { channels: { line: { accounts: { acc: {} } } } };
 
@@ -22,25 +32,27 @@ export const createFlexMessage = (altText: string, contents: unknown) => ({
   contents,
 });
 
+/** LINE's wire shape for label-only quick replies, as the plugin builds them. */
+export const createQuickReply = (...labels: string[]) => ({
+  items: labels.map((label) => ({
+    type: "action" as const,
+    action: { type: "message" as const, label, text: label },
+  })),
+});
+
 export const createImageMessage = (url: string) => ({
   type: "image" as const,
   originalContentUrl: url,
   previewImageUrl: url,
 });
 
-const createLocationMessage = (location: {
-  title: string;
-  address: string;
-  latitude: number;
-  longitude: number;
-}) => ({
+const createLocationMessage: LineAutoReplyDeps["createLocationMessage"] = (location) => ({
   type: "location" as const,
   ...location,
 });
 
-export function createDeps(overrides?: Partial<LineAutoReplyDeps>) {
-  const replyMessageLine = vi.fn(async () => ({}));
-  const createQuickReplyItems = vi.fn((labels: string[]) => ({ items: labels }));
+export function createDeps(overrides?: Partial<LineAutoReplyDeps>): LineAutoReplyTestDeps {
+  const replyMessageLine = vi.fn<LineAutoReplyDeps["replyMessageLine"]>(async () => ({}));
   const buildMediaMessage: LineAutoReplyDeps["buildMediaMessage"] = vi.fn(
     async (mediaUrl, options) => {
       switch (options.mediaKind) {
@@ -66,7 +78,7 @@ export function createDeps(overrides?: Partial<LineAutoReplyDeps>) {
       }
     },
   );
-  const pushMessagesLine = vi.fn(async () => ({
+  const pushMessagesLine = vi.fn<LineAutoReplyDeps["pushMessagesLine"]>(async () => ({
     messageId: "push",
     chatId: "u1",
     receipt: createLineSendReceipt({ messageId: "push", chatId: "u1", kind: "text" }),
@@ -76,7 +88,6 @@ export function createDeps(overrides?: Partial<LineAutoReplyDeps>) {
     processLineMessage: (text) => ({ text, flexMessages: [] }),
     chunkMarkdownText: (text) => [text],
     replyMessageLine,
-    createQuickReplyItems: createQuickReplyItems as LineAutoReplyDeps["createQuickReplyItems"],
     pushMessagesLine,
     createFlexMessage: createFlexMessage as LineAutoReplyDeps["createFlexMessage"],
     buildMediaMessage,
@@ -87,7 +98,6 @@ export function createDeps(overrides?: Partial<LineAutoReplyDeps>) {
   return {
     deps,
     replyMessageLine,
-    createQuickReplyItems,
     buildMediaMessage,
     pushMessagesLine,
   };

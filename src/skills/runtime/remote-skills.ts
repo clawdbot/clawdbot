@@ -2,9 +2,9 @@ import type { NodeSkillDescriptor } from "../../../packages/gateway-protocol/src
 import { createSyntheticSourceInfo } from "../../agents/sessions/source-info.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveNodeIdFromNodeList } from "../../shared/node-resolve.js";
-import { parseFrontmatter, resolveSkillInvocationPolicy } from "../loading/frontmatter.js";
-import { computeSkillPromptVersion } from "../loading/skill-version.js";
+import { parseSkillFrontmatter, resolveSkillInvocationPolicy } from "../loading/frontmatter.js";
 import type { ParsedSkillFrontmatter, SkillEntry } from "../types.js";
+import { areOrderedArraysEqual } from "./ordered-array-equality.js";
 import { bumpSkillsSnapshotVersion } from "./refresh-state.js";
 
 type PreparedNodeSkill = NodeSkillDescriptor & {
@@ -42,7 +42,7 @@ function prepareNodeSkills(
   const prepared: PreparedNodeSkill[] = [];
   for (const skill of skills) {
     try {
-      const frontmatter = parseFrontmatter(skill.content);
+      const frontmatter = parseSkillFrontmatter(skill.content);
       if (
         frontmatter.name?.trim() !== skill.name ||
         frontmatter.description?.trim() !== skill.description
@@ -57,21 +57,6 @@ function prepareNodeSkills(
     }
   }
   return prepared;
-}
-
-function sameSkills(
-  left: readonly PreparedNodeSkill[],
-  right: readonly PreparedNodeSkill[],
-): boolean {
-  return (
-    left.length === right.length &&
-    left.every(
-      (skill, index) =>
-        skill.name === right[index]?.name &&
-        skill.description === right[index]?.description &&
-        skill.content === right[index]?.content,
-    )
-  );
 }
 
 export function recordRemoteSkillNodeInfo(node: {
@@ -111,7 +96,14 @@ export function replaceRemoteNodeSkills(params: {
   const changed =
     !existing?.connected ||
     existing.displayName !== params.displayName ||
-    !sameSkills(existing.skills, nextSkills);
+    !areOrderedArraysEqual(
+      existing.skills,
+      nextSkills,
+      (previous, next) =>
+        previous.name === next.name &&
+        previous.description === next.description &&
+        previous.content === next.content,
+    );
   remoteSkillNodes.set(params.nodeId, {
     nodeId: params.nodeId,
     connId: existing?.connId,
@@ -236,7 +228,6 @@ export function mergeRemoteNodeSkillEntries(
         readContent: skill.content,
         filePath,
         baseDir: filePath.slice(0, -"/SKILL.md".length),
-        promptVersion: computeSkillPromptVersion(skill.content),
         source: "openclaw-node",
         sourceInfo: createSyntheticSourceInfo(filePath, {
           source: "openclaw-node",

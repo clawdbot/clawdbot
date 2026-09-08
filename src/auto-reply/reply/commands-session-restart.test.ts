@@ -36,7 +36,8 @@ vi.mock("../../config/sessions.js", () => ({
   extractDeliveryInfo: mocks.extractDeliveryInfo,
 }));
 
-vi.mock("../../globals.js", () => ({
+vi.mock("../../globals.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../globals.js")>()),
   logVerbose: vi.fn(),
 }));
 
@@ -186,22 +187,104 @@ describe("handleRestartCommand", () => {
     }
   });
 
-  it("rejects authorized non-owner restart commands", async () => {
-    const result = await handleRestartCommand(
+  it("adopts the durable ingress claim before scheduling the restart", async () => {
+    const order: string[] = [];
+    mocks.scheduleGatewaySigusr1Restart.mockImplementationOnce((_opts) => {
+      order.push("schedule");
+      return { scheduled: true };
+    });
+    const handler = () => {};
+    process.on("SIGUSR1", handler);
+    try {
+      await handleRestartCommand(
+        restartCommandParams({
+          opts: {
+            turnAdoptionLifecycle: {
+              onAdopted: () => {
+                order.push("adopt");
+              },
+            },
+          } as HandleCommandsParams["opts"],
+        }),
+        true,
+      );
+    } finally {
+      process.removeListener("SIGUSR1", handler);
+    }
+
+    // Unadopted at restart => drain releases with recordAttempt:false and the
+    // successor replays /restart, restarting again forever.
+    expect(order).toEqual(["adopt", "schedule"]);
+  });
+
+  it("adopts the durable ingress claim before the fallback restart path", async () => {
+    const order: string[] = [];
+    mocks.triggerOpenClawRestart.mockImplementationOnce(() => {
+      order.push("trigger");
+      return { ok: true, method: "launchctl" };
+    });
+
+    await handleRestartCommand(
       restartCommandParams({
-        command: {
-          ...restartCommandParams().command,
-          senderIsOwner: false,
-          isAuthorizedSender: true,
-        },
+        opts: {
+          turnAdoptionLifecycle: {
+            onAdopted: () => {
+              order.push("adopt");
+            },
+          },
+        } as HandleCommandsParams["opts"],
       }),
       true,
     );
 
-    expect(result).toEqual({ shouldContinue: false });
-    expect(mocks.writeRestartSentinel).not.toHaveBeenCalled();
-    expect(mocks.triggerOpenClawRestart).not.toHaveBeenCalled();
+    expect(order).toEqual(["adopt", "trigger"]);
   });
+
+  it("does not restart when ingress adoption was lost to another owner", async () => {
+    await expect(
+      handleRestartCommand(
+        restartCommandParams({
+          opts: {
+            turnAdoptionLifecycle: {
+              onAdopted: () => {
+                throw new Error("ingress adoption lost: guillotined");
+              },
+            },
+          } as HandleCommandsParams["opts"],
+        }),
+        true,
+      ),
+    ).rejects.toThrow("ingress adoption lost");
+
+    expect(mocks.triggerOpenClawRestart).not.toHaveBeenCalled();
+    expect(mocks.scheduleGatewaySigusr1Restart).not.toHaveBeenCalled();
+  });
+
+  it.each(["text", "native"] as const)(
+    "gives authorized non-owner %s restart commands the owner setup hint",
+    async (source) => {
+      const result = await handleRestartCommand(
+        restartCommandParams({
+          ctx: { CommandSource: source },
+          command: {
+            ...restartCommandParams().command,
+            senderIsOwner: false,
+            isAuthorizedSender: true,
+          },
+        }),
+        true,
+      );
+
+      expect(result).toEqual({
+        shouldContinue: false,
+        reply: {
+          text: "You are not authorized to use this owner-only command. Ask the operator to run `openclaw config set commands.ownerAllowFrom '[\"telegram:user-1\"]'` in a terminal to make this sender a command owner.",
+        },
+      });
+      expect(mocks.writeRestartSentinel).not.toHaveBeenCalled();
+      expect(mocks.triggerOpenClawRestart).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not restart when the sentinel cannot be written", async () => {
     mocks.writeRestartSentinel.mockRejectedValueOnce(new Error("disk full"));

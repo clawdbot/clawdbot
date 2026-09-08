@@ -1,0 +1,40 @@
+title: CLI onboarding contracts
+
+scenario:
+  id: cli-onboarding
+  surface: cli
+  category: cli.onboarding-and-auth-setup
+  coverage:
+    primary:
+      - cli.gateway-auth-storage
+      - cli.guided-onboarding
+      - cli.remote-onboarding
+      - cli.targeted-reconfiguration
+  objective: Verify guided and non-interactive CLI onboarding across Gateway storage, remote setup, reset, and section-scoped reconfiguration.
+  successCriteria:
+    - Guided onboarding runs under a real PTY, verifies the configured model, reaches completion, and performs no UI or terminal handoff.
+    - Gateway auth proves token SecretRef storage and password storage through executable non-interactive setup.
+    - Remote onboarding persists the requested remote URL and token, and reset removes stale remote configuration.
+    - Section-scoped skills configuration records configure metadata without selecting a Gateway run mode.
+    - The selected onboarding cases exclude channel setup.
+    - QA evidence records a separate executable assertion entry for every primary coverage boundary.
+  docsRefs:
+    - docs/cli/onboard.md
+    - docs/cli/configure.md
+  codeRefs:
+    - src/commands/onboard.ts
+    - src/commands/onboard-non-interactive.ts
+    - src/commands/onboard-non-interactive/remote.ts
+    - src/commands/onboard-non-interactive/local/auth-choice.ts
+    - src/commands/onboard-non-interactive/local/gateway-config.ts
+    - src/commands/configure.commands.ts
+    - scripts/e2e/lib/onboard/scenario.sh
+  execution:
+    kind: script
+    path: scripts/e2e/qa-cli-onboarding.mjs
+    dockerLane: onboard
+    summary: Runs the executable onboarding Docker lane with only the guided, Gateway-storage, remote, reset, and skills cases selected.
+    timeoutMs: 1800000
+    args:
+      - --artifact-base
+      - ${outputDir}

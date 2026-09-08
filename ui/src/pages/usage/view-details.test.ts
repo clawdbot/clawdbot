@@ -24,7 +24,7 @@ function point(overrides: Partial<TimeSeriesPoint> = {}): TimeSeriesPoint {
   };
 }
 
-function session(): UsageSessionEntry {
+function session(): UsageSessionEntry & { usage: NonNullable<UsageSessionEntry["usage"]> } {
   return {
     key: "agent:main:detail",
     label: "Detail session",
@@ -52,7 +52,7 @@ function session(): UsageSessionEntry {
         errors: 0,
       },
     },
-  } as UsageSessionEntry;
+  };
 }
 
 function mount(
@@ -70,24 +70,26 @@ function mount(
     timeSeries?: string;
     sessionLogs?: string;
     sessionLogsData?: SessionLogEntry[];
+    session?: UsageSessionEntry;
     stale?: boolean;
-    onRetryTimeSeries?: () => void;
-    onRetrySessionLogs?: () => void;
+    contextWeight?: UsageSessionEntry["contextWeight"];
+    contextExpanded?: boolean;
+    onToggleContextExpanded?: () => void;
   } = {},
 ) {
   const status = (error?: string): PanelRefreshStatus => ({
     error: error ?? null,
     hasLoaded: errors.stale ?? false,
     stale: errors.stale ?? false,
+    awaitingGateway: false,
   });
   const container = document.createElement("div");
   render(
     renderSessionDetailPanel(
-      session(),
+      { ...(errors.session ?? session()), contextWeight: errors.contextWeight },
       { points },
       false,
       status(errors.timeSeries),
-      errors.onRetryTimeSeries ?? vi.fn(),
       "per-turn",
       vi.fn(),
       breakdownMode,
@@ -102,7 +104,6 @@ function mount(
       errors.sessionLogsData ?? [],
       false,
       status(errors.sessionLogs),
-      errors.onRetrySessionLogs ?? vi.fn(),
       false,
       vi.fn(),
       { roles: [], tools: [], hasTools: false, query: "" },
@@ -111,8 +112,13 @@ function mount(
       vi.fn(),
       vi.fn(),
       vi.fn(),
-      false,
-      vi.fn(),
+      {
+        weight: errors.contextWeight,
+        loading: false,
+        status: status(),
+      },
+      errors.contextExpanded ?? false,
+      errors.onToggleContextExpanded ?? vi.fn(),
       vi.fn(),
     ),
     container,
@@ -143,7 +149,9 @@ describe("renderSessionDetailPanel filtered usage", () => {
     expect(
       [...container.querySelectorAll(".ts-axis-label")].map((label) => label.textContent),
     ).toEqual(expect.arrayContaining(["utc-time", "utc-time"]));
-    expect(container.querySelector(".ts-bar title")?.textContent).toContain("utc-date-time");
+    expect(container.querySelector(".ts-bar")?.getAttribute("data-tooltip")).toContain(
+      "utc-date-time",
+    );
   });
 
   it("filters detail points by the selected UTC day and keeps the final millisecond", () => {
@@ -182,32 +190,6 @@ describe("renderSessionDetailPanel filtered usage", () => {
       localYear.mockRestore();
       localMonth.mockRestore();
       localDay.mockRestore();
-    }
-  });
-
-  it("ends a local range at the next calendar midnight after a skipped midnight", () => {
-    const previousTimeZone = process.env.TZ;
-    process.env.TZ = "America/Santiago";
-    try {
-      const container = mount(
-        [
-          point({ timestamp: new Date(2026, 8, 6, 1).getTime() }),
-          point({ timestamp: new Date(2026, 8, 6, 12).getTime() }),
-          point({ timestamp: new Date(2026, 8, 7, 0, 30).getTime() }),
-        ],
-        null,
-        null,
-        "total",
-        { startDate: "2026-09-06", endDate: "2026-09-06", timeZone: "local" },
-      );
-
-      expect(container.querySelectorAll(".ts-bar")).toHaveLength(2);
-    } finally {
-      if (previousTimeZone === undefined) {
-        delete process.env.TZ;
-      } else {
-        process.env.TZ = previousTimeZone;
-      }
     }
   });
 
@@ -258,6 +240,60 @@ describe("renderSessionDetailPanel filtered usage", () => {
     ).toContain("47");
   });
 
+  it.each(["tool", "toolResult"] as const)(
+    "counts repeated assistant calls without counting %s results in the selected range",
+    (resultRole) => {
+      const start = Date.parse("2026-08-20T12:00:00Z");
+      const end = start + 2000;
+      const entry = session();
+      entry.usage = {
+        ...entry.usage,
+        toolUsage: {
+          totalCalls: 2,
+          uniqueTools: 2,
+          tools: [
+            { name: "read", count: 1 },
+            { name: "exec", count: 1 },
+          ],
+        },
+      };
+      const logs: SessionLogEntry[] = [
+        { timestamp: start, role: "assistant", content: "[Tool: read]\n[Tool: read]" },
+        {
+          timestamp: start + 500,
+          role: resultRole,
+          content: "[Tool: read]\n[Tool Result]\nFirst file",
+        },
+        {
+          timestamp: start + 1000,
+          role: resultRole,
+          content: "[Tool: read]\n[Tool Result]\nSecond file",
+        },
+        { timestamp: end, role: "assistant", content: "Both files reviewed." },
+        { timestamp: end + 1000, role: "assistant", content: "[Tool: exec]" },
+      ];
+      const points = [start, end, end + 1000].map((timestamp) => point({ timestamp }));
+      const data = { session: entry, sessionLogsData: logs };
+      const selected = mount(points, start, end, "total", {}, data);
+      expect(selected.querySelectorAll(".session-summary-value")[1]?.textContent).toBe("2");
+      expect(selected.querySelectorAll(".session-summary-meta")[1]?.textContent?.trim()).toBe(
+        "1 tools used",
+      );
+      expect(
+        [...selected.querySelectorAll(".usage-list-item")].map((item) => [
+          item.firstElementChild?.textContent,
+          item.querySelector(".usage-list-value > span")?.textContent,
+        ]),
+      ).toEqual([
+        ["read", "2"],
+        ["exec", "0"],
+      ]);
+      expect(selected.querySelector(".session-log-tools-pill")?.textContent?.trim()).toBe(
+        "read × 2",
+      );
+    },
+  );
+
   it("accepts a reversed range and falls back to full totals when no points match", () => {
     const reversed = mount(
       [point({ timestamp: 1000, totalTokens: 50 }), point({ timestamp: 2000, totalTokens: 75 })],
@@ -280,9 +316,7 @@ describe("renderSessionDetailPanel filtered usage", () => {
     expect(container.textContent).not.toContain("Invalid Date");
   });
 
-  it("renders independent retry actions for detail request failures", () => {
-    const onRetryTimeSeries = vi.fn();
-    const onRetrySessionLogs = vi.fn();
+  it("renders detail request failure messages without retry buttons", () => {
     const container = mount(
       [],
       null,
@@ -292,8 +326,6 @@ describe("renderSessionDetailPanel filtered usage", () => {
       {
         timeSeries: "timeline unavailable",
         sessionLogs: "logs unavailable",
-        onRetryTimeSeries,
-        onRetrySessionLogs,
       },
     );
 
@@ -308,10 +340,8 @@ describe("renderSessionDetailPanel filtered usage", () => {
       "Could not load conversation: logs unavailable",
     );
 
-    timelineError?.querySelector("button")?.click();
-    conversationError?.querySelector("button")?.click();
-    expect(onRetryTimeSeries).toHaveBeenCalledOnce();
-    expect(onRetrySessionLogs).toHaveBeenCalledOnce();
+    expect(timelineError?.querySelector("button")).toBeNull();
+    expect(conversationError?.querySelector("button")).toBeNull();
   });
 
   it("keeps loaded details visible and marks them stale after refresh failures", () => {
@@ -334,5 +364,101 @@ describe("renderSessionDetailPanel filtered usage", () => {
     expect(container.querySelector(".timeseries-svg")).not.toBeNull();
     expect(container.textContent).toContain("retained message");
     expect(container.textContent).toContain("Showing stale data");
+  });
+
+  it("preserves context-category order, sorted cards, expansion, and callbacks", () => {
+    const contextWeight: NonNullable<UsageSessionEntry["contextWeight"]> = {
+      source: "run",
+      generatedAt: 0,
+      systemPrompt: { chars: 80, projectContextChars: 20, nonProjectContextChars: 60 },
+      skills: {
+        promptChars: 100,
+        entries: Array.from({ length: 5 }, (_, index) => ({
+          name: `skill-${index}`,
+          blockChars: (index + 1) * 10,
+        })),
+      },
+      tools: {
+        listChars: 20,
+        schemaChars: 30,
+        entries: [
+          { name: "smaller-tool", summaryChars: 4, schemaChars: 6 },
+          { name: "larger-tool", summaryChars: 8, schemaChars: 12 },
+        ],
+      },
+      injectedWorkspaceFiles: [
+        {
+          name: "small.md",
+          path: "/small.md",
+          missing: false,
+          rawChars: 10,
+          injectedChars: 10,
+          truncated: false,
+        },
+        {
+          name: "large.md",
+          path: "/large.md",
+          missing: false,
+          rawChars: 30,
+          injectedChars: 30,
+          truncated: false,
+        },
+        {
+          name: "AGENTS.md",
+          path: "/AGENTS.md",
+          missing: false,
+          rawChars: 100,
+          injectionStatus: "native_unverified",
+          injectedChars: null,
+          truncated: null,
+        },
+      ],
+    };
+    const onToggleContextExpanded = vi.fn();
+    const container = mount(
+      [],
+      null,
+      null,
+      "total",
+      {},
+      { contextWeight, onToggleContextExpanded },
+    );
+    const categories = ["system", "skills", "tools", "files"];
+
+    expect(
+      [...container.querySelectorAll(".context-stacked-bar .context-segment")].map((segment) =>
+        categories.find((category) => segment.classList.contains(category)),
+      ),
+    ).toEqual(categories);
+    const cards = [...container.querySelectorAll(".context-breakdown-card")];
+    expect(
+      cards.map((card) => card.querySelector(".context-breakdown-title")?.textContent?.trim()),
+    ).toEqual(["Skills (5)", "Tools (2)", "Files (3)"]);
+    expect(
+      [...(cards[0]?.querySelectorAll(".context-breakdown-item .mono") ?? [])].map(
+        (entry) => entry.textContent,
+      ),
+    ).toEqual(["skill-4", "skill-3", "skill-2", "skill-1"]);
+    expect(cards[1]?.querySelector(".context-breakdown-item .mono")?.textContent).toBe(
+      "larger-tool",
+    );
+    const fileEntries = [...(cards[2]?.querySelectorAll(".context-breakdown-item") ?? [])];
+    expect(fileEntries.map((entry) => entry.querySelector(".mono")?.textContent)).toEqual([
+      "large.md",
+      "small.md",
+      "AGENTS.md",
+    ]);
+    expect(fileEntries[2]?.querySelector(".muted")?.textContent).toBe("unknown");
+    expect(cards[0]?.querySelector(".context-breakdown-more")?.textContent).toContain("1 more");
+    container.querySelector<HTMLButtonElement>(".context-breakdown-header button")?.click();
+    expect(onToggleContextExpanded).toHaveBeenCalledOnce();
+
+    const expanded = mount([], null, null, "total", {}, { contextWeight, contextExpanded: true });
+    expect(
+      expanded
+        .querySelectorAll(".context-breakdown-card")[0]
+        ?.querySelectorAll(".context-breakdown-item"),
+    ).toHaveLength(5);
+    expect(expanded.querySelector(".context-breakdown-more")).toBeNull();
   });
 });

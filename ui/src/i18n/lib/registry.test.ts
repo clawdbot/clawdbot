@@ -1,7 +1,19 @@
 // @vitest-environment node
 
 import { describe, expect, it } from "vitest";
-import { resolveNavigatorLocale } from "./registry.ts";
+import { de } from "../locales/de.ts";
+import { es } from "../locales/es.ts";
+import { hi } from "../locales/hi.ts";
+import { pt_BR } from "../locales/pt-BR.ts";
+import { ru } from "../locales/ru.ts";
+import { th } from "../locales/th.ts";
+import { zh_CN } from "../locales/zh-CN.ts";
+import {
+  DEFAULT_LOCALE,
+  loadLazyLocaleTranslation,
+  resolveNavigatorLocale,
+  SUPPORTED_LOCALES,
+} from "./registry.ts";
 
 describe("resolveNavigatorLocale", () => {
   it.each([
@@ -47,5 +59,34 @@ describe("resolveNavigatorLocale", () => {
     ["", "en"],
   ] as const)("maps browser language %s to %s", (browserLanguage, expectedLocale) => {
     expect(resolveNavigatorLocale(browserLanguage)).toBe(expectedLocale);
+  });
+});
+
+describe("lazy locale registry", () => {
+  it("keeps English as the default and materializes every registered foreign catalog", async () => {
+    expect(DEFAULT_LOCALE).toBe("en");
+    expect(SUPPORTED_LOCALES).toHaveLength(21);
+    expect(await loadLazyLocaleTranslation("en")).toBeNull();
+
+    const catalogs = await Promise.all(
+      SUPPORTED_LOCALES.slice(1).map(
+        async (locale) => [locale, await loadLazyLocaleTranslation(locale)] as const,
+      ),
+    );
+    for (const [locale, catalog] of catalogs) {
+      expect(catalog?.common, locale).toHaveProperty("health");
+    }
+    const byLocale = Object.fromEntries(catalogs);
+    for (const [locale, expected] of Object.entries({
+      de,
+      es,
+      "pt-BR": pt_BR,
+      "zh-CN": zh_CN,
+      hi,
+      th,
+      ru,
+    })) {
+      expect(byLocale[locale], locale).toEqual(expected);
+    }
   });
 });

@@ -7,19 +7,13 @@ import {
   getNodeSqliteKysely,
 } from "../../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../../infra/node-sqlite.js";
+import { recordLegacyMigrationRun } from "../../../infra/state-migrations.receipts.js";
 import type { DB as OpenClawStateDatabase } from "../../../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import type { LegacyCronMigrationSource } from "./legacy-store-migration.js";
 
-type CronMigrationDatabase = Pick<OpenClawStateDatabase, "migration_runs" | "migration_sources">;
-
-function migrationRunId(source: LegacyCronMigrationSource): string {
-  return `cron-legacy:${source.sourceKey}`;
-}
+type CronMigrationDatabase = Pick<OpenClawStateDatabase, "migration_sources">;
 
 function hasLegacyCronMigrationReceiptInDatabase(
   db: DatabaseSync,
@@ -71,36 +65,24 @@ export function acquireLegacyCronMigrationReceipt(
     return false;
   }
   const now = Date.now();
-  const runId = migrationRunId(source);
+  const runId = `cron-legacy:${source.sourceKey}`;
   const reportJson = JSON.stringify({
     source: "legacy-cron-json",
     target: "cron_jobs",
     statePath: source.stateSha256 ? source.statePath : undefined,
     stateSha256: source.stateSha256,
   });
-  const kysely = getNodeSqliteKysely<CronMigrationDatabase>(db);
+  recordLegacyMigrationRun(db, {
+    runId,
+    startedAt: now,
+    finishedAt: now,
+    status: "completed",
+    reportJson,
+    upsert: true,
+  });
   executeSqliteQuerySync(
     db,
-    kysely
-      .insertInto("migration_runs")
-      .values({
-        id: runId,
-        started_at: now,
-        finished_at: now,
-        status: "completed",
-        report_json: reportJson,
-      })
-      .onConflict((conflict) =>
-        conflict.column("id").doUpdateSet({
-          finished_at: now,
-          status: "completed",
-          report_json: reportJson,
-        }),
-      ),
-  );
-  executeSqliteQuerySync(
-    db,
-    kysely
+    getNodeSqliteKysely<CronMigrationDatabase>(db)
       .insertInto("migration_sources")
       .values({
         source_key: source.sourceKey,
@@ -127,16 +109,4 @@ export function acquireLegacyCronMigrationReceipt(
       ),
   );
   return true;
-}
-
-export function markLegacyCronMigrationSourceRemoved(source: LegacyCronMigrationSource): void {
-  runOpenClawStateWriteTransaction(({ db }) => {
-    executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<CronMigrationDatabase>(db)
-        .updateTable("migration_sources")
-        .set({ removed_source: 1 })
-        .where("source_key", "=", source.sourceKey),
-    );
-  });
 }

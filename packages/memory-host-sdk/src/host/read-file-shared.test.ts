@@ -40,6 +40,7 @@ describe("memory read result slicing", () => {
         lines: fixture.requestedLines,
       }),
     ).toEqual({
+      status: "ok",
       text: fixture.text,
       path: "memory/test.md",
       from: 1,
@@ -56,10 +57,30 @@ describe("memory read result slicing", () => {
         lines: Number.NaN,
       }),
     ).toEqual({
+      status: "ok",
       text: "one\ntwo\nthree",
       path: "memory/test.md",
       from: 1,
       lines: 3,
+    });
+  });
+
+  it.each([
+    { content: "ab\nc\n", maxChars: 2, text: "ab", lines: 1, nextFrom: 2 },
+    { content: "a\n\nb\n", maxChars: 2, text: "a\n", lines: 2, nextFrom: 3 },
+    { content: "ab\nc\n", maxChars: 4, text: "ab\nc", lines: 2 },
+    { content: "\n\n", maxChars: 1, text: "\n", lines: 2 },
+  ])("preserves whole and blank lines at a $maxChars-character boundary", (fixture) => {
+    const { content, maxChars, text, lines, nextFrom } = fixture;
+    expect(buildMemoryReadResult({ content, maxChars, relPath: "memory/test.md" })).toEqual({
+      status: "ok",
+      path: "memory/test.md",
+      from: 1,
+      lines,
+      text: nextFrom
+        ? `${text}\n\n[More content available. Use from=${nextFrom} to continue.]`
+        : text,
+      ...(nextFrom ? { truncated: true, nextFrom } : {}),
     });
   });
 
@@ -72,6 +93,7 @@ describe("memory read result slicing", () => {
         maxChars: Number.NaN,
       }),
     ).toEqual({
+      status: "ok",
       text: "one\ntwo",
       path: "memory/test.md",
       from: 1,
@@ -89,6 +111,7 @@ describe("memory read result slicing", () => {
         suggestReadFallback: true,
       }),
     ).toEqual({
+      status: "ok",
       text: "abc\n\n[More content available. Requested excerpt exceeded the default maxChars budget. If you need the full raw line, use read on the source file.]",
       path: "memory/test.md",
       from: 1,
@@ -107,6 +130,7 @@ describe("memory read result slicing", () => {
         suggestReadFallback: true,
       }),
     ).toEqual({
+      status: "ok",
       text: "\n\n[More content available. Requested excerpt exceeded the default maxChars budget. If you need the full raw line, use read on the source file.]",
       path: "memory/test.md",
       from: 1,

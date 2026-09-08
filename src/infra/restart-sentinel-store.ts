@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJson } from "@openclaw/normalization-core";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -6,6 +7,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { updateRecoverySchema, type UpdateRecovery } from "./update-recovery.js";
 
 type RestartSentinelLog = {
   stdoutTail?: string | null;
@@ -19,11 +21,15 @@ type RestartSentinelStep = {
   cwd?: string | null;
   durationMs?: number | null;
   log?: RestartSentinelLog | null;
+  advisory?: boolean;
 };
 
 type RestartSentinelStats = {
+  runId?: string;
+  recovery?: UpdateRecovery;
   mode?: string;
   root?: string;
+  target?: string;
   requiresRestart?: boolean;
   handoffId?: string;
   before?: Record<string, unknown> | null;
@@ -70,13 +76,14 @@ export type RestartSentinel = RestartSentinelEnvelope & {
   revision: number;
 };
 
-type RestartSentinelRowState =
+export type RestartSentinelRowState =
   | { kind: "missing" }
   | { kind: "invalid"; revision: number }
   | { kind: "valid"; sentinel: RestartSentinel };
 
 const RESTART_SENTINEL_KEY = "current";
 const RESTART_SENTINEL_REVISION_FLOOR_KEY = "revision-floor";
+const UPDATE_INSTALL_RECEIPT_KEY = "latest-update-install";
 const RESTART_SENTINEL_KINDS = new Set<RestartSentinelPayload["kind"]>([
   "config-apply",
   "config-auto-recovery",
@@ -149,10 +156,12 @@ function parseRestartSentinelStep(value: unknown): RestartSentinelStep | null {
   const cwd = parseOptionalNullableString(value, "cwd");
   const durationMs = value.durationMs;
   const log = value.log;
+  const advisory = value.advisory;
   if (
     cwd === false ||
     (durationMs !== undefined && durationMs !== null && !isFiniteNumber(durationMs)) ||
-    (log !== undefined && log !== null && !parseRestartSentinelLog(log))
+    (log !== undefined && log !== null && !parseRestartSentinelLog(log)) ||
+    (advisory !== undefined && typeof advisory !== "boolean")
   ) {
     return null;
   }
@@ -166,6 +175,9 @@ function parseRestartSentinelStep(value: unknown): RestartSentinelStep | null {
   if (log !== undefined) {
     result.log = log === null ? null : parseRestartSentinelLog(log);
   }
+  if (advisory !== undefined) {
+    result.advisory = advisory;
+  }
   return result;
 }
 
@@ -175,19 +187,27 @@ function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null 
   }
   const mode = parseOptionalNullableString(value, "mode");
   const root = parseOptionalNullableString(value, "root");
+  const target = parseOptionalNullableString(value, "target");
   const handoffId = parseOptionalNullableString(value, "handoffId");
+  const runId = parseOptionalNullableString(value, "runId");
   const reason = parseOptionalNullableString(value, "reason");
   const before = value.before;
   const after = value.after;
   const steps = value.steps;
   const durationMs = value.durationMs;
+  const recovery =
+    value.recovery === undefined ? undefined : updateRecoverySchema.safeParse(value.recovery);
   if (
     mode === false ||
     mode === null ||
     root === false ||
     root === null ||
+    target === false ||
+    target === null ||
     handoffId === false ||
     handoffId === null ||
+    runId === false ||
+    runId === null ||
     reason === false ||
     (value.requiresRestart !== undefined && typeof value.requiresRestart !== "boolean") ||
     (before !== undefined && before !== null && !isPlainRecord(before)) ||
@@ -199,17 +219,27 @@ function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null 
     return null;
   }
   const result: RestartSentinelStats = {};
+  // Recovery is diagnostic here; unsupported metadata must not suppress the restart notice.
+  if (recovery?.success) {
+    result.recovery = recovery.data;
+  }
   if (mode !== undefined) {
     result.mode = mode;
   }
   if (root !== undefined) {
     result.root = root;
   }
+  if (target !== undefined) {
+    result.target = target;
+  }
   if (value.requiresRestart !== undefined) {
     result.requiresRestart = value.requiresRestart as boolean;
   }
   if (handoffId !== undefined) {
     result.handoffId = handoffId;
+  }
+  if (runId !== undefined) {
+    result.runId = runId;
   }
   if (before !== undefined) {
     result.before = before as Record<string, unknown> | null;
@@ -356,11 +386,7 @@ function parseRequiredJson(value: string | null): unknown {
   if (value === null) {
     return undefined;
   }
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return undefined;
-  }
+  return safeParseJson(value);
 }
 
 function decodeRestartSentinelRow(row: {
@@ -428,7 +454,10 @@ function decodeRestartSentinelRow(row: {
   return payload ? { version: 1, payload, revision: row.updated_at_ms } : null;
 }
 
-export function readRestartSentinelRowSync(db: DatabaseSync): RestartSentinelRowState {
+export function readRestartSentinelRowForKeySync(
+  db: DatabaseSync,
+  sentinelKey: string,
+): RestartSentinelRowState {
   const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
   const row = executeSqliteQueryTakeFirstSync(
     db,
@@ -450,13 +479,22 @@ export function readRestartSentinelRowSync(db: DatabaseSync): RestartSentinelRow
         "stats_json",
         "updated_at_ms",
       ])
-      .where("sentinel_key", "=", RESTART_SENTINEL_KEY),
+      .where("sentinel_key", "=", sentinelKey),
   );
   if (!row) {
     return { kind: "missing" };
   }
   const sentinel = decodeRestartSentinelRow(row);
   return sentinel ? { kind: "valid", sentinel } : { kind: "invalid", revision: row.updated_at_ms };
+}
+
+export function readRestartSentinelRowSync(db: DatabaseSync): RestartSentinelRowState {
+  return readRestartSentinelRowForKeySync(db, RESTART_SENTINEL_KEY);
+}
+
+export function readUpdateInstallReceiptRowSync(db: DatabaseSync): RestartSentinel | null {
+  const current = readRestartSentinelRowForKeySync(db, UPDATE_INSTALL_RECEIPT_KEY);
+  return current.kind === "valid" ? current.sentinel : null;
 }
 
 function requireValidPayload(payload: RestartSentinelPayload): RestartSentinelPayload {
@@ -467,7 +505,7 @@ function requireValidPayload(payload: RestartSentinelPayload): RestartSentinelPa
   return parsed;
 }
 
-function nextRevision(currentRevision: number | null): number {
+export function nextRevision(currentRevision: number | null): number {
   if (currentRevision !== null && !Number.isSafeInteger(currentRevision)) {
     throw new Error("Restart sentinel revision is outside the safe integer range");
   }
@@ -508,7 +546,7 @@ function maxRevision(left: number | null, right: number | null): number | null {
   return Math.max(left, right);
 }
 
-function buildRestartSentinelRow(
+export function buildRestartSentinelRow(
   payload: RestartSentinelPayload,
   revision: number,
   sentinelKey = RESTART_SENTINEL_KEY,
@@ -581,19 +619,51 @@ export function writeRestartSentinelRowSync(
   rawPayload: RestartSentinelPayload,
 ): RestartSentinel {
   const payload = requireValidPayload(rawPayload);
-  const current = readRestartSentinelRowSync(db);
+  const revision = nextRevision(readRestartSentinelSnapshotSync(db).revision);
+  const row = buildRestartSentinelRow(payload, revision);
+  upsertRestartSentinelRowSync(db, row);
+  advanceRestartSentinelRevisionFloorSync(db, revision);
+  return { version: 1, payload, revision };
+}
+
+/** Read inside a transaction; the floor also identifies an absent, consumed notification. */
+export function readRestartSentinelSnapshotSync(db: DatabaseSync): {
+  state: RestartSentinelRowState;
+  revision: number | null;
+} {
+  const state = readRestartSentinelRowSync(db);
+  const currentRevision =
+    state.kind === "missing"
+      ? null
+      : state.kind === "valid"
+        ? state.sentinel.revision
+        : state.revision;
+  return {
+    state,
+    revision: maxRevision(currentRevision, readRestartSentinelRevisionFloorSync(db)),
+  };
+}
+
+export function writeUpdateInstallReceiptRowSync(
+  db: DatabaseSync,
+  rawPayload: RestartSentinelPayload,
+): RestartSentinel {
+  const payload = requireValidPayload(rawPayload);
+  if (payload.kind !== "update" || payload.stats?.mode !== "git") {
+    throw new TypeError("Update install receipt requires a git update payload");
+  }
+  const current = readRestartSentinelRowForKeySync(db, UPDATE_INSTALL_RECEIPT_KEY);
   const currentRevision =
     current.kind === "missing"
       ? null
       : current.kind === "valid"
         ? current.sentinel.revision
         : current.revision;
-  const revision = nextRevision(
-    maxRevision(currentRevision, readRestartSentinelRevisionFloorSync(db)),
+  const revision = nextRevision(currentRevision);
+  upsertRestartSentinelRowSync(
+    db,
+    buildRestartSentinelRow(payload, revision, UPDATE_INSTALL_RECEIPT_KEY),
   );
-  const row = buildRestartSentinelRow(payload, revision);
-  upsertRestartSentinelRowSync(db, row);
-  advanceRestartSentinelRevisionFloorSync(db, revision);
   return { version: 1, payload, revision };
 }
 
@@ -602,14 +672,12 @@ export function writeRestartSentinelRowIfRevisionSync(
   rawPayload: RestartSentinelPayload,
   expectedRevision: number,
 ): RestartSentinel | null {
-  const current = readRestartSentinelRowSync(db);
+  const { state: current, revision: previousRevision } = readRestartSentinelSnapshotSync(db);
   if (current.kind !== "valid" || current.sentinel.revision !== expectedRevision) {
     return null;
   }
   const payload = requireValidPayload(rawPayload);
-  const revision = nextRevision(
-    maxRevision(expectedRevision, readRestartSentinelRevisionFloorSync(db)),
-  );
+  const revision = nextRevision(previousRevision);
   const row = buildRestartSentinelRow(payload, revision);
   const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
   const result = executeSqliteQuerySync(

@@ -5,13 +5,14 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { acquireGitSource } from "../../infra/git-source.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
-import { withTempDir } from "../../infra/install-source-utils.js";
+import { withInstallWorkspace } from "../../infra/install-source-utils.js";
 import { writeJson } from "../../infra/json-files.js";
 import { isImmutableGitCommitRef, parseGitPluginSpec } from "../../plugins/git-install.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
+import type { InstallSafetyOverrides } from "../../plugins/install-security-scan.types.js";
 import { resolveUserPath } from "../../utils.js";
-import { parseFrontmatter } from "../loading/frontmatter.js";
+import { parseSkillFrontmatter } from "../loading/frontmatter.js";
 import { installExtractedSkillRoot, validateRequestedSkillSlug } from "./archive-install.js";
 import { untrackClawHubSkill } from "./clawhub.js";
 
@@ -45,7 +46,6 @@ type SkillSourceInstallResult =
   | { ok: false; error: string };
 
 const SKILL_SOURCE_ORIGIN_RELATIVE_PATH = path.join(".openclaw", "source-origin.json");
-const DEFAULT_GIT_TIMEOUT_MS = 120_000;
 
 function createGitCommandEnv(): NodeJS.ProcessEnv {
   return sanitizeHostExecEnv({
@@ -58,80 +58,10 @@ function createGitCommandEnv(): NodeJS.ProcessEnv {
   });
 }
 
-function formatGitCommandFailure(params: {
-  action: string;
-  label: string;
-  stdout: string;
-  stderr: string;
-}): string {
-  const detail = sanitizeForLog(
-    redactSensitiveUrlLikeString(params.stderr.trim() || params.stdout.trim() || "git failed"),
-  );
-  return `failed to ${params.action} ${sanitizeForLog(redactSensitiveUrlLikeString(params.label))}: ${detail}`;
-}
-
-async function runGitCommand(params: {
-  argv: string[];
-  action: string;
-  label: string;
-  cwd?: string;
-  timeoutMs?: number;
-}): Promise<{ ok: true; stdout: string } | { ok: false; error: string }> {
-  const result = await runCommandWithTimeout(params.argv, {
-    baseEnv: {},
-    cwd: params.cwd,
-    timeoutMs: params.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS,
-    env: createGitCommandEnv(),
-  });
-  if (result.code !== 0) {
-    return {
-      ok: false,
-      error: formatGitCommandFailure({
-        action: params.action,
-        label: params.label,
-        stdout: result.stdout,
-        stderr: result.stderr,
-      }),
-    };
-  }
-  return { ok: true, stdout: result.stdout };
-}
-
-async function resolveGitCommitish(params: {
-  repoDir: string;
-  ref: string;
-  label: string;
-  timeoutMs?: number;
-}): Promise<{ ok: true; commitish: string } | { ok: false; error: string }> {
-  const candidates = params.ref.startsWith("origin/")
-    ? [params.ref]
-    : [params.ref, `origin/${params.ref}`];
-  for (const candidate of candidates) {
-    const resolved = await runCommandWithTimeout(
-      ["git", "rev-parse", "--verify", "--quiet", `${candidate}^{commit}`],
-      {
-        baseEnv: {},
-        cwd: params.repoDir,
-        timeoutMs: params.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS,
-        env: createGitCommandEnv(),
-      },
-    );
-    const commit = normalizeOptionalString(resolved.stdout);
-    if (resolved.code === 0 && commit) {
-      return { ok: true, commitish: commit };
-    }
-  }
-
-  return {
-    ok: false,
-    error: `failed to resolve ref ${sanitizeForLog(redactSensitiveUrlLikeString(params.ref))} in ${sanitizeForLog(redactSensitiveUrlLikeString(params.label))}`,
-  };
-}
-
 async function readSkillNameFromFrontmatter(skillDir: string): Promise<string | null> {
   try {
     const raw = await fs.readFile(path.join(skillDir, "SKILL.md"), "utf8");
-    const frontmatter = parseFrontmatter(raw);
+    const frontmatter = parseSkillFrontmatter(raw);
     return normalizeOptionalString(frontmatter.name) ?? null;
   } catch {
     return null;
@@ -203,6 +133,7 @@ async function installLocalSkillDir(params: {
   timeoutMs?: number;
   logger?: Logger;
   config?: OpenClawConfig;
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   git?: SkillSourceOrigin["git"];
 }): Promise<SkillSourceInstallResult> {
   const slug = await resolveSkillInstallSlug({
@@ -219,6 +150,7 @@ async function installLocalSkillDir(params: {
     logger: params.logger,
     policy: {
       config: params.config,
+      onInstallPolicyWarning: params.onInstallPolicyWarning,
       installId: params.source,
       origin: {
         type: params.source,
@@ -270,68 +202,34 @@ async function installGitSkill(params: {
   timeoutMs?: number;
   logger?: Logger;
   config?: OpenClawConfig;
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
 }): Promise<SkillSourceInstallResult> {
   const parsed = parseGitPluginSpec(params.spec);
   if (!parsed) {
     return { ok: false, error: `Unsupported git skill spec: ${params.spec}` };
   }
 
-  return await withTempDir("openclaw-git-skill-", async (tmpDir) => {
+  return await withInstallWorkspace("openclaw-git-skill-", async (tmpDir) => {
     const repoDir = path.join(tmpDir, "repo");
     const exportDir = path.join(tmpDir, "export");
     params.logger?.info?.(
       `Cloning ${sanitizeForLog(redactSensitiveUrlLikeString(parsed.label))}...`,
     );
-    const cloneArgs = parsed.ref
-      ? ["git", "clone", "--", parsed.url, repoDir]
-      : ["git", "clone", "--depth", "1", "--", parsed.url, repoDir];
-    const clone = await runGitCommand({
-      argv: cloneArgs,
-      action: "clone",
-      label: parsed.label,
+    const acquired = await acquireGitSource({
+      ...parsed,
+      repoDir,
+      refMode: "resolve-remote",
       timeoutMs: params.timeoutMs,
+      commandEnv: () => ({ baseEnv: {}, env: createGitCommandEnv() }),
     });
-    if (!clone.ok) {
-      return clone;
-    }
-
-    if (parsed.ref) {
-      const commitish = await resolveGitCommitish({
-        repoDir,
-        ref: parsed.ref,
-        label: parsed.label,
-        timeoutMs: params.timeoutMs,
-      });
-      if (!commitish.ok) {
-        return commitish;
-      }
-      const checkout = await runGitCommand({
-        argv: ["git", "switch", "--detach", "--", commitish.commitish],
-        action: `checkout ${parsed.ref}`,
-        label: parsed.label,
-        cwd: repoDir,
-        timeoutMs: params.timeoutMs,
-      });
-      if (!checkout.ok) {
-        return checkout;
-      }
-    }
-
-    const rev = await runGitCommand({
-      argv: ["git", "rev-parse", "HEAD"],
-      action: "resolve commit for",
-      label: parsed.label,
-      cwd: repoDir,
-      timeoutMs: params.timeoutMs,
-    });
-    if (!rev.ok) {
-      return rev;
+    if (!acquired.ok) {
+      return acquired;
     }
 
     const git = {
       url: redactSensitiveUrlLikeString(parsed.url),
       ...(parsed.ref ? { ref: parsed.ref } : {}),
-      commit: normalizeOptionalString(rev.stdout),
+      commit: acquired.commit,
       resolvedAt: new Date().toISOString(),
     };
     const exported = await copyGitWorktreeExport({ repoDir, exportDir });
@@ -350,6 +248,7 @@ async function installGitSkill(params: {
       timeoutMs: params.timeoutMs,
       logger: params.logger,
       config: params.config,
+      onInstallPolicyWarning: params.onInstallPolicyWarning,
       git,
     });
   });
@@ -363,6 +262,7 @@ async function installPathSkill(params: {
   timeoutMs?: number;
   logger?: Logger;
   config?: OpenClawConfig;
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
 }): Promise<SkillSourceInstallResult> {
   const sourceDir = resolveUserPath(params.spec);
   let stat;
@@ -385,6 +285,7 @@ async function installPathSkill(params: {
     timeoutMs: params.timeoutMs,
     logger: params.logger,
     config: params.config,
+    onInstallPolicyWarning: params.onInstallPolicyWarning,
   });
 }
 
@@ -407,6 +308,7 @@ export async function installSkillFromSource(params: {
   timeoutMs?: number;
   logger?: Logger;
   config?: OpenClawConfig;
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
 }): Promise<SkillSourceInstallResult> {
   const spec = params.spec.trim();
   if (spec.toLowerCase().startsWith("git:")) {

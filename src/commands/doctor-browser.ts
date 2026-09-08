@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadBundledPluginPublicSurfaceModuleSync } from "../plugin-sdk/facade-loader.js";
+import { loadBundledPluginPublicSurfaceModuleSyncCore } from "../plugin-sdk/facade-loader.js";
 import { resolveConfigDir } from "../utils.js";
 
 type BrowserDoctorDeps = {
@@ -35,6 +35,13 @@ export type LegacyClawdBrowserProfileResidue = {
   canonicalUserDataDir: string;
 };
 
+type BrowserNativeHostRepairResult = {
+  status?: "repaired" | "skipped" | "failed";
+  reason?: string;
+  changes: string[];
+  warnings: string[];
+};
+
 type BrowserDoctorSurface = {
   noteChromeMcpBrowserReadiness: (cfg: OpenClawConfig, deps?: BrowserDoctorDeps) => Promise<void>;
   detectLegacyClawdBrowserProfileResidue?: (
@@ -45,13 +52,29 @@ type BrowserDoctorSurface = {
     cfg: OpenClawConfig,
     deps?: BrowserDoctorRepairDeps,
   ) => Promise<{ changes: string[]; warnings: string[] }>;
+  maybeRepairOwnedChromeExtensionNativeHosts?: () => Promise<BrowserNativeHostRepairResult>;
 };
 
 function loadBrowserDoctorSurface(): BrowserDoctorSurface {
-  return loadBundledPluginPublicSurfaceModuleSync<BrowserDoctorSurface>({
+  return loadBundledPluginPublicSurfaceModuleSyncCore<BrowserDoctorSurface>({
     dirName: "browser",
     artifactBasename: "browser-doctor.js",
   });
+}
+
+/** Reports the browser plugin's native-host repair outcome, including intentional skips. */
+export async function maybeRepairOwnedChromeExtensionNativeHosts(): Promise<BrowserNativeHostRepairResult> {
+  try {
+    const repair = loadBrowserDoctorSurface().maybeRepairOwnedChromeExtensionNativeHosts;
+    return repair ? await repair() : { changes: [], warnings: [] };
+  } catch (error) {
+    return {
+      changes: [],
+      warnings: [
+        `Browser extension native-host repair is unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      ],
+    };
+  }
 }
 
 function mayHaveLegacyClawdBrowserProfileResidue(deps?: BrowserDoctorRepairDeps): boolean {

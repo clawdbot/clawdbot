@@ -1,11 +1,6 @@
-/**
- * Nodes lookup helpers.
- *
- * Loads paired nodes from Gateway and resolves requested/default nodes with legacy pair-list fallback.
- */
+// Gateway node inventory and explicit/default target resolution.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
+import { parseNodeList } from "../../shared/node-list-parse.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { resolveNodeFromNodeList, resolveNodeIdFromNodeList } from "../../shared/node-resolve.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
@@ -19,64 +14,6 @@ type DefaultNodeSelectionOptions = {
   fallback?: DefaultNodeFallback;
   preferLocalMac?: boolean;
 };
-
-function messageFromError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  if (typeof error === "string") {
-    return error;
-  }
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "message" in error &&
-    typeof (error as { message?: unknown }).message === "string"
-  ) {
-    return (error as { message: string }).message;
-  }
-  if (typeof error === "object" && error !== null) {
-    try {
-      return JSON.stringify(error);
-    } catch {
-      return "";
-    }
-  }
-  return "";
-}
-
-function shouldFallbackToPairList(error: unknown): boolean {
-  const message = normalizeOptionalLowercaseString(messageFromError(error)) ?? "";
-  if (!message.includes("node.list")) {
-    return false;
-  }
-  return (
-    message.includes("unknown method") ||
-    message.includes("method not found") ||
-    message.includes("not implemented") ||
-    message.includes("unsupported")
-  );
-}
-
-async function loadNodes(opts: GatewayCallOptions, signal?: AbortSignal): Promise<NodeListNode[]> {
-  try {
-    const res = await callGatewayTool("node.list", opts, {}, { signal });
-    return parseNodeList(res);
-  } catch (error) {
-    if (!shouldFallbackToPairList(error)) {
-      throw error;
-    }
-    // Older gateways only expose paired-node state; preserve node tools until node.list exists.
-    const res = await callGatewayTool("node.pair.list", opts, {}, { signal });
-    const { paired } = parsePairingList(res);
-    return paired.map((n) => ({
-      nodeId: n.nodeId,
-      displayName: n.displayName,
-      platform: n.platform,
-      remoteIp: n.remoteIp,
-    }));
-  }
-}
 
 function isLocalMacNode(node: NodeListNode): boolean {
   return (
@@ -151,12 +88,13 @@ function pickDefaultNode(nodes: NodeListNode[]): NodeListNode | null {
   });
 }
 
-/** Lists Gateway nodes, falling back to paired-node records for older Gateway versions. */
+/** Lists the Gateway node inventory. */
 export async function listNodes(
   opts: GatewayCallOptions,
   signal?: AbortSignal,
 ): Promise<NodeListNode[]> {
-  return loadNodes(opts, signal);
+  const res = await callGatewayTool("node.list", opts, {}, { signal });
+  return parseNodeList(res);
 }
 
 /** Resolves a node id from an already-loaded node list using shared node matching rules. */
@@ -173,95 +111,22 @@ export function resolveNodeIdFromList(
   });
 }
 
-/** Tool-supplied error wording for {@link resolveEligibleNodeFromList}. */
-export type EligibleNodeMessages = {
-  /** Explicit exact-id match that is not eligible; `eligibleIds` is the sorted list (or "none"). */
-  ineligibleExact: (query: string, eligibleIds: string) => string;
-  /** Display-name/query resolution among eligible nodes failed (unknown/ambiguous). */
-  nameResolveFailed: (reason: string, eligibleIds: string) => string;
-  /** No eligible node exists. */
-  noneEligible: () => string;
-  /** Several eligible nodes and no query to disambiguate. */
-  multipleEligible: (eligible: NodeListNode[]) => string;
-};
-
-function formatNodeIdList(nodes: NodeListNode[]): string {
-  return nodes.length > 0
-    ? nodes
-        .map((node) => node.nodeId)
-        .toSorted()
-        .join(", ")
-    : "none";
-}
-
-/**
- * Resolves a capability-gated node from the FULL node list, keeping control off
- * the wrong device. An exact node-id match (case-sensitive, then -insensitive to
- * mirror display-name matching) is checked against every node first, so an
- * ineligible id can never fall through to an eligible node that merely shares its
- * display name. Display-name/query resolution runs only among eligible nodes and
- * rejects ambiguity. Any tool that filters nodes by capability must resolve
- * through here rather than handing a pre-filtered list to {@link resolveNodeIdFromList}.
- */
-export function resolveEligibleNodeFromList(
-  nodes: NodeListNode[],
-  query: string | undefined,
-  isEligible: (node: NodeListNode) => boolean,
-  messages: EligibleNodeMessages,
-): NodeListNode {
-  const eligible = nodes.filter(isEligible);
-  const trimmed = query?.trim();
-  if (trimmed) {
-    const eligibleIds = formatNodeIdList(eligible);
-    const lowerTrimmed = trimmed.toLowerCase();
-    const exactNode =
-      nodes.find((node) => node.nodeId === trimmed) ??
-      nodes.find((node) => node.nodeId.toLowerCase() === lowerTrimmed);
-    if (exactNode) {
-      if (!isEligible(exactNode)) {
-        throw new Error(messages.ineligibleExact(trimmed, eligibleIds));
-      }
-      return exactNode;
-    }
-    try {
-      const nodeId = resolveNodeIdFromList(eligible, trimmed, false);
-      const match = eligible.find((node) => node.nodeId === nodeId);
-      if (match) {
-        return match;
-      }
-    } catch (err) {
-      throw new Error(messages.nameResolveFailed(formatErrorMessage(err), eligibleIds), {
-        cause: err,
-      });
-    }
-    throw new Error(`node not found: ${trimmed}`);
-  }
-  const only = eligible.length === 1 ? eligible.at(0) : undefined;
-  if (only) {
-    return only;
-  }
-  if (eligible.length === 0) {
-    throw new Error(messages.noneEligible());
-  }
-  throw new Error(messages.multipleEligible(eligible));
-}
-
 /** Loads nodes from the Gateway and resolves the requested or default node id. */
-export async function resolveNodeId(
+export async function resolveAgentNodeId(
   opts: GatewayCallOptions,
   query?: string,
   allowDefault = false,
 ) {
-  return (await resolveNode(opts, query, allowDefault)).nodeId;
+  return (await resolveAgentNode(opts, query, allowDefault)).nodeId;
 }
 
 /** Loads nodes from the Gateway and returns the requested or default node record. */
-export async function resolveNode(
+export async function resolveAgentNode(
   opts: GatewayCallOptions,
   query?: string,
   allowDefault = false,
 ): Promise<NodeListNode> {
-  const nodes = await loadNodes(opts);
+  const nodes = await listNodes(opts);
   return resolveNodeFromNodeList(nodes, query, {
     allowDefault,
     pickDefaultNode,

@@ -4,7 +4,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { loadTranscriptEventsSync } from "openclaw/plugin-sdk/session-store-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asBoolean,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QaSuiteInfraError, QaSuiteScenarioSkipError } from "./errors.js";
 import {
   qaMockRequestCursorUrl,
@@ -110,14 +114,6 @@ type QaRuntimeToolFixtureDeps = {
   fetchJson: (url: string) => Promise<unknown>;
   ensureImageGenerationConfigured: (env: QaSuiteRuntimeEnv) => Promise<unknown>;
 };
-
-function readString(raw: unknown, fallback = "") {
-  return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : fallback;
-}
-
-function readBoolean(raw: unknown, fallback: boolean) {
-  return typeof raw === "boolean" ? raw : fallback;
-}
 
 function isKnownBroken(raw: unknown): raw is Record<string, unknown> {
   return isRecord(raw);
@@ -398,12 +394,8 @@ async function formatRuntimePatchMutationDiagnostics(params: {
   ].join("; ");
 }
 
-function readNonEmptyString(value: unknown) {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
 function normalizeToolCallId(value: unknown) {
-  return readNonEmptyString(value);
+  return normalizeOptionalString(value);
 }
 
 function stringifyTranscriptToolResult(value: unknown): string {
@@ -440,10 +432,10 @@ function extractTranscriptText(value: unknown): string {
       continue;
     }
     const text =
-      readNonEmptyString(block.text) ??
-      readNonEmptyString(block.content) ??
-      readNonEmptyString(block.message) ??
-      readNonEmptyString(block.error);
+      normalizeOptionalString(block.text) ??
+      normalizeOptionalString(block.content) ??
+      normalizeOptionalString(block.message) ??
+      normalizeOptionalString(block.error);
     if (text) {
       parts.push(text);
     }
@@ -461,11 +453,11 @@ function extractTranscriptToolCalls(
       if (!isRecord(block)) {
         continue;
       }
-      const type = readNonEmptyString(block.type)?.toLowerCase();
+      const type = normalizeOptionalString(block.type)?.toLowerCase();
       if (type !== "tool_use" && type !== "toolcall" && type !== "tool_call") {
         continue;
       }
-      const tool = readNonEmptyString(block.name);
+      const tool = normalizeOptionalString(block.name);
       if (!tool) {
         continue;
       }
@@ -490,7 +482,8 @@ function extractTranscriptToolCalls(
       continue;
     }
     const functionRecord = isRecord(call.function) ? call.function : undefined;
-    const tool = readNonEmptyString(call.name) ?? readNonEmptyString(functionRecord?.name);
+    const tool =
+      normalizeOptionalString(call.name) ?? normalizeOptionalString(functionRecord?.name);
     if (!tool) {
       continue;
     }
@@ -562,10 +555,10 @@ function extractTranscriptToolResults(
 ): QaRuntimeToolFixtureTranscriptToolResult[] {
   const results: QaRuntimeToolFixtureTranscriptToolResult[] = [];
   const tool =
-    readNonEmptyString(message.toolName) ??
-    readNonEmptyString(message.tool_name) ??
-    readNonEmptyString(message.name) ??
-    readNonEmptyString(message.tool);
+    normalizeOptionalString(message.toolName) ??
+    normalizeOptionalString(message.tool_name) ??
+    normalizeOptionalString(message.name) ??
+    normalizeOptionalString(message.tool);
   if ((message.role === "tool" || message.role === "toolResult") && message.content !== undefined) {
     const text = extractTranscriptText(message.content);
     const structuredFailure = isStructuredFailureToolResult({
@@ -602,7 +595,7 @@ function extractTranscriptToolResults(
     if (!isRecord(block)) {
       continue;
     }
-    const type = readNonEmptyString(block.type)?.toLowerCase();
+    const type = normalizeOptionalString(block.type)?.toLowerCase();
     if (type !== "tool_result" && type !== "toolresult" && type !== "tool_result_error") {
       continue;
     }
@@ -615,10 +608,10 @@ function extractTranscriptToolResults(
       is_error: block.is_error,
     });
     const blockTool =
-      readNonEmptyString(block.toolName) ??
-      readNonEmptyString(block.tool_name) ??
-      readNonEmptyString(block.name) ??
-      readNonEmptyString(block.tool);
+      normalizeOptionalString(block.toolName) ??
+      normalizeOptionalString(block.tool_name) ??
+      normalizeOptionalString(block.name) ??
+      normalizeOptionalString(block.tool);
     results.push({
       id:
         normalizeToolCallId(block.tool_use_id) ??
@@ -707,7 +700,7 @@ async function readSessionTranscriptBytes(
 ) {
   const store = await readRawQaSessionStore(env);
   const entry = store[sessionKey];
-  const sessionId = readNonEmptyString(entry?.sessionId);
+  const sessionId = normalizeOptionalString(entry?.sessionId);
   if (!sessionId) {
     throw new Error(`session transcript entry not found for ${sessionKey}`);
   }
@@ -813,8 +806,8 @@ function formatKnownBrokenDetails(
   config: QaRuntimeToolFixtureConfig,
 ) {
   const knownBroken = isKnownBroken(config.knownBroken) ? config.knownBroken : {};
-  const issue = readString(knownBroken.issue);
-  const reason = readString(knownBroken.reason, "known broken runtime tool fixture");
+  const issue = normalizeOptionalString(knownBroken.issue) ?? "";
+  const reason = normalizeOptionalString(knownBroken.reason) ?? "known broken runtime tool fixture";
   return [
     `known-broken ${toolName}: ${reason}`,
     issue ? `tracking: ${issue}` : undefined,
@@ -886,8 +879,8 @@ function plannedRequestHasPrompt(request: QaRuntimeToolFixtureRequest) {
 
 function formatKnownHarnessGapDetails(toolName: string, config: QaRuntimeToolFixtureConfig) {
   const knownHarnessGap = isKnownHarnessGap(config.knownHarnessGap) ? config.knownHarnessGap : {};
-  const issue = readString(knownHarnessGap.issue);
-  const reason = readString(knownHarnessGap.reason, "known QA harness gap");
+  const issue = normalizeOptionalString(knownHarnessGap.issue) ?? "";
+  const reason = normalizeOptionalString(knownHarnessGap.reason) ?? "known QA harness gap";
   return [`known-harness-gap ${toolName}: ${reason}`, issue ? `tracking: ${issue}` : undefined]
     .filter(Boolean)
     .join("\n");
@@ -898,7 +891,7 @@ export async function runRuntimeToolFixture(
   config: QaRuntimeToolFixtureConfig,
   deps: QaRuntimeToolFixtureDeps,
 ) {
-  const toolName = readString(config.toolName);
+  const toolName = normalizeOptionalString(config.toolName) ?? "";
   if (!toolName) {
     throw new Error("runtime tool fixture missing execution.config.toolName");
   }
@@ -947,7 +940,7 @@ export async function runRuntimeToolFixture(
   const dynamicExposureIntentionallyExcluded = forcedCodexNativeWorkspace && !tools.has(toolName);
   const requireCodexNativePatchCoverage =
     forcedCodexNativeWorkspace && metadata.required && toolName === "apply_patch";
-  const expectedAvailable = readBoolean(config.expectedAvailable, true);
+  const expectedAvailable = asBoolean(config.expectedAvailable) ?? true;
   if (!tools.has(toolName) && !dynamicExposureIntentionallyExcluded) {
     if (!expectedAvailable) {
       skipFixture(formatExpectedUnavailableDetails(toolName, tools));
@@ -965,20 +958,16 @@ export async function runRuntimeToolFixture(
     );
   }
 
-  const happyPrompt = readString(
-    config.happyPrompt,
-    `tool search qa check target=${toolName}. Call exactly that tool once and then summarize.`,
-  );
-  const failurePrompt = readString(
-    config.failurePrompt,
-    `tool search qa failure target=${toolName}. Exercise the denied-input path once and then summarize.`,
-  );
-  const promptSnippet = readString(config.promptSnippet, `target=${toolName}`);
-  const failurePromptSnippet = readString(
-    config.failurePromptSnippet,
-    `failure target=${toolName}`,
-  );
-  const happyPathOutputRequired = readBoolean(config.happyPathOutputRequired, true);
+  const happyPrompt =
+    normalizeOptionalString(config.happyPrompt) ??
+    `tool search qa check target=${toolName}. Call exactly that tool once and then summarize.`;
+  const failurePrompt =
+    normalizeOptionalString(config.failurePrompt) ??
+    `tool search qa failure target=${toolName}. Exercise the denied-input path once and then summarize.`;
+  const promptSnippet = normalizeOptionalString(config.promptSnippet) ?? `target=${toolName}`;
+  const failurePromptSnippet =
+    normalizeOptionalString(config.failurePromptSnippet) ?? `failure target=${toolName}`;
+  const happyPathOutputRequired = asBoolean(config.happyPathOutputRequired) ?? true;
   // Private QA can expose an actual dynamic patch tool. Real Codex instead
   // mirrors native file changes into linked apply_patch transcript evidence.
   const requireNativePatchTranscriptEvidence = !env.mock && requireCodexNativePatchCoverage;

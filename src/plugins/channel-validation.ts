@@ -9,12 +9,25 @@ import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelMeta } from "../channels/plugins/types.public.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
-import { pushPluginValidationDiagnostic } from "./validation-diagnostics.js";
+import {
+  getOfficialExternalPluginCatalogManifest,
+  listOfficialExternalChannelCatalogEntries,
+} from "./official-external-plugin-catalog.js";
 
-function resolveBundledChannelMeta(id: string): ChannelMeta | undefined {
+function resolveKnownChannelMeta(id: string): Partial<ChannelMeta> | undefined {
   return (
-    listChatChannels().find((meta) => meta?.id === id) ?? resolveGeneratedBundledChannelMeta(id)
+    listChatChannels().find((meta) => meta?.id === id) ??
+    resolveGeneratedBundledChannelMeta(id) ??
+    resolveOfficialExternalChannelMeta(id)
   );
+}
+
+function resolveOfficialExternalChannelMeta(id: string): Partial<ChannelMeta> | undefined {
+  const normalizedId = id.toLowerCase();
+  const channel = listOfficialExternalChannelCatalogEntries()
+    .map((entry) => getOfficialExternalPluginCatalogManifest(entry)?.channel)
+    .find((candidate) => candidate?.id?.trim().toLowerCase() === normalizedId);
+  return channel?.aliases?.length ? { aliases: channel.aliases } : undefined;
 }
 
 function resolveGeneratedBundledChannelMeta(id: string): ChannelMeta | undefined {
@@ -51,6 +64,8 @@ function collectMissingChannelMetaFields(meta?: Partial<ChannelMeta> | null): st
   return missing;
 }
 
+const CHANNEL_CAPABILITY_CHAT_TYPES = new Set(["direct", "group", "channel", "thread"]);
+
 /** Validates and normalizes a channel plugin registration before runtime catalog insertion. */
 export function normalizeRegisteredChannelPlugin(params: {
   pluginId: string;
@@ -63,12 +78,25 @@ export function normalizeRegisteredChannelPlugin(params: {
     normalizeStringifiedOptionalString(params.plugin?.id) ??
     "";
   if (!id) {
-    pushPluginValidationDiagnostic({
+    params.pushDiagnostic({
       level: "error",
       pluginId: params.pluginId,
       source: params.source,
       message: "channel registration missing id",
-      pushDiagnostic: params.pushDiagnostic,
+    });
+    return null;
+  }
+  const chatTypes = params.plugin.capabilities?.chatTypes;
+  if (
+    !Array.isArray(chatTypes) ||
+    chatTypes.length === 0 ||
+    chatTypes.some((chatType) => !CHANNEL_CAPABILITY_CHAT_TYPES.has(chatType))
+  ) {
+    params.pushDiagnostic({
+      level: "error",
+      pluginId: params.pluginId,
+      source: params.source,
+      message: `channel "${id}" registration missing or invalid required capabilities.chatTypes`,
     });
     return null;
   }
@@ -76,12 +104,11 @@ export function normalizeRegisteredChannelPlugin(params: {
     typeof params.plugin.config?.listAccountIds !== "function" ||
     typeof params.plugin.config?.resolveAccount !== "function"
   ) {
-    pushPluginValidationDiagnostic({
+    params.pushDiagnostic({
       level: "error",
       pluginId: params.pluginId,
       source: params.source,
       message: `channel "${id}" registration missing required config helpers`,
-      pushDiagnostic: params.pushDiagnostic,
     });
     return null;
   }
@@ -89,23 +116,21 @@ export function normalizeRegisteredChannelPlugin(params: {
   const rawMeta = params.plugin.meta as Partial<ChannelMeta> | undefined;
   const rawMetaId = normalizeOptionalString(rawMeta?.id);
   if (rawMetaId && rawMetaId !== id) {
-    pushPluginValidationDiagnostic({
+    params.pushDiagnostic({
       level: "warn",
       pluginId: params.pluginId,
       source: params.source,
       message: `channel "${id}" meta.id mismatch ("${rawMetaId}"); using registered channel id`,
-      pushDiagnostic: params.pushDiagnostic,
     });
   }
 
   const missingFields = collectMissingChannelMetaFields(rawMeta);
   if (missingFields.length > 0) {
-    pushPluginValidationDiagnostic({
+    params.pushDiagnostic({
       level: "warn",
       pluginId: params.pluginId,
       source: params.source,
       message: `channel "${id}" registered incomplete metadata; filled missing ${missingFields.join(", ")}`,
-      pushDiagnostic: params.pushDiagnostic,
     });
   }
 
@@ -115,7 +140,7 @@ export function normalizeRegisteredChannelPlugin(params: {
     meta: normalizeChannelMeta({
       id,
       meta: rawMeta,
-      existing: resolveBundledChannelMeta(id),
+      existing: resolveKnownChannelMeta(id),
     }),
   };
 }

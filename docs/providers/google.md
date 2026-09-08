@@ -35,7 +35,7 @@ the Gateway already runs inside a managed Google Cloud environment.
         Or pass the key directly:
 
         ```bash
-        openclaw onboard --non-interactive \
+        openclaw onboard --non-interactive --accept-risk --skip-health \
           --mode local \
           --auth-choice gemini-api-key \
           --gemini-api-key "$GEMINI_API_KEY"
@@ -67,8 +67,9 @@ the Gateway already runs inside a managed Google Cloud environment.
     catalog from the Gemini `models.list` API. Newly released Gemini 3 Pro, Flash,
     and Flash-Lite variants therefore appear in
     `openclaw models list --provider google` without waiting for an OpenClaw
-    release. If discovery is unavailable, OpenClaw keeps the bundled fallback
-    catalog.
+    release. Failed refreshes report the failure and retain the last successful
+    inventory, or bundled models before the first success. A successful empty
+    response clears discovered models. Vertex uses its separate static catalog.
 
   </Tab>
 
@@ -224,8 +225,10 @@ To use Google as the default image provider:
 {
   agents: {
     defaults: {
-      imageGenerationModel: {
-        primary: "google/gemini-3.1-flash-image",
+      mediaModels: {
+        image: {
+          primary: "google/gemini-3.1-flash-image",
+        },
       },
     },
   },
@@ -252,8 +255,10 @@ To use Google as the default video provider:
 {
   agents: {
     defaults: {
-      videoGenerationModel: {
-        primary: "google/veo-3.1-fast-generate-preview",
+      mediaModels: {
+        video: {
+          primary: "google/veo-3.1-fast-generate-preview",
+        },
       },
     },
   },
@@ -282,8 +287,10 @@ To use Google as the default music provider:
 {
   agents: {
     defaults: {
-      musicGenerationModel: {
-        primary: "google/lyria-3-clip-preview",
+      mediaModels: {
+        music: {
+          primary: "google/lyria-3-clip-preview",
+        },
       },
     },
   },

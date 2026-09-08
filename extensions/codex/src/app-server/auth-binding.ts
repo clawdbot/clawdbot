@@ -7,6 +7,7 @@ import {
   type AuthProfileCredential,
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveOpenAICodexAuthIdentity } from "openclaw/plugin-sdk/provider-auth";
 
 type CodexAppServerPreparedAuthBinding = {
   authProfileStore: AuthProfileStore;
@@ -35,8 +36,23 @@ export async function prepareCodexAppServerAuthBinding(
   params: AgentHarnessAuthBindingFingerprintParams,
 ): Promise<CodexAppServerPreparedAuthBinding | undefined> {
   const credential = params.authProfileStore.profiles[params.authProfileId];
-  if (!credential || credential.type === "oauth") {
+  if (!credential) {
     return undefined;
+  }
+  if (credential.type === "oauth") {
+    // The ChatGPT workspace can change under the same profile/email. Rotating
+    // tokens for that same workspace must not invalidate a live process binding.
+    const fingerprint = fingerprintResolvedAuthProfileCredential({
+      profileId: params.authProfileId,
+      credential: {
+        ...credential,
+        accountId: resolveOpenAICodexAuthIdentity(credential).accountId,
+      },
+      resolvedAuth: undefined,
+    });
+    return fingerprint
+      ? { fingerprint, authProfileStore: structuredClone(params.authProfileStore) }
+      : undefined;
   }
   const resolved = await resolveApiKeyForProfile({
     cfg: params.config,
@@ -45,7 +61,9 @@ export async function prepareCodexAppServerAuthBinding(
     agentDir: params.agentDir,
   });
   if (!resolved?.apiKey) {
-    throw new Error(`Codex could not resolve auth profile "${params.authProfileId}".`);
+    throw new Error(
+      `Codex could not resolve auth profile "${params.authProfileId}". Repair or replace its credential or SecretRef, then retry.`,
+    );
   }
   const fingerprint = fingerprintResolvedAuthProfileCredential({
     profileId: params.authProfileId,
@@ -58,7 +76,9 @@ export async function prepareCodexAppServerAuthBinding(
     },
   });
   if (!fingerprint) {
-    throw new Error(`Codex could not attest auth profile "${params.authProfileId}".`);
+    throw new Error(
+      `Codex could not attest auth profile "${params.authProfileId}". Re-select the OpenAI profile and retry.`,
+    );
   }
   return {
     fingerprint,

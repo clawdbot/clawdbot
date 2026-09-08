@@ -39,6 +39,10 @@ export default defineBundledChannelEntry({
     specifier: "./channel-plugin-api.js",
     exportName: "nostrPlugin",
   },
+  secrets: {
+    specifier: "./secret-contract-api.js",
+    exportName: "channelSecrets",
+  },
   runtime: {
     specifier: "./api.js",
     exportName: "setNostrRuntime",

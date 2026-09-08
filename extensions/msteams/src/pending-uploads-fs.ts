@@ -187,9 +187,24 @@ async function readUploadRows(
   if (!meta) {
     return undefined;
   }
+  if (
+    !Number.isSafeInteger(meta.chunkCount) ||
+    meta.chunkCount < 1 ||
+    meta.chunkCount > MAX_CHUNKS_PER_UPLOAD
+  ) {
+    return undefined;
+  }
+  // Published Teams packages retain support for hosts with point reads only.
+  const records = await chunkStore.lookupMany?.(
+    Array.from({ length: meta.chunkCount }, (_, index) => buildChunkKey(id, index)),
+  );
   const chunks: Buffer[] = [];
   for (let index = 0; index < meta.chunkCount; index += 1) {
-    const chunk = await chunkStore.lookup(buildChunkKey(id, index));
+    const result = records?.[index];
+    if (result && !result.ok) {
+      throw result.error;
+    }
+    const chunk = records ? result?.value : await chunkStore.lookup(buildChunkKey(id, index));
     if (!chunk || chunk.id !== id || chunk.index !== index) {
       return undefined;
     }

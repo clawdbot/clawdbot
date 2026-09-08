@@ -46,6 +46,8 @@ export type McpServerConfig = {
   auth?: "oauth";
   /** Optional OAuth client metadata overrides for HTTP MCP servers. */
   oauth?: {
+    /** Credential ownership for this server. Defaults to shared operator credentials. */
+    identity?: "shared" | "per-requester";
     /** Refresh-capable auth profile used to inject the current bearer token. */
     authProfileId?: string;
     scope?: string;
@@ -66,6 +68,8 @@ export type McpServerConfig = {
 };
 
 export type McpConfig = {
+  /** Session runtime idle TTL in milliseconds; unset or zero keeps the runtime alive. */
+  sessionIdleTtlMs?: number;
   /** Named MCP server definitions managed by OpenClaw. */
   servers?: Record<string, McpServerConfig>;
   /** Opt-in MCP Apps rendering and app-to-server bridge. */

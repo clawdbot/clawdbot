@@ -14,6 +14,22 @@ export type GatewayConnectionDetails = {
   message: string;
 };
 
+/** Project raw transport details into the credential-safe CLI/report shape. */
+export function projectGatewayConnectionDetailsForDiagnostics(
+  details: GatewayConnectionDetails,
+): GatewayConnectionDetails {
+  return {
+    ...details,
+    url: redactSensitiveUrlLikeString(details.url),
+    message: redactSensitiveUrlLikeString(details.message),
+  };
+}
+
+/** Redact one Gateway URL before it crosses an operator-visible diagnostic boundary. */
+export function projectGatewayUrlForDiagnostics(url: string): string {
+  return redactSensitiveUrlLikeString(url);
+}
+
 type GatewayConnectionDetailResolvers = {
   getRuntimeConfig?: () => OpenClawConfig;
   resolveConfigPath?: (env: NodeJS.ProcessEnv) => string;
@@ -29,6 +45,7 @@ export function buildGatewayConnectionDetailsWithResolvers(
     urlSource?: "cli" | "env";
     ignoreEnvUrlOverride?: boolean;
     localPortOverride?: number;
+    serviceTargetUrl?: string;
   } = {},
   resolvers: GatewayConnectionDetailResolvers = {},
 ): GatewayConnectionDetails {
@@ -37,7 +54,7 @@ export function buildGatewayConnectionDetailsWithResolvers(
     options.configPath ??
     resolvers.resolveConfigPath?.(process.env) ??
     resolveConfigPath(process.env);
-  const isRemoteMode = config.gateway?.mode === "remote";
+  const isRemoteMode = options.localPortOverride === undefined && config.gateway?.mode === "remote";
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
   const tlsEnabled = config.gateway?.tls?.enabled === true;
   const localPort =
@@ -48,27 +65,33 @@ export function buildGatewayConnectionDetailsWithResolvers(
   const scheme = tlsEnabled ? "wss" : "ws";
   const localUrl = `${scheme}://127.0.0.1:${localPort}`;
   const cliUrlOverride = normalizeOptionalString(options.url);
+  const serviceUrl = normalizeOptionalString(options.serviceTargetUrl);
   const envUrlOverride =
-    cliUrlOverride || options.ignoreEnvUrlOverride || options.localPortOverride !== undefined
+    cliUrlOverride ||
+    serviceUrl ||
+    options.ignoreEnvUrlOverride ||
+    options.localPortOverride !== undefined
       ? undefined
       : normalizeOptionalString(process.env.OPENCLAW_GATEWAY_URL);
   const urlOverride = cliUrlOverride ?? envUrlOverride;
   const remoteUrl = normalizeOptionalString(remote?.url);
-  const remoteMisconfigured = isRemoteMode && !urlOverride && !remoteUrl;
+  const remoteMisconfigured = isRemoteMode && !urlOverride && !serviceUrl && !remoteUrl;
   const urlSourceHint =
     options.urlSource ?? (cliUrlOverride ? "cli" : envUrlOverride ? "env" : undefined);
-  const url = urlOverride || remoteUrl || localUrl;
+  const url = urlOverride || serviceUrl || remoteUrl || localUrl;
   const displayUrl = redactSensitiveUrlLikeString(url);
   const urlSource = urlOverride
     ? urlSourceHint === "env"
       ? "env OPENCLAW_GATEWAY_URL"
       : "cli --url"
-    : remoteUrl
-      ? "config gateway.remote.url"
-      : remoteMisconfigured
-        ? "missing gateway.remote.url (fallback local)"
-        : "local loopback";
-  const bindDetail = !urlOverride && !remoteUrl ? `Bind: ${bindMode}` : undefined;
+    : serviceUrl
+      ? "service target"
+      : remoteUrl
+        ? "config gateway.remote.url"
+        : remoteMisconfigured
+          ? "missing gateway.remote.url (fallback local)"
+          : "local loopback";
+  const bindDetail = !urlOverride && (serviceUrl || !remoteUrl) ? `Bind: ${bindMode}` : undefined;
   const remoteFallbackNote = remoteMisconfigured
     ? "Warn: gateway.mode=remote but gateway.remote.url is missing; set gateway.remote.url or switch gateway.mode=local."
     : undefined;

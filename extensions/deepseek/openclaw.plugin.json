@@ -1,6 +1,5 @@
 {
   "id": "deepseek",
-  "icon": "https://cdn.simpleicons.org/deepseek",
   "activation": {
     "onStartup": false
   },
@@ -24,6 +23,9 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "deepseek": "deepseek"
+    },
     "providers": {
       "deepseek": {
         "baseUrl": "https://api.deepseek.com",
@@ -61,6 +63,26 @@
               "input": 0.435,
               "output": 0.87,
               "cacheRead": 0.003625,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens",
+              "codeMode": "preferred"
+            }
+          },
+          {
+            "id": "deepseek-v4-flash-vision-exp",
+            "name": "DeepSeek V4 Flash Vision (Experimental)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 384000,
+            "cost": {
+              "input": 0.44,
+              "output": 1.32,
+              "cacheRead": 0.014,
               "cacheWrite": 0
             },
             "compat": {

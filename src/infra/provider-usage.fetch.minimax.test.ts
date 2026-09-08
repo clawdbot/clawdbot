@@ -235,6 +235,36 @@ describe("fetchMinimaxUsage", () => {
       },
     },
     {
+      name: "skips an invalid early reset alias in a nested usage record",
+      payload: {
+        data: {
+          nested: [
+            {
+              usage_ratio: 0.4,
+              reset_at: "not-a-date",
+              expires_at: "2026-09-01T00:00:00Z",
+            },
+          ],
+        },
+      },
+      expected: {
+        windows: [{ label: "5h", usedPercent: 40, resetAt: 1_788_220_800_000 }],
+      },
+    },
+    {
+      name: "preserves reset alias order across numeric and date values",
+      payload: {
+        data: {
+          reset_at: 1_800_000_000,
+          resetTime: "2030-01-01T00:00:00Z",
+          nested: [{ usage_ratio: 0.4 }],
+        },
+      },
+      expected: {
+        windows: [{ label: "5h", usedPercent: 40, resetAt: 1_800_000_000_000 }],
+      },
+    },
+    {
       name: "drops Date-invalid reset timestamps",
       payload: {
         data: {

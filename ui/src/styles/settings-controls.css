@@ -1,0 +1,328 @@
+:root {
+  --settings-control-height: 32px;
+}
+
+/* Settings controls also appear outside the settings workspace: the login
+   gate, chat board controls, and the chat MCP form all use these primitives. */
+
+/* The neutral track keeps its 2px inset; many-option enums may wrap. */
+.settings-segmented {
+  min-height: var(--settings-control-height);
+  box-sizing: border-box;
+  align-items: stretch;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  max-width: 100%;
+  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  border: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  border-radius: var(--radius-md);
+  padding: 2px;
+}
+
+.settings-segmented:is(.settings-segmented--accent, .settings-segmented--primary) {
+  min-height: auto;
+  max-width: none;
+  flex-wrap: nowrap;
+  border-color: var(--border);
+  padding: 3px;
+}
+
+.settings-segmented--accent {
+  align-items: center;
+  background: var(--bg-muted);
+}
+
+.settings-segmented--primary {
+  display: flex;
+  align-items: normal;
+  gap: 1px;
+  background: var(--bg-elevated);
+}
+
+:root[data-theme-mode="light"] .settings-segmented--primary {
+  background: white;
+}
+
+.settings-segmented--compact {
+  --settings-control-height: 24px;
+
+  flex-wrap: nowrap;
+}
+
+.settings-control__sr-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+wa-radio-group.settings-segmented::part(form-control-label) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
+/* The parent selector also wins over the shared .btn hover/active chrome. */
+.settings-segmented > .settings-segmented__btn {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 550;
+  padding: 0 12px;
+  border: none;
+  border-radius: calc(var(--radius-md) - 3px);
+  background: transparent;
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: var(--cursor-action);
+  transition:
+    color var(--duration-normal) var(--ease-out),
+    background var(--duration-normal) var(--ease-out),
+    box-shadow var(--duration-normal) var(--ease-out);
+}
+
+.settings-segmented--accent > .settings-segmented__btn {
+  min-height: 28px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.settings-segmented--primary > .settings-segmented__btn {
+  display: block;
+  align-items: normal;
+  flex: 1;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: normal;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+.settings-segmented--compact > .settings-segmented__btn {
+  padding: 0 6px;
+  font-size: 10px;
+}
+
+.settings-segmented > .settings-segmented__btn--active {
+  background: var(--bg-elevated);
+  color: var(--text-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+.settings-segmented--accent > .settings-segmented__btn--active {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-weight: 600;
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+:root[data-theme-mode="light"] .settings-segmented--accent > .settings-segmented__btn--active {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.settings-segmented--primary > .settings-segmented__btn--active {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  box-shadow: 0 1px 3px var(--accent-subtle);
+}
+
+:is(.settings-segmented--accent, .settings-segmented--primary)
+  > .settings-segmented__btn:hover:not(.settings-segmented__btn--active) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+:where(.settings-segmented:not(.settings-segmented--accent, .settings-segmented--primary))
+  > .settings-segmented__btn:hover {
+  color: var(--text);
+}
+
+:where(.settings-segmented:not(.settings-segmented--accent, .settings-segmented--primary))
+  > .settings-segmented__btn:focus-visible {
+  outline: none;
+  color: var(--text);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+:where(.settings-segmented:not(.settings-segmented--primary)) > .settings-segmented__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (forced-colors: active) {
+  :where(.settings-segmented:not(.settings-segmented--accent, .settings-segmented--primary))
+    > .settings-segmented__btn--active {
+    text-decoration: underline 2px;
+    text-underline-offset: 3px;
+  }
+
+  :where(.settings-segmented:not(.settings-segmented--accent, .settings-segmented--primary))
+    > .settings-segmented__btn:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+}
+
+@media (max-width: 768px) {
+  .settings-segmented__btn[data-compact-label] {
+    font-size: 0;
+  }
+
+  .settings-segmented__btn[data-compact-label]::after {
+    content: attr(data-compact-label);
+    font-size: var(--control-ui-text-sm);
+  }
+}
+
+input.settings-input,
+select.settings-select:not([multiple]) {
+  height: var(--settings-control-height);
+  padding-block: 0;
+  box-sizing: border-box;
+}
+
+.settings-input,
+.settings-select {
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+}
+
+.settings-input {
+  --control-ui-touch-input-size: var(--control-ui-input-text-size);
+
+  font-size: var(--control-ui-input-text-size);
+}
+
+.settings-select {
+  --control-ui-touch-input-size: var(--control-ui-text-sm);
+
+  font-size: var(--control-ui-text-sm);
+}
+
+@media (pointer: coarse) {
+  wa-select.settings-select {
+    font-size: max(16px, var(--control-ui-touch-input-size));
+  }
+}
+
+/* Native controls own their box. Web Awesome selects are styled by their
+   component-owned stylesheet. */
+.settings-input,
+select.settings-select {
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: var(--radius-md);
+  background-color: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  color: var(--text);
+  padding: 7px 10px;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+select.settings-select:not([multiple]) {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 36px;
+  background-image: var(--select-chevron);
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+
+.settings-input::placeholder {
+  color: var(--muted);
+}
+
+.settings-input:focus-visible,
+select.settings-select:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border) 45%);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* Secret inputs also appear in the startup login gate. Keep these selectors
+   unscoped so the gate's mobile sizing rules retain higher specificity. */
+.settings-secret {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.settings-secret > input,
+.settings-secret > textarea {
+  width: 100%;
+  min-width: 0;
+  padding-right: 36px;
+}
+
+.settings-secret__toggle {
+  position: absolute;
+  right: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: var(--cursor-action);
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.settings-secret__toggle:hover {
+  color: var(--text);
+}
+
+.settings-secret__toggle:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.settings-secret__toggle:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.settings-secret__toggle svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Quiet count badge used by settings pages and the Skill Workshop. */
+.settings-count {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--bg-elevated) 80%, var(--border) 20%);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}

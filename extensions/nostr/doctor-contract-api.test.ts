@@ -10,7 +10,7 @@ import {
 import type {
   OpenKeyedStoreOptions,
   PluginDoctorStateMigrationContext,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 
@@ -40,6 +40,7 @@ describe("nostr doctor state migration", () => {
   });
 
   afterEach(async () => {
+    resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
@@ -86,8 +87,8 @@ describe("nostr doctor state migration", () => {
     expect(profileResult.warnings).toEqual([]);
     await expect(fs.access(busPath)).rejects.toThrow();
     await expect(fs.access(profilePath)).rejects.toThrow();
-    await expect(fs.access(`${busPath}.migrated`)).resolves.toBeUndefined();
-    await expect(fs.access(`${profilePath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${busPath}.migrated`);
+    await fs.access(`${profilePath}.migrated`);
     await expect(
       context.openPluginStateKeyedStore({ namespace: "bus-state", maxEntries: 256 }).lookup("main"),
     ).resolves.toEqual({

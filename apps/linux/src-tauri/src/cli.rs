@@ -4,11 +4,14 @@ use std::ffi::OsString;
 use std::fmt;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub struct OpenClawCli {
     executable: PathBuf,
     openclaw_home: PathBuf,
+    available: Arc<AtomicBool>,
 }
 
 #[derive(Debug)]
@@ -16,6 +19,7 @@ pub enum CliError {
     Missing,
     Environment(String),
     Spawn(String),
+    CommandFailed(String),
     InvalidJson(String),
 }
 
@@ -23,9 +27,10 @@ impl fmt::Display for CliError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Missing => write!(formatter, "OpenClaw CLI not found"),
-            Self::Environment(message) | Self::Spawn(message) | Self::InvalidJson(message) => {
-                formatter.write_str(message)
-            }
+            Self::Environment(message)
+            | Self::Spawn(message)
+            | Self::CommandFailed(message)
+            | Self::InvalidJson(message) => formatter.write_str(message),
         }
     }
 }
@@ -59,7 +64,12 @@ impl OpenClawCli {
         Self {
             executable,
             openclaw_home,
+            available: Arc::new(AtomicBool::new(true)),
         }
+    }
+
+    pub fn is_available(&self) -> bool {
+        self.available.load(Ordering::Acquire)
     }
 
     fn verify(&self) -> Result<(), CliError> {
@@ -90,22 +100,35 @@ impl OpenClawCli {
         I: IntoIterator<Item = S>,
         S: AsRef<std::ffi::OsStr>,
     {
-        self.command(args)?
-            .output()
-            .map_err(|error| CliError::Spawn(format!("Failed to run OpenClaw CLI: {error}")))
+        let mut command = self.command(args)?;
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let child = command.spawn().map_err(|error| {
+            self.available.store(false, Ordering::Release);
+            CliError::Spawn(format!("Failed to run OpenClaw CLI: {error}"))
+        })?;
+        child.wait_with_output().map_err(|error| {
+            CliError::Spawn(format!("Failed to read OpenClaw CLI output: {error}"))
+        })
     }
 
-    pub fn json<T, I, S>(&self, args: I) -> Result<(T, Output), CliError>
+    pub fn json<T, I, S>(&self, args: I) -> Result<T, CliError>
     where
         T: DeserializeOwned,
         I: IntoIterator<Item = S>,
         S: AsRef<std::ffi::OsStr>,
     {
         let output = self.output(args)?;
-        let value = serde_json::from_slice(&output.stdout).map_err(|error| {
+        // Failed commands own their stderr; parsing first would mislabel real
+        // failures as missing CLI dashboard support.
+        if !output.status.success() {
+            let message = output_tail(&output.stderr)
+                .or_else(|| output_tail(&output.stdout))
+                .unwrap_or_else(|| format!("OpenClaw CLI exited with {}", output.status));
+            return Err(CliError::CommandFailed(message));
+        }
+        serde_json::from_slice(&output.stdout).map_err(|error| {
             CliError::InvalidJson(format!("OpenClaw CLI returned invalid JSON: {error}"))
-        })?;
-        Ok((value, output))
+        })
     }
 
     fn command_path(&self) -> Result<OsString, CliError> {
@@ -121,6 +144,19 @@ impl OpenClawCli {
     }
 }
 
+pub(crate) fn output_tail(output: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(output);
+    let mut lines: Vec<&str> = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    // Repeated progress lines carry no additional failure context.
+    lines.dedup();
+    let start = lines.len().saturating_sub(12);
+    let tail = &lines[start..];
+    (!tail.is_empty()).then(|| tail.join("\n"))
+}
+
 pub fn openclaw_home() -> Result<PathBuf, CliError> {
     #[cfg(target_os = "windows")]
     let home = env::var_os("HOME")
@@ -130,4 +166,41 @@ pub fn openclaw_home() -> Result<PathBuf, CliError> {
     let home = env::var_os("HOME").filter(|value| !value.is_empty());
     let home = home.ok_or_else(|| CliError::Environment("HOME is not set".to_string()))?;
     Ok(PathBuf::from(home).join(".openclaw"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{output_tail, OpenClawCli};
+    use std::path::PathBuf;
+
+    #[test]
+    fn output_tail_keeps_the_last_twelve_nonempty_lines() {
+        let output = (1..=15)
+            .map(|line| format!("message {line}"))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let expected = (4..=15)
+            .map(|line| format!("message {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_eq!(output_tail(output.as_bytes()), Some(expected));
+        assert_eq!(output_tail(b"\n  \n"), None);
+        assert_eq!(
+            output_tail(b"waiting\n\nwaiting\nfailed\nwaiting"),
+            Some("waiting\nfailed\nwaiting".into())
+        );
+    }
+
+    #[test]
+    fn missing_executable_invalidates_the_cached_cli() {
+        let cli = OpenClawCli::new(
+            PathBuf::from("openclaw-test-executable-that-does-not-exist"),
+            PathBuf::new(),
+        );
+
+        assert!(cli.is_available());
+        assert!(cli.output(["--version"]).is_err());
+        assert!(!cli.is_available());
+    }
 }

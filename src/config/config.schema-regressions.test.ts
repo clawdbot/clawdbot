@@ -3,6 +3,15 @@ import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./validation.js";
 
 describe("config schema regressions", () => {
+  it.each([true, false])("accepts and preserves gateway.cliAgents.enabled=%s", (enabled) => {
+    const result = validateConfigObject({ gateway: { cliAgents: { enabled } } });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.gateway?.cliAgents?.enabled).toBe(enabled);
+    }
+  });
+
   it.each([0, 3_000])(
     "accepts the documented global exec approval running notice delay %i",
     (approvalRunningNoticeMs) => {
@@ -139,6 +148,32 @@ describe("config schema regressions", () => {
     ).toBe(true);
   });
 
+  it("accepts mixed extra memory path entries", () => {
+    expect(
+      validateConfigObject({
+        memory: {
+          search: {
+            extraPaths: ["../team-notes", { path: "../shared", pattern: "runbooks/**/*.md" }],
+          },
+        },
+        agents: { defaults: {} },
+      }).ok,
+    ).toBe(true);
+  });
+
+  it.each([
+    { pattern: "**/*.md" },
+    { path: "../shared", pattern: 42 },
+    { path: "../shared", name: "legacy-qmd-name" },
+  ])("rejects invalid extra memory path object %j", (entry) => {
+    expect(
+      validateConfigObject({
+        memory: { search: { extraPaths: [entry] } },
+        agents: { defaults: {} },
+      }).ok,
+    ).toBe(false);
+  });
+
   it("rejects local memorySearch GPU policy", () => {
     const res = validateConfigObject({
       memory: {
@@ -156,48 +191,6 @@ describe("config schema regressions", () => {
     });
 
     expect(res.ok).toBe(false);
-  });
-
-  it("accepts memorySearch.qmd.extraCollections", () => {
-    const res = validateConfigObject({
-      memory: {
-        search: {
-          qmd: {
-            extraCollections: [
-              { path: "/shared/team-notes", name: "team-notes", pattern: "**/*.md" },
-            ],
-          },
-        },
-      },
-
-      agents: {
-        defaults: {},
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("accepts agents.entries.*.memory.search.qmd.extraCollections", () => {
-    const res = validateConfigObject({
-      agents: {
-        entries: {
-          main: {
-            memory: {
-              search: {
-                qmd: {
-                  extraCollections: [
-                    { path: "/shared/team-notes", name: "team-notes", pattern: "**/*.md" },
-                  ],
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
   });
 
   it("accepts agents.defaults.startupContext overrides", () => {
@@ -387,6 +380,31 @@ describe("config schema regressions", () => {
     const res = validateConfigObject({
       browser: {
         tabCleanup: {
+          unknownKey: true as unknown,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
+  it("accepts the browser extension relay legacy-auth migration gate", () => {
+    const res = validateConfigObject({
+      browser: {
+        extensionRelay: {
+          allowLegacyAuth: false,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects unknown keys under browser.extensionRelay", () => {
+    const res = validateConfigObject({
+      browser: {
+        extensionRelay: {
+          allowLegacyAuth: true,
           unknownKey: true as unknown,
         },
       },

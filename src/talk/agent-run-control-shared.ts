@@ -4,6 +4,7 @@
  * This module owns the provider-facing control tool, conservative intent
  * classifier, and user-visible status/queue/cancel messages used by Talk.
  */
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -240,17 +241,17 @@ export function parseRealtimeVoiceAgentControlToolArgs(args: unknown): {
   mode: RealtimeVoiceAgentControlMode;
 } {
   const parsed = parseRealtimeVoiceAgentControlToolArgsRecord(args);
-  const record = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  const record = asNonArrayRecord(parsed);
   const text =
-    normalizeOptionalString((record as Record<string, unknown>).text) ??
-    normalizeOptionalString((record as Record<string, unknown>).message) ??
-    normalizeOptionalString((record as Record<string, unknown>).request) ??
-    normalizeOptionalString((record as Record<string, unknown>).query);
+    normalizeOptionalString(record.text) ??
+    normalizeOptionalString(record.message) ??
+    normalizeOptionalString(record.request) ??
+    normalizeOptionalString(record.query);
   if (!text) {
     throw new Error("text required");
   }
   const mode =
-    normalizeRealtimeVoiceAgentControlMode((record as Record<string, unknown>).mode) ??
+    normalizeRealtimeVoiceAgentControlMode(record.mode) ??
     resolveRealtimeVoiceAgentControlIntent({ text }).mode;
   return { text, mode };
 }
@@ -270,11 +271,15 @@ function parseRealtimeVoiceAgentControlToolArgsRecord(args: unknown): unknown {
   }
 }
 
+/** Fixed user-visible failure; private execution/readiness errors stay in host diagnostics. */
+export const REALTIME_VOICE_AGENT_CONTROL_FAILURE_MESSAGE =
+  "OpenClaw could not process that voice control. Please try again.";
+
 /** Build the system-style instruction that forces exact spoken status output. */
 export function buildRealtimeVoiceAgentControlSpeechMessage(text: string): string {
   return [
     "Internal OpenClaw voice control result.",
-    "Do not call openclaw_agent_consult or any other tool for this message.",
+    "Do not delegate this message or call any tools.",
     "Speak this exact OpenClaw status to the voice call, without adding, removing, or rephrasing words.",
     `Status: ${JSON.stringify(text)}`,
   ].join("\n");
@@ -305,6 +310,9 @@ export function formatRealtimeVoiceAgentQueueRejection(
   mode: RealtimeVoiceAgentControlMode,
   reason: string,
 ): string {
+  if (reason === "guarded_injection_unsupported") {
+    return "This agent runtime cannot safely accept scoped voice steering. Check status, cancel the run, or start a new explicit request. Update the runtime when guarded injection is supported.";
+  }
   if (reason === "compacting") {
     return "OpenClaw is compacting the active run and cannot accept voice steering yet.";
   }

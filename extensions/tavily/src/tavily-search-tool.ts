@@ -53,10 +53,16 @@ export function createTavilySearchTool(api: OpenClawPluginApi, ctx?: TavilyToolC
   return {
     name: "tavily_search",
     label: "Tavily Search",
+    resultContentSource: "network" as const,
     description:
       "Search the web using Tavily Search API. Supports search depth, topic filtering, domain filters, time ranges, and AI answer summaries.",
     parameters: TavilySearchToolSchema,
-    execute: async (_toolCallId: string, rawParams: Record<string, unknown>) => {
+    execute: async (
+      _toolCallId: string,
+      rawParams: Record<string, unknown>,
+      signal?: AbortSignal,
+    ) => {
+      signal?.throwIfAborted();
       const query = readStringParam(rawParams, "query", { required: true });
       const searchDepth = readStringParam(rawParams, "search_depth") || undefined;
       const topic = readStringParam(rawParams, "topic") || undefined;
@@ -80,6 +86,7 @@ export function createTavilySearchTool(api: OpenClawPluginApi, ctx?: TavilyToolC
           timeRange,
           includeDomains,
           excludeDomains,
+          ...(signal ? { signal } : {}),
         }),
       );
     },

@@ -2,19 +2,24 @@
 import crypto from "node:crypto";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
+import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import {
   resolveSessionLifecycleTimestamps,
   resolveSessionWorkStartError,
 } from "../../config/sessions/lifecycle.js";
 import { hasSessionAutoModelFallbackProvenance } from "../../config/sessions/model-override-provenance.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   evaluateSessionFreshness,
   resolveSessionResetPolicy,
   type SessionFreshness,
 } from "../../config/sessions/reset-policy.js";
-import { listSessionEntries, loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  listSessionEntriesCore,
+  loadSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import { preserveCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -91,11 +96,12 @@ function preserveNonAutoModelOverride(target: SessionEntry, entry: SessionEntry)
 }
 
 function preserveUserAuthOverride(target: SessionEntry, entry: SessionEntry): void {
-  if (entry.authProfileOverrideSource === "user") {
+  const source = resolveSessionAuthProfileOverrideSource(entry);
+  if (source === "user") {
     if (entry.authProfileOverride !== undefined) {
       target.authProfileOverride = entry.authProfileOverride;
     }
-    target.authProfileOverrideSource = entry.authProfileOverrideSource;
+    target.authProfileOverrideSource = source;
     if (entry.authProfileOverrideCompactionCount !== undefined) {
       target.authProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
     }
@@ -109,6 +115,11 @@ function sanitizeFreshCronSessionEntry(
   const next = {} as SessionEntry;
 
   copySessionFields(next, entry, FRESH_CRON_CARRIED_PREFERENCE_FIELDS);
+  if (entry.skillLibrarySelections) {
+    next.skillLibrarySelections = entry.skillLibrarySelections.map((selection) => ({
+      ...selection,
+    }));
+  }
   if (options.preserveAmbientContext) {
     copySessionFields(next, entry, AMBIENT_SESSION_CONTEXT_FIELDS);
   }
@@ -137,6 +148,7 @@ export function resolveCronSession(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   sourceSessionKey?: string;
+  skillLibrarySelections?: SessionEntry["skillLibrarySelections"];
   nowMs: number;
   agentId: string;
   forceNew?: boolean;
@@ -144,33 +156,37 @@ export function resolveCronSession(params: {
   store?: Record<string, SessionEntry>;
 }) {
   const sessionCfg = params.cfg.session;
-  const storePath = resolveStorePath(sessionCfg?.store, {
+  const storePath = resolveSessionStorePathCore(sessionCfg?.store, {
     agentId: params.agentId,
   });
   const store =
     params.store ??
     Object.fromEntries(
-      listSessionEntries({ agentId: params.agentId, storePath }).map(({ sessionKey, entry }) => [
-        sessionKey,
-        entry,
-      ]),
+      listSessionEntriesCore({ agentId: params.agentId, storePath }).map(
+        ({ sessionKey, entry }) => [sessionKey, entry],
+      ),
     );
   const sourceSessionKey = params.sourceSessionKey?.trim();
   const sourceSessionDiffers = Boolean(sourceSessionKey && sourceSessionKey !== params.sessionKey);
   const targetEntry = store[params.sessionKey];
   const entry = store[sourceSessionKey || params.sessionKey];
-  // Guard the run's target row: archived sessions stay read-only even when a
-  // differing source session seeds the carried preferences.
-  const archivedSessionError = resolveSessionWorkStartError(params.sessionKey, targetEntry);
-  if (archivedSessionError) {
-    throw new Error(archivedSessionError);
+  // Guard the run's target row even when a differing source session seeds the
+  // carried preferences. A forced isolated heartbeat may replace its archived
+  // synthetic row, but trusted initialization must still finish first.
+  const canRollArchivedHeartbeat =
+    params.forceNew === true &&
+    targetEntry?.archivedAt !== undefined &&
+    targetEntry.initializationPending !== true &&
+    Boolean(targetEntry.heartbeatIsolatedBaseSessionKey?.trim());
+  const sessionWorkStartError = resolveSessionWorkStartError(params.sessionKey, targetEntry);
+  if (sessionWorkStartError && !canRollArchivedHeartbeat) {
+    throw new Error(sessionWorkStartError);
   }
 
   let sessionId: string;
   let isNewSession: boolean;
   let systemSent: boolean;
   let resetBoundaryPending: { reason: "cron-stale"; sessionFile: string } | undefined;
-  let staleBoundaryReset = false;
 
   if (!params.forceNew && entry?.sessionId) {
     // Cron/webhook sessions follow the direct reset policy so scheduled turns
@@ -203,7 +219,6 @@ export function resolveCronSession(params: {
       isNewSession = true;
       systemSent = false;
       if (!sourceSessionDiffers) {
-        staleBoundaryReset = true;
         resetBoundaryPending = { reason: "cron-stale", sessionFile: params.sessionKey };
       }
     }
@@ -214,7 +229,7 @@ export function resolveCronSession(params: {
   }
 
   const previousSessionId =
-    isNewSession && !sourceSessionDiffers && !staleBoundaryReset ? entry?.sessionId : undefined;
+    isNewSession && !sourceSessionDiffers && !resetBoundaryPending ? entry?.sessionId : undefined;
   clearBootstrapSnapshotOnSessionRollover({
     sessionKey: params.sessionKey,
     previousSessionId,
@@ -231,6 +246,11 @@ export function resolveCronSession(params: {
     // Fresh cron sessions keep user preference/auth overrides but drop resume
     // handles and auto-fallback model overrides that belong to the old run.
     ...baseEntry,
+    skillLibrarySelections: structuredClone(
+      targetEntry?.skillLibrarySelections ??
+        params.skillLibrarySelections ??
+        baseEntry?.skillLibrarySelections,
+    ),
     sessionId,
     lifecycleRevision,
     updatedAt: params.nowMs,
@@ -257,7 +277,7 @@ export function resolveCronSession(params: {
   return {
     storePath,
     store,
-    sessionEntry,
+    sessionEntry: preserveCreationStamp(sessionEntry, targetEntry),
     lifecycleRevision,
     systemSent,
     isNewSession,

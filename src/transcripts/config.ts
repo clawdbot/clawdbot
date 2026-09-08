@@ -1,4 +1,3 @@
-// Resolves transcript source configuration from OpenClaw config.
 import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
 
 /**
@@ -10,6 +9,7 @@ import { normalizeOptionalString as readString } from "@openclaw/normalization-c
 /** Raw auto-start transcript source entry from config. */
 type TranscriptsAutoStartConfig = {
   providerId: string;
+  whenOccupied?: boolean;
   sessionId?: string;
   title?: string;
   accountId?: string;
@@ -21,6 +21,7 @@ type TranscriptsAutoStartConfig = {
 /** Normalized auto-start source entry consumed by transcript runtime code. */
 export type ResolvedTranscriptsAutoStartConfig = {
   providerId: string;
+  whenOccupied: boolean;
   sessionId?: string;
   title?: string;
   accountId?: string;
@@ -57,7 +58,8 @@ function resolveAutoStart(raw: unknown): ResolvedTranscriptsAutoStartConfig[] {
       }
       return {
         providerId,
-        sessionId: readString(config.sessionId),
+        whenOccupied: config.whenOccupied === true,
+        sessionId: config.whenOccupied === true ? undefined : readString(config.sessionId),
         title: readString(config.title),
         accountId: readString(config.accountId),
         guildId: readString(config.guildId),

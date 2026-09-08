@@ -5,12 +5,9 @@ import { closedObject } from "./closed-object.js";
 import { GatewayClientIdSchema, GatewayClientModeSchema, NonEmptyString } from "./primitives.js";
 import { SessionVisibilitySchema } from "./sessions-sharing-values.js";
 import { SnapshotSchema, StateVersionSchema } from "./snapshot.js";
+import { WorkerAdmissionHandshakeSchema } from "./worker-admission.js";
 
-export const GATEWAY_SERVER_CAPS = {
-  BOARD_WIDGET_PUT_CANVAS_DOC: "board-widget-put-canvas-doc",
-  CHAT_SEND_ROUTING_CONTRACT: "chat-send-routing-contract",
-  SYSTEM_AGENT_SETUP_MODEL_REF: "openclaw-setup-model-ref",
-} as const;
+export { GATEWAY_SERVER_CAPS } from "../server-capabilities.js";
 
 /**
  * Top-level gateway frame schemas.
@@ -37,14 +34,21 @@ export const ConnectParamsSchema = closedObject({
     id: GatewayClientIdSchema,
     displayName: Type.Optional(NonEmptyString),
     version: NonEmptyString,
+    buildId: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })),
     platform: NonEmptyString,
     deviceFamily: Type.Optional(NonEmptyString),
     modelIdentifier: Type.Optional(NonEmptyString),
+    /** Self-reported IANA zone. Bounded because the longest real name is well under this cap. */
+    timeZone: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
     mode: GatewayClientModeSchema,
     instanceId: Type.Optional(NonEmptyString),
   }),
   caps: Type.Optional(Type.Array(NonEmptyString, { default: [] })),
   commands: Type.Optional(Type.Array(NonEmptyString)),
+  /** Additive Computer Use declaration; the owning core contract validates its bounded shape. */
+  computerUse: Type.Optional(Type.Unknown()),
+  /** @deprecated Accepted for the shipped v1 node-host envelope; current hosts use runner inventory. */
+  workerRuns: Type.Optional(WorkerAdmissionHandshakeSchema),
   permissions: Type.Optional(Type.Record(NonEmptyString, Type.Boolean())),
   pathEnv: Type.Optional(Type.String()),
   role: Type.Optional(NonEmptyString),
@@ -72,12 +76,17 @@ export const ConnectParamsSchema = closedObject({
   userAgent: Type.Optional(Type.String()),
 });
 
-/** Successful gateway hello response with negotiated protocol and initial state. */
+/** Successful gateway hello response with the server protocol and initial state. */
 export const HelloOkSchema = closedObject({
   type: Type.Literal("hello-ok"),
   protocol: Type.Integer({ minimum: 1 }),
   server: closedObject({
     version: NonEmptyString,
+    buildId: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })),
+    bootId: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })),
+    controlUiBuildSource: Type.Optional(
+      Type.Union([Type.Literal("bundled"), Type.Literal("configured")]),
+    ),
     connId: NonEmptyString,
   }),
   features: closedObject({
@@ -86,6 +95,8 @@ export const HelloOkSchema = closedObject({
     capabilities: Type.Optional(Type.Array(NonEmptyString)),
   }),
   snapshot: SnapshotSchema,
+  // Public Control UI origin and mount path, independent of local SSH tunnels.
+  controlUiUrl: Type.Optional(NonEmptyString),
   // Additive: plugin-declared Control UI tabs (surface "tab" descriptors).
   controlUiTabs: Type.Optional(
     Type.Array(
@@ -96,6 +107,7 @@ export const HelloOkSchema = closedObject({
         description: Type.Optional(Type.String()),
         icon: Type.Optional(Type.String()),
         path: Type.Optional(Type.String()),
+        placement: Type.Optional(Type.String()),
         requiresGatewayAuth: Type.Optional(Type.Boolean()),
         group: Type.Optional(Type.Union([Type.Literal("control"), Type.Literal("agent")])),
         order: Type.Optional(Type.Number()),
@@ -113,13 +125,10 @@ export const HelloOkSchema = closedObject({
     ),
   ),
   pluginSurfaceUrls: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
-  deviceAuthMigration: Type.Optional(
-    closedObject({
-      pending: Type.Literal(true),
-    }),
-  ),
   auth: closedObject({
     deviceToken: Type.Optional(NonEmptyString),
+    recoveryMigrationAllowed: Type.Optional(Type.Literal(true)),
+    recoveryScope: Type.Optional(NonEmptyString),
     role: NonEmptyString,
     scopes: Type.Array(NonEmptyString),
     issuedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -138,6 +147,17 @@ export const HelloOkSchema = closedObject({
     maxPayload: Type.Integer({ minimum: 1 }),
     maxBufferedBytes: Type.Integer({ minimum: 1 }),
     tickIntervalMs: Type.Integer({ minimum: 1 }),
+    // Additive: unconditional decoded-size ceilings for chat attachments, so
+    // clients can validate a file before sending instead of hardcoding guesses.
+    // Per attachment, not per frame: the encoded request must still fit
+    // `maxPayload`. MIME acceptance and per-message counts stay server-side
+    // because they depend on the entrypoint, resolved model, and payload sniffing.
+    attachments: Type.Optional(
+      closedObject({
+        maxBytes: Type.Integer({ minimum: 1 }),
+        maxImageBytes: Type.Integer({ minimum: 1 }),
+      }),
+    ),
     allowedSessionVisibilities: Type.Optional(Type.Array(SessionVisibilitySchema)),
     hasMultipleSessionSharingIdentities: Type.Optional(Type.Boolean()),
   }),

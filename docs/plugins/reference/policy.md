@@ -2,10 +2,13 @@
 summary: "Adds policy-backed doctor checks for workspace conformance."
 read_when:
   - You are installing, configuring, or auditing the policy plugin
-title: "Policy plugin"
+title: "Policy plugin reference"
 ---
 
-# Policy plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 Adds policy-backed doctor checks for workspace conformance.
 
@@ -16,7 +19,7 @@ Adds policy-backed doctor checks for workspace conformance.
 
 ## Surface
 
-plugin
+- CLI commands: `openclaw policy`
 
 <!-- openclaw-plugin-reference:manual-start -->
 
@@ -35,6 +38,10 @@ OpenClaw settings and workspace declarations as evidence, and reports drift
 through `openclaw policy check` and `openclaw doctor --lint`. A clean policy
 check emits policy, evidence, findings, and attestation hashes that operators
 can record for audit.
+
+`openclaw policy check`, `watch`, and workspace-relative `compare` accept
+`--agent <id>`. Explicit multi-agent fleets must select the workspace owner;
+the plugin does not infer one from roster order.
 
 `openclaw policy compare --baseline <file>` compares one policy file to another
 policy file. It is config-level conformance only: it uses policy rule metadata

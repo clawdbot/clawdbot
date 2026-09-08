@@ -10,10 +10,7 @@ import {
 } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import { appendRegularFile, pathExists } from "openclaw/plugin-sdk/security-runtime";
-import {
-  isRecord as sharedIsRecord,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parse as parseYaml } from "yaml";
 
 const HOME_SHORTHAND_RE = /^~(?=$|[\\/])/u;
@@ -22,7 +19,7 @@ const EDGE_DASHES_RE = /^-+|-+$/g;
 
 export function resolveHomePath(input: string): string {
   const value = input.trim();
-  return value ? path.resolve(value.replace(HOME_SHORTHAND_RE, os.homedir())) : value;
+  return value ? path.resolve(value.replace(HOME_SHORTHAND_RE, () => os.homedir())) : value;
 }
 
 export async function exists(filePath: string): Promise<boolean> {
@@ -57,17 +54,13 @@ export function parseHermesConfig(content: string | undefined): Record<string, u
     : {};
 }
 
-export const isRecord = sharedIsRecord;
-
 export function childRecord(
   root: Record<string, unknown> | undefined,
   key: string,
 ): Record<string, unknown> {
   const value = root?.[key];
-  return isRecord(value) ? value : {};
+  return asNonArrayRecord(value);
 }
-
-export const readString = normalizeOptionalString;
 
 export function readStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) {

@@ -2,6 +2,7 @@
 import type { BuildMentionRegexesOptions } from "openclaw/plugin-sdk/channel-mention-gating";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
+import { formatAudioTranscriptForAgent } from "openclaw/plugin-sdk/media-understanding-runtime";
 import type { HistoryMediaEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveWhatsAppGroupsConfigPath } from "../../group-config-path.js";
 import {
@@ -109,7 +110,7 @@ function recordPendingGroupHistoryEntry(params: {
       timestamp: params.msg.event.timestamp,
       id: params.msg.event.id,
       senderJid: senderIdentity.jid ?? params.msg.platform.senderJid,
-      ...(params.body === undefined && params.msg.payload.media
+      ...(params.msg.payload.media
         ? {
             media: [
               {
@@ -154,7 +155,7 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
   const conversationGroupPolicy = inboundPolicy.resolveConversationGroupPolicy(conversationId);
   if (conversationGroupPolicy.allowlistEnabled && !conversationGroupPolicy.allowed) {
     const accountId = inboundPolicy.account.accountId;
-    const warnKey = `${accountId}:${conversationId}`;
+    const warnKey = JSON.stringify([accountId, conversationId, "group registry"]);
     if (shouldWarnForGroupDrop(warnKey)) {
       const groupsPath = resolveWhatsAppGroupsConfigPath({ cfg: params.cfg, accountId });
       params.replyLogger.warn(
@@ -269,10 +270,23 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
       );
       return { shouldProcess: false, needsMentionText: true } as const;
     }
+    const accountId = inboundPolicy.account.accountId;
+    if (shouldWarnForGroupDrop(JSON.stringify([accountId, conversationId, "no mention"]))) {
+      const groupsPath = resolveWhatsAppGroupsConfigPath({ cfg: params.cfg, accountId });
+      params.replyLogger.warn(
+        { conversationId, accountId, groupsPath },
+        `WhatsApp group ${conversationId}: skipping messages without a mention. Mention patterns can be derived from the agent identity name. Use /activation always for this session, or set ${groupsPath}[${JSON.stringify(conversationId)}].requireMention=false for the default. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
+      );
+    }
+    // Mention matching needs raw STT text, but deferred history is model-visible later.
+    const pendingHistoryBody =
+      params.mentionText === undefined
+        ? undefined
+        : formatAudioTranscriptForAgent(params.mentionText);
     return skipGroupMessageAndStoreHistory(
       params,
       `Group message stored for context (no mention detected) in ${conversationId}: ${mentionMsg.payload.body}`,
-      params.mentionText,
+      pendingHistoryBody,
     );
   }
 

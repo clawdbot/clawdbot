@@ -24,7 +24,13 @@ function getCapturedCtx() {
 function getGroupHistoryEntries(
   groupHistories: Map<
     string,
-    Array<{ sender?: string; body?: string; media?: HistoryMediaEntry[] }>
+    Array<{
+      sender?: string;
+      body?: string;
+      media?: HistoryMediaEntry[];
+      timestamp?: number;
+      messageId?: string;
+    }>
   >,
   groupId = "g1",
 ) {
@@ -194,11 +200,41 @@ describe("signal mention gating", () => {
     capturedCtx = undefined;
   });
 
-  it("drops group messages without mention when requireMention is configured", async () => {
-    const handler = createMentionHandler({ requireMention: true });
+  it("logs identity-derived mention drops once per account and group while preserving history", async () => {
+    const log = vi.fn();
+    const groupHistories = new Map();
+    const createHandler = (accountId: string) =>
+      createSignalEventHandler(
+        createBaseSignalEventHandlerDeps({
+          accountId,
+          runtime: { log, error: vi.fn(), exit: vi.fn() },
+          groupHistories,
+          cfg: { agents: { list: [{ id: "main", identity: { name: "Claw" } }] } },
+        }),
+      );
+    const event = (groupId: string) =>
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "What up",
+          groupInfo: { groupId },
+        },
+      });
+    const handler = createHandler("mention-primary");
 
-    await handler(makeGroupEvent({ message: "hello everyone" }));
+    await handler(event("mention-g1"));
+    await handler(event("mention-g1"));
+    await handler(event("mention-g2"));
+    await createHandler("mention-secondary")(event("mention-g1"));
+
     expect(capturedCtx).toBeUndefined();
+    expect(groupHistories.get("mention-g1")).toHaveLength(3);
+    expect(log).toHaveBeenCalledTimes(3);
+    expect(log.mock.calls[0]?.[0]).toContain("mention-g1");
+    expect(log.mock.calls[1]?.[0]).toContain("mention-g2");
+    expect(log.mock.calls[0]?.[0]).toContain("requireMention");
+    expect(log.mock.calls[0]?.[0]).toContain("false");
+    expect(log.mock.calls.flat().join(" ")).not.toContain("What up");
+    expect(log.mock.calls.flat().join(" ")).not.toContain("+15550001111");
   });
 
   it("allows group messages with mention when requireMention is configured", async () => {
@@ -249,6 +285,27 @@ describe("signal mention gating", () => {
     const entry = expectDefined(entries[0], "Signal group history entry");
     expect(entry.sender).toBe("Alice");
     expect(entry.body).toBe("hello from alice");
+  });
+
+  it("keeps the canonical data-message timestamp in skipped group history", async () => {
+    const { handler, groupHistories } = createMentionGatedHistoryHandler();
+    const timestamp = 1700000000123;
+
+    await handler(
+      createSignalReceiveEvent({
+        timestamp: undefined,
+        dataMessage: {
+          timestamp,
+          message: "history without a mention",
+          attachments: [],
+          groupInfo: { groupId: "g1", groupName: "Test Group" },
+        },
+      }),
+    );
+
+    const entry = expectDefined(getGroupHistoryEntries(groupHistories)[0], "Signal history entry");
+    expect(entry.timestamp).toBe(timestamp);
+    expect(entry.messageId).toBe(String(timestamp));
   });
 
   it("records edited target reply authors for skipped group messages", async () => {

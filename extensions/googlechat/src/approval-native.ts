@@ -1,6 +1,9 @@
 import { createApproverRestrictedNativeApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
-import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
+import type {
+  ChannelApprovalKind,
+  ChannelApprovalNativeRuntimeAdapter,
+} from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
@@ -10,6 +13,7 @@ import {
 import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
+  SystemAgentApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type {
   ChannelApprovalCapability,
@@ -33,7 +37,7 @@ import {
 } from "./approval-auth.js";
 import { isGoogleChatSpaceTarget, normalizeGoogleChatTarget } from "./targets.js";
 
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
 type GoogleChatApprovalTarget = {
   to: string;
   accountId?: string | null;
@@ -150,7 +154,7 @@ function resolveSessionGoogleChatOriginTarget(sessionTarget: {
 export function shouldHandleGoogleChatNativeApprovalRequest(params: {
   cfg: Parameters<typeof resolveGoogleChatAccount>[0]["cfg"];
   accountId?: string | null;
-  approvalKind?: "exec" | "plugin";
+  approvalKind?: ChannelApprovalKind;
   request: ApprovalRequest;
 }): boolean {
   return (
@@ -232,7 +236,7 @@ export const googleChatApprovalCapability: ChannelApprovalCapability =
     resolveOriginTarget: resolveGoogleChatOriginTarget,
     resolveApproverDmTargets: resolveGoogleChatApproverDmTargets,
     nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
-      eventKinds: ["exec", "plugin"],
+      eventKinds: ["exec", "plugin", "system-agent"],
       isConfigured: ({ cfg, accountId }) =>
         isGoogleChatNativeApprovalClientEnabled({ cfg, accountId }),
       shouldHandle: ({ cfg, accountId, approvalKind, request }) =>

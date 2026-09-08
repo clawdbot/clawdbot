@@ -11,7 +11,6 @@ import {
   getRuntimeConfigSourceSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
@@ -22,53 +21,44 @@ import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { ALWAYS_ALLOWED_RUNTIME_DIR_NAMES } from "./facade-activation-contract.js";
-import { resolveRegistryPluginModuleLocationFromRecords } from "./facade-resolution-shared.js";
+import {
+  resolveBundledMetadataManifestRecord,
+  resolveRegistryPluginModuleLocationFromRecords,
+  type FacadeModuleLocationLike,
+  type FacadePluginManifestLike,
+} from "./facade-resolution-shared.js";
 
 const ALWAYS_ALLOWED_RUNTIME_DIR_NAME_SET = new Set<string>(ALWAYS_ALLOWED_RUNTIME_DIR_NAMES);
 const EMPTY_FACADE_BOUNDARY_CONFIG: OpenClawConfig = {};
 
-/** Minimal manifest shape needed to decide whether a bundled facade may load. */
-export type FacadePluginManifestLike = Pick<
-  PluginManifestRecord,
-  "id" | "origin" | "enabledByDefault" | "enabledByDefaultOnPlatforms" | "rootDir" | "channels"
->;
+type FacadeActivationCheckParams = Parameters<typeof resolveBundledMetadataManifestRecord>[0];
 
-type FacadeModuleLocation = {
-  modulePath: string;
-  boundaryRoot: string;
-};
-
-function readFacadeBoundaryConfigSafely(): {
-  rawConfig: OpenClawConfig;
-} {
+function readFacadeBoundaryConfigSafely(): OpenClawConfig {
   try {
     const sourceSnapshot = getRuntimeConfigSourceSnapshot();
     if (sourceSnapshot) {
-      return { rawConfig: sourceSnapshot };
+      return sourceSnapshot;
     }
     const runtimeSnapshot = getRuntimeConfigSnapshot();
     if (runtimeSnapshot) {
-      return { rawConfig: runtimeSnapshot };
+      return runtimeSnapshot;
     }
     const configPath = resolveConfigPath();
     if (!fs.existsSync(configPath)) {
-      return { rawConfig: EMPTY_FACADE_BOUNDARY_CONFIG };
+      return EMPTY_FACADE_BOUNDARY_CONFIG;
     }
     const raw = fs.readFileSync(configPath, "utf8");
     const parsed = parseJsonWithJson5Fallback(raw);
-    const rawConfig =
-      parsed && typeof parsed === "object"
-        ? (parsed as OpenClawConfig)
-        : EMPTY_FACADE_BOUNDARY_CONFIG;
-    return { rawConfig };
+    return parsed && typeof parsed === "object"
+      ? (parsed as OpenClawConfig)
+      : EMPTY_FACADE_BOUNDARY_CONFIG;
   } catch {
-    return { rawConfig: EMPTY_FACADE_BOUNDARY_CONFIG };
+    return EMPTY_FACADE_BOUNDARY_CONFIG;
   }
 }
 
 function getFacadeBoundaryResolvedConfig() {
-  const readResult = readFacadeBoundaryConfigSafely();
-  const { rawConfig } = readResult;
+  const rawConfig = readFacadeBoundaryConfigSafely();
   const autoEnabled = configMayNeedPluginAutoEnable(rawConfig, process.env)
     ? applyPluginAutoEnable({
         config: rawConfig,
@@ -104,9 +94,8 @@ function getFacadeManifestRegistry(params: {
 export function resolveRegistryPluginModuleLocation(params: {
   dirName: string;
   artifactBasename: string;
-  resolutionKey: string;
   env?: NodeJS.ProcessEnv;
-}): FacadeModuleLocation | null {
+}): FacadeModuleLocationLike | null {
   const registry = getFacadeManifestRegistry(params.env ? { env: params.env } : {});
   return resolveRegistryPluginModuleLocationFromRecords({
     registry,
@@ -115,95 +104,9 @@ export function resolveRegistryPluginModuleLocation(params: {
   });
 }
 
-function readBundledPluginManifestRecordFromDir(params: {
-  pluginsRoot: string;
-  resolvedDirName: string;
-}): FacadePluginManifestLike | null {
-  const manifestPath = path.join(
-    params.pluginsRoot,
-    params.resolvedDirName,
-    "openclaw.plugin.json",
-  );
-  if (!fs.existsSync(manifestPath)) {
-    return null;
-  }
-  try {
-    const raw = parseJsonWithJson5Fallback(fs.readFileSync(manifestPath, "utf8")) as {
-      id?: unknown;
-      enabledByDefault?: unknown;
-      channels?: unknown;
-    };
-    if (typeof raw.id !== "string" || raw.id.trim().length === 0) {
-      return null;
-    }
-    return {
-      id: raw.id,
-      origin: "bundled",
-      enabledByDefault: raw.enabledByDefault === true,
-      rootDir: path.join(params.pluginsRoot, params.resolvedDirName),
-      channels: Array.isArray(raw.channels)
-        ? raw.channels.filter((entry): entry is string => typeof entry === "string")
-        : [],
-    };
-  } catch {
-    return null;
-  }
-}
-
-function resolveBundledMetadataManifestRecord(params: {
-  dirName: string;
-  artifactBasename: string;
-  location: FacadeModuleLocation | null;
-  sourceExtensionsRoot: string;
-  env?: NodeJS.ProcessEnv;
-}): FacadePluginManifestLike | null {
-  if (!params.location) {
-    return null;
-  }
-  if (params.location.modulePath.startsWith(`${params.sourceExtensionsRoot}${path.sep}`)) {
-    const relativeToExtensions = path.relative(
-      params.sourceExtensionsRoot,
-      params.location.modulePath,
-    );
-    const resolvedDirName = relativeToExtensions.split(path.sep)[0];
-    if (!resolvedDirName) {
-      return null;
-    }
-    return readBundledPluginManifestRecordFromDir({
-      pluginsRoot: params.sourceExtensionsRoot,
-      resolvedDirName,
-    });
-  }
-  const bundledPluginsDir = resolveBundledPluginsDir(params.env ?? process.env);
-  if (!bundledPluginsDir) {
-    return null;
-  }
-  const normalizedBundledPluginsDir = path.resolve(bundledPluginsDir);
-  if (!params.location.modulePath.startsWith(`${normalizedBundledPluginsDir}${path.sep}`)) {
-    return null;
-  }
-  const relativeToBundledDir = path.relative(
-    normalizedBundledPluginsDir,
-    params.location.modulePath,
-  );
-  const resolvedDirName = relativeToBundledDir.split(path.sep)[0];
-  if (!resolvedDirName) {
-    return null;
-  }
-  return readBundledPluginManifestRecordFromDir({
-    pluginsRoot: normalizedBundledPluginsDir,
-    resolvedDirName,
-  });
-}
-
-function resolveBundledPluginManifestRecord(params: {
-  dirName: string;
-  artifactBasename: string;
-  location: FacadeModuleLocation | null;
-  sourceExtensionsRoot: string;
-  resolutionKey: string;
-  env?: NodeJS.ProcessEnv;
-}): FacadePluginManifestLike | null {
+function resolveBundledPluginManifestRecord(
+  params: FacadeActivationCheckParams,
+): FacadePluginManifestLike | null {
   const metadataRecord = resolveBundledMetadataManifestRecord(params);
   if (metadataRecord) {
     return metadataRecord;
@@ -229,26 +132,16 @@ function resolveBundledPluginManifestRecord(params: {
 }
 
 /** Resolves the stable plugin id used for telemetry and error reporting. */
-export function resolveTrackedFacadePluginId(params: {
-  dirName: string;
-  artifactBasename: string;
-  location: FacadeModuleLocation | null;
-  sourceExtensionsRoot: string;
-  resolutionKey: string;
-  env?: NodeJS.ProcessEnv;
-}): string {
+export function resolveTrackedFacadePluginId(params: FacadeActivationCheckParams): string {
   return resolveBundledPluginManifestRecord(params)?.id ?? params.dirName;
 }
 
 /** Evaluates whether a bundled plugin's api/runtime-api facade is currently enabled. */
-export function resolveBundledPluginPublicSurfaceAccess(params: {
-  dirName: string;
-  artifactBasename: string;
-  location: FacadeModuleLocation | null;
-  sourceExtensionsRoot: string;
-  resolutionKey: string;
-  env?: NodeJS.ProcessEnv;
-}): { allowed: boolean; pluginId?: string; reason?: string } {
+export function resolveBundledPluginPublicSurfaceAccess(params: FacadeActivationCheckParams): {
+  allowed: boolean;
+  pluginId?: string;
+  reason?: string;
+} {
   if (
     params.artifactBasename === "runtime-api.js" &&
     ALWAYS_ALLOWED_RUNTIME_DIR_NAME_SET.has(params.dirName)
@@ -290,6 +183,7 @@ export function evaluateBundledPluginPublicSurfaceAccess(params: {
   const activationState = resolveEffectivePluginActivationState({
     id: params.manifestRecord.id,
     origin: params.manifestRecord.origin,
+    channelIds: params.manifestRecord.channels,
     config: params.normalizedPluginsConfig,
     rootConfig: params.config,
     enabledByDefault: isPluginEnabledByDefaultForPlatform(params.manifestRecord),
@@ -322,14 +216,9 @@ export function throwForBundledPluginPublicSurfaceAccess(params: {
 }
 
 /** Resolves bundled facade access and throws unless the facade is allowed to load. */
-export function resolveActivatedBundledPluginPublicSurfaceAccessOrThrow(params: {
-  dirName: string;
-  artifactBasename: string;
-  location: FacadeModuleLocation | null;
-  sourceExtensionsRoot: string;
-  resolutionKey: string;
-  env?: NodeJS.ProcessEnv;
-}) {
+export function resolveActivatedBundledPluginPublicSurfaceAccessOrThrow(
+  params: FacadeActivationCheckParams,
+) {
   const access = resolveBundledPluginPublicSurfaceAccess(params);
   if (!access.allowed) {
     throwForBundledPluginPublicSurfaceAccess({

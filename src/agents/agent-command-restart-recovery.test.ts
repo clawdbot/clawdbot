@@ -73,19 +73,26 @@ describe("buildCurrentRunRestartRecoveryClaim", () => {
     });
   });
 
-  it("rejects a route change after recovery ownership is claimed", () => {
-    expect(() =>
+  it("preserves the claimed route when delivery preparation resolves an alias", () => {
+    expect(
       buildCurrentRunRestartRecoveryClaim({
-        deliveryContext: { channel: "discord", to: "channel:other" },
+        deliveryContext: {
+          channel: "telegram",
+          to: "telegram:-100123:topic:1",
+          threadId: 1,
+        },
         entry: {
           sessionId: "session-1",
           updatedAt: 1,
           restartRecoveryDeliveryRunId: "recovery-run",
-          restartRecoveryDeliveryContext: { channel: "discord", to: "channel:123" },
+          restartRecoveryDeliveryContext: { channel: "telegram", to: "-100123", threadId: 1 },
         },
         runId: "recovery-run",
       }),
-    ).toThrow("restart recovery delivery route changed after the run was claimed");
+    ).toMatchObject({
+      restartRecoveryDeliveryContext: { channel: "telegram", to: "-100123", threadId: 1 },
+      restartRecoveryDeliveryRunId: "recovery-run",
+    });
   });
 
   it("requires explicit ownership for a new source claim", () => {

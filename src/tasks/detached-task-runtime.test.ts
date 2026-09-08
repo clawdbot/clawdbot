@@ -1,10 +1,6 @@
 // Covers detached task runtime spawning, events, and cancellation handling.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  getDetachedTaskLifecycleRuntimeRegistration,
-  registerDetachedTaskLifecycleRuntime,
-} from "./detached-task-runtime-state.js";
-import {
   completeTaskRunByRunId,
   createQueuedTaskRun,
   createRunningTaskRun,
@@ -330,19 +326,6 @@ describe("detached-task-runtime", () => {
 
     resetDetachedTaskLifecycleRuntimeForTests();
     expect(getDetachedTaskLifecycleRuntime()).toBe(defaultRuntime);
-  });
-
-  it("tracks registered detached runtimes by plugin id", () => {
-    const runtime = {
-      ...getDetachedTaskLifecycleRuntime(),
-    };
-
-    registerDetachedTaskLifecycleRuntime("tests/detached-runtime", runtime);
-
-    const registration = getDetachedTaskLifecycleRuntimeRegistration();
-    expect(registration?.pluginId).toBe("tests/detached-runtime");
-    expect(registration?.runtime).toBe(runtime);
-    expect(getDetachedTaskLifecycleRuntime()).toBe(runtime);
   });
 
   it("falls back to legacy complete and fail hooks when a runtime has no finalizer", () => {

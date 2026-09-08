@@ -13,6 +13,7 @@ struct ChatToolActivityItem: Identifiable, Equatable {
     let resultText: String?
     let isError: Bool
     let isPending: Bool
+    let liveDiffStat: ChatToolDiffStat?
 }
 
 enum ChatToolActivity {
@@ -34,7 +35,8 @@ enum ChatToolActivity {
                 details: result?.details,
                 resultText: result?.text,
                 isError: result?.isError ?? false,
-                isPending: false)
+                isPending: false,
+                liveDiffStat: nil)
         }
 
         items.append(contentsOf: remainingResults.map { index, result in
@@ -45,13 +47,24 @@ enum ChatToolActivity {
                 details: result.details,
                 resultText: result.text,
                 isError: result.isError ?? false,
-                isPending: false)
+                isPending: false,
+                liveDiffStat: nil)
         })
         return items
     }
 }
 
-struct ChatToolActivityRow: View {
+struct ChatToolActivityRow: View, Equatable {
+    let item: ChatToolActivityItem
+
+    var body: some View {
+        // Compare the item before constructing the content: its initializer prepares
+        // the diff, which unchanged siblings must not repeat on every tool update.
+        ChatToolActivityRowContent(item: self.item)
+    }
+}
+
+private struct ChatToolActivityRowContent: View {
     let item: ChatToolActivityItem
     private let resolvedDiff: (lines: [ChatToolDiffLine], stat: ChatToolDiffStat?)?
     @State private var expanded = false
@@ -104,6 +117,10 @@ struct ChatToolActivityRow: View {
         return Array(lines.prefix(Self.expandedLineLimit - 1)) + [
             ChatToolDiffLine(kind: .skip, text: ""),
         ]
+    }
+
+    private var displayedDiffStat: ChatToolDiffStat? {
+        self.item.isPending ? self.item.liveDiffStat ?? self.resolvedDiff?.stat : self.resolvedDiff?.stat
     }
 
     init(item: ChatToolActivityItem) {
@@ -217,20 +234,13 @@ struct ChatToolActivityRow: View {
             if let detailLine = self.detailLine {
                 Text(detailLine)
                     .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(OpenClawChatTheme.assistantText.opacity(0.62))
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
 
-            if let stat = self.resolvedDiff?.stat {
-                Text(verbatim: "+\(stat.added)")
-                    .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
-                    .foregroundStyle(OpenClawChatTheme.success.opacity(0.9))
-                    .lineLimit(1)
-                Text(verbatim: "−\(stat.removed)")
-                    .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
-                    .foregroundStyle(OpenClawChatTheme.danger.opacity(0.9))
-                    .lineLimit(1)
+            if let stat = self.displayedDiffStat {
+                ChatDiffStatChips(stat: stat)
             }
 
             Spacer(minLength: 0)
@@ -347,7 +357,7 @@ struct ChatToolActivityRow: View {
             "gateway": "server.rack",
             "glob": "magnifyingglass",
             "grep": "magnifyingglass",
-            "image": "photo",
+            "view_image": "photo",
             "list": "magnifyingglass",
             "ls": "magnifyingglass",
             "memory": "brain",
@@ -398,6 +408,21 @@ struct ChatToolActivityRow: View {
     }
 }
 
+struct ChatDiffStatChips: View {
+    let stat: ChatToolDiffStat
+
+    var body: some View {
+        Group {
+            Text(verbatim: "+\(self.stat.added)")
+                .foregroundStyle(OpenClawChatTheme.success.opacity(0.9))
+            Text(verbatim: "−\(self.stat.removed)")
+                .foregroundStyle(OpenClawChatTheme.danger.opacity(0.9))
+        }
+        .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
+        .lineLimit(1)
+    }
+}
+
 struct ChatToolActivityList: View {
     let items: [ChatToolActivityItem]
 
@@ -406,6 +431,7 @@ struct ChatToolActivityList: View {
             // Protocol IDs can collide with specified fallback IDs; encounter order is unique here.
             ForEach(self.items.indices, id: \.self) { index in
                 ChatToolActivityRow(item: self.items[index])
+                    .equatable()
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

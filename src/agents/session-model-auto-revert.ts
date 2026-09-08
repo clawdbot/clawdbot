@@ -2,15 +2,15 @@
 import {
   appendTranscriptMessage,
   loadSessionEntry,
-  patchSessionEntry,
+  patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import {
   createAgentPatchedSessionModelFallback,
   type AgentPatchedSessionModelFallback,
 } from "../config/sessions/session-model-fallback.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 import { resolveFailoverReasonFromError } from "./failover-error.js";
+import type { FailoverReason } from "./failover/signal.js";
 import { resolveSessionModelRef } from "./session-model-ref.js";
 
 // Revert only when the chosen model is definitively unusable. Transient
@@ -47,7 +47,7 @@ async function reconcileAgentPatchedSessionModel(params: {
   let note: string | undefined;
   let sessionId: string | undefined;
   let result: "cleared" | "promoted" | "reverted" | "none" = "none";
-  await patchSessionEntry(
+  await patchSessionEntryCore(
     {
       agentId: params.agentId,
       sessionKey: params.sessionKey,
@@ -96,6 +96,7 @@ async function reconcileAgentPatchedSessionModel(params: {
         authProfileOverride: marker.prevAuthProfileOverride,
         authProfileOverrideSource: marker.prevAuthProfileOverrideSource,
         authProfileOverrideCompactionCount: marker.prevAuthProfileOverrideCompactionCount,
+        contextWindow: marker.prevContextWindow,
         thinkingLevel: marker.prevThinkingLevel,
         modelFallback: undefined,
         liveModelSwitchPending: undefined,
@@ -165,6 +166,10 @@ export function createAgentPatchedSessionModelRunGuard(params: {
   let failure: { error?: unknown; reason?: FailoverReason } = {};
   let reconciled = false;
   const captureFailure = (error: unknown, reason?: string) => {
+    // Only the patch captured when this guard was created can be reconciled.
+    if (markerTs === undefined) {
+      return false;
+    }
     const classifiedReason = reason
       ? (reason as FailoverReason)
       : resolveFailoverReasonFromError(error);

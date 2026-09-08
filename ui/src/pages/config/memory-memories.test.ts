@@ -213,11 +213,10 @@ describe("MemoryMemoriesElement", () => {
     }
   });
 
-  it("keeps session, QMD, absolute, and escaping paths non-expandable", async () => {
+  it("keeps session, absolute, and escaping paths non-expandable", async () => {
     const nonExpandable = [
       { ...result, path: "sessions/main/session-1.jsonl", source: "sessions" as const },
       { ...result, path: "sessions/main/mislabeled.jsonl" },
-      { ...result, path: "qmd/workspace-main/memory/notes.md" },
       { ...result, path: "/external/MEMORY.md" },
       { ...result, path: "C:\\external\\MEMORY.md" },
       { ...result, path: "memory/../outside.md" },
@@ -234,10 +233,10 @@ describe("MemoryMemoriesElement", () => {
     try {
       await typeQuery(element, "memory");
       submit(element);
-      await waitForFast(() => expect(element.querySelectorAll("article")).toHaveLength(7));
+      await waitForFast(() => expect(element.querySelectorAll("article")).toHaveLength(6));
 
       expect(element.querySelectorAll("article > button")).toHaveLength(1);
-      expect(element.querySelectorAll("article > div.settings-row")).toHaveLength(6);
+      expect(element.querySelectorAll("article > div.settings-row")).toHaveLength(5);
       expect(
         request.mock.calls.filter(([method]) => method === "agents.workspace.get"),
       ).toHaveLength(0);
@@ -299,4 +298,55 @@ describe("MemoryMemoriesElement", () => {
       element.remove();
     }
   });
+
+  it.each([false, true])(
+    "shows stale guidance alongside results and clears it after a fresh search (hits=%s)",
+    async (hasHits) => {
+      const warning =
+        "Memory index is stale: index scope changed (owner: configuration, code: scope). Search results may be incomplete.";
+      const action =
+        "Run: openclaw memory status --index --agent main. Rebuilding uses keyword indexing only and does not call an embedding provider.";
+      const fresh = { ...result, snippet: "Freshly indexed Ada prefers careful reviews." };
+      const request = vi
+        .fn<Request>()
+        .mockResolvedValueOnce({
+          agentId: "main",
+          provider: "none",
+          searchMode: "fts-only",
+          results: hasHits ? [result] : [],
+          stale: true,
+          warning,
+          action,
+        })
+        .mockResolvedValueOnce({
+          agentId: "main",
+          provider: "none",
+          searchMode: "fts-only",
+          results: [fresh],
+        });
+      const element = createElement(request);
+      const readText = () => (element.textContent ?? "").replace(/\s+/gu, " ").trim();
+      try {
+        await typeQuery(element, "Ada");
+        submit(element);
+        await waitForFast(() =>
+          expect(element.querySelector(".memory-memories__results-heading")).not.toBeNull(),
+        );
+        expect(element.querySelectorAll("article")).toHaveLength(hasHits ? 1 : 0);
+        expect.soft(readText(), "stale result warning").toContain(warning);
+        expect.soft(readText(), "agent-scoped recovery guidance").toContain(action);
+        if (hasHits) {
+          expect(readText()).toContain(result.snippet);
+        }
+
+        await typeQuery(element, "Ada fresh");
+        submit(element);
+        await waitForFast(() => expect(readText()).toContain(fresh.snippet));
+        expect(readText()).not.toContain(warning);
+        expect(readText()).not.toContain(action);
+      } finally {
+        element.remove();
+      }
+    },
+  );
 });

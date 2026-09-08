@@ -7,6 +7,7 @@ import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
+import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -110,6 +111,28 @@ describe("zai provider plugin", () => {
     const template = createGlm47Template();
 
     const cases = [
+      {
+        modelId: "glm-5.3",
+        providerBaseUrl: "https://api.z.ai/api/coding/paas/v4",
+        expected: {
+          baseUrl: "https://api.z.ai/api/coding/paas/v4",
+          input: ["text"],
+          reasoning: true,
+          contextWindow: 1_048_576,
+          maxTokens: 131_072,
+        },
+      },
+      {
+        modelId: "glm-5.3-flash",
+        providerBaseUrl: "https://api.z.ai/api/coding/paas/v4",
+        expected: {
+          baseUrl: "https://api.z.ai/api/coding/paas/v4",
+          input: ["text", "image"],
+          reasoning: true,
+          contextWindow: 1_048_576,
+          maxTokens: 131_072,
+        },
+      },
       {
         modelId: "glm-5.2",
         providerBaseUrl: "https://api.z.ai/api/coding/paas/v4",
@@ -237,13 +260,13 @@ describe("zai provider plugin", () => {
 
     const resolved = provider.resolveDynamicModel?.({
       provider: "zai",
-      modelId: "glm-5.3",
+      modelId: "glm-5.4-preview",
       modelRegistry: {
         find: (_provider: string, modelId: string) => (modelId === "glm-4.7" ? template : null),
       },
     } as never) as Record<string, unknown> | undefined;
     expectModelFields(resolved, {
-      id: "glm-5.3",
+      id: "glm-5.4-preview",
       provider: "zai",
       api: "openai-completions",
       baseUrl: "https://api.z.ai/api/paas/v4",
@@ -301,23 +324,22 @@ describe("zai provider plugin", () => {
     expect(capturedPayload).not.toHaveProperty("tool_stream");
   });
 
-  it("exposes full GLM-5.2 thinking levels while keeping older GLM models binary", async () => {
+  it("exposes GLM-5.3 thinking levels while keeping older GLM models binary", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
     expect(
       provider.resolveThinkingProfile?.({
         provider: "zai",
-        modelId: "glm-5.2",
+        modelId: "glm-5.3",
         reasoning: true,
       } as never),
     ).toEqual({
       levels: [
-        { id: "off", label: "off" },
         { id: "low", label: "low" },
         { id: "high", label: "high" },
         { id: "max", label: "max" },
       ],
-      defaultLevel: "off",
+      defaultLevel: "max",
     });
 
     expect(
@@ -398,7 +420,7 @@ describe("zai provider plugin", () => {
     expect(capturedPayload).not.toHaveProperty("thinking");
   });
 
-  it("maps GLM-5.2 thinking levels to Z.AI reasoning effort", async () => {
+  it("maps GLM-5.3 thinking levels to Z.AI reasoning effort", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     const baseStreamFn: StreamFn = (model, _context, options) => {
       const payload: Record<string, unknown> = {};
@@ -406,14 +428,19 @@ describe("zai provider plugin", () => {
       return { payload } as never;
     };
 
-    for (const [thinkingLevel, expectedEffort] of [
-      ["low", "high"],
-      ["high", "high"],
-      ["max", "max"],
+    for (const [modelId, thinkingLevel, expectedEffort] of [
+      ["glm-5.3", "off", "low"],
+      ["glm-5.3", "low", "low"],
+      ["glm-5.3", "high", "high"],
+      ["glm-5.3", "max", "max"],
+      ["glm-5.3-flash", "off", "low"],
+      ["glm-5.3-flash", "low", "low"],
+      ["glm-5.3-flash", "high", "high"],
+      ["glm-5.3-flash", "max", "max"],
     ] as const) {
       const wrapped = provider.wrapStreamFn?.({
         provider: "zai",
-        modelId: "glm-5.2",
+        modelId,
         extraParams: {},
         thinkingLevel,
         streamFn: baseStreamFn,
@@ -423,7 +450,7 @@ describe("zai provider plugin", () => {
         {
           api: "openai-completions",
           provider: "zai",
-          id: "glm-5.2",
+          id: modelId,
         } as Model<"openai-completions">,
         { messages: [] } as Context,
         {},
@@ -519,14 +546,7 @@ describe("zai provider plugin", () => {
             },
             { type: "text", text: "visible reply" },
           ],
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
+          usage: createZeroUsageFixture(),
           stopReason: "stop",
           timestamp: 2,
         },

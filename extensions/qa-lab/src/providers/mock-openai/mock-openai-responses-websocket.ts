@@ -1,22 +1,16 @@
 import type { Server } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
-import type { ResponsesInputItem, StreamEvent } from "./mock-openai-contracts.js";
-
-export type QaMockResponsesDispatchResult = {
-  events: StreamEvent[];
-  failure?: {
-    status: number;
-    type: string;
-    message: string;
-  };
-  previewPauseMs?: number;
-};
+import {
+  isPreviewCompletion,
+  type QaMockProviderDispatchResult,
+  type ResponsesInputItem,
+} from "./mock-openai-contracts.js";
 
 type QaMockResponsesWebSocketDispatch = (params: {
   body: Record<string, unknown>;
   raw: string;
-}) => Promise<QaMockResponsesDispatchResult>;
+}) => Promise<QaMockProviderDispatchResult>;
 
 type QaMockResponsesWebSocketHistory = {
   id: string;
@@ -199,39 +193,31 @@ export function attachQaMockResponsesWebSocketServer(params: {
               status: dispatched.failure.status,
               error: {
                 type: dispatched.failure.type,
+                ...(dispatched.failure.code ? { code: dispatched.failure.code } : {}),
                 message: dispatched.failure.message,
               },
             });
             return;
           }
           const { events } = dispatched;
+          if (dispatched.responsePauseMs !== undefined) {
+            await sleep(dispatched.responsePauseMs);
+          }
           const completion = events.find((event) => event.type === "response.completed");
           if (completion?.type === "response.completed") {
-            if (!events.some((event) => event.type === "response.created")) {
-              sendEvent({
-                type: "response.created",
-                response: {
-                  id: completion.response.id,
-                  object: "response",
-                  created_at: Math.floor(Date.now() / 1_000),
-                  model: typeof body.model === "string" ? body.model : "",
-                  status: "in_progress",
-                  output: [],
-                },
-              });
-            }
             cachedResponse = {
               id: completion.response.id,
               body,
               input: [...body.input, ...completion.response.output],
             };
           }
-          for (const event of events) {
-            if (dispatched.previewPauseMs && event.type === "response.output_text.done") {
+          for (const [index, event] of events.entries()) {
+            if (dispatched.previewPauseMs && isPreviewCompletion(event, events[index - 1])) {
               await sleep(dispatched.previewPauseMs);
             }
             sendEvent(event);
           }
+          dispatched.onResponseSent?.();
         })
         .catch(() => {
           cachedResponse = undefined;

@@ -14,3 +14,17 @@ export type {
   DaemonStatusOptions,
   GatewayRpcOpts,
 } from "./daemon-cli/types.js";
+
+export {
+  isManagedUpdateRequesterOwner,
+  waitForGatewayUpdateRecovery,
+} from "./daemon-cli/lifecycle-context.js";
+// Handoff admission uses the serving runtime; terminal writes load the installed runtime afresh.
+export {
+  finishUpdateRun,
+  getUpdateRun,
+  recordUpdateRunStep,
+  recordUpdateRunVerification,
+} from "../infra/update-run-ledger.js";
+
+export { createManagedUpdateRequesterAuthority } from "../infra/update-requester-authority.js";

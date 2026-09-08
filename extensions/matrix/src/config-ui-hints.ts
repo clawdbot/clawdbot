@@ -3,6 +3,10 @@ import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-core";
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const matrixChannelConfigUiHints = {
+  joinIntro: {
+    label: "Matrix Group Join Introduction",
+    help: "Post one brief introduction when the bot joins an allowed group room (default: true). Account settings override the channel-wide setting.",
+  },
   ...createChannelConfigUiHints({
     channelLabel: "Matrix",
     mentionPatterns: {

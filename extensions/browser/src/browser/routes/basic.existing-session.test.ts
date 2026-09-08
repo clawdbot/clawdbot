@@ -1,5 +1,6 @@
 // Browser tests cover basic.existing session plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import chromeExtensionManifest from "../../../chrome-extension/manifest.json" with { type: "json" };
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
 const { inspectChromeGraphicsDiagnosticsMock } = vi.hoisted(() => ({
@@ -32,6 +33,8 @@ function createExistingSessionProfileState(params?: {
     options?: { ephemeral?: boolean; signal?: AbortSignal },
   ) => Promise<boolean>;
 }) {
+  const isTransportAvailable = params?.isTransportAvailable ?? (async () => true);
+  const isReachable = params?.isReachable ?? (async () => true);
   return {
     resolved: {
       enabled: true,
@@ -54,8 +57,27 @@ function createExistingSessionProfileState(params?: {
           attachOnly: true,
         },
         isHttpReachable: params?.isHttpReachable ?? (async () => true),
-        isTransportAvailable: params?.isTransportAvailable ?? (async () => true),
-        isReachable: params?.isReachable ?? (async () => true),
+        isTransportAvailable: async (
+          timeoutMs?: number,
+          signal?: AbortSignal,
+          pageProbe?: { timeoutMs?: () => number; onResult: (tabCount: number | null) => void },
+        ) => {
+          const available = await isTransportAvailable(timeoutMs, signal);
+          if (available && pageProbe) {
+            try {
+              const ready = await isReachable(pageProbe.timeoutMs?.() ?? timeoutMs, {
+                ephemeral: true,
+                signal,
+              });
+              pageProbe.onResult(ready ? 1 : null);
+            } catch {
+              signal?.throwIfAborted();
+              pageProbe.onResult(null);
+            }
+          }
+          return available;
+        },
+        isReachable,
       }) as never,
   };
 }
@@ -78,6 +100,7 @@ function createManagedProfileState(
     isHttpReachable?: (timeoutMs?: number, signal?: AbortSignal) => Promise<boolean>;
     isTransportAvailable?: (timeoutMs?: number, signal?: AbortSignal) => Promise<boolean>;
   },
+  executablePath?: string,
 ) {
   return {
     resolved: {
@@ -85,7 +108,7 @@ function createManagedProfileState(
       headless: false,
       headlessSource: "default",
       noSandbox: false,
-      executablePath: undefined,
+      executablePath,
     },
     profiles: new Map(),
     forProfile: () =>
@@ -112,8 +135,9 @@ function createManagedProfileState(
 }
 
 async function callBasicRouteWithState(params: {
+  route?: "/" | "/doctor";
   query?: Record<string, string>;
-  state: ReturnType<typeof createExistingSessionProfileState>;
+  state: ReturnType<typeof createExistingSessionProfileState | typeof createManagedProfileState>;
   signal?: AbortSignal;
 }) {
   const { app, getHandlers } = createBrowserRouteApp();
@@ -122,7 +146,7 @@ async function callBasicRouteWithState(params: {
     forProfile: params.state.forProfile,
   } as never);
 
-  const handler = getHandlers.get("/");
+  const handler = getHandlers.get(params.route ?? "/");
   expect(handler).toBeTypeOf("function");
 
   const response = createBrowserRouteResponse();
@@ -191,6 +215,43 @@ describe("basic browser routes", () => {
     inspectChromeGraphicsDiagnosticsMock.mockReset();
   });
 
+  it("reports version drift only from the selected extension profile owner", async () => {
+    const outdatedVersion = chromeExtensionManifest.version === "2.0.0" ? "1.0.0" : "2.0.0";
+    const state = {
+      ...createManagedProfileState(
+        { name: "chrome", driver: "extension", attachOnly: true },
+        {
+          isHttpReachable: async () => true,
+          isTransportAvailable: async () => true,
+        },
+      ),
+      extensionRelays: new Map([
+        ["chrome", { bridge: { identity: { extensionVersion: outdatedVersion } } }],
+        ["other", { bridge: { identity: { extensionVersion: chromeExtensionManifest.version } } }],
+      ]),
+    };
+
+    const response = await callBasicRouteWithState({
+      route: "/doctor",
+      query: { profile: "chrome" },
+      state,
+    });
+    const report = responseBodyRecord(response);
+    expect(response.statusCode).toBe(200);
+    expect(report.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "extension-version",
+          status: "warn",
+          summary: expect.stringContaining(
+            `running ${outdatedVersion}; bundled ${chromeExtensionManifest.version}`,
+          ),
+        }),
+      ]),
+    );
+    expect(report.status).not.toHaveProperty("chromeExtension");
+  });
+
   it("releases the doctor transaction, restarts once, and retries the live probe", async () => {
     const ensureBrowserAvailable = vi.fn(async () => {});
     const ensureTabAvailable = vi
@@ -224,6 +285,66 @@ describe("basic browser routes", () => {
     expect(response.statusCode).toBe(200);
     expect(ensureBrowserAvailable).toHaveBeenCalledOnce();
     expect(ensureTabAvailable).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["/", "/doctor"] as const)(
+    "detects the local managed profile executable for %s",
+    async (route) => {
+      const response = await callBasicRouteWithState({
+        route,
+        query: { profile: "openclaw" },
+        state: createManagedProfileState(
+          { executablePath: process.execPath, headless: true },
+          undefined,
+          "/definitely-missing-global-chromium",
+        ),
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = responseBodyRecord(response);
+      const browserStatus = route === "/doctor" ? responseBodyRecord({ body: body.status }) : body;
+      expect(browserStatus).toMatchObject({
+        executablePath: process.execPath,
+        detectedBrowser: "custom",
+        detectedExecutablePath: process.execPath,
+        detectError: null,
+      });
+      if (route === "/doctor") {
+        expect(body.ok).toBe(true);
+      }
+    },
+  );
+
+  it.each([
+    { name: "loopback attach-only", profile: { attachOnly: true } },
+    {
+      name: "remote CDP",
+      profile: {
+        cdpHost: "remote.example",
+        cdpIsLoopback: false,
+        cdpUrl: "http://remote.example:9222",
+      },
+    },
+    { name: "extension relay", profile: { driver: "extension", attachOnly: true } },
+    { name: "existing session", profile: { driver: "existing-session", attachOnly: true } },
+  ])("ignores a non-owning $name profile executable override", async ({ profile }) => {
+    const ignoredExecutable = "/definitely-missing-ignored-profile-chromium";
+    const response = await callBasicRouteWithState({
+      query: { profile: "openclaw" },
+      state: createManagedProfileState(
+        { ...profile, executablePath: ignoredExecutable, headless: true },
+        undefined,
+        process.execPath,
+      ),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(responseBodyRecord(response)).toMatchObject({
+      executablePath: ignoredExecutable,
+      detectedBrowser: "custom",
+      detectedExecutablePath: process.execPath,
+      detectError: null,
+    });
   });
 
   it("reports Linux no-display headless fallback for local managed profiles", async () => {

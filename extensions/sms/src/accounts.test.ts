@@ -1,6 +1,6 @@
 // Sms tests cover accounts plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
-import { listSmsAccountIds, resolveSmsAccount } from "./accounts.js";
+import { inspectSmsAccount, listSmsAccountIds, resolveSmsAccount } from "./accounts.js";
 import { SmsChannelConfigSchema } from "./config-schema.js";
 import type { SmsChannelConfig } from "./types.js";
 
@@ -66,6 +66,96 @@ describe("SMS account config", () => {
       allowFrom: [],
       textChunkLimit: 1500,
     });
+  });
+
+  it("reports an invalid public webhook URL without unconfiguring SMS credentials", () => {
+    expect(
+      inspectSmsAccount({
+        channels: {
+          sms: {
+            accountSid: "AC123",
+            authToken: "secret",
+            fromNumber: "+15557654321",
+            publicWebhookUrl: "https://sms_gateway.example.com/webhooks/sms",
+          },
+        },
+      }),
+    ).toMatchObject({
+      accountId: "default",
+      name: "+15557654321",
+      configured: true,
+      tokenStatus: "available",
+      signatureValidation: "invalid-public-url",
+    });
+  });
+
+  it("inspects unavailable account credentials without using environment fallbacks or hiding healthy siblings", () => {
+    process.env.TWILIO_AUTH_TOKEN = "lower-precedence-token";
+    const unresolvedToken = {
+      source: "env",
+      provider: "default",
+      id: "OPENCLAW_TEST_UNAVAILABLE_SMS_TOKEN",
+    } as const;
+    const cfg = {
+      channels: {
+        sms: {
+          accountSid: "AC-parent",
+          authToken: unresolvedToken,
+          fromNumber: "+15550000000",
+          accounts: {
+            support: {
+              authToken: unresolvedToken,
+              messagingServiceSid: "MG-support",
+              fromNumber: "",
+            },
+            inherited: { enabled: false },
+            healthy: { authToken: "healthy-token", fromNumber: "+15551112222" },
+            missing: { authToken: "" },
+          },
+        },
+      },
+    };
+
+    for (const accountId of ["default", "support", "inherited"]) {
+      expect(() => resolveSmsAccount(cfg, accountId)).toThrow("unresolved SecretRef");
+    }
+    const inspected = ["default", "support", "inherited", "healthy", "missing"].map((accountId) =>
+      inspectSmsAccount(cfg, accountId),
+    );
+    expect(inspected).toMatchObject([
+      {
+        accountId: "default",
+        name: "+15550000000",
+        enabled: true,
+        configured: true,
+        tokenStatus: "configured_unavailable",
+      },
+      {
+        accountId: "support",
+        name: "MG-support",
+        enabled: true,
+        configured: true,
+        tokenStatus: "configured_unavailable",
+      },
+      {
+        accountId: "inherited",
+        enabled: false,
+        configured: true,
+        tokenStatus: "configured_unavailable",
+      },
+      {
+        accountId: "healthy",
+        name: "+15551112222",
+        enabled: true,
+        configured: true,
+        tokenStatus: "available",
+      },
+      { accountId: "missing", enabled: true, configured: false, tokenStatus: "missing" },
+    ]);
+    for (const account of inspected) {
+      expect(account).not.toHaveProperty("authToken");
+      expect(account).not.toHaveProperty("accountSid");
+    }
   });
 
   it("merges named accounts over the top-level defaults", () => {
@@ -204,6 +294,18 @@ describe("SMS account config", () => {
       textChunkLimit: 1500,
     });
   });
+
+  it.each(["0", "00", " 0 ", "-1", "1.5", "unlimited", " "])(
+    "keeps the default text chunk limit when SMS_TEXT_CHUNK_LIMIT is %j",
+    (raw) => {
+      process.env.TWILIO_ACCOUNT_SID = "AC-env";
+      process.env.TWILIO_AUTH_TOKEN = "env-token";
+      process.env.TWILIO_PHONE_NUMBER = "+15550001111";
+      process.env.SMS_TEXT_CHUNK_LIMIT = raw;
+
+      expect(resolveSmsAccount({}).textChunkLimit).toBe(1500);
+    },
+  );
 
   it("coerces numeric allowFrom entries accepted by the config schema", () => {
     const parsed = parseSmsConfig({

@@ -1,49 +1,11 @@
 // Telegram helper module supports account config behavior.
 import {
+  mergeAccountConfig,
   normalizeAccountId,
   resolveNormalizedAccountEntry,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-core";
 import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
-
-function normalizeAllowFromEntry(value: string | number): string {
-  return String(value).trim();
-}
-
-function hasWildcardAllowFrom(value: unknown): boolean {
-  return (
-    Array.isArray(value) &&
-    value.some((entry) => normalizeAllowFromEntry(entry as string | number) === "*")
-  );
-}
-
-function hasRestrictiveAllowFrom(value: unknown): value is Array<string | number> {
-  return (
-    Array.isArray(value) &&
-    value.some((entry) => {
-      const normalized = normalizeAllowFromEntry(entry as string | number);
-      return normalized.length > 0 && normalized !== "*";
-    })
-  );
-}
-
-function dropWildcardAllowFrom(value: Array<string | number>): Array<string | number> {
-  return value.filter((entry) => normalizeAllowFromEntry(entry) !== "*");
-}
-
-function resolveMergedAllowFrom(params: {
-  baseAllowFrom?: Array<string | number>;
-  accountAllowFrom?: Array<string | number>;
-}): Array<string | number> | undefined {
-  const { baseAllowFrom, accountAllowFrom } = params;
-  if (hasRestrictiveAllowFrom(baseAllowFrom) && hasWildcardAllowFrom(accountAllowFrom)) {
-    const accountRestrictiveEntries = Array.isArray(accountAllowFrom)
-      ? dropWildcardAllowFrom(accountAllowFrom)
-      : [];
-    return accountRestrictiveEntries.length > 0 ? accountRestrictiveEntries : baseAllowFrom;
-  }
-  return accountAllowFrom ?? baseAllowFrom;
-}
 
 export function resolveTelegramAccountConfig(
   cfg: OpenClawConfig,
@@ -61,39 +23,15 @@ export function mergeTelegramAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): TelegramAccountConfig {
-  const {
-    accounts: _ignored,
-    defaultAccount: _ignoredDefaultAccount,
-    groups: channelGroups,
-    ...base
-  } = (cfg.channels?.telegram ?? {}) as TelegramAccountConfig & {
-    accounts?: unknown;
-    defaultAccount?: unknown;
-  };
-  const account = resolveTelegramAccountConfig(cfg, accountId) ?? {};
-
-  // Multi-account bots must not inherit channel-level groups unless explicitly set.
-  // Single-account bots fall back to root `channels.telegram.groups` when the
-  // account does not declare its own groups — including the empty-literal case
-  // `accounts.<id>.groups: {}`, which is almost always a config-migration
-  // artifact rather than an intentional "block all" declaration (use
-  // `groupPolicy: "disabled"` for that).
-  const configuredAccountIds = Object.keys(cfg.channels?.telegram?.accounts ?? {});
-  const isMultiAccount = configuredAccountIds.length > 1;
-  const hasAccountGroups = account.groups && Object.keys(account.groups).length > 0;
-  const groups = isMultiAccount
-    ? account.groups
-    : hasAccountGroups
-      ? account.groups
-      : channelGroups;
-  const allowFrom = resolveMergedAllowFrom({
-    baseAllowFrom: base.allowFrom,
-    accountAllowFrom: account.allowFrom,
+  const channelConfig = cfg.channels?.telegram;
+  // Empty groups retain their shipped single-account inheritance behavior;
+  // multiple accounts can explicitly opt out with an empty map.
+  const isMultiAccount = Object.keys(channelConfig?.accounts ?? {}).length > 1;
+  return mergeAccountConfig<TelegramAccountConfig>({
+    channelConfig,
+    accountConfig: resolveTelegramAccountConfig(cfg, accountId),
+    omitKeys: ["defaultAccount"],
+    inheritEmptyKeys: { capabilities: "array", ...(isMultiAccount ? {} : { groups: "object" }) },
+    preserveRootAllowFrom: true,
   });
-  const capabilities =
-    Array.isArray(account.capabilities) && account.capabilities.length === 0
-      ? base.capabilities
-      : (account.capabilities ?? base.capabilities);
-
-  return { ...base, ...account, allowFrom, capabilities, groups };
 }

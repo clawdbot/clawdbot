@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { resolveMemorySearchConfig } from "../../../agents/memory-search.js";
+import { resolveDefaultAgentWorkspaceDir } from "../../../agents/workspace-default.js";
 import { validateConfigObjectRaw } from "../../../config/validation.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
@@ -14,7 +16,12 @@ describe("legacy config migration end to end", () => {
       },
     });
     expect(duplicate.next).toEqual({
-      agents: { entries: { main: { name: "first" }, "main-2": { name: "second" } } },
+      agents: {
+        entries: {
+          main: { name: "first", workspace: resolveDefaultAgentWorkspaceDir() },
+          "main-2": { name: "second" },
+        },
+      },
     });
     expect(applyLegacyDoctorMigrations(duplicate.next)).toEqual({ next: null, changes: [] });
 
@@ -41,6 +48,80 @@ describe("legacy config migration end to end", () => {
   it("keeps agents.defaults.tts outside the schema", () => {
     expect(validateConfigObjectRaw({ agents: { defaults: { tts: {} } } }).ok).toBe(false);
   });
+
+  it.each([
+    {
+      name: "defaults-only QMD session indexing",
+      canonical: undefined,
+      defaults: {
+        provider: "none",
+        rememberAcrossConversations: false,
+        extraPaths: ["/defaults-existing"],
+      },
+      expectedSources: ["memory", "sessions"],
+      expectedPaths: ["/defaults-existing", "/defaults-qmd"],
+    },
+    {
+      name: "explicit canonical privacy and indexing policy",
+      canonical: {
+        provider: "none",
+        rememberAcrossConversations: false,
+        experimental: { sessionMemory: false },
+        sources: ["memory"],
+        extraPaths: ["/canonical"],
+      },
+      defaults: {
+        provider: "openai",
+        rememberAcrossConversations: true,
+        experimental: { sessionMemory: true },
+        extraPaths: ["/defaults-existing"],
+      },
+      expectedSources: ["memory"],
+      expectedPaths: ["/canonical", "/defaults-qmd"],
+    },
+  ])(
+    "migrates $name into validated effective memory settings",
+    ({ canonical, defaults, expectedSources, expectedPaths }) => {
+      const result = migrateLegacyConfig({
+        ...(canonical ? { memory: { search: canonical } } : {}),
+        session: { dmScope: "per-peer" },
+        agents: {
+          entries: { main: {} },
+          defaults: {
+            memory: {
+              search: {
+                ...defaults,
+                qmd: {
+                  sessions: { enabled: true },
+                  extraCollections: [{ path: "/defaults-qmd" }],
+                },
+              },
+            },
+          },
+        },
+      });
+
+      expect(result.partiallyValid).toBeUndefined();
+      expect(result.config).not.toHaveProperty("agents.defaults.memory");
+      const validation = validateConfigObjectRaw(result.config);
+      expect(validation.ok, validation.ok ? undefined : JSON.stringify(validation.issues)).toBe(
+        true,
+      );
+      if (!validation.ok) {
+        return;
+      }
+      const resolved = resolveMemorySearchConfig(validation.config, "main");
+      expect(resolved).toMatchObject({
+        provider: "none",
+        rememberAcrossConversations: false,
+        sources: expectedSources,
+        searchSources: expectedSources,
+        extraPaths: expectedPaths,
+      });
+      expect(validation.config.memory?.search?.experimental?.sessionMemory).toBe(!canonical);
+      expect(migrateLegacyConfig(validation.config)).toEqual({ config: null, changes: [] });
+    },
+  );
 
   it("canonicalizes a multi-family legacy config and is idempotent", () => {
     const result = migrateLegacyConfig({
@@ -127,6 +208,7 @@ describe("legacy config migration end to end", () => {
         defaults: { pdfMaxMb: 12, mediaModels: { image: "openai/image-1" } },
         entries: { main: { name: "Main", tools: { exec: { timeoutSeconds: 45 } } } },
       },
+      plugins: { entries: { openai: { config: { personality: "off" } } } },
       tools: { exec: { timeoutSeconds: 30 } },
       attachments: { ttlHours: 24 },
       logging: { consoleStyle: "pretty", audit: { enabled: false, messages: "direct" } },
@@ -154,6 +236,9 @@ describe("legacy config migration end to end", () => {
         },
       },
     });
+    expect(result.changes).toContain(
+      "Moved agents.defaults.promptOverlays.gpt5.personality → plugins.entries.openai.config.personality.",
+    );
     const validation = validateConfigObjectRaw(result.config);
     expect(validation.ok, validation.ok ? undefined : JSON.stringify(validation.issues)).toBe(true);
     expect(applyLegacyDoctorMigrations(result.config)).toEqual({ next: null, changes: [] });
@@ -169,5 +254,59 @@ describe("legacy config migration end to end", () => {
     ]) {
       expect(serialized).not.toContain(`"${key}"`);
     }
+  });
+
+  it("loads WhatsApp-owned acknowledgement migration guidance", () => {
+    const result = migrateLegacyConfig({
+      channels: {
+        whatsapp: {
+          ackReaction: { emoji: "👀", direct: true, group: "mentions" },
+        },
+      },
+    });
+
+    expect(result.sourceConfig?.messages).toEqual({ ackReaction: "👀" });
+    expect(result.config?.channels?.whatsapp?.ackReaction).toBeUndefined();
+    expect(result.changes.join("\n")).toContain(
+      "cannot preserve both direct-message and mentioned-group acknowledgements",
+    );
+  });
+
+  it("preserves canonical OpenAI personality over the retired prompt overlay", () => {
+    const result = migrateLegacyConfig({
+      agents: { defaults: { promptOverlays: { gpt5: { personality: "off" } } } },
+      plugins: { entries: { openai: { config: { personality: "friendly" } } } },
+    });
+
+    expect(result.config?.plugins?.entries?.openai?.config?.personality).toBe("friendly");
+    expect(result.config?.agents?.defaults?.promptOverlays).toBeUndefined();
+    expect(result.changes).toContain(
+      "Removed agents.defaults.promptOverlays.gpt5.personality (plugins.entries.openai.config.personality already set).",
+    );
+  });
+
+  it("repairs unsupported OTel grpc once and is then a no-op", () => {
+    const result = migrateLegacyConfig({
+      diagnostics: {
+        otel: {
+          enabled: true,
+          traces: false,
+          metrics: false,
+          logs: true,
+          logsExporter: "stdout",
+          protocol: "grpc",
+        },
+      },
+    });
+
+    expect(result.config?.diagnostics?.otel).toEqual({
+      enabled: true,
+      traces: false,
+      metrics: false,
+      logs: true,
+      logsExporter: "stdout",
+    });
+    expect(validateConfigObjectRaw(result.config).ok).toBe(true);
+    expect(applyLegacyDoctorMigrations(result.config)).toEqual({ next: null, changes: [] });
   });
 });

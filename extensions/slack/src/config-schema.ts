@@ -4,26 +4,28 @@ import {
   buildChannelConfigSchema,
   buildChannelExecApprovalsSchema,
   buildChannelReactionShape,
-  buildCommonChannelAccountShape,
+  buildChannelAccountSchemaParts,
   buildGroupEntrySchema,
   ChannelBotLoopProtectionSchema,
   ChannelDangerouslyAllowNameMatchingSchema,
   ChannelImplicitMentionsSchema,
   ChannelPreviewStreamingConfigSchema,
   ChannelStreamingProgressSchema,
-  GroupPolicySchema,
   ProviderCommandsSchema,
   ReplyToModeSchema,
-  requireAllowlistAllowFrom,
-  requireOpenAllowFrom,
+  refineChannelDmPolicy,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
 import { slackChannelConfigUiHints } from "./config-ui-hints.js";
 
 const SecretInputSchema = buildSecretInputSchema();
+// Match the default per-file AGENTS.md bootstrap budget so one presence wake
+// cannot inject more operator guidance than a normal workspace instruction file.
+const SLACK_PRESENCE_EVENT_PROMPT_MAX_CHARS = 20_000;
 
 const SlackStreamingProgressSchema = ChannelStreamingProgressSchema.extend({
+  style: z.enum(["card", "compact"]).optional(),
   nativeTaskCards: z.boolean().optional(),
 }).strict();
 const SlackStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
@@ -41,6 +43,7 @@ const SlackDmSchema = z
 const SlackPresenceEventsSchema = z
   .object({
     mode: z.enum(["off", "auto", "on"]).optional(),
+    prompt: z.string().max(SLACK_PRESENCE_EVENT_PROMPT_MAX_CHARS).optional(),
   })
   .strict();
 
@@ -82,15 +85,17 @@ const SlackRelaySchema = z
 
 const SlackIdentitySchema = z.enum(["bot", "user"]);
 
+const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
+  omit: ["groupAllowFrom"],
+  streaming: SlackStreamingConfigSchema.optional(),
+});
+
 const SlackAccountSchema = z
   .object({
-    ...buildCommonChannelAccountShape({
-      omit: ["groupAllowFrom"],
-      streaming: SlackStreamingConfigSchema.optional(),
-    }),
-    postAs: SlackIdentitySchema.default("bot"),
+    ...accountShape,
+    joinIntro: z.boolean().optional(),
+    postAs: SlackIdentitySchema.optional(),
     mode: z.enum(["socket", "http", "relay"]).optional(),
-    enterpriseOrgInstall: z.boolean().optional(),
     relay: SlackRelaySchema.optional(),
     signingSecret: SecretInputSchema.optional(),
     webhookPath: z.string().optional(),
@@ -99,7 +104,7 @@ const SlackAccountSchema = z
     botToken: SecretInputSchema.optional(),
     appToken: SecretInputSchema.optional(),
     userToken: SecretInputSchema.optional(),
-    userTokenReadOnly: z.boolean().optional().default(true),
+    userTokenReadOnly: z.boolean().optional(),
     allowBots: buildChannelAllowBotsSchema({ allowMentions: true }),
     botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
     dangerouslyAllowNameMatching: ChannelDangerouslyAllowNameMatchingSchema,
@@ -142,12 +147,6 @@ const SlackAccountSchema = z
     typingReaction: z.string().optional(),
   })
   .strict();
-
-// Account entries leave postAs unset to inherit the top-level default. DM allowlist
-// validation stays at SlackConfigSchema so entries can also inherit top-level allowFrom.
-const SlackAccountEntrySchema = SlackAccountSchema.extend({
-  postAs: SlackIdentitySchema.optional(),
-});
 
 type SlackAccountLike = {
   enabled?: unknown;
@@ -201,34 +200,20 @@ function validateSlackSigningSecretRequirements(
 }
 
 export const SlackConfigSchema = SlackAccountSchema.safeExtend({
+  ...rootPolicyShape,
+  postAs: SlackIdentitySchema.default("bot"),
+  userTokenReadOnly: z.boolean().optional().default(true),
   mode: z.enum(["socket", "http", "relay"]).optional().default("socket"),
   signingSecret: SecretInputSchema.optional(),
   webhookPath: z.string().optional().default("/slack/events"),
-  groupPolicy: GroupPolicySchema.optional().default("allowlist"),
-  accounts: z.record(z.string(), SlackAccountEntrySchema.optional()).optional(),
+  accounts: z.record(z.string(), SlackAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
   if (value.enabled === false) {
     return;
   }
 
-  const dmPolicy = value.dmPolicy ?? "pairing";
-  const allowFrom = value.allowFrom;
-  requireOpenAllowFrom({
-    policy: dmPolicy,
-    allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message: 'channels.slack.dmPolicy="open" requires channels.slack.allowFrom to include "*"',
-  });
-  requireAllowlistAllowFrom({
-    policy: dmPolicy,
-    allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.slack.dmPolicy="allowlist" requires channels.slack.allowFrom to contain at least one sender ID',
-  });
+  refineChannelDmPolicy({ channelId: "slack", value, ctx });
 
   const requireRelayConfig = (
     relay: { url?: unknown; authToken?: unknown; gatewayId?: unknown } | undefined,
@@ -276,24 +261,7 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
       ...value.relay,
       ...account.relay,
     };
-    const effectivePolicy = account.dmPolicy ?? value.dmPolicy ?? "pairing";
-    const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
-    requireOpenAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.slack.accounts.*.dmPolicy="open" requires channels.slack.accounts.*.allowFrom (or channels.slack.allowFrom) to include "*"',
-    });
-    requireAllowlistAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.slack.accounts.*.dmPolicy="allowlist" requires channels.slack.accounts.*.allowFrom (or channels.slack.allowFrom) to contain at least one sender ID',
-    });
+    refineChannelDmPolicy({ channelId: "slack", value, accountId, ctx });
     if (accountMode !== "http") {
       if (accountMode === "relay") {
         requireRelayConfig(effectiveRelay, ["accounts", accountId, "relay"]);

@@ -9,5 +9,5 @@ export const handleTeamsMeetingsNodeHostCommand =
     meetingLabel: "Microsoft Teams meeting",
     defaultAudioInputCommand: teamsMeetingsConfig.defaultAudioInputCommand,
     defaultAudioOutputCommand: teamsMeetingsConfig.defaultAudioOutputCommand,
-    sharePrerequisiteDeadline: false,
+    sharePrerequisiteDeadline: true,
   });

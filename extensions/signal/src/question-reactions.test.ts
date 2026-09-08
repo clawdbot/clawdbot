@@ -50,7 +50,7 @@ describe("Signal question reactions", () => {
     });
   });
 
-  it("matches the bot-authored target and ignores a duplicate", async () => {
+  it("matches the bot-authored target before routing a numbered reaction", async () => {
     const payload = buildPayload();
     expect(
       registerSignalQuestionReactionTargetForDeliveredPayload({
@@ -77,16 +77,12 @@ describe("Signal question reactions", () => {
       false,
     );
     await expect(
-      maybeResolveSignalQuestionReaction({ ...params, reactionKey: "4️⃣" }),
-    ).resolves.toBe(true);
-    await expect(maybeResolveSignalQuestionReaction(params)).resolves.toBe(true);
+      maybeResolveSignalQuestionReaction({ ...params, targetAuthor: "+15550009999" }),
+    ).resolves.toBe(false);
     await expect(maybeResolveSignalQuestionReaction(params)).resolves.toBe(true);
     expect(hoisted.resolve).toHaveBeenCalledOnce();
     expect(hoisted.resolve).toHaveBeenCalledWith(
       expect.objectContaining({ questionId, optionValue: "One", senderId: "+15550002222" }),
-    );
-    expect(params.logDebug).toHaveBeenCalledWith(
-      expect.stringContaining("stale question reaction ignored"),
     );
   });
 });

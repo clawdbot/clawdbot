@@ -5,11 +5,6 @@ import {
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk/channel-setup";
 // Imessage plugin module implements setup core behavior.
-import type {
-  ChannelSetupAdapter,
-  ChannelSetupWizard,
-  ChannelSetupWizardTextInput,
-} from "openclaw/plugin-sdk/setup-runtime";
 import {
   createCliPathTextInput,
   createDelegatedSetupWizardProxy,
@@ -19,6 +14,9 @@ import {
   setAccountAllowFromForChannel,
   setSetupChannelEnabled,
   createSetupTranslator,
+  type ChannelSetupAdapter,
+  type ChannelSetupWizard,
+  type ChannelSetupWizardTextInput,
   type OpenClawConfig,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
@@ -191,7 +189,7 @@ export const imessageCompletionNote = {
   ],
 };
 
-export const imessageSetupAdapter: ChannelSetupAdapter = {
+const imessageSetupAdapter: ChannelSetupAdapter = {
   ...createPatchedAccountSetupAdapter({
     channelKey: channel,
     buildPatch: (input) => buildIMessageSetupPatch(input as IMessageSetupInput),

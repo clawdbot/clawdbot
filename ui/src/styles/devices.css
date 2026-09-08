@@ -1,0 +1,286 @@
+/* One tile/body/controls grid for every inventory and pairing row. */
+.device-entry {
+  --device-tile-size: 38px;
+  display: grid;
+  grid-template-columns: var(--device-tile-size) minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.device-entry__body {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.device-entry > .settings-row__control {
+  max-width: 300px;
+  flex-wrap: wrap;
+}
+
+.device-entry__tile {
+  width: var(--device-tile-size);
+  height: var(--device-tile-size);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--muted);
+}
+
+.device-entry__tile-icon {
+  display: flex;
+}
+
+.device-entry__tile-icon svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.device-entry__heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.device-entry__status {
+  display: inline-flex;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--bg-hover);
+}
+
+/* Tracks cap at 160px so meters align across rows, but shrink together when a
+   wide controls column narrows the body above the 640px rung. */
+.device-resources {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 160px));
+  gap: var(--space-4);
+  margin-top: var(--space-1);
+}
+
+.device-resource {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.device-resource--load {
+  grid-column: 1;
+}
+
+.device-resource--memory {
+  grid-column: 2;
+}
+
+.device-resource--disk {
+  grid-column: 3;
+}
+
+.device-resource .session-context-meter {
+  width: 100%;
+  height: 4px;
+}
+
+.device-capabilities,
+.device-entry__scopes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.device-capabilities {
+  margin-top: var(--space-1);
+}
+
+.device-capability {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  overflow-wrap: anywhere;
+}
+
+.device-capability__icon {
+  display: inline-flex;
+  flex: none;
+}
+
+.device-capability svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+
+.device-capability--disabled {
+  border-style: dashed;
+  background: transparent;
+}
+
+.device-capability--scope {
+  background: var(--bg-hover);
+}
+
+/* Details spans body and controls; narrow layouts use the full row width. */
+.device-entry__details {
+  grid-column: 2 / -1;
+  font-size: var(--control-ui-text-sm);
+}
+
+.device-entry__details > summary,
+.device-group__dups > summary {
+  color: var(--muted);
+  user-select: none;
+  cursor: var(--cursor-action);
+}
+
+.device-entry__details > summary:hover,
+.device-group__dups > summary:hover {
+  color: var(--text);
+}
+
+.device-entry__facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-3) var(--space-4);
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+}
+
+.device-entry__facts dd {
+  min-width: 0;
+  margin: 0;
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+
+.device-entry__tokens {
+  overflow-x: auto;
+}
+
+.device-token-table {
+  min-width: 480px;
+  width: 100%;
+  overflow-wrap: normal;
+  border-collapse: collapse;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.device-token-table th,
+.device-token-table td {
+  padding: var(--space-2);
+  text-align: start;
+  vertical-align: top;
+}
+
+.device-token-table th {
+  padding-top: 0;
+  font-weight: 500;
+}
+
+.device-token-table td {
+  border-top: 1px solid var(--border);
+}
+
+.device-token-table :is(th, td):last-child {
+  text-align: end;
+}
+
+.device-entry__token-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.device-entry__menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Indent the duplicate tiles to the primary row's body column. */
+.device-group__dups {
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  padding-left: calc(38px + var(--space-4));
+}
+
+.device-group__dups + .settings-row {
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.device-group__dups > summary {
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--control-ui-text-sm);
+}
+
+@media (max-width: 640px) {
+  .device-entry {
+    grid-template-columns: var(--device-tile-size) minmax(0, 1fr);
+  }
+
+  .device-entry > .settings-row__control {
+    grid-column: 2;
+    width: 100%;
+    max-width: none;
+    justify-content: flex-start;
+  }
+
+  .device-resources {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--space-2);
+  }
+
+  .device-entry__details {
+    grid-column: 1 / -1;
+  }
+
+  .device-entry__facts {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-2);
+  }
+
+  .device-token-table.settings-table--stacked {
+    min-width: 0;
+  }
+
+  .device-entry__token-actions {
+    flex-direction: column;
+  }
+
+  .device-token-table.settings-table--stacked td:last-child {
+    text-align: start;
+  }
+
+  .device-group__dups {
+    padding-left: 0;
+  }
+}
+
+@media (max-width: 640px), (pointer: coarse) {
+  .device-entry__details > summary,
+  .device-group__dups > summary,
+  .device-entry__menu-trigger {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}

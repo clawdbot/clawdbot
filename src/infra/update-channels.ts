@@ -1,7 +1,8 @@
 // Resolves OpenClaw update channels from config, tags, and versions.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { parse as parseSemver } from "semver";
-import { normalizeLegacyDotBetaVersion } from "./semver.js";
+import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
+import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
 
 /** Release stream used to choose registry tags and update policy defaults. */
 export type UpdateChannel = "stable" | "extended-stable" | "beta" | "dev";
@@ -24,6 +25,14 @@ export const EXTENDED_STABLE_TAG_UNSUPPORTED_REASON = "extended-stable-tag-unsup
 export const UPDATE_EFFECTIVE_CHANNEL_ENV = "OPENCLAW_UPDATE_EFFECTIVE_CHANNEL";
 /** Git branch that represents the development update stream. */
 export const DEV_BRANCH = "main";
+
+/** Orders the configured Dev upstream before any detached-checkout fallbacks. */
+export function resolveDevUpstreamRefs(
+  detached: boolean,
+  fallbacks: readonly string[] = [],
+): string[] {
+  return detached ? [`${DEV_BRANCH}@{upstream}`, ...fallbacks] : ["@{upstream}"];
+}
 
 /** Normalizes config or CLI channel input to a supported update channel. */
 export function normalizeUpdateChannel(value?: string | null): UpdateChannel | null {
@@ -56,9 +65,44 @@ export function channelToNpmTag(channel: UpdateChannel): string {
   return "latest";
 }
 
+/** Beta follows the newest published beta or stable version, including plugin packages. */
+export function selectNpmChannelVersion<T extends { version: string | null }>(
+  beta: T,
+  latest: T,
+): T {
+  if (!latest.version) {
+    return beta;
+  }
+  if (!beta.version) {
+    return latest;
+  }
+  const comparison =
+    compareOpenClawReleaseVersions(beta.version, latest.version) ??
+    compareValidSemver(
+      normalizeLegacyDotBetaVersion(beta.version),
+      normalizeLegacyDotBetaVersion(latest.version),
+    );
+  return comparison !== null && comparison < 0 ? latest : beta;
+}
+
 /** Returns whether a version/tag explicitly targets the beta stream. */
 export function isBetaTag(tag: string): boolean {
   return /(?:^|[.-])beta(?:[.-]|$)/i.test(tag);
+}
+
+/** Returns whether a final monthly release belongs to the extended-stable line. */
+function isExtendedStableReleaseVersion(version: string): boolean {
+  const parsed = parseSemver(version.trim());
+  return (
+    parsed !== null &&
+    parsed.build.length === 0 &&
+    parsed.prerelease.length === 0 &&
+    parsed.major >= 1000 &&
+    parsed.major <= 9999 &&
+    parsed.minor >= 1 &&
+    parsed.minor <= 12 &&
+    parsed.patch >= 33
+  );
 }
 
 /** Detects prerelease tags, including legacy dot-beta tags and named prerelease channels. */
@@ -101,18 +145,19 @@ export function resolveEffectiveUpdateChannel(params: {
   installKind: "git" | "package" | "unknown";
   git?: { tag?: string | null; branch?: string | null };
 }): { channel: UpdateChannel; source: UpdateChannelSource } {
-  if (
-    params.currentVersion &&
-    isBetaTag(params.currentVersion) &&
-    params.configChannel !== "extended-stable" &&
-    params.configChannel !== "beta" &&
-    params.configChannel !== "dev"
-  ) {
+  // A one-off package tag does not replace the operator's saved update policy.
+  if (params.configChannel) {
+    return { channel: params.configChannel, source: "config" };
+  }
+
+  if (params.currentVersion && isBetaTag(params.currentVersion)) {
     return { channel: "beta", source: "installed-version" };
   }
 
-  if (params.configChannel) {
-    return { channel: params.configChannel, source: "config" };
+  if (params.installKind === "package" && params.currentVersion) {
+    if (isExtendedStableReleaseVersion(params.currentVersion)) {
+      return { channel: "extended-stable", source: "installed-version" };
+    }
   }
 
   if (params.installKind === "git") {
@@ -138,7 +183,7 @@ export function resolveEffectiveUpdateChannel(params: {
 }
 
 /** Formats an operator-facing channel label that includes the deciding source. */
-export function formatUpdateChannelLabel(params: {
+function formatUpdateChannelLabel(params: {
   channel: UpdateChannel;
   source: UpdateChannelSource;
   gitTag?: string | null;
@@ -156,7 +201,7 @@ export function formatUpdateChannelLabel(params: {
       : `${params.channel} (branch)`;
   }
   if (params.source === "installed-version") {
-    return "beta (installed version)";
+    return `${params.channel} (installed version)`;
   }
   return `${params.channel} (default)`;
 }

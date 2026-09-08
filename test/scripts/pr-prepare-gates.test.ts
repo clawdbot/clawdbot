@@ -1,47 +1,18 @@
-// Covers the scripts/pr prepare-gates remote testbox mode and the
-// cross-worktree gate lock that serializes whole gate blocks.
-import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
+// Covers the scripts/pr prepare-gates remote testbox mode.
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = process.cwd();
-const gateLockHelperPath = join(repoRoot, "scripts", "pr-gates-lock.mjs");
 
-const tempDirs: string[] = [];
-const children: ChildProcess[] = [];
-
-function makeTempDir(prefix: string): string {
-  // macOS os.tmpdir() is a /var -> /private/var symlink; resolve so lock and
-  // owner paths compare canonically.
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
-  tempDirs.push(dir);
-  return dir;
-}
-
-function makeLockRepoDir(): string {
-  const dir = makeTempDir("openclaw-pr-gates-lock-");
-  mkdirSync(join(dir, ".git"), { recursive: true });
-  return dir;
-}
-
-function heavyCheckLockDir(repoDir: string): string {
-  return join(repoDir, ".git", "openclaw-local-checks", "heavy-check.lock");
-}
+const tempDirs = createTempDirTracker();
 
 function sanitizedEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  // check:changed and gate runs export these to children; drop ambient copies
-  // so lock and mode behavior under test only sees explicit overrides.
   const env: NodeJS.ProcessEnv = { ...process.env };
   delete env.OPENCLAW_PR_GATES_REMOTE;
   delete env.OPENCLAW_TESTBOX;
-  delete env.OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD;
-  delete env.OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD;
-  delete env.OPENCLAW_OXLINT_SKIP_LOCK;
-  delete env.OPENCLAW_HEAVY_CHECK_LOCK_TIMEOUT_MS;
-  delete env.OPENCLAW_HEAVY_CHECK_LOCK_POLL_MS;
   return { ...env, ...overrides };
 }
 
@@ -79,18 +50,8 @@ function runGatesBash(
   );
 }
 
-function spawnGateLockHolder(repoDir: string, statusFile: string, env: NodeJS.ProcessEnv = {}) {
-  const child = spawn(process.execPath, [gateLockHelperPath, "--status-file", statusFile], {
-    cwd: repoDir,
-    stdio: ["ignore", "ignore", "pipe"],
-    env: sanitizedEnv(env),
-  });
-  children.push(child);
-  return child;
-}
-
-function makeRetryRepo(): { repoDir: string; stubBin: string; headSha: string } {
-  const dir = makeTempDir("openclaw-pr-gates-retry-");
+function makeRetryRepo(): { repoDir: string; headSha: string } {
+  const dir = tempDirs.make("openclaw-pr-gates-retry-");
   const repoDir = join(dir, "repo");
   mkdirSync(repoDir);
   for (const args of [
@@ -104,33 +65,15 @@ function makeRetryRepo(): { repoDir: string; stubBin: string; headSha: string } 
   }
   mkdirSync(join(repoDir, ".local"));
 
-  const stubBin = join(dir, "bin");
-  mkdirSync(stubBin);
-  writeFileSync(join(stubBin, "pnpm"), "#!/bin/sh\nexit 0\n");
-  chmodSync(join(stubBin, "pnpm"), 0o755);
-  // Route the crabbox wrapper to a canned timing report; everything else
-  // (the gate lock helper) still needs the real node.
-  writeFileSync(
-    join(stubBin, "node"),
-    [
-      "#!/bin/sh",
-      'case "$2" in',
-      `run) printf '{"provider":"blacksmith-testbox","leaseId":"tbx_retry","exitCode":0,"runStatus":"succeeded","actionsRunUrl":"https://example.test/runs/7"}\\n' >&2; exit 0;;`,
-      `*) exec '${process.execPath}' "$@";;`,
-      "esac",
-    ].join("\n"),
-  );
-  chmodSync(join(stubBin, "node"), 0o755);
-
   const headSha = spawnSync("git", ["rev-parse", "HEAD"], {
     cwd: repoDir,
     encoding: "utf8",
   }).stdout.trim();
-  return { repoDir, stubBin, headSha };
+  return { repoDir, headSha };
 }
 
 function makeSyncRepo(options: { needsRebase: boolean }): string {
-  const repoDir = join(makeTempDir("openclaw-pr-sync-"), "repo");
+  const repoDir = join(tempDirs.make("openclaw-pr-sync-"), "repo");
   mkdirSync(repoDir);
 
   const git = (...args: string[]) => {
@@ -168,7 +111,10 @@ function makeSyncRepo(options: { needsRebase: boolean }): string {
     join(repoDir, ".local", "pr-meta.env"),
     "PR_NUMBER=4242\nPR_AUTHOR=steipete\nPR_URL=https://example.test/pr/4242\n",
   );
-  writeFileSync(join(repoDir, ".local", "prep-context.env"), "PR_HEAD=topic\nPREP_BRANCH=prep\n");
+  writeFileSync(
+    join(repoDir, ".local", "prep-context.env"),
+    `PR_HEAD=topic\nPREP_BRANCH=prep\nPR_HEAD_SHA_BEFORE=${git("rev-parse", "HEAD")}\n`,
+  );
   writeFileSync(join(repoDir, ".local", "prep.md"), "# Prepare\n");
   return repoDir;
 }
@@ -178,7 +124,7 @@ function makePreparePushHeadDriftRepo(): {
   recordedHead: string;
   reviewedHead: string;
 } {
-  const repoDir = join(makeTempDir("openclaw-pr-prepare-drift-"), "repo");
+  const repoDir = join(tempDirs.make("openclaw-pr-prepare-drift-"), "repo");
   mkdirSync(repoDir);
 
   const git = (...args: string[]) => {
@@ -238,84 +184,377 @@ function makePreparePushHeadDriftRepo(): {
 
 function prepareSyncHeadStubs(): string[] {
   return [
-    "enter_worktree() { :; }",
+    "enter_worktree() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }",
     "hosted_sha=$(cat .local/hosted-sha)",
     'gh() { printf "%s\\n" "$hosted_sha"; }',
     "verify_pr_head_branch_matches_expected() { :; }",
     'verify_prep_head_extends_hosted_head() { git merge-base --is-ancestor "$1" HEAD; }',
     "push_prep_head_to_pr_branch() {",
-    '  local result_env="$7"',
+    '  local result_env="$5"',
     "  touch .local/published",
-    '  printf \'PUSH_PREP_HEAD_SHA=%q\\nPUSH_LOCAL_PREP_HEAD_SHA=%q\\nPUSHED_FROM_SHA=%q\\nPR_HEAD_SHA_AFTER_PUSH=%q\\n\' "$3" "$3" "$hosted_sha" "$3" > "$result_env"',
+    '  printf \'PUSH_PREP_HEAD_SHA=%q\\nPUSH_LOCAL_PREP_HEAD_SHA=%q\\nPUSHED_FROM_SHA=%q\\nPUSH_REPLACED_HOSTED_ANCESTRY=false\\nPR_HEAD_SHA_AFTER_PUSH=%q\\n\' "$3" "$3" "$hosted_sha" "$3" > "$result_env"',
     "}",
   ];
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (predicate()) {
-      return true;
+function makePublisherRepo() {
+  const root = tempDirs.make("openclaw-pr-publication-");
+  const repoDir = join(root, "repo");
+  const remote = join(root, "remote.git");
+  const env = sanitizedEnv({
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_ALLOW_PROTOCOL: "file",
+    GIT_TERMINAL_PROMPT: "0",
+    OPENCLAW_ALLOW_UNSIGNED_GIT_PUSH: "1",
+    OPENCLAW_PR_PUSH_MODE: "git",
+  });
+  mkdirSync(repoDir);
+  function git(...args: string[]) {
+    const result = spawnSync("git", args, { cwd: repoDir, env, encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    return result.stdout.trim();
+  }
+  git("init", "-q", "-b", "prep");
+  git("config", "user.name", "Fixture");
+  git("config", "user.email", "fixture@example.invalid");
+  git("commit", "-qm", "base", "--allow-empty");
+  const base = git("rev-parse", "HEAD");
+  writeFileSync(join(repoDir, "reviewed.txt"), "reviewed\n");
+  git("add", ".");
+  git("commit", "-qm", "reviewed");
+  const source = git("rev-parse", "HEAD");
+  writeFileSync(join(repoDir, "fixup.txt"), "fixup\n");
+  git("add", ".");
+  git("commit", "-qm", "fixup");
+  const candidate = git("rev-parse", "HEAD");
+  const sameTree = git("commit-tree", `${candidate}^{tree}`, "-p", source, "-m", "foreign");
+  const advance = git("commit-tree", `${source}^{tree}`, "-p", source, "-m", "foreign advance");
+  git("init", "-q", "--bare", remote);
+  git("remote", "add", "origin", remote);
+  git("push", "-q", "origin", `${candidate}:refs/heads/objects`, `${source}:refs/heads/topic`);
+  git("--git-dir", remote, "symbolic-ref", "refs/pull/4242/head", "refs/heads/topic");
+  const local = join(repoDir, ".local");
+  mkdirSync(local);
+  writeFileSync(
+    join(local, "pr-meta.env"),
+    `PR_NUMBER=4242\nPR_AUTHOR=fixture\nPR_HEAD=topic\nPR_HEAD_SHA=${source}\n`,
+  );
+  writeFileSync(
+    join(local, "prep-context.env"),
+    `PR_NUMBER=4242\nPR_HEAD=topic\nPR_HEAD_SHA_BEFORE=${source}\nPREP_BRANCH=prep\nPREP_STARTED_AT=2026-09-07T00:00:00Z\n`,
+  );
+  writeFileSync(
+    join(local, "gates.env"),
+    `PR_NUMBER=4242\nGATES_MODE=full\nLAST_VERIFIED_HEAD_SHA=${candidate}\n`,
+  );
+  writeFileSync(join(local, "prep.md"), "# Prepare\n");
+  writeFileSync(join(local, "events"), "");
+  return { repoDir, remote, local, env, git, base, source, candidate, sameTree, advance };
+}
+
+function runPublisher(
+  f: ReturnType<typeof makePublisherRepo>,
+  command = "prepare_sync_head 4242",
+  setup: string[] = [],
+) {
+  return runGatesBash(
+    [
+      `remote='${f.remote}'`,
+      `enter_worktree() { PR_MAIN_SHA=${f.base}; }`,
+      'resolve_head_push_url() { printf "%s\\n" "$remote"; }',
+      'resolve_contributor_coauthor_email() { printf "fixture@example.invalid\\n"; }',
+      'remote_head() { command git --git-dir="$remote" rev-parse refs/heads/topic; }',
+      "gh() {",
+      '  case "$*" in',
+      '    *headRefName*) printf \'{"headRefName":"topic"}\\n\';;',
+      "    *headRefOid*) remote_head;;",
+      '    *) echo "unexpected GitHub request" >&2; return 98;;',
+      "  esac",
+      "}",
+      'wait_for_pr_head_sha() { test "$(remote_head)" = "$2"; }',
+      "run_prepare_push_retry_gates() { echo retry-gates >> .local/events; }",
+      "git() {",
+      '  case "$1" in',
+      "    push) echo push >> .local/events;;",
+      "    rebase) echo rebase >> .local/events;;",
+      "  esac",
+      '  command git "$@"',
+      "}",
+      "gh_plain() {",
+      "  echo graphql >> .local/events",
+      "  local payload expected hosted",
+      '  test "$4" != "-" && test -f "$4" || return 1',
+      '  payload=$(cat "$4") || return $?',
+      "  expected=$(printf '%s' \"$payload\" | jq -r .variables.input.expectedHeadOid)",
+      '  test "$expected" = "$(remote_head)" || return 75',
+      '  hosted=$(command git commit-tree HEAD^{tree} -p "$expected" -m "Hosted verified commit")',
+      '  command git push -q "$remote" "$hosted:refs/heads/topic" || return $?',
+      '  printf \'{"data":{"createCommitOnBranch":{"commit":{"oid":"%s"}}}}\\n\' "$hosted"',
+      "}",
+      ...setup,
+      command,
+    ].join("\n"),
+    { cwd: f.repoDir, env: f.env, sourcePrepareCore: true, sourcePush: true },
+  );
+}
+
+describe("PR publication ownership", () => {
+  it.each(
+    ["prepare_push", "prepare_sync_head"].flatMap((operation) =>
+      ["advance", "rewind", "same-tree"].map((movement) => ({ operation, movement })),
+    ),
+  )(
+    "$operation refuses a foreign $movement observed before publication",
+    ({ operation, movement }) => {
+      const f = makePublisherRepo();
+      const foreign =
+        movement === "advance" ? f.advance : movement === "rewind" ? f.base : f.sameTree;
+      f.git("push", "-q", "origin", `${foreign}:refs/heads/foreign`);
+      f.git("--git-dir", f.remote, "update-ref", "refs/heads/topic", foreign);
+      const before = readFileSync(join(f.local, "prep.md"), "utf8");
+      const result = runPublisher(f, `${operation} 4242`);
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(foreign);
+      expect(f.git("rev-parse", "HEAD")).toBe(f.candidate);
+      expect(readFileSync(join(f.local, "events"), "utf8")).toBe("");
+      expect(readFileSync(join(f.local, "prep.md"), "utf8")).toBe(before);
+      expect(existsSync(join(f.local, "prep.env"))).toBe(false);
+      expect(existsSync(join(f.local, "prepare-sync-result.env"))).toBe(false);
+      expect(existsSync(join(f.local, "prepare-push-result.env"))).toBe(false);
+    },
+  );
+
+  it.each(["advance", "rewind", "same-tree"] as const)(
+    "keeps the original lease when a foreign %s races the push",
+    (movement) => {
+      const f = makePublisherRepo();
+      const foreign =
+        movement === "advance" ? f.advance : movement === "rewind" ? f.base : f.sameTree;
+      f.git("push", "-q", "origin", `${foreign}:refs/heads/foreign`);
+      const result = runPublisher(f, "prepare_push 4242", [
+        "git() {",
+        '  if [ "$1" = push ]; then',
+        "    echo push >> .local/events",
+        `    command git --git-dir="$remote" update-ref refs/heads/topic ${foreign}`,
+        '  elif [ "$1" = rebase ]; then echo rebase >> .local/events; fi',
+        '  command git "$@"',
+        "}",
+      ]);
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(foreign);
+      expect(f.git("rev-parse", "HEAD")).toBe(f.candidate);
+      expect(readFileSync(join(f.local, "events"), "utf8")).toBe("push\n");
+      expect(existsSync(join(f.local, "prep.env"))).toBe(false);
+      expect(existsSync(join(f.local, "prepare-push-result.env"))).toBe(false);
+      expect(readFileSync(join(f.local, "gates.env"), "utf8")).toContain(
+        `LAST_VERIFIED_HEAD_SHA=${f.candidate}`,
+      );
+    },
+  );
+
+  it.each(["readback", "fetch"] as const)(
+    "does not stamp a same-tree replacement at the post-publication %s",
+    (boundary) => {
+      const f = makePublisherRepo();
+      f.git("push", "-q", "origin", `${f.sameTree}:refs/heads/foreign`);
+      const result = runPublisher(
+        f,
+        "prepare_sync_head 4242",
+        boundary === "readback"
+          ? [
+              "wait_for_pr_head_sha() {",
+              '  test "$(remote_head)" = "$2" || return 1',
+              `  command git --git-dir="$remote" update-ref refs/heads/topic ${f.sameTree}`,
+              "}",
+            ]
+          : [
+              "git() {",
+              '  if [ "$1" = push ]; then echo push >> .local/events; fi',
+              '  if [ "$1" = fetch ]; then',
+              `    command git --git-dir="$remote" update-ref refs/heads/topic ${f.sameTree}`,
+              "  fi",
+              '  command git "$@"',
+              "}",
+            ],
+      );
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(f.sameTree);
+      expect(f.git("rev-parse", "HEAD")).toBe(f.candidate);
+      expect(existsSync(join(f.local, "prep.env"))).toBe(false);
+      expect(existsSync(join(f.local, "prepare-sync-result.env"))).toBe(false);
+    },
+  );
+
+  it("propagates the actual Git failure when invoked in a conditional", () => {
+    const f = makePublisherRepo();
+    const result = runPublisher(
+      f,
+      [
+        `PRHEAD_REMOTE_URL='${f.remote}'`,
+        'git() { if [ "$1" = push ]; then echo "transport failed" >&2; return 73; fi; command git "$@"; }',
+        `if oid=$(push_prep_head_once topic ${f.source} ${f.candidate}); then exit 99; else status=$?; fi`,
+        'test -z "$oid"',
+        'exit "$status"',
+      ].join("\n"),
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(73);
+    expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(f.source);
+  });
+
+  it("publishes appended fixups repeatedly using its own prior publication", () => {
+    const f = makePublisherRepo();
+    for (const command of ["prepare_push 4242", "prepare_sync_head 4242"]) {
+      const result = runPublisher(f, command);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      const published = f.git("rev-parse", "HEAD");
+      expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(published);
+      expect(readFileSync(join(f.local, "prep.env"), "utf8")).toContain(
+        `PREP_HEAD_SHA=${published}\n`,
+      );
+      f.git("commit", "-qm", "another reviewed fixup", "--allow-empty");
     }
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  return predicate();
-}
-
-async function waitForExit(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return;
-  }
-  await new Promise((resolve) => {
-    child.once("exit", resolve);
+    expect(readFileSync(join(f.local, "events"), "utf8")).toBe("push\npush\n");
+    expect(f.git("merge-base", f.source, "HEAD")).toBe(f.source);
   });
-}
 
-async function waitForStderr(
-  child: ChildProcess,
-  expected: string,
-  timeoutMs: number,
-): Promise<string> {
-  const stderr = child.stderr;
-  if (!stderr) {
-    throw new Error("child stderr is not piped");
-  }
-  stderr.setEncoding("utf8");
-  let output = "";
-  return await new Promise<string>((resolve, reject) => {
-    const cleanup = () => {
-      clearTimeout(timeout);
-      stderr.off("data", onData);
-      child.off("exit", onExit);
-    };
-    const onData = (chunk: string) => {
-      output += chunk;
-      if (output.includes(expected)) {
-        cleanup();
-        resolve(output);
+  it("accepts the exact candidate already published without another push", () => {
+    const f = makePublisherRepo();
+    f.git("--git-dir", f.remote, "update-ref", "refs/heads/topic", f.candidate);
+    const result = runPublisher(f);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(readFileSync(join(f.local, "events"), "utf8")).toBe("");
+    expect(readFileSync(join(f.local, "prep.env"), "utf8")).toContain(
+      `PREP_HEAD_SHA=${f.candidate}\n`,
+    );
+  });
+
+  it.each(["prepare_push", "prepare_sync_head"])(
+    "%s rejects a same-tree no-op that lost reviewed ancestry",
+    (operation) => {
+      const f = makePublisherRepo();
+      const foreign = f.git(
+        "commit-tree",
+        `${f.candidate}^{tree}`,
+        "-p",
+        f.base,
+        "-m",
+        "replaced reviewed ancestry",
+      );
+      f.git("checkout", "-B", "prep", foreign);
+      f.git("push", "-q", "origin", `${foreign}:refs/heads/foreign`);
+      f.git("--git-dir", f.remote, "update-ref", "refs/heads/topic", foreign);
+      const before = readFileSync(join(f.local, "prep.md"), "utf8");
+      const result = runPublisher(f, `${operation} 4242`);
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      expect(f.git("rev-parse", "HEAD")).toBe(foreign);
+      expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(foreign);
+      expect(readFileSync(join(f.local, "events"), "utf8")).toBe("");
+      expect(readFileSync(join(f.local, "prep.md"), "utf8")).toBe(before);
+      expect(existsSync(join(f.local, "prep.env"))).toBe(false);
+      expect(existsSync(join(f.local, "prepare-sync-result.env"))).toBe(false);
+      expect(existsSync(join(f.local, "prepare-push-result.env"))).toBe(false);
+    },
+  );
+
+  it("accepts the returned GraphQL OID but requires later fixups to extend it", () => {
+    const f = makePublisherRepo();
+    const graphql = [
+      "PR_HEAD_OWNER=fixture",
+      "PR_HEAD_REPO_NAME=repo",
+      "OPENCLAW_PR_PUSH_MODE=graphql",
+    ];
+    const first = runPublisher(f, "prepare_sync_head 4242", graphql);
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    const hosted = f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic");
+    expect(hosted).not.toBe(f.candidate);
+    expect(f.git("rev-parse", `${hosted}^{tree}`)).toBe(f.git("rev-parse", "HEAD^{tree}"));
+    let receipt = readFileSync(join(f.local, "prep.env"), "utf8");
+    expect(receipt).toContain(`PREP_HEAD_SHA=${hosted}\n`);
+    expect(receipt).toContain(`LOCAL_PREP_HEAD_SHA=${f.candidate}\n`);
+    const noop = runPublisher(f, "prepare_sync_head 4242", graphql);
+    expect(noop.status, noop.stdout + noop.stderr).toBe(0);
+    expect(readFileSync(join(f.local, "events"), "utf8")).toBe("graphql\n");
+    receipt = readFileSync(join(f.local, "prep.env"), "utf8");
+    f.git("commit", "-qm", "fixup on the unhosted local commit", "--allow-empty");
+    const rejected = runPublisher(f, "prepare_sync_head 4242", graphql);
+    expect(rejected.status, rejected.stdout + rejected.stderr).not.toBe(0);
+    expect(readFileSync(join(f.local, "prep.env"), "utf8")).toBe(receipt);
+    f.git("checkout", "-B", "prep", hosted);
+    f.git("commit", "-qm", "fixup on the hosted commit", "--allow-empty");
+    const accepted = runPublisher(f, "prepare_sync_head 4242", graphql);
+    expect(accepted.status, accepted.stdout + accepted.stderr).toBe(0);
+    expect(readFileSync(join(f.local, "events"), "utf8")).toBe("graphql\ngraphql\n");
+  });
+
+  it.each(["git-permission", "git-failure", "graphql-permission"] as const)(
+    "limits transport fallback for %s",
+    (failure) => {
+      const f = makePublisherRepo();
+      const result = runPublisher(f, "prepare_sync_head 4242", [
+        "PR_HEAD_OWNER=fixture",
+        "PR_HEAD_REPO_NAME=repo",
+        ...(failure === "graphql-permission"
+          ? [
+              "OPENCLAW_PR_PUSH_MODE=graphql",
+              'gh_plain() { echo graphql >> .local/events; echo "403 forbidden" >&2; return 74; }',
+            ]
+          : [
+              "git() {",
+              '  if [ "$1" = push ]; then',
+              "    echo push >> .local/events",
+              failure === "git-permission"
+                ? '    echo "403 permission denied" >&2'
+                : '    echo "transport failed" >&2',
+              "    return 73",
+              "  fi",
+              '  command git "$@"',
+              "}",
+            ]),
+      ]);
+      if (failure === "git-permission") {
+        expect(result.status, result.stdout + result.stderr).toBe(0);
+        expect(readFileSync(join(f.local, "events"), "utf8")).toBe("push\ngraphql\n");
+      } else {
+        expect(result.status, result.stdout + result.stderr).not.toBe(0);
+        expect(readFileSync(join(f.local, "events"), "utf8")).toBe(
+          failure === "git-failure" ? "push\n" : "graphql\n",
+        );
+        expect(existsSync(join(f.local, "prep.env"))).toBe(false);
       }
-    };
-    const onExit = () => {
-      cleanup();
-      reject(new Error(`child exited before writing ${JSON.stringify(expected)}: ${output}`));
-    };
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error(`timed out waiting for ${JSON.stringify(expected)}: ${output}`));
-    }, timeoutMs);
-    stderr.on("data", onData);
-    child.once("exit", onExit);
-  });
-}
+    },
+  );
 
-afterEach(async () => {
-  for (const child of children.splice(0)) {
-    child.kill("SIGKILL");
-    await waitForExit(child);
-  }
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  it.each(["number", "branch", "source", "local-tree"] as const)(
+    "rejects a prior receipt with mismatched %s provenance",
+    (mismatch) => {
+      const f = makePublisherRepo();
+      const first = runPublisher(f);
+      expect(first.status, first.stdout + first.stderr).toBe(0);
+      const path = join(f.local, "prep.env");
+      const before = readFileSync(path, "utf8");
+      const changes = {
+        number: ["PR_NUMBER=4242", "PR_NUMBER=4243"],
+        branch: ["PR_HEAD=topic", "PR_HEAD=other"],
+        source: [`PR_HEAD_SHA_BEFORE=${f.source}`, `PR_HEAD_SHA_BEFORE=${f.base}`],
+        "local-tree": [`LOCAL_PREP_HEAD_SHA=${f.candidate}`, `LOCAL_PREP_HEAD_SHA=${f.source}`],
+      } as const;
+      const [from, to] = changes[mismatch];
+      const changed = before.replace(from, to);
+      expect(changed).not.toBe(before);
+      writeFileSync(path, changed);
+      f.git("commit", "-qm", "appended fixup", "--allow-empty");
+      const result = runPublisher(f);
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      expect(readFileSync(path, "utf8")).toBe(changed);
+      expect(readFileSync(join(f.local, "events"), "utf8")).toBe("push\n");
+      expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(f.candidate);
+    },
+  );
+});
+
+afterEach(() => {
+  tempDirs.cleanup();
 });
 
 describe("resolve_pr_gates_remote_mode", () => {
@@ -323,6 +562,7 @@ describe("resolve_pr_gates_remote_mode", () => {
     { value: undefined, expected: "local" },
     { value: "", expected: "local" },
     { value: "testbox", expected: "testbox" },
+    { value: "crabbox-aws", expected: "crabbox-aws" },
   ])("resolves OPENCLAW_PR_GATES_REMOTE=$value to $expected", ({ value, expected }) => {
     const env: NodeJS.ProcessEnv = {};
     if (value !== undefined) {
@@ -348,6 +588,112 @@ describe("resolve_pr_gates_remote_mode", () => {
     expect(result.status).toBe(2);
     expect(result.stdout).toContain("conflicts with OPENCLAW_TESTBOX=1");
   });
+
+  it("rejects the Crabbox AWS hosted-gates conflict before touching the worktree", () => {
+    const result = runGatesBash("prepare_gates 424242", {
+      env: { OPENCLAW_PR_GATES_REMOTE: "crabbox-aws", OPENCLAW_TESTBOX: "1" },
+    });
+    expect(result.status).toBe(2);
+    expect(result.stdout).toContain("OPENCLAW_PR_GATES_REMOTE=crabbox-aws conflicts");
+  });
+});
+
+describe("remote Crabbox AWS gate contract", () => {
+  it("builds the canonical deterministic proof command", () => {
+    const planPath = join(tempDirs.make("openclaw-crabbox-command-"), "plan.json");
+    writeFileSync(
+      planPath,
+      JSON.stringify({
+        baseSha: "a".repeat(40),
+        changedPaths: [{ path: "scripts/pr-lib/gates.sh", status: "M" }],
+        headSha: "b".repeat(40),
+        targets: ["test/scripts/pr-prepare-gates.test.ts"],
+        version: 1,
+      }),
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(repoRoot, "scripts/pr-crabbox-gate-publisher.mjs"),
+        "--print-command",
+        planPath,
+        "c".repeat(64),
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("umask 022");
+    expect(result.stdout).toContain("pnpm build");
+    expect(result.stdout).toContain("pnpm check");
+    expect(result.stdout).toContain("test/scripts/pr-prepare-gates.test.ts");
+    expect(result.stdout).toContain(`OPENCLAW_CRABBOX_GATE_BASE=${"a".repeat(40)}`);
+    expect(result.stdout).toContain(`OPENCLAW_CRABBOX_GATE_HEAD=${"b".repeat(40)}`);
+    expect(result.stdout).not.toContain("OPENCLAW_CRABBOX_GATE_WORKFLOW=");
+    expect(result.stdout).not.toContain("test/scripts/pr-wrappers.test.ts");
+    expect(result.stdout).not.toContain("OPENCLAW_TEST_PROJECTS_PARALLEL");
+    expect(result.stdout).not.toContain("pnpm test");
+    expect(result.stdout).not.toContain("pnpm check:changed");
+  });
+
+  it("records only trusted publisher metadata after synchronous success", () => {
+    const dir = tempDirs.make("openclaw-pr-gates-aws-publisher-");
+    const workDir = join(dir, "work");
+    mkdirSync(workDir);
+    mkdirSync(join(workDir, ".local"));
+    const base = "a".repeat(40);
+    const head = "b".repeat(40);
+    const runUrl = "https://github.com/openclaw/openclaw/actions/runs/99";
+
+    const result = runGatesBash(
+      [
+        "require_active_org_admin_for_crabbox_gate() { :; }",
+        `read_crabbox_gate_pr_binding() { printf '%s\\n' '${base}'; }`,
+        "ci_dispatch() {",
+        `  printf '%s\\n' '${JSON.stringify({
+          actionsRunUrl: runUrl,
+          backend: "crabbox",
+          baseSha: base,
+          headSha: head,
+          leaseId: "cbx_stub",
+          provider: "aws",
+          runId: "run_stub",
+          target: "linux",
+        })}'`,
+        "}",
+        `finalize_remote_crabbox_aws_gate 424242 '${head}'`,
+        "cat .local/gates.env",
+      ].join("\n"),
+      { cwd: workDir },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("GATES_MODE=remote_crabbox_aws");
+    expect(result.stdout).toContain(`FULL_GATES_HEAD_SHA=${head}`);
+    expect(result.stdout).toContain("REMOTE_GATES_PROVIDER=aws");
+    expect(result.stdout).toContain("REMOTE_GATES_RUN_ID=run_stub");
+    expect(result.stdout).toContain("REMOTE_GATES_LEASE_ID=cbx_stub");
+    expect(result.stdout).toContain(`REMOTE_GATES_RUN_URL=${runUrl}`);
+  });
+
+  it("keeps pending evidence when the protected publisher fails", () => {
+    const workDir = join(tempDirs.make("openclaw-pr-gates-aws-failure-"), "work");
+    mkdirSync(workDir, { recursive: true });
+    mkdirSync(join(workDir, ".local"));
+    writeFileSync(join(workDir, ".local/gates.env"), "GATES_MODE=remote_crabbox_aws_pending\n");
+    const result = runGatesBash(
+      [
+        "require_active_org_admin_for_crabbox_gate() { :; }",
+        `read_crabbox_gate_pr_binding() { printf '%s\\n' '${"a".repeat(40)}'; }`,
+        "ci_dispatch() { return 1; }",
+        `finalize_remote_crabbox_aws_gate 424242 '${"b".repeat(40)}'`,
+      ].join("\n"),
+      { cwd: workDir },
+    );
+    expect(result.status).not.toBe(0);
+    expect(readFileSync(join(workDir, ".local/gates.env"), "utf8")).toBe(
+      "GATES_MODE=remote_crabbox_aws_pending\n",
+    );
+  });
 });
 
 describe("prepare gate changed-file plan", () => {
@@ -369,6 +715,7 @@ describe("prepare gate changed-file plan", () => {
     const result = runGatesBash(
       [
         gitStub,
+        `PR_MAIN_SHA=${"a".repeat(40)}`,
         "derive_prepare_gate_change_plan",
         'printf "%s\\t%s\\t%s\\t%s\\n" "$PREPARE_GATE_CHANGED_FILES" "$PREPARE_GATE_DOCS_ONLY" "$PREPARE_GATE_CHANGELOG_ONLY" "$PREPARE_GATE_CHANGELOG_REQUIRED"',
       ].join("\n"),
@@ -384,6 +731,7 @@ describe("prepare gate changed-file plan", () => {
       [
         "git() { printf 'src/index.ts\\n'; }",
         "changelog_required_for_changed_files() { return 0; }",
+        `PR_MAIN_SHA=${"a".repeat(40)}`,
         "derive_prepare_gate_change_plan",
         'printf "%s\\n" "$PREPARE_GATE_CHANGELOG_REQUIRED"',
       ].join("\n"),
@@ -392,11 +740,42 @@ describe("prepare gate changed-file plan", () => {
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe("true");
   });
+
+  it("scans changed files without temporary input storage", () => {
+    const workDir = tempDirs.make("openclaw-pr-gates-no-tmp-");
+    mkdirSync(join(workDir, ".local"));
+    writeFileSync(join(workDir, ".local", "pr-meta.env"), "PR_AUTHOR=steipete\n");
+    const result = runGatesBash(
+      [
+        "enter_worktree() { :; }",
+        "checkout_prep_branch() { :; }",
+        "derive_prepare_gate_change_plan() {",
+        "  PREPARE_GATE_CHANGED_FILES=$'CHANGELOG.md\\nchangelog/fragments/stale.md'",
+        "  PREPARE_GATE_DOCS_ONLY=true",
+        "  PREPARE_GATE_CHANGELOG_ONLY=false",
+        "  PREPARE_GATE_CHANGELOG_REQUIRED=false",
+        "}",
+        "prepare_gates 4242",
+      ].join("\n"),
+      {
+        cwd: workDir,
+        env: { TMPDIR: join(workDir, "missing-tmp") },
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("Unsupported changelog fragment files detected:");
+    expect(result.stdout).toContain("changelog/fragments/stale.md");
+    expect(result.stderr).not.toContain("cannot create temp file");
+    expect(readFileSync(join(repoRoot, "scripts/pr-lib/gates.sh"), "utf8")).not.toMatch(
+      /done\s+(?:<<<|<\s*<\()/u,
+    );
+  });
 });
 
 describe("remote testbox gate delegation", () => {
   it("runs the full pnpm test through the worktree crabbox wrapper", () => {
-    const dir = makeTempDir("openclaw-pr-gates-remote-");
+    const dir = tempDirs.make("openclaw-pr-gates-remote-");
     const stubBin = join(dir, "bin");
     mkdirSync(stubBin);
     writeFileSync(
@@ -435,12 +814,12 @@ describe("remote testbox gate delegation", () => {
         "--idle-timeout 90m --ttl 240m --timing-json " +
         "--label pr-424242-gates " +
         "-- env CI=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 " +
-        "PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=install corepack pnpm test",
+        "PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false corepack pnpm test",
     );
   });
 
   it("extracts the last successful blacksmith-testbox timing stamp", () => {
-    const dir = makeTempDir("openclaw-pr-gates-stamp-");
+    const dir = tempDirs.make("openclaw-pr-gates-stamp-");
     const log = join(dir, "gates-test.log");
     writeFileSync(
       log,
@@ -467,7 +846,7 @@ describe("remote testbox gate delegation", () => {
   });
 
   it("fails when the gate log has no successful stamp", () => {
-    const dir = makeTempDir("openclaw-pr-gates-stamp-");
+    const dir = tempDirs.make("openclaw-pr-gates-stamp-");
     const log = join(dir, "gates-test.log");
     writeFileSync(
       log,
@@ -480,65 +859,9 @@ describe("remote testbox gate delegation", () => {
   });
 });
 
-describe("lease-retry gate stamp refresh", () => {
-  it("rewrites gates.env with the fresh remote stamp for the rebased head", () => {
-    const { repoDir, stubBin, headSha } = makeRetryRepo();
-    const result = runGatesBash(
-      [
-        "PR_NUMBER=4242",
-        "CHANGELOG_REQUIRED=false",
-        "REMOTE_GATES_PROVIDER=blacksmith-testbox",
-        "REMOTE_GATES_LEASE_ID=tbx_stale",
-        "REMOTE_GATES_RUN_URL=https://example.test/runs/1",
-        "FULL_GATES_HEAD_SHA=deadbeef",
-        "run_prepare_push_retry_gates false",
-        "cat .local/gates.env",
-      ].join("\n"),
-      {
-        cwd: repoDir,
-        env: {
-          PATH: `${stubBin}:${process.env.PATH ?? ""}`,
-          OPENCLAW_PR_GATES_REMOTE: "testbox",
-        },
-      },
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("GATES_MODE=remote_testbox");
-    expect(result.stdout).toContain("REMOTE_GATES_LEASE_ID=tbx_retry");
-    expect(result.stdout).toContain(`LAST_VERIFIED_HEAD_SHA=${headSha}`);
-    expect(result.stdout).toContain(`FULL_GATES_HEAD_SHA=${headSha}`);
-    expect(result.stdout).not.toContain("tbx_stale");
-  });
-
-  it("clears a stale remote stamp when the retry test ran locally", () => {
-    const { repoDir, stubBin, headSha } = makeRetryRepo();
-    const result = runGatesBash(
-      [
-        "PR_NUMBER=4242",
-        "CHANGELOG_REQUIRED=false",
-        "REMOTE_GATES_PROVIDER=blacksmith-testbox",
-        "REMOTE_GATES_LEASE_ID=tbx_stale",
-        "run_prepare_push_retry_gates false",
-        "cat .local/gates.env",
-      ].join("\n"),
-      {
-        cwd: repoDir,
-        env: { PATH: `${stubBin}:${process.env.PATH ?? ""}` },
-      },
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("GATES_MODE=full");
-    expect(result.stdout).toContain("REMOTE_GATES_LEASE_ID=''");
-    expect(result.stdout).toContain(`FULL_GATES_HEAD_SHA=${headSha}`);
-    expect(result.stdout).not.toContain("tbx_stale");
-  });
-});
-
 describe("prepare review readiness", () => {
   it("rejects invalid review artifacts before any preparation side effects", () => {
-    const repoDir = makeTempDir("openclaw-pr-prepare-invalid-review-");
+    const repoDir = tempDirs.make("openclaw-pr-prepare-invalid-review-");
     mkdirSync(join(repoDir, ".local"));
     const result = runGatesBash(
       [
@@ -559,7 +882,7 @@ describe("prepare review readiness", () => {
   });
 
   it("rejects a non-ready review before taking the operation lock past validation", () => {
-    const repoDir = makeTempDir("openclaw-pr-prepare-not-ready-");
+    const repoDir = tempDirs.make("openclaw-pr-prepare-not-ready-");
     mkdirSync(join(repoDir, ".local"));
     const result = runGatesBash(
       [
@@ -580,9 +903,54 @@ describe("prepare review readiness", () => {
   });
 });
 
+describe("prepare author access snapshot", () => {
+  it.each([
+    ["admin", "maintainer"],
+    ["write", "maintainer"],
+    ["read", "external"],
+    ["none", "external"],
+    ["maintain", "unknown"],
+  ])("maps GitHub permission %s to %s", (permission, expected) => {
+    const result = runGatesBash(
+      [
+        "gh() {",
+        '  if [ "$1 $2" = "repo view" ]; then printf "fixture/repo\\n";',
+        `  else printf '{"permission":"${permission}"}\\n'; fi`,
+        "}",
+        "resolve_pr_author_access_at_prepare fixture",
+      ].join("\n"),
+      { sourcePrepareCore: true },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe(expected);
+  });
+
+  it.each(["error", "malformed"])("maps %s permission evidence to unknown", (mode) => {
+    const result = runGatesBash(
+      [
+        "gh() {",
+        '  if [ "$1 $2" = "repo view" ]; then printf "fixture/repo\\n";',
+        mode === "error" ? "  else return 1; fi" : "  else printf '{}\\n'; fi",
+        "}",
+        "resolve_pr_author_access_at_prepare fixture",
+      ].join("\n"),
+      { sourcePrepareCore: true },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe("unknown");
+  });
+});
+
 describe("prepare sync-head transitions", () => {
   it("publishes only appended fixups when main advances", () => {
     const repoDir = makeSyncRepo({ needsRebase: true });
+    const contextPath = join(repoDir, ".local", "prep-context.env");
+    writeFileSync(
+      contextPath,
+      `${readFileSync(contextPath, "utf8")}PR_AUTHOR_ACCESS_AT_PREP=external\n`,
+    );
     writeFileSync(join(repoDir, "fixup.ts"), "export const fixed = true;\n");
     for (const args of [
       ["add", "fixup.ts"],
@@ -606,6 +974,8 @@ describe("prepare sync-head transitions", () => {
         "! git merge-base --is-ancestor origin/main HEAD",
         "test -e .local/published",
         "grep -F 'Preserved hosted PR ancestry' .local/prep.md",
+        "grep -F 'PREP_REPLACED_HOSTED_ANCESTRY=false' .local/prep.env",
+        "grep -F 'PREP_AUTHOR_ACCESS=external' .local/prep.env",
       ].join("\n"),
       { cwd: repoDir, env: { OPENCLAW_TESTBOX: "1" }, sourcePrepareCore: true },
     );
@@ -621,7 +991,8 @@ describe("prepare push head drift", () => {
     const { repoDir, recordedHead, reviewedHead } = makePreparePushHeadDriftRepo();
     const result = runGatesBash(
       [
-        "enter_worktree() { :; }",
+        "refresh_main_snapshot() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }",
+        "enter_worktree() { refresh_main_snapshot; }",
         `reviewed_head='${reviewedHead}'`,
         'gh() { printf "%s\\n" "$reviewed_head"; }',
         "verify_pr_head_branch_matches_expected() { :; }",
@@ -630,8 +1001,8 @@ describe("prepare push head drift", () => {
         "  printf 'DOCS_ONLY=false\\nGATES_MODE=fresh\\n' > .local/gates.env",
         "}",
         "push_prep_head_to_pr_branch() {",
-        '  local result_env="$7"',
-        '  printf \'PUSH_PREP_HEAD_SHA=%q\\nPUSH_LOCAL_PREP_HEAD_SHA=%q\\nPUSHED_FROM_SHA=%q\\nPR_HEAD_SHA_AFTER_PUSH=%q\\n\' "$3" "$3" "$reviewed_head" "$3" > "$result_env"',
+        '  local result_env="$5"',
+        '  printf \'PUSH_PREP_HEAD_SHA=%q\\nPUSH_LOCAL_PREP_HEAD_SHA=%q\\nPUSHED_FROM_SHA=%q\\nPUSH_REPLACED_HOSTED_ANCESTRY=false\\nPR_HEAD_SHA_AFTER_PUSH=%q\\n\' "$3" "$3" "$reviewed_head" "$3" > "$result_env"',
         "}",
         "prepare_push 4242",
         'test "$(git rev-parse HEAD)" = "$reviewed_head"',
@@ -656,6 +1027,36 @@ describe("prepare push head drift", () => {
 });
 
 describe("GraphQL fork publication", () => {
+  it("classifies appended and replaced hosted ancestry without tree heuristics", () => {
+    const { repoDir, headSha } = makeRetryRepo();
+    spawnSync("git", ["commit", "-qm", "appended", "--allow-empty"], { cwd: repoDir });
+    const appendedHead = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: repoDir,
+      encoding: "utf8",
+    }).stdout.trim();
+    const tree = spawnSync("git", ["rev-parse", "HEAD^{tree}"], {
+      cwd: repoDir,
+      encoding: "utf8",
+    }).stdout.trim();
+    const replacedHead = spawnSync("git", ["-c", "commit.gpgsign=false", "commit-tree", tree], {
+      cwd: repoDir,
+      input: "replacement\n",
+      encoding: "utf8",
+    }).stdout.trim();
+
+    const result = runGatesBash(
+      [
+        `test "$(classify_replaced_hosted_ancestry ${headSha} ${appendedHead})" = false`,
+        `test "$(classify_replaced_hosted_ancestry ${headSha} ${replacedHead})" = true`,
+        `! classify_replaced_hosted_ancestry ${headSha} deadbeef 2>.local/ancestry-error`,
+        "grep -F 're-run prepare-init' .local/ancestry-error",
+      ].join("\n"),
+      { cwd: repoDir, sourcePush: true },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   it("accepts appended fixups and preserves the commit body", () => {
     const { repoDir, headSha } = makeRetryRepo();
     writeFileSync(join(repoDir, "fixup.ts"), "export const fixed = true;\n");
@@ -669,7 +1070,7 @@ describe("GraphQL fork publication", () => {
 
     const result = runGatesBash(
       [
-        'gh() { cat > .local/graphql-payload.json; printf \'%s\\n\' \'{"data":{"createCommitOnBranch":{"commit":{"oid":"signed-head","url":"https://example.test/commit"}}}}\'; }',
+        'gh_plain() { cp "$4" .local/graphql-payload.json; printf \'%s\\n\' \'{"data":{"createCommitOnBranch":{"commit":{"oid":"signed-head","url":"https://example.test/commit"}}}}\'; }',
         `graphql_push_to_fork example/repo topic ${headSha}`,
         'test "$(jq -r .variables.input.message.headline .local/graphql-payload.json)" = "reviewed fixup"',
         'test "$(jq -r .variables.input.message.body .local/graphql-payload.json)" = "Co-authored-by: Helper <helper@example.com>"',
@@ -699,7 +1100,7 @@ describe("GraphQL fork publication", () => {
 
     const result = runGatesBash(
       [
-        "gh() { touch .local/gh-called; return 99; }",
+        "gh_plain() { touch .local/gh-called; return 99; }",
         `graphql_push_to_fork example/repo topic ${headSha}`,
       ].join("\n"),
       { cwd: repoDir, sourcePush: true },
@@ -738,7 +1139,7 @@ describe("GraphQL fork publication", () => {
 
     const result = runGatesBash(
       [
-        "gh() { touch .local/gh-called; return 99; }",
+        "gh_plain() { touch .local/gh-called; return 99; }",
         `graphql_push_to_fork example/repo topic ${headSha}`,
       ].join("\n"),
       { cwd: repoDir, sourcePush: true },
@@ -751,7 +1152,7 @@ describe("GraphQL fork publication", () => {
 });
 
 describe("fork publication transport", () => {
-  it("keeps the PR push URL process-local", () => {
+  it("keeps the PR push URL process-local and reports a missing branch", () => {
     const { repoDir } = makeRetryRepo();
     const result = runGatesBash(
       [
@@ -760,23 +1161,9 @@ describe("fork publication transport", () => {
         "setup_prhead_remote",
         'test "$PRHEAD_REMOTE_URL" = https://github.com/contributor/repo.git',
         "test ! -e .local/git-called",
-      ].join("\n"),
-      { cwd: repoDir, sourcePush: true },
-    );
-
-    expect(result.status, result.stderr).toBe(0);
-  });
-
-  it("preserves an HTTPS fallback for the later push", () => {
-    const { repoDir } = makeRetryRepo();
-    const result = runGatesBash(
-      [
-        "PRHEAD_REMOTE_URL=ssh://git@example.test/contributor/repo.git",
-        "resolve_head_push_url_https() { printf '%s\\n' https://github.com/contributor/repo.git; }",
-        'git() { if [ "$1" = ls-remote ] && [ "$2" = https://github.com/contributor/repo.git ]; then printf \'hosted\\trefs/heads/topic\\n\'; fi; }',
-        "resolve_prhead_remote_sha topic",
-        'test "$PRHEAD_REMOTE_URL" = https://github.com/contributor/repo.git',
-        'test "$PRHEAD_REMOTE_SHA" = hosted',
+        "if remote_error=$(resolve_prhead_remote_sha topic 2>&1); then exit 97; fi",
+        'test "$remote_error" = "Remote branch refs/heads/topic not found on prhead"',
+        "test -e .local/git-called",
       ].join("\n"),
       { cwd: repoDir, sourcePush: true },
     );
@@ -846,6 +1233,7 @@ describe("prepare gate stamp transitions", () => {
       [
         `gh() { if [ "$1" = pr ]; then printf '{"headRefName":"topic","headRefOid":"${currentHead}","isCrossRepository":false}\\n'; else printf 'openclaw/openclaw\\n'; fi; }`,
         "run_quiet_logged() { printf 'ARG:%s\\n' \"$@\"; }",
+        "PR_MAIN_SHA=$(git rev-parse HEAD)",
         `run_hosted_prepare_gates 100606 ${currentHead} false`,
       ].join("\n"),
       { cwd: repoDir },
@@ -866,6 +1254,7 @@ describe("prepare gate stamp transitions", () => {
         `gh() { if [ "$1" = pr ]; then printf '{"headRefName":"topic","headRefOid":"${headSha}","isCrossRepository":false}\\n'; else printf 'openclaw/openclaw\\n'; fi; }`,
         'rg() { command grep -F -q "$3" "$4"; }',
         `run_quiet_logged() { printf 'Missing successful recent CI workflow for ${headSha}. Observed: none\\n' > "$2"; return 1; }`,
+        "PR_MAIN_SHA=$(git rev-parse HEAD)",
         `run_hosted_prepare_gates 100606 ${headSha} false`,
       ].join("\n"),
       { cwd: repoDir },
@@ -885,6 +1274,7 @@ describe("prepare gate stamp transitions", () => {
         `gh() { if [ "$1" = pr ]; then printf '{"headRefName":"topic","headRefOid":"${headSha}","isCrossRepository":true}\\n'; else printf 'openclaw/openclaw\\n'; fi; }`,
         'rg() { command grep -F -q "$3" "$4"; }',
         `run_quiet_logged() { printf 'Missing successful recent CI workflow for ${headSha}. Observed: none\\n' > "$2"; return 1; }`,
+        "PR_MAIN_SHA=$(git rev-parse HEAD)",
         `run_hosted_prepare_gates 100606 ${headSha} false`,
       ].join("\n"),
       { cwd: repoDir },
@@ -922,13 +1312,12 @@ describe("prepare gate stamp transitions", () => {
 
     const result = runGatesBash(
       [
-        "enter_worktree() { :; }",
+        "enter_worktree() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }",
         "checkout_prep_branch() { :; }",
         "path_is_docsish() { return 0; }",
         "changelog_required_for_changed_files() { return 1; }",
         "prepare_local_gate_workspace() { :; }",
         "run_quiet_logged() { :; }",
-        "release_pr_gates_lock() { :; }",
         "prepare_gates 4242",
         "cat .local/gates.env",
       ].join("\n"),
@@ -967,7 +1356,7 @@ describe("prepare gate stamp transitions", () => {
 
     const result = runGatesBash(
       [
-        "enter_worktree() { :; }",
+        "enter_worktree() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }",
         "checkout_prep_branch() { :; }",
         "path_is_docsish() { return 1; }",
         "changelog_required_for_changed_files() { return 1; }",
@@ -986,91 +1375,12 @@ describe("prepare gate stamp transitions", () => {
   });
 });
 
-describe("pr-gates-lock helper", () => {
-  it("acquires the shared heavy-check lock and releases it on SIGTERM", async () => {
-    const repoDir = makeLockRepoDir();
-    const statusFile = join(repoDir, "status");
-    const holder = spawnGateLockHolder(repoDir, statusFile);
-
-    expect(await waitFor(() => existsSync(statusFile), 5_000)).toBe(true);
-    expect(existsSync(heavyCheckLockDir(repoDir))).toBe(true);
-
-    holder.kill("SIGTERM");
-    await waitForExit(holder);
-    expect(await waitFor(() => !existsSync(heavyCheckLockDir(repoDir)), 5_000)).toBe(true);
-  });
-
-  it("queues behind an existing holder and acquires after it exits", async () => {
-    const repoDir = makeLockRepoDir();
-    const firstStatus = join(repoDir, "status-first");
-    const secondStatus = join(repoDir, "status-second");
-
-    const first = spawnGateLockHolder(repoDir, firstStatus);
-    expect(await waitFor(() => existsSync(firstStatus), 5_000)).toBe(true);
-
-    const second = spawnGateLockHolder(repoDir, secondStatus, {
-      OPENCLAW_HEAVY_CHECK_LOCK_POLL_MS: "50",
-    });
-    await waitForStderr(second, "queued behind the local heavy-check lock", 5_000);
-    expect(existsSync(secondStatus)).toBe(false);
-
-    first.kill("SIGTERM");
-    await waitForExit(first);
-    expect(await waitFor(() => existsSync(secondStatus), 5_000)).toBe(true);
-
-    second.kill("SIGTERM");
-    await waitForExit(second);
-    expect(await waitFor(() => !existsSync(heavyCheckLockDir(repoDir)), 5_000)).toBe(true);
-  });
-
-  it("fails instead of holding when the wait times out", async () => {
-    const repoDir = makeLockRepoDir();
-    const lockDir = heavyCheckLockDir(repoDir);
-    mkdirSync(lockDir, { recursive: true });
-    // Owner pid must be alive or the helper reclaims the stale lock.
-    writeFileSync(
-      join(lockDir, "owner.json"),
-      `${JSON.stringify({ pid: process.pid, tool: "test-holder", cwd: repoDir })}\n`,
-    );
-
-    const statusFile = join(repoDir, "status");
-    const holder = spawnGateLockHolder(repoDir, statusFile, {
-      OPENCLAW_HEAVY_CHECK_LOCK_TIMEOUT_MS: "200",
-      OPENCLAW_HEAVY_CHECK_LOCK_POLL_MS: "50",
-    });
-    await waitForExit(holder);
-
-    expect(holder.exitCode).not.toBe(0);
-    expect(existsSync(statusFile)).toBe(false);
-  });
-
-  it("releases the lock when the parent process dies", async () => {
-    const repoDir = makeLockRepoDir();
-    const statusFile = join(repoDir, "status");
-    const parent = spawn(
-      "bash",
-      [
-        "-c",
-        `node '${gateLockHelperPath}' --status-file '${statusFile}' 2>/dev/null & ` +
-          `while [ ! -s '${statusFile}' ]; do sleep 0.05; done`,
-      ],
-      { cwd: repoDir, stdio: "ignore", env: sanitizedEnv() },
-    );
-    children.push(parent);
-    await waitForExit(parent);
-
-    expect(existsSync(statusFile)).toBe(true);
-    expect(await waitFor(() => !existsSync(heavyCheckLockDir(repoDir)), 8_000)).toBe(true);
-  });
-});
-
-describe("gates.sh gate lock plumbing", () => {
-  it("acquires the block lock before dependency bootstrap", () => {
+describe("gates.sh local gate workspace", () => {
+  it("pins the worktree before dependency bootstrap", () => {
     const result = runGatesBash(
       [
         "events=$(mktemp)",
         'pin_worktree_bundled_plugins_dir() { echo pin >> "$events"; }',
-        'acquire_pr_gates_lock() { echo lock >> "$events"; }',
         'bootstrap_deps_if_needed() { echo bootstrap >> "$events"; }',
         "prepare_local_gate_workspace",
         'cat "$events"',
@@ -1078,66 +1388,6 @@ describe("gates.sh gate lock plumbing", () => {
     );
 
     expect(result.status).toBe(0);
-    expect(result.stdout.trim().split("\n")).toEqual(["pin", "lock", "bootstrap"]);
-  });
-
-  it("exports the held-lock contract while holding and clears it on release", () => {
-    const repoDir = makeLockRepoDir();
-    const result = runGatesBash(
-      [
-        "acquire_pr_gates_lock",
-        'echo "held=${OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD:-unset},${OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD:-unset},${OPENCLAW_OXLINT_SKIP_LOCK:-unset}"',
-        "jq -r .tool .git/openclaw-local-checks/heavy-check.lock/owner.json",
-        "release_pr_gates_lock",
-        'echo "released=${OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD:-unset}"',
-        '[ -d .git/openclaw-local-checks/heavy-check.lock ] && echo "lock=held" || echo "lock=free"',
-      ].join("\n"),
-      { cwd: repoDir },
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("held=1,1,1");
-    expect(result.stdout).toContain("pr-gates");
-    expect(result.stdout).toContain("released=unset");
-    expect(result.stdout).toContain("lock=free");
-  });
-
-  it("skips acquisition when a parent already holds the lock", () => {
-    const repoDir = makeLockRepoDir();
-    const result = runGatesBash(
-      [
-        "acquire_pr_gates_lock",
-        '[ -d .git/openclaw-local-checks/heavy-check.lock ] && echo "lock=held" || echo "lock=free"',
-        'echo "helper_pid=${PR_GATES_LOCK_PID:-none}"',
-      ].join("\n"),
-      { cwd: repoDir, env: { OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1" } },
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("lock=free");
-    expect(result.stdout).toContain("helper_pid=none");
-  });
-
-  it("fails the gate run when the lock wait times out", () => {
-    const repoDir = makeLockRepoDir();
-    const lockDir = heavyCheckLockDir(repoDir);
-    mkdirSync(lockDir, { recursive: true });
-    writeFileSync(
-      join(lockDir, "owner.json"),
-      `${JSON.stringify({ pid: process.pid, tool: "test-holder", cwd: repoDir })}\n`,
-    );
-
-    const result = runGatesBash("acquire_pr_gates_lock", {
-      cwd: repoDir,
-      env: {
-        OPENCLAW_HEAVY_CHECK_LOCK_TIMEOUT_MS: "200",
-        OPENCLAW_HEAVY_CHECK_LOCK_POLL_MS: "50",
-      },
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain(
-      "Failed to acquire the shared local heavy-check lock for prepare gates.",
-    );
+    expect(result.stdout.trim().split("\n")).toEqual(["pin", "bootstrap"]);
   });
 });

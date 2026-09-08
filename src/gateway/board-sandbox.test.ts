@@ -67,7 +67,7 @@ describe("board widget sandbox CSP", () => {
     );
   });
 
-  it("adds the best-effort descendant-frame guard only for board documents", () => {
+  it("adds the requested descendant-frame guard before resetting document port offers", () => {
     const proxy = buildSandboxHostProxyHtml({ blockDescendantFrames: true });
     const genericProxy = buildSandboxHostProxyHtml();
 
@@ -79,7 +79,7 @@ describe("board widget sandbox CSP", () => {
     expect(proxy).toContain('lock(globalThis,\\"open\\",undefined)');
     const guardedHtmlIndex = proxy.indexOf("const guardedHtml = guardDocument(params.html)");
     expect(guardedHtmlIndex).toBeGreaterThan(-1);
-    expect(proxy.indexOf("widgetBridgePortOffered = false", guardedHtmlIndex)).toBeGreaterThan(
+    expect(proxy.indexOf("widgetPortsOffered.clear()", guardedHtmlIndex)).toBeGreaterThan(
       guardedHtmlIndex,
     );
     expect(proxy).toContain("const apply=Reflect.apply");
@@ -87,5 +87,17 @@ describe("board widget sandbox CSP", () => {
     expect(proxy).toContain('const commentEnd = html.indexOf("-->", index + 4)');
     expect(genericProxy).toContain("const blockDescendantFrames = false");
     expect(genericProxy).not.toContain('lock(Document.prototype,\\"createElement\\"');
+  });
+
+  it("blocks scripted popups regardless of whether descendant-frame hardening is enabled", () => {
+    const path = buildBoardWidgetSandboxPath(document("pending"));
+    const encoded = new URL(path, "https://sandbox.example").searchParams.get("csp");
+    const csp = decodeSandboxHostCsp(encoded);
+
+    expect(csp?.blockDescendantFrames).toBe(true);
+    for (const proxy of [buildSandboxHostProxyHtml(csp), buildSandboxHostProxyHtml()]) {
+      expect(proxy).toContain('frame.setAttribute("sandbox", "allow-scripts allow-forms")');
+      expect(proxy).not.toContain("allow-popups");
+    }
   });
 });

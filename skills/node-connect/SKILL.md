@@ -1,143 +1,123 @@
 ---
 name: node-connect
-description: "Diagnose OpenClaw Android, iOS, or macOS node pairing, QR/setup code, route, auth, and connection failures."
+description: "Diagnose OpenClaw Control UI browser and native Android, iOS, or macOS node connection failures across route, auth, pairing, QR/setup-code, and reconnect states."
 ---
 
 # Node Connect
 
-Goal: find the one real route from node -> gateway, verify OpenClaw is advertising that route, then fix pairing/auth.
+Goal: fix one exact client against one exact Gateway, then prove that client's fresh connection.
 
-## Topology first
+## 1. Lock the target
 
-Decide which case you are in before proposing fixes:
+Record the target environment/profile, OpenClaw binary, config/state root, Gateway URL/port, and service before changing anything.
 
-- same machine / emulator / USB tunnel
-- same LAN / local Wi-Fi
-- same Tailscale tailnet
-- public URL / reverse proxy
+- Use the named deployment wrapper/profile for every config, log, service, device, and node command.
+- Never drift to a bare `openclaw`, proof environment, or similarly named deployment.
+- If the global executable is stale, invoke the target through its owner.
+- Verify status, config, logs, and process identity describe the same Gateway.
 
-Do not mix them.
+Do not mutate pairing or auth until the target is unambiguous.
 
-- Local Wi-Fi problem: do not switch to Tailscale unless remote access is actually needed.
-- VPS / remote gateway problem: do not keep debugging `localhost` or LAN IPs.
+## 2. Classify the client
 
-## If ambiguous, ask first
+Classify from the request and Gateway log before choosing commands:
 
-If the setup is unclear or the failure report is vague, ask short clarifying questions before diagnosing.
+- **Control UI browser:** the user says browser, dashboard, Control UI, or webchat; logs show `client=openclaw-control-ui` or `mode=webchat`.
+- **Native mobile/node:** the official app shows Connect, Scan QR, or setup code; logs/request metadata show a native client or `role=node`.
 
-Ask for:
+A phone can be either client. Do not use `openclaw qr` or `openclaw nodes status` for a phone browser; those belong to native mobile/node pairing.
 
-- which route they intend: same machine, same LAN, Tailscale tailnet, or public URL
-- whether they used QR/setup code or manual host/port
-- the exact app text/status/error, quoted exactly if possible
-- whether `openclaw devices list` shows a pending pairing request
+## 3. Observe the failing attempt
 
-Do not guess from `can't connect`.
-
-## Canonical checks
-
-Prefer `openclaw qr --json`. It uses the same setup-code payload Android scans.
+Run these through the locked target:
 
 ```bash
+openclaw gateway status --deep
+openclaw logs --follow --json
+openclaw devices list
 openclaw config get gateway.mode
 openclaw config get gateway.bind
-openclaw config get gateway.tailscale.mode
 openclaw config get gateway.remote.url
 openclaw config get gateway.auth.mode
 openclaw config get gateway.auth.allowTailscale
-openclaw config get plugins.entries.device-pair.config.publicUrl
-openclaw qr --json
-openclaw devices list
-openclaw nodes status
+openclaw config get gateway.tailscale.mode
 ```
 
-If this OpenClaw instance is pointed at a remote gateway, also run:
+Have the client retry once while logs are live. Correlate its client ID, mode, platform, address, auth result, device ID, user, and close code. Ignore other paired devices.
 
-```bash
-openclaw qr --remote --json
-```
+Interpret the first failed transition:
 
-If Tailscale is part of the story:
+- No matching Gateway attempt: route, DNS, TLS, origin, or proxy problem.
+- `token_missing`, `password_missing`, mismatch, or Tailscale identity failure: auth failed **before** pairing, so an empty pending list is expected.
+- `pairing required`: route and auth succeeded; approve the exact pending request.
+- `authenticated user connected` / `webchat connected`: match the exact client; if followed by `1006`, preserve auth/pairing and inspect lifecycle, transport, proxy, or reconnect.
+- `1006` without either application-level connected log does not prove auth/pairing; inspect the earlier handshake transition.
+
+## 4. Prove the route
+
+Choose one topology: same machine, LAN, tailnet, or public reverse proxy. Do not mix them.
+
+- Browser Control UI needs HTTPS or localhost for browser device identity. A remote plain-HTTP Tailnet/LAN URL is not a valid substitute.
+- `gateway.tailscale.mode=off` means OpenClaw is not managing Serve/Funnel. It does not prove that Tailscale or an externally managed Serve route is absent.
+- When Tailscale is involved, inspect live state rather than inferring it from OpenClaw config:
 
 ```bash
 tailscale status --json
+tailscale serve status --json
 ```
 
-## Read the result, not guesses
+Match the client's URL to the listener/proxy route reaching the locked Gateway.
 
-`openclaw qr --json` success means:
+## 5A. Control UI browser lane
 
-- `gatewayUrl`: this is the actual endpoint the app should use.
-- `urlSource`: this tells you which config path won.
+Restore browser auth before looking for a pairing request:
 
-Common good sources:
+- For token/password auth, enter the credential in Control UI settings. Never put permanent secrets in chat, logs, or URLs.
+- Prefer `openclaw dashboard` on the Gateway host for a one-time signed handoff. Use `--no-open` only when the operator can retrieve that host's clipboard, and keep the host browser/clipboard outside agent tooling. Never capture `dashboard --json`: it can expose the handoff and shared credentials. Never relay, rewrite, or send a loopback handoff URL to a remote phone.
+- For Tailscale Serve, verify the live route and forwarded identity. Enable `gateway.auth.allowTailscale` only for that intended trust boundary. Verified Tailscale Control UI auth with browser device identity can skip pairing.
 
-- `gateway.bind=lan`: same Wi-Fi / LAN only
-- `gateway.bind=tailnet`: direct tailnet access
-- `gateway.tailscale.mode=serve` or `gateway.tailscale.mode=funnel`: Tailscale route
-- `plugins.entries.device-pair.config.publicUrl`: explicit public/reverse-proxy route
-- `gateway.remote.url`: remote gateway route
+After auth succeeds:
 
-## Root-cause map
+- Retry; never infer pairing from the pre-auth attempt. Token/password auth can reveal `pairing required`; verified Tailscale identity can skip it.
+- If logs say `pairing required`, re-list devices and approve the exact request ID.
+- A successful verified-Tailscale connection may correctly create no pending or paired-device row.
+- After a repeated `1006`, preserve auth/pairing and inspect reconnect evidence.
 
-If `openclaw qr --json` says `Gateway is only bound to loopback`:
+## 5B. Native mobile/node lane
 
-- remote node cannot connect yet
-- fix the route, then generate a fresh setup code
-- `gateway.bind=auto` is not enough if the effective QR route is still loopback
-- same LAN: use `gateway.bind=lan`
-- same tailnet: prefer `gateway.tailscale.mode=serve` or use `gateway.bind=tailnet`
-- public internet: set a real `plugins.entries.device-pair.config.publicUrl` or `gateway.remote.url`
+Inspect the native route through the locked target without exposing the setup credential:
 
-If `gateway.bind=tailnet set, but no tailnet IP was found`:
+```bash
+openclaw qr --json | jq '{gatewayUrl, gatewayUrls, auth, access, accessDowngraded, urlSource}'
+```
 
-- gateway host is not actually on Tailscale
+For a CLI controlling a remote Gateway, add `--remote` before `--json`; it selects `gateway.remote.url` and remote credentials. If the redaction filter is unavailable, do not run raw QR JSON in agent-visible output.
 
-If `qr --remote requires gateway.remote.url`:
+Verify `gatewayUrl` and `urlSource`. The setup code is password-equivalent: have the operator copy it from **Control UI → Devices → Pair device**, or run `openclaw qr --setup-code-only` in a terminal outside agent tooling and paste it directly into the official app. Never relay it through agent/chat/tool output. Generate a fresh code after a URL/auth fix or expiry.
 
-- remote-mode config is incomplete
-
-If the app says `pairing required`:
-
-- network route and auth worked
-- approve the pending device
+If the app reports `pairing required`:
 
 ```bash
 openclaw devices list
-openclaw devices approve --latest   # preview only; copy the requestId from output
+openclaw devices approve --latest   # preview only; exits without approval
 openclaw devices approve <requestId>
+openclaw nodes status
 ```
 
-If the app says `bootstrap token invalid or expired`:
+`--latest` only previews the current request; never treat it as approval. Re-list immediately before the exact-ID command because retries can supersede the request. Never approve by position, age, or similarity.
 
-- old setup code
-- generate a fresh one and rescan
-- do this after any URL/auth fix too
+## 6. Correlate and finish
 
-If the app says `unauthorized`:
+Before approval, match available request, device/public-key, client, mode/role, platform, address, user, and retry-time facts.
 
-- wrong token/password, or wrong Tailscale expectation
-- for Tailscale Serve, `gateway.auth.allowTailscale` must match the intended flow
-- otherwise use explicit token/password
+Declare success only after a new attempt made after the final change proves all applicable checks:
 
-## Fast heuristics
+- the exact client reaches the locked Gateway;
+- intended auth succeeds;
+- the browser completes initial requests, or the native node appears in `openclaw nodes status`;
+- approval used the exact request ID; and
+- no immediate auth, pairing, or reconnect failure follows.
 
-- Same Wi-Fi setup + gateway advertises `127.0.0.1`, `localhost`, or loopback-only config: wrong.
-- Remote setup + setup/manual uses private LAN IP: wrong.
-- Tailnet setup + gateway advertises LAN IP instead of MagicDNS / tailnet route: wrong.
-- Public URL set but QR still advertises something else: inspect `urlSource`; config is not what you think.
-- `openclaw devices list` shows pending requests: stop changing network config and approve first.
+A QR/setup code, launched browser, empty pending list, approval, paired-device count, or Tailscale ping proves only one transition.
 
-## Fix style
-
-Reply with one concrete diagnosis and one route.
-
-If there is not enough signal yet, ask for setup + exact app text instead of guessing.
-
-Good:
-
-- `The gateway is still loopback-only, so a node on another network can never reach it. Enable Tailscale Serve, restart the gateway, run openclaw qr again, rescan, then approve the pending device pairing.`
-
-Bad:
-
-- `Maybe LAN, maybe Tailscale, maybe port forwarding, maybe public URL.`
+Report the diagnosis, chosen route/auth lane, exact-client evidence, and any remaining failed transition.

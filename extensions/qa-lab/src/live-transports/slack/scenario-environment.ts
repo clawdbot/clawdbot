@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { WebClient } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import {
@@ -14,6 +13,7 @@ import type {
   SlackQaScenarioContext,
   SlackQaScenarioMetadata,
   SlackQaScenarioRun,
+  SlackQaWebClient as WebClient,
 } from "./slack-live.contracts.js";
 import { assertSlackCodexApprovalModelSupported } from "./slack-live.contracts.js";
 import { waitForSlackChannelStable } from "./slack-live.message-observations.js";
@@ -32,7 +32,9 @@ export type SlackQaScenarioEnvironment = {
   }>;
   context: Omit<SlackQaScenarioContext, "sentTs">;
   gatewayDebugDirPath: string;
+  getMessageWriteCursor: () => number;
   observedMessages: SlackObservedMessage[];
+  readMessageWrites: (afterRequestEventId: number) => Promise<SlackObservedMessage[]>;
   outputDir: string;
   scenario: SlackQaScenarioMetadata;
   stopGateway: (preserveDebugArtifacts: boolean) => Promise<void>;
@@ -59,6 +61,8 @@ export function createSlackQaScenarioEnvironment(params: {
   channelId: string;
   driverBotUserId: string;
   driverClient: WebClient;
+  getMessageWriteCursor: () => number;
+  readMessageWrites: (afterRequestEventId: number) => Promise<SlackObservedMessage[]>;
   sutAppToken: string;
   sutBotToken: string;
   sutIdentity: SlackAuthIdentity;
@@ -67,7 +71,9 @@ export function createSlackQaScenarioEnvironment(params: {
 }) {
   const observedMessages: SlackObservedMessage[] = [];
 
-  const prepareFlow = async (input: FlowPreparationInput) => {
+  const prepareFlow = async (
+    input: FlowPreparationInput,
+  ): Promise<{ slackScenarioContext: SlackQaScenarioEnvironment }> => {
     const context = {
       channelId: params.channelId,
       driverClient: params.driverClient,
@@ -120,7 +126,9 @@ export function createSlackQaScenarioEnvironment(params: {
         },
         context,
         gatewayDebugDirPath: path.join(input.outputDir, "gateway-debug"),
+        getMessageWriteCursor: params.getMessageWriteCursor,
         observedMessages,
+        readMessageWrites: params.readMessageWrites,
         outputDir: input.outputDir,
         scenario: {
           id: input.scenarioId,

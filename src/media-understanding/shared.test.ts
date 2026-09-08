@@ -38,6 +38,7 @@ import {
   fetchWithTimeoutGuarded,
   pollProviderOperationJson,
   postJsonRequest,
+  postMultipartRequest,
   postTranscriptionRequest,
   resolveProviderHttpRequestConfig,
   resolveProviderHttpRequestConfigWithOriginTrust,
@@ -911,70 +912,75 @@ describe("fetchWithTimeoutGuarded", () => {
     expect(sleep).toHaveBeenCalledWith(0, undefined);
   });
 
-  it("forwards explicit pinDns overrides to transcription requests", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(null, { status: 200 }),
-      finalUrl: "https://example.com",
-      release: async () => {},
-    });
-
-    await postTranscriptionRequest({
-      url: "https://api.example.com/v1/transcriptions",
-      headers: new Headers(),
-      body: "audio-bytes",
-      fetchFn: fetch,
-      pinDns: false,
-    });
-
-    expect(getFirstGuardedFetchCall().pinDns).toBe(false);
-  });
-
-  it("does not retry transcription POST requests by default", async () => {
-    fetchWithSsrFGuardMock.mockReset();
-    fetchWithSsrFGuardMock
-      .mockRejectedValueOnce(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }))
-      .mockResolvedValueOnce({
+  describe.each([
+    { kind: "transcription", send: postTranscriptionRequest },
+    { kind: "multipart", send: postMultipartRequest },
+  ])("$kind POST requests", ({ send }) => {
+    it("forwards explicit pinDns overrides", async () => {
+      fetchWithSsrFGuardMock.mockResolvedValue({
         response: new Response(null, { status: 200 }),
-        finalUrl: "https://api.example.com",
+        finalUrl: "https://example.com",
         release: async () => {},
       });
 
-    await expect(
-      postTranscriptionRequest({
+      await send({
         url: "https://api.example.com/v1/transcriptions",
         headers: new Headers(),
         body: "audio-bytes",
         fetchFn: fetch,
-      }),
-    ).rejects.toThrow("socket hang up");
-
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("retries transcription POST requests only when marked as read operations", async () => {
-    fetchWithSsrFGuardMock.mockReset();
-    const sleep = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock
-      .mockRejectedValueOnce(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }))
-      .mockResolvedValueOnce({
-        response: new Response(null, { status: 200 }),
-        finalUrl: "https://api.example.com",
-        release: async () => {},
+        pinDns: false,
       });
 
-    await expect(
-      postTranscriptionRequest({
-        url: "https://api.example.com/v1/transcriptions",
-        headers: new Headers(),
-        body: "audio-bytes",
-        fetchFn: fetch,
-        retryStage: "read",
-        retry: { attempts: 2, baseDelayMs: 0, maxDelayMs: 0, sleep },
-      }),
-    ).resolves.toEqual(expect.objectContaining({ finalUrl: "https://api.example.com" }));
+      expect(getFirstGuardedFetchCall().pinDns).toBe(false);
+    });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
-    expect(sleep).toHaveBeenCalledWith(0, undefined);
+    it("does not retry by default", async () => {
+      fetchWithSsrFGuardMock.mockReset();
+      fetchWithSsrFGuardMock
+        .mockRejectedValueOnce(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }))
+        .mockResolvedValueOnce({
+          response: new Response(null, { status: 200 }),
+          finalUrl: "https://api.example.com",
+          release: async () => {},
+        });
+
+      await expect(
+        send({
+          url: "https://api.example.com/v1/transcriptions",
+          headers: new Headers(),
+          body: "audio-bytes",
+          fetchFn: fetch,
+        }),
+      ).rejects.toThrow("socket hang up");
+
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("retries only when marked as read operations", async () => {
+      fetchWithSsrFGuardMock.mockReset();
+      const sleep = vi.fn(async () => undefined);
+      fetchWithSsrFGuardMock
+        .mockRejectedValueOnce(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }))
+        .mockResolvedValueOnce({
+          response: new Response(null, { status: 200 }),
+          finalUrl: "https://api.example.com",
+          release: async () => {},
+        });
+
+      await expect(
+        send({
+          url: "https://api.example.com/v1/transcriptions",
+          headers: new Headers(),
+          body: "audio-bytes",
+          fetchFn: fetch,
+          retryStage: "read",
+          retry: { attempts: 2, baseDelayMs: 0, maxDelayMs: 0, sleep },
+        }),
+      ).resolves.toEqual(expect.objectContaining({ finalUrl: "https://api.example.com" }));
+
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+      expect(sleep).toHaveBeenCalledWith(0, undefined);
+    });
   });
 
   it("does not set a guarded fetch mode when no HTTP proxy env is configured", async () => {

@@ -6,27 +6,13 @@
 import {
   clampTimerTimeoutMs,
   MAX_TIMER_TIMEOUT_MS,
+  resolveOptionalIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const DEFAULT_AGENT_TIMEOUT_SECONDS = 48 * 60 * 60;
 export const DEFAULT_AGENT_TIMEOUT_MS = DEFAULT_AGENT_TIMEOUT_SECONDS * 1000;
 const NO_TIMEOUT_MS = MAX_TIMER_TIMEOUT_MS;
-const NO_TIMEOUT_SECONDS = Math.floor(NO_TIMEOUT_MS / 1000);
-
-const normalizeNumber = (value: unknown): number | undefined =>
-  typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : undefined;
-
-function resolveAgentTimeoutSeconds(cfg?: OpenClawConfig): number {
-  const raw = normalizeNumber(cfg?.agents?.defaults?.timeoutSeconds);
-  // Config 0 uses the same unlimited-run sentinel as per-run overrides. The
-  // LLM idle watchdog still enforces liveness under that sentinel.
-  if (raw === 0) {
-    return NO_TIMEOUT_SECONDS;
-  }
-  const seconds = raw ?? DEFAULT_AGENT_TIMEOUT_SECONDS;
-  return Math.max(seconds, 1);
-}
 
 export function resolveAgentTimeoutMs(opts: {
   cfg?: OpenClawConfig;
@@ -34,10 +20,14 @@ export function resolveAgentTimeoutMs(opts: {
   overrideSeconds?: number | null;
   minMs?: number;
 }): number {
-  const minMs = Math.max(normalizeNumber(opts.minMs) ?? 1, 1);
+  const minMs = Math.max(resolveOptionalIntegerOption(opts.minMs) ?? 1, 1);
   const clampTimeoutMs = (valueMs: number) => clampTimerTimeoutMs(valueMs, minMs) ?? minMs;
-  const defaultMs = clampTimeoutMs(resolveAgentTimeoutSeconds(opts.cfg) * 1000);
-  const overrideMs = normalizeNumber(opts.overrideMs);
+  const seconds =
+    resolveOptionalIntegerOption(opts.cfg?.agents?.defaults?.timeoutSeconds) ??
+    DEFAULT_AGENT_TIMEOUT_SECONDS;
+  // Config and per-run zero share the exact timer-safe unlimited sentinel.
+  const defaultMs = seconds === 0 ? NO_TIMEOUT_MS : clampTimeoutMs(Math.max(seconds, 1) * 1000);
+  const overrideMs = resolveOptionalIntegerOption(opts.overrideMs);
   if (overrideMs !== undefined) {
     if (overrideMs === 0) {
       return NO_TIMEOUT_MS;
@@ -47,7 +37,7 @@ export function resolveAgentTimeoutMs(opts: {
     }
     return clampTimeoutMs(overrideMs);
   }
-  const overrideSeconds = normalizeNumber(opts.overrideSeconds);
+  const overrideSeconds = resolveOptionalIntegerOption(opts.overrideSeconds);
   if (overrideSeconds !== undefined) {
     if (overrideSeconds === 0) {
       return NO_TIMEOUT_MS;

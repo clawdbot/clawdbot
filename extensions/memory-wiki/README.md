@@ -100,16 +100,18 @@ normalized agent id:
 
 This resolves agents such as `support` and `marketing` to
 `~/.openclaw/wiki/support` and `~/.openclaw/wiki/marketing`. With no explicit
-path, the parent defaults to `~/.openclaw/wiki`; the default `main` agent
-therefore keeps the existing `~/.openclaw/wiki/main` path. In global scope,
-`vault.path` remains the exact shared vault path.
+path, the parent defaults to `<state-dir>/wiki`; the default `main` agent
+therefore uses `<state-dir>/wiki/main`. The state directory is `~/.openclaw` by
+default and follows `OPENCLAW_STATE_DIR` when configured. In global scope,
+`vault.path` remains the exact shared vault path; explicit paths and `~/`
+expansion keep their existing behavior.
 
 Wiki tools and compiled prompt/corpus supplements resolve the active runtime
 agent on each call. In bridge mode, an agent vault imports only public memory
 artifacts whose `agentIds` includes that agent; unowned and other-agent
-artifacts are skipped. CLI and Gateway operations require an explicit agent in
-multi-agent setups; use `openclaw wiki --agent <agentId> ...` or pass `agentId`
-to the `wiki.*` RPC request. A single configured agent may remain implicit.
+artifacts are skipped. CLI operations use the configured default agent unless
+the command passes `--agent <agentId>`; Gateway operations in multi-agent
+setups require `agentId` on the `wiki.*` RPC request.
 
 Configuration validation rejects agent scope with either
 `vaultMode: "unsafe-local"` or `obsidian.useOfficialCli: true`. Obsidian-friendly
@@ -182,8 +184,8 @@ openclaw wiki obsidian command workspace:quick-switcher
 openclaw wiki obsidian daily
 
 # Agent-scoped vault
-openclaw wiki --agent support status
-openclaw wiki --agent support search "refund policy"
+openclaw wiki status --agent support
+openclaw wiki search "refund policy" --agent support
 ```
 
 ## Agent tools

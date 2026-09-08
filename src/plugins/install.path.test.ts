@@ -1,32 +1,16 @@
 // Covers plugin install path validation and normalization.
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { runCommandWithTimeout } from "../process/exec.js";
+import { afterAll, describe, expect, it } from "vitest";
 import { installPluginFromPath, PLUGIN_INSTALL_ERROR_CODE } from "./install.js";
 import { packToArchive } from "./test-helpers/archive-fixtures.js";
-import { createSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
-import {
-  createBundleInstallFixtureFactory,
-  createDualFormatInstallFixtureFactory,
-} from "./test-helpers/install-fixtures.js";
+import { createSyncSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
+import { createBundleInstallFixtureFactory } from "./test-helpers/install-fixtures.js";
 
-vi.mock("../process/exec.js", () => ({
-  runCommandWithTimeout: vi.fn(),
-}));
-
-const suiteTempRootTracker = createSuiteTempRootTracker("openclaw-plugin-install-path");
+const suiteTempRootTracker = createSyncSuiteTempRootTracker("openclaw-plugin-install-path");
 const setupBundleInstallFixture = createBundleInstallFixtureFactory(
   suiteTempRootTracker.makeTempDir,
 );
-const setupDualFormatInstallFixture = createDualFormatInstallFixtureFactory(
-  suiteTempRootTracker.makeTempDir,
-);
-let dualFormatArchiveCase: {
-  nodeModulesExists: boolean;
-  result: Awaited<ReturnType<typeof installPluginFromPath>>;
-  runCalls: unknown[][];
-};
 
 function setupNativePluginInstallFixture() {
   const caseDir = suiteTempRootTracker.makeTempDir();
@@ -58,46 +42,43 @@ afterAll(() => {
   suiteTempRootTracker.cleanup();
 });
 
-beforeAll(async () => {
-  const { pluginDir, extensionsDir } = setupDualFormatInstallFixture({
-    bundleFormat: "claude",
-  });
-  const archivePath = path.join(suiteTempRootTracker.makeTempDir(), "dual-format.tgz");
-
-  await packToArchive({
-    pkgDir: pluginDir,
-    outDir: path.dirname(archivePath),
-    outName: path.basename(archivePath),
-  });
-
-  const run = vi.mocked(runCommandWithTimeout);
-  run.mockReset();
-  run.mockResolvedValue({
-    code: 0,
-    stdout: "",
-    stderr: "",
-    signal: null,
-    killed: false,
-    termination: "exit",
-  });
-
-  const result = await installPluginFromPath({
-    path: archivePath,
-    extensionsDir,
-  });
-  dualFormatArchiveCase = {
-    nodeModulesExists: result.ok && fs.existsSync(path.join(result.targetDir, "node_modules")),
-    result,
-    runCalls: [...run.mock.calls],
-  };
-});
-
-beforeEach(() => {
-  vi.clearAllMocks();
-  vi.unstubAllEnvs();
-});
-
 describe("installPluginFromPath", () => {
+  it.each(["native plugin", "bundle"] as const)(
+    "does not publish an archived %s after authority closes during artifact review",
+    async (kind) => {
+      const { pluginDir, extensionsDir } =
+        kind === "native plugin"
+          ? setupNativePluginInstallFixture()
+          : setupBundleInstallFixture({ bundleFormat: "claude", name: "Guarded Bundle" });
+      const pluginId = kind === "native plugin" ? "symlink-plugin" : "guarded-bundle";
+      const archivePath = await packToArchive({
+        pkgDir: pluginDir,
+        outDir: suiteTempRootTracker.makeTempDir(),
+        outName: "guarded-plugin.tgz",
+      });
+      let authorityActive = true;
+      const result = await installPluginFromPath({
+        path: archivePath,
+        extensionsDir,
+        onBeforePluginArtifactCommit: async () => {
+          authorityActive = false;
+        },
+        beforePersistentApply: () => {
+          if (!authorityActive) {
+            throw new Error("plugin installation authority closed");
+          }
+        },
+      });
+
+      expect(authorityActive).toBe(false);
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("plugin installation authority closed"),
+      });
+      expect(fs.existsSync(path.join(extensionsDir, pluginId))).toBe(false);
+    },
+  );
+
   it("rejects managed plain file plugin installs through path install", async () => {
     const baseDir = suiteTempRootTracker.makeTempDir();
     const extensionsDir = path.join(baseDir, "extensions");
@@ -146,41 +127,46 @@ describe("installPluginFromPath", () => {
     },
   );
 
-  it("installs Claude bundles from an archive path", async () => {
-    const { pluginDir, extensionsDir } = setupBundleInstallFixture({
-      bundleFormat: "claude",
+  it.each([
+    {
+      format: "agent" as const,
+      name: "Portable Sample",
+      pluginId: "portable-sample",
+      archiveName: "agent-bundle.tgz",
+      manifestPath: "plugin.json",
+    },
+    {
+      format: "claude" as const,
       name: "Claude Sample",
-    });
-    const archivePath = path.join(suiteTempRootTracker.makeTempDir(), "claude-bundle.tgz");
+      pluginId: "claude-sample",
+      archiveName: "claude-bundle.tgz",
+      manifestPath: path.join(".claude-plugin", "plugin.json"),
+    },
+  ])(
+    "installs $format bundles from an archive path",
+    async ({ format, name, pluginId, archiveName, manifestPath }) => {
+      const { pluginDir, extensionsDir } = setupBundleInstallFixture({
+        bundleFormat: format,
+        name,
+      });
+      const archivePath = path.join(suiteTempRootTracker.makeTempDir(), archiveName);
 
-    await packToArchive({
-      pkgDir: pluginDir,
-      outDir: path.dirname(archivePath),
-      outName: path.basename(archivePath),
-    });
+      await packToArchive({
+        pkgDir: pluginDir,
+        outDir: path.dirname(archivePath),
+        outName: path.basename(archivePath),
+      });
 
-    const result = await installPluginFromPath({
-      path: archivePath,
-      extensionsDir,
-    });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-    expect(result.pluginId).toBe("claude-sample");
-    expect(fs.existsSync(path.join(result.targetDir, ".claude-plugin", "plugin.json"))).toBe(true);
-  });
-
-  it("prefers native package metadata without installing dependencies for dual-format archives", async () => {
-    const { nodeModulesExists, result, runCalls } = dualFormatArchiveCase;
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-    expect(result.pluginId).toBe("native-dual");
-    expect(path.basename(result.targetDir)).toBe("native-dual");
-    expect(runCalls).toHaveLength(0);
-    expect(nodeModulesExists).toBe(false);
-  });
+      const result = await installPluginFromPath({
+        path: archivePath,
+        extensionsDir,
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      expect(result.pluginId).toBe(pluginId);
+      expect(fs.existsSync(path.join(result.targetDir, manifestPath))).toBe(true);
+    },
+  );
 });

@@ -2,18 +2,21 @@
 import { ApplicationCommandType, ChannelType, InteractionContextType } from "discord-api-types/v10";
 import type { ChatCommandDefinition } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { nativeCommandRuntime } from "./native-command.runtime.js";
+import { createDiscordLivePolicyReader } from "./live-policy.js";
+import type { DiscordLivePolicy, DiscordLivePolicyReader } from "./live-policy.js";
 
 const { loadModelCatalogMock, logVerboseMock } = vi.hoisted(() => ({
   loadModelCatalogMock: vi.fn(),
   logVerboseMock: vi.fn(),
 }));
-const { loggerWarnMock } = vi.hoisted(() => ({
+const { loggerDebugMock, loggerWarnMock } = vi.hoisted(() => ({
+  loggerDebugMock: vi.fn(),
   loggerWarnMock: vi.fn(),
 }));
 
@@ -28,7 +31,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
       info: vi.fn(),
       error: vi.fn(),
       warn: loggerWarnMock,
-      debug: vi.fn(),
+      debug: loggerDebugMock,
     }),
     logVerbose: logVerboseMock,
   };
@@ -50,6 +53,7 @@ let createNoopThreadBindingManager: typeof import("./thread-bindings.js").create
 function createNativeCommand(
   name: string,
   opts?: {
+    readPolicy?: DiscordLivePolicyReader;
     cfg?: OpenClawConfig;
     discordConfig?: NonNullable<OpenClawConfig["channels"]>["discord"];
   },
@@ -74,6 +78,7 @@ function createNativeCommand(
           },
         };
   return createDiscordNativeCommand({
+    readPolicy: opts?.readPolicy,
     command,
     cfg,
     discordConfig,
@@ -235,6 +240,7 @@ describe("createDiscordNativeCommand option wiring", () => {
     clearRuntimeConfigSnapshot();
     loadModelCatalogMock.mockReset().mockReturnValue({ entries: [], routeVariants: [] });
     logVerboseMock.mockReset();
+    loggerDebugMock.mockReset();
     loggerWarnMock.mockReset();
   });
 
@@ -366,6 +372,119 @@ describe("createDiscordNativeCommand option wiring", () => {
     ]);
   });
 
+  it.each(["resolve", "reject"] as const)(
+    "returns empty autocomplete before its deadline when policy later $0s",
+    async (outcome) => {
+      vi.useFakeTimers();
+      try {
+        let resolvePolicy!: (value: DiscordLivePolicy) => void;
+        let rejectPolicy!: (error: Error) => void;
+        const pendingPolicy = new Promise<DiscordLivePolicy>((resolve, reject) => {
+          resolvePolicy = resolve;
+          rejectPolicy = reject;
+        });
+        const command = createNativeCommand("think", { readPolicy: () => pendingPolicy });
+        const autocomplete = requireAutocomplete(
+          requireOption(command, "level"),
+          "think level option did not wire autocomplete",
+        );
+        const respond = vi.fn(async () => undefined);
+        const run = autocomplete({
+          user: { id: "123456789", username: "AgentUser" },
+          channel: { type: ChannelType.DM, id: "dm-channel", name: "dm-channel" },
+          rawData: { member: { roles: [] } },
+          options: { getFocused: () => ({ value: "" }) },
+          respond,
+          client: {},
+        });
+
+        await vi.advanceTimersByTimeAsync(1_001);
+
+        expect(respond).toHaveBeenCalledExactlyOnceWith([]);
+        await run;
+        if (outcome === "resolve") {
+          resolvePolicy({
+            isCurrent: () => true,
+            accountId: "default",
+            cfg: {},
+            discordConfig: { dmPolicy: "open", allowFrom: ["*"] },
+            guildEntries: undefined,
+            allowFrom: ["*"],
+            dmPolicy: "open",
+            groupPolicy: "allowlist",
+            dmEnabled: true,
+            groupDmEnabled: false,
+            groupDmChannels: [],
+            allowNameMatching: false,
+          });
+        } else {
+          rejectPolicy(new Error("late autocomplete policy failure"));
+        }
+        await vi.advanceTimersByTimeAsync(0);
+        expect(respond).toHaveBeenCalledExactlyOnceWith([]);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("returns empty autocomplete when access is revoked during the pairing-store read", async () => {
+    const dmAuth = await import("./dm-command-auth.js");
+    const resolveDmAccess = dmAuth.resolveDiscordDmCommandAccess;
+    const stored = createDeferred<string[]>();
+    const readStarted = createDeferred<void>();
+    const authSpy = vi.spyOn(dmAuth, "resolveDiscordDmCommandAccess").mockImplementation((params) =>
+      resolveDmAccess({
+        ...params,
+        readStoreAllowFrom: async () => {
+          readStarted.resolve();
+          return await stored.promise;
+        },
+      }),
+    );
+    const cfg: OpenClawConfig = {
+      channels: { discord: { dmPolicy: "pairing", allowFrom: [] } },
+    };
+    setRuntimeConfigSnapshot(cfg, cfg);
+    const command = createNativeCommand("think", {
+      cfg,
+      readPolicy: createDiscordLivePolicyReader({
+        cfg,
+        accountId: "default",
+        token: "synthetic-token",
+        resolvedAllowlist: { guildEntries: undefined, allowFrom: [] },
+      }),
+    });
+    const autocomplete = requireAutocomplete(
+      requireOption(command, "level"),
+      "think level option did not wire autocomplete",
+    );
+    try {
+      const run = runAutocomplete(autocomplete, {
+        userId: "123456789",
+        channelType: ChannelType.DM,
+        channelId: "dm-channel",
+        channelName: "dm-channel",
+        focusedValue: "",
+      });
+      await readStarted.promise;
+      loadModelCatalogMock.mockClear();
+      const revoked: OpenClawConfig = {
+        channels: { discord: { dmPolicy: "disabled", allowFrom: [] } },
+      };
+      setRuntimeConfigSnapshot(revoked, revoked);
+      stored.resolve(["123456789"]);
+      const respond = await run;
+
+      expect(respond).toHaveBeenCalledExactlyOnceWith([]);
+      expect(loadModelCatalogMock).not.toHaveBeenCalled();
+    } finally {
+      stored.resolve([]);
+      authSpy.mockRestore();
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
   it("returns no autocomplete choices for unauthorized users", async () => {
     const command = createNativeCommand("think", {
       cfg: {
@@ -396,7 +515,7 @@ describe("createDiscordNativeCommand option wiring", () => {
     await expect(
       resolveAutocompleteAuthorized({
         cfg: createAllowedGuildAutocompleteConfig({
-          ownerAllowFrom: ["user:owner-user"],
+          ownerAllowFrom: ["discord:owner-user"],
         }),
         userId: "blocked-user",
         username: "blocked",
@@ -409,7 +528,7 @@ describe("createDiscordNativeCommand option wiring", () => {
     await expect(
       resolveAutocompleteAuthorized({
         cfg: createAllowedGuildAutocompleteConfig({
-          ownerAllowFrom: ["user:owner-user"],
+          ownerAllowFrom: ["discord:owner-user"],
           allowFrom: {
             discord: ["user:allowed-user"],
           },
@@ -422,7 +541,7 @@ describe("createDiscordNativeCommand option wiring", () => {
     await expect(
       resolveAutocompleteAuthorized({
         cfg: createAllowedGuildAutocompleteConfig({
-          ownerAllowFrom: ["user:owner-user"],
+          ownerAllowFrom: ["discord:owner-user"],
           allowFrom: {
             discord: ["user:allowed-user"],
           },
@@ -435,78 +554,73 @@ describe("createDiscordNativeCommand option wiring", () => {
   });
 
   it("keeps plugin command autocomplete aligned with dispatch owner checks", async () => {
-    const restoreMatchPluginCommand = nativeCommandRuntime.matchPluginCommand;
-    nativeCommandRuntime.matchPluginCommand = (prompt) =>
-      prompt === "/pair" ? ({ command: { name: "pair" }, args: "" } as never) : null;
-    try {
-      const command = createDiscordNativeCommand({
-        command: {
-          name: "pair",
-          description: "Pair",
-          acceptsArgs: true,
-          args: [
-            {
-              name: "mode",
-              description: "Pairing mode",
-              type: "string",
-              preferAutocomplete: true,
-              choices: () => [
-                { label: "fast", value: "fast" },
-                { label: "secure", value: "secure" },
-              ],
-            },
-          ],
-        },
-        cfg: createAllowedGuildAutocompleteConfig({
-          ownerAllowFrom: ["user:owner-user"],
+    const command = createDiscordNativeCommand({
+      command: {
+        name: "pair",
+        description: "Pair",
+        acceptsArgs: true,
+        args: [
+          {
+            name: "mode",
+            description: "Pairing mode",
+            type: "string",
+            preferAutocomplete: true,
+            choices: () => [
+              { label: "fast", value: "fast" },
+              { label: "secure", value: "secure" },
+            ],
+          },
+        ],
+        requireAuth: true,
+        prepareDispatch: () => ({
+          kind: "plugin" as const,
+          invocation: {
+            runtime: { execute: vi.fn() },
+            selection: Object.freeze({}),
+          },
         }),
-        discordConfig: {
-          groupPolicy: "allowlist",
-          guilds: {
-            "guild-1": {
-              channels: {
-                "channel-1": {
-                  enabled: true,
-                  requireMention: false,
-                },
+      } as never,
+      cfg: createAllowedGuildAutocompleteConfig({
+        ownerAllowFrom: ["discord:owner-user"],
+      }),
+      discordConfig: {
+        groupPolicy: "allowlist",
+        guilds: {
+          "guild-1": {
+            channels: {
+              "channel-1": {
+                enabled: true,
+                requireMention: false,
               },
             },
           },
         },
-        accountId: "default",
-        sessionPrefix: "discord:slash",
-        ephemeralDefault: true,
-        threadBindings: createNoopThreadBindingManager("default"),
-      });
-      const mode = requireOption(command, "mode");
-      const autocomplete = requireAutocomplete(
-        mode,
-        "plugin mode option did not wire autocomplete",
-      );
-      const respond = await runAutocomplete(autocomplete, {
-        userId: "blocked-user",
-        username: "blocked",
-        globalName: "Blocked",
-        channelType: ChannelType.GuildText,
-        channelId: "channel-1",
-        channelName: "general",
-        guildId: "guild-1",
-        focusedValue: "",
-      });
+      },
+      accountId: "default",
+      sessionPrefix: "discord:slash",
+      ephemeralDefault: true,
+      threadBindings: createNoopThreadBindingManager("default"),
+    });
+    const mode = requireOption(command, "mode");
+    const autocomplete = requireAutocomplete(mode, "plugin mode option did not wire autocomplete");
+    const respond = await runAutocomplete(autocomplete, {
+      userId: "blocked-user",
+      username: "blocked",
+      globalName: "Blocked",
+      channelType: ChannelType.GuildText,
+      channelId: "channel-1",
+      channelName: "general",
+      guildId: "guild-1",
+      focusedValue: "",
+    });
 
-      expect(respond).toHaveBeenCalledWith([
-        { name: "fast", value: "fast" },
-        { name: "secure", value: "secure" },
-      ]);
-    } finally {
-      nativeCommandRuntime.matchPluginCommand = restoreMatchPluginCommand;
-    }
+    expect(respond).toHaveBeenCalledWith([
+      { name: "fast", value: "fast" },
+      { name: "secure", value: "secure" },
+    ]);
   });
 
   it("refreshes autocomplete authorization and dynamic choices between invocations", async () => {
-    const restoreMatchPluginCommand = nativeCommandRuntime.matchPluginCommand;
-    nativeCommandRuntime.matchPluginCommand = (prompt) =>
-      prompt === "/scope" ? ({ command: { name: "scope" }, args: "" } as never) : null;
     const sourceCfg = {
       session: { dmScope: "main" },
       channels: {
@@ -526,56 +640,57 @@ describe("createDiscordNativeCommand option wiring", () => {
         },
       },
     } as OpenClawConfig;
-    try {
-      const command = createDiscordNativeCommand({
-        command: {
-          name: "scope",
-          description: "Scope",
-          acceptsArgs: true,
-          args: [
-            {
-              name: "value",
-              description: "Scope value",
-              type: "string",
-              preferAutocomplete: true,
-              choices: ({ cfg }) => {
-                const dmScope = cfg?.session?.dmScope ?? "missing";
-                return [{ label: dmScope, value: dmScope }];
-              },
+    const command = createDiscordNativeCommand({
+      command: {
+        name: "scope",
+        description: "Scope",
+        acceptsArgs: true,
+        args: [
+          {
+            name: "value",
+            description: "Scope value",
+            type: "string",
+            preferAutocomplete: true,
+            choices: ({ cfg }: { cfg?: OpenClawConfig }) => {
+              const dmScope = cfg?.session?.dmScope ?? "missing";
+              return [{ label: dmScope, value: dmScope }];
             },
-          ],
-        },
-        cfg: sourceCfg,
-        discordConfig: sourceCfg.channels?.discord ?? {},
-        accountId: "default",
-        sessionPrefix: "discord:slash",
-        ephemeralDefault: true,
-        threadBindings: createNoopThreadBindingManager("default"),
-      });
-      const value = requireOption(command, "value");
-      const autocomplete = requireAutocomplete(
-        value,
-        "scope value option did not wire autocomplete",
-      );
-      const autocompleteParams = {
-        userId: "owner",
-        channelType: ChannelType.DM,
-        channelId: "dm-1",
-        channelName: "dm-1",
-        focusedValue: "",
-      } as const;
+          },
+        ],
+        requireAuth: true,
+        prepareDispatch: () => ({
+          kind: "plugin" as const,
+          invocation: {
+            runtime: { execute: vi.fn() },
+            selection: Object.freeze({}),
+          },
+        }),
+      } as never,
+      cfg: sourceCfg,
+      discordConfig: sourceCfg.channels?.discord ?? {},
+      accountId: "default",
+      sessionPrefix: "discord:slash",
+      ephemeralDefault: true,
+      threadBindings: createNoopThreadBindingManager("default"),
+    });
+    const value = requireOption(command, "value");
+    const autocomplete = requireAutocomplete(value, "scope value option did not wire autocomplete");
+    const autocompleteParams = {
+      userId: "owner",
+      channelType: ChannelType.DM,
+      channelId: "dm-1",
+      channelName: "dm-1",
+      focusedValue: "",
+    } as const;
 
-      const blockedRespond = await runAutocomplete(autocomplete, autocompleteParams);
-      expect(blockedRespond).toHaveBeenCalledWith([]);
+    const blockedRespond = await runAutocomplete(autocomplete, autocompleteParams);
+    expect(blockedRespond).toHaveBeenCalledWith([]);
 
-      setRuntimeConfigSnapshot(runtimeCfg, runtimeCfg);
-      const refreshedRespond = await runAutocomplete(autocomplete, autocompleteParams);
-      expect(refreshedRespond).toHaveBeenCalledWith([
-        { name: "per-channel-peer", value: "per-channel-peer" },
-      ]);
-    } finally {
-      nativeCommandRuntime.matchPluginCommand = restoreMatchPluginCommand;
-    }
+    setRuntimeConfigSnapshot(runtimeCfg, runtimeCfg);
+    const refreshedRespond = await runAutocomplete(autocomplete, autocompleteParams);
+    expect(refreshedRespond).toHaveBeenCalledWith([
+      { name: "per-channel-peer", value: "per-channel-peer" },
+    ]);
   });
 
   it("returns no autocomplete choices outside the Discord allowlist when commands.useAccessGroups is false and commands.allowFrom is not configured", async () => {
@@ -679,6 +794,15 @@ describe("createDiscordNativeCommand option wiring", () => {
 
     expect(command.description).toBe("x".repeat(99));
     expect(requireOption(command, "input").description).toBe("x".repeat(99));
+    expect(loggerDebugMock).toHaveBeenNthCalledWith(
+      1,
+      `discord: truncating native command description (command:longdesc arg:input) from ${longDescription.length} to 100: ${JSON.stringify(longDescription)}`,
+    );
+    expect(loggerDebugMock).toHaveBeenNthCalledWith(
+      2,
+      `discord: truncating native command description (command:longdesc) from ${longDescription.length} to 100: ${JSON.stringify(longDescription)}`,
+    );
+    expect(loggerWarnMock).not.toHaveBeenCalled();
   });
 
   it("serializes localized command descriptions on a UTF-16 boundary", () => {

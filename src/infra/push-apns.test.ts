@@ -1,12 +1,13 @@
-// Tests APNS push signing and request construction.
 import { generateKeyPairSync } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { createServer, type Server as HttpServer } from "node:http";
 import http2 from "node:http2";
 import net from "node:net";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+// Tests APNS push signing and request construction.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../test-utils/deferred.js";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { startProxy, stopProxy, type ProxyHandle } from "./net/proxy/proxy-lifecycle.js";
 import {
   appendApnsResponseBodyCapture,
@@ -177,12 +178,7 @@ async function closeServer(server: HttpServer | http2.Http2SecureServer): Promis
   });
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "label-not-object");
 
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
@@ -564,10 +560,14 @@ describe("push APNs send semantics", () => {
       .spyOn(http2, "connect")
       .mockReturnValue(session as unknown as http2.ClientHttp2Session);
     const currentness = createDeferred<boolean>();
+    const checkingCurrentness = createDeferred();
     const isCurrent = vi
       .fn<() => Promise<boolean>>()
       .mockResolvedValueOnce(true)
-      .mockReturnValueOnce(currentness.promise);
+      .mockImplementationOnce(() => {
+        checkingCurrentness.resolve();
+        return currentness.promise;
+      });
     const { registration, auth } = createDirectApnsSendFixture({
       nodeId: "ios-node-session-error",
       environment: "production",
@@ -582,10 +582,13 @@ describe("push APNs send semantics", () => {
         auth,
         isCurrent,
       });
-      await vi.waitFor(() => {
-        expect(connect).toHaveBeenCalledTimes(1);
-        expect(isCurrent).toHaveBeenCalledTimes(2);
-      });
+      await withTestTimeout(
+        checkingCurrentness.promise,
+        1_000,
+        "APNs persistent currentness check did not start",
+      );
+      expect(connect).toHaveBeenCalledTimes(1);
+      expect(isCurrent).toHaveBeenCalledTimes(2);
 
       expect(session.listenerCount("error")).toBeGreaterThan(0);
       session.emit("error", new Error("APNs connection failed"));

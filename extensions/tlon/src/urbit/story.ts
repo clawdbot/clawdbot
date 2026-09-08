@@ -9,6 +9,7 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 // Inline content types
 type StoryInline =
   | string
+  | { imageBlock: { src: string; alt: string } }
   | { bold: StoryInline[] }
   | { italics: StoryInline[] }
   | { strike: StoryInline[] }
@@ -117,11 +118,11 @@ function parseInlineMarkdown(text: string): StoryInline[] {
     if (imageMatch) {
       // Return a special marker that will be hoisted to a block
       result.push({
-        __image: {
+        imageBlock: {
           src: expectDefined(imageMatch[2], "image URL capture"),
           alt: expectDefined(imageMatch[1], "image alt capture"),
         },
-      } as unknown as StoryInline);
+      });
       remaining = remaining.slice(imageMatch[0].length);
       continue;
     }
@@ -230,8 +231,8 @@ function processInlinesForImages(inlines: StoryInline[]): {
   const imageBlocks: StoryVerse[] = [];
 
   for (const inline of inlines) {
-    if (typeof inline === "object" && "__image" in inline) {
-      const img = (inline as unknown as { __image: { src: string; alt: string } })["__image"];
+    if (typeof inline === "object" && "imageBlock" in inline) {
+      const img = inline.imageBlock;
       imageBlocks.push(createImageBlock(img.src, img.alt));
     } else {
       cleanInlines.push(inline);
@@ -644,17 +645,14 @@ export function markdownToStory(markdown: string): Story {
     // preserve the whole block in the existing plain paragraph path.
     let preserveListText = preservesLooseList || MARKDOWN_LIST_ITEM_PATTERN.test(line);
 
-    // Regular paragraph - collect consecutive non-empty lines
+    // Only interrupt for blocks consumed above; plain hashtags must advance the cursor.
     const paragraphLines: string[] = [];
     while (true) {
       const paragraphLine = lines.at(i);
       if (
         paragraphLine === undefined ||
         paragraphLine.trim() === "" ||
-        paragraphLine.startsWith("#") ||
-        paragraphLine.startsWith("```") ||
-        paragraphLine.startsWith("> ") ||
-        /^(-{3,}|\*{3,})$/.test(paragraphLine.trim())
+        startsTopLevelStoryBlock(paragraphLine)
       ) {
         break;
       }

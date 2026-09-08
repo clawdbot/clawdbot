@@ -17,7 +17,6 @@ vi.mock("../plugins/provider-runtime.js", () => {
   }
 
   return {
-    applyProviderNativeStreamingUsageCompatWithPlugin: () => undefined,
     normalizeProviderConfigWithPlugin: (params: {
       context: { provider: string; providerConfig?: ProviderConfig };
     }) => {

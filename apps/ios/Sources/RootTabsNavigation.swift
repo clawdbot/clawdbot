@@ -1,5 +1,7 @@
 import CoreGraphics
 import Foundation
+import OpenClawChatUI
+import OpenClawKit
 import SwiftUI
 
 extension RootTabs {
@@ -27,6 +29,7 @@ extension RootTabs {
         case dreaming
         case usage
         case cron
+        case desktop
         case terminal
         case docs
         case settings
@@ -50,6 +53,7 @@ extension RootTabs {
             case .dreaming: String(localized: "Dreaming")
             case .usage: String(localized: "Usage")
             case .cron: String(localized: "Automations")
+            case .desktop: String(localized: "Desktop")
             case .terminal: String(localized: "Terminal")
             case .docs: String(localized: "Docs")
             case .settings: String(localized: "Settings")
@@ -78,10 +82,33 @@ extension RootTabs {
             case .dreaming: "moon.stars"
             case .usage: "chart.bar.xaxis"
             case .cron: "timer"
+            case .desktop: "display"
             case .terminal: "terminal"
             case .docs: "book"
             case .settings: "gearshape"
             case .gateway: "gearshape"
+            }
+        }
+
+        var screen: SidebarScreen {
+            switch self {
+            case .activity: .dashboard(DashboardRouteMap.activityPagePath)
+            case .workboard: .dashboard(DashboardRouteMap.workboardPagePath)
+            case .skillWorkshop: .dashboard(DashboardRouteMap.skillWorkshopPagePath)
+            case .instances: .dashboard(DashboardRouteMap.devicesSettingsPath)
+            case .dreaming: .dashboard(DashboardRouteMap.dreamingPagePath)
+            case .usage: .dashboard(DashboardRouteMap.usagePagePath)
+            case .cron: .dashboard(DashboardRouteMap.cronJobsPagePath)
+            case .chat: .chat
+            case .overview: .overview
+            case .agents: .agents
+            case .sessions: .sessions
+            case .files: .files
+            case .desktop: .desktop
+            case .terminal: .terminal
+            case .docs: .docs
+            case .settings: .settings
+            case .gateway: .gateway
             }
         }
 
@@ -92,15 +119,48 @@ extension RootTabs {
             case .chat, .overview, .activity, .agents, .workboard, .skillWorkshop, .instances, .sessions,
                  .files,
                  .dreaming,
-                 .usage, .cron, .terminal, .settings, .docs:
+                 .usage, .cron, .desktop, .terminal, .settings, .docs:
                 nil
             }
         }
     }
 
+    enum SidebarScreen: Equatable {
+        case dashboard(String)
+        case chat, overview, agents, sessions, files, desktop, terminal, docs, settings, gateway
+    }
+
+    static func notificationSettingsPath(servingEnabled: Bool, disclosureAccepted: Bool) -> String {
+        servingEnabled && disclosureAccepted
+            ? DashboardRouteMap.devicePermissionsSettingsPath
+            : DashboardRouteMap.deviceSettingsPath
+    }
+
     enum SidebarLayoutMode: Equatable {
         case drawer
         case split
+    }
+
+    enum SidebarSessionPresentation: Equatable {
+        case chat
+        case dashboard
+    }
+
+    struct SidebarDashboardTarget: Equatable {
+        let sessionKey: String
+        let agentId: String?
+    }
+
+    static func sidebarPresentation(for session: OpenClawChatSessionEntry) -> SidebarSessionPresentation {
+        session.boardFace == "dashboard" ? .dashboard : .chat
+    }
+
+    static func sidebarDashboardTarget(for session: OpenClawChatSessionEntry) -> SidebarDashboardTarget {
+        SidebarDashboardTarget(sessionKey: session.key, agentId: session.agentId)
+    }
+
+    static func sidebarLayoutContainerSize(contentSize: CGSize, windowSize: CGSize?) -> CGSize {
+        windowSize ?? contentSize
     }
 
     static func sidebarLayoutMode(containerSize: CGSize) -> SidebarLayoutMode {
@@ -138,10 +198,6 @@ extension RootTabs {
         return max(0, min(sidebarWidth, dragOffset))
     }
 
-    static func shouldShowSidebarRevealControl(isSidebarVisible: Bool) -> Bool {
-        !isSidebarVisible
-    }
-
     static func visibleSettingsRoute(
         navigationPath: [SettingsRoute],
         baseRoute: SettingsRoute?) -> SettingsRoute?
@@ -157,7 +213,7 @@ extension RootTabs {
         case .split:
             true
         case .drawer:
-            self.shouldShowSidebarRevealControl(isSidebarVisible: isSidebarVisible)
+            !isSidebarVisible
         }
     }
 
@@ -234,6 +290,7 @@ extension RootTabs {
         .instances,
         .files,
         .dreaming,
+        .desktop,
         .terminal,
         .docs,
     ]

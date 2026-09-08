@@ -27,10 +27,11 @@ export async function measureStartup<T>(
   return startupTrace ? startupTrace.measure(name, run) : await run();
 }
 
-export function createGatewayStartupTrace(log: GatewayLogger) {
+export function createGatewayStartupTrace(log: GatewayLogger, startedAt = performance.now()) {
   const logEnabled = isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE);
   let timelineConfig: OpenClawConfig | undefined;
   let eventLoopDelay: ReturnType<typeof monitorEventLoopDelay> | undefined;
+  let closed = false;
   const timelineOptions = () => ({
     ...(timelineConfig ? { config: timelineConfig } : {}),
     env: process.env,
@@ -39,14 +40,19 @@ export function createGatewayStartupTrace(log: GatewayLogger) {
     isDiagnosticsTimelineEnabled(timelineOptions()) &&
     isTruthyEnvValue(process.env.OPENCLAW_DIAGNOSTICS_EVENT_LOOP);
   const ensureEventLoopDelay = () => {
-    if (eventLoopDelay || (!logEnabled && !eventLoopTimelineEnabled())) {
+    if (closed || eventLoopDelay || (!logEnabled && !eventLoopTimelineEnabled())) {
       return;
     }
     eventLoopDelay = monitorEventLoopDelay({ resolution: 10 });
     eventLoopDelay.enable();
   };
   ensureEventLoopDelay();
-  const started = performance.now();
+  const close = () => {
+    eventLoopDelay?.disable();
+    eventLoopDelay = undefined;
+    closed = true;
+  };
+  const started = startedAt;
   let last = started;
   let spanSequence = 0;
   const formatMetric = (key: string, value: number | string) =>
@@ -122,6 +128,7 @@ export function createGatewayStartupTrace(log: GatewayLogger) {
     }
   };
   return {
+    close,
     setConfig(config: OpenClawConfig) {
       timelineConfig = config;
       ensureEventLoopDelay();
@@ -143,7 +150,7 @@ export function createGatewayStartupTrace(log: GatewayLogger) {
       emitEventLoopTimelineSample(name, eventLoopSample);
       last = now;
       if (name === "ready") {
-        eventLoopDelay?.disable();
+        close();
       }
     },
     detail(name: string, metrics: ReadonlyArray<readonly [string, number | string]>) {

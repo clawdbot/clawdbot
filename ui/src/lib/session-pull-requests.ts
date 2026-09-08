@@ -1,4 +1,8 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type {
+  ControlUiSessionPullRequest,
+  ControlUiSessionPullRequests,
   ControlUiSessionPullRequestSnapshot,
   ControlUiSessionPullRequestsChanged,
 } from "../../../src/gateway/control-ui-contract.js";
@@ -7,13 +11,49 @@ import {
   CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS,
 } from "../../../src/gateway/control-ui-contract.js";
 import type { ApplicationGateway } from "../app/gateway.ts";
+import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle.ts";
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
-import { normalizeAgentId, parseAgentSessionKey } from "./sessions/session-key.ts";
+import { createGatewaySetSyncLifecycle } from "./gateway-set-sync-lifecycle.ts";
+import { readSessionChangedEvent } from "./sessions/reconcile.ts";
+import { uiSessionEventMatches } from "./sessions/session-key.ts";
+
+export function sessionGitHubRepository(
+  snapshot: ControlUiSessionPullRequests | undefined,
+): { owner: string; repo: string } | null {
+  const repository = snapshot?.repository ?? snapshot?.branch ?? snapshot?.pullRequests[0];
+  return repository ? { owner: repository.owner, repo: repository.repo } : null;
+}
+
+export function summarizeSessionPullRequests(
+  pullRequests: readonly ControlUiSessionPullRequest[],
+  previous?: SessionCatalogPullRequestSummary,
+): SessionCatalogPullRequestSummary | undefined {
+  // Keep active work ahead of newer merged/closed history, as the sidebar and PR menu do.
+  const current =
+    pullRequests.find(({ state }) => state === "open") ??
+    pullRequests.find(({ state }) => state === "draft") ??
+    pullRequests.find(({ state }) => state === "merged") ??
+    pullRequests[0];
+  if (!current) {
+    return undefined;
+  }
+  const numbers = [...new Set(pullRequests.map((pullRequest) => pullRequest.number))]
+    .slice(0, 20)
+    .toSorted((left, right) => left - right);
+  return previous?.state === current.state && previous.numbers.join(",") === numbers.join(",")
+    ? previous
+    : { numbers, state: current.state };
+}
 
 export const SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD = "controlUi.sessionPullRequests.subscribe";
 
-const SUBSCRIPTION_RETRY_BASE_MS = 30_000;
-const SUBSCRIPTION_RETRY_MAX_MS = 5 * 60_000;
+const STRUCTURAL_SESSION_REASONS = new Set<unknown>([
+  "new",
+  "reset",
+  "branch-switch",
+  "fork",
+  "rewind",
+]);
 
 export type SessionPullRequestSnapshotStore = {
   watch: (
@@ -26,20 +66,12 @@ export type SessionPullRequestSnapshotStore = {
     owner: object,
     sessionKey: string,
   ) => Promise<ControlUiSessionPullRequestSnapshot | undefined>;
-  refresh: (sessionKey: string) => void;
+  refresh: (sessionKey: string) => boolean;
   get: (sessionKey: string) => ControlUiSessionPullRequestSnapshot | undefined;
   subscribe: (listener: () => void) => () => void;
 };
 
 const stores = new WeakMap<ApplicationGateway, SessionPullRequestSnapshotStore>();
-
-export function scopedSessionPullRequestKey(sessionKey: string, agentId?: string): string {
-  const key = sessionKey.trim();
-  if (!key || parseAgentSessionKey(key) || !agentId?.trim()) {
-    return key;
-  }
-  return `agent:${normalizeAgentId(agentId)}:${key}`;
-}
 
 function readChangedSessions(
   payload: unknown,
@@ -48,9 +80,7 @@ function readChangedSessions(
     return null;
   }
   const sessions = (payload as { sessions?: unknown }).sessions;
-  return sessions && typeof sessions === "object" && !Array.isArray(sessions)
-    ? (sessions as ControlUiSessionPullRequestsChanged["sessions"])
-    : null;
+  return asNullableRecord(sessions) as ControlUiSessionPullRequestsChanged["sessions"] | null;
 }
 
 function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotStore {
@@ -63,28 +93,10 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     Set<(snapshot: ControlUiSessionPullRequestSnapshot | undefined) => void>
   >();
   const pendingRefreshKeys = new Set<string>();
-  let knownClient = gateway.snapshot.client;
+  const connection = createGatewayConnectionLifecycle(gateway.snapshot);
   let lastHello: object | null = null;
   let lastSignature: string | null = null;
-  let retryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  let retryDelayMs = SUBSCRIPTION_RETRY_BASE_MS;
   let syncRequestGeneration = 0;
-  let syncScheduled = false;
-  let syncScheduleGeneration = 0;
-  let attached = false;
-  let stopGatewaySnapshots: (() => void) | null = null;
-  let stopGatewayEvents: (() => void) | null = null;
-  let visibilityDocument: Document | null = null;
-
-  const clearRetry = (resetDelay: boolean) => {
-    if (retryTimer !== null) {
-      globalThis.clearTimeout(retryTimer);
-      retryTimer = null;
-    }
-    if (resetDelay) {
-      retryDelayMs = SUBSCRIPTION_RETRY_BASE_MS;
-    }
-  };
 
   const notify = () => {
     for (const listener of Array.from(listeners)) {
@@ -140,14 +152,64 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
 
   const isActive = () => watchedByOwner.size > 0 || listeners.size > 0 || waiters.size > 0;
 
+  const retireConnection = () => {
+    syncRequestGeneration += 1;
+    lastHello = null;
+    lastSignature = null;
+    const hadSnapshots = snapshots.size > 0;
+    snapshots.clear();
+    for (const key of waiters.keys()) {
+      settle(key);
+    }
+    if (hadSnapshots) {
+      notify();
+    }
+  };
+
   const handleGatewaySnapshot = (snapshot: ApplicationGateway["snapshot"]) => {
-    if (snapshot.client !== knownClient || snapshot.hello !== lastHello) {
-      clearRetry(true);
-      scheduleSync();
+    const changed = connection.transition(snapshot);
+    if (changed) {
+      retireConnection();
+    }
+    if (changed || snapshot.hello !== lastHello) {
+      retry.reset();
+      lifecycle.schedule();
     }
   };
 
   const handleGatewayEvent: Parameters<ApplicationGateway["subscribeEvents"]>[0] = (event) => {
+    if (event.event === "sessions.changed") {
+      const changed = readSessionChangedEvent(event.payload);
+      const reason = asNullableRecord(event.payload)?.reason;
+      if (!changed || !STRUCTURAL_SESSION_REASONS.has(reason)) {
+        return;
+      }
+      const matchingKeys = watchedKeys().filter((sessionKey) =>
+        uiSessionEventMatches(
+          {
+            assistantAgentId: gateway.snapshot.assistantAgentId,
+            hello: gateway.snapshot.hello,
+            sessionKey,
+          },
+          changed.key,
+          changed.agentId,
+        ),
+      );
+      if (matchingKeys.length === 0) {
+        return;
+      }
+      let removed = false;
+      for (const sessionKey of matchingKeys) {
+        removed = snapshots.delete(sessionKey) || removed;
+        pendingRefreshKeys.add(sessionKey);
+      }
+      retry.reset();
+      if (removed) {
+        notify();
+      }
+      lifecycle.schedule();
+      return;
+    }
     if (event.event !== CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT) {
       return;
     }
@@ -161,19 +223,38 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
         continue;
       }
       const current = snapshots.get(sessionKey);
+      const repository = sessionGitHubRepository(snapshot);
+      const currentRepository = sessionGitHubRepository(current);
+      const canRetainCurrent =
+        !repository ||
+        (repository.owner === currentRepository?.owner &&
+          repository.repo === currentRepository?.repo);
       let next = snapshot;
-      if (current && snapshot.status === "rate-limited" && snapshot.pullRequests.length === 0) {
+      if (
+        current &&
+        canRetainCurrent &&
+        snapshot.status === "rate-limited" &&
+        snapshot.pullRequests.length === 0
+      ) {
         next = {
           ...snapshot,
           pullRequests: current.pullRequests,
           branch: snapshot.branch ?? current.branch,
+          repository: snapshot.repository ?? current.repository,
         };
       } else if (
         current &&
+        canRetainCurrent &&
         snapshot.status === "unavailable" &&
-        (current.pullRequests.length > 0 || current.branch !== undefined)
+        (current.pullRequests.length > 0 ||
+          current.branch !== undefined ||
+          current.repository !== undefined)
       ) {
-        next = { ...current, status: "unavailable" };
+        next = {
+          ...current,
+          repository: snapshot.repository ?? current.repository,
+          status: "unavailable",
+        };
       }
       snapshots.set(sessionKey, next);
       settle(sessionKey, next);
@@ -181,64 +262,29 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     notify();
   };
 
-  const handleVisibilityChange = () => {
-    clearRetry(true);
-    scheduleSync();
-  };
-
-  const attachExternalRegistrations = () => {
-    if (attached) {
-      return;
-    }
-    attached = true;
-    knownClient = gateway.snapshot.client;
-    lastHello = null;
-    lastSignature = null;
-    // Active consumers own these registrations: isolate:false workers share document, so an
-    // always-on visibility listener would root every per-gateway store and fake gateway.
-    stopGatewaySnapshots = gateway.subscribe(handleGatewaySnapshot);
-    stopGatewayEvents = gateway.subscribeEvents(handleGatewayEvent);
-    if (typeof document !== "undefined") {
-      document.addEventListener("visibilitychange", handleVisibilityChange);
-      visibilityDocument = document;
-    }
-  };
-
-  const detachExternalRegistrations = () => {
-    if (!attached) {
-      return;
-    }
-    attached = false;
-    stopGatewaySnapshots?.();
-    stopGatewaySnapshots = null;
-    stopGatewayEvents?.();
-    stopGatewayEvents = null;
-    visibilityDocument?.removeEventListener("visibilitychange", handleVisibilityChange);
-    visibilityDocument = null;
-    clearRetry(true);
-    syncRequestGeneration += 1;
-    syncScheduleGeneration += 1;
-    syncScheduled = false;
-    lastHello = null;
-    lastSignature = null;
-    snapshots.clear();
-  };
-
-  function sync() {
-    syncScheduled = false;
-    if (!attached) {
-      return;
-    }
-    const snapshot = gateway.snapshot;
-    const client = snapshot.client;
-    if (snapshot.client !== knownClient) {
-      clearRetry(true);
-      knownClient = snapshot.client;
+  const lifecycle = createGatewaySetSyncLifecycle(gateway, {
+    sync,
+    onSnapshot: handleGatewaySnapshot,
+    onEvent: handleGatewayEvent,
+    onAttach: () => {
+      if (connection.transition(gateway.snapshot)) {
+        retireConnection();
+      }
+      lastHello = null;
+      lastSignature = null;
+    },
+    onDetach: () => {
+      syncRequestGeneration += 1;
       lastHello = null;
       lastSignature = null;
       snapshots.clear();
-      notify();
-    }
+    },
+  });
+  const { retry } = lifecycle;
+
+  function sync() {
+    const snapshot = gateway.snapshot;
+    const client = snapshot.client;
     const available =
       snapshot.phase === "connected" &&
       client !== null &&
@@ -251,7 +297,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
         settle(key);
       }
       if (!isActive()) {
-        detachExternalRegistrations();
+        lifecycle.detach();
       }
       return;
     }
@@ -259,14 +305,14 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       typeof document !== "undefined" && document.visibilityState === "hidden" ? [] : watchedKeys();
     const sessionKeySet = new Set(sessionKeys);
     const refreshSessionKeys = [...pendingRefreshKeys].filter((key) => sessionKeySet.has(key));
-    const signature = JSON.stringify(sessionKeys);
+    const signature = JSON.stringify(sessionKeys.toSorted());
     if (
       snapshot.hello === lastHello &&
       signature === lastSignature &&
       refreshSessionKeys.length === 0
     ) {
       if (!isActive()) {
-        detachExternalRegistrations();
+        lifecycle.detach();
       }
       return;
     }
@@ -274,18 +320,18 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     lastSignature = signature;
     const requestGeneration = ++syncRequestGeneration;
     const isCurrentRequest = () =>
-      attached &&
+      lifecycle.attached &&
       isActive() &&
       requestGeneration === syncRequestGeneration &&
       snapshot.hello === lastHello &&
       signature === lastSignature;
-    clearRetry(false);
+    retry.cancel();
     const request = client.request(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
       sessionKeys,
       ...(refreshSessionKeys.length > 0 ? { refreshSessionKeys } : {}),
     });
     if (!isActive()) {
-      detachExternalRegistrations();
+      lifecycle.detach();
     }
     void request
       .then(() => {
@@ -293,38 +339,22 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
           for (const key of refreshSessionKeys) {
             pendingRefreshKeys.delete(key);
           }
-          retryDelayMs = SUBSCRIPTION_RETRY_BASE_MS;
+          retry.reset();
         }
       })
       .catch(() => {
         if (isCurrentRequest()) {
           lastSignature = null;
-          const delayMs = retryDelayMs;
-          retryDelayMs = Math.min(retryDelayMs * 2, SUBSCRIPTION_RETRY_MAX_MS);
-          retryTimer = globalThis.setTimeout(() => {
-            retryTimer = null;
-            if (attached && isActive()) {
-              scheduleSync();
+          retry.schedule(() => {
+            if (lifecycle.attached && isActive()) {
+              lifecycle.schedule();
             }
-          }, delayMs);
+          });
           for (const key of sessionKeys) {
             settle(key);
           }
         }
       });
-  }
-
-  function scheduleSync() {
-    if (!attached || syncScheduled) {
-      return;
-    }
-    syncScheduled = true;
-    const generation = syncScheduleGeneration;
-    globalThis.queueMicrotask(() => {
-      if (generation === syncScheduleGeneration) {
-        sync();
-      }
-    });
   }
 
   const watch = (
@@ -349,17 +379,17 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     } else {
       watchedByOwner.set(owner, { keys: next, foreground: options.foreground === true });
     }
-    clearRetry(true);
+    retry.reset();
     pruneUnwatched();
     if (isActive()) {
       if (!wasActive) {
         lastHello = null;
         lastSignature = null;
       }
-      attachExternalRegistrations();
-      scheduleSync();
-    } else if (attached) {
-      sync();
+      lifecycle.attach();
+      lifecycle.schedule();
+    } else if (lifecycle.attached) {
+      lifecycle.sync();
     }
   };
 
@@ -395,7 +425,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
           const pending = waiters.get(key) ?? new Set();
           pending.add(resolve);
           waiters.set(key, pending);
-          scheduleSync();
+          lifecycle.schedule();
         });
       } finally {
         const currentWatch = watchedByOwner.get(owner);
@@ -412,11 +442,12 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     refresh: (sessionKey) => {
       const key = sessionKey.trim();
       if (!key || !watchedKeys().includes(key)) {
-        return;
+        return false;
       }
       pendingRefreshKeys.add(key);
-      clearRetry(true);
-      scheduleSync();
+      retry.reset();
+      lifecycle.schedule();
+      return true;
     },
     get: (sessionKey) => snapshots.get(sessionKey),
     subscribe: (listener) => {
@@ -426,13 +457,13 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
         lastHello = null;
         lastSignature = null;
       }
-      attachExternalRegistrations();
+      lifecycle.attach();
       return () => {
         if (listeners.delete(listener)) {
           if (isActive()) {
-            scheduleSync();
-          } else if (attached) {
-            sync();
+            lifecycle.schedule();
+          } else if (lifecycle.attached) {
+            lifecycle.sync();
           }
         }
       };

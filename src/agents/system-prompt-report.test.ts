@@ -1,6 +1,7 @@
 // System prompt report tests cover prompt accounting, bootstrap injection
 // matching, and hash output used to compare prompt/tool parity.
 import { describe, expect, it } from "vitest";
+import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
 import { buildSystemPromptReport } from "./system-prompt-report.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
@@ -28,8 +29,10 @@ describe("buildSystemPromptReport", () => {
       bootstrapMaxChars: params.bootstrapMaxChars ?? 20_000,
       bootstrapTotalMaxChars: params.bootstrapTotalMaxChars,
       systemPrompt: "system",
-      bootstrapFiles: [params.file],
-      injectedFiles: [{ path: params.injectedPath, content: params.injectedContent }],
+      injectedWorkspaceFiles: buildBootstrapInjectionStats({
+        bootstrapFiles: [params.file],
+        injectedFiles: [{ path: params.injectedPath, content: params.injectedContent }],
+      }),
       skillsPrompt: "",
       tools: [],
     });
@@ -39,17 +42,6 @@ describe("buildSystemPromptReport", () => {
     const report = makeReport({
       file,
       injectedPath: "/tmp/workspace/policies/AGENTS.md",
-      injectedContent: "trimmed",
-    });
-
-    expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe("trimmed".length);
-  });
-
-  it("keeps legacy basename matching for injected files", () => {
-    const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
-    const report = makeReport({
-      file,
-      injectedPath: "AGENTS.md",
       injectedContent: "trimmed",
     });
 
@@ -95,7 +87,7 @@ describe("buildSystemPromptReport", () => {
     expect(report.tools.listChars).toBe(0);
   });
 
-  it("reports injectedChars=0 when injected file does not match by path or basename", () => {
+  it("reports injectedChars=0 when no injected file matches the source path", () => {
     const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
     const report = makeReport({
       file,
@@ -114,11 +106,13 @@ describe("buildSystemPromptReport", () => {
       generatedAt: 0,
       bootstrapMaxChars: 20_000,
       systemPrompt: "system",
-      bootstrapFiles: [file],
-      injectedFiles: [
-        { path: 123 as unknown as string, content: "bad" },
-        { path: "/tmp/workspace/policies/AGENTS.md", content: "trimmed" },
-      ],
+      injectedWorkspaceFiles: buildBootstrapInjectionStats({
+        bootstrapFiles: [file],
+        injectedFiles: [
+          { path: 123 as unknown as string, content: "bad" },
+          { path: "/tmp/workspace/policies/AGENTS.md", content: "trimmed" },
+        ],
+      }),
       skillsPrompt: "",
       tools: [],
     });
@@ -136,8 +130,10 @@ describe("buildSystemPromptReport", () => {
       generatedAt: 0,
       bootstrapMaxChars: 20_000,
       systemPrompt: "custom override",
-      bootstrapFiles: [file],
-      injectedFiles: [{ path: "/tmp/workspace/AGENTS.md", content: "rendered context" }],
+      injectedWorkspaceFiles: buildBootstrapInjectionStats({
+        bootstrapFiles: [file],
+        injectedFiles: [{ path: "/tmp/workspace/AGENTS.md", content: "rendered context" }],
+      }),
       skillsPrompt: "",
       tools: [],
     });
@@ -145,6 +141,72 @@ describe("buildSystemPromptReport", () => {
     expect(report.systemPrompt.chars).toBe("custom override".length);
     expect(report.systemPrompt.projectContextChars).toBe(0);
     expect(report.systemPrompt.nonProjectContextChars).toBe("custom override".length);
+  });
+
+  it.each([
+    ["LF markers and UTF-16 content", "lead\n# Project Context\n汉🦞\n## Silent Replies\ntail", 22],
+    ["missing end marker", "\n# Project Context\nx", 20],
+    [
+      "end marker before context",
+      "\n## Silent Replies\nlead\n# Project Context\nx\n## Silent Replies\n",
+      20,
+    ],
+    [
+      "first of repeated start markers",
+      "\n# Project Context\nfirst\n# Project Context\nsecond\n## Silent Replies\n",
+      49,
+    ],
+    ["nonmatching CRLF markers", "lead\r\n# Project Context\r\nx\r\n## Silent Replies\r\n", 0],
+  ] as const)(
+    "accounts for project context with %s",
+    (_name, systemPrompt, projectContextChars) => {
+      const report = buildSystemPromptReport({
+        source: "run",
+        generatedAt: 0,
+        bootstrapMaxChars: 20_000,
+        systemPrompt,
+        injectedWorkspaceFiles: [],
+        skillsPrompt: "",
+        tools: [],
+      });
+
+      expect(report.systemPrompt).toMatchObject({
+        chars: systemPrompt.length,
+        projectContextChars,
+        nonProjectContextChars: systemPrompt.length - projectContextChars,
+      });
+    },
+  );
+
+  it.each([
+    { skillsPrompt: " \n<skill><name>unfinished</name>", entries: [] },
+    {
+      skillsPrompt: " \n<SKILL><NAME> same </NAME></SKILL><skill><name>same</name></skill>\n ",
+      entries: [
+        { name: "same", blockChars: "<SKILL><NAME> same </NAME></SKILL>".length },
+        { name: "same", blockChars: "<skill><name>same</name></skill>".length },
+      ],
+    },
+    {
+      skillsPrompt: "<skill></skill><skill><name> </name></skill>",
+      entries: [
+        { name: "(unknown)", blockChars: "<skill></skill>".length },
+        { name: "(unknown)", blockChars: "<skill><name> </name></skill>".length },
+      ],
+    },
+  ])("reports complete skill blocks in order: $skillsPrompt", ({ skillsPrompt, entries }) => {
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: "system",
+      injectedWorkspaceFiles: [],
+      skillsPrompt,
+      tools: [],
+    });
+
+    expect(report.skills.promptChars).toBe(skillsPrompt.length);
+    expect(report.skills.entries).toEqual(entries);
   });
 
   it("emits content hashes for prompt and tool parity checks", () => {
@@ -156,8 +218,10 @@ describe("buildSystemPromptReport", () => {
       generatedAt: 0,
       bootstrapMaxChars: 20_000,
       systemPrompt: "system",
-      bootstrapFiles: [file],
-      injectedFiles: [],
+      injectedWorkspaceFiles: buildBootstrapInjectionStats({
+        bootstrapFiles: [file],
+        injectedFiles: [],
+      }),
       skillsPrompt: "<skill><name>docs</name></skill>",
       tools: [
         {
@@ -175,8 +239,10 @@ describe("buildSystemPromptReport", () => {
       generatedAt: 0,
       bootstrapMaxChars: 20_000,
       systemPrompt: "systen",
-      bootstrapFiles: [file],
-      injectedFiles: [],
+      injectedWorkspaceFiles: buildBootstrapInjectionStats({
+        bootstrapFiles: [file],
+        injectedFiles: [],
+      }),
       skillsPrompt: "<skill><name>docs</name></skill>",
       tools: [],
     });
@@ -201,8 +267,10 @@ describe("buildSystemPromptReport", () => {
       generatedAt: 0,
       bootstrapMaxChars: 20_000,
       systemPrompt: "system",
-      bootstrapFiles: [file],
-      injectedFiles: [],
+      injectedWorkspaceFiles: buildBootstrapInjectionStats({
+        bootstrapFiles: [file],
+        injectedFiles: [],
+      }),
       skillsPrompt: "",
       tools: [
         {

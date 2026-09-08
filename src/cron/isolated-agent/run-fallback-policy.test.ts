@@ -106,7 +106,7 @@ describe("resolveCronFallbacksOverride", () => {
     ).toEqual(["openai/gpt-5.2", "zai/glm-5"]);
   });
 
-  it("keeps a selected agent primary model strict ahead of default subagent fallbacks", () => {
+  it("uses default subagent fallbacks ahead of the agent primary", () => {
     expect(
       resolveCronFallbacksOverride({
         cfg: {
@@ -115,6 +115,38 @@ describe("resolveCronFallbacksOverride", () => {
               subagents: {
                 model: {
                   primary: "kimi/kimi-code",
+                  fallbacks: ["openai/gpt-5.2"],
+                },
+              },
+            },
+            list: [
+              {
+                id: "research",
+                model: {
+                  primary: "anthropic/claude-opus-4-6",
+                },
+              },
+            ],
+          },
+        },
+        agentId: "research",
+        useSubagentFallbacks: true,
+        job: makeJob({
+          kind: "agentTurn",
+          message: "summarize",
+        }),
+      }),
+    ).toEqual(["openai/gpt-5.2"]);
+  });
+
+  it("keeps the agent primary strict when the default subagent model has no primary", () => {
+    expect(
+      resolveCronFallbacksOverride({
+        cfg: {
+          agents: {
+            defaults: {
+              subagents: {
+                model: {
                   fallbacks: ["openai/gpt-5.2"],
                 },
               },
@@ -447,7 +479,7 @@ describe("resolveCronFallbacksOverride", () => {
 
   it("documents that cron preflight walks fallbacks before skipping", () => {
     const cliDocs = readFileSync("docs/cli/cron.md", "utf8");
-    const automationDocs = readFileSync("docs/automation/cron-jobs.md", "utf8");
+    const automationDocs = readFileSync("docs/automation/cron-jobs/payloads.md", "utf8");
 
     expect(cliDocs).toContain("Local-provider preflight checks walk configured fallbacks");
     expect(automationDocs).toContain("This preflight walks the job's configured fallback chain");

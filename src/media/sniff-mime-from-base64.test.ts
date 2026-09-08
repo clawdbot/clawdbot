@@ -14,6 +14,16 @@ describe("sniffMimeFromBase64", () => {
     await expect(sniffMimeFromBase64(onePixelPng)).resolves.toBe("image/png");
   });
 
+  it("keeps byte-only classification unless the caller supplies an audio hint", async () => {
+    const mp4 = Buffer.from("0000001c6674797069736f6d0000000069736f6d0000000000000000", "hex");
+    const base64 = mp4.toString("base64");
+
+    await expect(sniffMimeFromBase64(base64)).resolves.toBe("video/mp4");
+    await expect(
+      sniffMimeFromBase64(base64, { headerMime: "audio/mp4", filePath: "voice.m4a" }),
+    ).resolves.toBe("audio/mp4");
+  });
+
   it("rejects MIME signatures shorter than two base64 quads", async () => {
     await expect(
       sniffMimeFromBase64(Buffer.from("BM").toString("base64")),

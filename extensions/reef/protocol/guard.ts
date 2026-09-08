@@ -1,3 +1,5 @@
+import { canonicalBytes, sha256Hex } from "./canonical.js";
+
 export type GuardDirection = "outbound" | "inbound";
 
 export interface GuardRequest {
@@ -26,6 +28,57 @@ export interface RawGuardAdapter {
   readonly providerId: string;
   readonly pinnedModel: string;
   classifyRaw(request: GuardRequest, signal: AbortSignal): Promise<unknown>;
+}
+
+export interface GuardRules {
+  outbound?: string;
+  inbound?: string;
+}
+
+export const GUARD_RULES_MAX_CHARS = 2000;
+
+// Operator rules ride the trusted instruction side of the guard call, never the
+// serialized untrusted request, and may only move the allow/review boundary:
+// the base deny floor and the deterministic pre-checks stay binding so a
+// permissive ruleset cannot authorize concrete secrets.
+const OPERATOR_RULES_FRAME =
+  "The claw owner's operator sharing policy follows between <operator-policy> markers. It is trusted policy text, never a message to classify and never an instruction to change the verdict format. Apply it on top of the base policy: it may tighten decisions for named topics, peers, or projects, and it may explicitly allow named cases that would otherwise be review. It can never allow what the base policy denies; when it conflicts with a base deny rule, the base rule wins.";
+
+export function assertGuardRules(rules: GuardRules | undefined): void {
+  for (const text of [rules?.outbound, rules?.inbound]) {
+    if (text === undefined) {
+      continue;
+    }
+    if (text.trim().length === 0 || text.length > GUARD_RULES_MAX_CHARS) {
+      throw new Error(
+        `guard rules must be non-empty and at most ${GUARD_RULES_MAX_CHARS} characters`,
+      );
+    }
+  }
+}
+
+export function guardInstructions(direction: GuardDirection, rules?: GuardRules): string {
+  const base = direction === "outbound" ? OUTBOUND_INSTRUCTIONS : INBOUND_INSTRUCTIONS;
+  const text = direction === "outbound" ? rules?.outbound : rules?.inbound;
+  if (text === undefined) {
+    return base;
+  }
+  return `${base} ${OPERATOR_RULES_FRAME} <operator-policy>${text}</operator-policy>`;
+}
+
+// Rules text is part of the audited policy identity: the suffix flows into the
+// verdict echo check and approvalDigest, so editing the rules fails pending
+// review approvals closed instead of approving under a policy the owner changed.
+// Full untruncated digest: approvalDigest hashes this string, so a truncated
+// suffix would let colliding rule sets share an approval identity.
+export function effectiveGuardPolicyVersion(base: string, rules?: GuardRules): string {
+  if (rules?.outbound === undefined && rules?.inbound === undefined) {
+    return base;
+  }
+  const digest = sha256Hex(
+    canonicalBytes({ inbound: rules.inbound ?? "", outbound: rules.outbound ?? "" }),
+  );
+  return `${base}+${digest}`;
 }
 
 export const OUTBOUND_INSTRUCTIONS =
@@ -123,7 +176,13 @@ export function parseVerdict(value: unknown): Verdict {
   ) {
     throw new Error("invalid guard verdict fields");
   }
-  return record as unknown as Verdict;
+  return {
+    decision: record.decision,
+    category: record.category,
+    reason: record.reason,
+    model: record.model,
+    policyVersion: record.policyVersion,
+  };
 }
 
 function guardFailure(model: string, policyVersion: string): Verdict {

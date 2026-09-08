@@ -1,10 +1,12 @@
 import {
   embeddedAgentLog,
+  runAgentCleanupStep,
   type AgentHarnessRuntimeArtifactBinding,
-  type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveCodexStartupTimeoutMs } from "./attempt-timeouts.js";
+import { protectCodexAppServerLiveThread } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
+import { shouldAutoApproveCodexAppServerApprovals } from "./config.js";
 import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { buildCodexHookRequester } from "./hook-requester.js";
@@ -15,18 +17,23 @@ import {
   createCodexNativeHookRelay,
   emitCodexNativePreToolUseFailureDiagnostic,
   type CodexNativePreToolUseFailure,
+  type CodexNativeHookRelay,
 } from "./native-hook-relay.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
 import type { CodexAttemptPrompt } from "./run-attempt-prompt.js";
-import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
+import {
+  releaseCodexSandboxExecServerEnvironment,
+  type CodexSandboxExecEnvironment,
+} from "./sandbox-exec-server.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import {
   clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
+  createIsolatedCodexAppServerClient,
   retainSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
 import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle.js";
-import { createCodexTrajectoryRecorder, type CodexHostTrajectoryRecorder } from "./trajectory.js";
+import { createCodexTrajectoryRecorder } from "./trajectory.js";
 import type { CodexAppServerTurnRouter, CodexThreadRouteReservation } from "./turn-router.js";
 
 export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
@@ -38,25 +45,28 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     params,
     effectiveCwd,
     sessionAgentId,
-    sandboxSessionKey,
+    contextSessionKey,
     runAbortController,
     sandbox,
     options,
     nativeHookRelayEvents,
   } = connection;
   const { toolBridge } = attemptTools;
-  const hostTrajectoryRecorder = (
-    params as typeof params & { trajectoryRecorder?: CodexHostTrajectoryRecorder | null }
-  ).trajectoryRecorder;
   const trajectoryRecorder = createCodexTrajectoryRecorder({
     attempt: params,
     cwd: effectiveCwd,
     developerInstructions: buildRenderedCodexDeveloperInstructions(),
     prompt: turnState.codexTurnPromptText,
-    trajectoryRecorder: hostTrajectoryRecorder,
+    trajectory: params.hostCapabilities.trajectory,
     tools: toolBridge.availableSpecs,
-    warn: (message, fields) => embeddedAgentLog.warn(message, fields),
   });
+  const executionState: {
+    sandboxExecEnvironment: CodexSandboxExecEnvironment | undefined;
+    executionDisconnectError: Error | undefined;
+  } = {
+    sandboxExecEnvironment: undefined,
+    executionDisconnectError: undefined,
+  };
   const state = {
     client: undefined as unknown as CodexAppServerClient,
     thread: undefined as unknown as CodexAppServerThreadLifecycleBinding,
@@ -66,17 +76,19 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     routeActivated: false,
     detachRouteAbort: (() => undefined) as () => void,
     trajectoryEndRecorded: false,
-    nativeHookRelay: undefined as NativeHookRelayRegistrationHandle | undefined,
+    nativeHookRelay: undefined as CodexNativeHookRelay | undefined,
     nativeSubagentMonitor: undefined as
       | ReturnType<typeof codexNativeSubagentMonitorRuntime.register>
       | undefined,
+    runtimeContinuationStarted: false,
     nativePreToolUseFailureFallbackActive: false,
     nativePreToolUseFailureFallbackTerminalReason: undefined as
       | CodexNativePreToolUseFailure["disposition"]
       | undefined,
     releaseSharedClientLease: undefined as (() => void) | undefined,
+    startupClientUnsafe: false,
     sharedCodexClientRetiredForOneShotCleanup: false,
-    sandboxExecEnvironmentAcquired: false,
+    ...executionState,
     codexEnvironmentSelection: undefined as CodexTurnEnvironmentParams[] | undefined,
     codexExecutionCwd: effectiveCwd,
     codexSandboxPolicy: undefined as CodexSandboxPolicy | undefined,
@@ -90,7 +102,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     emitCodexNativePreToolUseFailureDiagnostic({
       agentId: sessionAgentId,
       sessionId: params.sessionId,
-      sessionKey: sandboxSessionKey,
+      sessionKey: contextSessionKey,
       runId: params.runId,
       signal: runAbortController.signal,
       failure,
@@ -133,7 +145,9 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     }
     state.sharedCodexClientRetiredForOneShotCleanup = true;
     const retired = clearSharedCodexAppServerClientIfCurrentAndUnclaimed(state.client);
-    embeddedAgentLog.info("codex app-server one-shot cleanup checked shared client retirement", {
+    // Runs on every one-shot attempt teardown; routine retirement checks are
+    // diagnostic detail, not operator-facing info.
+    embeddedAgentLog.debug("codex app-server one-shot cleanup checked shared client retirement", {
       runId: params.runId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
@@ -142,20 +156,52 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       closed: retired.closed,
       matchedSharedClient: retired.found,
     });
-    if (retired.closed) {
-      await state.client.closeAndWait({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 });
+    // Retained peers prevent retirement; preserve their client without treating
+    // missing close evidence as a completed one-shot cleanup.
+    const result = retired.closed
+      ? await state.client.closeAndWait({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 })
+      : undefined;
+    if (params.oneShotCliRun && result?.cleanup !== "closed") {
+      throw new Error("Codex one-shot client cleanup could not be confirmed");
+    }
+  };
+  const releaseSandboxExecEnvironment = async () => {
+    if (state.sandboxExecEnvironment) {
+      const environment = state.sandboxExecEnvironment;
+      state.sandboxExecEnvironment = undefined;
+      await releaseCodexSandboxExecServerEnvironment(sandbox, environment);
     }
   };
   const releaseSharedClientLeaseAndRetireOneShotClient = async () => {
+    if (connection.attemptClientFactory === createIsolatedCodexAppServerClient) {
+      // Close the authorized node lease first; losing its socket first is a real disconnect.
+      await releaseSandboxExecEnvironment();
+      const ownedClient = state.releaseSharedClientLease ? state.client : undefined;
+      releaseSharedClientLeaseOnce();
+      if (ownedClient) {
+        const result = await ownedClient.closeAndWait({
+          exitTimeoutMs: 2_000,
+          forceKillDelayMs: 250,
+        });
+        if (params.oneShotCliRun && result.cleanup !== "closed") {
+          throw new Error("Codex isolated client cleanup could not be confirmed");
+        }
+      }
+      return;
+    }
     releaseSharedClientLeaseOnce();
     await retireSharedCodexClientForOneShotCleanup();
   };
-  const releaseSandboxExecEnvironment = async () => {
-    if (state.sandboxExecEnvironmentAcquired) {
-      state.sandboxExecEnvironmentAcquired = false;
-      await releaseCodexSandboxExecServerEnvironment(sandbox);
-    }
-  };
+  const runCleanupStep = (step: string, operation: () => Promise<void> | void | undefined) =>
+    runAgentCleanupStep({
+      runId: params.runId,
+      sessionId: params.sessionId,
+      step,
+      log: embeddedAgentLog,
+      cleanup: async () => {
+        await operation();
+      },
+    });
   const unregisterNativeSubagentMonitor = () => {
     state.nativeSubagentMonitor?.unregister();
     state.nativeSubagentMonitor = undefined;
@@ -169,6 +215,18 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       taskRuntimeScope: params.agentHarnessTaskRuntimeScope,
       agentId: sessionAgentId,
       retainClient: () => retainSharedCodexAppServerClientIfCurrent(state.client),
+      retainParentThread: (protectedThreadId) =>
+        protectCodexAppServerLiveThread(state.client, protectedThreadId),
+      claimDirectChild: (childThreadId) => state.nativeHookRelay?.claimDirectChild(childThreadId),
+      rejectPendingDirectChild: (childThreadId, reason) =>
+        state.nativeHookRelay?.rejectPendingDirectChild(childThreadId, reason),
+      ...(params.sessionKey && params.agentHarnessTaskRuntimeScope
+        ? {
+            onDirectChildAccepted: () => {
+              state.runtimeContinuationStarted = true;
+            },
+          }
+        : {}),
     });
   };
   const releaseCurrentRoute = () => {
@@ -189,6 +247,13 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     decision: { action: "resume"; binding: CodexAppServerThreadBinding } | { action: "start" },
   ) => {
     state.nativeHookRelay?.unregister();
+    if (params.pluginHarnessToolPolicyRestricted === true) {
+      state.nativeHookRelay = undefined;
+      return {
+        configPatch: buildCodexNativeHookRelayDisabledConfig(),
+        nativeHookRelayGeneration: undefined,
+      };
+    }
     state.nativeHookRelay = createCodexNativeHookRelay({
       options: options.nativeHookRelay,
       generation:
@@ -200,8 +265,10 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       events: nativeHookRelayEvents,
       agentId: sessionAgentId,
       sessionId: params.sessionId,
-      sessionKey: sandboxSessionKey,
+      sessionKey: contextSessionKey,
       config: params.config,
+      autoApproveMcpTools: shouldAutoApproveCodexAppServerApprovals(appServer),
+      projectedMcpServers: runtime.bundleMcpThreadConfig.configPatch?.mcp_servers,
       runId: params.runId,
       channelId: hookChannelId,
       ...(requester ? { requester } : {}),
@@ -218,6 +285,8 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       turnStartTimeoutMs: params.timeoutMs,
       loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
       signal: runAbortController.signal,
+      hostCapabilities: params.hostCapabilities,
+      assertCurrent: connection.assertCurrent,
       onPreToolUseFailure: (failure) => {
         const projector = projectorRef.current;
         if (projector) {
@@ -235,7 +304,6 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
             relay: state.nativeHookRelay,
             events: nativeHookRelayEvents,
             hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
-            loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
           })
         : options.nativeHookRelay?.enabled === false
           ? buildCodexNativeHookRelayDisabledConfig()
@@ -256,6 +324,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     releaseSharedClientLeaseOnce,
     releaseSharedClientLeaseAndRetireOneShotClient,
     releaseSandboxExecEnvironment,
+    runCleanupStep,
     registerNativeSubagentMonitor,
     releaseCurrentRoute,
     startupTimeoutMs,

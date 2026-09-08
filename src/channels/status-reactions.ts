@@ -170,22 +170,7 @@ export function resolveToolEmoji(
   if (Object.hasOwn(TOOL_DISPLAY_CONFIG.tools, normalized)) {
     return resolveToolDisplay({ name: toolName }).emoji;
   }
-  if (category === "deploy") {
-    return emojis.deploy;
-  }
-  if (category === "build") {
-    return emojis.build;
-  }
-  if (category === "concierge") {
-    return emojis.concierge;
-  }
-  if (category === "web") {
-    return emojis.web;
-  }
-  if (category === "coding") {
-    return emojis.coding;
-  }
-  return emojis.tool;
+  return emojis[category];
 }
 
 /**
@@ -203,11 +188,14 @@ export function createStatusReactionController(params: {
   enabled: boolean;
   adapter: StatusReactionAdapter;
   initialEmoji: string;
+  /** Acknowledgement keeps one working reaction; only actual errors replace it. */
+  presentation?: "activity" | "acknowledgement";
   emojis?: StatusReactionEmojis;
   timing?: StatusReactionTiming;
   onError?: (err: unknown) => void;
 }): StatusReactionController {
   const { enabled, adapter, initialEmoji, onError } = params;
+  const showActivity = params.presentation !== "acknowledgement";
 
   const emojis: Required<StatusReactionEmojis> = {
     ...DEFAULT_EMOJIS,
@@ -225,6 +213,8 @@ export function createStatusReactionController(params: {
   let debounceTimer: NodeJS.Timeout | null = null;
   let stallSoftTimer: NodeJS.Timeout | null = null;
   let stallHardTimer: NodeJS.Timeout | null = null;
+  let terminalHold: { timer: NodeJS.Timeout; resolve: () => void } | null = null;
+  let terminalHoldGeneration = 0;
   let finished = false;
   let chainPromise = Promise.resolve();
   const activeEmojis = new Set<string>();
@@ -234,11 +224,8 @@ export function createStatusReactionController(params: {
     return chainPromise;
   }
 
-  function clearAllTimers(): void {
-    if (debounceTimer) {
-      clearTimeout(debounceTimer);
-      debounceTimer = null;
-    }
+  function clearActivityTimers(): void {
+    clearDebounceTimer();
     if (stallSoftTimer) {
       clearTimeout(stallSoftTimer);
       stallSoftTimer = null;
@@ -249,6 +236,30 @@ export function createStatusReactionController(params: {
     }
   }
 
+  function cancelTerminalHold(): void {
+    terminalHoldGeneration += 1;
+    const hold = terminalHold;
+    if (!hold) {
+      return;
+    }
+    terminalHold = null;
+    clearTimeout(hold.timer);
+    hold.resolve();
+  }
+
+  function waitForTerminalHold(holdMs: number, generation: number): Promise<void> {
+    if (holdMs <= 0 || generation !== terminalHoldGeneration) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        terminalHold = null;
+        resolve();
+      }, holdMs);
+      terminalHold = { timer, resolve };
+    });
+  }
+
   function clearDebounceTimer(): void {
     if (debounceTimer) {
       clearTimeout(debounceTimer);
@@ -257,6 +268,9 @@ export function createStatusReactionController(params: {
   }
 
   function resetStallTimers(): void {
+    if (!showActivity) {
+      return;
+    }
     if (stallSoftTimer) {
       clearTimeout(stallSoftTimer);
     }
@@ -314,12 +328,13 @@ export function createStatusReactionController(params: {
   }
 
   function scheduleEmoji(
-    emoji: string,
+    requestedEmoji: string,
     options: { immediate?: boolean; skipStallReset?: boolean } = {},
   ): void {
     if (!enabled || finished) {
       return;
     }
+    const emoji = showActivity ? requestedEmoji : initialEmoji;
 
     // Skip duplicate sends while still refreshing stall timers for active phases.
     if (emoji === currentEmoji || emoji === pendingEmoji) {
@@ -374,28 +389,32 @@ export function createStatusReactionController(params: {
     pendingEmoji = "";
   }
 
-  function finishWithEmoji(emoji: string): Promise<void> {
+  function finishWithEmoji(emoji: string, holdMs: number): Promise<void> {
     if (!enabled) {
       return Promise.resolve();
     }
 
     finished = true;
-    clearAllTimers();
+    clearActivityTimers();
+    const holdGeneration = terminalHoldGeneration;
 
-    // Return the updated chain so callers can wait for terminal cleanup.
+    // The serialized hold keeps an immediate restore queued, while explicit clear can cancel it.
     return enqueue(async () => {
       await applyEmoji(emoji);
       await removeActiveEmojis({ keepEmoji: emoji });
       pendingEmoji = "";
+      await waitForTerminalHold(holdMs, holdGeneration);
     });
   }
 
   function setDone(): Promise<void> {
-    return finishWithEmoji(emojis.done);
+    return showActivity
+      ? finishWithEmoji(emojis.done, timing.doneHoldMs)
+      : finishWithEmoji(initialEmoji, 0);
   }
 
   function setError(): Promise<void> {
-    return finishWithEmoji(emojis.error);
+    return finishWithEmoji(emojis.error, timing.errorHoldMs);
   }
 
   async function clear(): Promise<void> {
@@ -403,7 +422,8 @@ export function createStatusReactionController(params: {
       return;
     }
 
-    clearAllTimers();
+    clearActivityTimers();
+    cancelTerminalHold();
     finished = true;
 
     await enqueue(async () => {
@@ -436,12 +456,17 @@ export function createStatusReactionController(params: {
     const pendingBeforeClear = pendingEmoji;
     const hadDebouncedPending = debounceTimer !== null;
     const hasExtraActiveEmoji = Array.from(activeEmojis).some((emoji) => emoji !== initialEmoji);
-    clearAllTimers();
-    if (alreadyInitial && (!pendingBeforeClear || hadDebouncedPending) && !hasExtraActiveEmoji) {
+    clearActivityTimers();
+    if (
+      !finished &&
+      alreadyInitial &&
+      (!pendingBeforeClear || hadDebouncedPending) &&
+      !hasExtraActiveEmoji
+    ) {
       pendingEmoji = "";
       return;
     }
-    if (pendingBeforeClear === initialEmoji && !hadDebouncedPending) {
+    if (!finished && pendingBeforeClear === initialEmoji && !hadDebouncedPending) {
       await chainPromise;
       return;
     }

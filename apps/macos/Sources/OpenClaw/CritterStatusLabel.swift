@@ -8,6 +8,8 @@ struct CritterStatusLabel: View {
     var blinkTick: Int
     var sendCelebrationTick: Int
     var gatewayStatus: GatewayProcessManager.Status
+    var connectionMode: AppState.ConnectionMode
+    var controlChannelState: ControlChannel.ConnectionState
     var animationsEnabled: Bool
     var iconState: IconState
     var voiceWakeMeterActive: Bool = false
@@ -16,8 +18,8 @@ struct CritterStatusLabel: View {
     @State var celebrating = false
     @State var celebrationGeneration = 0
     @State var nextBlink = Date().addingTimeInterval(Double.random(in: 3.5...8.5))
-    @State var wiggleAngle: Double = 0
-    @State var wiggleOffset: CGFloat = 0
+    @State var iconRotation = CritterMotionTarget()
+    @State var iconTranslation = CritterMotionTarget()
     @State var nextWiggle = Date().addingTimeInterval(Double.random(in: 6.5...14))
     @State var legWiggle: CGFloat = 0
     @State var nextLegWiggle = Date().addingTimeInterval(Double.random(in: 5.0...11.0))

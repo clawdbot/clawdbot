@@ -1,63 +1,40 @@
 // Receipt lookup and source-removal bookkeeping for legacy workspace migration.
-import { createHash } from "node:crypto";
-import path from "node:path";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
+  readLegacyMigrationReceipt,
+  resolveLegacyMigrationSourceKey,
+} from "./state-migrations.receipts.js";
 import type { LegacyWorkspaceStateSource } from "./state-migrations.workspace-setup.types.js";
 
-type WorkspaceReceiptDatabase = Pick<OpenClawStateKyselyDatabase, "migration_sources">;
+export { markLegacyMigrationSourceRemoved } from "./state-migrations.receipts.js";
 
 export type MigrationReceipt = {
   sourceKey: string;
   sha256: string | null;
   removedSource: boolean;
+  archivePath?: string;
 };
 
 export function resolveWorkspaceMigrationSourceKey(source: LegacyWorkspaceStateSource): string {
-  return `workspace-${source.kind}:${createHash("sha256")
-    .update(source.workspaceKey)
-    .update("\0")
-    .update(path.resolve(source.sourcePath))
-    .digest("hex")}`;
+  return resolveLegacyMigrationSourceKey(
+    `workspace-${source.kind}`,
+    source.sourcePath,
+    source.workspaceKey,
+  );
 }
 
 export function readReceipt(
   source: LegacyWorkspaceStateSource,
   env: NodeJS.ProcessEnv,
 ): MigrationReceipt | null {
-  const key = resolveWorkspaceMigrationSourceKey(source);
-  const { db } = openOpenClawStateDatabase({ env });
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<WorkspaceReceiptDatabase>(db)
-      .selectFrom("migration_sources")
-      .select(["source_sha256", "removed_source"])
-      .where("source_key", "=", key),
-  );
-  return row
-    ? { sourceKey: key, sha256: row.source_sha256, removedSource: row.removed_source === 1 }
+  const receipt = readLegacyMigrationReceipt(resolveWorkspaceMigrationSourceKey(source), env);
+  const archivePath = receipt ? safeParseJsonRecord(receipt.reportJson)?.archivePath : undefined;
+  return receipt
+    ? {
+        sourceKey: receipt.sourceKey,
+        sha256: receipt.sourceSha256,
+        removedSource: receipt.removedSource,
+        ...(typeof archivePath === "string" ? { archivePath } : {}),
+      }
     : null;
-}
-
-export function markSourceRemoved(sourceKey: string, env: NodeJS.ProcessEnv): void {
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<WorkspaceReceiptDatabase>(db)
-          .updateTable("migration_sources")
-          .set({ removed_source: 1 })
-          .where("source_key", "=", sourceKey),
-      );
-    },
-    { env },
-  );
 }

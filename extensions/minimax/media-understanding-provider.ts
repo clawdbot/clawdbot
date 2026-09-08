@@ -1,9 +1,5 @@
 // Minimax provider module implements model/runtime integration.
-import {
-  describeImageWithModel,
-  describeImagesWithModel,
-  type MediaUnderstandingProvider,
-} from "openclaw/plugin-sdk/media-understanding";
+import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 
 export const minimaxMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "minimax",
@@ -11,8 +7,8 @@ export const minimaxMediaUnderstandingProvider: MediaUnderstandingProvider = {
   defaultModels: { image: "MiniMax-VL-01" },
   documentModels: { pdf: { textExtraction: "MiniMax-M2.7", image: false } },
   autoPriority: { image: 40 },
-  describeImage: describeImageWithModel,
-  describeImages: describeImagesWithModel,
+  describeImage: undefined,
+  describeImages: undefined,
 };
 
 export const minimaxPortalMediaUnderstandingProvider: MediaUnderstandingProvider = {
@@ -21,6 +17,6 @@ export const minimaxPortalMediaUnderstandingProvider: MediaUnderstandingProvider
   defaultModels: { image: "MiniMax-VL-01" },
   documentModels: { pdf: { textExtraction: "MiniMax-M2.7", image: false } },
   autoPriority: { image: 50 },
-  describeImage: describeImageWithModel,
-  describeImages: describeImagesWithModel,
+  describeImage: undefined,
+  describeImages: undefined,
 };

@@ -29,6 +29,7 @@ const data = {
     model: "claude-opus-4-5",
   },
   modelNames: new Map<string, string>(),
+  modelCatalog: [],
 };
 
 describe("Mattermost model picker", () => {
@@ -202,6 +203,7 @@ describe("Mattermost model picker", () => {
           model: "gpt-5",
         },
         modelNames: new Map<string, string>(),
+        modelCatalog: [],
       };
 
       expect(

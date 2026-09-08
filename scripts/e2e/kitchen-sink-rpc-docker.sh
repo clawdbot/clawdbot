@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-kitchen-sink-rpc-e2e" OPENCLAW_KITCHEN_SINK_RPC_E2E_IMAGE)"
 MAX_MEMORY_MIB="$(docker_e2e_read_nonnegative_decimal_env OPENCLAW_KITCHEN_SINK_MAX_MEMORY_MIB 2048)"
@@ -26,6 +27,11 @@ DOCKER_ENV_ARGS=(
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0
   -e OPENCLAW_ENTRY=/app/openclaw.mjs
 )
+capability_status=0
+openclaw_resolve_frozen_plugin_harness_capabilities \
+  "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" || capability_status=$?
+[ "$capability_status" -eq 0 ] || exit "$capability_status"
+openclaw_append_frozen_plugin_harness_docker_env
 
 for env_name in \
   OPENCLAW_KITCHEN_SINK_NPM_SPEC \
@@ -52,7 +58,7 @@ echo "Running kitchen-sink RPC Docker E2E..."
 docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 docker_e2e_harness_mount_args
 DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run --name "$CONTAINER_NAME" "${DOCKER_E2E_HARNESS_ARGS[@]}" "${DOCKER_ENV_ARGS[@]}" -i "$IMAGE_NAME" \
-  node scripts/e2e/kitchen-sink-rpc-walk.mjs >"$RUN_LOG" 2>&1 &
+  bash -lc "source scripts/lib/openclaw-e2e-instance.sh; openclaw_e2e_run_script_entrypoint scripts/e2e/kitchen-sink-rpc-walk" >"$RUN_LOG" 2>&1 &
 docker_pid="$!"
 
 docker_e2e_sample_stats_until_exit \

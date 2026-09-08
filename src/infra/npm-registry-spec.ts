@@ -148,12 +148,6 @@ export function parseRegistryNpmSpec(rawSpec: string): ParsedRegistryNpmSpec | n
   return parsed.ok ? parsed.parsed : null;
 }
 
-/** Returns whether a user-provided npm spec resolves to the official OpenClaw npm scope. */
-export function isOpenClawOrgNpmSpec(rawSpec: string | undefined): boolean {
-  const parsed = rawSpec ? parseRegistryNpmSpec(rawSpec) : null;
-  return parsed?.name.startsWith("@openclaw/") === true;
-}
-
 /** Validates a registry-only npm spec and returns a user-facing error when rejected. */
 export function validateRegistryNpmSpec(rawSpec: string): string | null {
   const parsed = parseRegistryNpmSpecInternal(rawSpec);
@@ -199,6 +193,15 @@ function parseOpenClawReleaseVersion(value: string): SemVer | null {
 function isOpenClawStableCorrectionVersion(value: string): boolean {
   const parsed = parseOpenClawReleaseVersion(value);
   return parsed !== null && isOpenClawCorrectionSemver(parsed);
+}
+
+/** Resolves stable correction releases to their shared base release cohort. */
+export function resolveOpenClawReleaseCohortVersion(value: string): string {
+  const trimmed = value.trim();
+  const parsed = parseOpenClawReleaseVersion(trimmed);
+  return parsed && isOpenClawCorrectionSemver(parsed)
+    ? `${parsed.major}.${parsed.minor}.${parsed.patch}`
+    : trimmed;
 }
 
 /** Compares OpenClaw monthly patch release versions across alpha, beta, stable, and corrections. */

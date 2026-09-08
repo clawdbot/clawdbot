@@ -12,11 +12,13 @@ describe("QA Lab package bus protocol", () => {
     "group:team-room",
     "dm:user-1",
     "thread:Room/Topic",
+    "thread:/v1/group/Room%2FOne/Topic%2FTwo",
+    "thread:/v1/dm/Alice/Topic",
   ])("matches the canonical target parser for %s", (target) => {
     expect(parseQaTarget(target)).toEqual(parseCanonicalQaTarget(target));
   });
 
-  it.each(["", "CHANNEL:CaseSensitive", "thread:Room/", "dm:"])(
+  it.each(["", "CHANNEL:CaseSensitive", "thread:Room/", "thread:/v1/group/Room/%GG", "dm:"])(
     "matches canonical target errors for %j",
     (target) => {
       expect(() => parseQaTarget(target)).toThrow();

@@ -2,8 +2,30 @@
  * Shared transport lifecycle helpers for stdio and WebSocket Codex app-server
  * connections.
  */
+import { finished } from "node:stream/promises";
+import { terminateCodexAppServerDescendants } from "./transport-process-containment.js";
+
+export type CodexAppServerCloseResult =
+  | { exited: true; cleanup: "closed" | "uncertain" }
+  | { exited: false; cleanup: "uncertain" };
+
+type TransportClose = {
+  closing: Promise<"natural" | "contained" | "uncertain">;
+  naturalExit: boolean;
+  wasForced: () => boolean;
+};
+const CODEX_APP_SERVER_TRANSPORT_CLOSES = new WeakMap<object, TransportClose>();
+
+type TransportCloseOptions = { forceKillDelayMs?: number; drainStdio?: boolean };
+
+/** True only after bounded settlement proves an exit that cleanup did not cause. */
+export function hasCodexAppServerNaturalExit(child: CodexAppServerTransport): boolean {
+  return CODEX_APP_SERVER_TRANSPORT_CLOSES.get(child)?.naturalExit === true;
+}
+
 /** Child-process-like transport shape consumed by the Codex app-server client. */
 export type CodexAppServerTransport = {
+  maxFrameBytes?: number;
   stdin: {
     write: (data: string | Uint8Array, callback?: (error?: Error | null) => void) => unknown;
     end?: () => unknown;
@@ -32,41 +54,127 @@ export type CodexAppServerTransport = {
 /** Starts graceful transport shutdown and schedules a force kill fallback. */
 export function closeCodexAppServerTransport(
   child: CodexAppServerTransport,
-  options: { forceKillDelayMs?: number } = {},
+  options: TransportCloseOptions = {},
 ): void {
-  child.stdin.end?.();
-  child.stdin.destroy?.();
+  void beginCodexAppServerTransportClose(child, options).closing;
+}
+
+function beginCodexAppServerTransportClose(
+  child: CodexAppServerTransport,
+  options: TransportCloseOptions,
+): TransportClose {
+  const current = CODEX_APP_SERVER_TRANSPORT_CLOSES.get(child);
+  if (current) {
+    return current;
+  }
+  let forced = false;
+  const forceKill = () => {
+    forced = true;
+    signalCodexAppServerTransport(child, "SIGKILL");
+  };
+  const closing: TransportClose["closing"] = (async () => {
+    if (hasCodexAppServerTransportExited(child)) {
+      return "natural";
+    }
+    if (process.platform === "win32" || !child.pid || !child.kill) {
+      finishCodexAppServerTransportClose(child, options, forceKill);
+      return "uncertain";
+    }
+    let contained;
+    try {
+      contained = await terminateCodexAppServerDescendants(child);
+    } catch {
+      contained = undefined;
+    }
+    if (contained === "exited") {
+      return "natural";
+    }
+    try {
+      finishCodexAppServerTransportClose(child, options, forceKill, contained?.resume);
+    } catch {
+      forceKill();
+    }
+    // Only observed descendant termination followed by graceful root exit
+    // certifies cleanup. EOF or a forced root exit alone cannot prove it.
+    return contained ? "contained" : "uncertain";
+  })();
+  const closure = { closing, naturalExit: false, wasForced: () => forced };
+  CODEX_APP_SERVER_TRANSPORT_CLOSES.set(child, closure);
+  return closure;
+}
+
+function finishCodexAppServerTransportClose(
+  child: CodexAppServerTransport,
+  options: TransportCloseOptions,
+  killTransport: () => void,
+  resumeRoot?: () => void,
+): void {
   const forceKillDelayMs = options.forceKillDelayMs ?? 1_000;
   const forceKill = setTimeout(
     () => {
       if (hasCodexAppServerTransportExited(child)) {
         return;
       }
-      signalCodexAppServerTransport(child, "SIGKILL");
+      killTransport();
     },
     Math.max(1, forceKillDelayMs),
   );
   forceKill.unref?.();
   child.once("exit", () => {
     clearTimeout(forceKill);
-    child.stdout.destroy?.();
-    child.stderr.destroy?.();
+    if (!options.drainStdio) {
+      child.stdout.destroy?.();
+      child.stderr.destroy?.();
+    }
   });
+  try {
+    child.stdin.end?.();
+    child.stdin.destroy?.();
+  } finally {
+    resumeRoot?.();
+  }
   child.unref?.();
   child.stdout.unref?.();
   child.stderr.unref?.();
   child.stdin.unref?.();
 }
 
-/** Closes a transport and waits briefly for an exit event. */
+/** Reports physical settlement separately from confirmed process cleanup. */
 export async function closeCodexAppServerTransportAndWait(
   child: CodexAppServerTransport,
-  options: { exitTimeoutMs?: number; forceKillDelayMs?: number } = {},
-): Promise<boolean> {
-  if (!hasCodexAppServerTransportExited(child)) {
-    closeCodexAppServerTransport(child, options);
+  options: TransportCloseOptions & { exitTimeoutMs?: number } = {},
+): Promise<CodexAppServerCloseResult> {
+  const drained = options.drainStdio
+    ? Promise.all(
+        [child.stdout, child.stderr].map((stream) => finished(stream, { cleanup: true })),
+      ).then(
+        () => true,
+        () => false,
+      )
+    : undefined;
+  const closure = beginCodexAppServerTransportClose(child, options);
+  const containment = await closure.closing;
+  const settled = await waitForCodexAppServerTransportExit(
+    child,
+    options.exitTimeoutMs ?? 2_000,
+    drained,
+  );
+  closure.naturalExit = containment === "natural" && settled;
+  if (options.drainStdio) {
+    // Share the existing exit budget with pipe draining. A timed-out drain is
+    // not a complete natural-exit diagnostic and must not authorize a retry.
+    child.stdout.destroy?.();
+    child.stderr.destroy?.();
   }
-  return await waitForCodexAppServerTransportExit(child, options.exitTimeoutMs ?? 2_000);
+  return settled
+    ? {
+        exited: true,
+        cleanup:
+          containment === "contained" && !closure.wasForced() && child.signalCode == null
+            ? "closed"
+            : "uncertain",
+      }
+    : { exited: false, cleanup: "uncertain" };
 }
 
 function hasCodexAppServerTransportExited(child: CodexAppServerTransport): boolean {
@@ -78,32 +186,31 @@ function hasCodexAppServerTransportExited(child: CodexAppServerTransport): boole
 async function waitForCodexAppServerTransportExit(
   child: CodexAppServerTransport,
   timeoutMs: number,
+  drained?: Promise<boolean>,
 ): Promise<boolean> {
-  if (hasCodexAppServerTransportExited(child)) {
-    return true;
-  }
   return await new Promise<boolean>((resolve) => {
     let settled = false;
-    const onExit = () => {
+    const finish = (exited: boolean) => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimeout(timeout);
-      resolve(true);
+      child.off?.("exit", onExit);
+      resolve(exited);
     };
-    const timeout = setTimeout(
-      () => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        child.off?.("exit", onExit);
-        resolve(false);
-      },
-      Math.max(1, timeoutMs),
-    );
+    const onExit = () => {
+      if (drained) {
+        void drained.then(finish);
+      } else {
+        finish(true);
+      }
+    };
+    const timeout = setTimeout(() => finish(false), Math.max(1, timeoutMs));
     child.once("exit", onExit);
+    if (hasCodexAppServerTransportExited(child)) {
+      onExit();
+    }
   });
 }
 

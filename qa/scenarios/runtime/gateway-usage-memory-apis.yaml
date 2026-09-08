@@ -1,0 +1,26 @@
+title: Gateway usage and memory APIs
+
+scenario:
+  id: gateway-usage-memory-apis
+  surface: runtime
+  coverage:
+    primary:
+      - gateway.usage-and-memory-apis
+  objective: Prove authenticated Gateway usage summaries, session detail projections, and explicit memory readiness without live billing.
+  successCriteria:
+    - usage.status returns an empty deterministic provider snapshot without contacting a billing service.
+    - usage.cost and sessions.usage project exact token and cost totals from a completed SQLite-backed session.
+    - Session timeseries and logs preserve the seeded timestamps, content, tokens, and cost.
+    - An invalid session reference returns INVALID_REQUEST with a useful session-key error.
+    - doctor.memory.status returns an explicit unavailable projection when the memory plugin is disabled.
+  docsRefs:
+    - docs/gateway/protocol.md
+  codeRefs:
+    - src/gateway/server-methods/usage.ts
+    - src/gateway/server-methods/doctor.ts
+    - src/infra/session-cost-usage-aggregation.ts
+    - test/e2e/qa-lab/runtime/gateway-usage-memory-apis.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/gateway-usage-memory-apis.e2e.test.ts
+    summary: Run a token-authenticated Gateway against isolated SQLite session and usage state, then verify usage, session detail, invalid-session, and memory-readiness RPCs.

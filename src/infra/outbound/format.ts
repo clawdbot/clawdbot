@@ -6,24 +6,6 @@ import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
 import type { OutboundDeliveryResult } from "./deliver.js";
 
-/**
- * Machine-readable delivery result emitted by outbound send commands.
- */
-export type OutboundDeliveryJson = {
-  channel: string;
-  via: "direct" | "gateway";
-  to: string;
-  messageId: string;
-  mediaUrl: string | null;
-  chatId?: string;
-  channelId?: string;
-  roomId?: string;
-  conversationId?: string;
-  timestamp?: number;
-  toJid?: string;
-  meta?: Record<string, unknown>;
-};
-
 const resolveChannelLabel = (channel: string) => {
   const pluginLabel = getChannelPlugin(channel as ChannelId)?.meta.label;
   if (pluginLabel) {
@@ -53,17 +35,8 @@ export function formatOutboundDeliverySummary(
   const label = resolveChannelLabel(result.channel);
   const base = `✅ ${action} via ${label}. Message ID: ${result.messageId}`;
 
-  if ("chatId" in result) {
-    return `${base} (chat ${result.chatId})`;
-  }
-  if ("channelId" in result) {
-    return `${base} (channel ${result.channelId})`;
-  }
-  if ("roomId" in result) {
-    return `${base} (room ${result.roomId})`;
-  }
-  if ("conversationId" in result) {
-    return `${base} (conversation ${result.conversationId})`;
+  if (result.target) {
+    return `${base} (${result.target.kind} ${result.target.id})`;
   }
   return base;
 }

@@ -9,7 +9,12 @@ import {
   allowedImplicitMentionKindsFromConfig,
   resolveInboundMentionDecision,
 } from "../mention-gating.js";
-import { applyMutableIdentifierPolicy, redactedAllowlistDiagnostics } from "./allowlist.js";
+import { applyIdentifierAuthenticationPolicy, redactedAllowlistDiagnostics } from "./allowlist.js";
+import {
+  DEFAULT_IDENTIFIER_AUTHENTICATION,
+  meetsIdentifierAuthentication,
+  minimumIdentifierAuthenticationFrom,
+} from "./identifier-authentication.js";
 import {
   applyEventAuthModeToSenderGate,
   senderGateForDirect,
@@ -19,7 +24,7 @@ import type {
   AccessGraphGate,
   ChannelIngressDecision,
   ChannelIngressPolicyInput,
-  ChannelIngressState,
+  NormalizedIngressState,
   RedactedIngressMatch,
 } from "./types.js";
 
@@ -38,7 +43,7 @@ function decisiveDecision(params: {
   };
 }
 
-function routeGates(state: ChannelIngressState): AccessGraphGate[] {
+function routeGates(state: NormalizedIngressState): AccessGraphGate[] {
   // Route gates run first because a matched route can block dispatch before sender,
   // command, or mention policy needs to evaluate.
   return state.routeFacts.map((route) => ({
@@ -52,7 +57,7 @@ function routeGates(state: ChannelIngressState): AccessGraphGate[] {
   }));
 }
 
-function routeSenderEmptyGate(state: ChannelIngressState): AccessGraphGate | null {
+function routeSenderEmptyGate(state: NormalizedIngressState): AccessGraphGate | null {
   // deny-when-empty route sender policy means the route matched but has no sender list to
   // authorize against, so it becomes an explicit route block.
   const route = state.routeFacts.find(
@@ -80,7 +85,7 @@ function routeSenderEmptyGate(state: ChannelIngressState): AccessGraphGate | nul
 }
 
 function commandGate(params: {
-  state: ChannelIngressState;
+  state: NormalizedIngressState;
   policy: ChannelIngressPolicyInput;
 }): AccessGraphGate {
   const command = params.policy.command;
@@ -95,10 +100,16 @@ function commandGate(params: {
     };
   }
   const useAccessGroups = command.useAccessGroups ?? true;
-  // Command authorization combines owner and group allowlists after mutable-id policy so
+  // Command authorization combines owner and group allowlists after authentication policy so
   // command control cannot be granted by identifiers the current policy rejects.
-  const owner = applyMutableIdentifierPolicy(params.state.allowlists.commandOwner, params.policy);
-  const group = applyMutableIdentifierPolicy(params.state.allowlists.commandGroup, params.policy);
+  const owner = applyIdentifierAuthenticationPolicy(
+    params.state.allowlists.commandOwner,
+    params.policy,
+  );
+  const group = applyIdentifierAuthenticationPolicy(
+    params.state.allowlists.commandGroup,
+    params.policy,
+  );
   const authorized = resolveCommandAuthorizedFromAuthorizers({
     useAccessGroups,
     modeWhenAccessGroupsOff: command.modeWhenAccessGroupsOff,
@@ -116,6 +127,12 @@ function commandGate(params: {
     allowed: authorized,
     reasonCode: shouldBlock ? "control_command_unauthorized" : "command_authorized",
     match: mergeCommandMatch(owner.match, group.match),
+    identifierAuthentication: {
+      evaluated: Boolean(owner.authentication?.evaluated || group.authentication?.evaluated),
+      affectedMatch: Boolean(
+        owner.authentication?.affectedMatch || group.authentication?.affectedMatch,
+      ),
+    },
     command: {
       useAccessGroups,
       allowTextCommands: command.allowTextCommands,
@@ -137,7 +154,8 @@ function mergeCommandMatch(
 }
 
 function eventGate(params: {
-  state: ChannelIngressState;
+  state: NormalizedIngressState;
+  policy: ChannelIngressPolicyInput;
   senderGate: AccessGraphGate;
   commandGate: AccessGraphGate;
 }): AccessGraphGate {
@@ -171,8 +189,22 @@ function eventGate(params: {
     if (!params.state.event.hasOriginSubject) {
       return eventResult(false, "origin_subject_missing");
     }
-    const matched = params.state.event.originSubjectMatched;
-    return eventResult(matched, matched ? "event_authorized" : "origin_subject_not_matched");
+    const matched =
+      params.state.event.originSubjectMatched &&
+      meetsIdentifierAuthentication(
+        params.state.event.originSubjectAuthentication ?? DEFAULT_IDENTIFIER_AUTHENTICATION,
+        minimumIdentifierAuthenticationFrom(params.policy),
+      );
+    return {
+      ...eventResult(matched, matched ? "event_authorized" : "origin_subject_not_matched"),
+      identifierAuthentication: {
+        evaluated:
+          params.policy.minIdentifierAuthentication !== undefined ||
+          params.policy.mutableIdentifierMatching !== undefined ||
+          params.state.event.originSubjectAuthentication !== undefined,
+        affectedMatch: params.state.event.originSubjectMatched && !matched,
+      },
+    };
   }
   return eventResult(
     params.senderGate.allowed,
@@ -182,7 +214,7 @@ function eventGate(params: {
 
 function activationMetadata(params: {
   activation?: ChannelIngressPolicyInput["activation"];
-  mentionFacts: ChannelIngressState["mentionFacts"];
+  mentionFacts: NormalizedIngressState["mentionFacts"];
   shouldSkip: boolean;
   effectiveWasMentioned?: boolean;
   shouldBypassMention?: boolean;
@@ -227,7 +259,7 @@ function resolveAllowedImplicitMentionKinds(activation: ChannelIngressPolicyInpu
 }
 
 function activationGate(params: {
-  state: ChannelIngressState;
+  state: NormalizedIngressState;
   policy: ChannelIngressPolicyInput;
   commandGate: AccessGraphGate;
 }): AccessGraphGate {
@@ -281,7 +313,7 @@ function activationGate(params: {
 }
 
 export function decideChannelIngress(
-  state: ChannelIngressState,
+  state: NormalizedIngressState,
   policy: ChannelIngressPolicyInput,
 ): ChannelIngressDecision {
   const gates: AccessGraphGate[] = routeGates(state);
@@ -337,7 +369,7 @@ export function decideChannelIngress(
     return decisiveDecision({ admission: "drop", decision: "block", gate: command, gates });
   }
 
-  const event = eventGate({ state, senderGate: eventModeSender, commandGate: command });
+  const event = eventGate({ state, policy, senderGate: eventModeSender, commandGate: command });
   gates.push(event);
   if (!event.allowed) {
     return decisiveDecision({ admission: "drop", decision: "block", gate: event, gates });

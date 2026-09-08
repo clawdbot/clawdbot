@@ -22,12 +22,13 @@ export function resolveSkillSource(skill: Skill): string {
 
 export function resolveSkillTelemetrySourceValue(value: unknown): SkillTelemetrySource {
   const source = normalizeOptionalString(value) ?? "";
-  if (source === "bundled" || source === "openclaw-bundled") {
+  if (source === "bundled" || source === "openclaw-bundled" || source === "openclaw-custodian") {
     return "bundled";
   }
   if (
     source === "workspace" ||
     source === "openclaw-workspace" ||
+    source === "openclaw-workshop" ||
     source === "openclaw-managed" ||
     source === "openclaw-extra" ||
     source === "agents-skills-personal" ||

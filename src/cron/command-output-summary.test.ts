@@ -17,6 +17,49 @@ describe("cron command output summaries", () => {
     );
   });
 
+  it.each(["\n", "\r\n"])("matches complete trimmed action lines with %j separators", (newline) => {
+    const action = "Visit https://example.com/device";
+    const stdout = `before${newline}  ${action}  ${newline}after`;
+    expect(
+      buildCronCommandSummary({
+        stdout,
+        stderr: "",
+        preservedStdoutLines: [` ${action} `, "Copy this code ABCD-EFGH"],
+      }),
+    ).toBe(`action-required output preserved:\nCopy this code ABCD-EFGH\n\n${stdout}`);
+  });
+
+  it("retains missing actions in stream order, including duplicates across streams", () => {
+    const action = "Visit https://example.com/device";
+    const stdout = `prefix ${action} suffix`;
+    expect(
+      buildCronCommandSummary({
+        stdout,
+        stderr: "warning",
+        preservedStdoutLines: [` ${action} `, action, "Copy this code ABCD-EFGH"],
+        preservedStderrLines: [action],
+      }),
+    ).toBe(
+      `action-required output preserved:\n${action}\nCopy this code ABCD-EFGH\n${action}\n\nstdout:\n${stdout}\n\nstderr:\nwarning`,
+    );
+  });
+
+  it("keeps independent preservation quotas before checking the captured tail", () => {
+    const stdoutLines = Array.from(
+      { length: 12 },
+      (_, index) => `Visit https://example.com/${index}`,
+    );
+    const stderrLine = "Copy this code ABCD-EFGH";
+    expect(
+      buildCronCommandSummary({
+        stdout: stdoutLines.join("\n"),
+        stderr: "",
+        preservedStdoutLines: [...stdoutLines, "Visit https://example.com/outside-quota"],
+        preservedStderrLines: [stderrLine],
+      }),
+    ).toBe(`action-required output preserved:\n${stderrLine}\n\n${stdoutLines.join("\n")}`);
+  });
+
   it("redacts action-required URLs and codes before external cron delivery", () => {
     const summary =
       "action-required output preserved:\nVisit https://example.com/device or www.example.com/device and enter code ABCD-EFGH\n\ncompleted";

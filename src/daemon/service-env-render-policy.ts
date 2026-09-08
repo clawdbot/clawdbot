@@ -1,20 +1,11 @@
 /** Applies platform render policy for managed daemon service environment values. */
-import { normalizeServiceEnvPlanKey, type MutableServiceEnvPlan } from "./service-env-plan.js";
+import type { MutableServiceEnvPlan } from "./service-env-plan.js";
 import {
+  normalizeServiceEnvKey,
   readManagedServiceEnvKeysFromEnvironment,
   writeManagedServiceEnvKeysToEnvironment,
 } from "./service-managed-env.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
-
-function isLaunchAgentServiceEnvironment(params: {
-  platform: NodeJS.Platform;
-  serviceEnvironment: Record<string, string | undefined>;
-}): boolean {
-  return (
-    params.platform === "darwin" &&
-    Boolean(params.serviceEnvironment.OPENCLAW_LAUNCHD_LABEL?.trim())
-  );
-}
 
 function addManagedServiceEnvEntries(params: {
   plan: MutableServiceEnvPlan;
@@ -26,7 +17,7 @@ function addManagedServiceEnvEntries(params: {
     if (typeof value !== "string" || !value.trim()) {
       continue;
     }
-    const key = normalizeServiceEnvPlanKey(rawKey);
+    const key = normalizeServiceEnvKey(rawKey);
     if (!key || !params.managedKeys.has(key)) {
       continue;
     }
@@ -44,7 +35,9 @@ export function applyManagedServiceEnvRenderPolicy(params: {
   stateDirDotEnvEnvironment: Record<string, string | undefined>;
   configSecretRefEnvironment: Record<string, string | undefined>;
 }): void {
-  const launchAgent = isLaunchAgentServiceEnvironment(params);
+  const launchAgent =
+    params.platform === "darwin" &&
+    Boolean(params.serviceEnvironment.OPENCLAW_LAUNCHD_LABEL?.trim());
   writeManagedServiceEnvKeysToEnvironment(params.plan.environment, params.managedServiceEnvKeys);
   if (params.plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS) {
     params.plan.environmentValueSources.OPENCLAW_SERVICE_MANAGED_ENV_KEYS = "inline";

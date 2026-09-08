@@ -1,5 +1,5 @@
-// Renders a session's raw output ring as plain text for terminal.text — an
-// agent/LLM affordance that wants readable output, not escape sequences.
+// Renders a session's raw output ring as plain text for the agent terminal tool,
+// which needs readable output rather than escape sequences.
 import { stripAnsiSequences } from "../../../packages/terminal-core/src/ansi.js";
 
 // Built at runtime so the source stays free of literal control characters and
@@ -23,12 +23,10 @@ export function renderTerminalBufferText(raw: string): string {
   return stripped
     .split("\n")
     .map((line) => {
-      const segments = line.split("\r");
-      const last = segments[segments.length - 1];
-      // A trailing \r ("text\r\n" split) leaves an empty last segment; the
-      // carriage return did not overwrite anything yet, so keep the text.
-      const kept = last === "" && segments.length > 1 ? segments[segments.length - 2] : last;
-      return (kept ?? "").replace(CONTROL_BYTES_REGEX, "");
+      // A final CR has not overwritten anything yet. Exclude only that CR;
+      // an earlier CR still starts the last write, even when it is empty.
+      const end = line.endsWith("\r") ? line.length - 1 : line.length;
+      return line.slice(line.lastIndexOf("\r", end - 1) + 1, end).replace(CONTROL_BYTES_REGEX, "");
     })
     .join("\n");
 }

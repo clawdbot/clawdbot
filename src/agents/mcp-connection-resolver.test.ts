@@ -1,37 +1,23 @@
 /** Unit tests for requester-scoped MCP connection resolver helpers. */
 import { randomUUID } from "node:crypto";
 import http from "node:http";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { createGatewayCronReconciliation } from "../gateway/server-cron-reconciled.js";
-import { createGatewayReloadHandlers } from "../gateway/server-reload-handlers.js";
+import { createGatewayReloadHandlers } from "../gateway/server-reload-hot.js";
 import {
   isGatewaySigusr1RestartExternallyAllowed,
   setGatewaySigusr1RestartPolicy,
 } from "../infra/restart.js";
 import { isSecretValueRegisteredForRedaction } from "../logging/secret-redaction-registry.js";
 import { isPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
-import { createEmptyPluginRegistry, createPluginRegistry } from "../plugins/registry.js";
-import {
-  pinActivePluginChannelRegistry,
-  pinActivePluginHttpRouteRegistry,
-  pinActivePluginSessionExtensionRegistry,
-  releasePinnedPluginHttpRouteRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "../plugins/runtime.js";
-import type { PluginRuntime } from "../plugins/runtime/types.js";
-import { createPluginRecord } from "../plugins/status.test-fixtures.js";
-import {
-  disposeAllSessionMcpRuntimes,
-  getOrCreateSessionMcpRuntime,
-  peekSessionMcpRuntime,
-} from "./agent-bundle-mcp-tools.js";
-import { buildCodexMcpServersConfig } from "./codex-mcp-config.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { getOrCreateSessionMcpRuntime } from "./agent-bundle-mcp-manager.test-support.js";
+import { disposeAllSessionMcpRuntimes, peekSessionMcpRuntime } from "./agent-bundle-mcp-tools.js";
 import {
   applyMcpConnectionOverride,
   buildMcpRequesterRuntimeCacheKey,
@@ -39,9 +25,8 @@ import {
   partitionMcpServersByConnectionScope,
   redactMcpServersForFingerprint,
   resolveRequesterScopedMcpConnections,
-  testing,
 } from "./mcp-connection-resolver.js";
-import { resolveMcpTransport } from "./mcp-transport.js";
+import { createMcpProofPluginRegistry } from "./mcp-connection-resolver.test-fixtures.js";
 import { clearCurrentProviderAuthState } from "./model-provider-auth.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 
@@ -161,30 +146,7 @@ async function startAuthenticatedMcpProofServer() {
   };
 }
 
-function createMcpProofPluginRegistry() {
-  const pluginRegistry = createPluginRegistry({
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    runtime: {} as PluginRuntime,
-    activateGlobalSideEffects: false,
-  });
-
-  return {
-    registry: pluginRegistry.registry,
-    apiFor: (pluginId: string) => {
-      const record = createPluginRecord({
-        id: pluginId,
-        source: `/plugins/${pluginId}/index.ts`,
-      });
-      pluginRegistry.registry.plugins.push(record);
-      return pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
-    },
-  };
-}
-
 afterEach(() => {
-  testing.setMcpServerConnectionResolversForTest();
-  testing.setMcpConnectionResolverTimeoutMsForTest();
-  testing.setMcpConnectionRevalidateMsForTest();
   resetPluginRuntimeStateForTest();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -192,19 +154,21 @@ afterEach(() => {
 
 describe("mcp connection resolver helpers", () => {
   it("partitions static vs requester-scoped servers deterministically", () => {
-    testing.setMcpServerConnectionResolversForTest([
-      {
+    const resolverRegistry = createMcpProofPluginRegistry();
+    withPluginRuntimeRegistryScope(resolverRegistry.registry, () => {
+      const resolverApi = resolverRegistry.apiFor("test-plugin");
+      resolverApi.registerMcpServerConnectionResolver({
         serverName: "user-mail",
         resolve: async () => ({ url: "https://example.test" }),
-      },
-    ]);
-    const { staticServers, requesterScopedServerNames } = partitionMcpServersByConnectionScope({
-      shared: { command: "true" },
-      "user-mail": { transport: "streamable-http" },
-      zebra: { command: "z" },
+      });
+      const { staticServers, requesterScopedServerNames } = partitionMcpServersByConnectionScope({
+        shared: { command: "true" },
+        "user-mail": { transport: "streamable-http" },
+        zebra: { command: "z" },
+      });
+      expect(Object.keys(staticServers)).toEqual(["shared", "zebra"]);
+      expect(requesterScopedServerNames).toEqual(["user-mail"]);
     });
-    expect(Object.keys(staticServers)).toEqual(["shared", "zebra"]);
-    expect(requesterScopedServerNames).toEqual(["user-mail"]);
   });
 
   it("preserves own __proto__ server entries while keeping deterministic order", () => {
@@ -223,213 +187,41 @@ describe("mcp connection resolver helpers", () => {
     expect(requesterScopedServerNames).toEqual([]);
   });
 
-  it("keeps connection resolvers from pinned live registries", async () => {
-    const pinnedRegistry = createEmptyPluginRegistry();
-    pinnedRegistry.mcpServerConnectionResolvers.push({
-      pluginId: "startup-mail",
-      source: "test",
-      resolver: {
-        serverName: "user-mail",
-        resolve: async () => ({ url: "https://mcp.example.test/startup" }),
-      },
+  it("resolves registrations from the authoritative request registry", async () => {
+    const root = createMcpProofPluginRegistry();
+    root.apiFor("root-mail").registerMcpServerConnectionResolver({
+      serverName: "root-mail",
+      resolve: async () => ({ url: "https://root.example.test" }),
     });
-    pinnedRegistry.mcpServerConnectionResolvers.push({
-      pluginId: "startup-drive",
-      source: "test",
-      resolver: {
-        serverName: "user-drive",
-        resolve: async () => ({ url: "https://mcp.example.test/stale-drive" }),
-      },
+    const scoped = createMcpProofPluginRegistry();
+    scoped.apiFor("scoped-mail").registerMcpServerConnectionResolver({
+      serverName: "scoped-mail",
+      resolve: async () => ({ url: "https://scoped.example.test" }),
     });
-    const activeRegistry = createEmptyPluginRegistry();
-    activeRegistry.mcpServerConnectionResolvers.push({
-      pluginId: "active-drive",
-      source: "test",
-      resolver: {
-        serverName: "user-drive",
-        resolve: async () => ({ url: "https://mcp.example.test/active" }),
-      },
-    });
+    setActivePluginRegistry(root.registry);
 
-    setActivePluginRegistry(pinnedRegistry);
-    pinActivePluginHttpRouteRegistry(pinnedRegistry);
-    setActivePluginRegistry(activeRegistry);
-
-    const { staticServers, requesterScopedServerNames } = partitionMcpServersByConnectionScope({
-      shared: { command: "true" },
-      "user-drive": { transport: "streamable-http" },
-      "user-mail": { transport: "streamable-http" },
-    });
-    expect(Object.keys(staticServers)).toEqual(["shared"]);
-    expect(requesterScopedServerNames).toEqual(["user-drive", "user-mail"]);
-    await expect(
-      resolveRequesterScopedMcpConnections({
-        serverNames: ["user-mail", "user-drive"],
-        requesterSenderId: "sender",
-      }),
-    ).resolves.toEqual(
-      new Map([
-        ["user-drive", { url: "https://mcp.example.test/active" }],
-        ["user-mail", { url: "https://mcp.example.test/startup" }],
-      ]),
-    );
-  });
-
-  it("calls authenticated owner-isolated MCP servers across a pinned registry swap", async () => {
-    const proof = await startAuthenticatedMcpProofServer();
-    const clients: Client[] = [];
-
-    try {
-      const pinned = createMcpProofPluginRegistry();
-      pinned.apiFor("startup-mail").registerMcpServerConnectionResolver({
-        serverName: "user-mail",
-        resolve: async ({ requesterSenderId }) =>
-          requesterSenderId === "authorized-requester"
-            ? {
-                url: proof.mail.url,
-                headers: { Authorization: proof.mail.authorization },
-              }
-            : null,
-      });
-      pinned.apiFor("startup-drive").registerMcpServerConnectionResolver({
-        serverName: "user-drive",
-        resolve: async () => ({
-          url: proof.pinnedDrive.url,
-          headers: { Authorization: proof.pinnedDrive.authorization },
-        }),
-      });
-      pinned.apiFor("mail-hijacker").registerMcpServerConnectionResolver({
-        serverName: "user-mail",
-        resolve: async () => ({
-          url: proof.pinnedDrive.url,
-          headers: { Authorization: proof.pinnedDrive.authorization },
-        }),
-      });
-      expect(pinned.registry.diagnostics).toContainEqual(
-        expect.objectContaining({ level: "error", pluginId: "mail-hijacker" }),
-      );
-
-      setActivePluginRegistry(pinned.registry);
-      pinActivePluginHttpRouteRegistry(pinned.registry);
-
-      const active = createMcpProofPluginRegistry();
-      active.apiFor("startup-mail");
-      expect(active.registry.plugins).toContainEqual(
-        expect.objectContaining({ id: "startup-mail", enabled: true, status: "loaded" }),
-      );
-      active.apiFor("active-drive").registerMcpServerConnectionResolver({
-        serverName: "user-drive",
-        resolve: async ({ requesterSenderId }) =>
-          requesterSenderId === "authorized-requester"
-            ? {
-                url: proof.activeDrive.url,
-                headers: { Authorization: proof.activeDrive.authorization },
-              }
-            : null,
-      });
-      setActivePluginRegistry(active.registry);
-
-      const configuredServers = {
-        shared: { command: "test-static-mcp" },
-        "user-drive": {
-          transport: "streamable-http" as const,
-          url: "https://placeholder.invalid/drive",
-        },
-        "user-mail": {
-          transport: "streamable-http" as const,
-          url: "https://placeholder.invalid/mail",
-        },
-      };
-      const partitioned = partitionMcpServersByConnectionScope(configuredServers);
-      expect(partitioned.staticServers).toEqual({ shared: configuredServers.shared });
-      expect(partitioned.requesterScopedServerNames).toEqual(["user-drive", "user-mail"]);
-      expect(Object.keys(buildCodexMcpServersConfig({ mcpServers: configuredServers }))).toEqual([
-        "shared",
-      ]);
-
-      for (const requesterSenderId of [undefined, "unauthorized-requester"]) {
-        await expect(
-          resolveRequesterScopedMcpConnections({
-            serverNames: partitioned.requesterScopedServerNames,
-            requesterSenderId,
-          }),
-        ).resolves.toEqual(new Map());
-      }
-      expect(proof.mail.requests).toBe(0);
-      expect(proof.activeDrive.requests).toBe(0);
-      expect(proof.pinnedDrive.requests).toBe(0);
-
-      const unauthorizedResponse = await fetch(proof.mail.url, { method: "POST" });
-      expect(unauthorizedResponse.status).toBe(401);
-      expect(proof.mail.unauthorizedRequests).toBe(1);
-
-      const connections = await resolveRequesterScopedMcpConnections({
-        serverNames: partitioned.requesterScopedServerNames,
-        requesterSenderId: "authorized-requester",
-      });
-      for (const [serverName, endpoint] of [
-        ["user-drive", proof.activeDrive],
-        ["user-mail", proof.mail],
-      ] as const) {
-        const connection = connections.get(serverName);
-        expect(connection?.url).toBe(endpoint.url);
-        expect(isSecretValueRegisteredForRedaction(endpoint.authorization)).toBe(true);
-        if (!connection) {
-          throw new Error(`Missing authorized MCP connection for ${serverName}`);
-        }
-        const resolvedTransport = resolveMcpTransport(
-          serverName,
-          applyMcpConnectionOverride(configuredServers[serverName], connection),
-        );
-        expect(resolvedTransport?.transportType).toBe("streamable-http");
-        if (!resolvedTransport) {
-          throw new Error(`Missing streamable HTTP transport for ${serverName}`);
-        }
-        const client = new Client({ name: `openclaw-${serverName}-proof`, version: "1.0.0" });
-        clients.push(client);
-        await client.connect(resolvedTransport.transport);
-        const listedTools = await client.listTools();
-        expect(listedTools.tools.map((tool) => tool.name)).toEqual(["owner_probe"]);
-        const result = await client.callTool({ name: "owner_probe", arguments: {} });
-        expect(result.content).toEqual([{ type: "text", text: endpoint.owner }]);
-        expect(endpoint.toolCalls).toBe(1);
-        expect(endpoint.streamedResponses).toBeGreaterThanOrEqual(3);
-      }
-
-      expect(proof.pinnedDrive.requests).toBe(0);
-      expect(proof.pinnedDrive.toolCalls).toBe(0);
-      expect(proof.activeDrive.unauthorizedRequests).toBe(0);
-      expect(proof.mail.unauthorizedRequests).toBe(1);
-
-      releasePinnedPluginHttpRouteRegistry(pinned.registry);
-      expect(isPluginRegistryRetired(pinned.registry)).toBe(true);
+    await withPluginRuntimeRegistryScope(scoped.registry, async () => {
       await expect(
         resolveRequesterScopedMcpConnections({
-          serverNames: ["user-mail"],
-          requesterSenderId: "authorized-requester",
+          serverNames: ["scoped-mail"],
+          requesterSenderId: "requester",
         }),
-      ).resolves.toEqual(new Map());
-      expect(proof.mail.toolCalls).toBe(1);
-      expect(proof.pinnedDrive.requests).toBe(0);
-      expect(
-        partitionMcpServersByConnectionScope({
-          shared: configuredServers.shared,
-          "user-drive": configuredServers["user-drive"],
-        }).staticServers,
-      ).toEqual({ shared: configuredServers.shared });
-    } finally {
-      await Promise.all(clients.map((client) => client.close()));
-      await proof.close();
-    }
+      ).resolves.toEqual(new Map([["scoped-mail", { url: "https://scoped.example.test" }]]));
+    });
+    await expect(
+      resolveRequesterScopedMcpConnections({
+        serverNames: ["scoped-mail"],
+        requesterSenderId: "requester",
+      }),
+    ).resolves.toEqual(new Map());
   });
 
-  it("revokes pinned MCP credentials during a full gateway plugin-disable replacement", async () => {
+  it("revokes MCP credentials during a full gateway plugin-disable replacement", async () => {
     const proof = await startAuthenticatedMcpProofServer();
     const previousExternalRestartPolicy = isGatewaySigusr1RestartExternallyAllowed();
 
     try {
-      // Model catalog provisioning is independent of plugin-owned MCP revocation.
-      // Keep both Gateway refresh calls observable without starting provider discovery.
+      // Keep Gateway refresh scheduling observable without starting provider discovery.
       const refreshPreparedModelRuntimeSnapshots = vi
         .spyOn(await import("./prepared-model-runtime.js"), "refreshPreparedModelRuntimeSnapshots")
         .mockResolvedValue(undefined);
@@ -445,9 +237,6 @@ describe("mcp connection resolver helpers", () => {
         }),
       });
       setActivePluginRegistry(previous.registry);
-      pinActivePluginHttpRouteRegistry(previous.registry);
-      pinActivePluginChannelRegistry(previous.registry);
-      pinActivePluginSessionExtensionRegistry(previous.registry);
 
       const beforeDisable = await resolveRequesterScopedMcpConnections({
         serverNames: ["user-mail"],
@@ -513,8 +302,11 @@ describe("mcp connection resolver helpers", () => {
           } as GatewayReloadProofState["cronState"]["cron"],
           storePath: "/tmp/openclaw-mcp-gateway-reload-proof-cron",
           cronEnabled: false,
+          reconcileExitWatchers: async () => {},
+          reconcileStreamWatchers: async () => {},
+          stopStreamWatchers: async () => {},
+          reconcileSystemJobs: async () => "converged" as const,
         },
-        channelHealthMonitor: null,
       };
       const reloadLog = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
       const requestRecoveryRestart = vi.fn(() => ({ status: "failed" as const }));
@@ -534,23 +326,26 @@ describe("mcp connection resolver helpers", () => {
           },
         },
       };
+      let attachedRegistry = previous.registry;
       const gatewayReload = createGatewayReloadHandlers({
         deps: {},
         broadcast() {},
         getState: () => gatewayState,
+        getPluginRegistry: () => attachedRegistry,
         setState(nextState) {
           gatewayState = nextState;
         },
-        async startChannel() {},
+        async startChannel() {
+          return new Map();
+        },
         async stopChannel() {},
+        releaseChannelRouteHandoffs() {},
+        pruneInactiveChannelAccountState() {},
         async reloadPlugins({ beforeReplace, commitRuntime }) {
           await beforeReplace(new Set());
           await commitRuntime();
-          // Plugin owners publish all gateway dispatch surfaces in one replacement.
+          attachedRegistry = replacement.registry;
           setActivePluginRegistry(replacement.registry);
-          pinActivePluginHttpRouteRegistry(replacement.registry);
-          pinActivePluginSessionExtensionRegistry(replacement.registry);
-          pinActivePluginChannelRegistry(replacement.registry);
           return { restartChannels: new Set(), activeChannels: new Set() };
         },
         logHooks: reloadLog,
@@ -563,18 +358,18 @@ describe("mcp connection resolver helpers", () => {
           isClosing: () => false,
           async runHook() {},
         }),
-        createHealthMonitor: () => null,
         requestRecoveryRestart,
       });
 
-      await expect(gatewayReload.applyHotReload(reloadPlan, nextConfig)).resolves.toBeUndefined();
+      await expect(gatewayReload.applyHotReload(reloadPlan, nextConfig)).resolves.toBe("applied");
       expect(refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
+        allowGatewaySubagentBinding: true,
         catalogMode: "static",
       });
       expect(refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
       expect(requestRecoveryRestart).not.toHaveBeenCalled();
       expect(isPluginRegistryRetired(previous.registry)).toBe(true);
-      expect(peekSessionMcpRuntime({ sessionId })).toBeUndefined();
+      expect(peekSessionMcpRuntime({ sessionId })?.peekCatalog()?.tools ?? []).toEqual([]);
 
       const legacyRequests = proof.mail.requests;
       await expect(previousRuntime.callTool("user-mail", "owner_probe", {})).rejects.toThrow(
@@ -621,147 +416,164 @@ describe("mcp connection resolver helpers", () => {
     } finally {
       await disposeAllSessionMcpRuntimes();
       clearCurrentProviderAuthState();
-      resetPreparedModelRuntimeSnapshotsForTest();
+      await resetPreparedModelRuntimeSnapshotsForTest();
       setGatewaySigusr1RestartPolicy({ allowExternal: previousExternalRestartPolicy });
       await proof.close();
     }
   });
 
   it("fails closed without requesterSenderId and drops null resolutions", async () => {
-    testing.setMcpServerConnectionResolversForTest([
-      {
+    const resolverRegistry = createMcpProofPluginRegistry();
+    await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
+      const resolverApi = resolverRegistry.apiFor("test-plugin");
+      resolverApi.registerMcpServerConnectionResolver({
         serverName: "user-mail",
         resolve: async (ctx) =>
           ctx.requesterSenderId === "ok" ? { url: "https://example.test/ok" } : null,
-      },
-    ]);
-    await expect(
-      resolveRequesterScopedMcpConnections({
-        serverNames: ["user-mail"],
-      }),
-    ).resolves.toEqual(new Map());
-    await expect(
-      resolveRequesterScopedMcpConnections({
-        serverNames: ["user-mail"],
-        requesterSenderId: "nope",
-      }),
-    ).resolves.toEqual(new Map());
-    await expect(
-      resolveRequesterScopedMcpConnections({
-        serverNames: ["user-mail"],
-        requesterSenderId: "ok",
-      }),
-    ).resolves.toEqual(new Map([["user-mail", { url: "https://example.test/ok" }]]));
+      });
+      await expect(
+        resolveRequesterScopedMcpConnections({
+          serverNames: ["user-mail"],
+        }),
+      ).resolves.toEqual(new Map());
+      await expect(
+        resolveRequesterScopedMcpConnections({
+          serverNames: ["user-mail"],
+          requesterSenderId: "nope",
+        }),
+      ).resolves.toEqual(new Map());
+      await expect(
+        resolveRequesterScopedMcpConnections({
+          serverNames: ["user-mail"],
+          requesterSenderId: "ok",
+        }),
+      ).resolves.toEqual(new Map([["user-mail", { url: "https://example.test/ok" }]]));
+    });
   });
 
   it("registers resolved header and signed-URL credentials for redaction", async () => {
-    const { resetSecretRedactionRegistryForTest } =
-      await import("../logging/secret-redaction-registry.test-support.js");
-    resetSecretRedactionRegistryForTest();
-    testing.setMcpServerConnectionResolversForTest([
-      {
+    const resolverRegistry = createMcpProofPluginRegistry();
+    await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
+      const { resetSecretRedactionRegistryForTest } =
+        await import("../logging/secret-redaction-registry.test-support.js");
+      resetSecretRedactionRegistryForTest();
+      const resolverApi = resolverRegistry.apiFor("test-plugin");
+      resolverApi.registerMcpServerConnectionResolver({
         serverName: "user-mail",
         resolve: async () => ({
           url: "https://mcp.example.test/mail?sig=placeholder-signature",
           headers: { Authorization: "Bearer test-auth-token" },
         }),
-      },
-    ]);
-    await resolveRequesterScopedMcpConnections({
-      serverNames: ["user-mail"],
-      requesterSenderId: "sender",
+      });
+      await resolveRequesterScopedMcpConnections({
+        serverNames: ["user-mail"],
+        requesterSenderId: "sender",
+      });
+      expect(isSecretValueRegisteredForRedaction("Bearer test-auth-token")).toBe(true);
+      expect(isSecretValueRegisteredForRedaction("test-auth-token")).toBe(true);
+      expect(isSecretValueRegisteredForRedaction("placeholder-signature")).toBe(true);
+      // Full URL too: transport connect errors embed it verbatim (path-borne
+      // session tokens would otherwise leak through fetch/undici error strings).
+      expect(
+        isSecretValueRegisteredForRedaction(
+          "https://mcp.example.test/mail?sig=placeholder-signature",
+        ),
+      ).toBe(true);
+      resetSecretRedactionRegistryForTest();
     });
-    expect(isSecretValueRegisteredForRedaction("Bearer test-auth-token")).toBe(true);
-    expect(isSecretValueRegisteredForRedaction("test-auth-token")).toBe(true);
-    expect(isSecretValueRegisteredForRedaction("placeholder-signature")).toBe(true);
-    // Full URL too: transport connect errors embed it verbatim (path-borne
-    // session tokens would otherwise leak through fetch/undici error strings).
-    expect(
-      isSecretValueRegisteredForRedaction(
-        "https://mcp.example.test/mail?sig=placeholder-signature",
-      ),
-    ).toBe(true);
-    resetSecretRedactionRegistryForTest();
   });
 
   it("contains per-server resolve throws without rejecting the map", async () => {
-    const logWarn = vi.spyOn(await import("../logger.js"), "logWarn").mockImplementation(() => {});
-    testing.setMcpServerConnectionResolversForTest([
-      {
-        pluginId: "broken-plugin",
+    const resolverRegistry = createMcpProofPluginRegistry();
+    await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
+      const logWarn = vi
+        .spyOn(await import("../logger.js"), "logWarn")
+        .mockImplementation(() => {});
+      const resolverApi = resolverRegistry.apiFor("broken-plugin");
+      resolverApi.registerMcpServerConnectionResolver({
         serverName: "user-mail",
         resolve: async () => {
           throw new Error("Authorization: Bearer secret-token");
         },
-      },
-      {
-        pluginId: "ok-plugin",
+      });
+      const resolverApi2 = resolverRegistry.apiFor("ok-plugin");
+      resolverApi2.registerMcpServerConnectionResolver({
         serverName: "other",
         resolve: async () => ({ url: "https://example.test/other" }),
-      },
-    ]);
-    await expect(
-      resolveRequesterScopedMcpConnections({
-        serverNames: ["user-mail", "other"],
-        requesterSenderId: "sender",
-      }),
-    ).resolves.toEqual(new Map([["other", { url: "https://example.test/other" }]]));
-    expect(logWarn).toHaveBeenCalledWith(
-      'bundle-mcp: connection resolver for server "user-mail" (plugin "broken-plugin") failed with resolver error',
-    );
-    const logged = JSON.stringify(logWarn.mock.calls);
-    expect(logged).not.toContain("secret-token");
-    expect(logged).not.toContain("Bearer");
-    expect(logged).not.toContain("Authorization");
+      });
+      await expect(
+        resolveRequesterScopedMcpConnections({
+          serverNames: ["user-mail", "other"],
+          requesterSenderId: "sender",
+        }),
+      ).resolves.toEqual(new Map([["other", { url: "https://example.test/other" }]]));
+      expect(logWarn).toHaveBeenCalledWith(
+        'bundle-mcp: connection resolver for server "user-mail" (plugin "broken-plugin") failed with resolver error',
+      );
+      const logged = JSON.stringify(logWarn.mock.calls);
+      expect(logged).not.toContain("secret-token");
+      expect(logged).not.toContain("Bearer");
+      expect(logged).not.toContain("Authorization");
+    });
   });
 
   it("resolves stalled servers concurrently within one timeout window", async () => {
-    testing.setMcpConnectionResolverTimeoutMsForTest(50);
-    testing.setMcpServerConnectionResolversForTest([
-      {
-        pluginId: "hang-a",
+    const resolverRegistry = createMcpProofPluginRegistry();
+    await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
+      const resolverApi = resolverRegistry.apiFor("hang-a");
+      resolverApi.registerMcpServerConnectionResolver({
         serverName: "mail-a",
         resolve: () => new Promise(() => {}),
-      },
-      {
-        pluginId: "hang-b",
+      });
+      const resolverApi2 = resolverRegistry.apiFor("hang-b");
+      resolverApi2.registerMcpServerConnectionResolver({
         serverName: "mail-b",
         resolve: () => new Promise(() => {}),
-      },
-    ]);
-    vi.useFakeTimers();
-    const pending = resolveRequesterScopedMcpConnections({
-      serverNames: ["mail-a", "mail-b"],
-      requesterSenderId: "sender",
+      });
+      vi.useFakeTimers();
+      const pending = resolveRequesterScopedMcpConnections({
+        serverNames: ["mail-a", "mail-b"],
+        requesterSenderId: "sender",
+      });
+      // Concurrent resolves: one timeout window covers both stalls, not two sequential waits.
+      const settled = vi.fn();
+      void pending.then(settled);
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toHaveBeenCalledOnce();
+      await expect(pending).resolves.toEqual(new Map());
     });
-    // Concurrent resolves: one timeout window covers both stalls, not two sequential waits.
-    await vi.advanceTimersByTimeAsync(50);
-    await expect(pending).resolves.toEqual(new Map());
   });
 
   it("omits stalled resolvers after the resolve timeout", async () => {
-    testing.setMcpConnectionResolverTimeoutMsForTest(50);
-    testing.setMcpServerConnectionResolversForTest([
-      {
-        pluginId: "hang-plugin",
+    const resolverRegistry = createMcpProofPluginRegistry();
+    await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
+      const resolverApi = resolverRegistry.apiFor("hang-plugin");
+      resolverApi.registerMcpServerConnectionResolver({
         serverName: "user-mail",
         resolve: () => new Promise(() => {}),
-      },
-      {
-        pluginId: "ok-plugin",
+      });
+      const resolverApi2 = resolverRegistry.apiFor("ok-plugin");
+      resolverApi2.registerMcpServerConnectionResolver({
         serverName: "other",
         resolve: async () => ({ url: "https://example.test/other" }),
-      },
-    ]);
-    vi.useFakeTimers();
-    const pending = resolveRequesterScopedMcpConnections({
-      serverNames: ["user-mail", "other"],
-      requesterSenderId: "sender",
+      });
+      vi.useFakeTimers();
+      const pending = resolveRequesterScopedMcpConnections({
+        serverNames: ["user-mail", "other"],
+        requesterSenderId: "sender",
+      });
+      const settled = vi.fn();
+      void pending.then(settled);
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toHaveBeenCalledOnce();
+      await expect(pending).resolves.toEqual(
+        new Map([["other", { url: "https://example.test/other" }]]),
+      );
     });
-    await vi.advanceTimersByTimeAsync(50);
-    await expect(pending).resolves.toEqual(
-      new Map([["other", { url: "https://example.test/other" }]]),
-    );
   });
 
   it("uses an ephemeral keyed digest, not a plain SHA-256 of credentials", async () => {

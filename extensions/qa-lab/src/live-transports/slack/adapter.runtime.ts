@@ -1,24 +1,29 @@
 // Qa Lab plugin module implements Slack live transport adapter behavior.
+import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import {
-  createSlackWebClient,
-  createSlackWriteClient,
-  resolveSlackWebClientOptions,
-} from "@openclaw/slack/api.js";
-import type { FetchFunction } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
+import {
+  createDebugProxyCaptureReader,
+  type DebugProxyCaptureReader,
+} from "openclaw/plugin-sdk/proxy-capture";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
 } from "../shared/credential-lease.runtime.js";
 import { createSlackQaScenarioEnvironment } from "./scenario-environment.js";
+import { getSlackQaMessageWriteCursor, readSlackQaMessageWrites } from "./slack-live.capture.js";
 import {
   buildSlackQaConfig,
   parseSlackQaCredentialPayload,
   resolveSlackQaRuntimeEnv,
 } from "./slack-live.config.js";
-import type { SlackMessage, SlackQaRuntimeEnv } from "./slack-live.contracts.js";
+import type {
+  SlackMessage,
+  SlackQaFetchFunction,
+  SlackQaRuntimeEnv,
+} from "./slack-live.contracts.js";
 import { waitForSlackChannelStable } from "./slack-live.message-observations.js";
 import {
   getSlackIdentity,
@@ -26,9 +31,11 @@ import {
   listSlackThreadMessages,
   sendSlackChannelMessage,
 } from "./slack-live.observations.js";
+import { loadSlackQaRuntime } from "./slack-plugin.runtime.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type FactoryContext = Parameters<AdapterFactory["create"]>[0];
+type FetchFunction = SlackQaFetchFunction;
 type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
 
 const SLACK_POLL_INTERVAL_MS = 500;
@@ -109,6 +116,8 @@ async function recordSlackObservedMessage(params: {
 export async function createSlackQaTransportAdapter(
   context: FactoryContext,
 ): Promise<AdapterDefinition> {
+  const { createSlackWebClient, createSlackWriteClient, resolveSlackWebClientOptions } =
+    loadSlackQaRuntime();
   const options = context.adapterOptions ?? {};
   const lease = await acquireQaCredentialLease<SlackQaRuntimeEnv>({
     kind: "slack",
@@ -121,6 +130,8 @@ export async function createSlackQaTransportAdapter(
   const runtimeEnv = lease.payload;
   let driverIdentity: Awaited<ReturnType<typeof getSlackIdentity>>;
   let sutIdentity: Awaited<ReturnType<typeof getSlackIdentity>>;
+  let captureReader: DebugProxyCaptureReader | undefined;
+  const captureSessionId = `qa-slack-${randomUUID()}`;
   try {
     [driverIdentity, sutIdentity] = await Promise.all([
       getSlackIdentity(runtimeEnv.driverBotToken),
@@ -217,10 +228,37 @@ export async function createSlackQaTransportAdapter(
       }
     })().catch((error: unknown) => {
       if (!stopped) {
-        pollingError = error instanceof Error ? error : new Error(String(error));
+        pollingError = toStringifiedError(error);
       }
     });
   };
+
+  const scenarioEnvironment = createSlackQaScenarioEnvironment({
+    accountId,
+    channelId: runtimeEnv.channelId,
+    driverBotUserId: driverIdentity.userId,
+    driverClient,
+    getMessageWriteCursor: () =>
+      captureReader
+        ? getSlackQaMessageWriteCursor({
+            sessionId: captureSessionId,
+            store: captureReader,
+          })
+        : 0,
+    readMessageWrites: async (afterRequestEventId) =>
+      captureReader
+        ? await readSlackQaMessageWrites({
+            afterRequestEventId,
+            sessionId: captureSessionId,
+            store: captureReader,
+          })
+        : [],
+    sutAppToken: runtimeEnv.sutAppToken,
+    sutBotToken: runtimeEnv.sutBotToken,
+    sutIdentity,
+    sutReadClient: sutClient,
+    sutWriteClient,
+  });
 
   return {
     id: "slack",
@@ -272,17 +310,16 @@ export async function createSlackQaTransportAdapter(
         sutAppToken: runtimeEnv.sutAppToken,
         sutBotToken: runtimeEnv.sutBotToken,
       }),
-    prepareFlow: createSlackQaScenarioEnvironment({
-      accountId,
-      channelId: runtimeEnv.channelId,
-      driverBotUserId: driverIdentity.userId,
-      driverClient,
-      sutAppToken: runtimeEnv.sutAppToken,
-      sutBotToken: runtimeEnv.sutBotToken,
-      sutIdentity,
-      sutReadClient: sutClient,
-      sutWriteClient,
-    }).prepareFlow,
+    createRuntimeEnvPatch: () => ({
+      OPENCLAW_DEBUG_PROXY_ENABLED: "1",
+      OPENCLAW_DEBUG_PROXY_SESSION_ID: captureSessionId,
+    }),
+    prepareFlow: async (input) => {
+      captureReader ??= createDebugProxyCaptureReader({
+        env: (input.gateway as { runtimeEnv: NodeJS.ProcessEnv }).runtimeEnv,
+      });
+      return await scenarioEnvironment.prepareFlow(input);
+    },
     waitReady: async ({ gateway }) =>
       await waitForSlackChannelStable(gateway as never, accountId, "connected"),
     buildAgentDelivery: () => ({
@@ -302,7 +339,6 @@ export async function createSlackQaTransportAdapter(
       pollingAbort.abort();
     },
     async cleanupAfterGatewayStop() {
-      // Lease release must still run when heartbeat shutdown reports an error.
       try {
         await heartbeat.stop();
       } finally {

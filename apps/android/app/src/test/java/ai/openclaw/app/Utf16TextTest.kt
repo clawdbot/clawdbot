@@ -49,5 +49,10 @@ class Utf16TextTest {
     assertEquals("ab", "abc".takeUtf16Safe(2))
     assertEquals("", "\uD83D\uDE00tail".takeUtf16Safe(1))
     assertEquals("\uD83D\uDE00", "\uD83D\uDE00tail".takeUtf16Safe(2))
+
+    val splitPairPrefix = "a".repeat(156)
+    assertEquals(splitPairPrefix, "$splitPairPrefix😀tail".takeUtf16Safe(157))
+    val completePairPrefix = "a".repeat(155)
+    assertEquals("$completePairPrefix😀", "$completePairPrefix😀tail".takeUtf16Safe(157))
   }
 }

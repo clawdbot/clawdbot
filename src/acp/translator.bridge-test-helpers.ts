@@ -10,8 +10,11 @@ import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { expect, vi } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
-import { AcpGatewayAgent } from "./translator.js";
-import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
+import {
+  createAcpConnection,
+  createAcpGateway,
+  createAcpGatewayAgent,
+} from "./translator.test-helpers.js";
 
 /** Builds a minimal ACP new-session request for translator tests. */
 export function createNewSessionRequest(cwd = "/tmp"): NewSessionRequest {
@@ -115,7 +118,7 @@ export async function expectOversizedPromptRejected(params: { sessionId: string;
   const requestMock = vi.fn(async (_method: string) => ({ ok: true }));
   const request = requestMock as GatewayClient["request"];
   const sessionStore = createInMemorySessionStore();
-  const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+  const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
     sessionStore,
   });
   await agent.loadSession(createLoadSessionRequest(params.sessionId));
@@ -127,13 +130,11 @@ export async function expectOversizedPromptRejected(params: { sessionId: string;
   const session = sessionStore.getSession(params.sessionId);
   expect(session?.activeRunId).toBeNull();
   expect(session?.abortController).toBeNull();
-
-  sessionStore.clearAllSessionsForTest();
 }
 
 export type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
 
-export function requireRecord(value: unknown, label: string): Record<string, unknown> {
+export function requireAcpObject(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object") {
     throw new Error(`expected ${label}`);
   }
@@ -157,10 +158,10 @@ export function expectConfigOption(options: unknown, id: string, fields: Record<
 
 export function sessionUpdatePayloads(source: MockCallSource, updateType?: string) {
   const payloads = source.mock.calls.map((call, index) => {
-    const envelope = requireRecord(call[0], `session update envelope ${index}`);
+    const envelope = requireAcpObject(call[0], `session update envelope ${index}`);
     return {
       sessionId: envelope.sessionId,
-      update: requireRecord(envelope.update, `session update ${index}`),
+      update: requireAcpObject(envelope.update, `session update ${index}`),
     };
   });
   if (!updateType) {

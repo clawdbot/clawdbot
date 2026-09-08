@@ -52,7 +52,34 @@ describe("OpenClaw assistant", () => {
     expect(SYSTEM_AGENT_SYSTEM_PROMPT).toContain("call configure_gateway");
     expect(SYSTEM_AGENT_SYSTEM_PROMPT).toContain("call import_memory");
     expect(SYSTEM_AGENT_SYSTEM_PROMPT).toContain("default agent's existing workspace");
-    expect(SYSTEM_AGENT_SYSTEM_PROMPT).toContain("Never ask for or repeat a credential");
+    expect(SYSTEM_AGENT_SYSTEM_PROMPT).toContain("Never ask for or repeat reusable secrets");
+  });
+
+  it("does not tell the fallback planner to solicit secrets", () => {
+    expect(SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT).not.toMatch(/\bask for secrets?\b/iu);
+  });
+
+  it.each([
+    ["fallback planner", SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT],
+    ["primary agent loop", SYSTEM_AGENT_SYSTEM_PROMPT],
+  ])("protects reusable secrets while allowing authorized sign-in in %s", (_name, prompt) => {
+    expect(prompt).toContain("their request already authorizes the handoff");
+    expect(prompt).toContain(
+      "first select a private conversation with the requesting user from trusted conversation context",
+    );
+    expect(prompt).toContain("recovery/backup codes, and hidden device tokens");
+    expect(prompt).toContain(
+      "Keep these secrets out of chat, tool arguments, URLs, logs, and shell text",
+    );
+    expect(prompt).toContain("host-owned masked credential entry");
+    expect(prompt).toContain(
+      "trusted flow's short-lived user-facing code and verification URL only there",
+    );
+    expect(prompt).toContain("user-provided short-lived one-time codes or OAuth callbacks");
+    expect(prompt).toContain("same pending flow");
+    expect(prompt).toContain(
+      "Keep messages intact unless the user requests deletion. Confirm completion from the login result.",
+    );
   });
 
   it("keeps remote Gateway mode outside both hosted chat planners", () => {

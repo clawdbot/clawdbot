@@ -34,27 +34,6 @@ const STATIC_MODEL_IDS = [
   "moonshotai/kimi-k2.6",
 ];
 
-function restoreEnvVar(name: "NODE_ENV" | "VITEST", value: string | undefined): void {
-  if (value === undefined) {
-    delete process.env[name];
-  } else {
-    process.env[name] = value;
-  }
-}
-
-async function withLiveDiscovery<T>(run: () => Promise<T>): Promise<T> {
-  const oldNodeEnv = process.env.NODE_ENV;
-  const oldVitest = process.env.VITEST;
-  delete process.env.NODE_ENV;
-  delete process.env.VITEST;
-  try {
-    return await run();
-  } finally {
-    restoreEnvVar("NODE_ENV", oldNodeEnv);
-    restoreEnvVar("VITEST", oldVitest);
-  }
-}
-
 function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(payload), {
     status: 200,
@@ -69,15 +48,20 @@ afterEach(() => {
 });
 
 describe("vercel ai gateway provider catalog", () => {
-  it("builds the bundled Vercel AI Gateway defaults", async () => {
-    const provider = await buildVercelAiGatewayProvider();
-
-    expect(provider).toStrictEqual({
-      baseUrl: VERCEL_AI_GATEWAY_BASE_URL,
-      api: "anthropic-messages",
-      models: getStaticVercelAiGatewayModelCatalog(),
-    });
-  });
+  it.each([503, 200])(
+    "preserves the public advisory builder for HTTP %s with no rows",
+    async (status) => {
+      const release = vi.fn(async () => undefined);
+      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+        response: jsonResponse({ data: [] }, { status }),
+        release,
+      });
+      await expect(buildVercelAiGatewayProvider()).resolves.toEqual(
+        buildStaticVercelAiGatewayProvider(),
+      );
+      expect(release).toHaveBeenCalledOnce();
+    },
+  );
 
   it("exposes the static fallback model catalog", () => {
     expect(getStaticVercelAiGatewayModelCatalog().map((model) => model.id)).toStrictEqual(
@@ -129,8 +113,47 @@ describe("vercel ai gateway provider catalog", () => {
     });
   });
 
-  it("falls back to the static catalog for malformed successful model list payloads", async () => {
-    for (const payload of [[], { data: {} }, { data: [null] }]) {
+  it("excludes non-language models while preserving vision and legacy catalog rows", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: jsonResponse({
+        data: [
+          {
+            id: "alibaba/qwen3-235b-a22b-thinking",
+            type: "language",
+            tags: ["vision", "reasoning"],
+          },
+          ...[
+            ["embedding", "alibaba/qwen3-embedding-0.6b"],
+            ["image", "bfl/flux-2-flex"],
+            ["video", "alibaba/wan-v2.5-t2v-preview"],
+            ["reranking", "cohere/rerank-v3.5"],
+            ["speech", "fish-audio/s1"],
+            ["transcription", "fish-audio/transcribe-1"],
+            ["realtime", "openai/gpt-realtime-1.5"],
+          ].map(([type, id]) => ({ id, type })),
+          { id: "custom/legacy-model" },
+        ],
+      }),
+      release: async () => {},
+      finalUrl: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
+    });
+
+    expect((await buildVercelAiGatewayProvider()).models).toMatchObject([
+      {
+        id: "alibaba/qwen3-235b-a22b-thinking",
+        reasoning: true,
+        input: ["text", "image"],
+      },
+      { id: "custom/legacy-model", input: ["text"] },
+    ]);
+  });
+
+  it("preserves empty and fully filtered catalogs", async () => {
+    for (const payload of [
+      [],
+      { data: [] },
+      { data: [{ id: "fixture/embedding-model", type: "embedding" }] },
+    ]) {
       clearLiveCatalogCacheForTests();
       fetchWithSsrFGuardMock.mockReset();
       fetchWithSsrFGuardMock.mockResolvedValueOnce({
@@ -139,12 +162,30 @@ describe("vercel ai gateway provider catalog", () => {
         finalUrl: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
       });
 
-      await withLiveDiscovery(async () => {
-        expect(await discoverVercelAiGatewayModels()).toStrictEqual(
-          getStaticVercelAiGatewayModelCatalog(),
-        );
-      });
+      await expect(discoverVercelAiGatewayModels({ discoveryMode: "strict" })).resolves.toEqual([]);
     }
+  });
+
+  it.each([
+    {
+      kind: "envelope",
+      payload: { data: {} },
+      error: "Live model catalog response must be an array or { data: [] }",
+    },
+    {
+      kind: "row",
+      payload: { data: [null] },
+      error: "Vercel AI Gateway model list: malformed JSON response",
+    },
+  ])("propagates a malformed model list $kind", async ({ payload, error }) => {
+    const release = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: jsonResponse(payload),
+      release,
+      finalUrl: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
+    });
+    await expect(discoverVercelAiGatewayModels({ discoveryMode: "strict" })).rejects.toThrow(error);
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("falls back from malformed live token metadata", async () => {
@@ -171,19 +212,17 @@ describe("vercel ai gateway provider catalog", () => {
       finalUrl: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
     });
 
-    await withLiveDiscovery(async () => {
-      const models = await discoverVercelAiGatewayModels();
+    const models = await discoverVercelAiGatewayModels();
 
-      expect(models[0]).toMatchObject({
-        id: "anthropic/claude-opus-4.6",
-        contextWindow: 1_000_000,
-        maxTokens: 128_000,
-      });
-      expect(models[1]).toMatchObject({
-        id: "custom/provider-model",
-        contextWindow: VERCEL_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW,
-        maxTokens: VERCEL_AI_GATEWAY_DEFAULT_MAX_TOKENS,
-      });
+    expect(models[0]).toMatchObject({
+      id: "anthropic/claude-opus-4.6",
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    });
+    expect(models[1]).toMatchObject({
+      id: "custom/provider-model",
+      contextWindow: VERCEL_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW,
+      maxTokens: VERCEL_AI_GATEWAY_DEFAULT_MAX_TOKENS,
     });
   });
 
@@ -195,11 +234,9 @@ describe("vercel ai gateway provider catalog", () => {
       finalUrl: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
     });
 
-    await withLiveDiscovery(async () => {
-      const models = await discoverVercelAiGatewayModels();
+    const models = await discoverVercelAiGatewayModels();
 
-      expect(models.map((model) => model.id)).toStrictEqual(["custom/live-model"]);
-    });
+    expect(models.map((model) => model.id)).toStrictEqual(["custom/live-model"]);
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({
         mode: "trusted_env_proxy",

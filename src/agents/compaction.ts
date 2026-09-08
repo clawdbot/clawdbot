@@ -17,22 +17,26 @@ import {
   BASE_CHUNK_RATIO,
   computeAdaptiveChunkRatio,
   estimateMessagesTokens,
-  isOversizedForSummary,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
   SUMMARIZATION_OVERHEAD_TOKENS,
 } from "./compaction-planning.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { isTimeoutError } from "./failover-error.js";
-import type { AgentMessage, StreamFn, ThinkingLevel } from "./runtime/index.js";
+import type {
+  AgentMessage,
+  CompactionSummaryPrompt,
+  StreamFn,
+  ThinkingLevel,
+} from "./runtime/index.js";
+import type { SessionModelUsageSink } from "./sessions/compaction/runtime.js";
 import type { ExtensionContext } from "./sessions/index.js";
-import { generateSummary as agentGenerateSummary } from "./sessions/index.js";
+import { generateSummary } from "./sessions/index.js";
 
 export {
   BASE_CHUNK_RATIO,
   computeAdaptiveChunkRatio,
   estimateMessagesTokens,
-  isOversizedForSummary,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
   SUMMARIZATION_OVERHEAD_TOKENS,
@@ -41,10 +45,6 @@ export {
 const log = createSubsystemLogger("compaction");
 
 type PartialSummaryError = Error & { partialSummary?: string };
-
-type CompactionSummaryResult =
-  | { kind: "summary"; text: string }
-  | { kind: "generic-fallback"; text: string };
 
 const DEFAULT_SUMMARY_FALLBACK = "No prior history.";
 const MERGE_SUMMARIES_INSTRUCTIONS = [
@@ -71,18 +71,33 @@ export type CompactionSummarizationInstructions = {
   identifierInstructions?: string;
 };
 
+type CompactionSummaryParams = {
+  messages: AgentMessage[];
+  model: NonNullable<ExtensionContext["model"]>;
+  apiKey: string;
+  headers?: Record<string, string>;
+  signal: AbortSignal;
+  reserveTokens: number;
+  maxChunkTokens: number;
+  contextWindow: number;
+  customInstructions?: string;
+  summaryPrompt?: CompactionSummaryPrompt;
+  summarizationInstructions?: CompactionSummarizationInstructions;
+  previousSummary?: string;
+  thinkingLevel?: ThinkingLevel;
+  streamFn?: StreamFn;
+  usageSink?: SessionModelUsageSink;
+};
+
 function resolveIdentifierPreservationInstructions(
   instructions?: CompactionSummarizationInstructions,
 ): string | undefined {
-  const policy = instructions?.identifierPolicy ?? "strict";
-  if (policy === "off") {
+  if (instructions?.identifierPolicy === "off") {
     return undefined;
   }
-  if (policy === "custom") {
-    const custom = instructions?.identifierInstructions?.trim();
-    return custom && custom.length > 0 ? custom : IDENTIFIER_PRESERVATION_INSTRUCTIONS;
-  }
-  return IDENTIFIER_PRESERVATION_INSTRUCTIONS;
+  return instructions?.identifierPolicy === "custom"
+    ? instructions.identifierInstructions?.trim() || IDENTIFIER_PRESERVATION_INSTRUCTIONS
+    : IDENTIFIER_PRESERVATION_INSTRUCTIONS;
 }
 
 /** Combines identifier-preservation and caller-provided compaction instructions. */
@@ -92,32 +107,15 @@ function buildCompactionSummarizationInstructions(
 ): string | undefined {
   const custom = customInstructions?.trim();
   const identifierPreservation = resolveIdentifierPreservationInstructions(instructions);
-  if (!identifierPreservation && !custom) {
-    return undefined;
-  }
   if (!custom) {
     return identifierPreservation;
   }
-  if (!identifierPreservation) {
-    return `Additional focus:\n${custom}`;
-  }
-  return `${identifierPreservation}\n\nAdditional focus:\n${custom}`;
+  return identifierPreservation
+    ? `${identifierPreservation}\n\nAdditional focus:\n${custom}`
+    : `Additional focus:\n${custom}`;
 }
 
-async function summarizeChunks(params: {
-  messages: AgentMessage[];
-  model: NonNullable<ExtensionContext["model"]>;
-  apiKey: string;
-  headers?: Record<string, string>;
-  signal: AbortSignal;
-  reserveTokens: number;
-  maxChunkTokens: number;
-  customInstructions?: string;
-  summarizationInstructions?: CompactionSummarizationInstructions;
-  previousSummary?: string;
-  thinkingLevel?: ThinkingLevel;
-  streamFn?: StreamFn;
-}): Promise<string> {
+async function summarizeChunks(params: CompactionSummaryParams): Promise<string> {
   if (params.messages.length === 0) {
     return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
   }
@@ -132,8 +130,7 @@ async function summarizeChunks(params: {
     params.customInstructions,
     params.summarizationInstructions,
   );
-  let hasGeneratedChunk = false;
-  for (const chunk of chunks) {
+  for (const [completedChunks, chunk] of chunks.entries()) {
     try {
       summary = await retryAsync(
         () =>
@@ -148,6 +145,8 @@ async function summarizeChunks(params: {
             summary,
             params.thinkingLevel,
             params.streamFn,
+            params.usageSink,
+            params.summaryPrompt,
           ),
         {
           attempts: 3,
@@ -158,43 +157,27 @@ async function summarizeChunks(params: {
           // Backoff must honor caller cancellation; otherwise an abort during
           // the sleep would stall compaction until the full delay elapses.
           sleep: (ms) => sleepWithAbort(ms, params.signal),
-          shouldRetry: (err) => {
-            // Stop retrying when the caller explicitly cancelled.
-            if (params.signal.aborted) {
-              return false;
-            }
-            // Preserve existing non-retry policy for real network/transport
-            // timeouts (e.g. "fetch failed", ETIMEDOUT) that are not AbortErrors.
-            if (!isAbortError(err) && isTimeoutError(err)) {
-              return false;
-            }
-            // Provider-side AbortErrors with signal not yet aborted are
-            // transient disconnects — retrying is correct.
-            return true;
-          },
+          // Caller aborts and transport timeouts are terminal; provider-side
+          // AbortErrors without caller cancellation remain retryable.
+          shouldRetry: (err) =>
+            !params.signal.aborted && (isAbortError(err) || !isTimeoutError(err)),
         },
       );
-      hasGeneratedChunk = true;
     } catch (err) {
-      // Propagate only when the caller explicitly cancelled. Provider-side
-      // AbortErrors (signal not aborted) fall through to partial/fallback paths.
-      if (params.signal.aborted) {
-        throw err;
-      }
-      // Real non-abort transport timeouts still propagate immediately.
-      if (!isAbortError(err) && isTimeoutError(err)) {
-        throw err;
-      }
-      // No chunk has succeeded yet — rethrow so summarizeWithFallback
-      // can run its existing "Context contained N messages" fallback.
-      if (!hasGeneratedChunk) {
+      // Caller aborts, transport timeouts, and failures before any completed
+      // chunk cannot produce a recoverable partial summary.
+      if (
+        params.signal.aborted ||
+        (!isAbortError(err) && isTimeoutError(err)) ||
+        completedChunks === 0 ||
+        summary === undefined
+      ) {
         throw err;
       }
       // At least one chunk succeeded — throw with the partial summary
       // attached so summarizeWithFallback can try the oversized-message
       // retry first and only fall back to the partial summary if that
       // also fails.
-      const completedChunks = chunks.indexOf(chunk);
       log.warn("chunk summarization failed after retries; partial summary available", {
         err,
         completedChunks,
@@ -202,7 +185,7 @@ async function summarizeChunks(params: {
       });
       const partial = new Error("partial summarization failure");
       (partial as PartialSummaryError).partialSummary =
-        `${summary!}\n\n[Partial summary: chunks 1-${completedChunks} of ${chunks.length} were summarized. Chunks ${completedChunks + 1}-${chunks.length} could not be processed.]`;
+        `${summary}\n\n[Partial summary: chunks 1-${completedChunks} of ${chunks.length} were summarized. Chunks ${completedChunks + 1}-${chunks.length} could not be processed.]`;
       throw partial;
     }
   }
@@ -210,65 +193,22 @@ async function summarizeChunks(params: {
   return summary ?? DEFAULT_SUMMARY_FALLBACK;
 }
 
-function generateSummary(
-  currentMessages: AgentMessage[],
-  model: NonNullable<ExtensionContext["model"]>,
-  reserveTokens: number,
-  apiKey: string,
-  headers: Record<string, string> | undefined,
-  signal: AbortSignal,
-  customInstructions?: string,
-  previousSummary?: string,
-  thinkingLevel?: ThinkingLevel,
-  streamFn?: StreamFn,
-): Promise<string> {
-  return agentGenerateSummary(
-    currentMessages,
-    model,
-    reserveTokens,
-    apiKey,
-    headers,
-    signal,
-    customInstructions,
-    previousSummary,
-    thinkingLevel,
-    streamFn,
-  );
-}
-
 /**
  * Summarize with progressive fallback for handling oversized messages.
  * If full summarization fails, tries partial summarization excluding oversized messages.
  */
-async function summarizeWithFallbackResult(params: {
-  messages: AgentMessage[];
-  model: NonNullable<ExtensionContext["model"]>;
-  apiKey: string;
-  headers?: Record<string, string>;
-  signal: AbortSignal;
-  reserveTokens: number;
-  maxChunkTokens: number;
-  contextWindow: number;
-  customInstructions?: string;
-  summarizationInstructions?: CompactionSummarizationInstructions;
-  previousSummary?: string;
-  thinkingLevel?: ThinkingLevel;
-  streamFn?: StreamFn;
-}): Promise<CompactionSummaryResult> {
+async function summarizeWithFallback(params: CompactionSummaryParams): Promise<string> {
   const { messages, contextWindow } = params;
 
   if (messages.length === 0) {
-    return {
-      kind: "summary",
-      text: params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK,
-    };
+    return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
   }
 
   // Try full summarization first
   let partialSummaryFallback: string | undefined;
   let lastError: unknown;
   try {
-    return { kind: "summary", text: await summarizeChunks(params) };
+    return await summarizeChunks(params);
   } catch (err) {
     lastError = err;
     if (params.signal.aborted) {
@@ -284,6 +224,7 @@ async function summarizeWithFallbackResult(params: {
     contextWindow,
     signal: params.signal,
   });
+  const oversizedSuffix = oversizedNotes.length > 0 ? `\n\n${oversizedNotes.join("\n")}` : "";
 
   // When nothing was oversized, `smallMessages` is the same transcript as the full attempt.
   // Re-summarizing it would duplicate the same failing API work (and duplicate warn logs).
@@ -293,8 +234,7 @@ async function summarizeWithFallbackResult(params: {
         ...params,
         messages: smallMessages,
       });
-      const notes = oversizedNotes.length > 0 ? `\n\n${oversizedNotes.join("\n")}` : "";
-      return { kind: "summary", text: partialSummary + notes };
+      return partialSummary + oversizedSuffix;
     } catch (partialError) {
       lastError = partialError;
       if (params.signal.aborted) {
@@ -306,15 +246,14 @@ async function summarizeWithFallbackResult(params: {
       // so the model knows large content was filtered.
       const retryPartial = (lastError as PartialSummaryError).partialSummary;
       if (retryPartial) {
-        const notes = oversizedNotes.length > 0 ? `\n\n${oversizedNotes.join("\n")}` : "";
-        partialSummaryFallback = retryPartial + notes;
+        partialSummaryFallback = retryPartial + oversizedSuffix;
       }
     }
   }
 
   // Final fallback: use best available partial summary, otherwise throw error
   if (partialSummaryFallback) {
-    return { kind: "summary", text: partialSummaryFallback };
+    return partialSummaryFallback;
   }
 
   // All summarization attempts failed — throw error so caller knows compaction
@@ -328,16 +267,10 @@ async function summarizeWithFallbackResult(params: {
   );
 }
 
-async function summarizeWithFallback(
-  params: Parameters<typeof summarizeWithFallbackResult>[0],
-): Promise<string> {
-  return (await summarizeWithFallbackResult(params)).text;
-}
-
 /** Extracts a compact timestamp range from a chunk of messages for merge metadata. */
 function extractChunkTimeRange(chunk: AgentMessage[]): string {
-  let earliest: number | undefined;
-  let latest: number | undefined;
+  let earliest = Number.POSITIVE_INFINITY;
+  let latest = 0;
   for (const message of chunk) {
     const timestamp = message.timestamp;
     if (
@@ -347,10 +280,10 @@ function extractChunkTimeRange(chunk: AgentMessage[]): string {
     ) {
       continue;
     }
-    earliest = earliest === undefined ? timestamp : Math.min(earliest, timestamp);
-    latest = latest === undefined ? timestamp : Math.max(latest, timestamp);
+    earliest = Math.min(earliest, timestamp);
+    latest = Math.max(latest, timestamp);
   }
-  if (earliest === undefined || latest === undefined) {
+  if (!Number.isFinite(earliest)) {
     return "";
   }
   const format = (timestamp: number) =>
@@ -360,29 +293,15 @@ function extractChunkTimeRange(chunk: AgentMessage[]): string {
 }
 
 /** Summarizes history in multiple stages when a single pass would be too large. */
-export async function summarizeInStages(params: {
-  messages: AgentMessage[];
-  model: NonNullable<ExtensionContext["model"]>;
-  apiKey: string;
-  headers?: Record<string, string>;
-  signal: AbortSignal;
-  reserveTokens: number;
-  maxChunkTokens: number;
-  contextWindow: number;
-  customInstructions?: string;
-  summarizationInstructions?: CompactionSummarizationInstructions;
-  previousSummary?: string;
-  parts?: number;
-  minMessagesForSplit?: number;
-  thinkingLevel?: ThinkingLevel;
-  streamFn?: StreamFn;
-}): Promise<CompactionSummaryResult> {
+export async function summarizeInStages(
+  params: CompactionSummaryParams & {
+    parts?: number;
+    minMessagesForSplit?: number;
+  },
+): Promise<string> {
   const { messages } = params;
   if (messages.length === 0) {
-    return {
-      kind: "summary",
-      text: params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK,
-    };
+    return await summarizeWithFallback(params);
   }
 
   const plan = await buildStageSplitPlanWithWorker({
@@ -394,18 +313,18 @@ export async function summarizeInStages(params: {
   });
 
   if (plan.mode === "single") {
-    return summarizeWithFallbackResult(params);
+    return await summarizeWithFallback(params);
   }
 
   const partialSummaries: string[] = [];
   for (const [index, chunk] of plan.chunks.entries()) {
     try {
-      const result = await summarizeWithFallbackResult({
+      const summary = await summarizeWithFallback({
         ...params,
         messages: chunk,
         previousSummary: undefined,
       });
-      partialSummaries.push(result.text);
+      partialSummaries.push(summary);
     } catch (err) {
       // A chunk summarization failed — fail the whole stages compaction.
       // This prevents silent infinite retry loops where compaction reports
@@ -427,7 +346,7 @@ export async function summarizeInStages(params: {
     if (summary === undefined) {
       throw new Error("Compaction summary plan produced no summary");
     }
-    return { kind: "summary", text: summary };
+    return summary;
   }
 
   // Capture once so timestamps are strictly monotonic across
@@ -461,12 +380,11 @@ export async function summarizeInStages(params: {
     ? `${MERGE_SUMMARIES_INSTRUCTIONS}\n\n${custom}`
     : MERGE_SUMMARIES_INSTRUCTIONS;
 
-  const mergedResult = await summarizeWithFallbackResult({
+  return await summarizeWithFallback({
     ...params,
     messages: summaryMessages,
     customInstructions: mergeInstructions,
   });
-  return mergedResult;
 }
 
 /** Resolves a positive context-window token count from model metadata. */

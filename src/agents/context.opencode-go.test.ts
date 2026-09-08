@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { resolveMemoryFlushContextWindowTokens } from "../auto-reply/reply/memory-flush.js";
+import { resolveContextTokens } from "../auto-reply/reply/model-selection-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { refreshContextWindowCache, resetContextWindowCacheForTest } from "./context.js";
 
@@ -8,13 +8,16 @@ describe("OpenCode Go context metadata", () => {
   let configuredModels: OpenClawConfig["models"];
 
   beforeAll(async () => {
-    const cfg: OpenClawConfig = { plugins: { allow: ["opencode-go"] } };
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "opencode-go/deepseek-v4-pro" } } },
+      plugins: { allow: ["opencode-go"] },
+    };
 
     await refreshContextWindowCache(cfg);
-    contextWindowTokens = resolveMemoryFlushContextWindowTokens({
+    contextWindowTokens = resolveContextTokens({
       cfg,
       provider: "opencode-go",
-      modelId: "deepseek-v4-pro",
+      model: "deepseek-v4-pro",
     });
     configuredModels = cfg.models;
   });

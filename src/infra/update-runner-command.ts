@@ -9,7 +9,7 @@ import type {
   UpdateStepResult,
 } from "./update-runner-types.js";
 
-export const DEFAULT_TIMEOUT_MS = 20 * 60_000;
+export const UPDATE_RUNNER_TIMEOUT_MS = 20 * 60_000;
 export const MAX_LOG_CHARS = 8000;
 
 function mergeCommandEnvironments(
@@ -34,30 +34,34 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
   const started = Date.now();
   const result = await runCommand(argv, { cwd, timeoutMs, env });
   const durationMs = Date.now() - started;
+  const stdoutTail = trimLogTail(result.stdout, MAX_LOG_CHARS);
   const stderrTail = trimLogTail(result.stderr, MAX_LOG_CHARS);
 
   progress?.onStepComplete?.({
     ...stepInfo,
     durationMs,
     exitCode: result.code,
+    stdoutTail,
     stderrTail,
     signal: result.signal,
     killed: result.killed,
     termination: result.termination,
   });
 
-  return {
+  const stepResult: UpdateStepResult = {
     name,
     command,
     cwd,
     durationMs,
     exitCode: result.code,
-    stdoutTail: trimLogTail(result.stdout, MAX_LOG_CHARS),
+    stdoutTail,
     stderrTail,
     signal: result.signal,
     killed: result.killed,
     termination: result.termination,
   };
+  opts.results?.push(stepResult);
+  return stepResult;
 }
 
 export function normalizeFallbackFailureReason(
@@ -72,6 +76,8 @@ export function normalizeFallbackFailureReason(
       return "global-install-failed";
     case "openclaw doctor":
       return "doctor-failed";
+    case "post-install verification":
+      return "runtime-verification-failed";
     case "ui:build (post-doctor repair)":
       return "ui-build-failed";
     default:

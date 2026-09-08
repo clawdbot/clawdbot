@@ -1,7 +1,7 @@
 // Daily skip regression tests cover missed-run handling for daily cron jobs.
 import { describe, expect, it } from "vitest";
 import { createMockCronStateForJobs } from "./service.test-harness.js";
-import { recomputeNextRuns, recomputeNextRunsForMaintenance } from "./service/jobs.js";
+import { recomputeNextRuns, recomputeNextRunsForMaintenance } from "./service/jobs-scheduling.js";
 import type { CronJob } from "./types.js";
 
 /**

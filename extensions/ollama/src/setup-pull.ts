@@ -68,7 +68,7 @@ async function pullOllamaModelCore(params: {
       init: {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: modelName }),
+        body: JSON.stringify({ model: modelName }),
       },
       signal: params.signal
         ? AbortSignal.any([responseController.signal, params.signal])
@@ -79,7 +79,9 @@ async function pullOllamaModelCore(params: {
     clearTimeout(responseTimeout);
     try {
       if (!response.ok) {
-        await response.body?.cancel().catch(() => undefined);
+        // Capture can retain a cloned tee branch, so cancellation must not delay
+        // the guard's bounded dispatcher release.
+        void response.body?.cancel().catch(() => undefined);
         return { ok: false, message: `Failed to download ${modelName} (HTTP ${response.status})` };
       }
       if (!response.body) {
@@ -92,28 +94,25 @@ async function pullOllamaModelCore(params: {
       let pendingRecordBytes = 0;
       const layers = new Map<string, { total: number; completed: number }>();
 
-      const parseLine = (line: string): OllamaPullResult => {
-        const trimmed = line.trim();
-        if (!trimmed) {
-          return { ok: true };
+      const parseLine = (line: string): OllamaPullResult | undefined => {
+        if (!line.trim()) {
+          return undefined;
         }
         try {
-          const chunk = JSON.parse(trimmed) as OllamaPullChunk;
+          const chunk = JSON.parse(line) as OllamaPullChunk;
           if (chunk.error) {
             return { ok: false, message: `Download failed: ${chunk.error}` };
           }
-          if (!chunk.status) {
-            return { ok: true };
+          if (!chunk.status || chunk.status === "success") {
+            return chunk.status ? { ok: true } : undefined;
           }
           if (chunk.total && chunk.completed !== undefined) {
             layers.set(chunk.status, { total: chunk.total, completed: chunk.completed });
-            const totals = [...layers.values()].reduce(
-              (sum, layer) => ({
-                total: sum.total + layer.total,
-                completed: sum.completed + layer.completed,
-              }),
-              { total: 0, completed: 0 },
-            );
+            const totals = { total: 0, completed: 0 };
+            for (const layer of layers.values()) {
+              totals.total += layer.total;
+              totals.completed += layer.completed;
+            }
             params.onStatus?.(
               chunk.status,
               totals.total > 0 ? Math.round((totals.completed / totals.total) * 100) : null,
@@ -124,14 +123,18 @@ async function pullOllamaModelCore(params: {
         } catch {
           // Ignore malformed streaming lines from Ollama.
         }
-        return { ok: true };
+        return undefined;
       };
 
       try {
         for (;;) {
           const { done, value } = await readOllamaPullChunkWithIdleTimeout(reader);
           if (done) {
-            return parseLine(buffer);
+            const terminal = parseLine(buffer);
+            if (terminal) {
+              return terminal;
+            }
+            throw new Error("pull stream ended before success");
           }
           pendingRecordBytes = checkNdjsonRecordCap(value, pendingRecordBytes);
           buffer += decoder.decode(value, { stream: true });
@@ -139,23 +142,23 @@ async function pullOllamaModelCore(params: {
           buffer = lines.pop() ?? "";
           for (const line of lines) {
             const parsed = parseLine(line);
-            if (!parsed.ok) {
+            if (parsed) {
               return parsed;
             }
           }
         }
       } finally {
         // Overflow and parsed-error returns can leave unread response bytes.
-        // Cancel before unlocking so setup never abandons a live pull body.
-        await reader.cancel().catch(() => undefined);
+        // Start cancellation without awaiting a captured tee, then unlock so
+        // the guard's bounded dispatcher release can always run.
+        void reader.cancel().catch(() => undefined);
         reader.releaseLock();
       }
     } finally {
       await release();
     }
   } catch (err) {
-    const reason = formatErrorMessage(err);
-    return { ok: false, message: `Failed to download ${modelName}: ${reason}` };
+    return { ok: false, message: `Failed to download ${modelName}: ${formatErrorMessage(err)}` };
   } finally {
     clearTimeout(responseTimeout);
   }

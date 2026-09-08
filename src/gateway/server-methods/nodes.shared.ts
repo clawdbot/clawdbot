@@ -2,7 +2,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import {
   isNodePairingGenerationCurrent,
   type NodePairingGeneration,
-} from "../../infra/node-pairing-state.js";
+} from "../../infra/device-pairing-node-state.js";
 import type { NodeSession } from "../node-registry.js";
 import { isNodeWakeLifecycleCurrent, type NodeWakeLifecycle } from "../node-wake-state.js";
 import type { RespondFn } from "./shared-types.js";

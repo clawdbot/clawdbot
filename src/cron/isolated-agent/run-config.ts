@@ -27,6 +27,8 @@ function extractCronAgentDefaultsOverride(agentConfigOverride?: ResolvedAgentCon
     model: overrideModel,
     sandbox: _agentSandboxOverride,
     memory: _agentMemoryOverride,
+    models: _agentModelsOverride,
+    params: _agentParamsOverride,
     ...agentOverrideRest
   } = agentConfigOverride ?? {};
   return {
@@ -52,21 +54,27 @@ function mergeCronAgentModelOverride(params: {
   return nextDefaults;
 }
 
-/** Builds the agent defaults snapshot used by isolated cron runs. */
-export function buildCronAgentDefaultsConfig(params: {
-  defaults?: AgentDefaultsConfig;
+/** Selects the active runtime snapshot before deriving isolated cron agent defaults. */
+export function resolveCronAgentConfig(params: {
+  config: OpenClawConfig;
   agentConfigOverride?: ResolvedAgentConfig;
 }) {
+  const runtimeConfig = resolveCronActiveRuntimeConfig(params.config);
   const { overrideModel, definedOverrides } = extractCronAgentDefaultsOverride(
     params.agentConfigOverride,
   );
-  // Keep nested configs owned by agent-aware resolvers out of this flattened snapshot.
-  // Copying partial sandbox or memory objects into defaults destroys their global
-  // fields before the resolver can merge the selected agent's override.
-  // Model authorization likewise uses the unflattened config plus agent id; this
-  // snapshot only carries the effective runtime metadata and explicit policy.
-  return mergeCronAgentModelOverride({
-    defaults: Object.assign({}, params.defaults, definedOverrides),
+  // Agent-aware resolvers merge these scopes themselves. Flattening partial maps
+  // erases inherited sandbox, memory, model-runtime and request-parameter settings.
+  const agentDefaults = mergeCronAgentModelOverride({
+    defaults: Object.assign({}, runtimeConfig.agents?.defaults, definedOverrides),
     overrideModel,
   });
+  return {
+    runtimeConfig,
+    agentDefaults,
+    cfgWithAgentDefaults: {
+      ...runtimeConfig,
+      agents: Object.assign({}, runtimeConfig.agents, { defaults: agentDefaults }),
+    } satisfies OpenClawConfig,
+  };
 }

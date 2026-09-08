@@ -1,20 +1,10 @@
 /** Verifies global hook runner sequencing, mutation, and error behavior. */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMockPluginRegistry } from "./hooks.test-fixtures.js";
-import { createEmptyPluginRegistry } from "./registry-empty.js";
-import {
-  pinActivePluginChannelRegistry,
-  releasePinnedPluginChannelRegistry,
-  setActivePluginRegistry,
-} from "./runtime.js";
-import { createPluginRecord } from "./status.test-fixtures.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 
 async function importHookRunnerGlobalModule() {
   return import("./hook-runner-global.js");
-}
-
-async function importHookRunnerGlobalStateModule() {
-  return import("./hook-runner-global-state.js");
 }
 
 type HookRunnerGlobalModule = Awaited<ReturnType<typeof importHookRunnerGlobalModule>>;
@@ -43,11 +33,12 @@ afterEach(async () => {
   vi.useRealTimers();
   const mod = await importHookRunnerGlobalModule();
   mod.resetGlobalHookRunner();
-  setActivePluginRegistry(createEmptyPluginRegistry());
+  resetPluginRuntimeStateForTest();
 });
 
 describe("hook-runner-global", () => {
   async function createInitializedModule() {
+    resetPluginRuntimeStateForTest();
     const modA = await importHookRunnerGlobalModule();
     const registry = createMockPluginRegistry([{ hookName: "message_received", handler: vi.fn() }]);
     modA.initializeGlobalHookRunner(registry);
@@ -83,54 +74,23 @@ describe("hook-runner-global", () => {
     await expectGlobalRunnerState({ hasRunner: false });
   });
 
-  it("exposes trusted policies from the same live registry set as hooks", async () => {
+  it("checks scoped reply dispatch with only the host dispatch kind", async () => {
+    const registry = createMockPluginRegistry([]);
+    registry.typedHooks.push({
+      pluginId: "acp-dispatch",
+      hookName: "reply_dispatch",
+      handler: vi.fn(),
+      eligibleDispatchKinds: ["acp"],
+      source: "test",
+    });
     const mod = await importHookRunnerGlobalModule();
-    const gatewayRegistry = createMockPluginRegistry([
-      {
-        hookName: "before_tool_call",
-        pluginId: "rovoclaw",
-        handler: vi.fn(),
-      },
-    ]);
-    gatewayRegistry.plugins = [createPluginRecord({ id: "rovoclaw" })];
-    gatewayRegistry.trustedToolPolicies = [
-      {
-        pluginId: "rovoclaw",
-        pluginName: "RovoClaw",
-        source: "test",
-        policy: {
-          id: "atl-sec-core",
-          description: "trusted policy",
-          evaluate: () => undefined,
-        },
-      },
-    ];
+    setActivePluginRegistry(registry);
+    mod.initializeGlobalHookRunner(registry);
 
-    setActivePluginRegistry(gatewayRegistry);
-    mod.initializeGlobalHookRunner(gatewayRegistry);
-    pinActivePluginChannelRegistry(gatewayRegistry);
-    try {
-      const laterRegistry = createEmptyPluginRegistry();
-      laterRegistry.plugins = [createPluginRecord({ id: "openai" })];
-      setActivePluginRegistry(laterRegistry);
-      mod.initializeGlobalHookRunner(laterRegistry);
-
-      expect(expectGlobalHookRunner(mod.getGlobalHookRunner()).hasHooks("before_tool_call")).toBe(
-        true,
-      );
-      expect(mod.getGlobalPluginRegistry()).toBe(laterRegistry);
-      const stateMod = await importHookRunnerGlobalStateModule();
-      expect(
-        stateMod
-          .getGlobalHookRunnerRegistry()
-          ?.trustedToolPolicies?.map((registration) => [
-            registration.pluginId,
-            registration.policy.id,
-          ]),
-      ).toEqual([["rovoclaw", "atl-sec-core"]]);
-    } finally {
-      releasePinnedPluginChannelRegistry(gatewayRegistry);
-    }
+    expect(mod.hasGlobalHooks("reply_dispatch", { dispatchKind: "agent" })).toBe(false);
+    expect(mod.hasGlobalHooks("reply_dispatch", { dispatchKind: "acp" })).toBe(true);
+    expect(mod.hasGlobalHooks("reply_dispatch", {})).toBe(true);
+    expect(mod.hasGlobalHooks("reply_dispatch")).toBe(true);
   });
 
   it.each([

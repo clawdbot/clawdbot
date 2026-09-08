@@ -9,6 +9,8 @@ describe("appendStatusReportSections", () => {
     appendStatusReportSections({
       lines,
       heading: (text) => `# ${text}`,
+      width: 120,
+      renderTable: ({ width, rows }) => `  table:${width}:${rows.length} \n\t`,
       sections: [
         {
           kind: "raw",
@@ -22,11 +24,9 @@ describe("appendStatusReportSections", () => {
         {
           kind: "table",
           title: "Health",
-          width: 120,
-          renderTable: ({ rows }) => `table:${rows.length}`,
           columns: [{ key: "Item", header: "Item" }],
           rows: [{ Item: "Gateway" }],
-          trailer: "trailer",
+          trailer: "trailer  ",
         },
         {
           kind: "lines",
@@ -46,8 +46,62 @@ describe("appendStatusReportSections", () => {
       "overview body",
       "",
       "# Health",
-      "table:1",
-      "trailer",
+      "  table:120:1",
+      "trailer  ",
     ]);
   });
+
+  it.each([{ initial: [] }, { initial: ["# Start"] }, { initial: ["# Start", ""] }])(
+    "keeps empty sections unless explicitly skipped after $initial",
+    ({ initial }) => {
+      const lines = [...initial];
+      appendStatusReportSections({
+        lines,
+        heading: (text) => `# ${text}`,
+        width: 80,
+        renderTable: ({ width, rows }) => `table:${width}:${rows.length}\n`,
+        sections: [
+          { kind: "raw", body: [], skipIfEmpty: true },
+          { kind: "lines", title: "Skipped", body: [], skipIfEmpty: true },
+          {
+            kind: "table",
+            title: "Skipped table",
+            columns: [],
+            rows: [],
+            skipIfEmpty: true,
+            trailer: "skipped trailer",
+          },
+          { kind: "lines", title: "Empty lines", body: [] },
+          { kind: "raw", body: [] },
+          {
+            kind: "table",
+            title: "Empty table",
+            columns: [],
+            rows: [],
+            trailer: "empty trailer",
+          },
+          {
+            kind: "table",
+            title: "More rows",
+            columns: [{ key: "Item", header: "Item" }],
+            rows: [{ Item: "Gateway" }],
+            skipIfEmpty: true,
+            trailer: "",
+          },
+        ],
+      });
+      expect(lines).toEqual([
+        ...initial,
+        ...(initial.length ? [""] : []),
+        "# Empty lines",
+        "",
+        "# Empty table",
+        "table:80:0",
+        "empty trailer",
+        "",
+        "# More rows",
+        "table:80:1",
+      ]);
+    },
+  );
 });

@@ -1,39 +1,14 @@
 // PNG encode helpers build small PNG files without external image dependencies.
-import { deflateSync } from "node:zlib";
-import { expectDefined } from "@openclaw/normalization-core";
+import { crc32, deflateSync } from "node:zlib";
 
-const CRC_TABLE = (() => {
-  const table = new Uint32Array(256);
-  for (let i = 0; i < 256; i += 1) {
-    let c = i;
-    for (let k = 0; k < 8; k += 1) {
-      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    }
-    table[i] = c >>> 0;
-  }
-  return table;
-})();
-
-/** Compute CRC32 checksum for a buffer (used in PNG chunk encoding). */
-function crc32(buf: Buffer): number {
-  let crc = 0xffffffff;
-  for (const byte of buf) {
-    crc =
-      expectDefined(CRC_TABLE[(crc ^ byte) & 0xff], "crc table entry at (crc ^ byte) & 0xff") ^
-      (crc >>> 8);
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
-/** Create a PNG chunk with type, data, and CRC. */
-function pngChunk(type: string, data: Buffer): Buffer {
-  const typeBuf = Buffer.from(type, "ascii");
-  const len = Buffer.alloc(4);
-  len.writeUInt32BE(data.length, 0);
-  const crc = crc32(Buffer.concat([typeBuf, data]));
+/** Keep chunk parts separate so final assembly copies compressed data only once. */
+function pngChunkParts(type: string, data: Buffer): Buffer[] {
+  const header = Buffer.alloc(8);
+  header.writeUInt32BE(data.length, 0);
+  header.write(type, 4, "ascii");
   const crcBuf = Buffer.alloc(4);
-  crcBuf.writeUInt32BE(crc, 0);
-  return Buffer.concat([len, typeBuf, data, crcBuf]);
+  crcBuf.writeUInt32BE(crc32(data, crc32(header.subarray(4))), 0);
+  return [header, data, crcBuf];
 }
 
 /**
@@ -86,9 +61,9 @@ function encodePng(buffer: Buffer, width: number, height: number, channels: 3 | 
 
   return Buffer.concat([
     signature,
-    pngChunk("IHDR", ihdr),
-    pngChunk("IDAT", compressed),
-    pngChunk("IEND", Buffer.alloc(0)),
+    ...pngChunkParts("IHDR", ihdr),
+    ...pngChunkParts("IDAT", compressed),
+    ...pngChunkParts("IEND", Buffer.alloc(0)),
   ]);
 }
 

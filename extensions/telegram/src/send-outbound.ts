@@ -1,5 +1,18 @@
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
-import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createMessageReceiptFromOutboundResults,
+  type MessageReceiptPartKind,
+} from "openclaw/plugin-sdk/channel-outbound";
+import type { TelegramThreadSpec } from "./bot/helpers.js";
+import {
+  recordOutboundMessageForPromptContext,
+  type TelegramOutboundPromptContextMessage,
+} from "./outbound-message-context.js";
+import {
+  assertTelegramProviderThread,
+  resolveTelegramProviderObservedThreadId,
+} from "./provider-thread-proof.js";
 import {
   buildTelegramThreadReplyParams,
   resolveTelegramSendThreadSpec,
@@ -13,7 +26,7 @@ import {
   resolveTelegramMessageIdOrThrow,
   type TelegramApiContext,
 } from "./send-context.js";
-import type { TelegramSendOpts } from "./send-message-types.js";
+import type { TelegramSendOpts, TelegramSendResult } from "./send-message-types.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { parseTelegramTarget } from "./targets.js";
 
@@ -27,6 +40,60 @@ type PreparedTelegramOutbound = {
 type PreparedTelegramOutboundWithMessageId<T> = PreparedTelegramOutbound &
   (T extends string | number ? { messageId: number } : { messageId?: undefined });
 
+export function buildTelegramProviderDeliveryResult(params: {
+  message: TelegramOutboundPromptContextMessage;
+  messageId: string | number;
+  fallbackChatId: string | number;
+  successfulSendThread?: TelegramThreadSpec;
+  kind?: MessageReceiptPartKind;
+  meta?: TelegramSendResult["meta"];
+}): TelegramSendResult {
+  const messageId = String(params.messageId);
+  const chatId = String(params.message.chat?.id ?? params.fallbackChatId);
+  const providerThreadId = resolveTelegramProviderObservedThreadId({
+    message: params.message,
+    successfulSendThread: params.successfulSendThread,
+  });
+  return {
+    messageId,
+    chatId,
+    ...(providerThreadId !== undefined
+      ? {
+          receipt: createMessageReceiptFromOutboundResults({
+            results: [{ messageId, chatId }],
+            ...(params.kind !== undefined ? { kind: params.kind } : {}),
+            threadId: String(providerThreadId),
+          }),
+        }
+      : {}),
+    ...(params.meta ? { meta: params.meta } : {}),
+  };
+}
+
+export async function reportTelegramProviderDelivery(
+  params: Parameters<typeof buildTelegramProviderDeliveryResult>[0] & {
+    onPrepared?: (delivery: TelegramSendResult) => void;
+    onDeliveryResult?: TelegramSendOpts["onDeliveryResult"];
+  },
+): Promise<TelegramSendResult> {
+  const delivery = buildTelegramProviderDeliveryResult(params);
+  params.onPrepared?.(delivery);
+  await params.onDeliveryResult?.(delivery);
+  try {
+    assertTelegramProviderThread({
+      message: params.message,
+      successfulSendThread: params.successfulSendThread,
+    });
+  } catch (error) {
+    throw createChannelPartialDeliveryError(error, {
+      messageIds: [delivery.messageId],
+      ...(delivery.receipt ? { receipt: delivery.receipt } : {}),
+      visibleReplySent: true,
+    });
+  }
+  return delivery;
+}
+
 export async function prepareTelegramOutbound<T extends string | number | undefined>(params: {
   to: string | number;
   context: TelegramApiContext;
@@ -34,6 +101,7 @@ export async function prepareTelegramOutbound<T extends string | number | undefi
   messageIdInput?: T;
   thread?: {
     messageThreadId?: number;
+    directMessagesTopicId?: number;
     replyToMessageId?: number;
     replyQuoteText?: string;
     useReplyIdAsQuoteSource?: boolean;
@@ -56,6 +124,8 @@ export async function prepareTelegramOutbound<T extends string | number | undefi
   const threadSpec = params.thread
     ? resolveTelegramSendThreadSpec({
         targetMessageThreadId: target.messageThreadId,
+        targetDirectMessagesTopicId:
+          params.thread.directMessagesTopicId ?? target.directMessagesTopicId,
         messageThreadId: params.thread.messageThreadId,
         chatType: target.chatType,
       })
@@ -108,20 +178,26 @@ export async function finalizeTelegramOutbound(params: {
   promptContextProjectionPlan?: TelegramSendOpts["promptContextProjectionPlan"];
   onDeliveryResult?: TelegramSendOpts["onDeliveryResult"];
   beforeActivity?: (result: { messageId: string; chatId: string }) => void;
-}): Promise<{ messageId: string; chatId: string }> {
-  const { cfg, account } = params.context;
+}): Promise<TelegramSendResult> {
+  const { cfg, account, ownerAgentId } = params.context;
   const messageId = resolveTelegramMessageIdOrThrow(params.result, params.resultContext);
-  const resultIds = {
-    messageId: String(messageId),
-    chatId: String(params.result.chat?.id ?? params.prepared.chatId),
-  };
-  recordSentMessage(params.prepared.chatId, messageId, cfg);
-  await params.onDeliveryResult?.(resultIds);
+  recordSentMessage(params.prepared.chatId, messageId, cfg, {
+    accountId: account.accountId,
+    agentId: ownerAgentId,
+  });
+  const resultIds = await reportTelegramProviderDelivery({
+    message: params.result,
+    messageId,
+    fallbackChatId: params.prepared.chatId,
+    successfulSendThread: params.prepared.threadSpec,
+    onDeliveryResult: params.onDeliveryResult,
+  });
   const projection = params.promptContextProjectionPlan?.cursor.take(
     params.promptContextProjectionPlan.finalPart,
   );
   const recorded = await recordOutboundMessageForPromptContext({
     cfg,
+    ownerAgentId,
     account,
     botUserId: params.botUserId,
     chatId: params.prepared.chatId,

@@ -15,3 +15,10 @@ wit
 allowIn
 planText
 nwe
+smoe
+thirdParty
+doubleClick
+ND
+CNA
+unparseable
+afterAll

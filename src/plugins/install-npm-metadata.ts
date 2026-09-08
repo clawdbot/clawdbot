@@ -1,16 +1,14 @@
 import {
-  createNpmMetadataEnv,
+  loadNpmPackageVersions,
   resolveNpmSpecMetadata,
   type NpmSpecResolution,
 } from "../infra/install-source-utils.js";
 import {
   compareOpenClawReleaseVersions,
-  isExactSemverVersion,
   isPrereleaseSemverVersion,
   type ParsedRegistryNpmSpec,
 } from "../infra/npm-registry-spec.js";
 import { compareValidSemver } from "../infra/semver.js";
-import { runCommandWithTimeout } from "../process/exec.js";
 import {
   validateOpenClawPackageInstallCompatibility,
   type PluginInstallRuntime,
@@ -43,36 +41,11 @@ type TrustedOfficialPrereleaseResolution =
   | { kind: "prerelease-only"; resolution: NpmSpecResolution }
   | { kind: "allow-prerelease-only" };
 
-async function loadNpmPackageVersions(params: {
-  packageName: string;
-  timeoutMs: number;
-}): Promise<string[] | null> {
-  const versions = await runCommandWithTimeout(
-    ["npm", "view", params.packageName, "versions", "--json"],
-    {
-      timeoutMs: Math.max(params.timeoutMs, 60_000),
-      env: createNpmMetadataEnv(),
-    },
-  );
-  if (versions.code !== 0) {
-    return null;
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(versions.stdout.trim());
-  } catch {
-    return null;
-  }
-  return (Array.isArray(parsed) ? parsed : [parsed]).filter(
-    (value): value is string => typeof value === "string" && isExactSemverVersion(value),
-  );
-}
-
 export async function resolveTrustedOfficialPrereleaseResolution(params: {
   spec: ParsedRegistryNpmSpec;
   resolvedPrereleaseVersion: string;
   timeoutMs: number;
+  signal?: AbortSignal;
   logger: PluginInstallLogger;
 }): Promise<TrustedOfficialPrereleaseResolution | null> {
   if (!params.spec.name.startsWith("@openclaw/")) {
@@ -81,6 +54,8 @@ export async function resolveTrustedOfficialPrereleaseResolution(params: {
   const semverVersions = await loadNpmPackageVersions({
     packageName: params.spec.name,
     timeoutMs: params.timeoutMs,
+    signal: params.signal,
+    killProcessTree: true,
   });
   if (!semverVersions) {
     return null;
@@ -100,6 +75,7 @@ export async function resolveTrustedOfficialPrereleaseResolution(params: {
         const metadataResult = await resolveNpmSpecMetadata({
           spec: prereleaseSpec,
           timeoutMs: params.timeoutMs,
+          signal: params.signal,
         });
         if (!metadataResult.ok) {
           return null;
@@ -121,6 +97,7 @@ export async function resolveTrustedOfficialPrereleaseResolution(params: {
   const metadataResult = await resolveNpmSpecMetadata({
     spec: stableSpec,
     timeoutMs: params.timeoutMs,
+    signal: params.signal,
   });
   if (!metadataResult.ok) {
     return null;
@@ -187,6 +164,7 @@ export async function resolveLatestCompatibleNpmResolution(params: {
   expectedPluginId?: string;
   currentResolution: NpmSpecResolution;
   timeoutMs: number;
+  signal?: AbortSignal;
   logger: PluginInstallLogger;
 }): Promise<NpmSpecResolution | null> {
   if (!params.currentResolution.version) {
@@ -207,6 +185,8 @@ export async function resolveLatestCompatibleNpmResolution(params: {
   const versions = await loadNpmPackageVersions({
     packageName: params.parsedSpec.name,
     timeoutMs: params.timeoutMs,
+    signal: params.signal,
+    killProcessTree: true,
   });
   if (!versions) {
     return null;
@@ -226,6 +206,7 @@ export async function resolveLatestCompatibleNpmResolution(params: {
     const metadataResult = await resolveNpmSpecMetadata({
       spec,
       timeoutMs: params.timeoutMs,
+      signal: params.signal,
     });
     if (!metadataResult.ok) {
       params.logger.warn?.(

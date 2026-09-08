@@ -13,6 +13,7 @@ export function expectChannelSurfaceContract(params: {
     | "id"
     | "actions"
     | "setup"
+    | "setupContract"
     | "status"
     | "outbound"
     | "messaging"
@@ -39,8 +40,7 @@ export function expectChannelSurfaceContract(params: {
   }
 
   if (surface === "setup") {
-    expect(plugin.setup).toBeDefined();
-    expect(typeof plugin.setup?.applyAccountConfig).toBe("function");
+    expect(typeof (plugin.setupContract ?? plugin.setup)?.applyAccountConfig).toBe("function");
     return;
   }
 
@@ -73,7 +73,6 @@ export function expectChannelSurfaceContract(params: {
     expect(
       [
         messaging?.normalizeTarget,
-        messaging?.parseExplicitTarget,
         messaging?.inferTargetChatType,
         messaging?.buildCrossContextPresentation,
         messaging?.hasStructuredReplyPayload,
@@ -116,6 +115,9 @@ export function expectChannelSurfaceContract(params: {
         threading?.resolveAutoThreadId,
         threading?.resolveReplyTransport,
         threading?.resolveFocusedBinding,
+        // Core reads this hook directly (source-reply-mirror.ts), so a channel may
+        // declare threading for target matching alone without any reply-shaping hook.
+        threading?.matchesToolContextTarget,
       ].some((value) => typeof value === "function"),
     ).toBe(true);
     return;

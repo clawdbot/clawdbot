@@ -8,6 +8,73 @@ vi.mock("./sticker-vision.runtime.js", () => ({
 }));
 
 describe("buildTelegramMessageContext media carriers", () => {
+  it("carries a successfully downloaded original filename into the current-turn media facts", async () => {
+    const context = await buildTelegramMessageContextForTest({
+      message: {
+        chat: { id: 42, type: "private", first_name: "Ada" },
+        text: "Please read quarterly report.pdf",
+        document: {
+          file_id: "file-1",
+          file_unique_id: "file-u1",
+          file_name: "quarterly report.pdf",
+        },
+      },
+      allMedia: [
+        {
+          kind: "document",
+          path: "/tmp/opaque-upload",
+          contentType: "application/pdf",
+          fileName: "quarterly report.pdf",
+        },
+      ],
+    });
+
+    expect(context?.ctxPayload.media).toEqual([
+      expect.objectContaining({ path: "/tmp/opaque-upload", fileName: "quarterly report.pdf" }),
+    ]);
+  });
+
+  it("carries direct tool policy into a topic-bound admitted turn", async () => {
+    const context = await buildTelegramMessageContextForTest({
+      message: {
+        chat: { id: 42, type: "private", first_name: "Ada" },
+        from: { id: 42, is_bot: false, first_name: "Ada", username: "ada" },
+        message_thread_id: 7,
+        is_topic_message: true,
+        text: "hello",
+      },
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: {
+          tools: { deny: ["write"] },
+          toolsBySender: {
+            "channel:telegram:42": { deny: ["exec"] },
+          },
+        },
+        topicConfig: { agentId: "support" },
+      }),
+    });
+
+    expect(context?.ctxPayload).toMatchObject({
+      ConversationToolPolicy: { deny: ["exec"] },
+    });
+  });
+
+  it("does not attach direct policy to group turns", async () => {
+    const context = await buildTelegramMessageContextForTest({
+      message: {
+        chat: { id: -42, type: "supergroup", title: "Ops" },
+        from: { id: 42, is_bot: false, first_name: "Ada" },
+        text: "hello",
+      },
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { tools: { deny: ["exec"] }, requireMention: false },
+        topicConfig: undefined,
+      }),
+    });
+
+    expect(context?.ctxPayload.ConversationToolPolicy).toBeUndefined();
+  });
+
   it("keeps reply media structured before reply-chain rendering", () => {
     const target = describeReplyTarget({
       message_id: 11,

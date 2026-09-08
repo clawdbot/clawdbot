@@ -3,6 +3,7 @@ package ai.openclaw.app
 import android.Manifest
 import android.app.Dialog
 import android.content.pm.PackageManager
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -124,6 +125,47 @@ class PermissionRequesterTest {
         assertTrue(requests.deliver(requester, 1, mapOf(Manifest.permission.CAMERA to true)))
         runCurrent()
         assertEquals(mapOf(Manifest.permission.CAMERA to true), recovered.await())
+      } finally {
+        Dispatchers.resetMain()
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun cancelledPermissionDialogsDismissAndReleaseNextRequest() =
+    runTest {
+      Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+      try {
+        for (showRationale in listOf(true, false)) {
+          val originalActivity = if (showRationale) rationaleActivity() else activity()
+          val requests = FakePermissionRequests()
+          val requester = requester(originalActivity, requests)
+          val cancelled = async { requester.requestIfMissing(listOf(Manifest.permission.CAMERA), timeoutMs = 1_000) }
+          runCurrent()
+          if (!showRationale) {
+            assertTrue(requests.deliver(requester, 0, mapOf(Manifest.permission.CAMERA to false)))
+            runCurrent()
+          }
+
+          val dialog = checkNotNull(ShadowDialog.getLatestDialog())
+          assertTrue(dialog.isShowing)
+          cancelled.cancelAndJoin()
+          shadowOf(Looper.getMainLooper()).idle()
+          runCurrent()
+          assertFalse("rationale=$showRationale", dialog.isShowing)
+
+          val replacementActivity = activity()
+          val replacementRequests = FakePermissionRequests()
+          requester.attach(replacementActivity, replacementRequests::request)
+          requester.activate(replacementActivity)
+          val recovered =
+            async { requester.requestIfMissing(listOf(Manifest.permission.RECORD_AUDIO), timeoutMs = 1_000) }
+          runCurrent()
+          assertEquals(1, replacementRequests.size)
+          assertTrue(replacementRequests.deliver(requester, 0, mapOf(Manifest.permission.RECORD_AUDIO to true)))
+          runCurrent()
+          assertEquals(mapOf(Manifest.permission.RECORD_AUDIO to true), recovered.await())
+        }
       } finally {
         Dispatchers.resetMain()
       }

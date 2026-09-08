@@ -21,9 +21,9 @@ if (process.platform === "win32") {
 }
 
 const repoRoot = resolve(repoRootArg);
-const invocationCwd = process.cwd();
 // The supervisor must not retain a cwd inside a worktree the operation may
-// delete; only the child keeps the caller's original cwd.
+// delete. Start the child in this same owner so early Git/gh reads use the
+// repository selected by the wrapper, before any PR worktree is entered.
 process.chdir(repoRoot);
 const lockScript = fileURLToPath(new URL("./operation-lock.sh", import.meta.url));
 const lockSnapshotDir = mkdtempSync(join(tmpdir(), "openclaw-pr-lock-release-"));
@@ -54,6 +54,7 @@ let drainFailure;
 let drainFailureGroupStatus;
 let drainFailureNotificationOpen = false;
 let validationPhaseState = "unannounced";
+let operationCompleteReceived = false;
 
 function delay(ms) {
   return new Promise((resolveDelay) => {
@@ -113,6 +114,47 @@ function processGroupRows(pgid) {
     });
 }
 
+function notificationPipeHolderRows() {
+  const lsofOptions = {
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024,
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 1000,
+  };
+  const owner = spawnSync("lsof", ["-n", "-P", "-p", String(process.pid)], lsofOptions);
+  if (owner.status !== 0) {
+    return [];
+  }
+  const socketAddresses = new Set(
+    Array.from(owner.stdout.matchAll(/\b(?:PIPE|unix)\s+(0x[0-9a-f]+)\b/giu), (match) =>
+      match[1].toLowerCase(),
+    ),
+  );
+  const fifoNodes = new Set(
+    Array.from(owner.stdout.matchAll(/\bFIFO\b.*\s(\d+)\s+pipe$/gmu), (match) => match[1]),
+  );
+  if (socketAddresses.size === 0 && fifoNodes.size === 0) {
+    return [];
+  }
+  const holders = spawnSync("lsof", ["-n", "-P", "-a", "-d", "3"], lsofOptions);
+  if (holders.status !== 0) {
+    return [];
+  }
+  return holders.stdout
+    .split("\n")
+    .filter((line) => {
+      const socketPeer = /->(0x[0-9a-f]+)$/iu.exec(line)?.[1].toLowerCase();
+      const fifoNode = /\bFIFO\b.*\s(\d+)\s+pipe$/u.exec(line)?.[1];
+      return Boolean(
+        (socketPeer && socketAddresses.has(socketPeer)) || (fifoNode && fifoNodes.has(fifoNode)),
+      );
+    })
+    .slice(0, 10)
+    .map((line) => /^\s*(\S+)\s+(\d+)\s+\S+\s+(\S+)/u.exec(line))
+    .filter(Boolean)
+    .map((match) => `${match[2]} ${match[3]} ${match[1]}`.slice(0, 200));
+}
+
 function signalProcessGroup(signal) {
   const childPid = operationGroup.pid;
   if (!childPid || operationGroupGone) {
@@ -154,11 +196,23 @@ for (const signal of FORWARDED_SIGNALS) {
   process.on(signal, handler);
 }
 
+// Git maintenance must join before leader completion, not daemonize with fd 3.
+// Append to Git's inherited -c transport so nested tools share this lifetime
+// without changing repository config or discarding the caller's other settings.
+const gitConfigParameters = [
+  process.env.GIT_CONFIG_PARAMETERS,
+  "'maintenance.autoDetach=false'",
+  "'gc.autoDetach=false'",
+]
+  .filter(Boolean)
+  .join(" ");
+
 const child = spawn(script, args, {
-  cwd: invocationCwd,
+  cwd: repoRoot,
   detached: true,
   env: {
     ...process.env,
+    GIT_CONFIG_PARAMETERS: gitConfigParameters,
     OPENCLAW_PR_DEDICATED_PROCESS_GROUP: "1",
     OPENCLAW_PR_LOCK_NOTIFY_FD: "3",
     OPENCLAW_PR_LOCK_SUPERVISOR_PID: String(process.pid),
@@ -173,6 +227,14 @@ if (killDeadline) {
 }
 
 function consumeNotificationLine(line) {
+  if (operationCompleteReceived) {
+    notificationFailure ??= new Error("scripts/pr emitted metadata after operation completion");
+    return;
+  }
+  if (line === "phase\toperation-complete") {
+    operationCompleteReceived = true;
+    return;
+  }
   if (line === "phase\tvalidation-started") {
     // The FD is inherited by descendants, so phase messages are monotonic:
     // no later writer may reopen validation after side effects have started.
@@ -295,6 +357,30 @@ const childResult = await new Promise((resolveResult) => {
   child.once("exit", (code, signal) => settle({ code, signal }));
 });
 
+function childResultAllowsLockRelease() {
+  if (!operationCompleteReceived) {
+    return false;
+  }
+  const completedCleanly =
+    childResult.code === 0 &&
+    !receivedSignal &&
+    !childResult.signal &&
+    !notificationFailure &&
+    !hadLingeringGroup;
+  const failedDuringValidation =
+    validationPhaseState === "validation" &&
+    childResult.code !== null &&
+    childResult.code > 0 &&
+    // Shells encode signal termination as 128+signal. Retain conservatively for
+    // every such status, including signals scripts/pr does not trap itself.
+    childResult.code < 128 &&
+    !receivedSignal &&
+    !childResult.signal &&
+    !notificationFailure &&
+    !hadLingeringGroup;
+  return completedCleanly || failedDuringValidation;
+}
+
 const postExitGroupStatus = child.pid ? processGroupStatus(child.pid) : "dead";
 if (postExitGroupStatus === "indeterminate") {
   notificationFailure ??= new Error("scripts/pr process-group state became indeterminate");
@@ -319,9 +405,21 @@ async function waitForOperationDrain() {
       throw new Error("scripts/pr process-group state became indeterminate");
     }
     if (groupStatus === "dead" && notificationEnded) {
-      return;
+      return "drained";
     }
     if (killDeadline && Date.now() >= killDeadline) {
+      // Release needs the leader's post-join completion marker (ClawSweeper P1, PR #124614).
+      // The pipe is diagnostic; a clean escapee has the same residual blind spot as an
+      // fd-closing daemonizer already has on main (#124583).
+      if (
+        groupStatus === "dead" &&
+        !notificationEnded &&
+        notificationBuffer.length === 0 &&
+        !discardingOversizedNotificationLine &&
+        childResultAllowsLockRelease()
+      ) {
+        return "drained-with-open-pipe";
+      }
       drainFailureGroupStatus = groupStatus;
       drainFailureNotificationOpen = !notificationEnded;
       throw new Error(
@@ -437,8 +535,9 @@ function reportRetainedLock({ lockRef, ownerOid }, releaseError, releaseFailures
 }
 
 let drained = false;
+let drainResult;
 try {
-  await waitForOperationDrain();
+  drainResult = await waitForOperationDrain();
   drained = true;
 } catch (error) {
   drainFailure = toError(error, "scripts/pr operation drain failed");
@@ -449,6 +548,31 @@ try {
   finishNotifications();
   notificationStream.destroy();
 }
+if (drainResult === "drained-with-open-pipe") {
+  finishNotifications();
+  if (childResultAllowsLockRelease()) {
+    console.error(
+      "Warning: scripts/pr operation drain deadline expired with group=dead, pipe=open; releasing eligible locks despite an escaped descendant holding the notification pipe (#124583).",
+    );
+    const pipeHolders = notificationPipeHolderRows();
+    if (pipeHolders.length > 0) {
+      console.error("surviving notification-pipe holders (pid fd command):");
+      for (const row of pipeHolders) {
+        console.error(`  ${row}`);
+      }
+    }
+  } else {
+    drained = false;
+    drainFailureGroupStatus = "dead";
+    drainFailureNotificationOpen = true;
+    drainFailure = new Error("scripts/pr operation lifetime did not drain (group=dead, pipe=open)");
+    notificationFailure ??= drainFailure;
+  }
+  notificationStream.destroy();
+}
+if (drained && !operationCompleteReceived) {
+  notificationFailure ??= new Error("scripts/pr leader completion marker was not received");
+}
 
 if (escalationTimer) {
   clearTimeout(escalationTimer);
@@ -457,30 +581,9 @@ for (const [signal, handler] of signalHandlers) {
   process.off(signal, handler);
 }
 
-// PR commands must join all state-mutating children before returning. A clean
-// exit is the normal completion signal. A nonzero exit may also release while
-// the child explicitly remains in its pre-side-effect validation phase; every
-// other abnormal exit retains because an escaped child can outlive the group.
-const completedCleanly =
-  childResult.code === 0 &&
-  !receivedSignal &&
-  !childResult.signal &&
-  !notificationFailure &&
-  !hadLingeringGroup;
-const failedDuringValidation =
-  validationPhaseState === "validation" &&
-  childResult.code !== null &&
-  childResult.code > 0 &&
-  // Shells encode signal termination as 128+signal. Retain conservatively for
-  // every such status, including signals scripts/pr does not trap itself.
-  childResult.code < 128 &&
-  !receivedSignal &&
-  !childResult.signal &&
-  !notificationFailure &&
-  !hadLingeringGroup;
 const retainedLocks = [];
 const releaseFailures = new Set();
-if (drained && (completedCleanly || failedDuringValidation)) {
+if (drained && childResultAllowsLockRelease()) {
   for (const lock of locks.values()) {
     try {
       releaseLock(lock);

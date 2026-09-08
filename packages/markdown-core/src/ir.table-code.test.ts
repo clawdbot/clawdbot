@@ -52,7 +52,7 @@ describe("markdownToIR tableMode code", () => {
 | Name | Value |
 |------|-------|
 | **Bold** | *Italic* |
-| \`Code\` | ~~Strike~~ |
+| [\`Code\`](https://example.com) | ~~Strike~~ |
 `.trim();
 
     const ir = markdownToIR(md, { tableMode: "code" });
@@ -64,5 +64,17 @@ describe("markdownToIR tableMode code", () => {
         style: "code_block",
       },
     ]);
+    expect(ir.links).toEqual([]);
+  });
+
+  it.each([
+    { name: "leading", cell: "` a`", expected: "| V  |\n| --- |\n|  a |\n" },
+    { name: "trailing", cell: "`a `", expected: "| V  |\n| --- |\n| a  |\n" },
+  ])("measures code-owned $name space as cell content", ({ cell, expected }) => {
+    expect(markdownToIR(`| V |\n| --- |\n| ${cell} |`, { tableMode: "code" })).toEqual({
+      text: expected,
+      styles: [{ start: 0, end: expected.length, style: "code_block" }],
+      links: [],
+    });
   });
 });

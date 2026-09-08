@@ -1,8 +1,8 @@
 // Check Temp Path Guardrails script supports OpenClaw repository automation.
-import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import pMap, { pMapSkip } from "p-map";
+import { listRepoFilesSync } from "./check-file-utils.js";
 
 type QuoteChar = "'" | '"' | "`";
 
@@ -210,16 +210,12 @@ function hasDynamicTmpdirJoin(source: string): boolean {
 }
 
 function listTrackedRuntimeSourceFiles(repoRoot: string): string[] {
-  const stdout = execFileSync("git", ["-C", repoRoot, "ls-files", "--", "src", "extensions"], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "inherit"],
-  });
-  return stdout
-    .split(/\r?\n/u)
-    .filter(Boolean)
-    .filter((relativePath) => relativePath.endsWith(".ts") || relativePath.endsWith(".tsx"))
-    .filter((relativePath) => !shouldSkipGuardrailRuntimeSource(relativePath))
-    .map((relativePath) => path.join(repoRoot, relativePath));
+  return listRepoFilesSync(repoRoot, {
+    roots: ["src", "extensions"],
+    includeFile: (relativePath) =>
+      (relativePath.endsWith(".ts") || relativePath.endsWith(".tsx")) &&
+      !shouldSkipGuardrailRuntimeSource(relativePath),
+  }).map((relativePath) => path.join(repoRoot, relativePath));
 }
 
 async function readRuntimeSourceFiles(

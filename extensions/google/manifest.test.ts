@@ -1,8 +1,19 @@
 // Google tests cover manifest plugin behavior.
 import { readFileSync } from "node:fs";
+import { buildJsonPluginConfigSchema } from "openclaw/plugin-sdk/core";
+import type { JsonSchemaObject } from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";
 
 type GoogleManifest = {
+  setup?: {
+    providers?: Array<{
+      id?: string;
+      authEvidence?: Array<{
+        fileEnvVar?: string;
+        fallbackPaths?: string[];
+      }>;
+    }>;
+  };
   providerAuthChoices?: Array<{
     provider?: string;
     method?: string;
@@ -19,12 +30,34 @@ type GoogleManifest = {
     >;
   };
   modelCatalog?: {
+    discovery?: Record<string, string>;
     suppressions?: Array<{
       provider?: string;
       model?: string;
       reason?: string;
     }>;
+    providers?: Record<
+      string,
+      {
+        api?: string;
+        baseUrl?: string;
+        models?: Array<{
+          id?: string;
+          name?: string;
+        }>;
+      }
+    >;
   };
+  configSchema?: JsonSchemaObject;
+  configContracts?: {
+    secretInputs?: {
+      paths?: Array<{ path?: string; expected?: string }>;
+    };
+  };
+  contracts?: {
+    usageProviders?: string[];
+  };
+  uiHints?: Record<string, { sensitive?: boolean }>;
 };
 
 const RETIRED_GEMINI_CHAT_MODELS = [
@@ -74,6 +107,49 @@ function loadManifest(): GoogleManifest {
 }
 
 describe("google manifest model catalog", () => {
+  it("checks relocated Cloud SDK ADC before platform-specific fallback paths", () => {
+    const vertex = loadManifest().setup?.providers?.find(
+      (provider) => provider.id === "google-vertex",
+    );
+
+    expect(vertex?.authEvidence).toEqual([
+      expect.objectContaining({
+        fileEnvVar: "GOOGLE_APPLICATION_CREDENTIALS",
+        fallbackPaths: [
+          "${CLOUDSDK_CONFIG}/application_default_credentials.json",
+          "${HOME}/.config/gcloud/application_default_credentials.json",
+          "${APPDATA}/gcloud/application_default_credentials.json",
+        ],
+      }),
+    ]);
+  });
+
+  it("owns the canonical Google model catalog and runtime discovery declaration", () => {
+    const catalog = loadManifest().modelCatalog;
+    const provider = catalog?.providers?.google;
+    const modelIds = provider?.models?.map((model) => model.id) ?? [];
+
+    expect(catalog?.discovery?.google).toBe("runtime");
+    expect(provider).toMatchObject({
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    });
+    expect(modelIds).toHaveLength(10);
+    expect(modelIds).not.toContain(undefined);
+    expect(new Set(modelIds).size).toBe(modelIds.length);
+  });
+
+  it("keeps legacy Google chat providers out of the canonical manifest catalog", () => {
+    const manifest = loadManifest();
+
+    // google-gemini-cli references must stay unknown-model so Doctor keeps
+    // emitting its migration hint, and neither CLI nor Vertex declares runtime
+    // discovery, so manifest rows for them would leak into runtime catalog
+    // planning. Only the canonical google provider owns manifest rows.
+    expect(manifest.modelCatalog?.providers?.["google-gemini-cli"]).toBeUndefined();
+    expect(manifest.modelCatalog?.providers?.["google-vertex"]).toBeUndefined();
+  });
+
   it("offers Google AI Studio API keys without consumer CLI OAuth", () => {
     const choices = loadManifest().providerAuthChoices ?? [];
 
@@ -87,6 +163,10 @@ describe("google manifest model catalog", () => {
       }),
     ]);
     expect(choices.some((choice) => choice.provider === "google-gemini-cli")).toBe(false);
+  });
+
+  it("does not advertise retired Gemini CLI quota hooks", () => {
+    expect(loadManifest().contracts?.usageProviders).toBeUndefined();
   });
 
   it("suppresses retired Gemini chat model identifiers for all Google chat providers", () => {
@@ -126,5 +206,47 @@ describe("google manifest model catalog", () => {
       expect(aliases?.["gemini-3-pro"]).toBe("gemini-3.1-pro-preview");
       expect(aliases?.["gemini-3-pro-preview"]).toBe("gemini-3.1-pro-preview");
     }
+  });
+});
+
+describe("google manifest webSearch headers", () => {
+  function validateWebSearchConfig(webSearch: unknown): { success: boolean } {
+    const schema = loadManifest().configSchema;
+    if (!schema) {
+      throw new Error("expected google manifest configSchema");
+    }
+    const safeParse = buildJsonPluginConfigSchema(schema).safeParse;
+    if (!safeParse) {
+      throw new Error("expected a safeParse validator for the google config schema");
+    }
+    return safeParse({ webSearch });
+  }
+
+  it("accepts plain and SecretRef header values", () => {
+    expect(validateWebSearchConfig({ headers: { "X-Routing-Target": "staging" } }).success).toBe(
+      true,
+    );
+    expect(
+      validateWebSearchConfig({
+        headers: {
+          "X-Gateway-Token": {
+            source: "env",
+            provider: "default",
+            id: "GEMINI_GATEWAY_TOKEN",
+          },
+        },
+      }).success,
+    ).toBe(true);
+    expect(validateWebSearchConfig({ headers: { "X-Retry-Count": 3 } }).success).toBe(false);
+  });
+
+  it("uses the existing SecretRef contract without classifying plain headers as sensitive", () => {
+    const manifest = loadManifest();
+    expect(manifest.configContracts?.secretInputs?.paths).toContainEqual({
+      path: "webSearch.headers.*",
+      expected: "string",
+    });
+    expect(manifest.uiHints?.["webSearch.headers"]?.sensitive).not.toBe(true);
+    expect(manifest.uiHints?.["webSearch.headers.*"]?.sensitive).not.toBe(true);
   });
 });

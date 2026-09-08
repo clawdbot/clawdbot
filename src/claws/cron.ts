@@ -1,8 +1,15 @@
+import type { SQLInputValue } from "node:sqlite";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import type { Selectable } from "kysely";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
+import { cronJobDefinitionFromReadView } from "../cron/job-read-view.js";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
 import { createTrustedCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
 import { applyDefaultCronToolsAllow } from "../cron/tools-allow.js";
 import type { CronJob } from "../cron/types.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
+import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -25,18 +32,8 @@ export type PersistedClawCronRef = {
   updatedAtMs: number;
 };
 
-type CronRefRow = {
-  schema_version: string;
-  agent_id: string;
-  manifest_id: string;
-  declaration_key: string;
-  scheduler_job_id: string | null;
-  status: PersistedClawCronRef["status"];
-  job_json: string;
-  error: string | null;
-  created_at_ms: number | bigint;
-  updated_at_ms: number | bigint;
-};
+type CronRefDatabase = Pick<DB, "claw_cron_refs">;
+type CronRefRow = Selectable<CronRefDatabase["claw_cron_refs"]>;
 
 export type ClawCronGateway = {
   add: (input: Record<string, unknown>) => Promise<unknown>;
@@ -64,11 +61,27 @@ function rowToRef(row: CronRefRow): PersistedClawCronRef {
     manifestId: row.manifest_id,
     declarationKey: row.declaration_key,
     ...(row.scheduler_job_id ? { schedulerJobId: row.scheduler_job_id } : {}),
-    status: row.status,
+    // SAFETY: Lifecycle writers own the existing persisted status enum.
+    status: row.status as PersistedClawCronRef["status"],
     job: JSON.parse(row.job_json) as ClawCronJob,
     ...(row.error ? { error: row.error } : {}),
-    createdAtMs: Number(row.created_at_ms),
-    updatedAtMs: Number(row.updated_at_ms),
+    createdAtMs: sqliteNumber(row.created_at_ms),
+    updatedAtMs: sqliteNumber(row.updated_at_ms),
+  };
+}
+
+function refToRow(ref: PersistedClawCronRef): CronRefRow {
+  return {
+    schema_version: ref.schemaVersion,
+    agent_id: ref.agentId,
+    manifest_id: ref.manifestId,
+    declaration_key: ref.declarationKey,
+    scheduler_job_id: ref.schedulerJobId ?? null,
+    status: ref.status,
+    job_json: JSON.stringify(ref.job),
+    error: ref.error ?? null,
+    created_at_ms: ref.createdAtMs,
+    updated_at_ms: ref.updatedAtMs,
   };
 }
 
@@ -80,15 +93,17 @@ function persistPendingRef(
   const nowMs = options.nowMs ?? Date.now();
   const declarationKey = `claw:${plan.agent.finalId}:${job.id}`;
   const database = openOpenClawStateDatabase(options);
+  const query = getNodeSqliteKysely<CronRefDatabase>(database.db)
+    .selectFrom("claw_cron_refs")
+    .selectAll()
+    .where("agent_id", "=", plan.agent.finalId)
+    .where("manifest_id", "=", job.id)
+    .compile();
   const existing =
-    database.db /* sqlite-allow-raw: read one Claw cron ownership row by closed agent and manifest ids. */
-      .prepare(
-        `SELECT schema_version, agent_id, manifest_id, declaration_key, scheduler_job_id,
-              status, job_json, error, created_at_ms, updated_at_ms
-         FROM claw_cron_refs
-        WHERE agent_id = ? AND manifest_id = ?`,
-      )
-      .get(plan.agent.finalId, job.id) as CronRefRow | undefined;
+    database.db /* sqlite-allow-raw: execute compiled Kysely with the existing native read error boundary. */
+      .prepare(query.sql)
+      // SAFETY: Compiled predicates bind strings; the canonical schema supplies the row shape.
+      .get(...(query.parameters as SQLInputValue[])) as CronRefRow | undefined;
   if (existing) {
     const ref = rowToRef(existing);
     if (ref.declarationKey !== declarationKey || JSON.stringify(ref.job) !== JSON.stringify(job)) {
@@ -114,26 +129,12 @@ function persistPendingRef(
     updatedAtMs: nowMs,
   };
   runOpenClawStateWriteTransaction(({ db }) => {
-    db /* sqlite-allow-raw: insert one pending Claw cron ownership row. */
-      .prepare(
-        `INSERT INTO claw_cron_refs (
-         agent_id, manifest_id, schema_version, declaration_key, scheduler_job_id,
-         status, job_json, error, created_at_ms, updated_at_ms
-       ) VALUES (
-         @agent_id, @manifest_id, @schema_version, @declaration_key, NULL,
-         @status, @job_json, NULL, @created_at_ms, @updated_at_ms
-       )`,
-      )
-      .run({
-        agent_id: record.agentId,
-        manifest_id: record.manifestId,
-        schema_version: record.schemaVersion,
-        declaration_key: record.declarationKey,
-        status: record.status,
-        job_json: JSON.stringify(record.job),
-        created_at_ms: nowMs,
-        updated_at_ms: nowMs,
-      });
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<CronRefDatabase>(db)
+        .insertInto("claw_cron_refs")
+        .values(refToRow(record)),
+    );
   }, options);
   return record;
 }
@@ -143,29 +144,27 @@ function updateRef(
   update: { schedulerJobId?: string; status: PersistedClawCronRef["status"]; error?: string },
   options: OpenClawStateDatabaseOptions & { nowMs?: number },
 ): PersistedClawCronRef {
+  // Omitted fields are cleared in SQLite and must not survive in the returned result.
+  const { schedulerJobId: _schedulerJobId, error: _error, ...retained } = ref;
   const updated = {
-    ...ref,
+    ...retained,
     ...update,
     updatedAtMs: options.nowMs ?? Date.now(),
   };
   runOpenClawStateWriteTransaction(({ db }) => {
-    db /* sqlite-allow-raw: update one Claw cron ownership row. */
-      .prepare(
-        `UPDATE claw_cron_refs
-          SET scheduler_job_id = @scheduler_job_id,
-              status = @status,
-              error = @error,
-              updated_at_ms = @updated_at_ms
-        WHERE agent_id = @agent_id AND manifest_id = @manifest_id`,
-      )
-      .run({
-        agent_id: ref.agentId,
-        manifest_id: ref.manifestId,
-        scheduler_job_id: update.schedulerJobId ?? null,
-        status: update.status,
-        error: update.error ?? null,
-        updated_at_ms: updated.updatedAtMs,
-      });
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<CronRefDatabase>(db)
+        .updateTable("claw_cron_refs")
+        .set({
+          scheduler_job_id: updated.schedulerJobId ?? null,
+          status: updated.status,
+          error: updated.error ?? null,
+          updated_at_ms: updated.updatedAtMs,
+        })
+        .where("agent_id", "=", ref.agentId)
+        .where("manifest_id", "=", ref.manifestId),
+    );
   }, options);
   return updated;
 }
@@ -185,10 +184,10 @@ export function clawCronSchedulerJobFromResult(value: unknown): { id: string } |
   return undefined;
 }
 
-function schedulerJobByDeclarationKey(
+function schedulerJobRecordByDeclarationKey(
   value: unknown,
   declarationKey: string,
-): { id: string } | undefined {
+): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
   }
@@ -204,6 +203,14 @@ function schedulerJobByDeclarationKey(
       typeof (job as Record<string, unknown>).id === "string",
   );
   const match = matches.length === 1 ? matches[0] : undefined;
+  return match;
+}
+
+function schedulerJobByDeclarationKey(
+  value: unknown,
+  declarationKey: string,
+): { id: string } | undefined {
+  const match = schedulerJobRecordByDeclarationKey(value, declarationKey);
   return match ? { id: match.id as string } : undefined;
 }
 
@@ -244,7 +251,7 @@ export function clawCronGatewayJobMatchesRef(
   if (!value || typeof value !== "object") {
     return false;
   }
-  const live = value as Partial<CronJob>;
+  const live = cronJobDefinitionFromReadView(value as Partial<CronJob>);
   const expected = normalizeCronJobCreate(clawCronGatewayInput(agentId, ref));
   if (
     !expected ||
@@ -318,10 +325,43 @@ export async function installClawCronJobs(
     };
     const pending = persistPendingRef(plan, job, options);
     refs.push(pending);
-    if (pending.status === "complete" && pending.schedulerJobId) {
-      continue;
-    }
     let result: { id: string } | undefined;
+    if (pending.status === "complete" && pending.schedulerJobId) {
+      if (!options.gateway.list) {
+        continue;
+      }
+      if (!agentAvailable) {
+        await options.gateway.waitUntilAgentAvailable?.(plan.agent.finalId);
+        agentAvailable = true;
+      }
+      const listedJob = schedulerJobRecordByDeclarationKey(
+        await options.gateway.list(plan.agent.finalId),
+        pending.declarationKey,
+      );
+      if (listedJob) {
+        if (!clawCronGatewayJobMatchesRef(plan.agent.finalId, pending, listedJob)) {
+          throw new ClawCronInstallError(
+            "cron_reconcile_conflict",
+            `Cron declaration ${JSON.stringify(pending.manifestId)} changed after installation.`,
+            refs,
+          );
+        }
+        result = { id: listedJob.id as string };
+        if (result.id !== pending.schedulerJobId) {
+          refs[refs.length - 1] = updateRef(
+            pending,
+            { status: "complete", schedulerJobId: result.id },
+            options,
+          );
+        }
+        continue;
+      }
+      throw new ClawCronInstallError(
+        "cron_reconcile_conflict",
+        `Cron declaration ${JSON.stringify(pending.manifestId)} is missing; remove and add the Claw again to recreate it safely.`,
+        refs,
+      );
+    }
     try {
       if (!agentAvailable) {
         await options.gateway.waitUntilAgentAvailable?.(plan.agent.finalId);
@@ -340,7 +380,7 @@ export async function installClawCronJobs(
         throw new Error("cron.add returned no scheduler job id");
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = coerceErrorMessage(error);
       refs[refs.length - 1] = updateRef(pending, { status: "pending", error: message }, options);
       throw new ClawCronInstallError("cron_install_failed", message, refs);
     }
@@ -351,7 +391,7 @@ export async function installClawCronJobs(
         options,
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = coerceErrorMessage(error);
       throw new ClawCronInstallError(
         "cron_provenance_failed",
         `cron.add succeeded, but its scheduler id could not be persisted: ${message}`,
@@ -375,15 +415,17 @@ export function readClawCronRefs(
   ) {
     return [];
   }
-  const rows = database.db /* sqlite-allow-raw: read Claw cron ownership rows by closed agent id. */
-    .prepare(
-      `SELECT schema_version, agent_id, manifest_id, declaration_key, scheduler_job_id,
-              status, job_json, error, created_at_ms, updated_at_ms
-         FROM claw_cron_refs
-        WHERE agent_id = ?
-        ORDER BY manifest_id`,
-    )
-    .all(agentId) as CronRefRow[];
+  const query = getNodeSqliteKysely<CronRefDatabase>(database.db)
+    .selectFrom("claw_cron_refs")
+    .selectAll()
+    .where("agent_id", "=", agentId)
+    .orderBy("manifest_id")
+    .compile();
+  const rows =
+    database.db /* sqlite-allow-raw: execute compiled Kysely with the existing native read error boundary. */
+      .prepare(query.sql)
+      // SAFETY: The compiled predicate binds a string; the canonical schema supplies the row shape.
+      .all(...(query.parameters as SQLInputValue[])) as CronRefRow[];
   return rows.map(rowToRef);
 }
 
@@ -393,9 +435,13 @@ export function deleteClawCronRef(
   options: OpenClawStateDatabaseOptions = {},
 ): void {
   runOpenClawStateWriteTransaction(({ db }) => {
-    db /* sqlite-allow-raw: delete one Claw cron ownership row after scheduler cleanup. */
-      .prepare("DELETE FROM claw_cron_refs WHERE agent_id = ? AND manifest_id = ?")
-      .run(agentId, manifestId);
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<CronRefDatabase>(db)
+        .deleteFrom("claw_cron_refs")
+        .where("agent_id", "=", agentId)
+        .where("manifest_id", "=", manifestId),
+    );
   }, options);
 }
 
@@ -415,35 +461,22 @@ export function upsertClawCronRef(
   options: OpenClawStateDatabaseOptions = {},
 ): void {
   runOpenClawStateWriteTransaction(({ db }) => {
-    db /* sqlite-allow-raw: Claw cron lifecycle provenance write. */
-      .prepare(
-        `INSERT INTO claw_cron_refs (
-         agent_id, manifest_id, schema_version, declaration_key, scheduler_job_id,
-         status, job_json, error, created_at_ms, updated_at_ms
-       ) VALUES (
-         @agent_id, @manifest_id, @schema_version, @declaration_key, @scheduler_job_id,
-         @status, @job_json, @error, @created_at_ms, @updated_at_ms
-       )
-       ON CONFLICT(agent_id, manifest_id) DO UPDATE SET
-         schema_version = excluded.schema_version,
-         declaration_key = excluded.declaration_key,
-         scheduler_job_id = excluded.scheduler_job_id,
-         status = excluded.status,
-         job_json = excluded.job_json,
-         error = excluded.error,
-         updated_at_ms = excluded.updated_at_ms`,
-      )
-      .run({
-        agent_id: ref.agentId,
-        manifest_id: ref.manifestId,
-        schema_version: ref.schemaVersion,
-        declaration_key: ref.declarationKey,
-        scheduler_job_id: ref.schedulerJobId ?? null,
-        status: ref.status,
-        job_json: JSON.stringify(ref.job),
-        error: ref.error ?? null,
-        created_at_ms: ref.createdAtMs,
-        updated_at_ms: ref.updatedAtMs,
-      });
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<CronRefDatabase>(db)
+        .insertInto("claw_cron_refs")
+        .values(refToRow(ref))
+        .onConflict((conflict) =>
+          conflict.columns(["agent_id", "manifest_id"]).doUpdateSet((eb) => ({
+            schema_version: eb.ref("excluded.schema_version"),
+            declaration_key: eb.ref("excluded.declaration_key"),
+            scheduler_job_id: eb.ref("excluded.scheduler_job_id"),
+            status: eb.ref("excluded.status"),
+            job_json: eb.ref("excluded.job_json"),
+            error: eb.ref("excluded.error"),
+            updated_at_ms: eb.ref("excluded.updated_at_ms"),
+          })),
+        ),
+    );
   }, options);
 }

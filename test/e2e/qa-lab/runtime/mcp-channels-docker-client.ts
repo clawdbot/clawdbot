@@ -1,6 +1,7 @@
 // MCP channels Docker client drives the QA-owned channel bridge smoke.
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import { hasExpectedSeededMcpAttachment } from "../../../../scripts/e2e/lib/mcp-channels-attachment-contract.mjs";
 import {
   assert,
   assertGatewayScopes,
@@ -100,6 +101,7 @@ async function waitForGatewaySeededConversation(gateway: GatewayRpcClient) {
 async function main() {
   const gatewayUrl = process.env.GW_URL?.trim();
   const gatewayToken = process.env.GW_TOKEN?.trim();
+  const frozenTarget = process.env.OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT === "legacy";
   assert(gatewayUrl, "missing GW_URL");
   assert(gatewayToken, "missing GW_TOKEN");
 
@@ -233,18 +235,43 @@ async function main() {
       (attachments.structuredContent?.attachments?.length ?? 0) === 1,
       "expected one seeded attachment",
     );
+    assert(
+      hasExpectedSeededMcpAttachment(attachments.structuredContent?.attachments?.[0], frozenTarget),
+      `expected persisted media attachment: ${JSON.stringify(attachments.structuredContent)}`,
+    );
 
+    let waitCursor = 0;
+    let lastWaitEvent: Record<string, unknown> | undefined;
     const waitMessage = `wait event ${randomUUID()}`;
-    const [waited, waitRun] = await Promise.all([
-      callTool<{
-        structuredContent?: { event?: Record<string, unknown> };
-      }>({
-        name: "events_wait",
-        arguments: {
-          session_key: "agent:main:main",
-          after_cursor: 0,
-          timeout_ms: 120_000,
+    const [waitEvent, waitRun] = await Promise.all([
+      waitFor(
+        "correlated events_wait user event",
+        async () => {
+          const waited = await callTool<{
+            structuredContent?: { event?: Record<string, unknown> };
+          }>({
+            name: "events_wait",
+            arguments: {
+              session_key: "agent:main:main",
+              after_cursor: waitCursor,
+              timeout_ms: 15_000,
+            },
+          });
+          const event = waited.structuredContent?.event;
+          if (!event) {
+            return undefined;
+          }
+          assert(typeof event.cursor === "number", "expected events_wait cursor");
+          waitCursor = event.cursor;
+          lastWaitEvent = event;
+          return event.text === waitMessage ? event : undefined;
         },
+        120_000,
+      ).catch((error: unknown) => {
+        throw new Error(
+          `events_wait did not return the expected user event: ${JSON.stringify(lastWaitEvent)}`,
+          { cause: error },
+        );
       }),
       gateway.request<{ runId?: string; status?: string }>("chat.send", {
         sessionKey: "agent:main:main",
@@ -252,12 +279,9 @@ async function main() {
         idempotencyKey: randomUUID(),
       }),
     ]);
-    const waitEvent = waited.structuredContent?.event;
-    assert(waitEvent, "expected events_wait result");
     assert(waitEvent.type === "message", "expected message event");
     assert(waitEvent.role === "user", "expected user event role");
     assert(waitEvent.text === waitMessage, "expected wait event text");
-    const waitCursor = typeof waitEvent.cursor === "number" ? waitEvent.cursor : 0;
     assert(
       waitRun.status === "started" && typeof waitRun.runId === "string",
       `chat.send did not start: ${JSON.stringify(waitRun)}`,
@@ -480,6 +504,7 @@ async function main() {
           nonOwnerReplyForwarded: true,
           nonOwnerPermissionBlocked: true,
           ownerPermissionAllowed: permission.behavior === "allow",
+          mediaAttachmentFound: true,
           rawNotifications: connectedMcp.rawMessages.filter(
             (entry) =>
               ClaudeChannelNotificationSchema.safeParse(entry).success ||

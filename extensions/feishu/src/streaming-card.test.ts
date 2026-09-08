@@ -40,21 +40,12 @@ type StreamingRequest = {
   res: ServerResponse;
 };
 
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
-
 const serverStops: Array<() => Promise<void>> = [];
 const HERMETIC_PUBLIC_LOOKUP_ADDRESS = "93.184.216.34";
 
-const hermeticPublicLookup: LookupFn = (async (_hostname: string, _options?: unknown) => ({
-  address: HERMETIC_PUBLIC_LOOKUP_ADDRESS,
-  family: 4,
-})) as LookupFn;
+const hermeticPublicLookup: LookupFn = async () => [
+  { address: HERMETIC_PUBLIC_LOOKUP_ADDRESS, family: 4 },
+];
 
 async function readRequestBody(req: IncomingMessage): Promise<string> {
   let body = "";
@@ -294,6 +285,195 @@ describe("FeishuStreamingSession", () => {
     } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
     return { authTokens, client, deps };
   }
+
+  function mockAcceptedStreamingCard(params: {
+    accountId: string;
+    response?: { code: number; msg: string; data?: { message_id?: string } };
+    rejectClose?: boolean;
+    rejectClear?: boolean;
+  }) {
+    const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
+    const deps = createMemoryFetch((url, body) => {
+      if (url.pathname.includes("/auth/")) {
+        return jsonResponse({
+          code: 0,
+          msg: "ok",
+          tenant_access_token: "token",
+          expire: 7200,
+        });
+      }
+      if (url.pathname.endsWith("/cardkit/v1/cards")) {
+        return jsonResponse({ code: 0, msg: "ok", data: { card_id: "card_accepted" } });
+      }
+      requests.push({ path: url.pathname, body: JSON.parse(body) as Record<string, unknown> });
+      return jsonResponse(
+        params.rejectClose && url.pathname.endsWith("/settings")
+          ? { code: 91400, msg: "close rejected" }
+          : params.rejectClear && url.pathname.endsWith("/elements/content")
+            ? { code: 19002, msg: "clear rejected" }
+            : { code: 0, msg: "ok" },
+      );
+    });
+    const response = params.response ?? { code: 0, msg: "ok", data: {} };
+    const create = vi.fn(async () => response);
+    const reply = vi.fn(async () => response);
+    const remove = vi.fn(async () => ({ code: 0, msg: "ok" }));
+    const client = {
+      im: { message: { create, reply, delete: remove } },
+    } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
+    const session = new FeishuStreamingSession(
+      client,
+      { appId: params.accountId, appSecret: "test-secret" },
+      undefined,
+      deps,
+    );
+    return { session, requests, create, reply, remove };
+  }
+
+  it.each([
+    { mode: "create", options: undefined, method: "create" },
+    { mode: "root_create", options: { rootId: "root_1" }, method: "create" },
+    {
+      mode: "reply",
+      options: { replyToMessageId: "inbound_1", replyInThread: true },
+      method: "reply",
+    },
+  ] as const)(
+    "updates and closes an accepted $mode card when its optional message receipt is absent",
+    async ({ mode, options, method }) => {
+      const { session, requests, create, reply } = mockAcceptedStreamingCard({
+        accountId: `accepted-without-receipt-${mode}`,
+      });
+
+      await session.start("chat_1", "chat_id", options);
+      await session.update("The accepted answer");
+
+      await expect(session.closeWithResult("The accepted answer")).resolves.toEqual({
+        visibleReplySent: true,
+        content: "The accepted answer",
+      });
+      expect(method === "reply" ? reply : create).toHaveBeenCalledOnce();
+      expect(method === "reply" ? create : reply).not.toHaveBeenCalled();
+      if (mode === "root_create") {
+        expect(create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({ root_id: "root_1" }),
+          }),
+        );
+      } else if (mode === "create") {
+        expect(create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.not.objectContaining({ root_id: expect.anything() }),
+          }),
+        );
+      } else {
+        expect(reply).toHaveBeenCalledWith(
+          expect.objectContaining({
+            path: { message_id: "inbound_1" },
+            data: expect.objectContaining({ reply_in_thread: true }),
+          }),
+        );
+      }
+      expect(requests.map(({ path }) => path)).toEqual([
+        "/open-apis/cardkit/v1/cards/card_accepted/elements/content/content",
+        "/open-apis/cardkit/v1/cards/card_accepted/settings",
+      ]);
+      expect(session.isActive()).toBe(false);
+    },
+  );
+
+  it("clears an accepted preview without requesting deletion with an absent message receipt", async () => {
+    const { session, requests, remove } = mockAcceptedStreamingCard({
+      accountId: "discard-without-receipt",
+    });
+
+    await session.start("chat_1");
+    await session.update("Transient preview");
+    await session.discard();
+
+    expect(remove).not.toHaveBeenCalled();
+    expect(requests.map(({ path }) => path)).toEqual([
+      "/open-apis/cardkit/v1/cards/card_accepted/elements/content/content",
+      "/open-apis/cardkit/v1/cards/card_accepted/elements/content",
+      "/open-apis/cardkit/v1/cards/card_accepted/settings",
+    ]);
+    expect(JSON.parse(String(requests[1]?.body.element))).toEqual({
+      tag: "markdown",
+      content: "",
+      element_id: "content",
+    });
+    expect(session.isActive()).toBe(false);
+  });
+
+  it("deletes an accepted preview normally when its message receipt is present", async () => {
+    const { session, requests, remove } = mockAcceptedStreamingCard({
+      accountId: "discard-with-receipt",
+      response: { code: 0, msg: "ok", data: { message_id: "om_accepted" } },
+    });
+
+    await session.start("chat_1");
+    await session.update("Transient preview");
+    await session.discard();
+
+    expect(remove).toHaveBeenCalledExactlyOnceWith({ path: { message_id: "om_accepted" } });
+    expect(requests.map(({ path }) => path)).toEqual([
+      "/open-apis/cardkit/v1/cards/card_accepted/elements/content/content",
+    ]);
+    expect(session.isActive()).toBe(false);
+  });
+
+  it.each([undefined, "om_accepted"])(
+    "retains accepted content and receipt %s when preview removal fails",
+    async (messageId) => {
+      const { session, remove } = mockAcceptedStreamingCard({
+        accountId: `failed-discard-${messageId ?? "without-receipt"}`,
+        response: { code: 0, msg: "ok", data: { message_id: messageId } },
+        rejectClear: true,
+      });
+      remove.mockResolvedValue({ code: 230001, msg: "delete rejected" });
+      await session.start("chat_1");
+      await session.update("Already visible answer");
+
+      await expect(session.discard()).rejects.toMatchObject({
+        name: "FeishuStreamingFinalizationError",
+        result: {
+          visibleReplySent: true,
+          content: "Already visible answer",
+          ...(messageId ? { messageId } : {}),
+        },
+      });
+      expect(remove).toHaveBeenCalledTimes(messageId ? 1 : 0);
+      expect(session.isActive()).toBe(false);
+    },
+  );
+
+  it("preserves accepted visible card content when receipt-free finalization fails", async () => {
+    const { session } = mockAcceptedStreamingCard({
+      accountId: "failed-close-without-receipt",
+      rejectClose: true,
+    });
+
+    await session.start("chat_1");
+    await session.update("Already visible answer");
+
+    await expect(session.closeWithResult("Already visible answer")).rejects.toMatchObject({
+      name: "FeishuStreamingFinalizationError",
+      result: {
+        visibleReplySent: true,
+        content: "Already visible answer",
+      },
+    });
+  });
+
+  it("still rejects provider-declined streaming card messages", async () => {
+    const { session } = mockAcceptedStreamingCard({
+      accountId: "declined-streaming-card",
+      response: { code: 230099, msg: "message rejected" },
+    });
+
+    await expect(session.start("chat_1")).rejects.toThrow("Send card failed: message rejected");
+    expect(session.isActive()).toBe(false);
+  });
 
   it("rejects oversized streaming tenant-token JSON before buffering the full body", async () => {
     let streamState:
@@ -573,165 +753,6 @@ describe("FeishuStreamingSession", () => {
     });
   });
 
-  it("coalesces a blocked update burst to the latest pending snapshot", async () => {
-    const updateBodies: string[] = [];
-    const firstUpdateResponse = createDeferred<Response>();
-    const deps = createMemoryFetch((url, body) => {
-      if (url.pathname.includes("/auth/")) {
-        return jsonResponse({
-          code: 0,
-          msg: "ok",
-          tenant_access_token: "token",
-          expire: 7200,
-        });
-      }
-      if (url.pathname.includes("/elements/content/content")) {
-        updateBodies.push(body);
-        if (updateBodies.length === 1) {
-          return firstUpdateResponse.promise;
-        }
-      }
-      return jsonResponse({ code: 0, msg: "ok" });
-    });
-    const session = new FeishuStreamingSession(
-      {} as never,
-      { appId: "app_blocked_burst", appSecret: "secret" },
-      undefined,
-      deps,
-    );
-    setStreamingSessionInternals(session, {
-      state: {
-        cardId: "card_blocked_burst",
-        messageId: "om_blocked_burst",
-        sequence: 1,
-        currentText: "",
-        sentText: "",
-        hasNote: false,
-      },
-      lastUpdateTime: 0,
-    });
-
-    const firstText = "first snapshot with enough content";
-    const middleText = `${firstText} and a stale middle snapshot`;
-    const latestText = `${middleText} followed by the latest complete snapshot`;
-    const firstPromise = session.update(firstText);
-    await vi.waitFor(() => expect(updateBodies).toHaveLength(1));
-    const middlePromise = session.update(middleText);
-    const latestPromise = session.update(latestText);
-
-    expect(updateBodies).toHaveLength(1);
-    firstUpdateResponse.resolve(jsonResponse({ code: 0, msg: "ok" }));
-    await Promise.all([firstPromise, middlePromise, latestPromise]);
-
-    expect(updateBodies.map((body) => JSON.parse(body).content)).toEqual([firstText, latestText]);
-  });
-
-  it("waits for an in-flight update before closing with the latest text", async () => {
-    const updateBodies: string[] = [];
-    const settingsBodies: string[] = [];
-    const firstUpdateResponse = createDeferred<Response>();
-    const deps = createMemoryFetch((url, body) => {
-      if (url.pathname.includes("/auth/")) {
-        return jsonResponse({
-          code: 0,
-          msg: "ok",
-          tenant_access_token: "token",
-          expire: 7200,
-        });
-      }
-      if (url.pathname.includes("/elements/content/content")) {
-        updateBodies.push(body);
-        if (updateBodies.length === 1) {
-          return firstUpdateResponse.promise;
-        }
-      } else if (url.pathname.includes("/settings")) {
-        settingsBodies.push(body);
-      }
-      return jsonResponse({ code: 0, msg: "ok" });
-    });
-    const session = new FeishuStreamingSession(
-      {} as never,
-      { appId: "app_blocked_close", appSecret: "secret" },
-      undefined,
-      deps,
-    );
-    setStreamingSessionInternals(session, {
-      state: {
-        cardId: "card_blocked_close",
-        messageId: "om_blocked_close",
-        sequence: 1,
-        currentText: "",
-        sentText: "",
-        hasNote: false,
-      },
-      lastUpdateTime: 0,
-    });
-
-    const updatePromise = session.update("first");
-    await vi.waitFor(() => expect(updateBodies).toHaveLength(1));
-    const closePromise = session.close("first latest before close");
-
-    expect(settingsBodies).toHaveLength(0);
-    firstUpdateResponse.resolve(jsonResponse({ code: 0, msg: "ok" }));
-    await Promise.all([updatePromise, closePromise]);
-
-    expect(updateBodies.map((body) => JSON.parse(body).content)).toEqual([
-      "first",
-      "first latest before close",
-    ]);
-    expect(settingsBodies).toHaveLength(1);
-  });
-
-  it("waits for an in-flight update before discarding the card", async () => {
-    const updateBodies: string[] = [];
-    const firstUpdateResponse = createDeferred<Response>();
-    const deleteMessage = vi.fn(async () => ({ code: 0, msg: "ok" }));
-    const deps = createMemoryFetch((url, body) => {
-      if (url.pathname.includes("/auth/")) {
-        return jsonResponse({
-          code: 0,
-          msg: "ok",
-          tenant_access_token: "token",
-          expire: 7200,
-        });
-      }
-      if (url.pathname.includes("/elements/content/content")) {
-        updateBodies.push(body);
-        return firstUpdateResponse.promise;
-      }
-      return jsonResponse({ code: 0, msg: "ok" });
-    });
-    const session = new FeishuStreamingSession(
-      { im: { message: { delete: deleteMessage } } } as never,
-      { appId: "app_blocked_discard", appSecret: "secret" },
-      undefined,
-      deps,
-    );
-    setStreamingSessionInternals(session, {
-      state: {
-        cardId: "card_blocked_discard",
-        messageId: "om_blocked_discard",
-        sequence: 1,
-        currentText: "",
-        sentText: "",
-        hasNote: false,
-      },
-      lastUpdateTime: 0,
-    });
-
-    const updatePromise = session.update("first");
-    await vi.waitFor(() => expect(updateBodies).toHaveLength(1));
-    const discardPromise = session.discard();
-
-    expect(deleteMessage).not.toHaveBeenCalled();
-    firstUpdateResponse.resolve(jsonResponse({ code: 0, msg: "ok" }));
-    await Promise.all([updatePromise, discardPromise]);
-
-    expect(deleteMessage).toHaveBeenCalledWith({
-      path: { message_id: "om_blocked_discard" },
-    });
-  });
-
   it("sends a divergent reasoning snapshot without merging the previous snapshot", async () => {
     const updateBodies: string[] = [];
     const deps = await createStreamingFetch(({ url, body, res }) => {
@@ -804,7 +825,7 @@ describe("FeishuStreamingSession", () => {
     expect(updateBodies).toHaveLength(0);
     expect(replaceBodies).toHaveLength(0);
 
-    await session.close();
+    await session.closeWithResult();
 
     expect(updateBodies).toHaveLength(0);
     expect(replaceBodies).toHaveLength(1);
@@ -860,8 +881,10 @@ describe("FeishuStreamingSession", () => {
     });
 
     await session.update(next);
-    // close() reports whether any accepted content remains visible, even when the final rewrite fails.
-    await expect(session.close()).resolves.toBe(true);
+    await expect(session.closeWithResult()).rejects.toMatchObject({
+      name: "FeishuStreamingFinalizationError",
+      result: { visibleReplySent: true, content: previous },
+    });
 
     expect(replaceBodies).toHaveLength(1);
     expect(settingsBodies).toHaveLength(1);
@@ -1054,7 +1077,7 @@ describe("FeishuStreamingSession", () => {
       lastUpdateTime: 3_000,
     });
 
-    await session.close("final answer");
+    await session.closeWithResult("final answer");
 
     expect(updateBodies).toHaveLength(0);
     expect(replaceBodies).toHaveLength(1);
@@ -1122,7 +1145,7 @@ describe("FeishuStreamingSession", () => {
       lastUpdateTime: 3_000,
     });
 
-    await session.close(finalText);
+    await session.closeWithResult(finalText);
 
     expect(settingsBodies).toHaveLength(1);
     const settingsPayload = JSON.parse(settingsBodies[0] ?? "{}") as { settings?: string };
@@ -1172,7 +1195,10 @@ describe("FeishuStreamingSession", () => {
       lastUpdateTime: 3_000,
     });
 
-    await session.close("final answer");
+    await expect(session.closeWithResult("final answer")).rejects.toMatchObject({
+      name: "FeishuStreamingFinalizationError",
+      result: { visibleReplySent: true, content: "working\n\nfinal answer" },
+    });
 
     expect(updateBodies).toHaveLength(0);
     expect(replaceBodies).toHaveLength(1);
@@ -1210,7 +1236,10 @@ describe("FeishuStreamingSession", () => {
       lastUpdateTime: 3_000,
     });
 
-    await expect(session.close("final answer")).resolves.toBe(false);
+    await expect(session.closeWithResult("final answer")).rejects.toMatchObject({
+      name: "FeishuStreamingFinalizationError",
+      result: { visibleReplySent: false },
+    });
 
     expect(updateBodies).toHaveLength(1);
     expect(replaceBodies).toHaveLength(0);

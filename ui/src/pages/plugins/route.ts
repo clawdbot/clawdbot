@@ -2,13 +2,10 @@ import { definePage, type RouteLoaderOptions, type RouteLocation } from "@opencl
 import { html } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { loadPluginCatalog } from "../../lib/plugins/index.ts";
 import type { PluginsRouteData } from "./plugins-page.ts";
 import { pluginsRouteLocation } from "./route-data.ts";
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 async function loadPluginsRouteData(
   context: ApplicationContext,
@@ -25,7 +22,13 @@ async function loadPluginsRouteData(
     const result = await loadPluginCatalog(client);
     return { gateway, gatewaySnapshot, result, error: null, location };
   } catch (error) {
-    return { gateway, gatewaySnapshot, result: null, error: errorMessage(error), location };
+    return {
+      gateway,
+      gatewaySnapshot,
+      result: null,
+      error: formatUiError(error),
+      location,
+    };
   }
 }
 

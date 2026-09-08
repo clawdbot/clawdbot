@@ -1,7 +1,6 @@
-import type { AgentHarness } from "../agents/harness/types.js";
+import type { AgentHarness, AgentHarnessRegistrationOptions } from "../agents/harness/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ContextEngineFactory } from "../context-engine/registry.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
@@ -10,6 +9,8 @@ import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
 } from "./agent-tool-result-middleware-types.js";
+import type { PluginBoardWidgetContentKind } from "./board-widget-content-kind.types.js";
+import type { PluginCapabilityCatalogContext } from "./capability-catalog-context.types.js";
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
@@ -53,7 +54,6 @@ import type {
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
 import type { PluginLogger } from "./logger-types.js";
-import type { MemoryCorpusSupplement } from "./memory-state.js";
 import type {
   MigrationProviderPlugin,
   PluginConfigMigration,
@@ -74,9 +74,17 @@ import type {
   OpenClawPluginService,
   PluginInteractiveHandlerRegistration,
   PluginRegistrationMode,
+  WidgetPresenter,
 } from "./plugin-registration.types.js";
 import type { UnifiedModelCatalogProviderPlugin } from "./provider-catalog.types.js";
 import type { ProviderPlugin } from "./provider-plugin.types.js";
+import type {
+  ContextEngineFactory,
+  MemoryCorpusSupplement,
+  MemoryPluginCapability,
+  MemoryPromptSectionBuilder,
+  MemoryPromptSectionParams,
+} from "./registry-contribution-types.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import type {
@@ -164,7 +172,11 @@ type OpenClawPluginLifecycleApi = {
   registerRuntimeLifecycle: (lifecycle: PluginRuntimeLifecycleRegistration) => void;
 };
 
-/** Main registration API injected into native plugin entry files. */
+/**
+ * Main registration API injected into native plugin entry files.
+ * @experimental All plugin APIs are experimental. Pin and test OpenClaw host versions.
+ * @see https://docs.openclaw.ai/plugins/sdk-overview#api-stability
+ */
 export type OpenClawPluginApi = {
   id: string;
   name: string;
@@ -206,6 +218,8 @@ export type OpenClawPluginApi = {
   registerHttpRoute: (params: OpenClawPluginHttpRouteParams) => void;
   /** Register a plugin-owned resolver for browser-style hosted media URLs. */
   registerHostedMediaResolver: (resolver: OpenClawPluginHostedMediaResolver) => void;
+  /** Register a plugin-owned destination for presenting hosted widget documents. */
+  registerWidgetPresenter: (presenter: WidgetPresenter) => void;
   /** Bind a declared MCP server's transport to the trusted message requester. */ registerMcpServerConnectionResolver: (
     resolver: import("./types.mcp-connection.js").OpenClawPluginMcpServerConnectionResolver,
   ) => void;
@@ -221,8 +235,13 @@ export type OpenClawPluginApi = {
   registerGatewayMethod: (
     method: string,
     handler: GatewayRequestHandler,
-    opts?: { scope?: OperatorScope },
+    opts?: {
+      scope?: OperatorScope;
+      profileAccess?: "independent" | "required";
+    },
   ) => void;
+  /** Register a sandboxed board widget source kind owned by this plugin. */
+  registerBoardWidgetContentKind: (definition: PluginBoardWidgetContentKind) => void;
   /** Register a read-only external-session catalog with optional native adoption actions. */
   registerSessionCatalog: (provider: SessionCatalogProvider) => void;
   registerCli: (
@@ -266,12 +285,24 @@ export type OpenClawPluginApi = {
   registerEmbeddingProvider: (
     adapter: import("./embedding-providers.js").EmbeddingProviderAdapter,
   ) => void;
-  /** Register a speech synthesis provider (speech capability). */
-  registerSpeechProvider: (provider: SpeechProviderPlugin) => void;
-  /** Register a realtime transcription provider (streaming STT capability). */
-  registerRealtimeTranscriptionProvider: (provider: RealtimeTranscriptionProviderPlugin) => void;
-  /** Register a realtime voice provider (duplex voice capability). */
-  registerRealtimeVoiceProvider: (provider: RealtimeVoiceProviderPlugin) => void;
+  /** Register a speech descriptor or synchronous factory bound to native host operations. */
+  registerSpeechProvider: (
+    provider:
+      | SpeechProviderPlugin
+      | ((context: PluginCapabilityCatalogContext) => SpeechProviderPlugin),
+  ) => void;
+  /** Register a transcription descriptor or synchronous factory bound to native host operations. */
+  registerRealtimeTranscriptionProvider: (
+    provider:
+      | RealtimeTranscriptionProviderPlugin
+      | ((context: PluginCapabilityCatalogContext) => RealtimeTranscriptionProviderPlugin),
+  ) => void;
+  /** Register a voice descriptor or synchronous factory bound to native host operations. */
+  registerRealtimeVoiceProvider: (
+    provider:
+      | RealtimeVoiceProviderPlugin
+      | ((context: PluginCapabilityCatalogContext) => RealtimeVoiceProviderPlugin),
+  ) => void;
   /** Register a media understanding provider (media understanding capability). */
   registerMediaUnderstandingProvider: (provider: MediaUnderstandingProviderPlugin) => void;
   /** Register a transcripts source provider (live or imported meeting transcript capability). */
@@ -303,7 +334,7 @@ export type OpenClawPluginApi = {
     provider: import("./compaction-provider.js").CompactionProvider,
   ) => void;
   /** Register an agent harness implementation. */
-  registerAgentHarness: (harness: AgentHarness) => void;
+  registerAgentHarness: (harness: AgentHarness, options?: AgentHarnessRegistrationOptions) => void;
   /**
    * Register a Codex app-server extension factory for Codex harness tool-result
    * middleware. Only bundled plugins may use this seam, and
@@ -426,30 +457,15 @@ export type OpenClawPluginApi = {
   /** Register the active detached task runtime for this plugin (exclusive slot). */
   registerDetachedTaskRuntime: (runtime: DetachedTaskLifecycleRuntime) => void;
   /** Register the active memory capability for this memory plugin (exclusive slot). */
-  registerMemoryCapability: (
-    capability: import("./memory-state.js").MemoryPluginCapability,
-  ) => void;
+  registerMemoryCapability: (capability: MemoryPluginCapability) => void;
   /** Register an additive memory-adjacent prompt section (non-exclusive). */
-  registerMemoryPromptSupplement: (
-    builder: import("./memory-state.js").MemoryPromptSectionBuilder,
-  ) => void;
+  registerMemoryPromptSupplement: (builder: MemoryPromptSectionBuilder) => void;
   /** Register an async memory prompt preparation step (non-exclusive). */
   registerMemoryPromptPreparation: (
-    prepare: (
-      params: import("./memory-state.js").MemoryPromptSectionParams,
-    ) => Promise<readonly string[]>,
+    prepare: (params: MemoryPromptSectionParams) => Promise<readonly string[]>,
   ) => void;
   /** Register an additive memory-adjacent search/read corpus supplement (non-exclusive). */
   registerMemoryCorpusSupplement: (supplement: MemoryCorpusSupplement) => void;
-  /**
-   * Register a memory embedding provider adapter. Multiple adapters may coexist.
-   * @deprecated New embedding providers should use `registerEmbeddingProvider`
-   * and `contracts.embeddingProviders`. This memory-specific seam is retained
-   * while existing memory providers migrate.
-   */
-  registerMemoryEmbeddingProvider: (
-    adapter: import("./memory-embedding-providers.js").MemoryEmbeddingProviderAdapter,
-  ) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(

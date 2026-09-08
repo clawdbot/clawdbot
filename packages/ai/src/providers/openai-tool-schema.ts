@@ -25,7 +25,7 @@ type ToolSchemaCompatInput = {
 };
 
 const MAX_STRICT_SCHEMA_CACHE_ENTRIES_PER_SCHEMA = 8;
-let strictOpenAISchemaCache = new WeakMap<object, Array<{ key: string; value: unknown }>>();
+const strictOpenAISchemaCache = new WeakMap<object, Array<{ key: string; value: unknown }>>();
 
 function resolveToolSchemaModelCompat(
   compat: ToolSchemaCompatInput | null | undefined,
@@ -71,10 +71,6 @@ function rememberStrictOpenAISchema(schema: object, key: string, value: unknown)
     ),
   );
   return value;
-}
-
-export function clearOpenAIToolSchemaCacheForTest(): void {
-  strictOpenAISchemaCache = new WeakMap();
 }
 
 /** Normalizes a tool parameter schema into the OpenAI strict JSON-schema subset. */
@@ -126,15 +122,16 @@ function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown, depth: number
 
   const record = schema as Record<string, unknown>;
   let changed = false;
-  const normalized: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(record)) {
-    const next = normalizeStrictOpenAIJsonSchemaRecursive(
-      value,
-      key === "properties" ? depth : depth + 1,
-    );
-    normalized[key] = next;
-    changed ||= next !== value;
-  }
+  const normalized = Object.fromEntries<unknown>(
+    Object.entries(record).map(([key, value]) => {
+      const next = normalizeStrictOpenAIJsonSchemaRecursive(
+        value,
+        key === "properties" ? depth : depth + 1,
+      );
+      changed ||= next !== value;
+      return [key, next];
+    }),
+  );
 
   if (normalized.type === "object") {
     const properties =

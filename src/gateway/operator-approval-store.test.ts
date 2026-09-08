@@ -23,11 +23,11 @@ import {
   expireDueOperatorApprovals,
   forceDenyOperatorApproval,
   getOperatorApprovalDetailed,
-  getOperatorApprovalDetailedByLocator,
   insertOperatorApproval,
   listPendingOperatorApprovals,
   listTerminalOperatorApprovals,
   OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS,
+  OperatorApprovalHistoryCursorError,
   pruneTerminalOperatorApprovals,
   resolveOperatorApproval,
 } from "./operator-approval-store.js";
@@ -174,8 +174,9 @@ describe("operator approval store", () => {
       inserted.record,
     );
     expect(
-      getOperatorApprovalDetailedByLocator({
-        locator: inserted.record.resolutionRef,
+      getOperatorApprovalDetailed({
+        id: inserted.record.resolutionRef,
+        allowTransportRef: true,
         nowMs: 2_000,
         databaseOptions,
       }),
@@ -229,6 +230,26 @@ describe("operator approval store", () => {
     const firstPage = listTerminalOperatorApprovals({ limit: 2, nowMs: 3_000, databaseOptions });
     expect(firstPage.records.map((record) => record.id)).toEqual(["system-middle", "plugin-new"]);
     expect(firstPage.nextCursor).toEqual(expect.any(String));
+    if (!firstPage.nextCursor) {
+      throw new Error("expected terminal history cursor");
+    }
+
+    const cursorPayload = JSON.parse(
+      Buffer.from(firstPage.nextCursor, "base64url").toString("utf8"),
+    ) as Record<string, unknown>;
+    const nonEmittedCursor = Buffer.from(
+      JSON.stringify({ ...cursorPayload, extra: true }),
+      "utf8",
+    ).toString("base64url");
+    for (const cursor of [
+      `${firstPage.nextCursor}!`,
+      `${firstPage.nextCursor}=`,
+      nonEmittedCursor,
+    ]) {
+      expect(() =>
+        listTerminalOperatorApprovals({ cursor, nowMs: 3_000, databaseOptions }),
+      ).toThrow(OperatorApprovalHistoryCursorError);
+    }
 
     const secondPage = listTerminalOperatorApprovals({
       cursor: firstPage.nextCursor,
@@ -479,8 +500,9 @@ describe("operator approval store", () => {
       }),
     ).toEqual({ outcome: "conflict" });
     expect(
-      getOperatorApprovalDetailedByLocator({
-        locator: inserted.record.resolutionRef,
+      getOperatorApprovalDetailed({
+        id: inserted.record.resolutionRef,
+        allowTransportRef: true,
         nowMs: 2_000,
         databaseOptions,
       }),

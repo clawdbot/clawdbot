@@ -1,6 +1,7 @@
 // Owns durable outbound admission, immutable payload custody, and media staging.
 import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-batch.js";
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.js";
 import type { DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import {
   collectPayloadMediaSources,
@@ -8,19 +9,21 @@ import {
   stripInternalRuntimeScaffoldingFromPayload,
 } from "./deliver-payload.js";
 import { releaseSpoolArtifacts, stageQueuePayloadMedia } from "./delivery-queue-media-spool.js";
-import { cancelDeliveryQueueMediaStage } from "./delivery-queue-media-staging.js";
+import { cancelDeliveryQueueMediaRetention } from "./delivery-queue-media-staging.js";
 import type { StableDeliveryPreparation } from "./delivery-queue-preparation.js";
-import { loadPendingDelivery, type QueuedDelivery } from "./delivery-queue-storage.js";
 import {
+  loadPendingDelivery,
+  type QueuedDelivery,
   enqueueDelivery,
   enqueueDeliveryOnce,
   enqueuePreparedDeliveryOnce,
-} from "./delivery-queue.js";
+} from "./delivery-queue-storage.js";
 import {
   acceptedPreparedOutboundEntries,
   mapPreparedOutboundAcceptedPayloads,
   type PreparedOutboundBatch,
 } from "./prepared-batch.js";
+import { normalizeOutboundReplyFacts } from "./reply-policy.js";
 
 export function restoreQueuedDeliveryCustody(
   params: DeliverOutboundPayloadsParams,
@@ -57,8 +60,11 @@ export function restoreQueuedDeliveryCustody(
 export async function stageAndEnqueueOutboundDelivery(
   params: DeliverOutboundPayloadsParams,
   preparedBatch: PreparedOutboundBatch,
-  options?: { getStablePreparation?: () => StableDeliveryPreparation },
-): Promise<{ id: string; created: boolean } | null> {
+  options?: {
+    getStablePreparation?: () => StableDeliveryPreparation;
+    claimForLiveDelivery?: boolean;
+  },
+): Promise<{ id: string; created: boolean; producerClaimId?: string } | null> {
   const { channel, to } = params;
   const queuePolicy = params.queuePolicy ?? "best_effort";
   const acceptedPayloads = acceptedPreparedOutboundEntries(preparedBatch).map((entry) =>
@@ -107,6 +113,9 @@ export async function stageAndEnqueueOutboundDelivery(
     return null;
   }
   try {
+    const initialProducerClaim = options?.claimForLiveDelivery
+      ? createInitialDeliveryProducerClaim()
+      : undefined;
     const queuedPreparedBatch = mapPreparedOutboundAcceptedPayloads(preparedBatch, staged.payloads);
     const delivery = {
       channel,
@@ -115,11 +124,11 @@ export async function stageAndEnqueueOutboundDelivery(
       queuePolicy,
       requireUnknownSendReconciliation: params.requireUnknownSendReconciliation,
       ...(params.reusePendingDeliveryIntent ? { requiresProducerClaim: true } : {}),
+      ...(initialProducerClaim ? { initialProducerClaim } : {}),
       preparedBatch: queuedPreparedBatch,
       renderedBatchPlan,
       threadId: params.threadId,
-      replyToId: params.replyToId,
-      replyToMode: params.replyToMode,
+      reply: normalizeOutboundReplyFacts(params),
       formatting: params.formatting,
       identity: params.identity,
       bestEffort: params.bestEffort,
@@ -150,17 +159,24 @@ export async function stageAndEnqueueOutboundDelivery(
             staged.mediaStageId,
           );
       if (!queued.created) {
-        cancelDeliveryQueueMediaStage(staged.mediaStageId);
+        cancelDeliveryQueueMediaRetention(staged.mediaStageId);
         await releaseSpoolArtifacts(staged.artifacts);
       }
-      return queued;
+      return {
+        ...queued,
+        ...(queued.created && initialProducerClaim
+          ? { producerClaimId: initialProducerClaim.producerClaimId }
+          : {}),
+      };
     }
-    const id = staged.mediaStageId
-      ? await enqueueDelivery(delivery, undefined, staged.mediaStageId)
-      : await enqueueDelivery(delivery);
-    return { id, created: true };
+    const id = await enqueueDelivery(delivery, undefined, staged.mediaStageId);
+    return {
+      id,
+      created: true,
+      ...(initialProducerClaim ? { producerClaimId: initialProducerClaim.producerClaimId } : {}),
+    };
   } catch (err) {
-    cancelDeliveryQueueMediaStage(staged.mediaStageId);
+    cancelDeliveryQueueMediaRetention(staged.mediaStageId);
     await releaseSpoolArtifacts(staged.artifacts);
     throw err;
   }

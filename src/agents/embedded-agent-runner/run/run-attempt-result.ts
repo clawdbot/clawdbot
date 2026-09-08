@@ -1,8 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { copyCoreTtsAttemptResultProvenance } from "../../tools/tts-tool-result-provenance.js";
 import { hasOutboundDeliveryEvidence } from "../delivery-evidence.js";
 import type { ToolSummaryTrace } from "../types.js";
-import { runEmbeddedAttemptWithBackend } from "./backend.js";
-import { resolveAttemptReplayMetadata } from "./incomplete-turn.js";
+import type { runEmbeddedAttemptWithBackend } from "./backend.js";
 
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
 
@@ -26,7 +26,11 @@ export function normalizeEmbeddedRunAttemptResult(
       | EmbeddedRunAttemptForRunner["currentAttemptReplayMetadata"]
       | null;
   };
-  return {
+  const runtimeContinuationReplayMetadata =
+    raw.runtimeContinuationStarted === true
+      ? { hadPotentialSideEffects: true, replaySafe: false }
+      : undefined;
+  return copyCoreTtsAttemptResultProvenance(attempt, {
     ...attempt,
     assistantTexts: raw.assistantTexts ?? [],
     toolMetas: raw.toolMetas ?? [],
@@ -42,9 +46,11 @@ export function normalizeEmbeddedRunAttemptResult(
       completedCount: 0,
       activeCount: 0,
     },
-    replayMetadata: resolveAttemptReplayMetadata(raw),
-    currentAttemptReplayMetadata: raw.currentAttemptReplayMetadata ?? undefined,
-  };
+    replayMetadata: runtimeContinuationReplayMetadata ??
+      raw.replayMetadata ?? { hadPotentialSideEffects: true, replaySafe: false },
+    currentAttemptReplayMetadata:
+      runtimeContinuationReplayMetadata ?? raw.currentAttemptReplayMetadata ?? undefined,
+  });
 }
 
 export function hasCompletedModelProgressForIdleBreaker(

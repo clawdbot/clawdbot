@@ -3,7 +3,7 @@ import {
   claimAgentRunContext,
   clearAgentRunContext,
   consumeCronNextCheckProposal,
-} from "../../infra/agent-events.js";
+} from "../../infra/agent-run-registry.js";
 import { createCronTool } from "./cron-tool.js";
 
 const RUN_ID = "paced-run";

@@ -92,7 +92,7 @@ These are frequently reported but are typically closed with no code change:
 
 - Prompt-injection-only chains without a boundary bypass (prompt injection is out of scope).
 - Operator-intended local features (for example TUI local `!` shell) presented as remote injection.
-- Reports that treat explicit operator-control surfaces (for example `canvas.eval`, browser evaluate/script execution, or direct `node.invoke` execution primitives) as vulnerabilities without demonstrating an auth/policy/sandbox boundary bypass. These capabilities are intentional when enabled and are trusted-operator features, not standalone security bugs.
+- Reports that treat explicit operator-control surfaces (for example browser evaluate/script execution or direct `node.invoke` execution primitives) as vulnerabilities without demonstrating an auth/policy/sandbox boundary bypass. These capabilities are intentional when enabled and are trusted-operator features, not standalone security bugs.
 - Reports that treat an admin-gated enablement or arming step as requiring `operator.admin` for every subsequent action, when the documented contract delegates use of the enabled capability to `operator.write` and no auth, arming, allowlist, sandbox, or policy bypass is shown. This is an arm-then-use operator guardrail, not privilege escalation.
 - Authorized user-triggered local actions presented as privilege escalation. Example: an allowlisted/owner sender running `/export-session /absolute/path.html` to write on the host. In this trust model, authorized user actions are trusted host actions unless you demonstrate an auth/sandbox/boundary bypass.
 - Reports that only show a malicious plugin executing privileged actions after a trusted operator installs/enables it.
@@ -169,7 +169,7 @@ Plugins/extensions are part of OpenClaw's trusted computing base for a gateway.
 - Reports whose only claim is post-approval executable identity drift on a trusted host via same-path file replacement/rewrite unless a separate untrusted boundary bypass is shown for that host write primitive.
 - Reports whose only claim is environment-variable-driven executable behavior change, including path lookup changes, preload hooks, wrapper/interpreter selection, package-manager/runtime hooks, or variables that make an executable invoke another executable, unless a separate OpenClaw boundary bypass lets untrusted input set or mutate that environment.
 - Reports where the only demonstrated impact is an already-authorized sender intentionally invoking a local-action command (for example `/export-session` writing to an absolute host path) without bypassing auth, sandbox, or another documented boundary
-- Reports whose only claim is use of an explicit trusted-operator control surface (for example `canvas.eval`, browser evaluate/script execution, or direct `node.invoke` execution) without demonstrating an auth, policy, allowlist, approval, or sandbox bypass.
+- Reports whose only claim is use of an explicit trusted-operator control surface (for example browser evaluate/script execution or direct `node.invoke` execution) without demonstrating an auth, policy, allowlist, approval, or sandbox bypass.
 - Reports where the only claim is that a trusted-installed/enabled plugin can execute with gateway/host privileges (documented trust model behavior).
 - Any report whose only claim is that an operator-enabled `dangerous*`/`dangerously*` config option weakens defaults (these are explicit break-glass tradeoffs by design)
 - Reports that depend on trusted operator-supplied configuration values to trigger availability impact (for example custom regex patterns). These may still be fixed as defense-in-depth hardening, but are not security-boundary bypasses.
@@ -275,7 +275,7 @@ Security boundary notes:
 - Enforcement reference points:
   - temp root resolver: `src/infra/tmp-openclaw-dir.ts`
   - SDK temp helpers: `src/plugin-sdk/temp-path.ts`
-  - messaging/channel tmp guardrail: `scripts/check-no-random-messaging-tmp.mjs`
+  - messaging/channel tmp guardrail: `scripts/check-no-random-messaging-tmp.mts`
 
 ### Operational Guidance
 
@@ -322,15 +322,12 @@ OpenClaw's web interface (Gateway Control UI + HTTP endpoints) is intended for *
 
 ### Node.js Version
 
-OpenClaw requires **Node.js 22.22.3+, Node.js 24.15+, or Node.js 25.9+**. Node 24 is the recommended default runtime for new installs. These minimum versions include the upstream SQLite WAL-reset corruption fix; Node 23 is unsupported. The minimum supported Node 22 version also includes important security patches:
-
-- CVE-2025-59466: async_hooks DoS vulnerability
-- CVE-2026-21636: Permission model bypass vulnerability
+OpenClaw requires **Node.js 24.16+ or Node.js 26.1+**. Node 26 is recommended; Node 24 is the supported LTS line. These minimum versions include the upstream SQLite WAL-reset corruption fix and preserve embedded NUL characters in SQLite TEXT reads. Node 22, 23, and 25 are unsupported.
 
 Verify your Node.js version:
 
 ```bash
-node --version  # Should be v22.22.3+, v24.15+, or v25.9+
+node --version  # Should be v24.16+ or v26.1+
 ```
 
 ### Docker Security
@@ -355,12 +352,12 @@ OpenClaw uses several security and release-validation layers. No single scanner 
 
 ### Secret Detection
 
-OpenClaw runs the pre-commit `detect-private-key` hook in CI and keeps secret-resolution behavior covered by the dedicated secrets test surface.
+OpenClaw runs the in-repo `scripts/detect-private-keys.mts` scanner in CI (the same private-key marker set as the pre-commit-hooks `detect-private-key` hook, with no hook-repo fetches, package installs, or third-party hook execution in the scan's path) over every tracked regular file except colocated `*.test.ts` fixtures and the iOS Fastfile; pull requests run the base branch's copy of the scanner and fail if the base branch lacks it. The local `detect-private-key` pre-commit hook runs the same scanner over the text files pre-commit hands it. Secret-resolution behavior stays covered by the dedicated secrets test surface.
 
 Run the key scan locally:
 
 ```bash
-pre-commit run --all-files detect-private-key
+node scripts/detect-private-keys.mts
 ```
 
 ### Static Analysis

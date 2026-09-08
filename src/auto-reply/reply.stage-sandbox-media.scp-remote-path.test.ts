@@ -164,13 +164,11 @@ describe("stageSandboxMedia scp remote paths", () => {
         workspaceDir,
       });
 
-      const stagedPath = join(
-        CONFIG_DIR,
-        "media",
-        "remote-cache",
-        slugifySessionKey(sessionKey),
-        basename(remotePath),
+      const stagedPath = result.staged.get(0)!;
+      expect(stagedPath).toContain(
+        join(CONFIG_DIR, "media", "remote-cache", slugifySessionKey(sessionKey)),
       );
+      expect(basename(stagedPath)).toBe("input-photo.jpg");
       expect(result.staged.get(0)).toBe(stagedPath);
       expect(ctx.media?.[0]?.path).toBe(stagedPath);
       expect(ctx.media?.[0]?.url).toBe(stagedPath);
@@ -219,13 +217,11 @@ describe("stageSandboxMedia scp remote paths", () => {
         remoteMediaMode: "cache",
       });
 
-      const stagedPath = join(
-        CONFIG_DIR,
-        "media",
-        "remote-cache",
-        slugifySessionKey(sessionKey),
-        basename(remotePath),
+      const stagedPath = result.staged.get(0)!;
+      expect(stagedPath).toContain(
+        join(CONFIG_DIR, "media", "remote-cache", slugifySessionKey(sessionKey)),
       );
+      expect(basename(stagedPath)).toBe("input-photo.jpg");
       expect(result.staged.get(0)).toBe(stagedPath);
       expect(ctx.media?.[0]?.path).toBe(stagedPath);
       expect(ctx.media?.[0]).toMatchObject({

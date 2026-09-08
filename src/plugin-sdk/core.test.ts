@@ -40,9 +40,29 @@ function createApi(registrationMode: PluginRegistrationMode): OpenClawPluginApi 
 }
 
 describe("defineChannelPluginEntry", () => {
+  it("defers and memoizes config schema factories", () => {
+    const configSchema = {
+      schema: { type: "object" as const, additionalProperties: false },
+    };
+    const createConfigSchema = vi.fn(() => configSchema);
+    const entry = defineChannelPluginEntry({
+      id: "lazy-config-schema",
+      name: "Lazy Config Schema",
+      description: "lazy config schema test",
+      plugin: createChannelPlugin("lazy-config-schema"),
+      configSchema: createConfigSchema,
+    });
+
+    expect(createConfigSchema).not.toHaveBeenCalled();
+    expect(entry.configSchema).toBe(configSchema);
+    expect(entry.configSchema).toBe(configSchema);
+    expect(createConfigSchema).toHaveBeenCalledTimes(1);
+  });
+
   it("runs tool registrations without channel runtime wiring during tool discovery", () => {
     const setRuntime = vi.fn<(runtime: PluginRuntime) => void>();
     const registerCliMetadata = vi.fn<(api: OpenClawPluginApi) => void>();
+    const registerCapabilities = vi.fn<(api: OpenClawPluginApi) => void>();
     const registerFull = vi.fn<(api: OpenClawPluginApi) => void>((api) => {
       api.registerTool(
         {
@@ -63,6 +83,7 @@ describe("defineChannelPluginEntry", () => {
       setRuntime,
       registerCliMetadata,
       registerFull,
+      registerCapabilities,
     });
 
     const api = createApi("tool-discovery");
@@ -72,6 +93,7 @@ describe("defineChannelPluginEntry", () => {
     expect(setRuntime).not.toHaveBeenCalled();
     expect(registerCliMetadata).not.toHaveBeenCalled();
     expect(registerFull).toHaveBeenCalledWith(api);
+    expect(registerCapabilities).toHaveBeenCalledExactlyOnceWith(api);
     expect(api.registerTool).toHaveBeenCalledTimes(1);
   });
 
@@ -79,6 +101,7 @@ describe("defineChannelPluginEntry", () => {
     const setRuntime = vi.fn<(runtime: PluginRuntime) => void>();
     const registerCliMetadata = vi.fn<(api: OpenClawPluginApi) => void>();
     const registerFull = vi.fn<(api: OpenClawPluginApi) => void>();
+    const registerCapabilities = vi.fn<(api: OpenClawPluginApi) => void>();
     const entry = defineChannelPluginEntry({
       id: "runtime-discovery",
       name: "Runtime Discovery",
@@ -87,6 +110,7 @@ describe("defineChannelPluginEntry", () => {
       setRuntime,
       registerCliMetadata,
       registerFull,
+      registerCapabilities,
     });
 
     const api = createApi("discovery");
@@ -96,12 +120,14 @@ describe("defineChannelPluginEntry", () => {
     expect(registerCliMetadata).toHaveBeenCalledTimes(1);
     expect(setRuntime).toHaveBeenCalledWith(api.runtime);
     expect(registerFull).not.toHaveBeenCalled();
+    expect(registerCapabilities).toHaveBeenCalledExactlyOnceWith(api);
   });
 
   it("keeps setup-runtime and full registration wired to runtime helpers", () => {
     const setRuntime = vi.fn<(runtime: PluginRuntime) => void>();
     const registerCliMetadata = vi.fn<(api: OpenClawPluginApi) => void>();
     const registerFull = vi.fn<(api: OpenClawPluginApi) => void>();
+    const registerCapabilities = vi.fn<(api: OpenClawPluginApi) => void>();
     const entry = defineChannelPluginEntry({
       id: "runtime-activation",
       name: "Runtime Activation",
@@ -110,13 +136,24 @@ describe("defineChannelPluginEntry", () => {
       setRuntime,
       registerCliMetadata,
       registerFull,
+      registerCapabilities,
     });
+
+    const cliApi = createApi("cli-metadata");
+    entry.register(cliApi);
+    expect(registerCliMetadata).toHaveBeenCalledWith(cliApi);
+    expect(registerCapabilities).not.toHaveBeenCalled();
+    registerCliMetadata.mockClear();
+
+    entry.register(createApi("setup-only"));
+    expect(registerCapabilities).not.toHaveBeenCalled();
 
     const setupApi = createApi("setup-runtime");
     entry.register(setupApi);
     expect(setRuntime).toHaveBeenCalledWith(setupApi.runtime);
     expect(registerCliMetadata).not.toHaveBeenCalled();
     expect(registerFull).not.toHaveBeenCalled();
+    expect(registerCapabilities).not.toHaveBeenCalled();
 
     setRuntime.mockClear();
     const fullApi = createApi("full");
@@ -124,6 +161,7 @@ describe("defineChannelPluginEntry", () => {
     expect(setRuntime).toHaveBeenCalledWith(fullApi.runtime);
     expect(registerCliMetadata).toHaveBeenCalledWith(fullApi);
     expect(registerFull).toHaveBeenCalledWith(fullApi);
+    expect(registerCapabilities).toHaveBeenCalledExactlyOnceWith(fullApi);
   });
 });
 
@@ -145,6 +183,33 @@ describe("createChannelPluginBase", () => {
 });
 
 describe("createChatChannelPlugin", () => {
+  it("preserves DM routing and entry classification through the security shorthand", () => {
+    const dmRouting = {
+      resolveDmScope: () => "per-peer" as const,
+      resolveDmRoute: () => ({ kind: "core" as const }),
+    };
+    const plugin = createChatChannelPlugin({
+      base: createChannelPlugin("security-routing") as ChannelPlugin<{ accountId: string }>,
+      security: {
+        dm: {
+          channelKey: "security-routing",
+          resolvePolicy: () => "allowlist",
+          resolveAllowFrom: () => [],
+          classifyEntryAuthentication: () => "mutable",
+        },
+        dmRouting,
+      },
+    });
+
+    expect(plugin.security?.dmRouting).toBe(dmRouting);
+    const policy = plugin.security?.resolveDmPolicy?.({
+      cfg: {},
+      accountId: "default",
+      account: { accountId: "default" },
+    });
+    expect(policy?.classifyEntryAuthentication?.("alias")).toBe("mutable");
+  });
+
   it("preserves account-scoped current-conversation binding support", () => {
     const conversationBindings: NonNullable<ChannelPlugin["conversationBindings"]> = {
       isCurrentConversationBindingSupported: ({ accountId }) => accountId !== "enterprise",
@@ -167,5 +232,22 @@ describe("createChatChannelPlugin", () => {
         accountId: "enterprise",
       }),
     ).toBe(false);
+  });
+
+  it("exports the conversation route-owner result contract", () => {
+    const messaging = {
+      resolveConversationRouteOwner: ({ conversation }) =>
+        conversation.peerId === "retry"
+          ? ({ kind: "unavailable" } as const)
+          : ({ kind: "agent", agentId: "main" } as const),
+    } satisfies NonNullable<ChannelPlugin["messaging"]>;
+
+    expect(
+      messaging.resolveConversationRouteOwner({
+        cfg: {},
+        accountId: "default",
+        conversation: { kind: "direct", peerId: "retry" },
+      }),
+    ).toEqual({ kind: "unavailable" });
   });
 });

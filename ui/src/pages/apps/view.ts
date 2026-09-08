@@ -5,12 +5,14 @@ import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
+import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
 import "../../styles/apps.css";
 import { brandIcons } from "../about/brand-icons.ts";
 import { appsBrandIcons } from "./brand-icons.ts";
 
 type AppsProps = {
   onNavigate: (routeId: RouteId) => void;
+  macGatewayLaunchUrl?: string | null;
   /** Opens the device-pairing dialog; absent when the operator cannot pair. */
   onPairDevice?: () => void;
 };
@@ -164,9 +166,12 @@ const APP_SECTIONS: readonly AppSection[] = [
         icon: appsBrandIcons.chrome,
         title: () => t("appsPage.cards.chrome.title"),
         desc: () => t("appsPage.cards.chrome.desc"),
-        // Installs unpacked via `openclaw browser extension path`; there is no
-        // Chrome Web Store listing, so the only CTA is the setup guide.
         ctas: [
+          {
+            kind: "external",
+            href: "https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig",
+            label: () => t("appsPage.ctaChromeWebStore"),
+          },
           {
             kind: "external",
             href: "https://docs.openclaw.ai/tools/chrome-extension",
@@ -196,7 +201,7 @@ const APP_SECTIONS: readonly AppSection[] = [
 const COMMUNITY_LINKS: ReadonlyArray<{ href: string; icon: TemplateResult; label: () => string }> =
   [
     {
-      href: "https://discord.gg/clawd",
+      href: COMMUNITY_DISCORD_URL,
       icon: brandIcons.discord,
       label: () => t("appsPage.linkDiscord"),
     },
@@ -226,6 +231,7 @@ function renderCta(cta: AppCardCta, index: number, props: AppsProps) {
 
 function renderAppCard(card: AppCard, props: AppsProps) {
   const [from, to] = card.gradient;
+  const macGatewayLaunchUrl = card.id === "macos" ? props.macGatewayLaunchUrl : null;
   return html`
     <article class="apps-card">
       <div class="apps-card__art" style=${`--apps-art-a:${from};--apps-art-b:${to}`}>
@@ -252,7 +258,12 @@ function renderAppCard(card: AppCard, props: AppsProps) {
         </div>
         <p class="apps-card__desc">${card.desc()}</p>
         <div class="apps-card__ctas">
-          ${card.ctas.map((cta, index) => renderCta(cta, index, props))}
+          ${macGatewayLaunchUrl
+            ? html`<a class="apps-card__cta apps-card__cta--primary" href=${macGatewayLaunchUrl}>
+                ${t("appsPage.ctaOpenMac")}
+              </a>`
+            : nothing}
+          ${card.ctas.map((cta, index) => renderCta(cta, index + (macGatewayLaunchUrl ? 1 : 0), props))}
         </div>
       </div>
     </article>

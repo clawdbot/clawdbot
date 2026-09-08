@@ -1,0 +1,97 @@
+title: Settled write finalizer exhaustion fallback
+
+scenario:
+  id: settled-write-finalizer-exhaustion-fallback
+  surface: runtime
+  coverage:
+    primary:
+      - agent-runtime.failure-recovery-empty-response-recovery
+    secondary:
+      - agent-runtime.failure-recovery-retry-policy
+      - channels.qa-channel-final-reply
+  objective: Verify an exhausted finalizer produces one visible fallback without replaying a settled write.
+  successCriteria:
+    - The model plans the write exactly once.
+    - Both isolated finalization attempts expose no tools.
+    - Exactly one host fallback is delivered with no generic error or requested success marker.
+  codeRefs:
+    - src/agents/embedded-agent-runner/run/settled-turn-finalization.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+  execution:
+    kind: flow
+    channel: qa-channel
+    summary: Exhaust finalization after one real write and verify safe delivery.
+    config:
+      requiredProviderMode: mock-openai
+      promptSnippet: Empty response after write exhaustion QA check
+      settledToolRetryNeedle: The previous assistant turn completed its tool calls but did not produce a user-visible answer.
+      expectedFallback: "The tool run finished, but no final summary was produced. I did not repeat any completed actions."
+      unexpectedSuccessMarker: WRITE-EXHAUSTED-OK
+
+flow:
+  steps:
+    - name: delivers one fallback without replaying the write
+      actions:
+        - assert:
+            expr: "env.providerMode === 'mock-openai'"
+            message: this seeded scenario is mock-openai only
+        - resetTransport: true
+        - set: requestCursorBefore
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - set: sessionKey
+          value:
+            expr: "`agent:qa:settled-write-finalizer:${randomUUID().slice(0, 8)}`"
+        - call: startAgentRun
+          saveAs: started
+          args:
+            - ref: env
+            - sessionKey:
+                ref: sessionKey
+              message: "Empty response after write exhaustion QA check: write qa-empty-response-side-effect.txt with the text side effect completed once, then reply with exact marker: `WRITE-EXHAUSTED-OK`."
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 45000)
+        - set: waited
+          value:
+            expr: "await env.gateway.call('agent.wait', { runId: started.runId, timeoutMs: liveTurnTimeoutMs(env, 45000) }, { timeoutMs: liveTurnTimeoutMs(env, 50000) })"
+        - assert:
+            expr: "waited?.status === 'ok'"
+            message:
+              expr: "`agent.wait returned ${String(waited?.status ?? 'unknown')}: ${String(waited?.error ?? '')}`"
+        - waitForOutbound:
+            conversation: { id: qa-operator, kind: direct }
+            sinceIndex: { ref: outboundStartIndex }
+            textIncludes: { ref: config.expectedFallback }
+            timeoutMs: 30000
+          saveAs: reply
+        - set: scenarioOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(outboundStartIndex).filter((message) => message.conversation.id === 'qa-operator')"
+        - assert:
+            expr: "scenarioOutbound.length === 1 && String(scenarioOutbound[0]?.text ?? '').trim() === config.expectedFallback"
+            message:
+              expr: "`expected one safe fallback, saw ${JSON.stringify(scenarioOutbound.map((message) => message.text))}`"
+        - assert:
+            expr: "!scenarioOutbound.some((message) => String(message.text ?? '').includes(config.unexpectedSuccessMarker) || String(message.text ?? '').startsWith('⚠️'))"
+            message: settled-write exhaustion delivered a false success marker or generic error
+        - set: scenarioRequests
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet)) : []"
+        - set: writeRequests
+          value:
+            expr: "scenarioRequests.filter((request) => request.plannedToolName === 'write')"
+        - set: finalizationRequests
+          value:
+            expr: "scenarioRequests.filter((request) => String(request.allInputText ?? '').includes(config.settledToolRetryNeedle))"
+        - assert:
+            expr: "scenarioRequests.length === 4 && writeRequests.length === 1"
+            message:
+              expr: "`expected one write across four bounded requests: ${JSON.stringify(scenarioRequests.map((request) => request.plannedToolName ?? null))}`"
+        - assert:
+            expr: "finalizationRequests.length === 2 && finalizationRequests.every((request) => !Array.isArray(request.body?.tools) || request.body.tools.length === 0)"
+            message:
+              expr: "`expected two tool-free finalization attempts, saw ${finalizationRequests.length}`"
+      detailsExpr: "`requests=${String(scenarioRequests.length)} writes=${String(writeRequests.length)} finalizations=${String(finalizationRequests.length)} fallback=${String(scenarioOutbound[0]?.text ?? '')}`"

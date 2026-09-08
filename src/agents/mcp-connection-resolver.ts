@@ -3,17 +3,18 @@
  * Resolved url/headers are credentials — never log, fingerprint, or persist them.
  */
 import crypto from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveOpenClawMcpTransportAlias } from "../config/mcp-config-normalize.js";
 import { logWarn } from "../logger.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
-import { collectLivePluginRegistries } from "../plugins/runtime.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type {
   McpServerConnectionResolved,
   McpServerConnectionResolveContext,
   OpenClawPluginMcpServerConnectionResolver,
 } from "../plugins/types.js";
-import { isMcpConfigRecord } from "./mcp-config-shared.js";
 
 export type { McpServerConnectionResolved };
 
@@ -27,46 +28,7 @@ const MCP_CONNECTION_RESOLVER_TIMEOUT_MS = 10_000;
  * How long a full-set requester runtime may skip re-resolve while active.
  * Revocation/rotation takes effect within this window even for continuously active requesters.
  */
-const MCP_CONNECTION_REVALIDATE_MS = 5 * 60 * 1000;
-
-const MCP_CONNECTION_RESOLVER_TEST_STATE_KEY = Symbol.for(
-  "openclaw.mcpServerConnectionResolverTestState",
-);
-
-type McpConnectionResolverTestState = {
-  resolversByServerName?: Map<string, McpServerConnectionResolverEntry>;
-  resolveTimeoutMs?: number;
-  revalidateMs?: number;
-};
-
-function getTestState(): McpConnectionResolverTestState {
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalStore[MCP_CONNECTION_RESOLVER_TEST_STATE_KEY] as
-    | McpConnectionResolverTestState
-    | undefined;
-  if (existing) {
-    return existing;
-  }
-  const state: McpConnectionResolverTestState = {};
-  globalStore[MCP_CONNECTION_RESOLVER_TEST_STATE_KEY] = state;
-  return state;
-}
-
-function resolveConnectionResolverTimeoutMs(): number {
-  const override = getTestState().resolveTimeoutMs;
-  if (typeof override === "number" && Number.isFinite(override) && override > 0) {
-    return Math.floor(override);
-  }
-  return MCP_CONNECTION_RESOLVER_TIMEOUT_MS;
-}
-
-export function resolveMcpConnectionRevalidateMs(): number {
-  const override = getTestState().revalidateMs;
-  if (typeof override === "number" && Number.isFinite(override) && override > 0) {
-    return Math.floor(override);
-  }
-  return MCP_CONNECTION_REVALIDATE_MS;
-}
+export const MCP_CONNECTION_REVALIDATE_MS = 5 * 60 * 1000;
 
 /**
  * Ephemeral per-process HMAC key for connection digests. Never exported, logged,
@@ -132,40 +94,49 @@ function listMcpServerConnectionResolversByServerName(): Map<
   string,
   McpServerConnectionResolverEntry
 > {
-  const testOverrides = getTestState().resolversByServerName;
-  if (testOverrides) {
-    return new Map([...testOverrides.entries()].toSorted(([a], [b]) => a.localeCompare(b)));
-  }
   const byName = new Map<string, McpServerConnectionResolverEntry>();
-  for (const registry of collectLivePluginRegistries()) {
-    for (const entry of registry.mcpServerConnectionResolvers) {
-      const serverName = normalizeOptionalString(entry.resolver.serverName);
-      if (!serverName || typeof entry.resolver.resolve !== "function" || byName.has(serverName)) {
-        continue;
-      }
-      byName.set(serverName, {
-        pluginId: entry.pluginId,
-        serverName,
-        resolve: entry.resolver.resolve,
-      });
+  const registry =
+    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry();
+  for (const entry of registry?.mcpServerConnectionResolvers ?? []) {
+    const serverName = normalizeOptionalString(entry.resolver.serverName);
+    if (!serverName || typeof entry.resolver.resolve !== "function" || byName.has(serverName)) {
+      continue;
     }
+    byName.set(serverName, {
+      pluginId: entry.pluginId,
+      serverName,
+      resolve: entry.resolver.resolve,
+    });
   }
   return new Map([...byName.entries()].toSorted(([a], [b]) => a.localeCompare(b)));
 }
 
-/** Partition loaded MCP servers into static vs requester-scoped by registered resolvers. */
+/** Partition loaded MCP servers into static vs requester-scoped connections. */
 export function partitionMcpServersByConnectionScope<T>(mcpServers: Record<string, T>): {
   staticServers: Record<string, T>;
   requesterScopedServerNames: string[];
+  oauthRequesterServerNames: string[];
+  resolverRequesterServerNames: string[];
 } {
   const resolvers = listMcpServerConnectionResolversByServerName();
   const staticServerEntries: Array<[string, T]> = [];
   const requesterScopedServerNames: string[] = [];
+  const oauthRequesterServerNames: string[] = [];
+  const resolverRequesterServerNames: string[] = [];
   for (const [serverName, rawServer] of Object.entries(mcpServers).toSorted(([a], [b]) =>
     a.localeCompare(b),
   )) {
+    const oauth = isRecord(rawServer) && isRecord(rawServer.oauth) ? rawServer.oauth : undefined;
+    if (isRecord(rawServer) && rawServer.auth === "oauth" && oauth?.identity === "per-requester") {
+      // Config-declared requester OAuth must stay out of anonymous/static runs.
+      // Resolver lookup here would erase OAuth and could expose a shared connection.
+      requesterScopedServerNames.push(serverName);
+      oauthRequesterServerNames.push(serverName);
+      continue;
+    }
     if (resolvers.has(serverName)) {
       requesterScopedServerNames.push(serverName);
+      resolverRequesterServerNames.push(serverName);
       continue;
     }
     staticServerEntries.push([serverName, rawServer]);
@@ -173,7 +144,12 @@ export function partitionMcpServersByConnectionScope<T>(mcpServers: Record<strin
   // Data-property construction preserves every own key from unvalidated inputs,
   // including "__proto__", without invoking Object.prototype's legacy setter.
   const staticServers = Object.fromEntries(staticServerEntries);
-  return { staticServers, requesterScopedServerNames };
+  return {
+    staticServers,
+    requesterScopedServerNames,
+    oauthRequesterServerNames,
+    resolverRequesterServerNames,
+  };
 }
 
 /**
@@ -235,7 +211,7 @@ export async function resolveRequesterScopedMcpConnections(params: {
       ? { messageChannel: normalizeOptionalString(params.messageChannel) }
       : {}),
   };
-  const timeoutMs = resolveConnectionResolverTimeoutMs();
+  const timeoutMs = MCP_CONNECTION_RESOLVER_TIMEOUT_MS;
   const sortedNames = [...params.serverNames].toSorted((a, b) => a.localeCompare(b));
   const settled = await Promise.all(
     sortedNames.map(async (serverName) => {
@@ -249,7 +225,7 @@ export async function resolveRequesterScopedMcpConnections(params: {
           return null;
         }
         const headers =
-          result.headers && isMcpConfigRecord(result.headers)
+          result.headers && isRecord(result.headers)
             ? Object.fromEntries(
                 Object.entries(result.headers)
                   .filter(
@@ -294,7 +270,7 @@ export function applyMcpConnectionOverride(
   rawServer: unknown,
   override: McpServerConnectionResolved,
 ): Record<string, unknown> {
-  const base = isMcpConfigRecord(rawServer) ? { ...rawServer } : {};
+  const base = isRecord(rawServer) ? { ...rawServer } : {};
   base.url = override.url;
   if (override.headers) {
     base.headers = { ...override.headers };
@@ -335,7 +311,7 @@ export function redactMcpServersForFingerprint(
       redacted[serverName] = rawServer;
       continue;
     }
-    if (!isMcpConfigRecord(rawServer)) {
+    if (!isRecord(rawServer)) {
       redacted[serverName] = { connection: "requester-scoped" };
       continue;
     }
@@ -369,39 +345,3 @@ export function buildMcpRequesterRuntimeCacheKey(params: {
     requesterSenderId: params.requesterSenderId,
   });
 }
-
-export const testing = {
-  setMcpServerConnectionResolversForTest(
-    resolvers?: Iterable<OpenClawPluginMcpServerConnectionResolver & { pluginId?: string }> | null,
-  ): void {
-    if (!resolvers) {
-      getTestState().resolversByServerName = undefined;
-      return;
-    }
-    const map = new Map<string, McpServerConnectionResolverEntry>();
-    for (const resolver of resolvers) {
-      const serverName = normalizeOptionalString(resolver.serverName);
-      if (!serverName || typeof resolver.resolve !== "function") {
-        continue;
-      }
-      map.set(serverName, {
-        pluginId: normalizeOptionalString(resolver.pluginId) ?? "test-plugin",
-        serverName,
-        resolve: resolver.resolve,
-      });
-    }
-    getTestState().resolversByServerName = map;
-  },
-  setMcpConnectionResolverTimeoutMsForTest(timeoutMs?: number): void {
-    getTestState().resolveTimeoutMs =
-      typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-        ? Math.floor(timeoutMs)
-        : undefined;
-  },
-  setMcpConnectionRevalidateMsForTest(revalidateMs?: number): void {
-    getTestState().revalidateMs =
-      typeof revalidateMs === "number" && Number.isFinite(revalidateMs) && revalidateMs > 0
-        ? Math.floor(revalidateMs)
-        : undefined;
-  },
-};

@@ -1,14 +1,13 @@
 // Mattermost plugin module owns draft-preview final delivery.
 import {
+  createAcceptedChannelDeliveryResult,
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
-  createMessageReceiptFromOutboundResults,
   defineFinalizableLivePreviewAdapter,
   deliverWithFinalizableLivePreviewAdapter,
   listMessageReceiptPlatformIds,
-  type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
   buildTtsSupplementMediaPayload,
@@ -66,23 +65,12 @@ function combineMattermostVisibleDeliveryResults(
   if (visibleResults.length === 0) {
     return undefined;
   }
-  const receiptResults: Array<{ receipt: MessageReceipt } | { messageId: string }> = [];
-  for (const result of visibleResults) {
-    if (result.receipt) {
-      receiptResults.push({ receipt: result.receipt });
-    } else {
-      receiptResults.push(...(result.messageIds ?? []).map((messageId) => ({ messageId })));
-    }
-  }
-  const receipt = createMessageReceiptFromOutboundResults({
-    results: receiptResults,
-  });
   return {
     outcome: visibleResults.some((result) => result.outcome === "media") ? "media" : "text",
-    messageIds: listMessageReceiptPlatformIds(receipt),
-    receipt,
-    visibleReplySent: true,
-    content: joinMattermostVisibleContent(visibleResults.map((result) => result.content)),
+    ...createAcceptedChannelDeliveryResult({
+      deliveryResults: visibleResults,
+      content: joinMattermostVisibleContent(visibleResults.map((result) => result.content)),
+    }),
   };
 }
 
@@ -134,15 +122,18 @@ export async function deliverMattermostReplyWithDraftPreview(
           previewFinalDeliveryText = previewFinalResolution?.deliveryText;
           previewFinalTextAlreadyDelivered =
             previewFinalResolution?.alreadyDelivered === true && payload.isError !== true;
+          // A text-only preview cannot finalize unsent presentation content or controls.
           useConfirmedPreviewAsWholeFinal =
             previewFinalTextAlreadyDelivered &&
-            !resolveSendableOutboundReplyParts(payload).hasMedia;
+            !resolveSendableOutboundReplyParts(payload).hasMedia &&
+            !payload.presentation;
           const previewFinalText = previewFinalResolution?.editText;
 
           if (
             (hasMedia && !ttsSupplement) ||
             typeof previewFinalText !== "string" ||
             payload.isError ||
+            payload.presentation ||
             !canFinalizeMattermostPreviewInPlace({
               kind: params.kind,
               previewRootId: params.effectiveReplyToId,
@@ -244,51 +235,32 @@ export async function deliverMattermostReplyWithDraftPreview(
       ]) ?? previewDeliveryResult
     );
   } catch (error: unknown) {
-    // A provider send can complete before preview cleanup fails. Preserve every
-    // completed visible receipt so core cannot mistake that post-send failure for a safe retry.
-    const completedVisibleResults: MattermostReplyDeliveryResult[] = [];
-    const completedReceiptResults: Array<{ receipt: MessageReceipt } | { messageId: string }> = [];
-    for (const result of [
+    // Preserve confirmed preview and supplemental receipts so core cannot
+    // mistake a later visible-delivery failure for a safe retry.
+    const completedVisibleResults = [
       confirmedPreviewDelivery,
       previewDeliveryResult,
       normalDeliveryResult,
       supplementalDeliveryResult,
-    ]) {
-      if (result?.visibleReplySent !== true) {
-        continue;
-      }
-      completedVisibleResults.push(result);
-      if (result.receipt) {
-        completedReceiptResults.push({ receipt: result.receipt });
-      } else {
-        completedReceiptResults.push(
-          ...(result.messageIds ?? []).map((messageId) => ({ messageId })),
-        );
-      }
-    }
+    ].filter(
+      (result): result is MattermostReplyDeliveryResult => result?.visibleReplySent === true,
+    );
     if (completedVisibleResults.length === 0) {
       throw error;
     }
     const failedPartial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
-    const receipt = createMessageReceiptFromOutboundResults({
-      results: [
-        ...completedReceiptResults,
-        ...(failedPartial?.receipt
-          ? [{ receipt: failedPartial.receipt }]
-          : (failedPartial?.messageIds ?? []).map((messageId) => ({ messageId }))),
-      ],
-    });
-    throw createChannelPartialDeliveryError(error, {
-      messageIds: listMessageReceiptPlatformIds(receipt),
-      receipt,
-      visibleReplySent: true,
-      content: joinMattermostVisibleContent([
-        confirmedPreviewDelivery?.content,
-        previewDeliveryResult?.content,
-        normalDeliveryResult?.content,
-        supplementalDeliveryResult?.content,
-        failedPartial?.content,
-      ]),
-    });
+    throw createChannelPartialDeliveryError(
+      error,
+      createAcceptedChannelDeliveryResult({
+        deliveryResults: [...completedVisibleResults, ...(failedPartial ? [failedPartial] : [])],
+        content: joinMattermostVisibleContent([
+          confirmedPreviewDelivery?.content,
+          previewDeliveryResult?.content,
+          normalDeliveryResult?.content,
+          supplementalDeliveryResult?.content,
+          failedPartial?.content,
+        ]),
+      }),
+    );
   }
 }

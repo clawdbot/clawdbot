@@ -1,6 +1,7 @@
 // SSH-verified node pairing policy and verifier tests (probe injected).
 import crypto from "node:crypto";
 import { describe, expect, test } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   deriveDeviceIdFromPublicKey,
   publicKeyRawBase64UrlFromPem,
@@ -106,6 +107,13 @@ describe("planNodePairingSshVerify", () => {
       { config: undefined, eligibility: makeEligibility({ reportedClientIp: "203.0.113.9" }) },
     ],
     [
+      "local-use NAT64 source address",
+      {
+        config: undefined,
+        eligibility: makeEligibility({ reportedClientIp: "64:ff9b:1::8.8.8.8" }),
+      },
+    ],
+    [
       "loopback source address",
       { config: undefined, eligibility: makeEligibility({ reportedClientIp: "127.0.0.1" }) },
     ],
@@ -154,6 +162,51 @@ describe("planNodePairingSshVerify", () => {
 });
 
 describe("startNodePairingSshVerify", () => {
+  test.each(
+    [
+      { name: "user", policy: { user: "replacement-user" } },
+      { name: "identity", policy: { identity: "/keys/replacement" } },
+      { name: "timeout", policy: { timeoutMs: 500 } },
+      { name: "CIDR scope", policy: { cidrs: ["192.168.0.0/16"] } },
+    ].flatMap((change) =>
+      ["in-flight", "failure cooldown"].map((phase) => Object.assign({}, change, { phase })),
+    ),
+  )("starts a fresh probe after $name changes during $phase", async ({ policy, phase }) => {
+    const identity = makeIdentity();
+    const oldProbe = createDeferred<NodeIdentityProbeResult>();
+    const oldPlan = makePlan();
+    const original = startNodePairingSshVerify({
+      plan: oldPlan,
+      expectedDeviceId: identity.deviceId,
+      expectedPublicKey: identity.publicKey,
+      probe: () => oldProbe.promise,
+    });
+    const failure = { status: "ok", stdout: "not a node identity" } as const;
+    try {
+      expect(original !== null).toBe(true);
+      if (phase === "failure cooldown") {
+        oldProbe.resolve(failure);
+        await original?.done;
+      }
+      const { probe, calls } = probeReturning({
+        status: "ok",
+        stdout: JSON.stringify({ deviceId: identity.deviceId, publicKey: identity.publicKey }),
+      });
+      const replacement = startNodePairingSshVerify({
+        plan: { ...oldPlan, policy: { ...oldPlan.policy, ...policy } },
+        expectedDeviceId: identity.deviceId,
+        expectedPublicKey: identity.publicKey,
+        probe,
+      });
+      expect(replacement?.alreadyInFlight).toBe(false);
+      await expect(replacement?.done).resolves.toMatchObject({ ok: true });
+      expect(calls).toHaveLength(1);
+    } finally {
+      oldProbe.resolve(failure);
+      await original?.done;
+    }
+  });
+
   test("approves when the remote identity matches, tolerating login-shell noise", async () => {
     const identity = makeIdentity();
     const { probe, calls } = probeReturning({

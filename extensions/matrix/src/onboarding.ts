@@ -1,5 +1,6 @@
 // Matrix setup module handles plugin onboarding behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import {
   type ChannelSetupWizardAdapter,
   formatDocsLink,
@@ -9,6 +10,7 @@ import {
   promptAccountId,
   promptChannelAccessConfig,
   splitSetupEntries,
+  type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-policy";
 import {
@@ -32,7 +34,7 @@ import {
 } from "./matrix/client/url-validation.js";
 import { updateMatrixAccountConfig } from "./matrix/config-update.js";
 import { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./matrix/deps.js";
-import type { RuntimeEnv, WizardPrompter } from "./runtime-api.js";
+import { isMatrixRoomId } from "./matrix/target-ids.js";
 import { moveSingleMatrixAccountConfigToNamedAccount } from "./setup-config.js";
 import { createMatrixSetupDmPolicy } from "./setup-dm-policy.js";
 import type { CoreConfig, MatrixConfig } from "./types.js";
@@ -54,11 +56,7 @@ function isMatrixInviteAutoJoinPolicy(value: string): value is MatrixInviteAutoJ
 }
 
 function isMatrixInviteAutoJoinTarget(entry: string): boolean {
-  return (
-    entry === "*" ||
-    (entry.startsWith("!") && entry.includes(":")) ||
-    (entry.startsWith("#") && entry.includes(":"))
-  );
+  return entry === "*" || isMatrixRoomId(entry) || (entry.startsWith("#") && entry.includes(":"));
 }
 
 function resolveMatrixOnboardingAccountId(cfg: CoreConfig, accountId?: string): string {
@@ -241,7 +239,7 @@ async function configureMatrixInviteAutoJoin(params: {
   while (true) {
     const rawAllowlist = await params.prompter.text({
       message: "Matrix invite auto-join allowlist (comma-separated)",
-      placeholder: "!roomId:server, #alias:server, *",
+      placeholder: "!roomId:server, !roomId, #alias:server, *",
       initialValue: currentAllowlist[0] ? currentAllowlist.join(", ") : undefined,
       validate: (value) => {
         const entries = splitSetupEntries(value);
@@ -253,7 +251,7 @@ async function configureMatrixInviteAutoJoin(params: {
     if (allowlist.length === 0 || invalidEntries.length > 0) {
       await params.prompter.note(
         [
-          "Use only stable Matrix invite targets for auto-join: !roomId:server, #alias:server, or *.",
+          "Use only stable Matrix invite targets for auto-join: !roomId:server (or the suffixless !roomId form on room version 12+), #alias:server, or *.",
           invalidEntries.length > 0 ? `Invalid: ${invalidEntries.join(", ")}` : undefined,
         ]
           .filter(Boolean)
@@ -292,7 +290,7 @@ async function configureMatrixAccessPrompts(params: {
     label: "Matrix rooms",
     currentPolicy: existingAccountConfig.groupPolicy ?? "allowlist",
     currentEntries: Object.keys(existingGroups ?? {}),
-    placeholder: "!roomId:server, #alias:server, Project Room",
+    placeholder: "!roomId:server, !roomId, #alias:server, Project Room",
     updatePrompt: Boolean(existingGroups),
   });
   if (accessConfig) {
@@ -312,7 +310,7 @@ async function configureMatrixAccessPrompts(params: {
               continue;
             }
             const cleaned = trimmed.replace(/^(room|channel):/i, "").trim();
-            if (cleaned.startsWith("!") && cleaned.includes(":")) {
+            if (isMatrixRoomId(cleaned)) {
               resolvedIds.push(cleaned);
               continue;
             }

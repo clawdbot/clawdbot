@@ -9,7 +9,8 @@ export function registerMatrixAutoJoin(params: {
   client: MatrixClient;
   accountConfig: Pick<MatrixConfig, "autoJoin" | "autoJoinAllowlist">;
   runtime: RuntimeEnv;
-}) {
+  runDetachedTask: (label: string, task: () => Promise<void>) => Promise<void>;
+}): () => void {
   const { client, accountConfig, runtime } = params;
   const core = getMatrixRuntime();
   const logVerbose = (message: string) => {
@@ -26,7 +27,7 @@ export function registerMatrixAutoJoin(params: {
   const resolvedAliasRoomIds = new Map<string, string>();
 
   if (autoJoin === "off") {
-    return;
+    return () => {};
   }
 
   if (autoJoin === "always") {
@@ -59,19 +60,9 @@ export function registerMatrixAutoJoin(params: {
     );
     return resolved.filter((roomId): roomId is string => Boolean(roomId));
   };
-  const runInviteTask = (roomId: string, task: () => Promise<void>) => {
-    void Promise.resolve()
-      .then(task)
-      .catch((err: unknown) => {
-        runtime.error?.(
-          `matrix: auto-join invite handler failed for room ${roomId}: ${String(err)}`,
-        );
-      });
-  };
-
   // Handle invites directly so both "always" and "allowlist" modes share the same path.
-  client.on("room.invite", (roomId: string, _inviteEvent: unknown) => {
-    runInviteTask(roomId, async () => {
+  const onInvite = (roomId: string, _inviteEvent: unknown) => {
+    void params.runDetachedTask(`auto-join invite handler room=${roomId}`, async () => {
       if (autoJoin === "allowlist") {
         const allowedAliasRoomIds = await resolveAllowedAliasRoomIds();
         const allowed =
@@ -92,5 +83,9 @@ export function registerMatrixAutoJoin(params: {
         runtime.error?.(`matrix: failed to join room ${roomId}: ${String(err)}`);
       }
     });
-  });
+  };
+  client.on("room.invite", onInvite);
+  return () => {
+    client.off("room.invite", onInvite);
+  };
 }

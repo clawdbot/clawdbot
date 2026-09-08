@@ -1,5 +1,6 @@
 // Reads package.json metadata needed by install and update flows.
 import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import { tryReadJson } from "./json-files.js";
 
@@ -10,16 +11,20 @@ type PackageJson = {
 };
 
 /** Reads package.json as a loose object, returning null for missing or invalid manifests. */
-async function readPackageJson(root: string): Promise<PackageJson | null> {
-  const parsed = await tryReadJson<unknown>(path.join(root, "package.json"));
-  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-    ? (parsed as PackageJson)
-    : null;
+async function readPackageJson(
+  root: string,
+  options?: { maxBytes: number },
+): Promise<PackageJson | null> {
+  const parsed = await tryReadJson<unknown>(path.join(root, "package.json"), options);
+  return asNullableRecord(parsed) as PackageJson | null;
 }
 
 /** Reads and trims the package version string, returning null for blank or non-string values. */
-export async function readPackageVersion(root: string): Promise<string | null> {
-  return normalizeString((await readPackageJson(root))?.version);
+export async function readPackageVersion(
+  root: string,
+  options?: { maxBytes: number },
+): Promise<string | null> {
+  return normalizeString((await readPackageJson(root, options))?.version);
 }
 
 /** Reads and trims the package name string, returning null for blank or non-string values. */

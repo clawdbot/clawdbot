@@ -1,0 +1,242 @@
+.session-progress-card {
+  --session-progress-neutral: var(--muted);
+  --session-progress-marker-size: 14px;
+
+  min-width: 0;
+  color: var(--text);
+}
+
+.session-progress-card--composer {
+  flex: 1 1 100%;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent-subtle) 42%, var(--panel-strong));
+  animation: fade-in 0.2s var(--ease-out);
+}
+
+/* Docked in the conversation's right gutter, below any suggestion tray sharing
+   .chat-gutter-stack. The width is fixed rather than derived from the gutter:
+   the pane only renders this placement once it has measured a gutter wide
+   enough for this card plus the stack's insets, so the clearance is already
+   guaranteed and a stable card beats one that grows with the window.
+   Top-anchored by the stack, so appended steps extend downward instead of
+   shifting the rows already being read. */
+.session-progress-card--dock {
+  width: var(--chat-progress-dock-width);
+  max-height: min(50vh, 420px);
+  overflow-y: auto;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent-subtle) 42%, var(--panel-strong));
+  box-shadow: var(--shadow-sm);
+  animation: fade-in 0.2s var(--ease-out);
+}
+
+.session-progress-card--board {
+  padding: var(--space-3);
+}
+
+.session-progress-card__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.session-progress-card__heading-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.session-progress-card__summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 7px 9px;
+  color: var(--text);
+  cursor: var(--cursor-action);
+  list-style: none;
+  user-select: none;
+}
+
+.session-progress-card__summary::-webkit-details-marker {
+  display: none;
+}
+
+.session-progress-card__chevron {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  transition: transform 0.16s var(--ease-out);
+}
+
+.session-progress-card__chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+.session-progress-card--composer:not([open]) .session-progress-card__chevron {
+  transform: rotate(-90deg);
+}
+
+.session-progress-card__summary:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
+  outline-offset: -2px;
+}
+
+.session-progress-card__current-marker,
+.session-progress-card__step-marker {
+  display: inline-flex;
+  width: var(--session-progress-marker-size);
+  height: var(--session-progress-marker-size);
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  padding: 0;
+  margin: 0;
+  font-size: 0;
+  line-height: 0;
+}
+
+.session-progress-card__current-marker svg,
+.session-progress-card__step-marker svg {
+  width: var(--session-progress-marker-size);
+  height: var(--session-progress-marker-size);
+  margin: 0;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.session-progress-card__current-marker {
+  color: var(--session-progress-neutral);
+}
+
+.session-progress-card__current-marker > .session-run-spinner,
+.session-progress-card__step-marker > .session-run-spinner {
+  width: var(--session-progress-marker-size);
+  height: var(--session-progress-marker-size);
+  border-color: color-mix(in srgb, var(--session-progress-neutral) 28%, transparent);
+  border-top-color: var(--session-progress-neutral);
+}
+
+.session-progress-card__current {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 500;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-progress-card__dismiss {
+  width: 22px;
+  min-width: 22px;
+  height: 22px;
+  min-height: 22px;
+}
+
+.session-progress-card--composer .session-progress-card__body {
+  padding: 7px 9px 8px;
+  border-top: 1px solid color-mix(in srgb, var(--accent) 16%, var(--border));
+}
+
+.session-progress-card__markdown.sidebar-markdown {
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.session-progress-card__markdown > :first-child {
+  margin-top: 0;
+}
+
+.session-progress-card__markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.session-progress-card__markdown + .session-progress-card__steps {
+  margin-top: var(--space-3);
+}
+
+.session-progress-card__markdown progress {
+  display: block;
+  width: 100%;
+  margin-top: var(--space-2);
+  accent-color: var(--accent);
+}
+
+.session-progress-card__markdown progress::-webkit-progress-bar {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.session-progress-card__markdown progress::-webkit-progress-value,
+.session-progress-card__markdown progress::-moz-progress-bar {
+  background: var(--accent);
+  border-radius: var(--radius-lg);
+}
+
+.session-progress-card__steps {
+  display: grid;
+  row-gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session-progress-card__step {
+  display: grid;
+  grid-template-columns: var(--session-progress-marker-size) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.4;
+}
+
+.session-progress-card__step--completed .session-progress-card__step-marker {
+  color: var(--ok);
+}
+
+.session-progress-card__step--completed .session-progress-card__step-text {
+  color: color-mix(in srgb, var(--muted) 82%, transparent);
+}
+
+.session-progress-card__step--in_progress {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.session-progress-card__step--in_progress .session-progress-card__step-marker {
+  color: var(--session-progress-neutral);
+}
+
+.session-progress-card__step--pending .session-progress-card__step-marker,
+.session-progress-card__step--paused .session-progress-card__step-marker {
+  color: var(--session-progress-neutral);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-progress-card--composer,
+  .session-progress-card--dock {
+    animation: none;
+    transition: none;
+  }
+}

@@ -1,7 +1,6 @@
-/** Shared predicates and mutations for plugin host-owned session-state cleanup. */
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import { normalizeSessionEntrySlotKey } from "../../plugins/session-entry-slot-keys.js";
+import { normalizeSessionKeyPreservingOpaquePeerIds } from "../../sessions/session-key-utils.js";
 import type { SessionEntry } from "./types.js";
 
 /** Cleanup variants owned by plugin host lifecycle paths. */
@@ -20,7 +19,7 @@ export type PluginHostSessionCleanupStoreParams = {
   sessionEntrySlotKeys?: ReadonlySet<string>;
   /** Locked-harness ids whose sessions this cleanup must leave untouched. */
   preserveLockedHarnessIds?: ReadonlySet<string>;
-  /** Per-store file-backed transaction boundary. */
+  /** Per-store SQLite transaction boundary. */
   storePath: string;
   /** Cancels the cleanup before persistence when host lifecycle state changes. */
   shouldCleanup?: () => boolean;
@@ -71,9 +70,8 @@ function clearPromotedSessionEntrySlots(
     options.includeStoredSlotKeys === false && sessionEntrySlotKeys
       ? new Set(sessionEntrySlotKeys)
       : collectPromotedSessionEntrySlotKeys(entry, pluginId, sessionEntrySlotKeys);
-  const entryRecord = entry as unknown as Record<string, unknown>;
   for (const slotKey of slotKeys) {
-    delete entryRecord[slotKey];
+    Reflect.deleteProperty(entry, slotKey);
   }
   if (!options.pruneSlotOwnership || !entry.pluginExtensionSlotKeys) {
     return;
@@ -152,9 +150,8 @@ function hasPromotedSessionEntrySlot(
   if (slotKeys.size === 0) {
     return false;
   }
-  const entryRecord = entry as unknown as Record<string, unknown>;
   for (const slotKey of slotKeys) {
-    if (Object.hasOwn(entryRecord, slotKey)) {
+    if (Object.hasOwn(entry, slotKey)) {
       return true;
     }
   }
@@ -186,13 +183,14 @@ export function matchesPluginHostCleanupSession(
   entry: SessionEntry,
   sessionKey?: string,
 ): boolean {
-  const normalizedSessionKey = normalizeLowercaseStringOrEmpty(sessionKey);
+  const normalizedSessionKey = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
   if (!normalizedSessionKey) {
     return true;
   }
+  // Only session keys have opaque peer spans; runtime IDs remain case-insensitive.
   return (
-    normalizeLowercaseStringOrEmpty(entryKey) === normalizedSessionKey ||
-    normalizeLowercaseStringOrEmpty(entry.sessionId) === normalizedSessionKey
+    normalizeSessionKeyPreservingOpaquePeerIds(entryKey) === normalizedSessionKey ||
+    entry.sessionId.trim().toLowerCase() === sessionKey?.trim().toLowerCase()
   );
 }
 

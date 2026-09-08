@@ -1,4 +1,6 @@
+import type { Tool as AnthropicTool } from "@anthropic-ai/sdk/resources/messages.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { AnthropicOptions } from "../provider-options.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
 import { projectRuntimeToolInputSchema } from "./tool-schema-json-projection.js";
 
@@ -12,8 +14,7 @@ type AnthropicProjectedTool = {
   readonly originalName: string;
   readonly wireName: string;
   readonly description?: string;
-  readonly inputSchema: {
-    readonly type: "object";
+  readonly inputSchema: AnthropicTool["input_schema"] & {
     readonly properties: Record<string, unknown>;
     readonly required: string[];
   };
@@ -34,6 +35,53 @@ export type AnthropicProjectedToolChoice =
   | ({ readonly type: "any" } & AnthropicParallelToolChoice)
   | { readonly type: "none" }
   | ({ readonly type: "tool"; readonly name: string } & AnthropicParallelToolChoice);
+
+const CLAUDE_CODE_TOOL_NAMES = [
+  "Read",
+  "Write",
+  "Edit",
+  "Bash",
+  "Grep",
+  "Glob",
+  "AskUserQuestion",
+  "EnterPlanMode",
+  "ExitPlanMode",
+  "KillShell",
+  "NotebookEdit",
+  "Skill",
+  "Task",
+  "TaskOutput",
+  "TodoWrite",
+  "WebFetch",
+  "WebSearch",
+];
+const CLAUDE_CODE_TOOL_LOOKUP = new Map(
+  CLAUDE_CODE_TOOL_NAMES.map((name) => [name.toLowerCase(), name]),
+);
+
+/** Preserve Claude Code's canonical tool casing for subscription OAuth requests. */
+export function toClaudeCodeToolName(name: string): string {
+  return CLAUDE_CODE_TOOL_LOOKUP.get(name.toLowerCase()) ?? name;
+}
+
+/** Anthropic rejects forced tools while extended thinking is enabled. */
+export function normalizeAnthropicToolChoice(
+  thinkingEnabled: boolean,
+  toolChoice: NonNullable<AnthropicOptions["toolChoice"]>,
+): AnthropicProjectedToolChoice {
+  if (
+    thinkingEnabled &&
+    (toolChoice === "any" || (typeof toolChoice === "object" && toolChoice.type === "tool"))
+  ) {
+    return { type: "auto" };
+  }
+  return typeof toolChoice === "string" ? { type: toolChoice } : toolChoice;
+}
+
+/** Anthropic tool identifiers accept only ASCII word characters and dashes. */
+export function normalizeAnthropicToolCallId(id: string): string {
+  return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
+}
 
 function isProviderSupportedViolation(violation: string): boolean {
   return violation.endsWith(".$dynamicRef") || violation.endsWith(".$dynamicAnchor");
@@ -108,6 +156,10 @@ function normalizeAnthropicJsonSchema(schema: unknown): unknown {
     changed = true;
   }
 
+  if (changed) {
+    // Converted tuples use 2020-12 syntax, including inside referenced schema resources.
+    delete normalized.$schema;
+  }
   return changed ? normalized : schema;
 }
 
@@ -117,6 +169,7 @@ export function projectAnthropicTools(
   toWireName: (name: string) => string,
 ): AnthropicToolProjection {
   const projectedTools: AnthropicProjectedTool[] = [];
+  const originalNameByWireName = new Map<string, string>();
   const unavailableOriginalNames = new Set<string>();
   for (const tool of tools) {
     let projectedTool: AnthropicProjectedTool;
@@ -163,6 +216,8 @@ export function projectAnthropicTools(
         wireName,
         ...(description ? { description } : {}),
         inputSchema: {
+          // Root constraints and reference targets belong to the validated schema too.
+          ...anthropicSchema,
           type: "object",
           properties: (properties ?? {}) as Record<string, unknown>,
           required: (required ?? []) as string[],
@@ -175,14 +230,13 @@ export function projectAnthropicTools(
       }
       continue;
     }
-    const conflictingTool = projectedTools.find(
-      (entry) => entry.wireName === projectedTool.wireName,
-    );
-    if (conflictingTool && conflictingTool.originalName !== projectedTool.originalName) {
+    const conflictingName = originalNameByWireName.get(projectedTool.wireName);
+    if (conflictingName !== undefined && conflictingName !== projectedTool.originalName) {
       throw new Error(
-        `Anthropic tool names "${conflictingTool.originalName}" and "${projectedTool.originalName}" both map to "${projectedTool.wireName}"`,
+        `Anthropic tool names "${conflictingName}" and "${projectedTool.originalName}" both map to "${projectedTool.wireName}"`,
       );
     }
+    originalNameByWireName.set(projectedTool.wireName, projectedTool.originalName);
     projectedTools.push(projectedTool);
   }
   return {

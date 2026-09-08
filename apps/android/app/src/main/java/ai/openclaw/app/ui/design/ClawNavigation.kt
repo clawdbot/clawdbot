@@ -1,5 +1,7 @@
 package ai.openclaw.app.ui.design
 
+import ai.openclaw.app.currentAppLanguage
+import ai.openclaw.app.ui.localizedUppercase
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -16,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -28,6 +31,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
+import androidx.compose.ui.unit.sp
 
 /**
  * Stable bottom-navigation destination descriptor.
@@ -54,7 +59,7 @@ internal fun ClawTopBar(
     modifier =
       modifier
         .fillMaxWidth()
-        .padding(horizontal = ClawTheme.spacing.lg, vertical = ClawTheme.spacing.sm),
+        .padding(horizontal = ClawTheme.spacing.sm, vertical = ClawTheme.spacing.xs),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(12.dp),
   ) {
@@ -96,11 +101,9 @@ internal fun ClawBottomNav(
   Box(modifier = modifier.fillMaxWidth().background(ClawTheme.colors.canvas)) {
     Surface(
       modifier = Modifier.fillMaxWidth(),
-      color = ClawTheme.colors.surface.copy(alpha = 0.92f),
-      border = BorderStroke(1.dp, ClawTheme.colors.border.copy(alpha = 0.42f)),
-      shape = RoundedCornerShape(topStart = ClawTheme.radii.sheet, topEnd = ClawTheme.radii.sheet),
-      tonalElevation = 2.dp,
-      shadowElevation = 8.dp,
+      color = ClawTheme.colors.surface,
+      border = BorderStroke(1.dp, ClawTheme.colors.border),
+      shape = RoundedCornerShape(topStart = ClawTheme.radii.panel, topEnd = ClawTheme.radii.panel),
     ) {
       Row(
         modifier =
@@ -133,17 +136,17 @@ private fun ClawBottomNavItem(
 ) {
   Surface(
     onClick = onClick,
-    modifier = modifier.heightIn(min = 52.dp),
+    modifier = modifier.heightIn(min = ClawTheme.spacing.row),
     shape = RoundedCornerShape(ClawTheme.radii.control),
-    color = if (selected) ClawTheme.colors.surfacePressed.copy(alpha = 0.72f) else Color.Transparent,
+    color = if (selected) ClawTheme.colors.accentSoft else Color.Transparent,
     contentColor = if (selected) ClawTheme.colors.text else ClawTheme.colors.textMuted,
   ) {
     Column(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 5.dp, vertical = 5.dp),
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp),
       horizontalAlignment = Alignment.CenterHorizontally,
       verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-      Icon(imageVector = item.icon, contentDescription = item.label, modifier = Modifier.size(20.dp))
+      Icon(imageVector = item.icon, contentDescription = item.label, modifier = Modifier.size(ClawTheme.spacing.icon))
       Text(
         modifier = Modifier.fillMaxWidth(),
         text = item.label,
@@ -165,14 +168,21 @@ internal fun ClawAvatarMark(
   modifier: Modifier = Modifier,
 ) {
   Surface(
-    modifier = modifier.size(38.dp),
+    modifier = modifier.size(34.dp),
     shape = CircleShape,
     color = ClawTheme.colors.surfaceRaised,
     contentColor = ClawTheme.colors.text,
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
-    Box(contentAlignment = Alignment.Center) {
-      Text(text = text.take(2).uppercase(), style = ClawTheme.type.label)
+    Box(modifier = Modifier.padding(4.dp), contentAlignment = Alignment.Center) {
+      val label = ClawTheme.type.label
+      // A fixed sp line height would still clip when autosizing shrinks the initials.
+      Text(
+        text = localizedUppercase(text.take(2), currentAppLanguage().languageTag),
+        style = label.copy(lineHeight = (label.lineHeight.value / label.fontSize.value).em),
+        maxLines = 1,
+        autoSize = TextAutoSize.StepBased(minFontSize = 1.sp, maxFontSize = label.fontSize),
+      )
     }
   }
 }

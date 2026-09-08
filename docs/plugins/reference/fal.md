@@ -2,10 +2,13 @@
 summary: "Adds fal model provider support to OpenClaw."
 read_when:
   - You are installing, configuring, or auditing the fal plugin
-title: "fal plugin"
+title: "fal plugin reference"
 ---
 
-# fal plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 Adds fal model provider support to OpenClaw.
 
@@ -16,7 +19,8 @@ Adds fal model provider support to OpenClaw.
 
 ## Surface
 
-providers: `fal`; contracts: `imageGenerationProviders`, `musicGenerationProviders`, `videoGenerationProviders`
+- Providers: `fal`
+- Contracts: `imageGenerationProviders`, `musicGenerationProviders`, `videoGenerationProviders`
 
 ## Related docs
 

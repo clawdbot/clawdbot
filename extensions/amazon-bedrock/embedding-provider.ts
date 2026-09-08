@@ -9,7 +9,7 @@ import {
   type MemoryEmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
-  asOptionalRecord as asRecord,
+  asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -23,6 +23,9 @@ type BedrockEmbeddingClient = {
   region: string;
   model: string;
   dimensions?: number;
+  endpoint?: string;
+  useFipsEndpoint?: true;
+  useDualstackEndpoint?: true;
 };
 
 /** Default Bedrock embedding model used when no explicit model is configured. */
@@ -149,7 +152,7 @@ function loadDefaultCredentialProvider(): Promise<AwsCredentialProvider | null> 
 // ---------------------------------------------------------------------------
 
 const MODEL_PREFIX_RE = /^(?:bedrock|amazon-bedrock|aws)\//;
-const REGION_RE = /bedrock-runtime\.([a-z0-9-]+)\./;
+const REGION_RE = /bedrock-runtime(?:-fips)?\.([a-z0-9-]+)\./;
 
 function normalizeBedrockEmbeddingModel(model: string): string {
   const trimmed = model.trim();
@@ -218,9 +221,9 @@ type BedrockEmbeddingResponseJson = {
   data?: unknown;
 };
 
-function parseBedrockEmbeddingResponseJson(raw: string): BedrockEmbeddingResponseJson {
+function parseEmbeddingResponseJson(raw: Uint8Array | undefined): BedrockEmbeddingResponseJson {
   try {
-    const parsed = JSON.parse(raw) as unknown;
+    const parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(raw)) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new Error("Amazon Bedrock embedding response returned malformed JSON");
     }
@@ -253,16 +256,16 @@ function asNumberArrayBatch(value: unknown): number[][] {
   return value.map((entry) => asNumberArray(entry));
 }
 
-function parseSingle(family: Family, raw: string): number[] {
-  const data = parseBedrockEmbeddingResponseJson(raw);
+function parseSingle(family: Family, raw: Uint8Array | undefined): number[] {
+  const data = parseEmbeddingResponseJson(raw);
   switch (family) {
     case "nova":
       return asNumberArray(Array.isArray(data.embeddings) ? data.embeddings[0]?.embedding : null);
     case "twelvelabs": {
       if (Array.isArray(data.data)) {
-        return asNumberArray(asRecord(data.data[0])?.embedding);
+        return asNumberArray(asOptionalRecord(data.data[0])?.embedding);
       }
-      const dataRecord = asRecord(data.data);
+      const dataRecord = asOptionalRecord(data.data);
       if (dataRecord) {
         return asNumberArray(dataRecord.embedding);
       }
@@ -273,30 +276,20 @@ function parseSingle(family: Family, raw: string): number[] {
   }
 }
 
-function parseCohereBatch(family: Family, raw: string): number[][] {
-  const data = parseBedrockEmbeddingResponseJson(raw);
+function parseCohereBatch(family: Family, raw: Uint8Array | undefined): number[][] {
+  const data = parseEmbeddingResponseJson(raw);
   const embeddings = data.embeddings;
   if (!embeddings) {
     throw malformedBedrockEmbeddingResponse();
   }
   if (family === "cohere-v4" && !Array.isArray(embeddings)) {
-    const embeddingRecord = asRecord(embeddings);
+    const embeddingRecord = asOptionalRecord(embeddings);
     if (!embeddingRecord) {
       throw malformedBedrockEmbeddingResponse();
     }
     return asNumberArrayBatch(embeddingRecord.float);
   }
   return asNumberArrayBatch(embeddings);
-}
-
-const testing = {
-  parseCohereBatch,
-  parseSingle,
-  stripInferenceProfilePrefix,
-};
-
-if (process.env.VITEST === "true") {
-  Reflect.set(globalThis, Symbol.for("openclaw.amazonBedrockEmbeddingTestApi"), testing);
 }
 
 // ---------------------------------------------------------------------------
@@ -306,8 +299,8 @@ if (process.env.VITEST === "true") {
 export async function createBedrockEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<{ provider: MemoryEmbeddingProvider; client: BedrockEmbeddingClient }> {
-  const client = resolveBedrockEmbeddingClient(options);
   const { BedrockRuntimeClient, InvokeModelCommand } = await loadSdk();
+  const client = resolveBedrockEmbeddingClient(options, BedrockRuntimeClient);
   const spec = resolveSpec(client.model);
   const family = spec?.family ?? inferFamily(client.model);
 
@@ -318,9 +311,14 @@ export async function createBedrockEmbeddingProvider(
     family,
   });
 
-  const invoke = async (body: string, signal?: AbortSignal): Promise<string> => {
+  const invoke = async (body: string, signal?: AbortSignal): Promise<Uint8Array | undefined> => {
     await refreshAwsSharedConfigCacheForBedrock();
-    const sdk = new BedrockRuntimeClient({ region: client.region });
+    const sdk = new BedrockRuntimeClient({
+      region: client.region,
+      endpoint: client.endpoint,
+      useFipsEndpoint: client.useFipsEndpoint,
+      useDualstackEndpoint: client.useDualstackEndpoint,
+    });
     try {
       const res = await sdk.send(
         new InvokeModelCommand({
@@ -331,7 +329,7 @@ export async function createBedrockEmbeddingProvider(
         }),
         signal ? { abortSignal: signal } : undefined,
       );
-      return new TextDecoder().decode(res.body);
+      return res.body;
     } finally {
       sdk.destroy();
     }
@@ -353,25 +351,26 @@ export async function createBedrockEmbeddingProvider(
     return parseCohereBatch(family, raw).map((e) => sanitizeAndNormalizeEmbedding(e));
   };
 
-  const embedQuery = async (
-    text: string,
-    optionsValue?: { signal?: AbortSignal },
-  ): Promise<number[]> => {
+  const embedQuery = async (text: string, signal?: AbortSignal): Promise<number[]> => {
     if (!text.trim()) {
       return [];
     }
     if (isCohere) {
-      return (await embedCohere([text], "search_query", optionsValue?.signal))[0] ?? [];
+      return (await embedCohere([text], "search_query", signal))[0] ?? [];
     }
-    return embedSingle(text, optionsValue?.signal);
+    return embedSingle(text, signal);
   };
 
   const embedBatch = async (
-    texts: string[],
-    optionsLocal?: { signal?: AbortSignal },
+    inputs: Array<string | { text: string }>,
+    optionsLocal?: { signal?: AbortSignal; inputType?: string },
   ): Promise<number[][]> => {
+    const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
     if (texts.length === 0) {
       return [];
+    }
+    if (optionsLocal?.inputType === "query") {
+      return await Promise.all(texts.map((text) => embedQuery(text, optionsLocal.signal)));
     }
     if (isCohere) {
       return embedCohere(texts, "search_document", optionsLocal?.signal);
@@ -386,7 +385,13 @@ export async function createBedrockEmbeddingProvider(
       id: "bedrock",
       model: client.model,
       maxInputTokens: spec?.maxTokens,
-      embedQuery,
+      embed: async (input, optionsValue) => {
+        const text = typeof input === "string" ? input : input.text;
+        if (optionsValue?.inputType === "query") {
+          return await embedQuery(text, optionsValue.signal);
+        }
+        return (await embedBatch([text], { ...optionsValue, inputType: "document" }))[0] ?? [];
+      },
       embedBatch,
     },
     client,
@@ -399,10 +404,16 @@ export async function createBedrockEmbeddingProvider(
 
 function resolveBedrockEmbeddingClient(
   options: MemoryEmbeddingProviderCreateOptions,
+  BedrockRuntimeClient: AwsSdk["BedrockRuntimeClient"],
 ): BedrockEmbeddingClient {
   const model = normalizeBedrockEmbeddingModel(options.model);
   const spec = resolveSpec(model);
   const providerConfig = options.config.models?.providers?.["amazon-bedrock"];
+  let endpoint =
+    normalizeOptionalString(options.remote?.baseUrl) ??
+    normalizeOptionalString(providerConfig?.baseUrl);
+  let useFipsEndpoint: true | undefined;
+  let useDualstackEndpoint: true | undefined;
 
   const region =
     regionFromUrl(options.remote?.baseUrl) ??
@@ -411,19 +422,56 @@ function resolveBedrockEmbeddingClient(
     normalizeOptionalString(process.env.AWS_DEFAULT_REGION) ??
     "us-east-1";
 
+  if (endpoint) {
+    const sdk = new BedrockRuntimeClient({ region });
+    try {
+      const normalizedEndpoint = new URL(endpoint).href;
+      for (const fips of [false, true]) {
+        for (const dualstack of [false, true]) {
+          const endpointModes = { Region: region, UseFIPS: fips, UseDualStack: dualstack };
+          try {
+            if (sdk.config.endpointProvider(endpointModes).url.href !== normalizedEndpoint) {
+              continue;
+            }
+          } catch {
+            // Unsupported hypothetical modes must not reject a valid custom endpoint.
+            continue;
+          }
+          // SDK-owned endpoints must retain their security modes and environment overrides.
+          endpoint = undefined;
+          useFipsEndpoint = fips || undefined;
+          useDualstackEndpoint = dualstack || undefined;
+          break;
+        }
+        if (!endpoint) {
+          break;
+        }
+      }
+    } finally {
+      sdk.destroy();
+    }
+  }
+
   let dimensions: number | undefined;
-  if (options.outputDimensionality != null) {
-    if (spec?.validDims && !spec.validDims.includes(options.outputDimensionality)) {
+  if (options.dimensions != null) {
+    if (spec?.validDims && !spec.validDims.includes(options.dimensions)) {
       throw new Error(
-        `Invalid dimensions ${options.outputDimensionality} for ${model}. Valid values: ${spec.validDims.join(", ")}`,
+        `Invalid dimensions ${options.dimensions} for ${model}. Valid values: ${spec.validDims.join(", ")}`,
       );
     }
-    dimensions = options.outputDimensionality;
+    dimensions = options.dimensions;
   } else {
     dimensions = spec?.dims;
   }
 
-  return { region, model, dimensions };
+  return {
+    region,
+    model,
+    dimensions,
+    ...(endpoint ? { endpoint } : {}),
+    ...(useFipsEndpoint ? { useFipsEndpoint } : {}),
+    ...(useDualstackEndpoint ? { useDualstackEndpoint } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------

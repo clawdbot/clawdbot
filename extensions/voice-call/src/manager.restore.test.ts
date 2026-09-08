@@ -1,18 +1,21 @@
-// Voice Call tests cover manager.restore plugin behavior.
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// Voice Call tests cover manager.restore plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { VoiceCallConfigSchema } from "./config.js";
 import { CallManager } from "./manager.js";
 import {
   createTestStorePath,
   FakeProvider,
   makePersistedCall,
+  registerTestManagerCleanup,
   writeCallsToStore,
 } from "./manager.test-harness.js";
+import { MAX_CALL_REPLAY_KEYS } from "./manager/replay-keys.js";
 import { loadActiveCallsFromStore } from "./manager/store.js";
 import { setVoiceCallStateRuntime } from "./runtime-state.js";
 
@@ -45,12 +48,7 @@ function requireSingleActiveCall(manager: CallManager) {
   return activeCall;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-record");
 
 function requireSingleHangupCall(provider: FakeProvider) {
   expect(provider.hangupCalls).toHaveLength(1);
@@ -61,12 +59,13 @@ describe("CallManager verification on restore", () => {
   beforeEach(() => {
     resetPluginStateStoreForTests();
     installStateRuntime();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    resetPluginStateStoreForTests();
+    // Finish hooks are LIFO: managers must persist terminal state before stores
+    // close, and clear fake timers before the clock is restored.
+    onTestFinished(() => {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+      resetPluginStateStoreForTests();
+    });
   });
 
   async function initializeManager(params?: {
@@ -91,7 +90,7 @@ describe("CallManager verification on restore", () => {
       fromNumber: "+15550000000",
       ...params?.configOverrides,
     });
-    const manager = new CallManager(config, storePath);
+    const manager = registerTestManagerCleanup(new CallManager(config, storePath));
     await manager.initialize(provider, "https://example.com/voice/webhook");
 
     return { call, manager, provider, storePath };
@@ -142,7 +141,7 @@ describe("CallManager verification on restore", () => {
       provider: "plivo",
       fromNumber: "+15550000000",
     });
-    const manager = new CallManager(config, storePath);
+    const manager = registerTestManagerCleanup(new CallManager(config, storePath));
     await manager.initialize(new FakeProvider(), "https://example.com/voice/webhook");
 
     expect(manager.getCallByProviderCallId("call-target")?.callId).toBe("call-active");
@@ -292,7 +291,7 @@ describe("CallManager verification on restore", () => {
       maxDurationSeconds: 300,
     });
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const manager = new CallManager(config, storePath);
+    const manager = registerTestManagerCleanup(new CallManager(config, storePath));
 
     await manager.initialize(provider, "https://example.com/voice/webhook");
 
@@ -389,13 +388,17 @@ describe("CallManager verification on restore", () => {
     },
   );
 
-  it("restores dedupe keys from terminal persisted calls so replayed webhooks stay ignored", async () => {
+  it("keeps terminal identity when a replay key is retained or evicted", async () => {
     const storePath = createTestStorePath();
+    const replayKeys = Array.from(
+      { length: MAX_CALL_REPLAY_KEYS + 2 },
+      (_, index) => `evt-terminal-${index}`,
+    );
     const persisted = makePersistedCall({
       state: "completed",
       endedAt: Date.now() - 5_000,
       endReason: "completed",
-      processedEventIds: ["evt-terminal-init"],
+      processedEventIds: replayKeys,
     });
     writeCallsToStore(storePath, [persisted]);
 
@@ -405,11 +408,11 @@ describe("CallManager verification on restore", () => {
       provider: "plivo",
       fromNumber: "+15550000000",
     });
-    const manager = new CallManager(config, storePath);
+    const manager = registerTestManagerCleanup(new CallManager(config, storePath));
     await manager.initialize(provider, "https://example.com/voice/webhook");
 
     manager.processEvent({
-      id: "evt-terminal-init",
+      id: replayKeys.at(-1) as string,
       type: "call.initiated",
       callId: String(persisted.providerCallId),
       providerCallId: String(persisted.providerCallId),
@@ -420,5 +423,21 @@ describe("CallManager verification on restore", () => {
     });
 
     expect(manager.getActiveCalls()).toHaveLength(0);
+
+    manager.processEvent({
+      id: replayKeys[0] as string,
+      type: "call.initiated",
+      callId: String(persisted.providerCallId),
+      providerCallId: String(persisted.providerCallId),
+      timestamp: Date.now(),
+      direction: "outbound",
+      from: "+15550000000",
+      to: "+15550000001",
+    });
+
+    expect(manager.getActiveCalls()).toHaveLength(0);
+    expect(new Set((await manager.getCallHistory()).map((call) => call.callId))).toEqual(
+      new Set([persisted.callId]),
+    );
   });
 });

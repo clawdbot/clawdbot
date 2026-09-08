@@ -3,7 +3,10 @@ import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
 } from "../../../config/sessions/legacy-sqlite-marker.js";
-import { listSessionEntries, loadSessionEntry } from "../../../config/sessions/session-accessor.js";
+import {
+  listSessionEntriesReadOnly,
+  loadSessionEntryReadOnly,
+} from "../../../config/sessions/session-accessor.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../../sessions/session-id-resolution.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
@@ -30,13 +33,13 @@ export function applyEmbeddedAttemptSessionIdentity(params: {
     if (marker) {
       const retainedSessionKey = sessionPromptState.sessionTarget?.sessionKey;
       const retainedEntry = retainedSessionKey
-        ? loadSessionEntry({
+        ? loadSessionEntryReadOnly({
             agentId: marker.agentId,
             sessionKey: retainedSessionKey,
             storePath: marker.storePath,
           })
         : undefined;
-      const markerMatches = listSessionEntries({
+      const markerMatches = listSessionEntriesReadOnly({
         agentId: marker.agentId,
         storePath: marker.storePath,
       }).filter(({ entry }) => entry.sessionId === marker.sessionId);
@@ -71,7 +74,7 @@ export function applyEmbeddedAttemptSessionIdentity(params: {
       sessionPromptState.sessionTarget &&
       resolveAgentIdFromSessionKey(sessionFileUsed) === sessionPromptState.sessionTarget.agentId
     ) {
-      const keyedEntry = loadSessionEntry({
+      const keyedEntry = loadSessionEntryReadOnly({
         agentId: sessionPromptState.sessionTarget.agentId,
         sessionKey: sessionFileUsed,
         storePath: sessionPromptState.sessionTarget.storePath,

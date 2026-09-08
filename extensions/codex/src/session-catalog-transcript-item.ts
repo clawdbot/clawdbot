@@ -1,5 +1,6 @@
 import type { SessionCatalogTranscriptItem } from "openclaw/plugin-sdk/session-catalog";
 import type { CodexThreadItem } from "./app-server/protocol.js";
+import { projectCodexUserItemText } from "./app-server/transcript-history-projection.js";
 
 const CODEX_MESSAGE_TYPES = new Map<string, SessionCatalogTranscriptItem["type"]>([
   ["userMessage", "userMessage"],
@@ -33,7 +34,10 @@ export function toGenericTranscriptItem(item: CodexThreadItem): SessionCatalogTr
   const changesText = Array.isArray(item.changes)
     ? item.changes.map((change) => `${change.kind}: ${change.path}`).join("\n") || undefined
     : undefined;
-  const text = item.text || resultText || changesText || fallback;
+  const text =
+    item.type === "userMessage"
+      ? projectCodexUserItemText(item)
+      : item.text || resultText || changesText || fallback;
   return {
     id: item.id,
     type,

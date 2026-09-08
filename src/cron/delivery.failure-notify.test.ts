@@ -1,5 +1,9 @@
-// Delivery failure notification tests cover alerts emitted after delivery failures.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// Strict cron announcement transport tests cover scheduler-authorized alert delivery.
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  OutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+} from "../infra/outbound/deliver-types.js";
 
 const mocks = vi.hoisted(() => ({
   resolveDeliveryTarget: vi.fn(),
@@ -7,64 +11,28 @@ const mocks = vi.hoisted(() => ({
   resolveAgentOutboundIdentity: vi.fn().mockReturnValue({ kind: "identity" }),
   buildOutboundSessionContext: vi.fn().mockReturnValue({ kind: "session" }),
   createOutboundSendDeps: vi.fn().mockReturnValue({ kind: "deps" }),
-  warn: vi.fn(),
 }));
 
 vi.mock("./isolated-agent/delivery-target.js", () => ({
   resolveDeliveryTarget: mocks.resolveDeliveryTarget,
 }));
-
 vi.mock("../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloads: mocks.deliverOutboundPayloads,
   deliverOutboundPayloadsInternal: mocks.deliverOutboundPayloads,
 }));
-
 vi.mock("../infra/outbound/identity.js", () => ({
   resolveAgentOutboundIdentity: mocks.resolveAgentOutboundIdentity,
 }));
-
 vi.mock("../infra/outbound/session-context.js", () => ({
   buildOutboundSessionContext: mocks.buildOutboundSessionContext,
 }));
-
 vi.mock("../cli/outbound-send-deps.js", () => ({
   createOutboundSendDeps: mocks.createOutboundSendDeps,
 }));
 
-vi.mock("../logging.js", () => ({
-  getChildLogger: vi.fn(() => ({
-    warn: mocks.warn,
-  })),
-}));
+const { sendCronAnnouncePayloadStrict } = await import("./delivery.js");
 
-const { sendFailureNotificationAnnounce } = await import("./delivery.js");
-
-type DeliveryRequest = {
-  abortSignal?: unknown;
-  accountId?: string;
-  bestEffort?: boolean;
-  cfg?: unknown;
-  channel?: string;
-  deps?: unknown;
-  identity?: unknown;
-  payloads?: unknown;
-  session?: unknown;
-  threadId?: number;
-  to?: string;
-};
-
-type WarnMeta = { channel?: string; err?: string; to?: string };
-
-function firstDeliveryRequest() {
-  const [deliveryRequest] = mocks.deliverOutboundPayloads.mock.calls[0] as [DeliveryRequest];
-  return deliveryRequest;
-}
-
-function firstWarnCall() {
-  return mocks.warn.mock.calls[0] as [WarnMeta, string];
-}
-
-describe("sendFailureNotificationAnnounce", () => {
+describe("sendCronAnnouncePayloadStrict", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.resolveDeliveryTarget.mockResolvedValue({
@@ -78,153 +46,234 @@ describe("sendFailureNotificationAnnounce", () => {
     mocks.deliverOutboundPayloads.mockResolvedValue([{ ok: true }]);
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("delivers failure alerts to the resolved explicit target with strict send settings", async () => {
-    const deps = {} as never;
-    const cfg = {} as never;
-
-    await sendFailureNotificationAnnounce(
-      deps,
-      cfg,
-      "main",
-      "job-1",
-      { channel: "telegram", to: "123", accountId: "bot-a" },
-      "Cron failed",
-    );
-
-    expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
-      cfg,
-      "main",
-      {
-        channel: "telegram",
-        to: "123",
-        accountId: "bot-a",
-      },
-      undefined,
-    );
-    expect(mocks.buildOutboundSessionContext).toHaveBeenCalledWith({
-      cfg,
+  it("delivers the payload through the resolved target with strict send settings", async () => {
+    await sendCronAnnouncePayloadStrict({
+      deps: {} as never,
+      cfg: {} as never,
       agentId: "main",
-      sessionKey: "cron:job-1:failure",
+      jobId: "job-1",
+      target: { channel: "telegram", to: "123", accountId: "bot-a" },
+      payload: { text: "Automation failed" },
+      abortSignal: new AbortController().signal,
     });
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    const deliveryRequest = firstDeliveryRequest();
-    expect(deliveryRequest.cfg).toBe(cfg);
-    expect(deliveryRequest.channel).toBe("telegram");
-    expect(deliveryRequest.to).toBe("123");
-    expect(deliveryRequest.accountId).toBe("bot-a");
-    expect(deliveryRequest.threadId).toBe(42);
-    expect(deliveryRequest.payloads).toEqual([{ text: "Cron failed" }]);
-    expect(deliveryRequest.session).toEqual({ kind: "session" });
-    expect(deliveryRequest.identity).toEqual({ kind: "identity" });
-    expect(deliveryRequest.bestEffort).toBe(false);
-    expect(deliveryRequest.deps).toEqual({ kind: "deps" });
-    expect(deliveryRequest.abortSignal).toBeInstanceOf(AbortSignal);
-  });
-
-  it("uses sessionKey for delivery-target resolution and outbound context", async () => {
-    await sendFailureNotificationAnnounce(
-      {} as never,
-      {} as never,
-      "main",
-      "job-1",
-      {
-        channel: "telegram",
-        sessionKey: "agent:main:telegram:direct:123:thread:99",
-      },
-      "Cron failed",
-    );
 
     expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
-      {} as never,
+      {},
       "main",
-      {
-        channel: "telegram",
-        to: undefined,
-        accountId: undefined,
-        sessionKey: "agent:main:telegram:direct:123:thread:99",
-      },
+      { channel: "telegram", to: "123", accountId: "bot-a" },
       undefined,
     );
     expect(mocks.buildOutboundSessionContext).toHaveBeenCalledWith({
       cfg: {},
       agentId: "main",
-      sessionKey: "agent:main:telegram:direct:123:thread:99",
+      sessionKey: "cron:job-1:failure",
     });
-  });
-
-  it("can suppress session-thread inheritance for explicit failure destinations", async () => {
-    await sendFailureNotificationAnnounce(
-      {} as never,
-      {} as never,
-      "main",
-      "job-1",
-      {
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
         channel: "telegram",
-        to: "-1001234567890",
-        sessionKey: "agent:main:telegram:group:-1001234567890:thread:42",
-        inheritSessionThread: false,
-      },
-      "Cron failed",
-    );
-
-    expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
-      {},
-      "main",
-      {
-        channel: "telegram",
-        to: "-1001234567890",
-        accountId: undefined,
-        sessionKey: "agent:main:telegram:group:-1001234567890:thread:42",
-      },
-      { inheritSessionThread: false },
+        to: "123",
+        accountId: "bot-a",
+        threadId: 42,
+        payloads: [{ text: "Automation failed" }],
+        bestEffort: false,
+      }),
     );
   });
 
-  it("does not send when target resolution fails", async () => {
-    mocks.resolveDeliveryTarget.mockResolvedValue({
-      ok: false,
-      error: new Error("target missing"),
+  it("does not begin delivery when target resolution settles after cancellation", async () => {
+    let resolvePendingTarget: (value: unknown) => void = () => {};
+    mocks.resolveDeliveryTarget.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolvePendingTarget = resolve;
+        }),
+    );
+    const abortController = new AbortController();
+    const delivery = sendCronAnnouncePayloadStrict({
+      deps: {} as never,
+      cfg: {} as never,
+      agentId: "main",
+      jobId: "job-1",
+      target: { channel: "telegram", to: "123" },
+      payload: { text: "Automation failed" },
+      abortSignal: abortController.signal,
     });
 
-    await sendFailureNotificationAnnounce(
-      {} as never,
-      {} as never,
-      "main",
-      "job-1",
-      { channel: "telegram", to: "123" },
-      "Cron failed",
-    );
+    abortController.abort(new Error("delivery deadline exceeded"));
+    resolvePendingTarget({
+      ok: true,
+      channel: "telegram",
+      to: "123",
+      accountId: "bot-a",
+      mode: "explicit",
+    });
 
+    await expect(delivery).rejects.toThrow("delivery deadline exceeded");
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
-    expect(mocks.warn).toHaveBeenCalledWith(
-      { error: "target missing" },
-      "cron: failed to resolve failure destination target",
-    );
   });
 
-  it("swallows outbound delivery errors after logging", async () => {
-    mocks.deliverOutboundPayloads.mockRejectedValue(new Error("send failed"));
+  it("reports the first recipient result before later delivery work settles", async () => {
+    let releaseDelivery = () => {};
+    const pendingDelivery = new Promise<void>((resolve) => {
+      releaseDelivery = resolve;
+    });
+    let reportFirstResult = () => {};
+    const firstResult = new Promise<void>((resolve) => {
+      reportFirstResult = resolve;
+    });
+    const delivered = { channel: "telegram" as const, messageId: "delivered-first" };
+    mocks.deliverOutboundPayloads.mockImplementationOnce(
+      async (params: { onDeliveryResult?: (result: typeof delivered) => Promise<void> | void }) => {
+        await params.onDeliveryResult?.(delivered);
+        reportFirstResult();
+        await pendingDelivery;
+        return [delivered];
+      },
+    );
+    const onDeliveryAttempt = vi.fn();
+    const delivery = sendCronAnnouncePayloadStrict({
+      deps: {} as never,
+      cfg: {} as never,
+      agentId: "main",
+      jobId: "job-1",
+      target: { channel: "telegram", to: "123" },
+      payload: { text: "Automation failed" },
+      abortSignal: new AbortController().signal,
+      onDeliveryAttempt,
+    });
+
+    await firstResult;
+    try {
+      expect(onDeliveryAttempt).toHaveBeenCalledExactlyOnceWith(true);
+    } finally {
+      releaseDelivery();
+      await delivery;
+    }
+    expect(onDeliveryAttempt).toHaveBeenCalledExactlyOnceWith(true);
+  });
+
+  it.each([
+    { reason: "no_visible_result", recipientReached: false },
+    { reason: "no_visible_payload", recipientReached: false },
+    { reason: "cancelled_by_message_sending_hook", recipientReached: false },
+    { reason: "cancelled_by_reply_payload_sending_hook", recipientReached: false },
+    { reason: "empty_after_message_sending_hook", recipientReached: false },
+    { reason: "empty_after_reply_payload_sending_hook", recipientReached: false },
+    { reason: "adapter_returned_no_identity", recipientReached: true },
+  ] as const)(
+    "preserves terminal $reason suppression and authoritative recipient reach",
+    async ({ reason, recipientReached }) => {
+      mocks.deliverOutboundPayloads.mockImplementationOnce(
+        async (params: { onPayloadDeliveryOutcome?: (outcome: unknown) => void }) => {
+          if (reason !== "no_visible_result") {
+            params.onPayloadDeliveryOutcome?.({ index: 0, status: "suppressed", reason });
+          }
+          return [];
+        },
+      );
+      const onDeliveryAttempt = vi.fn();
+
+      const result = await sendCronAnnouncePayloadStrict({
+        deps: {} as never,
+        cfg: {} as never,
+        agentId: "main",
+        jobId: "job-1",
+        target: { channel: "telegram", to: "123" },
+        payload: { text: "Scheduled result" },
+        abortSignal: new AbortController().signal,
+        onDeliveryAttempt,
+      });
+
+      expect(result).toMatchObject({ status: "suppressed", reason, results: [] });
+      expect(onDeliveryAttempt).toHaveBeenCalledExactlyOnceWith(recipientReached);
+      expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["raw-partial", "wrapped-partial", "failed-after-send"] as const)(
+    "preserves recipient-reached evidence across a %s failure",
+    async (failureKind) => {
+      const rejectedChunk = new PlatformMessageNotDispatchedError(
+        "second chunk was never dispatched",
+        {
+          cause: Object.assign(new Error("connect ECONNREFUSED"), {
+            code: "ECONNREFUSED",
+            syscall: "connect",
+          }),
+        },
+      );
+      const firstChunk = { channel: "telegram" as const, messageId: "already-delivered" };
+      const deliveryError =
+        failureKind === "wrapped-partial"
+          ? new OutboundDeliveryError("delivery failed after the first chunk", {
+              cause: rejectedChunk,
+              results: [firstChunk],
+              stage: "platform_send",
+            })
+          : rejectedChunk;
+      mocks.deliverOutboundPayloads.mockImplementationOnce(
+        async (params: { onPayloadDeliveryOutcome?: (outcome: unknown) => void }) => {
+          if (failureKind === "wrapped-partial") {
+            throw deliveryError;
+          }
+          params.onPayloadDeliveryOutcome?.({
+            index: 0,
+            status: "failed",
+            error: deliveryError,
+            sentBeforeError: true,
+            stage: "platform_send",
+          });
+          return failureKind === "raw-partial" ? [firstChunk] : [];
+        },
+      );
+      const onDeliveryAttempt = vi.fn();
+
+      await expect(
+        sendCronAnnouncePayloadStrict({
+          deps: {} as never,
+          cfg: {} as never,
+          agentId: "main",
+          jobId: "job-1",
+          target: { channel: "telegram", to: "123" },
+          payload: { text: "Automation failed" },
+          abortSignal: new AbortController().signal,
+          onDeliveryAttempt,
+        }),
+      ).rejects.toThrow(deliveryError.message);
+
+      expect(onDeliveryAttempt).toHaveBeenCalledExactlyOnceWith(true);
+      expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    {
+      name: "target resolution",
+      arrange: () =>
+        mocks.resolveDeliveryTarget.mockResolvedValueOnce({
+          ok: false,
+          error: new Error("target unavailable"),
+        }),
+      error: "target unavailable",
+    },
+    {
+      name: "channel delivery",
+      arrange: () => mocks.deliverOutboundPayloads.mockRejectedValueOnce(new Error("send failed")),
+      error: "send failed",
+    },
+  ])("rejects $name failures", async ({ arrange, error }) => {
+    arrange();
 
     await expect(
-      sendFailureNotificationAnnounce(
-        {} as never,
-        {} as never,
-        "main",
-        "job-1",
-        { channel: "telegram", to: "123" },
-        "Cron failed",
-      ),
-    ).resolves.toBeUndefined();
-
-    expect(mocks.warn).toHaveBeenCalledTimes(1);
-    const [warnMeta, warnMessage] = firstWarnCall();
-    expect(warnMeta.err).toBe("send failed");
-    expect(warnMeta.channel).toBe("telegram");
-    expect(warnMeta.to).toBe("123");
-    expect(warnMessage).toBe("cron: failure destination announce failed");
+      sendCronAnnouncePayloadStrict({
+        deps: {} as never,
+        cfg: {} as never,
+        agentId: "main",
+        jobId: "job-1",
+        target: { channel: "telegram", to: "123" },
+        payload: { text: "Automation failed" },
+        abortSignal: new AbortController().signal,
+      }),
+    ).rejects.toThrow(error);
   });
 });

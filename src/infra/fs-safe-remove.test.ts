@@ -69,7 +69,8 @@ describe("removePathWithinRoot", () => {
         relativePath: "nested",
         force: true,
       }),
-      /ENOTEMPTY|EEXIST|EPERM/,
+      // fs-safe 0.5.2 reports the documented typed remove codes instead of raw errnos.
+      "not-empty",
     );
     await expect(fs.readFile(childPath, "utf8")).resolves.toBe("hello");
   });
@@ -108,6 +109,35 @@ describe("removePathWithinRoot", () => {
       }),
       "not-found",
     );
+  });
+
+  it.each([undefined, false, true])("handles a missing parent with force=%s", async (force) => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    const parentPath = path.join(root, "missing-parent");
+    const removal = removePathWithinRoot({
+      rootDir: root,
+      relativePath: path.join("missing-parent", "target.txt"),
+      recursive: true,
+      force,
+    });
+
+    if (force === false) {
+      await expectRejectCode(removal, "not-found");
+    } else {
+      await expect(removal).resolves.toBeUndefined();
+    }
+    await expectRejectCode(fs.stat(parentPath), "ENOENT");
+  });
+
+  it.each([undefined, false, true])("rejects a missing root with force=%s", async (force) => {
+    const parent = await tempDirs.make("openclaw-fs-safe-root-");
+    const root = path.join(parent, "missing-root");
+
+    await expectRejectCode(
+      removePathWithinRoot({ rootDir: root, relativePath: "target.txt", force }),
+      "not-found",
+    );
+    await expectRejectCode(fs.stat(root), "ENOENT");
   });
 
   it("rejects symlink and junction targets", async () => {

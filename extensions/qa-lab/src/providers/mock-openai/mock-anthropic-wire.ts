@@ -1,4 +1,5 @@
 // QA Lab Anthropic Messages wire conversion and response events.
+import { createHash } from "node:crypto";
 import {
   type ResponsesInputItem,
   type StreamEvent,
@@ -6,13 +7,14 @@ import {
   type AnthropicMessage,
   type AnthropicMessagesRequest,
   type AnthropicStreamEvent,
+  type QaMockProviderFailure,
   countApproxTokens,
 } from "./mock-openai-contracts.js";
 
 // Anthropic Messages conversion preserves role and tool ordering while reusing
 // the shared Responses scenario dispatcher for provider parity.
 
-function normalizeAnthropicSystemToString(
+export function normalizeAnthropicSystemToString(
   system: AnthropicMessagesRequest["system"],
 ): string | undefined {
   if (typeof system === "string") {
@@ -102,15 +104,12 @@ export function convertAnthropicMessagesToResponsesInput(params: {
         continue;
       }
       if (block.type === "tool_result") {
-        const output = stringifyToolResultContent(block.content);
-        if (output.trim()) {
-          toolResultItems.push({
-            type: "function_call_output",
-            call_id: block.tool_use_id,
-            output,
-            ...(block.is_error === true ? { is_error: true } : {}),
-          });
-        }
+        toolResultItems.push({
+          type: "function_call_output",
+          call_id: block.tool_use_id,
+          output: stringifyToolResultContent(block.content),
+          ...(typeof block.is_error === "boolean" ? { is_error: block.is_error } : {}),
+        });
         continue;
       }
       if (block.type === "tool_use") {
@@ -148,17 +147,71 @@ export function convertAnthropicMessagesToResponsesInput(params: {
   return items;
 }
 
-export type ExtractedAssistantOutput = {
+type ExtractedAssistantOutput = {
   text: string;
   toolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }>;
 };
 
-export function extractFinalAssistantOutputFromEvents(
-  events: StreamEvent[],
-): ExtractedAssistantOutput {
+const NATIVE_ANTHROPIC_TOOL_USE_ID_RE = /^toolu_[A-Za-z0-9_]+$/;
+const ANTHROPIC_TOOL_USE_ID_MAX_LENGTH = 64;
+
+function isNativeAnthropicToolUseId(id: string): boolean {
+  return id.length <= ANTHROPIC_TOOL_USE_ID_MAX_LENGTH && NATIVE_ANTHROPIC_TOOL_USE_ID_RE.test(id);
+}
+
+export function adaptAnthropicToolCallIds(events: StreamEvent[]): StreamEvent[] {
+  const adaptedIds = new Map<string, string>();
+  const adaptId = (id: string) => {
+    if (isNativeAnthropicToolUseId(id)) {
+      return id;
+    }
+    const existing = adaptedIds.get(id);
+    if (existing) {
+      return existing;
+    }
+    const adapted = `toolu${createHash("sha256").update(id).digest("hex").slice(0, 35)}`;
+    adaptedIds.set(id, adapted);
+    return adapted;
+  };
+  const adaptItem = (item: Record<string, unknown>) => {
+    if (
+      (item.type === "function_call" || item.type === "custom_tool_call") &&
+      typeof item.call_id === "string"
+    ) {
+      return { ...item, call_id: adaptId(item.call_id) };
+    }
+    return item;
+  };
+
+  return events.map((event) => {
+    if (event.type === "response.output_item.added" || event.type === "response.output_item.done") {
+      return { ...event, item: adaptItem(event.item) };
+    }
+    if (event.type === "response.custom_tool_call_input.delta") {
+      return { ...event, call_id: adaptId(event.call_id) };
+    }
+    if (event.type === "response.completed") {
+      return {
+        ...event,
+        response: {
+          ...event.response,
+          output: event.response.output.map(adaptItem),
+        },
+      };
+    }
+    return event;
+  });
+}
+
+export function extractAssistantOutputFromEvents(events: StreamEvent[]): ExtractedAssistantOutput {
   const toolCalls: ExtractedAssistantOutput["toolCalls"] = [];
   let text = "";
   for (const event of events) {
+    // Failed streams may never finish an output item; retain text emitted before failure.
+    if (event.type === "response.output_text.delta") {
+      text += event.delta;
+      continue;
+    }
     if (event.type !== "response.output_item.done") {
       continue;
     }
@@ -203,8 +256,8 @@ export function extractFinalAssistantOutputFromEvents(
 export function buildAnthropicMessageResponse(params: {
   model: string;
   extracted: ExtractedAssistantOutput;
-}): Record<string, unknown> {
-  const content: Array<Record<string, unknown>> = [];
+}) {
+  const content: Array<Extract<AnthropicMessageContentBlock, { type: "text" | "tool_use" }>> = [];
   if (params.extracted.text) {
     content.push({ type: "text", text: params.extracted.text });
   }
@@ -236,6 +289,17 @@ export function buildAnthropicMessageResponse(params: {
     usage: {
       input_tokens: approxInputTokens,
       output_tokens: approxOutputTokens,
+    },
+  };
+}
+
+export function buildAnthropicFailureResponse(failure: QaMockProviderFailure) {
+  return {
+    type: "error",
+    error: {
+      type: failure.type,
+      ...(failure.code ? { code: failure.code } : {}),
+      message: failure.message,
     },
   };
 }
@@ -326,94 +390,59 @@ export function buildAnthropicThinkingErrorStreamEvents(params: {
   ];
 }
 
-export function buildAnthropicMessageStreamEvents(params: {
-  model: string;
-  extracted: ExtractedAssistantOutput;
-}): AnthropicStreamEvent[] {
-  const approxInputTokens = 64;
-  const approxOutputTokens = Math.max(
-    16,
-    countApproxTokens(params.extracted.text) + params.extracted.toolCalls.length * 16,
-  );
-  const messageId = `msg_mock_${Math.floor(Math.random() * 1_000_000).toString(16)}`;
+export function buildAnthropicMessageStreamEvents(
+  message: ReturnType<typeof buildAnthropicMessageResponse>,
+  failure?: QaMockProviderFailure,
+): AnthropicStreamEvent[] {
   const events: AnthropicStreamEvent[] = [
     {
       type: "message_start",
       message: {
-        id: messageId,
-        type: "message",
-        role: "assistant",
-        model: params.model || "claude-opus-4-8",
+        ...message,
         content: [],
         stop_reason: null,
-        stop_sequence: null,
         usage: {
-          input_tokens: approxInputTokens,
+          input_tokens: message.usage.input_tokens,
           output_tokens: 0,
         },
       },
     },
   ];
-  let index = 0;
-  if (params.extracted.text || params.extracted.toolCalls.length === 0) {
+  for (const [index, block] of message.content.entries()) {
     events.push({
       type: "content_block_start",
       index,
       content_block: {
-        type: "text",
-        text: "",
+        ...block,
+        ...(block.type === "text" ? { text: "" } : { input: {} }),
       },
     });
-    if (params.extracted.text) {
+    const delta = block.type === "text" ? block.text : JSON.stringify(block.input);
+    if (delta) {
       events.push({
         type: "content_block_delta",
         index,
-        delta: {
-          type: "text_delta",
-          text: params.extracted.text,
-        },
+        delta:
+          block.type === "text"
+            ? { type: "text_delta", text: delta }
+            : { type: "input_json_delta", partial_json: delta },
       });
     }
     events.push({
       type: "content_block_stop",
       index,
     });
-    index += 1;
   }
-  for (const call of params.extracted.toolCalls) {
-    events.push({
-      type: "content_block_start",
-      index,
-      content_block: {
-        type: "tool_use",
-        id: call.id,
-        name: call.name,
-        input: {},
-      },
-    });
-    events.push({
-      type: "content_block_delta",
-      index,
-      delta: {
-        type: "input_json_delta",
-        partial_json: JSON.stringify(call.input ?? {}),
-      },
-    });
-    events.push({
-      type: "content_block_stop",
-      index,
-    });
-    index += 1;
+  if (failure) {
+    events.push(buildAnthropicFailureResponse(failure));
+    return events;
   }
   events.push({
     type: "message_delta",
     delta: {
-      stop_reason: params.extracted.toolCalls.length > 0 ? "tool_use" : "end_turn",
+      stop_reason: message.stop_reason,
     },
-    usage: {
-      input_tokens: approxInputTokens,
-      output_tokens: approxOutputTokens,
-    },
+    usage: message.usage,
   });
   events.push({
     type: "message_stop",

@@ -1,6 +1,7 @@
 // Bounded session-list ordering shared by synchronous and asynchronous projections.
 
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
+import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 
 const SESSIONS_LIST_TOP_N_LIMIT = 200;
@@ -13,8 +14,8 @@ function compareSessionEntryPairs(
   sortBy: SessionsListParams["sortBy"] = "updatedAt",
 ): number {
   if (sortBy !== "lastInteractionAt") {
-    const aPinnedAt = a[1]?.pinnedAt ?? 0;
-    const bPinnedAt = b[1]?.pinnedAt ?? 0;
+    const aPinnedAt = isPinnableSessionEntry(a[0], a[1]) ? (a[1]?.pinnedAt ?? 0) : 0;
+    const bPinnedAt = isPinnableSessionEntry(b[0], b[1]) ? (b[1]?.pinnedAt ?? 0) : 0;
     if (aPinnedAt !== bPinnedAt) {
       return bPinnedAt - aPinnedAt;
     }
@@ -36,9 +37,17 @@ function selectNewestLimitedEntries(
 ): SessionEntryPair[] {
   const selected: SessionEntryPair[] = [];
   for (const entry of entries) {
-    const insertAt = selected.findIndex(
-      (candidate) => compareSessionEntryPairs(entry, candidate, sortBy) < 0,
-    );
+    const first = selected[0];
+    const beforeFirst = first && compareSessionEntryPairs(entry, first, sortBy) < 0;
+    const worst = selected[limit - 1];
+    if (!beforeFirst && worst && compareSessionEntryPairs(entry, worst, sortBy) >= 0) {
+      continue;
+    }
+    const insertAt = beforeFirst
+      ? 0
+      : selected.findIndex(
+          (candidate, index) => index > 0 && compareSessionEntryPairs(entry, candidate, sortBy) < 0,
+        );
     if (insertAt >= 0) {
       selected.splice(insertAt, 0, entry);
       if (selected.length > limit) {

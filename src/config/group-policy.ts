@@ -1,29 +1,27 @@
-// Normalizes group-policy config for channel and runtime decisions.
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelId } from "../channels/plugins/channel-id.types.js";
-import { createDedupeCache } from "../infra/dedupe.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
-import { normalizeMessageChannel } from "../utils/message-channel-core.js";
-import type { OpenClawConfig } from "./types.openclaw.js";
 import {
-  parseToolsBySenderTypedKey,
-  type GroupToolPolicyBySenderConfig,
-  type GroupToolPolicyConfig,
-  type ToolsBySenderKeyType,
-} from "./types.tools.js";
+  resolveChannelGroups,
+  type ChannelGroupConfig,
+  type ChannelGroups,
+} from "./channel-groups.js";
+import {
+  resolveScopeRequireMention,
+  resolveScopeToolsPolicy,
+  type ScopeNode,
+  type ScopePath,
+  type ScopeTree,
+} from "./group-scope-tree.js";
+import type { GroupToolPolicySender } from "./tools-by-sender.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
+import type { GroupToolPolicyConfig } from "./types.tools.js";
+
+export { resolveChannelGroups } from "./channel-groups.js";
+export { resolveToolsBySender } from "./tools-by-sender.js";
 
 type GroupPolicyChannel = ChannelId;
-
-type ChannelGroupConfig = {
-  requireMention?: boolean;
-  ingest?: boolean;
-  tools?: GroupToolPolicyConfig;
-  toolsBySender?: GroupToolPolicyBySenderConfig;
-};
 
 export type ChannelGroupPolicy = {
   allowlistEnabled: boolean;
@@ -31,8 +29,6 @@ export type ChannelGroupPolicy = {
   groupConfig?: ChannelGroupConfig;
   defaultConfig?: ChannelGroupConfig;
 };
-
-type ChannelGroups = Record<string, ChannelGroupConfig>;
 
 function resolveChannelGroupConfig(
   groups: ChannelGroups | undefined,
@@ -59,311 +55,35 @@ function resolveChannelGroupConfig(
   return groups[matchedKey];
 }
 
-type GroupToolPolicySender = {
-  /** Skip sender-specific overlays for trusted non-ingress executions. */
-  senderPolicyMode?: "always" | "never";
-  messageProvider?: string | null;
-  senderId?: string | null;
-  senderName?: string | null;
-  senderUsername?: string | null;
-  senderE164?: string | null;
-};
-
-type SenderKeyType = ToolsBySenderKeyType;
-type CompiledSenderPolicy = {
-  buckets: SenderPolicyBuckets;
-  wildcard?: GroupToolPolicyConfig;
-};
-
-const MAX_WARNED_LEGACY_TOOLS_BY_SENDER_KEYS = 4096;
-// Warning state spans fresh config snapshots; bounding it means evicted legacy keys can re-warn.
-const warnedLegacyToolsBySenderKeys = createDedupeCache({
-  ttlMs: 0,
-  maxSize: MAX_WARNED_LEGACY_TOOLS_BY_SENDER_KEYS,
-});
-const compiledToolsBySenderCache = new WeakMap<
-  GroupToolPolicyBySenderConfig,
-  CompiledSenderPolicy
->();
-
-type ParsedSenderPolicyKey =
-  | { kind: "wildcard" }
-  | { kind: "typed"; type: SenderKeyType; key: string };
-
-type SenderPolicyBuckets = Record<ToolsBySenderKeyType, Map<string, GroupToolPolicyConfig>>;
-
-function normalizeSenderKey(
-  value: string,
-  options: {
-    stripLeadingAt?: boolean;
-  } = {},
-): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  const withoutAt = options.stripLeadingAt && trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
-  return normalizeLowercaseStringOrEmpty(withoutAt);
-}
-
-function normalizeTypedSenderKey(value: string, type: SenderKeyType): string {
-  if (type === "channel") {
-    return normalizeChannelSenderKey(value);
-  }
-  return normalizeSenderKey(value, {
-    stripLeadingAt: type === "username",
-  });
-}
-
-function normalizeSenderPolicyChannel(value: string | null | undefined): string {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return "";
-  }
-  return normalizeMessageChannel(trimmed) ?? normalizeSenderKey(trimmed);
-}
-
-function normalizeChannelSenderKey(value: string): string {
-  const trimmed = value.trim();
-  const separatorIndex = trimmed.indexOf(":");
-  if (separatorIndex <= 0 || separatorIndex === trimmed.length - 1) {
-    return "";
-  }
-  const channel = normalizeSenderPolicyChannel(trimmed.slice(0, separatorIndex));
-  const senderId = normalizeTypedSenderKey(trimmed.slice(separatorIndex + 1), "id");
-  if (!channel || !senderId) {
-    return "";
-  }
-  return `${channel}:${senderId}`;
-}
-
-function normalizeLegacySenderKey(value: string): string {
-  return normalizeSenderKey(value, {
-    stripLeadingAt: true,
-  });
-}
-
-function warnLegacyToolsBySenderKey(rawKey: string) {
-  const trimmed = rawKey.trim();
-  if (!trimmed || warnedLegacyToolsBySenderKeys.check(trimmed)) {
-    return;
-  }
-  process.emitWarning(
-    `toolsBySender key "${trimmed}" is deprecated. Use explicit prefixes (channel:, id:, e164:, username:, name:). Legacy unprefixed keys are matched as id only.`,
-    {
-      type: "DeprecationWarning",
-      code: "OPENCLAW_TOOLS_BY_SENDER_UNTYPED_KEY",
-    },
-  );
-}
-
-function parseSenderPolicyKey(rawKey: string): ParsedSenderPolicyKey | undefined {
-  const trimmed = rawKey.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  if (trimmed === "*") {
-    return { kind: "wildcard" };
-  }
-  const typed = parseToolsBySenderTypedKey(trimmed);
-  if (typed) {
-    const key = normalizeTypedSenderKey(typed.value, typed.type);
-    if (!key) {
-      return undefined;
-    }
-    return {
-      kind: "typed",
-      type: typed.type,
-      key,
-    };
-  }
-
-  // Backward-compatible fallback: untyped keys now map to immutable sender IDs only.
-  warnLegacyToolsBySenderKey(trimmed);
-  const key = normalizeLegacySenderKey(trimmed);
-  if (!key) {
-    return undefined;
-  }
-  return {
-    kind: "typed",
-    type: "id",
-    key,
-  };
-}
-
-function createSenderPolicyBuckets(): SenderPolicyBuckets {
-  return {
-    channel: new Map<string, GroupToolPolicyConfig>(),
-    id: new Map<string, GroupToolPolicyConfig>(),
-    e164: new Map<string, GroupToolPolicyConfig>(),
-    username: new Map<string, GroupToolPolicyConfig>(),
-    name: new Map<string, GroupToolPolicyConfig>(),
-  };
-}
-
-function compileToolsBySenderPolicy(
-  toolsBySender: GroupToolPolicyBySenderConfig,
-): CompiledSenderPolicy | undefined {
-  const entries = Object.entries(toolsBySender);
-  if (entries.length === 0) {
-    return undefined;
-  }
-
-  const buckets = createSenderPolicyBuckets();
-  let wildcard: GroupToolPolicyConfig | undefined;
-  for (const [rawKey, policy] of entries) {
-    if (!policy) {
-      continue;
-    }
-    const parsed = parseSenderPolicyKey(rawKey);
-    if (!parsed) {
-      continue;
-    }
-    if (parsed.kind === "wildcard") {
-      wildcard = policy;
-      continue;
-    }
-    const bucket = buckets[parsed.type];
-    if (!bucket.has(parsed.key)) {
-      bucket.set(parsed.key, policy);
-    }
-  }
-
-  return { buckets, wildcard };
-}
-
-function resolveCompiledToolsBySenderPolicy(
-  toolsBySender: GroupToolPolicyBySenderConfig,
-): CompiledSenderPolicy | undefined {
-  const cached = compiledToolsBySenderCache.get(toolsBySender);
-  if (cached) {
-    return cached;
-  }
-  const compiled = compileToolsBySenderPolicy(toolsBySender);
-  if (!compiled) {
-    return undefined;
-  }
-  // Config is loaded once and treated as immutable; cache compiled sender policy by object identity.
-  compiledToolsBySenderCache.set(toolsBySender, compiled);
-  return compiled;
-}
-
-function normalizeCandidate(value: string | null | undefined, type: SenderKeyType): string {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return "";
-  }
-  return normalizeTypedSenderKey(trimmed, type);
-}
-
-function normalizeSenderIdCandidates(value: string | null | undefined): string[] {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return [];
-  }
-  const typed = normalizeTypedSenderKey(trimmed, "id");
-  const legacy = normalizeLegacySenderKey(trimmed);
-  if (!typed) {
-    return legacy ? [legacy] : [];
-  }
-  if (!legacy || legacy === typed) {
-    return [typed];
-  }
-  return [typed, legacy];
-}
-
-function matchToolsBySenderPolicy(
-  compiled: CompiledSenderPolicy,
-  params: GroupToolPolicySender,
-): GroupToolPolicyConfig | undefined {
-  const senderIdCandidates = normalizeSenderIdCandidates(params.senderId);
-  const channel = normalizeSenderPolicyChannel(params.messageProvider);
-  if (channel) {
-    for (const senderIdCandidate of senderIdCandidates) {
-      const match = compiled.buckets.channel.get(`${channel}:${senderIdCandidate}`);
-      if (match) {
-        return match;
-      }
-    }
-  }
-  for (const senderIdCandidate of senderIdCandidates) {
-    const match = compiled.buckets.id.get(senderIdCandidate);
-    if (match) {
-      return match;
-    }
-  }
-  const senderE164 = normalizeCandidate(params.senderE164, "e164");
-  if (senderE164) {
-    const match = compiled.buckets.e164.get(senderE164);
-    if (match) {
-      return match;
-    }
-  }
-  const senderUsername = normalizeCandidate(params.senderUsername, "username");
-  if (senderUsername) {
-    const match = compiled.buckets.username.get(senderUsername);
-    if (match) {
-      return match;
-    }
-  }
-  const senderName = normalizeCandidate(params.senderName, "name");
-  if (senderName) {
-    const match = compiled.buckets.name.get(senderName);
-    if (match) {
-      return match;
-    }
-  }
-  return compiled.wildcard;
-}
-
-export function resolveToolsBySender(
-  params: {
-    toolsBySender?: GroupToolPolicyBySenderConfig;
-  } & GroupToolPolicySender,
-): GroupToolPolicyConfig | undefined {
-  const toolsBySender = params.toolsBySender;
-  if (!toolsBySender) {
-    return undefined;
-  }
-  const compiled = resolveCompiledToolsBySenderPolicy(toolsBySender);
-  if (!compiled) {
-    return undefined;
-  }
-  return matchToolsBySenderPolicy(compiled, params);
-}
-
-export function resolveChannelGroups(
-  cfg: OpenClawConfig,
-  channel: GroupPolicyChannel,
-  accountId?: string | null,
-): ChannelGroups | undefined {
-  const normalizedAccountId = normalizeAccountId(accountId);
-  const channelConfig = cfg.channels?.[channel] as
-    | {
-        accounts?: Record<string, { groups?: ChannelGroups }>;
-        groups?: ChannelGroups;
-      }
+/** Locate the authored map selected by the channel owner without changing its inheritance rules. */
+export function resolveChannelGroupsConfigPath(params: {
+  cfg: OpenClawConfig;
+  channel: GroupPolicyChannel;
+  accountId?: string | null;
+  groups: Readonly<Record<string, unknown>> | undefined;
+}): string {
+  const rootPath = `channels.${params.channel}.groups`;
+  // SAFETY: Validated channel groups retain the original map reference selected by the caller.
+  const channelConfig = params.cfg.channels?.[params.channel] as
+    | { accounts?: Record<string, { groups?: Readonly<Record<string, unknown>> }> }
     | undefined;
-  if (!channelConfig) {
-    return undefined;
+  const accounts = channelConfig?.accounts;
+  if (!accounts) {
+    return rootPath;
   }
-  const accountGroups = resolveAccountEntry(channelConfig.accounts, normalizedAccountId)?.groups;
-  // In a single-account setup, treat an explicit empty account groups map
-  // (`accounts.<id>.groups: {}`) the same as undefined for fallback: the empty
-  // literal is almost always a config-migration artifact, not an intentional
-  // "block all groups" declaration — the explicit way to block is
-  // `groupPolicy: "disabled"` (or omitting the group from a populated
-  // allowlist). Without this, an empty `{}` paired with the default
-  // `groupPolicy: "allowlist"` silently denies every group update even though
-  // root `channels.<channel>.groups` is populated. Multi-account contexts keep
-  // the existing semantics so per-account explicit-empty groups still scope
-  // disable a single account without affecting siblings.
-  const isMultiAccount = Object.keys(channelConfig.accounts ?? {}).length > 1;
-  if (!isMultiAccount) {
-    const hasAccountGroups = accountGroups && Object.keys(accountGroups).length > 0;
-    return hasAccountGroups ? accountGroups : channelConfig.groups;
+  const accountId = normalizeAccountId(params.accountId);
+  const account = resolveAccountEntry(accounts, accountId);
+  // Account merging preserves map references. Use the owner's selected map so
+  // empty-map inheritance and shallow replacement both retain their exact scope.
+  if (!account || (params.groups !== undefined && params.groups !== account.groups)) {
+    return rootPath;
   }
-  return accountGroups ?? channelConfig.groups;
+  const accountKey = Object.hasOwn(accounts, accountId)
+    ? accountId
+    : Object.keys(accounts).find((key) => accounts[key] === account);
+  return accountKey
+    ? `channels.${params.channel}.accounts[${JSON.stringify(accountKey)}].groups`
+    : rootPath;
 }
 
 type ChannelGroupPolicyMode = "open" | "allowlist" | "disabled";
@@ -426,6 +146,26 @@ export function resolveChannelGroupPolicy(params: {
   };
 }
 
+function buildSelectedGroupScope(
+  groupConfig: ChannelGroupConfig | undefined,
+  defaultConfig: ChannelGroupConfig | undefined,
+): { tree: ScopeTree; path: ScopePath } {
+  // Flat lookup selects one whole entry, including an explicitly requested "*".
+  // Preserve its boolean/truthy fallback rules without changing native scope callers.
+  const project = (node: ChannelGroupConfig): ScopeNode => ({
+    requireMention: typeof node.requireMention === "boolean" ? node.requireMention : undefined,
+    tools: node.tools || undefined,
+    toolsBySender: node.toolsBySender,
+  });
+  return {
+    tree: {
+      scopes: groupConfig ? { selected: project(groupConfig) } : {},
+      defaults: defaultConfig ? project(defaultConfig) : undefined,
+    },
+    path: groupConfig ? ["selected"] : [],
+  };
+}
+
 export function resolveChannelGroupRequireMention(params: {
   cfg: OpenClawConfig;
   channel: GroupPolicyChannel;
@@ -436,28 +176,13 @@ export function resolveChannelGroupRequireMention(params: {
   configuredGroupDefaultsToNoMention?: boolean;
   overrideOrder?: "before-config" | "after-config";
 }): boolean {
-  const { requireMentionOverride, overrideOrder = "after-config" } = params;
   const { groupConfig, defaultConfig } = resolveChannelGroupPolicy(params);
-  const configMention =
-    typeof groupConfig?.requireMention === "boolean"
-      ? groupConfig.requireMention
-      : typeof defaultConfig?.requireMention === "boolean"
-        ? defaultConfig.requireMention
-        : undefined;
-
-  if (overrideOrder === "before-config" && typeof requireMentionOverride === "boolean") {
-    return requireMentionOverride;
-  }
-  if (typeof configMention === "boolean") {
-    return configMention;
-  }
-  if (overrideOrder !== "before-config" && typeof requireMentionOverride === "boolean") {
-    return requireMentionOverride;
-  }
-  if (params.configuredGroupDefaultsToNoMention && groupConfig) {
-    return false;
-  }
-  return true;
+  return resolveScopeRequireMention({
+    ...buildSelectedGroupScope(groupConfig, defaultConfig),
+    requireMentionOverride: params.requireMentionOverride,
+    overrideOrder: params.overrideOrder,
+    configuredScopeDefaultsToNoMention: params.configuredGroupDefaultsToNoMention,
+  });
 }
 
 export function resolveChannelGroupToolsPolicy(
@@ -487,40 +212,9 @@ export function resolveChannelGroupToolsPolicy(
       break;
     }
   }
-  const defaultConfig = groups?.["*"];
-  const groupSenderPolicy =
-    params.senderPolicyMode === "never"
-      ? undefined
-      : resolveToolsBySender({
-          toolsBySender: groupConfig?.toolsBySender,
-          messageProvider: params.messageProvider ?? params.channel,
-          senderId: params.senderId,
-          senderName: params.senderName,
-          senderUsername: params.senderUsername,
-          senderE164: params.senderE164,
-        });
-  if (groupSenderPolicy) {
-    return groupSenderPolicy;
-  }
-  if (groupConfig?.tools) {
-    return groupConfig.tools;
-  }
-  const defaultSenderPolicy =
-    params.senderPolicyMode === "never"
-      ? undefined
-      : resolveToolsBySender({
-          toolsBySender: defaultConfig?.toolsBySender,
-          messageProvider: params.messageProvider ?? params.channel,
-          senderId: params.senderId,
-          senderName: params.senderName,
-          senderUsername: params.senderUsername,
-          senderE164: params.senderE164,
-        });
-  if (defaultSenderPolicy) {
-    return defaultSenderPolicy;
-  }
-  if (defaultConfig?.tools) {
-    return defaultConfig.tools;
-  }
-  return undefined;
+  return resolveScopeToolsPolicy({
+    ...params,
+    ...buildSelectedGroupScope(groupConfig, groups?.["*"]),
+    messageProvider: params.messageProvider ?? params.channel,
+  });
 }

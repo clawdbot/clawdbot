@@ -6,20 +6,6 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct ExecApprovalsPromptServerTests {
-    private func makeShortSocketRoot() throws -> URL {
-        let root = URL(fileURLWithPath: "/tmp", isDirectory: true)
-            .appendingPathComponent("ocps-\(UUID().uuidString.prefix(12))", isDirectory: true)
-        try FileManager().createDirectory(
-            at: root,
-            withIntermediateDirectories: false,
-            attributes: [.posixPermissions: 0o700])
-        let socketPath = root.appendingPathComponent("exec-approvals.sock").path
-        guard socketPath.utf8.count < MemoryLayout.size(ofValue: sockaddr_un().sun_path) else {
-            throw POSIXError(.ENAMETOOLONG)
-        }
-        return root
-    }
-
     private final class SequenceCredentialsProbe: @unchecked Sendable {
         private let lock = NSLock()
         private let socketPath: String
@@ -93,7 +79,7 @@ struct ExecApprovalsPromptServerTests {
 
     @Test
     func `prompt server reloads credentials after an unavailable approvals read`() async throws {
-        let root = try self.makeShortSocketRoot()
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         let socketPath = root.appendingPathComponent("exec-approvals.sock").path
         defer { try? FileManager().removeItem(at: root) }
 
@@ -104,7 +90,6 @@ struct ExecApprovalsPromptServerTests {
             retryDelay: .milliseconds(10),
             resolveSocketCredentials: { probe.resolve() },
             onPrompt: { _ in .allowOnce })
-        defer { server.stop() }
 
         server.start()
         #expect(!FileManager().fileExists(atPath: socketPath))
@@ -114,11 +99,12 @@ struct ExecApprovalsPromptServerTests {
         #expect(snapshot.count >= 2)
         #expect(!snapshot.resolvedOnMain)
         #expect(decision == .allowOnce)
+        await server.stop()?.value
     }
 
     @Test
     func `stopping prompt server prevents a blocked resolver from installing a socket`() async throws {
-        let root = try self.makeShortSocketRoot()
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         let socketPath = root.appendingPathComponent("exec-approvals.sock").path
         defer { try? FileManager().removeItem(at: root) }
 
@@ -140,31 +126,38 @@ struct ExecApprovalsPromptServerTests {
 
         #expect(probe.snapshot().completed)
         #expect(!FileManager().fileExists(atPath: socketPath))
-        let decision = await ExecApprovalsSocketClient.requestDecision(
+        let decision = await ExecApprovalsSocketTestSupport.requestDecision(
             socketPath: socketPath,
             token: "current-token",
-            request: ExecApprovalPromptRequest(command: "echo stopped"),
             timeoutMs: 100)
         #expect(decision == nil)
     }
 
     @Test
     func `pre-cancelled socket startup does not listen`() async throws {
-        let root = try self.makeShortSocketRoot()
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         let socketPath = root.appendingPathComponent("exec-approvals.sock").path
         defer { try? FileManager().removeItem(at: root) }
 
-        let result = await ExecApprovalsPromptServer._testPrecancelledSocketStart(
-            socketPath: socketPath)
+        let sentinel = ExecApprovalsSocketTestSupport.makeServer(socketPath: socketPath)
+        #expect(await sentinel.start())
+        let server = ExecApprovalsSocketTestSupport.makeServer(socketPath: socketPath)
+        let ready = await Task.detached {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await server.start()
+        }.value
+        await server.stop().value
 
-        #expect(!result.ready)
-        #expect(result.preservedExistingListener)
+        #expect(!ready)
+        #expect(sentinel.isListening)
+        #expect((try? ExecApprovalsSocketPathGuard.pathKind(at: socketPath)) == .socket)
+        await sentinel.stop().value
         #expect(!FileManager().fileExists(atPath: socketPath))
     }
 
     @Test
     func `prompt server retries after a transient socket startup failure`() async throws {
-        let root = try self.makeShortSocketRoot()
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         let socketURL = root.appendingPathComponent("exec-approvals.sock")
         _ = FileManager().createFile(atPath: socketURL.path, contents: Data("occupied".utf8))
         defer { try? FileManager().removeItem(at: root) }
@@ -176,23 +169,28 @@ struct ExecApprovalsPromptServerTests {
             retryDelay: .milliseconds(10),
             resolveSocketCredentials: { probe.resolve() },
             onPrompt: { _ in .allowOnce })
-        defer { server.stop() }
 
         server.start()
         let observedRetry = await self.waitUntil { probe.snapshot().count >= 2 }
         #expect(observedRetry)
-        try FileManager().removeItem(at: socketURL)
+        do {
+            try FileManager().removeItem(at: socketURL)
+        } catch {
+            await server.stop()?.value
+            throw error
+        }
 
         let decision = await self.waitForDecision(
             socketPath: socketURL.path,
             token: "current-token")
         #expect(probe.snapshot().count >= 2)
         #expect(decision == .allowOnce)
+        await server.stop()?.value
     }
 
     @Test
     func `prompt server restarts after its active listener stops unexpectedly`() async throws {
-        let root = try self.makeShortSocketRoot()
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         let socketPath = root.appendingPathComponent("exec-approvals.sock").path
         defer { try? FileManager().removeItem(at: root) }
 
@@ -203,7 +201,6 @@ struct ExecApprovalsPromptServerTests {
             retryDelay: .milliseconds(10),
             resolveSocketCredentials: { probe.resolve() },
             onPrompt: { _ in .allowOnce })
-        defer { server.stop() }
 
         server.start()
         let initialDecision = await self.waitForDecision(
@@ -219,15 +216,15 @@ struct ExecApprovalsPromptServerTests {
             token: "current-token")
         #expect(probe.snapshot().count > initialResolveCount)
         #expect(recoveredDecision == .allowOnce)
+        await server.stop()?.value
     }
 
     private func waitForDecision(socketPath: String, token: String) async -> ExecApprovalDecision? {
         for _ in 0..<100 {
             try? await Task.sleep(for: .milliseconds(10))
-            if let decision = await ExecApprovalsSocketClient.requestDecision(
+            if let decision = await ExecApprovalsSocketTestSupport.requestDecision(
                 socketPath: socketPath,
                 token: token,
-                request: ExecApprovalPromptRequest(command: "echo ready"),
                 timeoutMs: 100)
             {
                 return decision

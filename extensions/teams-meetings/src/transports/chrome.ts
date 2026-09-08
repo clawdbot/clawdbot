@@ -8,7 +8,7 @@ const chromeTransport = MeetingPlatformAdapter.createPluginChromeTransport({
   runtime: MeetingPlatformAdapter.createChromeRuntimeBindings(),
 });
 
-export const assertBlackHole2chAvailable = chromeTransport.assertAudioDeviceAvailable;
+export const assertTeamsMeetingsAudioAvailable = chromeTransport.assertAudioDeviceAvailable;
 export const launchTeamsMeetingInChrome = chromeTransport.launchInChrome;
 export const launchTeamsMeetingOnNode = chromeTransport.launchOnNode;
 export const leaveTeamsMeetingInBrowser = chromeTransport.leaveInBrowser;

@@ -26,12 +26,9 @@ export {
 export {
   createMatrixThreadBindingManager,
   getMatrixThreadBindingManager,
-  resetMatrixThreadBindingsForTests,
 } from "./src/matrix/thread-bindings.js";
 export {
   setMatrixThreadBindingIdleTimeoutBySessionKey,
   setMatrixThreadBindingMaxAgeBySessionKey,
 } from "./src/matrix/thread-bindings-shared.js";
 export { matrixOnboardingAdapter as matrixSetupWizard } from "./src/onboarding.js";
-
-export const matrixSessionBindingAdapterChannels = ["matrix"] as const;

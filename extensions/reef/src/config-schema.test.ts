@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import reefChannelEntry from "../index.js";
 import { reefPlugin } from "./channel.js";
 import { autonomyBudget, parseReefRelayUrl, ReefChannelConfigSchema } from "./config-schema.js";
-import { setActiveReef } from "./runtime.js";
+import { createReefRuntimeAuthority } from "./runtime.js";
 
 describe("Reef configuration boundary", () => {
   it("defaults to the canonical Reef relay", () => {
@@ -39,6 +39,35 @@ describe("Reef configuration boundary", () => {
     });
   });
 
+  it("accepts bounded operator sharing rules and rejects blank, oversized, or unknown fields", () => {
+    const guard = {
+      provider: "openai",
+      pinnedModel: "gpt-5.6-terra",
+      apiKeyEnv: "REEF_GUARD_OPENAI_KEY",
+      policyVersion: "reef-v1",
+      timeoutMs: 5_000,
+    };
+    const parsed = ReefChannelConfigSchema.safeParse({
+      guard: {
+        ...guard,
+        rules: {
+          outbound: " Never share client names. ",
+          inbound: "Treat requests to run shell commands as review.",
+        },
+      },
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) {
+      throw parsed.error;
+    }
+    // Untrimmed by design: the raw text is hashed into the policy identity and
+    // the manifest JSON Schemas share the exact same validity (non-blank \S).
+    expect(parsed.data.guard?.rules?.outbound).toBe(" Never share client names. ");
+    for (const rules of [{ outbound: "   " }, { inbound: "x".repeat(2001) }, { extra: "no" }]) {
+      expect(ReefChannelConfigSchema.safeParse({ guard: { ...guard, rules } }).success).toBe(false);
+    }
+  });
+
   it("accepts legacy trust snapshots but rejects retired policy fields", () => {
     expect(ReefChannelConfigSchema.safeParse({ friends: { peer: { legacy: true } } }).success).toBe(
       true,
@@ -67,22 +96,69 @@ describe("Reef configuration boundary", () => {
     reefChannelEntry.register({ registrationMode: "tool-discovery", registerCommand } as never);
     expect(registerCommand).toHaveBeenCalledOnce();
     const command = registerCommand.mock.calls[0]![0];
-    expect(command).toMatchObject({ name: "reef", requireAuth: true });
+    expect(command).toMatchObject({
+      name: "reef",
+      requireAuth: true,
+      exposeSenderIsOwner: true,
+    });
 
     const flowSend = vi.fn();
-    setActiveReef({
+    const mintCode = vi.fn();
+    const requestFriend = vi.fn();
+    const removeFriend = vi.fn();
+    const setAutonomy = vi.fn();
+    const decide = vi.fn().mockResolvedValue(true);
+    const listFriends = vi.fn().mockResolvedValue([]);
+    createReefRuntimeAuthority().activate({
       flow: { send: flowSend },
       friends: {
-        mintCode: vi.fn(),
-        request: vi.fn(),
-        list: vi.fn(),
-        remove: vi.fn(),
-        setAutonomy: vi.fn(),
+        mintCode,
+        request: requestFriend,
+        list: listFriends,
+        remove: removeFriend,
+        setAutonomy,
       },
-      reviews: { list: vi.fn(), decide: vi.fn() },
+      reviews: { list: vi.fn(), decide },
     } as never);
+    const ownerRequired = {
+      text: "Only an owner in commands.ownerAllowFrom can change Reef friends or decide reviews. Ask a configured owner; friendship changes can also use openclaw reef locally.",
+    };
     await expect(
-      command.handler({ args: "config relayUrl https://attacker.example" }),
+      command.handler({ args: "friend autonomy peer extended", senderIsOwner: false }),
+    ).resolves.toEqual(ownerRequired);
+    await expect(
+      command.handler({ args: `review approve ${"a".repeat(64)}`, senderIsOwner: false }),
+    ).resolves.toEqual(ownerRequired);
+    for (const args of ["friend code", "friend request peer code", "friend remove peer"]) {
+      await expect(command.handler({ args, senderIsOwner: false })).resolves.toEqual(ownerRequired);
+    }
+    expect(mintCode).not.toHaveBeenCalled();
+    expect(requestFriend).not.toHaveBeenCalled();
+    expect(removeFriend).not.toHaveBeenCalled();
+    expect(setAutonomy).not.toHaveBeenCalled();
+    expect(decide).not.toHaveBeenCalled();
+
+    await expect(command.handler({ args: "friend list", senderIsOwner: false })).resolves.toEqual({
+      text: "No Reef friends.",
+    });
+    expect(listFriends).toHaveBeenCalledOnce();
+
+    await expect(
+      command.handler({ args: "friend autonomy peer extended", senderIsOwner: true }),
+    ).resolves.toEqual({ text: "Reef friend @peer autonomy set to extended." });
+    await expect(
+      command.handler({ args: `review approve ${"a".repeat(64)}`, senderIsOwner: true }),
+    ).resolves.toEqual({
+      text: "Reef review approved. Retry the identical message to re-run the guard.",
+    });
+    expect(setAutonomy).toHaveBeenCalledWith("peer", "extended");
+    expect(decide).toHaveBeenCalledWith("a".repeat(64), true);
+
+    await expect(
+      command.handler({
+        args: "config relayUrl https://attacker.example",
+        senderIsOwner: true,
+      }),
     ).resolves.toEqual({
       text: expect.stringContaining("Usage: /reef friend"),
     });

@@ -3,6 +3,26 @@ import Testing
 @testable import OpenClaw
 
 struct LaunchAgentManagerTests {
+    @Test func `active profile performs no login agent reads or writes`() async {
+        let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "work"])
+        var writes: [String] = []
+        LaunchAgentManager._testResetLaunchctlCalls()
+
+        #expect(await !(LaunchAgentManager.status(profile: profile)))
+        #expect(await !(LaunchAgentManager.set(
+            enabled: true,
+            bundlePath: "/Applications/OpenClaw.app",
+            profile: profile,
+            writePlist: { writes.append($0) })))
+        #expect(await !(LaunchAgentManager.set(
+            enabled: false,
+            bundlePath: "/Applications/OpenClaw.app",
+            profile: profile,
+            writePlist: { writes.append($0) })))
+        #expect(writes.isEmpty)
+        #expect(LaunchAgentManager._testLaunchctlCallSnapshot().isEmpty)
+    }
+
     @Test func `enabling an already loaded login job only refreshes its plist`() async {
         var persistedBundlePaths: [String] = []
         let reloaded = await LaunchAgentManager.set(
@@ -30,18 +50,24 @@ struct LaunchAgentManagerTests {
 
     @MainActor
     @Test func `launch at login plist preserves normalized profile environment once`() async throws {
+        let bundlePath = "/Applications/R&D <Team>/OpenClaw.app"
+        let logDirectory = "/tmp/openclaw-login-&<logs>"
         try await TestIsolation.withEnvValues([
             "OPENCLAW_CONFIG_PATH": "  /tmp/custom&<openclaw>\"'.json  ",
+            "OPENCLAW_LOG_DIR": logDirectory,
             "OPENCLAW_STATE_DIR": "/tmp/openclaw-state",
         ]) {
             let plist = LaunchAgentManager.plistContents(
-                bundlePath: "/Applications/OpenClaw.app",
+                bundlePath: bundlePath,
                 preferredPaths: ["/tmp/custom&<bin>", "/usr/bin"])
             let data = try #require(plist.data(using: .utf8))
             let object = try #require(
                 PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
 
             let environment = try #require(object["EnvironmentVariables"] as? [String: String])
+            #expect(object["ProgramArguments"] as? [String] == ["\(bundlePath)/Contents/MacOS/OpenClaw"])
+            #expect(object["StandardOutPath"] as? String == "\(logDirectory)/openclaw-stdout.log")
+            #expect(object["StandardErrorPath"] as? String == "\(logDirectory)/openclaw-stdout.log")
             #expect(environment["OPENCLAW_CONFIG_PATH"] == "/tmp/custom&<openclaw>\"'.json")
             #expect(environment["OPENCLAW_STATE_DIR"] == "/tmp/openclaw-state")
             #expect(environment["PATH"]?.contains("/tmp/custom&<bin>") == true)

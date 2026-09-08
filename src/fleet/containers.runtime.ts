@@ -1,13 +1,12 @@
 import { spawn } from "node:child_process";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringRecord } from "@openclaw/normalization-core/record-coerce";
+import { withContainerEnvFile } from "../infra/container-env-file.js";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
   buildCellCreateArgs,
   buildCellRunArgs,
+  validateCellContainerProfile,
   validateFleetImage,
   type CellContainerProfile,
   type FleetContainerRuntimeName,
@@ -135,7 +134,7 @@ function requireNonNegativeNumber(value: unknown): number {
   return value;
 }
 
-function readOptionalString(value: unknown): string | undefined {
+function readOptionalInspectString(value: unknown): string | undefined {
   if (value === undefined || value === null || value === "") {
     return undefined;
   }
@@ -145,32 +144,14 @@ function readOptionalString(value: unknown): string | undefined {
   return value;
 }
 
-function readLabels(value: unknown): Record<string, string> {
-  if (value === undefined || value === null) {
-    return {};
-  }
-  const record = requireRecord(value);
-  const labels: Record<string, string> = {};
-  for (const [key, label] of Object.entries(record)) {
-    if (typeof label !== "string") {
-      throw new InvalidInspectOutputError();
-    }
-    labels[key] = label;
-  }
-  return labels;
-}
-
 function readStringRecord(value: unknown): Record<string, string> {
   if (value === undefined || value === null) {
     return {};
   }
-  const record = requireRecord(value);
-  for (const entry of Object.values(record)) {
-    if (typeof entry !== "string") {
-      throw new InvalidInspectOutputError();
-    }
+  if (!isStringRecord(value)) {
+    throw new InvalidInspectOutputError();
   }
-  return record as Record<string, string>;
+  return value;
 }
 
 function readStringArray(value: unknown): string[] {
@@ -194,7 +175,7 @@ function readRestartPolicy(value: unknown): string | undefined {
   if (value === undefined || value === null) {
     return undefined;
   }
-  return readOptionalString(requireRecord(value).Name);
+  return readOptionalInspectString(requireRecord(value).Name);
 }
 
 function readPortBindings(
@@ -231,7 +212,7 @@ function readNetworkAttachments(value: unknown): Array<{ id: string; name?: stri
         throw new InvalidInspectOutputError();
       }
       const attachment = requireRecord(rawAttachment);
-      const name = readOptionalString(attachment.Name ?? attachment.name);
+      const name = readOptionalInspectString(attachment.Name ?? attachment.name);
       const normalized: { id: string; name?: string } = { id };
       if (name) {
         normalized.name = name;
@@ -242,14 +223,8 @@ function readNetworkAttachments(value: unknown): Array<{ id: string; name?: stri
 }
 
 function readEnvironment(value: unknown): Record<string, string> {
-  if (value === undefined || value === null) {
-    return {};
-  }
-  if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) {
-    throw new InvalidInspectOutputError();
-  }
   const environment: Record<string, string> = {};
-  for (const assignment of value) {
+  for (const assignment of readStringArray(value)) {
     const separator = assignment.indexOf("=");
     if (separator <= 0) {
       throw new InvalidInspectOutputError();
@@ -269,7 +244,7 @@ function readPidsLimit(value: unknown): number | undefined {
   return value;
 }
 
-function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult, { kind: "ok" }> {
+function parseInspectRecord(stdout: string): Record<string, unknown> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout);
@@ -279,20 +254,25 @@ function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult
   if (!Array.isArray(parsed) || parsed.length !== 1) {
     throw new InvalidInspectOutputError();
   }
-  const inspected = requireRecord(parsed[0]);
+  return requireRecord(parsed[0]);
+}
+
+function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult, { kind: "ok" }> {
+  const inspected = parseInspectRecord(stdout);
   const state = requireRecord(inspected.State);
   const config = requireRecord(inspected.Config);
   const hostConfig = requireRecord(inspected.HostConfig);
   const nanoCpus = requireNonNegativeNumber(hostConfig.NanoCpus);
-  const user = readOptionalString(config.User);
-  const usernsMode = readOptionalString(hostConfig.UsernsMode);
+  const user = readOptionalInspectString(config.User);
+  const usernsMode = readOptionalInspectString(hostConfig.UsernsMode);
 
   return {
     kind: "ok",
     containerId: requireString(inspected.Id),
     state: requireString(state.Status),
     running: requireBoolean(state.Running),
-    labels: readLabels(config.Labels),
+    // Preserve ordinary-object assignment semantics for JSON "__proto__" labels.
+    labels: Object.assign({}, readStringRecord(config.Labels)),
     environment: readEnvironment(config.Env),
     imageId: requireString(inspected.Image),
     memory: String(requireNonNegativeNumber(hostConfig.Memory)),
@@ -314,37 +294,18 @@ function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult
 function parseNetworkInspectOutput(
   stdout: string,
 ): Extract<FleetNetworkInspectResult, { kind: "ok" }> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stdout);
-  } catch {
-    throw new InvalidInspectOutputError();
-  }
-  if (!Array.isArray(parsed) || parsed.length !== 1) {
-    throw new InvalidInspectOutputError();
-  }
-
-  const inspected = requireRecord(parsed[0]);
+  const inspected = parseInspectRecord(stdout);
   return {
     kind: "ok",
-    labels: readLabels(inspected.Labels ?? inspected.labels),
+    labels: Object.assign({}, readStringRecord(inspected.Labels ?? inspected.labels)),
     attachedContainers: readNetworkAttachments(inspected.Containers ?? inspected.containers),
     internal: readOptionalBoolean(inspected.Internal ?? inspected.internal) ?? false,
   };
 }
 
 function parseDockerContextEndpoint(stdout: string): string {
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(stdout);
-  } catch {
-    throw new Error("docker context inspect returned an invalid response");
-  }
-  if (!Array.isArray(parsed) || parsed.length !== 1) {
-    throw new Error("docker context inspect returned an invalid response");
-  }
-  try {
-    const context = requireRecord(parsed[0]);
+    const context = parseInspectRecord(stdout);
     const endpoints = requireRecord(context.Endpoints);
     const docker = requireRecord(endpoints.docker);
     return requireString(docker.Host);
@@ -368,20 +329,10 @@ function isLocalDockerEndpoint(endpoint: string): boolean {
 }
 
 function parsePodmanServiceIsRemote(stdout: string): boolean {
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(stdout);
-  } catch {
-    throw new Error("podman info returned an invalid response");
-  }
-  try {
-    const info = requireRecord(parsed);
+    const info = requireRecord(JSON.parse(stdout));
     const host = requireRecord(info.host);
-    const serviceIsRemote = host.serviceIsRemote;
-    if (typeof serviceIsRemote !== "boolean") {
-      throw new Error();
-    }
-    return serviceIsRemote;
+    return requireBoolean(host.serviceIsRemote);
   } catch {
     throw new Error("podman info returned an invalid response");
   }
@@ -524,7 +475,11 @@ const defaultFleetContainerStreamExecutor: FleetContainerStreamExecutor = (
     };
     pipeWithBackpressure(child.stdout, process.stdout, stdout);
     pipeWithBackpressure(child.stderr, process.stderr, stderr);
-    child.once("error", reject);
+    child.on("error", (error) => {
+      if (child.pid === undefined) {
+        reject(error);
+      }
+    });
     child.once("close", (code, signal) => {
       stdout.flush();
       stderr.flush();
@@ -708,24 +663,15 @@ export function createFleetContainerRuntime(
     },
 
     async run(profile: CellContainerProfile, start: boolean): Promise<void> {
-      const tempRoot = await fs.realpath(os.tmpdir());
-      const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-fleet-env-"));
-      const environmentFile = path.join(tempDir, "cell.env");
-      try {
+      validateCellContainerProfile(profile);
+      await withContainerEnvFile(profile.environment, async (environmentFile) => {
         const args = start
           ? buildCellRunArgs(profile, { environmentFile })
           : buildCellCreateArgs(profile, { environmentFile });
-        const content = Object.entries(profile.environment)
-          .toSorted(([left], [right]) => left.localeCompare(right))
-          .map(([key, value]) => `${key}=${value}\n`)
-          .join("");
-        await fs.writeFile(environmentFile, content, { encoding: "utf8", mode: 0o600 });
         await execute(profile.runtime, args, {
           redactValues: Object.values(profile.environment),
         });
-      } finally {
-        await fs.rm(tempDir, { recursive: true, force: true });
-      }
+      });
     },
 
     async pull(runtime: FleetContainerRuntimeName, image: string): Promise<void> {
@@ -807,4 +753,3 @@ export function createFleetContainerRuntime(
     },
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

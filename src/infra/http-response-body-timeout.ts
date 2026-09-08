@@ -4,15 +4,24 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 
 type TimeoutErrorFactory = (params: { timeoutMs: number }) => Error;
 
-async function withCancellableTimeout<T>(params: {
-  timeoutMs: number;
-  onTimeout: TimeoutErrorFactory;
+function createResponseBodyTimeoutError(message: string): Error {
+  const error = new Error(message);
+  error.name = "TimeoutError";
+  return error;
+}
+
+export async function withResponseBodyTimeout<T>(params: {
+  timeoutMs: number | undefined;
+  onTimeout: TimeoutErrorFactory | undefined;
   cancel: (error: Error) => Promise<unknown>;
-  read: () => Promise<T>;
+  read: (refreshTimeout?: () => void) => Promise<T>;
 }): Promise<T> {
+  if (params.timeoutMs === undefined) {
+    return await params.read();
+  }
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  let timedOut = false;
+  let timeoutError: Error | undefined;
 
   return await new Promise<T>((resolve, reject) => {
     const clear = () => {
@@ -23,8 +32,10 @@ async function withCancellableTimeout<T>(params: {
     };
 
     timeoutId = setTimeout(() => {
-      timedOut = true;
-      const error = params.onTimeout({ timeoutMs });
+      const error =
+        params.onTimeout?.({ timeoutMs }) ??
+        createResponseBodyTimeoutError(`Response body timed out after ${timeoutMs}ms`);
+      timeoutError = error;
       clear();
       void params.cancel(error).catch(() => undefined);
       reject(error);
@@ -34,21 +45,51 @@ async function withCancellableTimeout<T>(params: {
     }
 
     void Promise.resolve()
-      .then(params.read)
+      .then(() =>
+        params.read(() => {
+          // A late read must not restart an expired deadline or consume another chunk.
+          if (timeoutError) {
+            throw timeoutError;
+          }
+          timeoutId?.refresh();
+        }),
+      )
       .then(
         (value) => {
           clear();
-          if (!timedOut) {
+          if (!timeoutError) {
             resolve(value);
           }
         },
         (error: unknown) => {
           clear();
-          if (!timedOut) {
+          if (!timeoutError) {
             reject(toErrorObject(error, "Non-Error rejection"));
           }
         },
       );
+  });
+}
+
+/** Owns one refreshable idle deadline for a bounded response-body operation. */
+export function withResponseBodyIdleTimeout<T>(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  chunkTimeoutMs: number | undefined,
+  onIdleTimeout: ((params: { chunkTimeoutMs: number }) => Error) | undefined,
+  read: (refreshTimeout?: () => void) => Promise<T>,
+): Promise<T> {
+  if (chunkTimeoutMs === undefined) {
+    return read();
+  }
+  return withResponseBodyTimeout({
+    timeoutMs: chunkTimeoutMs,
+    onTimeout: ({ timeoutMs }) =>
+      onIdleTimeout?.({ chunkTimeoutMs: timeoutMs }) ??
+      createResponseBodyTimeoutError(`Media download stalled: no data received for ${timeoutMs}ms`),
+    // Cancellation releases fetch sockets and buffers instead of letting the
+    // pending read continue after the caller has failed.
+    cancel: async (error) => await reader.cancel(error),
+    read,
   });
 }
 
@@ -58,35 +99,7 @@ export async function readChunkWithIdleTimeout(
   chunkTimeoutMs: number,
   onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error,
 ): Promise<Awaited<ReturnType<typeof reader.read>>> {
-  return await withCancellableTimeout({
-    timeoutMs: chunkTimeoutMs,
-    onTimeout: ({ timeoutMs }) =>
-      onIdleTimeout?.({ chunkTimeoutMs: timeoutMs }) ??
-      new Error(`Media download stalled: no data received for ${timeoutMs}ms`),
-    // Cancellation releases fetch sockets and buffers instead of letting the
-    // pending read continue after the caller has failed.
-    cancel: async (error) => await reader.cancel(error),
-    read: async () => await reader.read(),
-  });
-}
-
-export async function withResponseBodyTimeout<T>(params: {
-  timeoutMs: number | undefined;
-  onTimeout: TimeoutErrorFactory | undefined;
-  cancel: (error: Error) => Promise<unknown>;
-  read: () => Promise<T>;
-}): Promise<T> {
-  if (params.timeoutMs === undefined) {
-    return await params.read();
-  }
-  return await withCancellableTimeout({
-    timeoutMs: params.timeoutMs,
-    onTimeout: ({ timeoutMs }) =>
-      params.onTimeout?.({ timeoutMs }) ??
-      new Error(`Response body timed out after ${timeoutMs}ms`),
-    // Fetch resolves at headers. Body cancellation owns socket cleanup when
-    // the separate whole-body deadline wins.
-    cancel: params.cancel,
-    read: params.read,
-  });
+  return await withResponseBodyIdleTimeout(reader, chunkTimeoutMs, onIdleTimeout, () =>
+    reader.read(),
+  );
 }

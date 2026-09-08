@@ -1,13 +1,16 @@
 ---
-summary: "Experimental Canvas control and A2UI rendering surfaces for paired nodes."
+summary: "Presents hosted widget documents on paired macOS panels."
 read_when:
   - You are installing, configuring, or auditing the canvas plugin
-title: "Canvas plugin"
+title: "Canvas plugin reference"
 ---
 
-# Canvas plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
-Experimental Canvas control and A2UI rendering surfaces for paired nodes.
+Presents hosted widget documents on paired macOS panels.
 
 ## Distribution
 
@@ -16,4 +19,5 @@ Experimental Canvas control and A2UI rendering surfaces for paired nodes.
 
 ## Surface
 
-contracts: `tools`; skills
+- Contracts: `tools`
+- Skills

@@ -9,6 +9,17 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 
 ## Global rules
 
+- Parallels is postpublish-confidence coverage by default, not a prerequisite
+  for the bounded beta-publish phase. Run it against one exact published
+  package version and record the Validation SHA + Tooling SHA run tuple that
+  authorized that package. Validation SHA maps to its Code SHA or Release SHA;
+  it is not a third release identity.
+- A failed postpublish Parallels lane does not retroactively unpublish a beta.
+  Classify it as product, harness/tooling/provenance, infrastructure/credential,
+  or wrapper failure. Only a confirmed product defect enters the next beta.
+- Use one coordinator and one lane per independent guest family. Diagnose and
+  retry one failed family once, then reassess; do not restart the aggregate
+  matrix automatically.
 - Inventory existing VMs and snapshots before provisioning anything. When a preconfigured pristine
   snapshot matches the requested baseline, switch to it and reuse its user, tools, and base setup.
   Do not create a new VM, reinstall macOS, or rebuild the guest baseline for a "fresh" run.
@@ -92,6 +103,33 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 ## CLI invocation footgun
 
 - The Parallels smoke shell scripts should tolerate a literal bare `--` arg so `pnpm test:parallels:* -- --json` and similar forwarded invocations work without needing to call `bash scripts/e2e/...` directly.
+
+## macOS guest-command transport
+
+The macOS smoke and same-guest update lanes route guest commands through
+`scripts/e2e/parallels/parallels-exec.py`; macOS hosts need `python3` with its standard
+library. On the verified Parallels 27.0.0 (58628) Apple-silicon installation, the
+client retains SDK login-job handles through result extraction, avoiding the
+host CLI's intermittent `PrlJob_GetRetCode: Invalid argument` failure. This error
+is not proof that the guest needs reinstallation or another Tools update.
+
+Selection checks the actual `prlctl` on PATH and the installed CLI digest before
+execution. Other binaries retain ordinary `prlctl`; an SDK failure never retries
+through another transport. Root/current-user choice, raw shell-argument joining,
+stdin, stdout/stderr, and guest exit status are preserved. Callers still own shell
+quoting. Snapshot/start/stop/input/capture and Linux/Windows execution are unchanged.
+
+For an already-owned, running macOS guest, the same transport can be checked directly:
+
+```bash
+python3 -B scripts/e2e/parallels/parallels-exec.py --timeout-ms 30000 -- exec "<owned-macos-vm>" --current-user /bin/echo ready
+```
+
+Keep the outer host timeout for complete lanes; the SDK wait deadline is not proof
+of guest-process termination. This is a bounded workaround, not a supported public
+SDK integration. Revalidate ABI and live command/stdio/cleanup behavior before
+adding an installed-binary digest; remove the workaround after a vendor-fixed CLI
+is verified. Restore the original snapshot and stop the guest after ad-hoc proof.
 
 ## macOS flow
 

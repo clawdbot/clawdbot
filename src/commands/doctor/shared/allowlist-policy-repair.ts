@@ -1,14 +1,17 @@
 // Doctor repair for dmPolicy allowlists whose sender entries only exist in pairing stores.
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeChatChannelId } from "../../../channels/ids.js";
-import { setCanonicalDmAllowFrom } from "../../../channels/plugins/dm-access.js";
+import {
+  resolveChannelDmAccess,
+  setCanonicalDmAllowFrom,
+} from "../../../channels/plugins/dm-access.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { readChannelAllowFromStore } from "../../../pairing/pairing-store.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
 import { resolveAllowFromMode, type AllowFromMode } from "./allow-from-mode.js";
 import { hasAllowFromEntries } from "./allowlist.js";
-import { asObjectRecord } from "./object.js";
 
 /** Restore missing allowFrom entries for allowlist DM policies from persisted pairing stores. */
 export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): Promise<{
@@ -43,24 +46,21 @@ export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): 
 
   const recoverAllowFromForAccount = async (params: {
     channelName: string;
+    // Resolved once per channel by the caller: the lookup can materialize a bundled
+    // channel plugin, so recomputing it per account turns repair into plugin loading.
+    mode: AllowFromMode;
     account: Record<string, unknown>;
+    parent?: Record<string, unknown>;
     accountId?: string;
     prefix: string;
   }) => {
-    const dmEntry = params.account.dm;
-    const dm =
-      dmEntry && typeof dmEntry === "object" && !Array.isArray(dmEntry)
-        ? (dmEntry as Record<string, unknown>)
-        : undefined;
-    const dmPolicy =
-      (params.account.dmPolicy as string | undefined) ?? (dm?.policy as string | undefined);
-    if (dmPolicy !== "allowlist") {
-      return;
-    }
-
-    const topAllowFrom = params.account.allowFrom as Array<string | number> | undefined;
-    const nestedAllowFrom = dm?.allowFrom as Array<string | number> | undefined;
-    if (hasAllowFromEntries(topAllowFrom) || hasAllowFromEntries(nestedAllowFrom)) {
+    const { mode } = params;
+    const { dmPolicy, allowFrom } = resolveChannelDmAccess({
+      account: params.account,
+      parent: params.parent,
+      mode,
+    });
+    if (dmPolicy !== "allowlist" || hasAllowFromEntries(allowFrom)) {
       return;
     }
 
@@ -84,7 +84,7 @@ export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): 
     applyRecoveredAllowFrom({
       account: params.account,
       allowFrom: recovered,
-      mode: resolveAllowFromMode(params.channelName),
+      mode,
       prefix: params.prefix,
     });
   };
@@ -97,13 +97,15 @@ export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): 
     if (channelConfig.enabled === false) {
       continue;
     }
+    const mode = resolveAllowFromMode(channelName);
     await recoverAllowFromForAccount({
       channelName,
+      mode,
       account: channelConfig,
       prefix: `channels.${channelName}`,
     });
 
-    const accounts = asObjectRecord(channelConfig.accounts);
+    const accounts = asNullableRecord(channelConfig.accounts);
     if (!accounts) {
       continue;
     }
@@ -116,7 +118,9 @@ export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): 
       }
       await recoverAllowFromForAccount({
         channelName,
+        mode,
         account: accountConfig as Record<string, unknown>,
+        parent: channelConfig,
         accountId,
         prefix: `channels.${channelName}.accounts.${accountId}`,
       });

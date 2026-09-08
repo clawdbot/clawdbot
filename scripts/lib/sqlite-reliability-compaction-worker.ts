@@ -29,7 +29,7 @@ async function main(argv: string[]): Promise<void> {
       throw new Error(`global compaction unexpectedly skipped ${target.path}`);
     }
   } else {
-    const report = compactDoctorSessionSqliteTarget(
+    const report = await compactDoctorSessionSqliteTarget(
       {
         agentId: target.agentId,
         storePath: target.path,

@@ -5,37 +5,29 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { saveLegacySessionStore as saveSessionStore } from "../../infra/state-migrations.legacy-session-store.js";
+import { createFixtureSkillEntry } from "../../skills/test-support/test-helpers.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import {
   resolveTrajectoryFilePath,
   resolveTrajectoryPointerFilePath,
 } from "../../trajectory/paths.js";
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
-import {
-  enforceSessionDiskBudget,
-  measureSessionPhysicalDiskUsage,
-  pruneUnreferencedSessionArtifacts,
-} from "./disk-budget.js";
+import { enforceSessionDiskBudget, measureSessionPhysicalDiskUsage } from "./disk-budget.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
 async function expectPathExists(targetPath: string): Promise<void> {
-  await expect(fs.access(targetPath)).resolves.toBeUndefined();
+  await fs.access(targetPath);
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  try {
-    await fs.stat(targetPath);
-  } catch (error) {
-    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
-    return;
-  }
-  throw new Error(`expected path to be missing: ${targetPath}`);
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 function expectBudgetResult(
@@ -65,7 +57,7 @@ function refreshPathBeforeSecondStat(targetPath: string): ReturnType<typeof vi.s
 
 describe("enforceSessionDiskBudget", () => {
   it("counts the SQLite main file and WAL as physical session usage", async () => {
-    await withTempDir({ prefix: "openclaw-disk-budget-sqlite-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-disk-budget-sqlite-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const databasePath = resolveSqliteTargetFromSessionStorePath(storePath).path;
       if (!databasePath) {
@@ -86,7 +78,7 @@ describe("enforceSessionDiskBudget", () => {
   });
 
   it("excludes migration archives from physical SQLite usage (#106875)", async () => {
-    await withTempDir({ prefix: "openclaw-disk-budget-sqlite-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-disk-budget-sqlite-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const databasePath = resolveSqliteTargetFromSessionStorePath(storePath).path;
       if (!databasePath) {
@@ -97,6 +89,12 @@ describe("enforceSessionDiskBudget", () => {
       // counting them would evict live history to pay for unreclaimable bytes.
       await fs.writeFile(path.join(dir, "legacy.jsonl.migrated"), Buffer.alloc(4096));
       await fs.writeFile(path.join(dir, "legacy.jsonl.migrated.2"), Buffer.alloc(4096));
+      for (const kind of ["branch", "openai-codex"]) {
+        await fs.writeFile(
+          path.join(dir, `legacy.jsonl.pre-doctor-${kind}-repair-2026-08-30T10-20-30-000Z.bak`),
+          Buffer.alloc(4096),
+        );
+      }
 
       const usage = await measureSessionPhysicalDiskUsage(storePath);
 
@@ -106,7 +104,7 @@ describe("enforceSessionDiskBudget", () => {
   });
 
   it("counts durable fixed-store agent partitions and their WAL files", async () => {
-    await withTempDir({ prefix: "openclaw-disk-budget-partition-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-disk-budget-partition-" }, async (dir) => {
       const stateDir = path.join(dir, "state");
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const storePath = path.join(dir, "shared.json");
@@ -131,7 +129,7 @@ describe("enforceSessionDiskBudget", () => {
   });
 
   it("excludes migration archives from the session disk budget (#106875)", async () => {
-    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const sessionKey = "agent:main:main";
       const sessionId = "keep";
@@ -168,7 +166,7 @@ describe("enforceSessionDiskBudget", () => {
   });
 
   it("does not treat referenced transcripts with marker-like session IDs as archived artifacts", async () => {
-    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const sessionId = "keep.deleted.keep";
       const activeKey = "agent:main:main";
@@ -200,7 +198,7 @@ describe("enforceSessionDiskBudget", () => {
   });
 
   it("removes true archived transcript artifacts while preserving referenced primary transcripts", async () => {
-    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const sessionId = "keep";
       const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
@@ -237,7 +235,7 @@ describe("enforceSessionDiskBudget", () => {
   });
 
   it("reclaims stale store temps under pressure but never a fresh in-flight one (#56827)", async () => {
-    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const sessionId = "keep";
       const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
@@ -281,7 +279,7 @@ describe("enforceSessionDiskBudget", () => {
   });
 
   it("preserves runtime-provided session keys when removing entries for disk budget", async () => {
-    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const childKey = "agent:main:subagent:pending-budget";
       const removableKey = "agent:main:old-removable";
@@ -295,6 +293,8 @@ describe("enforceSessionDiskBudget", () => {
         [removableKey]: {
           sessionId: "old-removable",
           updatedAt: now,
+          archivedAt: now - 1,
+          archiveReason: "active-session-cap",
         },
       };
       await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
@@ -318,7 +318,7 @@ describe("enforceSessionDiskBudget", () => {
   });
 
   it("preserves model-locked harness sessions when removing entries for disk budget", async () => {
-    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const lockedKey = "agent:main:harness-owned:locked";
       const removableKey = "agent:main:old-removable";
@@ -332,6 +332,8 @@ describe("enforceSessionDiskBudget", () => {
         [removableKey]: {
           sessionId: "old-removable",
           updatedAt: now,
+          archivedAt: now - 1,
+          archiveReason: "active-session-cap",
         },
       };
       await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
@@ -353,8 +355,39 @@ describe("enforceSessionDiskBudget", () => {
     });
   });
 
+  it("does not evict sessions for runtime-only resolved skill catalogs", async () => {
+    await withTestDir({ prefix: "openclaw-disk-budget-runtime-skills-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const sessionKey = "agent:main:subagent:runtime-skills";
+      const resolvedSkills = [
+        createFixtureSkillEntry("demo", { source: "x".repeat(20_000) }).skill,
+      ];
+      const entry: SessionEntry = {
+        sessionId: "runtime-skills",
+        updatedAt: Date.now(),
+        skillsSnapshot: {
+          prompt: "compact prompt",
+          skills: [{ name: "demo" }],
+          resolvedSkills,
+        },
+      };
+      const store = { [sessionKey]: entry };
+
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        maintenance: { maxDiskBytes: 2_048, highWaterBytes: 1_024 },
+        warnOnly: false,
+      });
+
+      expect(result).toMatchObject({ overBudget: false, removedEntries: 0 });
+      expect(store[sessionKey]).toBe(entry);
+      expect(entry.skillsSnapshot?.resolvedSkills).toBe(resolvedSkills);
+    });
+  });
+
   it("accounts for deduped skills prompt blobs before evicting sessions", async () => {
-    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const prompt = `<available_skills>\n${"shared prompt\n".repeat(200)}</available_skills>`;
       const now = Date.now();
@@ -393,7 +426,7 @@ describe("enforceSessionDiskBudget", () => {
   });
 
   it("removes unreferenced skills prompt blobs when evicting sessions", async () => {
-    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const activeKey = "agent:main:active";
       const oldKey = "agent:main:old";
@@ -403,6 +436,8 @@ describe("enforceSessionDiskBudget", () => {
         [oldKey]: {
           sessionId: "old",
           updatedAt: 1,
+          archivedAt: 1,
+          archiveReason: "active-session-cap",
           skillsSnapshot: {
             prompt: oldPrompt,
             skills: [{ name: "old" }],
@@ -468,7 +503,7 @@ describe("enforceSessionDiskBudget", () => {
   });
 
   it("preserves fresh unreferenced skills prompt blobs under pressure", async () => {
-    await withTempDir({ prefix: "openclaw-disk-budget-fresh-prompt-blob-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-disk-budget-fresh-prompt-blob-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const store: Record<string, SessionEntry> = {
         "agent:main:active": { sessionId: "active", updatedAt: Date.now() },
@@ -499,7 +534,7 @@ describe("enforceSessionDiskBudget", () => {
   });
 
   it("revalidates stale prompt blobs before removing them under pressure", async () => {
-    await withTempDir({ prefix: "openclaw-disk-budget-revalidate-prompt-blob-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-disk-budget-revalidate-prompt-blob-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const store: Record<string, SessionEntry> = {
         "agent:main:active": { sessionId: "active", updatedAt: Date.now() },
@@ -536,7 +571,7 @@ describe("enforceSessionDiskBudget", () => {
   });
 
   it("reclaims stale skills prompt blob temps under pressure", async () => {
-    await withTempDir({ prefix: "openclaw-disk-budget-prompt-temp-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-disk-budget-prompt-temp-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const store: Record<string, SessionEntry> = {
         "agent:main:main": { sessionId: "keep", updatedAt: Date.now() },
@@ -571,7 +606,7 @@ describe("enforceSessionDiskBudget", () => {
   });
 
   it("removes unreferenced compaction checkpoint artifacts under pressure", async () => {
-    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const sessionId = "keep";
       const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
@@ -632,7 +667,7 @@ describe("enforceSessionDiskBudget", () => {
   });
 
   it("removes unreferenced trajectory sidecars while preserving referenced ones", async () => {
-    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const sessionId = "keep";
       const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
@@ -679,9 +714,10 @@ describe("enforceSessionDiskBudget", () => {
   });
 
   it("does not evict protected thread session entries under store pressure", async () => {
-    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const protectedKey = "agent:main:slack:channel:C123:thread:1710000000.000100";
+      const manualArchiveKey = "agent:main:explicit:manual-archive";
       const removableKey = "agent:main:subagent:old-worker";
       const activeKey = "agent:main:main";
       const store: Record<string, SessionEntry> = {
@@ -693,7 +729,16 @@ describe("enforceSessionDiskBudget", () => {
         [removableKey]: {
           sessionId: "removable-worker",
           updatedAt: 2,
+          archivedAt: 2,
+          archiveReason: "active-session-cap",
           displayName: "r".repeat(2000),
+        },
+        [manualArchiveKey]: {
+          sessionId: "manual-archive",
+          updatedAt: 1,
+          archivedAt: 1,
+          archiveReason: "manual",
+          displayName: "m".repeat(2000),
         },
         [activeKey]: {
           sessionId: "active",
@@ -714,6 +759,7 @@ describe("enforceSessionDiskBudget", () => {
       });
 
       expect(store).toHaveProperty(protectedKey);
+      expect(store).toHaveProperty(manualArchiveKey);
       expect(store[removableKey]).toBeUndefined();
       expect(store).toHaveProperty(activeKey);
       expectBudgetResult(result);
@@ -722,14 +768,19 @@ describe("enforceSessionDiskBudget", () => {
   });
 
   it("commits the reduced session index before deleting an evicted transcript", async () => {
-    await withTempDir({ prefix: "openclaw-disk-budget-commit-order-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-disk-budget-commit-order-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const oldKey = "agent:main:subagent:old-worker";
       const activeKey = "agent:main:main";
       const oldTranscript = path.join(dir, "old.jsonl");
       const activeTranscript = path.join(dir, "active.jsonl");
       const store: Record<string, SessionEntry> = {
-        [oldKey]: { sessionId: "old", updatedAt: 1 },
+        [oldKey]: {
+          sessionId: "old",
+          updatedAt: 1,
+          archivedAt: 1,
+          archiveReason: "active-session-cap",
+        },
         [activeKey]: { sessionId: "active", updatedAt: 2 },
       };
       await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
@@ -772,13 +823,18 @@ describe("enforceSessionDiskBudget", () => {
   });
 
   it("retains the evicted transcript when the index commit fails", async () => {
-    await withTempDir({ prefix: "openclaw-disk-budget-commit-fail-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-disk-budget-commit-fail-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const oldKey = "agent:main:subagent:old-worker";
       const activeKey = "agent:main:main";
       const oldTranscript = path.join(dir, "old.jsonl");
       const store: Record<string, SessionEntry> = {
-        [oldKey]: { sessionId: "old", updatedAt: 1 },
+        [oldKey]: {
+          sessionId: "old",
+          updatedAt: 1,
+          archivedAt: 1,
+          archiveReason: "active-session-cap",
+        },
         [activeKey]: { sessionId: "active", updatedAt: 2 },
       };
       await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
@@ -803,13 +859,18 @@ describe("enforceSessionDiskBudget", () => {
   });
 
   it("retains evicted artifacts when no durable index commit is available", async () => {
-    await withTempDir({ prefix: "openclaw-disk-budget-missing-commit-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-disk-budget-missing-commit-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const oldKey = "agent:main:subagent:old-worker";
       const activeKey = "agent:main:main";
       const oldTranscript = path.join(dir, "old.jsonl");
       const store: Record<string, SessionEntry> = {
-        [oldKey]: { sessionId: "old", updatedAt: 1 },
+        [oldKey]: {
+          sessionId: "old",
+          updatedAt: 1,
+          archivedAt: 1,
+          archiveReason: "active-session-cap",
+        },
         [activeKey]: { sessionId: "active", updatedAt: 2 },
       };
       await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
@@ -831,192 +892,47 @@ describe("enforceSessionDiskBudget", () => {
       await expectPathExists(oldTranscript);
     });
   });
-});
 
-describe("pruneUnreferencedSessionArtifacts", () => {
-  it("reclaims stale store temp sidecars but preserves in-flight ones (#56827)", async () => {
-    await withTempDir({ prefix: "openclaw-prune-temp-" }, async (dir) => {
+  it("stops at the default target when highWaterBytes resolves to zero", async () => {
+    await withTestDir({ prefix: "openclaw-zero-high-water-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
-      const staleTemp = path.join(
-        dir,
-        "sessions.json.111.0f9c1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b.tmp",
-      );
-      const freshTemp = path.join(
-        dir,
-        "sessions.json.222.1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d.tmp",
-      );
-      const store: Record<string, SessionEntry> = {
-        "agent:main:main": { sessionId: "keep", updatedAt: Date.now() },
-      };
-      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
-      await fs.writeFile(staleTemp, "s".repeat(64), "utf-8");
-      await fs.writeFile(freshTemp, "f".repeat(64), "utf-8");
-      // Age the stale temp well past the temp staleness window; keep the other in-flight.
-      const old = new Date(Date.now() - 30 * 60 * 1000);
-      await fs.utimes(staleTemp, old, old);
-
-      const result = await pruneUnreferencedSessionArtifacts({
-        store,
-        storePath,
-        // 30d general cutoff: a stale temp must be reclaimed by its own short window,
-        // not by the unreferenced-artifact age threshold.
-        olderThanMs: 30 * 24 * 60 * 60 * 1000,
-      });
-
-      await expectPathMissing(staleTemp);
-      await expectPathExists(freshTemp);
-      await expectPathExists(storePath);
-      expect(result.removedFiles).toBeGreaterThanOrEqual(1);
-    });
-  });
-
-  it("reclaims unreferenced skills prompt blobs during normal artifact cleanup", async () => {
-    await withTempDir({ prefix: "openclaw-prune-prompt-blob-" }, async (dir) => {
-      const storePath = path.join(dir, "sessions.json");
-      const oldKey = "agent:main:old";
-      const keepKey = "agent:main:keep";
-      const oldPrompt = `<available_skills>\n${"old prompt\n".repeat(200)}</available_skills>`;
-      const keepPrompt = `<available_skills>\n${"keep prompt\n".repeat(200)}</available_skills>`;
-      const store: Record<string, SessionEntry> = {
-        [oldKey]: {
-          sessionId: "old",
-          updatedAt: 1,
-          skillsSnapshot: {
-            prompt: oldPrompt,
-            skills: [{ name: "old" }],
-            version: 1,
-          },
-        },
-        [keepKey]: {
-          sessionId: "keep",
-          updatedAt: 2,
-          skillsSnapshot: {
-            prompt: keepPrompt,
-            skills: [{ name: "keep" }],
-            version: 1,
-          },
-        },
-      };
+      const store: Record<string, SessionEntry> = {};
+      for (let index = 1; index <= 4; index += 1) {
+        await fs.writeFile(path.join(dir, `worker-${index}.jsonl`), "x".repeat(64 * 1024));
+        store[`agent:main:subagent:worker-${index}`] = {
+          sessionId: `worker-${index}`,
+          updatedAt: index,
+          archivedAt: index,
+          archiveReason: "active-session-cap",
+        };
+      }
       await saveSessionStore(storePath, store, { skipMaintenance: true });
 
-      const raw = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, SessionEntry>;
-      const oldHash = raw[oldKey]?.skillsSnapshot?.promptRef?.hash;
-      const keepHash = raw[keepKey]?.skillsSnapshot?.promptRef?.hash;
-      if (!oldHash || !keepHash) {
-        throw new Error("expected prompt refs");
-      }
-      const oldBlob = path.join(
-        dir,
-        "skills-prompts",
-        "sha256",
-        oldHash.slice(0, 2),
-        `${oldHash}.txt`,
-      );
-      const keepBlob = path.join(
-        dir,
-        "skills-prompts",
-        "sha256",
-        keepHash.slice(0, 2),
-        `${keepHash}.txt`,
-      );
-      await expectPathExists(oldBlob);
-      await expectPathExists(keepBlob);
-      const oldMtime = new Date(Date.now() - 10 * 60 * 1000);
-      await fs.utimes(oldBlob, oldMtime, oldMtime);
-      delete store[oldKey];
-
-      const result = await pruneUnreferencedSessionArtifacts({
+      const maintenance = resolveMaintenanceConfigFromInput({
+        maxDiskBytes: 200_000,
+        highWaterBytes: 0,
+      });
+      const result = await enforceSessionDiskBudget({
         store,
         storePath,
-        olderThanMs: 60_000,
+        maintenance: {
+          maxDiskBytes: maintenance.maxDiskBytes,
+          highWaterBytes: maintenance.highWaterBytes,
+        },
+        warnOnly: false,
+        commitEvictedIndex: async () => {
+          await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+        },
       });
 
-      await expectPathMissing(oldBlob);
-      await expectPathExists(keepBlob);
-      expect(result.removedFiles).toBe(1);
-    });
-  });
-
-  it("preserves fresh unreferenced skills prompt blobs during normal artifact cleanup", async () => {
-    await withTempDir({ prefix: "openclaw-prune-fresh-prompt-blob-" }, async (dir) => {
-      const storePath = path.join(dir, "sessions.json");
-      const hash = "c".repeat(64);
-      const blobDir = path.join(dir, "skills-prompts", "sha256", hash.slice(0, 2));
-      const blobPath = path.join(blobDir, `${hash}.txt`);
-      await fs.writeFile(storePath, JSON.stringify({}, null, 2), "utf-8");
-      await fs.mkdir(blobDir, { recursive: true });
-      await fs.writeFile(blobPath, "fresh unreferenced prompt blob".repeat(200), "utf-8");
-
-      const result = await pruneUnreferencedSessionArtifacts({
-        store: {},
-        storePath,
-        olderThanMs: 0,
-      });
-
-      await expectPathExists(blobPath);
-      expect(result.removedFiles).toBe(0);
-    });
-  });
-
-  it("revalidates stale prompt blobs before removing them during normal artifact cleanup", async () => {
-    await withTempDir({ prefix: "openclaw-prune-revalidate-prompt-blob-" }, async (dir) => {
-      const storePath = path.join(dir, "sessions.json");
-      const hash = "e".repeat(64);
-      const blobDir = path.join(dir, "skills-prompts", "sha256", hash.slice(0, 2));
-      const blobPath = path.join(blobDir, `${hash}.txt`);
-      await fs.writeFile(storePath, JSON.stringify({}, null, 2), "utf-8");
-      await fs.mkdir(blobDir, { recursive: true });
-      await fs.writeFile(blobPath, "stale prompt blob".repeat(200), "utf-8");
-      const staleBlobTime = new Date(Date.now() - 10 * 60 * 1000);
-      await fs.utimes(blobPath, staleBlobTime, staleBlobTime);
-      const statSpy = refreshPathBeforeSecondStat(blobPath);
-      try {
-        const result = await pruneUnreferencedSessionArtifacts({
-          store: {},
-          storePath,
-          olderThanMs: 60_000,
-        });
-
-        await expectPathExists(blobPath);
-        expect(result.removedFiles).toBe(0);
-      } finally {
-        statSpy.mockRestore();
-      }
-    });
-  });
-
-  it("reclaims stale skills prompt blob temps during normal artifact cleanup", async () => {
-    await withTempDir({ prefix: "openclaw-prune-prompt-temp-" }, async (dir) => {
-      const storePath = path.join(dir, "sessions.json");
-      const store: Record<string, SessionEntry> = {
-        "agent:main:main": { sessionId: "keep", updatedAt: Date.now() },
-      };
-      const hash = "b".repeat(64);
-      const tempDir = path.join(dir, "skills-prompts", "sha256", hash.slice(0, 2));
-      const staleTemp = path.join(
-        tempDir,
-        `${hash}.txt.123.22222222-2222-4222-8222-222222222222.tmp`,
-      );
-      const freshTemp = path.join(
-        tempDir,
-        `${hash}.txt.456.33333333-3333-4333-8333-333333333333.tmp`,
-      );
-      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
-      await fs.mkdir(tempDir, { recursive: true });
-      await fs.writeFile(staleTemp, "s".repeat(64), "utf-8");
-      await fs.writeFile(freshTemp, "f".repeat(64), "utf-8");
-      const old = new Date(Date.now() - 30 * 60 * 1000);
-      await fs.utimes(staleTemp, old, old);
-
-      const result = await pruneUnreferencedSessionArtifacts({
-        store,
-        storePath,
-        olderThanMs: 30 * 24 * 60 * 60 * 1000,
-      });
-
-      await expectPathMissing(staleTemp);
-      await expectPathExists(freshTemp);
-      expect(result.removedFiles).toBe(1);
+      // The resolved high-water mark is this loop's stop condition, so a zero
+      // mark is unreachable while any data remains and every session would be
+      // evicted. The default target stops the sweep with history intact.
+      expect(maintenance.highWaterBytes).toBe(160_000);
+      expectBudgetResult(result);
+      expect(result.totalBytesAfter).toBeLessThanOrEqual(160_000);
+      expect(store).toHaveProperty("agent:main:subagent:worker-4");
+      await expectPathExists(path.join(dir, "worker-4.jsonl"));
     });
   });
 });

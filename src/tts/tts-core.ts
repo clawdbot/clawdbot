@@ -1,3 +1,4 @@
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 // TTS core coordinates text preparation, provider selection, and speech output.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -7,8 +8,7 @@ import {
   type ModelRef,
 } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.js";
-import type { TextContent } from "../llm/types.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+import { sanitizeAssistantVisibleText } from "../shared/text/assistant-visible-text.js";
 import type { ResolvedTtsConfig } from "./tts-types.js";
 export {
   normalizeApplyTextNormalization,
@@ -20,7 +20,7 @@ export {
 } from "./tts-provider-helpers.js";
 
 type SummarizeTextDeps = {
-  completeSimple: typeof import("../llm/stream.js").completeSimple;
+  completeWithPreparedSimpleCompletionModel: typeof import("../agents/simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel;
   prepareSimpleCompletionModel: typeof import("../agents/simple-completion-runtime.js").prepareSimpleCompletionModel;
   requireApiKey: typeof import("../agents/model-auth.js").requireApiKey;
 };
@@ -31,11 +31,11 @@ function loadDefaultSummarizeTextDeps(): Promise<SummarizeTextDeps> {
   // Speech provider imports should not initialize the LLM stack. Load it only
   // when synthesis actually needs summarization, then reuse the module bindings.
   return (defaultSummarizeTextDepsPromise ??= Promise.all([
-    import("../llm/stream.js"),
     import("../agents/simple-completion-runtime.js"),
     import("../agents/model-auth.js"),
-  ]).then(([stream, completionRuntime, { requireApiKey }]) => ({
-    completeSimple: stream.completeSimple,
+  ]).then(([completionRuntime, { requireApiKey }]) => ({
+    completeWithPreparedSimpleCompletionModel:
+      completionRuntime.completeWithPreparedSimpleCompletionModel,
     prepareSimpleCompletionModel: completionRuntime.prepareSimpleCompletionModel,
     requireApiKey,
   })));
@@ -75,10 +75,6 @@ function resolveSummaryModelRef(
   return { ref: resolved.ref, source: "summaryModel" };
 }
 
-function isTextContentBlock(block: { type: string }): block is TextContent {
-  return block.type === "text";
-}
-
 /** Summarize long text before synthesis using the configured summary model. */
 export async function summarizeText(
   params: {
@@ -104,7 +100,6 @@ export async function summarizeText(
     cfg,
     provider: ref.provider,
     modelId: ref.model,
-    useAsyncModelResolution: true,
   });
   if ("error" in prepared) {
     throw new Error(prepared.error);
@@ -120,9 +115,10 @@ export async function summarizeText(
     try {
       // Keep summarization on the simple-completion path so provider auth,
       // aliases, and timeout behavior match other lightweight model calls.
-      const res = await resolvedDeps.completeSimple(
-        completionModel,
-        {
+      const res = await resolvedDeps.completeWithPreparedSimpleCompletionModel({
+        model: completionModel,
+        auth: { ...prepared.auth, apiKey: providerKey },
+        context: {
           messages: [
             {
               role: "user",
@@ -135,19 +131,22 @@ export async function summarizeText(
             },
           ],
         },
-        {
-          apiKey: providerKey,
+        cfg,
+        options: {
           maxTokens: Math.ceil(targetLength / 2),
           temperature: 0.3,
+          // Summary text is spoken; never recover incomplete reasoning as visible prose.
+          strictReasoningTags: true,
           signal: controller.signal,
         },
+      });
+      const summary = sanitizeAssistantVisibleText(
+        res.content
+          .filter((block) => block.type === "text")
+          .map((block) => block.text.trim())
+          .filter(Boolean)
+          .join(" "),
       );
-      const summary = res.content
-        .filter(isTextContentBlock)
-        .map((block) => block.text.trim())
-        .filter(Boolean)
-        .join(" ")
-        .trim();
 
       if (!summary) {
         throw new Error("No summary returned");

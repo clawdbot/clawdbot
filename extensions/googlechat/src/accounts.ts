@@ -247,6 +247,21 @@ export function resolveGoogleChatAccount(params: {
 export function inspectGoogleChatAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
-}): ResolvedGoogleChatAccount {
-  return resolveGoogleChatAccountWithMode({ ...params, mode: "inspect" });
+}) {
+  const account = resolveGoogleChatAccountWithMode({ ...params, mode: "inspect" });
+  return {
+    ...account,
+    configured: isGoogleChatAccountConfigured(account),
+    audienceType: account.config.audienceType,
+    audience: account.config.audience,
+    webhookPath: account.config.webhookPath,
+    webhookUrl: account.config.webhookUrl,
+    dmPolicy: account.config.dmPolicy ?? "pairing",
+  };
+}
+
+export function isGoogleChatAccountConfigured(account: ResolvedGoogleChatAccount): boolean {
+  return account.tokenStatus
+    ? account.tokenStatus !== "missing"
+    : account.credentialSource !== "none";
 }

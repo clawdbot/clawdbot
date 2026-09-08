@@ -1,11 +1,13 @@
 // Feishu plugin module implements perm behavior.
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import type { OpenClawPluginApi } from "../runtime-api.js";
-import { listEnabledFeishuAccounts } from "./accounts.js";
 import { FeishuPermSchema, type FeishuPermParams } from "./perm-schema.js";
 import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
-import { toolExecutionErrorResult, unknownToolActionResult } from "./tool-result.js";
+import {
+  feishuExternalToolResult as jsonResult,
+  toolExecutionErrorResult,
+  unknownToolActionResult,
+} from "./tool-result.js";
 
 type ListTokenType =
   | "doc"
@@ -115,12 +117,7 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
     return;
   }
 
-  const accounts = listEnabledFeishuAccounts(api.config);
-  if (accounts.length === 0) {
-    return;
-  }
-
-  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(accounts);
+  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(api.config);
   if (!toolsCfg.perm) {
     return;
   }
@@ -132,6 +129,7 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
       const defaultAccountId = ctx.agentAccountId;
       return {
         name: "feishu_perm",
+        resultContentSource: "network",
         label: "Feishu Perm",
         description: "Feishu permission management. Actions: list, add, remove",
         parameters: FeishuPermSchema,

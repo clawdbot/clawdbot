@@ -3,7 +3,7 @@
  * OpenClaw diagnostic flags.
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-flags";
 
 const PROFILER_FLAGS = ["profiler", "codex.profiler"] as const;
 

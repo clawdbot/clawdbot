@@ -4,9 +4,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const nodePtyMocks = vi.hoisted(() => ({
   spawn: vi.fn(),
 }));
+const processTreeMocks = vi.hoisted(() => ({
+  signalProcessTree: vi.fn((_pid: number, _signal: string, opts?: { onComplete?: () => void }) =>
+    opts?.onComplete?.(),
+  ),
+}));
 
 vi.mock("@lydell/node-pty", () => ({
   spawn: nodePtyMocks.spawn,
+}));
+vi.mock("../process/kill-tree.js", () => ({
+  signalProcessTree: processTreeMocks.signalProcessTree,
 }));
 
 import { startPty } from "./tui-pty-test-support.js";
@@ -23,12 +31,36 @@ function createMockPty(overrides: Partial<IPty> = {}): IPty {
 describe("TUI PTY test support", () => {
   beforeEach(() => {
     nodePtyMocks.spawn.mockReset();
+    processTreeMocks.signalProcessTree.mockClear();
+    vi.unstubAllEnvs();
+  });
+
+  it("removes explicitly cleared inherited environment variables", () => {
+    vi.stubEnv("OPENCLAW_TUI_PTY_PARENT_ONLY", "parent");
+    nodePtyMocks.spawn.mockReturnValue(createMockPty());
+
+    startPty("node", [], {
+      cwd: process.cwd(),
+      env: {
+        OPENCLAW_TUI_PTY_PARENT_ONLY: undefined,
+        OPENCLAW_TUI_PTY_CHILD_ONLY: "child",
+      },
+      exitTimeoutMs: 1_000,
+      outputTimeoutMs: 1_000,
+    });
+
+    const spawnOptions = nodePtyMocks.spawn.mock.calls[0]?.[2];
+    expect(spawnOptions?.env).not.toHaveProperty("OPENCLAW_TUI_PTY_PARENT_ONLY");
+    expect(spawnOptions?.env).toMatchObject({
+      OPENCLAW_TUI_PTY_CHILD_ONLY: "child",
+      TERM: "xterm-256color",
+    });
   });
 
   it("applies fixture-specific terminal dimensions", () => {
     nodePtyMocks.spawn.mockReturnValue(createMockPty());
 
-    startPty("node", [], {
+    const run = startPty("node", [], {
       cwd: process.cwd(),
       env: {
         OPENCLAW_TUI_PTY_COLS: "72",
@@ -46,12 +78,13 @@ describe("TUI PTY test support", () => {
         rows: 20,
       }),
     );
+    expect(run).toMatchObject({ cols: 72, rows: 20 });
   });
 
   it("falls back when fixture-specific terminal dimensions are invalid", () => {
     nodePtyMocks.spawn.mockReturnValue(createMockPty());
 
-    startPty("node", [], {
+    const run = startPty("node", [], {
       cwd: process.cwd(),
       env: {
         OPENCLAW_TUI_PTY_COLS: "0",
@@ -69,6 +102,7 @@ describe("TUI PTY test support", () => {
         rows: 30,
       }),
     );
+    expect(run).toMatchObject({ cols: 100, rows: 30 });
   });
 
   it.each([
@@ -189,13 +223,86 @@ describe("TUI PTY test support", () => {
 
     const disposal = run.dispose();
     expect(run.dispose()).toBe(disposal);
-    expect(order).toEqual(["data-dispose", "kill"]);
+    expect(order).toEqual(["kill"]);
 
     order.push("exit");
     exitListener?.({ exitCode: 0 });
     await disposal;
 
-    expect(order).toEqual(["data-dispose", "kill", "exit", "exit-dispose"]);
+    expect(order).toEqual(["kill", "exit", "data-dispose", "exit-dispose"]);
     expect(kill).toHaveBeenCalledWith("SIGTERM");
+  });
+
+  it("force-kills the owned process tree when graceful disposal times out", async () => {
+    const order: string[] = [];
+    const kill = vi.fn(() => order.push("term"));
+    nodePtyMocks.spawn.mockReturnValue(
+      createMockPty({
+        pid: 4242,
+        kill,
+        onData: vi.fn(() => ({ dispose: () => order.push("data-dispose") })),
+        onExit: vi.fn(() => ({ dispose: () => order.push("exit-dispose") })),
+      }),
+    );
+    processTreeMocks.signalProcessTree.mockImplementation((_pid, _signal, opts) => {
+      order.push("force");
+      opts?.onComplete?.();
+    });
+
+    const run = startPty("node", [], {
+      cwd: process.cwd(),
+      env: {},
+      exitTimeoutMs: 1,
+      outputTimeoutMs: 1_000,
+    });
+
+    await run.dispose();
+
+    expect(kill).toHaveBeenCalledWith("SIGTERM");
+    expect(processTreeMocks.signalProcessTree).toHaveBeenCalledWith(4242, "SIGKILL", {
+      onComplete: expect.any(Function),
+    });
+    expect(order).toEqual(["term", "force", "data-dispose", "exit-dispose"]);
+  });
+
+  it("force-kills the PTY and waits for its exit event", async () => {
+    const order: string[] = [];
+    let exitListener: ((event: { exitCode: number; signal?: number }) => void) | undefined;
+    processTreeMocks.signalProcessTree.mockImplementation((_pid, _signal, opts) => {
+      order.push("kill");
+      opts?.onComplete?.();
+    });
+    nodePtyMocks.spawn.mockReturnValue(
+      createMockPty({
+        pid: 4242,
+        onData: vi.fn(() => ({ dispose: () => order.push("data-dispose") })),
+        onExit: vi.fn((listener: typeof exitListener) => {
+          exitListener = listener;
+          return { dispose: () => order.push("exit-dispose") };
+        }),
+      }),
+    );
+
+    const run = startPty("node", [], {
+      cwd: process.cwd(),
+      env: {},
+      exitTimeoutMs: 1_000,
+      outputTimeoutMs: 1_000,
+    });
+
+    const forcedExit = run.forceKill();
+    expect(run.forceKill()).toBe(forcedExit);
+    expect(order).toEqual(["kill"]);
+    expect(processTreeMocks.signalProcessTree).toHaveBeenCalledWith(4242, "SIGKILL", {
+      onComplete: expect.any(Function),
+    });
+
+    order.push("exit");
+    exitListener?.({ exitCode: 0, signal: 9 });
+    await forcedExit;
+    expect(run.dispose()).toBe(forcedExit);
+
+    expect(order).toEqual(["kill", "exit", "data-dispose", "exit-dispose"]);
+    expect(processTreeMocks.signalProcessTree).toHaveBeenCalledTimes(1);
   });
 });

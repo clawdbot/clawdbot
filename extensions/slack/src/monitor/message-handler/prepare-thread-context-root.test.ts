@@ -19,49 +19,14 @@ type SlackThreadRootCandidate = {
 describe("isSlackThreadAuthorCurrentBot", () => {
   const identity = { botUserId: "U_BOT", botId: "B1" };
 
-  it("matches the configured bot user id", () => {
-    expect(
-      isSlackThreadAuthorCurrentBot({
-        identity,
-        author: { userId: "U_BOT" },
-      }),
-    ).toBe(true);
-  });
-
-  it("matches the configured bot id", () => {
-    expect(
-      isSlackThreadAuthorCurrentBot({
-        identity,
-        author: { botId: "B1" },
-      }),
-    ).toBe(true);
-  });
-
-  it("does not match a different bot id", () => {
-    expect(
-      isSlackThreadAuthorCurrentBot({
-        identity,
-        author: { botId: "B2" },
-      }),
-    ).toBe(false);
-  });
-
-  it("does not match a regular user", () => {
-    expect(
-      isSlackThreadAuthorCurrentBot({
-        identity,
-        author: { userId: "U1" },
-      }),
-    ).toBe(false);
-  });
-
-  it("returns false when identity has no bot ids", () => {
-    expect(
-      isSlackThreadAuthorCurrentBot({
-        identity: {},
-        author: { userId: "U_BOT", botId: "B1" },
-      }),
-    ).toBe(false);
+  it.each([
+    ["matches the configured bot user id", identity, { userId: "U_BOT" }, true],
+    ["matches the configured bot id", identity, { botId: "B1" }, true],
+    ["does not match a different bot id", identity, { botId: "B2" }, false],
+    ["does not match a regular user", identity, { userId: "U1" }, false],
+    ["returns false when identity has no bot ids", {}, { userId: "U_BOT", botId: "B1" }, false],
+  ] as const)("%s", (_name, botIdentity, author, expected) => {
+    expect(isSlackThreadAuthorCurrentBot({ identity: botIdentity, author })).toBe(expected);
   });
 });
 
@@ -72,7 +37,7 @@ describe("resolveSlackThreadHistoryFilterPolicy", () => {
         includeBotStarterAsRootContext: true,
         starterTs: "1",
       }),
-    ).toEqual({ retainCurrentBotRootTs: "1" });
+    ).toEqual({ currentBot: "root-only", rootTs: "1" });
   });
 
   it("filters current-bot messages on existing sessions", () => {
@@ -81,7 +46,17 @@ describe("resolveSlackThreadHistoryFilterPolicy", () => {
         includeBotStarterAsRootContext: false,
         starterTs: "1",
       }),
-    ).toEqual({});
+    ).toEqual({ currentBot: "omit" });
+  });
+
+  it("retains current-bot history when the owner requests thread reconstruction", () => {
+    expect(
+      resolveSlackThreadHistoryFilterPolicy({
+        includeBotStarterAsRootContext: false,
+        starterTs: "1",
+        retainCurrentBotHistory: true,
+      }),
+    ).toEqual({ currentBot: "all" });
   });
 });
 
@@ -96,7 +71,7 @@ describe("applySlackThreadHistoryFilterPolicy", () => {
     ];
     const result = applySlackThreadHistoryFilterPolicy({
       history,
-      policy: { retainCurrentBotRootTs: "1" },
+      policy: { currentBot: "root-only", rootTs: "1" },
       identity,
     });
     expect(result.kept.map((entry) => entry.ts)).toEqual(["1", "2"]);
@@ -112,17 +87,32 @@ describe("applySlackThreadHistoryFilterPolicy", () => {
     ];
     const result = applySlackThreadHistoryFilterPolicy({
       history,
-      policy: {},
+      policy: { currentBot: "omit" },
       identity,
     });
     expect(result.kept.map((entry) => entry.ts)).toEqual(["3", "4"]);
     expect(result.omittedCurrentBot).toBe(2);
   });
 
+  it("keeps all current-bot messages when reconstructing a fresh thread", () => {
+    const history = [
+      { ts: "1", userId: "U1", text: "user root" },
+      { ts: "2", botId: "B1", text: "assistant reply" },
+      { ts: "3", userId: "U_BOT", text: "assistant follow-up" },
+    ];
+    const result = applySlackThreadHistoryFilterPolicy({
+      history,
+      policy: { currentBot: "all" },
+      identity,
+    });
+    expect(result.kept).toEqual(history);
+    expect(result.omittedCurrentBot).toBe(0);
+  });
+
   it("returns an empty result for empty history", () => {
     const result = applySlackThreadHistoryFilterPolicy({
       history: [] as Array<{ ts: string; userId?: string; botId?: string }>,
-      policy: {},
+      policy: { currentBot: "omit" },
       identity,
     });
     expect(result.kept).toEqual([]);
@@ -131,44 +121,29 @@ describe("applySlackThreadHistoryFilterPolicy", () => {
 });
 
 describe("shouldIncludeBotThreadStarterContext", () => {
-  it("includes when starter is bot, session is new, and starter has text", () => {
-    expect(
-      shouldIncludeBotThreadStarterContext({
-        starterIsCurrentBot: true,
-        isNewThreadSession: true,
-        hasStarterText: true,
-      }),
-    ).toBe(true);
-  });
-
-  it("does not include when starter is not the current bot", () => {
-    expect(
-      shouldIncludeBotThreadStarterContext({
-        starterIsCurrentBot: false,
-        isNewThreadSession: true,
-        hasStarterText: true,
-      }),
-    ).toBe(false);
-  });
-
-  it("does not include when session is not new", () => {
-    expect(
-      shouldIncludeBotThreadStarterContext({
-        starterIsCurrentBot: true,
-        isNewThreadSession: false,
-        hasStarterText: true,
-      }),
-    ).toBe(false);
-  });
-
-  it("does not include when starter has no text", () => {
-    expect(
-      shouldIncludeBotThreadStarterContext({
-        starterIsCurrentBot: true,
-        isNewThreadSession: true,
-        hasStarterText: false,
-      }),
-    ).toBe(false);
+  it.each([
+    [
+      "includes when starter is bot, session is new, and starter has text",
+      { starterIsCurrentBot: true, isNewThreadSession: true, hasStarterText: true },
+      true,
+    ],
+    [
+      "does not include when starter is not the current bot",
+      { starterIsCurrentBot: false, isNewThreadSession: true, hasStarterText: true },
+      false,
+    ],
+    [
+      "does not include when session is not new",
+      { starterIsCurrentBot: true, isNewThreadSession: false, hasStarterText: true },
+      false,
+    ],
+    [
+      "does not include when starter has no text",
+      { starterIsCurrentBot: true, isNewThreadSession: true, hasStarterText: false },
+      false,
+    ],
+  ] as const)("%s", (_name, params, expected) => {
+    expect(shouldIncludeBotThreadStarterContext(params)).toBe(expected);
   });
 });
 

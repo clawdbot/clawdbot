@@ -1,5 +1,6 @@
 import { readClawPackageRefs, type PersistedClawPackageRef } from "../claws/provenance.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 
 function clawPackageRefMatchesPluginInstall(
@@ -10,8 +11,7 @@ function clawPackageRefMatchesPluginInstall(
   if (ref.kind !== "plugin" || ref.source !== "clawhub" || record.source !== "clawhub") {
     return false;
   }
-  const installedRef =
-    record.clawhubPackage ?? record.spec?.replace(/^clawhub:/i, "").replace(/@[^@]+$/, "");
+  const installedRef = record.clawhubPackage ?? parseClawHubPluginSpec(record.spec ?? "")?.name;
   return (installedRef ?? pluginId) === ref.ref;
 }
 

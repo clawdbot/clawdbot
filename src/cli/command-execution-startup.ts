@@ -1,42 +1,21 @@
-// CLI startup context, banner/log presentation, and bootstrap orchestration.
+// CLI startup presentation and config-before-plugin bootstrap.
 import type { ConfigFileSnapshot } from "../config/types.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { resolveCliArgvInvocation } from "./argv-invocation.js";
-import { ensureCliCommandBootstrap } from "./command-bootstrap.js";
-import { resolveCliStartupPolicy } from "./command-startup-policy.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import type { resolveCliStartupPolicy } from "./command-startup-policy.js";
+import { measureCliCommandStartup } from "./command-startup-timing.js";
+import { ensureCliPluginRegistryLoaded } from "./plugin-registry-loader.js";
 
 type CliStartupPolicy = ReturnType<typeof resolveCliStartupPolicy>;
+
+const configGuardModuleLoader = createLazyImportLoader(() => import("./program/config-guard.js"));
 
 const hasJsonFlag = (argv: readonly string[]) =>
   argv.some((arg) => arg === "--json" || arg.startsWith("--json="));
 
 const hasVersionFlag = (argv: readonly string[]) =>
   argv.some((arg) => arg === "--version" || arg === "-V");
-
-export function resolveCliExecutionStartupContext(params: {
-  argv: string[];
-  protocolCommandPath?: string[];
-  jsonOutputMode: boolean;
-  env?: NodeJS.ProcessEnv;
-  routeMode?: boolean;
-}) {
-  // Resolve argv once so startup policy, routing, and bootstrap share the same command path.
-  const invocation = resolveCliArgvInvocation(params.argv);
-  const { commandPath } = invocation;
-  return {
-    invocation,
-    commandPath,
-    startupPolicy: resolveCliStartupPolicy({
-      argv: params.argv,
-      commandPath,
-      protocolCommandPath: params.protocolCommandPath,
-      jsonOutputMode: params.jsonOutputMode,
-      env: params.env,
-      routeMode: params.routeMode,
-    }),
-  };
-}
 
 export async function applyCliExecutionStartupPresentation(params: {
   argv?: string[];
@@ -71,23 +50,46 @@ export async function ensureCliExecutionBootstrap(params: {
   beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
   loadPlugins?: boolean;
   skipConfigGuard?: boolean;
+  validateConfigOnly?: boolean;
   skipPristineCoreStateMigrations?: boolean;
   skipPristineStartupStateMigrations?: boolean;
 }) {
-  await ensureCliCommandBootstrap({
-    runtime: params.runtime,
-    commandPath: params.commandPath,
-    suppressDoctorStdout: params.startupPolicy.suppressDoctorStdout,
-    allowInvalid: params.allowInvalid,
-    ...(params.beforeStateMigrations
-      ? { beforeStateMigrations: params.beforeStateMigrations }
-      : {}),
-    loadPlugins: params.loadPlugins ?? params.startupPolicy.loadPlugins,
-    pluginRegistry: params.startupPolicy.pluginRegistry,
-    skipConfigGuard: params.skipConfigGuard ?? params.startupPolicy.skipConfigGuard,
-    ...(params.skipPristineStartupStateMigrations
-      ? { skipPristineStartupStateMigrations: true }
-      : {}),
-    ...(params.skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),
-  });
+  const {
+    runtime,
+    commandPath,
+    startupPolicy,
+    allowInvalid,
+    beforeStateMigrations,
+    skipPristineCoreStateMigrations,
+    skipPristineStartupStateMigrations,
+  } = params;
+  const { suppressDoctorStdout, pluginRegistry } = startupPolicy;
+  const loadPlugins = params.loadPlugins ?? startupPolicy.loadPlugins;
+  const skipConfigGuard = params.skipConfigGuard ?? startupPolicy.skipConfigGuard;
+  const validateConfigOnly = params.validateConfigOnly ?? startupPolicy.validateConfigOnly;
+  if (!skipConfigGuard) {
+    await measureCliCommandStartup("config-ready", async () => {
+      const { ensureConfigReady } = await configGuardModuleLoader.load();
+      await ensureConfigReady({
+        runtime,
+        commandPath,
+        measure: (stage, run) => measureCliCommandStartup(stage, run),
+        ...(allowInvalid ? { allowInvalid: true } : {}),
+        ...(validateConfigOnly ? { validateConfigOnly: true } : {}),
+        ...(beforeStateMigrations ? { beforeStateMigrations } : {}),
+        ...(suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
+        ...(skipPristineStartupStateMigrations ? { skipPristineStartupStateMigrations: true } : {}),
+        ...(skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),
+      });
+    });
+  }
+  if (!loadPlugins) {
+    return;
+  }
+  await measureCliCommandStartup("plugin-registry", () =>
+    ensureCliPluginRegistryLoaded({
+      scope: pluginRegistry.scope,
+      routeLogsToStderr: suppressDoctorStdout,
+    }),
+  );
 }

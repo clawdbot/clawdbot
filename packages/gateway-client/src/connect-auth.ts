@@ -43,7 +43,11 @@ export function selectGatewayConnectAuth(params: {
   const storedToken = normalized(params.storedToken);
   const stored = { storedToken, storedScopes: params.storedScopes };
   if (params.preferBootstrapToken && bootstrapToken) {
-    return { authBootstrapToken: bootstrapToken, authPassword, ...stored };
+    return {
+      authBootstrapToken: bootstrapToken,
+      signatureToken: bootstrapToken,
+      ...stored,
+    };
   }
   const useRetryToken =
     params.pendingDeviceTokenRetry === true &&
@@ -61,7 +65,9 @@ export function selectGatewayConnectAuth(params: {
   const authBootstrapToken =
     !authToken && !resolvedDeviceToken && !authPassword ? bootstrapToken : undefined;
   return {
-    authToken: selectedToken,
+    // Only explicit shared auth may suppress verified human identity. Cached
+    // device credentials belong in deviceToken, even though both are signed.
+    authToken,
     authBootstrapToken,
     authDeviceToken: useRetryToken ? storedToken : undefined,
     authPassword,

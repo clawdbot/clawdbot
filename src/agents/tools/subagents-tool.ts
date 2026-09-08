@@ -9,16 +9,23 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listTaskRecordsUnsorted } from "../../tasks/runtime-internal.js";
 import { cancelDetachedTaskRunById } from "../../tasks/task-executor.js";
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
+import { resolveTaskSessionAgentId } from "../../tasks/task-session-identity.js";
+import { TASK_STATUS_DETAIL_MAX_CHARS, sanitizeTaskStatusText } from "../../tasks/task-status.js";
 import { optionalPositiveIntegerSchema, optionalStringEnum } from "../schema/typebox.js";
 import {
   DEFAULT_RECENT_MINUTES,
   listControlledSubagentRuns,
   MAX_RECENT_MINUTES,
   resolveSubagentController,
-} from "../subagent-control.js";
-import { buildSubagentList } from "../subagent-list.js";
+} from "../subagents/registry/subagent-control.js";
+import { buildSubagentList } from "../subagents/registry/subagent-list.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readPositiveIntegerParam, readStringParam } from "./common.js";
+import {
+  jsonResult,
+  readPositiveIntegerParam,
+  readToolStringParam,
+  ToolInputError,
+} from "./common.js";
 
 const SUBAGENT_ACTIONS = ["list", "cancel"] as const;
 type SubagentAction = (typeof SUBAGENT_ACTIONS)[number];
@@ -41,6 +48,12 @@ const STATUS_MAP: Record<TaskStatus, string> = {
 
 type SubagentsToolOptions = {
   agentSessionKey?: string;
+  /** Policy/sandbox key retained task rows may still carry from pre-change code, when it
+   * differs from the durable {@link agentSessionKey}. Lets split-key callers (e.g. Telegram
+   * DM) keep seeing and cancelling retained media/spawn tasks created before the durable-key
+   * alignment. Undefined and equal-to-agentSessionKey values are no-ops. */
+  callerPolicySessionKey?: string;
+  agentId?: string;
   config?: OpenClawConfig;
   listTasks?: typeof listTaskRecordsUnsorted;
   cancelTask?: typeof cancelDetachedTaskRunById;
@@ -50,8 +63,28 @@ function taskUpdatedAt(task: TaskRecord): number {
   return task.lastEventAt ?? task.endedAt ?? task.startedAt ?? task.createdAt;
 }
 
-function listTreeTasks(tasks: TaskRecord[], rootSessionKey: string): TaskRecord[] {
-  const visibleKeys = new Set([rootSessionKey]);
+function taskOwnerMatches(
+  task: TaskRecord,
+  allowedOwnerKeys: ReadonlySet<string>,
+  agentId: string,
+  cfg: OpenClawConfig,
+): boolean {
+  return (
+    allowedOwnerKeys.has(task.ownerKey) &&
+    resolveTaskSessionAgentId(task.ownerKey, task.requesterAgentId, cfg) === agentId
+  );
+}
+
+function listTreeTasks(
+  tasks: TaskRecord[],
+  rootSessionKeys: ReadonlySet<string>,
+  rootAgentId: string,
+  cfg: OpenClawConfig,
+): TaskRecord[] {
+  const visibleSessions = new Set<string>();
+  for (const key of rootSessionKeys) {
+    visibleSessions.add(`${rootAgentId}\0${key}`);
+  }
   const visibleTasks = new Set<string>();
   let changed = true;
   while (changed) {
@@ -60,13 +93,21 @@ function listTreeTasks(tasks: TaskRecord[], rootSessionKey: string): TaskRecord[
       if (task.scopeKind !== "session" || visibleTasks.has(task.taskId)) {
         continue;
       }
-      if (!visibleKeys.has(task.ownerKey)) {
+      const taskRequesterAgentId = resolveTaskSessionAgentId(
+        task.ownerKey,
+        task.requesterAgentId,
+        cfg,
+      );
+      if (!visibleSessions.has(`${taskRequesterAgentId ?? ""}\0${task.ownerKey}`)) {
         continue;
       }
       visibleTasks.add(task.taskId);
-      if (task.childSessionKey && !visibleKeys.has(task.childSessionKey)) {
-        visibleKeys.add(task.childSessionKey);
-        changed = true;
+      if (task.childSessionKey) {
+        const childIdentity = `${task.agentId ?? taskRequesterAgentId ?? ""}\0${task.childSessionKey}`;
+        if (!visibleSessions.has(childIdentity)) {
+          visibleSessions.add(childIdentity);
+          changed = true;
+        }
       }
     }
   }
@@ -74,13 +115,23 @@ function listTreeTasks(tasks: TaskRecord[], rootSessionKey: string): TaskRecord[
 }
 
 function mapTask(task: TaskRecord) {
+  // Task failures can contain hidden provider/runtime context; reuse the bounded status owner.
+  const error = sanitizeTaskStatusText(task.error, {
+    errorContext: true,
+    maxChars: TASK_STATUS_DETAIL_MAX_CHARS,
+  });
   return {
     taskId: task.taskId,
     runtime: task.runtime,
-    status: STATUS_MAP[task.status],
+    status:
+      task.status === "succeeded" && task.terminalOutcome === "blocked"
+        ? "blocked"
+        : STATUS_MAP[task.status],
     ...(task.label ? { label: task.label } : {}),
     ...(task.progressSummary ? { progressSummary: task.progressSummary } : {}),
     ...(task.terminalSummary ? { terminalSummary: task.terminalSummary } : {}),
+    ...(task.terminalOutcome ? { terminalOutcome: task.terminalOutcome } : {}),
+    ...(error ? { error } : {}),
   };
 }
 
@@ -93,7 +144,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
     parameters: SubagentsToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const action = (readStringParam(params, "action") ?? "list") as SubagentAction;
+      const action = (readToolStringParam(params, "action") ?? "list") as SubagentAction;
       const cfg = opts.config ?? getRuntimeConfig();
       const recentMinutesRaw = readPositiveIntegerParam(params, "recentMinutes");
       const recentMinutes =
@@ -103,12 +154,34 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
       const controller = resolveSubagentController({
         cfg,
         agentSessionKey: opts?.agentSessionKey,
+        agentId: opts.agentId,
       });
+      const controllerAgentId = controller.controllerAgentId;
+      if (!controllerAgentId) {
+        throw new ToolInputError("subagent controller agent required");
+      }
+      // Owner keys this caller may match task rows against: the durable controller key plus
+      // the retained policy key, so rows created before the durable-key alignment stay
+      // reachable and cancellable for split-key callers (e.g. Telegram DM).
+      const allowedOwnerKeys = new Set<string>();
+      if (controller.controllerSessionKey) {
+        allowedOwnerKeys.add(controller.controllerSessionKey);
+      }
+      const callerPolicySessionKey = opts?.callerPolicySessionKey?.trim();
+      if (callerPolicySessionKey) {
+        allowedOwnerKeys.add(callerPolicySessionKey);
+      }
       // The caller only sees subagents controlled by its effective controller session.
-      const runs = listControlledSubagentRuns(controller.controllerSessionKey);
+      const runs = listControlledSubagentRuns(
+        controller.controllerSessionKey,
+        controllerAgentId,
+        cfg,
+      );
       const treeTasks = listTreeTasks(
         (opts.listTasks ?? listTaskRecordsUnsorted)(),
-        controller.controllerSessionKey,
+        allowedOwnerKeys,
+        controllerAgentId,
+        cfg,
       );
 
       if (action === "list") {
@@ -143,7 +216,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
       }
 
       if (action === "cancel") {
-        const taskId = readStringParam(params, "taskId", { required: true });
+        const taskId = readToolStringParam(params, "taskId", { required: true });
         const target = treeTasks.find((task) => task.taskId === taskId);
         if (!target) {
           return jsonResult({ status: "forbidden", error: "Task outside session tree." });
@@ -152,7 +225,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
         // control-scope gate every other cross-session subagent mutation enforces.
         if (
           controller.controlScope !== "children" &&
-          target.ownerKey !== controller.callerSessionKey
+          !taskOwnerMatches(target, allowedOwnerKeys, controllerAgentId, cfg)
         ) {
           return jsonResult({
             status: "forbidden",

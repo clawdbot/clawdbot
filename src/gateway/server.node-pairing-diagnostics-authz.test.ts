@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { approveNodePairing, requestNodePairing } from "../infra/node-pairing.js";
+import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { callGateway } from "./call.js";
 import { openTrackedWs, pairDeviceIdentity } from "./device-authz.test-helpers.js";

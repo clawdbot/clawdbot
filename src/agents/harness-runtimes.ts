@@ -5,9 +5,12 @@ import { listModelRefsFromConfigValue } from "@openclaw/model-catalog-core/confi
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
-import { OPENCLAW_AGENT_RUNTIME_ID, isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
-import { normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
-import { listAgentEntries } from "./agent-scope-config.js";
+import {
+  OPENCLAW_AGENT_RUNTIME_ID,
+  isDefaultAgentRuntimeId,
+  normalizeOptionalAgentRuntimeId,
+} from "./agent-runtime-id.js";
+import { listAgentEntries, withAgentRosterFactsBatch } from "./agent-scope-config.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 
 // Harness runtime discovery feeds plugin preloading/setup. Only plugin runtimes
@@ -35,7 +38,7 @@ function parseConfiguredModelRef(
   return parseModelCatalogRef(value) ?? undefined;
 }
 
-function resolveConfiguredModelHarnessRuntime(params: {
+export function resolveConfiguredModelHarnessRuntime(params: {
   config: OpenClawConfig;
   includeImplicitRuntimePreferences: boolean;
   modelRef: string;
@@ -143,11 +146,17 @@ export function collectConfiguredAgentHarnessRuntimes(
   config: OpenClawConfig,
   options: ConfiguredAgentHarnessRuntimeOptions = {},
 ): string[] {
-  const runtimes = new Set<string>();
-  const includeImplicitRuntimePreferences = options.includeImplicitRuntimePreferences ?? true;
+  // Roster facts are memoized for the whole batch: per-reference policy
+  // resolution otherwise re-projects the roster O(agents × models) times,
+  // which blocks the event loop on large fleets (#135743). The batch is a
+  // pure read of config.
+  return withAgentRosterFactsBatch(config, () => {
+    const runtimes = new Set<string>();
+    const includeImplicitRuntimePreferences = options.includeImplicitRuntimePreferences ?? true;
 
-  pushConfiguredModelRuntimeIds(config, runtimes);
-  pushConfiguredAgentModelRuntimeIds(config, runtimes, includeImplicitRuntimePreferences);
+    pushConfiguredModelRuntimeIds(config, runtimes);
+    pushConfiguredAgentModelRuntimeIds(config, runtimes, includeImplicitRuntimePreferences);
 
-  return [...runtimes].toSorted((left, right) => left.localeCompare(right));
+    return [...runtimes].toSorted((left, right) => left.localeCompare(right));
+  });
 }

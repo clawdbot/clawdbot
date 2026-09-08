@@ -1,3 +1,4 @@
+import { normalizeOptionalString as normalizeId } from "openclaw/plugin-sdk/string-coerce-runtime";
 type ActiveDiscordTurnThreadRoute = {
   accountId?: string;
   sourceChannelId: string;
@@ -9,11 +10,6 @@ type ActiveDiscordTurnThreadRoute = {
 };
 
 const activeRoutes = new Map<string, Set<ActiveDiscordTurnThreadRoute>>();
-
-function normalizeId(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed || undefined;
-}
 
 export function beginDiscordActiveTurnThreadRoute(
   sessionKey: string | undefined,

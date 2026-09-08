@@ -3,35 +3,34 @@
  * stay tied to the layer that introduced them, while plugin groups are
  * expanded only after unknown core/plugin entries are classified.
  */
-import { filterToolsByPolicy } from "./agent-tools.policy.js";
+import { isFrozenClawToolAllowPolicy } from "../claws/tool-policy-runtime.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isKnownCoreToolId } from "./tool-catalog.js";
-import { auditToolPolicyFilter, type ToolPolicyAuditLogLevel } from "./tool-policy-audit.js";
+import { auditToolPolicyFilter } from "./tool-policy-audit.js";
+import { filterToolsByPolicy } from "./tool-policy-match.js";
 import {
   analyzeAllowlistByToolType,
   buildPluginToolGroups,
   expandPolicyWithPluginGroups,
-  normalizeToolName,
+  normalizeToolPolicyName,
   type DeclaredToolAllowlistContext,
   type ToolPolicyLike,
 } from "./tool-policy.js";
 
 const MAX_TOOL_POLICY_WARNING_CACHE = 256;
 const seenToolPolicyWarnings = new Set<string>();
-const toolPolicyWarningOrder: string[] = [];
 
 function rememberToolPolicyWarning(warning: string): boolean {
   if (seenToolPolicyWarnings.has(warning)) {
     return false;
   }
   if (seenToolPolicyWarnings.size >= MAX_TOOL_POLICY_WARNING_CACHE) {
-    const oldest = toolPolicyWarningOrder.shift();
+    const oldest = seenToolPolicyWarnings.values().next().value;
     if (oldest) {
       seenToolPolicyWarnings.delete(oldest);
     }
   }
   seenToolPolicyWarnings.add(warning);
-  toolPolicyWarningOrder.push(warning);
   return true;
 }
 
@@ -137,14 +136,13 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
   toolMeta: (tool: TTool) => { pluginId: string } | undefined;
   warn: (message: string) => void;
   steps: ToolPolicyPipelineStep[];
-  auditLogLevel?: ToolPolicyAuditLogLevel;
   declaredToolAllowlist?: DeclaredToolAllowlistContext;
   onFilter?: (event: ToolPolicyFilterEvent<TTool>) => void;
 }): TTool[] {
   const coreToolNames = new Set(
     params.tools
       .filter((tool) => !params.toolMeta(tool))
-      .map((tool) => normalizeToolName(tool.name))
+      .map((tool) => normalizeToolPolicyName(tool.name))
       .filter(Boolean),
   );
 
@@ -159,9 +157,11 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
       continue;
     }
 
-    let policy: ToolPolicyLike | undefined = step.policy;
+    const policy = step.policy;
+    const frozenAllow = isFrozenClawToolAllowPolicy(policy);
     if (step.stripPluginOnlyAllowlist) {
       // Plugin-only allowlists are valid for deferred tools; warn only for entries that cannot match.
+      // Read declarations per layer because callbacks can update the next layer.
       const resolved = analyzeAllowlistByToolType(
         policy,
         pluginGroups,
@@ -171,7 +171,7 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
       if (resolved.unknownAllowlist.length > 0) {
         const unavailableCoreWarningAllowlist = new Set(
           (step.suppressUnavailableCoreToolWarningAllowlist ?? []).map((entry) =>
-            normalizeToolName(entry),
+            normalizeToolPolicyName(entry),
           ),
         );
         const gatedCoreEntries = resolved.unknownAllowlist.filter((entry) =>
@@ -184,15 +184,9 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
           (entry) => !isKnownCoreToolId(entry) && !unavailableCoreWarningAllowlist.has(entry),
         );
         const warningEntries = [...warnableGatedCoreEntries, ...otherEntries];
-        if (
-          shouldWarnAboutUnknownAllowlist({
-            hasGatedCoreEntries: warnableGatedCoreEntries.length > 0,
-            hasOtherEntries: otherEntries.length > 0,
-          })
-        ) {
+        if (warningEntries.length > 0) {
           const entries = warningEntries.join(", ");
           const suffix = describeUnknownAllowlistSuffix({
-            pluginOnlyAllowlist: resolved.pluginOnlyAllowlist,
             hasGatedCoreEntries: warnableGatedCoreEntries.length > 0,
             hasOtherEntries: otherEntries.length > 0,
             unavailableCoreToolReason: step.unavailableCoreToolReason,
@@ -203,10 +197,14 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
           }
         }
       }
-      policy = resolved.policy;
     }
 
-    const expanded = expandPolicyWithPluginGroups(policy, pluginGroups);
+    const expanded = frozenAllow
+      ? {
+          allow: policy.allow,
+          deny: expandPolicyWithPluginGroups({ deny: policy.deny }, pluginGroups)?.deny,
+        }
+      : expandPolicyWithPluginGroups(policy, pluginGroups);
     if (!expanded) {
       continue;
     }
@@ -218,28 +216,16 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
       policy: expanded,
       before,
       after: filtered,
-      logLevel: params.auditLogLevel,
     });
   }
   return filtered;
 }
 
-function shouldWarnAboutUnknownAllowlist(params: {
-  hasGatedCoreEntries: boolean;
-  hasOtherEntries: boolean;
-}): boolean {
-  return params.hasGatedCoreEntries || params.hasOtherEntries;
-}
-
 function describeUnknownAllowlistSuffix(params: {
-  pluginOnlyAllowlist: boolean;
   hasGatedCoreEntries: boolean;
   hasOtherEntries: boolean;
   unavailableCoreToolReason?: string;
 }): string {
-  const preface = params.pluginOnlyAllowlist
-    ? "Allowlist contains only plugin entries; core tools will not be available."
-    : "";
   const unavailableCoreToolReason = params.unavailableCoreToolReason?.trim();
   const unavailableCoreDetail = unavailableCoreToolReason
     ? `These entries are shipped core tools but unavailable here: ${unavailableCoreToolReason}.`
@@ -247,23 +233,9 @@ function describeUnknownAllowlistSuffix(params: {
   const mixedUnavailableCoreDetail = unavailableCoreToolReason
     ? `Some entries are shipped core tools but unavailable here: ${unavailableCoreToolReason}; other entries won't match any tool unless the plugin is enabled.`
     : "Some entries are shipped core tools but unavailable in the current runtime/provider/model/config; other entries won't match any tool unless the plugin is enabled.";
-  const detail =
-    params.hasGatedCoreEntries && params.hasOtherEntries
-      ? mixedUnavailableCoreDetail
-      : params.hasGatedCoreEntries
-        ? unavailableCoreDetail
-        : "These entries won't match any tool unless the plugin is enabled.";
-  return preface ? `${preface} ${detail}` : detail;
-}
-
-/** Clears process-local warning dedupe state between tests. */
-function resetToolPolicyWarningCacheForTest(): void {
-  seenToolPolicyWarnings.clear();
-  toolPolicyWarningOrder.length = 0;
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.toolPolicyWarningCacheTestApi")
-  ] = { resetToolPolicyWarningCacheForTest };
+  return params.hasGatedCoreEntries && params.hasOtherEntries
+    ? mixedUnavailableCoreDetail
+    : params.hasGatedCoreEntries
+      ? unavailableCoreDetail
+      : "These entries won't match any tool unless the plugin is enabled.";
 }

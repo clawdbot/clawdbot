@@ -1,10 +1,13 @@
+import { runInNewContext } from "node:vm";
+import { nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import {
   createBrowserClient,
   createBrowserPanelTestController,
   createBrowserPanelTestMetrics,
   createBrowserPanelTestTab,
-  createDeferred,
   createInspectedNode,
   createPointer,
   createView,
@@ -15,6 +18,7 @@ import {
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
 import { BrowserPanelController } from "./browser-panel-controller.ts";
+import { renderBrowserPanelChrome } from "./browser-panel-render.ts";
 
 setupBrowserPanelTestCleanup();
 
@@ -54,6 +58,67 @@ describe("BrowserPanelController capture and input ownership", () => {
     expect(controller.errorText).toBe("Browser request failed: Tab focus rejected");
     expect(controller.loading).toBe(false);
   });
+
+  it.each(["navigation", "focus rejection"] as const)(
+    "does not restore a stale view when %s settles first",
+    async (first) => {
+      const navigation = createDeferred<{ ok: boolean }>();
+      const focus = createDeferred<{ ok: boolean }>();
+      const initialUrl = "https://example.test/initial";
+      const destinationUrl = "https://example.test/destination";
+      const { client, request } = createBrowserClient(async (envelope) => {
+        if (envelope.path === "/navigate") {
+          return await navigation.promise;
+        }
+        if (envelope.path === "/tabs/focus") {
+          return await focus.promise;
+        }
+        throw new Error(`Unexpected browser route: ${envelope.path}`);
+      });
+      const controller = createBrowserPanelTestController(client, "tab-a", initialUrl);
+      controller.tabs = [
+        {
+          kind: "remote" as const,
+          id: "tab-a",
+          targetId: "raw-a",
+          title: "Initial",
+          url: initialUrl,
+        },
+        {
+          kind: "remote" as const,
+          id: "tab-b",
+          targetId: "raw-b",
+          title: "Selected",
+          url: "https://example.test/selected",
+        },
+      ];
+
+      const pendingNavigation = controller.openUrl(destinationUrl, { newTab: false });
+      await flushBrowserResponses();
+      const pendingSelection = controller.selectTab("tab-b");
+      if (first === "navigation") {
+        navigation.resolve({ ok: true });
+        await pendingNavigation;
+        focus.reject(new Error("Tab focus rejected"));
+        await pendingSelection;
+      } else {
+        focus.reject(new Error("Tab focus rejected"));
+        await pendingSelection;
+        navigation.resolve({ ok: true });
+        await pendingNavigation;
+      }
+
+      expect(controller.activeTargetId).toBeNull();
+      expect(controller.view).toBeNull();
+      expect(controller.urlDraft).toBe("");
+      expect(controller.errorText).toBe("Browser request failed: Tab focus rejected");
+      expect(
+        request.mock.calls.filter(([, envelope]) => {
+          return (envelope as BrowserRequestEnvelope).path === "/tabs";
+        }),
+      ).toEqual([]);
+    },
+  );
 
   it("retains a newly opened tab after its original active tab closes", async () => {
     stubScreenshotMedia();
@@ -233,8 +298,15 @@ describe("BrowserPanelController capture and input ownership", () => {
     const activeView = createView("active-tab", activeUrl);
     controller.view = activeView;
     controller.tabs = [
-      { id: "active-tab", targetId: "raw-active", title: "Active", url: activeUrl },
       {
+        kind: "remote" as const,
+        id: "active-tab",
+        targetId: "raw-active",
+        title: "Active",
+        url: activeUrl,
+      },
+      {
+        kind: "remote" as const,
         id: "background-tab",
         targetId: "raw-background",
         title: "Background",
@@ -378,6 +450,71 @@ describe("BrowserPanelController capture and input ownership", () => {
     expect(controller.loading).toBe(false);
   });
 
+  it("does not poll tab metadata after a committed background navigation", async () => {
+    stubScreenshotMedia();
+    const navigation = createDeferred<{ ok: boolean }>();
+    const initialUrl = "https://example.test/initial";
+    const destinationUrl = "https://example.test/destination";
+    const selectedUrl = "https://example.test/selected";
+    const { client, request } = createBrowserClient(async (envelope) => {
+      if (envelope.path === "/navigate") {
+        return await navigation.promise;
+      }
+      if (envelope.path === "/tabs/focus") {
+        return { ok: true };
+      }
+      if (envelope.path === "/screenshot") {
+        return { path: "/selected.png", targetId: "raw-b", url: selectedUrl };
+      }
+      if (envelope.path === "/act") {
+        return createBrowserPanelTestMetrics(selectedUrl, "Selected");
+      }
+      throw new Error(`Unexpected browser route: ${envelope.path}`);
+    });
+    const controller = createBrowserPanelTestController(client, "tab-a", initialUrl);
+    controller.tabs = [
+      {
+        kind: "remote" as const,
+        id: "tab-a",
+        targetId: "raw-a",
+        title: "Initial",
+        url: initialUrl,
+      },
+      {
+        kind: "remote" as const,
+        id: "tab-b",
+        targetId: "raw-b",
+        title: "Selected",
+        url: selectedUrl,
+      },
+    ];
+
+    const pendingNavigation = controller.openUrl(destinationUrl, { newTab: false });
+    await flushBrowserResponses();
+    await controller.selectTab("tab-b");
+    navigation.resolve({ ok: true });
+    await pendingNavigation;
+
+    expect(controller.activeTargetId).toBe("tab-b");
+    expect(controller.view?.targetId).toBe("tab-b");
+    expect(controller.view?.url).toBe(selectedUrl);
+    expect(controller.tabs.find((tab) => tab.id === "tab-a")).toMatchObject({
+      title: "Initial",
+      url: initialUrl,
+    });
+    expect(
+      request.mock.calls.filter(([, envelope]) => {
+        return (envelope as BrowserRequestEnvelope).path === "/tabs";
+      }),
+    ).toEqual([]);
+    expect(
+      request.mock.calls.filter(([, envelope]) => {
+        const browserRequest = envelope as BrowserRequestEnvelope;
+        return browserRequest.path === "/screenshot" && browserRequest.body?.targetId === "tab-a";
+      }),
+    ).toEqual([]);
+  });
+
   it("selects a new tab after a passive refresh overtakes its creation", async () => {
     stubScreenshotMedia();
     const initialUrl = "https://example.test/initial";
@@ -443,6 +580,118 @@ describe("BrowserPanelController capture and input ownership", () => {
     expect(controller.loading).toBe(false);
   });
 
+  it("clears stale inspected elements and owned errors across a failed inspection retry", async () => {
+    vi.useFakeTimers({ now: 1_000 });
+    let inspections = 0;
+    const initialNode = createInspectedNode("initial");
+    const recoveredNode = createInspectedNode("recovered");
+    const { client } = createBrowserClient(async () => {
+      inspections += 1;
+      if (inspections === 2) {
+        throw new Error("Browser connection temporarily unavailable");
+      }
+      return { result: inspections === 1 ? initialNode : recoveredNode };
+    });
+    const controller = createBrowserPanelTestController(client, "tab-a");
+    controller.setMode("inspect");
+
+    controller.handleOverlayPointerMove(createPointer(10, 20));
+    await flushBrowserResponses();
+    expect(controller.inspected).toEqual(initialNode);
+
+    await vi.advanceTimersByTimeAsync(120);
+    controller.handleOverlayPointerMove(createPointer(30, 40));
+    expect(controller.inspected).toBeNull();
+    await flushBrowserResponses();
+
+    expect(controller.errorText).toBe(
+      "Browser request failed: Browser connection temporarily unavailable",
+    );
+    expect(controller.mode).toBe("inspect");
+    expect(controller.evaluateUnavailable).toBe(false);
+    expect(controller.inspected).toBeNull();
+    const renderedPanel = document.createElement("div");
+    const renderPanel = () =>
+      render(
+        renderBrowserPanelChrome(
+          controller,
+          "right",
+          400,
+          400,
+          () => {},
+          () => {},
+          nothing,
+        ),
+        renderedPanel,
+      );
+    renderPanel();
+    expect(renderedPanel.querySelector('[role="alert"]')?.textContent).toBe(
+      "Browser request failed: Browser connection temporarily unavailable",
+    );
+
+    await vi.advanceTimersByTimeAsync(120);
+    controller.handleOverlayPointerMove(createPointer(70, 80));
+    await flushBrowserResponses();
+
+    expect(controller.inspected).toEqual(recoveredNode);
+    expect(controller.errorText).toBeNull();
+    expect(controller.inspectPointer).toEqual({ x: 0.7, y: 0.8 });
+    renderPanel();
+    expect(renderedPanel.querySelector('[role="alert"]')).toBeNull();
+    expect(
+      renderedPanel.querySelector<HTMLButtonElement>('button[aria-label="Inspect element"]')
+        ?.disabled,
+    ).toBe(false);
+  });
+
+  it.each([
+    {
+      name: "structured action code",
+      message: "evaluation disabled",
+      details: { code: "ACT_EVALUATE_DISABLED" },
+      expected: true,
+    },
+    {
+      name: "legacy Browser node message without an action code",
+      message: "403: act:evaluate is disabled by config (browser.evaluateEnabled=false).",
+      details: { nodeError: { message: "legacy Browser node" } },
+      expected: true,
+    },
+    {
+      name: "unknown action code with matching prose",
+      message: "act:evaluate is disabled by config (browser.evaluateEnabled=false).",
+      details: { code: "ACT_UNKNOWN" },
+      expected: false,
+    },
+    {
+      name: "sanitized unknown action code with matching prose",
+      message: "act:evaluate is disabled by config (browser.evaluateEnabled=false).",
+      details: { unrecognizedCode: true },
+      expected: false,
+    },
+  ])(
+    "classifies $name without reinterpreting structured errors",
+    async ({ message, details, expected }) => {
+      const { client } = createBrowserClient(async () => {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message,
+          details,
+        });
+      });
+      const controller = createBrowserPanelTestController(client, "tab-a");
+      controller.setMode("inspect");
+
+      controller.handleOverlayPointerMove(createPointer(10, 20));
+      await flushBrowserResponses();
+
+      expect(controller.evaluateUnavailable).toBe(expected);
+      expect(controller.mode).toBe(expected ? "interact" : "inspect");
+      expect(controller.errorText).toBeTruthy();
+      expect(controller.errorText?.includes("Browser request failed")).toBe(!expected);
+    },
+  );
+
   it("keeps the newest inspected element when pointer responses finish out of order", async () => {
     vi.useFakeTimers({ now: 1_000 });
     const first = createDeferred<unknown>();
@@ -482,8 +731,10 @@ describe("BrowserPanelController capture and input ownership", () => {
     vi.useFakeTimers({ now: 1_000 });
     const latestInspection = createDeferred<unknown>();
     let inspectionCount = 0;
+    const elementFromPoint = vi.fn(() => null);
     const { client, request } = createBrowserClient(async (envelope) => {
       if (envelope.path === "/act" && envelope.body?.kind === "evaluate") {
+        runInNewContext(`(${String(envelope.body.fn)})()`, { document: { elementFromPoint } });
         inspectionCount += 1;
         if (inspectionCount === 1) {
           return { result: createInspectedNode("initial") };
@@ -512,10 +763,10 @@ describe("BrowserPanelController capture and input ownership", () => {
         body: expect.objectContaining({
           kind: "evaluate",
           targetId: "tab-a",
-          fn: expect.stringContaining("document.elementFromPoint(70, 80)"),
         }),
       }),
     );
+    expect(elementFromPoint).toHaveBeenLastCalledWith(70, 80);
     const latestNode = createInspectedNode("latest-coalesced");
     latestInspection.resolve({ result: latestNode });
     await flushBrowserResponses();
@@ -586,6 +837,72 @@ describe("BrowserPanelController capture and input ownership", () => {
     expect(inspections[0]?.[1]).toMatchObject({ body: { targetId: "tab-a" } });
   });
 
+  it("reconciles selected tab metadata from the captured history document", async () => {
+    vi.useFakeTimers();
+    stubScreenshotMedia();
+    const currentUrl = "https://example.test/current";
+    const previousUrl = "https://example.test/previous";
+    const { client, request } = createBrowserClient(async (envelope) => {
+      if (envelope.path === "/act") {
+        const fn = typeof envelope.body?.fn === "string" ? envelope.body.fn : "";
+        return fn.includes("history.go")
+          ? { result: true }
+          : createBrowserPanelTestMetrics(previousUrl, "Previous");
+      }
+      if (envelope.path === "/screenshot") {
+        return { path: "/fresh.png", targetId: "raw-a", url: previousUrl };
+      }
+      throw new Error(`Unexpected browser route: ${envelope.path}`);
+    });
+    const controller = createBrowserPanelTestController(client, "tab-a", currentUrl);
+    controller.tabs = [
+      {
+        kind: "remote" as const,
+        id: "tab-a",
+        targetId: "raw-a",
+        title: "Current",
+        url: currentUrl,
+      },
+      {
+        kind: "remote" as const,
+        id: "tab-b",
+        targetId: "raw-b",
+        title: "Background",
+        url: "https://example.test/background",
+      },
+    ];
+
+    controller.goHistory(-1);
+    await flushBrowserResponses();
+    await vi.advanceTimersByTimeAsync(350);
+    await flushBrowserResponses();
+    await vi.runAllTimersAsync();
+    await flushBrowserResponses();
+
+    expect(controller.tabs).toEqual([
+      {
+        kind: "remote" as const,
+        id: "tab-a",
+        targetId: "raw-a",
+        title: "Previous",
+        url: previousUrl,
+      },
+      {
+        kind: "remote" as const,
+        id: "tab-b",
+        targetId: "raw-b",
+        title: "Background",
+        url: "https://example.test/background",
+      },
+    ]);
+    expect(controller.urlDraft).toBe(previousUrl);
+    expect(
+      request.mock.calls.filter(([, envelope]) => {
+        return (envelope as BrowserRequestEnvelope).path === "/tabs";
+      }),
+    ).toEqual([]);
+  });
+
   it("never forwards a queued wheel action to a newly selected tab", async () => {
     vi.useFakeTimers();
     const { client, request } = createBrowserClient(async (envelope) => {
@@ -617,6 +934,8 @@ describe("BrowserPanelController capture and input ownership", () => {
     const oldCapture = createDeferred<unknown>();
     const freshCapture = createDeferred<unknown>();
     const captures = [oldCapture, freshCapture];
+    const oldStarted = createDeferred();
+    const freshStarted = createDeferred();
     const url = "https://example.test/page";
     const { client, request } = createBrowserClient(async (envelope) => {
       if (envelope.path === "/tabs") {
@@ -630,6 +949,7 @@ describe("BrowserPanelController capture and input ownership", () => {
         if (!capture) {
           throw new Error("Unexpected screenshot capture");
         }
+        (capture === oldCapture ? oldStarted : freshStarted).resolve();
         return await capture.promise;
       }
       if (envelope.path === "/act") {
@@ -642,8 +962,9 @@ describe("BrowserPanelController capture and input ownership", () => {
     controller.activeTargetId = "tab-a";
 
     const oldRefresh = controller.refreshAll();
+    await oldStarted.promise;
     const freshRefresh = controller.refreshAll();
-    await flushBrowserResponses();
+    await freshStarted.promise;
     expect(
       request.mock.calls.filter(([, envelope]) => {
         return (envelope as BrowserRequestEnvelope).path === "/screenshot";

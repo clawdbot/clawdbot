@@ -56,7 +56,7 @@ run_plugins_clawhub_scenario() {
 
     node scripts/e2e/lib/plugins/assertions.mjs clawhub-preflight
 
-    run_plugins_openclaw_logged install-clawhub plugins install "$CLAWHUB_PLUGIN_SPEC"
+    run_plugins_fixture_logged install-clawhub plugins install "$CLAWHUB_PLUGIN_SPEC"
     run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins-clawhub-installed.json" plugins list --json
     run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins-clawhub-inspect.json" plugins inspect "$CLAWHUB_PLUGIN_ID" --json
 

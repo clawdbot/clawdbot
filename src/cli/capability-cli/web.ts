@@ -1,5 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -18,10 +19,10 @@ import {
   getCapabilityWebSearchCommandSecretTargets,
 } from "../command-secret-targets.js";
 import type { CapabilityEnvelope } from "./metadata.js";
+import { emitJsonOrText, formatEnvelopeForText } from "./output.js";
 import {
-  emitJsonOrText,
-  formatEnvelopeForText,
   parseOptionalPositiveInteger,
+  registerLocalProvidersCommand,
   resolveLocalCapabilityRuntimeConfig,
 } from "./shared.js";
 
@@ -175,40 +176,36 @@ export function registerWebCapabilityCommands(capability: Command): void {
       }
     });
 
-  web
-    .command("providers")
-    .description("List web providers")
-    .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const cfg = getRuntimeConfig();
-        const selectedSearchProvider =
-          typeof cfg.tools?.web?.search?.provider === "string"
-            ? normalizeLowercaseStringOrEmpty(cfg.tools.web.search.provider)
-            : "";
-        const selectedFetchProvider =
-          typeof cfg.tools?.web?.fetch?.provider === "string"
-            ? normalizeLowercaseStringOrEmpty(cfg.tools.web.fetch.provider)
-            : "";
-        const result = {
-          search: listWebSearchProviders({ config: cfg }).map((provider) => ({
-            available: true,
-            configured: isWebSearchProviderConfigured({ provider, config: cfg }),
-            selected: provider.id === selectedSearchProvider,
-            id: provider.id,
-            envVars: provider.envVars,
-          })),
-          fetch: listWebFetchProviders({ config: cfg }).map((provider) => ({
-            available: true,
-            configured: isWebFetchProviderConfigured({ provider, config: cfg }),
-            selected: provider.id === selectedFetchProvider,
-            id: provider.id,
-            envVars: provider.envVars,
-          })),
-        };
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, (value) =>
-          JSON.stringify(value, null, 2),
-        );
-      });
-    });
+  registerLocalProvidersCommand(
+    web,
+    "List web providers",
+    (cfg, agentId) => {
+      const agentDir = resolveAgentDir(cfg, agentId);
+      const selectedSearchProvider =
+        typeof cfg.tools?.web?.search?.provider === "string"
+          ? normalizeLowercaseStringOrEmpty(cfg.tools.web.search.provider)
+          : "";
+      const selectedFetchProvider =
+        typeof cfg.tools?.web?.fetch?.provider === "string"
+          ? normalizeLowercaseStringOrEmpty(cfg.tools.web.fetch.provider)
+          : "";
+      return {
+        search: listWebSearchProviders({ config: cfg }).map((provider) => ({
+          available: true,
+          configured: isWebSearchProviderConfigured({ provider, config: cfg, agentDir }),
+          selected: provider.id === selectedSearchProvider,
+          id: provider.id,
+          envVars: provider.envVars,
+        })),
+        fetch: listWebFetchProviders({ config: cfg }).map((provider) => ({
+          available: true,
+          configured: isWebFetchProviderConfigured({ provider, config: cfg }),
+          selected: provider.id === selectedFetchProvider,
+          id: provider.id,
+          envVars: provider.envVars,
+        })),
+      };
+    },
+    (value) => JSON.stringify(value, null, 2),
+  );
 }

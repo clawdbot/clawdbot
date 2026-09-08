@@ -81,4 +81,68 @@ describe("renderSessionsHubTabs", () => {
       );
     });
   });
+
+  it("does not steal deliberate focus established before a queued route handoff", async () => {
+    const source = await mount({ active: "sessions", onSelect: () => undefined });
+    source
+      .querySelector<HTMLElement>("#sessions-tab-worktrees")
+      ?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, composed: true }),
+      );
+    source.remove();
+
+    await mount({ active: "worktrees", onSelect: () => undefined });
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    outside.focus();
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, 0);
+    });
+
+    expect(document.activeElement).toBe(outside);
+  });
+
+  it("does not steal deliberate focus established before the destination mounts", async () => {
+    const source = await mount({ active: "sessions", onSelect: () => undefined });
+    const sourceTab = source.querySelector<HTMLElement>("#sessions-tab-worktrees");
+    sourceTab?.focus();
+    sourceTab?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, composed: true }),
+    );
+    source.remove();
+
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    outside.focus();
+    await mount({ active: "worktrees", onSelect: () => undefined });
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, 0);
+    });
+
+    expect(document.activeElement).toBe(outside);
+  });
+
+  it("keeps only the latest cross-route keyboard focus handoff", async () => {
+    const first = await mount({ active: "sessions", onSelect: () => undefined });
+    first
+      .querySelector<HTMLElement>("#sessions-tab-worktrees")
+      ?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, composed: true }),
+      );
+    first.remove();
+    const intermediate = await mount({ active: "worktrees", onSelect: () => undefined });
+    intermediate
+      .querySelector<HTMLElement>("#sessions-tab-sessions")
+      ?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, composed: true }),
+      );
+    intermediate.remove();
+    const destination = await mount({ active: "sessions", onSelect: () => undefined });
+
+    await vi.waitFor(() =>
+      expect(document.activeElement).toBe(
+        destination.querySelector<HTMLElement>("#sessions-tab-sessions"),
+      ),
+    );
+  });
 });

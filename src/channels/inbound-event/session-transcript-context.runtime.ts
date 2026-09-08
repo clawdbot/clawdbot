@@ -86,10 +86,11 @@ function mergeMessages(params: {
   };
 }
 
-function chatWindowEntries(ctx: FinalizedMsgContext) {
+function mergeableChatWindowEntries(ctx: FinalizedMsgContext) {
   return (ctx.ChannelStructuredContext ?? []).filter(
     (entry): entry is typeof entry & { payload: Record<string, unknown> } =>
       entry.type === "chat_window" &&
+      entry.sessionTranscriptMode !== "preserve" &&
       Boolean(entry.payload) &&
       typeof entry.payload === "object" &&
       !Array.isArray(entry.payload),
@@ -119,11 +120,15 @@ export async function mergeSessionTranscriptContext(params: {
   if (!agentId) {
     throw new Error("Session transcript context requires an agent owner.");
   }
+  const windows = mergeableChatWindowEntries(params.ctx);
   const turns = await readRecentUserAssistantTextForSession({
     agentId,
     sessionKey: params.sessionKey,
     storePath: params.storePath,
     limit,
+    ...(windows.length === 0 && options?.chatWindow === true
+      ? { includeCronDirectDeliveryContext: true }
+      : {}),
     ...((options?.beforeTimestampMs ?? params.ctx.Timestamp) !== undefined
       ? { beforeTimestampMs: options?.beforeTimestampMs ?? params.ctx.Timestamp }
       : {}),
@@ -154,7 +159,6 @@ export async function mergeSessionTranscriptContext(params: {
   if (transcript.length === 0) {
     return;
   }
-  const windows = chatWindowEntries(params.ctx);
   if (windows.length === 0 && options?.chatWindow) {
     params.ctx.ChannelStructuredContext = [
       ...(params.ctx.ChannelStructuredContext ?? []),

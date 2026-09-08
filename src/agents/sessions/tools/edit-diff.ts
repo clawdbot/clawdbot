@@ -13,7 +13,7 @@ import {
   applyReplacementsPreservingLineEndings,
   type TextReplacement,
 } from "./edit-replacements.js";
-import { resolveToCwd } from "./path-utils.js";
+import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 
 interface FuzzyBoundary {
   /** Original offset when the normalized boundary begins a replacement. */
@@ -696,8 +696,7 @@ export function splitNoOpEdits(
   const noOpEdits: Edit[] = [];
   const realEdits: Edit[] = [];
   for (const edit of edits) {
-    const fuzzyNoOp = normalizeForFuzzyMatch(edit.oldText) === normalizeForFuzzyMatch(edit.newText);
-    if (edit.oldText === edit.newText || fuzzyNoOp) {
+    if (edit.oldText === edit.newText) {
       applyEditsToNormalizedContent(
         normalizedContent,
         [{ oldText: edit.oldText, newText: "" }],
@@ -723,8 +722,9 @@ export async function computeEditsDiff(
     readFile: (absolutePath: string) => Promise<Buffer | string>;
     access: (absolutePath: string) => Promise<void>;
   },
+  resolvePath = operations ? resolveToCwd : resolveLocalPathToCwd,
 ): Promise<EditDiffResult | EditDiffError> {
-  const absolutePath = resolveToCwd(path, cwd);
+  const absolutePath = resolvePath(path, cwd);
 
   try {
     // Check if file exists and is readable

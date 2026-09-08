@@ -1,22 +1,14 @@
 // Openai plugin module implements tts behavior.
-import {
-  assertOkOrThrowProviderError,
-  resolveProviderRequestHeaders,
-} from "openclaw/plugin-sdk/provider-http";
-import {
-  captureHttpExchange,
-  isDebugProxyGlobalFetchPatchInstalled,
-} from "openclaw/plugin-sdk/proxy-capture";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
-} from "openclaw/plugin-sdk/ssrf-runtime";
 
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_TTS_MAX_BYTES = 16 * 1024 * 1024;
 
-export const OPENAI_TTS_MODELS = ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"] as const;
+export const OPENAI_TTS_MODELS = [
+  "gpt-4o-mini-tts",
+  "gpt-4o-mini-tts-2025-12-15",
+  "tts-1",
+  "tts-1-hd",
+] as const;
 
 export const OPENAI_TTS_VOICES = [
   "alloy",
@@ -126,6 +118,15 @@ export async function openaiTTS(params: {
   if (!isValidOpenAIVoice(voice, baseUrl)) {
     throw new Error(`Invalid voice: ${voice}`);
   }
+  const {
+    assertOkOrThrowProviderError,
+    readProviderBinaryResponse,
+    resolveProviderRequestHeaders,
+  } = await import("openclaw/plugin-sdk/provider-http");
+  const { captureHttpExchange, isDebugProxyGlobalFetchPatchInstalled } =
+    await import("openclaw/plugin-sdk/proxy-capture");
+  const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
+    await import("openclaw/plugin-sdk/ssrf-runtime");
 
   const requestHeaders = resolveProviderRequestHeaders({
     provider: "openai",
@@ -182,7 +183,8 @@ export async function openaiTTS(params: {
 
     await assertOkOrThrowProviderError(response, "OpenAI TTS API error");
 
-    return await readResponseWithLimit(response, maxBytes, {
+    return await readProviderBinaryResponse(response, "OpenAI TTS API error", "audio", {
+      maxBytes,
       onOverflow: ({ maxBytes: maxBytesLocal }) =>
         new Error(`OpenAI TTS audio response exceeds ${maxBytesLocal} bytes`),
     });

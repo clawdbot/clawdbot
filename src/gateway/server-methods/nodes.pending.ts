@@ -11,7 +11,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   captureNodePairingGeneration,
   isNodePairingGenerationCurrent,
-} from "../../infra/node-pairing-state.js";
+} from "../../infra/device-pairing-node-state.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import {
   acknowledgePendingNodeActions,
@@ -20,9 +20,10 @@ import {
   type PendingNodeAction,
 } from "../node-runtime-state.js";
 import { nodeInvokePolicy } from "./nodes-policy.js";
-import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
 import { respondPairingChanged } from "./nodes.shared.js";
+import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 function resolveAllowedPendingNodeActions(params: {
   nodeId: string;
@@ -67,30 +68,7 @@ function resolveAllowedPendingNodeActions(params: {
   return allowed;
 }
 
-function ackPendingNodeActions(
-  nodeId: string,
-  ids: string[],
-  pairingGeneration: string,
-): PendingNodeAction[] {
-  if (ids.length === 0) {
-    return listPendingNodeActions({
-      nodeId,
-      pairingGeneration,
-      ttlMs: nodeInvokePolicy.pendingActionTtlMs,
-    });
-  }
-  return acknowledgePendingNodeActions({
-    nodeId,
-    pairingGeneration,
-    ids,
-    ttlMs: nodeInvokePolicy.pendingActionTtlMs,
-  });
-}
-
 export function toPendingParamsJSON(params: unknown): string | undefined {
-  if (params === undefined) {
-    return undefined;
-  }
   try {
     return JSON.stringify(params);
   } catch {
@@ -98,14 +76,9 @@ export function toPendingParamsJSON(params: unknown): string | undefined {
   }
 }
 
-export const nodePendingHandlers: GatewayRequestHandlers = {
+export const nodePendingActionHandlers: GatewayRequestHandlers = {
   "node.pending.pull": async ({ params, respond, client, context }) => {
-    if (!validateNodeListParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.pending.pull",
-        validator: validateNodeListParams,
-      });
+    if (!assertValidParams(params, validateNodeListParams, "node.pending.pull", respond)) {
       return;
     }
     const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
@@ -152,12 +125,7 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
     });
   },
   "node.pending.ack": async ({ params, respond, client, context }) => {
-    if (!validateNodePendingAckParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.pending.ack",
-        validator: validateNodePendingAckParams,
-      });
+    if (!assertValidParams(params, validateNodePendingAckParams, "node.pending.ack", respond)) {
       return;
     }
     const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
@@ -178,7 +146,12 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
         return;
       }
       const ackIds = normalizeUniqueTrimmedStringList(params.ids);
-      const remaining = ackPendingNodeActions(trimmedNodeId, ackIds, generation.key);
+      const remaining = acknowledgePendingNodeActions({
+        nodeId: trimmedNodeId,
+        pairingGeneration: generation.key,
+        ids: ackIds,
+        ttlMs: nodeInvokePolicy.pendingActionTtlMs,
+      });
       if (!(await isNodePairingGenerationCurrent(generation))) {
         respondPairingChanged(respond);
         return;

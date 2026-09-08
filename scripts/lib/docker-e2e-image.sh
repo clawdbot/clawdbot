@@ -137,6 +137,7 @@ docker_e2e_build_or_reuse() {
     # The Dockerfile never sees repo sources as app input; functional installs
     # exactly this tarball through a named BuildKit context.
     build_args+=(--build-context "openclaw_package=$package_context")
+    build_args+=(--build-arg "OPENCLAW_FS_SAFE_NATIVE_CONTRACT=${OPENCLAW_FS_SAFE_NATIVE_CONTRACT:-required}")
   fi
   build_args+=(-t "$image_name" -f "$dockerfile" "$context")
   local build_status=0
@@ -150,10 +151,30 @@ docker_e2e_build_or_reuse() {
   return "$build_status"
 }
 
+docker_e2e_test_state_entrypoint() {
+  local extension entrypoint
+  for extension in mts mjs; do
+    entrypoint="$ROOT_DIR/scripts/lib/openclaw-test-state.$extension"
+    if [ -f "$entrypoint" ]; then
+      printf '%s\n' "$entrypoint"
+      return 0
+    fi
+  done
+
+  echo "OpenClaw test-state entrypoint not found under $ROOT_DIR/scripts/lib" >&2
+  return 1
+}
+
+docker_e2e_run_test_state() {
+  local entrypoint
+  entrypoint="$(docker_e2e_test_state_entrypoint)" || return
+  node "$entrypoint" "$@"
+}
+
 docker_e2e_test_state_shell_b64() {
   local label="${1:?missing test-state label}"
   local scenario="${2:-empty}"
-  node "$ROOT_DIR/scripts/lib/openclaw-test-state.mjs" shell \
+  docker_e2e_run_test_state shell \
     --label "$label" \
     --scenario "$scenario" |
     base64 |
@@ -161,7 +182,7 @@ docker_e2e_test_state_shell_b64() {
 }
 
 docker_e2e_test_state_function_b64() {
-  node "$ROOT_DIR/scripts/lib/openclaw-test-state.mjs" shell-function |
+  docker_e2e_run_test_state shell-function |
     base64 |
     tr -d '\n'
 }

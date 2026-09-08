@@ -22,6 +22,10 @@ describe("Buzz QA CLI", () => {
     const qa = new Command();
     buzzQaCliRegistration.register(qa);
 
+    expect(qa.commands.find((command) => command.name() === "buzz")?.helpInformation()).toMatch(
+      /default: file with --credential-file; otherwise\s+shared environment/u,
+    );
+
     await qa.parseAsync([
       "node",
       "openclaw",
@@ -47,5 +51,29 @@ describe("Buzz QA CLI", () => {
         providerMode: "mock-openai",
       }),
     ).toEqual(["channel-canary", "channel-mention-gating"]);
+  });
+
+  it("forwards an explicitly selected thread follow-up scenario", async () => {
+    const qa = new Command();
+    buzzQaCliRegistration.register(qa);
+
+    await qa.parseAsync([
+      "node",
+      "openclaw",
+      "buzz",
+      "--credential-file",
+      "/secure/buzz-qa.json",
+      "--scenario",
+      "thread-follow-up",
+    ]);
+
+    const params = runLiveTransportQaSuiteCommand.mock.calls[0]?.[0];
+    expect(
+      params?.selectScenarioIds({
+        primaryModel: "openai/gpt-5.4",
+        providerMode: "mock-openai",
+        scenarioIds: ["thread-follow-up"],
+      }),
+    ).toEqual(["thread-follow-up"]);
   });
 });

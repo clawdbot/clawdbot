@@ -33,6 +33,9 @@ Auth env var: `STEPFUN_API_KEY`
 
 ## Built-in catalog
 
+Setup saves connection settings and aliases without copying generated catalog rows into your config.
+Explicit `models.mode: "replace"` keeps catalog seeding enabled; custom model rows stay intact.
+
 Standard (`stepfun`):
 
 | Model ref                | Context | Max output | Notes                          |
@@ -138,7 +141,7 @@ A single auth flow writes region-matched profiles for both `stepfun` and `stepfu
   <Accordion title="Full config: Standard provider">
     ```json5
     {
-      env: { STEPFUN_API_KEY: "your-key" },
+      env: { vars: { STEPFUN_API_KEY: "your-key" } },
       agents: { defaults: { model: { primary: "stepfun/step-3.5-flash" } } },
       models: {
         mode: "merge",
@@ -178,7 +181,7 @@ A single auth flow writes region-matched profiles for both `stepfun` and `stepfu
   <Accordion title="Full config: Step Plan provider">
     ```json5
     {
-      env: { STEPFUN_API_KEY: "your-key" },
+      env: { vars: { STEPFUN_API_KEY: "your-key" } },
       agents: { defaults: { model: { primary: "stepfun-plan/step-3.5-flash" } } },
       models: {
         mode: "merge",

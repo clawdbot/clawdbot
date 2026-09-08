@@ -133,10 +133,8 @@ describe("Codex Computer Use shared plugin cache", () => {
     expect(activeCacheEntry?.isSymbolicLink()).toBe(false);
     expect((await fs.lstat(activeCachePath)).isDirectory()).toBe(true);
     expect((await fs.lstat(activeCachePath)).isSymbolicLink()).toBe(false);
-    await expect(
-      fs.access(path.join(activeCachePath, ".codex-plugin", "plugin.json")),
-    ).resolves.toBe(undefined);
-    await expect(fs.access(priorCachePath)).resolves.toBe(undefined);
+    await fs.access(path.join(activeCachePath, ".codex-plugin", "plugin.json"));
+    await fs.access(priorCachePath);
   });
 
   it("leaves an up-to-date copied cache entry unchanged", async () => {
@@ -174,9 +172,91 @@ describe("Codex Computer Use shared plugin cache", () => {
     });
     expect((await fs.lstat(activeCachePath)).isDirectory()).toBe(true);
     expect((await fs.lstat(activeCachePath)).isSymbolicLink()).toBe(false);
+    await fs.access(path.join(activeCachePath, ".codex-plugin", "plugin.json"));
+  });
+
+  it("refreshes same-version cache bytes for a new desktop generation", async () => {
+    const root = tempDirs.make("openclaw-computer-use-cache-generation-");
+    const bundledMarketplacePath = path.join(root, "Codex.app", "plugins", "openai-bundled");
+    const bundledPluginRoot = path.join(bundledMarketplacePath, "plugins", "computer-use");
+    await writeBundledComputerUsePlugin(bundledMarketplacePath, "1.0.857");
+    await fs.writeFile(path.join(bundledPluginRoot, "generation.txt"), "generation-y");
+    const codexHome = path.join(root, "agent", "codex-home");
+    const activeCachePath = path.join(
+      codexHome,
+      "plugins",
+      "cache",
+      "openai-bundled",
+      "computer-use",
+      "1.0.857",
+    );
+    await fs.mkdir(path.join(activeCachePath, ".codex-plugin"), { recursive: true });
+    await fs.writeFile(
+      path.join(activeCachePath, ".codex-plugin", "plugin.json"),
+      JSON.stringify({ name: "computer-use", version: "1.0.857" }),
+    );
+    await fs.writeFile(path.join(activeCachePath, "generation.txt"), "generation-x");
+
+    const result = await ensureCodexComputerUseSharedPluginCache({
+      codexHome,
+      bundledMarketplacePath,
+      config: computerUseConfig(),
+      forceRefresh: true,
+    });
+
+    expect(result).toMatchObject({ status: "shared", changed: true, version: "1.0.857" });
+    await expect(fs.readFile(path.join(activeCachePath, "generation.txt"), "utf8")).resolves.toBe(
+      "generation-y",
+    );
+  });
+
+  it("leaves same-version cache bytes intact when the generation is stale before publication", async () => {
+    const root = tempDirs.make("openclaw-computer-use-cache-stale-");
+    const bundledMarketplacePath = path.join(root, "Codex.app", "plugins", "openai-bundled");
+    const bundledPluginRoot = path.join(bundledMarketplacePath, "plugins", "computer-use");
+    await writeBundledComputerUsePlugin(bundledMarketplacePath, "1.0.857");
+    await fs.writeFile(path.join(bundledPluginRoot, "generation.txt"), "generation-y");
+    const codexHome = path.join(root, "agent", "codex-home");
+    const activeCachePath = path.join(
+      codexHome,
+      "plugins",
+      "cache",
+      "openai-bundled",
+      "computer-use",
+      "1.0.857",
+    );
+    await fs.mkdir(path.join(activeCachePath, ".codex-plugin"), { recursive: true });
+    await fs.writeFile(
+      path.join(activeCachePath, ".codex-plugin", "plugin.json"),
+      JSON.stringify({ name: "computer-use", version: "1.0.857" }),
+    );
+    await fs.writeFile(path.join(activeCachePath, "generation.txt"), "generation-x");
+
+    let currentnessChecks = 0;
     await expect(
-      fs.access(path.join(activeCachePath, ".codex-plugin", "plugin.json")),
-    ).resolves.toBe(undefined);
+      ensureCodexComputerUseSharedPluginCache({
+        codexHome,
+        bundledMarketplacePath,
+        config: computerUseConfig(),
+        forceRefresh: true,
+        assertCurrent: () => {
+          currentnessChecks += 1;
+          if (currentnessChecks === 2) {
+            throw new Error("desktop generation is stale");
+          }
+        },
+      }),
+    ).rejects.toThrow("desktop generation is stale");
+    expect(currentnessChecks).toBe(2);
+
+    await expect(fs.readFile(path.join(activeCachePath, "generation.txt"), "utf8")).resolves.toBe(
+      "generation-x",
+    );
+    expect(
+      (await fs.readdir(path.dirname(activeCachePath))).filter((entry) =>
+        entry.startsWith(".1.0.857"),
+      ),
+    ).toEqual([]);
   });
 
   it("refreshes a stale copied cache entry with the bundled version", async () => {
@@ -220,6 +300,33 @@ describe("Codex Computer Use shared plugin cache", () => {
     ).resolves.toContain('"version":"1.0.857"');
   });
 
+  it.runIf(process.platform !== "win32")(
+    "rejects a symlinked managed cache parent without touching its external target",
+    async () => {
+      const root = tempDirs.make("openclaw-computer-use-cache-link-");
+      const agentDir = path.join(root, "agent");
+      const codexHome = path.join(agentDir, "codex-home");
+      const bundledMarketplacePath = path.join(root, "bundled-marketplace");
+      const external = path.join(root, "external-cache");
+      await writeBundledComputerUsePlugin(bundledMarketplacePath, "2.0.0");
+      await fs.mkdir(codexHome, { recursive: true });
+      await fs.mkdir(external, { recursive: true });
+      await fs.writeFile(path.join(external, "sentinel"), "outside");
+      await fs.symlink(external, path.join(codexHome, "plugins"), "dir");
+
+      await expect(
+        ensureCodexComputerUseSharedPluginCache({
+          codexHome,
+          ownershipRoot: agentDir,
+          bundledMarketplacePath,
+          config: computerUseConfig(),
+        }),
+      ).rejects.toThrow(/symlink|real directories/u);
+      await expect(fs.readFile(path.join(external, "sentinel"), "utf8")).resolves.toBe("outside");
+      await expect(fs.access(path.join(external, "cache"))).rejects.toThrow();
+    },
+  );
+
   it("leaves cache entries alone in independent mode", async () => {
     const root = tempDirs.make("openclaw-computer-use-cache-");
     const result = await ensureCodexComputerUseSharedPluginCache({
@@ -253,8 +360,8 @@ describe("Codex Computer Use shared plugin cache", () => {
       changed: false,
       removedStaleVersions: [],
     });
-    await expect(fs.access(path.join(cacheRoot, "1.0.101"))).resolves.toBe(undefined);
-    await expect(fs.access(path.join(cacheRoot, "1.0.102"))).resolves.toBe(undefined);
+    await fs.access(path.join(cacheRoot, "1.0.101"));
+    await fs.access(path.join(cacheRoot, "1.0.102"));
   });
 
   it("preserves the default namespace when marketplacePath is explicit", async () => {
@@ -283,8 +390,8 @@ describe("Codex Computer Use shared plugin cache", () => {
       changed: false,
       removedStaleVersions: [],
     });
-    await expect(fs.access(path.join(cacheRoot, "1.0.101"))).resolves.toBe(undefined);
-    await expect(fs.access(path.join(cacheRoot, "1.0.102"))).resolves.toBe(undefined);
+    await fs.access(path.join(cacheRoot, "1.0.101"));
+    await fs.access(path.join(cacheRoot, "1.0.102"));
   });
 
   it("preserves the active cache when replacement copying fails", async () => {

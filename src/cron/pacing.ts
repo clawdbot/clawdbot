@@ -1,3 +1,4 @@
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import type { CronPacing } from "./types.js";
 
@@ -8,16 +9,15 @@ type CronPacingBounds = {
 };
 
 function parsePositivePacingDuration(value: string, field: "min" | "max"): number {
-  let durationMs: number;
   try {
-    durationMs = parseDurationMs(value);
+    const durationMs = parseDurationMs(value);
+    if (durationMs > 0) {
+      return durationMs;
+    }
   } catch {
-    throw new Error(`cron pacing ${field} must be a positive duration`);
+    // Normalize parser details into the cron configuration contract below.
   }
-  if (durationMs <= 0) {
-    throw new Error(`cron pacing ${field} must be a positive duration`);
-  }
-  return durationMs;
+  throw new Error(`cron pacing ${field} must be a positive duration`);
 }
 
 /** Validates pacing strings and returns their millisecond bounds. */
@@ -40,11 +40,13 @@ export function resolvePacedNextRunAtMs(params: {
   nowMs: number;
   delayMs: number;
   pacing: CronPacing;
-}): number {
+}): number | undefined {
   const { minMs, maxMs } = parseCronPacingBounds(params.pacing);
   const proposedAtMs = params.nowMs + params.delayMs;
-  return Math.min(
-    params.nowMs + (maxMs ?? Number.POSITIVE_INFINITY),
-    Math.max(params.nowMs + (minMs ?? 0), proposedAtMs),
+  return asDateTimestampMs(
+    Math.min(
+      params.nowMs + (maxMs ?? Number.POSITIVE_INFINITY),
+      Math.max(params.nowMs + (minMs ?? 0), proposedAtMs),
+    ),
   );
 }

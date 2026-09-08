@@ -1,12 +1,16 @@
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
-  interruptCodexTurnBestEffort,
+  interruptCodexTurnAndWaitBestEffort,
+  retireUnsafeCodexTurnClientBestEffort,
 } from "./attempt-client-cleanup.js";
 import {
   createCodexModelCallDiagnosticEmitter,
   utf8JsonByteLength,
 } from "./attempt-diagnostics.js";
+import { assertCodexSessionRuntimeOwnership } from "./binding-connection.js";
+import { prepareCodexWorkspaceReferences } from "./client-runtime.js";
+import { isCodexAppServerIndeterminateRequestCancellationError } from "./client.js";
+import { resolveCodexExplicitSkillInputs } from "./explicit-skill-input.js";
 import { assertCodexTurnStartResponse } from "./protocol-validators.js";
 import type { CodexTurnStartResponse } from "./protocol.js";
 import { readCodexRateLimitsRevision } from "./rate-limit-cache.js";
@@ -15,8 +19,10 @@ import {
   withCodexAppServerFastModeServiceTier,
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import { joinPresentSections } from "./run-attempt-state.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { buildTurnStartParams } from "./thread-lifecycle.js";
+import { recordCodexTrajectoryContext } from "./trajectory.js";
 import { buildCodexUserPromptMessage } from "./transcript-mirror.js";
 
 export async function prepareCodexAttemptTurnRequest(
@@ -30,7 +36,7 @@ export async function prepareCodexAttemptTurnRequest(
   const { runtime, attemptTools, hookContextWindowFields, workspaceBootstrapContext } = context;
   const { connection, runtimeParams, effectiveRuntimeProviderId, effectiveRuntimeModelId } =
     runtime;
-  const { tools } = attemptTools;
+  const { tools, toolBridge } = attemptTools;
   const {
     params,
     usesSupervisionConnection,
@@ -41,6 +47,12 @@ export async function prepareCodexAttemptTurnRequest(
     runAbortController,
   } = connection;
   const { state } = turnRuntime;
+  const explicitSkillInputs = await resolveCodexExplicitSkillInputs({
+    client: resourceState.client,
+    cwd: resourceState.codexExecutionCwd,
+    selections: runtimeParams.explicitSkillSelections,
+    signal: runAbortController.signal,
+  });
   const buildCodexModelInputMessages = () => [
     ...prompt.codexModelInputHistoryMessages,
     buildCodexUserPromptMessage({ ...runtimeParams, prompt: turnState.codexTurnPromptText }),
@@ -89,32 +101,77 @@ export async function prepareCodexAttemptTurnRequest(
     error.name = "AbortError";
     throw error;
   };
+  const prepareWorkspaceReferences = () => {
+    const references = prepareCodexWorkspaceReferences(
+      resourceState.client,
+      resourceState.thread.threadId,
+      workspaceBootstrapContext.promptContext,
+    );
+    prompt.refreshWorkspaceReferences(references.include);
+    return references;
+  };
   const startCodexTurn = async (): Promise<CodexTurnStartResponse> => {
     const activeTurnRoute = (await ensureCurrentThreadRoute()) as {
       armTurn(): void;
       cancelTurn(): Promise<void>;
     };
+    // Resume may observe a newer native tuple after host auth was prepared. Keep
+    // that truthful binding, but never infer with credentials selected for the old tuple.
+    assertCodexSessionRuntimeOwnership(
+      resourceState.thread,
+      params.expectedSessionRuntimeOwnership,
+    );
     const turnAppServer = withCodexAppServerFastModeServiceTier(
       connection.mutable.pluginAppServer,
       runtimeParams,
     );
     connection.mutable.pluginAppServer = turnAppServer;
-    const turnStartParams = buildTurnStartParams(runtimeParams, {
-      threadId: resourceState.thread.threadId,
-      cwd: resourceState.codexExecutionCwd,
-      appServer: turnAppServer,
-      promptText: turnState.codexTurnPromptText,
-      sandboxPolicy: resourceState.codexSandboxPolicy,
-      environmentSelection: resourceState.codexEnvironmentSelection,
-      ...(usesSupervisionConnection
-        ? {}
-        : { model: resourceState.thread.model, modelProvider: resourceState.thread.modelProvider }),
-      turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
-      skillsCollaborationInstructions: context.skillsCollaborationInstructions,
-      memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
-      preserveNativeTurnSettings: usesSupervisionConnection,
-    });
+    const references = prepareWorkspaceReferences();
+    const referencesRetained = turnState.codexTurnPromptText.includes(
+      workspaceBootstrapContext.promptContext ?? "",
+    );
+    const turnStartParams = buildTurnStartParams(
+      {
+        ...runtimeParams,
+        images: [...prompt.contextImages, ...(runtimeParams.images ?? [])],
+      },
+      {
+        threadId: resourceState.thread.threadId,
+        cwd: resourceState.codexExecutionCwd,
+        appServer: turnAppServer,
+        promptText: turnState.codexTurnPromptText,
+        explicitSkillInputs,
+        sandboxPolicy: resourceState.codexSandboxPolicy,
+        environmentSelection: resourceState.codexEnvironmentSelection,
+        clearInheritedServiceTier: resourceState.thread.clearInheritedServiceTier,
+        ...(usesSupervisionConnection
+          ? {}
+          : {
+              model: resourceState.thread.model,
+              modelProvider: resourceState.thread.modelProvider,
+            }),
+        turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
+        skillsCollaborationInstructions: context.skillsCollaborationInstructions,
+        memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
+        preserveNativeTurnSettings: usesSupervisionConnection,
+        messageToolAvailable: toolBridge.availableTools.some((tool) => tool.name === "message"),
+        requireExplicitMessageTarget: attemptTools.requireExplicitMessageTarget,
+        sessionStatusAvailable: toolBridge.availableTools.some(
+          (tool) => tool.name === "session_status",
+        ),
+      },
+    );
     codexModelCallDiagnostics.setRequestPayloadBytes(utf8JsonByteLength(turnStartParams));
+    recordCodexTrajectoryContext(resources.trajectoryRecorder, {
+      attempt: params,
+      cwd: connection.effectiveCwd,
+      developerInstructions: joinPresentSections(
+        buildRenderedCodexDeveloperInstructions(),
+        attemptTools.configuredMcp?.diagnosticNotice,
+      ),
+      prompt: turnState.codexTurnPromptText,
+      tools: toolBridge.availableSpecs,
+    });
     state.latestStartupErrorNotification = undefined;
     state.rateLimitsRevisionBeforeLastTurnStart = readCodexRateLimitsRevision(resourceState.client);
     activeTurnRoute.armTurn();
@@ -123,9 +180,10 @@ export async function prepareCodexAttemptTurnRequest(
       data: {
         phase: "turn_starting",
         threadId: resourceState.thread.threadId,
-        model: turnStartParams.model,
+        model: params.modelId,
         effort: turnStartParams.effort,
         collaborationEffort: turnStartParams.collaborationMode?.settings.reasoning_effort,
+        serviceTier: turnStartParams.serviceTier,
       },
     });
     let acceptedTurnId: string | undefined;
@@ -134,19 +192,32 @@ export async function prepareCodexAttemptTurnRequest(
         await resourceState.client.request("turn/start", turnStartParams, {
           timeoutMs: params.timeoutMs,
           signal: runAbortController.signal,
+          assertCurrent: connection.assertCurrent,
         }),
       );
       acceptedTurnId = startedTurn.turn.id;
+      connection.assertCurrent();
+      // Fitting may drop or truncate references; only acknowledge the complete block.
+      if (referencesRetained) {
+        references.accepted();
+      }
       throwIfTurnStartAcceptedAfterAbort();
       return startedTurn;
     } catch (error) {
-      if (acceptedTurnId) {
-        interruptCodexTurnBestEffort(resourceState.client, {
-          threadId: resourceState.thread.threadId,
-          turnId: acceptedTurnId,
-          timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
-        });
-        releaseCurrentRoute();
+      if (acceptedTurnId || isCodexAppServerIndeterminateRequestCancellationError(error)) {
+        // Codex serializes start/interrupt per thread; an empty id interrupts
+        // the accepted native turn even when local cancellation hid its response.
+        try {
+          resourceState.startupClientUnsafe = !(await interruptCodexTurnAndWaitBestEffort(
+            resourceState.client,
+            { threadId: resourceState.thread.threadId, turnId: acceptedTurnId ?? "" },
+          ));
+          if (resourceState.startupClientUnsafe) {
+            await retireUnsafeCodexTurnClientBestEffort(resourceState.client, "startup interrupt");
+          }
+        } finally {
+          releaseCurrentRoute();
+        }
       } else {
         await activeTurnRoute.cancelTurn();
       }
@@ -178,6 +249,7 @@ export async function prepareCodexAttemptTurnRequest(
       );
     }
   }
+  prepareWorkspaceReferences();
   const buildLlmInputEvent = () => ({
     runId: params.runId,
     sessionId: params.sessionId,
@@ -190,7 +262,7 @@ export async function prepareCodexAttemptTurnRequest(
     systemPrompt: buildRenderedCodexDeveloperInstructions(),
     prompt: turnState.codexTurnPromptText,
     historyMessages: prompt.codexModelInputHistoryMessages,
-    imagesCount: params.images?.length ?? 0,
+    imagesCount: prompt.contextImages.length + (params.images?.length ?? 0),
     tools,
   });
   return { codexModelCallDiagnostics, startCodexTurn, buildLlmInputEvent };

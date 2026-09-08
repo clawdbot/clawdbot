@@ -2,7 +2,6 @@
  * Runtime SDK subpath for native approval routing, target matching, and forwarding gates.
  */
 export {
-  createChannelApprovalForwardingEvaluator,
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
   createNativeApprovalChannelRouteGates,
@@ -26,6 +25,7 @@ export {
 export { buildChannelApprovalNativeTargetKey } from "../infra/approval-native-target-key.js";
 export {
   doesApprovalRequestMatchChannelAccount,
+  doesApprovalRequestSelectChannelAccount,
   resolveApprovalRequestAccountId,
   resolveApprovalRequestChannelAccountId,
 } from "../infra/approval-request-account-binding.js";

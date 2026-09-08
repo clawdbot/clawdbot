@@ -1,6 +1,7 @@
 // Leaf contract for chat.send acknowledgment shapes and timing records.
-// Kept import-free of chat-page modules so lifecycle/steer/history layers
+// Kept import-free of chat-page modules so lifecycle and history layers
 // can consume ack types without forming import cycles.
+import { asNonNegativeFiniteNumber as normalizeAckTimingValue } from "@openclaw/normalization-core/number-coercion";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 
 type ChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
@@ -14,12 +15,10 @@ type ChatSendAckServerTiming = {
 export type ChatSendAck = {
   runId: string;
   status: ChatSendAckStatus;
+  stopReason?: "restart";
+  messageSeq?: number;
   serverTiming?: ChatSendAckServerTiming;
 };
-
-function normalizeAckTimingValue(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
 
 function normalizeChatSendAckServerTiming(value: unknown): ChatSendAckServerTiming | undefined {
   if (!value || typeof value !== "object") {
@@ -46,6 +45,12 @@ export function normalizeChatSendAck(payload: unknown, fallbackRunId: string): C
     typeof record.runId === "string" && record.runId.trim() ? record.runId.trim() : fallbackRunId;
   const status = record.status;
   const serverTiming = normalizeChatSendAckServerTiming(record.serverTiming);
+  const messageSeq =
+    typeof record.messageSeq === "number" &&
+    Number.isSafeInteger(record.messageSeq) &&
+    record.messageSeq > 0
+      ? record.messageSeq
+      : undefined;
   return {
     runId,
     status:
@@ -53,6 +58,8 @@ export function normalizeChatSendAck(payload: unknown, fallbackRunId: string): C
         ? status
         : "started",
     ...(serverTiming ? { serverTiming } : {}),
+    ...(messageSeq !== undefined ? { messageSeq } : {}),
+    ...(record.stopReason === "restart" ? { stopReason: "restart" as const } : {}),
   };
 }
 

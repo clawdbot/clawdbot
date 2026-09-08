@@ -1,8 +1,7 @@
-// Memory Host SDK module implements embedding chunk limits behavior.
 import { estimateUtf8Bytes, splitTextToUtf8ByteLimit } from "./embedding-input-limits.js";
 import { hasNonTextEmbeddingParts } from "./embedding-inputs.js";
 import { resolveEmbeddingMaxInputTokens } from "./embedding-model-limits.js";
-import type { EmbeddingProvider } from "./embeddings.js";
+import type { EmbeddingProvider } from "./embeddings.types.js";
 import { hashText } from "./hash.js";
 import type { MemoryChunk } from "./internal.js";
 

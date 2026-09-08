@@ -60,9 +60,11 @@ export function createKimiWebSearchProvider(): WebSearchProviderPlugin {
       description:
         "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search.",
       parameters: KimiSearchSchema,
-      execute: async (args) => {
+      execute: async (args, context) => {
         const { executeKimiWebSearchProviderTool } = await loadKimiWebSearchProviderRuntime();
-        return await executeKimiWebSearchProviderTool(ctx, args);
+        return await executeKimiWebSearchProviderTool(ctx, args, {
+          signal: context?.signal,
+        });
       },
     }),
   };

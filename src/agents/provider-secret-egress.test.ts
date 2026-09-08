@@ -5,10 +5,8 @@ import {
   attachModelProviderRequestTransport,
   getModelProviderRequestTransport,
 } from "./provider-request-config.js";
-import {
-  protectPreparedProviderRuntimeAuth,
-  unwrapModelHeaderSentinelsForProviderEgress,
-} from "./provider-secret-egress.js";
+import { protectPreparedProviderRuntimeAuth } from "./provider-runtime-auth-protection.js";
+import { unwrapModelHeaderSentinelsForProviderEgress } from "./provider-secret-egress.js";
 
 describe("protectPreparedProviderRuntimeAuth", () => {
   it("sentinels a real credential returned by the auth exchange and registers it for redaction", () => {

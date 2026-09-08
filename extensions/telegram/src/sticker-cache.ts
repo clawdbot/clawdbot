@@ -1,15 +1,16 @@
 // Telegram plugin module implements sticker cache behavior.
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/agent-runtime";
-import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import {
   findModelInCatalog,
   loadPreparedModelCatalog,
   modelSupportsVision,
+  resolveAgentDir,
+  resolveApiKeyForProvider,
+  resolveDefaultModelForAgent,
+  type ModelCatalogEntry,
 } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveAgentDir, resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveAutoImageModel } from "openclaw/plugin-sdk/media-runtime";
 import {
+  resolveAutoImageModel,
   resolveAutoMediaKeyProviders,
   resolveDefaultMediaModel,
 } from "openclaw/plugin-sdk/media-runtime";

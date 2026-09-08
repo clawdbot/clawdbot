@@ -3,7 +3,7 @@ import SwiftUI
 
 struct CostUsageHistoryMenuView: View {
     let summary: GatewayCostUsageSummary
-    let width: CGFloat
+    let dates: CostUsageMenuDateParser
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -11,13 +11,14 @@ struct CostUsageHistoryMenuView: View {
             self.chart
             self.footer
         }
+        .environment(\.timeZone, self.dates.timeZone)
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .frame(width: max(1, self.width), alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var header: some View {
-        let todayKey = CostUsageMenuDateParser.format(Date())
+        let todayKey = self.dates.format(Date())
         let todayEntry = self.summary.daily.first { $0.date == todayKey }
         let todayCost = CostUsageFormatting.formatUsd(todayEntry?.totalCost) ?? "n/a"
         let totalCost = CostUsageFormatting.formatUsd(self.summary.totals.totalCost) ?? "n/a"
@@ -31,7 +32,7 @@ struct CostUsageHistoryMenuView: View {
                     .font(.system(size: 14, weight: .semibold))
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text("Last \(self.summary.days)d")
+                Text(String(format: String(localized: "Last %lldd"), self.summary.days))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Text(totalCost)
@@ -43,7 +44,7 @@ struct CostUsageHistoryMenuView: View {
 
     private var chart: some View {
         let entries = self.summary.daily.compactMap { entry -> (Date, Double)? in
-            guard let date = CostUsageMenuDateParser.parse(entry.date) else { return nil }
+            guard let date = self.dates.parse(entry.date) else { return nil }
             return (date, entry.totalCost)
         }
 
@@ -74,26 +75,10 @@ struct CostUsageHistoryMenuView: View {
             return AnyView(EmptyView())
         }
         return AnyView(
-            Text("Partial: \(self.summary.totals.missingCostEntries) entries missing cost")
+            Text(String(
+                format: String(localized: "Partial: %lld entries missing cost"),
+                self.summary.totals.missingCostEntries))
                 .font(.caption2)
                 .foregroundStyle(.secondary))
-    }
-}
-
-private enum CostUsageMenuDateParser {
-    static let formatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone.current
-        return formatter
-    }()
-
-    static func parse(_ value: String) -> Date? {
-        self.formatter.date(from: value)
-    }
-
-    static func format(_ date: Date) -> String {
-        self.formatter.string(from: date)
     }
 }

@@ -19,5 +19,7 @@ Required workflow:
 1. Use the `$claw-score` skill before editing.
 2. Read `taxonomy.yaml`, any existing maturity score file, and the release evidence artifacts.
 3. Refresh scores for every active surface in `taxonomy.yaml`.
+   - Treat failed, blocked, and skipped QA entries as missing Coverage; only passing evidence fulfills Coverage.
+   - Do not automatically lower Quality or Completeness because a lane was blocked by unavailable credentials. Score those dimensions from their own repository and evidence criteria.
 4. Run the QA Lab maturity score validation used by this repository.
 5. If no defensible score update is possible, leave a valid `qa/maturity-scores.yaml` and explain the uncertainty in the final message.

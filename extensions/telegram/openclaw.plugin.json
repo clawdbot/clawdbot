@@ -1,6 +1,11 @@
 {
   "id": "telegram",
-  "icon": "https://cdn.simpleicons.org/telegram",
+  "name": "Telegram",
+  "description": "OpenClaw Telegram channel plugin.",
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": [{ "id": "telegram-legacy-state" }]
+  },
   "activation": {
     "onStartup": false
   },

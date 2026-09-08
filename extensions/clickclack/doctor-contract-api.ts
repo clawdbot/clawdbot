@@ -1,1 +1,1 @@
-export { normalizeCompatibilityConfig } from "./src/doctor-contract.js";
+export { normalizeCompatibilityConfig } from "./config-doctor-api.js";

@@ -8,6 +8,8 @@ import {
   type RegisteredProviderCollections,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
+import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
+import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import xiaomiPlugin from "./index.js";
@@ -33,14 +35,7 @@ type ReplayToolCall = {
 };
 
 type RegisteredProvider = RegisteredProviderCollections["providers"][number];
-const emptyUsage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const emptyUsage = createZeroUsageFixture();
 
 function requireThinkingProfileResolver(
   provider: RegisteredProvider,
@@ -256,7 +251,7 @@ describe("xiaomi provider plugin", () => {
 
   it("builds the static Xiaomi model catalog with reasoning flags", async () => {
     const provider = await getXiaomiProvider();
-    const catalogProvider = await runSingleProviderCatalog(provider);
+    const catalogProvider = await runSingleProviderCatalog({ catalog: provider.staticCatalog });
 
     expect(catalogProvider.api).toBe("openai-completions");
     expect(catalogProvider.baseUrl).toBe("https://api.xiaomimimo.com/v1");
@@ -273,54 +268,74 @@ describe("xiaomi provider plugin", () => {
   });
 
   it("exposes Token Plan v2.5 catalog rows only after a provider config selects a region", async () => {
-    const provider = await getXiaomiTokenPlanProvider();
+    const response = Response.json({ data: [{ id: "mimo-v2.5" }, { id: "mimo-v2.5-pro" }] });
+    const release = vi.fn(async () => undefined);
+    const guardedFetch = vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockResolvedValue({
+      response,
+      finalUrl: "https://token-plan-cn.xiaomimimo.com/v1/models",
+      release,
+    });
 
-    const missingConfig = await provider.catalog?.run({
-      config: {},
-      env: {},
-      resolveProviderApiKey: () => ({ apiKey: "tp-test" }),
-      resolveProviderAuth: () => ({
-        apiKey: "tp-test",
-        mode: "api_key",
-        source: "env",
-      }),
-    } as never);
-    expect(missingConfig).toBeNull();
+    try {
+      const provider = await getXiaomiTokenPlanProvider();
 
-    const configured = await provider.catalog?.run({
-      config: {
-        models: {
-          providers: {
-            "xiaomi-token-plan": {
-              baseUrl: "https://token-plan-cn.xiaomimimo.com/v1",
+      const missingConfig = await provider.catalog?.run({
+        config: {},
+        env: {},
+        resolveProviderApiKey: () => ({ apiKey: "tp-test" }),
+        resolveProviderAuth: () => ({
+          apiKey: "tp-test",
+          mode: "api_key",
+          source: "env",
+        }),
+      } as never);
+      expect(missingConfig).toBeNull();
+      expect(guardedFetch).not.toHaveBeenCalled();
+
+      const configured = await provider.catalog?.run({
+        config: {
+          models: {
+            providers: {
+              "xiaomi-token-plan": {
+                baseUrl: "https://token-plan-cn.xiaomimimo.com/v1",
+              },
             },
           },
         },
-      },
-      env: {},
-      resolveProviderApiKey: () => ({ apiKey: "tp-test" }),
-      resolveProviderAuth: () => ({
-        apiKey: "tp-test",
-        mode: "api_key",
-        source: "profile",
-        profileId: "xiaomi-token-plan:default",
-      }),
-    } as never);
-    if (!configured || !("provider" in configured)) {
-      throw new Error("expected configured Xiaomi Token Plan catalog");
-    }
-    expect(configured.provider.baseUrl).toBe("https://token-plan-cn.xiaomimimo.com/v1");
-    expect(configured.provider.api).toBe("openai-completions");
-    expect(configured.provider.models?.map((model) => model.id)).toEqual([
-      "mimo-v2.5-pro",
-      "mimo-v2.5",
-    ]);
-    expect(configured.provider.models?.find((model) => model.id === "mimo-v2.5")?.input).toEqual([
-      "text",
-      "image",
-    ]);
-    for (const model of configured.provider.models ?? []) {
-      expect(model.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+        env: {},
+        resolveProviderApiKey: () => ({ apiKey: "tp-test" }),
+        resolveProviderAuth: () => ({
+          apiKey: "tp-test",
+          mode: "api_key",
+          source: "profile",
+          profileId: "xiaomi-token-plan:default",
+        }),
+      } as never);
+      if (!configured || !("provider" in configured)) {
+        throw new Error("expected configured Xiaomi Token Plan catalog");
+      }
+      expect(configured.provider.baseUrl).toBe("https://token-plan-cn.xiaomimimo.com/v1");
+      expect(configured.provider.api).toBe("openai-completions");
+      expect(configured.provider.models?.map((model) => model.id)).toEqual([
+        "mimo-v2.5",
+        "mimo-v2.5-pro",
+      ]);
+      expect(configured.provider.models?.find((model) => model.id === "mimo-v2.5")?.input).toEqual([
+        "text",
+        "image",
+      ]);
+      for (const model of configured.provider.models ?? []) {
+        expect(model.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+      }
+      expect(guardedFetch).toHaveBeenCalledOnce();
+      const request = guardedFetch.mock.calls[0]?.[0];
+      expect(request?.url).toBe("https://token-plan-cn.xiaomimimo.com/v1/models");
+      expect(request?.init?.method ?? "GET").toBe("GET");
+      expect(new Headers(request?.init?.headers).get("authorization")).toBe("Bearer tp-test");
+      expect(response.bodyUsed).toBe(true);
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      guardedFetch.mockRestore();
     }
   });
 

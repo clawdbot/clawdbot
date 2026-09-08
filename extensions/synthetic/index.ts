@@ -2,7 +2,7 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { applySyntheticConfig, SYNTHETIC_DEFAULT_MODEL_REF } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { buildSyntheticProvider } from "./provider-catalog.js";
+import { buildSyntheticProvider, SYNTHETIC_MODEL_DISCOVERY } from "./provider-catalog.js";
 
 const PROVIDER_ID = "synthetic";
 
@@ -19,7 +19,11 @@ export default defineSingleProviderPluginEntry({
       applyConfig: applySyntheticConfig,
     },
     catalog: {
+      discoveryMode: "strict",
       buildProvider: buildSyntheticProvider,
+      buildStaticProvider: buildSyntheticProvider,
+      allowExplicitBaseUrl: true,
+      liveModelDiscovery: SYNTHETIC_MODEL_DISCOVERY,
     },
   },
 });

@@ -9,7 +9,7 @@ import {
 
 vi.mock("../../channels/plugins/bootstrap-registry.js", async () => ({
   getBootstrapChannelPlugin: (
-    await import("./message-action-test-fixtures.js")
+    await import("./message-action-runner.test-support.js")
   ).createPinboardMessageActionBootstrapRegistryMock(),
 }));
 
@@ -19,6 +19,7 @@ describe("actionRequiresTarget", () => {
     ["channel-info", true],
     ["broadcast", false],
     ["search", false],
+    ["conversation-open", false],
   ])("returns %s for %s", (action, expected) => {
     expect(actionRequiresTarget(action as never)).toBe(expected);
   });

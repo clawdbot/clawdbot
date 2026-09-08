@@ -10,7 +10,6 @@ const loadPluginManifestRegistryForInstalledIndexMock = vi.fn();
 const startupInfo: InstalledPluginStartupInfo = {
   sidecar: false,
   memory: false,
-  deferConfiguredChannelFullLoadUntilAfterListen: false,
   agentHarnesses: [],
 };
 
@@ -117,7 +116,6 @@ describe("listPersistedBundledPluginLocationBridges", () => {
       {
         bundledPluginId: "diagnostics-otel",
         pluginId: "diagnostics-otel",
-        preferredSource: "npm",
         npmSpec: "@openclaw/diagnostics-otel",
         clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
         channelIds: ["diagnostics-otel"],
@@ -156,7 +154,6 @@ describe("listPersistedBundledPluginLocationBridges", () => {
       {
         bundledPluginId: "diagnostics-otel",
         pluginId: "diagnostics-otel",
-        preferredSource: "npm",
         npmSpec: "@openclaw/diagnostics-otel",
         clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
         channelIds: ["diagnostics-otel"],
@@ -164,9 +161,42 @@ describe("listPersistedBundledPluginLocationBridges", () => {
     ]);
   });
 
+  it("targets the renamed official plugin id when externalizing a bundled plugin", async () => {
+    readPersistedInstalledPluginIndexMock.mockResolvedValue(
+      makeIndex({
+        pluginId: "qqbot",
+        manifestPath: "/app/dist/extensions/qqbot/openclaw.plugin.json",
+        manifestHash: "hash",
+        source: "/app/dist/extensions/qqbot/index.js",
+        rootDir: "/app/dist/extensions/qqbot",
+        origin: "bundled",
+        enabled: true,
+        startup: startupInfo,
+        compat: [],
+        packageInstall: { warnings: [] },
+      }),
+    );
+    loadPluginManifestRegistryForInstalledIndexMock.mockReturnValue(makeRegistry("qqbot"));
+
+    await expect(listPersistedBundledPluginLocationBridges({})).resolves.toEqual([
+      {
+        bundledPluginId: "qqbot",
+        pluginId: "openclaw-qqbot",
+        npmSpec: "@tencent-connect/openclaw-qqbot@2.0.3",
+        expectedIntegrity:
+          "sha512-yngu/2cPeZjJfIfHWCXWB2/6KlDHrb9vpOUjKLdQxePLSp6wCn3CFOALcBIVq/9o6jlYz9WTU9idW6nfX1xpFA==",
+        channelIds: ["qqbot"],
+      },
+    ]);
+  });
+
   it.each([
     ["byteplus", "@openclaw/byteplus-provider", true],
     ["duckduckgo", "@openclaw/duckduckgo-plugin", false],
+    ["mistral", "@openclaw/mistral-provider", true],
+    ["novita", "@openclaw/novita-provider", true],
+    ["opencode", "@openclaw/opencode-provider", true],
+    ["opencode-go", "@openclaw/opencode-go-provider", true],
     ["synthetic", "@openclaw/synthetic-provider", true],
     ["teams-meetings", "@openclaw/teams-meetings", true],
     ["volcengine", "@openclaw/volcengine-provider", true],
@@ -200,7 +230,6 @@ describe("listPersistedBundledPluginLocationBridges", () => {
         {
           bundledPluginId: pluginId,
           pluginId,
-          preferredSource: "npm",
           npmSpec,
           clawhubSpec: `clawhub:${npmSpec}`,
           ...(enabledByDefault ? { enabledByDefault: true } : {}),
@@ -208,6 +237,69 @@ describe("listPersistedBundledPluginLocationBridges", () => {
       ]);
     },
   );
+
+  it("externalizes the shipped bundled ComfyUI plugin while preserving default enablement", async () => {
+    readPersistedInstalledPluginIndexMock.mockResolvedValue(
+      makeIndex({
+        pluginId: "comfy",
+        manifestPath: "/app/dist/extensions/comfy/openclaw.plugin.json",
+        manifestHash: "hash",
+        source: "/app/dist/extensions/comfy/index.js",
+        rootDir: "/app/dist/extensions/comfy",
+        origin: "bundled",
+        enabled: true,
+        enabledByDefault: true,
+        startup: startupInfo,
+        compat: [],
+        packageInstall: {
+          warnings: [],
+        },
+      }),
+    );
+    loadPluginManifestRegistryForInstalledIndexMock.mockReturnValue(makeRegistry("comfy", []));
+
+    await expect(listPersistedBundledPluginLocationBridges({})).resolves.toEqual([
+      {
+        bundledPluginId: "comfy",
+        pluginId: "comfy",
+        npmSpec: "@openclaw/comfy-provider",
+        clawhubSpec: "clawhub:@openclaw/comfy-provider",
+        enabledByDefault: true,
+      },
+    ]);
+  });
+
+  it("externalizes the shipped bundled iMessage channel while preserving default enablement", async () => {
+    readPersistedInstalledPluginIndexMock.mockResolvedValue(
+      makeIndex({
+        pluginId: "imessage",
+        manifestPath: "/app/dist/extensions/imessage/openclaw.plugin.json",
+        manifestHash: "hash",
+        source: "/app/dist/extensions/imessage/index.js",
+        rootDir: "/app/dist/extensions/imessage",
+        origin: "bundled",
+        enabled: true,
+        enabledByDefault: true,
+        startup: startupInfo,
+        compat: [],
+        packageInstall: {
+          warnings: [],
+        },
+      }),
+    );
+    loadPluginManifestRegistryForInstalledIndexMock.mockReturnValue(makeRegistry("imessage"));
+
+    await expect(listPersistedBundledPluginLocationBridges({})).resolves.toEqual([
+      {
+        bundledPluginId: "imessage",
+        pluginId: "imessage",
+        npmSpec: "@openclaw/imessage",
+        clawhubSpec: "clawhub:@openclaw/imessage",
+        enabledByDefault: true,
+        channelIds: ["imessage"],
+      },
+    ]);
+  });
 
   it("does not create a relocation bridge without persisted or official install metadata", async () => {
     readPersistedInstalledPluginIndexMock.mockResolvedValue(

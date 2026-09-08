@@ -19,7 +19,7 @@ export function registerMattermostInteractions(params: {
   interactionPath: string;
   allowedSourceIps: string[];
   handleModelPickerInteraction: MattermostModelPickerInteractionHandler;
-}): (() => void) | undefined {
+}): () => void {
   const { monitor } = params;
   const { account, botUserId, cfg, client, core, pairing, resources, runtime } = monitor;
   const { resolveChannelInfo } = resources;
@@ -95,7 +95,7 @@ export function registerMattermostInteractions(params: {
         if (!eventPlan) {
           return;
         }
-        const { channelDisplay, kind, route, thread, to } = eventPlan;
+        const { channelDisplay, channelId, kind, route, thread, to } = eventPlan;
         const bodyText = `[Button click: user @${button.userName} selected "${button.actionName}"]`;
         const ctxPayload = eventPlan.finalizeContext({
           Body: bodyText,
@@ -109,8 +109,7 @@ export function registerMattermostInteractions(params: {
           WasMentioned: true,
           CommandAuthorized: false,
         });
-        const { deliveryBarrier, replyOptions, replyPipeline, tableMode, textLimit } =
-          eventPlan.createReplyPlan();
+        const { replyOptions, replyPipeline, tableMode, textLimit } = eventPlan.createReplyPlan();
         await core.channel.inbound.dispatch({
           cfg,
           channel: "mattermost",
@@ -128,7 +127,7 @@ export function registerMattermostInteractions(params: {
                 core,
                 cfg,
                 payload,
-                to,
+                channelId,
                 accountId: account.accountId,
                 agentId: route.agentId,
                 replyToId: resolveMattermostInteractionReplyRootId({
@@ -141,7 +140,6 @@ export function registerMattermostInteractions(params: {
                 textLimit,
                 tableMode,
                 sendMessage: sendMessageMattermost,
-                onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
               });
               if (result.visibleReplySent) {
                 runtime.log?.(`delivered button-click reply to ${to}`);
@@ -154,8 +152,6 @@ export function registerMattermostInteractions(params: {
           },
           replyPipeline,
           dispatcherOptions: {
-            resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
-            onDeliverySettled: deliveryBarrier.markDeliverySettled,
             humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
           },
           replyOptions,
@@ -167,5 +163,6 @@ export function registerMattermostInteractions(params: {
     source: "mattermost-interactions",
     accountId: account.accountId,
     log: (message: string) => runtime.log?.(message),
+    throwOnFailure: true,
   });
 }

@@ -88,7 +88,7 @@ fi
 
 require_host_tools() {
   local tool
-  for tool in prlctl curl python3 ruby; do
+  for tool in prlctl curl python3 ruby node; do
     command -v "$tool" >/dev/null 2>&1 || die "missing host tool: $tool"
   done
 }
@@ -114,12 +114,18 @@ vm_exists() {
 }
 
 vm_state() {
-  prlctl status "$VM_NAME" 2>/dev/null | awk '{print $NF}'
+  run_bounded 30 prlctl status "$VM_NAME" 2>/dev/null | awk '{print $NF}'
 }
 
 ensure_vm_running() {
-  local state
+  local state deadline=$((SECONDS + 120))
   state="$(vm_state)"
+  # snapshot-switch can return before Parallels finishes restoring the disk state.
+  while [[ "$state" == "restoring" ]]; do
+    [[ "$SECONDS" -lt "$deadline" ]] || die "snapshot restore did not finish within 120 seconds"
+    sleep 1
+    state="$(vm_state)"
+  done
   case "$state" in
     running)
       ;;
@@ -617,8 +623,18 @@ ensure_git() {
   wait_for_check Git 'where git.exe'
 }
 
+guest_node_supported() {
+  local version
+  version="$(guest_user_cmd 'node.exe --version' | tr -d '\r' | tail -n 1)" || return 1
+  node --input-type=module - "$SCRIPT_DIR/../preinstall-package-manager-warning.mjs" "$version" <<'JS'
+import { pathToFileURL } from "node:url";
+const { enforceSupportedNodeRuntime } = await import(pathToFileURL(process.argv[2]).href);
+process.exitCode = enforceSupportedNodeRuntime({ version: process.argv[3], execPath: "Windows guest PATH" }) ? 0 : 1;
+JS
+}
+
 ensure_node() {
-  if guest_user_cmd 'where node.exe' >/dev/null 2>&1; then
+  if guest_node_supported >/dev/null 2>&1; then
     return
   fi
   winget_download OpenJS.NodeJS.LTS
@@ -630,6 +646,7 @@ ensure_node() {
   run_windows_installer msiexec.exe /i "$installer" /qn /norestart
   finish_installer_reboot
   wait_for_check Node.js 'where node.exe'
+  guest_node_supported || die "installed Node.js does not satisfy the OpenClaw runtime requirement"
 }
 
 cleanup_installers() {
@@ -640,6 +657,7 @@ cleanup_installers() {
 verify_baseline() {
   set_guest_paths
   guest_user_cmd 'git --version && node --version && npm --version'
+  guest_node_supported || die "baseline Node.js is unsupported; rerun prepare with --baseline-snapshot <new-name> to upgrade it"
   guest_user_cmd 'wsl.exe --version' || die "MSI-backed WSL is unavailable"
   guest_user_cmd 'wsl.exe --status' || die "WSL status failed"
   guest_system_ps "if (-not (Get-CimInstance Win32_ComputerSystem).HypervisorPresent) { throw 'Windows hypervisor is not active; WSL 2 workloads cannot start' }"

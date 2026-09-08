@@ -21,7 +21,7 @@ type SummarizeTextDeps = NonNullable<Parameters<TtsCoreModule["summarizeText"]>[
 
 let ttsRuntime: TtsRuntimeModule;
 let ttsRuntimeInitialized = false;
-let completeSimple: typeof import("openclaw/plugin-sdk/llm").completeSimple;
+let completeWithPreparedSimpleCompletionModel: SummarizeTextDeps["completeWithPreparedSimpleCompletionModel"];
 let prepareSimpleCompletionModelMock: SummarizeTextDeps["prepareSimpleCompletionModel"];
 let requireApiKeyMock: SummarizeTextDeps["requireApiKey"];
 let summarizeTextCore: TtsCoreModule["summarizeText"];
@@ -100,7 +100,7 @@ function asLegacyTtsConfig(value: unknown): OpenClawConfig {
 }
 
 function asLegacyOpenClawConfig(value: Record<string, unknown>): OpenClawConfig {
-  return value as unknown as OpenClawConfig;
+  return asLegacyTtsConfig(value);
 }
 
 function mockCallAt(mock: { mock: { calls: Array<Array<unknown>> } }, index: number): unknown[] {
@@ -137,7 +137,7 @@ const mockAssistantMessage = (content: AssistantMessage["content"]): AssistantMe
 
 function createSummarizeTextDeps() {
   return {
-    completeSimple,
+    completeWithPreparedSimpleCompletionModel,
     prepareSimpleCompletionModel: prepareSimpleCompletionModelMock,
     requireApiKey: requireApiKeyMock,
   };
@@ -182,11 +182,8 @@ async function withMockedSpeechFetch(
   audioLength: number,
 ) {
   const originalFetch = globalThis.fetch;
-  const fetchMock = vi.fn(async () => ({
-    ok: true,
-    arrayBuffer: async () => new ArrayBuffer(audioLength),
-  }));
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  const fetchMock = vi.fn(async () => new Response(new Uint8Array(audioLength)));
+  globalThis.fetch = fetchMock;
   try {
     await run(fetchMock);
   } finally {
@@ -521,10 +518,10 @@ function createResolvedSummarizationConfig(cfg: OpenClawConfig): ResolvedTtsConf
 
 async function setupSummarizationMocks() {
   ({ summarizeText: summarizeTextCore } = await loadTtsCore());
-  ({ completeSimple } = await import("../../plugin-sdk/llm.js"));
+  completeWithPreparedSimpleCompletionModel = vi.fn();
   prepareSimpleCompletionModelMock = createPrepareSimpleCompletionModelMock();
   requireApiKeyMock = vi.fn() as SummarizeTextDeps["requireApiKey"];
-  vi.mocked(completeSimple).mockResolvedValue(
+  vi.mocked(completeWithPreparedSimpleCompletionModel).mockResolvedValue(
     mockAssistantMessage([{ type: "text", text: "Summary" }]),
   );
   vi.mocked(requireApiKeyMock).mockImplementation((auth: { apiKey?: string }) => auth.apiKey ?? "");
@@ -559,12 +556,12 @@ export function describeTtsConfigContract() {
         },
         {
           name: "override",
-          cfg: {
+          cfg: asLegacyTtsConfig({
             ...baseCfg,
             tts: {
               edge: { outputFormat: "audio-24khz-96kbitrate-mono-mp3" },
             },
-          } as unknown as OpenClawConfig,
+          }),
           expected: "audio-24khz-96kbitrate-mono-mp3",
         },
       ] as const)("$name", ({ cfg, expected, name }) => {
@@ -796,22 +793,22 @@ export function describeTtsConfigContract() {
         },
         {
           name: "config wins over env",
-          cfg: {
+          cfg: asLegacyTtsConfig({
             ...baseCfg,
             tts: { ...baseCfg.tts, openai: { baseUrl: "http://my-server:9000/v1" } },
-          } as unknown as OpenClawConfig,
+          }),
           env: { OPENAI_TTS_BASE_URL: "http://localhost:8880/v1" },
           expected: "http://my-server:9000/v1",
         },
         {
           name: "config slash trimming",
-          cfg: {
+          cfg: asLegacyTtsConfig({
             ...baseCfg,
             tts: {
               ...baseCfg.tts,
               openai: { baseUrl: "http://my-server:9000/v1///" },
             },
-          } as unknown as OpenClawConfig,
+          }),
           env: { OPENAI_TTS_BASE_URL: undefined },
           expected: "http://my-server:9000/v1",
         },
@@ -879,7 +876,7 @@ export function describeTtsSummarizationContract() {
 
     it("summarizes text and returns result with metrics", async () => {
       const mockSummary = "This is a summarized version of the text.";
-      vi.mocked(completeSimple).mockResolvedValue(
+      vi.mocked(completeWithPreparedSimpleCompletionModel).mockResolvedValue(
         mockAssistantMessage([{ type: "text", text: mockSummary }]),
       );
 
@@ -893,18 +890,23 @@ export function describeTtsSummarizationContract() {
       expect(result.inputLength).toBe(2000);
       expect(result.outputLength).toBe(mockSummary.length);
       expect(result.latencyMs).toBeGreaterThanOrEqual(0);
-      expect(completeSimple).toHaveBeenCalledTimes(1);
+      expect(completeWithPreparedSimpleCompletionModel).toHaveBeenCalledTimes(1);
     });
 
     it("calls the summary model with the expected parameters", async () => {
       await runSummarizeText();
 
-      const callArgs = mockCallAt(vi.mocked(completeSimple), 0);
+      const callArgs = mockCallAt(vi.mocked(completeWithPreparedSimpleCompletionModel), 0);
       expect(
-        (callArgs[1] as { messages?: Array<{ role?: string }> } | undefined)?.messages?.[0]?.role,
+        (callArgs[0] as { context?: { messages?: Array<{ role?: string }> } } | undefined)?.context
+          ?.messages?.[0]?.role,
       ).toBe("user");
-      expect((callArgs[2] as { maxTokens?: number } | undefined)?.maxTokens).toBe(250);
-      expect((callArgs[2] as { temperature?: number } | undefined)?.temperature).toBe(0.3);
+      expect(
+        (callArgs[0] as { options?: { maxTokens?: number } } | undefined)?.options?.maxTokens,
+      ).toBe(250);
+      expect(
+        (callArgs[0] as { options?: { temperature?: number } } | undefined)?.options?.temperature,
+      ).toBe(0.3);
       expect(requireApiKeyMock).toHaveBeenCalledWith(
         expect.objectContaining({ apiKey: "test-api-key" }),
         "openai",
@@ -922,7 +924,6 @@ export function describeTtsSummarizationContract() {
         cfg,
         provider: "openai",
         modelId: "gpt-4.1-mini",
-        useAsyncModelResolution: true,
       });
     });
 
@@ -938,7 +939,11 @@ export function describeTtsSummarizationContract() {
       await runSummarizeText();
 
       expect(
-        (mockCallAt(vi.mocked(completeSimple), 0)[0] as { api?: string } | undefined)?.api,
+        (
+          mockCallAt(vi.mocked(completeWithPreparedSimpleCompletionModel), 0)[0] as
+            | { model?: { api?: string } }
+            | undefined
+        )?.model?.api,
       ).toBe("openai-completions");
     });
 
@@ -967,7 +972,7 @@ export function describeTtsSummarizationContract() {
         message: mockAssistantMessage([{ type: "text", text: "   " }]),
       },
     ] as const)("throws when summary output is missing or empty: $name", async (testCase) => {
-      vi.mocked(completeSimple).mockResolvedValue(testCase.message);
+      vi.mocked(completeWithPreparedSimpleCompletionModel).mockResolvedValue(testCase.message);
       await expect(runSummarizeText({ text: "text" }), testCase.name).rejects.toThrow(
         "No summary returned",
       );
@@ -1003,148 +1008,102 @@ export function describeTtsProviderRuntimeContract() {
     });
 
     describe("fallback readiness errors", () => {
-      it("continues synthesize fallback when primary readiness checks throw", async () => {
-        await withIsolatedSpeechProviderEnvAsync({}, async () => {
-          const throwingPrimary: SpeechProviderPlugin = {
-            id: "openai",
-            label: "OpenAI",
-            autoSelectOrder: 10,
-            resolveConfig: () => ({}),
-            isConfigured: () => {
-              throw new Error("Authorization: Bearer sk-readiness-throw-token-1234567890\nboom");
-            },
-            synthesize: async () => {
-              throw new Error("unexpected synthesize call");
-            },
-          };
-          const fallback: SpeechProviderPlugin = {
-            id: "microsoft",
-            label: "Microsoft",
-            autoSelectOrder: 20,
-            resolveConfig: () => ({}),
-            isConfigured: () => true,
-            synthesize: async () => ({
-              audioBuffer: createAudioBuffer(2),
-              outputFormat: "mp3",
-              fileExtension: ".mp3",
-              voiceCompatible: true,
-            }),
-          };
-          const registry = createEmptyPluginRegistry();
-          registry.speechProviders = [
-            { pluginId: "openai", provider: throwingPrimary, source: "test" },
-            { pluginId: "microsoft", provider: fallback, source: "test" },
-          ];
-          setActivePluginRegistry(registry);
-
-          const result = await ttsRuntime.synthesizeSpeech({
-            text: "hello fallback",
-            cfg: {
-              tts: {
-                provider: "openai",
+      it.each([
+        {
+          name: "synthesize",
+          primaryId: "openai",
+          primaryLabel: "OpenAI",
+          token: "sk-readiness-throw-token-1234567890",
+          separator: "\n",
+          text: "hello fallback",
+        },
+        {
+          name: "telephony",
+          primaryId: "primary-throws",
+          primaryLabel: "PrimaryThrows",
+          token: "sk-telephony-throw-token-1234567890",
+          separator: "\t",
+          text: "hello telephony fallback",
+        },
+      ])(
+        "continues $name fallback when primary readiness checks throw",
+        async ({ name, primaryId, primaryLabel, token, separator, text }) => {
+          await withIsolatedSpeechProviderEnvAsync({}, async () => {
+            const throwingPrimary: SpeechProviderPlugin = {
+              id: primaryId,
+              label: primaryLabel,
+              autoSelectOrder: 10,
+              resolveConfig: () => ({}),
+              isConfigured: () => {
+                throw new Error(`Authorization: Bearer ${token}${separator}boom`);
               },
-            },
-          });
-
-          expect(result.success).toBe(true);
-          if (!result.success) {
-            throw new Error("expected fallback synthesis success");
-          }
-          expect(result.provider).toBe("microsoft");
-          expect(result.fallbackFrom).toBe("openai");
-          expect(result.attemptedProviders).toEqual(["openai", "microsoft"]);
-          expect(result.attempts).toHaveLength(2);
-          expect(result.attempts?.[0]?.provider).toBe("openai");
-          expect(result.attempts?.[0]?.outcome).toBe("failed");
-          expect(result.attempts?.[0]?.reasonCode).toBe("provider_error");
-          expect(result.attempts?.[0]?.persona).toBeUndefined();
-          expect(result.attempts?.[0]?.personaBinding).toBe("none");
-          expect(typeof result.attempts?.[0]?.latencyMs).toBe("number");
-          expect(result.attempts?.[0]?.error).toContain("openai: Authorization: Bearer");
-          expect(result.attempts?.[0]?.error).not.toContain("sk-readiness-throw-token-1234567890");
-          expect(result.attempts?.[1]?.provider).toBe("microsoft");
-          expect(result.attempts?.[1]?.outcome).toBe("success");
-          expect(result.attempts?.[1]?.reasonCode).toBe("success");
-          expect(result.attempts?.[1]?.persona).toBeUndefined();
-          expect(result.attempts?.[1]?.personaBinding).toBe("none");
-          expect(typeof result.attempts?.[1]?.latencyMs).toBe("number");
-          expect(result.attempts?.[1]?.error).toBeUndefined();
-        });
-      });
-
-      it("continues telephony fallback when primary readiness checks throw", async () => {
-        await withIsolatedSpeechProviderEnvAsync({}, async () => {
-          const throwingPrimary: SpeechProviderPlugin = {
-            id: "primary-throws",
-            label: "PrimaryThrows",
-            autoSelectOrder: 10,
-            resolveConfig: () => ({}),
-            isConfigured: () => {
-              throw new Error("Authorization: Bearer sk-telephony-throw-token-1234567890\tboom");
-            },
-            synthesize: async () => {
-              throw new Error("unexpected synthesize call");
-            },
-          };
-          const fallback: SpeechProviderPlugin = {
-            id: "microsoft",
-            label: "Microsoft",
-            autoSelectOrder: 20,
-            resolveConfig: () => ({}),
-            isConfigured: () => true,
-            synthesize: async () => ({
-              audioBuffer: createAudioBuffer(2),
-              outputFormat: "mp3",
-              fileExtension: ".mp3",
-              voiceCompatible: true,
-            }),
-            synthesizeTelephony: async () => ({
-              audioBuffer: createAudioBuffer(2),
-              outputFormat: "mp3",
-              sampleRate: 24000,
-            }),
-          };
-          const registry = createEmptyPluginRegistry();
-          registry.speechProviders = [
-            { pluginId: "primary-throws", provider: throwingPrimary, source: "test" },
-            { pluginId: "microsoft", provider: fallback, source: "test" },
-          ];
-          setActivePluginRegistry(registry);
-
-          const result = await ttsRuntime.textToSpeechTelephony({
-            text: "hello telephony fallback",
-            cfg: {
-              tts: {
-                provider: "primary-throws",
+              synthesize: async () => {
+                throw new Error("unexpected synthesize call");
               },
-            },
-          });
+            };
+            const fallback: SpeechProviderPlugin = {
+              id: "microsoft",
+              label: "Microsoft",
+              autoSelectOrder: 20,
+              resolveConfig: () => ({}),
+              isConfigured: () => true,
+              synthesize: async () => ({
+                audioBuffer: createAudioBuffer(2),
+                outputFormat: "mp3",
+                fileExtension: ".mp3",
+                voiceCompatible: true,
+              }),
+              ...(name === "telephony"
+                ? {
+                    synthesizeTelephony: async () => ({
+                      audioBuffer: createAudioBuffer(2),
+                      outputFormat: "mp3",
+                      sampleRate: 24000,
+                    }),
+                  }
+                : {}),
+            };
+            const registry = createEmptyPluginRegistry();
+            registry.speechProviders = [
+              { pluginId: primaryId, provider: throwingPrimary, source: "test" },
+              { pluginId: "microsoft", provider: fallback, source: "test" },
+            ];
+            setActivePluginRegistry(registry);
 
-          expect(result.success).toBe(true);
-          if (!result.success) {
-            throw new Error("expected telephony fallback success");
-          }
-          expect(result.provider).toBe("microsoft");
-          expect(result.fallbackFrom).toBe("primary-throws");
-          expect(result.attemptedProviders).toEqual(["primary-throws", "microsoft"]);
-          expect(result.attempts).toHaveLength(2);
-          expect(result.attempts?.[0]?.provider).toBe("primary-throws");
-          expect(result.attempts?.[0]?.outcome).toBe("failed");
-          expect(result.attempts?.[0]?.reasonCode).toBe("provider_error");
-          expect(result.attempts?.[0]?.persona).toBeUndefined();
-          expect(result.attempts?.[0]?.personaBinding).toBe("none");
-          expect(typeof result.attempts?.[0]?.latencyMs).toBe("number");
-          expect(result.attempts?.[0]?.error).toContain("primary-throws: Authorization: Bearer");
-          expect(result.attempts?.[0]?.error).not.toContain("sk-telephony-throw-token-1234567890");
-          expect(result.attempts?.[1]?.provider).toBe("microsoft");
-          expect(result.attempts?.[1]?.outcome).toBe("success");
-          expect(result.attempts?.[1]?.reasonCode).toBe("success");
-          expect(result.attempts?.[1]?.persona).toBeUndefined();
-          expect(result.attempts?.[1]?.personaBinding).toBe("none");
-          expect(typeof result.attempts?.[1]?.latencyMs).toBe("number");
-          expect(result.attempts?.[1]?.error).toBeUndefined();
-        });
-      });
+            const params = { text, cfg: { tts: { provider: primaryId } } };
+            const result =
+              name === "telephony"
+                ? await ttsRuntime.textToSpeechTelephony(params)
+                : await ttsRuntime.synthesizeSpeech(params);
+
+            expect(result.success).toBe(true);
+            if (!result.success) {
+              throw new Error(
+                `expected ${name === "telephony" ? "telephony " : ""}fallback synthesis success`,
+              );
+            }
+            expect(result.provider).toBe("microsoft");
+            expect(result.fallbackFrom).toBe(primaryId);
+            expect(result.attemptedProviders).toEqual([primaryId, "microsoft"]);
+            expect(result.attempts).toHaveLength(2);
+            expect(result.attempts?.[0]?.provider).toBe(primaryId);
+            expect(result.attempts?.[0]?.outcome).toBe("failed");
+            expect(result.attempts?.[0]?.reasonCode).toBe("provider_error");
+            expect(result.attempts?.[0]?.persona).toBeUndefined();
+            expect(result.attempts?.[0]?.personaBinding).toBe("none");
+            expect(typeof result.attempts?.[0]?.latencyMs).toBe("number");
+            expect(result.attempts?.[0]?.error).toContain(`${primaryId}: Authorization: Bearer`);
+            expect(result.attempts?.[0]?.error).not.toContain(token);
+            expect(result.attempts?.[1]?.provider).toBe("microsoft");
+            expect(result.attempts?.[1]?.outcome).toBe("success");
+            expect(result.attempts?.[1]?.reasonCode).toBe("success");
+            expect(result.attempts?.[1]?.persona).toBeUndefined();
+            expect(result.attempts?.[1]?.personaBinding).toBe("none");
+            expect(typeof result.attempts?.[1]?.latencyMs).toBe("number");
+            expect(result.attempts?.[1]?.error).toBeUndefined();
+          });
+        },
+      );
 
       it("cancels the discarded speech response body after synthesize", async () => {
         await withIsolatedSpeechProviderEnvAsync({}, async () => {

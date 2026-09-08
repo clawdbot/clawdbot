@@ -5,6 +5,11 @@
   },
   "enabledByDefault": true,
   "providers": ["synthetic"],
+  "modelCatalog": {
+    "discovery": {
+      "synthetic": "refreshable"
+    }
+  },
   "setup": {
     "providers": [
       {

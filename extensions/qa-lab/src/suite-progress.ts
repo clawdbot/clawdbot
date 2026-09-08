@@ -82,6 +82,18 @@ export function createQaSuiteProgressController(params: {
       }
       emit("running");
     },
+    recordScenarioResult(scenarioId: string, result: QaSuiteProgressResult["result"]) {
+      // Runner outcomes retain catalog titles and assign even empty details.
+      // Aggregate results below instead merge names/details from child reports.
+      outcomes.set(scenarioId, {
+        ...outcomes.get(scenarioId)!,
+        status: result.status,
+        details: result.details,
+        steps: result.steps,
+        finishedAt: new Date().toISOString(),
+      });
+      emit("running");
+    },
     recordResults(entries: readonly QaSuiteProgressResult[]) {
       const finishedAt = new Date().toISOString();
       for (const entry of entries) {

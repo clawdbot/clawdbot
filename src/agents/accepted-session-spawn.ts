@@ -2,11 +2,12 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
-// Helpers for recognizing accepted session-spawn tool results in loosely typed
-// tool payloads and persisted delivery metadata.
+// Helpers for recognizing accepted session-spawn tool results.
 export type AcceptedSessionSpawn = {
   runId: string;
   childSessionKey: string;
+  /** True only when this child owns a terminal completion for its requester. */
+  expectsCompletionMessage?: boolean;
 };
 
 /** Normalize a tool result that accepted a child session spawn. */
@@ -20,18 +21,23 @@ export function normalizeAcceptedSessionSpawnResult(result: unknown): AcceptedSe
   if (!runId || !childSessionKey) {
     return null;
   }
-  return { runId, childSessionKey };
+  return {
+    runId,
+    childSessionKey,
+    expectsCompletionMessage: details.expectsCompletionMessage === true,
+  };
 }
 
 /** Return true when a collection contains at least one accepted child spawn. */
-export function hasAcceptedSessionSpawn(acceptedSessionSpawns?: readonly unknown[]): boolean {
-  return (acceptedSessionSpawns ?? []).some((spawn) => {
-    const record = asOptionalRecord(spawn);
-    if (!record) {
-      return false;
-    }
-    return Boolean(
-      normalizeOptionalString(record.runId) && normalizeOptionalString(record.childSessionKey),
-    );
-  });
+export function hasAcceptedSessionSpawn(
+  acceptedSessionSpawns?: readonly AcceptedSessionSpawn[],
+): boolean {
+  return Boolean(acceptedSessionSpawns?.length);
+}
+
+/** Return true when an accepted child owns the requester's terminal completion. */
+export function hasCompletionMessageSessionSpawn(
+  acceptedSessionSpawns?: readonly AcceptedSessionSpawn[],
+): boolean {
+  return acceptedSessionSpawns?.some((spawn) => spawn.expectsCompletionMessage === true) === true;
 }

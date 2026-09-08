@@ -3,6 +3,7 @@ import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type {
+  RequesterMcpConnect,
   SessionMcpRequesterScope,
   SessionMcpRuntime,
   SessionMcpRuntimeManager,
@@ -10,11 +11,15 @@ import type {
 import type { McpServerConnectionResolved } from "./mcp-connection-resolver.js";
 
 export const SESSION_MCP_RUNTIME_MANAGER_KEY = Symbol.for("openclaw.sessionMcpRuntimeManager");
-export const DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS = 10 * 60 * 1000;
 export const SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS = 60 * 1000;
-// Bounds live per-sender MCP transports in one session between idle sweeps;
-// far above concurrent-run parallelism, so active requesters never evict.
-export const SESSION_MCP_MAX_IDLE_REQUESTER_RUNTIMES = 64;
+// Includes runtimes being created or drained; existing sessions never evict for capacity.
+export const SESSION_MCP_MAX_LIVE_RUNTIMES = 256;
+
+/** Idle eviction is opt-in; zero retains the session lifetime. */
+export function resolveSessionMcpRuntimeIdleTtlMs(cfg?: OpenClawConfig): number {
+  const raw = cfg?.mcp?.sessionIdleTtlMs;
+  return typeof raw === "number" && Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 0;
+}
 
 /** Checks whether harness-scoped MCP can affect a turn without loading its runtime graph. */
 export function shouldLoadRequesterScopedMcpHarnessRuntime(params: {
@@ -43,10 +48,7 @@ export type CreateSessionMcpRuntime = (params: {
   connectionOverrides?: ReadonlyMap<string, McpServerConnectionResolved>;
   redactConnectionServerNames?: ReadonlySet<string>;
   requesterScope?: SessionMcpRequesterScope;
+  requesterConnect?: RequesterMcpConnect;
   configFingerprint?: string;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
-}) => SessionMcpRuntime;
-
-export function resolveSessionMcpRuntimeIdleTtlMs(): number {
-  return DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS;
-}
+}) => SessionMcpRuntime | Promise<SessionMcpRuntime>;

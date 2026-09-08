@@ -7,18 +7,48 @@ import type { LineAccountConfig } from "./types.js";
 
 type MessageEvent = webhook.MessageEvent;
 
-// Avoid pulling in globals/pairing/media dependencies; this suite only asserts
-// allowlist/groupPolicy gating and message-context wiring.
-vi.mock("openclaw/plugin-sdk/channel-inbound", () => ({
+const pairingDeliveryMocks = vi.hoisted(() => ({
+  invokePairingReply: false,
+  pushMessageLine: vi.fn(async () => {
+    throw new Error("pushMessageLine should not be called from bot-handlers tests");
+  }),
+  replyMessageLine: vi.fn(async () => {
+    throw new Error("replyMessageLine should not be called from bot-handlers tests");
+  }),
+}));
+
+// Stub delivery and context wiring while keeping mention-drop diagnostics real.
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
+  implicitMentionKindWhen: (await import("openclaw/plugin-sdk/channel-mention-gating"))
+    .implicitMentionKindWhen,
+  logInboundDrop: (await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>())
+    .logInboundDrop,
   buildMentionRegexes: () => [],
+  isChannelPartialDeliveryError: (error: unknown) =>
+    Boolean(
+      error &&
+      typeof error === "object" &&
+      (error as { code?: unknown }).code === "CHANNEL_PARTIAL_DELIVERY",
+    ),
   matchesMentionPatterns: () => false,
 }));
 vi.mock("openclaw/plugin-sdk/channel-pairing", () => ({
   createChannelPairingChallengeIssuer:
     ({ upsertPairingRequest }: { upsertPairingRequest: (args: unknown) => Promise<unknown> }) =>
-    async ({ senderId, onCreated }: { senderId: string; onCreated?: () => void }) => {
+    async ({
+      senderId,
+      onCreated,
+      sendPairingReply,
+    }: {
+      senderId: string;
+      onCreated?: () => void;
+      sendPairingReply?: (text: string) => Promise<void>;
+    }) => {
       await upsertPairingRequest({ id: senderId, meta: {} });
       onCreated?.();
+      if (pairingDeliveryMocks.invokePairingReply) {
+        await sendPairingReply?.("Pairing challenge");
+      }
     },
 }));
 vi.mock("openclaw/plugin-sdk/command-auth-native", () => ({
@@ -128,6 +158,7 @@ const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
   upsertPairingRequestMock: vi.fn(async (_args: unknown) => ({ code: "CODE", created: true })),
 }));
 const downloadLineMediaMock = vi.hoisted(() => vi.fn());
+const getUserDisplayNameMock = vi.hoisted(() => vi.fn(async (userId: string) => userId));
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   resolvePairingIdLabel: () => "lineUserId",
@@ -141,12 +172,10 @@ vi.mock("./download.js", async (importActual) => ({
 }));
 
 vi.mock("./send.js", () => ({
-  pushMessageLine: async () => {
-    throw new Error("pushMessageLine should not be called from bot-handlers tests");
-  },
-  replyMessageLine: async () => {
-    throw new Error("replyMessageLine should not be called from bot-handlers tests");
-  },
+  getLineGroupName: vi.fn(),
+  getUserDisplayName: getUserDisplayNameMock,
+  pushMessageLine: pairingDeliveryMocks.pushMessageLine,
+  replyMessageLine: pairingDeliveryMocks.replyMessageLine,
 }));
 
 const { buildLineMessageContextMock, buildLinePostbackContextMock } = vi.hoisted(() => ({
@@ -160,7 +189,10 @@ const { buildLineMessageContextMock, buildLinePostbackContextMock } = vi.hoisted
   buildLinePostbackContextMock: vi.fn(async () => null as unknown),
 }));
 
-vi.mock("./bot-message-context.js", () => ({
+vi.mock("./bot-message-context.js", async (importOriginal) => ({
+  // Reading a LINE text body is pure and is part of the behavior these tests
+  // exercise, so it comes from the real module rather than a stub.
+  ...(await importOriginal<typeof import("./bot-message-context.js")>()),
   buildLineMessageContext: buildLineMessageContextMock,
   buildLinePostbackContext: buildLinePostbackContextMock,
   getLineSourceInfo: (source: {
@@ -177,6 +209,9 @@ vi.mock("./bot-message-context.js", () => ({
 }));
 
 let handleLineWebhookEvents: typeof import("./bot-handlers.js").handleLineWebhookEvents;
+// Loaded through the same registry epoch as the module under test so both share
+// one instance of the sent-id record.
+let recordLineSentMessages: typeof import("./outbound-message-log.js").recordLineSentMessages;
 type LineWebhookContext = Parameters<typeof import("./bot-handlers.js").handleLineWebhookEvents>[1];
 
 const createRuntime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
@@ -229,6 +264,7 @@ function createLineWebhookTestContext(params: {
   requireMention?: boolean;
   groupHistories?: Map<string, HistoryEntry[]>;
   accessGroups?: Record<string, { type: "message.senders"; members: Record<string, string[]> }>;
+  implicitMentions?: { quotedBot?: boolean };
 }): Parameters<typeof handleLineWebhookEvents>[1] {
   const allowFrom = params.allowFrom ?? (params.dmPolicy === "open" ? ["*"] : undefined);
   const lineConfig = {
@@ -240,7 +276,10 @@ function createLineWebhookTestContext(params: {
   return {
     cfg: {
       ...(params.accessGroups ? { accessGroups: params.accessGroups } : {}),
-      channels: { line: lineConfig },
+      channels: {
+        line: lineConfig,
+        defaults: { implicitMentions: params.implicitMentions },
+      },
     },
     account: {
       accountId: "default",
@@ -289,6 +328,7 @@ async function expectRequireMentionGroupMessageProcessed(event: MessageEvent) {
 describe("handleLineWebhookEvents", () => {
   beforeAll(async () => {
     ({ handleLineWebhookEvents } = await import("./bot-handlers.js"));
+    ({ recordLineSentMessages } = await import("./outbound-message-log.js"));
   });
 
   afterAll(() => {
@@ -307,6 +347,9 @@ describe("handleLineWebhookEvents", () => {
   });
 
   beforeEach(() => {
+    pairingDeliveryMocks.invokePairingReply = false;
+    pairingDeliveryMocks.pushMessageLine.mockClear();
+    pairingDeliveryMocks.replyMessageLine.mockClear();
     buildLineMessageContextMock.mockReset();
     buildLineMessageContextMock.mockImplementation(async () => ({
       ctxPayload: { From: "line:group:group-1" },
@@ -325,6 +368,8 @@ describe("handleLineWebhookEvents", () => {
     downloadLineMediaMock.mockImplementation(async () => {
       throw new Error("downloadLineMedia should not be called from bot-handlers tests");
     });
+    getUserDisplayNameMock.mockReset();
+    getUserDisplayNameMock.mockImplementation(async (userId: string) => userId);
   });
   it("blocks group messages when groupPolicy is disabled", async () => {
     const processMessage = vi.fn();
@@ -728,6 +773,41 @@ describe("handleLineWebhookEvents", () => {
     expect(pairingRequest?.accountId).toBe("default");
   });
 
+  it.each([
+    { name: "already accepted", delivered: true, fallbackPushCount: 0 },
+    { name: "not delivered", delivered: false, fallbackPushCount: 1 },
+  ])(
+    "avoids duplicate delivery when the pairing reply was $name",
+    async ({ delivered, fallbackPushCount }) => {
+      pairingDeliveryMocks.invokePairingReply = true;
+      const replyError = delivered
+        ? Object.assign(new Error("activity store unavailable"), {
+            code: "CHANNEL_PARTIAL_DELIVERY",
+            deliveryResult: { messageIds: ["line-final"], visibleReplySent: true },
+          })
+        : new Error("provider delivery rejected");
+      pairingDeliveryMocks.replyMessageLine.mockRejectedValueOnce(replyError);
+      const event = createTestMessageEvent({
+        message: {
+          id: "pairing-final",
+          type: "text",
+          text: "hello",
+          quoteToken: "pairing-final-quote",
+        },
+        source: { type: "user", userId: "pairing-user" },
+        webhookEventId: "pairing-final-event",
+      });
+
+      await handleLineWebhookEvents(
+        [event],
+        createLineWebhookTestContext({ processMessage: vi.fn(), dmPolicy: "pairing" }),
+      );
+
+      expect(pairingDeliveryMocks.replyMessageLine).toHaveBeenCalledOnce();
+      expect(pairingDeliveryMocks.pushMessageLine).toHaveBeenCalledTimes(fallbackPushCount);
+    },
+  );
+
   it("does not authorize DM senders from another account's pairing-store entries", async () => {
     const processMessage = vi.fn();
     readAllowFromStoreMock.mockImplementation(async (...args: unknown[]) => {
@@ -795,32 +875,76 @@ describe("handleLineWebhookEvents", () => {
     expect(buildLineMessageContextMock).not.toHaveBeenCalled();
   });
 
-  it("records unmentioned group messages as pending history", async () => {
+  it("keeps matching display names distinct in pending group history", async () => {
     const processMessage = vi.fn();
     const groupHistories = new Map<string, HistoryEntry[]>();
-    const event = createTestMessageEvent({
-      message: { id: "m-hist-1", type: "text", text: "hello history", quoteToken: "q-hist-1" },
-      timestamp: 1700000000000,
-      source: { type: "group", groupId: "group-hist-1", userId: "user-hist" },
-      webhookEventId: "evt-hist-1",
+    getUserDisplayNameMock.mockResolvedValue("Sora");
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: true,
+      groupHistories,
     });
 
     await handleLineWebhookEvents(
-      [event],
-      createLineWebhookTestContext({
-        processMessage,
-        groupPolicy: "open",
-        groupHistories,
-      }),
+      [
+        createTestMessageEvent({
+          message: {
+            id: "m-hist-1",
+            type: "text",
+            text: "() (hello)",
+            quoteToken: "q-hist-1",
+            emojis: [
+              { index: 0, length: 2, productId: "emoji-set", emojiId: "1" },
+              { index: 3, length: 7, productId: "emoji-set", emojiId: "2" },
+            ],
+          },
+          timestamp: 1700000000000,
+          source: { type: "group", groupId: "group-hist-1", userId: "user-one" },
+          webhookEventId: "evt-hist-1",
+        }),
+        createTestMessageEvent({
+          message: { id: "m-hist-2", type: "text", text: "second", quoteToken: "q-hist-2" },
+          timestamp: 1700000001000,
+          source: { type: "group", groupId: "group-hist-1", userId: "user-two" },
+          webhookEventId: "evt-hist-2",
+        }),
+      ],
+      context,
     );
 
     expect(processMessage).not.toHaveBeenCalled();
-    const entries = groupHistories.get("group-hist-1");
-    expect(entries).toHaveLength(1);
-    const entry = entries?.[0];
-    expect(entry?.sender).toBe("user:user-hist");
-    expect(entry?.body).toBe("hello history");
-    expect(entry?.timestamp).toBe(1700000000000);
+    expect(groupHistories.get("group-hist-1")).toEqual([
+      expect.objectContaining({ sender: "Sora (user-one)", body: "[emoji] (hello)" }),
+      expect.objectContaining({ sender: "Sora (user-two)", body: "second" }),
+    ]);
+
+    await handleLineWebhookEvents(
+      [
+        createTestMessageEvent({
+          message: {
+            id: "m-hist-mention",
+            type: "text",
+            text: "@Bot summarize",
+            quoteToken: "q-hist-mention",
+            mention: { mentionees: [{ index: 0, length: 4, type: "user", isSelf: true }] },
+          },
+          timestamp: 1700000002000,
+          source: { type: "group", groupId: "group-hist-1", userId: "user-three" },
+          webhookEventId: "evt-hist-mention",
+        }),
+      ],
+      context,
+    );
+
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inboundHistory: [
+          expect.objectContaining({ sender: "Sora (user-one)", body: "[emoji] (hello)" }),
+          expect.objectContaining({ sender: "Sora (user-two)", body: "second" }),
+        ],
+      }),
+    );
   });
 
   it("keeps a group message recorded during a mention turn instead of clearing it", async () => {
@@ -1089,12 +1213,97 @@ describe("handleLineWebhookEvents", () => {
     expect(groupHistories.get("grp-fail")).toHaveLength(1);
   });
 
-  it("skips group messages without mention when requireMention is set", async () => {
+  it("logs missing mentions once per group at the default level", async () => {
     const processMessage = vi.fn();
     const event = createTestMessageEvent({
       message: { id: "m-mention-1", type: "text", text: "hi there", quoteToken: "q-mention-1" },
       source: { type: "group", groupId: "group-mention", userId: "user-mention" },
       webhookEventId: "evt-mention-1",
+    });
+
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: true,
+    });
+    await handleLineWebhookEvents([event, event], context);
+
+    expect(processMessage).not.toHaveBeenCalled();
+    expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+    expect(context.runtime.log).toHaveBeenCalledOnce();
+    expect(context.runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("line: drop no mention target=group-mention"),
+    );
+    expect(context.runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("requireMention=false"),
+    );
+    expect(context.runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("hi there"));
+  });
+
+  it.each([
+    { name: "default quote policy", quotedBot: undefined, mentioned: false, dispatched: true },
+    { name: "enabled quote policy", quotedBot: true, mentioned: false, dispatched: true },
+    { name: "disabled quote policy", quotedBot: false, mentioned: false, dispatched: false },
+    {
+      name: "explicit mention with quotes disabled",
+      quotedBot: false,
+      mentioned: true,
+      dispatched: true,
+    },
+  ])("respects $name for a quote of the bot", async ({ quotedBot, mentioned, dispatched }) => {
+    const processMessage = vi.fn();
+    const groupHistories = new Map<string, HistoryEntry[]>();
+    recordLineSentMessages("default", ["m-bot-quote-policy"]);
+    const text = mentioned ? "@Bot explain this" : "does quoting you count as addressing you";
+    const event = createTestMessageEvent({
+      message: {
+        id: "m-quote-policy",
+        type: "text",
+        text,
+        quotedMessageId: "m-bot-quote-policy",
+        quoteToken: "q-quote-policy",
+        ...(mentioned
+          ? {
+              mention: {
+                mentionees: [{ index: 0, length: 4, type: "user" as const, isSelf: true }],
+              },
+            }
+          : {}),
+      },
+      source: { type: "group", groupId: "group-quote", userId: "user-quote" },
+      webhookEventId: "evt-quote-policy",
+    });
+
+    await handleLineWebhookEvents(
+      [event],
+      createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "open",
+        requireMention: true,
+        implicitMentions: { quotedBot },
+        groupHistories,
+      }),
+    );
+
+    expect.soft(processMessage).toHaveBeenCalledTimes(dispatched ? 1 : 0);
+    expect.soft(buildLineMessageContextMock).toHaveBeenCalledTimes(dispatched ? 1 : 0);
+    expect(groupHistories.get("group-quote") ?? []).toEqual(
+      dispatched ? [] : [expect.objectContaining({ sender: "user-quote", body: text })],
+    );
+  });
+
+  it("skips a group message quoting a message the bot did not send", async () => {
+    const processMessage = vi.fn();
+    const event = createTestMessageEvent({
+      message: {
+        id: "m-quote-2",
+        type: "text",
+        text: "talking to you, not the bot",
+        quotedMessageId: "m-somebody-else",
+        quoteToken: "q-quote-2",
+      },
+      source: { type: "group", groupId: "group-quote", userId: "user-quote" },
+      webhookEventId: "evt-quote-2",
     });
 
     await handleLineWebhookEvents(
@@ -1107,7 +1316,6 @@ describe("handleLineWebhookEvents", () => {
     );
 
     expect(processMessage).not.toHaveBeenCalled();
-    expect(buildLineMessageContextMock).not.toHaveBeenCalled();
   });
 
   it("processes group messages with bot mention when requireMention is set", async () => {
@@ -1204,7 +1412,7 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("forwards LINE file names to media downloads", async () => {
+  it("forwards LINE file names to media downloads and to the message context", async () => {
     const processMessage = vi.fn();
     downloadLineMediaMock.mockResolvedValueOnce({
       path: "/tmp/line-media/voice-note.m4a",
@@ -1239,8 +1447,43 @@ describe("handleLineWebhookEvents", () => {
           {
             path: "/tmp/line-media/voice-note.m4a",
             contentType: "audio/x-m4a",
+            fileName: "voice-note.m4a",
           },
         ],
+      }),
+    );
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the media fact unnamed for LINE message types that carry no file name", async () => {
+    const processMessage = vi.fn();
+    downloadLineMediaMock.mockResolvedValueOnce({
+      path: "/tmp/line-media/photo.jpg",
+      contentType: "image/jpeg",
+      size: 2048,
+    });
+    const event = createTestMessageEvent({
+      message: {
+        id: "image-named-1",
+        type: "image",
+        contentProvider: { type: "line" },
+        quoteToken: "q-image-named",
+      },
+      source: { type: "user", userId: "user-image-named" },
+      webhookEventId: "evt-image-named",
+    });
+
+    await handleLineWebhookEvents(
+      [event],
+      createLineWebhookTestContext({ processMessage, dmPolicy: "open" }),
+    );
+
+    expect(downloadLineMediaMock).toHaveBeenCalledWith("image-named-1", "token", 1, {
+      originalFilename: undefined,
+    });
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allMedia: [{ path: "/tmp/line-media/photo.jpg", contentType: "image/jpeg" }],
       }),
     );
     expect(processMessage).toHaveBeenCalledTimes(1);
@@ -1297,6 +1540,49 @@ describe("handleLineWebhookEvents", () => {
         createLineWebhookTestContext({ processMessage, dmPolicy: "open" }),
       ),
     ).rejects.toBeInstanceOf(MediaFetchError);
+
+    expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+    expect(processMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not materialize or dispatch media after ingress cancellation", async () => {
+    const cancellation = new Error("LINE webhook spool stopped");
+    const abort = new AbortController();
+    const processMessage = vi.fn();
+    downloadLineMediaMock.mockImplementationOnce(
+      async (
+        _messageId: string,
+        _token: string,
+        _maxBytes: number,
+        options?: { signal?: AbortSignal },
+      ) => {
+        options?.signal?.throwIfAborted();
+        throw new Error("download did not receive ingress cancellation");
+      },
+    );
+    const event = createTestMessageEvent({
+      message: {
+        id: "image-cancelled-1",
+        type: "image",
+        contentProvider: { type: "line" },
+        quoteToken: "q-image-cancelled",
+      },
+      source: { type: "user", userId: "user-image-cancelled" },
+      webhookEventId: "evt-image-cancelled",
+    });
+    const context = {
+      ...createLineWebhookTestContext({ processMessage, dmPolicy: "open" }),
+      turnAdoptionLifecycle: {
+        admission: "exclusive" as const,
+        abortSignal: abort.signal,
+        onAdopted: vi.fn(),
+        onDeferred: vi.fn(),
+        onAbandoned: vi.fn(),
+      },
+    };
+    abort.abort(cancellation);
+
+    await expect(handleLineWebhookEvents([event], context)).rejects.toBe(cancellation);
 
     expect(buildLineMessageContextMock).not.toHaveBeenCalled();
     expect(processMessage).not.toHaveBeenCalled();

@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
-import { createManagedWorktreeOwnerProtection } from "../agents/worktrees/owner-protection.js";
+import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
 import { managedWorktrees, resolveWorktreeCleanupLimits } from "../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -90,7 +90,7 @@ export function registerWorktreesCli(program: Command): void {
       const result = await managedWorktrees.remove({
         id,
         reason: "manual-delete",
-        force: opts.force,
+        allowSnapshotLoss: opts.force,
       });
       if (opts.json) {
         printJson(result);
@@ -121,7 +121,7 @@ export function registerWorktreesCli(program: Command): void {
       const limits = resolveWorktreeCleanupLimits();
       const result = await managedWorktrees.gc({
         limits,
-        shouldProtectOwner: createManagedWorktreeOwnerProtection(cfg),
+        ...createManagedWorktreeOwnerPolicy(cfg),
       });
       if (opts.json) {
         printJson(result);

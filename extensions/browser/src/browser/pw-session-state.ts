@@ -1,5 +1,7 @@
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ConsoleMessage, Dialog, Frame, Page, Request, Response } from "playwright-core";
 import { saveBrowserDownload, type BrowserDownloadCaptureOptions } from "./pw-download-capture.js";
 import {
@@ -11,14 +13,13 @@ import {
   type ArmedDialogResponse,
   type BrowserObservedDialogRecord,
   type BrowserObservedState,
-  type BrowserNetworkRequest,
   type BrowserConsoleMessage,
   type DownloadPayload,
   type PageState,
   type RoleRefs,
   type RoleRefsCacheEntry,
+  BrowserObservedDialogBlockedError,
 } from "./pw-session-contracts.js";
-import { BrowserObservedDialogBlockedError } from "./pw-session-contracts.js";
 import {
   appendRecentDialog,
   clearArmedDialogResponse,
@@ -34,19 +35,14 @@ import {
 const roleRefsByTarget = new Map<string, RoleRefsCacheEntry>();
 const MAX_ROLE_REFS_CACHE = 50;
 let roleRefsCacheGeneration = 0;
+const MAX_OBSERVED_PAGE_TEXT_CHARS = 2_048;
+
+function truncateObservedPageText(value: string): string {
+  return truncateUtf16Safe(value, MAX_OBSERVED_PAGE_TEXT_CHARS);
+}
 
 export function normalizeCdpUrl(raw: string) {
   return raw.replace(/\/$/, "");
-}
-
-function findNetworkRequestById(state: PageState, id: string): BrowserNetworkRequest | undefined {
-  for (let i = state.requests.length - 1; i >= 0; i -= 1) {
-    const candidate = state.requests[i];
-    if (candidate && candidate.id === id) {
-      return candidate;
-    }
-  }
-  return undefined;
 }
 
 export function targetKey(cdpUrl: string, targetId: string) {
@@ -109,13 +105,7 @@ function rememberRoleRefsForTarget(opts: {
     ...(opts.mode ? { mode: opts.mode } : {}),
     generation,
   });
-  while (roleRefsByTarget.size > MAX_ROLE_REFS_CACHE) {
-    const first = roleRefsByTarget.keys().next();
-    if (first.done) {
-      break;
-    }
-    roleRefsByTarget.delete(first.value);
-  }
+  pruneMapToMaxSize(roleRefsByTarget, MAX_ROLE_REFS_CACHE);
   return generation;
 }
 
@@ -216,7 +206,7 @@ export function ensurePageState(page: Page): PageState {
   const state: PageState = {
     console: [],
     errors: [],
-    requests: [],
+    requests: new Map(),
     requestIds: new WeakMap(),
     nextRequestId: 0,
     armIdUpload: 0,
@@ -232,11 +222,12 @@ export function ensurePageState(page: Page): PageState {
   if (!observedPages.has(page)) {
     observedPages.add(page);
     page.on("console", (msg: ConsoleMessage) => {
+      const location = msg.location();
       const entry: BrowserConsoleMessage = {
-        type: msg.type(),
-        text: msg.text(),
+        type: truncateObservedPageText(msg.type()),
+        text: truncateObservedPageText(msg.text()),
         timestamp: new Date().toISOString(),
-        location: msg.location(),
+        location: { ...location, url: truncateObservedPageText(location.url) },
       };
       state.console.push(entry);
       if (state.console.length > MAX_CONSOLE_MESSAGES) {
@@ -245,9 +236,9 @@ export function ensurePageState(page: Page): PageState {
     });
     page.on("pageerror", (err: Error) => {
       state.errors.push({
-        message: err.message || String(err),
-        name: err.name || undefined,
-        stack: err.stack || undefined,
+        message: truncateObservedPageText(err.message || String(err)),
+        name: err.name ? truncateObservedPageText(err.name) : undefined,
+        stack: err.stack ? truncateObservedPageText(err.stack) : undefined,
         timestamp: new Date().toISOString(),
       });
       if (state.errors.length > MAX_PAGE_ERRORS) {
@@ -258,16 +249,14 @@ export function ensurePageState(page: Page): PageState {
       state.nextRequestId += 1;
       const id = `r${state.nextRequestId}`;
       state.requestIds.set(req, id);
-      state.requests.push({
+      state.requests.set(id, {
         id,
         timestamp: new Date().toISOString(),
         method: req.method(),
-        url: req.url(),
+        url: truncateObservedPageText(req.url()),
         resourceType: req.resourceType(),
       });
-      if (state.requests.length > MAX_NETWORK_REQUESTS) {
-        state.requests.shift();
-      }
+      pruneMapToMaxSize(state.requests, MAX_NETWORK_REQUESTS);
     });
     page.on("response", (resp: Response) => {
       const req = resp.request();
@@ -275,7 +264,7 @@ export function ensurePageState(page: Page): PageState {
       if (!id) {
         return;
       }
-      const rec = findNetworkRequestById(state, id);
+      const rec = state.requests.get(id);
       if (!rec) {
         return;
       }
@@ -287,11 +276,12 @@ export function ensurePageState(page: Page): PageState {
       if (!id) {
         return;
       }
-      const rec = findNetworkRequestById(state, id);
+      const rec = state.requests.get(id);
       if (!rec) {
         return;
       }
-      rec.failureText = req.failure()?.errorText;
+      const failureText = req.failure()?.errorText;
+      rec.failureText = failureText ? truncateObservedPageText(failureText) : undefined;
       rec.ok = false;
     });
     page.on("dialog", (dialog: Dialog) => {
@@ -364,6 +354,9 @@ export function ensurePageState(page: Page): PageState {
       }
     });
     page.on("close", () => {
+      const emulationSession = state.emulation?.session;
+      state.emulation = undefined;
+      void emulationSession?.then((session) => session.detach()).catch(() => {});
       clearArmedDialogResponse(state);
       for (const controller of state.dialogAbortControllers) {
         if (!controller.signal.aborted) {

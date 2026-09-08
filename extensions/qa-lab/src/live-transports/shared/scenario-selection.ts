@@ -18,6 +18,7 @@ export function resolveCatalogLiveTransportQaScenarioIds(params: {
   primaryModel?: string;
   providerMode: QaProviderModeInput;
   scenarioIds?: readonly string[];
+  supportsModuleFlows?: boolean;
 }) {
   const channelId = params.channelId.trim().toLowerCase();
   const catalog = readQaScenarioPack().scenarios;
@@ -32,6 +33,7 @@ export function resolveCatalogLiveTransportQaScenarioIds(params: {
     primaryModel: params.primaryModel?.trim() || defaultQaModelForMode(providerMode),
     channelDriver: params.channelDriver ?? "live",
     channel: channelId,
+    resolveModuleFlowSupport: () => params.supportsModuleFlows === true,
   });
   if (selectedScenarios.length === 0) {
     throw new Error(`${channelId} QA catalog selection resolved no scenarios.`);
@@ -45,6 +47,7 @@ export function resolveLiveTransportQaScenarioIds(params: {
   primaryModel?: string;
   providerMode: QaProviderModeInput;
   scenarioIds?: readonly string[];
+  supportsModuleFlows?: boolean;
 }) {
   return resolveQaProfileScenarios({
     profile: params.profile?.trim() || "release",
@@ -54,6 +57,7 @@ export function resolveLiveTransportQaScenarioIds(params: {
     channel: params.channelId,
     executionKind: "flow",
     requireDeclaredChannel: true,
+    resolveModuleFlowSupport: () => params.supportsModuleFlows === true,
     scenarioIds: params.scenarioIds,
   }).scenarios.map((scenario) => scenario.id);
 }
@@ -62,6 +66,7 @@ export function listLiveTransportQaScenarios(params: {
   channelId: string;
   primaryModel?: string;
   providerMode: QaProviderModeInput;
+  supportsModuleFlows?: boolean;
 }) {
   const defaultIds = new Set(resolveLiveTransportQaScenarioIds(params));
   const providerMode = normalizeQaProviderMode(params.providerMode);
@@ -76,6 +81,7 @@ export function listLiveTransportQaScenarios(params: {
     channelDriver: "live",
     channel: params.channelId,
     executionKind: "flow",
+    resolveModuleFlowSupport: () => params.supportsModuleFlows === true,
   }).selectedScenarios;
   return scenarios.map((scenario) => {
     return {

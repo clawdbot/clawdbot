@@ -1,13 +1,12 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import {
-  normalizeMemoryHostEventRecordForStorage,
-  resolveMemoryHostEventLogPath,
-} from "openclaw/plugin-sdk/memory-host-events";
+// Doctor enumeration cold-loads this closure; memory-host-events pulls the
+// event-store/kysely graph, so values load lazily inside the async migration.
+import type { normalizeMemoryHostEventRecordForStorage } from "openclaw/plugin-sdk/memory-host-events";
 import type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
   collectLegacyMemoryHostEventSources,
   memoryHostWorkspacePrefix,
@@ -157,6 +156,8 @@ async function migrateLegacyMemoryHostEventSource(params: {
   changes: string[];
   warnings: string[];
 }): Promise<"completed" | "blocked"> {
+  const { normalizeMemoryHostEventRecordForStorage, resolveMemoryHostEventLogPath } =
+    await import("openclaw/plugin-sdk/memory-host-events");
   const activeRelativePath = path.relative(
     params.source.workspaceDir,
     resolveMemoryHostEventLogPath(params.source.workspaceDir),
@@ -560,7 +561,7 @@ export const hostEventsStateMigration: PluginDoctorStateMigration = {
       preview: pending.map((source) =>
         source.kind === "ready"
           ? `- Memory Core host events: ${source.filePath} -> SQLite plugin state (${MEMORY_HOST_EVENTS_NAMESPACE})`
-          : `- Memory Core host events: ${source.filePath} requires safe-path repair (${source.reason})`,
+          : `- ${source.reason}`,
       ),
     };
   },
@@ -573,9 +574,7 @@ export const hostEventsStateMigration: PluginDoctorStateMigration = {
         continue;
       }
       if (source.kind === "rejected") {
-        warnings.push(
-          `Skipped unsafe Memory Core host event source for ${source.workspaceDir}: ${source.reason}`,
-        );
+        warnings.push(source.reason);
         blockedWorkspaces.add(source.workspaceDir);
         continue;
       }

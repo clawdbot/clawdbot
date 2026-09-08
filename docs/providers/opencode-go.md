@@ -6,18 +6,24 @@ read_when:
 title: "OpenCode Go"
 ---
 
-OpenCode Go is the Go catalog inside [OpenCode](/providers/opencode). It shares
-the `OPENCODE_API_KEY` credential with the Zen catalog, but keeps its own
-runtime provider id (`opencode-go`) so upstream per-model routing stays
-correct.
+OpenCode Go is a separate paid subscription inside [OpenCode](/providers/opencode).
+It uses the same `OPENCODE_API_KEY` credential infrastructure as Zen, but a Zen
+key does not automatically include Go entitlement. Go keeps its own runtime
+provider id (`opencode-go`) so upstream per-model routing stays correct.
+OpenCode Go is bundled in the OpenClaw package for this release, so onboarding
+and configuration are sufficient; no separate plugin install is required.
 
 | Property         | Value                                              |
 | ---------------- | -------------------------------------------------- |
 | Runtime provider | `opencode-go`                                      |
+| Plugin           | Bundled (`opencode-go`)                            |
 | Auth             | `OPENCODE_API_KEY` (alias: `OPENCODE_ZEN_API_KEY`) |
 | Parent setup     | [OpenCode](/providers/opencode)                    |
 
 ## Getting started
+
+OpenCode Go is already included with OpenClaw for this release. Continue with
+interactive onboarding or pass the shared OpenCode API key directly.
 
 <Tabs>
   <Tab title="Interactive">
@@ -29,7 +35,7 @@ correct.
       </Step>
       <Step title="Set a Go model as default">
         ```bash
-        openclaw config set agents.defaults.model.primary "opencode-go/kimi-k2.6"
+        openclaw config set agents.defaults.model.primary "opencode-go/kimi-k3"
         ```
       </Step>
       <Step title="Verify models are available">
@@ -60,36 +66,38 @@ correct.
 
 ```json5
 {
-  env: { OPENCODE_API_KEY: "YOUR_API_KEY_HERE" }, // pragma: allowlist secret
-  agents: { defaults: { model: { primary: "opencode-go/kimi-k2.6" } } },
+  env: { vars: { OPENCODE_API_KEY: "YOUR_API_KEY_HERE" } }, // pragma: allowlist secret
+  agents: { defaults: { model: { primary: "opencode-go/kimi-k3" } } },
 }
 ```
 
-## Built-in catalog
+## Catalog
 
 Run `openclaw models list --provider opencode-go` for the current model list.
-Bundled rows:
+OpenClaw combines Go's advertised model IDs with authoritative metadata from
+`https://models.opencode.ai/api.json`, so new upstream models appear without an
+OpenClaw update when they use a supported transport on the trusted OpenCode
+endpoint. The upstream catalog is downloaded and
+cached only when OpenCode Zen or Go is configured or explicitly selected with
+OpenCode credentials; it is never fetched at startup or while using unrelated
+providers.
 
-| Model ref                       | Name              | Context   | Max output | Image input |
-| ------------------------------- | ----------------- | --------- | ---------- | ----------- |
-| `opencode-go/deepseek-v4-pro`   | DeepSeek V4 Pro   | 1M        | 384K       | No          |
-| `opencode-go/deepseek-v4-flash` | DeepSeek V4 Flash | 1M        | 384K       | No          |
-| `opencode-go/glm-5`             | GLM-5             | 202,752   | 32,768     | No          |
-| `opencode-go/glm-5.1`           | GLM-5.1           | 202,752   | 32,768     | No          |
-| `opencode-go/glm-5.2`           | GLM-5.2           | 1M        | 131,072    | No          |
-| `opencode-go/hy3-preview`       | HY3 Preview       | 262,144   | 32,768     | No          |
-| `opencode-go/kimi-k2.5`         | Kimi K2.5         | 262,144   | 65,536     | Yes         |
-| `opencode-go/kimi-k2.6`         | Kimi K2.6         | 262,144   | 65,536     | Yes         |
-| `opencode-go/kimi-k2.7-code`    | Kimi K2.7 Code    | 262,144   | 262,144    | Yes         |
-| `opencode-go/mimo-v2.5`         | MiMo V2.5         | 1M        | 128,000    | Yes         |
-| `opencode-go/mimo-v2.5-pro`     | MiMo V2.5 Pro     | 1,048,576 | 128,000    | No          |
-| `opencode-go/minimax-m2.5`      | MiniMax M2.5      | 204,800   | 65,536     | No          |
-| `opencode-go/minimax-m2.7`      | MiniMax M2.7      | 204,800   | 131,072    | No          |
-| `opencode-go/minimax-m3`        | MiniMax M3        | 204,800   | 131,072    | No          |
-| `opencode-go/qwen3.5-plus`      | Qwen3.5 Plus      | 262,144   | 65,536     | Yes         |
-| `opencode-go/qwen3.6-plus`      | Qwen3.6 Plus      | 262,144   | 65,536     | Yes         |
-| `opencode-go/qwen3.7-max`       | Qwen3.7 Max       | 1M        | 65,536     | No          |
-| `opencode-go/qwen3.7-plus`      | Qwen3.7 Plus      | 1M        | 65,536     | Yes         |
+Example refs include `opencode-go/deepseek-v4-flash`, `opencode-go/kimi-k3`, and
+`opencode-go/qwen3.8-max`. Use the CLI for the current lineup rather than treating
+these examples as an inventory. OpenClaw excludes deprecated rows from active
+discovery and applies refreshed lifecycle status to its offline fallback.
+Bundled preview rows stay hidden until accepted upstream metadata supplies them.
+Existing explicit refs in the bundled seed remain resolvable.
+
+The Go model-list endpoint is a general inventory, not an account-entitlement
+check. A successful listing does not grant access: inference still requires an
+active Go subscription, including for promotional models.
+
+## Privacy
+
+Retention and training policies vary by model. Review the current
+[OpenCode Go privacy table](https://opencode.ai/docs/go/#privacy) before using a
+model, because provider policy can change independently of OpenClaw.
 
 ## Advanced configuration
 
@@ -105,8 +113,9 @@ Bundled rows:
   </Accordion>
 
   <Accordion title="Shared credentials">
-    One `OPENCODE_API_KEY` covers both the Zen and Go catalogs. Entering the
-    key during setup stores credentials for both runtime providers.
+    The same `OPENCODE_API_KEY` can authenticate both runtime providers, so
+    setup may store both profiles. Go access still requires a separate paid
+    subscription in the OpenCode console.
   </Accordion>
 </AccordionGroup>
 

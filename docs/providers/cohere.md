@@ -45,7 +45,7 @@ openclaw gateway restart
 3. Run onboarding:
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --auth-choice cohere-api-key \
   --cohere-api-key "$COHERE_API_KEY"
 ```
@@ -57,6 +57,8 @@ openclaw models list --provider cohere
 ```
 
 Onboarding only sets Cohere as the primary model when no primary model is already configured.
+
+Onboarding preserves your model entries and leaves generated catalog rows to discovery. With `models.mode: "replace"`, it also writes the built-in catalog because that mode skips discovery.
 
 ## Environment-only setup
 

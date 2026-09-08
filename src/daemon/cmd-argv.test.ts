@@ -32,7 +32,7 @@ describe("cmd argv helpers", () => {
       "--quoted",
       'he said "hi"',
     ];
-    const encoded = args.map(quoteCmdScriptArg).join(" ");
+    const encoded = args.map((arg) => quoteCmdScriptArg(arg)).join(" ");
     expect(parseCmdScriptCommandLine(encoded)).toEqual(args);
   });
 

@@ -1,6 +1,10 @@
 import type { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import type { fetchWithTimeoutGuarded, postJsonRequest } from "openclaw/plugin-sdk/provider-http";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+  readStringField,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const DEFAULT_MINIMAX_MEDIA_BASE_URL = "https://api.minimax.io";
 
@@ -26,15 +30,21 @@ export function resolveMinimaxMediaBaseUrl(
   }
 }
 
-export function assertMinimaxBaseResp(
-  baseResp: MinimaxBaseResp | undefined,
-  context: string,
-): void {
+export function assertMinimaxBaseResp(value: unknown, context: string): void {
+  const baseResp = asOptionalRecord(value);
   if (baseResp && typeof baseResp.status_code === "number" && baseResp.status_code !== 0) {
     throw new Error(
-      `${context} (${baseResp.status_code}): ${baseResp.status_msg ?? "unknown error"}`,
+      `${context} (${baseResp.status_code}): ${readStringField(baseResp, "status_msg") ?? "unknown error"}`,
     );
   }
+}
+
+export function normalizeMinimaxHexAudio(data: string, label: string): string {
+  const normalized = data.trim();
+  if (!/^[0-9a-f]+$/iu.test(normalized) || normalized.length % 2 !== 0) {
+    throw new Error(`${label} returned malformed hex audio`);
+  }
+  return normalized;
 }
 
 export function resolveMinimaxGuardedRequestOptions(

@@ -1,7 +1,81 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { buildSessionsCsv } from "./query.ts";
+import {
+  applySuggestionToQuery,
+  buildQuerySuggestions,
+  buildSessionsCsv,
+  buildUsageFilterOptions,
+  removeQueryToken,
+  setQueryTokensForKey,
+} from "./query.ts";
 import type { UsageSessionEntry } from "./types.ts";
+
+describe("usage query token mutations", () => {
+  const quotedLabel = 'label:"Team  Planning"';
+
+  it("preserves quoted phrases when adding or replacing categorical tokens", () => {
+    const query = `${quotedLabel} PROVIDER:"OpenAI"`;
+    expect(setQueryTokensForKey(query, "provider", ["openai", "anthropic"])).toBe(
+      `${query} provider:anthropic `,
+    );
+    expect(setQueryTokensForKey(query, "provider", ["anthropic"])).toBe(
+      `${quotedLabel} provider:anthropic `,
+    );
+    expect(setQueryTokensForKey(`${quotedLabel} PROVIDER:`, "provider", ["openai"])).toBe(
+      `${quotedLabel} provider:openai `,
+    );
+    expect(setQueryTokensForKey(query, "provider", [])).toBe(`${quotedLabel} `);
+  });
+
+  it("removes an entire quoted term without leaving phrase fragments", () => {
+    expect(removeQueryToken(`${quotedLabel} provider:openai`, quotedLabel)).toBe(
+      "provider:openai ",
+    );
+  });
+
+  it("preserves quoted phrases when accepting a query suggestion", () => {
+    expect(applySuggestionToQuery(`${quotedLabel} provider:o`, "provider:openai")).toBe(
+      `${quotedLabel} provider:openai `,
+    );
+    expect(buildQuerySuggestions(quotedLabel, buildUsageFilterOptions([]))).toEqual([]);
+  });
+});
+
+it("limits suggestions before matching while preserving raw option spelling", () => {
+  const values = [
+    "OpenAI",
+    "OpenAI",
+    "openai",
+    " ",
+    "",
+    undefined,
+    "four",
+    "five",
+    "six",
+    "seventh",
+  ];
+  const sessions = values.map((value, index) => ({
+    key: `session-${index}`,
+    agentId: value,
+    channel: value,
+    modelProvider: value,
+    model: value,
+    usage: null,
+  }));
+  const options = buildUsageFilterOptions(sessions);
+  expect(options.agent).toEqual(["OpenAI", "openai", " ", "four", "five", "six"]);
+  for (const key of ["agent", "channel", "provider", "model"]) {
+    expect(buildQuerySuggestions(`${key}:OPEN`, options).map((entry) => entry.value)).toEqual([
+      `${key}:OpenAI`,
+      `${key}:openai`,
+    ]);
+    expect(buildQuerySuggestions(`${key}:seventh`, options)).toEqual([]);
+  }
+  expect(buildQuerySuggestions("constructor:", options)).toEqual([]);
+  expect(buildQuerySuggestions("has:err", options)).toEqual([
+    { label: "has:errors", value: "has:errors" },
+  ]);
+});
 
 describe("usage query CSV export", () => {
   it("omits invalid session updated timestamps instead of throwing", () => {

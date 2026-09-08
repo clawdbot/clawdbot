@@ -2,6 +2,7 @@
 import { createServer, request } from "node:http";
 import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
+import { buildRoomKeyBackupUnavailableFaultRule } from "../scenarios/scenario-runtime-e2ee-room.js";
 import { startMatrixQaFaultProxy } from "./fault-proxy.js";
 
 type MatrixQaFaultProxy = Awaited<ReturnType<typeof startMatrixQaFaultProxy>>;
@@ -75,26 +76,11 @@ describe("Matrix QA fault proxy", () => {
     }
   });
 
-  it("faults matching Matrix requests and forwards everything else", async () => {
+  it("prevents backup discovery and creation only for the faulted account", async () => {
     const target = await startTargetServer();
     proxy = await startMatrixQaFaultProxy({
       targetBaseUrl: target.baseUrl,
-      rules: [
-        {
-          id: "room-key-backup-version-unavailable",
-          match: (proxyRequest) =>
-            proxyRequest.method === "GET" &&
-            proxyRequest.path === "/_matrix/client/v3/room_keys/version" &&
-            proxyRequest.bearerToken === "driver-token",
-          response: () => ({
-            body: {
-              errcode: "M_NOT_FOUND",
-              error: "No current key backup",
-            },
-            status: 404,
-          }),
-        },
-      ],
+      rules: [buildRoomKeyBackupUnavailableFaultRule("driver-token")],
     });
 
     const faulted = await fetch(`${proxy.baseUrl}/_matrix/client/v3/room_keys/version`, {
@@ -105,6 +91,20 @@ describe("Matrix QA fault proxy", () => {
       errcode: "M_NOT_FOUND",
       error: "No current key backup",
     });
+
+    const creation = await fetch(`${proxy.baseUrl}/_matrix/client/v3/room_keys/version`, {
+      headers: { authorization: "Bearer driver-token" },
+      method: "POST",
+    });
+    expect(creation.status).toBe(503);
+    await expect(creation.json()).resolves.toMatchObject({ errcode: "M_UNKNOWN" });
+
+    const otherAccount = await fetch(`${proxy.baseUrl}/_matrix/client/v3/room_keys/version`, {
+      headers: { authorization: "Bearer other-token" },
+      method: "POST",
+    });
+    expect(otherAccount.status).toBe(200);
+    await expect(otherAccount.json()).resolves.toEqual({ forwarded: true });
 
     const forwarded = await fetch(`${proxy.baseUrl}/_matrix/client/v3/sync?timeout=0`, {
       body: JSON.stringify({ ok: true }),
@@ -123,8 +123,19 @@ describe("Matrix QA fault proxy", () => {
         path: "/_matrix/client/v3/room_keys/version",
         ruleId: "room-key-backup-version-unavailable",
       },
+      {
+        method: "POST",
+        path: "/_matrix/client/v3/room_keys/version",
+        ruleId: "room-key-backup-version-unavailable",
+      },
     ]);
     expect(target.requests).toEqual([
+      {
+        authorization: "Bearer other-token",
+        body: "",
+        method: "POST",
+        url: "/_matrix/client/v3/room_keys/version",
+      },
       {
         authorization: "Bearer driver-token",
         body: '{"ok":true}',
@@ -133,6 +144,43 @@ describe("Matrix QA fault proxy", () => {
       },
     ]);
   });
+
+  it.each(["forwarded", "faulted"] as const)(
+    "finishes the %s response when its exchange observer rejects",
+    async (mode) => {
+      const target = await startTargetServer();
+      let observations = 0;
+      proxy = await startMatrixQaFaultProxy({
+        targetBaseUrl: target.baseUrl,
+        rules:
+          mode === "faulted"
+            ? [
+                {
+                  id: "synthetic-fault",
+                  match: () => true,
+                  response: () => ({ body: { errcode: "M_QA_FAULT" }, status: 503 }),
+                },
+              ]
+            : [],
+        onExchange: async () => {
+          observations += 1;
+          throw new Error("capture observer failed");
+        },
+      });
+
+      const response = await fetch(`${proxy.baseUrl}/_matrix/client/v3/sync`, {
+        signal: AbortSignal.timeout(5_000),
+      });
+
+      expect(response.status).toBe(502);
+      await expect(response.json()).resolves.toMatchObject({
+        errcode: "MATRIX_QA_FAULT_PROXY_ERROR",
+        error: "capture observer failed",
+      });
+      expect(observations).toBe(1);
+      expect(target.requests).toHaveLength(mode === "forwarded" ? 1 : 0);
+    },
+  );
 
   it("rejects request targets that resolve outside the configured origin", async () => {
     const target = await startTargetServer();

@@ -5,7 +5,7 @@ import path from "node:path";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
 import { migrateNextcloudTalkLegacyReplayState } from "./webhook-spool-state.js";
@@ -30,12 +30,16 @@ function createRawEvent(params?: { messageId?: string; roomToken?: string; text?
   return JSON.stringify(payload);
 }
 
-function startSpool(queue: NextcloudTalkIngressQueue, deliver: NextcloudTalkIngressDeliver) {
+function startSpool(
+  queue: NextcloudTalkIngressQueue,
+  deliver: NextcloudTalkIngressDeliver,
+  log = vi.fn(),
+) {
   return createNextcloudTalkWebhookSpool({
     accountId: "default",
     queue,
     deliver,
-    runtime: { error: vi.fn(), log: vi.fn() },
+    runtime: { error: vi.fn(), log },
     pollIntervalMs: 60_000,
     adoptionStallTimeoutMs: 5_000,
     legacyReplayStore: null,
@@ -220,6 +224,88 @@ describe("Nextcloud Talk durable ingress", () => {
     });
   });
 
+  it("drains other rooms while keeping unadopted same-room deliveries ordered", async () => {
+    await withQueue(async (queue) => {
+      let releaseRoomA!: () => void;
+      const roomADelivery = new Promise<void>((resolve) => {
+        releaseRoomA = resolve;
+      });
+      const delivered: string[] = [];
+      const spool = startSpool(queue, async (message, lifecycle) => {
+        delivered.push(message.messageId);
+        if (message.messageId === "room-a-1") {
+          await roomADelivery;
+        }
+        await lifecycle.onAdopted();
+      });
+
+      try {
+        await spool.receive(createRawEvent({ messageId: "room-a-1", roomToken: "room-a" }));
+        await vi.waitFor(() => expect(delivered).toEqual(["room-a-1"]));
+
+        await spool.receive(createRawEvent({ messageId: "room-a-2", roomToken: "room-a" }));
+        await spool.receive(createRawEvent({ messageId: "room-b-1", roomToken: "room-b" }));
+
+        await vi.waitFor(() => expect(delivered).toEqual(["room-a-1", "room-b-1"]));
+        expect(await queue.listPending()).toEqual([
+          expect.objectContaining({ id: "room-a-2", laneKey: "room:room-a" }),
+        ]);
+
+        releaseRoomA();
+        await vi.waitFor(() => expect(delivered).toEqual(["room-a-1", "room-b-1", "room-a-2"]));
+      } finally {
+        releaseRoomA();
+        await spool.stop();
+      }
+    });
+  });
+
+  it("caps active room deliveries after durable adoption across repeated pumps", async () => {
+    await withQueue(async (queue) => {
+      let releaseDeliveries!: () => void;
+      const deliveryGate = new Promise<void>((resolve) => {
+        releaseDeliveries = resolve;
+      });
+      let activeDeliveries = 0;
+      let maxActiveDeliveries = 0;
+      const deliver = vi.fn(async (_message, lifecycle) => {
+        activeDeliveries += 1;
+        maxActiveDeliveries = Math.max(maxActiveDeliveries, activeDeliveries);
+        await lifecycle.onAdopted();
+        try {
+          await deliveryGate;
+        } finally {
+          activeDeliveries -= 1;
+        }
+      });
+      const spool = startSpool(queue, deliver);
+
+      try {
+        for (let index = 0; index < 33; index += 1) {
+          await spool.receive(
+            createRawEvent({
+              messageId: `room-delivery-${index}`,
+              roomToken: `room-${index}`,
+            }),
+          );
+        }
+
+        await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(32));
+        expect(maxActiveDeliveries).toBe(32);
+        expect(await queue.listPending()).toEqual([
+          expect.objectContaining({ id: "room-delivery-32", laneKey: "room:room-32" }),
+        ]);
+
+        releaseDeliveries();
+        await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(33));
+        expect(maxActiveDeliveries).toBe(32);
+      } finally {
+        releaseDeliveries();
+        await spool.stop();
+      }
+    });
+  });
+
   it("stores the exact raw envelope in the room lane", async () => {
     await withQueue(async (queue) => {
       const rawEvent = createRawEvent({ messageId: "msg-raw", roomToken: "test-room-token" });
@@ -286,13 +372,28 @@ describe("Nextcloud Talk durable ingress", () => {
     });
   });
 
-  it("ignores non-message events before they consume the message id", async () => {
+  it("logs non-message events before they consume the message id", async () => {
     await withQueue(async (queue) => {
       const deliver = vi.fn();
-      const spool = startSpool(queue, deliver);
+      const log = vi.fn();
+      const spool = startSpool(queue, deliver, log);
       try {
-        const ignored = JSON.stringify({ type: "Update", object: { id: "msg-edit" } });
-        await expect(spool.receive(ignored)).resolves.toBe("ignored");
+        const fileShare = JSON.stringify({
+          type: "Create",
+          actor: { type: "Person", id: "alice", name: "Alice" },
+          object: {
+            type: "Document",
+            id: "file-1",
+            name: "report.pdf",
+            content: "",
+            mediaType: "application/pdf",
+          },
+          target: { type: "Collection", id: "room-1", name: "Room 1" },
+        });
+        await expect(spool.receive(fileShare)).resolves.toBe("ignored");
+        expect(log).toHaveBeenCalledWith(
+          "nextcloud-talk: ignored non-message webhook event (type=Create objectType=Document)",
+        );
         expect(await queue.listPending({ limit: "all" })).toEqual([]);
         expect(deliver).not.toHaveBeenCalled();
       } finally {

@@ -30,14 +30,16 @@ function createHarness(config?: Record<string, unknown>) {
       ? config
       : {
           agents: {
-            list: [{ id: "main", default: true, workspace: "/tmp/main-workspace" }],
+            entries: { main: { default: true, workspace: "/tmp/main-workspace" } },
           },
         };
   const api = {
     runtime: {
       config: { current: () => runtimeConfig },
       agent: {
-        resolveAgentWorkspaceDir: vi.fn(() => "/tmp/main-workspace"),
+        resolveAgentWorkspaceDir: vi.fn(
+          (_config: unknown, agentId: string) => `/tmp/${agentId}-workspace`,
+        ),
       },
     },
     registerGatewayMethod(
@@ -73,7 +75,10 @@ describe("session backfill gateway methods", () => {
   });
 
   it("validates preview params and returns at most three samples per day", async () => {
-    const { methods } = createHarness();
+    const pluginConfig = { memoryPolicy: { excludeSessions: { channels: ["discord"] } } };
+    const { methods } = createHarness({
+      plugins: { entries: { "memory-core": { config: pluginConfig } } },
+    });
     executeBatchMock.mockResolvedValueOnce({
       result: {
         agentId: "main",
@@ -108,6 +113,7 @@ describe("session backfill gateway methods", () => {
       to: "2026-07-31",
       limitDays: 14,
       workspaceDir: "/tmp/main-workspace",
+      pluginConfig,
     });
     expect(respond).toHaveBeenCalledWith(true, {
       days: 1,
@@ -152,6 +158,42 @@ describe("session backfill gateway methods", () => {
     });
   });
 
+  it("accepts a keyed non-default agent", async () => {
+    const { methods } = createHarness({
+      agents: {
+        entries: {
+          main: { default: true },
+          tester: {},
+        },
+      },
+    });
+    executeBatchMock.mockResolvedValueOnce({
+      result: {
+        agentId: "tester",
+        workspaceDir: "/tmp/tester-workspace",
+        applied: false,
+        rem: false,
+        days: [],
+        candidateCount: 0,
+        stagedEntries: 0,
+        writtenDiaryEntries: 0,
+        replacedDiaryEntries: 0,
+      },
+      continuation: { advanced: false, hasMore: false },
+    });
+
+    const respond = await invoke(methods.get(SESSION_BACKFILL_GATEWAY_METHODS.preview)!, {
+      agentId: "tester",
+    });
+
+    expect(executeBatchMock).toHaveBeenCalledWith({
+      agentId: "tester",
+      limitDays: 92,
+      workspaceDir: "/tmp/tester-workspace",
+    });
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+  });
+
   it("allows only the implicit default agent when no roster is configured", async () => {
     const { methods } = createHarness({});
     const preview = methods.get(SESSION_BACKFILL_GATEWAY_METHODS.preview)!;
@@ -164,7 +206,10 @@ describe("session backfill gateway methods", () => {
   });
 
   it("applies a chunk with cursor progress and rolls back by agent", async () => {
-    const { methods } = createHarness();
+    const pluginConfig = { memoryPolicy: { excludeSessions: { chatTypes: ["group"] } } };
+    const { methods } = createHarness({
+      plugins: { entries: { "memory-core": { config: pluginConfig } } },
+    });
     executeBatchMock.mockResolvedValueOnce({
       result: {
         agentId: "main",
@@ -196,6 +241,7 @@ describe("session backfill gateway methods", () => {
       agentId: "main",
       limitDays: 14,
     });
+    expect(executeBatchMock).toHaveBeenCalledWith(expect.objectContaining({ pluginConfig }));
     expect(applyRespond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({

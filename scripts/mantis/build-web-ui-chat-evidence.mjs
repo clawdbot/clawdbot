@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Builds a Mantis evidence manifest from Control UI web chat proof artifacts.
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -35,66 +35,73 @@ function normalizeStatus(value) {
   throw new Error(`Unsupported web UI chat proof status: ${value}`);
 }
 
-function artifactEntry({ inline = false, kind, label, path: artifactPath, required, targetPath }) {
+function artifactEntry({ inline = false, kind, label, path: artifactPath, required }) {
   return {
     kind,
     lane: "candidate",
     label,
     path: artifactPath,
-    targetPath,
+    targetPath: artifactPath,
     required,
     ...(inline ? { alt: label, inline: true, width: 900 } : {}),
   };
 }
 
-export function buildWebUiChatEvidenceManifest({ candidateRef, candidateSha, status }) {
+function buildWebUiChatEvidenceManifest({ candidateRef, candidateSha, status, captures }) {
   const passed = status === "pass";
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: "web-ui-chat-proof",
     title: "Mantis Web UI Chat Proof",
-    summary:
-      "Mantis ran the OpenClaw Control UI chat proof against the candidate ref, sent a message through the mocked Gateway, rendered the final reply in the browser, and captured browser artifacts for review.",
+    summary: passed
+      ? "Mantis ran the OpenClaw Control UI chat proof against the candidate ref, sent a message through the mocked Gateway, rendered the final reply in the browser, and captured browser artifacts for review."
+      : "Mantis could not complete the Control UI chat proof. Retained attempt artifacts and logs describe the failure.",
     scenario: "web-ui-chat-proof",
     comparison: {
       candidate: {
         ...(candidateSha ? { sha: candidateSha } : {}),
         ...(candidateRef ? { ref: candidateRef } : {}),
         expected: "Control UI chat sends through the Gateway and renders the final reply",
+        expectationMet: passed,
         status,
         fixed: passed,
       },
+      outcome: passed ? "pass" : "fail",
       pass: passed,
     },
     artifacts: [
-      artifactEntry({
-        inline: true,
-        kind: "desktopScreenshot",
-        label: "Control UI web chat proof",
-        path: "web-ui-chat.png",
-        required: passed,
-        targetPath: "web-ui-chat.png",
-      }),
-      artifactEntry({
-        kind: "fullVideo",
-        label: "Control UI web chat recording",
-        path: "web-ui-chat.webm",
-        required: false,
-        targetPath: "web-ui-chat.webm",
-      }),
-      artifactEntry({
-        kind: "metadata",
-        label: "Control UI web chat proof metadata",
-        path: "web-ui-chat-proof.json",
-        required: passed,
-        targetPath: "web-ui-chat-proof.json",
-      }),
+      ...captures.flatMap(({ directory, complete }) => [
+        artifactEntry({
+          inline: true,
+          kind: "desktopScreenshot",
+          label: `Control UI web chat proof (${directory})`,
+          path: `${directory}/web-ui-chat.png`,
+          required: passed && complete,
+        }),
+        artifactEntry({
+          kind: "fullVideo",
+          label: `Control UI web chat recording (${directory})`,
+          path: `${directory}/web-ui-chat.webm`,
+          required: false,
+        }),
+        artifactEntry({
+          kind: "metadata",
+          label: `Control UI web chat proof metadata (${directory})`,
+          path: `${directory}/web-ui-chat-proof.json`,
+          required: passed && complete,
+        }),
+      ]),
       artifactEntry({
         kind: "metadata",
         label: "Control UI web chat Vitest log",
         path: "vitest.log",
         required: false,
-        targetPath: "vitest.log",
+      }),
+      artifactEntry({
+        kind: "metadata",
+        label: "Control UI web chat setup log",
+        path: "setup.log",
+        required: false,
       }),
       {
         kind: "report",
@@ -107,7 +114,7 @@ export function buildWebUiChatEvidenceManifest({ candidateRef, candidateSha, sta
   };
 }
 
-function renderReport({ candidateRef, candidateSha, outputDir, status }) {
+function renderReport({ candidateRef, candidateSha, outputDir, status, artifacts }) {
   const artifactStatus = (artifactPath) =>
     existsSync(path.join(outputDir, artifactPath)) ? "present" : "missing";
   return [
@@ -119,14 +126,16 @@ function renderReport({ candidateRef, candidateSha, outputDir, status }) {
     "",
     "## Scenario",
     "",
-    "OpenClaw Control UI chat was loaded in a browser with the mocked Gateway harness. The proof sends a chat message through the GUI, verifies the `chat.send` request, emits a final Gateway reply, and waits for the reply to render in the web chat thread.",
+    "The scenario loads OpenClaw Control UI chat in a browser with the mocked Gateway harness, sends a chat message through the GUI, verifies the `chat.send` request, emits a final Gateway reply, and waits for the reply to render in the web chat thread.",
     "",
     "## Artifacts",
     "",
-    `- Screenshot: \`web-ui-chat.png\` (${artifactStatus("web-ui-chat.png")})`,
-    `- Recording: \`web-ui-chat.webm\` (${artifactStatus("web-ui-chat.webm")})`,
-    `- Proof metadata: \`web-ui-chat-proof.json\` (${artifactStatus("web-ui-chat-proof.json")})`,
-    `- Vitest log: \`vitest.log\` (${artifactStatus("vitest.log")})`,
+    ...artifacts
+      .filter((artifact) => artifact.kind !== "report")
+      .map(
+        (artifact) =>
+          `- ${artifact.label}: \`${artifact.path}\` (${artifactStatus(artifact.path)})`,
+      ),
     "",
   ].join("\n");
 }
@@ -141,13 +150,35 @@ export function writeWebUiChatEvidence(rawArgs = process.argv.slice(2)) {
   }
   const outputDir = path.resolve(args.output_dir);
   mkdirSync(outputDir, { recursive: true });
+  const reportPath = path.join(outputDir, "mantis-report.md");
+  const manifestPath = path.join(outputDir, "mantis-evidence.json");
+  if (existsSync(reportPath) || existsSync(manifestPath)) {
+    throw new Error("Evidence already exists in --output-dir; use a fresh invocation directory.");
+  }
   const status = normalizeStatus(args.status);
+  // The workflow owns this fresh invocation root. Keep every attempt, including
+  // incomplete retries; never pick a newest capture from a shared history root.
+  const captures = readdirSync(outputDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith("mantis-chat-proof-"))
+    .map((entry) => entry.name)
+    .toSorted()
+    .map((directory) => ({
+      directory,
+      complete: ["web-ui-chat.png", "web-ui-chat-proof.json"].every((file) =>
+        existsSync(path.join(outputDir, directory, file)),
+      ),
+    }));
+  if (status === "pass" && !captures.some((capture) => capture.complete)) {
+    throw new Error(
+      "Passing proof requires a captured screenshot and proof metadata in --output-dir.",
+    );
+  }
   const manifest = buildWebUiChatEvidenceManifest({
     candidateRef: args.candidate_ref,
     candidateSha: args.candidate_sha,
     status,
+    captures,
   });
-  const reportPath = path.join(outputDir, "mantis-report.md");
   writeFileSync(
     reportPath,
     renderReport({
@@ -155,11 +186,14 @@ export function writeWebUiChatEvidence(rawArgs = process.argv.slice(2)) {
       candidateSha: args.candidate_sha,
       outputDir,
       status,
+      artifacts: manifest.artifacts,
     }),
-    "utf8",
+    { encoding: "utf8", flag: "wx" },
   );
-  const manifestPath = path.join(outputDir, "mantis-evidence.json");
-  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, {
+    encoding: "utf8",
+    flag: "wx",
+  });
   return { manifest, manifestPath, reportPath };
 }
 

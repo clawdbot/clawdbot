@@ -88,6 +88,7 @@ export function createDirectChatContext(
     },
     agentRunSeq: new Map(),
     chatAbortControllers: new Map(),
+    chatQueuedTurns: new Map(),
     chatRunState: createChatRunState(),
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
@@ -97,6 +98,9 @@ export function createDirectChatContext(
     nodeSendToSession: vi.fn(),
     registerToolEventRecipient: vi.fn(),
     getRuntimeConfig: () => config,
+    readChatMetadata: vi.fn(async () => {
+      throw new Error("prepared chat metadata is unavailable in direct handler tests");
+    }),
     recoveryRuntime: {
       dispatchAgent: vi.fn(),
       waitForAgent: vi.fn(),

@@ -18,6 +18,11 @@ vi.mock("openclaw/plugin-sdk/webhook-request-guards", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/webhook-targets", () => ({
+  canonicalizeWebhookRouteKey: (raw: string) =>
+    raw
+      .replace(/\/{2,}/g, "/")
+      .replace(/\/+$/, "")
+      .toLowerCase(),
   normalizeWebhookPath: (raw: string) => raw,
   resolveWebhookTargetWithAuthOrReject,
   withResolvedWebhookRequestPipeline,
@@ -169,7 +174,7 @@ describe("googlechat monitor webhook", () => {
       processEvent,
     });
     const req = createRequest({
-      url: "/googlechat?ignored=1",
+      url: "/GoogleChat//?ignored=1",
       headers: {
         "x-forwarded-for": "198.51.100.7, 10.0.0.1",
       },

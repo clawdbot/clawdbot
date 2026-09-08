@@ -1,4 +1,3 @@
-// Terminal Core module implements restore behavior.
 import { clearActiveProgressLine } from "./progress-line.js";
 
 const RESET_SEQUENCE =

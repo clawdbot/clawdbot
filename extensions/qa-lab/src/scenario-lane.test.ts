@@ -1,10 +1,12 @@
-// Qa Lab tests cover canonical scenario lane matching behavior.
+// QA Lab tests cover canonical scenario lane matching behavior.
 import { describe, expect, it } from "vitest";
 import type { QaProviderMode } from "./model-selection.js";
+import { resolveQaRunProfileExecutionSelection } from "./profile-planning.js";
 import { readQaScenarioById, readQaScenarioPack } from "./scenario-catalog.js";
+import { requireFlowScenario } from "./scenario-catalog.test-utils.js";
 import {
   describeQaProviderLaneMismatches,
-  resolveQaScenarioLaneChannels,
+  expandQaScenarioExecutionCells,
   scenarioMatchesQaProviderLane,
 } from "./scenario-lane.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
@@ -16,6 +18,28 @@ describe("QA scenario lane matching", () => {
       (coverageId) => planningCoverageIds.has(coverageId),
     ),
   );
+
+  it("expands scheduler cells deterministically across flow and native scenarios", () => {
+    const cells = expandQaScenarioExecutionCells({
+      scenarios: [
+        readQaScenarioById("thread-isolation"),
+        readQaScenarioById("control-ui-chat-flow-playwright"),
+      ],
+      channelDriver: "live",
+      supportsChannel: (channel) => channel === "matrix" || channel === "slack",
+      expandChannels: true,
+    });
+
+    expect(cells).toEqual([
+      { scenarioId: "thread-isolation", executionKind: "flow", channel: "slack" },
+      { scenarioId: "thread-isolation", executionKind: "flow", channel: "matrix" },
+      {
+        scenarioId: "control-ui-chat-flow-playwright",
+        executionKind: "playwright",
+        channel: null,
+      },
+    ]);
+  });
 
   it.each(planningScenarios)("selects $id for the GPT-5.6 Luna live lane", (scenario) => {
     expect(
@@ -37,6 +61,11 @@ describe("QA scenario lane matching", () => {
   it.each([
     {
       id: "cron-empty-response-after-write-recovery",
+      allowedProviderMode: "mock-openai" as const,
+      rejectedProviderMode: "live-frontier" as const,
+    },
+    {
+      id: "subagent-completion-direct-fallback",
       allowedProviderMode: "mock-openai" as const,
       rejectedProviderMode: "live-frontier" as const,
     },
@@ -71,16 +100,102 @@ describe("QA scenario lane matching", () => {
     },
   );
 
+  it.each(["matrix-room-block-streaming", "matrix-voice-preflight-mention"])(
+    "keeps the scenario-pinned provider for %s out of the live provider lane",
+    (scenarioId) => {
+      const scenario = readQaScenarioById(scenarioId);
+      const liveLane = {
+        scenario,
+        providerMode: "live-frontier" as const,
+        primaryModel: "openai/gpt-5.6-luna",
+        channelDriver: "live" as const,
+        channel: "matrix",
+        supportsModuleFlows: true,
+      };
+
+      expect(scenarioMatchesQaProviderLane(liveLane)).toBe(false);
+      expect(describeQaProviderLaneMismatches(liveLane)).toEqual(["providerMode=mock-openai"]);
+    },
+  );
+
+  it("excludes a mock-pinned Matrix scenario from a live profile execution", () => {
+    const scenario = readQaScenarioById("matrix-room-block-streaming");
+
+    expect(
+      resolveQaRunProfileExecutionSelection({
+        scenarios: [scenario],
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.6-luna",
+        channelDriver: "live",
+        channel: "matrix",
+        resolveModuleFlowSupport: () => true,
+      }),
+    ).toEqual({
+      selectedScenarios: [],
+      excludedScenarios: [{ scenario, reasons: ["providerMode=mock-openai"] }],
+    });
+  });
+
+  it("treats matching execution and config provider pins as one lane requirement", () => {
+    const scenario = requireFlowScenario(
+      makeQaSuiteTestScenario("matching-provider-modes", {
+        config: { requiredProviderMode: "mock-openai" },
+      }),
+    );
+    scenario.execution.providerMode = "mock-openai";
+
+    expect(
+      describeQaProviderLaneMismatches({
+        scenario,
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.6-luna",
+      }),
+    ).toEqual(["providerMode=mock-openai"]);
+    expect(
+      scenarioMatchesQaProviderLane({
+        scenario,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+      }),
+    ).toBe(true);
+  });
+
+  it.each(["mock-openai", "live-frontier"] as const)(
+    "rejects conflicting execution and config provider pins on the %s lane",
+    (providerMode) => {
+      const scenario = requireFlowScenario(
+        makeQaSuiteTestScenario("conflicting-provider-modes", {
+          config: { requiredProviderMode: "live-frontier" },
+        }),
+      );
+      scenario.execution.providerMode = "mock-openai";
+
+      expect(() =>
+        describeQaProviderLaneMismatches({
+          scenario,
+          providerMode,
+          primaryModel: "openai/gpt-5.6-luna",
+        }),
+      ).toThrow(
+        "QA scenario conflicting-provider-modes declares conflicting provider modes: execution.providerMode=mock-openai, execution.config.requiredProviderMode=live-frontier",
+      );
+    },
+  );
+
   it("keeps multi-channel metadata as OR eligibility while exposing every supported lane", () => {
     const scenario = readQaScenarioById("thread-isolation");
 
     expect(
-      resolveQaScenarioLaneChannels({
-        scenario,
+      expandQaScenarioExecutionCells({
+        scenarios: [scenario],
         channelDriver: "live",
         supportsChannel: (channel) => channel === "slack" || channel === "matrix",
+        expandChannels: true,
       }),
-    ).toEqual(["slack", "matrix"]);
+    ).toEqual([
+      { scenarioId: scenario.id, executionKind: "flow", channel: "slack" },
+      { scenarioId: scenario.id, executionKind: "flow", channel: "matrix" },
+    ]);
   });
 
   it("reports every declared mismatch in one decision", () => {
@@ -174,6 +289,38 @@ describe("QA scenario lane matching", () => {
         channel: "matrix",
       }),
     ).toBe(true);
+  });
+
+  it("keeps module-flow support independent from driver and channel constraints", () => {
+    const scenario = makeQaSuiteTestScenario("matrix-module", {
+      channel: "matrix",
+      flowKind: "module",
+      config: { requiredChannelDriver: "live" },
+    });
+
+    expect(
+      describeQaProviderLaneMismatches({
+        scenario,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        channelDriver: "crabline",
+        channel: "telegram",
+      }),
+    ).toEqual([
+      "channelDriver=live",
+      "channel=matrix",
+      "module flow unsupported by implementation=crabline:telegram",
+    ]);
+    expect(
+      describeQaProviderLaneMismatches({
+        scenario,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        channelDriver: "live",
+        channel: "matrix",
+        supportsModuleFlows: true,
+      }),
+    ).toEqual([]);
   });
 
   it("keeps the built-in driver bound to the qa-channel channel", () => {

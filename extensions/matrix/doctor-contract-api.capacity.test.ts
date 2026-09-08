@@ -14,7 +14,7 @@ import {
   resetPluginStateStoreForTests,
   setMaxPluginStateEntriesPerPluginForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor";
+import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 import {
@@ -62,7 +62,7 @@ function writeLegacyDedupeSource(stateDir: string, now: number, withMetadata = f
     "accounts",
     "home",
     "matrix.example.org__bot",
-    "token-a",
+    "0123456789abcdef",
   );
   fs.mkdirSync(root, { recursive: true });
   const jsonPath = path.join(root, "inbound-dedupe.json");

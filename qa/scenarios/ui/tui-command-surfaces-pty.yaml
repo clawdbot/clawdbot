@@ -1,0 +1,41 @@
+title: TUI command surfaces PTY contracts
+scenario:
+  id: tui-command-surfaces-pty
+  surface: tui
+  category: tui.input-and-commands
+  coverage:
+    primary: [tui.slash-commands, tui.pickers, tui.settings]
+  risk: low
+  objective: Prove slash commands, model and session pickers, and settings updates through the real runTui PTY loop.
+  successCriteria:
+    - Slash command help and an executed backend command are visible in authenticated final terminal frames.
+    - Model and session picker choices are visible, selected through literal PTY input, and applied to subsequent backend calls.
+    - The settings overlay visibly updates tool output and thinking values, including the history refresh triggered by showing thinking.
+  codeRefs:
+    - src/tui/tui-pty-command-surfaces-test-support.ts
+    - src/tui/tui-pty-harness-assertion-test-support.ts
+    - src/tui/tui-pty-harness.e2e.test.ts
+  execution:
+    kind: script
+    parallelSafe: true
+    path: test/e2e/qa-lab/tui/tui-pty-evidence-producer.ts
+    summary: Runs independently matched real-PTY command surface assertions and authenticates their fresh Vitest results.
+    timeoutMs: 180000
+    args: [--artifact-base, "${outputDir}", --scenario-id, "${scenarioId}"]
+    config:
+      tuiPtyCases:
+        - {
+            coverageId: tui.slash-commands,
+            testFile: src/tui/tui-pty-harness.e2e.test.ts,
+            testNamePattern: "^TUI PTY harness > lists and executes slash commands through authenticated real PTY frames$",
+          }
+        - {
+            coverageId: tui.pickers,
+            testFile: src/tui/tui-pty-harness.e2e.test.ts,
+            testNamePattern: "^TUI PTY harness > selects model and session pickers through authenticated real PTY frames$",
+          }
+        - {
+            coverageId: tui.settings,
+            testFile: src/tui/tui-pty-harness.e2e.test.ts,
+            testNamePattern: "^TUI PTY harness > updates settings through an authenticated real PTY overlay$",
+          }

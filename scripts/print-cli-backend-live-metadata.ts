@@ -1,6 +1,7 @@
 // Print Cli Backend Live Metadata script supports OpenClaw repository automation.
 import { pathToFileURL } from "node:url";
 import { resolveCliBackendConfig, resolveCliBackendLiveTest } from "../src/agents/cli-backends.js";
+import { resolvePluginSetupRegistry } from "../src/plugins/setup-registry.js";
 
 export async function resolveCliBackendLiveMetadata(provider: string) {
   if (provider === "codex-cli") {
@@ -66,7 +67,53 @@ async function loadFallbackBackend(id: string) {
   }
 }
 
+export async function resolveCliBackendDockerPackages(
+  requestedProviders: readonly string[] = [],
+  requestedModels: readonly string[] = [],
+) {
+  // Only explicit model refs contribute providers; modern/small/all keep the
+  // provider filter intact, including its unrestricted default.
+  const requested = new Set(
+    [
+      ...requestedProviders,
+      ...requestedModels.flatMap((modelRef) => {
+        const slash = modelRef.indexOf("/");
+        return slash > 0 && modelRef.slice(slash + 1).trim() ? [modelRef.slice(0, slash)] : [];
+      }),
+    ]
+      .map((provider) => provider.trim().toLowerCase())
+      .filter((provider) => provider && provider !== "all"),
+  );
+  const backends = resolvePluginSetupRegistry().cliBackends;
+  const providers = requested.size
+    ? [
+        ...requested,
+        ...backends
+          .filter(({ backend }) => backend.modelProvider && requested.has(backend.modelProvider))
+          .map(({ backend }) => backend.id),
+      ]
+    : backends.map(({ backend }) => backend.id);
+  const packages = new Set<string>();
+  for (const provider of providers) {
+    const metadata = await resolveCliBackendLiveMetadata(provider);
+    if ("dockerNpmPackage" in metadata && metadata.dockerNpmPackage) {
+      packages.add(metadata.dockerNpmPackage);
+    }
+  }
+  return [...packages].toSorted();
+}
+
 async function main() {
+  if (process.argv[2] === "--docker-packages") {
+    const packages = await resolveCliBackendDockerPackages(
+      process.argv[3]?.split(","),
+      process.argv[4]?.split(","),
+    );
+    for (const npmPackage of packages) {
+      process.stdout.write(`${npmPackage}\n`);
+    }
+    return;
+  }
   const provider = process.argv[2]?.trim().toLowerCase();
   if (!provider) {
     console.error("usage: node scripts/print-cli-backend-live-metadata.ts <provider>");

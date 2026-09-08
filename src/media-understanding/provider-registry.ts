@@ -1,8 +1,8 @@
+import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import { resolveImageCapableConfigProviderIds } from "./config-provider-models.js";
 import { describeImageWithModel, describeImagesWithModel } from "./image-runtime.js";
-import { normalizeMediaProviderId } from "./provider-id.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
 function mergeProviderIntoRegistry(
@@ -23,6 +23,8 @@ function mergeProviderIntoRegistry(
         documentModels: provider.documentModels ?? existing.documentModels,
       }
     : provider;
+  // Own undefined hooks reset earlier owners; absent hooks inherit. Hydrate after
+  // merging so providers sharing a normalized id retain that distinction.
   registry.set(normalizedKey, hydrateModelBackedMediaProvider(merged));
 }
 
@@ -44,7 +46,7 @@ function hydrateModelBackedMediaProvider(
   };
 }
 
-export { normalizeMediaExecutionProviderId, normalizeMediaProviderId } from "./provider-id.js";
+export { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 
 /** Builds the media-understanding provider registry from plugin capabilities and config providers. */
 export function buildMediaUnderstandingRegistry(
@@ -68,8 +70,6 @@ export function buildMediaUnderstandingRegistry(
       mergeProviderIntoRegistry(registry, {
         id: normalizedKey,
         capabilities: ["image"],
-        describeImage: describeImageWithModel,
-        describeImages: describeImagesWithModel,
       });
     }
   }

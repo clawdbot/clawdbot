@@ -1,4 +1,3 @@
-// Memory Host SDK module implements memory schema behavior.
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "./error-utils.js";
 import {
@@ -23,14 +22,14 @@ import {
   assertLegacyMemoryRowsCopied,
   ensureLegacyMemoryMigrationIndexes,
 } from "./memory-schema-migration.js";
+import * as provenanceSchema from "./memory-schema-provenance.js";
 import { ensureMemoryRecallMetadataSchema } from "./memory-schema-recall.js";
+import { migrateSqliteSchemaToStrict } from "./openclaw-runtime-sqlite.js";
 export {
   ensureMemoryRecallMetadataSchema,
   hasLegacyMemoryRecallMetadataColumns,
   MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
 } from "./memory-schema-recall.js";
-import * as provenanceSchema from "./memory-schema-provenance.js";
-import { migrateSqliteSchemaToStrict } from "./openclaw-runtime-sqlite.js";
 
 export {
   dropMemoryPathFtsTriggers,
@@ -50,6 +49,7 @@ export {
   MEMORY_INDEX_META_TABLE,
   MEMORY_INDEX_STATE_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
+  MEMORY_INDEX_DERIVED_TABLES,
 } from "./memory-schema-base.js";
 
 // SQLite schema setup for builtin memory index, embedding cache, and FTS.

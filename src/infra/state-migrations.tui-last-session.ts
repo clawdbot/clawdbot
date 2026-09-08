@@ -1,6 +1,7 @@
 // Doctor-only import for the retired TUI last-session JSON store.
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -11,6 +12,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { assertAllowedJsonFields } from "./state-migrations.json-fields.js";
 import {
   assertLegacyMigrationSourceUnchanged,
   claimAndRemoveLegacyMigrationSource,
@@ -19,7 +21,7 @@ import {
 } from "./state-migrations.source-snapshot.js";
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
 
-type TuiLastSessionMigrationDatabase = Pick<OpenClawStateKyselyDatabase, "tui_last_sessions">;
+type TuiLastSessionMigrationDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;
 
 type LegacyTuiLastSession = {
   scopeKey: string;
@@ -28,6 +30,7 @@ type LegacyTuiLastSession = {
 };
 
 const LEGACY_RECORD_KEYS = new Set(["sessionKey", "updatedAt"]);
+const TUI_LAST_SESSION_STATE_KEY_PREFIX = "tui.lastSession.";
 
 function resolveLegacyTuiLastSessionPath(stateDir: string): string {
   return path.join(stateDir, "tui", "last-session.json");
@@ -62,10 +65,6 @@ function assertLegacySourceUnchanged(sourcePath: string, expected: LegacySourceS
   });
 }
 
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 function isHeartbeatSessionKey(sessionKey: string): boolean {
   return sessionKey.toLowerCase().endsWith(":heartbeat");
 }
@@ -83,12 +82,11 @@ function parseLegacyTuiLastSessions(raw: string): LegacyTuiLastSession[] {
     if (!isObjectRecord(value)) {
       throw new Error(`legacy TUI last-session record ${scopeKey} must be an object`);
     }
-    const unexpectedKey = Object.keys(value).find((key) => !LEGACY_RECORD_KEYS.has(key));
-    if (unexpectedKey) {
-      throw new Error(
-        `legacy TUI last-session record ${scopeKey} has unexpected field ${unexpectedKey}`,
-      );
-    }
+    assertAllowedJsonFields(
+      value,
+      LEGACY_RECORD_KEYS,
+      `legacy TUI last-session record ${scopeKey}`,
+    );
     const sessionKey = value.sessionKey;
     const updatedAt = value.updatedAt;
     if (
@@ -108,10 +106,13 @@ function parseLegacyTuiLastSessions(raw: string): LegacyTuiLastSession[] {
 }
 
 function rowMatches(
-  row: { session_key: string; updated_at: number } | undefined,
+  row: { value_json: string; updated_at_ms: number } | undefined,
   expected: LegacyTuiLastSession,
 ): boolean {
-  return row?.session_key === expected.sessionKey && row.updated_at === expected.updatedAt;
+  return (
+    row?.value_json === JSON.stringify(expected.sessionKey) &&
+    row.updated_at_ms === expected.updatedAt
+  );
 }
 
 /** Import, verify, and remove the retired JSON store during an explicit doctor repair. */
@@ -153,28 +154,31 @@ export function migrateLegacyTuiLastSessions(params: {
       ({ db }) => {
         const tuiDb = getNodeSqliteKysely<TuiLastSessionMigrationDatabase>(db);
         for (const record of activeRecords) {
+          const stateKey = `${TUI_LAST_SESSION_STATE_KEY_PREFIX}${record.scopeKey}`;
           const existing = executeSqliteQueryTakeFirstSync(
             db,
             tuiDb
-              .selectFrom("tui_last_sessions")
-              .select(["session_key", "updated_at"])
-              .where("scope_key", "=", record.scopeKey),
+              .selectFrom("config_machine_state")
+              .select(["value_json", "updated_at_ms"])
+              .where("state_key", "=", stateKey),
           );
           if (!existing) {
             executeSqliteQuerySync(
               db,
-              tuiDb.insertInto("tui_last_sessions").values({
-                scope_key: record.scopeKey,
-                session_key: record.sessionKey,
-                updated_at: record.updatedAt,
+              tuiDb.insertInto("config_machine_state").values({
+                state_key: stateKey,
+                value_json: JSON.stringify(record.sessionKey),
+                updated_at_ms: record.updatedAt,
               }),
             );
             expectedRows.set(record.scopeKey, record);
             importedCount += 1;
             continue;
           }
-          if (existing.updated_at === record.updatedAt) {
-            if (existing.session_key !== record.sessionKey) {
+          // SAFETY: The TUI owner stores each tui.lastSession value as a JSON string.
+          const existingSessionKey = JSON.parse(existing.value_json) as string;
+          if (existing.updated_at_ms === record.updatedAt) {
+            if (existingSessionKey !== record.sessionKey) {
               throw new Error(
                 `scope ${record.scopeKey} has divergent JSON and SQLite pointers at the same timestamp`,
               );
@@ -182,11 +186,11 @@ export function migrateLegacyTuiLastSessions(params: {
             expectedRows.set(record.scopeKey, record);
             continue;
           }
-          if (existing.updated_at > record.updatedAt) {
+          if (existing.updated_at_ms > record.updatedAt) {
             expectedRows.set(record.scopeKey, {
               scopeKey: record.scopeKey,
-              sessionKey: existing.session_key,
-              updatedAt: existing.updated_at,
+              sessionKey: existingSessionKey,
+              updatedAt: existing.updated_at_ms,
             });
             supersededCount += 1;
             continue;
@@ -194,9 +198,12 @@ export function migrateLegacyTuiLastSessions(params: {
           executeSqliteQuerySync(
             db,
             tuiDb
-              .updateTable("tui_last_sessions")
-              .set({ session_key: record.sessionKey, updated_at: record.updatedAt })
-              .where("scope_key", "=", record.scopeKey),
+              .updateTable("config_machine_state")
+              .set({
+                value_json: JSON.stringify(record.sessionKey),
+                updated_at_ms: record.updatedAt,
+              })
+              .where("state_key", "=", stateKey),
           );
           expectedRows.set(record.scopeKey, record);
           importedCount += 1;
@@ -219,9 +226,9 @@ export function migrateLegacyTuiLastSessions(params: {
       const row = executeSqliteQueryTakeFirstSync(
         database.db,
         tuiDb
-          .selectFrom("tui_last_sessions")
-          .select(["session_key", "updated_at"])
-          .where("scope_key", "=", expected.scopeKey),
+          .selectFrom("config_machine_state")
+          .select(["value_json", "updated_at_ms"])
+          .where("state_key", "=", `${TUI_LAST_SESSION_STATE_KEY_PREFIX}${expected.scopeKey}`),
       );
       if (!rowMatches(row, expected)) {
         throw new Error(`SQLite verification failed for scope ${expected.scopeKey}`);

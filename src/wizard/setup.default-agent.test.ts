@@ -22,19 +22,23 @@ vi.mock("./navigation-prompter.js", () => ({
   ) => await run(prompter),
 }));
 
-vi.mock("./setup.shared.js", () => ({
-  readSetupConfigFileSnapshot: mocks.readSnapshot,
-  readValidSetupConfigFile: vi.fn(),
-  requireRiskAcknowledgement: async ({ config }: { config: OpenClawConfig }) => config,
-  resolveQuickstartGatewayDefaults: () => ({
-    hasExisting: false,
-    port: 18789,
-    bind: "loopback",
-    authMode: "token",
-    tailscaleMode: "off",
-  }),
-  writeWizardConfigFile: mocks.writeConfig,
-}));
+vi.mock("./setup.shared.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./setup.shared.js")>();
+  return {
+    ...actual,
+    readSetupConfigFileSnapshot: mocks.readSnapshot,
+    readValidSetupConfigFile: vi.fn(),
+    requireRiskAcknowledgement: async ({ config }: { config: OpenClawConfig }) => config,
+    resolveQuickstartGatewayDefaults: () => ({
+      hasExisting: false,
+      port: 18789,
+      bind: "loopback",
+      authMode: "token",
+      tailscaleMode: "off",
+    }),
+    writeWizardConfigFile: mocks.writeConfig,
+  };
+});
 
 vi.mock("./setup.migration-import.js", () => ({
   detectSetupMigrationSources: vi.fn(async () => []),
@@ -70,7 +74,6 @@ vi.mock("./setup.gateway-config.js", () => ({
       authMode: "token",
       gatewayToken: "test-token",
       tailscaleMode: "off",
-      tailscaleResetOnExit: false,
     },
   }),
 }));
@@ -105,7 +108,10 @@ vi.mock("../commands/onboard-helpers.js", () => ({
 }));
 
 vi.mock("../commands/onboard-skills.js", () => ({ setupSkills: mocks.setupSkills }));
-vi.mock("../config/config.js", () => ({ resolveGatewayPort: () => 18789 }));
+vi.mock("../config/config.js", () => ({
+  resolveGatewayPort: () => 18789,
+  readConfigFileSnapshot: mocks.readSnapshot,
+}));
 vi.mock("../config/logging.js", () => ({ logConfigUpdated: vi.fn() }));
 vi.mock("../plugins/status.js", () => ({
   buildPluginCompatibilitySnapshotNotices: vi.fn(() => []),
@@ -152,6 +158,7 @@ describe("runSetupWizard default-agent ownership", () => {
       valid: true,
       config,
       sourceConfig: config,
+      sourceConfigBeforeMigrations: config,
       issues: [],
     });
     mocks.writeConfig.mockImplementation(async (nextConfig: OpenClawConfig) => nextConfig);
@@ -166,6 +173,103 @@ describe("runSetupWizard default-agent ownership", () => {
       async ({ config: nextConfig }: { config: OpenClawConfig }) => nextConfig,
     );
     mocks.finalizeSetup.mockResolvedValue({ launchedTui: false });
+  });
+
+  it.each([false, true])(
+    "retains the telemetry choice %s when reconciling an authored main roster",
+    async (enabled) => {
+      const config = {
+        gateway: { mode: "local", port: 18789 },
+        agents: { entries: { main: {} } },
+      } satisfies OpenClawConfig;
+      mocks.readSnapshot.mockResolvedValue({
+        exists: true,
+        valid: true,
+        config,
+        sourceConfig: config,
+        sourceConfigBeforeMigrations: config,
+        issues: [],
+      });
+      vi.mocked(prompter.select).mockResolvedValue(enabled);
+      let persisted: OpenClawConfig | undefined;
+      mocks.writeConfig.mockImplementation(async (nextConfig: OpenClawConfig) => {
+        persisted = nextConfig;
+        return nextConfig;
+      });
+
+      await runSetupWizard(
+        {
+          acceptRisk: true,
+          flow: "quickstart",
+          mode: "local",
+          authChoice: "skip",
+          skipChannels: true,
+          skipSkills: true,
+          skipSearch: true,
+          skipHealth: true,
+          skipHooks: true,
+          skipUi: true,
+          installDaemon: false,
+        },
+        runtime,
+        prompter,
+      );
+
+      expect(persisted?.telemetry).toEqual({ enabled, consentedAt: expect.any(String) });
+      expect(persisted?.agents?.entries).toEqual({ main: {} });
+    },
+  );
+
+  it("keeps concurrent gateway settings while carrying the telemetry choice", async () => {
+    const config = {
+      gateway: { mode: "local", port: 18789 },
+      agents: { entries: { main: {} } },
+    } satisfies OpenClawConfig;
+    const current = { ...config, gateway: { ...config.gateway, port: 24444 } };
+    mocks.readSnapshot
+      .mockResolvedValueOnce({
+        exists: true,
+        valid: true,
+        config,
+        sourceConfig: config,
+        sourceConfigBeforeMigrations: config,
+        issues: [],
+      })
+      .mockResolvedValue({
+        exists: true,
+        valid: true,
+        config: current,
+        sourceConfig: current,
+        sourceConfigBeforeMigrations: current,
+        issues: [],
+      });
+    vi.mocked(prompter.select).mockResolvedValue(false);
+    let persisted: OpenClawConfig | undefined;
+    mocks.writeConfig.mockImplementation(async (nextConfig: OpenClawConfig) => {
+      persisted = nextConfig;
+      return nextConfig;
+    });
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        mode: "local",
+        authChoice: "skip",
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipHooks: true,
+        skipUi: true,
+        installDaemon: false,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(persisted?.telemetry).toEqual({ enabled: false, consentedAt: expect.any(String) });
+    expect(persisted?.gateway?.port).toBe(24444);
   });
 
   it("uses the keyed default-agent workspace for all classic agent-owned effects", async () => {

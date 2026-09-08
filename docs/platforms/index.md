@@ -6,9 +6,10 @@ read_when:
 title: "Platforms"
 ---
 
-OpenClaw core is written in TypeScript. **Node is the required runtime** because
-the canonical state store uses `node:sqlite`. Bun remains available for
-dependency installation and package scripts; see [Bun](/install/bun).
+OpenClaw core is written in TypeScript. **Node is the primary, default, and
+recommended runtime**. Bun 1.4+ builds with WAL-reset-safe `node:sqlite` can run
+the CLI, Gateway, and managed node host as an explicit opt-in; see
+[Bun](/install/bun).
 
 Companion apps exist for Windows Hub, macOS (menu bar app), and mobile nodes
 (iOS/Android). Linux companion apps are planned, but the Gateway is fully
@@ -18,21 +19,23 @@ Linux-compatible Gateway runtime.
 
 ## Choose your OS
 
-- macOS: [macOS](/platforms/macos)
-- iOS: [iOS](/platforms/ios)
 - Android: [Android](/platforms/android)
-- Windows: [Windows](/platforms/windows)
+- ChromeOS: [ChromeOS (Crostini)](/platforms/chromeos)
+- iOS: [iOS](/platforms/ios)
 - Linux: [Linux](/platforms/linux)
+- macOS: [macOS](/platforms/macos)
+- Windows: [Windows](/platforms/windows)
 
 ## VPS and hosting
 
 - VPS hub: [VPS hosting](/vps)
-- Fly.io: [Fly.io](/install/fly)
-- Hetzner (Docker): [Hetzner](/install/hetzner)
-- GCP (Compute Engine): [GCP](/install/gcp)
 - Azure (Linux VM): [Azure](/install/azure)
-- exe.dev (VM + HTTPS proxy): [exe.dev](/install/exe-dev)
+- Daytona (cloud sandbox): [Daytona](/install/daytona)
 - EasyRunner (Podman + Caddy): [EasyRunner](/platforms/easyrunner)
+- exe.dev (VM + HTTPS proxy): [exe.dev](/install/exe-dev)
+- Fly.io: [Fly.io](/install/fly)
+- GCP (Compute Engine): [GCP](/install/gcp)
+- Hetzner (Docker): [Hetzner](/install/hetzner)
 
 ## Common links
 

@@ -130,7 +130,10 @@ function shouldRewriteCandidate(params: {
   satisfiedBy: ExecSegmentSatisfiedBy | undefined;
 }): boolean {
   if (params.mode === "enforced") {
-    return true;
+    // Safe builtins (cd, :, true, false, pwd, test) are handled by the shell itself, not by an
+    // external executable. Rewriting them to a resolved path (e.g. /usr/bin/cd) is semantically
+    // wrong and does not strengthen PATH-shadowing protection, so enforced mode leaves them as-is.
+    return params.satisfiedBy !== "safeBuiltins";
   }
   return params.satisfiedBy === "safeBins" || params.satisfiedBy === "inlineChain";
 }
@@ -145,6 +148,9 @@ function replacementForCandidate(params: {
   mode: AuthorizedShellRenderMode;
   satisfiedBy: ExecSegmentSatisfiedBy | undefined;
 }): AuthorizedShellRenderResult | SourceReplacement | null {
+  if (params.mode === "enforced" && hasArgumentShellExpansionSource(params.candidate)) {
+    return { ok: false, reason: "shell expansion in enforced arguments" };
+  }
   if (!shouldRewriteCandidate({ mode: params.mode, satisfiedBy: params.satisfiedBy })) {
     return null;
   }
@@ -154,9 +160,6 @@ function replacementForCandidate(params: {
   }
   if (params.satisfiedBy === "safeBins" && hasArgumentShellExpansionSource(params.candidate)) {
     return { ok: false, reason: "shell expansion in safe-bin arguments" };
-  }
-  if (params.mode === "enforced" && hasArgumentShellExpansionSource(params.candidate)) {
-    return { ok: false, reason: "shell expansion in enforced arguments" };
   }
   if (params.mode === "enforced" && params.candidate.transport.kind === "shell-wrapper") {
     return { ok: false, reason: "shell quoting required in wrapper payload" };

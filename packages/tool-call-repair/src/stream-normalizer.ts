@@ -1,3 +1,10 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  isOffsetInProtectedRanges,
+  type PlainTextToolCallNameMatcher,
+  type PlainTextToolCallProtectedRange,
+  type PlainTextToolCallProtectedRangeResolver,
+} from "./contracts.js";
 import {
   consumeLineBreak,
   END_TOOL_REQUEST,
@@ -11,14 +18,16 @@ import {
   type StructuralLineBreakOptions,
   utf8ByteLengthWithinLimit,
 } from "./grammar.js";
-import {
-  scanPlainTextToolCall,
-  type PlainTextToolCallNameMatcher,
-  type PlainTextToolCallScan,
-} from "./payload.js";
+import { scanPlainTextToolCall, type PlainTextToolCallScan } from "./payload.js";
 import type { PlainTextToolCallMessageProjection } from "./promote.js";
+import {
+  advanceProtectionScanState,
+  cloneProtectionScanState,
+  createProtectionScanState,
+  resolveProtectionFastPath,
+} from "./protection-fast-path.js";
 
-export type { PlainTextToolCallNameMatcher } from "./payload.js";
+export type { PlainTextToolCallNameMatcher } from "./contracts.js";
 
 /** Result of repairing the final message carried by a provider stream `done` event. */
 export type PlainTextToolCallMessageNormalization =
@@ -31,6 +40,16 @@ export type PlainTextToolCallStreamNormalizerOptions = {
   createPromotedToolCallEvents(message: Record<string, unknown>): Iterable<unknown>;
   /** Tool-name matcher scoped to the exact request being normalized. */
   matcher: PlainTextToolCallNameMatcher;
+  /** Resolves source ranges that must remain literal user-visible text. */
+  resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver;
+  /**
+   * Opts a fence-based `resolveProtectedRanges` into the incremental fast path so a
+   * candidate-shaped delta can skip a full re-parse (see protection-fast-path.ts's safety
+   * contract). Leave unset for any resolver whose protected ranges are not exactly CommonMark
+   * fenced/indented/inline code spans — the fast path only tracks fence state, so trusting it
+   * for a differently defined resolver would silently drop that resolver's protection.
+   */
+  protectedRangesFenceCompatible?: boolean;
   /** Promotes an eligible terminal snapshot or scrubs every recognized candidate. */
   normalizeTerminalMessage(params: {
     allowPromotion: boolean;
@@ -44,6 +63,8 @@ export type PlainTextToolCallStreamNormalizerOptions = {
 
 const MAX_PAYLOAD_BYTES = 256_000;
 const MAX_PENDING_EVENTS = 256;
+// Retain bounded visible history only for split Markdown ownership; terminal snapshots stay canonical.
+const MAX_PROTECTION_CONTEXT_CHARS = 1_000_000;
 const MAX_TOOL_NAME_CHARS = 120;
 
 type TextRange = { end: number; start: number };
@@ -97,10 +118,6 @@ type SuppressingPendingState = {
 
 type PendingState = CandidatePendingState | SuppressingPendingState;
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-}
-
 function eventContentIndex(event: Record<string, unknown>): number {
   const index = event.contentIndex;
   return typeof index === "number" && Number.isInteger(index) && index >= 0 ? index : 0;
@@ -114,7 +131,7 @@ function extractStandaloneCandidate(
   message: unknown,
   requireAssistantRole = false,
 ): StandalonePlainTextToolCallCandidate | undefined {
-  const record = asRecord(message);
+  const record = asOptionalObjectRecord(message);
   if (!record || (requireAssistantRole && record.role !== "assistant")) {
     return undefined;
   }
@@ -126,7 +143,7 @@ function extractStandaloneCandidate(
   }
   const candidate: StandalonePlainTextToolCallCandidate = { text: "", parts: [] };
   for (const [contentIndex, block] of record.content.entries()) {
-    const value = asRecord(block);
+    const value = asOptionalObjectRecord(block);
     if (!value) {
       return undefined;
     }
@@ -200,6 +217,7 @@ function findCallSequences(
   matcher: PlainTextToolCallNameMatcher,
   structuralBoundaries: readonly number[] = [],
   structuralLineBreaks?: StructuralLineBreakOptions,
+  protectedRanges: readonly PlainTextToolCallProtectedRange[] = [],
 ): ScannedCallSequence[] {
   const sequences: ScannedCallSequence[] = [];
   const structuralBoundarySet = new Set(structuralBoundaries);
@@ -217,6 +235,10 @@ function findCallSequences(
     }
     const sequenceStart = index;
     let callStart = skipLineIndentation(text, index);
+    if (isOffsetInProtectedRanges(callStart, protectedRanges)) {
+      index += 1;
+      continue;
+    }
     let sequenceEnd = callStart;
     let hasOverCap = false;
     let activeStart: number | undefined;
@@ -274,6 +296,9 @@ function findCallSequences(
       if (nextStart >= text.length) {
         break;
       }
+      if (isOffsetInProtectedRanges(nextStart, protectedRanges)) {
+        break;
+      }
       const nextScan = scanPlainTextToolCall(text, nextStart, {
         matcher,
         maxPayloadBytes: MAX_PAYLOAD_BYTES,
@@ -321,9 +346,16 @@ function createCandidateScanView(candidate: StandalonePlainTextToolCallCandidate
 function findCandidateCallSequences(
   candidate: StandalonePlainTextToolCallCandidate,
   matcher: PlainTextToolCallNameMatcher,
+  resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver,
 ): ScannedCallSequence[] {
   const view = createCandidateScanView(candidate);
-  return findCallSequences(view.text, matcher, view.boundaries, view.structuralLineBreaks);
+  return findCallSequences(
+    view.text,
+    matcher,
+    view.boundaries,
+    view.structuralLineBreaks,
+    resolveProtectedRanges?.(view.text),
+  );
 }
 
 function createRangeRemover(ranges: readonly TextRange[]) {
@@ -376,7 +408,7 @@ function projectRangesOntoMessage(
   const sourceToProjectedContentIndex = new Map<number, number>();
   for (const [index, block] of record.content.entries()) {
     const part = parts.get(index);
-    const blockRecord = asRecord(block);
+    const blockRecord = asOptionalObjectRecord(block);
     if (!part || blockRecord?.type !== "text" || typeof blockRecord.text !== "string") {
       sourceToProjectedContentIndex.set(index, content.length);
       content.push(block);
@@ -398,9 +430,10 @@ export function projectScrubbedPlainTextToolCallMessage(params: {
   matcher: PlainTextToolCallNameMatcher;
   message: unknown;
   preserveEmptyTextBlocks?: boolean;
+  resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver;
   requireAssistantRole?: boolean;
 }): PlainTextToolCallMessageProjection | undefined {
-  const record = asRecord(params.message);
+  const record = asOptionalObjectRecord(params.message);
   const candidate = extractStandaloneCandidate(
     params.message,
     params.requireAssistantRole === true,
@@ -408,7 +441,11 @@ export function projectScrubbedPlainTextToolCallMessage(params: {
   if (!record || !candidate) {
     return undefined;
   }
-  const sequences = findCandidateCallSequences(candidate, params.matcher);
+  const sequences = findCandidateCallSequences(
+    candidate,
+    params.matcher,
+    params.resolveProtectedRanges,
+  );
   const visibleOutsideCalls = Boolean(createRangeRemover(sequences)(candidate.text).trim());
   const ranges = sequences.filter(
     (sequence) =>
@@ -426,6 +463,7 @@ function findPotentialCallStart(
   text: string,
   atLineStart: boolean,
   matcher: PlainTextToolCallNameMatcher,
+  isProtected?: (offset: number) => boolean,
 ): number | null {
   for (let index = 0; index < text.length;) {
     const lineStart =
@@ -435,6 +473,10 @@ function findPotentialCallStart(
       continue;
     }
     const start = skipLineIndentation(text, index);
+    if (isProtected?.(start)) {
+      index += 1;
+      continue;
+    }
     const scan = scanPlainTextToolCall(text, start, {
       matcher,
       maxPayloadBytes: MAX_PAYLOAD_BYTES,
@@ -445,6 +487,102 @@ function findPotentialCallStart(
     index = Math.max(index + 1, scan.next);
   }
   return null;
+}
+
+/** A confirmed preceding-context verdict, keyed by the partial's own reported length. */
+type PrecedingContextVerdict = { precedingLength: number; trusted: boolean };
+
+/**
+ * Decides whether the carried fence-state scan can be trusted for a candidate in
+ * `contentIndex`, reusing a cached verdict from an earlier delta in the same block when
+ * it is still known to apply.
+ *
+ * The scan advances in event order; `partial`'s own per-block offsets are in
+ * content-index order. These normally agree, but not when a provider interleaves active
+ * blocks (an earlier block can stream after a later one), when an earlier block was
+ * never streamed as its own delta at all, or when an earlier block is itself still
+ * actively streaming and grows between two candidate checks in a later block -- so the
+ * scan's state does not correspond to "everything that precedes this block" and must
+ * not be trusted without checking the partial's own reported preceding text.
+ *
+ * `partial` is optional on every event, so a delta can arrive with none at all -- that
+ * proves nothing either way and, with no cache to fall back on either, defaults to
+ * trusting the scan (there is nothing to contradict it with; it remains the only source
+ * of truth this normalizer itself built, in order).
+ *
+ * A cached verdict is reused only when a later delta's own reported preceding length
+ * (`part.start`) exactly matches the length the cache was validated against -- a
+ * still-evolving earlier block changes that length, invalidating the cache and forcing
+ * a fresh comparison, rather than trusting a verdict that predates the earlier block's
+ * own growth. A length match alone does not otherwise prove agreement -- interleaved
+ * blocks of the same length streamed out of order can produce the same tracked length
+ * from different actual text (e.g. opposite fence state) -- so a fresh, same-length,
+ * nonzero-length comparison still needs a real text comparison. `trackedPrefix` is
+ * called lazily: only an uncached (or invalidated) comparison pays for materializing it,
+ * and its cost is bounded by the (typically small, fixed) preceding-block size, not by
+ * however large the current block's own growing content is.
+ */
+function resolvePrecedingContextTrust(
+  partial: unknown,
+  contentIndex: number,
+  trackedLength: number,
+  trackedPrefix: () => string,
+  cached: PrecedingContextVerdict | undefined,
+): { cache: PrecedingContextVerdict | undefined; trusted: boolean } {
+  const candidate = extractStandaloneCandidate(partial);
+  const part = candidate?.parts.find((entry) => entry.contentIndex === contentIndex);
+  if (!candidate || !part) {
+    return { cache: cached, trusted: cached?.trusted ?? true };
+  }
+  if (cached && cached.precedingLength === part.start) {
+    return { cache: cached, trusted: cached.trusted };
+  }
+  const trusted =
+    part.start === trackedLength &&
+    (part.start === 0 || candidate.text.slice(0, part.start) === trackedPrefix());
+  return { cache: { precedingLength: part.start, trusted }, trusted };
+}
+
+function resolvePartialProtectionCheck(params: {
+  authoritative: boolean;
+  contentIndex: number;
+  incoming: string;
+  partial: unknown;
+  resolveProtectedRanges: PlainTextToolCallProtectedRangeResolver;
+}): ((offset: number) => boolean) | undefined {
+  const candidate = extractStandaloneCandidate(params.partial);
+  const record = asOptionalObjectRecord(params.partial);
+  if (!candidate || !record) {
+    return undefined;
+  }
+  let blockStart = 0;
+  let blockText: string | undefined;
+  if (typeof record.content === "string") {
+    if (params.contentIndex !== 0) {
+      return undefined;
+    }
+    blockText = record.content;
+  } else {
+    const part = candidate.parts.find((entry) => entry.contentIndex === params.contentIndex);
+    const block = Array.isArray(record.content)
+      ? asOptionalObjectRecord(record.content[params.contentIndex])
+      : undefined;
+    if (!part || block?.type !== "text" || typeof block.text !== "string") {
+      return undefined;
+    }
+    blockStart = part.start;
+    blockText = block.text;
+  }
+  const incomingStart = params.authoritative ? 0 : blockText.length - params.incoming.length;
+  if (
+    incomingStart < 0 ||
+    (params.authoritative ? blockText !== params.incoming : !blockText.endsWith(params.incoming))
+  ) {
+    return undefined;
+  }
+  const protectedRanges = params.resolveProtectedRanges(candidate.text);
+  return (offset) =>
+    isOffsetInProtectedRanges(blockStart + incomingStart + offset, protectedRanges);
 }
 
 function nextAtLineStart(previous: boolean, text: string): boolean {
@@ -638,14 +776,14 @@ function projectedTextForEvent(
   event: Record<string, unknown>,
   projection: PlainTextToolCallMessageProjection,
 ): string | undefined {
-  const content = asRecord(projection.message)?.content;
+  const content = asOptionalObjectRecord(projection.message)?.content;
   if (typeof content === "string") {
     return content;
   }
   const projectedIndex = projection.sourceToProjectedContentIndex.get(eventContentIndex(event));
   const block =
     Array.isArray(content) && projectedIndex !== undefined
-      ? asRecord(content[projectedIndex])
+      ? asOptionalObjectRecord(content[projectedIndex])
       : undefined;
   return block?.type === "text" && typeof block.text === "string" ? block.text : undefined;
 }
@@ -756,6 +894,7 @@ function createOverCapSuppressor(
 function classifyPending(
   pending: CandidatePendingState,
   matcher: PlainTextToolCallNameMatcher,
+  resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver,
   finalize = false,
 ): PendingClassification {
   const candidate = { text: pending.buffer, parts: pending.parts };
@@ -766,7 +905,7 @@ function classifyPending(
     structuralLineBreaks: view.structuralLineBreaks,
   });
   const hasNamedCandidate = scanHasNamedCandidate(terminalScan);
-  const sequences = findCandidateCallSequences(candidate, matcher);
+  const sequences = findCandidateCallSequences(candidate, matcher, resolveProtectedRanges);
   const overCapRanges = sequences.filter(({ overCap }) => overCap);
   const leading = sequences[0]?.start === 0 ? sequences[0] : undefined;
   if (leading?.activeStart !== undefined && (pending.sequenceOverCap || overCapRanges.length > 0)) {
@@ -1014,7 +1153,7 @@ function orderByContentIndex(
 ): unknown[] {
   const contentLength = Array.isArray(message.content) ? message.content.length : 0;
   const order = (event: unknown) => {
-    const index = asRecord(event)?.contentIndex;
+    const index = asOptionalObjectRecord(event)?.contentIndex;
     return typeof index === "number" &&
       Number.isInteger(index) &&
       index >= 0 &&
@@ -1039,6 +1178,94 @@ export async function* normalizePlainTextToolCallStreamEvents(
   const heldTextStarts = new Map<string, Record<string, unknown>>();
   const lineStarts = new Map<string, boolean>();
   const emittedTextUnits = new Map<string, number>();
+  const protectionChunks: string[] = [];
+  let protectionContextLength = 0;
+  let protectionContextOverflow = false;
+  let protectionBlockContentIndex: number | undefined;
+  let protectionBlockStart = 0;
+  // This block's cached preceding-context trust verdict (see resolvePrecedingContextTrust),
+  // keyed by the preceding length it was validated against. Reset per block so it starts
+  // fresh for each one, and invalidated within a block if a later delta's partial reports
+  // a different preceding length than the cache was validated against (an earlier block
+  // that is itself still actively streaming can grow between two candidate checks here).
+  let protectionBlockPrefixVerdict: PrecedingContextVerdict | undefined;
+  // Carried Markdown block state mirrors the protection context so a candidate delta can
+  // skip re-parsing the whole response. `protectionScanAtBlockStart` matches the prefix an
+  // authoritative delta uses (context sliced at protectionBlockStart); the live state
+  // matches the full context. Both stay in sync because every context mutation routes
+  // through advanceProtectionContext/beginProtectionBlock.
+  let protectionScan = createProtectionScanState();
+  let protectionScanAtBlockStart = createProtectionScanState();
+
+  const beginProtectionBlock = (contentIndex: number) => {
+    if (protectionBlockContentIndex === contentIndex) {
+      return;
+    }
+    protectionBlockContentIndex = contentIndex;
+    protectionBlockStart = protectionContextLength;
+    protectionScanAtBlockStart = cloneProtectionScanState(protectionScan);
+    protectionBlockPrefixVerdict = undefined;
+  };
+  const truncateProtectionContext = (length: number) => {
+    while (protectionContextLength > length) {
+      const tail = protectionChunks.at(-1);
+      if (tail === undefined) {
+        protectionContextLength = 0;
+        return;
+      }
+      const retainedLength = tail.length - (protectionContextLength - length);
+      if (retainedLength > 0) {
+        protectionChunks[protectionChunks.length - 1] = tail.slice(0, retainedLength);
+        protectionContextLength = length;
+        return;
+      }
+      protectionChunks.pop();
+      protectionContextLength -= tail.length;
+    }
+  };
+  const advanceProtectionContext = (text: string, resetActiveBlock = false) => {
+    if (!options.resolveProtectedRanges || protectionContextOverflow) {
+      return;
+    }
+    if (resetActiveBlock) {
+      truncateProtectionContext(protectionBlockStart);
+      protectionScan = cloneProtectionScanState(protectionScanAtBlockStart);
+    }
+    if (protectionContextLength + text.length > MAX_PROTECTION_CONTEXT_CHARS) {
+      protectionChunks.length = 0;
+      protectionContextLength = 0;
+      protectionContextOverflow = true;
+      return;
+    }
+    if (text) {
+      protectionChunks.push(text);
+      advanceProtectionScanState(protectionScan, text);
+    }
+    protectionContextLength += text.length;
+  };
+  const materializeProtectionPrefix = (authoritative: boolean): string => {
+    if (protectionContextOverflow) {
+      return "";
+    }
+    const context = protectionChunks.join("");
+    return authoritative ? context.slice(0, protectionBlockStart) : context;
+  };
+  // Reconstructs only the first `length` tracked characters, stopping as soon as enough
+  // chunks are collected instead of joining every chunk ever pushed. protectionChunks
+  // keeps growing with the CURRENT block's own advances, so joining it in full to read a
+  // fixed-size preceding-block prefix would itself be the quadratic cost this exists to
+  // avoid; this stays bounded by `length` (the preceding block's own size), not by
+  // however large the current, still-growing block gets.
+  const materializeBoundedPrefix = (length: number): string => {
+    let result = "";
+    for (const chunk of protectionChunks) {
+      if (result.length >= length) {
+        break;
+      }
+      result += chunk;
+    }
+    return result.slice(0, length);
+  };
 
   const scrubSnapshot = (
     value: unknown,
@@ -1051,6 +1278,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
           matcher: options.matcher,
           message: value,
           preserveEmptyTextBlocks,
+          resolveProtectedRanges: options.resolveProtectedRanges,
         })
       : undefined;
     if (forced) {
@@ -1093,7 +1321,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
 
   async function* normalizeEvents() {
     for await (const sourceEvent of source) {
-      let record = asRecord(sourceEvent);
+      let record = asOptionalObjectRecord(sourceEvent);
       if (!record) {
         yield sourceEvent;
         continue;
@@ -1153,6 +1381,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
         const closesText = type === "text_end";
         let authoritative = closesText;
         let sequenceOverCap = false;
+        beginProtectionBlock(eventContentIndex(record));
         while (true) {
           if (pending?.kind === "suppressing") {
             if (closesText) {
@@ -1208,7 +1437,76 @@ export async function* normalizePlainTextToolCallStreamEvents(
               sequenceOverCap ||
               overCapSequenceOpen ||
               (lineStarts.get(key) ?? true);
-            const callStart = findPotentialCallStart(incoming, atLineStart, options.matcher);
+            let callStart = findPotentialCallStart(incoming, atLineStart, options.matcher);
+            if (callStart !== null && options.resolveProtectedRanges) {
+              if (protectionContextOverflow) {
+                // Bounded live history no longer proves ownership. Preserve bytes and let the
+                // authoritative terminal snapshot decide instead of deleting literal content.
+                callStart = null;
+              } else {
+                // Candidate-shaped text is rare in prose but constant in bracket-dense
+                // answers, so materializing and re-parsing the whole response here is
+                // quadratic. Ask the carried fence state first; it answers only what it
+                // can prove and yields to a full parse for everything else. Only a caller
+                // that opted in has promised its resolver's protection is exactly fence
+                // state, so an un-opted-in resolver always takes the full-parse path below
+                // and stays authoritative — the fast path must never silently stand in for it.
+                const carriedScan = authoritative ? protectionScanAtBlockStart : protectionScan;
+                // protectionBlockStart is how much text the scan had tracked (in event order)
+                // when this block began. If the partial's own content-order offset for this
+                // block disagrees, either an earlier block was never streamed as its own delta,
+                // blocks interleaved out of content-index order, or an earlier block is itself
+                // still growing -- either way the scan's state does not correspond to this
+                // block's actual preceding text and cannot be trusted here, whatever it claims
+                // for this block's own content. resolvePrecedingContextTrust caches its
+                // verdict per block (reset in beginProtectionBlock) but invalidates it the
+                // moment a later delta's own reported preceding length changes, so an earlier
+                // block growing mid-stream still gets a fresh comparison rather than reusing a
+                // verdict that predates that growth.
+                const precedingContextTrust = resolvePrecedingContextTrust(
+                  incomingRecord.partial,
+                  eventContentIndex(incomingRecord),
+                  protectionBlockStart,
+                  () => materializeBoundedPrefix(protectionBlockStart),
+                  protectionBlockPrefixVerdict,
+                );
+                protectionBlockPrefixVerdict = precedingContextTrust.cache;
+                const untrackedPrecedingContext = !precedingContextTrust.trusted;
+                let isProtectedAt: ((offset: number) => boolean) | undefined =
+                  !untrackedPrecedingContext && options.protectedRangesFenceCompatible
+                    ? resolveProtectionFastPath(carriedScan, incoming)
+                    : undefined;
+                if (!isProtectedAt) {
+                  // The fast path could not prove the verdict from carried state (an
+                  // un-opted-in resolver, or a delimiter it cannot classify). Recover from
+                  // the provider's own cumulative "partial" snapshot when one validates
+                  // against this exact delta — providers like OpenAI-completions and
+                  // Mistral attach it to every text delta, but this is still a full parse,
+                  // so it must never run ahead of the fast path above on the common case.
+                  isProtectedAt = resolvePartialProtectionCheck({
+                    authoritative,
+                    contentIndex: eventContentIndex(incomingRecord),
+                    incoming,
+                    partial: incomingRecord.partial,
+                    resolveProtectedRanges: options.resolveProtectedRanges,
+                  });
+                }
+                if (!isProtectedAt) {
+                  const protectionPrefix = materializeProtectionPrefix(authoritative);
+                  const protectedRanges = options.resolveProtectedRanges(
+                    `${protectionPrefix}${incoming}`,
+                  );
+                  isProtectedAt = (offset) =>
+                    isOffsetInProtectedRanges(protectionPrefix.length + offset, protectedRanges);
+                }
+                callStart = findPotentialCallStart(
+                  incoming,
+                  atLineStart,
+                  options.matcher,
+                  isProtectedAt,
+                );
+              }
+            }
             if (callStart === null) {
               const held = heldTextStarts.get(key);
               if (held) {
@@ -1224,9 +1522,11 @@ export async function* normalizePlainTextToolCallStreamEvents(
                   (sequenceOverCap || continuesScrubbedSequence) && contentIndex > 0;
               }
               lineStarts.set(key, nextAtLineStart(atLineStart, incoming));
+              advanceProtectionContext(incoming, authoritative);
               break;
             }
             const visiblePrefix = incoming.slice(0, callStart);
+            advanceProtectionContext(visiblePrefix, authoritative);
             const emittedUnits = emittedTextUnits.get(key) ?? 0;
             const emittedPrefixUnits = authoritative ? emittedUnits : 0;
             const novelVisiblePrefix = visiblePrefix.slice(emittedPrefixUnits);
@@ -1244,7 +1544,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
                 yield createSyntheticTextDelta(
                   visibleTemplate,
                   novelVisiblePrefix,
-                  asRecord(visibleProjection?.message),
+                  asOptionalObjectRecord(visibleProjection?.message),
                 );
               }
             }
@@ -1289,7 +1589,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
                   createSyntheticTextDelta(
                     pending.template,
                     candidateText,
-                    asRecord(record.partial),
+                    asOptionalObjectRecord(record.partial),
                   ),
                   { ...incomingRecord, content: incoming },
                 ];
@@ -1332,7 +1632,11 @@ export async function* normalizePlainTextToolCallStreamEvents(
           if (!shouldClassify) {
             break;
           }
-          const classification = classifyPending(pending, options.matcher);
+          const classification = classifyPending(
+            pending,
+            options.matcher,
+            options.resolveProtectedRanges,
+          );
           pending.nextScanChars = Math.max(pending.buffer.length + 1, pending.nextScanChars * 2);
           if (classification.kind === "complete" || classification.kind === "incomplete") {
             break;
@@ -1373,10 +1677,12 @@ export async function* normalizePlainTextToolCallStreamEvents(
           if (classification.kind === "false-positive") {
             yield* replayFalsePositiveCandidate(pending);
             const replayText = pending.buffer;
+            const replayedCandidate = pending;
             pending = undefined;
             if (replayText) {
               overCapSequenceOpen = false;
               lineStarts.set(key, nextAtLineStart(lineStarts.get(key) ?? true, replayText));
+              advanceProtectionContext(replayedCandidate.buffer);
             }
             break;
           }
@@ -1419,11 +1725,14 @@ export async function* normalizePlainTextToolCallStreamEvents(
             yield createSyntheticTextDelta(pending.template, novelText, partial);
           }
           lineStarts.set(key, nextAtLineStart(lineStarts.get(key) ?? true, sanitizedText));
+          advanceProtectionContext(sanitizedText);
           pending = undefined;
           break;
         }
         if (closesText) {
           emittedTextUnits.delete(key);
+          protectionBlockContentIndex = undefined;
+          protectionBlockStart = protectionContextLength;
         }
         continue;
       }
@@ -1444,9 +1753,11 @@ export async function* normalizePlainTextToolCallStreamEvents(
           : extractStandaloneCandidate(record.message, false);
         const terminalHasIncompleteCandidate =
           terminalCandidate &&
-          findCandidateCallSequences(terminalCandidate, options.matcher).some(
-            (sequence) => sequence.activeStart !== undefined,
-          );
+          findCandidateCallSequences(
+            terminalCandidate,
+            options.matcher,
+            options.resolveProtectedRanges,
+          ).some((sequence) => sequence.activeStart !== undefined);
         const terminalCandidateProjection = terminalHasIncompleteCandidate
           ? scrubSnapshot(record.message, preserveTerminalContentIndexes, true)
           : undefined;
@@ -1470,7 +1781,12 @@ export async function* normalizePlainTextToolCallStreamEvents(
           yield { ...record, reason: "toolUse", message: normalized.message };
         } else if (normalized?.kind === "scrubbed") {
           if (pending?.kind === "candidate") {
-            const classification = classifyPending(pending, options.matcher, true);
+            const classification = classifyPending(
+              pending,
+              options.matcher,
+              options.resolveProtectedRanges,
+              true,
+            );
             if (classification.kind === "stripped" && classification.text) {
               const template = projectEventIndex(pending.template, normalized);
               if (template) {
@@ -1491,7 +1807,12 @@ export async function* normalizePlainTextToolCallStreamEvents(
         } else {
           let message = record.message;
           if (pending?.kind === "candidate") {
-            const classification = classifyPending(pending, options.matcher, true);
+            const classification = classifyPending(
+              pending,
+              options.matcher,
+              options.resolveProtectedRanges,
+              true,
+            );
             if (classification.kind === "false-positive") {
               yield* replayFalsePositiveCandidate(pending);
             } else {
@@ -1510,6 +1831,16 @@ export async function* normalizePlainTextToolCallStreamEvents(
         forceScrubTerminal = false;
         heldTextStarts.clear();
         emittedTextUnits.clear();
+        protectionChunks.length = 0;
+        protectionContextLength = 0;
+        protectionContextOverflow = false;
+        protectionBlockContentIndex = undefined;
+        protectionBlockStart = 0;
+        // Carried block state belongs to the completion that just ended. Without this a
+        // following completion would start inside its fence while the materialized
+        // context is empty, and the fast path would call its first line protected.
+        protectionScan = createProtectionScanState();
+        protectionScanAtBlockStart = createProtectionScanState();
         if (options.stopAfterDone) {
           return;
         }
@@ -1520,7 +1851,8 @@ export async function* normalizePlainTextToolCallStreamEvents(
         const knownCandidate =
           pending?.kind === "suppressing" ||
           (pending?.kind === "candidate" &&
-            classifyPending(pending, options.matcher, true).kind !== "false-positive");
+            classifyPending(pending, options.matcher, options.resolveProtectedRanges, true).kind !==
+              "false-positive");
         if (pending?.kind === "candidate" && !knownCandidate) {
           yield* replayFalsePositiveCandidate(pending);
         }
@@ -1573,9 +1905,19 @@ export async function* normalizePlainTextToolCallStreamEvents(
         }
         queuePendingEvent(pending, record);
         if (pendingQueueOverCap(pending)) {
-          const classification = classifyPending(pending, options.matcher);
+          const classification = classifyPending(
+            pending,
+            options.matcher,
+            options.resolveProtectedRanges,
+          );
           if (classification.kind === "false-positive") {
             yield* replayFalsePositiveCandidate(pending);
+            // Replayed text becomes ordinary visible text going forward, same as the
+            // false-positive branch in the main delta loop above -- without this, the
+            // carried fence-state scan silently falls behind what was actually streamed,
+            // and a later candidate inside a fence this replay opened would wrongly
+            // report unprotected.
+            advanceProtectionContext(pending.buffer);
             pending = undefined;
             continue;
           }
@@ -1606,7 +1948,12 @@ export async function* normalizePlainTextToolCallStreamEvents(
     }
 
     if (pending?.kind === "candidate") {
-      const classification = classifyPending(pending, options.matcher, true);
+      const classification = classifyPending(
+        pending,
+        options.matcher,
+        options.resolveProtectedRanges,
+        true,
+      );
       if (classification.kind === "false-positive") {
         yield* replayFalsePositiveCandidate(pending);
       } else {
@@ -1620,7 +1967,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
     }
   }
   for await (const event of normalizeEvents()) {
-    const record = asRecord(event);
+    const record = asOptionalObjectRecord(event);
     if (record?.type === "text_delta" && typeof record.delta === "string") {
       const key = eventKey(record);
       const previous = emittedTextUnits.get(key) ?? 0;

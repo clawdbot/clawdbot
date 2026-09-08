@@ -9,15 +9,20 @@ import {
   buildBootstrapInjectionStats,
   analyzeBootstrapBudget,
 } from "../agents/bootstrap-budget.js";
-import { resolveBootstrapContextForRun } from "../agents/bootstrap-files.js";
+import { resolveBootstrapContextForDiagnostics } from "../agents/bootstrap-files-diagnostics.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "../agents/embedded-agent-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
+// Every warning uses the same locale; silent checks never need a formatter.
+let integerFormatter: Intl.NumberFormat | undefined;
+
 function formatInt(value: number): string {
-  return new Intl.NumberFormat("en-US").format(Math.max(0, Math.floor(value)));
+  return (integerFormatter ??= new Intl.NumberFormat("en-US")).format(
+    Math.max(0, Math.floor(value)),
+  );
 }
 
 function formatPercent(numerator: number, denominator: number): string {
@@ -51,7 +56,7 @@ export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
   for (const { agentId, workspaceDir } of workspaces) {
     const bootstrapMaxChars = resolveBootstrapMaxChars(cfg, agentId);
     const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(cfg, agentId);
-    const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
+    const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForDiagnostics({
       workspaceDir,
       config: cfg,
       agentId,

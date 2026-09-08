@@ -1,15 +1,18 @@
 import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelProgressDraftConfig } from "openclaw/plugin-sdk/channel-outbound";
+import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolveSlackReplyRenderPlan } from "../../reply-blocks.js";
+import { prepareSlackReply, type PreparedSlackReply } from "../../reply-blocks.js";
 import type { SlackMessageEvent } from "../../types.js";
 import { readSlackReplyBlocks, resolveSlackThreadTs } from "../replies.js";
 import { resolveSlackTimestampMs } from "./timestamp.js";
 import type { PreparedSlackMessage } from "./types.js";
+
+type SlackProgressConfigEntry = Pick<SlackAccountConfig, "streaming"> | null | undefined;
 
 function resolveSlackMessageTimestampMs(message: SlackMessageEvent): number | undefined {
   const ts = message.event_ts ?? message.ts;
@@ -60,19 +63,6 @@ export function isSlackStreamingEnabled(params: {
   return false;
 }
 
-export function shouldEnableSlackPreviewStreaming(params: {
-  mode: "off" | "partial" | "block" | "progress";
-}): boolean {
-  return params.mode !== "off";
-}
-
-export function shouldInitializeSlackDraftStream(params: {
-  previewStreamingEnabled: boolean;
-  useStreaming: boolean;
-}): boolean {
-  return params.previewStreamingEnabled && !params.useStreaming;
-}
-
 export function resolveSlackDisableBlockStreaming(params: {
   useStreaming: boolean;
   shouldUseDraftStream: boolean;
@@ -97,20 +87,29 @@ export function resolveExplicitSlackProgressTitle(
   return trimmed && trimmed.toLowerCase() !== "auto" ? trimmed : undefined;
 }
 
-export function resolveSlackNativeProgressTaskCards(
-  entry: Parameters<typeof resolveChannelProgressDraftConfig>[0],
-): boolean {
-  const streaming = entry?.streaming;
-  if (!streaming || typeof streaming !== "object" || Array.isArray(streaming)) {
+export function resolveSlackProgressStyle(entry: SlackProgressConfigEntry): "card" | "compact" {
+  // DO NOT REMOVE OR CHANGE THE COMPACT STYLE WITHOUT APPROVAL FROM SJF OR PASHPASHPASH.
+  const progress = entry?.streaming?.progress;
+  return progress?.style ?? (progress?.toolProgress === false ? "compact" : "card");
+}
+
+// Slack's native agent card is the default progress surface; operators opt out
+// with an explicit `false`, which falls back to the Block Kit progress card.
+export function resolveSlackNativeProgressTaskCards(entry: SlackProgressConfigEntry): boolean {
+  // THIS BEHAVIOR IS INTENTIONAL AND MUST NOT BE CASUALLY ADJUSTED.
+  // DO NOT CHANGE THIS WITHOUT APPROVAL FROM SJF OR PASHPASHPASH.
+  if (resolveSlackProgressStyle(entry) === "compact") {
     return false;
   }
+  const streaming = entry?.streaming;
+  if (!streaming || typeof streaming !== "object" || Array.isArray(streaming)) {
+    return true;
+  }
   const progressConfig = (streaming as Record<string, unknown>).progress;
-  return (
-    Boolean(progressConfig) &&
-    typeof progressConfig === "object" &&
-    !Array.isArray(progressConfig) &&
-    (progressConfig as { nativeTaskCards?: unknown }).nativeTaskCards === true
-  );
+  if (!progressConfig || typeof progressConfig !== "object" || Array.isArray(progressConfig)) {
+    return true;
+  }
+  return (progressConfig as { nativeTaskCards?: unknown }).nativeTaskCards !== false;
 }
 
 export function resolveSlackStreamingThreadHint(params: {
@@ -148,14 +147,14 @@ function getSlackStreamRecipientTeamCache(client: object): Map<string, string> {
   return cache;
 }
 
-function buildSlackEventDeliveryKey(params: SlackEventDeliveryAttempt): string | null {
+export function buildSlackEventDeliveryKey(
+  params: SlackEventDeliveryAttempt,
+  preparedReply: PreparedSlackReply = prepareSlackReply(params.payload),
+): string | null {
   const reply = resolveSendableOutboundReplyParts(params.payload, {
     text: params.textOverride,
   });
-  const renderPlan = resolveSlackReplyRenderPlan(
-    params.payload,
-    params.textOverride ?? params.payload.text,
-  );
+  const renderPlan = preparedReply.resolvePreview(params.textOverride);
   const plannedBlocks =
     renderPlan.mode === "single" ? renderPlan.blocks : renderPlan.blockPart?.blocks;
   const slackBlocks = readSlackReplyBlocks(params.payload) ?? plannedBlocks;
@@ -218,12 +217,10 @@ function rememberSlackStreamRecipientTeam(params: {
 export function createSlackEventDeliveryTracker() {
   const deliveredKeys = new Set<string>();
   return {
-    hasDelivered(params: SlackEventDeliveryAttempt) {
-      const key = buildSlackEventDeliveryKey(params);
+    hasDelivered(key: string | null) {
       return key ? deliveredKeys.has(key) : false;
     },
-    markDelivered(params: SlackEventDeliveryAttempt) {
-      const key = buildSlackEventDeliveryKey(params);
+    markDelivered(key: string | null) {
       if (key) {
         deliveredKeys.add(key);
       }

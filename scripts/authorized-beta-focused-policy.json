@@ -1,0 +1,77 @@
+{
+  "schema": "openclaw.authorized-beta-focused-policy.v1",
+  "mode": "authorized-beta-focused-v1",
+  "releaseTag": "v2026.8.1-beta.3",
+  "releaseVersion": "2026.8.1-beta.3",
+  "baseCandidateSha": "3203a6f7f8d79644fde2b4f091a694f4c1698538",
+  "candidateSha": "3fbe94065c2b94f4c08acb6742a69938bf408d94",
+  "reviewedHeadSha": "e347223a5858bda5907acda858404e5f7a4c3720",
+  "candidateTreeSha": "71fb83bcab002be3da4057e7cffacf77d4cdbd2d",
+  "baseTreeSha": "10d1f3ab0ff52383c025c5846427e0dd5d14598a",
+  "packageProjectionSha256": "d1d8f60b8a14aeb567a0d5215a6b0265c74a07ebea04b288e43c31cba473bbca",
+  "eligibilityPlanDigest": "sha256:e05226cfd77716b262882b3e2525037a506cd8b6af2affa0a876499074b1671b",
+  "historicalToolingSha": "eed27fdb88c0c60cb79c5b159a0284bd519271c2",
+  "historicalToolingRef": "refs/tags/release-publish/eed27fdb88c0-1787493831",
+  "historicalFrv": {
+    "runId": "32644377679",
+    "runAttempt": 1,
+    "workflowPath": ".github/workflows/full-release-validation.yml",
+    "workflowRef": "release-ci/eed27fdb88c0-1787493942617",
+    "targetSha": "3203a6f7f8d79644fde2b4f091a694f4c1698538",
+    "ciRunId": "32644407381",
+    "ciFailedJobId": "97206458686",
+    "ciAggregateJobId": "97216945772",
+    "pluginRunId": "32645134710",
+    "pluginFailedJobId": "97208293666",
+    "pluginAggregateJobId": "97210400113",
+    "releaseChecksRunId": "32645133620",
+    "releaseChecksVerifierJobId": "97211299203",
+    "performanceRunId": "32644407718",
+    "performanceFailedJobId": "97206336416"
+  },
+  "focusedProof": {
+    "ciRunId": "32664685168",
+    "ciTargetLogJobId": "97256163016",
+    "ciSuccessJobId": "97256296219",
+    "pluginRunId": "32664686635",
+    "pluginTargetLogJobId": "97256164326",
+    "pluginSuccessJobId": "97256329353"
+  },
+  "changedPaths": [
+    {
+      "path": "extensions/slack/src/monitor.test-helpers.ts",
+      "status": "M",
+      "added": 12,
+      "deleted": 18
+    },
+    {
+      "path": "extensions/slack/src/monitor/provider.auth-test-token.test.ts",
+      "status": "M",
+      "added": 10,
+      "deleted": 569
+    },
+    {
+      "path": "extensions/slack/src/monitor/provider.event-identity-recovery.test.ts",
+      "status": "D",
+      "added": 0,
+      "deleted": 155
+    },
+    {
+      "path": "extensions/slack/src/monitor/provider.identity.test.ts",
+      "status": "A",
+      "added": 658,
+      "deleted": 0
+    }
+  ],
+  "inventory": {
+    "npmCount": 93,
+    "npmNamesSha256": "778eb6aeb324c02942e17755557ff9d5055376fb4d39096a60022f0ae75d67f3",
+    "clawHubCount": 89,
+    "clawHubNamesSha256": "1b161a4fde3c003e23db306d4a86908086caac1cd33e75feeaf27474366c1c2b",
+    "trustedPublisherCount": 75,
+    "trustedPublisherNamesSha256": "4266416f20fe5c8b7a4ce732121a2206fc8cfa6af25deae0aec70d552ceb5df8",
+    "bootstrapCount": 14,
+    "bootstrapNamesSha256": "83c79c6099d12dc2ebb58e2fc5ca8e078776dfa21b50dee741bac6aed5526eef",
+    "missingTrustedPublisherCount": 0
+  }
+}

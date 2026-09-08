@@ -113,9 +113,9 @@ Gateway startup uses the same effective port and bind when it seeds local Contro
 | `gateway.reload.mode` | Behavior                                   |
 | --------------------- | ------------------------------------------ |
 | `off`                 | No config reload                           |
-| `hot`                 | Apply only hot-safe changes                |
-| `restart`             | Restart on reload-required changes         |
 | `hybrid` (default)    | Hot-apply when safe, restart when required |
+
+The earlier `hot` and `restart` modes are retired; [`openclaw doctor --fix`](/cli/doctor) maps both to `hybrid`.
 
 ## Operator command set
 
@@ -187,6 +187,12 @@ See: [Remote Gateway](/gateway/remote), [Authentication](/gateway/authentication
 
 ## Supervision and service lifecycle
 
+Native service-control commands receive only the operating-system environment
+needed for executable lookup, account identity, locale, and service-manager
+routing. They do not inherit application credentials or arbitrary shell
+variables. The Gateway payload and its installed service definition retain
+their separately configured environments.
+
 Use supervised runs for production-like reliability.
 
 <Tabs>
@@ -251,11 +257,11 @@ ExecStart=/usr/local/bin/openclaw gateway --port 18789
 Restart=always
 RestartSec=5
 RestartPreventExitStatus=78
-TimeoutStopSec=30
+TimeoutStopSec=330
 TimeoutStartSec=30
 SuccessExitStatus=0 143
 OOMPolicy=continue
-KillMode=control-group
+KillMode=mixed
 
 [Install]
 WantedBy=default.target

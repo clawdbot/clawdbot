@@ -1,23 +1,55 @@
-import { lstat, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  lutimes,
+  mkdir,
+  mkdtemp,
+  opendir,
+  realpath,
+  rm,
+  rmdir,
+  writeFile,
+} from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isCanonicalTerminalUploadBase64,
   MAX_TERMINAL_UPLOAD_BASE64_LENGTH,
   MAX_TERMINAL_UPLOAD_BYTES,
+  TERMINAL_UPLOAD_RETENTION_MS,
   terminalUploadDecodedSize,
 } from "../../packages/gateway-protocol/src/schema/terminal-constants.js";
 import { logWarn } from "../logger.js";
+import { BoundedSerialQueue } from "../shared/bounded-serial-queue.js";
+import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import { hasErrnoCode } from "./errno.js";
+import { createFileLockManager } from "./file-lock-manager.js";
+import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
+import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
 const TERMINAL_UPLOAD_PREFIX = "openclaw-terminal-upload-";
-const TERMINAL_UPLOAD_RETENTION_MS = 24 * 60 * 60 * 1000;
 const TERMINAL_UPLOAD_CLEANUP_RETRY_MS = 60 * 60 * 1000;
+const MAX_RETAINED_BYTES = 256 * 1024 * 1024;
+const MAX_RETAINED_DIRECTORIES = 64;
 const MAX_STAGED_NAME_BYTES = 180;
-const PORTABLE_NAME_FORBIDDEN = new Set(["<", ">", ":", '"', "/", "\\", "|", "?", "*", "%", "!"]);
+const PORTABLE_NAME_FORBIDDEN = new RegExp(String.raw`[\u0000-\u001f\u007f<>:"/\\|?*%!]`, "g");
 const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/iu;
-const cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const cleanupRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>();
-let defaultCleanupPromise: Promise<void> | undefined;
+const uploadLocks = createFileLockManager("openclaw.terminal-upload");
+const uploadQueue = new BoundedSerialQueue({
+  maxPendingCount: MAX_RETAINED_DIRECTORIES,
+  maxPendingWeight: Math.ceil(MAX_RETAINED_BYTES / 3) * 4,
+});
+
+type CleanupState = {
+  retentionMs: number;
+  // One deadline per observed upload, including legacy inventories above the admission limit.
+  deadlines: Map<string, { dev: bigint; ino: bigint; expiresAt: number }>;
+  timer?: ReturnType<typeof setTimeout>;
+  nextAt?: number;
+};
+
+const cleanupRoots = new Map<string, CleanupState>();
+const cleanupRecoveries = new Map<string, Promise<void>>();
 
 type TerminalUploadRootOptions = {
   platform?: NodeJS.Platform;
@@ -58,13 +90,8 @@ function truncateUtf8(value: string, maxBytes: number): string {
 
 function sanitizeTerminalUploadName(name: string): string {
   const basename = path.posix.basename(name.replaceAll("\\", "/"));
-  const cleaned = Array.from(basename, (char) => {
-    const codePoint = char.codePointAt(0) ?? 0;
-    return codePoint <= 0x1f || codePoint === 0x7f || PORTABLE_NAME_FORBIDDEN.has(char)
-      ? "_"
-      : char;
-  })
-    .join("")
+  const cleaned = basename
+    .replace(PORTABLE_NAME_FORBIDDEN, "_")
     .trim()
     .replace(/[. ]+$/u, "");
   const portable = WINDOWS_RESERVED_NAME.test(cleaned) ? `_${cleaned}` : cleaned;
@@ -72,7 +99,7 @@ function sanitizeTerminalUploadName(name: string): string {
   return truncateUtf8(safe, MAX_STAGED_NAME_BYTES) || "upload";
 }
 
-function decodeTerminalUpload(contentBase64: string): Buffer {
+function validateTerminalUpload(contentBase64: string): number {
   if (
     contentBase64.length > MAX_TERMINAL_UPLOAD_BASE64_LENGTH ||
     terminalUploadDecodedSize(contentBase64) > MAX_TERMINAL_UPLOAD_BYTES
@@ -82,117 +109,246 @@ function decodeTerminalUpload(contentBase64: string): Buffer {
   if (!isCanonicalTerminalUploadBase64(contentBase64)) {
     throw new Error("invalid terminal upload encoding");
   }
-  const bytes = Buffer.from(contentBase64, "base64");
-  if (bytes.length > MAX_TERMINAL_UPLOAD_BYTES) {
-    throw new Error(`terminal upload exceeds ${MAX_TERMINAL_UPLOAD_BYTES} bytes`);
-  }
-  if (bytes.toString("base64") !== contentBase64) {
-    throw new Error("invalid terminal upload encoding");
-  }
-  return bytes;
+  return terminalUploadDecodedSize(contentBase64);
 }
 
-async function removeTerminalUploadDirectory(directory: string): Promise<void> {
+function stagingLimitError(): Error {
+  return new Error(
+    "terminal upload staging limit reached (256 MiB or 64 files). " +
+      "Move or remove staged files, then retry, or wait for the 24-hour cleanup.",
+  );
+}
+
+function cleanupState(root: string, retentionMs?: number): CleanupState {
+  let state = cleanupRoots.get(root);
+  if (!state) {
+    state = { retentionMs: retentionMs ?? TERMINAL_UPLOAD_RETENTION_MS, deadlines: new Map() };
+    cleanupRoots.set(root, state);
+  } else if (retentionMs !== undefined) {
+    state.retentionMs = retentionMs;
+  }
+  return state;
+}
+
+function scheduleCleanup(root: string, state: CleanupState, at: number): void {
+  if (state.timer && state.nextAt !== undefined && state.nextAt <= at) {
+    return;
+  }
+  if (state.timer) {
+    clearTimeout(state.timer);
+  }
+  state.nextAt = at;
+  state.timer = setTimeout(
+    () => {
+      state.timer = undefined;
+      state.nextAt = undefined;
+      void ensureTerminalUploadCleanup({ tempRoot: root, retentionMs: state.retentionMs });
+    },
+    Math.max(0, at - Date.now()),
+  );
+  state.timer.unref?.();
+}
+
+async function withUploadLock<T>(
+  root: string,
+  run: (assertHeld: () => Promise<void>) => Promise<T>,
+): Promise<T> {
+  const uid = typeof process.getuid === "function" ? process.getuid() : "user";
+  const privateRoot = resolvePreferredOpenClawTmpDir({
+    preferredDir: path.join(root, `.openclaw-terminal-staging-${uid}`),
+    tmpdir: () => root,
+  });
+  const lockDirectory = path.join(privateRoot, "terminal-upload-lock");
+  await mkdir(lockDirectory, { recursive: true, mode: 0o700 });
+  const staleOwner = ({ payload }: { payload: unknown }) =>
+    isLockOwnerDefinitelyStale({ payload: asNullableRecord(payload) });
+  const lock = await uploadLocks
+    .acquire(path.join(lockDirectory, "admission"), {
+      retry: { retries: 40, factor: 1.2, minTimeout: 10, maxTimeout: 100 },
+      staleRecovery: "remove-if-unchanged",
+      payload: () => ({
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        starttime: getFileLockProcessStartTime(process.pid),
+      }),
+      shouldReclaim: staleOwner,
+      shouldRemoveStaleLock: staleOwner,
+    })
+    .catch((error: unknown) => {
+      if (hasErrnoCode(error, "file_lock_timeout") || hasErrnoCode(error, "file_lock_stale")) {
+        throw new Error(
+          "terminal upload staging is busy; retry after other uploads finish. " +
+            "If it stays blocked after a crash, stop all Gateway and node-host processes using " +
+            `this staging directory, remove the lock directory ${lockDirectory}, then restart them.`,
+          { cause: error },
+        );
+      }
+      throw error;
+    });
+  try {
+    return await run(async () => {
+      if (!(await lock.verifyStillHeld())) {
+        throw new Error("terminal upload staging ownership changed; retry the upload");
+      }
+    });
+  } finally {
+    await lock.release();
+  }
+}
+
+async function removeTerminalUploadDirectory(directory: string): Promise<boolean> {
   try {
     await rm(directory, { recursive: true, force: true });
+    return true;
   } catch (error) {
     logWarn(`terminal-upload: cleanup failed; retrying: ${String(error)}`);
-    scheduleTerminalUploadCleanup(directory, TERMINAL_UPLOAD_CLEANUP_RETRY_MS);
+    return false;
   }
 }
 
-function scheduleTerminalUploadCleanup(directory: string, afterMs: number): void {
-  if (cleanupTimers.has(directory)) {
-    return;
-  }
-  const timer = setTimeout(
-    () => {
-      cleanupTimers.delete(directory);
-      void removeTerminalUploadDirectory(directory);
-    },
-    Math.max(0, afterMs),
-  );
-  cleanupTimers.set(directory, timer);
-  timer.unref?.();
-}
-
-/** Restores cleanup timers for staged uploads left by a previous process. */
-async function recoverTerminalUploadCleanup(options?: {
-  tempRoot?: string;
-  retentionMs?: number;
-  nowMs?: number;
-}): Promise<void> {
-  const tempRoot = options?.tempRoot ?? resolveTerminalUploadRoot();
-  const retentionMs = options?.retentionMs ?? TERMINAL_UPLOAD_RETENTION_MS;
-  const nowMs = options?.nowMs ?? Date.now();
-  let entries;
-  try {
-    entries = await readdir(tempRoot, { withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      logWarn(`terminal-upload: recovery scan failed: ${String(error)}`);
+async function readUploadBytes(
+  directory: string,
+  remaining: number,
+): Promise<{ bytes: number; empty: boolean }> {
+  let bytes = 0;
+  let empty = true;
+  const entries = await opendir(directory);
+  for await (const entry of entries) {
+    empty = false;
+    if (!entry.isFile() && !entry.isDirectory()) {
+      continue;
+    }
+    const child = path.join(directory, entry.name);
+    let stats;
+    try {
+      stats = await lstat(child);
+    } catch (error) {
+      if (hasErrnoCode(error, "ENOENT")) {
+        continue;
+      }
       throw error;
     }
-    return;
+    if (stats.isFile()) {
+      bytes += stats.size;
+    } else if (stats.isDirectory()) {
+      bytes += (await readUploadBytes(child, remaining - bytes)).bytes;
+    }
+    if (bytes > remaining) {
+      break;
+    }
   }
-  await Promise.all(
-    entries
-      .filter((entry) => entry.isDirectory() && entry.name.startsWith(TERMINAL_UPLOAD_PREFIX))
-      .map(async (entry) => {
-        const directory = path.join(tempRoot, entry.name);
-        try {
-          const stats = await lstat(directory);
-          if (!stats.isDirectory()) {
-            return;
-          }
-          if (typeof process.getuid === "function" && stats.uid !== process.getuid()) {
-            return;
-          }
-          const remainingMs = retentionMs - Math.max(0, nowMs - stats.mtimeMs);
-          if (remainingMs <= 0) {
-            await removeTerminalUploadDirectory(directory);
-          } else {
-            scheduleTerminalUploadCleanup(directory, remainingMs);
-          }
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-            logWarn(`terminal-upload: recovery failed: ${String(error)}`);
-            throw error;
-          }
+  return { bytes, empty };
+}
+
+/** Disk is authoritative across processes, restarts, and files moved by an operator. */
+async function scanUploads(
+  root: string,
+  state: CleanupState,
+  assertHeld: () => Promise<void>,
+  options: { nowMs?: number; incomingBytes?: number } = {},
+): Promise<{ bytes: number; directories: number }> {
+  const nowMs = options.nowMs ?? Date.now();
+  const unseen = new Set(state.deadlines.keys());
+  let bytes = 0;
+  let directories = 0;
+  let nextAt = Infinity;
+  try {
+    const entries = await opendir(root);
+    for await (const entry of entries) {
+      if (!entry.isDirectory() || !entry.name.startsWith(TERMINAL_UPLOAD_PREFIX)) {
+        continue;
+      }
+      const directory = path.join(root, entry.name);
+      let stats;
+      try {
+        stats = await lstat(directory, { bigint: true });
+      } catch (error) {
+        if (hasErrnoCode(error, "ENOENT")) {
+          continue;
         }
-      }),
-  );
-}
-
-function cleanupRecoveryRoot(options?: { tempRoot?: string }): string {
-  return options?.tempRoot ?? resolveTerminalUploadRoot();
-}
-
-function clearTerminalUploadCleanupRetry(tempRoot: string): void {
-  const timer = cleanupRecoveryTimers.get(tempRoot);
-  if (!timer) {
-    return;
+        throw error;
+      }
+      if (
+        !stats.isDirectory() ||
+        (typeof process.getuid === "function" && stats.uid !== BigInt(process.getuid()))
+      ) {
+        continue;
+      }
+      unseen.delete(directory);
+      let deadline = state.deadlines.get(directory);
+      if (!deadline || deadline.dev !== stats.dev || deadline.ino !== stats.ino) {
+        // Keep fractional milliseconds so recovery cannot expire an upload early.
+        const mtimeMs =
+          Number(stats.mtimeNs / 1_000_000n) + Number(stats.mtimeNs % 1_000_000n) / 1_000_000;
+        if (mtimeMs > nowMs) {
+          // Persist the clamp so another process cannot extend a future-dated upload.
+          await assertHeld();
+          await lutimes(directory, stats.atime, new Date(nowMs));
+        }
+        deadline = {
+          dev: stats.dev,
+          ino: stats.ino,
+          expiresAt: Math.min(mtimeMs, nowMs) + state.retentionMs,
+        };
+        state.deadlines.set(directory, deadline);
+      }
+      const { expiresAt } = deadline;
+      if (expiresAt <= nowMs) {
+        await assertHeld();
+        if (await removeTerminalUploadDirectory(directory)) {
+          state.deadlines.delete(directory);
+          continue;
+        }
+      }
+      if (options.incomingBytes !== undefined) {
+        if (bytes + options.incomingBytes <= MAX_RETAINED_BYTES) {
+          const usage = await readUploadBytes(
+            directory,
+            MAX_RETAINED_BYTES - options.incomingBytes - bytes,
+          );
+          if (usage.empty) {
+            // rmdir is atomic and cannot remove a file that appeared after a move.
+            await assertHeld();
+            try {
+              await rmdir(directory);
+              state.deadlines.delete(directory);
+              continue;
+            } catch (error) {
+              if (hasErrnoCode(error, "ENOENT")) {
+                state.deadlines.delete(directory);
+                continue;
+              }
+              throw error;
+            }
+          }
+          bytes += usage.bytes;
+        }
+        directories += 1;
+      }
+      nextAt = Math.min(
+        nextAt,
+        expiresAt <= nowMs ? nowMs + TERMINAL_UPLOAD_CLEANUP_RETRY_MS : expiresAt,
+      );
+    }
+    for (const directory of unseen) {
+      state.deadlines.delete(directory);
+    }
+  } catch (error) {
+    nextAt = Math.min(nextAt, Date.now() + TERMINAL_UPLOAD_CLEANUP_RETRY_MS);
+    throw error;
+  } finally {
+    if (Number.isFinite(nextAt)) {
+      scheduleCleanup(root, state, nextAt);
+    } else {
+      if (state.timer) {
+        clearTimeout(state.timer);
+      }
+      state.timer = undefined;
+      state.nextAt = undefined;
+      cleanupRoots.delete(root);
+    }
   }
-  clearTimeout(timer);
-  cleanupRecoveryTimers.delete(tempRoot);
-}
-
-function scheduleTerminalUploadCleanupRetry(options?: {
-  tempRoot?: string;
-  retentionMs?: number;
-}): void {
-  const tempRoot = cleanupRecoveryRoot(options);
-  if (cleanupRecoveryTimers.has(tempRoot)) {
-    return;
-  }
-  const timer = setTimeout(() => {
-    cleanupRecoveryTimers.delete(tempRoot);
-    void ensureTerminalUploadCleanup(
-      options ? { tempRoot, retentionMs: options.retentionMs } : undefined,
-    );
-  }, TERMINAL_UPLOAD_CLEANUP_RETRY_MS);
-  cleanupRecoveryTimers.set(tempRoot, timer);
-  timer.unref?.();
+  return { bytes, directories };
 }
 
 async function runTerminalUploadCleanupRecovery(options?: {
@@ -200,33 +356,42 @@ async function runTerminalUploadCleanupRecovery(options?: {
   retentionMs?: number;
   nowMs?: number;
 }): Promise<void> {
-  const tempRoot = cleanupRecoveryRoot(options);
+  const requestedRoot = options?.tempRoot ?? resolveTerminalUploadRoot();
+  let root = path.resolve(requestedRoot);
   try {
-    await recoverTerminalUploadCleanup(options);
-    clearTerminalUploadCleanupRetry(tempRoot);
-  } catch {
-    scheduleTerminalUploadCleanupRetry(options);
+    root = await realpath(root);
+    await withUploadLock(root, async (assertHeld) => {
+      await scanUploads(root, cleanupState(root, options?.retentionMs), assertHeld, options);
+    });
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return;
+    }
+    logWarn(`terminal-upload: recovery failed; retrying: ${String(error)}`);
+    scheduleCleanup(
+      root,
+      cleanupState(root, options?.retentionMs),
+      Date.now() + TERMINAL_UPLOAD_CLEANUP_RETRY_MS,
+    );
   }
 }
 
-/** Starts one process-wide recovery scan and retries transient scan failures. */
+/** Recovers existing uploads with a streaming scan and one cleanup timer per root. */
 export function ensureTerminalUploadCleanup(options?: {
   tempRoot?: string;
   retentionMs?: number;
   nowMs?: number;
 }): Promise<void> {
-  if (options) {
-    return runTerminalUploadCleanupRecovery(options);
+  const root = path.resolve(options?.tempRoot ?? resolveTerminalUploadRoot());
+  const existing = cleanupRecoveries.get(root);
+  if (existing) {
+    return existing;
   }
-  if (defaultCleanupPromise) {
-    return defaultCleanupPromise;
-  }
-  defaultCleanupPromise = runTerminalUploadCleanupRecovery().finally(() => {
-    if (cleanupRecoveryTimers.has(cleanupRecoveryRoot())) {
-      defaultCleanupPromise = undefined;
-    }
+  const recovery = runTerminalUploadCleanupRecovery(options).finally(() => {
+    cleanupRecoveries.delete(root);
   });
-  return defaultCleanupPromise;
+  cleanupRecoveries.set(root, recovery);
+  return recovery;
 }
 
 /** Stages one browser-selected file in a private, expiring temporary directory. */
@@ -234,24 +399,59 @@ export async function stageTerminalUpload(
   file: TerminalUploadFile,
   options?: TerminalUploadRootOptions & { tempRoot?: string; cleanupAfterMs?: number },
 ): Promise<TerminalUploadResult> {
-  if (!options?.tempRoot) {
-    void ensureTerminalUploadCleanup();
+  const { name, contentBase64 } = file;
+  const size = validateTerminalUpload(contentBase64);
+  const admitted = uploadQueue.enqueue(
+    async () => {
+      const tempRoot = options?.tempRoot ?? resolveTerminalUploadRoot(options);
+      if ((options?.platform ?? process.platform) === "win32" && !options?.tempRoot) {
+        // The user profile supplies the restrictive DACL, including for the root lock.
+        await mkdir(tempRoot, { recursive: true, mode: 0o700 });
+      }
+      const root = await realpath(tempRoot);
+      return await withUploadLock(root, async (assertHeld) => {
+        const state = cleanupState(root);
+        const retained = await scanUploads(root, state, assertHeld, { incomingBytes: size });
+        if (
+          retained.directories >= MAX_RETAINED_DIRECTORIES ||
+          retained.bytes + size > MAX_RETAINED_BYTES
+        ) {
+          throw stagingLimitError();
+        }
+        await assertHeld();
+        const directory = await mkdtemp(path.join(root, TERMINAL_UPLOAD_PREFIX));
+        const targetPath = path.join(directory, sanitizeTerminalUploadName(name));
+        let identity: { dev: bigint; ino: bigint } | undefined;
+        try {
+          const { dev, ino } = await lstat(directory, { bigint: true });
+          identity = { dev, ino };
+          await assertHeld();
+          await writeFile(targetPath, Buffer.from(contentBase64, "base64"), {
+            flag: "wx",
+            mode: 0o600,
+          });
+          const expiresAt = Date.now() + (options?.cleanupAfterMs ?? TERMINAL_UPLOAD_RETENTION_MS);
+          state.deadlines.set(directory, { ...identity, expiresAt });
+          cleanupRoots.set(root, state);
+          scheduleCleanup(root, state, expiresAt);
+          return { path: targetPath, size };
+        } catch (error) {
+          if (!(await removeTerminalUploadDirectory(directory))) {
+            const retryAt = Date.now() + TERMINAL_UPLOAD_CLEANUP_RETRY_MS;
+            if (identity) {
+              state.deadlines.set(directory, { ...identity, expiresAt: retryAt });
+            }
+            cleanupRoots.set(root, state);
+            scheduleCleanup(root, state, retryAt);
+          }
+          throw error;
+        }
+      });
+    },
+    { weight: contentBase64.length, sealOnOverflow: false },
+  );
+  if (!admitted.accepted) {
+    throw new Error("terminal upload staging is busy; retry after current uploads finish");
   }
-  const bytes = decodeTerminalUpload(file.contentBase64);
-  const platform = options?.platform ?? process.platform;
-  const tempRoot = options?.tempRoot ?? resolveTerminalUploadRoot(options);
-  if (platform === "win32" && !options?.tempRoot) {
-    // The user profile supplies the restrictive DACL; this mode protects POSIX-compatible hosts.
-    await mkdir(tempRoot, { recursive: true, mode: 0o700 });
-  }
-  const directory = await mkdtemp(path.join(tempRoot, TERMINAL_UPLOAD_PREFIX));
-  const targetPath = path.join(directory, sanitizeTerminalUploadName(file.name));
-  try {
-    await writeFile(targetPath, bytes, { flag: "wx", mode: 0o600 });
-  } catch (error) {
-    await removeTerminalUploadDirectory(directory);
-    throw error;
-  }
-  scheduleTerminalUploadCleanup(directory, options?.cleanupAfterMs ?? TERMINAL_UPLOAD_RETENTION_MS);
-  return { path: targetPath, size: bytes.length };
+  return await admitted.completion;
 }

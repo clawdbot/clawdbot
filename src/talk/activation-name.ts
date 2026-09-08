@@ -120,12 +120,10 @@ export function matchRealtimeVoiceActivationName(
     ...leadingActivationNameCandidates(text, maxWords),
     ...trailingActivationNameCandidates(text, maxWords),
   ]
-    .map(
-      (candidate): PreparedEdgeActivationNameCandidate => ({
-        candidate,
-        compact: compactActivationName(candidate.heardName),
-      }),
-    )
+    .map((candidate): PreparedEdgeActivationNameCandidate => ({
+      candidate,
+      compact: compactActivationName(candidate.heardName),
+    }))
     .toSorted((left, right) => right.compact.length - left.compact.length);
 
   for (const { candidate, compact: heardCompact } of candidates) {

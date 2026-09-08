@@ -2,22 +2,16 @@
  * Claude CLI setup migration helpers. They rewrite legacy Claude CLI model refs
  * to Anthropic refs while preserving runtime allowlist entries for CLI execution.
  */
-import {
-  CLAUDE_CLI_PROFILE_ID,
-  type OpenClawConfig,
-  type ProviderAuthResult,
-} from "openclaw/plugin-sdk/provider-auth";
+import type { OpenClawConfig, ProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveClaudeCliAnthropicModelRefs } from "./claude-model-refs.js";
-import type { readClaudeCliCredentialsForSetup } from "./cli-auth-seam.js";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "./cli-shared.js";
 
 type AgentDefaultsModel = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["model"];
 type AgentDefaultsModels = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"];
-type ClaudeCliCredential = NonNullable<ReturnType<typeof readClaudeCliCredentialsForSetup>>;
 
 function toAnthropicModelRef(raw: string): string | null {
   return resolveClaudeCliAnthropicModelRefs(raw)?.rewriteRef ?? null;
@@ -180,47 +174,8 @@ function modelEntryWithClaudeCliRuntime(entry: unknown): Record<string, unknown>
   return base;
 }
 
-function buildClaudeCliAuthProfiles(
-  credential?: ClaudeCliCredential | null,
-): ProviderAuthResult["profiles"] {
-  if (!credential) {
-    return [];
-  }
-  if (credential.type === "oauth") {
-    return [
-      {
-        profileId: CLAUDE_CLI_PROFILE_ID,
-        credential: {
-          type: "oauth",
-          provider: CLAUDE_CLI_BACKEND_ID,
-          access: credential.access,
-          refresh: credential.refresh,
-          expires: credential.expires,
-        },
-      },
-    ];
-  }
-  if (credential.type === "api_key_helper") {
-    return [];
-  }
-  return [
-    {
-      profileId: CLAUDE_CLI_PROFILE_ID,
-      credential: {
-        type: "token",
-        provider: CLAUDE_CLI_BACKEND_ID,
-        token: credential.token,
-        expires: credential.expires,
-      },
-    },
-  ];
-}
-
 /** Build the config migration result for adopting Claude CLI-backed Anthropic defaults. */
-export function buildAnthropicCliMigrationResult(
-  config: OpenClawConfig,
-  credential?: ClaudeCliCredential | null,
-): ProviderAuthResult {
+export function buildAnthropicCliMigrationResult(config: OpenClawConfig): ProviderAuthResult {
   const defaults = config.agents?.defaults;
   const rewrittenModel = rewriteModelSelection(defaults?.model);
   const rewrittenModels = rewriteModelEntryMap(defaults?.models);
@@ -235,7 +190,7 @@ export function buildAnthropicCliMigrationResult(
   const defaultModel = rewrittenModel.primary ?? "anthropic/claude-opus-5";
 
   return {
-    profiles: buildClaudeCliAuthProfiles(credential),
+    profiles: [],
     configPatch: {
       agents: {
         defaults: {

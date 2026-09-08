@@ -2,21 +2,28 @@ import type {
   SessionsCompanionAskResult,
   SessionsCompanionStateResult,
 } from "../../packages/gateway-protocol/src/schema/sessions.js";
+import { resolveSessionAgentId } from "../agents/agent-scope.js";
+import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import {
   createSessionCompanionAskRuntime,
   type SessionCompanionAskDeps,
 } from "./session-companion-ask.js";
 import type { SessionCompanionThread } from "./session-companion-state.js";
+import { sessionObserverScopeKey } from "./session-observer-model.js";
 import { onGatewaySessionReset } from "./session-reset-notifications.js";
+
+type SessionCompanionTarget = { sessionKey: string; agentId: string };
 
 export type SessionCompanionService = {
   ask: (params: {
+    agentId: string;
     sessionKey: string;
     question: string;
     connId: string;
+    signal?: AbortSignal;
   }) => Promise<SessionsCompanionAskResult>;
-  state: (sessionKey: string) => SessionsCompanionStateResult;
-  reset: (sessionKey: string) => void;
+  state: (target: SessionCompanionTarget) => SessionsCompanionStateResult;
+  reset: (target: SessionCompanionTarget) => void;
   dispose: () => void;
 };
 
@@ -41,31 +48,56 @@ export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompa
     isDisposed: () => disposed,
   });
 
-  const reset = (sessionKey: string) => {
-    const key = sessionKey.trim();
-    if (!key) {
+  const reset = (
+    target: SessionCompanionTarget,
+    cancellation: "backing-session-revoked" | "explicit-reset",
+  ) => {
+    const sessionKey = target.sessionKey.trim();
+    const agentId = target.agentId.trim();
+    if (!sessionKey || !agentId) {
       return;
     }
-    askRuntime.cancel(key);
+    const key = sessionObserverScopeKey(sessionKey, agentId);
+    askRuntime.cancel(sessionKey, agentId, cancellation);
     threads.delete(key);
   };
 
   const sweep = () => {
     const cutoff = now() - SESSION_COMPANION_IDLE_TTL_MS;
-    for (const [sessionKey, thread] of threads) {
+    for (const [key, thread] of threads) {
       if (!thread.busy && thread.lastUsedAt <= cutoff) {
-        reset(sessionKey);
+        threads.delete(key);
       }
     }
   };
   const sweepTimer = setIntervalFn(sweep, SESSION_COMPANION_SWEEP_INTERVAL_MS);
   sweepTimer.unref?.();
-  const unsubscribeReset = onGatewaySessionReset(reset);
+  const unsubscribeReset = onGatewaySessionReset((sessionKey, suppliedAgentId) => {
+    let agentId = suppliedAgentId;
+    try {
+      agentId ??= resolveSessionAgentId({ sessionKey, config: deps.getConfig() });
+    } catch {
+      return;
+    }
+    reset({ sessionKey, agentId }, "backing-session-revoked");
+  });
+  const unsubscribeIdentity = onSessionIdentityMutation((mutation) => {
+    if (mutation.kind !== "delete" || !mutation.previous.sessionId) {
+      return;
+    }
+    for (const sessionKey of mutation.previous.sessionKeys) {
+      const key = sessionObserverScopeKey(sessionKey, mutation.agentId);
+      // Replayed deletions must not retire a newer generation under the same scoped key.
+      if (threads.get(key)?.context.sessionId === mutation.previous.sessionId) {
+        reset({ sessionKey, agentId: mutation.agentId }, "backing-session-revoked");
+      }
+    }
+  });
 
   return {
     ask: askRuntime.ask,
-    state(sessionKey) {
-      const key = sessionKey.trim();
+    state(target) {
+      const key = sessionObserverScopeKey(target.sessionKey.trim(), target.agentId.trim());
       const thread = threads.get(key);
       if (!thread) {
         return { exchanges: [] };
@@ -75,7 +107,9 @@ export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompa
         exchanges: thread.exchanges.map(({ question, answer, ts }) => ({ question, answer, ts })),
       };
     },
-    reset,
+    reset(target) {
+      reset(target, "explicit-reset");
+    },
     dispose() {
       if (disposed) {
         return;
@@ -83,6 +117,7 @@ export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompa
       disposed = true;
       clearIntervalFn(sweepTimer);
       unsubscribeReset();
+      unsubscribeIdentity();
       askRuntime.dispose();
       threads.clear();
     },

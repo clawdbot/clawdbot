@@ -1,3 +1,4 @@
+import { resolveThinkingDefaultWithRuntimeCatalogCore } from "../agents/model-thinking-default.js";
 import {
   getPreparedModelCatalogSnapshot,
   loadPreparedModelCatalog,
@@ -14,9 +15,9 @@ export {
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentDir,
-  resolveSessionAgentIds,
   setAgentEffectiveModelPrimary,
 } from "../agents/agent-scope.js";
+export { resolveSessionAgentIds } from "./agent-scope-runtime.js";
 
 export { DEFAULT_PROVIDER } from "../agents/defaults.js";
 // Consumed by the codex plugin's app-server usage surface.
@@ -30,7 +31,7 @@ export {
   resolveIdentityNamePrefix,
 } from "../agents/identity.js";
 
-export { resolveApiKeyForProvider } from "../agents/model-auth.js";
+export { resolveApiKeyForProviderCore as resolveApiKeyForProvider } from "../agents/model-auth.js";
 export { findModelInCatalog, modelSupportsVision } from "../agents/model-catalog.js";
 export type { ModelCatalogEntry } from "../agents/model-catalog.js";
 export { getPreparedModelCatalogSnapshot, loadPreparedModelCatalog };
@@ -41,7 +42,11 @@ type LoadModelCatalogCompatibilityParams = LoadPreparedModelCatalogParams & {
   /** @deprecated Use getPreparedModelCatalogSnapshot for new nonblocking readers. */
   cacheOnly?: boolean;
   /** @deprecated Plugin metadata belongs to the published lifecycle generation. */
-  metadataSnapshot?: PluginMetadataSnapshot;
+  metadataSnapshot?: Omit<PluginMetadataSnapshot, "owners"> & {
+    // Shipped callers may supply owner maps from before normalization policies were prepared.
+    owners: Omit<PluginMetadataSnapshot["owners"], "modelIdNormalizationPolicies"> &
+      Partial<Pick<PluginMetadataSnapshot["owners"], "modelIdNormalizationPolicies">>;
+  };
 };
 
 /** @deprecated Use loadPreparedModelCatalog or getPreparedModelCatalogSnapshot. */
@@ -67,8 +72,26 @@ export {
   parseModelRef,
   resolveAllowedModelRef,
   resolveModelRefFromString,
-  resolveThinkingDefaultWithRuntimeCatalog,
 } from "../agents/model-selection.js";
+
+// Preserve the v2026.7.1-2 callback contract at the SDK boundary; internal
+// owners use loadRuntimeCatalog. Remove only at an approved SDK-breaking boundary.
+export function resolveThinkingDefaultWithRuntimeCatalog(
+  params: Omit<
+    Parameters<typeof resolveThinkingDefaultWithRuntimeCatalogCore>[0],
+    "loadRuntimeCatalog"
+  > & {
+    loadModelCatalog: Parameters<
+      typeof resolveThinkingDefaultWithRuntimeCatalogCore
+    >[0]["loadRuntimeCatalog"];
+  },
+) {
+  const { loadModelCatalog: loadRuntimeCatalog, ...rest } = params;
+  return resolveThinkingDefaultWithRuntimeCatalogCore({
+    ...rest,
+    loadRuntimeCatalog,
+  });
+}
 
 export { EmbeddedBlockChunker } from "../agents/embedded-agent-block-chunker.js";
 export { formatReasoningMessage } from "../agents/embedded-agent-utils.js";
@@ -116,9 +139,9 @@ export type {
 } from "../agents/auth-profiles.js";
 
 export { buildConfiguredModelCatalog } from "../agents/model-selection-shared.js";
-export { extractAssistantText } from "../agents/embedded-agent-utils.js";
+export { extractEmbeddedAssistantText as extractAssistantText } from "../agents/embedded-agent-utils.js";
 export { jsonResult } from "../agents/tools/tool-results.js";
-export { readStringParam } from "../agents/tools/common.js";
+export { readToolStringParam as readStringParam } from "../agents/tools/common.js";
 export {
   resolveAgentConfig,
   resolveAgentDir,

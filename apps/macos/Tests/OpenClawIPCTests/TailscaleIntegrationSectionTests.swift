@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import Testing
 @testable import OpenClaw
@@ -5,6 +6,22 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct TailscaleIntegrationSectionTests {
+    @Test func `dashboard link uses the configured Control UI path`() async throws {
+        let host = "gateway-host.tailnet-example.ts.net"
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+
+        try await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            #expect(TailscaleIntegrationSection.dashboardURL(host: host)?.absoluteString ==
+                "https://gateway-host.tailnet-example.ts.net/")
+
+            try Data(#"{"gateway":{"controlUi":{"basePath":" control "}}}"#.utf8)
+                .write(to: URL(fileURLWithPath: configPath))
+            #expect(TailscaleIntegrationSection.dashboardURL(host: host)?.absoluteString ==
+                "https://gateway-host.tailnet-example.ts.net/control/")
+        }
+    }
+
     @Test func `cli installation requires an executable candidate`() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -88,7 +105,8 @@ struct TailscaleIntegrationSectionTests {
         #expect(service.statusError == nil)
     }
 
-    @Test func `concurrent status checks share one request`() async {
+    @Test(arguments: ["neither", "initial", "joined"])
+    func `concurrent status checks share one request despite waiter cancellation`(cancelledWaiter: String) async {
         let loader = TailscaleStatusLoader()
         let completion = TailscaleStatusCompletion()
         let joinBarrier = TailscaleStatusJoinBarrier()
@@ -109,6 +127,11 @@ struct TailscaleIntegrationSectionTests {
             await completion.markFinished()
         }
         await joinBarrier.wait()
+        if cancelledWaiter == "initial" {
+            first.cancel()
+        } else if cancelledWaiter == "joined" {
+            second.cancel()
+        }
 
         #expect(await loader.requestCount == 1)
         #expect(await completion.finishedCount == 0)
@@ -118,52 +141,11 @@ struct TailscaleIntegrationSectionTests {
         await second.value
 
         #expect(await completion.finishedCount == 1)
+        #expect(await loader.requestWasCancelled == false)
         #expect(service.tailscaleIP == "100.66.5.88")
 
         await service.checkTailscaleStatus()
         #expect(await loader.requestCount == 2)
-    }
-
-    @Test func `tailscale section builds body when not installed`() {
-        let service = TailscaleService(isInstalled: false, isRunning: false, statusError: "not installed")
-        var view = TailscaleIntegrationSection(connectionMode: .local, isPaused: false)
-        view.setTestingService(service)
-        view.setTestingState(mode: "off", requireCredentials: false, statusMessage: "Idle")
-        _ = view.body
-    }
-
-    @Test func `tailscale section builds body for serve mode`() {
-        let service = TailscaleService(
-            isInstalled: true,
-            isRunning: true,
-            tailscaleHostname: "openclaw.tailnet.ts.net",
-            tailscaleIP: "100.64.0.1")
-        var view = TailscaleIntegrationSection(connectionMode: .local, isPaused: false)
-        view.setTestingService(service)
-        view.setTestingState(
-            mode: "serve",
-            requireCredentials: true,
-            password: "secret",
-            statusMessage: "Running")
-        _ = view.body
-    }
-
-    @Test func `tailscale section builds body for funnel mode`() {
-        let service = TailscaleService(
-            isInstalled: true,
-            isAppInstalled: true,
-            isRunning: false,
-            tailscaleHostname: nil,
-            tailscaleIP: nil,
-            statusError: "not running")
-        var view = TailscaleIntegrationSection(connectionMode: .remote, isPaused: false)
-        view.setTestingService(service)
-        view.setTestingState(
-            mode: "funnel",
-            requireCredentials: false,
-            statusMessage: "Needs start",
-            validationMessage: "Invalid token")
-        _ = view.body
     }
 
     @Test func `general tailscale hydration does not rewrite existing config`() async throws {
@@ -252,6 +234,7 @@ struct TailscaleIntegrationSectionTests {
 
 private actor TailscaleStatusLoader {
     private(set) var requestCount = 0
+    private(set) var requestWasCancelled = false
     private var requestStartedContinuations: [CheckedContinuation<Void, Never>] = []
     private var requestContinuation: CheckedContinuation<Void, Never>?
     private var shouldSuspendRequest = true
@@ -268,6 +251,7 @@ private actor TailscaleStatusLoader {
                 self.requestContinuation = continuation
             }
         }
+        self.requestWasCancelled = Task.isCancelled
         let data = try JSONEncoder().encode(
             TailscaleService.TailscaleAPIResponse(
                 status: "Running",

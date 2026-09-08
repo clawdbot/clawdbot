@@ -1,9 +1,9 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 // Operator commands for inspecting and resubmitting failed channel ingress events.
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { createChannelIngressQueue } from "../../channels/message/ingress-queue.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.js";
-import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 
 type ChannelsDeadLettersOptions = {
@@ -18,7 +18,12 @@ function resolveScope(options: ChannelsDeadLettersOptions) {
   if (!channelId) {
     throw new Error("--channel is required.");
   }
-  return { channelId, accountId: options.account?.trim() || "default" };
+  // Only omission selects the default queue; an explicit blank selector must not change scope.
+  const accountId = options.account?.trim() ?? "default";
+  if (!accountId) {
+    throw new Error("--account must not be blank");
+  }
+  return { channelId, accountId };
 }
 
 function parseLimit(value: unknown): number {

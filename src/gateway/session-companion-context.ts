@@ -1,0 +1,241 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { extractStoredAssistantText } from "../agents/tools/chat-history-text.js";
+import { readSessionTranscriptBoundedMessageTailPage } from "../config/sessions/session-accessor.sqlite-active-events.js";
+import { redactToolPayloadText } from "../logging/redact.js";
+import type {
+  SessionCompanionContextMessage,
+  SessionCompanionPreparedContext,
+} from "./session-companion-state.js";
+import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+
+const CONTEXT_MAX_MESSAGES = 40;
+const CONTEXT_MAX_BYTES = 24 * 1024;
+const CONTEXT_MESSAGE_MAX_CHARS = 4000;
+const CONTEXT_READ_MAX_SCANNED_MESSAGES = 4096;
+const CONTEXT_READ_MAX_BYTES = 1024 * 1024;
+const CONTEXT_READ_PAGE_MESSAGES = 128;
+
+type SessionCompanionContextReadResult =
+  | { kind: "ready"; context: SessionCompanionPreparedContext }
+  | { kind: "missing" }
+  | { kind: "unavailable" };
+
+export type SessionCompanionContextReader = {
+  currentSessionId: (params: { agentId: string; sessionKey: string }) => string | undefined;
+  read: (params: {
+    agentId: string;
+    sessionKey: string;
+    signal?: AbortSignal;
+  }) => Promise<SessionCompanionContextReadResult>;
+};
+
+function normalizeContextText(value: string): string {
+  return truncateUtf16Safe(
+    redactToolPayloadText(value).replace(/\s+/gu, " ").trim(),
+    CONTEXT_MESSAGE_MAX_CHARS,
+  );
+}
+
+function extractUserText(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") {
+    return normalizeContextText(content) || undefined;
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const text = content
+    .flatMap((block) => {
+      if (!block || typeof block !== "object" || (block as { type?: unknown }).type !== "text") {
+        return [];
+      }
+      const blockText = (block as { text?: unknown }).text;
+      return typeof blockText === "string" ? [blockText] : [];
+    })
+    .join("\n");
+  return normalizeContextText(text) || undefined;
+}
+
+function readMessageTimestamp(message: unknown): number {
+  if (!message || typeof message !== "object") {
+    return 0;
+  }
+  const value = (message as { timestamp?: unknown }).timestamp;
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+}
+
+function appendContextMessages(
+  events: Array<{ event: unknown }>,
+  messages: SessionCompanionContextMessage[],
+): void {
+  // Keep newest-first context across pages; older discarded rows need no text work.
+  for (
+    let index = events.length - 1;
+    index >= 0 && messages.length < CONTEXT_MAX_MESSAGES;
+    index--
+  ) {
+    const event = events[index]?.event;
+    if (!event || typeof event !== "object") {
+      continue;
+    }
+    const message = (event as { message?: unknown }).message;
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    const role = (message as { role?: unknown }).role;
+    const text =
+      role === "assistant"
+        ? normalizeContextText(extractStoredAssistantText(message) ?? "")
+        : role === "user"
+          ? extractUserText(message)
+          : undefined;
+    if (text && (role === "assistant" || role === "user")) {
+      messages.push({ role, text, ts: readMessageTimestamp(message) });
+    }
+  }
+}
+
+function selectContextMessages(messages: SessionCompanionContextMessage[]) {
+  const selected: SessionCompanionContextMessage[] = [];
+  let bytes = 2;
+  for (const message of messages) {
+    const messageBytes = Buffer.byteLength(JSON.stringify(message), "utf8") + 1;
+    if (bytes + messageBytes > CONTEXT_MAX_BYTES) {
+      break;
+    }
+    selected.push(message);
+    bytes += messageBytes;
+  }
+  return selected.toReversed();
+}
+
+async function readSessionCompanionContext(params: {
+  agentId: string;
+  sessionKey: string;
+  signal?: AbortSignal;
+}): Promise<SessionCompanionContextReadResult> {
+  const loaded = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
+  const sessionId = loaded.entry?.sessionId?.trim();
+  if (!sessionId) {
+    return { kind: "missing" };
+  }
+  try {
+    const scope = {
+      agentId: params.agentId,
+      sessionId,
+      sessionKey: params.sessionKey,
+      storePath: loaded.storePath,
+    };
+    if (params.signal?.aborted) {
+      return { kind: "unavailable" };
+    }
+    let offset = 0;
+    let rawBytes = 0;
+    let scannedMessages = 0;
+    let totalMessages = 0;
+    let stoppedAtOlderByteBoundary = false;
+    let snapshot:
+      | {
+          activeLeafEntryId?: string | null;
+          generation?: string;
+          indexedSeq: number;
+          totalMessages: number;
+        }
+      | undefined;
+    const contextMessages: SessionCompanionContextMessage[] = [];
+    while (
+      contextMessages.length < CONTEXT_MAX_MESSAGES &&
+      scannedMessages < CONTEXT_READ_MAX_SCANNED_MESSAGES
+    ) {
+      const page = readSessionTranscriptBoundedMessageTailPage(scope, {
+        maxBytes: CONTEXT_READ_MAX_BYTES - rawBytes,
+        maxMessages: Math.min(
+          CONTEXT_READ_PAGE_MESSAGES,
+          CONTEXT_READ_MAX_SCANNED_MESSAGES - scannedMessages,
+        ),
+        offset,
+      });
+      if (params.signal?.aborted) {
+        return { kind: "unavailable" };
+      }
+      const pageSnapshot = {
+        activeLeafEntryId: page.activeLeafEntryId,
+        generation: page.snapshot.generation,
+        indexedSeq: page.snapshot.indexedSeq,
+        totalMessages: page.totalMessages,
+      };
+      snapshot ??= pageSnapshot;
+      if (
+        pageSnapshot.activeLeafEntryId !== snapshot.activeLeafEntryId ||
+        pageSnapshot.generation !== snapshot.generation ||
+        pageSnapshot.indexedSeq !== snapshot.indexedSeq ||
+        pageSnapshot.totalMessages !== snapshot.totalMessages
+      ) {
+        return { kind: "unavailable" };
+      }
+      totalMessages = page.totalMessages;
+      const pageIsPartial = page.newestContiguousEventCount !== page.scannedMessages;
+      // Sparse bounded pages may include older rows beyond an oversized gap.
+      // Only the contiguous newest suffix is authoritative companion context.
+      const pageEvents =
+        page.newestContiguousEventCount === page.events.length
+          ? page.events
+          : page.events.slice(page.events.length - page.newestContiguousEventCount);
+      rawBytes += page.serializedBytes;
+      scannedMessages += page.scannedMessages;
+      offset += page.scannedMessages;
+      appendContextMessages(pageEvents, contextMessages);
+      if (pageIsPartial) {
+        if (contextMessages.length === 0) {
+          return { kind: "unavailable" };
+        }
+        stoppedAtOlderByteBoundary = true;
+        break;
+      }
+      if (page.scannedMessages === 0 || offset >= totalMessages) {
+        break;
+      }
+    }
+    if (
+      contextMessages.length < CONTEXT_MAX_MESSAGES &&
+      offset < totalMessages &&
+      !stoppedAtOlderByteBoundary
+    ) {
+      return { kind: "unavailable" };
+    }
+    const fence = readSessionTranscriptBoundedMessageTailPage(scope, {
+      maxBytes: 0,
+      maxMessages: 0,
+      offset: 0,
+    });
+    if (
+      params.signal?.aborted ||
+      !snapshot ||
+      fence.activeLeafEntryId !== snapshot.activeLeafEntryId ||
+      fence.snapshot.generation !== snapshot.generation ||
+      fence.snapshot.indexedSeq !== snapshot.indexedSeq ||
+      fence.totalMessages !== snapshot.totalMessages
+    ) {
+      return { kind: "unavailable" };
+    }
+    return {
+      kind: "ready",
+      context: {
+        empty: totalMessages === 0,
+        messages: selectContextMessages(contextMessages),
+        sessionId,
+      },
+    };
+  } catch {
+    return { kind: "unavailable" };
+  }
+}
+
+export const defaultSessionCompanionContextReader: SessionCompanionContextReader = {
+  currentSessionId: ({ agentId, sessionKey }) =>
+    loadGatewaySessionEntryReadOnly(sessionKey, { agentId }).entry?.sessionId?.trim() || undefined,
+  read: readSessionCompanionContext,
+};

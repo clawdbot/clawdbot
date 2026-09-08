@@ -1,7 +1,11 @@
 // Model picker flow lets users select provider models for config defaults.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveAgentConfig, resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import {
+  resolveAgentConfig,
+  resolveAgentEffectiveModelPrimary,
+  resolveDefaultAgentDir,
+} from "../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import {
@@ -36,6 +40,7 @@ import {
   normalizeAgentModelRefForConfig,
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
+  toAgentModelListLike,
 } from "../config/model-input.js";
 import { computeModelPolicyAllowlist } from "../config/model-policy-allowlist-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -139,7 +144,10 @@ function resolveConfiguredModelKeys(cfg: OpenClawConfig): string[] {
 }
 
 function resolveModelPickerConfig(cfg: OpenClawConfig, agentId?: string): OpenClawConfig {
-  const agent = agentId ? resolveAgentConfig(cfg, agentId) : undefined;
+  if (!agentId) {
+    return cfg;
+  }
+  const agent = resolveAgentConfig(cfg, agentId);
   if (agent?.model === undefined && agent?.models === undefined) {
     return cfg;
   }
@@ -149,7 +157,14 @@ function resolveModelPickerConfig(cfg: OpenClawConfig, agentId?: string): OpenCl
       ...cfg.agents,
       defaults: {
         ...cfg.agents?.defaults,
-        ...(agent.model !== undefined ? { model: agent.model } : {}),
+        ...(agent.model !== undefined
+          ? {
+              model: {
+                ...toAgentModelListLike(agent.model),
+                primary: resolveAgentEffectiveModelPrimary(cfg, agentId),
+              },
+            }
+          : {}),
         ...(agent.models !== undefined
           ? { models: { ...cfg.agents?.defaults?.models, ...agent.models } }
           : {}),
@@ -201,8 +216,8 @@ function loadPickerModelCatalog(
         ...(opts.workspaceDir !== undefined ? { workspaceDir: opts.workspaceDir } : {}),
         ...(opts.env !== undefined ? { env: opts.env } : {}),
       }).then((providerCatalog) => {
-        if (providerCatalog.length > 0) {
-          return snapshot(providerCatalog);
+        if (providerCatalog.entries.length > 0) {
+          return providerCatalog;
         }
         if (opts.allowStaticFallbackCatalog !== false) {
           const manifestRows = loadStaticManifestCatalogRowsForList({
@@ -277,7 +292,6 @@ async function resolvePickerLogicalCatalog(params: {
         })),
       });
       return resolveLogicalModelCatalogEntryState({
-        entry,
         evaluation,
         routePolicy: openAIModelCatalogRoutePolicy,
       });
@@ -411,6 +425,7 @@ async function resolveLiteralPrefixProviderIds(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  providerRefs?: readonly string[];
 }): Promise<Set<string>> {
   const { resolvePluginProviders } = await loadResolvedModelPickerRuntime();
   const providers = resolvePluginProviders({
@@ -420,6 +435,7 @@ async function resolveLiteralPrefixProviderIds(params: {
     activate: false,
     cache: false,
     includeUntrustedWorkspacePlugins: false,
+    ...(params.providerRefs?.length ? { providerRefs: params.providerRefs } : {}),
   });
   const ids = new Set<string>();
   for (const provider of providers) {
@@ -820,6 +836,7 @@ export async function promptDefaultModel(
   const preferredProvider = preferredProviderRaw
     ? normalizeProviderId(preferredProviderRaw)
     : undefined;
+  const providerScopedCatalog = Boolean(browseCatalogOnDemand && preferredProvider);
   const configuredRaw = resolveConfiguredModelRaw(pickerConfig);
   const useStaticModelNormalization = !loadCatalog || browseCatalogOnDemand;
   const resolved = resolveConfiguredModelRef({
@@ -837,6 +854,9 @@ export async function promptDefaultModel(
         cfg,
         workspaceDir: params.workspaceDir,
         env: params.env,
+        ...(providerScopedCatalog && preferredProvider
+          ? { providerRefs: [preferredProvider] }
+          : {}),
       });
     }
     return literalPrefixProvidersCache;
@@ -954,11 +974,10 @@ export async function promptDefaultModel(
   const catalogProgress = params.prompter.progress(t("wizard.model.loadingModels"));
   let catalogSnapshot: ModelCatalogSnapshot;
   try {
-    const providerScopedCatalog = browseCatalogOnDemand && preferredProvider;
     catalogSnapshot = await loadPickerModelCatalog(cfg, {
       preferredProvider: providerScopedCatalog ? preferredProvider : undefined,
-      preferLiveProviderCatalog: Boolean(providerScopedCatalog),
-      providerScoped: Boolean(providerScopedCatalog),
+      preferLiveProviderCatalog: providerScopedCatalog,
+      providerScoped: providerScopedCatalog,
       agentDir: pickerAgentDir,
       ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
       ...(params.env !== undefined ? { env: params.env } : {}),
@@ -1010,7 +1029,7 @@ export async function promptDefaultModel(
   const isVisibleProvider = createModelPickerVisibleProviderPredicate({
     config: cfg,
     env: params.env,
-    includeSetupRegistry: true,
+    includeSetupRegistry: !providerScopedCatalog,
   });
   const filteredModels = await maybeFilterModelsByProvider({
     models,
@@ -1061,7 +1080,7 @@ export async function promptDefaultModel(
   if (includeManual) {
     options.push({ value: MANUAL_VALUE, label: t("wizard.model.enterManually") });
   }
-  if (includeProviderPluginSetups && params.agentDir) {
+  if (includeProviderPluginSetups && params.agentDir && !providerScopedCatalog) {
     options.push(
       ...(await resolveProviderPluginSetupOptions({
         cfg,
@@ -1159,6 +1178,7 @@ export async function promptModelAllowlist(params: {
   config: OpenClawConfig;
   prompter: WizardPrompter;
   message?: string;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -1168,7 +1188,7 @@ export async function promptModelAllowlist(params: {
   loadCatalog?: boolean;
   providerScopedCatalog?: boolean;
 }): Promise<PromptModelAllowlistResult> {
-  const cfg = params.config;
+  const cfg = resolveModelPickerConfig(params.config, params.agentId);
   const pickerAgentDir = resolvePickerAgentDir({
     cfg,
     ...(params.agentDir !== undefined ? { agentDir: params.agentDir } : {}),

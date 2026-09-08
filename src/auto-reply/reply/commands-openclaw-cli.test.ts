@@ -1,102 +1,76 @@
-import { createRequire } from "node:module";
 // Verifies chat-facing CLI snippets execute the OpenClaw CLI even from harness-hosted gateways.
-import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { describe, expect, it } from "vitest";
 import {
-  buildCurrentOpenClawCliArgv,
-  buildCurrentOpenClawCliExecEnv,
-} from "./commands-openclaw-cli.js";
+  createSourceCliFixture,
+  runSourceCliProbe,
+  withSourceCliParent,
+} from "../../infra/openclaw-cli-invocation.test-support.js";
+import { withTempDir } from "../../test-utils/temp-dir.js";
+import { buildCurrentOpenClawCliExecRequest } from "./commands-openclaw-cli.js";
 
-const requireFromHere = createRequire(import.meta.url);
-const originalArgv = [...process.argv];
-const repoSourceEntry = path.join(process.cwd(), "src", "entry.ts");
-const trustedTsxLoader = requireFromHere.resolve("tsx", { paths: [process.cwd()] });
-
-function setArgv1(value: string): void {
-  process.argv.splice(0, process.argv.length, process.execPath, value);
-}
-
-describe("buildCurrentOpenClawCliArgv", () => {
-  afterEach(() => {
-    process.argv.splice(0, process.argv.length, ...originalArgv);
-  });
-
-  it("falls back to the package CLI entry when hosted by a test harness", () => {
-    setArgv1(path.join(process.cwd(), "scripts", "test-live.mjs"));
-
-    expect(buildCurrentOpenClawCliArgv(["sessions", "export-trajectory"])).toEqual([
-      process.execPath,
-      "--import",
-      trustedTsxLoader,
-      repoSourceEntry,
-      "sessions",
-      "export-trajectory",
-    ]);
-  });
-
-  it("preserves a real OpenClaw launcher entry", () => {
-    setArgv1("/opt/openclaw/openclaw.mjs");
-
-    expect(buildCurrentOpenClawCliArgv(["sessions", "export-trajectory"])).toEqual([
-      process.execPath,
-      ...process.execArgv,
-      "/opt/openclaw/openclaw.mjs",
-      "sessions",
-      "export-trajectory",
-    ]);
-  });
-
-  it("preserves OpenClaw dist entries from the package root", () => {
-    const distEntry = path.join(process.cwd(), "dist", "entry.js");
-    setArgv1(distEntry);
-
-    expect(buildCurrentOpenClawCliArgv(["sessions", "export-trajectory"])).toEqual([
-      process.execPath,
-      ...process.execArgv,
-      distEntry,
-      "sessions",
-      "export-trajectory",
-    ]);
-  });
-
-  it("preserves OpenClaw source entries from the package root", () => {
-    const sourceEntry = path.join(process.cwd(), "src", "entry.ts");
-    setArgv1(sourceEntry);
-
-    expect(buildCurrentOpenClawCliArgv(["sessions", "export-trajectory"])).toEqual([
-      process.execPath,
-      ...process.execArgv,
-      sourceEntry,
-      "sessions",
-      "export-trajectory",
-    ]);
-  });
-
-  it("does not treat foreign dist entries as OpenClaw launchers", () => {
-    setArgv1("/app/dist/index.js");
-
-    expect(buildCurrentOpenClawCliArgv(["sessions", "export-trajectory"])).toEqual([
-      process.execPath,
-      "--import",
-      trustedTsxLoader,
-      repoSourceEntry,
-      "sessions",
-      "export-trajectory",
-    ]);
+describe("buildCurrentOpenClawCliExecRequest", () => {
+  it("delegates launch policy while keeping shell rendering local", () => {
+    const args = ["sessions", "export-trajectory"];
+    const { argv, command } = buildCurrentOpenClawCliExecRequest(args);
+    expect(argv.at(-2)).toBe("sessions");
+    expect(argv.at(-1)).toBe("export-trajectory");
+    expect(command).toBe(argv.map((value) => `'${value}'`).join(" "));
   });
 
   it("clears inherited Vitest runner environment for CLI child processes", () => {
-    expect(
-      buildCurrentOpenClawCliExecEnv({
-        PATH: "/usr/bin",
-        VITEST: "true",
-        VITEST_POOL_ID: "pool",
-        OPENCLAW_VITEST_MAX_WORKERS: "1",
-      }),
-    ).toEqual({
+    const { env } = buildCurrentOpenClawCliExecRequest([], {
+      PATH: "/usr/bin",
+      VITEST: "true",
+      VITEST_POOL_ID: "pool",
+      OPENCLAW_VITEST_MAX_WORKERS: "1",
+    });
+    expect(env).toMatchObject({
       VITEST: "",
       VITEST_POOL_ID: "",
       OPENCLAW_VITEST_MAX_WORKERS: "",
     });
+    expect(env).not.toHaveProperty("PATH");
   });
+
+  it("resolves source workspace imports in reconstructed commands outside the checkout", async () => {
+    await withTempDir("openclaw-chat-cli-source-", async (root) => {
+      const fixture = await createSourceCliFixture(root);
+      const args = ["sessions", "export-trajectory"];
+      const { argv, env } = withSourceCliParent(fixture, () =>
+        buildCurrentOpenClawCliExecRequest(args),
+      );
+      const command = expectDefined(argv[0], "CLI invocation executable");
+      const control = runSourceCliProbe(command, argv.slice(1), fixture.checkout, { env });
+      expect(control.status, control.stderr).toBe(0);
+
+      const external = runSourceCliProbe(command, argv.slice(1), fixture.callerCwd, { env });
+      expect(external.status, external.stderr).toBe(0);
+      expect(JSON.parse(external.stdout)).toMatchObject({
+        source: "gateway",
+        args,
+        cwd: fixture.callerCwd,
+      });
+    });
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "resolves source workspace imports in a shell-rendered diagnostics command",
+    async () => {
+      await withTempDir("openclaw-chat-cli-shell-", async (root) => {
+        const fixture = await createSourceCliFixture(root);
+        const args = ["gateway", "diagnostics", "export", "--json"];
+        const { command, env } = withSourceCliParent(fixture, () =>
+          buildCurrentOpenClawCliExecRequest(args),
+        );
+        const result = runSourceCliProbe("/bin/sh", ["-c", command], fixture.callerCwd, { env });
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          source: "gateway",
+          args,
+          cwd: fixture.callerCwd,
+        });
+      });
+    },
+  );
 });

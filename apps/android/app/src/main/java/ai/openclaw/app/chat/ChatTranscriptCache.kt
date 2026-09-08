@@ -1,11 +1,12 @@
 package ai.openclaw.app.chat
 
-import androidx.room.Dao
-import androidx.room.Entity
-import androidx.room.Insert
-import androidx.room.OnConflictStrategy
-import androidx.room.Query
-import androidx.room.withTransaction
+import androidx.room3.Dao
+import androidx.room3.Entity
+import androidx.room3.Insert
+import androidx.room3.OnConflictStrategy
+import androidx.room3.Query
+import androidx.room3.withWriteTransaction
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
@@ -33,6 +34,20 @@ private data class CachedMessageContent(
   val sizeBytes: Long? = null,
   val durationMs: Long? = null,
   val playback: String? = null,
+)
+
+@Serializable
+private data class CachedMessagePayload(
+  val content: List<CachedMessageContent>,
+  val provenance: ChatMessageProvenance? = null,
+  @SerialName("__openclaw") val transcriptMarker: ChatTranscriptMarker? = null,
+  val senderLabel: String? = null,
+  val provider: String? = null,
+  val model: String? = null,
+  val deliveryMirror: ChatDeliveryMirror? = null,
+  val usage: ChatMessageUsage? = null,
+  val cost: ChatMessageCost? = null,
+  val isSyntheticDisplay: Boolean = false,
 )
 
 /**
@@ -73,6 +88,7 @@ interface ChatTranscriptCache {
     agentId: String,
     sessionKey: String,
     messages: List<ChatMessage>,
+    sessionInfo: ChatSessionEntry? = null,
   )
 
   /** Removes one session and its transcript, so gateway-side deletes also purge offline copies. */
@@ -92,6 +108,7 @@ internal data class CachedSessionEntity(
   val agentId: String,
   val sessionKey: String,
   val displayName: String?,
+  val color: String?,
   val updatedAtMs: Long?,
   val status: String?,
   val startedAt: Long?,
@@ -249,7 +266,8 @@ internal interface ChatCacheDao {
 class RoomChatTranscriptCache internal constructor(
   private val database: GatewayCacheDatabase,
 ) : ChatTranscriptCache {
-  private val json = Json
+  private val json = Json { ignoreUnknownKeys = true }
+  private val cachedPayloadSerializer = CachedMessagePayload.serializer()
   private val cachedContentSerializer = ListSerializer(CachedMessageContent.serializer())
   private val legacyTextPartsSerializer = ListSerializer(String.serializer())
 
@@ -283,6 +301,7 @@ class RoomChatTranscriptCache internal constructor(
         updatedAtMs = row.updatedAtMs,
         ownerAgentId = agent,
         displayName = row.displayName,
+        color = row.color,
         status = row.status,
         startedAt = row.startedAt,
         endedAt = row.endedAt,
@@ -303,11 +322,12 @@ class RoomChatTranscriptCache internal constructor(
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return emptyList()
     return database.dao().messages(gateway, agent, key).mapNotNull { row ->
       val role = normalizeVisibleChatMessageRole(row.role) ?: return@mapNotNull null
+      val payload = decodeCachedMessage(row.textPartsJson)
       ChatMessage(
         id = UUID.randomUUID().toString(),
         role = role,
         content =
-          decodeCachedContent(row.textPartsJson).map { part ->
+          payload.content.map { part ->
             ChatMessageContent(
               type = part.type,
               text = part.text,
@@ -328,6 +348,15 @@ class RoomChatTranscriptCache internal constructor(
         idempotencyKey = row.idempotencyKey,
         // Canonical tree ids stay live-only; cached rows regain actions after history refresh.
         entryId = null,
+        provenance = payload.provenance,
+        transcriptMarker = payload.transcriptMarker,
+        senderLabel = payload.senderLabel,
+        provider = payload.provider,
+        model = payload.model,
+        deliveryMirror = payload.deliveryMirror,
+        usage = payload.usage,
+        cost = payload.cost,
+        isSyntheticDisplay = payload.isSyntheticDisplay,
       )
     }
   }
@@ -342,48 +371,21 @@ class RoomChatTranscriptCache internal constructor(
     val agent = scopedAgentId(agentId) ?: return
     val retainedKey = retainedSessionKey?.trim()?.takeIf { it.isNotEmpty() }
     val dao = database.dao()
-    database.withTransaction {
+    database.withWriteTransaction {
       val initialSessions = sessions.take(MAX_CACHED_SESSIONS)
       val needsRetainedRow = retainedKey != null && initialSessions.none { it.key == retainedKey }
       val retainedEntry = if (needsRetainedRow) sessions.firstOrNull { it.key == retainedKey } else null
       val retainedRow =
         if (needsRetainedRow) {
-          retainedEntry?.let { entry ->
-            CachedSessionEntity(
-              gatewayId = gateway,
-              agentId = agent,
-              sessionKey = entry.key,
-              displayName = entry.displayName,
-              updatedAtMs = entry.updatedAtMs,
-              status = entry.status,
-              startedAt = entry.startedAt,
-              endedAt = entry.endedAt,
-              runtimeMs = entry.runtimeMs,
-              outputTokens = entry.outputTokens,
-              hasRunMetadata = entry.hasRunMetadata,
-              rowOrder = 0,
-            )
-          } ?: dao.session(gateway, agent, retainedKey)
+          retainedEntry?.toCachedSession(gateway, agent, rowOrder = 0)
+            ?: dao.session(gateway, agent, retainedKey)
         } else {
           null
         }
       val listedSessionLimit = MAX_CACHED_SESSIONS - if (retainedRow == null) 0 else 1
       val rows =
         sessions.take(listedSessionLimit).mapIndexed { index, session ->
-          CachedSessionEntity(
-            gatewayId = gateway,
-            agentId = agent,
-            sessionKey = session.key,
-            displayName = session.displayName,
-            updatedAtMs = session.updatedAtMs,
-            status = session.status,
-            startedAt = session.startedAt,
-            endedAt = session.endedAt,
-            runtimeMs = session.runtimeMs,
-            outputTokens = session.outputTokens,
-            hasRunMetadata = session.hasRunMetadata,
-            rowOrder = index,
-          )
+          session.toCachedSession(gateway, agent, rowOrder = index)
         }
       dao.deleteSessions(gateway, agent)
       dao.insertSessions(rows)
@@ -399,6 +401,7 @@ class RoomChatTranscriptCache internal constructor(
     agentId: String,
     sessionKey: String,
     messages: List<ChatMessage>,
+    sessionInfo: ChatSessionEntry?,
   ) {
     val gateway = scopedGatewayId(gatewayId) ?: return
     val agent = scopedAgentId(agentId) ?: return
@@ -411,23 +414,14 @@ class RoomChatTranscriptCache internal constructor(
           val role = normalizeVisibleChatMessageRole(message.role) ?: return@mapNotNull null
           val content =
             message.content.mapNotNull { part ->
+              val isImage = part.type == "image"
               when {
-                part.type == "text" && !part.text.isNullOrBlank() ->
+                part.type == "text" && !part.text.isNullOrBlank() -> {
                   CachedMessageContent(type = "text", text = part.text)
-                part.type == "image" && !part.artifactId.isNullOrBlank() && !part.url.isNullOrBlank() ->
-                  CachedMessageContent(
-                    type = "image",
-                    mimeType = part.mimeType,
-                    fileName = part.fileName,
-                    artifactId = part.artifactId,
-                    url = part.url,
-                    openUrl = part.openUrl,
-                    alt = part.alt,
-                    width = part.width,
-                    height = part.height,
-                    sizeBytes = part.sizeBytes,
-                  )
-                part.type == "audio" || part.type == "video" ->
+                }
+
+                (isImage && !part.artifactId.isNullOrBlank() && !part.url.isNullOrBlank()) ||
+                  part.type == "audio" || part.type == "video" || part.type == "file" -> {
                   CachedMessageContent(
                     type = part.type,
                     mimeType = part.mimeType,
@@ -439,29 +433,52 @@ class RoomChatTranscriptCache internal constructor(
                     width = part.width,
                     height = part.height,
                     sizeBytes = part.sizeBytes,
-                    durationMs = part.durationMs,
-                    playback = part.playback,
+                    durationMs = part.durationMs.takeUnless { isImage },
+                    playback = part.playback.takeUnless { isImage },
                   )
-                else -> null
+                }
+
+                else -> {
+                  null
+                }
               }
             }
-          if (content.isEmpty()) return@mapNotNull null
-          Triple(message, role, content)
+          val hasPersistedMetadata =
+            message.provenance != null || message.transcriptMarker != null || message.deliveryMirror != null ||
+              message.usage != null || message.cost != null
+          // An empty real call still ends the previous call’s usage snapshot.
+          val isRealAssistantBoundary =
+            message.role == "assistant" && !message.isSyntheticDisplay && !message.isTranscriptOnlyOpenClawAssistant()
+          if (content.isEmpty() && !hasPersistedMetadata && !isRealAssistantBoundary) return@mapNotNull null
+          val payload =
+            CachedMessagePayload(
+              content = content,
+              provenance = message.provenance,
+              transcriptMarker = message.transcriptMarker,
+              senderLabel = message.senderLabel,
+              provider = message.provider,
+              model = message.model,
+              deliveryMirror = message.deliveryMirror,
+              usage = message.usage,
+              cost = message.cost,
+              isSyntheticDisplay = message.isSyntheticDisplay,
+            )
+          Triple(message, role, payload)
         }.takeLast(MAX_CACHED_MESSAGES_PER_SESSION)
-        .mapIndexed { index, (message, role, content) ->
+        .mapIndexed { index, (message, role, payload) ->
           CachedMessageEntity(
             gatewayId = gateway,
             agentId = agent,
             sessionKey = key,
             rowOrder = index,
             role = role,
-            textPartsJson = json.encodeToString(cachedContentSerializer, content),
+            textPartsJson = json.encodeToString(cachedPayloadSerializer, payload),
             timestampMs = message.timestampMs,
             idempotencyKey = message.idempotencyKey,
           )
         }
     val dao = database.dao()
-    database.withTransaction {
+    database.withWriteTransaction {
       dao.deleteTranscript(gateway, agent, key)
       dao.insertMessages(rows)
       // A transcript may arrive for a session missing from the cached list (e.g. deep session
@@ -469,23 +486,16 @@ class RoomChatTranscriptCache internal constructor(
       val currentSession = dao.session(gateway, agent, key)
       // REPLACE refreshes SQLite rowid, making the transcript's session the most recent gateway
       // row while preserving list metadata when that session was already cached.
+      // Persist the accepted history row with its transcript, including cleared usage.
+      // Otherwise a failed list refresh resurrects the previous run on offline reopen.
+      val session = sessionInfo?.copy(key = key) ?: ChatSessionEntry(key = key, updatedAtMs = null)
       dao.insertSessions(
         listOf(
-          currentSession
-            ?: CachedSessionEntity(
-              gatewayId = gateway,
-              agentId = agent,
-              sessionKey = key,
-              displayName = null,
-              updatedAtMs = null,
-              status = null,
-              startedAt = null,
-              endedAt = null,
-              runtimeMs = null,
-              outputTokens = null,
-              hasRunMetadata = false,
-              rowOrder = dao.nextSessionRowOrder(gateway, agent),
-            ),
+          if (sessionInfo != null || currentSession == null) {
+            session.toCachedSession(gateway, agent, rowOrder = currentSession?.rowOrder ?: dao.nextSessionRowOrder(gateway, agent))
+          } else {
+            currentSession
+          },
         ),
       )
       dao.evictSessionsBeyondKeeping(gateway, agent, keepSessionKey = key, keep = MAX_CACHED_SESSIONS - 1)
@@ -498,7 +508,7 @@ class RoomChatTranscriptCache internal constructor(
   override suspend fun clearGateway(gatewayId: String) {
     val gateway = scopedGatewayId(gatewayId) ?: return
     val dao = database.dao()
-    database.withTransaction {
+    database.withWriteTransaction {
       dao.deleteMessages(gateway)
       dao.deleteSessionsForGateway(gateway)
       dao.deleteGatewayOwner(gateway)
@@ -514,7 +524,7 @@ class RoomChatTranscriptCache internal constructor(
     val agent = scopedAgentId(agentId) ?: return
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return
     val dao = database.dao()
-    database.withTransaction {
+    database.withWriteTransaction {
       dao.deleteSessionRow(gateway, agent, key)
       dao.deleteTranscript(gateway, agent, key)
     }
@@ -524,12 +534,37 @@ class RoomChatTranscriptCache internal constructor(
 
   private fun scopedAgentId(agentId: String): String? = agentId.trim().takeIf { it.isNotEmpty() }
 
-  private fun decodeCachedContent(encoded: String): List<CachedMessageContent> =
-    runCatching { json.decodeFromString(cachedContentSerializer, encoded) }.getOrElse {
+  private fun decodeCachedMessage(encoded: String): CachedMessagePayload =
+    runCatching { json.decodeFromString(cachedPayloadSerializer, encoded) }.getOrElse {
       // Offline transcript browsing is shipped behavior. Keep the previous string-array rows
       // readable until a live history refresh naturally rewrites this disposable cache entry.
-      runCatching { json.decodeFromString(legacyTextPartsSerializer, encoded) }
-        .getOrDefault(emptyList())
-        .map { CachedMessageContent(type = "text", text = it) }
+      val content =
+        runCatching { json.decodeFromString(cachedContentSerializer, encoded) }.getOrElse {
+          runCatching { json.decodeFromString(legacyTextPartsSerializer, encoded) }
+            .getOrDefault(emptyList())
+            .map { CachedMessageContent(type = "text", text = it) }
+        }
+      CachedMessagePayload(content = content)
     }
 }
+
+private fun ChatSessionEntry.toCachedSession(
+  gatewayId: String,
+  agentId: String,
+  rowOrder: Int,
+): CachedSessionEntity =
+  CachedSessionEntity(
+    gatewayId = gatewayId,
+    agentId = agentId,
+    sessionKey = key,
+    displayName = displayName,
+    color = color,
+    updatedAtMs = updatedAtMs,
+    status = status,
+    startedAt = startedAt,
+    endedAt = endedAt,
+    runtimeMs = runtimeMs,
+    outputTokens = outputTokens,
+    hasRunMetadata = hasRunMetadata,
+    rowOrder = rowOrder,
+  )

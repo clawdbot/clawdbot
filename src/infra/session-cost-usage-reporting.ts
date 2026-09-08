@@ -2,17 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { normalizeUsage } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
-import {
-  isPrimarySessionTranscriptFileName,
-  parseUsageCountedSessionIdFromFileName,
-} from "../config/sessions/artifacts.js";
+import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
-import { estimateUsageCost } from "../utils/usage-format.js";
 import {
   isUsageCostRollupFresh,
   readUsageCostRollups,
@@ -31,10 +26,7 @@ import {
 import {
   computeUsageTokenTotals,
   createUsageCostResolver,
-  extractCostBreakdown,
-  parseTimestamp,
   parseUsageCostTranscriptEntry,
-  shouldRecomputeRecordedZeroCost,
 } from "./session-cost-usage-pricing.js";
 import { createUsageDayKeyFormatter } from "./session-cost-usage-projection.js";
 import { buildSessionCostSummaryFromRollup } from "./session-cost-usage-rollup.js";
@@ -67,15 +59,12 @@ export async function discoverAllSessions(params: {
 
   for (const file of files) {
     // Do not exclude by endMs: a session can have activity in range even if it continued later.
-    const filePath = file.filePath;
-    const fileName = path.basename(filePath);
-    const sqliteMarker = parseSqliteSessionFileMarker(filePath);
-
-    const sessionId = sqliteMarker?.sessionId ?? parseUsageCountedSessionIdFromFileName(fileName);
+    const { filePath, sourcePath: sessionFile, sessionId } = file;
     if (!sessionId) {
       continue;
     }
-    const isPrimaryTranscript = sqliteMarker ? true : isPrimarySessionTranscriptFileName(fileName);
+    const isPrimaryTranscript =
+      file.kind === "sqlite" || isPrimarySessionTranscriptFileName(path.basename(sessionFile));
 
     // Try to read first user message for label extraction
     let firstUserMessage: string | undefined;
@@ -126,7 +115,7 @@ export async function discoverAllSessions(params: {
     if (shouldReplace) {
       discovered.set(sessionId, {
         sessionId,
-        sessionFile: filePath,
+        sessionFile,
         mtime: file.mtimeMs,
         firstUserMessage: firstUserMessage ?? existing?.firstUserMessage,
       });
@@ -190,9 +179,9 @@ export async function loadSessionCostSummary(params: {
     return null;
   }
   const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir);
-  const stored = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath).get(
-    currentFile.filePath,
-  );
+  const stored = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath, {
+    filePaths: [currentFile.filePath],
+  }).get(currentFile.filePath);
   if (!stored || !isUsageCostRollupFresh({ stored, file: currentFile })) {
     return null;
   }
@@ -230,7 +219,7 @@ export async function loadSessionUsageTimeSeries(params: {
     }
   }
 
-  const points: Array<Omit<SessionUsageTimePoint, "cumulativeTokens" | "cumulativeCost">> = [];
+  let points: Array<Omit<SessionUsageTimePoint, "cumulativeTokens" | "cumulativeCost">> = [];
   const agentDir = resolveUsageCostAgentDir(params.config, params.agentId);
   const resolveCost = createUsageCostResolver({ config: params.config, agentDir });
 
@@ -254,65 +243,51 @@ export async function loadSessionUsageTimeSeries(params: {
     });
   }
 
-  // Sort by timestamp
+  points.sort((a, b) => a.timestamp - b.timestamp);
+
+  const maxPoints = params.maxPoints ?? 100;
+  if (points.length > maxPoints) {
+    const step = Math.ceil(points.length / maxPoints);
+    const downsampled: typeof points = [];
+    let bucket: (typeof points)[number] | undefined;
+    let bucketSize = 0;
+    for (const point of points) {
+      if (!bucket || bucketSize === step) {
+        bucket = {
+          timestamp: point.timestamp,
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: 0,
+        };
+        downsampled.push(bucket);
+        bucketSize = 0;
+      }
+      bucket.timestamp = point.timestamp;
+      bucket.input += point.input;
+      bucket.output += point.output;
+      bucket.cacheRead += point.cacheRead;
+      bucket.cacheWrite += point.cacheWrite;
+      bucket.totalTokens += point.totalTokens;
+      bucket.cost += point.cost;
+      bucketSize += 1;
+    }
+    points = downsampled;
+  }
+
+  // Accumulate after sampling to preserve the bucket-based floating-point sums.
   let cumulativeTokens = 0;
   let cumulativeCost = 0;
-  const sortedPoints: SessionUsageTimePoint[] = points
-    .toSorted((a, b) => a.timestamp - b.timestamp)
-    .map((point) => {
+  return {
+    sessionId: params.sessionId,
+    points: points.map((point) => {
       cumulativeTokens += point.totalTokens;
       cumulativeCost += point.cost;
       return Object.assign(point, { cumulativeTokens, cumulativeCost });
-    });
-
-  // Optionally downsample if too many points
-  const maxPoints = params.maxPoints ?? 100;
-  if (sortedPoints.length > maxPoints) {
-    const step = Math.ceil(sortedPoints.length / maxPoints);
-    const downsampled: SessionUsageTimePoint[] = [];
-    let downsampledCumulativeTokens = 0;
-    let downsampledCumulativeCost = 0;
-    for (let i = 0; i < sortedPoints.length; i += step) {
-      const bucket = sortedPoints.slice(i, i + step);
-      const bucketLast = bucket[bucket.length - 1];
-      if (!bucketLast) {
-        continue;
-      }
-
-      let bucketInput = 0;
-      let bucketOutput = 0;
-      let bucketCacheRead = 0;
-      let bucketCacheWrite = 0;
-      let bucketTotalTokens = 0;
-      let bucketCost = 0;
-      for (const point of bucket) {
-        bucketInput += point.input;
-        bucketOutput += point.output;
-        bucketCacheRead += point.cacheRead;
-        bucketCacheWrite += point.cacheWrite;
-        bucketTotalTokens += point.totalTokens;
-        bucketCost += point.cost;
-      }
-
-      downsampledCumulativeTokens += bucketTotalTokens;
-      downsampledCumulativeCost += bucketCost;
-
-      downsampled.push({
-        timestamp: bucketLast.timestamp,
-        input: bucketInput,
-        output: bucketOutput,
-        cacheRead: bucketCacheRead,
-        cacheWrite: bucketCacheWrite,
-        totalTokens: bucketTotalTokens,
-        cost: bucketCost,
-        cumulativeTokens: downsampledCumulativeTokens,
-        cumulativeCost: downsampledCumulativeCost,
-      });
-    }
-    return { sessionId: params.sessionId, points: downsampled };
-  }
-
-  return { sessionId: params.sessionId, points: sortedPoints };
+    }),
+  };
 }
 
 export async function loadSessionLogs(params: {
@@ -431,55 +406,17 @@ export async function loadSessionLogs(params: {
         content = truncateUtf16Safe(content, maxLen) + "…";
       }
 
-      // Get timestamp
-      // Keep detail logs on the usage-summary timestamp path, including nested
-      // fallback; direct Date parsing can leak NaN as null through Gateway JSON.
-      const timestamp = parseTimestamp(parsed)?.getTime() ?? 0;
-
-      // Get usage for assistant messages
-      let tokens: number | undefined;
-      let cost: number | undefined;
-      if (role === "assistant") {
-        const usageRaw = message.usage as Record<string, unknown> | undefined;
-        const usage = normalizeUsage(usageRaw);
-        if (usage) {
-          tokens =
-            usage.total ??
-            (usage.input ?? 0) +
-              (usage.output ?? 0) +
-              (usage.cacheRead ?? 0) +
-              (usage.cacheWrite ?? 0);
-          const breakdown = extractCostBreakdown(usageRaw);
-          const costConfig = resolveCost({
-            provider:
-              (typeof message.provider === "string" ? message.provider : undefined) ??
-              (typeof parsed.provider === "string" ? parsed.provider : undefined),
-            model:
-              (typeof message.model === "string" ? message.model : undefined) ??
-              (typeof parsed.model === "string" ? parsed.model : undefined),
-          });
-          if (
-            breakdown?.total !== undefined &&
-            !shouldRecomputeRecordedZeroCost({
-              usage,
-              cost: costConfig,
-              costBreakdown: breakdown,
-              costTotal: breakdown.total,
-            })
-          ) {
-            cost = breakdown.total;
-          } else {
-            cost = estimateUsageCost({ usage, cost: costConfig });
-          }
-        }
-      }
+      // Logs share pricing and timestamp interpretation with summaries and charts.
+      // Recomputing here can turn unknown prices into zero or ignore tiered rates.
+      const entry = parseUsageCostTranscriptEntry(parsed, resolveCost);
+      const usage = role === "assistant" ? entry?.usage : undefined;
 
       logs.push({
-        timestamp,
+        timestamp: entry?.timestamp?.getTime() ?? 0,
         role,
         content,
-        tokens,
-        cost,
+        tokens: usage ? computeUsageTokenTotals(usage).totalTokens : undefined,
+        cost: usage ? entry?.costTotal : undefined,
       });
       // Timestamps can arrive out of order, so keep a bounded sorted window instead
       // of relying on transcript append order or retaining the whole file.

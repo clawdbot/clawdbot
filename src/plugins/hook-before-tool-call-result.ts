@@ -1,3 +1,5 @@
+import type { ApprovalScope } from "../infra/approval-scope.js";
+
 export const PluginApprovalResolutions = {
   ALLOW_ONCE: "allow-once",
   ALLOW_ALWAYS: "allow-always",
@@ -16,6 +18,7 @@ export type PluginHookBeforeToolCallResult = {
   requireApproval?: {
     title: string;
     description: string;
+    scope?: ApprovalScope;
     severity?: "info" | "warning" | "critical";
     timeoutMs?: number;
     /**

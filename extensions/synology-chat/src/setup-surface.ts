@@ -9,6 +9,7 @@ import {
   formatDocsLink,
   mergeAllowFromEntries,
   normalizeAccountId,
+  patchScopedAccountConfig,
   setSetupChannelEnabled,
   splitSetupEntries,
   type ChannelSetupAdapter,
@@ -21,6 +22,7 @@ import {
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listAccountIds, resolveAccount } from "./accounts.js";
+import { resolveSynologyHostedMediaRoute } from "./hosted-media-route.js";
 import type { SynologyChatAccountRaw, SynologyChatChannelConfig } from "./types.js";
 
 const t = createSetupTranslator();
@@ -30,6 +32,7 @@ const DEFAULT_WEBHOOK_PATH = "/webhook/synology";
 
 type SynologyChatSetupInput = ChannelSetupInput & {
   url?: string;
+  webhookUrl?: string;
   webhookPath?: string;
 };
 
@@ -69,47 +72,19 @@ function patchSynologyChatAccountConfig(params: {
   clearFields?: string[];
   enabled?: boolean;
 }): OpenClawConfig {
-  const channelConfig = getChannelConfig(params.cfg);
-  if (params.accountId === DEFAULT_ACCOUNT_ID) {
-    const nextChannelConfig = { ...channelConfig } as Record<string, unknown>;
-    for (const field of params.clearFields ?? []) {
-      delete nextChannelConfig[field];
-    }
-    return {
-      ...params.cfg,
-      channels: {
-        ...params.cfg.channels,
-        [channel]: {
-          ...nextChannelConfig,
-          ...(params.enabled ? { enabled: true } : {}),
-          ...params.patch,
-        },
-      },
-    };
-  }
-
-  const nextAccounts = { ...channelConfig.accounts } as Record<string, Record<string, unknown>>;
-  const nextAccountConfig = { ...nextAccounts[params.accountId] };
-  for (const field of params.clearFields ?? []) {
-    delete nextAccountConfig[field];
-  }
-  nextAccounts[params.accountId] = {
-    ...nextAccountConfig,
-    ...(params.enabled ? { enabled: true } : {}),
-    ...params.patch,
-  };
-
-  return {
-    ...params.cfg,
-    channels: {
-      ...params.cfg.channels,
-      [channel]: {
-        ...channelConfig,
-        ...(params.enabled ? { enabled: true } : {}),
-        accounts: nextAccounts,
-      },
+  return patchScopedAccountConfig({
+    cfg: params.cfg,
+    channelKey: channel,
+    accountId: params.accountId,
+    patch: params.patch,
+    accountPatch: {
+      ...(params.enabled ? { enabled: true } : {}),
+      ...params.patch,
     },
-  };
+    clearFields: params.clearFields,
+    ensureChannelEnabled: Boolean(params.enabled),
+    ensureAccountEnabled: false,
+  });
 }
 
 function isSynologyChatConfigured(cfg: OpenClawConfig, accountId: string): boolean {
@@ -125,6 +100,19 @@ function validateWebhookUrl(value: string): string | undefined {
     }
   } catch {
     return "Incoming webhook must be a valid URL.";
+  }
+  return undefined;
+}
+
+function validatePublicWebhookUrl(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    resolveSynologyHostedMediaRoute({ webhookUrl: trimmed, webhookPath: DEFAULT_WEBHOOK_PATH });
+  } catch (error) {
+    return error instanceof Error ? error.message : "Attachment webhook URL is invalid.";
   }
   return undefined;
 }
@@ -179,6 +167,12 @@ export const synologyChatSetupAdapter: ChannelSetupAdapter = {
     if (urlError) {
       return urlError;
     }
+    if (setupInput.webhookUrl?.trim()) {
+      const webhookUrlError = validatePublicWebhookUrl(setupInput.webhookUrl);
+      if (webhookUrlError) {
+        return webhookUrlError;
+      }
+    }
     if (setupInput.webhookPath?.trim()) {
       return validateWebhookPath(setupInput.webhookPath.trim()) ?? null;
     }
@@ -194,6 +188,7 @@ export const synologyChatSetupAdapter: ChannelSetupAdapter = {
       patch: {
         ...(setupInput.useEnv ? {} : { token: setupInput.token?.trim() }),
         incomingUrl: setupInput.url?.trim(),
+        ...(setupInput.webhookUrl?.trim() ? { webhookUrl: setupInput.webhookUrl.trim() } : {}),
         ...(setupInput.webhookPath?.trim() ? { webhookPath: setupInput.webhookPath.trim() } : {}),
       },
     });
@@ -209,7 +204,16 @@ export const synologyChatSetupContract = defineChannelSetupContract({
     },
     url: {
       kind: "string",
+      sensitive: true,
       cli: { flags: "--url <url>", description: "Synology Chat webhook URL" },
+    },
+    webhookUrl: {
+      kind: "string",
+      sensitive: true,
+      cli: {
+        flags: "--webhook-url <url>",
+        description: "Public HTTPS Synology Chat callback URL used for attachments",
+      },
     },
     webhookPath: {
       kind: "string",
@@ -218,6 +222,7 @@ export const synologyChatSetupContract = defineChannelSetupContract({
     useEnv: {
       kind: "boolean",
       cli: { flags: "--use-env", description: "Use Synology Chat environment credentials" },
+      envVars: ["SYNOLOGY_CHAT_TOKEN"],
     },
   },
   legacyAdapter: synologyChatSetupAdapter,
@@ -294,8 +299,9 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
         t("wizard.synologyChat.incomingWebhookHelpUseUrl"),
         t("wizard.synologyChat.incomingWebhookHelpReplies"),
       ],
+      sensitive: true,
       currentValue: ({ cfg, accountId }) => getRawAccountConfig(cfg, accountId).incomingUrl?.trim(),
-      keepPrompt: (value) => t("wizard.synologyChat.incomingWebhookKeep", { value }),
+      keepPrompt: t("wizard.synologyChat.incomingWebhookKeep"),
       validate: ({ value }) => validateWebhookUrl(value),
       applySet: async ({ cfg, accountId, value }) =>
         patchSynologyChatAccountConfig({
@@ -303,6 +309,30 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
           accountId,
           enabled: true,
           patch: { incomingUrl: value.trim() },
+        }),
+    },
+    {
+      inputKey: "webhookUrl",
+      message: t("wizard.synologyChat.publicWebhookUrlPrompt"),
+      placeholder: "https://gateway.example.com/webhook/synology",
+      required: false,
+      applyEmptyValue: true,
+      sensitive: true,
+      helpTitle: t("wizard.synologyChat.publicWebhookUrlTitle"),
+      helpLines: [
+        t("wizard.synologyChat.publicWebhookUrlHelp"),
+        t("wizard.synologyChat.publicWebhookUrlScope"),
+      ],
+      currentValue: ({ cfg, accountId }) => getRawAccountConfig(cfg, accountId).webhookUrl?.trim(),
+      keepPrompt: t("wizard.synologyChat.publicWebhookUrlKeep"),
+      validate: ({ value }) => validatePublicWebhookUrl(value),
+      applySet: async ({ cfg, accountId, value }) =>
+        patchSynologyChatAccountConfig({
+          cfg,
+          accountId,
+          enabled: true,
+          clearFields: value.trim() ? undefined : ["webhookUrl"],
+          patch: value.trim() ? { webhookUrl: value.trim() } : {},
         }),
     },
     {

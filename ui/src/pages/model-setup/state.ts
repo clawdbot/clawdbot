@@ -5,11 +5,12 @@ import type {
   WizardNextResult,
   WizardStep,
 } from "../../api/types.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 
-export const MODEL_SETUP_DETECT_TIMEOUT_MS = 20_000;
-export const MODEL_SETUP_VERIFY_TIMEOUT_MS = 30_000;
-const MODEL_SETUP_ACTIVATE_TIMEOUT_MS = 150_000;
-const MODEL_SETUP_CODEX_ACTIVATE_TIMEOUT_MS = 480_000;
+export const MODEL_SETUP_DETECT_TIMEOUT_MS = 40_000;
+// Match native setup: the Gateway's 90-second inference probe also needs startup allowance.
+export const MODEL_SETUP_VERIFY_TIMEOUT_MS = 150_000;
+const MODEL_SETUP_ACTIVATE_TIMEOUT_MS = 480_000;
 export const MODEL_SETUP_AUTH_START_TIMEOUT_MS = 30_000;
 export const MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS = null;
 
@@ -20,7 +21,7 @@ export type ModelSetupPageState =
 
 export type ModelSetupActivationState =
   | { phase: "idle" }
-  | { phase: "testing"; targetId: string; modelRef: string }
+  | { phase: "testing"; targetId: string }
   | {
       phase: "failure";
       targetId: string;
@@ -37,6 +38,10 @@ export type ModelSetupVerifyState =
   | { phase: "ok"; modelRef: string; latencyMs?: number }
   | { phase: "failed"; status: ModelSetupVerifyFailure["status"]; error: string };
 
+export type ModelSetupWizardResult =
+  | WizardNextResult
+  | { done: true; status: "not-admitted"; error: string };
+
 export type ModelSetupWizardState =
   | { phase: "idle" }
   | { phase: "starting"; authChoice: string }
@@ -47,14 +52,16 @@ export type ModelSetupWizardState =
       busy: boolean;
       validationError: string | null;
     }
-  | { phase: "done"; authChoice: string }
+  | { phase: "done"; authChoice: string; preparedModelRef?: string }
   | { phase: "cancelled"; message: string }
   | { phase: "error"; message: string };
 
 export function activationTimeoutForKind(kind: string): number {
-  return kind === "codex-cli"
-    ? MODEL_SETUP_CODEX_ACTIVATE_TIMEOUT_MS
-    : MODEL_SETUP_ACTIVATE_TIMEOUT_MS;
+  // Match the Gateway-owned provider-auth wizard lifetime, including user sign-in.
+  if (kind === "provider-auth") {
+    return 25 * 60 * 1000;
+  }
+  return MODEL_SETUP_ACTIVATE_TIMEOUT_MS;
 }
 
 export function activationTargetId(kind: string, modelRef: string): string {
@@ -65,20 +72,29 @@ export function mapActivationResult(params: {
   result: SystemAgentSetupActivateResult;
   targetId: string;
   fallbackError: string;
+  restartWarning: string;
+  refreshWarning?: string | null;
 }): ModelSetupActivationState {
   const { result } = params;
   if (result.ok && result.modelRef) {
+    const warning = [
+      result.gatewayRestartRequired ? params.restartWarning : null,
+      params.refreshWarning,
+    ]
+      .filter(Boolean)
+      .join("\n");
     return {
       phase: "success",
       modelRef: result.modelRef,
       ...(typeof result.latencyMs === "number" ? { latencyMs: result.latencyMs } : {}),
+      ...(warning ? { warning } : {}),
     };
   }
   return {
     phase: "failure",
     targetId: params.targetId,
     status: result.status && result.status !== "ok" ? result.status : "unknown",
-    error: result.error?.trim() || params.fallbackError,
+    error: formatUiExternalText(result.error, params.fallbackError),
   };
 }
 
@@ -90,12 +106,12 @@ export function mapVerifyResult(result: SystemAgentSetupVerifyResult): ModelSetu
       ...(typeof result.latencyMs === "number" ? { latencyMs: result.latencyMs } : {}),
     };
   }
-  return { phase: "failed", status: result.status, error: result.error };
+  return { phase: "failed", status: result.status, error: formatUiExternalText(result.error) };
 }
 
 export function wizardStateFromResult(
   authChoice: string,
-  result: WizardNextResult,
+  result: ModelSetupWizardResult,
   fallbackError: string,
 ): ModelSetupWizardState {
   if (!result.done && result.step) {
@@ -104,16 +120,20 @@ export function wizardStateFromResult(
       authChoice,
       step: result.step,
       busy: false,
-      validationError: result.error?.trim() || null,
+      validationError: result.error?.trim() ? formatUiExternalText(result.error) : null,
     };
   }
-  if (result.status === "done") {
-    return { phase: "done", authChoice };
+  if (result.done && result.status === "done") {
+    return {
+      phase: "done",
+      authChoice,
+      ...(result.preparedModelRef ? { preparedModelRef: result.preparedModelRef } : {}),
+    };
   }
   if (result.status === "cancelled") {
-    return { phase: "cancelled", message: result.error?.trim() || fallbackError };
+    return { phase: "cancelled", message: formatUiExternalText(result.error, fallbackError) };
   }
-  return { phase: "error", message: result.error?.trim() || fallbackError };
+  return { phase: "error", message: formatUiExternalText(result.error, fallbackError) };
 }
 
 export function initialWizardValue(step: WizardStep): unknown {

@@ -1,46 +1,39 @@
-import AVFAudio
+import Foundation
 import Observation
+import OpenClawKit
 
 @MainActor
 @Observable
-final class WatchSpeechPlayback: NSObject {
-    private let synthesizer = AVSpeechSynthesizer()
+final class WatchSpeechPlayback {
+    private var speechTask: Task<Void, Never>?
     private(set) var isSpeaking = false
-
-    override init() {
-        super.init()
-        self.synthesizer.delegate = self
-    }
+    private(set) var errorText: String?
 
     func speak(_ text: String) {
         self.stop()
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         self.isSpeaking = true
-        self.synthesizer.speak(AVSpeechUtterance(string: text))
+        self.speechTask = Task { @MainActor in
+            // A stopped task can still be scheduled, or finish after its replacement.
+            // Only the current task may start speech or clear the playback controls.
+            guard !Task.isCancelled else { return }
+            do {
+                try await TalkSystemSpeechSynthesizer.shared.speak(text: text)
+            } catch TalkSystemSpeechSynthesizer.SpeakError.canceled {
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.errorText = String(localized: "Couldn't speak the reply. Read it in Chat.")
+            }
+            guard !Task.isCancelled else { return }
+            self.isSpeaking = false
+            self.speechTask = nil
+        }
     }
 
     func stop() {
-        guard self.isSpeaking || self.synthesizer.isSpeaking else { return }
-        self.synthesizer.stopSpeaking(at: .immediate)
+        self.speechTask?.cancel()
+        self.speechTask = nil
         self.isSpeaking = false
-    }
-}
-
-extension WatchSpeechPlayback: AVSpeechSynthesizerDelegate {
-    nonisolated func speechSynthesizer(
-        _: AVSpeechSynthesizer,
-        didFinish _: AVSpeechUtterance)
-    {
-        Task { @MainActor in
-            self.isSpeaking = false
-        }
-    }
-
-    nonisolated func speechSynthesizer(
-        _: AVSpeechSynthesizer,
-        didCancel _: AVSpeechUtterance)
-    {
-        Task { @MainActor in
-            self.isSpeaking = false
-        }
+        self.errorText = nil
     }
 }

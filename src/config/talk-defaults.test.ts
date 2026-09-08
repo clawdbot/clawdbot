@@ -38,7 +38,9 @@ describe("talk silence timeout defaults", () => {
       `\`${EXPECTED_TALK_SILENCE_TIMEOUT_MS_BY_PLATFORM.ios}\` ms iOS`;
 
     expect(FIELD_HELP["talk.silenceTimeoutMs"]).toContain(defaultsDescription);
-    expect(readRepoFile("docs/gateway/config-agents.md")).toContain(defaultsDescription);
+    expect(readRepoFile("docs/gateway/config-agents/messages-and-talk.md")).toContain(
+      defaultsDescription,
+    );
     expect(readRepoFile("docs/nodes/talk.md")).toContain(talkDocDefaults);
   });
 

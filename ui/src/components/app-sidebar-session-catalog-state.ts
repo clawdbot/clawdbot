@@ -5,14 +5,13 @@ import type {
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { sessionCatalogHostKey } from "./app-sidebar-session-types.ts";
 
-type SessionCatalogError = NonNullable<SessionCatalog["error"]>;
-
-export function sessionCatalogRequestError(error: unknown): SessionCatalogError {
+export function sessionCatalogRequestError(error: unknown): NonNullable<SessionCatalog["error"]> {
   return {
     code: error instanceof GatewayRequestError ? error.gatewayCode : "UNAVAILABLE",
-    message: error instanceof Error ? error.message : String(error),
+    message: formatUiError(error),
   };
 }
 
@@ -31,12 +30,11 @@ export function preserveExpandedCatalogHost(
   if (!previous) {
     return freshHost;
   }
-  const { sessions, nextCursor, ...previousDetails } = previous;
   const { sessions: _freshSessions, nextCursor: _freshNextCursor, ...freshDetails } = freshHost;
+  const { nextCursor, ...previousDetails } = previous;
   return {
     ...previousDetails,
     ...freshDetails,
-    sessions,
     ...(nextCursor !== undefined ? { nextCursor } : {}),
   };
 }
@@ -87,6 +85,7 @@ export async function refetchExpandedSessionCatalogPages(params: {
   agentId: string;
   pageDepths: ReadonlyMap<string, number>;
   isCurrent: () => boolean;
+  canRequestPage: () => boolean;
 }): Promise<SessionCatalog[]> {
   const previousCatalogs = new Map(params.previousCatalogs.map((catalog) => [catalog.id, catalog]));
   return Promise.all(
@@ -108,6 +107,10 @@ export async function refetchExpandedSessionCatalogPages(params: {
           let sessions = host.sessions;
           let nextCursor = host.nextCursor;
           for (let loadedPages = 0; loadedPages < pageDepth && nextCursor; loadedPages += 1) {
+            // Pausing automatic replay must retain the full visible window, not its partial prefix.
+            if (!params.canRequestPage()) {
+              return preserveExpandedCatalogHost(host, previous);
+            }
             let result: SessionsCatalogListResult;
             try {
               result = await params.client.request<SessionsCatalogListResult>(
@@ -115,6 +118,7 @@ export async function refetchExpandedSessionCatalogPages(params: {
                 {
                   agentId: params.agentId,
                   catalogId: catalog.id,
+                  hostIds: [host.hostId],
                   cursors: { [host.hostId]: nextCursor },
                 },
               );

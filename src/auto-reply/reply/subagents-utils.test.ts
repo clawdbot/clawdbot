@@ -1,16 +1,22 @@
 // Tests subagent utility helpers for label, routing, and transcript handling.
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
-import {
-  resolveSubagentLabel,
-  resolveSubagentTargetFromRuns,
-  sortSubagentRuns,
-} from "./subagents-utils.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.js";
+import { sortSubagentRuns } from "../../agents/subagents/registry/subagent-run-view.js";
+import { resolveSubagentEntryForToken } from "./commands-subagents/shared.js";
+import { resolveSubagentLabel } from "./subagents-utils.js";
 
 const NOW_MS = 1_700_000_000_000;
 
-function makeRun(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
+type RunOverrides = Omit<Partial<SubagentRunRecord>, "execution"> & {
+  startedAt?: number;
+  endedAt?: number;
+  outcome?: SubagentRunRecord["execution"]["outcome"];
+  execution?: SubagentRunRecord["execution"];
+};
+
+function makeRun(overrides: RunOverrides): SubagentRunRecord {
   const id = overrides.runId ?? "run-default";
+  const { startedAt, endedAt, outcome, execution, ...recordOverrides } = overrides;
   return {
     runId: id,
     childSessionKey: overrides.childSessionKey ?? `agent:main:subagent:${id}`,
@@ -19,27 +25,24 @@ function makeRun(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
     task: overrides.task ?? "default task",
     cleanup: overrides.cleanup ?? "keep",
     createdAt: overrides.createdAt ?? NOW_MS - 2_000,
-    ...overrides,
+    ...recordOverrides,
+    execution:
+      execution ??
+      (endedAt === undefined
+        ? { status: "running", startedAt }
+        : { status: "terminal", startedAt, endedAt, outcome }),
   };
 }
 
-function resolveTarget(runs: SubagentRunRecord[], token: string | undefined) {
-  return resolveSubagentTargetFromRuns({
-    runs,
-    token,
-    recentWindowMinutes: 30,
-    label: (entry) => resolveSubagentLabel(entry),
-    aliases: (entry) => (entry.taskName ? [entry.taskName] : []),
-    errors: {
-      missingTarget: "missing",
-      invalidIndex: (value) => `invalid:${value}`,
-      unknownSession: (value) => `unknown-session:${value}`,
-      ambiguousLabel: (value) => `ambiguous-label:${value}`,
-      ambiguousLabelPrefix: (value) => `ambiguous-prefix:${value}`,
-      ambiguousRunIdPrefix: (value) => `ambiguous-run:${value}`,
-      unknownTarget: (value) => `unknown:${value}`,
-    },
-  });
+function resolveTarget(
+  runs: SubagentRunRecord[],
+  token: string | undefined,
+): {
+  entry?: SubagentRunRecord;
+  error?: string;
+} {
+  const result = resolveSubagentEntryForToken(runs, token);
+  return "entry" in result ? result : { error: result.reply.reply?.text };
 }
 
 function expectResolvedRunId(
@@ -55,6 +58,10 @@ function expectResolvedRunId(
 }
 
 describe("subagents utils", () => {
+  beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW_MS);
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -83,7 +90,6 @@ describe("subagents utils", () => {
   });
 
   it("resolves numeric index from running then recent finished order", () => {
-    vi.spyOn(Date, "now").mockReturnValue(NOW_MS);
     const runs = [
       makeRun({
         runId: "running",
@@ -106,14 +112,14 @@ describe("subagents utils", () => {
 
     expectResolvedRunId(runs, "1", "running");
     expectResolvedRunId(runs, "2", "recent-finished");
-    expect(resolveTarget(runs, "3").error).toBe("invalid:3");
+    expect(resolveTarget(runs, "3").error).toBe("⚠️ Invalid subagent index: 3");
   });
 
   it("resolves session key target and unknown session errors", () => {
     const run = makeRun({ runId: "abc123", childSessionKey: "agent:beta:subagent:xyz" });
     expectResolvedRunId([run], "agent:beta:subagent:xyz", "abc123");
     expect(resolveTarget([run], "agent:beta:subagent:missing").error).toBe(
-      "unknown-session:agent:beta:subagent:missing",
+      "⚠️ Unknown subagent session: agent:beta:subagent:missing",
     );
   });
 
@@ -129,10 +135,10 @@ describe("subagents utils", () => {
     expectResolvedRunId(runs, "run-beta", "run-beta-1");
 
     expectResolvedRunId(runs, "alpha core", "run-alpha-1");
-    expect(resolveTarget(runs, "alpha").error).toBe("ambiguous-prefix:alpha");
-    expect(resolveTarget(runs, "run-alpha").error).toBe("ambiguous-run:run-alpha");
-    expect(resolveTarget(runs, "missing").error).toBe("unknown:missing");
-    expect(resolveTarget(runs, undefined).error).toBe("missing");
+    expect(resolveTarget(runs, "alpha").error).toBe("⚠️ Ambiguous subagent label prefix: alpha");
+    expect(resolveTarget(runs, "run-alpha").error).toBe("⚠️ Ambiguous run id prefix: run-alpha");
+    expect(resolveTarget(runs, "missing").error).toBe("⚠️ Unknown subagent id: missing");
+    expect(resolveTarget(runs, undefined).error).toBe("⚠️ Missing subagent id.");
   });
 
   it("returns ambiguous exact label error before prefix/run id matching", () => {
@@ -140,7 +146,7 @@ describe("subagents utils", () => {
       makeRun({ runId: "run-a", label: "dup" }),
       makeRun({ runId: "run-b", label: "dup" }),
     ];
-    expect(resolveTarget(runs, "dup").error).toBe("ambiguous-label:dup");
+    expect(resolveTarget(runs, "dup").error).toBe("⚠️ Ambiguous subagent label: dup");
   });
 
   it("resolves stable taskName aliases before labels and run ids", () => {
@@ -164,7 +170,6 @@ describe("subagents utils", () => {
   });
 
   it("ignores stale duplicate taskName aliases when a current run reuses the handle", () => {
-    vi.spyOn(Date, "now").mockReturnValue(NOW_MS);
     const runs = [
       makeRun({
         runId: "run-old-review",

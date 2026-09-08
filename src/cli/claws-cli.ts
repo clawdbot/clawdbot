@@ -7,33 +7,30 @@ export type ClawsInspectOptions = {
   json?: boolean;
 };
 
-export type ClawsAddOptions = {
+export type ClawsCreateOptions = ClawsInspectOptions & {
+  name?: string;
+  agentId?: string;
+};
+export type ClawsValidateOptions = { json?: boolean };
+export type ClawsBuildOptions = { out: string; json?: boolean };
+export type ClawsDevOptions = { agentId?: string; workspace?: string; json?: boolean };
+
+export type ClawsAddOptions = ClawsDevOptions & {
   dryRun?: boolean;
   yes?: boolean;
   planIntegrity?: string;
-  json?: boolean;
-  agentId?: string;
-  workspace?: string;
 };
 
 export type ClawsStatusOptions = { json?: boolean };
-export type ClawsUpdateOptions = {
+export type ClawsUpdateOptions = Omit<ClawsAddOptions, "agentId" | "workspace"> & {
   from?: string;
-  dryRun?: boolean;
-  yes?: boolean;
-  planIntegrity?: string;
-  json?: boolean;
 };
-export type ClawsRemoveOptions = {
-  dryRun?: boolean;
-  yes?: boolean;
-  planIntegrity?: string;
+export type ClawsRemoveOptions = Omit<ClawsAddOptions, "agentId" | "workspace"> & {
   removeUnused?: boolean;
   removeReferenced?: string[];
   forceReferenced?: boolean;
-  json?: boolean;
 };
-export type ClawsExportOptions = { out: string; json?: boolean };
+export type ClawsExportOptions = { out: string; bootstrap?: string; json?: boolean };
 
 function collectOption(value: string, previous: string[]): string[] {
   return [...previous, value];
@@ -44,6 +41,51 @@ export function registerClawsCli(program: Command) {
     return;
   }
   const claws = program.command("claws").description("Manage experimental OpenClaw Claws");
+
+  claws
+    .command("create")
+    .description("Create a minimal local Claw project")
+    .argument("[path]", "New project directory", ".")
+    .option("--name <name>", "Set the package name")
+    .option("--agent-id <id>", "Set the portable agent id")
+    .option("--json", "Print JSON", false)
+    .action(async (path: string, opts: ClawsCreateOptions) => {
+      const { runClawsCreateCommand } = await import("./claws-cli.project.js");
+      await runClawsCreateCommand(path, opts);
+    });
+
+  claws
+    .command("validate")
+    .description("Validate a local Claw project")
+    .argument("[path]", "Project directory", ".")
+    .option("--json", "Print JSON", false)
+    .action(async (path: string, opts: ClawsValidateOptions) => {
+      const { runClawsValidateCommand } = await import("./claws-cli.project.js");
+      await runClawsValidateCommand(path, opts);
+    });
+
+  claws
+    .command("dev")
+    .description("Build and preview a local Claw without network or mutation")
+    .argument("[path]", "Project directory", ".")
+    .option("--agent-id <id>", "Preview with an unused local agent id")
+    .option("--workspace <path>", "Preview with a new workspace path")
+    .option("--json", "Print JSON", false)
+    .action(async (path: string, opts: ClawsDevOptions) => {
+      const { runClawsDevCommand } = await import("./claws-cli.project.js");
+      await runClawsDevCommand(path, opts);
+    });
+
+  claws
+    .command("build")
+    .description("Build a deterministic Claw package artifact")
+    .argument("[path]", "Project directory", ".")
+    .requiredOption("--out <artifact>", "New .tgz artifact to create")
+    .option("--json", "Print JSON", false)
+    .action(async (path: string, opts: ClawsBuildOptions) => {
+      const { runClawsBuildCommand } = await import("./claws-cli.project.js");
+      await runClawsBuildCommand(path, opts);
+    });
 
   claws
     .command("inspect")
@@ -128,6 +170,7 @@ export function registerClawsCli(program: Command) {
     .description("Export portable state for one installed Claw agent")
     .argument("<agent>", "Final id of the installed Claw agent")
     .requiredOption("--out <path>", "New package directory to create")
+    .option("--bootstrap <path>", "Reviewed Markdown file to export as package BOOTSTRAP.md")
     .option("--json", "Print JSON", false)
     .action(async (agent: string, opts: ClawsExportOptions) => {
       const { runClawsExportCommand } = await import("./claws-cli.runtime.js");

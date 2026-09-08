@@ -40,11 +40,12 @@ export function shouldNotifyUserAboutCompaction(cfg?: OpenClawConfig): boolean {
 
 export function createCompactionNoticePayload(params: {
   phase: CompactionNoticePhase;
+  text?: string;
   currentMessageId?: string;
   applyReplyToMode?: (payload: ReplyPayload) => ReplyPayload;
 }): ReplyPayload {
   const payload: ReplyPayload = {
-    text: COMPACTION_NOTICE_TEXT[params.phase],
+    text: params.text ?? COMPACTION_NOTICE_TEXT[params.phase],
     ...(params.currentMessageId ? { replyToId: params.currentMessageId } : {}),
     replyToCurrent: true,
     isCompactionNotice: true,

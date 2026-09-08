@@ -1,11 +1,13 @@
 /** Tests ACP manager cancellation of active turns and idle sessions. */
 import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import {
   requireTaskByRunId,
   withAcpManagerTaskStateDir,
 } from "../../../test/helpers/acp-manager-task-state.js";
 import {
+  AcpRuntimeError,
   AcpSessionManager,
   baseCfg,
   createRuntime,
@@ -15,10 +17,53 @@ import {
   installAcpSessionManagerTestLifecycle,
   mockParentedAcpSessionEntries,
   mockCallArg,
+  readySessionMeta,
 } from "./manager.test-helpers.js";
 
 describe("AcpSessionManager cancelSession", () => {
   installAcpSessionManagerTestLifecycle();
+
+  it.each(["generic", "acp"] as const)(
+    "records idle cancellation failures without losing %s error identity",
+    async (kind) => {
+      const runtimeState = createRuntime();
+      const error =
+        kind === "generic"
+          ? new Error("Cancel transport failed")
+          : new AcpRuntimeError("ACP_BACKEND_UNAVAILABLE", "Cancel backend unavailable", {
+              detailCode: "CANCEL_UNAVAILABLE",
+            });
+      runtimeState.cancel.mockRejectedValue(error);
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      const sessionKey = "agent:codex:acp:idle-cancel";
+      hoisted.readAcpSessionEntryMock.mockReturnValue({
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: readySessionMeta(),
+      });
+
+      const cancellation = new AcpSessionManager().cancelSession({
+        cfg: baseCfg,
+        sessionKey,
+        reason: "manual-cancel",
+      });
+      if (kind === "generic") {
+        await expect(cancellation).rejects.toMatchObject({
+          code: "ACP_TURN_FAILED",
+          message: error.message,
+          cause: error,
+        });
+      } else {
+        await expect(cancellation).rejects.toBe(error);
+      }
+      expect(runtimeState.cancel).toHaveBeenCalledOnce();
+      expectRecordFields(mockCallArg(runtimeState.cancel), { reason: "manual-cancel" });
+      expect(extractStatesFromUpserts().at(-1)).toBe("error");
+    },
+  );
 
   it("preempts an active turn on cancel and returns to idle state", async () => {
     await withAcpManagerTaskStateDir(async () => {
@@ -64,11 +109,17 @@ describe("AcpSessionManager cancelSession", () => {
         },
         { interval: 1 },
       );
+      const taskDetail = asOptionalRecord(requireTaskByRunId("run-1").detail);
+      const instanceId = typeof taskDetail?.instanceId === "string" ? taskDetail.instanceId : "";
+      expect(instanceId).not.toBe("");
 
       await manager.cancelSession({
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         reason: "manual-cancel",
+        expectedRunId: "run-1",
+        expectedInstanceId: instanceId,
+        expectedOwnerKey: "agent:main:main",
       });
       await runPromise;
 
@@ -90,6 +141,152 @@ describe("AcpSessionManager cancelSession", () => {
       expect(states).toContain("running");
       expect(states).toContain("idle");
       expect(states).not.toContain("error");
+    });
+  });
+
+  it("keeps a queued same-id successor outside the active-turn cancellation", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      mockParentedAcpSessionEntries({
+        childSessionKey: "agent:codex:acp:child-1",
+        parentSessionKey: "agent:main:main",
+      });
+
+      let runCount = 0;
+      let firstEntered = false;
+      let secondEntered = false;
+      let secondSignal: AbortSignal | undefined;
+      let releaseSecond: (() => void) | undefined;
+      runtimeState.runTurn.mockImplementation(async function* (input: { signal?: AbortSignal }) {
+        runCount += 1;
+        if (runCount === 1) {
+          firstEntered = true;
+          await new Promise<void>((resolve) => {
+            if (input.signal?.aborted) {
+              resolve();
+              return;
+            }
+            input.signal?.addEventListener("abort", () => resolve(), { once: true });
+          });
+          yield { type: "done" as const, stopReason: "cancel" };
+          return;
+        }
+        secondEntered = true;
+        secondSignal = input.signal;
+        await new Promise<void>((resolve) => {
+          releaseSecond = resolve;
+        });
+        yield { type: "done" as const, stopReason: "end_turn" };
+      });
+
+      const manager = new AcpSessionManager();
+      const firstRun = manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:child-1",
+        text: "first task",
+        mode: "prompt",
+        requestId: "run-shared",
+      });
+      await vi.waitFor(() => expect(firstEntered).toBe(true), { interval: 1 });
+      const taskDetail = asOptionalRecord(requireTaskByRunId("run-shared").detail);
+      const instanceId = typeof taskDetail?.instanceId === "string" ? taskDetail.instanceId : "";
+      expect(instanceId).not.toBe("");
+
+      const successorRun = manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:child-1",
+        text: "queued successor",
+        mode: "prompt",
+        requestId: "run-shared",
+      });
+      await Promise.resolve();
+      expect(secondEntered).toBe(false);
+
+      await manager.cancelSession({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:child-1",
+        reason: "cancel-first",
+        expectedRunId: "run-shared",
+        expectedInstanceId: instanceId,
+        expectedOwnerKey: "agent:main:main",
+      });
+      await firstRun;
+      await vi.waitFor(() => expect(secondEntered).toBe(true), { interval: 1 });
+
+      expect(runtimeState.cancel).toHaveBeenCalledTimes(1);
+      expect(secondSignal?.aborted).toBe(false);
+      releaseSecond?.();
+      await successorRun;
+      expect(runtimeState.cancel).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("does not cancel a replacement active turn", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      mockParentedAcpSessionEntries({
+        childSessionKey: "agent:codex:acp:child-1",
+        parentSessionKey: "agent:main:main",
+      });
+      let enteredRun = false;
+      let releaseRun: (() => void) | undefined;
+      runtimeState.runTurn.mockImplementation(async function* () {
+        enteredRun = true;
+        await new Promise<void>((resolve) => {
+          releaseRun = resolve;
+        });
+        yield { type: "done" as const, stopReason: "end_turn" };
+      });
+      const manager = new AcpSessionManager();
+      const runPromise = manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:child-1",
+        text: "replacement task",
+        mode: "prompt",
+        requestId: "run-current",
+      });
+      await vi.waitFor(() => expect(enteredRun).toBe(true), { interval: 1 });
+      const taskDetail = asOptionalRecord(requireTaskByRunId("run-current").detail);
+      const instanceId = typeof taskDetail?.instanceId === "string" ? taskDetail.instanceId : "";
+      expect(instanceId).not.toBe("");
+
+      await expect(
+        manager.cancelSession({
+          cfg: baseCfg,
+          sessionKey: "agent:codex:acp:child-1",
+          reason: "foreign-owner-cancel",
+          expectedRunId: "run-current",
+          expectedInstanceId: instanceId,
+          expectedOwnerKey: "agent:main:other",
+        }),
+      ).rejects.toThrow("ACP task owner could not be verified.");
+      expect(runtimeState.cancel).not.toHaveBeenCalled();
+
+      await expect(
+        manager.cancelSession({
+          cfg: baseCfg,
+          sessionKey: "agent:codex:acp:child-1",
+          reason: "stale-task-cancel",
+          expectedRunId: "run-current",
+          expectedInstanceId: "instance-from-prior-turn",
+          expectedOwnerKey: "agent:main:main",
+        }),
+      ).rejects.toThrow("ACP task is no longer the active run.");
+      expect(runtimeState.cancel).not.toHaveBeenCalled();
+
+      releaseRun?.();
+      await runPromise;
     });
   });
 });

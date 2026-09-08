@@ -1,5 +1,19 @@
 export type ManagedWorktreeOwnerKind = "manual" | "workboard" | "session";
 
+export type ManagedWorktreeRunEndCleanupOutcome =
+  | "removed-lossless"
+  | "retained-busy"
+  | "retained-dirty"
+  | "retained-unpushed"
+  | "retained-provisioned-drift"
+  | "failed";
+
+export type ManagedWorktreeRunEndCleanup = {
+  outcome: ManagedWorktreeRunEndCleanupOutcome;
+  at: number;
+  reason?: string;
+};
+
 export type ProvisionedFileState = {
   path: string;
   mode: number | null;
@@ -20,6 +34,7 @@ export type ManagedWorktreeRecord = {
   createdAt: number;
   lastActiveAt: number;
   removedAt?: number;
+  runEndCleanup?: ManagedWorktreeRunEndCleanup;
 };
 
 export type CreateManagedWorktreeParams = {
@@ -28,11 +43,16 @@ export type CreateManagedWorktreeParams = {
   /** Derived default name; collisions receive a stable numeric suffix. */
   suggestedName?: string;
   baseRef?: string;
+  /** Verified immutable checkout point when baseRef retains the publication target. */
+  checkoutCommit?: string;
   ownerKind?: ManagedWorktreeOwnerKind;
   ownerId?: string;
-  // Repository checkout hooks and .openclaw/worktree-setup.sh execute repo-local code, so
-  // callers reachable from less-privileged surfaces opt out; admin paths keep them on.
+  // Repository Git hooks are always disabled; only the setup script runs repo-local code.
   runSetupScript?: boolean;
+  signal?: AbortSignal;
+  onProgress?: (phase: "checkout" | "setup") => void;
+  /** Synchronous caller-authority guard checked at allocation commit boundaries. */
+  commitGuard?: () => void;
 };
 
 export type RemoveManagedWorktreeResult = {

@@ -8,6 +8,7 @@ const PROFILE = { provider: "example" };
 function provider(overrides: Partial<WorkerProvider> = {}): WorkerProvider {
   return {
     id: "example",
+    resolveAllocation: vi.fn(),
     provision: vi.fn(),
     inspect: vi.fn(),
     destroy: vi.fn(),

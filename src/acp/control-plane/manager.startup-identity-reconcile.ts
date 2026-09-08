@@ -14,6 +14,7 @@ import type {
   ResolveManagerSession,
   WithManagerSessionActor,
 } from "./manager.types.js";
+import { resolveAcpSessionTarget } from "./manager.utils.js";
 
 /** Resolves pending ACP session identities opportunistically during manager startup. */
 export async function runManagerStartupIdentityReconcile(params: {
@@ -55,22 +56,27 @@ export async function runManagerStartupIdentityReconcile(params: {
 
     checked += 1;
     try {
-      const becameResolved = await params.withSessionActor(session.sessionKey, async () => {
+      const target = resolveAcpSessionTarget({
+        cfg: params.cfg,
+        sessionKey: session.sessionKey,
+        agentId: session.agentId,
+      });
+      const becameResolved = await params.withSessionActor(target, async () => {
         const resolution = params.resolveSession({
           cfg: params.cfg,
-          sessionKey: session.sessionKey,
+          ...target,
         });
         if (resolution.kind !== "ready") {
           return false;
         }
         const { runtime, handle, meta } = await params.ensureRuntimeHandle({
           cfg: params.cfg,
-          sessionKey: session.sessionKey,
+          ...target,
           meta: resolution.meta,
         });
         const reconciled = await params.reconcileRuntimeSessionIdentifiers({
           cfg: params.cfg,
-          sessionKey: session.sessionKey,
+          ...target,
           runtime,
           handle,
           meta,

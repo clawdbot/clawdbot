@@ -6,9 +6,9 @@ export function getNodeWakeStateSnapshot(
   pairingGeneration?: string,
 ):
   | {
-      lastWakeAtMs: number;
+      lastWakeAtMs: number | undefined;
       wakeInFlight: boolean;
-      lastNudgeAtMs: number;
+      lastNudgeAtMs: number | undefined;
       lifecycleUsers: number;
     }
   | undefined {

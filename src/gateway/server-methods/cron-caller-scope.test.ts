@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { CronJob, CronJobCreate } from "../../cron/types.js";
-import { cronJobMatchesCallerScope, cronJobMatchesDeclarationScope } from "./cron-caller-scope.js";
+import {
+  cronJobMatchesCallerScope,
+  cronJobMatchesDeclarationScope,
+  readCronCallerScope,
+} from "./cron-caller-scope.js";
 
 function createScopedJob(): CronJob {
   return {
@@ -20,6 +24,40 @@ function createScopedJob(): CronJob {
 }
 
 describe("cron caller scope ownership", () => {
+  it.each([
+    [
+      "external channel",
+      { turnSourceChannel: " Discord " },
+      { kind: "external", channel: "discord" },
+    ],
+    ["explicit local", { turnSourceLocal: true }, { kind: "local" }],
+    ["missing", {}, { kind: "unknown" }],
+  ] as const)(
+    "stamps %s creator origin without reading the routing key",
+    (_label, source, origin) => {
+      const scope = readCronCallerScope({
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            turnSourceAccountId: "work",
+            cronToolsAllowCapture: "final-executable-surface",
+            cronExecToolTarget: { host: "gateway", ask: "always" },
+            ...source,
+          },
+        },
+      } as never);
+
+      expect(scope?.toolsAllowProvenance?.callerOrigin).toEqual(origin);
+      expect(scope?.toolsAllowExecTarget).toEqual({
+        version: 1,
+        host: "gateway",
+        ask: "always",
+      });
+    },
+  );
+
   it("uses a scoped session key before the configured default", () => {
     const job = createScopedJob();
 

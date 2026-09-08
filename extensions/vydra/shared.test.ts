@@ -1,10 +1,9 @@
-// Vydra tests cover shared download timeout plugin behavior.
+// Vydra tests cover shared URL extraction and download behavior.
 import { once } from "node:events";
 import http from "node:http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
-import { afterEach, describe, expect, it } from "vitest";
-import { downloadVydraAsset } from "./shared.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { downloadVydraAsset, extractVydraResultUrls } from "./shared.js";
 
 describe("downloadVydraAsset", () => {
   installPinnedHostnameTestHooks();
@@ -19,6 +18,7 @@ describe("downloadVydraAsset", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     for (const timer of dripTimers) {
       clearTimeout(timer);
     }
@@ -114,7 +114,35 @@ describe("downloadVydraAsset", () => {
     expect(elapsedMs).toBeLessThan(timeoutMs + 1_500);
   });
 
+  it.each([200, 500])(
+    "preserves the request timeout when wall-clock time trails its timer (HTTP %i)",
+    async (statusCode) => {
+      // The request timer can fire before Date reaches the absolute deadline.
+      // Keep real HTTP and timers while making that clock ordering deterministic.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const timeoutMs = 250;
+      const port = await listenDripServer({
+        statusCode,
+        contentType: statusCode === 200 ? "image/png" : "text/plain",
+        chunk: "e",
+      });
+
+      await expect(
+        downloadVydraAsset({
+          url: `http://127.0.0.1:${port}/generated/test.png`,
+          kind: "image",
+          timeoutMs,
+          fetchFn: fetch,
+          maxBytes: 1024 * 1024,
+          requestPolicy: requestPolicyFor(`http://127.0.0.1:${port}`, true),
+        }),
+      ).rejects.toThrow(`Vydra image download timed out after ${timeoutMs}ms`);
+    },
+  );
+
+  // Completed-response semantics must not race host time; real drip tests above own deadlines.
   it("preserves normalized and redacted provider errors after the bounded read", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const result = await downloadVydraAsset({
       url: "https://cdn.vydra.example/generated/test.png",
       kind: "image",
@@ -130,6 +158,7 @@ describe("downloadVydraAsset", () => {
       maxBytes: 1024 * 1024,
       requestPolicy: requestPolicyFor("https://cdn.vydra.example"),
     }).catch((error: unknown) => error);
+    expect(vi.getTimerCount()).toBe(0);
 
     expect(result).toMatchObject({
       name: "ProviderHttpError",
@@ -143,6 +172,7 @@ describe("downloadVydraAsset", () => {
   });
 
   it("normalizes null-body HTTP errors after the bounded read", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const result = await downloadVydraAsset({
       url: "https://cdn.vydra.example/generated/test.png",
       kind: "image",
@@ -151,11 +181,13 @@ describe("downloadVydraAsset", () => {
       maxBytes: 1024 * 1024,
       requestPolicy: requestPolicyFor("https://cdn.vydra.example"),
     }).catch((error: unknown) => error);
+    expect(vi.getTimerCount()).toBe(0);
 
     expect(result).toMatchObject({ name: "ProviderHttpError", status: 304, statusCode: 304 });
   });
 
   it("preserves HTTP metadata when the error body stream fails", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const result = await downloadVydraAsset({
       url: "https://cdn.vydra.example/generated/test.png",
       kind: "image",
@@ -175,6 +207,7 @@ describe("downloadVydraAsset", () => {
       maxBytes: 1024 * 1024,
       requestPolicy: requestPolicyFor("https://cdn.vydra.example"),
     }).catch((error: unknown) => error);
+    expect(vi.getTimerCount()).toBe(0);
 
     expect(result).toMatchObject({
       name: "ProviderHttpError",
@@ -185,6 +218,7 @@ describe("downloadVydraAsset", () => {
   });
 
   it("preserves successful response body errors before the deadline", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const result = await downloadVydraAsset({
       url: "https://cdn.vydra.example/generated/test.png",
       kind: "image",
@@ -201,35 +235,110 @@ describe("downloadVydraAsset", () => {
       maxBytes: 1024 * 1024,
       requestPolicy: requestPolicyFor("https://cdn.vydra.example"),
     }).catch((error: unknown) => error);
+    expect(vi.getTimerCount()).toBe(0);
 
     expect(result).toBeInstanceOf(Error);
     expect(result).toMatchObject({ message: "broken success body" });
   });
 
-  it("does not bound a dripping body when only chunk idle timeout is used", async () => {
-    // Negative control: chunkTimeoutMs resets on every drip, so idle alone never fires.
-    const port = await listenDripServer({
-      statusCode: 200,
-      contentType: "image/png",
-      chunk: Buffer.from([0x00]),
-    });
-    const response = await fetch(`http://127.0.0.1:${port}/`);
-    let settled = false;
-    void readResponseWithLimit(response, 1024 * 1024, {
-      chunkTimeoutMs: 100,
-      onIdleTimeout: ({ chunkTimeoutMs }) => new Error(`idle fired after ${chunkTimeoutMs}ms`),
-    })
-      .then(() => {
-        settled = true;
-      })
-      .catch(() => {
-        settled = true;
-      });
-
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 400);
-    });
-    expect(settled).toBe(false);
-    // Body reader is locked by readResponseWithLimit; tear down via server close in afterEach.
+  it.each([
+    { name: "JSON error", contentType: "application/json", body: '{"error":"denied"}' },
+    { name: "problem JSON", contentType: "application/problem+json", body: '{"title":"denied"}' },
+    { name: "HTML", contentType: "text/html; charset=utf-8", body: "<html>sign in</html>" },
+    { name: "empty video", contentType: "video/mp4", body: "" },
+  ])("rejects a successful $name response as a downloaded video", async ({ contentType, body }) => {
+    await expect(
+      downloadVydraAsset({
+        url: "https://cdn.vydra.example/generated/test.mp4",
+        kind: "video",
+        timeoutMs: 250,
+        fetchFn: async () =>
+          new Response(body, { status: 200, headers: { "content-type": contentType } }),
+        maxBytes: 1024 * 1024,
+        requestPolicy: requestPolicyFor("https://cdn.vydra.example"),
+      }),
+    ).rejects.toThrow("Vydra video download: malformed video response");
   });
+
+  it("keeps valid downloads alive beyond the binary reader's default idle timeout", async () => {
+    vi.useFakeTimers();
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+          setTimeout(() => controller.close(), 31_000);
+        },
+      }),
+      { headers: { "content-type": "video/mp4" } },
+    );
+    const result = downloadVydraAsset({
+      url: "https://cdn.vydra.example/generated/test.mp4",
+      kind: "video",
+      timeoutMs: 45_000,
+      fetchFn: async () => response,
+      maxBytes: 1024,
+      requestPolicy: requestPolicyFor("https://cdn.vydra.example"),
+    }).catch((error: unknown) => error);
+
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(await result).toMatchObject({ buffer: Buffer.from([1, 2, 3]) });
+  });
+
+  it("labels malformed download rejections with the requested media kind", async () => {
+    await expect(
+      downloadVydraAsset({
+        url: "https://cdn.vydra.example/generated/test.png",
+        kind: "image",
+        timeoutMs: 250,
+        fetchFn: async () =>
+          new Response('{"error":"denied"}', {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        maxBytes: 1024 * 1024,
+        requestPolicy: requestPolicyFor("https://cdn.vydra.example"),
+      }),
+    ).rejects.toThrow("Vydra image download: malformed image response");
+  });
+});
+
+it("preserves URL priority, traversal bounds and independent result arrays", () => {
+  const payload = {
+    audioUrl: "https://cdn.example/other.mp3",
+    videoUrl: "https://cdn.example/other.mp4",
+    imageUrls: ["https://cdn.example/second.png", [" https://cdn.example/first.png "]],
+    imageUrl: " \thttps://cdn.example/first.png\n",
+    url: "https://cdn.example/shared.png",
+    resultUrl: "https://cdn.example/result.png",
+    outputs: [
+      { imageUrl: "https://cdn.example/second.png", url: "https://cdn.example/nested.png" },
+      [[{ imageUrl: "https://cdn.example/array.png" }]],
+    ],
+    data: {
+      data: {
+        data: {
+          data: {
+            data: {
+              imageUrl: "https://cdn.example/edge.png",
+              data: { imageUrl: "https://cdn.example/too-deep.png" },
+            },
+          },
+        },
+      },
+    },
+  };
+  const expected = [
+    "https://cdn.example/first.png",
+    "https://cdn.example/second.png",
+    "https://cdn.example/result.png",
+    "https://cdn.example/shared.png",
+    "https://cdn.example/nested.png",
+    "https://cdn.example/array.png",
+    "https://cdn.example/edge.png",
+  ];
+
+  const urls = extractVydraResultUrls(payload, "image");
+  expect(urls).toEqual(expected);
+  urls.push("https://cdn.example/caller-owned.png");
+  expect(extractVydraResultUrls(payload, "image")).toEqual(expected);
 });

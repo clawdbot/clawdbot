@@ -9,11 +9,12 @@ import {
   resetTaskFlowRegistryRuntimeForTests,
   type TaskFlowRegistryObserverEvent,
 } from "./task-flow-registry.store.js";
-import type {
-  TaskFlowRecord,
-  TaskFlowStatus,
-  TaskFlowSyncMode,
-  JsonValue,
+import {
+  isTerminalTaskFlow,
+  type JsonValue,
+  type TaskFlowRecord,
+  type TaskFlowStatus,
+  type TaskFlowSyncMode,
 } from "./task-flow-registry.types.js";
 import type { TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
 
@@ -107,6 +108,11 @@ type TaskFlowSyncResult =
       reason: "persist_failed";
       current: TaskFlowRecord;
     };
+
+export type PreparedTaskMirroredFlowSync = {
+  current: TaskFlowRecord;
+  next: TaskFlowRecord;
+};
 
 function cloneStructuredValue<T>(value: T | undefined): T | undefined {
   if (value === undefined) {
@@ -526,18 +532,6 @@ export function createTaskFlowForTask(params: {
   });
 }
 
-function updateFlowRecordByIdUnchecked(
-  flowId: string,
-  patch: FlowRecordPatch,
-): TaskFlowRecord | null {
-  ensureTaskFlowRegistryReady();
-  const current = flows.get(flowId);
-  if (!current) {
-    return null;
-  }
-  return writeFlowRecord(applyFlowPatch(current, patch), current);
-}
-
 export function updateFlowRecordByIdExpectedRevision(params: {
   flowId: string;
   expectedRevision: number;
@@ -721,6 +715,22 @@ export function syncFlowFromTaskResult(
   if (flow.syncMode !== "task_mirrored") {
     return { ok: true, flow };
   }
+  const prepared = prepareTaskMirroredFlowSyncFromCurrent(task, flow);
+  const updated = writeFlowRecord(prepared.next, prepared.current);
+  if (!updated) {
+    return {
+      ok: false,
+      reason: "persist_failed",
+      current: flow,
+    };
+  }
+  return { ok: true, flow: updated };
+}
+
+function prepareTaskMirroredFlowSyncFromCurrent(
+  task: Parameters<typeof syncFlowFromTaskResult>[0],
+  flow: TaskFlowRecord,
+): PreparedTaskMirroredFlowSync {
   const terminalFlowStatus = deriveTaskFlowStatusFromTask(task);
   const isTerminal = isTerminalTaskFlowStatus(terminalFlowStatus);
   const timing = resolveTaskMirroredFlowTiming(
@@ -731,7 +741,7 @@ export function syncFlowFromTaskResult(
     },
     isTerminal,
   );
-  const updated = updateFlowRecordByIdUnchecked(flowId, {
+  const next = applyFlowPatch(flow, {
     status: terminalFlowStatus,
     notifyPolicy: task.notifyPolicy,
     goal: normalizeOptionalString(task.label) ?? (task.task.trim() || "Background task"),
@@ -746,14 +756,36 @@ export function syncFlowFromTaskResult(
         }
       : { endedAt: null }),
   });
-  if (!updated) {
-    return {
-      ok: false,
-      reason: "persist_failed",
-      current: flow,
-    };
+  return { current: cloneFlowRecord(flow), next };
+}
+
+export function prepareTaskMirroredFlowSync(
+  task: Parameters<typeof syncFlowFromTaskResult>[0],
+): PreparedTaskMirroredFlowSync | undefined {
+  const flowId = task.parentFlowId?.trim();
+  if (!flowId) {
+    return undefined;
   }
-  return { ok: true, flow: updated };
+  const flow = getTaskFlowById(flowId);
+  return flow?.syncMode === "task_mirrored"
+    ? prepareTaskMirroredFlowSyncFromCurrent(task, flow)
+    : undefined;
+}
+
+/** Publishes a mirrored flow record already committed by a shared-state transaction. */
+export function publishTaskFlowAfterAtomicStore(
+  prepared: PreparedTaskMirroredFlowSync,
+  deferredObserverEvents: Array<() => void>,
+): void {
+  const next = cloneFlowRecord(prepared.next);
+  flows.set(next.flowId, next);
+  deferredObserverEvents.push(() =>
+    emitFlowRegistryObserverEvent(() => ({
+      kind: "upserted",
+      flow: cloneFlowRecord(next),
+      previous: cloneFlowRecord(prepared.current),
+    })),
+  );
 }
 
 export function getTaskFlowById(flowId: string): TaskFlowRecord | undefined {
@@ -775,8 +807,14 @@ export function listTaskFlowsForOwnerKey(ownerKey: string): TaskFlowRecord[] {
 }
 
 export function findLatestTaskFlowForOwnerKey(ownerKey: string): TaskFlowRecord | undefined {
-  const flow = listTaskFlowsForOwnerKey(ownerKey)[0];
-  return flow ? cloneFlowRecord(flow) : undefined;
+  return listTaskFlowsForOwnerKey(ownerKey)[0];
+}
+
+// Owner-key actions must target live work before retained terminal history;
+// otherwise `show` and `cancel` silently act on a completed flow.
+export function findTaskFlowForOwnerLookup(ownerKey: string): TaskFlowRecord | undefined {
+  const ownerFlows = listTaskFlowsForOwnerKey(ownerKey);
+  return ownerFlows.find((flow) => !isTerminalTaskFlow(flow)) ?? ownerFlows[0];
 }
 
 export function resolveTaskFlowForLookupToken(token: string): TaskFlowRecord | undefined {
@@ -784,7 +822,7 @@ export function resolveTaskFlowForLookupToken(token: string): TaskFlowRecord | u
   if (!lookup) {
     return undefined;
   }
-  return getTaskFlowById(lookup) ?? findLatestTaskFlowForOwnerKey(lookup);
+  return getTaskFlowById(lookup) ?? findTaskFlowForOwnerLookup(lookup);
 }
 
 export function listTaskFlowRecords(): TaskFlowRecord[] {

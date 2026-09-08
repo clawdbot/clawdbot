@@ -26,13 +26,26 @@ describe("target registry pattern helpers", () => {
   it("matches wildcard and array tokens with stable capture ordering", () => {
     const tokens = compilePattern("agents.list[].memory.search.providers.*.apiKey").pathTokens;
     const match = matchPathTokens(
-      ["agents", "list", "2", "memory", "search", "providers", "openai", "apiKey"],
+      ["agents", "list", 2, "memory", "search", "providers", "openai", "apiKey"],
       tokens,
     );
 
     expect(match).toEqual({
-      captures: ["2", "openai"],
+      captures: [2, "openai"],
     });
+    expect(
+      matchPathTokens(
+        ["agents", "list", "2", "memory", "search", "providers", "openai", "apiKey"],
+        tokens,
+        { allowLegacyArrayString: true },
+      ),
+    ).toEqual({ captures: [2, "openai"] });
+    expect(
+      matchPathTokens(
+        ["agents", "list", "2", "memory", "search", "providers", "openai", "apiKey"],
+        tokens,
+      ),
+    ).toBeNull();
     expect(
       matchPathTokens(
         ["agents", "list", "x", "memory", "search", "providers", "openai", "apiKey"],
@@ -65,10 +78,10 @@ describe("target registry pattern helpers", () => {
       "agents.list[].memory.search.providers.*.apiKeyRef",
     ).refPathTokens;
     expect(refTokens).toBeDefined();
-    expect(materializePathTokens(refTokens ?? [], ["1", "anthropic"])).toEqual([
+    expect(materializePathTokens(refTokens ?? [], [1, "anthropic"])).toEqual([
       "agents",
       "list",
-      "1",
+      1,
       "memory",
       "search",
       "providers",
@@ -76,6 +89,7 @@ describe("target registry pattern helpers", () => {
       "apiKeyRef",
     ]);
     expect(materializePathTokens(refTokens ?? [], ["anthropic"])).toBeNull();
+    expect(materializePathTokens(refTokens ?? [], ["1", "anthropic"])).toBeNull();
     expect(materializePathTokens(refTokens ?? [], ["01", "anthropic"])).toBeNull();
     expect(materializePathTokens(refTokens ?? [], ["+1", "anthropic"])).toBeNull();
     expect(materializePathTokens(refTokens ?? [], ["4294967294", "anthropic"])).toBeNull();
@@ -90,6 +104,48 @@ describe("target registry pattern helpers", () => {
     expect(match).toEqual({
       captures: ["openai", "x-api-key"],
     });
+  });
+
+  it("keeps wildcard record keys distinct from array indices without excluding arrays", () => {
+    const tokens = compilePattern("accounts.*.token").pathTokens;
+
+    expect(matchPathTokens(["accounts", "0", "token"], tokens)).toEqual({ captures: ["0"] });
+    expect(matchPathTokens(["accounts", 0, "token"], tokens)).toEqual({ captures: [0] });
+    expect(
+      matchPathTokens(["accounts", 0, "token"], compilePattern("accounts.0.token").pathTokens),
+    ).toBeNull();
+  });
+
+  it("normalizes legacy numeric strings only for declared array captures", () => {
+    const arrayTokens = compilePattern("accounts[].token").pathTokens;
+    const wildcardTokens = compilePattern("accounts.*.token").pathTokens;
+    const options = { allowLegacyArrayString: true };
+
+    expect(matchPathTokens(["accounts", "0", "token"], arrayTokens)).toBeNull();
+    expect(matchPathTokens(["accounts", "0", "token"], arrayTokens, options)).toEqual({
+      captures: [0],
+    });
+    expect(matchPathTokens(["accounts", "0", "token"], wildcardTokens, options)).toEqual({
+      captures: ["0"],
+    });
+    for (const invalid of ["01", "+1", "4294967294"]) {
+      expect(matchPathTokens(["accounts", invalid, "token"], arrayTokens, options)).toBeNull();
+    }
+  });
+
+  it("materializes wildcard sibling ref paths with their original container shape", () => {
+    const { pathTokens, refPathTokens } = compilePattern("accounts.*.token", "accounts.*.tokenRef");
+
+    for (const segment of ["0", 0] as const) {
+      const matched = matchPathTokens(["accounts", segment, "token"], pathTokens);
+
+      expect(matched).not.toBeNull();
+      expect(materializePathTokens(refPathTokens ?? [], matched!.captures)).toEqual([
+        "accounts",
+        segment,
+        "tokenRef",
+      ]);
+    }
   });
 
   it("expands wildcard and array patterns over config objects", () => {
@@ -155,5 +211,19 @@ describe("target registry pattern helpers", () => {
         value: "oa",
       },
     ]);
+  });
+
+  it("preserves numeric indices when expanding array and wildcard patterns", () => {
+    const root = { accounts: [{ token: "array-secret" }] };
+
+    for (const pattern of ["accounts[].token", "accounts.*.token"]) {
+      expect(expandPathTokens(root, compilePattern(pattern).pathTokens)).toEqual([
+        {
+          segments: ["accounts", 0, "token"],
+          captures: [0],
+          value: "array-secret",
+        },
+      ]);
+    }
   });
 });

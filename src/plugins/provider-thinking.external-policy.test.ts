@@ -27,7 +27,8 @@ fixtureState.pluginRoot = externalPluginRoot;
 process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = emptyBundledPluginsDir;
 process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
 
-vi.mock("./current-plugin-metadata-snapshot.js", () => ({
+vi.mock("./current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: () => ({
     manifestRegistry: {
       plugins: [

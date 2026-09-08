@@ -1,5 +1,11 @@
 function historyMessage(role: "assistant" | "user", text: string, timestamp: number) {
-  return { content: [{ type: "text", text }], role, timestamp };
+  return {
+    content: [{ type: "text", text }],
+    role,
+    timestamp,
+    __openclaw:
+      role === "user" ? { senderId: "mock-operator", senderName: "Riley Example" } : undefined,
+  };
 }
 
 function finishedTask(n: number, now: number) {
@@ -35,6 +41,8 @@ function taskDetailCase(task: { id: string; title: string } & Record<string, unk
 export function buildBackgroundTasksMock(baseTime: number) {
   const now = Date.now();
   const taskSessionKey = "agent:openclaw-mock:subagent:mock-task-1";
+  const secondTaskSessionKey = "agent:openclaw-mock:subagent:mock-task-2";
+  const requesterSessionKey = "agent:main:main";
   const tasks = [
     {
       id: "task-mock-running",
@@ -47,8 +55,11 @@ export function buildBackgroundTasksMock(baseTime: number) {
       startedAt: now - 25_000,
       updatedAt: now,
       toolUseCount: 7,
+      diffStat: { files: 3, added: 128, removed: 20 },
       lastToolName: "read",
       progressSummary: "Tracing task events through the background task rail",
+      sessionKey: requesterSessionKey,
+      ownerKey: requesterSessionKey,
       childSessionKey: taskSessionKey,
     },
     {
@@ -62,6 +73,10 @@ export function buildBackgroundTasksMock(baseTime: number) {
       startedAt: now - 95_000,
       updatedAt: now - 1_000,
       progressSummary: "Comparing agent-scoped task event paths",
+      diffStat: { files: 2, added: 55, removed: 21 },
+      sessionKey: requesterSessionKey,
+      ownerKey: requesterSessionKey,
+      childSessionKey: secondTaskSessionKey,
     },
     finishedTask(1, now),
     finishedTask(2, now),
@@ -70,31 +85,43 @@ export function buildBackgroundTasksMock(baseTime: number) {
     finishedTask(5, now),
   ];
   return {
-    "chat.history": {
-      cases: [
-        {
-          match: { sessionKey: taskSessionKey },
-          response: {
-            messages: [
-              historyMessage(
-                "user",
-                "Map the run-status indicator code and report the active execution path.",
-                baseTime + 40 * 60_000,
-              ),
-              historyMessage(
-                "assistant",
-                "Tracing task events from the gateway through the chat background-tasks rail.",
-                baseTime + 40 * 60_000 + 8_000,
-              ),
-            ],
-            sessionId: "control-ui-mock-task-session",
-            thinkingLevel: null,
-          },
-        },
-      ],
+    sessions: [taskSessionKey, secondTaskSessionKey].map((key) => ({ key })),
+    sessionTranscripts: {
+      [taskSessionKey]: {
+        messages: [
+          historyMessage(
+            "user",
+            "Map the run-status indicator code and report the active execution path.",
+            baseTime + 40 * 60_000,
+          ),
+          historyMessage(
+            "assistant",
+            "Tracing task events from the gateway through the chat background-tasks rail.",
+            baseTime + 40 * 60_000 + 8_000,
+          ),
+        ],
+        thinkingLevel: null,
+      },
+      [secondTaskSessionKey]: {
+        messages: [
+          historyMessage(
+            "user",
+            "Audit the gateway task-event scope guards.",
+            baseTime + 41 * 60_000,
+          ),
+          historyMessage(
+            "assistant",
+            "Comparing requester, owner, and child-session event routing.",
+            baseTime + 41 * 60_000 + 6_000,
+          ),
+        ],
+        thinkingLevel: null,
+      },
     },
-    // One live subagent task exercises the rail, collapsed badge, and running-task status row.
-    "tasks.list": { tasks },
-    "tasks.get": { cases: tasks.map(taskDetailCase) },
+    methodResponses: {
+      // One live subagent task exercises the rail, collapsed badge, and running-task status row.
+      "tasks.list": { tasks },
+      "tasks.get": { cases: tasks.map(taskDetailCase) },
+    },
   };
 }

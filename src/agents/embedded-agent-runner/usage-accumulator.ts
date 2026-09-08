@@ -1,6 +1,7 @@
 /**
- * Accumulates and normalizes per-call token usage across embedded runs.
+ * Accumulates per-call token usage and monetary totals across embedded runs.
  */
+import { hasBillableUsage } from "../usage.js";
 import type { NormalizedUsage } from "../usage.js";
 
 export type UsageAccumulator = {
@@ -8,8 +9,13 @@ export type UsageAccumulator = {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  cacheReadReported?: true;
+  cacheWriteReported?: true;
+  cacheWrite1h: number;
   reasoningTokens: number;
   total: number;
+  /** Undefined means unobserved; any missing call price makes the complete sum unavailable. */
+  cost: { total: number } | "unavailable" | undefined;
   /**
    * Completed assistant round trips across every model attempt of the run.
    * Kept beside token totals so retried attempts stay counted like their usage.
@@ -32,45 +38,40 @@ export const createUsageAccumulator = (): UsageAccumulator => ({
   output: 0,
   cacheRead: 0,
   cacheWrite: 0,
+  cacheWrite1h: 0,
   reasoningTokens: 0,
   total: 0,
+  cost: undefined,
   assistantTurns: 0,
 });
 
-type MaybeUsage = NormalizedUsage | undefined;
-
-const hasUsageValues = (usage: MaybeUsage): usage is NormalizedUsage => {
-  if (!usage) {
-    return false;
-  }
-  return (
-    [
-      usage.input,
-      usage.output,
-      usage.cacheRead,
-      usage.cacheWrite,
-      usage.contextUsage?.state === "available" ? usage.contextUsage.promptTokens : undefined,
-      usage.contextUsage?.state === "available" ? usage.contextUsage.totalTokens : undefined,
-      usage.reasoningTokens,
-      usage.total,
-    ].some((value) => typeof value === "number" && Number.isFinite(value) && value > 0) ||
-    usage.contextUsage?.state === "unavailable"
-  );
-};
-
-export const mergeUsageIntoAccumulator = (target: UsageAccumulator, usage: MaybeUsage) => {
-  if (!hasUsageValues(usage)) {
+export const mergeUsageIntoAccumulator = (
+  target: UsageAccumulator,
+  usage: NormalizedUsage | undefined,
+) => {
+  if (!hasBillableUsage(usage)) {
     return;
   }
   const callTotal =
     usage.total ??
     (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+  if (usage.cacheRead !== undefined) {
+    target.cacheReadReported = true;
+  }
+  if (usage.cacheWrite !== undefined) {
+    target.cacheWriteReported = true;
+  }
   target.input += usage.input ?? 0;
   target.output += usage.output ?? 0;
   target.cacheRead += usage.cacheRead ?? 0;
   target.cacheWrite += usage.cacheWrite ?? 0;
+  target.cacheWrite1h += usage.cacheWrite1h ?? 0;
   target.reasoningTokens += usage.reasoningTokens ?? 0;
   target.total += callTotal;
+  target.cost =
+    target.cost !== "unavailable" && usage.cost
+      ? { total: (target.cost?.total ?? 0) + usage.cost.total }
+      : "unavailable";
 };
 
 /**
@@ -104,15 +105,19 @@ export const toNormalizedUsage = (usage: UsageAccumulator): NormalizedUsage | un
     usage.cacheWrite > 0 ||
     usage.reasoningTokens > 0 ||
     usage.total > 0;
-  if (!hasUsage) {
+  const cost = usage.cost === "unavailable" ? undefined : usage.cost;
+  if (!hasUsage && !cost) {
     return undefined;
   }
+  const derivedTotal = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
   return {
     input: usage.input || undefined,
     output: usage.output || undefined,
-    cacheRead: usage.cacheRead || undefined,
-    cacheWrite: usage.cacheWrite || undefined,
+    cacheRead: usage.cacheReadReported ? usage.cacheRead : usage.cacheRead || undefined,
+    cacheWrite: usage.cacheWriteReported ? usage.cacheWrite : usage.cacheWrite || undefined,
+    ...(usage.cacheWrite1h > 0 ? { cacheWrite1h: usage.cacheWrite1h } : {}),
     ...(usage.reasoningTokens > 0 ? { reasoningTokens: usage.reasoningTokens } : {}),
-    total: usage.total || undefined,
+    total: usage.total || derivedTotal || undefined,
+    ...(cost ? { cost: { ...cost } } : {}),
   };
 };

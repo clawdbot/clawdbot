@@ -35,10 +35,7 @@ export function createDoctorPrompter(params: {
   options: DoctorOptions;
 }): DoctorPrompter {
   const repairMode = resolveDoctorRepairMode(params.options);
-  const confirmDefault = async (p: Parameters<typeof confirm>[0]) => {
-    if (shouldAutoApproveDoctorFix(repairMode)) {
-      return true;
-    }
+  const confirmPrompt = async (p: DoctorConfirmParams) => {
     if (repairMode.nonInteractive) {
       return false;
     }
@@ -56,6 +53,12 @@ export function createDoctorPrompter(params: {
       130,
     );
   };
+  const confirmDefault = async (p: DoctorConfirmParams) => {
+    if (shouldAutoApproveDoctorFix(repairMode)) {
+      return true;
+    }
+    return confirmPrompt(p);
+  };
 
   return {
     confirm: confirmDefault,
@@ -64,23 +67,10 @@ export function createDoctorPrompter(params: {
       if (shouldAutoApproveDoctorFix(repairMode, { requiresForce: true })) {
         return true;
       }
-      if (repairMode.nonInteractive) {
-        return false;
-      }
       if (repairMode.shouldRepair && !repairMode.shouldForce) {
         return false;
       }
-      if (!repairMode.canPrompt) {
-        return p.initialValue ?? false;
-      }
-      return guardCancel(
-        await confirm({
-          ...p,
-          message: stylePromptMessage(p.message),
-        }),
-        params.runtime,
-        130,
-      );
+      return confirmPrompt(p);
     },
     confirmRuntimeRepair: async (p) => {
       const { requiresInteractiveConfirmation, ...confirmParams } = p;
@@ -93,20 +83,7 @@ export function createDoctorPrompter(params: {
       if (requiresInteractiveConfirmation === true && !repairMode.canPrompt) {
         return false;
       }
-      if (repairMode.nonInteractive) {
-        return false;
-      }
-      if (!repairMode.canPrompt) {
-        return confirmParams.initialValue ?? false;
-      }
-      return guardCancel(
-        await confirm({
-          ...confirmParams,
-          message: stylePromptMessage(confirmParams.message),
-        }),
-        params.runtime,
-        130,
-      );
+      return confirmPrompt(confirmParams);
     },
     select: async <T>(p: Parameters<typeof select>[0], fallback: T) => {
       if (!repairMode.canPrompt || repairMode.shouldRepair) {

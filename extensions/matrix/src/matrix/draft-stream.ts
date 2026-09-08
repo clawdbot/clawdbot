@@ -1,5 +1,5 @@
 // Matrix plugin module implements draft stream behavior.
-import { createDraftStreamLoop } from "openclaw/plugin-sdk/channel-outbound";
+import { createFinalizableDraftStreamControlsForState } from "openclaw/plugin-sdk/channel-outbound";
 import type { CoreConfig } from "../types.js";
 import type { MatrixClient } from "./sdk.js";
 import { editMessageMatrix, prepareMatrixSingleText, sendSingleTextMessageMatrix } from "./send.js";
@@ -35,6 +35,8 @@ type MatrixDraftStream = {
   stop: () => Promise<string | undefined>;
   /** Cancel pending draft updates without creating a new preview event. */
   discardPending: () => Promise<void>;
+  /** Retract the current preview without ending this text block. */
+  deleteCurrentMessage: () => Promise<void>;
   /** Clear the MSC4357 live marker in place when the draft is kept as final text. */
   finalizeLive: () => Promise<boolean>;
   /** Reset state for the next text block (after tool calls). */
@@ -71,7 +73,7 @@ export function createMatrixDraftStream(params: {
   let currentEventId: string | undefined;
   let lastSentText = "";
   let lastSentContent = "";
-  let stopped = false;
+  const streamState = { stopped: false, final: false };
   let sendFailed = false;
   let finalizeInPlaceBlocked = false;
   let liveFinalized = false;
@@ -79,16 +81,20 @@ export function createMatrixDraftStream(params: {
 
   const sendOrEdit = async (text: string): Promise<boolean> => {
     const trimmed = text.trimEnd();
-    if (!trimmed) {
+    if (!trimmed.trim()) {
       return false;
     }
-    const preparedText = prepareMatrixSingleText(trimmed, { cfg, accountId });
+    const preparedText = prepareMatrixSingleText(trimmed, {
+      cfg,
+      accountId,
+      preserveWhitespace: true,
+    });
     if (!preparedText.fitsInSingleEvent) {
       finalizeInPlaceBlocked = true;
       if (!currentEventId) {
         sendFailed = true;
       }
-      stopped = true;
+      streamState.stopped = true;
       log?.(
         `draft-stream: preview exceeded single-event limit (${preparedText.convertedText.length} > ${preparedText.singleEventLimit})`,
       );
@@ -140,14 +146,19 @@ export function createMatrixDraftStream(params: {
       if (!currentEventId) {
         sendFailed = true;
       }
-      stopped = true;
+      streamState.stopped = true;
       return false;
     }
   };
 
-  const loop = createDraftStreamLoop({
+  const {
+    loop,
+    update,
+    stop: stopDraft,
+    discardPending,
+  } = createFinalizableDraftStreamControlsForState({
     throttleMs: DEFAULT_THROTTLE_MS,
-    isStopped: () => stopped,
+    state: streamState,
     sendOrEditStreamMessage: sendOrEdit,
   });
 
@@ -185,51 +196,51 @@ export function createMatrixDraftStream(params: {
   };
 
   const stop = async (): Promise<string | undefined> => {
-    // Flush before marking stopped so the loop can drain pending text.
-    await loop.flush();
-    stopped = true;
+    await stopDraft();
     return currentEventId;
   };
 
-  const discardPending = async (): Promise<void> => {
-    stopped = true;
-    loop.stop();
-    await loop.waitForInFlight();
-  };
-
-  const reset = (): void => {
-    // Clear reply context unless preserveReplyId is set (replyToMode "all"),
-    // in which case subsequent blocks should keep replying to the original.
-    replyToId = params.preserveReplyId ? params.replyToId : undefined;
+  const resetCurrentMessage = (): void => {
     currentEventId = undefined;
     lastSentText = "";
     lastSentContent = "";
-    stopped = false;
     sendFailed = false;
     finalizeInPlaceBlocked = false;
     liveFinalized = false;
     loop.resetPending();
     loop.resetThrottleWindow();
   };
+  const reset = (): void => {
+    // A new block consumes the first-only reply reference; retraction does not.
+    replyToId = params.preserveReplyId ? params.replyToId : undefined;
+    streamState.stopped = false;
+    streamState.final = false;
+    resetCurrentMessage();
+  };
+  const deleteCurrentMessage = async () => {
+    loop.resetPending();
+    await loop.waitForInFlight();
+    if (currentEventId) {
+      await client.redactEvent(roomId, currentEventId);
+    }
+    resetCurrentMessage();
+  };
 
   return {
-    update: (text: string) => {
-      if (stopped) {
-        return;
-      }
-      loop.update(text);
-    },
+    update,
     flush: loop.flush,
     stop,
     discardPending,
+    deleteCurrentMessage,
     finalizeLive,
     reset,
     eventId: () => currentEventId,
     content: () => lastSentContent || undefined,
     matchesPreparedText: (text: string) =>
-      prepareMatrixSingleText(text, {
+      prepareMatrixSingleText(text.trimEnd(), {
         cfg,
         accountId,
+        preserveWhitespace: true,
       }).trimmedText === lastSentText,
     mustDeliverFinalNormally: () => sendFailed || finalizeInPlaceBlocked,
   };

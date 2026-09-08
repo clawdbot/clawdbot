@@ -2,6 +2,7 @@
 import type { HealthCheck, HealthFinding } from "openclaw/plugin-sdk/health";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import type { PolicyEvidence } from "../../policy-state.js";
+import { createPolicyScopedChecks } from "../check-factory.js";
 import { CHECK_IDS } from "../check-ids.js";
 import type { PolicyDoctorCheckDeps } from "../types.js";
 import { readPolicyBoolean, readStringList } from "../utils.js";
@@ -9,61 +10,25 @@ import { readPolicyBoolean, readStringList } from "../utils.js";
 export function createPolicyModelNetworkChecks(
   deps: PolicyDoctorCheckDeps,
 ): readonly HealthCheck[] {
-  const { evaluatePolicy, findingsForCheck } = deps;
-
-  const policyMcpDeniedServerCheck: HealthCheck = {
-    id: CHECK_IDS.policyDeniedMcpServer,
-    kind: "plugin",
-    description: "Configured MCP servers do not match policy deny rules.",
-    source: "policy",
-    async detect(ctx) {
-      return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyDeniedMcpServer);
-    },
-  };
-  const policyMcpUnapprovedServerCheck: HealthCheck = {
-    id: CHECK_IDS.policyUnapprovedMcpServer,
-    kind: "plugin",
-    description: "Configured MCP servers do not match policy allow rules.",
-    source: "policy",
-    async detect(ctx) {
-      return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyUnapprovedMcpServer);
-    },
-  };
-  const policyModelsDeniedProviderCheck: HealthCheck = {
-    id: CHECK_IDS.policyDeniedModelProvider,
-    kind: "plugin",
-    description: "Configured model providers do not match policy deny rules.",
-    source: "policy",
-    async detect(ctx) {
-      return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyDeniedModelProvider);
-    },
-  };
-  const policyModelsUnapprovedProviderCheck: HealthCheck = {
-    id: CHECK_IDS.policyUnapprovedModelProvider,
-    kind: "plugin",
-    description: "Configured model providers do not match policy allow rules.",
-    source: "policy",
-    async detect(ctx) {
-      return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyUnapprovedModelProvider);
-    },
-  };
-  const policyNetworkPrivateAccessCheck: HealthCheck = {
-    id: CHECK_IDS.policyPrivateNetworkAccess,
-    kind: "plugin",
-    description: "Network SSRF policy settings match private-network requirements.",
-    source: "policy",
-    async detect(ctx) {
-      return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyPrivateNetworkAccess);
-    },
-  };
-
-  return [
-    policyMcpDeniedServerCheck,
-    policyMcpUnapprovedServerCheck,
-    policyModelsDeniedProviderCheck,
-    policyModelsUnapprovedProviderCheck,
-    policyNetworkPrivateAccessCheck,
-  ];
+  return createPolicyScopedChecks(deps, [
+    [CHECK_IDS.policyDeniedMcpServer, "Configured MCP servers do not match policy deny rules."],
+    [
+      CHECK_IDS.policyUnapprovedMcpServer,
+      "Configured MCP servers do not match policy allow rules.",
+    ],
+    [
+      CHECK_IDS.policyDeniedModelProvider,
+      "Configured model providers do not match policy deny rules.",
+    ],
+    [
+      CHECK_IDS.policyUnapprovedModelProvider,
+      "Configured model providers do not match policy allow rules.",
+    ],
+    [
+      CHECK_IDS.policyPrivateNetworkAccess,
+      "Network SSRF policy settings match private-network requirements.",
+    ],
+  ]);
 }
 
 export function mcpServerFindings(

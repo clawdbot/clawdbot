@@ -3,6 +3,7 @@ import { chunkTextByBreakResolver, splitLongTextLine } from "../shared/text-chun
 
 /** Offset-preserving text ranges for transports with native style metadata. */
 export {
+  avoidTrailingHighSurrogateBreak,
   chunkTextRanges,
   type ChunkTextRangesOptions,
   type TextChunkRange,
@@ -94,12 +95,10 @@ export { stripMarkdown } from "../shared/text/strip-markdown.js";
 export { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 /** System-message marker helpers for preserving generated status lines. */
 export { SYSTEM_MARK, hasSystemMark, prefixSystemMessage } from "../infra/system-message.ts";
-/** Inline directive stripping helpers for display and delivery boundaries. */
+/** Inline directive stripping helpers for streaming display and delivery boundaries. */
 export {
   stripInlineDirectiveTagsForDelivery,
   stripInlineDirectiveTagsForDisplay,
-  stripInlineDirectiveTagsFromMessageForDisplay,
-  type DisplayMessageWithContent,
   type InlineDirectiveParseResult,
 } from "../utils/directive-tags.js";
 /** Generic item chunker for plugin payload planning. */

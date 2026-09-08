@@ -47,6 +47,7 @@ describe("WhatsApp channel status", () => {
       running: false,
       connected: false,
       healthState: "logged-out",
+      lifecycle: "blocked" as const,
       lastError: "status=401",
     };
 
@@ -69,12 +70,14 @@ describe("WhatsApp channel status", () => {
       authAgeMs: null,
       self: { e164: null, jid: null, lid: null },
       healthState: "logged-out",
+      lifecycle: "blocked",
     });
     expect(accountSnapshot).toMatchObject({
       configured: true,
       statusState: "not-linked",
       linked: false,
       healthState: "logged-out",
+      lifecycle: "blocked",
     });
   });
 });

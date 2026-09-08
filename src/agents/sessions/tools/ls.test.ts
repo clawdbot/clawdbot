@@ -1,20 +1,24 @@
 // ls tool tests cover deterministic directory listings and safe limit
 // normalization for agent-visible file enumeration.
-import { describe, expect, it, vi } from "vitest";
-import { createLsToolDefinition, type LsOperations } from "./ls.js";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import type { DirectoryEntry } from "../../../infra/directory-entries.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
+import { createLsTool, type LsOperations } from "./ls.js";
+import { DEFAULT_MAX_BYTES } from "./truncate.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function operations(entries: string[]): LsOperations {
   return {
-    exists: () => true,
-    stat: (absolutePath) => ({
-      isDirectory: () => absolutePath === "/workspace" || absolutePath.endsWith("/dir"),
-    }),
-    readdir: () => entries,
+    readDirectory: () => entries.map((name) => ({ name, isDirectory: false })),
   };
 }
 
 function textContent(
-  result: Awaited<ReturnType<ReturnType<typeof createLsToolDefinition>["execute"]>>,
+  result: Awaited<ReturnType<ReturnType<typeof createLsTool>["execute"]>>,
 ): string {
   const first = result.content[0];
   return first?.type === "text" ? (first.text ?? "") : "";
@@ -33,104 +37,183 @@ function trackAbortListener(signal: AbortSignal) {
 }
 
 describe("ls tool", () => {
+  it.each([
+    { name: "byte limit", modelBudget: undefined },
+    { name: "model context", modelBudget: { maxChars: 1_800, maxContextChars: 2_500 } },
+  ])("visits every filename through complete pages bounded by $name", async ({ modelBudget }) => {
+    const names = Array.from(
+      { length: 300 },
+      (_, index) => `${String(index).padStart(3, "0")}-${"x".repeat(210)}`,
+    );
+    const tool = createLsTool("/workspace", { operations: operations(names), modelBudget });
+    const seen: unknown[] = [];
+    let after: string | undefined;
+    let pageCount = 0;
+    for (; pageCount < names.length; pageCount += 1) {
+      const page = await tool.execute("list-page", { limit: 500, after });
+      const output = textContent(page);
+      const pageNames = output
+        .split("\n")
+        .filter((line) => line.startsWith('"'))
+        .map((line) => JSON.parse(line));
+      expect(pageNames.length).toBeGreaterThan(0);
+      expect(Buffer.byteLength(output)).toBeLessThanOrEqual(DEFAULT_MAX_BYTES);
+      if (modelBudget) {
+        expect(output.length).toBeLessThanOrEqual(modelBudget.maxChars);
+        expect(output.length * 2).toBeLessThanOrEqual(modelBudget.maxContextChars);
+      }
+      seen.push(...pageNames);
+      const nextAfter = page.details?.nextAfter;
+      if (nextAfter === undefined) {
+        break;
+      }
+      expect(nextAfter).toBe(pageNames.at(-1));
+      expect(nextAfter).not.toBe(after);
+      expect(output).toContain(`after=${JSON.stringify(nextAfter)}`);
+      after = nextAfter;
+    }
+    expect(pageCount).toBeGreaterThan(0);
+    expect(seen).toEqual(names);
+  });
+
+  it("quotes complete control-character and Unicode names in binary order", async () => {
+    const tool = createLsTool("/workspace", {
+      operations: operations([
+        "line\nbreak",
+        "á",
+        "a",
+        "Z",
+        "A",
+        "\tleading",
+        '"quoted"',
+        "emoji-🦀",
+      ]),
+    });
+
+    const page = await tool.execute("list-unusual-names", {});
+
+    expect(
+      textContent(page)
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+    ).toEqual(["\tleading", '"quoted"', "A", "Z", "a", "emoji-🦀", "line\nbreak", "á"]);
+    expect(page.details?.nextAfter).toBeUndefined();
+  });
+
+  it("continues after a deleted directory using its raw name without skipping unseen entries", async () => {
+    const cwd = tempDirs.make("openclaw-ls-delete-page-");
+    await fs.mkdir(path.join(cwd, "alpha"));
+    await Promise.all(["beta", "gamma"].map((name) => fs.writeFile(path.join(cwd, name), "")));
+    const tool = createLsTool(cwd);
+    const first = await tool.execute("first-page", { limit: 1 });
+    expect(textContent(first).split("\n")[0]).toBe('"alpha/"');
+    expect(first.details?.nextAfter).toBe("alpha");
+    await fs.rmdir(path.join(cwd, "alpha"));
+
+    const second = await tool.execute("second-page", { limit: 1, after: first.details?.nextAfter });
+    expect(textContent(second).split("\n")[0]).toBe('"beta"');
+    expect(second.details?.nextAfter).toBe("beta");
+    const final = await tool.execute("final-page", { limit: 1, after: second.details?.nextAfter });
+    expect(textContent(final)).toBe('"gamma"');
+    expect(final.details?.nextAfter).toBeUndefined();
+  });
+
+  it("retains links without following targets and marks only actual directories", async () => {
+    const cwd = tempDirs.make("openclaw-ls-links-");
+    const tool = createLsTool(cwd);
+    const symlinkType = process.platform === "win32" ? "junction" : "dir";
+    const list = (limit?: number) => tool.execute("ls-links", limit ? { limit } : {});
+
+    expect((await list()).content).toEqual([{ type: "text", text: "(empty directory)" }]);
+    await fs.symlink(path.join(cwd, "missing-target"), path.join(cwd, "a-broken"), symlinkType);
+
+    const dangling = await list();
+    expect(dangling.content).toEqual([{ type: "text", text: '"a-broken"' }]);
+    expect(dangling.details).toEqual({ content: '"a-broken"' });
+
+    await fs.mkdir(path.join(cwd, "target-dir"));
+    await fs.symlink(path.join(cwd, "target-dir"), path.join(cwd, "link-to-dir"), symlinkType);
+    await fs.writeFile(path.join(cwd, "z-file.txt"), "fixture\n");
+    expect((await list()).content).toEqual([
+      { type: "text", text: '"a-broken"\n"link-to-dir"\n"target-dir/"\n"z-file.txt"' },
+    ]);
+
+    const limited = await list(1);
+    expect(textContent(limited).split("\n")[0]).toBe('"a-broken"');
+    expect(limited.details).toEqual({ content: textContent(limited), nextAfter: "a-broken" });
+  });
+
   it("clamps non-positive limits instead of reporting a non-empty directory as empty", async () => {
     // Clamp to one entry so bad numeric input cannot hide directory contents.
-    const tool = createLsToolDefinition("/workspace", {
+    const tool = createLsTool("/workspace", {
       operations: operations(["beta.txt", "alpha.txt"]),
     });
 
-    const result = await tool.execute("call-1", { limit: 0 }, undefined, undefined, {} as never);
+    const result = await tool.execute("call-1", { limit: 0 });
 
-    expect(textContent(result)).toBe(
-      "alpha.txt\n\n[1 entries limit reached. Use limit=2 for more]",
-    );
-    expect(result.details?.entryLimitReached).toBe(1);
+    expect(textContent(result).split("\n")[0]).toBe('"alpha.txt"');
+    expect(result.details?.nextAfter).toBe("alpha.txt");
   });
 
   it("uses the default limit for non-finite values", async () => {
-    const tool = createLsToolDefinition("/workspace", {
+    const tool = createLsTool("/workspace", {
       operations: operations(["beta.txt", "alpha.txt"]),
     });
 
-    const result = await tool.execute(
-      "call-1",
-      { limit: Number.NaN },
-      undefined,
-      undefined,
-      {} as never,
-    );
+    const result = await tool.execute("call-1", { limit: Number.NaN });
 
-    expect(textContent(result)).toBe("alpha.txt\nbeta.txt");
-    expect(result.details).toBeUndefined();
+    expect(textContent(result)).toBe('"alpha.txt"\n"beta.txt"');
+    expect(result.details).toEqual({ content: '"alpha.txt"\n"beta.txt"' });
   });
 
-  it.each([
-    {
-      name: "missing path",
-      operations: { ...operations([]), exists: () => false },
-      error: "Path not found: /workspace",
-    },
-    {
-      name: "non-directory path",
+  it("preserves a directory read failure and releases the abort listener", async () => {
+    const tool = createLsTool("/workspace", {
       operations: {
-        ...operations([]),
-        stat: () => ({ isDirectory: () => false }),
-      },
-      error: "Not a directory: /workspace",
-    },
-    {
-      name: "directory read failure",
-      operations: {
-        ...operations([]),
-        readdir: () => {
+        readDirectory: () => {
           throw new Error("permission denied");
         },
       },
-      error: "Cannot read directory: permission denied",
-    },
-  ])("releases the abort listener after $name", async ({ operations: ops, error }) => {
-    const tool = createLsToolDefinition("/workspace", { operations: ops });
+    });
     const controller = new AbortController();
     const listener = trackAbortListener(controller.signal);
 
-    await expect(
-      tool.execute("call-1", {}, controller.signal, undefined, {} as never),
-    ).rejects.toThrow(error);
+    await expect(tool.execute("call-1", {}, controller.signal)).rejects.toThrow(
+      "permission denied",
+    );
 
     listener.expectReleased();
   });
 
   it("releases the abort listener after success", async () => {
-    const tool = createLsToolDefinition("/workspace", { operations: operations(["alpha.txt"]) });
+    const tool = createLsTool("/workspace", { operations: operations(["alpha.txt"]) });
     const controller = new AbortController();
     const listener = trackAbortListener(controller.signal);
 
-    await expect(
-      tool.execute("call-1", {}, controller.signal, undefined, {} as never),
-    ).resolves.toBeDefined();
+    await expect(tool.execute("call-1", {}, controller.signal)).resolves.toBeDefined();
 
     listener.expectReleased();
   });
 
   it("settles once and releases the listener when aborted during an operation", async () => {
-    let finishExists: (() => void) | undefined;
-    const tool = createLsToolDefinition("/workspace", {
+    const listing = createDeferredCore<DirectoryEntry[]>();
+    const reading = createDeferredCore<AbortSignal | undefined>();
+    const tool = createLsTool("/workspace", {
       operations: {
-        ...operations([]),
-        exists: () =>
-          new Promise<boolean>((resolve) => {
-            finishExists = () => resolve(true);
-          }),
+        readDirectory: (_absolutePath, signal) => {
+          reading.resolve(signal);
+          return listing.promise;
+        },
       },
     });
     const controller = new AbortController();
     const listener = trackAbortListener(controller.signal);
-    const result = tool.execute("call-1", {}, controller.signal, undefined, {} as never);
+    const result = tool.execute("call-1", {}, controller.signal);
+    await expect(reading.promise).resolves.toBe(controller.signal);
 
     controller.abort();
 
     await expect(result).rejects.toThrow("Operation aborted");
     listener.expectReleased();
-    finishExists?.();
+    listing.resolve([]);
   });
 });

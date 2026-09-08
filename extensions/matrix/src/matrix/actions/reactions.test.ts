@@ -1,7 +1,7 @@
 // Matrix tests cover reactions plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { MatrixClient } from "../sdk.js";
-import { listMatrixReactions, removeMatrixReactions } from "./reactions.js";
+import { listMatrixEmojis, listMatrixReactions, removeMatrixReactions } from "./reactions.js";
 
 function createReactionsClient(params: {
   chunk: Array<{
@@ -48,6 +48,90 @@ function createReactionsClient(params: {
 }
 
 describe("matrix reaction actions", () => {
+  it("lists sorted room and personal MSC2545 emoticons while rejecting malformed and sticker-only images", async () => {
+    const doRequest = vi.fn(async () => [
+      {
+        type: "im.ponies.room_emotes",
+        state_key: "",
+        content: {
+          images: {
+            zebra: { url: "mxc://example.org/zebra" },
+            sticker: { url: "mxc://example.org/sticker", usage: ["sticker"] },
+            wrongUrl: { url: "https://example.org/wrong" },
+            incompleteMxc: { url: "mxc://example.org" },
+            wrongUsage: { url: "mxc://example.org/wrong-usage", usage: "emoticon" },
+            malformed: null,
+          },
+        },
+      },
+      {
+        type: "im.ponies.room_emotes",
+        state_key: "extra-pack",
+        content: {
+          pack: { usage: ["sticker"] },
+          images: {
+            hidden: { url: "mxc://example.org/hidden" },
+            alpha: { url: "mxc://example.org/alpha", usage: ["emoticon", "sticker"] },
+          },
+        },
+      },
+      { type: "im.ponies.room_emotes", state_key: "broken", content: { images: [] } },
+      { type: "m.room.name", state_key: "", content: { images: { ignored: {} } } },
+    ]);
+    const getAccountData = vi.fn(async () => ({
+      images: { middle: { url: "mxc://example.org/middle", usage: ["emoticon"] } },
+    }));
+    const client = { doRequest, getAccountData, stop: vi.fn() } as unknown as MatrixClient;
+
+    await expect(listMatrixEmojis("!room:example.org", { client })).resolves.toStrictEqual([
+      { name: "alpha", identifier: "alpha", url: "mxc://example.org/alpha" },
+      { name: "middle", identifier: "middle", url: "mxc://example.org/middle" },
+      { name: "zebra", identifier: "zebra", url: "mxc://example.org/zebra" },
+    ]);
+    expect(doRequest).toHaveBeenCalledWith(
+      "GET",
+      "/_matrix/client/v3/rooms/!room%3Aexample.org/state",
+    );
+    expect(getAccountData).toHaveBeenCalledWith("im.ponies.user_emotes");
+  });
+
+  it("caps sorted custom-emote results at 100 and accepts a missing personal pack", async () => {
+    const images = Object.fromEntries(
+      Array.from({ length: 105 }, (_, index) => {
+        const shortcode = `emoji_${String(index).padStart(3, "0")}`;
+        return [shortcode, { url: `mxc://example.org/${shortcode}` }];
+      }),
+    );
+    const client = {
+      doRequest: vi.fn(async () => [
+        { type: "im.ponies.room_emotes", state_key: "", content: { images } },
+      ]),
+      getAccountData: vi.fn(async () => undefined),
+      stop: vi.fn(),
+    } as unknown as MatrixClient;
+
+    const emojis = await listMatrixEmojis("!room:example.org", { client, limit: 500 });
+
+    expect(emojis).toHaveLength(100);
+    expect(emojis[0]?.name).toBe("emoji_000");
+    expect(emojis.at(-1)?.name).toBe("emoji_099");
+    await expect(listMatrixEmojis("!room:example.org", { client, limit: 2 })).resolves.toHaveLength(
+      2,
+    );
+  });
+
+  it("fails visibly when the room-state response is malformed", async () => {
+    const client = {
+      doRequest: vi.fn(async () => ({ state: [] })),
+      getAccountData: vi.fn(async () => undefined),
+      stop: vi.fn(),
+    } as unknown as MatrixClient;
+
+    await expect(listMatrixEmojis("!room:example.org", { client })).rejects.toThrow(
+      "Matrix room state response is invalid.",
+    );
+  });
+
   it("aggregates reactions by key and unique sender", async () => {
     const { client, doRequest } = createReactionsClient({
       chunk: [

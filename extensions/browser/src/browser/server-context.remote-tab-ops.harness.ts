@@ -27,6 +27,8 @@ export function makeState(
       cdpPortRangeEnd: 18899,
       extensionRelayDefaultPort: 18799,
       extensionRelayPorts: {},
+      extensionRelay: { allowLegacyAuth: true },
+      extensionRelayInternalTokens: {},
       cdpProtocol: profile === "remote" ? "https" : "http",
       cdpHost: profile === "remote" ? "1.1.1.1" : "127.0.0.1",
       cdpIsLoopback: profile !== "remote",
@@ -121,7 +123,6 @@ export function createTestBrowserRouteContext(opts: { getState: () => BrowserSer
       profile,
       runtime,
       getCdpControlPolicy: () => resolveCdpControlPolicy(profile, state.resolved.ssrfPolicy),
-      ensureBrowserAvailable: async () => {},
       listTabs: tabOps.listTabs,
       openTab: tabOps.openTab,
     });

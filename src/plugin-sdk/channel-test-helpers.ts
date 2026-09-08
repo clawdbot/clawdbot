@@ -1,4 +1,8 @@
 // Channel test helper exports provide shared fixtures for plugin channel contract tests.
+export {
+  createAccountPolicyInheritanceCases,
+  validateTestChannelConfig,
+} from "./test-helpers/channel-config.js";
 export { createDirectoryTestRuntime, expectDirectorySurface } from "./test-helpers/directory.js";
 export { expectDirectoryIds, type DirectoryListFn } from "./test-helpers/directory-ids.js";
 export {
@@ -15,9 +19,10 @@ export {
   createOutboundTestPlugin,
   createTestRegistry,
   initializeGlobalHookRunner,
-  releasePinnedPluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
   resetGlobalHookRunner,
   setActivePluginRegistry,
+  withPluginRuntimeRegistryScope,
   type PluginHookRegistration,
 } from "./test-helpers/outbound-delivery.js";
 export {
@@ -45,7 +50,6 @@ export {
   getRequiredHookHandler,
   registerHookHandlersForTest,
 } from "./test-helpers/subagent-hooks.js";
-export { assertBundledChannelEntries } from "./test-helpers/bundled-channel-entry.js";
 export {
   escapeRegExp,
   formatEnvelopeTimestamp,

@@ -1,4 +1,5 @@
 // Config-only channel status formatter used when the gateway is unreachable.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
@@ -8,16 +9,13 @@ import {
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import {
-  buildChannelAccountSnapshot,
+  resolveChannelAccountSnapshot,
   buildReadOnlySourceChannelAccountSnapshot,
 } from "../../channels/plugins/status.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
-import {
-  type OfficialExternalPluginRepairHint,
-  resolveMissingOfficialExternalChannelPluginRepairHint,
-} from "../../plugins/official-external-plugin-repair-hints.js";
+import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
 import {
   appendBaseUrlBit,
   appendEnabledConfiguredLinkedBits,
@@ -25,6 +23,7 @@ import {
   appendTokenSourceBits,
   buildChannelAccountLine,
   type ChatChannel,
+  NO_CONFIGURED_CHAT_CHANNELS_LINE,
 } from "./shared.js";
 
 type ChannelStatusPluginLabel = {
@@ -68,12 +67,15 @@ export async function formatConfigChannelsStatusLines(
     });
 
   const sourceConfig = opts?.sourceConfig ?? cfg;
-  const requestedChannel = opts?.channel ? normalizeChannelId(opts.channel) : null;
+  const requestedChannel = opts?.channel
+    ? (normalizeChannelId(opts.channel) ?? normalizeOptionalLowercaseString(opts.channel))
+    : null;
   const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
     activationSourceConfig: sourceConfig,
     includeSetupFallbackPlugins: true,
   }).filter((plugin) => !requestedChannel || plugin.id === requestedChannel);
   const visibleChannelIds = new Set<string>();
+  const statusLinesStart = lines.length;
   for (const plugin of plugins) {
     visibleChannelIds.add(plugin.id);
     const accountIds = plugin.config.listAccountIds(cfg);
@@ -87,7 +89,7 @@ export async function formatConfigChannelsStatusLines(
         cfg: sourceConfig,
         accountId,
       });
-      const resolvedSnapshot = await buildChannelAccountSnapshot({
+      const resolvedSnapshot = await resolveChannelAccountSnapshot({
         plugin,
         cfg,
         accountId,
@@ -106,37 +108,29 @@ export async function formatConfigChannelsStatusLines(
     }
   }
 
-  const missingHints: OfficialExternalPluginRepairHint[] = [];
   const missingChannelIds = [
     ...new Set([
       ...listExplicitConfiguredChannelIdsForConfig(sourceConfig),
       ...listExplicitConfiguredChannelIdsForConfig(cfg),
     ]),
-  ];
-  for (const channelId of missingChannelIds) {
-    if (requestedChannel && channelId !== requestedChannel) {
-      continue;
-    }
-    if (visibleChannelIds.has(channelId)) {
-      continue;
-    }
-    const hint = resolveMissingOfficialExternalChannelPluginRepairHint({
-      config: cfg,
-      activationSourceConfig: sourceConfig,
-      channelId,
-    });
-    if (!hint?.channelId || visibleChannelIds.has(hint.channelId)) {
-      continue;
-    }
-    missingHints.push(hint);
-    visibleChannelIds.add(hint.channelId);
-  }
+  ].filter(
+    (channelId) =>
+      (!requestedChannel || channelId === requestedChannel) && !visibleChannelIds.has(channelId),
+  );
+  const missingHints = resolveMissingOfficialExternalChannelPluginRepairHints({
+    config: cfg,
+    activationSourceConfig: sourceConfig,
+    channelIds: missingChannelIds,
+  });
   if (missingHints.length > 0) {
     lines.push("");
     lines.push(theme.warn("Missing official external plugins:"));
     for (const hint of missingHints) {
       lines.push(`- ${hint.label}: ${hint.repairHint}`);
     }
+  }
+  if (lines.length === statusLinesStart) {
+    lines.push(theme.muted(NO_CONFIGURED_CHAT_CHANNELS_LINE));
   }
 
   lines.push("");
