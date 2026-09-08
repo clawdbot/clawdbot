@@ -384,6 +384,7 @@ function createMinimalRun(params?: {
   bindActiveAuthority?: boolean;
   attachSteerBackend?: boolean;
   activeBackendRunId?: string;
+  supportsQueueMessageImages?: boolean;
 }) {
   const typing = createMockTypingController();
   const opts = params?.opts;
@@ -465,6 +466,7 @@ function createMinimalRun(params?: {
         operation.attachBackend({
           kind: "embedded",
           runId: params?.activeBackendRunId,
+          supportsQueueMessageImages: params?.supportsQueueMessageImages,
           cancel: state.activeBackendCancelMock,
           claimPendingUserInputAnswer: async (prompt, options) => {
             const result = (await state.queueEmbeddedAgentMessageMock(
@@ -610,6 +612,49 @@ function requireBuiltChannelSourceTurnId(
 }
 
 describe("runReplyAgent active steering", () => {
+  it("steers an image follow-up across automatic auth profile rotation", async () => {
+    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
+    const { followupRun, run } = createMinimalRun({
+      isActive: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+      bindActiveAuthority: false,
+      supportsQueueMessageImages: true,
+      runOverrides: {
+        authProfileId: "anthropic:fallback",
+        authProfileIdSource: "auto",
+      },
+    });
+    const image = { type: "image" as const, data: "steered", mimeType: "image/png" };
+    followupRun.images = [image];
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    active.bindToolAuthoritySnapshot(
+      prepareReplyToolAuthority({
+        ...followupRun,
+        run: {
+          ...followupRun.run,
+          authProfileId: "anthropic:primary",
+          authProfileIdSource: "auto",
+        },
+      }),
+    );
+    active.setPhase("running");
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledWith(
+      "session",
+      "hello",
+      expect.objectContaining({ images: [image] }),
+    );
+    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    active.complete();
+  });
+
   it("queues instead of steering when privilege facts differ on the active route", async () => {
     const activeRoute = { provider: "openai", model: "gpt-fallback" };
     const { followupRun, run } = createMinimalRun({

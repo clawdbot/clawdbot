@@ -172,6 +172,41 @@ describe("reply run registry", () => {
   });
 
   it.each([
+    { source: "auto" as const, expected: "same" },
+    { source: "user" as const, expected: "different" },
+    { source: undefined, expected: "different" },
+  ])(
+    "keeps $source auth profile selection $expected for steering authority",
+    ({ source, expected }) => {
+      const first = createQueueTestRun({ prompt: "first profile" });
+      const second = createQueueTestRun({ prompt: "second profile" });
+      first.run.authProfileId = "openai:primary";
+      first.run.authProfileIdSource = source;
+      second.run.authProfileId = "openai:fallback";
+      second.run.authProfileIdSource = source;
+
+      const firstFingerprint = resolveFollowupRunToolAuthorityFingerprint(first);
+      const secondFingerprint = resolveFollowupRunToolAuthorityFingerprint(second);
+      if (expected === "same") {
+        expect(firstFingerprint).toBe(secondFingerprint);
+      } else {
+        expect(firstFingerprint).not.toBe(secondFingerprint);
+      }
+    },
+  );
+
+  it("distinguishes automatic auth profile selection from no profile", () => {
+    const automatic = createQueueTestRun({ prompt: "automatic profile" });
+    const unprofiled = createQueueTestRun({ prompt: "no profile" });
+    automatic.run.authProfileId = "openai:primary";
+    automatic.run.authProfileIdSource = "auto";
+
+    expect(resolveFollowupRunToolAuthorityFingerprint(automatic)).not.toBe(
+      resolveFollowupRunToolAuthorityFingerprint(unprofiled),
+    );
+  });
+
+  it.each([
     {
       label: "provider",
       first: { provider: "openai", model: "gpt-test" },

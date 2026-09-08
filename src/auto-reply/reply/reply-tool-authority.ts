@@ -64,6 +64,7 @@ export type ReplyToolAuthorityInput = {
       | "traceAuthorized"
       | "approvalReviewerDeviceId"
       | "authProfileId"
+      | "authProfileIdSource"
       | "clientCaps"
       | "toolBindings"
     >
@@ -258,7 +259,8 @@ function resolveReplyToolAuthorityInputFingerprint(
         bashElevated: execution.bashElevated,
         traceAuthorized: execution.traceAuthorized === true,
         approvalReviewerDeviceId: execution.approvalReviewerDeviceId,
-        authProfileId: execution.authProfileId,
+        // Auto-selection is one authority class: ignore rotation without colliding with no profile.
+        authProfileId: execution.authProfileIdSource === "auto" ? null : execution.authProfileId,
         clientCaps: [...new Set(execution.clientCaps ?? [])].toSorted(),
         toolBindings: execution.toolBindings,
       }),
