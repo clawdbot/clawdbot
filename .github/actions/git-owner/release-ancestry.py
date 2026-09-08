@@ -192,6 +192,9 @@ def establish_ancestry():
         return result
 
     previous_count = reachable_commit_count(source_sha, target_sha)
+    # Seed the separate destination: Git may only create a new ref on the first
+    # deepen, leaving existing shallow edges unchanged until the next fetch.
+    run_git(workspace, "update-ref", target_hydration_local_ref, target_sha, timeout=operation_timeout())
     chunk_index = 0
     while True:
         chunk = deepen_chunks[min(chunk_index, len(deepen_chunks) - 1)]

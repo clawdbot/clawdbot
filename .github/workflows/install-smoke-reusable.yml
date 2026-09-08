@@ -489,6 +489,15 @@ jobs:
       - *trusted_workflow_subdir_checkout_step
       - *trusted_workflow_subdir_identity_step
 
+      - name: Checkout selected source for gateway network provenance
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/openclaw
+          ref: ${{ needs.preflight.outputs.target_sha }}
+          path: .release-source
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Validate root Dockerfile image artifact binding
         env:
           ARCHIVE_SHA256: ${{ needs.root_dockerfile_image.outputs.archive_sha256 }}
@@ -586,6 +595,7 @@ jobs:
 
       - name: Run Docker gateway network e2e
         env:
+          OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}/.release-source
           OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}
           OPENCLAW_GATEWAY_NETWORK_E2E_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}
           OPENCLAW_GATEWAY_NETWORK_E2E_SKIP_BUILD: "1"
