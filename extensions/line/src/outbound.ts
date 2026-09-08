@@ -186,8 +186,10 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
 
       if (lineData.templateMessage) {
         const template = buildTemplate(lineData.templateMessage);
-        if (template) {
+        if (template?.type === "template") {
           await recordResult(sendTemplate(to, template, sendOptions));
+        } else if (template) {
+          await recordResult(sendText(to, template.text, sendOptions));
         }
       }
 

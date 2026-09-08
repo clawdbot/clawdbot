@@ -554,12 +554,15 @@ describe("action label/data surrogate-safe truncation", () => {
         line: { templateMessage: Parameters<typeof buildTemplateMessageFromPayload>[0] };
       };
     };
-    const template = expectDefined(
+    const message = expectDefined(
       buildTemplateMessageFromPayload(result.channelData.line.templateMessage),
       "LINE buttons template message",
-    ).template as { actions: Array<{ label: string }> };
+    );
+    if (message.type !== "template" || message.template.type !== "buttons") {
+      throw new Error(`expected a LINE buttons template, received ${message.type}`);
+    }
 
-    expect(template.actions).toMatchObject([{ type: "message", label: "x".repeat(20) }]);
+    expect(message.template.actions).toMatchObject([{ type: "message", label: "x".repeat(20) }]);
   });
 
   it("/card action visibly disables an oversized URI at the Flex action owner", async () => {
@@ -720,9 +723,11 @@ describe("action label/data surrogate-safe truncation", () => {
       actions: [{ type: "uri", label: "Open", uri: `https://e.example/?q=${"u".repeat(1200)}` }],
     });
 
-    const buttonsTemplate = expectDefined(template, "buttons template message").template as {
-      actions: Array<{ type: string; label?: string; text?: string }>;
-    };
+    const message = expectDefined(template, "buttons template message");
+    if (message.type !== "template" || message.template.type !== "buttons") {
+      throw new Error("expected buttons template");
+    }
+    const buttonsTemplate = message.template;
     const uriTemplateAction = expectDefined(
       buttonsTemplate.actions[0],
       "buttons template uri action",
@@ -740,9 +745,11 @@ describe("action label/data surrogate-safe truncation", () => {
       text: "Pick",
       actions: [{ type: "postback", label: "Open", data: `action=open&token=${"x".repeat(300)}` }],
     });
-    const buttonsTemplate = expectDefined(template, "buttons template message").template as {
-      actions: Array<{ type: string; label?: string; text?: string }>;
-    };
+    const message = expectDefined(template, "buttons template message");
+    if (message.type !== "template" || message.template.type !== "buttons") {
+      throw new Error("expected buttons template");
+    }
+    const buttonsTemplate = message.template;
 
     expect(buttonsTemplate.actions[0]).toEqual({
       type: "message",
