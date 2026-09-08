@@ -1,9 +1,42 @@
-import { describe, expect, it } from "vitest";
+import os from "node:os";
+import { describe, expect, it, vi } from "vitest";
 import {
   resolveLocalVitestEnv,
   resolveLocalFullSuiteProfile,
   resolveLocalVitestScheduling,
 } from "../../scripts/lib/vitest-local-scheduling.mts";
+
+describe("vitest scheduling host snapshot", () => {
+  it("sizes every project against one host reading while the load average moves", async () => {
+    // Vitest refuses a run whose projects share sequence.groupOrder but disagree on
+    // maxWorkers. Pin cpu and memory so only the load average moves; without one
+    // snapshot per process these two resolutions return 12 and 3.
+    vi.resetModules();
+    const host = os as unknown as Record<string, unknown>;
+    const saved = {
+      availableParallelism: os.availableParallelism,
+      totalmem: os.totalmem,
+      freemem: os.freemem,
+      loadavg: os.loadavg,
+    };
+    host.availableParallelism = () => 16;
+    host.totalmem = () => 512 * 1024 ** 3;
+    host.freemem = () => 256 * 1024 ** 3;
+    host.loadavg = () => [0, 0, 0];
+    try {
+      const scheduling = await import("../../scripts/lib/vitest-local-scheduling.mts");
+      const first = scheduling.resolveLocalVitestScheduling({});
+      host.loadavg = () => [64, 64, 64];
+      const second = scheduling.resolveLocalVitestScheduling({});
+      // Guard against a vacuous pass: the stub must actually be driving the reading.
+      expect(os.loadavg()[0]).toBe(64);
+      expect(second.maxWorkers).toBe(first.maxWorkers);
+      expect(second.throttledBySystem).toBe(first.throttledBySystem);
+    } finally {
+      Object.assign(host, saved);
+    }
+  });
+});
 
 describe("local Vitest scheduling", () => {
   it.each([
