@@ -65,6 +65,7 @@ type DoctorLintExecution = {
 type DoctorLintStateRunner = <T>(run: () => Promise<T>) => Promise<T>;
 
 const RUNTIME_TOOL_SCHEMA_CHECK_ID = "core/doctor/runtime-tool-schemas";
+const PROJECT_CLONE_SHAPE_CHECK_ID = "core/doctor/project-clone-shape";
 const AUTH_PROFILE_CHECK_ID = "core/doctor/auth-profiles";
 
 class DoctorLintStateSnapshotError extends Error {
@@ -426,7 +427,7 @@ function withCoreLintContext(
     ...check,
     detect(_ctx, scope) {
       const detect = async () => await check.detect(ctx, scope);
-      if (check.id === RUNTIME_TOOL_SCHEMA_CHECK_ID) {
+      if (check.id === RUNTIME_TOOL_SCHEMA_CHECK_ID || check.id === PROJECT_CLONE_SHAPE_CHECK_ID) {
         return ctx.runWithPrivateStateSnapshot(detect);
       }
       // Auth health uses read-only loaders but needs uncopied agent stores and source paths.
