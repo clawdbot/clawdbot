@@ -70,7 +70,9 @@ export function detectVitestHostInfo() {
   };
 }
 
-let schedulingHostInfoCache: ReturnType<typeof detectVitestHostInfo> | undefined;
+// Vite bundles each project config on its own, so a module-level cache would be
+// per-project. The snapshot must live on globalThis to span every bundle in a process.
+const SCHEDULING_HOST_INFO = Symbol.for("openclaw.vitestSchedulingHostInfo");
 
 /**
  * Worker sizing reads the 1m load average, so re-detecting per Vitest project lets two
@@ -80,8 +82,11 @@ let schedulingHostInfoCache: ReturnType<typeof detectVitestHostInfo> | undefined
  * detectVitestHostInfo for the resource reporter.
  */
 function schedulingHostInfo(): ReturnType<typeof detectVitestHostInfo> {
-  schedulingHostInfoCache ??= detectVitestHostInfo();
-  return schedulingHostInfoCache;
+  const store = globalThis as Record<PropertyKey, unknown>;
+  if (!Object.hasOwn(store, SCHEDULING_HOST_INFO)) {
+    store[SCHEDULING_HOST_INFO] = detectVitestHostInfo();
+  }
+  return store[SCHEDULING_HOST_INFO] as ReturnType<typeof detectVitestHostInfo>;
 }
 
 function resolveMemoryPressureWorkerLimit(system: VitestHostInfo) {

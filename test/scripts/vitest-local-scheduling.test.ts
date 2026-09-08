@@ -7,11 +7,12 @@ import {
 } from "../../scripts/lib/vitest-local-scheduling.mts";
 
 describe("vitest scheduling host snapshot", () => {
-  it("sizes every project against one host reading while the load average moves", async () => {
-    // Vitest refuses a run whose projects share sequence.groupOrder but disagree on
-    // maxWorkers. Pin cpu and memory so only the load average moves; without one
-    // snapshot per process these two resolutions return 12 and 3.
-    vi.resetModules();
+  it("sizes separately loaded project configs against one host reading", async () => {
+    // Vite bundles each project config on its own, so each project gets its own copy
+    // of this module. Vitest refuses a run whose projects share sequence.groupOrder
+    // but disagree on maxWorkers, so two module instances that resolve while the
+    // load average moves must still agree; without a process-wide snapshot they
+    // return 12 and 3.
     const host = os as unknown as Record<string, unknown>;
     const saved = {
       availableParallelism: os.availableParallelism,
@@ -22,16 +23,20 @@ describe("vitest scheduling host snapshot", () => {
     host.availableParallelism = () => 16;
     host.totalmem = () => 512 * 1024 ** 3;
     host.freemem = () => 256 * 1024 ** 3;
-    host.loadavg = () => [0, 0, 0];
     try {
-      const scheduling = await import("../../scripts/lib/vitest-local-scheduling.mts");
-      const first = scheduling.resolveLocalVitestScheduling({});
+      host.loadavg = () => [0, 0, 0];
+      vi.resetModules();
+      const first = await import("../../scripts/lib/vitest-local-scheduling.mts");
+      const before = first.resolveLocalVitestScheduling({});
       host.loadavg = () => [64, 64, 64];
-      const second = scheduling.resolveLocalVitestScheduling({});
-      // Guard against a vacuous pass: the stub must actually be driving the reading.
+      vi.resetModules();
+      const second = await import("../../scripts/lib/vitest-local-scheduling.mts");
+      const after = second.resolveLocalVitestScheduling({});
+      // Guard against a vacuous pass: distinct instances, and the stub drives the reading.
+      expect(second).not.toBe(first);
       expect(os.loadavg()[0]).toBe(64);
-      expect(second.maxWorkers).toBe(first.maxWorkers);
-      expect(second.throttledBySystem).toBe(first.throttledBySystem);
+      expect(after.maxWorkers).toBe(before.maxWorkers);
+      expect(after.throttledBySystem).toBe(before.throttledBySystem);
     } finally {
       Object.assign(host, saved);
     }
