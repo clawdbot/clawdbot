@@ -1,0 +1,29 @@
+name: Diagnostic release node wire
+
+on:
+  push:
+    branches:
+      - codex/diagnose-release-node-wire-hosted
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: diagnostic-release-node-wire
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    name: Diagnostic only — Gateway 3/4
+    uses: openclaw/openclaw/.github/workflows/openclaw-repo-e2e-reusable.yml@009f929485cea13760d87bca66e5befb943765ad
+    with:
+      ref: ${{ github.sha }}
+      workflow_repository: openclaw/openclaw
+      workflow_sha: 009f929485cea13760d87bca66e5befb943765ad
+      build_profile: full
+      suites: '[{"name":"Diagnostic Gateway 3/4","command":"node .github/diagnostics/run-node-wire-cohort.mjs"}]'
+      use_github_hosted_runners: true
+      advisory: false
+      allow_unreleased_changelog: false
+      allow_frozen_target_scenario_omissions: true
