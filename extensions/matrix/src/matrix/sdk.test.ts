@@ -9,6 +9,7 @@ import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixTestRuntime } from "../test-runtime.js";
 import { readMatrixRecoveryKeyState } from "./crypto-state-store.js";
+import * as matrixCryptoRuntime from "./sdk/crypto-runtime.js";
 import { MatrixDecryptBridge } from "./sdk/decrypt-bridge.js";
 
 function requestUrl(input: RequestInfo | URL | undefined): string {
@@ -767,6 +768,49 @@ describe("MatrixClient request hardening", () => {
 
       expect(flushSpy).toHaveBeenCalledTimes(1);
       expect(matrixJsClient.stopClient).toHaveBeenCalledTimes(1);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("waits for an active periodic crypto snapshot before the final shutdown snapshot", async () => {
+    vi.useFakeTimers();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-sdk-persist-order-"));
+    let resolvePeriodic: (() => void) | undefined;
+    const periodic = new Promise<void>((resolve) => {
+      resolvePeriodic = resolve;
+    });
+    const persistSpy = vi
+      .spyOn(matrixCryptoRuntime, "persistIdbToDisk")
+      .mockResolvedValueOnce(undefined)
+      .mockImplementationOnce(() => periodic)
+      .mockResolvedValueOnce(undefined);
+
+    try {
+      const client = new MatrixClient("https://matrix.example.org", "token", {
+        encryption: true,
+        idbSnapshotPath: path.join(tempDir, "crypto-idb-snapshot.json"),
+        cryptoDatabasePrefix: path.basename(tempDir),
+      });
+      await (
+        client as unknown as { initializeCryptoIfNeeded: () => Promise<void> }
+      ).initializeCryptoIfNeeded();
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(persistSpy).toHaveBeenCalledTimes(2);
+
+      let stopped = false;
+      const stopPromise = client.stopAndPersist().then(() => {
+        stopped = true;
+      });
+      await Promise.resolve();
+      expect(stopped).toBe(false);
+      expect(persistSpy).toHaveBeenCalledTimes(2);
+
+      resolvePeriodic?.();
+      await stopPromise;
+      expect(stopped).toBe(true);
+      expect(persistSpy).toHaveBeenCalledTimes(3);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

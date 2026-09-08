@@ -346,6 +346,7 @@ export class MatrixClient {
     | undefined;
   private readonly autoBootstrapCrypto: boolean;
   private stopPersistPromise: Promise<void> | null = null;
+  private idbPersistPromise: Promise<void> | null = null;
   private verificationSummaryListenerBound = false;
   private currentSyncState: MatrixSyncState | null = null;
 
@@ -712,23 +713,30 @@ export class MatrixClient {
   }
 
   stop(): void {
+    if (this.stopPersistPromise) {
+      return;
+    }
     this.stopSyncWithoutPersist();
     this.decryptBridge?.stop();
     // Final persist on shutdown
     this.syncStore?.markCleanShutdown();
     if (loadedMatrixCryptoRuntime) {
       const { persistIdbToDisk } = loadedMatrixCryptoRuntime;
-      this.stopPersistPromise = Promise.all([
-        persistIdbToDisk({
-          snapshotPath: this.idbSnapshotPath,
-          databasePrefix: this.cryptoDatabasePrefix,
-        }).catch(noop),
-        this.syncStore?.flush().catch(noop),
-      ]).then(() => undefined);
+      this.stopPersistPromise = (async () => {
+        await this.idbPersistPromise;
+        await Promise.all([
+          persistIdbToDisk({
+            snapshotPath: this.idbSnapshotPath,
+            databasePrefix: this.cryptoDatabasePrefix,
+          }).catch(noop),
+          this.syncStore?.flush().catch(noop),
+        ]);
+      })();
       return;
     }
     this.stopPersistPromise = loadMatrixCryptoRuntime()
       .then(async ({ persistIdbToDisk }) => {
+        await this.idbPersistPromise;
         await Promise.all([
           persistIdbToDisk({
             snapshotPath: this.idbSnapshotPath,
@@ -832,10 +840,17 @@ export class MatrixClient {
 
       // Periodically persist to capture new Olm sessions and room keys.
       this.idbPersistTimer = setInterval(() => {
-        persistIdbToDisk({
+        if (this.idbPersistPromise) {
+          return;
+        }
+        this.idbPersistPromise = persistIdbToDisk({
           snapshotPath: this.idbSnapshotPath,
           databasePrefix: this.cryptoDatabasePrefix,
-        }).catch(noop);
+        })
+          .catch(noop)
+          .finally(() => {
+            this.idbPersistPromise = null;
+          });
       }, MATRIX_IDB_PERSIST_INTERVAL_MS);
       this.idbPersistTimer.unref?.();
     } catch (err) {
