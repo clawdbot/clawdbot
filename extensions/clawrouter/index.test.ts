@@ -69,6 +69,9 @@ describe("ClawRouter plugin", () => {
       kind: "api_key",
     });
     expect(provider?.wrapSimpleCompletionStreamFn).toBe(provider?.wrapStreamFn);
+    await expect(
+      provider?.fetchUsageSnapshot?.({ isAuthProfileCurrent: () => false } as never),
+    ).resolves.toBeNull();
   });
 
   it("resolves authoritative catalog thinking profiles without inventing minimal", async () => {

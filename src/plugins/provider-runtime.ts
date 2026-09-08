@@ -631,6 +631,17 @@ export async function prepareProviderRuntimeAuth(params: {
   });
 }
 
+function hasAccountUsageContract(
+  plugin: ProviderPlugin | undefined,
+  params: Parameters<typeof resolveUsageHookProviderPluginContracts>[0] & { provider: string },
+): boolean {
+  return resolveUsageHookProviderPluginContracts(params).some(
+    (contract) =>
+      contract.pluginId === plugin?.pluginId &&
+      contract.accountUsageProviderIds?.includes(normalizeProviderId(params.provider)),
+  );
+}
+
 export async function resolveProviderUsageAuthWithPlugin(params: {
   provider: string;
   config?: OpenClawConfig;
@@ -639,14 +650,13 @@ export async function resolveProviderUsageAuthWithPlugin(params: {
   context: ProviderResolveUsageAuthContext;
 }) {
   const plugin = resolveProviderRuntimePlugin(params);
+  if (params.context.authProfileId && !hasAccountUsageContract(plugin, params)) {
+    return { handled: true };
+  }
   if (!plugin?.resolveUsageAuth) {
     return undefined;
   }
-  const result = await plugin.resolveUsageAuth(params.context);
-  if (!result) {
-    return undefined;
-  }
-  return result;
+  return (await plugin.resolveUsageAuth(params.context)) ?? undefined;
 }
 
 export async function resolveProviderUsageSnapshotWithPlugin(params: {
@@ -656,7 +666,11 @@ export async function resolveProviderUsageSnapshotWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderFetchUsageSnapshotContext;
 }) {
-  const providerHook = resolveProviderRuntimePlugin(params)?.fetchUsageSnapshot;
+  const plugin = resolveProviderRuntimePlugin(params);
+  if (params.context.isAuthProfileCurrent && !hasAccountUsageContract(plugin, params)) {
+    return undefined;
+  }
+  const providerHook = plugin?.fetchUsageSnapshot;
   if (providerHook) {
     const snapshot = await providerHook(params.context);
     if (snapshot != null) {
@@ -703,6 +717,7 @@ export async function resolveProviderUsageSnapshotWithPlugin(params: {
 export type ProviderUsagePluginDescriptor = {
   provider: UsageProviderId;
   displayName: string;
+  supportsAccountUsage?: boolean;
 };
 
 /** Lists provider plugins that own the complete usage auth + fetch lifecycle. */
@@ -724,6 +739,9 @@ export function listProviderUsagePluginDescriptors(params: {
       descriptors.set(provider, {
         provider,
         displayName: providerUsageLabel(provider) ?? provider,
+        ...(contract.accountUsageProviderIds?.includes(provider)
+          ? { supportsAccountUsage: true }
+          : {}),
       });
     }
   }

@@ -302,7 +302,8 @@
     "mediaUnderstandingProviders": ["openai"],
     "imageGenerationProviders": ["openai"],
     "videoGenerationProviders": ["openai"],
-    "usageProviders": ["openai"]
+    "usageProviders": ["openai"],
+    "accountUsageProviders": ["openai"]
   },
   "imageGenerationProviderMetadata": {
     "openai": {

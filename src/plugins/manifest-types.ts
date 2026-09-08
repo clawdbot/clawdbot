@@ -523,6 +523,8 @@ export type PluginManifestContracts = {
   workerProviders?: string[];
   /** Provider ids whose plugin owns usage auth and snapshot hooks. */
   usageProviders?: string[];
+  /** Usage providers whose hooks honor exact-profile auth and final-I/O ownership checks. */
+  accountUsageProviders?: string[];
   migrationProviders?: string[];
   gatewayMethodDispatch?: string[];
   tools?: string[];

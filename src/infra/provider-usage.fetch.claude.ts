@@ -205,6 +205,7 @@ export async function fetchClaudeUsage(
   token: string,
   timeoutMs: number,
   fetchFn: typeof fetch,
+  options?: { authProfileId?: string },
 ): Promise<ProviderUsageSnapshot> {
   const res = await fetchJson(
     "https://api.anthropic.com/api/oauth/usage",
@@ -235,10 +236,13 @@ export async function fetchClaudeUsage(
       // ignore parse errors
     }
 
-    // Claude Code CLI setup-token yields tokens that can be used for inference, but may not
-    // include user:profile scope required by the OAuth usage endpoint. When a claude.ai
-    // browser sessionKey is available, fall back to the web API.
-    if (res.status === 403 && message?.includes("scope requirement user:profile")) {
+    // Setup tokens may lack user:profile scope. Ambient web sessions can back provider usage,
+    // but cannot replace a selected account's credential: they may belong to someone else.
+    if (
+      !options?.authProfileId &&
+      res.status === 403 &&
+      message?.includes("scope requirement user:profile")
+    ) {
       const sessionKey = resolveClaudeWebSessionKey();
       if (sessionKey) {
         const web = await fetchClaudeWebUsage(sessionKey, timeoutMs, fetchFn);

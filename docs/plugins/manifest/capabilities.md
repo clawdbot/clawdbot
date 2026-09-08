@@ -34,6 +34,7 @@ Use `contracts` only for static capability ownership metadata that OpenClaw can 
     "webSearchProviders": ["gemini"],
     "workerProviders": ["example-worker"],
     "usageProviders": ["acme-ai"],
+    "accountUsageProviders": ["acme-ai"],
     "migrationProviders": ["hermes"],
     "gatewayMethodDispatch": ["authenticated-request"],
     "tools": ["firecrawl_search", "firecrawl_scrape"]
@@ -77,6 +78,8 @@ Runtime `api.registerTool(...)` registrations must match `contracts.tools`. Tool
 Provider plugins that implement `resolveExternalAuthProfiles` should declare `contracts.externalAuthProviders`; undeclared external-auth hooks are ignored.
 
 Provider plugins that implement both `resolveUsageAuth` and `fetchUsageSnapshot` should declare each auto-discovered provider id in `contracts.usageProviders`. Usage discovery reads this contract before loading runtime code, then verifies both hooks after loading only the declared owners.
+
+`contracts.accountUsageProviders` optionally lists the subset of those provider ids that support exact-profile authentication and final-I/O ownership checks. Without it, usage remains provider-wide and is not attributed to a saved login. See the [provider usage hook contract](/plugins/sdk-provider-plugins).
 
 Embedding providers must declare `contracts.embeddingProviders` for each adapter registered with `api.registerEmbeddingProvider(...)`. The same generic contract serves reusable vector generation and memory search. The retired `contracts.memoryEmbeddingProviders` key is no longer accepted.
 

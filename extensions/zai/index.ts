@@ -379,6 +379,11 @@ export default defineSingleProviderPluginEntry({
       if (apiKey) {
         return { token: apiKey };
       }
+      // Legacy Pi auth is provider-wide, not tied to the selected profile.
+      // A scoped miss must not substitute another account's token.
+      if (ctx.authProfileId !== undefined) {
+        return null;
+      }
       const legacyToken = resolveDeprecatedPiAgentAccessToken(ctx.env, ["z-ai", PROVIDER_ID]);
       return legacyToken ? { token: legacyToken } : null;
     },

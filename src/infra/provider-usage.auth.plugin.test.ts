@@ -19,7 +19,12 @@ const resolveApiKeyForProfileMock = vi.fn(
   async (..._args: unknown[]): Promise<{ apiKey: string; provider: string } | null> => null,
 );
 
-vi.mock("../agents/auth-profiles.js", () => ({
+vi.mock("../agents/auth-profiles.js", async () => ({
+  resolveAuthProfileEligibility: (
+    await vi.importActual<typeof import("../agents/auth-profiles/order.js")>(
+      "../agents/auth-profiles/order.js",
+    )
+  ).resolveAuthProfileEligibility,
   dedupeProfileIds: (profileIds: string[]) => [...new Set(profileIds)],
   ensureAuthProfileStore: () => ensureAuthProfileStoreMock(),
   ensureAuthProfileStoreWithoutExternalProfiles: () =>
@@ -85,6 +90,7 @@ vi.mock("../secrets/provider-env-vars.js", () => ({
 }));
 
 let resolveProviderAuths: typeof import("./provider-usage.auth.js").resolveProviderAuths;
+let resolveProviderProfileUsageAuth: typeof import("./provider-usage.auth.js").resolveProviderProfileUsageAuth;
 
 function resolveProviderAuthsForTest(
   params: Parameters<typeof resolveProviderAuths>[0],
@@ -114,7 +120,8 @@ function providerCalls(mockFn: { mock: { calls: unknown[][] } }): unknown[] {
 
 describe("resolveProviderAuths plugin boundary", () => {
   beforeAll(async () => {
-    ({ resolveProviderAuths } = await import("./provider-usage.auth.js"));
+    ({ resolveProviderAuths, resolveProviderProfileUsageAuth } =
+      await import("./provider-usage.auth.js"));
   });
 
   beforeEach(() => {
@@ -155,6 +162,182 @@ describe("resolveProviderAuths plugin boundary", () => {
       ]);
     });
     expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("binds plugin usage auth to the requested profile", async () => {
+    const store = {
+      profiles: {
+        "openai:first": {
+          type: "oauth",
+          provider: "openai",
+          access: "first-access",
+          refresh: "first-refresh",
+          expires: Date.now() + 60_000,
+        },
+        "openai:second": {
+          type: "oauth",
+          provider: "openai",
+          access: "second-access",
+          refresh: "second-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+    resolveApiKeyForProfileMock.mockImplementation(async (params) => {
+      const profileId = (params as { profileId: string }).profileId;
+      return {
+        apiKey: profileId === "openai:second" ? "second-access" : "first-access",
+        provider: "openai",
+      };
+    });
+    resolveProviderUsageAuthWithPluginMock.mockImplementationOnce(async (rawParams) => {
+      const params = rawParams as {
+        context: {
+          authProfileId?: string;
+          resolveOAuthToken: () => Promise<{ token: string } | null>;
+        };
+      };
+      expect(params.context.authProfileId).toBe("openai:second");
+      return params.context.resolveOAuthToken();
+    });
+
+    await expect(
+      resolveProviderProfileUsageAuth({
+        provider: "openai",
+        profileId: "openai:second",
+        store: store as never,
+        config: {},
+        env: {},
+      }),
+    ).resolves.toEqual({
+      provider: "openai",
+      token: "second-access",
+      authProfileId: "openai:second",
+    });
+    expect(resolveProviderUsageAuthWithPluginMock).toHaveBeenCalledOnce();
+    expect(resolveApiKeyForProfileMock).toHaveBeenCalledOnce();
+    expect(resolveApiKeyForProfileMock).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "openai:second", allowProfileFallback: false }),
+    );
+  });
+
+  it("does not substitute an ambient key for account-scoped plugin usage", async () => {
+    const profileId = "openrouter:account";
+    const store = {
+      profiles: {
+        [profileId]: {
+          type: "api_key",
+          provider: "openrouter",
+          key: "saved-account-key",
+        },
+      },
+    };
+    resolveProviderUsageAuthWithPluginMock.mockImplementationOnce(async (rawParams) => {
+      const params = rawParams as {
+        context: {
+          env: NodeJS.ProcessEnv;
+          resolveApiKeyFromConfigAndStore: (options: {
+            envDirect: Array<string | undefined>;
+          }) => string | undefined;
+        };
+      };
+      const token = params.context.resolveApiKeyFromConfigAndStore({
+        envDirect: [params.context.env.OPENROUTER_API_KEY],
+      });
+      return token ? { token } : null;
+    });
+
+    await expect(
+      resolveProviderProfileUsageAuth({
+        provider: "openrouter",
+        profileId,
+        store: store as never,
+        config: {},
+        env: { OPENROUTER_API_KEY: "ambient-provider-key" },
+      }),
+    ).resolves.toEqual({
+      provider: "openrouter",
+      token: "saved-account-key",
+      authProfileId: profileId,
+    });
+  });
+
+  it("preserves an unavailable secret error for an exact account", async () => {
+    const profileId = "openrouter:account";
+    const secretError = new Error("Saved account secret is unavailable");
+    resolveApiKeyForProfileMock.mockRejectedValueOnce(secretError);
+    resolveProviderUsageAuthWithPluginMock.mockImplementationOnce(async (rawParams) => {
+      const { context } = rawParams as {
+        context: {
+          resolveApiKeyCandidatesFromConfigAndStore: () => Promise<string[]>;
+        };
+      };
+      const [token] = await context.resolveApiKeyCandidatesFromConfigAndStore();
+      return token ? { token } : null;
+    });
+
+    await expect(
+      resolveProviderProfileUsageAuth({
+        provider: "openrouter",
+        profileId,
+        store: {
+          version: 1,
+          profiles: {
+            [profileId]: {
+              type: "api_key",
+              provider: "openrouter",
+              keyRef: { source: "env", provider: "default", id: "ACCOUNT_KEY" },
+            },
+          },
+        },
+        config: {},
+        env: {},
+      }),
+    ).rejects.toBe(secretError);
+  });
+
+  it("excludes OAuth profiles from provider-only usage", async () => {
+    const profileId = "openai:first";
+    const store = {
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "openai",
+          access: "first-access",
+          refresh: "first-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+    resolveAuthProfileOrderMock.mockReturnValue([profileId]);
+    resolveApiKeyForProfileMock.mockResolvedValue({
+      apiKey: "first-access",
+      provider: "openai",
+    });
+    resolveProviderUsageAuthWithPluginMock.mockImplementation(async (rawParams) => {
+      const params = rawParams as {
+        context: {
+          resolveOAuthToken: () => Promise<{ token: string; authProfileId?: string } | null>;
+        };
+      };
+      return params.context.resolveOAuthToken();
+    });
+
+    await expect(
+      resolveProviderAuthsForTest({
+        providers: ["openai"],
+        store: store as never,
+        env: {},
+        providerOnly: true,
+      }),
+    ).resolves.toEqual([]);
+    await expect(
+      resolveProviderAuthsForTest({
+        providers: ["openai"],
+        store: store as never,
+        env: {},
+      }),
+    ).resolves.toEqual([{ provider: "openai", token: "first-access" }]);
   });
 
   it("preserves exact plugin auth failures for direct callers", async () => {

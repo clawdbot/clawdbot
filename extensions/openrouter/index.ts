@@ -9,6 +9,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { sanitizeConfiguredModelProviderRequest } from "openclaw/plugin-sdk/provider-http";
 import {
   buildProviderReplayFamilyHooks,
   DEFAULT_CONTEXT_TOKENS,
@@ -347,18 +348,40 @@ export default defineSingleProviderPluginEntry({
       isCacheTtlEligible: ({ modelId }) =>
         OPENROUTER_CACHE_TTL_MODEL_FAMILY.test(normalizeOpenRouterModelFamilyId(modelId) ?? ""),
       resolveUsageAuth: async (ctx) => {
-        const apiKey = ctx.resolveApiKeyFromConfigAndStore({
-          envDirect: [ctx.env.OPENROUTER_API_KEY],
-        });
+        if (!ctx.authProfileId) {
+          const request = sanitizeConfiguredModelProviderRequest(
+            ctx.config.models?.providers?.openrouter?.request,
+          );
+          const token =
+            request?.auth?.mode === "header"
+              ? request.auth.value
+              : request?.auth?.mode === "authorization-bearer"
+                ? request.auth.token
+                : new Headers(request?.headers).get("authorization");
+          if (token) {
+            return { token };
+          }
+        }
+        const apiKey = ctx.resolveApiKeyCandidatesFromConfigAndStore
+          ? (
+              await ctx.resolveApiKeyCandidatesFromConfigAndStore({
+                envDirect: [ctx.env.OPENROUTER_API_KEY],
+              })
+            )[0]
+          : ctx.resolveApiKeyFromConfigAndStore({
+              envDirect: [ctx.env.OPENROUTER_API_KEY],
+            });
         return apiKey ? { token: apiKey } : null;
       },
       fetchUsageSnapshot: async (ctx) =>
         await fetchOpenRouterUsage({
           token: ctx.token,
+          authProfileId: ctx.authProfileId,
           baseUrl: ctx.config.models?.providers?.openrouter?.baseUrl,
           request: ctx.config.models?.providers?.openrouter?.request,
           timeoutMs: ctx.timeoutMs,
           fetchFn: ctx.fetchFn,
+          isAuthProfileCurrent: ctx.isAuthProfileCurrent,
         }),
     };
   },

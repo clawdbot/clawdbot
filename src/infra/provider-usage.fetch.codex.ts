@@ -1,29 +1,13 @@
-import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asFiniteNumber,
+  parseStrictFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
+import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 // Fetches Codex provider usage windows.
 import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
 import { fetchUsageJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
-
-type CodexUsageResponse = {
-  rate_limit?: {
-    limit_reached?: boolean;
-    primary_window?: {
-      limit_window_seconds?: number;
-      used_percent?: number;
-      reset_at?: number;
-      reset_after_seconds?: number;
-    };
-    secondary_window?: {
-      limit_window_seconds?: number;
-      used_percent?: number;
-      reset_at?: number;
-      reset_after_seconds?: number;
-    };
-  };
-  plan_type?: string;
-  credits?: { balance?: number | string | null };
-};
 
 const WEEKLY_RESET_GAP_SECONDS = 3 * 24 * 60 * 60;
 
@@ -87,43 +71,40 @@ export async function fetchCodexUsage(
   if (!parsed.ok) {
     return parsed.snapshot;
   }
-  const data = parsed.data as CodexUsageResponse;
+  const data = asNonArrayRecord(parsed.data);
   const windows: UsageWindow[] = [];
-
-  if (data.rate_limit?.primary_window) {
-    const pw = data.rate_limit.primary_window;
-    const windowHours = Math.round((pw.limit_window_seconds || 10800) / 3600);
+  const rateLimit = asOptionalRecord(data.rate_limit);
+  const primary = asOptionalRecord(rateLimit?.primary_window);
+  if (primary) {
+    const resetAt = asFiniteNumber(primary.reset_at);
+    const minutes = Math.round((asFiniteNumber(primary.limit_window_seconds) ?? 10_800) / 60);
     windows.push({
-      label: `${windowHours}h`,
-      usedPercent: clampPercent(pw.used_percent || 0),
-      resetAt: pw.reset_at ? pw.reset_at * 1000 : undefined,
+      label: minutes % 60 === 0 ? `${minutes / 60}h` : `${minutes}m`,
+      usedPercent: clampPercent(asFiniteNumber(primary.used_percent) ?? 0),
+      resetAt: resetAt ? resetAt * 1000 : undefined,
+    });
+  }
+  const secondary = asOptionalRecord(rateLimit?.secondary_window);
+  if (secondary) {
+    const resetAt = asFiniteNumber(secondary.reset_at);
+    windows.push({
+      label: resolveSecondaryWindowLabel({
+        windowHours: Math.round((asFiniteNumber(secondary.limit_window_seconds) ?? 86_400) / 3600),
+        primaryResetAt: asFiniteNumber(primary?.reset_at),
+        secondaryResetAt: resetAt,
+      }),
+      usedPercent: clampPercent(asFiniteNumber(secondary.used_percent) ?? 0),
+      resetAt: resetAt ? resetAt * 1000 : undefined,
     });
   }
 
-  if (data.rate_limit?.secondary_window) {
-    const sw = data.rate_limit.secondary_window;
-    const windowHours = Math.round((sw.limit_window_seconds || 86400) / 3600);
-    const label = resolveSecondaryWindowLabel({
-      windowHours,
-      primaryResetAt: data.rate_limit?.primary_window?.reset_at,
-      secondaryResetAt: sw.reset_at,
-    });
-    windows.push({
-      label,
-      usedPercent: clampPercent(sw.used_percent || 0),
-      resetAt: sw.reset_at ? sw.reset_at * 1000 : undefined,
-    });
-  }
-
-  const plan = data.plan_type;
-  let billing: ProviderUsageSnapshot["billing"];
-  if (data.credits?.balance !== undefined && data.credits.balance !== null) {
-    const balance =
-      typeof data.credits.balance === "number"
-        ? data.credits.balance
-        : parseStrictFiniteNumber(data.credits.balance);
+  const plan = typeof data.plan_type === "string" ? data.plan_type : undefined;
+  const billing: NonNullable<ProviderUsageSnapshot["billing"]> = [];
+  const balanceValue = asOptionalRecord(data.credits)?.balance;
+  if (balanceValue !== undefined && balanceValue !== null) {
+    const balance = parseStrictFiniteNumber(balanceValue);
     if (balance !== undefined && balance >= 0) {
-      billing = [{ type: "balance", amount: balance, unit: "credits" }];
+      billing.push({ type: "balance", amount: balance, unit: "credits" });
     }
   }
 
@@ -132,6 +113,6 @@ export async function fetchCodexUsage(
     displayName: PROVIDER_LABELS.openai,
     windows,
     plan,
-    ...(billing ? { billing } : {}),
+    ...(billing.length ? { billing } : {}),
   };
 }

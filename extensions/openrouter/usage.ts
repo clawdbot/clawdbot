@@ -104,7 +104,11 @@ async function fetchEndpoint(params: {
   dispatcherPolicy: ReturnType<typeof resolveProviderHttpRequestConfig>["dispatcherPolicy"];
   timeoutMs: number;
   fetchFn: typeof fetch;
+  isAuthProfileCurrent?: () => boolean;
 }): Promise<EndpointResult> {
+  if (params.isAuthProfileCurrent?.() === false) {
+    return { ok: false, reason: "transport" };
+  }
   let guardedResponse: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
   try {
     guardedResponse = await fetchWithSsrFGuard({
@@ -122,6 +126,11 @@ async function fetchEndpoint(params: {
       maxRedirects: 0,
       policy: params.ssrfPolicy,
       auditContext: "openrouter-usage",
+      beforeRequest: () => {
+        if (params.isAuthProfileCurrent?.() === false) {
+          throw new Error("Usage profile is no longer current");
+        }
+      },
     });
   } catch {
     return { ok: false, reason: "transport" };
@@ -146,11 +155,14 @@ async function fetchEndpoint(params: {
 
 export async function fetchOpenRouterUsage(params: {
   token: string;
+  authProfileId?: string;
   baseUrl?: string;
   request?: ModelProviderConfig["request"];
   timeoutMs: number;
   fetchFn: typeof fetch;
+  isAuthProfileCurrent?: () => boolean;
 }): Promise<ProviderUsageSnapshot> {
+  const configuredRequest = sanitizeConfiguredModelProviderRequest(params.request);
   const requestConfig = resolveProviderHttpRequestConfig({
     provider: "openrouter",
     capability: "other",
@@ -160,8 +172,22 @@ export async function fetchOpenRouterUsage(params: {
       Accept: "application/json",
       Authorization: `Bearer ${params.token}`,
     },
-    request: sanitizeConfiguredModelProviderRequest(params.request),
+    request: configuredRequest,
   });
+  // Configured authentication owns the proxy route; its quota cannot identify a saved account.
+  if (
+    params.authProfileId &&
+    requestConfig.headers.get("Authorization") !== `Bearer ${params.token}`
+  ) {
+    return {
+      provider: "openrouter",
+      displayName: "OpenRouter",
+      windows: [],
+      error:
+        "Account usage is unavailable with configured request authentication. See the provider summary.",
+      unavailableReason: "configured-request-auth",
+    };
+  }
   const request = {
     baseUrl: requestConfig.baseUrl,
     headers: requestConfig.headers,
@@ -169,6 +195,7 @@ export async function fetchOpenRouterUsage(params: {
     dispatcherPolicy: requestConfig.dispatcherPolicy,
     timeoutMs: params.timeoutMs,
     fetchFn: params.fetchFn,
+    isAuthProfileCurrent: params.isAuthProfileCurrent,
   };
   const [creditsResult, keyResult] = await Promise.all([
     fetchEndpoint({ ...request, path: "credits" }),

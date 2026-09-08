@@ -155,6 +155,8 @@ export type ProviderResolveUsageAuthContext = {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   provider: string;
+  /** Exact saved profile selected for account-scoped usage; helper resolution is bound to it. */
+  authProfileId?: string;
   resolveApiKeyFromConfigAndStore: (params?: {
     providerIds?: string[];
     envDirect?: Array<string | undefined>;
@@ -173,6 +175,8 @@ export type ProviderResolveUsageAuthContext = {
 export type ProviderUsageAuthToken = {
   token: string;
   accountId?: string;
+  /** Saved profile that supplied this token, when resolution selected one. */
+  authProfileId?: string;
   /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
   subscriptionType?: string;
   rateLimitTier?: string;
@@ -217,6 +221,8 @@ export type ProviderFetchUsageSnapshotContext = {
   /** Account email captured on the resolved credential, when known. */
   email?: string;
   timeoutMs: number;
+  /** Recheck immediately before custom provider I/O for a selected saved profile. */
+  isAuthProfileCurrent?: () => boolean;
   fetchFn: typeof fetch;
 };
 

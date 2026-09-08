@@ -786,6 +786,7 @@ export function resolveCatalogHookProviderPluginIds(params: {
 type UsageHookProviderPluginContract = {
   pluginId: string;
   providerIds: string[];
+  accountUsageProviderIds?: string[];
 };
 
 export function resolveUsageHookProviderPluginContracts(params: {
@@ -821,13 +822,39 @@ export function resolveUsageHookProviderPluginContracts(params: {
   }).filter((pluginId) => usagePluginIds.has(pluginId));
   const pluginIds = sortUniqueStrings([...enabledPluginIds, ...bundledCompatPluginIds]);
   const manifestsById = new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin]));
+  const eligibleOwnerIds = new Set(
+    resolveActivatableProviderOwnerPluginIds({
+      ...params,
+      registry,
+      manifestRegistry,
+      pluginIds: [...manifestsById.keys()],
+    }),
+  );
+  const eligibleOwners = manifestRegistry.plugins.filter((plugin) =>
+    eligibleOwnerIds.has(plugin.id),
+  );
   return pluginIds.flatMap((pluginId) => {
     const providerIds = sortUniqueStrings(
       (manifestsById.get(pluginId)?.contracts?.usageProviders ?? [])
         .map(normalizeProviderId)
         .filter(Boolean),
     );
-    return providerIds.length > 0 ? [{ pluginId, providerIds }] : [];
+    const accountUsageProviderIds = sortUniqueStrings(
+      (manifestsById.get(pluginId)?.contracts?.accountUsageProviders ?? [])
+        .map(normalizeProviderId)
+        .filter((provider) => providerIds.includes(provider))
+        // Discovery stays lazy; competing owners must all honor the account contract.
+        .filter((provider) =>
+          eligibleOwners.every(
+            (owner) =>
+              !pluginOwnsProviderRef(owner, provider) ||
+              owner.contracts?.accountUsageProviders?.some(
+                (id) => normalizeProviderId(id) === provider,
+              ),
+          ),
+        ),
+    );
+    return providerIds.length > 0 ? [{ pluginId, providerIds, accountUsageProviderIds }] : [];
   });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

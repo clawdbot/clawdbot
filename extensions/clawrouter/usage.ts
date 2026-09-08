@@ -91,6 +91,7 @@ export async function fetchClawRouterUsage(params: {
   token: string;
   baseUrl?: string;
   timeoutMs: number;
+  isAuthProfileCurrent?: () => boolean;
   /** Test-only seam; production keeps the shared SSRF guard owning transport. */
   fetchGuard?: ClawRouterUsageFetchGuard;
 }): Promise<ProviderUsageSnapshot> {
@@ -111,6 +112,11 @@ export async function fetchClawRouterUsage(params: {
       timeoutMs: params.timeoutMs,
       policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(rootUrl),
       auditContext: "clawrouter.usage",
+      beforeRequest: () => {
+        if (params.isAuthProfileCurrent?.() === false) {
+          throw new Error("Usage profile is no longer current");
+        }
+      },
     }),
   );
   try {

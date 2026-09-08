@@ -224,6 +224,7 @@ describe("fetchCopilotUsage", () => {
     const result = await fetchCopilotUsage("token", 5000, mockFetch);
 
     expect(result.error).toBe("HTTP 500");
+    expect(result.usageScope).toBe("account");
     expect(result.windows).toHaveLength(0);
   });
 
@@ -261,6 +262,7 @@ describe("fetchCopilotUsage", () => {
     const result = await fetchCopilotUsage("token", 5000, mockFetch);
 
     expect(result.plan).toBe("pro");
+    expect(result.usageScope).toBe("account");
     expect(result.windows).toEqual([
       { label: "Premium", usedPercent: 80 },
       { label: "Chat", usedPercent: 25 },
@@ -298,6 +300,7 @@ describe("fetchCopilotUsage", () => {
     expect(result).toEqual({
       provider: "github-copilot",
       displayName: "Copilot",
+      usageScope: "account",
       windows: [],
       plan: "free",
     });
@@ -314,6 +317,7 @@ describe("fetchCopilotUsage", () => {
     expect(result).toEqual({
       provider: "github-copilot",
       displayName: "Copilot",
+      usageScope: "account",
       windows: [],
       plan: undefined,
     });
