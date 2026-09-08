@@ -47,9 +47,11 @@ const manifestMocks = vi.hoisted(() => ({
     id: string;
     channels: string[];
   }>,
-  // A plugin installed into the agent's workspace is only discoverable when the caller
-  // supplies that scope, which is what pins the purge lookup to the selected agent.
+  // A plugin installed into an agent's workspace is only discoverable when the caller
+  // supplies that exact scope, which is what pins the purge lookup to the operation
+  // owner rather than to any workspace at all.
   workspaceScoped: false,
+  workspaceDir: "/tmp/ops-workspace",
 }));
 
 const gatewayMocks = vi.hoisted(() => ({
@@ -88,7 +90,10 @@ vi.mock("../plugins/plugin-registry.js", async () => {
   return {
     ...actual,
     loadPluginManifestRegistryForPluginRegistry: (params?: { workspaceDir?: string }) => ({
-      plugins: manifestMocks.workspaceScoped && !params?.workspaceDir ? [] : manifestMocks.plugins,
+      plugins:
+        manifestMocks.workspaceScoped && params?.workspaceDir !== manifestMocks.workspaceDir
+          ? []
+          : manifestMocks.plugins,
     }),
   };
 });
@@ -164,6 +169,7 @@ describe("channelsRemoveCommand", () => {
     resetPluginRuntimeStateForTest();
     manifestMocks.plugins = [{ id: "external-chat", channels: ["external-chat"] }];
     manifestMocks.workspaceScoped = false;
+    manifestMocks.workspaceDir = "/tmp/ops-workspace";
     configMocks.readConfigFileSnapshot.mockClear();
     configMocks.writeConfigFile.mockClear();
     configMocks.replaceConfigFile
@@ -949,11 +955,17 @@ describe("channelsRemoveCommand", () => {
   });
 
   // The shared-queue guard only fires when discovery finds the manifest. A plugin
-  // installed into the agent's workspace is invisible to an unscoped lookup, and the
-  // no-manifest branch below it purges the queue its channels share.
+  // installed into the operation owner's workspace is invisible to a lookup scoped
+  // anywhere else, and the no-manifest branch below it purges the queue its channels
+  // share. No --agent here on purpose: the owner is the sole configured agent, so a
+  // lookup that assumes the default agent id resolves the wrong workspace.
   it("keeps a workspace-installed plugin's sibling rows when one of its channels is deleted", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue(
       createTestConfigSnapshot({
+        agents: {
+          ownership: "explicit",
+          entries: { ops: { workspace: "/tmp/ops-workspace" } },
+        },
         channels: { "external-chat": { enabled: true, token: "token-1" } },
       }),
     );

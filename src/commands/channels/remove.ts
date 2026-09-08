@@ -1,6 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 // Implements guided and non-interactive disable/delete for channel accounts.
-import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
 import {
   type ChannelIngressQueueAccountPurge,
   purgeChannelIngressQueueAccount,
@@ -21,14 +20,11 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  DEFAULT_AGENT_ID,
-  normalizeAccountId,
-} from "../../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
+import { resolveChannelSetupOwner } from "../channel-setup/owner.js";
 import { assertAccountSelectorForMutation } from "./account-selector.js";
 import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { channelLabel } from "./runtime-label.js";
@@ -344,7 +340,7 @@ export async function channelsRemoveCommand(
         channelId: resolvedChannelId,
         accountId: preparedRemoval.accountKey,
         cfg,
-        workspaceDir: resolveAgentWorkspaceDir(cfg, opts.agent ?? DEFAULT_AGENT_ID),
+        workspaceDir: resolveChannelSetupOwner(cfg, opts.agent).workspaceDir,
       })
     : undefined;
   const summary = [
