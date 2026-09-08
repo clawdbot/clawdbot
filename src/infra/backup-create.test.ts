@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import * as tar from "tar";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type MockInstance } from "vitest";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import { backupRestoreCommand } from "../commands/backup-restore.js";
 import { backupVerifyCommand, verifyBackupArchive } from "../commands/backup-verify.js";
@@ -1200,6 +1200,83 @@ describe("createBackupArchive", () => {
       );
     },
   );
+
+  it("does not abort the archive when a snapshotted sqlite sidecar vanishes after tar enumerates it", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-sidecar-race-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const agentDir = state.path("sidecar-agent");
+        await fs.mkdir(agentDir, { recursive: true });
+        await state.writeConfig({
+          agents: { entries: { main: { default: true, agentDir } } },
+        });
+        const dbPath = path.join(agentDir, "openclaw-agent.sqlite");
+        createOwnedSqliteDatabase({ sqlitePath: dbPath, role: "agent", agentId: "main" });
+
+        const sqlite = requireNodeSqlite();
+        const db = new sqlite.DatabaseSync(dbPath);
+        const originalLstat = fsSync.lstat.bind(fsSync);
+        let vanishedBeforeLstat = false;
+        let lstatSpy: MockInstance | undefined;
+        try {
+          db.exec(`
+            PRAGMA journal_mode = WAL;
+            PRAGMA wal_autocheckpoint = 0;
+            CREATE TABLE durable_records (value TEXT NOT NULL);
+          `);
+          db.prepare("INSERT INTO durable_records (value) VALUES (?)").run("committed-in-wal");
+          await fs.access(`${dbPath}-wal`);
+          await fs.access(`${dbPath}-shm`);
+
+          // Reproduce the live-agent race: tar has already enumerated the
+          // sidecars via readdir, and the owning process removes them before
+          // node-tar lstats them. A vanished sidecar of a snapshotted database
+          // must not abort the whole archive.
+          const sidecarPaths = new Set(
+            [`${dbPath}-wal`, `${dbPath}-shm`].map((sidecar) => path.resolve(sidecar)),
+          );
+          lstatSpy = vi.spyOn(fsSync, "lstat");
+          lstatSpy.mockImplementation(((target: unknown, callback: unknown) => {
+            if (
+              typeof target === "string" &&
+              typeof callback === "function" &&
+              sidecarPaths.has(path.resolve(target))
+            ) {
+              // unlink does not stat the file first, so this cannot recurse
+              // back into the lstat mock through rimraf.
+              try {
+                fsSync.unlinkSync(target);
+              } catch {
+                // already removed by an earlier lstat of the same sidecar
+              }
+              vanishedBeforeLstat = true;
+            }
+            return originalLstat(target as never, callback as never);
+          }) as unknown as typeof fsSync.lstat);
+
+          const archive = await createBackupArchive({
+            output: state.path("sidecar-race.tar.gz"),
+            includeWorkspace: false,
+          });
+
+          const entries = await listArchiveEntries(archive.archivePath);
+          expect(vanishedBeforeLstat).toBe(false);
+          expect(
+            entries.find((entry) => entry.endsWith("/sidecar-agent/openclaw-agent.sqlite")),
+          ).toBeDefined();
+          expect(entries.some((entry) => entry.endsWith("/openclaw-agent.sqlite-wal"))).toBe(false);
+          expect(entries.some((entry) => entry.endsWith("/openclaw-agent.sqlite-shm"))).toBe(false);
+        } finally {
+          lstatSpy?.mockRestore();
+          db.close();
+        }
+      },
+    );
+  });
 
   it("rejects a configured external agent database owned by a different agent", async () => {
     await withOpenClawTestState(

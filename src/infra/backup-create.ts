@@ -361,6 +361,16 @@ function isBackupTarFilterFile(entry: import("node:fs").Stats | import("tar").Re
   return "isFile" in entry ? entry.isFile() : entry.type === "File";
 }
 
+/**
+ * Restores the native path spelling of a node-tar stat-cache key. node-tar
+ * normalizes its absolute cache keys to forward slashes on Windows, while the
+ * snapshot source sets hold native `path.resolve` spellings with backslashes,
+ * so exact-match lookups must convert the key back first.
+ */
+function fromTarCacheKey(tarCacheKey: string): string {
+  return path.sep === "/" ? tarCacheKey : tarCacheKey.replaceAll("/", path.sep);
+}
+
 const MAX_LEGACY_AUDIT_CAPTURE_ATTEMPTS = 3;
 
 type ConsistentStateSnapshotPlan = {
@@ -624,7 +634,24 @@ export async function createBackupArchive(
                 portable: true,
                 preservePaths: true,
                 linkCache: createBackupLinkCache(),
-                statCache: createBackupVolatileStatCache(plan.inventory.isVolatile),
+                statCache: createBackupVolatileStatCache(
+                  (sourcePath) =>
+                    plan.inventory.isVolatile(sourcePath) ||
+                    // node-tar lstats every enumerated entry before the tar
+                    // filter can exclude it, and a live SQLite database can
+                    // remove a transient sidecar (-wal/-shm/-journal) at any
+                    // moment. Paths already excluded by a verified snapshot
+                    // must not abort the whole archive when that happens, so
+                    // they get a synthetic stat and are filtered out without
+                    // touching the filesystem. Unsnapshotted SQLite sources
+                    // stay uncovered so the filter still rejects them.
+                    // node-tar normalizes its cache keys to forward slashes on
+                    // Windows while the snapshot sets below hold native
+                    // path.resolve spellings, so restore the native separator
+                    // spelling before the exact-match lookups.
+                    skippedStateSourcePaths.has(fromTarCacheKey(sourcePath)) ||
+                    stateSqliteBackup.discoveredSourcePaths.has(fromTarCacheKey(sourcePath)),
+                ),
                 filter: (entryPath, entryStat) => {
                   reportProgress({ phase: "traversal", entryPath });
                   return tarFilter(entryPath, entryStat);
