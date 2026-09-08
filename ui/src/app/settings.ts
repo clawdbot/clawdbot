@@ -18,6 +18,7 @@ import { normalizeChatSplitLayout } from "../pages/chat/split-layout-persistence
 import type { ChatSplitLayout } from "../pages/chat/split-layout-types.ts";
 import { resolveControlUiPaths } from "./browser.ts";
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
+import { registerGatewayProfileForSettings } from "./gateway-settings-registration.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 import { normalizeTypefaceOverride, type TypefaceId } from "./typography.ts";
 import { normalizeLocalUserIdentity, type LocalUserIdentity } from "./user-identity.ts";
@@ -35,7 +36,7 @@ const TOKEN_SESSION_KEY_PREFIX = "openclaw.control.token.v1:";
 const MAX_SCOPED_SESSION_ENTRIES = 10;
 
 export function settingsKeyForGateway(gatewayUrl: string): string {
-  return `${SETTINGS_KEY_PREFIX}${gatewayOriginScope(gatewayUrl)}`;
+  return `${SETTINGS_KEY_PREFIX}${gatewayCredentialScope(gatewayUrl)}`;
 }
 
 function currentGatewaySelectionKeyForPage(pageUrl: string): string {
@@ -315,7 +316,7 @@ function settingsMatchGatewayTarget(parsed: PersistedUiSettings, targetUrl: stri
   if (!storedUrl) {
     return false;
   }
-  return gatewayOriginScope(storedUrl) === gatewayOriginScope(targetUrl);
+  return gatewayCredentialScope(storedUrl) === gatewayCredentialScope(targetUrl);
 }
 
 function readSettingsForGateway(
@@ -336,7 +337,7 @@ function readSettingsForGateway(
 }
 
 function tokenSessionKeyForGateway(gatewayUrl: string): string {
-  return `${TOKEN_SESSION_KEY_PREFIX}${gatewayOriginScope(gatewayUrl)}`;
+  return `${TOKEN_SESSION_KEY_PREFIX}${gatewayCredentialScope(gatewayUrl)}`;
 }
 
 function resolveScopedSessionSelection(
@@ -344,7 +345,7 @@ function resolveScopedSessionSelection(
   parsed: PersistedUiSettings,
   fallback: ScopedSessionSelection,
 ): ScopedSessionSelection {
-  const scope = gatewayOriginScope(gatewayUrl);
+  const scope = gatewayCredentialScope(gatewayUrl);
   const scoped = parsed.sessionsByGateway?.[scope];
   const scopedSessionKey = normalizeOptionalString(scoped?.sessionKey);
   const scopedLastActiveSessionKey = normalizeOptionalString(scoped?.lastActiveSessionKey);
@@ -402,7 +403,7 @@ export function resolveGatewayCredentialsForUrlEdit(
   credentials: { token: string; password: string },
 ): { token: string; password: string } {
   const sameTokenScope =
-    gatewayOriginScope(currentGatewayUrl) === gatewayOriginScope(nextGatewayUrl);
+    gatewayCredentialScope(currentGatewayUrl) === gatewayCredentialScope(nextGatewayUrl);
   const sameCredentialScope =
     gatewayCredentialScope(currentGatewayUrl) === gatewayCredentialScope(nextGatewayUrl);
   return {
@@ -461,7 +462,7 @@ export function loadUiPreferences(targetGatewayUrl?: string): UiPreferences {
   if (
     cached &&
     (!targetGatewayUrl ||
-      gatewayOriginScope(cached.gatewayUrl) === gatewayOriginScope(targetGatewayUrl))
+      gatewayCredentialScope(cached.gatewayUrl) === gatewayCredentialScope(targetGatewayUrl))
   ) {
     return targetGatewayUrl ? { ...cached, gatewayUrl: targetGatewayUrl } : cached;
   }
@@ -490,14 +491,21 @@ export function loadUiPreferences(targetGatewayUrl?: string): UiPreferences {
   };
 
   try {
-    const selectedGatewayUrl =
-      targetGatewayUrl ??
-      normalizeOptionalString(storage?.getItem(currentGatewaySelectionKeyForPage(pageDerivedUrl)));
+    const legacySelectedGatewayUrl = normalizeOptionalString(
+      storage?.getItem(currentGatewaySelectionKeyForPage(pageDerivedUrl)),
+    );
+    const selectedGatewayUrl = targetGatewayUrl ?? legacySelectedGatewayUrl;
     const source =
       (selectedGatewayUrl ? readSettingsForGateway(storage, selectedGatewayUrl) : null) ??
       (targetGatewayUrl ? null : readSettingsForGateway(storage, defaultUrl));
     if (!source) {
-      return defaults;
+      const gatewayUrl = selectedGatewayUrl ?? defaultUrl;
+      const selection = loadGatewaySessionSelection(gatewayUrl);
+      return {
+        ...defaults,
+        gatewayUrl,
+        ...selection,
+      };
     }
     const parsed = source.parsed;
     const parsedGatewayUrl = source.gatewayUrl;
@@ -654,7 +662,7 @@ export function loadLocalUserIdentity(): LocalUserIdentity {
 
 function persistSettings(next: UiSettings, options: { selectGateway?: boolean } = {}) {
   const storage = getSafeLocalStorage();
-  const scope = gatewayOriginScope(next.gatewayUrl);
+  const scope = gatewayCredentialScope(next.gatewayUrl);
   const scopedKey = settingsKeyForGateway(next.gatewayUrl);
   const accent = normalizeAccentColor(next.accent);
   const fontUi = normalizeTypefaceOverride(next.fontUi);
@@ -765,6 +773,9 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     if (options.selectGateway || storage?.getItem(selectionKey) == null) {
       storage?.setItem(selectionKey, next.gatewayUrl);
     }
+    registerGatewayProfileForSettings(next.gatewayUrl, {
+      select: options.selectGateway === true,
+    });
     storage?.removeItem(LEGACY_SETTINGS_KEY);
     if (storage) {
       unpersistedSettings = null;
@@ -775,7 +786,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     // unpersistedSettings keeps this tab consistent until storage recovers
   }
   const owner = livePreferenceOwner;
-  if (owner && gatewayOriginScope(owner.gatewayUrl()) === scope) {
+  if (owner && gatewayCredentialScope(owner.gatewayUrl()) === scope) {
     owner.refresh();
   }
 }

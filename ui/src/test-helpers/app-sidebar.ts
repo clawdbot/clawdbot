@@ -18,6 +18,7 @@ import type {
   ApplicationGatewaySnapshot,
 } from "../app/context.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
+import type { GatewayRegistry } from "../app/gateway-registry.ts";
 import type { ApplicationOverlays } from "../app/overlays-types.ts";
 import type { SessionDataController } from "../components/session-data-controller.ts";
 import type { SessionOrganizerController } from "../components/session-organizer-controller.ts";
@@ -64,6 +65,9 @@ export type SidebarLifecycleState = HTMLElement & {
   terminalAvailable: boolean;
   catalogOpenTarget: "viewer" | "terminal";
   canPairDevice: boolean;
+  gatewayRegistry: GatewayRegistry;
+  onSelectGateway?: (id: string) => void;
+  onManageGateways?: () => void;
   sidebarEntries: readonly string[];
   sidebarLiveActivity: boolean;
   onUpdateSidebarEntries?: (entries: string[]) => void;

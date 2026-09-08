@@ -907,8 +907,8 @@ suite.define(() => {
             entry.browserConnect !== undefined,
           queryEvidenceStart,
         );
-        // The shared secret travels in both connect fields since the single secret field.
-        expect(queryEvidence.browserConnect?.authFields).toEqual(["password", "token"]);
+        // A query-distinct gateway is a separate credential scope.
+        expect(queryEvidence.browserConnect?.authFields).toEqual([]);
 
         const originEvidenceStart = proxy.evidence.length;
         await connected.page.evaluate((gatewayUrl) => {

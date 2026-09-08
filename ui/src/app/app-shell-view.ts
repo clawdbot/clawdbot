@@ -36,6 +36,8 @@ import { canGoBackInNativeEmbed } from "./browser.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
+import { loadGatewayRegistryForGateway } from "./gateway-registry.ts";
+import { selectAndConnectGateway } from "./gateway-shell-selection.ts";
 import {
   DEBUG_OVERLAY_ELEMENT,
   isOptionalElementDefined,
@@ -278,12 +280,15 @@ export function renderApplicationShell(host: ShellViewHost) {
       lobsterPetVisits: uiSettings.lobsterPetVisits !== false,
       lobsterPetSounds: uiSettings.lobsterPetSounds === true,
       gatewayVersion: config.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? null,
+      gatewayRegistry: loadGatewayRegistryForGateway(context.gateway.connection.gatewayUrl),
       devGitBranch: config.devGitBranch,
       watchUpdateProgress,
       onOpenApprovals: () => host.openApprovals(),
       onOpenPalette: () => host.openPalette(),
       onRetryConnect: () => context.gateway.connect(),
       onToggleSidebar: () => host.toggleNavigationSurface(),
+      onSelectGateway: (id: string) => selectAndConnectGateway(context.gateway, id),
+      onManageGateways: () => host.navigate("connection"),
       onOpenNewSession: openNewSession,
       onUpdateSidebarEntries: (entries: string[]) =>
         context.navigation.update({ sidebarEntries: entries }),

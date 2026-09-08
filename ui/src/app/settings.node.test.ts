@@ -17,6 +17,7 @@ import {
   persistSessionToken,
   resolvePageGatewaySettings,
   saveSettings,
+  settingsKeyForGateway,
 } from "./settings.ts";
 import { resolveApplicationStartupSettings } from "./startup-settings.ts";
 
@@ -320,6 +321,33 @@ describe("loadSettings default gateway URL derivation", () => {
     const settings = loadSettings();
     expect(settings.gatewayUrl).toBe(gwUrl);
     expect(settings.token).toBe("gateway-a-token");
+  });
+
+  it("isolates saved settings and sessions for query-distinct gateways", () => {
+    setTestLocation({ protocol: "https:", host: "gateway.example:8443", pathname: "/" });
+    const personal = "wss://gateway.example/rpc?account=personal";
+    const team = "wss://gateway.example/rpc?account=team";
+
+    saveSettings({
+      ...makeUiSettings(personal),
+      token: "personal-token",
+      sessionKey: "personal",
+      lastActiveSessionKey: "personal",
+    });
+    saveSettings({
+      ...makeUiSettings(team),
+      token: "team-token",
+      sessionKey: "team",
+      lastActiveSessionKey: "team",
+    });
+    persistSessionToken(personal, "personal-token");
+    persistSessionToken(team, "team-token");
+
+    expect(settingsKeyForGateway(personal)).not.toBe(settingsKeyForGateway(team));
+    expect(loadSettings(personal)).toMatchObject({ gatewayUrl: personal, token: "personal-token" });
+    expect(loadSettings(team)).toMatchObject({ gatewayUrl: team, token: "team-token" });
+    expect(loadGatewaySessionSelection(personal).sessionKey).toBe("personal");
+    expect(loadGatewaySessionSelection(team).sessionKey).toBe("team");
   });
 
   it("does not persist gateway tokens when saving settings", () => {

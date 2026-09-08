@@ -9,6 +9,7 @@ import {
   type ApplicationGatewaySnapshot,
   type ApplicationNavigationOptions,
 } from "../app/context.ts";
+import type { GatewayRegistry } from "../app/gateway-registry.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
@@ -46,6 +47,10 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) lobsterPetVisits = true;
   @property({ attribute: false }) lobsterPetSounds = false;
   @property({ attribute: false }) gatewayVersion: string | null = null;
+  @property({ attribute: false }) gatewayRegistry: GatewayRegistry = {
+    gateways: [],
+    activeGatewayId: null,
+  };
   @property({ attribute: false }) devGitBranch: string | null = null;
   @property({ attribute: false }) watchUpdateProgress:
     | ((listener: (progress: UpdateProgress) => void) => () => void)
@@ -54,6 +59,8 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onOpenPalette?: () => void;
   @property({ attribute: false }) onRetryConnect?: () => void;
   @property({ attribute: false }) onToggleSidebar?: () => void;
+  @property({ attribute: false }) onSelectGateway?: (id: string) => void;
+  @property({ attribute: false }) onManageGateways?: () => void;
   @property({ attribute: false }) onOpenNewSession?: (
     agentId: string,
     target?: NewSessionTarget,
