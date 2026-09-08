@@ -14,7 +14,7 @@ jobs:
   manifest-tracer:
     name: Swift manifest tracer (${{ matrix.sandbox }})
     runs-on: macos-26-intel
-    timeout-minutes: 15
+    timeout-minutes: 18
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -49,7 +49,7 @@ jobs:
 
       - name: Setup CodeQL CLI
         id: setup-codeql
-        timeout-minutes: 2
+        timeout-minutes: 3
         uses: github/codeql-action/setup-codeql@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           tools: https://github.com/github/codeql-action/releases/download/codeql-bundle-v2.26.4/codeql-bundle-osx64.tar.gz

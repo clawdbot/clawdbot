@@ -4,7 +4,7 @@ set -euo pipefail
 PATH_CLEAN="/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin"
 MANIFEST_SHA="076e7810d9a463f3d7f034f9429bd5dcb3ed72203d06e1636f221668ec327962"
 SELF_TEST_TEMP=""
-JOB_BUDGET_SECONDS=900
+JOB_BUDGET_SECONDS=1080
 PRE_CLOCK_ALLOWANCE_SECONDS=120
 TRACE_STEP_SECONDS=540
 COLLECTION_RESERVE_SECONDS=60
@@ -39,6 +39,40 @@ stats_json() {
     --argjson files "$files" \
     --argjson bytes "$bytes" \
     '{exists: $present, files: $files, bytes: $bytes}'
+}
+
+semantic_manifest_hash() {
+  local output="$1"
+  local expected_source_root="$2"
+  local semantic_sha
+
+  if ! jq -e --arg expected "$expected_source_root" '
+    (.packageKind | type) == "object"
+    and (.packageKind.root | type) == "array"
+    and (.packageKind.root | length) == 1
+    and (.packageKind.root[0] | type) == "string"
+    and .packageKind.root[0] == $expected
+  ' "$output" >/dev/null; then
+    jq -cn '{
+      status: "unknown-schema-or-source-root",
+      sha256: null,
+      normalizedJsonPointer: "$.packageKind.root[0]",
+      expectedSourceRootMatched: false
+    }'
+    return
+  fi
+
+  semantic_sha=$(jq -cS \
+    '.packageKind.root[0] = "__CODEQL_DIAGNOSTIC_SOURCE_ROOT__"' \
+    "$output" | shasum -a 256 | awk '{ print $1 }')
+  jq -cn \
+    --arg sha "$semantic_sha" \
+    '{
+      status: "computed",
+      sha256: $sha,
+      normalizedJsonPointer: "$.packageKind.root[0]",
+      expectedSourceRootMatched: true
+    }'
 }
 
 require_context() {
@@ -184,6 +218,12 @@ manifest_child() {
   local output="$dir/manifest.json"
   local stderr="$dir/manifest.stderr.log"
   local tracing=false
+  local semantic='{
+    "status": "not-computed",
+    "sha256": null,
+    "normalizedJsonPointer": "$.packageKind.root[0]",
+    "expectedSourceRootMatched": false
+  }'
 
   [[ "$phase" == "baseline" || "$phase" == "traced" ]] || die "invalid child phase"
   [[ "$DIAGNOSTIC_PHASE" == "$phase" ]] || die "child phase mismatch"
@@ -237,10 +277,13 @@ manifest_child() {
   local output_sha=""
   local output_bytes=0
   if [[ "$status" -eq 0 ]]; then
+    local expected_source_root
     jq -e . "$output" >/dev/null || die "manifest output is not JSON"
     output_bytes=$(wc -c < "$output" | awk '{ print $1 }')
     [[ "$output_bytes" -le 65536 ]] || die "manifest output exceeds 64 KiB"
     output_sha=$(shasum -a 256 "$output" | awk '{ print $1 }')
+    expected_source_root=$(cd "$dir/source" && pwd -P)
+    semantic=$(semantic_manifest_hash "$output" "$expected_source_root")
   fi
   jq -n \
     --arg phase "$phase" \
@@ -250,13 +293,14 @@ manifest_child() {
     --argjson exit "$status" \
     --arg sha "$output_sha" \
     --argjson bytes "$output_bytes" \
+    --argjson semantic "$semantic" \
     '{
       phase: $phase,
       startMonotonicSeconds: $start,
       endMonotonicSeconds: $end,
       elapsedSeconds: $elapsed,
       exitCode: $exit,
-      manifest: {sha256: $sha, bytes: $bytes}
+      manifest: {sha256: $sha, bytes: $bytes, semantic: $semantic}
     }' > "$DIAGNOSTIC_ROOT/receipts/$phase-child-completion.json"
   return "$status"
 }
@@ -650,6 +694,11 @@ collect() {
 self_test() {
   local log
   local summary
+  local semantic_a
+  local semantic_b
+  local semantic_changed
+  local semantic_malformed
+  local semantic_unknown
   SELF_TEST_TEMP=$(mktemp -d)
   trap 'rm -rf "$SELF_TEST_TEMP"' EXIT
   ROOT="$SELF_TEST_TEMP"
@@ -685,15 +734,46 @@ self_test() {
     and .exactCodeqlEvents.executeLanguageMatcher == 1
   ' "$summary" >/dev/null
   ! grep -Eq 'secret|/private/path|--token' "$summary" || die "typed log leaked raw input"
-  admission_allowed 150 || die "trace admission rejected the exact reserved boundary"
-  ! admission_allowed 151 || die "trace admission accepted insufficient reserved time"
+  jq -n --arg root "/case/off/source" \
+    '{name: "Sparkle", packageKind: {root: [$root]}, products: []}' \
+    > "$SELF_TEST_TEMP/manifest-a.json"
+  jq -n --arg root "/case/on/source" \
+    '{name: "Sparkle", packageKind: {root: [$root]}, products: []}' \
+    > "$SELF_TEST_TEMP/manifest-b.json"
+  jq -n --arg root "/case/on/source" \
+    '{name: "SparkleChanged", packageKind: {root: [$root]}, products: []}' \
+    > "$SELF_TEST_TEMP/manifest-changed.json"
+  semantic_a=$(semantic_manifest_hash "$SELF_TEST_TEMP/manifest-a.json" "/case/off/source")
+  semantic_b=$(semantic_manifest_hash "$SELF_TEST_TEMP/manifest-b.json" "/case/on/source")
+  semantic_changed=$(
+    semantic_manifest_hash "$SELF_TEST_TEMP/manifest-changed.json" "/case/on/source"
+  )
+  semantic_malformed=$(
+    semantic_manifest_hash "$SELF_TEST_TEMP/summary.json" "/case/off/source"
+  )
+  semantic_unknown=$(semantic_manifest_hash "$SELF_TEST_TEMP/manifest-a.json" "/unexpected/source")
+  [[ "$(jq -r '.status' <<<"$semantic_a")" == computed ]] ||
+    die "semantic manifest hash was not computed"
+  [[ "$(jq -r '.sha256' <<<"$semantic_a")" == "$(jq -r '.sha256' <<<"$semantic_b")" ]] ||
+    die "source-root-only difference changed semantic manifest hash"
+  [[ "$(jq -r '.sha256' <<<"$semantic_a")" != "$(jq -r '.sha256' <<<"$semantic_changed")" ]] ||
+    die "substantive manifest difference did not change semantic hash"
+  jq -e '.status == "unknown-schema-or-source-root" and .sha256 == null' \
+    <<<"$semantic_malformed" >/dev/null ||
+    die "malformed manifest schema did not produce unknown semantic hash"
+  jq -e '.status == "unknown-schema-or-source-root" and .sha256 == null' \
+    <<<"$semantic_unknown" >/dev/null ||
+    die "unexpected source root did not produce unknown semantic hash"
+
+  admission_allowed 330 || die "trace admission rejected the exact reserved boundary"
+  ! admission_allowed 331 || die "trace admission accepted insufficient reserved time"
   [[ "$(classification success '{"exitCode":0}' '{"exitCode":0}' null)" == completed ]] ||
     die "complete classification failed"
   [[ "$(classification success '{"exitCode":0}' null null)" == missing-or-unknown ]] ||
     die "partial completion was misclassified"
   [[ "$(classification failure null null '{"admitted":false}')" == skipped-insufficient-job-budget ]] ||
     die "admission refusal classification failed"
-  echo "self-test: admission=pass classifications=pass clean-env=pass typed-log-boundary=pass truncation=pass"
+  echo "self-test: admission=pass classifications=pass clean-env=pass semantic-hash=pass typed-log-boundary=pass truncation=pass"
 }
 
 COMMAND="${1:-}"
