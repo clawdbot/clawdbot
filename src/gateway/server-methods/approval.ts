@@ -112,11 +112,12 @@ function respondApprovalNotFound(respond: RespondFn): void {
 }
 
 function readExactApprovalId(params: unknown): string | null {
-  if (!isRecord(params) || typeof params.id !== "string") {
+  if (!isRecord(params)) {
     return null;
   }
-  const id = params.id;
-  return isWellFormedApprovalId(id) ? id : null;
+  // Clipboard/RPC padding must not miss exact Map/SQL approval ids.
+  const id = normalizeOptionalString(params.id);
+  return id && isWellFormedApprovalId(id) ? id : null;
 }
 
 function loadVisibleApproval(params: {
