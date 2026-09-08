@@ -13,6 +13,15 @@ export type ResolveQuestionOverGatewayResult =
   | { status: "custom-input"; questionId: string }
   | { status: "already-terminal"; reason: "already-terminal" | "not-found" };
 
+/**
+ * Re-checked after the awaited question read and immediately before the resolve
+ * write, so access lost during that window cannot answer.
+ */
+export type QuestionResolutionAuthorizer = () => boolean | Promise<boolean>;
+
+/** Only a caller that supplies an authorizer can receive this. */
+export type ResolveQuestionOverGatewayDenial = { status: "denied" };
+
 export type ResolveQuestionOverGatewayParams = {
   cfg: OpenClawConfig;
   questionId: string;
@@ -55,10 +64,23 @@ function readTerminalReason(error: unknown): "already-terminal" | "not-found" | 
   return reason === "QUESTION_NOT_FOUND" ? "not-found" : undefined;
 }
 
+/** Params for the overload that re-checks access before the resolve write. */
+export type AuthorizedResolveQuestionOverGatewayParams = ResolveQuestionOverGatewayParams & {
+  authorize: QuestionResolutionAuthorizer;
+};
+
 /** Resolves one rendered choice or validates a custom-input transition. */
+// Only the authorized overload widens the result, so callers that never opt in
+// keep the result union they already exhaust.
+export async function resolveQuestionOverGateway(
+  params: AuthorizedResolveQuestionOverGatewayParams,
+): Promise<ResolveQuestionOverGatewayResult | ResolveQuestionOverGatewayDenial>;
 export async function resolveQuestionOverGateway(
   params: ResolveQuestionOverGatewayParams,
-): Promise<ResolveQuestionOverGatewayResult> {
+): Promise<ResolveQuestionOverGatewayResult>;
+export async function resolveQuestionOverGateway(
+  params: ResolveQuestionOverGatewayParams & { authorize?: QuestionResolutionAuthorizer },
+): Promise<ResolveQuestionOverGatewayResult | ResolveQuestionOverGatewayDenial> {
   if (!QUESTION_RECORD_ID_PATTERN.test(params.questionId)) {
     throw new Error("question resolution requires a valid question record id");
   }
@@ -111,6 +133,9 @@ export async function resolveQuestionOverGateway(
   const optionValue = params.optionValue ?? question.options[params.optionIndex as number]?.label;
   if (!optionValue) {
     throw new Error("question resolution index does not match a declared option");
+  }
+  if (params.authorize && !(await params.authorize())) {
+    return { status: "denied" };
   }
   try {
     await callGateway<QuestionResolveResult>({

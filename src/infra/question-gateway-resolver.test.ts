@@ -34,6 +34,53 @@ describe("resolveQuestionOverGateway", () => {
     hoisted.callGateway.mockReset();
   });
 
+  it("does not resolve when access is lost between the read and the write", async () => {
+    hoisted.callGateway.mockResolvedValueOnce({ question: pendingRecord });
+    let methodsSeenWhenChecked: string[] = [];
+
+    const result = await resolveQuestionOverGateway({
+      cfg: {} as never,
+      questionId: recordId,
+      optionValue: "Production",
+      senderId: "mattermost:42",
+      authorize: () => {
+        methodsSeenWhenChecked = hoisted.callGateway.mock.calls.map((call) => call[0].method);
+        return false;
+      },
+    });
+
+    expect(result).toEqual({ status: "denied" });
+    // The check runs after the read, which is the window it exists to guard.
+    expect(methodsSeenWhenChecked).toEqual(["question.get"]);
+    // The privileged write never happened.
+    expect(hoisted.callGateway.mock.calls.map((call) => call[0].method)).toEqual(["question.get"]);
+  });
+
+  it("resolves as usual when access still holds at the write", async () => {
+    hoisted.callGateway.mockResolvedValueOnce({ question: pendingRecord }).mockResolvedValueOnce({
+      status: "answered",
+      answers: { answers: { deploy_target: ["Production"] } },
+    });
+
+    await expect(
+      resolveQuestionOverGateway({
+        cfg: {} as never,
+        questionId: recordId,
+        optionValue: "Production",
+        senderId: "mattermost:42",
+        authorize: () => true,
+      }),
+    ).resolves.toEqual({
+      status: "answered",
+      questionId: "deploy_target",
+      optionValue: "Production",
+    });
+    expect(hoisted.callGateway.mock.calls.map((call) => call[0].method)).toEqual([
+      "question.get",
+      "question.resolve",
+    ]);
+  });
+
   it("maps the rendered option value to the canonical question id", async () => {
     hoisted.callGateway.mockResolvedValueOnce({ question: pendingRecord }).mockResolvedValueOnce({
       status: "answered",
