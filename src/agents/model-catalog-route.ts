@@ -7,6 +7,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-types.js";
 import { resolveProviderModelCatalogId } from "../plugins/provider-model-routes.js";
+import { resolveDirectBundledProviderPolicySurface } from "../plugins/provider-policy-surface.js";
 import {
   PREPARED_THINKING_POLICY,
   type ThinkingCatalogPolicyCarrier,
@@ -62,9 +63,10 @@ export function resolveConfiguredModelCatalogOverrides(params: {
   if (!providerConfig) {
     return undefined;
   }
+  const surface = resolveDirectBundledProviderPolicySurface(provider);
   const normalizeConfiguredModelId = (modelId: string) =>
     params.policy?.resolveIdentity({ provider: params.entry.provider, id: modelId })?.key ??
-    resolveProviderModelCatalogId({ provider, modelId }) ??
+    resolveProviderModelCatalogId({ provider, modelId, surface }) ??
     modelId.trim();
   const model = resolveMergedModelProviderModels({
     models: providerConfig.models,
@@ -154,10 +156,12 @@ export function projectModelCatalogEntryForRoute(params: {
   overrides?: ModelCatalogLogicalOverrides;
 }): ModelCatalogEntry {
   if (params.projection.kind === "unmanaged") {
-    const id = resolveProviderModelCatalogId({
-      provider: params.entry.provider,
-      modelId: params.entry.id,
-    });
+    const provider = normalizeProviderId(params.entry.provider);
+    const surface = resolveDirectBundledProviderPolicySurface(provider);
+    // Route-capable owners project identity only with their route facts.
+    const id = surface?.resolveModelRoutes
+      ? null
+      : resolveProviderModelCatalogId({ provider, modelId: params.entry.id, surface });
     const entry = id && id !== params.entry.id ? { ...params.entry, id } : params.entry;
     return applyLogicalOverrides(entry, params.overrides);
   }

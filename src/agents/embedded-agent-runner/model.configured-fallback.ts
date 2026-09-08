@@ -2,6 +2,7 @@ import { findConfiguredProviderModel } from "../../config/model-provider-config.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { createProviderModelCatalogIdNormalizer } from "../../plugins/provider-model-routes.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { resolveCatalogOwnedModelCompat } from "../model-compat-catalog.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
@@ -50,7 +51,12 @@ export function buildConfiguredFallbackModel(params: {
   const { provider, modelId, cfg, agentDir, workspaceDir, runtimeHooks } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
-  const configuredModel = findConfiguredProviderModel(providerConfig, provider, modelId);
+  const configuredModel = findConfiguredProviderModel(
+    providerConfig,
+    provider,
+    modelId,
+    createProviderModelCatalogIdNormalizer(provider),
+  );
   if (!hasConfiguredFallbackSurface({ providerConfig, configuredModel, modelId })) {
     return undefined;
   }

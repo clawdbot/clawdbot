@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { stripSelfProviderModelPrefix } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ProviderRouteOverridePresence } from "../plugin-sdk/provider-model-types.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "./types.models.js";
@@ -13,19 +14,27 @@ export function matchesProviderScopedModelId(params: {
   candidateId?: string;
   provider: string;
   modelId: string;
+  normalizeModelId?: (modelId: string) => string;
 }): boolean {
   const { candidateId, provider, modelId } = params;
   if (candidateId === modelId) {
     return true;
   }
   const slashIndex = candidateId?.indexOf("/") ?? -1;
-  if (!candidateId || slashIndex <= 0) {
+  if (!candidateId) {
     return false;
   }
-  return (
+  if (
+    slashIndex > 0 &&
     candidateId.slice(slashIndex + 1) === modelId &&
     normalizeProviderId(candidateId.slice(0, slashIndex)) === normalizeProviderId(provider)
-  );
+  ) {
+    return true;
+  }
+  return params.normalizeModelId
+    ? params.normalizeModelId(stripSelfProviderModelPrefix(provider, candidateId)) ===
+        params.normalizeModelId(stripSelfProviderModelPrefix(provider, modelId))
+    : false;
 }
 
 /** Uses the same authored row for transport materialization and early auth selection. */
@@ -33,9 +42,23 @@ export function findConfiguredProviderModel(
   providerConfig: { models?: ModelDefinitionConfig[] } | undefined,
   provider: string,
   modelId: string,
+  canonicalizeModelId?: (modelId: string) => string,
 ) {
-  return providerConfig?.models?.find((candidate) =>
+  const exact = providerConfig?.models?.find((candidate) =>
     matchesProviderScopedModelId({ candidateId: candidate.id, provider, modelId }),
+  );
+  return (
+    exact ??
+    (canonicalizeModelId
+      ? providerConfig?.models?.find((candidate) =>
+          matchesProviderScopedModelId({
+            candidateId: candidate.id,
+            provider,
+            modelId,
+            normalizeModelId: canonicalizeModelId,
+          }),
+        )
+      : undefined)
   );
 }
 

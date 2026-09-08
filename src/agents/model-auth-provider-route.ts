@@ -4,6 +4,7 @@ import {
   resolveMergedModelProviderConfig,
 } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createProviderModelCatalogIdNormalizer } from "../plugins/provider-model-routes.js";
 import {
   resolveProviderIdForAuth,
   type ProviderAuthAliasLookupParams,
@@ -32,6 +33,7 @@ export function resolveModelProviderAuthConfig(
           resolveMergedModelProviderConfig(params.config, params.provider),
           params.provider,
           params.modelId,
+          createProviderModelCatalogIdNormalizer(params.provider),
         )?.baseUrl?.trim()
       : undefined);
   if (typeof modelBaseUrl !== "string" || !modelBaseUrl) {

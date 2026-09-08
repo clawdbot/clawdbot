@@ -27,6 +27,14 @@ type ProviderModelRoutesResolver = (
   observed?: ProviderModelRouteObservation,
 ) => ProviderModelRouteResolution | null;
 
+/** Binds one provider's identity facts for an authored-row lookup. */
+export function createProviderModelCatalogIdNormalizer(providerId: string) {
+  const provider = normalizeProviderId(providerId);
+  const surface = provider ? resolveDirectBundledProviderPolicySurface(provider) : null;
+  return (modelId: string) =>
+    resolveProviderModelCatalogId({ provider, modelId, surface }) ?? modelId;
+}
+
 /** Resolves provider-owned catalog id equivalence without loading its runtime. */
 export function resolveProviderModelCatalogId(params: {
   provider: string;

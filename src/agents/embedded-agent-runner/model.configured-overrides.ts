@@ -11,6 +11,7 @@ import { projectConfigOntoRuntimeSourceSnapshot } from "../../config/runtime-sou
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Api, Model } from "../../llm/types.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { createProviderModelCatalogIdNormalizer } from "../../plugins/provider-model-routes.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveCatalogOwnedModelCompat } from "../model-compat-catalog.js";
 import { modelKey, normalizeStaticProviderModelId } from "../model-ref-shared.js";
@@ -114,23 +115,25 @@ export function findInlineModelMatch(params: {
   provider: string;
   modelId: string;
 }) {
-  const matchesModelId = (entry: { provider: string; id?: string }) =>
-    matchesProviderScopedModelId({
-      candidateId: entry.id,
-      provider: entry.provider,
-      modelId: params.modelId,
-    });
   const inlineModels = params.preparedModels ?? buildInlineProviderModels(params.providers);
-  const exact = inlineModels.find(
-    (entry) => entry.provider === params.provider && matchesModelId(entry),
-  );
-  if (exact) {
-    return exact;
-  }
   const normalizedProvider = normalizeProviderId(params.provider);
-  return inlineModels.find(
-    (entry) => normalizeProviderId(entry.provider) === normalizedProvider && matchesModelId(entry),
-  );
+  const find = (normalizeModelId?: (modelId: string) => string) => {
+    const matchesModelId = (entry: { provider: string; id?: string }) =>
+      matchesProviderScopedModelId({
+        candidateId: entry.id,
+        provider: entry.provider,
+        modelId: params.modelId,
+        ...(normalizeModelId ? { normalizeModelId } : {}),
+      });
+    return (
+      inlineModels.find((entry) => entry.provider === params.provider && matchesModelId(entry)) ??
+      inlineModels.find(
+        (entry) =>
+          normalizeProviderId(entry.provider) === normalizedProvider && matchesModelId(entry),
+      )
+    );
+  };
+  return find() ?? find(createProviderModelCatalogIdNormalizer(params.provider));
 }
 
 export function resolveConfiguredProviderConfig(
@@ -397,10 +400,16 @@ export function applyConfiguredProviderOverrides(params: {
       headers: requestConfig.headers,
     };
   }
+  const normalizeModelId = createProviderModelCatalogIdNormalizer(params.provider);
   const configuredModel =
-    findConfiguredProviderModel(providerConfig, params.provider, modelId) ??
+    findConfiguredProviderModel(providerConfig, params.provider, modelId, normalizeModelId) ??
     (discoveredModel.id !== modelId
-      ? findConfiguredProviderModel(providerConfig, params.provider, discoveredModel.id)
+      ? findConfiguredProviderModel(
+          providerConfig,
+          params.provider,
+          discoveredModel.id,
+          normalizeModelId,
+        )
       : undefined);
   const configuredStaticCatalogModel =
     configuredModel && (params.staticCatalogModel ?? params.getStaticCatalogModel?.());
