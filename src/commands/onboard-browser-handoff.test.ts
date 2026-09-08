@@ -169,6 +169,37 @@ describe("runBrowserHatchHandoff", () => {
     );
   });
 
+  it.each([true, false])(
+    "preserves the coordinator target in the browser handoff (GUI: %s)",
+    async (gui) => {
+      sharedMocks.detectBrowserOpenSupport.mockResolvedValueOnce({ ok: gui });
+      const prompter = createWizardPrompter();
+      const openBrowser = vi.fn(async () => true);
+      const result = await runBrowserHatchHandoff(
+        { config: {}, prompter, agentId: "coordinator" },
+        {
+          env: {},
+          platform: "darwin",
+          openBrowser,
+          resolveTarget: async () => target,
+          probePresence: async () => ({ reachable: true, clientKeys: [] }),
+          pollForClient: async () => ({ connected: true }),
+        },
+      );
+      expect(result).toEqual({ handedOff: true });
+      if (gui) {
+        expect(openBrowser).toHaveBeenCalledWith(
+          expect.stringContaining("?session=agent%3Acoordinator%3Amain#bootstrapToken="),
+        );
+      } else {
+        expect(prompter.note).toHaveBeenCalledWith(
+          expect.stringContaining("?session=agent%3Acoordinator%3Amain#"),
+          expect.any(String),
+        );
+      }
+    },
+  );
+
   it("probes the configured Gateway without a redundant target URL", async () => {
     const config = { gateway: { port: 19001 } };
     const configuredTarget = {

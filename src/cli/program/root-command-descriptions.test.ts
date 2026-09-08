@@ -27,6 +27,7 @@ const JSON_NOT_APPLICABLE = {
   namespaces: {
     reason: "command group only; reporting subcommands declare JSON output individually",
     commands: [
+      "agents team",
       "backup",
       "backup git",
       "backup sqlite",

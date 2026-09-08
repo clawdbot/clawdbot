@@ -8,7 +8,25 @@ import { parseClawManifest } from "./schema.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe("CLAW.md prompt bodies", () => {
+describe("Claw source reader", () => {
+  it("reads an unpackaged Claw directory without bypassing declared package metadata", async () => {
+    const root = tempDirs.make("openclaw-standalone-claw-");
+    const source = join(root, "CLAW.md");
+    await writeFile(
+      source,
+      "---\nschemaVersion: 1\nagent:\n  id: researcher\n---\nResearch carefully.\n",
+    );
+    const standalone = await readClawManifestFile(source);
+    expect(standalone.ok).toBe(true);
+    expect(await readClawManifestFile(root)).toEqual(standalone);
+
+    await writeFile(join(root, "package.json"), JSON.stringify({ name: "invalid-package" }));
+    expect(await readClawManifestFile(root)).toMatchObject({
+      ok: false,
+      diagnostics: [expect.objectContaining({ code: "invalid_package_metadata" })],
+    });
+  });
+
   it("preserves non-ASCII UTF-8 frontmatter values", async () => {
     const root = tempDirs.make("openclaw-claw-markdown-unicode-");
     const manifestPath = join(root, "CLAW.md");

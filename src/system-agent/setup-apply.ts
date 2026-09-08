@@ -1,8 +1,12 @@
+import path from "node:path";
 // Applies OpenClaw's conversational setup: config, workspace files, gateway.
 import { isDeepStrictEqual } from "node:util";
 import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope-config.js";
 import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
-import { resolveSystemAgentOnboardingTarget as resolveSystemTarget } from "../commands/onboard-agent-target.js";
+import {
+  resolveOnboardingAgentTarget,
+  resolveSystemAgentOnboardingTarget,
+} from "../commands/onboard-agent-target.js";
 import type { FirstOnboardingAgent } from "../commands/onboard-agent.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import {
@@ -22,10 +26,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { GatewayServiceSetupOutcome } from "../wizard/setup.finalize.js";
-import {
-  projectDefaultInferenceRoute,
-  type DefaultInferenceRouteProjection,
-} from "./inference-route.js";
+import { projectInferenceRoute, type DefaultInferenceRouteProjection } from "./inference-route.js";
 import { requireValidSystemAgentSetupSnapshot } from "./setup-config-snapshot.js";
 import {
   assertSetupTarget,
@@ -195,6 +196,11 @@ export async function applySystemAgentSetup(
   let guardedExpectedAgentId = expectedAgentId;
   let guardedExpectedAgentDir = expectedAgentDir;
   let sessionMigrationWarnings: string[] = [];
+  let coordinatorId: string | undefined;
+  const resolveSetupTarget = (config: OpenClawConfig) =>
+    coordinatorId
+      ? resolveOnboardingAgentTarget(config, coordinatorId)
+      : resolveSystemAgentOnboardingTarget(config);
 
   if (hasExpectedConfigHash && resolveConfigSnapshotHash(snapshot) !== expectedConfigHash) {
     throw new Error("OpenClaw config changed while AI access was being tested. Try setup again.");
@@ -217,7 +223,7 @@ export async function applySystemAgentSetup(
       expectedAgentDir: guardedExpectedAgentDir,
       expectedModelRef,
       resolveAgentDir: guardModules[0].resolveAgentDir,
-      resolveDefaultAgentId: (currentConfig) => resolveSystemTarget(currentConfig).agentId,
+      resolveDefaultAgentId: (currentConfig) => resolveSetupTarget(currentConfig).agentId,
       resolveDefaultModelForAgent: guardModules[1].resolveDefaultModelForAgent,
     });
   };
@@ -248,8 +254,9 @@ export async function applySystemAgentSetup(
       verifiedSnapshot.path === setupSnapshot.path &&
       verifiedSnapshot.hash === setupSnapshot.hash &&
       isDeepStrictEqual(verifiedSource, setupSource)
-        ? await projectDefaultInferenceRoute(
+        ? await projectInferenceRoute(
             verifiedSnapshot.runtimeConfig ?? verifiedSnapshot.config,
+            coordinatorId,
           )
         : null;
     if (
@@ -290,12 +297,14 @@ export async function applySystemAgentSetup(
       throw new Error("OpenClaw config changed after first-agent creation. Retry setup.");
     }
     const createdRoster = listAgentEntries(snapshotConfig.sourceConfig);
+    const expectedAgentIds = created.createdAgentIds ?? [created.agentId];
     if (
-      createdRoster.length !== 1 ||
-      normalizeAgentId(createdRoster[0]?.id ?? "") !== created.agentId
+      createdRoster.length !== expectedAgentIds.length ||
+      createdRoster.some((entry) => !expectedAgentIds.includes(normalizeAgentId(entry.id)))
     ) {
       throw new Error("OpenClaw first-agent ownership changed during setup. Retry setup.");
     }
+    coordinatorId = params.firstAgent?.team ? created.agentId : undefined;
     const rebasedRoute = await assertVerifiedRoute(snapshot, verifiedRoute, "before", true);
     verifiedRoute = rebasedRoute ?? verifiedRoute;
     guardModules ??= await Promise.all([
@@ -362,7 +371,7 @@ export async function applySystemAgentSetup(
       preserveWorkspace,
     });
     if (model) {
-      const targetAgentId = candidate.agents?.defaults?.systemAgent?.agentId;
+      const targetAgentId = coordinatorId ?? candidate.agents?.defaults?.systemAgent?.agentId;
       candidate = await applySystemAgentModelSelection({
         config: candidate,
         model,
@@ -421,7 +430,7 @@ export async function applySystemAgentSetup(
         ? finalizeConfig(setupCandidate.nextConfig, currentSnapshot.sourceConfig)
         : setupCandidate.nextConfig;
       const expectedSourceRoute = verifiedRoute
-        ? await projectDefaultInferenceRoute(finalizedConfig)
+        ? await projectInferenceRoute(finalizedConfig, coordinatorId)
         : undefined;
       if (
         verifiedRoute &&
@@ -438,8 +447,12 @@ export async function applySystemAgentSetup(
       if (assertCommitPreconditions) {
         assertCommitPreconditions(currentSnapshot.sourceConfig);
         if (
-          resolveUserPath(resolveSystemTarget(finalizedConfig).workspaceDir) !==
-          resolveUserPath(setupWorkspace)
+          resolveUserPath(resolveSetupTarget(finalizedConfig).workspaceDir) !==
+          resolveUserPath(
+            params.firstAgent?.team
+              ? path.join(setupWorkspace, normalizeAgentId(params.firstAgent.name))
+              : setupWorkspace,
+          )
         ) {
           throw new Error(
             "Another onboarding run owns a different workspace. Retry onboarding with its approved workspace.",
@@ -460,7 +473,7 @@ export async function applySystemAgentSetup(
   if (!settings) {
     throw new Error("OpenClaw setup committed without resolved Gateway settings.");
   }
-  const onboardingTarget = resolveSystemTarget(nextConfig);
+  const onboardingTarget = resolveSetupTarget(nextConfig);
   const effectiveWorkspace = onboardingTarget.workspaceDir;
   if (verifiedRoute) {
     const afterRead = await readConfigFileSnapshotWithPluginMetadata();
@@ -477,7 +490,10 @@ export async function applySystemAgentSetup(
         `OpenClaw could not validate the setup route after its config write${detail}. No further setup effects were applied. Retry setup from the current OpenClaw session.`,
       );
     }
-    const expectedPersistedRoute = await projectDefaultInferenceRoute(expectedRuntime.config);
+    const expectedPersistedRoute = await projectInferenceRoute(
+      expectedRuntime.config,
+      coordinatorId,
+    );
     await assertVerifiedRoute(afterSnapshot, expectedPersistedRoute, "after");
     // Plugin defaults are part of the access-tested runtime route. Reject a
     // metadata change that would make the committed config run differently.
