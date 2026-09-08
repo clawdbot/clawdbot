@@ -6,17 +6,17 @@ counts:
 rollups:
   surface_average:
     quality:
-      score: 64
-      label: Alpha
-    completeness:
-      score: 71
-      label: Beta
-  category_average:
-    quality:
-      score: 66
+      score: 65
       label: Alpha
     completeness:
       score: 72
+      label: Beta
+  category_average:
+    quality:
+      score: 67
+      label: Alpha
+    completeness:
+      score: 73
       label: Beta
 surfaces:
   - id: gateway
@@ -1848,16 +1848,16 @@ surfaces:
     name: Linux companion app
     family: platform-app
     level:
-      id: planned
-      code: M0
-      label: Planned
+      id: beta
+      code: M3
+      label: Beta
     scores:
       quality:
-        score: 19
-        label: Experimental
+        score: 71
+        label: Beta
       completeness:
-        score: 21
-        label: Experimental
+        score: 76
+        label: Beta
     lts:
       status: none
       supported_categories: 0
@@ -1871,55 +1871,55 @@ surfaces:
     categories:
       - name: App Distribution
         quality:
-          score: 19
-          label: Experimental
+          score: 76
+          label: Beta
         completeness:
-          score: 21
-          label: Experimental
+          score: 84
+          label: Stable
         lts:
           supported: false
           reason: none
           human_override: false
       - name: Gateway Connectivity
         quality:
-          score: 19
-          label: Experimental
+          score: 74
+          label: Beta
         completeness:
-          score: 21
-          label: Experimental
+          score: 82
+          label: Stable
         lts:
           supported: false
           reason: none
           human_override: false
       - name: Chat and Sessions
         quality:
-          score: 19
-          label: Experimental
+          score: 68
+          label: Alpha
         completeness:
-          score: 21
-          label: Experimental
+          score: 74
+          label: Beta
         lts:
           supported: false
           reason: none
           human_override: false
       - name: Desktop Capabilities
         quality:
-          score: 19
-          label: Experimental
+          score: 64
+          label: Alpha
         completeness:
-          score: 21
-          label: Experimental
+          score: 61
+          label: Alpha
         lts:
           supported: false
           reason: none
           human_override: false
       - name: Status and Diagnostics
         quality:
-          score: 19
-          label: Experimental
+          score: 72
+          label: Beta
         completeness:
-          score: 21
-          label: Experimental
+          score: 79
+          label: Beta
         lts:
           supported: false
           reason: none
