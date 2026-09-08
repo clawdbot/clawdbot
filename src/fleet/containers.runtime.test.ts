@@ -452,11 +452,21 @@ describe("fleet container runtime", () => {
   it.each([
     [{}, ["logs", "cell-acme"]],
     [{ follow: true }, ["logs", "--follow", "cell-acme"]],
+    [{ timestamps: true }, ["logs", "--timestamps", "cell-acme"]],
     [{ tail: 200 }, ["logs", "--tail", "200", "cell-acme"]],
     [{ since: "10m" }, ["logs", "--since", "10m", "cell-acme"]],
     [
-      { follow: true, tail: 100, since: "2026-07-11T10:00:00Z" },
-      ["logs", "--follow", "--tail", "100", "--since", "2026-07-11T10:00:00Z", "cell-acme"],
+      { follow: true, timestamps: true, tail: 100, since: "2026-07-11T10:00:00Z" },
+      [
+        "logs",
+        "--follow",
+        "--timestamps",
+        "--tail",
+        "100",
+        "--since",
+        "2026-07-11T10:00:00Z",
+        "cell-acme",
+      ],
     ],
   ] as const)("streams logs with exact argv for %o", async (options, expectedArgs) => {
     const stream = vi.fn<FleetContainerStreamExecutor>(async () => ({ code: 0, signal: null }));
