@@ -7,6 +7,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { resolveLegacyStateDirs, resolveStateDir } from "../config/paths.js";
 import { root } from "../infra/fs-safe.js";
 import { pathMayExistSync } from "../infra/path-existence.js";
+import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { formatDoctorStateRepairFailure } from "../infra/state-repair-message.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
@@ -158,7 +159,8 @@ function workspaceMigrationError(
   env?: NodeJS.ProcessEnv,
   operation?: "doctor",
 ): Error {
-  return new Error(
+  return new StartupMaintenanceRequiredError(
+    "legacy-workspace",
     operation === "doctor"
       ? formatDoctorStateRepairFailure(
           `Legacy workspace setup state requires migration at ${blockedPaths.join(", ")}`,
@@ -264,7 +266,7 @@ export function prepareLegacyWorkspaceStateReset(
 /** Discard retired workspace files from a pre-removal reset plan. */
 export async function removeLegacyWorkspaceStateForReset(
   plan: LegacyWorkspaceResetPlan,
-  options?: { dryRun?: boolean },
+  options?: { dryRun?: boolean; assertCurrent?: () => void },
 ): Promise<LegacyWorkspaceResetCleanup> {
   const removedPaths: string[] = [];
   const warnings: string[] = [];
@@ -297,6 +299,7 @@ export async function removeLegacyWorkspaceStateForReset(
         }
       }
       if (!options?.dryRun) {
+        options?.assertCurrent?.();
         await sourceRoot.remove(relativePath);
       }
       removedPaths.push(sourcePath);

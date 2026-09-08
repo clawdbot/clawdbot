@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { formatDoctorStateRepairFailure } from "../../infra/state-repair-message.js";
+import { readAgentDeletionJournal } from "../../state/agent-deletion-journal.js";
 import { listOpenClawRegisteredAgentDatabases } from "../../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -100,6 +101,15 @@ export async function runSessionStartupMigration(params: {
       continue;
     }
     databases.add(databasePath);
+    // Retained stores remain discoverable, but only deletion cleanup may write them.
+    // Check the physical owner so surviving shared stores still reach their runtime.
+    const deletion = readAgentDeletionJournal(options.agentId, { env });
+    if (deletion) {
+      params.log.info(
+        `session: skipping deleted agent database for ${options.agentId} (${deletion.cleanupCompleted ? "cleanup complete" : "cleanup pending; retry agent deletion"})`,
+      );
+      continue;
+    }
     const alreadyOpen = isOpenClawAgentDatabaseOpen(databasePath);
     let handedOff = false;
     try {

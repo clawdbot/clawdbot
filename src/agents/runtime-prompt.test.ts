@@ -5,7 +5,6 @@ const {
   buildSystemPromptParamsMock,
   collectRuntimeChannelCapabilitiesMock,
   getMachineDisplayNameMock,
-  listChannelSupportedActionsMock,
   resolveChannelMessageToolHintsMock,
   resolveChannelReactionGuidanceMock,
 } = vi.hoisted(() => ({
@@ -16,7 +15,6 @@ const {
   })),
   collectRuntimeChannelCapabilitiesMock: vi.fn(() => ["voice"]),
   getMachineDisplayNameMock: vi.fn(async () => "test-host"),
-  listChannelSupportedActionsMock: vi.fn(() => ["send", "react"]),
   resolveChannelMessageToolHintsMock: vi.fn(() => ["Use the message tool."]),
   resolveChannelReactionGuidanceMock: vi.fn(() => ({
     level: "minimal" as const,
@@ -25,7 +23,6 @@ const {
 }));
 
 vi.mock("./channel-tools.js", () => ({
-  listChannelSupportedActions: listChannelSupportedActionsMock,
   resolveChannelMessageToolHints: resolveChannelMessageToolHintsMock,
   resolveChannelReactionGuidance: resolveChannelReactionGuidanceMock,
 }));
@@ -72,29 +69,12 @@ describe("resolveAgentRuntimePrompt", () => {
       channel: "Telegram",
       accountId: "work",
       chatType: "group",
-      currentChannelId: "telegram:-1001:topic:928",
-      currentThreadTs: "928",
-      currentMessageId: "message-1",
-      senderId: "sender-1",
-      senderIsOwner: true,
     });
 
     const channelContext = { cfg: config, channel: "telegram", accountId: "work" };
     expect(collectRuntimeChannelCapabilitiesMock).toHaveBeenCalledWith(channelContext);
     expect(resolveChannelReactionGuidanceMock).toHaveBeenCalledWith(channelContext);
     expect(resolveChannelMessageToolHintsMock).toHaveBeenCalledWith(channelContext);
-    expect(listChannelSupportedActionsMock).toHaveBeenCalledWith({
-      ...channelContext,
-      chatType: "group",
-      currentChannelId: "telegram:-1001:topic:928",
-      currentThreadTs: "928",
-      currentMessageId: "message-1",
-      sessionKey: "agent:main:telegram:direct:123",
-      sessionId: "session-1",
-      agentId: "main",
-      requesterSenderId: "sender-1",
-      senderIsOwner: true,
-    });
     expect(buildSystemPromptParamsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         config,
@@ -108,7 +88,6 @@ describe("resolveAgentRuntimePrompt", () => {
           channel: "telegram",
           chatType: "group",
           capabilities: ["voice"],
-          channelActions: ["send", "react"],
         }),
       }),
     );
@@ -118,32 +97,6 @@ describe("resolveAgentRuntimePrompt", () => {
         runtimeCapabilities: ["voice"],
         reactionGuidance: { level: "minimal", channel: "Telegram" },
         messageToolHints: ["Use the message tool."],
-      }),
-    );
-  });
-
-  it("normalizes absent message-action targets", async () => {
-    await resolveAgentRuntimePrompt({
-      config: {},
-      agentId: "main",
-      model: "openai/gpt-test",
-      channel: "telegram",
-      accountId: null,
-      currentChannelId: null,
-      currentThreadTs: null,
-      currentMessageId: null,
-      senderId: null,
-      senderIsOwner: null,
-    });
-
-    expect(listChannelSupportedActionsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        currentChannelId: undefined,
-        currentThreadTs: undefined,
-        currentMessageId: undefined,
-        accountId: undefined,
-        requesterSenderId: undefined,
-        senderIsOwner: undefined,
       }),
     );
   });

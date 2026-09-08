@@ -100,11 +100,7 @@ const readBestEffortConfig = vi.fn(async () => configState.cfg);
 type ConfigSnapshotReadOptionsStub = {
   isolateEnv?: boolean;
   lowerPrecedenceEnv?: Readonly<Record<string, string>>;
-  recoverSuspicious?: boolean;
-  allowSuspiciousRecovery?: (
-    candidate: Record<string, unknown>,
-    current: Record<string, unknown>,
-  ) => boolean | Promise<boolean>;
+  observe?: boolean;
 };
 const readConfigFileSnapshotWithPluginMetadata = vi.fn(
   async (_options?: ConfigSnapshotReadOptionsStub) => ({
@@ -1456,79 +1452,6 @@ describe("gateway run option collisions", () => {
     });
   });
 
-  it("blocks a future-version late recovery candidate before gateway startup", async () => {
-    readConfigFileSnapshotWithPluginMetadata.mockImplementationOnce(async (options) => {
-      await options?.allowSuspiciousRecovery?.(
-        {
-          gateway: { mode: "local" },
-          meta: { lastTouchedVersion: "9999.1.1" },
-        },
-        { gateway: { mode: "local" } },
-      );
-      return { snapshot: configState.snapshot };
-    });
-
-    await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
-      "__exit__:1",
-    );
-
-    expect(startGatewayServer).not.toHaveBeenCalled();
-    expect(runtimeErrors.join("\n")).toContain("run automatic gateway startup migrations");
-  });
-
-  it("blocks a future-version service-mode late recovery candidate before restore", async () => {
-    let recoveryAllowed: boolean | undefined;
-    await withEnvAsync(
-      {
-        OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1",
-        OPENCLAW_SERVICE_MARKER: undefined,
-      },
-      async () => {
-        readConfigFileSnapshotWithPluginMetadata.mockImplementationOnce(async (options) => {
-          recoveryAllowed = await options?.allowSuspiciousRecovery?.(
-            {
-              env: { vars: { OPENCLAW_SERVICE_MARKER: "gateway" } },
-              gateway: { mode: "local" },
-              meta: { lastTouchedVersion: "9999.1.1" },
-            },
-            { gateway: { mode: "local" } },
-          );
-          return { snapshot: configState.snapshot };
-        });
-
-        await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
-          "__exit__:78",
-        );
-      },
-    );
-
-    expect(recoveryAllowed).toBe(false);
-    expect(startGatewayServer).not.toHaveBeenCalled();
-    expect(runtimeErrors.join("\n")).toContain("start the gateway service");
-  });
-
-  it("blocks a future-version current config before suspicious recovery", async () => {
-    let recoveryAllowed: boolean | undefined;
-    readConfigFileSnapshotWithPluginMetadata.mockImplementationOnce(async (options) => {
-      recoveryAllowed = await options?.allowSuspiciousRecovery?.(
-        { gateway: { mode: "local" } },
-        {
-          gateway: { mode: "local" },
-          meta: { lastTouchedVersion: "9999.1.1" },
-        },
-      );
-      return { snapshot: configState.snapshot };
-    });
-
-    await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
-      "__exit__:1",
-    );
-
-    expect(recoveryAllowed).toBe(false);
-    expect(startGatewayServer).not.toHaveBeenCalled();
-    expect(runtimeErrors.join("\n")).toContain("run automatic gateway startup migrations");
-  });
-
   it("blocks a final startup snapshot that changes guarded config selection", async () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: undefined }, async () => {
       configState.snapshot = {
@@ -1614,8 +1537,7 @@ describe("gateway run option collisions", () => {
     expect(readConfigFileSnapshotWithPluginMetadata).toHaveBeenCalledTimes(1);
     expect(readConfigFileSnapshotWithPluginMetadata).toHaveBeenCalledWith({
       isolateEnv: true,
-      recoverSuspicious: true,
-      allowSuspiciousRecovery: expect.any(Function),
+      observe: false,
     });
     expect(resolveShellEnvExpectedKeys).not.toHaveBeenCalled();
     expect(readBestEffortConfig).not.toHaveBeenCalled();
@@ -2014,11 +1936,11 @@ describe("gateway run option collisions", () => {
         );
         await withEnvAsync({ CODEX_THREAD_ID: undefined }, async () => {
           await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
-            "__exit__:1",
+            "__exit__:78",
           );
         });
         expect(triageAfterFailure).not.toHaveBeenCalled();
-        expect(parkCurrentLaunchAgentForMaintenance).not.toHaveBeenCalled();
+        expect(parkCurrentLaunchAgentForMaintenance).toHaveBeenCalledOnce();
         expect(runtimeErrors.join("\n")).toContain(message);
         expect(await fs.readFile(storePath, "utf8")).toBe(original);
       } finally {
@@ -2026,6 +1948,30 @@ describe("gateway run option collisions", () => {
       }
     },
   );
+
+  it("exits 78 when the only startup blocker is legacy workspace setup state", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-workspace-refusal-"));
+    const source = path.join(workspaceDir, "openclaw-workspace-state.json");
+    const original = JSON.stringify({ version: 1, setupCompletedAt: new Date().toISOString() });
+    await fs.writeFile(source, original);
+    try {
+      const { assertWorkspaceStateMigrationReady } =
+        await import("../../agents/workspace-legacy-state.js");
+      startGatewayServer.mockImplementationOnce(async () => {
+        assertWorkspaceStateMigrationReady({ workspaceDirs: [workspaceDir] });
+        throw new Error("Legacy workspace setup state was unexpectedly accepted");
+      });
+      await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
+        "__exit__:78",
+      );
+      expect(parkCurrentLaunchAgentForMaintenance).toHaveBeenCalledOnce();
+      expect(triageAfterFailure).not.toHaveBeenCalled();
+      expect(runtimeErrors.join("\n")).toMatch(/gateway stop.*doctor --fix.*gateway start/s);
+      expect(await fs.readFile(source, "utf8")).toBe(original);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
 
   it("skips failure bundles but exits nonzero for unconfirmed gateway lock conflicts", async () => {
     const port = await getFreePort();
@@ -2105,6 +2051,7 @@ describe("gateway run option collisions", () => {
     { phase: "server", kind: "state" },
     { phase: "server", kind: "agent" },
     { phase: "server", kind: "wrapped-reader" },
+    { phase: "server", kind: "mixed-maintenance" },
     { phase: "bootstrap", kind: "reader" },
     { phase: "configuration", kind: "wrapped-reader" },
   ] as const)("stops newer-schema retries from $phase ($kind)", async ({ phase, kind }) => {
@@ -2121,7 +2068,18 @@ describe("gateway run option collisions", () => {
           ])
         : kind === "reader"
           ? readerError
-          : new Error("Failed to open plugin state", { cause: readerError });
+          : kind === "mixed-maintenance"
+            ? new AggregateError(
+                [
+                  new OpenClawStateDatabaseSchemaMigrationRequiredError(
+                    "audit-events-v2",
+                    "/tmp/state.sqlite",
+                  ),
+                  readerError,
+                ],
+                "Multiple maintenance failures",
+              )
+            : new Error("Failed to open plugin state", { cause: readerError });
     if (phase === "bootstrap") {
       beforeRun.mockRejectedValueOnce(error);
     } else if (phase === "configuration") {
@@ -2142,8 +2100,10 @@ describe("gateway run option collisions", () => {
     expect(parkCurrentLaunchAgentForMaintenance).toHaveBeenCalledOnce();
     expect(offerInvalidConfigRecovery).not.toHaveBeenCalled();
     expect(runtimeErrors.join("\n")).toContain("newer");
-    expect(runtimeErrors.join("\n")).toContain("build that supports");
-    expect(runtimeErrors.join("\n")).not.toContain("doctor --fix");
+    expect(runtimeErrors.join("\n")).toContain("restore your pre-update backup");
+    expect(runtimeErrors.join("\n")).toMatch(
+      /Stop the service.*then restore your pre-update backup.*then start it again/s,
+    );
     expect(triageAfterFailure).not.toHaveBeenCalled();
     expect(startGatewayServer).toHaveBeenCalledTimes(phase === "server" ? 1 : 0);
   });

@@ -69,7 +69,7 @@ After subscribing in a supported browser or installed Control UI PWA, turn on **
 
 Only browsers bound to the mentioned profile receive the alert. Each delivery rechecks the device, current profile and role, read scope, and session visibility, then applies the category setting, quiet hours, and agent filter. Being online is not required. With **Private** detail, the alert says only that someone mentioned you in a conversation; **Names only** and **Detailed** may include the sanitized sender and session labels, never the message excerpt. Selecting it opens the session through the normal authenticated Control UI route.
 
-Your [mentions Inbox](/concepts/multi-user#temporary-mentions-inbox) does not depend on Web Push permission or this setting. Opening the Inbox or reconnecting does not resend its old entries as browser notifications. The service worker displays browser alerts; the live Inbox update does not create a second OS notification. Human mention alerts are not implemented through the native macOS or iOS/Android push paths.
+Your [mentions Inbox](/concepts/multi-user#temporary-mentions-inbox) does not depend on Web Push permission or this setting. Its entries and dismissals survive Gateway restarts within the seven-day retention window. Opening the Inbox, reconnecting, or restarting the Gateway does not resend old entries as browser notifications. The service worker displays browser alerts; the live Inbox update does not create a second OS notification. Human mention alerts are not implemented through the native macOS or iOS/Android push paths.
 
 To verify targeting, have another eligible signed-in person select you from the chat `@` picker and send a normal message. Check **Inbox → Mentions**, then check the enabled browser alert. **Send test** only checks browser push transport and can reach every registered subscription; it does not prove that a human mention was selected, committed, or addressed to your profile. Delivery is best-effort, not an exactly-once guarantee.
 
@@ -134,7 +134,7 @@ For a single PWA that switches among Gateways, also verify that every Gateway us
 
 Confirm the sender selected your profile from the picker rather than only typing your name, and that the original message reached the transcript. Sign in with the same profile and check that you still have access to the session. Incognito, Goal, catalog, suggestion-only, and command-send modes do not support human mentions.
 
-If the entry is in **Inbox → Mentions**, check this browser's subscription, **Someone mentions me**, quiet hours, mute overrides, and agent filter. An Inbox entry does not imply permission to display a browser notification. If the entry disappeared, it may have been dismissed from another browser using your profile, expired, evicted, or cleared by a Gateway restart. The retained chat message is independent of that temporary Inbox entry.
+If the entry is in **Inbox → Mentions**, check this browser's subscription, **Someone mentions me**, quiet hours, mute overrides, and agent filter. An Inbox entry does not imply permission to display a browser notification. If the entry disappeared, it may have been dismissed from another browser using your profile, expired, evicted, or become inaccessible after a session access change. Gateway restarts preserve retained entries and dismissals. The retained chat message is independent of the Inbox entry; entries already lost before durable storage was introduced are not recovered from old messages.
 
 ## Related
 

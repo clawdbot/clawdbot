@@ -16,8 +16,7 @@ the Xcode requirements below.
 
 - **Xcode 26.4+** (Swift 6.3 toolchain), on the latest macOS available in
   Software Update.
-- **Node.js 24.15+ & pnpm** for the gateway, CLI, and packaging scripts. Node
-  22.22.3+ also works.
+- **Node.js 24.16+ or 26.1+ & pnpm** for the gateway, CLI, and packaging scripts.
 
 ## 1. Install dependencies
 

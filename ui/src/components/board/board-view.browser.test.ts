@@ -416,6 +416,12 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     expect(first.classList.contains("board-widget--card")).toBe(true);
     expect(getComputedStyle(cardBody!).paddingTop).toBe("12px");
     expect(second.classList.contains("board-widget--frameless")).toBe(true);
+    // Other tests can leave the shared browser's pointer or focus over this widget.
+    const { page } = await import("vitest/browser");
+    await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
+    focusSink().focus({ preventScroll: true });
+    expect(second.matches(":hover")).toBe(false);
+    expect(second.matches(":focus-within")).toBe(false);
     expect(getComputedStyle(second).backgroundColor).toBe("rgba(0, 0, 0, 0)");
     finishDocumentAnimations();
     expect(getComputedStyle(second).borderTopColor).toBe("rgba(0, 0, 0, 0)");

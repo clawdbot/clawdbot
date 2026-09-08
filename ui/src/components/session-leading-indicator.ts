@@ -30,10 +30,10 @@ function renderPersistentSessionIcon(icon: string) {
     : html`<span class="session-glyph__emoji" aria-hidden="true">${icon}</span>`;
 }
 
-export function describeSessionTrailingState(session: SidebarRecentSession) {
+export function describeSessionState(session: SidebarRecentSession) {
   return [
-    session.forkSource ? t("sessionsView.forkedSession") : "",
-    session.unread ? t("sessionsView.unread") : "",
+    !session.isChild && session.forkSource ? t("sessionsView.forkedSession") : "",
+    session.hasActiveRun && session.unread ? t("sessionsView.unread") : "",
   ]
     .filter(Boolean)
     .join(" · ");
@@ -48,7 +48,6 @@ export function renderSessionLeadingState(
 ): {
   running: boolean;
   leadingIndicator: TemplateResult | typeof nothing;
-  trailingIndicator: TemplateResult | typeof nothing;
   renderedIdentities?: readonly SessionParticipantIdentity[];
 } {
   const { participants, participantCount } = session;
@@ -56,7 +55,6 @@ export function renderSessionLeadingState(
   // the collapsed child toggle and must never read as the parent's execution.
   const running = session.hasActiveRun;
   const queued = session.hasActiveRun && session.status === "queued";
-  const trailingIndicator = session.isChild || running ? nothing : renderSessionState(session);
   // Transient attention always outranks the persistent decorative icon.
   if (session.isChild) {
     if (session.attention.kind !== "none") {
@@ -68,7 +66,6 @@ export function renderSessionLeadingState(
           queued,
           badge: session.unread && !session.hasActiveRun ? renderSessionUnreadBadge() : nothing,
         }),
-        trailingIndicator,
       };
     }
     if (session.icon) {
@@ -80,7 +77,6 @@ export function renderSessionLeadingState(
           queued,
           badge: session.unread && !session.hasActiveRun ? renderSessionUnreadBadge() : nothing,
         }),
-        trailingIndicator,
       };
     }
     if (session.channelAvatarUrl) {
@@ -98,13 +94,11 @@ export function renderSessionLeadingState(
           circular: true,
           badge: session.unread && !session.hasActiveRun ? renderSessionUnreadBadge() : nothing,
         }),
-        trailingIndicator,
       };
     }
     return {
       running,
       leadingIndicator: renderSessionState(session),
-      trailingIndicator,
     };
   }
 
@@ -115,8 +109,8 @@ export function renderSessionLeadingState(
         content: renderSessionAttentionIcon(session.attention, true),
         running,
         queued,
+        badge: session.unread && !session.hasActiveRun ? renderSessionUnreadBadge() : nothing,
       }),
-      trailingIndicator,
     };
   }
   if (session.icon) {
@@ -126,8 +120,8 @@ export function renderSessionLeadingState(
         content: renderPersistentSessionIcon(session.icon),
         running,
         queued,
+        badge: session.unread && !session.hasActiveRun ? renderSessionUnreadBadge() : nothing,
       }),
-      trailingIndicator,
     };
   }
   const ownerChip = ownerActor?.id?.trim()
@@ -155,9 +149,9 @@ export function renderSessionLeadingState(
         ></openclaw-channel-avatar>`,
         running,
         queued,
+        badge: session.unread && !session.hasActiveRun ? renderSessionUnreadBadge() : nothing,
         circular: true,
       }),
-      trailingIndicator,
     };
   }
   if (ownerChip) {
@@ -167,9 +161,9 @@ export function renderSessionLeadingState(
         content: ownerChip,
         running,
         queued,
+        badge: session.unread && !session.hasActiveRun ? renderSessionUnreadBadge() : nothing,
         circular: true,
       }),
-      trailingIndicator,
       // Exclude only visible avatars; a +N stack still needs individual live viewers.
       renderedIdentities: [
         ...(ownerActor?.identity ? [ownerActor.identity] : []),
@@ -181,7 +175,10 @@ export function renderSessionLeadingState(
   }
   return {
     running,
-    leadingIndicator: running ? renderSessionGlyph({ content: nothing, running, queued }) : nothing,
-    trailingIndicator,
+    leadingIndicator: running
+      ? renderSessionGlyph({ content: nothing, running, queued })
+      : session.unread
+        ? renderSessionState(session)
+        : nothing,
   };
 }

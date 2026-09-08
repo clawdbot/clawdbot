@@ -1154,6 +1154,7 @@ jobs:
           OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS: "1"
           OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE: ${{ inputs.update_baseline_version || 'latest' }}
           OPENCLAW_INSTALL_SMOKE_UPDATE_EXPECT_VERSION: ${{ needs.installer_smoke_candidate_payload.outputs.package_version }}
+          OPENCLAW_INSTALL_ALLOW_LEGACY_SAME_VERSION_APPLY: ${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}
         run: bash .release-harness/scripts/test-install-sh-docker.sh
 
       - name: Run Rocky Linux installer smoke

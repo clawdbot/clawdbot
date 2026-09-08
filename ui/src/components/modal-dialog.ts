@@ -3,6 +3,7 @@ import "@awesome.me/webawesome/dist/components/dialog/dialog.js";
 import type WaDialog from "@awesome.me/webawesome/dist/components/dialog/dialog.js";
 import { css, html, type PropertyValues } from "lit";
 import { property, query } from "lit/decorators.js";
+import { acquireNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 
 const modalLayers = (document.openClawModalLayers ??= new Set<HTMLElement>());
@@ -26,6 +27,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
   private returnFocusOverride: HTMLElement | null | undefined;
   private syncGeneration = 0;
   private suppressNextCancel = false;
+  private releaseNativeOcclusion?: () => void;
 
   static override styles = css`
     :host {
@@ -164,11 +166,15 @@ export class OpenClawModalDialog extends OpenClawLitElement {
       this.open = false;
     }
     super.connectedCallback();
+    if (this.open) {
+      this.releaseNativeOcclusion ??= acquireNativeOverlayOcclusion();
+    }
     void this.updateComplete.then(() => this.syncDialogOpen());
   }
 
   override disconnectedCallback() {
     setModalLayer(this, false);
+    this.clearNativeOcclusion();
     this.syncGeneration += 1;
     const webAwesomeDialog = this.webAwesomeDialog;
     const dialog = webAwesomeDialog?.shadowRoot?.querySelector("dialog");
@@ -207,6 +213,9 @@ export class OpenClawModalDialog extends OpenClawLitElement {
   protected override updated(changed: PropertyValues<this>) {
     if (changed.has("open")) {
       setModalLayer(this, this.open);
+      if (this.open && this.isConnected) {
+        this.releaseNativeOcclusion ??= acquireNativeOverlayOcclusion();
+      }
     }
     void this.syncAccessibility();
     void this.syncDialogOpen();
@@ -235,7 +244,14 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     if (webAwesomeDialog.open || dialog?.open) {
       this.suppressNextCancel = true;
       webAwesomeDialog.open = false;
+    } else {
+      this.clearNativeOcclusion();
     }
+  }
+
+  private clearNativeOcclusion() {
+    this.releaseNativeOcclusion?.();
+    this.releaseNativeOcclusion = undefined;
   }
 
   private async syncAccessibility() {
@@ -290,6 +306,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     if (event.target !== event.currentTarget) {
       return;
     }
+    this.clearNativeOcclusion();
     const returnFocus = this.returnFocusOverride;
     const originalReturnFocus = this.returnFocus;
     this.returnFocusOverride = undefined;

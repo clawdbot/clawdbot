@@ -1,4 +1,3 @@
-// LLM Core module implements diagnostics behavior.
 export interface DiagnosticErrorInfo {
   name?: string;
   message: string;

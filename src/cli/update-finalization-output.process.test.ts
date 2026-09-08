@@ -175,6 +175,14 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
         });
         if (scenario === "phase-hang") {
           expect(output.stuckPhase).toBe(blockedPhase);
+          const pid = Number(await fs.readFile(path.join(root, "blocked-child.pid"), "utf8"));
+          expect(output.childProcesses, failure).toContainEqual({
+            pid,
+            parentPid: expect.any(Number),
+            command: expect.stringMatching(/^node(?:\.exe)?$/u),
+          });
+          expect(output.childProcessInspection, failure).toBe("complete");
+          expect(result.stdout + result.stderr, failure).not.toContain("fixture-private-argument");
           const prerequisite = output.phaseTimings.find(
             (entry: { phase: string }) => entry.phase === "targetConfigValidation",
           );
@@ -210,6 +218,19 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
       if (scenario === "handle-hang") {
         expect(result.stderr).toContain("activeResources");
         expect(result.stderr).toContain("unsettledDisposers");
+        const pid = Number(await fs.readFile(path.join(root, "blocked-child.pid"), "utf8"));
+        const diagnostic = result.stderr
+          .split("\n")
+          .find((line) => line.includes("Process still alive after terminal output:"));
+        expect(diagnostic, failure).toBeDefined();
+        const payload = JSON.parse(diagnostic!.slice(diagnostic!.indexOf("{")));
+        expect(payload.childProcesses, failure).toContainEqual({
+          pid,
+          parentPid: expect.any(Number),
+          command: expect.stringMatching(/^node(?:\.exe)?$/u),
+        });
+        expect(payload.unsettledDisposers, failure).toContain("fixture-stdin-child");
+        expect(result.stdout + result.stderr, failure).not.toContain("fixture-private-argument");
         expect(readRun()).toMatchObject({
           status: "succeeded",
           steps: expect.arrayContaining([

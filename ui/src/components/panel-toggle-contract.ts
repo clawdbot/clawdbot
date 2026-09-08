@@ -46,6 +46,8 @@ export type BrowserPanelToggleDetail = {
   /** Existing tab to focus when the panel opens (browser-tab chat cards). */
   browserTab?: BrowserTabTarget;
   url?: string;
+  /** User-opened WKWebView tab on the native macOS host. */
+  native?: boolean;
 };
 
 export type DesktopPanelToggleDetail = {

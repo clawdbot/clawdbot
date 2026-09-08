@@ -235,13 +235,13 @@ struct TalkModeManagerTests {
 
         let parsed = Self.parse(config)
 
-        #expect(parsed.activeProvider == "elevenlabs")
+        #expect(parsed.snapshot.activeProvider == "elevenlabs")
         #expect(parsed.executionMode == .realtimeRelay)
         #expect(parsed.defaultModelId == "eleven_v3")
         #expect(parsed.defaultVoiceId == "eleven-voice")
-        #expect(parsed.realtimeProvider == "openai")
+        #expect(parsed.snapshot.realtime.provider == "openai")
         #expect(parsed.realtimeModelId == "gpt-realtime-2")
-        #expect(parsed.realtimeVoiceId == "marin")
+        #expect(parsed.snapshot.realtime.voice == "marin")
     }
 
     @Test func `infers realtime provider when provider map has single entry`() {
@@ -251,7 +251,7 @@ struct TalkModeManagerTests {
             transport: "webrtc")
 
         #expect(parsed.executionMode == .realtimeWebRTC)
-        #expect(parsed.realtimeProvider == "openai")
+        #expect(parsed.snapshot.realtime.provider == "openai")
         #expect(parsed.realtimeModelId == "gpt-realtime-2")
     }
 
@@ -277,7 +277,7 @@ struct TalkModeManagerTests {
         #expect(parsed.executionMode == .realtimeRelay)
         #expect(parsed.defaultModelId == "eleven_v3")
         #expect(parsed.realtimeModelId == "gpt-realtime-2")
-        #expect(parsed.realtimeVoiceId == nil)
+        #expect(parsed.snapshot.realtime.voice == nil)
     }
 
     @Test func `omits model override when gateway owns redacted selection`() {
@@ -890,11 +890,11 @@ struct TalkModeManagerTests {
 
         let parsed = Self.parse(config)
 
-        #expect(parsed.activeProvider == "elevenlabs")
+        #expect(parsed.snapshot.activeProvider == "elevenlabs")
         #expect(parsed.executionMode == .realtimeWebRTC)
-        #expect(parsed.realtimeProvider == "openai")
+        #expect(parsed.snapshot.realtime.provider == "openai")
         #expect(parsed.realtimeModelId == "gpt-realtime-2")
-        #expect(parsed.realtimeVoiceId == "cedar")
+        #expect(parsed.snapshot.realtime.voice == "cedar")
         #expect(parsed.rawConfigApiKey == "__OPENCLAW_REDACTED__")
     }
 

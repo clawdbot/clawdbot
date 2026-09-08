@@ -51,6 +51,7 @@ vi.mock("../system-agent/inference-route.js", () => ({
       model: split.model.slice(slash + 1),
       modelLabel: split.model,
       runConfig: config,
+      sourceConfig: config,
       agentId,
       agentDir: `/isolated/${agentId}`,
       ...(split.profile ? { authProfileId: split.profile } : {}),

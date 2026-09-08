@@ -495,6 +495,106 @@ describe("config schema response cache", () => {
   });
 });
 
+describe("config write source preparation", () => {
+  it.each(["config.set", "config.apply", "config.patch"] as const)(
+    "%s distinguishes literal nulls from omitted values at its write boundary",
+    async (method) => {
+      const source: OpenClawConfig = {
+        gateway: { port: 18789 },
+        agents: { defaults: { params: { temperature: 0.2, topP: 0.8 } } },
+      };
+      const runtime: OpenClawConfig = {
+        ...source,
+        agents: { defaults: { ...source.agents?.defaults, maxConcurrent: 4 } },
+      };
+      storedConfig = source;
+      configWriteMocks.readConfigFileSnapshotForWrite.mockImplementationOnce(async () => {
+        const result = createConfigWriteSnapshot(source);
+        result.snapshot.config = runtime;
+        result.snapshot.runtimeConfig = runtime;
+        return result;
+      });
+      const params = { temperature: null, nested: { value: null } };
+      const harness = createConfigHandlerHarness({
+        method,
+        params: {
+          raw: JSON.stringify(
+            method === "config.patch"
+              ? { agents: { defaults: { params: { temperature: null, topP: null } } } }
+              : { ...runtime, agents: { defaults: { ...runtime.agents?.defaults, params } } },
+          ),
+          baseHash: storedHash,
+        },
+      });
+
+      await expectDefined(configHandlers[method], "config write handler")(harness.options);
+
+      expect(harness.respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
+      expect(storedConfig).toStrictEqual({
+        ...source,
+        agents: { defaults: { params: method === "config.patch" ? {} : params } },
+      });
+    },
+  );
+
+  it.each([
+    ...(["config.set", "config.apply", "config.patch"] as const).flatMap((method) =>
+      [false, true].map((authored) => ({
+        method,
+        authored,
+        explicitDefault: false,
+        changePort: true,
+      })),
+    ),
+    ...[false, true].map((changePort) => ({
+      method: "config.patch" as const,
+      authored: false,
+      explicitDefault: true,
+      changePort,
+    })),
+  ])(
+    "$method preserves source intent (authored: $authored, explicit default: $explicitDefault, port edit: $changePort)",
+    async ({ method, authored, explicitDefault, changePort }) => {
+      const source: OpenClawConfig = {
+        gateway: { port: 18789 },
+        ...(authored ? { agents: { defaults: { maxConcurrent: 4 } } } : {}),
+      };
+      const runtime: OpenClawConfig = {
+        ...source,
+        agents: { defaults: { maxConcurrent: 4 } },
+      };
+      storedConfig = source;
+      configWriteMocks.readConfigFileSnapshotForWrite.mockImplementationOnce(async () => {
+        const result = createConfigWriteSnapshot(source);
+        result.snapshot.config = runtime;
+        result.snapshot.runtimeConfig = runtime;
+        return result;
+      });
+      const harness = createConfigHandlerHarness({
+        method,
+        params: {
+          raw: JSON.stringify({
+            ...(method === "config.patch" ? {} : runtime),
+            ...(explicitDefault ? { agents: runtime.agents } : {}),
+            ...(changePort ? { gateway: { port: 18790 } } : {}),
+          }),
+          baseHash: storedHash,
+        },
+      });
+
+      await expectDefined(configHandlers[method], "config write handler")(harness.options);
+
+      expect(harness.respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
+      expect(storedConfig).toEqual({
+        ...source,
+        ...(explicitDefault ? { agents: runtime.agents } : {}),
+        gateway: { port: changePort ? 18790 : 18789 },
+      });
+      expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledOnce();
+    },
+  );
+});
+
 describe("config.patch hash-free ui.prefs LWW", () => {
   it("persists a ui.prefs-only patch and returns the committed hash", async () => {
     const { respond } = await invokeConfigPatch({ raw: { ui: { prefs: { theme: "knot" } } } });

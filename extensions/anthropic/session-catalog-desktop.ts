@@ -212,6 +212,7 @@ export async function readDesktopOverlay(
     !forceRefresh &&
     entry &&
     entry.refreshedAt + CLAUDE_DESKTOP_SCAN_TTL_MS > Date.now() &&
+    dirty !== "all" &&
     !(dirty instanceof Set && dirty.size > 0)
   ) {
     setBoundedCache(desktopOverlays, homeDir, entry, 8, (evicted) => evicted.watch?.close());

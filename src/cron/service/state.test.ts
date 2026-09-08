@@ -8,7 +8,6 @@ describe("cron service state seam coverage", () => {
     const nowMs = vi.fn(() => 123_456);
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
-    const runHeartbeatOnce = vi.fn();
     const resolveSessionStorePath = vi.fn((agentId?: string) => `/tmp/${agentId ?? "main"}.json`);
 
     const state = createCronServiceState({
@@ -26,7 +25,6 @@ describe("cron service state seam coverage", () => {
       resolveSessionStorePath,
       enqueueSystemEvent,
       requestHeartbeat,
-      runHeartbeatOnce,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
@@ -44,7 +42,6 @@ describe("cron service state seam coverage", () => {
     expect(state.deps.resolveSessionStorePath).toBe(resolveSessionStorePath);
     expect(state.deps.enqueueSystemEvent).toBe(enqueueSystemEvent);
     expect(state.deps.requestHeartbeat).toBe(requestHeartbeat);
-    expect(state.deps.runHeartbeatOnce).toBe(runHeartbeatOnce);
     expect(state.deps.nowMs()).toBe(123_456);
   });
 

@@ -30,6 +30,10 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import {
+  readTranscriptContextVersionInTransaction,
+  type SessionTranscriptContextVersion,
+} from "./session-accessor.sqlite-transcript-state.js";
 import { projectResetBoundaryNavigationSql } from "./session-model-context-projection.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 
@@ -80,15 +84,26 @@ export async function loadTranscriptEvents(
 
 /** Loads raw transcript events synchronously from the additive SQLite transcript store. */
 export function loadTranscriptEventsSync(scope: SessionTranscriptReadScope): TranscriptEvent[] {
+  return loadTranscriptReadSnapshotSync(scope).events;
+}
+
+/** Pair loaded bytes with the watermark that also fences opaque navigation edits. */
+export function loadTranscriptReadSnapshotSync(scope: SessionTranscriptReadScope): {
+  events: TranscriptEvent[];
+  version: SessionTranscriptContextVersion;
+} {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   return runSqliteDeferredTransactionSync(
     database.db,
     () => {
       const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
-      return loadTranscriptEventsFromDatabase(database, resolved.sessionId, {
-        beforeEventSeq: fence?.beforeRawSeq,
-      });
+      return {
+        events: loadTranscriptEventsFromDatabase(database, resolved.sessionId, {
+          beforeEventSeq: fence?.beforeRawSeq,
+        }),
+        version: readTranscriptContextVersionInTransaction(database, resolved.sessionId),
+      };
     },
     {
       databaseLabel: database.path,

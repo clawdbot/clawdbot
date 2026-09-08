@@ -69,7 +69,7 @@ export function renderSessionState(session: SidebarRecentSession) {
   if (!session.isChild) {
     return session.unread
       ? html`<span
-          class="session-unread-dot sidebar-recent-session__unread"
+          class="session-unread-dot"
           role="img"
           aria-label=${t("sessionsView.unread")}
         ></span>`

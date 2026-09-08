@@ -8,15 +8,19 @@ import { parseNodeList } from "../shared/node-list-parse.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
 import { resolveEligibleNodeFromList } from "../shared/node-resolve.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
+import { getBeforeToolCallFailureDisposition } from "./agent-tools.before-tool-call.js";
 import { redactCodeModeCatalogIds, type CodeModeCatalogProjection } from "./code-mode-catalog.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import type { CodeModeReplyLease } from "./code-mode-program-data.js";
 import type { PendingBridgeRequest } from "./code-mode-runtime.js";
 import { readCodeModeSkill } from "./code-mode-skills.js";
+import { createCodeModeToolApiFile } from "./code-mode-tool-api.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { isCollectorSpawnTool } from "./subagents/swarm/swarm-collector-capability.js";
 import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
+import { getToolContractFailureCode } from "./tool-contract-error.js";
+import { isTrustedToolInputError } from "./tool-input-error.js";
 import { isToolExecutionAllowed, TOOL_EXECUTION_GATED_MESSAGE } from "./tool-policy-shared.js";
 import type { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogEntry, ToolSearchToolContext } from "./tool-search-types.js";
@@ -257,7 +261,10 @@ export async function runBridgeRequest(params: {
           includeMcp: false,
         });
         const { id: _id, sourceName: _sourceName, mcp: _mcp, ...guestDescription } = described;
-        value = { ...guestDescription, callableName: binding.callableName };
+        value =
+          values[1] === "declaration"
+            ? await createCodeModeToolApiFile(binding.callableName, guestDescription)
+            : { ...guestDescription, callableName: binding.callableName };
         break;
       }
       case "callValue": {
@@ -406,9 +413,16 @@ export async function runBridgeRequest(params: {
     }
     params.reply.settle(true, value);
   } catch (error) {
-    params.reply.settle(
-      false,
-      redactCodeModeCatalogIds(formatErrorMessage(error), catalogProjection.bindings),
-    );
+    const classified =
+      getBeforeToolCallFailureDisposition(error) !== undefined && error instanceof Error
+        ? (error.cause ?? error)
+        : error;
+    params.reply.settle(false, {
+      message: redactCodeModeCatalogIds(formatErrorMessage(error), catalogProjection.bindings),
+      code:
+        getToolContractFailureCode(classified) ??
+        (isTrustedToolInputError(classified) ? "invalid_input" : "tool_error"),
+      effectStatus: "unknown",
+    });
   }
 }

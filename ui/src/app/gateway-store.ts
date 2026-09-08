@@ -29,7 +29,7 @@ import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { resolveSessionKey } from "../lib/sessions/index.ts";
 import { readSessionDefaults } from "../lib/sessions/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
-import { clearStoredChatSnapshots } from "../pages/chat/session-snapshot-invalidation.runtime.ts";
+import { clearWarmBootState } from "./bootstrap-warm-boot.ts";
 import type {
   ApplicationGateway,
   ApplicationGatewayConnectOptions,
@@ -284,12 +284,8 @@ export function createApplicationGateway(
     bumpCanvasWidgetFrameConnectionGeneration();
   };
   const updateSettings = (patch: Partial<typeof settings>, selectGateway = false) => {
-    const next = { ...settings, ...patch };
     if (!persistConnectionSettings && !selectGateway) {
-      settings = next;
-      if (patch.gatewayUrl !== undefined || patch.token !== undefined) {
-        persistSessionToken(next.gatewayUrl, next.token);
-      }
+      settings = { ...settings, ...patch };
       return;
     }
     persistConnectionSettings = true;
@@ -380,7 +376,7 @@ export function createApplicationGateway(
     const retiredEventLog = credentialsChanged ? eventLog.resetConnection() : null;
     if (credentialsChanged) {
       connectionRevision += 1;
-      void clearStoredChatSnapshots();
+      clearWarmBootState();
     }
     // Only a gateway URL that differs from the current connection counts as an
     // explicit selection. The login gate always resubmits its prefilled URL, so
@@ -454,6 +450,12 @@ export function createApplicationGateway(
         if (client !== nextClient) {
           return;
         }
+        // The submitted secret is unclassified until this Gateway reports its mode.
+        // Clear an old token too when the origin now uses password or proxy auth.
+        persistSessionToken(
+          nextConnection.gatewayUrl,
+          asOptionalRecord(hello.snapshot)?.authMode === "token" ? nextConnection.token : "",
+        );
         setUnavailableDeadline("suspensionPhase");
         // A successful hello retires bootstrap; the client has processed any issued device grant.
         connection = { ...connection, bootstrapToken: "", bootstrapProfile: undefined };

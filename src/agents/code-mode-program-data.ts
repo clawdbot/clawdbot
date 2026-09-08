@@ -66,7 +66,7 @@ export class CodeModeProgramDataInbox {
         }
         const json =
           JSON.stringify(
-            ok ? toCodeModeJsonSafe(value) : boundCodeModeError(String(value), this.errorBytes),
+            ok ? toCodeModeJsonSafe(value) : normalizeReplyError(value, this.errorBytes),
           ) ?? "null";
         // Normalization may invoke tool-owned toJSON code, including cancellation.
         if (this.closed || state !== "pending") {
@@ -122,4 +122,15 @@ export class CodeModeProgramDataInbox {
       close();
     }
   }
+}
+
+function normalizeReplyError(value: unknown, maxBytes: number): unknown {
+  if (value !== null && typeof value === "object" && "message" in value && "code" in value) {
+    return {
+      message: boundCodeModeError(String(value.message), maxBytes),
+      code: String(value.code),
+      effectStatus: "unknown",
+    };
+  }
+  return boundCodeModeError(String(value), maxBytes);
 }

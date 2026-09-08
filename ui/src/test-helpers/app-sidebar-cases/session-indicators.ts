@@ -336,8 +336,9 @@ describe("AppSidebar session indicators", () => {
           ".sidebar-session-indicator .session-glyph--running .session-glyph__ring",
         );
         expect.soft(ring).not.toBeNull();
-        expect.soft(row.querySelector(".session-row-state .session-run-spinner")).toBeNull();
+        expect.soft(row.querySelector(".session-row-state")).toBeNull();
         expect(row.querySelector(".session-unread-dot")).toBeNull();
+        expect(row.querySelector(".session-glyph__badge--unread")).toBeNull();
         expect(row.querySelector(".session-owner-chip") !== null).toBe(key === keys[0]);
         const link = row.querySelector("a")!;
         const description = sidebar.querySelector(
@@ -627,24 +628,20 @@ describe("AppSidebar session indicators", () => {
     expect(forked?.querySelector(".session-row-state")).toBeNull();
 
     const unread = sidebar.querySelector(`[data-session-key="${keys.unread}"]`);
-    expectEmptyLead(unread);
-    expect(
-      unread?.querySelector(".session-row-aside > .session-row-state .session-unread-dot"),
-    ).not.toBeNull();
+    expect(unread?.querySelector(".sidebar-session-indicator .session-unread-dot")).not.toBeNull();
+    expect(unread?.querySelector(".session-row-state")).toBeNull();
+    expect(unread?.querySelector("a")?.hasAttribute("aria-describedby")).toBe(false);
 
     const runningUnread = sidebar.querySelector(`[data-session-key="${keys.runningUnread}"]`);
     expect(runningUnread?.classList.contains("session-row-host--running")).toBe(true);
     expect(
       runningUnread?.querySelector(".sidebar-session-indicator .session-glyph__ring"),
     ).not.toBeNull();
-    expect(
-      runningUnread?.querySelector(".session-row-aside > .session-row-state .session-run-spinner"),
-    ).toBeNull();
-    expect(
-      runningUnread?.querySelector(".session-row-aside > .session-row-state .session-unread-dot"),
-    ).toBeNull();
+    expect(runningUnread?.querySelector(".session-row-state")).toBeNull();
+    expect(runningUnread?.querySelector(".session-unread-dot")).toBeNull();
+    expect(runningUnread?.querySelector(".session-glyph__badge--unread")).toBeNull();
 
-    for (const key of [keys.unread, keys.runningUnread]) {
+    for (const key of [keys.forked, keys.runningUnread]) {
       const link = sidebar.querySelector(`[data-session-key="${key}"] a`);
       const descriptionId = link?.getAttribute("aria-describedby");
       expect(descriptionId).toBe(`sidebar-session-state-${encodeURIComponent(key)}`);

@@ -1361,6 +1361,28 @@ describe("package-mac-app plist stamping", () => {
     },
   );
 
+  it("builds and bundles the macOS control CLI for every requested architecture", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const buildLoop = readFileSync(swiftScriptPath, "utf8");
+    const cliCopy = script.slice(
+      script.indexOf('echo "🚚 Copying macOS control CLI"'),
+      script.indexOf(
+        'if [[ "$SKIP_MLX_TTS" == "1" ]]; then',
+        script.indexOf('echo "🚚 Copying binary"'),
+      ),
+    );
+
+    expect(buildLoop).toContain('--product openclaw-mac --build-path "$BUILD_PATH" --arch "$arch"');
+    expect(cliCopy).toContain(
+      'cp "$(mac_cli_bin_for_arch "$PRIMARY_ARCH")" "$APP_ROOT/Contents/MacOS/openclaw-mac"',
+    );
+    expect(cliCopy).toContain('/usr/bin/lipo -create "${MAC_CLI_BIN_INPUTS[@]}"');
+    expect(cliCopy).toContain('chmod +x "$APP_ROOT/Contents/MacOS/openclaw-mac"');
+    expect(cliCopy).toContain(
+      '/usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/openclaw-mac"',
+    );
+  });
+
   it.runIf(process.platform === "darwin")(
     "merges framework Mach-O binaries when the checkout path contains glob metacharacters",
     () => {

@@ -39,7 +39,10 @@ if (fsSafeNativeContract === "not-applicable") {
 
 const { mode, packageRoot } = parseArgs(process.argv.slice(2));
 const requireFromPackage = createRequire(path.join(packageRoot, "package.json"));
-const fsSafeManifestPath = requireFromPackage.resolve("@openclaw/fs-safe/package.json");
+// `package.json` is not a public fs-safe export. Its public root entry is,
+// and the manifest beside that resolved entry declares platform packages.
+const fsSafeEntryPath = requireFromPackage.resolve("@openclaw/fs-safe");
+const fsSafeManifestPath = path.resolve(fsSafeEntryPath, "..", "..", "package.json");
 const fsSafeManifest = JSON.parse(await fsPromises.readFile(fsSafeManifestPath, "utf8"));
 const requireFromFsSafe = createRequire(fsSafeManifestPath);
 const platformPackageNames = Object.keys(fsSafeManifest.optionalDependencies ?? {}).filter((name) =>

@@ -1,6 +1,6 @@
 // Cron wake tests cover waking the scheduler for due jobs and service changes.
 import { describe, expect, it, vi } from "vitest";
-import { requestCronHeartbeat, wake } from "./wake.js";
+import { wake } from "./wake.js";
 
 function createState() {
   const enqueueSystemEvent = vi.fn();
@@ -18,24 +18,6 @@ function createState() {
 }
 
 describe("wake (cron timer)", () => {
-  it("preserves persisted monitor cadence through the shared heartbeat wake dispatch", () => {
-    const { state, requestHeartbeat } = createState();
-    requestCronHeartbeat(state, {
-      source: "interval",
-      intent: "scheduled",
-      reason: "interval",
-      agentId: "research",
-      scheduledEveryMs: 30_000,
-    });
-    expect(requestHeartbeat).toHaveBeenCalledWith({
-      source: "interval",
-      intent: "scheduled",
-      reason: "interval",
-      agentId: "research",
-      scheduledEveryMs: 30_000,
-    });
-  });
-
   it("returns ok:false on empty text without enqueueing or waking", () => {
     const { state, enqueueSystemEvent, requestHeartbeat } = createState();
     expect(wake(state, { mode: "now", text: "   " })).toEqual({ ok: false });

@@ -1,17 +1,9 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
-import { persistHeartbeatOutcome } from "../../../infra/heartbeat-outcome-store.js";
 import type { Context, Model, SimpleStreamOptions } from "../../../llm/types.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
 import type { StreamFn } from "../../runtime/index.js";
 import {
   createAssistant,
@@ -125,8 +117,6 @@ type PromptErrorCall = {
   yieldDetected: boolean;
   yieldMessage: string | null;
 };
-
-const tempStateDirs: string[] = [];
 
 function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 } = {}) {
   const order: string[] = [];
@@ -341,9 +331,6 @@ beforeEach(() => {
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   vi.unstubAllEnvs();
-  for (const stateDir of tempStateDirs.splice(0)) {
-    fs.rmSync(stateDir, { recursive: true, force: true });
-  }
 });
 
 registerAgentSessionLoopTestLifecycle();
@@ -725,41 +712,6 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       expect(fixture.readState().promptError).toBeNull();
     },
   );
-
-  it("does not claim heartbeat outcomes for detached user-triggered runs", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-prompt-phase-heartbeat-"));
-    tempStateDirs.push(stateDir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    await upsertSessionEntryCore(
-      { agentId: "main", env: process.env, sessionKey: "agent:main:main" },
-      { sessionId: "prompt-phase-heartbeat-test", updatedAt: 1 },
-    );
-    persistHeartbeatOutcome({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      runSessionKey: "agent:main:main:heartbeat",
-      response: { outcome: "progress", notify: false, summary: "Heartbeat context" },
-      occurredAt: 1,
-      env: process.env,
-    });
-    const fixture = createFixture();
-    Object.assign(fixture.input.attempt, {
-      sessionKey: "agent:main:main",
-      sessionPersistence: "detached",
-      trigger: "user",
-    });
-
-    await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
-
-    expect(mocks.preparePromptContext.mock.calls[0]?.[0]).not.toHaveProperty(
-      "heartbeatOutcomeContext",
-    );
-    expect(
-      openOpenClawAgentDatabase({ agentId: "main", env: process.env })
-        .db.prepare("SELECT context_run_id, context_claimed_at FROM heartbeat_outcomes")
-        .get(),
-    ).toEqual({ context_run_id: null, context_claimed_at: null });
-  });
 
   it("runs prompt work in phase order and publishes prompt outputs", async () => {
     const fixture = createFixture();

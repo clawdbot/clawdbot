@@ -2250,12 +2250,10 @@ openclaw-settings-save-indicator:empty {
   padding-right: var(--session-row-actions-reserve);
 }
 
-/* Hover actions replace trailing unread/PR tracks; leading activity and second-line metadata stay visible. */
+/* Hover actions replace trailing PR badges; leading state and second-line metadata stay visible. */
 .sidebar-recent-session--single-line:not(.sidebar-recent-session--child):is(:hover, :focus-within)
   :is(
-    .session-unread-dot,
     .session-row-badge--pull-request,
-    .session-row-aside:has(> .session-row-state > .session-unread-dot:only-child),
     .session-row-badges:has(> openclaw-tooltip:only-child > .session-row-badge--pull-request)
   ) {
   display: none;
@@ -4586,10 +4584,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   overflow: hidden;
   flex: 0 1 auto;
   margin-left: auto;
-}
-
-.sidebar-recent-session__details-endcap .session-row-state {
-  min-height: 18px;
 }
 
 .sidebar-session-attention__icon {

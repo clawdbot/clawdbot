@@ -8,6 +8,7 @@ from ci_git_owner import FetchTimeout, GitFailure, backoff, cleanup_seconds, git
 
 
 source_local_ref = "refs/remotes/origin/release-ancestry-source"
+target_hydration_local_ref = "refs/remotes/origin/release-ancestry-target-hydration"
 deepen_chunks = (128, 256, 512, 1024, 2048)
 max_total_seconds = 120
 max_fetch_seconds = 30
@@ -67,6 +68,7 @@ def fetch_history(source_sha, target, depth_argument):
                 "--no-tags",
                 "--no-recurse-submodules",
                 "--filter=blob:none",
+                "--refmap=",
                 depth_argument,
                 "origin",
                 f"+{source_sha}:{source_local_ref}",
@@ -181,7 +183,9 @@ def establish_ancestry():
     target_local_ref = f"refs/remotes/origin/{target_ref[len('refs/heads/') :]}"
     source_sha = resolve_commit("HEAD")
     fetch_history(source_sha, f"+{target_ref}:{target_local_ref}", "--depth=64")
-    # Freeze the branch after the first fetch; every deepen hydrates this exact target.
+    # Freeze the branch after the first fetch. Later requests hydrate the live
+    # branch into a separate ref: Git may not deepen a detached SHA want, while
+    # every ancestry decision below remains bound to this immutable target.
     target_sha = resolve_commit(target_local_ref)
     result, previous_boundaries = relation_result(mode, source_sha, target_sha)
     if result is not None:
@@ -191,7 +195,11 @@ def establish_ancestry():
     chunk_index = 0
     while True:
         chunk = deepen_chunks[min(chunk_index, len(deepen_chunks) - 1)]
-        fetch_history(source_sha, f"+{target_sha}:{target_local_ref}", f"--deepen={chunk}")
+        fetch_history(
+            source_sha,
+            f"+{target_ref}:{target_hydration_local_ref}",
+            f"--deepen={chunk}",
+        )
         result, current_boundaries = relation_result(mode, source_sha, target_sha)
         if result is not None:
             return result

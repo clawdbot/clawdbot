@@ -7,7 +7,7 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { formatErrorMessage } from "./errors.js";
 import { recordRunStart, shouldDeferWake, type DeferDecision } from "./heartbeat-cooldown.js";
 import {
-  heartbeatLog,
+  heartbeatLog as log,
   isHeartbeatOwnerUnresolved,
   resolveHeartbeatAgents,
   resolveHeartbeatForWake,
@@ -26,8 +26,6 @@ import {
   isRetryableHeartbeatSkipReason,
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
-
-const log = heartbeatLog;
 
 type HeartbeatAgentState = {
   agentId: string;

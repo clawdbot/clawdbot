@@ -1693,6 +1693,7 @@
     "native.apple.05f711cec069ec47": "Jumelage requis. Dans un client OpenClaw déjà jumelé, exécutez /pair approve, puis vérifiez à nouveau la connexion.",
     "native.apple.0603402116243f9e": "Nouvelle discussion dans l’arbre de travail",
     "native.apple.060e3947436fa930": "Impossible de traiter %1$@ : %2$@",
+    "native.apple.0644a7702bb80de1": "La session de connexion dans le navigateur a expiré. Reconnectez ce Gateway.",
     "native.apple.067bbf8e4b7d1837": "Entendu : %@",
     "native.apple.06aa02b192d6a1b3": "Examen en cours",
     "native.apple.06ced75261e8a242": "PID de l’application",

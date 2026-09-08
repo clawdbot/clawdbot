@@ -52,18 +52,6 @@ const EXECUTABLE_ENTRYPOINTS = [
     status: 0,
   },
   {
-    args: ["--clawhub-release-security-mode", "2026.6.35"],
-    output: "absent",
-    script: "scripts/e2e/lib/package-compat.mjs",
-    status: 0,
-  },
-  {
-    args: ["--clawhub-release-security-mode", "2026.8.1"],
-    output: "required",
-    script: "scripts/e2e/lib/package-compat.mjs",
-    status: 0,
-  },
-  {
     args: [],
     output: "docker_e2e_count=",
     script: "scripts/plan-release-workflow-matrix.mjs",
