@@ -246,9 +246,8 @@ async function runWithModelFallbackInternal<T>(
 
   const hasFallbackCandidates = candidates.length > 1;
   const requestedCandidate = candidates.find((candidate) => candidate.routeOrigin === "requested");
-  const runAttribution = { sessionId: params.sessionId, lane: params.lane };
+  const runAttribution = { runId: params.runId, sessionId: params.sessionId, lane: params.lane };
   const runObs = {
-    runId: params.runId,
     ...runAttribution,
     requestedProvider: params.provider,
     requestedModel: params.model,
