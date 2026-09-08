@@ -341,6 +341,41 @@ describe("createBlockReplyDeliveryHandler", () => {
     });
   });
 
+  it("strips media directives from block-streamed text while retaining structured media", async () => {
+    const enqueue = vi.fn();
+    const signalTextDelta = vi.fn(async () => {});
+    const blockReplyPipeline = {
+      enqueue,
+    } as unknown as BlockReplyPipelineLike;
+
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply: vi.fn(async () => {}),
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      typingSignals: { signalTextDelta } as unknown as TypingSignaler,
+      blockStreamingEnabled: true,
+      blockReplyPipeline,
+      directlySentBlockKeys: new Set(),
+      directlySentBlockPayloads: [],
+    });
+
+    await handler({
+      text: "Rendered image\nMEDIA:/private/tmp/generated.png",
+      mediaUrls: ["/api/chat/media/outgoing/generated.png"],
+    });
+
+    expect(enqueue).toHaveBeenCalledWith({
+      text: "Rendered image",
+      mediaUrl: "/api/chat/media/outgoing/generated.png",
+      mediaUrls: ["/api/chat/media/outgoing/generated.png"],
+      replyToId: undefined,
+      replyToCurrent: undefined,
+      replyToTag: false,
+      audioAsVoice: false,
+    });
+    expect(signalTextDelta).toHaveBeenCalledWith("Rendered image");
+  });
+
   it("suppresses implicit current-message threading for block replies when reply threading denies it", async () => {
     const blockReplyPipeline = {
       enqueue: vi.fn(),
