@@ -1,8 +1,8 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import { hintForPath } from "../components/config-form.shared.ts";
 import {
   cloneConfigObject,
-  hintForPath,
   removePathValue,
   sanitizeRedactedFormForSubmit,
   serializeConfigForm,

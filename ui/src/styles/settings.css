@@ -538,10 +538,14 @@ wa-switch.settings-toggle {
    grid instead of ragged right-aligned fields. A percentage guard cannot work
    here (the shrink-to-fit control resolves 100% circularly); the fixed width
    shrinks via flex because .settings-input/.settings-secret set min-width: 0. */
-.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input,
-.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-secret,
-.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-phone-presentation,
-.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input-with-hint {
+.settings-row:not(.settings-row--stacked)
+  :is(.settings-row__control, .cfg-scalar-input__control)
+  > :is(
+    .settings-input,
+    .settings-secret,
+    .settings-phone-presentation,
+    .settings-input-with-hint
+  ) {
   width: 340px;
 }
 
@@ -566,7 +570,9 @@ wa-switch.settings-toggle {
   overflow-wrap: anywhere;
 }
 
-.settings-row--stacked .settings-row__control > .settings-phone-presentation {
+.settings-row--stacked
+  :is(.settings-row__control, .cfg-scalar-input__control)
+  > .settings-phone-presentation {
   flex: 1 1 auto;
   width: 100%;
 }
@@ -574,10 +580,17 @@ wa-switch.settings-toggle {
 /* Number inputs hold short values (ports, counts, limits); the shared 340px
    text width turns −/+ stepper rows into a stretched bar. */
 .settings-row:not(.settings-row--stacked)
-  .settings-row__control
-  > input[type="number"].settings-input {
+  :is(.settings-row__control, .cfg-scalar-input__control)
+  > :is(
+    input[type="number"].settings-input,
+    .settings-secret:has(> input[type="number"].settings-input)
+  ) {
   width: 110px;
   text-align: center;
+
+  > input {
+    text-align: inherit;
+  }
 }
 
 /* Time inputs hold HH:MM; the shared 340px text width would stretch the paired
@@ -588,11 +601,35 @@ wa-switch.settings-toggle {
   width: auto;
 }
 
+/* Inline validation/unsupported-node message inside a settings-row. */
+.cfg-field__error {
+  font-size: 12px;
+  color: var(--danger);
+}
+
+/* Keep the control cluster intact while its error wraps below. Letting the
+   input wrap with its adjusters splits full-width array values into three rows. */
+.cfg-scalar-input {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.cfg-scalar-input__control {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
 /* ── Secret input (inset reveal toggle; no trailing button) ── */
 
 /* Stacked rows (config form arrays/maps) give the control full width; the
    wrapper must grow or the inner 100% resolves against fit-content. */
-.settings-row--stacked .settings-row__control > .settings-secret {
+.settings-row--stacked :is(.settings-row__control, .cfg-scalar-input__control) > .settings-secret {
   flex: 1 1 auto;
 }
 
@@ -854,7 +891,7 @@ textarea.settings-input {
     right: 0;
   }
 
-  .settings-secret > :is(input, textarea) {
+  .settings-secret:has(.settings-secret__toggle) > :is(input, textarea) {
     padding-right: calc(44px + var(--space-2));
   }
 
@@ -881,7 +918,7 @@ textarea.settings-input {
       right: 0;
     }
 
-    .settings-secret > :is(input, textarea) {
+    .settings-secret:has(.settings-secret__toggle) > :is(input, textarea) {
       padding-right: calc(44px + var(--space-2));
     }
 

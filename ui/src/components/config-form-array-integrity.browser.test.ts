@@ -1,10 +1,11 @@
 // Control UI tests cover array draft recovery and repeated-item constraints.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { cloneConfigObject, setPathValue } from "../lib/config-form-utils.ts";
 import { ConfigFormCollectionDraft } from "./config-form-collection-draft.ts";
 import { renderArray } from "./config-form.node.collection.ts";
 import type { JsonSchema } from "./config-form.shared.ts";
-import { renderNode } from "./config-form.ts";
+import { analyzeConfigSchema, renderConfigForm, renderNode } from "./config-form.ts";
 
 function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
   expect(element instanceof Element, label).toBe(true);
@@ -33,6 +34,103 @@ function findAddButton(container: Element): HTMLButtonElement | undefined {
 }
 
 describe("config form array integrity", () => {
+  it("preserves unaffected scalar drafts and resets changed repeated rows", () => {
+    let formValue = { values: ["111", "222"] };
+    const onPatch = vi.fn((path: Array<string | number>, value: unknown) => {
+      setPathValue(formValue, path, value);
+      renderValues();
+    });
+    const container = document.createElement("div");
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: {
+        values: {
+          type: "array",
+          items: { type: "string", pattern: "^[0-9]+$", default: "444" },
+        },
+      },
+    });
+    const renderValues = () => {
+      render(
+        renderConfigForm({
+          schema: analysis.schema,
+          uiHints: {},
+          unsupportedPaths: analysis.unsupportedPaths,
+          value: formValue,
+          showAdvanced: true,
+          onShowAdvanced: () => {},
+          onPatch,
+        }),
+        container,
+      );
+    };
+
+    renderValues();
+    const first = expectElement(
+      container.querySelector<HTMLInputElement>("input[aria-label='Values']"),
+      "first repeated scalar input",
+    );
+    first.value = "abc";
+    first.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(first.getAttribute("aria-invalid")).toBe("true");
+    expect(first.validationMessage).not.toBe("");
+
+    expect(onPatch).not.toHaveBeenCalled();
+    const second = expectElement(
+      container.querySelectorAll<HTMLInputElement>("input[aria-label='Values']")[1],
+      "second repeated scalar input",
+    );
+    second.value = "333";
+    second.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(formValue.values).toEqual(["111", "333"]);
+    const afterSiblingUpdate = expectElement(
+      container.querySelector<HTMLInputElement>("input[aria-label='Values']"),
+      "repeated scalar input after sibling update",
+    );
+    expect(afterSiblingUpdate).toBe(first);
+    expect(afterSiblingUpdate.value).toBe("abc");
+    expect(afterSiblingUpdate.getAttribute("aria-invalid")).toBe("true");
+    expect(afterSiblingUpdate.validationMessage).not.toBe("");
+
+    expectElement(findAddButton(container), "add repeated scalar item").click();
+    expect(formValue.values).toEqual(["111", "333", "444"]);
+    const afterAppend = expectElement(
+      container.querySelector<HTMLInputElement>("input[aria-label='Values']"),
+      "repeated scalar input after append",
+    );
+    expect(afterAppend).toBe(first);
+    expect(afterAppend.value).toBe("abc");
+    expect(afterAppend.getAttribute("aria-invalid")).toBe("true");
+    expect(afterAppend.validationMessage).not.toBe("");
+
+    for (const index of [2, 1]) {
+      expectElement(
+        container.querySelectorAll<HTMLButtonElement>("button[aria-label='Remove item']")[index],
+        "remove later repeated scalar item",
+      ).click();
+    }
+    expect(formValue.values).toEqual(["111"]);
+    const afterLaterRemoval = expectElement(
+      container.querySelector<HTMLInputElement>("input[aria-label='Values']"),
+      "repeated scalar input after later removal",
+    );
+    expect(afterLaterRemoval).toBe(first);
+    expect(afterLaterRemoval.value).toBe("abc");
+    expect(afterLaterRemoval.getAttribute("aria-invalid")).toBe("true");
+    expect(afterLaterRemoval.validationMessage).not.toBe("");
+
+    formValue = cloneConfigObject({ values: ["444"] }, formValue);
+    renderValues();
+    const changed = expectElement(
+      container.querySelector<HTMLInputElement>("input[aria-label='Values']"),
+      "changed repeated scalar input",
+    );
+    expect(changed).toBe(first);
+    expect(changed.value).toBe("444");
+    expect(changed.getAttribute("aria-invalid")).toBe("false");
+    expect(changed.validationMessage).toBe("");
+  });
+
   it("applies safe whole-array composition candidates atomically", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");

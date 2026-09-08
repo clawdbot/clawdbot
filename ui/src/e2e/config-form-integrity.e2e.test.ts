@@ -19,10 +19,7 @@ const proofVariant = process.env.OPENCLAW_UI_PROOF_VARIANT ?? "after";
 let uiProofArtifactDir: string;
 beforeEach(() => {
   if (captureUiProofEnabled) {
-    uiProofArtifactDir = path.join(
-      createControlUiE2eArtifactDir("config-form-integrity"),
-      proofVariant,
-    );
+    uiProofArtifactDir = createControlUiE2eArtifactDir(`config-form-integrity-${proofVariant}`);
   }
 });
 
@@ -32,6 +29,8 @@ function configFormIntegrityMocks() {
       endpoint: "local-api",
       metadata: { mode: "safe" },
       retryBudget: 4,
+      countOrFlag: 6,
+      privateCount: 6,
       weights: [2],
       codes: [],
     },
@@ -71,6 +70,14 @@ function configFormIntegrityMocks() {
                 maximum: 8,
                 multipleOf: 2,
               },
+              countOrFlag: {
+                title: "Count or flag",
+                anyOf: [{ type: "integer" }, { type: "boolean" }],
+              },
+              privateCount: {
+                title: "Private count",
+                anyOf: [{ type: "integer" }, { type: "boolean" }],
+              },
               weights: {
                 type: "array",
                 title: "Weights",
@@ -90,13 +97,253 @@ function configFormIntegrityMocks() {
           },
         },
       },
-      uiHints: {},
+      uiHints: { "laboratory.privateCount": { sensitive: true } },
       version: "e2e",
     },
   };
 }
 
 suite.define(() => {
+  it.each([
+    { width: 1440, height: 1000 },
+    { width: 390, height: 844 },
+  ])("keeps numeric-array adjusters beside the input at $width px", async (viewport) => {
+    await suite.withPage(
+      { colorScheme: "dark", locale: "en-US", serviceWorkers: "block", viewport },
+      async ({ page }) => {
+        const fixture = configFormIntegrityMocks();
+        const gateway = await installMockGateway(page, { methodResponses: fixture });
+        const response = await page.goto(
+          `${suite.server.baseUrl}settings/advanced?section=laboratory`,
+        );
+        expect(response?.status()).toBe(200);
+        await gateway.waitForRequest("config.get");
+        await gateway.waitForRequest("config.schema");
+
+        const weights = page.locator(".cfg-array").filter({ hasText: "Weights" });
+        const input = weights.getByRole("spinbutton");
+        const decrease = weights.getByRole("button", { name: /: -2$/ });
+        const increase = weights.getByRole("button", { name: /: \+2$/ });
+        const retryBudget = page.getByRole("spinbutton", { name: "Retry budget" });
+        const countOrFlag = page.getByRole("spinbutton", { name: "Count or flag" });
+        const privateCount = page.getByRole("spinbutton", { name: "Private count" });
+        const endpoint = page.getByRole("textbox", { name: "Endpoint slug" });
+        for (const control of [
+          input,
+          decrease,
+          increase,
+          retryBudget,
+          countOrFlag,
+          privateCount,
+          endpoint,
+        ]) {
+          await expect.poll(() => control.count()).toBe(1);
+          await expect.poll(() => control.isVisible()).toBe(true);
+        }
+        expect(await input.inputValue()).toBe("2");
+        expect(await retryBudget.inputValue()).toBe("4");
+        expect(await countOrFlag.inputValue()).toBe("6");
+        expect(await privateCount.inputValue()).toBe("");
+        expect(
+          await privateCount.evaluate(
+            (element) => element instanceof HTMLInputElement && element.readOnly,
+          ),
+        ).toBe(true);
+        for (const control of [input, retryBudget]) {
+          expect(await control.getAttribute("min")).toBe("2");
+          expect(await control.getAttribute("max")).toBe("8");
+          expect(await control.getAttribute("step")).toBe("2");
+        }
+        expect(await gateway.getRequests("config.set")).toHaveLength(0);
+
+        const measure = async (controls: Locator[]) => {
+          const [minus, field, plus] = await Promise.all(
+            controls.map((control) => control.boundingBox()),
+          );
+          if (!minus || !field || !plus) {
+            throw new Error("Numeric adjusters and input must all have visible bounds");
+          }
+          for (const box of [minus, field, plus]) {
+            expect(box.width).toBeGreaterThan(0);
+            expect(box.height).toBeGreaterThan(0);
+          }
+          return { minus, field, plus };
+        };
+        const nativeValidation = () =>
+          input.evaluate((element) => {
+            if (!(element instanceof HTMLInputElement)) {
+              throw new Error("Numeric field must be a native input");
+            }
+            return {
+              valid: element.validity.valid,
+              message: element.validationMessage,
+              focused: element.matches(":focus"),
+              borderColor: getComputedStyle(element).borderTopColor,
+            };
+          });
+        const measureInputStyle = (control: Locator) =>
+          control.evaluate((element) => {
+            if (!(element instanceof HTMLInputElement)) {
+              throw new Error("Form value must be a native input");
+            }
+            const box = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            const toggle = element.parentElement?.querySelector(".settings-secret__toggle");
+            const toggleBox = toggle?.getBoundingClientRect();
+            return {
+              width: box.width,
+              paddingLeft: Number.parseFloat(style.paddingLeft),
+              paddingRight: Number.parseFloat(style.paddingRight),
+              textAlign: style.textAlign,
+              toggle: toggleBox
+                ? { width: toggleBox.width, rightInset: box.right - toggleBox.right }
+                : null,
+            };
+          });
+        const measureInputStyles = async () => ({
+          plain: await measureInputStyle(endpoint),
+          numberUnion: await measureInputStyle(countOrFlag),
+          sensitiveNumberUnion: await measureInputStyle(privateCount),
+        });
+        const observations: Array<{
+          phase: string;
+          value: string;
+          invalid: string | null;
+          validation: Awaited<ReturnType<typeof nativeValidation>>;
+          array: Awaited<ReturnType<typeof measure>>;
+          ordinary: Awaited<ReturnType<typeof measure>>;
+          ordinaryControlRight: number;
+          inputStyles: Awaited<ReturnType<typeof measureInputStyles>>;
+        }> = [];
+        const capture = async (phase: string) => {
+          await weights.scrollIntoViewIfNeeded();
+          observations.push({
+            phase,
+            value: await input.inputValue(),
+            invalid: await input.getAttribute("aria-invalid"),
+            validation: await nativeValidation(),
+            inputStyles: await measureInputStyles(),
+            array: await measure([decrease, input, increase]),
+            ordinary: await measure([
+              page.getByRole("button", { name: "Retry budget: -2", exact: true }),
+              retryBudget,
+              page.getByRole("button", { name: "Retry budget: +2", exact: true }),
+            ]),
+            ordinaryControlRight: await retryBudget.evaluate((element) => {
+              const control = element.closest(".settings-row__control");
+              if (!(control instanceof HTMLElement) || control.getBoundingClientRect().width <= 0) {
+                throw new Error("Ordinary field must have a visible Settings control container");
+              }
+              return control.getBoundingClientRect().right;
+            }),
+          });
+          if (captureUiProofEnabled) {
+            await writeFile(
+              path.join(uiProofArtifactDir, `numeric-array-${viewport.width}.json`),
+              JSON.stringify(
+                { viewport, observations, writes: await gateway.getRequests("config.set") },
+                null,
+                2,
+              ),
+            );
+            await page.locator("#config-section-panel").screenshot({
+              animations: "disabled",
+              path: path.join(uiProofArtifactDir, `numeric-array-${viewport.width}-${phase}.png`),
+            });
+          }
+        };
+
+        await capture("initial");
+        await input.fill("3");
+        await expect.poll(() => input.getAttribute("aria-invalid")).toBe("true");
+        expect(await input.inputValue()).toBe("3");
+        expect(await gateway.getRequests("config.set")).toHaveLength(0);
+        const error = weights.getByRole("alert", { includeHidden: true });
+        await expect.poll(() => error.count()).toBe(1);
+        await expect.poll(() => error.isVisible()).toBe(true);
+        const errorId = await error.getAttribute("id");
+        if (!errorId) {
+          throw new Error("Validation feedback must have an accessible description id");
+        }
+        expect((await input.getAttribute("aria-describedby"))?.split(/\s+/)).toContain(errorId);
+        const invalid = await nativeValidation();
+        expect(invalid.valid).toBe(false);
+        expect(invalid.message).not.toBe("");
+        expect(await error.textContent()).toBe(invalid.message);
+        await capture("invalid");
+
+        await gateway.deferNext("config.set");
+        await input.fill("4");
+        const request = await gateway.waitForRequest("config.set");
+        const params = request.params;
+        if (
+          !params ||
+          typeof params !== "object" ||
+          !("raw" in params) ||
+          typeof params.raw !== "string"
+        ) {
+          throw new Error("Settings save must carry the serialized config");
+        }
+        expect(JSON.parse(params.raw)).toEqual({
+          laboratory: { ...fixture["config.get"].config.laboratory, weights: [4] },
+        });
+        await gateway.resolveDeferred("config.set");
+        await expect.poll(() => input.isEnabled()).toBe(true);
+        await expect.poll(() => input.getAttribute("aria-invalid")).toBe("false");
+        expect(await input.inputValue()).toBe("4");
+        expect(await gateway.getRequests("config.set")).toHaveLength(1);
+        expect((await nativeValidation()).valid).toBe(true);
+        expect((await nativeValidation()).message).toBe("");
+        expect(await error.isVisible()).toBe(false);
+        expect(await error.textContent()).toBe("");
+        await input.press("Tab");
+        await expect.poll(async () => (await nativeValidation()).focused).toBe(false);
+        await expect
+          .poll(async () => (await nativeValidation()).borderColor)
+          .toBe(await retryBudget.evaluate((element) => getComputedStyle(element).borderTopColor));
+        expect(await gateway.getRequests("config.set")).toHaveLength(1);
+        await capture("corrected");
+
+        // Measure after the real draft/save path so a layout failure retains its behavior evidence.
+        for (const observation of observations) {
+          const { plain, numberUnion, sensitiveNumberUnion } = observation.inputStyles;
+          for (const field of [plain, numberUnion]) {
+            expect(field.toggle).toBeNull();
+            expect(field.paddingRight).toBe(field.paddingLeft);
+          }
+          for (const field of [numberUnion, sensitiveNumberUnion]) {
+            expect(Math.abs(field.width - 110)).toBeLessThanOrEqual(1);
+            expect(field.textAlign).toBe("center");
+          }
+          const toggle = sensitiveNumberUnion.toggle;
+          if (!toggle) {
+            throw new Error("Sensitive number must retain its inset reveal toggle");
+          }
+          expect(toggle.width).toBeGreaterThan(0);
+          expect(toggle.rightInset).toBeGreaterThanOrEqual(0);
+          expect(sensitiveNumberUnion.paddingRight).toBeGreaterThan(
+            toggle.width + toggle.rightInset,
+          );
+          expect(
+            Math.abs(
+              observation.ordinary.plus.x +
+                observation.ordinary.plus.width -
+                observation.ordinaryControlRight,
+            ),
+          ).toBeLessThanOrEqual(1);
+          for (const layout of [observation.ordinary, observation.array]) {
+            const centers = [layout.minus, layout.field, layout.plus].map(
+              (box) => box.y + box.height / 2,
+            );
+            expect(Math.max(...centers) - Math.min(...centers)).toBeLessThanOrEqual(1);
+            expect(layout.field.x).toBeGreaterThanOrEqual(layout.minus.x + layout.minus.width);
+            expect(layout.plus.x).toBeGreaterThanOrEqual(layout.field.x + layout.field.width);
+          }
+        }
+      },
+    );
+  });
+
   it("round-trips Agent List model overrides through the complete Gateway schema", async () => {
     const { buildConfigSchemaCore } = await import("../../../src/config/schema.ts");
     const schema = buildConfigSchemaCore();

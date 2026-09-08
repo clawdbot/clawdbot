@@ -1,8 +1,6 @@
 // Control UI helpers derive native constraints and safe initial values from config schemas.
-import {
-  isJsonSchemaValueValid,
-  jsonSchemaValuesEqual,
-} from "@openclaw/normalization-core/json-schema";
+import { isJsonSchemaValueValid } from "@openclaw/normalization-core/json-schema";
+import { jsonSchemaValuesEqual } from "@openclaw/normalization-core/json-value";
 import { asFiniteNumber as finiteNumber } from "@openclaw/normalization-core/number-coercion";
 import { arrayItemSchema, collectAllOfSchemas, combinedSchema } from "./config-form.array-items.ts";
 import { decimalRational } from "./config-form.numeric.ts";

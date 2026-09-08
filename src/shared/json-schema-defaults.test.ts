@@ -1,8 +1,9 @@
 import {
   isJsonSchemaValueValid,
-  jsonSchemaValuesEqual,
   normalizeJsonSchemaForTypeBox,
 } from "@openclaw/normalization-core/json-schema";
+import { isJsonValue, jsonSchemaValuesEqual } from "@openclaw/normalization-core/json-value";
+import { Guard } from "typebox/guard";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyJsonSchemaDefaults, findJsonSchemaShapeError } from "./json-schema-defaults.js";
 
@@ -152,6 +153,95 @@ describe("normalizeJsonSchemaForTypeBox", () => {
     expect(isJsonSchemaValueValid({}, Object.assign(Object.create(null), { value: "ok" }))).toBe(
       true,
     );
+  });
+});
+
+describe("jsonSchemaValuesEqual TypeBox contract", () => {
+  const shared = { enabled: true };
+  const cases: [string, unknown, unknown, boolean][] = [
+    [
+      "nested JSON and object order",
+      { a: [null, true, 1, "ok"], b: { value: 2 } },
+      { b: { value: 2 }, a: [null, true, 1, "ok"] },
+      true,
+    ],
+    ["nested changed scalar", { a: { value: 1 } }, { a: { value: 2 } }, false],
+    ["object key count", { a: 1 }, { a: 1, b: 2 }, false],
+    ["different object keys", { a: 1 }, { b: 1 }, false],
+    ["array order", [1, 2], [2, 1], false],
+    ["array length", [1], [1, 2], false],
+    ["different scalar types", 1, "1", false],
+    ["signed zero", -0, 0, true],
+    ["null and empty object", null, {}, false],
+    [
+      "literal prototype keys",
+      JSON.parse('{"__proto__":{"value":1},"constructor":2}'),
+      JSON.parse('{"constructor":2,"__proto__":{"value":1}}'),
+      true,
+    ],
+    ["object to array", { 0: "a", length: 1 }, ["a"], true],
+    ["array to object", ["a"], { 0: "a", length: 1 }, false],
+    ["null-prototype object", Object.assign(Object.create(null), { value: 1 }), { value: 1 }, true],
+    [
+      "shared children",
+      { a: shared, b: shared },
+      { a: { enabled: true }, b: { enabled: true } },
+      true,
+    ],
+  ];
+
+  it.each(cases)("matches TypeBox for %s", (_name, left, right, expected) => {
+    expect(isJsonValue(left)).toBe(true);
+    expect(isJsonValue(right)).toBe(true);
+    expect(Guard.IsDeepEqual(left, right)).toBe(expected);
+    expect(jsonSchemaValuesEqual(left, right)).toBe(expected);
+  });
+
+  it.each(["object", "array"])("preserves TypeBox accessor read order for %s", (kind) => {
+    const observe = (compare: typeof jsonSchemaValuesEqual) => {
+      const reads: string[] = [];
+      const create = (side: string) => {
+        const value = kind === "array" ? [0] : { value: 0 };
+        Object.defineProperty(value, kind === "array" ? "0" : "value", {
+          enumerable: true,
+          get() {
+            reads.push(side);
+            return 1;
+          },
+        });
+        return value;
+      };
+      return { equal: compare(create("left"), create("right")), reads };
+    };
+    const expected = observe(
+      (left, right) => isJsonValue(left) && isJsonValue(right) && Guard.IsDeepEqual(left, right),
+    );
+    expect(expected).toEqual({
+      equal: true,
+      reads:
+        kind === "array"
+          ? ["left", "right", "left", "left", "right"]
+          : ["left", "right", "left", "right"],
+    });
+    expect(observe(jsonSchemaValuesEqual)).toEqual(expected);
+  });
+
+  it("catches a late accessor failure even when both inputs are the same object", () => {
+    let reads = 0;
+    const value = {
+      get field() {
+        if (++reads > 2) {
+          throw new Error("late accessor failure");
+        }
+        return 1;
+      },
+    };
+    expect(isJsonValue(value)).toBe(true);
+    expect(isJsonValue(value)).toBe(true);
+    expect(() => Guard.IsDeepEqual(value, value)).toThrow("late accessor failure");
+    reads = 0;
+    expect(jsonSchemaValuesEqual(value, value)).toBe(false);
+    expect(reads).toBe(3);
   });
 });
 
