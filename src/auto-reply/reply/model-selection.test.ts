@@ -1796,7 +1796,7 @@ describe("createModelSelectionState inherits primary from stale last-used", () =
     const initialEntry = { ...sessionEntry };
     const sessionStore = { [sessionKey]: sessionEntry };
     sessionPersistenceMocks.persistReplySessionEntry.mockImplementationOnce(async ({ entry }) => ({
-      status: "persisted",
+      status: "current",
       entry: { ...entry },
     }));
 
