@@ -18,8 +18,6 @@ import { isPlatformAutoSessionLabel } from "./platform-session-label.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { readSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
 
-export { isPlatformAutoSessionLabel } from "./platform-session-label.js";
-
 type DashboardSessionTitleModelEntry = Pick<
   SessionEntry,
   | "agentHarnessId"
