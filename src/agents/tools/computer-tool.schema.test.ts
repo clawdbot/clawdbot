@@ -1,14 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { loadPairedComputerUseAvailabilityForSurface } from "../computer-use-node-capabilities.js";
-import { createComputerTool, readActionEnum, v2Descriptor } from "./computer-tool.test-helpers.js";
+import { beforeEach, describe, expect, it } from "vitest";
+import {
+  createComputerTool,
+  listNodesMock,
+  loadPairedComputerUseAvailabilityForSurface,
+  readActionEnum,
+  resetComputerToolMocks,
+  v2Descriptor,
+} from "./computer-tool.test-helpers.js";
 
-const listNodes = vi.hoisted(() => vi.fn());
-
-vi.mock("./nodes-utils.js", () => ({ listNodes }));
-
-beforeEach(() => {
-  listNodes.mockReset();
-});
+beforeEach(resetComputerToolMocks);
 
 describe("createComputerTool schema", () => {
   it("loads paired capabilities only for an exposed ordinary paired surface", async () => {
@@ -17,14 +17,14 @@ describe("createComputerTool schema", () => {
       invoke: async () => undefined,
     };
 
-    listNodes.mockResolvedValue([]);
+    listNodesMock.mockResolvedValue([]);
     await expect(
       loadPairedComputerUseAvailabilityForSurface({
         computerAllowed: true,
         modelHasVision: true,
       }),
     ).resolves.toBeDefined();
-    expect(listNodes).toHaveBeenCalledTimes(1);
+    expect(listNodesMock).toHaveBeenCalledTimes(1);
 
     for (const params of [
       { computerAllowed: false, modelHasVision: true },
@@ -35,7 +35,7 @@ describe("createComputerTool schema", () => {
     ]) {
       expect(await loadPairedComputerUseAvailabilityForSurface(params)).toBeUndefined();
     }
-    expect(listNodes).toHaveBeenCalledTimes(1);
+    expect(listNodesMock).toHaveBeenCalledTimes(1);
   });
 
   it("keeps an undeclared node on the exact v1 action list", () => {
