@@ -1,7 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../../config/paths.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
-import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 
 type UnsafeUpdateRecovery = Extract<
@@ -50,12 +49,12 @@ export function resolveUpdateResultNextAction(params: {
     )?.stderrTail;
     return `${configRefusal ? `${configRefusal} ` : ""}${state}${resolveUnsafeUpdateRecoveryGuidance(reason, env)}`;
   }
-  const command = (value: string) => replaceCliName(formatCliCommand(value, env), resolveCliName());
+  const command = (value: string) => formatCliCommand(value, env);
   if (result.reason === "dirty") {
     return `Git-based updates need a clean working tree before they can switch commits, fetch, or rebase. Commit, stash, or discard the local changes, then rerun \`${command("openclaw update")}\`.`;
   }
   if (result.reason === "not-git-install") {
-    return `This OpenClaw install isn't a git checkout, and the package manager couldn't be detected. Update via your package manager, then run \`${command("openclaw doctor")}\` and \`${command("openclaw gateway restart")}\`. Examples: \`${replaceCliName("npm i -g openclaw@latest", resolveCliName())}\` or \`${replaceCliName("pnpm add -g openclaw@latest", resolveCliName())}\`.`;
+    return `This OpenClaw install isn't a git checkout, and the package manager couldn't be detected. Update via your package manager, then run \`${command("openclaw doctor")}\` and \`${command("openclaw gateway restart")}\`. Examples: \`npm i -g openclaw@latest\` or \`pnpm add -g openclaw@latest\`.`;
   }
   if (result.status === "ok") {
     return `After verifying your history, preview recovery rollback retirement with ${command("openclaw update cleanup --dry-run")} for state ${resolveStateDir(env)}. Keep the same state/config overrides.`;

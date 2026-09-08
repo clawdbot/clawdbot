@@ -6,7 +6,7 @@ import type { LogLevel } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
 import { getVerboseFlag, isHelpOrVersionInvocation } from "../argv.js";
-import { resolveCliName } from "../cli-name.js";
+import { CLI_NAME } from "../cli-name.js";
 import {
   applyCliExecutionStartupPresentation,
   ensureCliExecutionBootstrap,
@@ -32,11 +32,10 @@ function setProcessTitleForCommand(actionCommand: Command) {
     current = current.parent;
   }
   const name = current.name();
-  const cliName = resolveCliName();
-  if (!name || name === cliName) {
+  if (!name || name === CLI_NAME) {
     return;
   }
-  process.title = `${cliName}-${name}`;
+  process.title = `${CLI_NAME}-${name}`;
 }
 
 function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: string[]): boolean {
