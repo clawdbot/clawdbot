@@ -688,10 +688,16 @@ final class WatchDirectNode {
         case .unknown: .unknown
         @unknown default: .unknown
         }
+        let level = device.batteryLevel >= 0 ? Double(device.batteryLevel) : nil
+        // WKInterfaceDevice.batteryLevel is a normalized 0.0–1.0 fraction, matching
+        // the shared OpenClawBatteryStatusPayload.level contract. `levelPercent`
+        // mirrors it as an integer 0–100 percentage.
+        let levelPercent = level.map { Int(($0 * 100).rounded()) }
         let battery = OpenClawBatteryStatusPayload(
-            level: device.batteryLevel >= 0 ? Double(device.batteryLevel) : nil,
+            level: level,
             state: batteryState,
-            lowPowerModeEnabled: ProcessInfo.processInfo.isLowPowerModeEnabled)
+            lowPowerModeEnabled: ProcessInfo.processInfo.isLowPowerModeEnabled,
+            levelPercent: levelPercent)
         let thermalState: OpenClawThermalState = switch ProcessInfo.processInfo.thermalState {
         case .nominal: .nominal
         case .fair: .fair
