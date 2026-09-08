@@ -22,14 +22,15 @@ For custom servers, leave room for the full OpenClaw prompt, tools, history, and
 
 ## Pick a backend
 
-| Backend                                              | Use when                                                                           |
-| ---------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| [ds4](/providers/ds4)                                | Local DeepSeek V4 Flash on macOS Metal with OpenAI-compatible tool calls           |
-| LiteLLM / OAI-proxy / custom OpenAI-compatible proxy | You front another model API and need OpenClaw to treat it as OpenAI                |
-| [llama.cpp](/plugins/llama-cpp)                      | Hardware-aware model selection, verified downloads, and an OpenClaw-managed server |
-| [LM Studio](/providers/lmstudio)                     | First-time local setup, GUI loader, native Responses API                           |
-| MLX / vLLM / SGLang                                  | High-throughput self-hosted serving with an OpenAI-compatible HTTP endpoint        |
-| [Ollama](/providers/ollama)                          | CLI workflow, model library, hands-off systemd service                             |
+| Backend                                              | Use when                                                                                     |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| [ds4](/providers/ds4)                                | Local DeepSeek V4 Flash on macOS Metal with OpenAI-compatible tool calls                     |
+| LiteLLM / OAI-proxy / custom OpenAI-compatible proxy | You front another model API and need OpenClaw to treat it as OpenAI                          |
+| [llama.cpp](/plugins/llama-cpp)                      | Hardware-aware model selection, verified downloads, and an OpenClaw-managed server           |
+| [llmman](/providers/llmman)                          | OCI-registry model pulls, upstream llama.cpp/vLLM/MLX engines, hybrid local + hosted routing |
+| [LM Studio](/providers/lmstudio)                     | First-time local setup, GUI loader, native Responses API                                     |
+| MLX / vLLM / SGLang                                  | High-throughput self-hosted serving with an OpenAI-compatible HTTP endpoint                  |
+| [Ollama](/providers/ollama)                          | CLI workflow, model library, hands-off systemd service                                       |
 
 Use `api: "openai-responses"` when the backend supports it (LM Studio does). Otherwise use `api: "openai-completions"`. If `api` is omitted on a custom provider with a `baseUrl`, OpenClaw defaults to `openai-completions`.
 
@@ -128,6 +129,8 @@ Setup checklist:
 ```
 
 For local-first with a hosted safety net, swap `primary`/`fallbacks` order and keep the same `providers` block and `models.mode: "merge"`.
+
+OpenClaw fallbacks switch models per turn on provider errors. For per-request routing that keeps small prompts on the local model and sends only oversized ones to a hosted model, see [Hybrid inference](/providers/llmman#hybrid-inference) with llmman.
 
 ### Regional hosting / data routing
 

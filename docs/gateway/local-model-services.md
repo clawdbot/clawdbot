@@ -90,13 +90,13 @@ Set `timeoutSeconds` on the provider entry (not `localService`) so slow cold sta
 
 ## llmman example
 
-llmman is a custom OpenAI-compatible `/v1` backend, so the same `localService` API works with an `llmman` provider entry. It listens on `127.0.0.1:17434` by default; `LLMMAN_HOST` overrides the bind address, while `LLMMAN_LLM_LIBRARY` overrides GPU auto-detection. Its API has no authentication, so keep the default loopback bind unless a trusted network boundary restricts access.
+llmman is a custom OpenAI-compatible `/v1` backend, so the same `localService` API works with an `llmman` provider entry. It listens on `127.0.0.1:17434` by default; `LLMMAN_HOST` overrides the bind address, while `LLMMAN_LLM_LIBRARY` overrides GPU auto-detection. Its API has no authentication, so keep the default loopback bind unless a trusted network boundary restricts access. llmman has no `/health` route; use `/v1/models` or `/api/version` as `healthUrl`.
 
 ```json5
 {
   agents: {
     defaults: {
-      model: { primary: "llmman/gemma4" },
+      model: { primary: "llmman/qwen3.8" },
     },
   },
   models: {
@@ -104,12 +104,12 @@ llmman is a custom OpenAI-compatible `/v1` backend, so the same `localService` A
     providers: {
       llmman: {
         baseUrl: "http://127.0.0.1:17434/v1",
-        apiKey: "llmman-local",
+        apiKey: "${LLMMAN_API_KEY}",
         api: "openai-completions",
         timeoutSeconds: 300,
         localService: {
           command: "/opt/homebrew/bin/llmman",
-          args: ["serve", "gemma4"],
+          args: ["serve"],
           env: { LLMMAN_CONTEXT_LENGTH: "65536" },
           healthUrl: "http://127.0.0.1:17434/v1/models",
           readyTimeoutMs: 180000,
@@ -117,13 +117,13 @@ llmman is a custom OpenAI-compatible `/v1` backend, so the same `localService` A
         },
         models: [
           {
-            id: "gemma4",
-            name: "Gemma 4 (llmman)",
-            reasoning: false,
-            input: ["text"],
+            id: "qwen3.8",
+            name: "Qwen3.8 (llmman)",
+            reasoning: true,
+            input: ["text", "image"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 65536,
-            maxTokens: 4096,
+            maxTokens: 8192,
           },
         ],
       },
@@ -132,7 +132,7 @@ llmman is a custom OpenAI-compatible `/v1` backend, so the same `localService` A
 }
 ```
 
-Replace `command` with the result of `which llmman` on the machine running OpenClaw. Full llmman setup: [llmman](/providers/llmman).
+Replace `command` with the result of `which llmman` on the machine running OpenClaw, and set `LLMMAN_API_KEY=llmman-local` in `~/.openclaw/.env`. `llmman serve` takes no arguments; daemon settings such as `LLMMAN_CONTEXT_LENGTH` go in `env`, and the model loads on the first request that names it. Full llmman setup, including hybrid local + hosted routing: [llmman](/providers/llmman).
 
 ## ds4 example
 
@@ -180,6 +180,6 @@ Full setup, context sizing, and verification commands: [ds4](/providers/ds4).
     Local model setup, provider choices, and safety guidance.
   </Card>
   <Card title="llmman" href="/providers/llmman" icon="cpu">
-    Run OpenClaw through the llmman OpenAI-compatible local server.
+    Local models, hybrid local + hosted routing, and on-demand startup with llmman.
   </Card>
 </CardGroup>
