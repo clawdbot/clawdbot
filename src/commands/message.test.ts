@@ -488,21 +488,47 @@ describe("messageCommand", () => {
     expect(readOnlyMessageActionCall().agentId).toBe("ops");
   });
 
-  it("uses the configured system owner for an explicit multi-agent config", async () => {
-    const effectiveConfig = {
-      agents: {
-        ownership: "explicit" as const,
-        defaults: { systemAgent: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
-    };
-    mockResolvedCommandConfig({ rawConfig: {}, resolvedConfig: effectiveConfig, diagnostics: [] });
+  it.each([false, true])(
+    "guides an ownerless explicit fleet to a system owner (dryRun=%s)",
+    async (dryRun) => {
+      const ownerlessConfig = {
+        agents: {
+          ownership: "explicit" as const,
+          entries: { ops: {}, research: {} },
+        },
+      };
+      mockResolvedCommandConfig({
+        rawConfig: {},
+        resolvedConfig: ownerlessConfig,
+        diagnostics: [],
+      });
 
-    await runMessageCommand();
+      const failedRun = runMessageCommand({ dryRun });
+      await expect(failedRun).rejects.toMatchObject({
+        code: "AGENT_SELECTION_REQUIRED",
+        hint: expect.stringContaining("agents.defaults.systemAgent.agentId"),
+      });
+      await expect(failedRun).rejects.not.toThrow("--agent");
+      expect(runMessageActionMock).not.toHaveBeenCalled();
 
-    expect(readOnlyMessageActionCall().cfg).toBe(effectiveConfig);
-    expect(readOnlyMessageActionCall().agentId).toBe("ops");
-  });
+      const effectiveConfig = {
+        agents: {
+          ...ownerlessConfig.agents,
+          defaults: { systemAgent: { agentId: "ops" } },
+        },
+      };
+      mockResolvedCommandConfig({
+        rawConfig: {},
+        resolvedConfig: effectiveConfig,
+        diagnostics: [],
+      });
+
+      await runMessageCommand({ dryRun });
+
+      expect(readOnlyMessageActionCall().cfg).toBe(effectiveConfig);
+      expect(readOnlyMessageActionCall().agentId).toBe("ops");
+    },
+  );
 
   it("keeps local-fallback resolved cfg and logs diagnostics", async () => {
     const rawConfig = {
