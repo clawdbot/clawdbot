@@ -1194,6 +1194,40 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
     }
   });
 
+  it("does not let an extension marker authorize imports outside its region", () => {
+    const installRoot = makeInstalledPackageRoot();
+    const packageRoot = join(installRoot, "openclaw");
+
+    try {
+      writePackageFile(packageRoot, "package.json", { dependencies: {} });
+      writePackageFile(installRoot, "@openclaw/discord/package.json", {
+        name: "@openclaw/discord",
+        dependencies: { "@discordjs/voice": "0.19.2" },
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "mixed-runtime.js"),
+        [
+          "//#region extensions/discord/src/voice.js",
+          "const extensionValue = true;",
+          "//#endregion",
+          "//#region src/root-runtime.js",
+          'const voice = require("@discordjs/voice");',
+          "//#endregion",
+          "export { extensionValue, voice };",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        "installed package root is missing declared runtime dependency '@discordjs/voice' for dist importers: mixed-runtime.js. Add it to package.json dependencies/optionalDependencies.",
+      ]);
+    } finally {
+      rmSync(installRoot, { recursive: true, force: true });
+    }
+  });
+
   it("accepts optional or externalized runtime imports", () => {
     const packageRoot = makeInstalledPackageRoot();
 
