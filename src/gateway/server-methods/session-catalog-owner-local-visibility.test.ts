@@ -407,12 +407,15 @@ describe("session catalog caller visibility", () => {
   it("revokes an owner-local read adopted while transcript retrieval is pending", async () => {
     hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(true);
     const listedHost = host([session("native-thread")]);
-    const transcript = Promise.withResolvers<{
+    let resolveTranscript!: (value: { hostId: string; threadId: string; items: [] }) => void;
+    const transcript = new Promise<{
       hostId: string;
       threadId: string;
       items: [];
-    }>();
-    const read = vi.fn(() => transcript.promise);
+    }>((resolve) => {
+      resolveTranscript = resolve;
+    });
+    const read = vi.fn(() => transcript);
     hoisted.activeRegistry.sessionCatalogs = [
       {
         provider: provider({
@@ -437,7 +440,7 @@ describe("session catalog caller visibility", () => {
         },
       },
     ]);
-    transcript.resolve({ hostId: listedHost.hostId, threadId: "native-thread", items: [] });
+    resolveTranscript({ hostId: listedHost.hostId, threadId: "native-thread", items: [] });
 
     const result = await pending;
     expect(result).toHaveBeenCalledWith(
