@@ -1,6 +1,10 @@
 // Covers platform shell argv construction.
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildNodeShellCommand } from "./node-shell.js";
+import { buildNodeShellCommand, restoreLoginShellServicePath } from "./node-shell.js";
 
 describe("buildNodeShellCommand", () => {
   it("uses cmd.exe for win-prefixed platform labels", () => {
@@ -38,5 +42,108 @@ describe("buildNodeShellCommand", () => {
     expect(buildNodeShellCommand("echo hi")).toEqual(["/bin/sh", "-lc", "echo hi"]);
     expect(buildNodeShellCommand("echo hi", null)).toEqual(["/bin/sh", "-lc", "echo hi"]);
     expect(buildNodeShellCommand("echo hi", "   ")).toEqual(["/bin/sh", "-lc", "echo hi"]);
+  });
+});
+
+describe("restoreLoginShellServicePath", () => {
+  const servicePath = "/svc/bin:/usr/bin";
+  const rewritten = (payload: string) =>
+    `export PATH="\${OPENCLAW_PREPEND_PATH}\${PATH:+:$PATH}"; unset OPENCLAW_PREPEND_PATH; ${payload}`;
+
+  it("re-exports the service PATH for posix login-shell invocations", () => {
+    for (const argv of [
+      ["/bin/sh", "-lc", "echo hi"],
+      ["/bin/sh", "-l", "-c", "echo hi"],
+      ["/bin/sh", "-c", "-l", "echo hi"],
+      ["/usr/bin/bash", "-cl", "echo hi"],
+      ["dash", "-lc", "echo hi"],
+      ["/bin/zsh", "-lc", "echo hi"],
+    ]) {
+      expect(restoreLoginShellServicePath(argv, { PATH: servicePath, HOME: "/home/n" })).toEqual({
+        argv: [...argv.slice(0, -1), rewritten("echo hi")],
+        env: { PATH: servicePath, HOME: "/home/n", OPENCLAW_PREPEND_PATH: servicePath },
+      });
+    }
+  });
+
+  it("leaves argv shapes that are not posix login-shell payloads unchanged", () => {
+    for (const argv of [
+      ["/bin/sh", "-c", "echo hi"],
+      ["cmd.exe", "/d", "/s", "/c", "echo hi"],
+      ["/usr/bin/git", "status"],
+      ["/bin/sh", "-lc", "echo hi", "argv0", "arg1"],
+      ["/bin/sh", "-lco", "pipefail", "echo hi"],
+      ["/bin/sh", "-lc"],
+      ["/bin/env", "-lc", "echo hi"],
+    ]) {
+      const env = { PATH: servicePath };
+      expect(restoreLoginShellServicePath(argv, env)).toEqual({ argv, env });
+    }
+  });
+
+  it("leaves the command unchanged when no PATH is handed to the child", () => {
+    expect(restoreLoginShellServicePath(["/bin/sh", "-lc", "echo hi"], undefined)).toEqual({
+      argv: ["/bin/sh", "-lc", "echo hi"],
+      env: undefined,
+    });
+    expect(restoreLoginShellServicePath(["/bin/sh", "-lc", "echo hi"], { PATH: "" })).toEqual({
+      argv: ["/bin/sh", "-lc", "echo hi"],
+      env: { PATH: "" },
+    });
+  });
+
+  it("never interpolates the PATH value into argv", () => {
+    const hostile = '/svc/bin:$(touch /tmp/pwned):`id`:"quoted"';
+    const result = restoreLoginShellServicePath(["/bin/sh", "-lc", "echo hi"], { PATH: hostile });
+    expect(result.argv.join(" ")).not.toContain(hostile);
+    expect(result.argv.at(-1)).toBe(rewritten("echo hi"));
+    expect(result.env?.OPENCLAW_PREPEND_PATH).toBe(hostile);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "keeps the service PATH ahead of the login shell's own startup files",
+    () => {
+      // The bug is a shell-startup interaction, so drive a real login shell and
+      // compare its child PATH with and without the rewrite. Which startup files
+      // a given /bin/sh sources varies by host, so assert the two invariants the
+      // fix owns rather than a specific profile's behavior: the service PATH
+      // leads, and nothing the startup files contributed is dropped.
+      const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-profile-")));
+      const serviceBin = path.join(home, "service-bin");
+      fs.mkdirSync(serviceBin);
+      const probe = path.join(serviceBin, "openclaw-path-probe");
+      fs.writeFileSync(probe, "#!/bin/sh\nprintf ok\n", { mode: 0o755 });
+      try {
+        const spawnedPath = `${serviceBin}:/usr/bin:/bin`;
+        const baseEnv = { HOME: home, PATH: spawnedPath };
+        const run = (command: string, env: Record<string, string>, rewrite: boolean) => {
+          const built = buildNodeShellCommand(command, "linux");
+          const { argv, env: spawnEnv } = rewrite
+            ? restoreLoginShellServicePath(built, env)
+            : { argv: built, env };
+          return execFileSync(argv[0] ?? "", argv.slice(1), {
+            env: spawnEnv,
+            encoding: "utf8",
+          }).trim();
+        };
+
+        const startupPath = run('printf %s "$PATH"', baseEnv, false);
+        const restoredPath = run('printf %s "$PATH"', baseEnv, true);
+        // Mirrors the `${PATH:+:$PATH}` guard: an empty startup PATH must not
+        // leave a trailing `:`, which a shell reads as the current directory.
+        expect(restoredPath).toBe(startupPath ? `${spawnedPath}:${startupPath}` : spawnedPath);
+        expect(run("command -v openclaw-path-probe", baseEnv, true)).toBe(probe);
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("overrides a request-scoped carrier variable of the same name", () => {
+    const result = restoreLoginShellServicePath(["/bin/sh", "-lc", "echo hi"], {
+      PATH: servicePath,
+      OPENCLAW_PREPEND_PATH: "/attacker/bin",
+    });
+    expect(result.env?.OPENCLAW_PREPEND_PATH).toBe(servicePath);
   });
 });
