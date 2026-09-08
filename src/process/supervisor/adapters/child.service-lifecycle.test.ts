@@ -506,10 +506,18 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       rootPath,
       `
         const { spawn } = require("node:child_process");
+        const fs = require("node:fs");
         spawn(process.execPath, [${JSON.stringify(descendantPath)}], {
           stdio: ["ignore", 1, 2, 3],
         });
-        setTimeout(() => process.exit(0), 250);
+        const ready = setInterval(() => {
+          if (!fs.existsSync(${JSON.stringify(descendantPidPath)})) {
+            return;
+          }
+          clearInterval(ready);
+          fs.closeSync(3);
+          setTimeout(() => process.exit(0), 250);
+        }, 5);
       `,
       "utf8",
     );
