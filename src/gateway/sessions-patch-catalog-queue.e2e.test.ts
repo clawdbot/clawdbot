@@ -330,6 +330,7 @@ describe("Gateway Codex native catalog", () => {
       env: {
         OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
         OPENCLAW_SKIP_PROVIDERS: undefined,
+        OPENCLAW_PROFILE: "codex-native-catalog",
       },
       config: {
         gateway: { mode: "local" },
@@ -359,6 +360,13 @@ describe("Gateway Codex native catalog", () => {
         host.sessions.some((session) => session.threadId === native.threadId),
       );
       expect(nativeHost).toBeDefined();
+      expect(nativeHost?.sessions.find((session) => session.threadId === native.threadId)).toEqual(
+        expect.objectContaining({
+          canContinue: false,
+          canArchive: false,
+          canOpenTerminal: false,
+        }),
+      );
 
       const searched = await admin.request<SessionsCatalogListResult>("sessions.catalog.list", {
         catalogId: "codex",

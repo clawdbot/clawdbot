@@ -44,10 +44,12 @@ import {
 } from "./session-catalog-list-lifetime.js";
 import {
   allowCatalogProcessHomeRead,
+  catalogAllowsProcessHomeMutations,
   allowProcessHomeFallback,
   createSessionCatalogRequestNodeSnapshot,
   listSessionCatalogProvider,
   catalogRegistrationSnapshot,
+  catalogError,
   type CatalogRegistrationSnapshot,
 } from "./session-catalog-provider-access.js";
 import { catalogStartHandler } from "./session-catalog-terminal-start.js";
@@ -72,17 +74,6 @@ function normalizeSessionCatalogSearch(search: string | undefined): string | und
   return normalized
     ? truncateUtf16Safe(normalized, SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS)
     : undefined;
-}
-
-function catalogError(error: unknown): { code: string; message: string } {
-  const record =
-    error && typeof error === "object" ? (error as Record<string, unknown>) : undefined;
-  const recordMessage = typeof record?.message === "string" ? record.message.trim() : "";
-  const fallbackMessage = typeof error === "string" ? error.trim() : "";
-  return {
-    code: typeof record?.code === "string" && record.code ? record.code : "catalog_error",
-    message: recordMessage || fallbackMessage || "session catalog provider failed",
-  };
 }
 
 export function resolveSessionCatalogProvider(
@@ -373,8 +364,6 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     const search = normalizeSessionCatalogSearch(request.search);
-    // Cached provider enumeration is not permission. Each synchronous delivery gets current
-    // caller facts and one canonical index, never the provider's pre-await planning snapshot.
     const projectResult = (result: CatalogListEnumeration): CatalogListResult => {
       const currentConfig = context.getRuntimeConfig();
       const visibility = resolveSessionCatalogVisibility(client, currentConfig);
@@ -490,7 +479,6 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       const listNodes = createSessionCatalogRequestNodeSnapshot();
       const catalogList = await Promise.all(
         selected.map(async (provider): Promise<SessionCatalog> => {
-          const providerAllowHomeFallback = allowCatalogProcessHomeRead(provider, client);
           const shareRoute = catalogRegistrations.shareRoutes.get(provider);
           const createTarget = resolveProviderCreateTarget(provider, resolvedAgent.agentId, config);
           const createSession = createTarget.ok
@@ -510,7 +498,11 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
             const hosts = await progress.runProvider(onHost, (lifetime) =>
               listSessionCatalogProvider(provider, {
                 agentId: resolvedAgent.agentId,
-                allowProcessHomeFallback: providerAllowHomeFallback,
+                allowProcessHomeFallback: allowCatalogProcessHomeRead(provider, client),
+                allowProcessHomeMutations: catalogAllowsProcessHomeMutations(
+                  catalogRegistrations,
+                  provider,
+                ),
                 search,
                 limitPerHost: request.limitPerHost,
                 hostIds: request.hostIds,

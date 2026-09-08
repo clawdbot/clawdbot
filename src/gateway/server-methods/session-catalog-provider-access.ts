@@ -23,6 +23,17 @@ const PROCESS_HOME_CATALOG_SKIP_MESSAGE =
 
 let reportedProcessHomeCatalogSkip = false;
 
+export function catalogError(error: unknown): { code: string; message: string } {
+  const record =
+    error && typeof error === "object" ? (error as Record<string, unknown>) : undefined;
+  const recordMessage = typeof record?.message === "string" ? record.message.trim() : "";
+  const fallbackMessage = typeof error === "string" ? error.trim() : "";
+  return {
+    code: typeof record?.code === "string" && record.code ? record.code : "catalog_error",
+    message: recordMessage || fallbackMessage || "session catalog provider failed",
+  };
+}
+
 export function allowProcessHomeFallback(
   logGateway?: { warn: (message: string, fields?: Record<string, unknown>) => void },
   params?: {
@@ -80,6 +91,14 @@ export type CatalogRegistrationSnapshot = {
   providers: SessionCatalogProvider[];
   shareRoutes: ReadonlyMap<SessionCatalogProvider, SessionCatalogShareRoute>;
 };
+
+export function catalogAllowsProcessHomeMutations(
+  snapshot: CatalogRegistrationSnapshot,
+  provider: SessionCatalogProvider,
+): boolean | undefined {
+  return snapshot.registrations.find((entry) => entry.provider === provider)
+    ?.allowProcessHomeMutations;
+}
 
 let cachedCatalogRegistrations: CatalogRegistrationSnapshot | undefined;
 
