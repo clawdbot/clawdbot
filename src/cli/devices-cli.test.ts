@@ -1321,6 +1321,19 @@ describe("devices cli rename", () => {
   });
 });
 
+describe("devices cli help", () => {
+  it("cross-references `openclaw qr` for mobile app setup codes", () => {
+    const program = new Command();
+    registerDevicesCli(program);
+
+    const devices = program.commands.find((cmd) => cmd.name() === "devices");
+    const joinCode = devices?.commands.find((cmd) => cmd.name() === "join-code");
+
+    expect(devices?.description()).toContain("openclaw qr");
+    expect(joinCode?.description()).toContain("openclaw qr");
+  });
+});
+
 describe("devices cli join-code", () => {
   it("mints with admin scope and prints the pasteable command", async () => {
     const joinUrl = `https://gateway.example/j/${"a".repeat(22)}`;
