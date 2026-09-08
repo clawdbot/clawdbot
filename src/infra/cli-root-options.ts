@@ -172,7 +172,7 @@ function parseCommandArgsWithRootOptions(
         valueFlags,
         options.mode,
       );
-      if (optionConsumed === 0) {
+      if (optionConsumed === 0 || commandIndex === 0) {
         return null;
       }
       index += optionConsumed - 1;

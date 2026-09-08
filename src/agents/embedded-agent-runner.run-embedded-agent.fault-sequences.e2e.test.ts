@@ -63,8 +63,8 @@ let runEmbeddedAgentWithPreparedAdmission: ProductionRunEmbeddedAgent;
 let runWithModelFallback: typeof import("./model-fallback-runner.js").runWithModelFallback;
 let captureRoutingDecisionWork: typeof import("./test-helpers/model-routing-decision-e2e-fixtures.js").captureRoutingDecisionWork;
 let createModelRoutingTestAdmission: typeof import("./test-helpers/model-routing-decision-e2e-fixtures.js").createModelRoutingTestAdmission;
-let ensureAuthProfileStore: typeof import("./auth-profiles/store.js").ensureAuthProfileStore;
-let saveAuthProfileStore: typeof import("./auth-profiles/store.js").saveAuthProfileStore;
+let ensureAuthProfileStore: typeof import("./auth-profiles/store-runtime.js").ensureAuthProfileStore;
+let saveAuthProfileStore: typeof import("./auth-profiles/store-runtime.js").saveAuthProfileStore;
 
 beforeAll(async () => {
   vi.resetModules();
@@ -86,7 +86,8 @@ beforeAll(async () => {
   ({ runWithModelFallback } = await import("./model-fallback-runner.js"));
   ({ captureRoutingDecisionWork, createModelRoutingTestAdmission } =
     await import("./test-helpers/model-routing-decision-e2e-fixtures.js"));
-  ({ ensureAuthProfileStore, saveAuthProfileStore } = await import("./auth-profiles/store.js"));
+  ({ ensureAuthProfileStore, saveAuthProfileStore } =
+    await import("./auth-profiles/store-runtime.js"));
 });
 
 beforeEach(() => {
@@ -194,6 +195,8 @@ function makeAttemptForFault(
   }
   if (fault.status === 500) {
     return makeEmbeddedRunnerAttempt({
+      // Model fallback scenarios exercise exhaustion of a provider-reported cap.
+      providerRetryMaxRetries: 3,
       terminal: {
         kind: "failed",
         source: "prompt",
@@ -454,15 +457,17 @@ describe("runEmbeddedAgent provider fault sequences", () => {
     await expectPreparationInvalidationToDropRoutingWork("replace");
   });
 
-  it("429 -> 429 -> 200 consumes two same-model retries without rotating", async () => {
+  it("recovers four short rate limits with the default budget without rotating profiles", async () => {
     const faults = [
       { status: 429, window: "short" },
       { status: 429, window: "short" },
-      { status: 200, text: "third attempt ok" },
+      { status: 429, window: "short" },
+      { status: 429, window: "short" },
+      { status: 200, text: "fifth attempt ok" },
     ] satisfies ProviderFault[];
 
     await withScenarioWorkspace(async ({ agentDir, workspaceDir }) => {
-      writeProfiles(agentDir, { openai: 1 });
+      writeProfiles(agentDir, { openai: 2 });
       const observations: AttemptObservation[] = [];
       installFaultScript(faults, observations);
 
@@ -481,11 +486,13 @@ describe("runEmbeddedAgent provider fault sequences", () => {
       ).toEqual(
         faults.map(() => ({ provider: "openai", model: "mock-1", profileId: "openai:p1" })),
       );
-      expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).toEqual([1_000, 2_000]);
+      expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).toEqual([
+        1_000, 2_000, 4_000, 8_000,
+      ]);
       expect(outcome.provider).toBe("openai");
       expect(outcome.model).toBe("mock-1");
       expect(outcome.attempts).toEqual([]);
-      expect(outcome.result.payloads?.[0]?.text).toContain("third attempt ok");
+      expect(outcome.result.payloads?.[0]?.text).toContain("fifth attempt ok");
       const usageStats = await readUsageStats(agentDir);
       expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
       expect(usageStats["openai:p1"]?.disabledUntil).toBeUndefined();
@@ -500,7 +507,7 @@ describe("runEmbeddedAgent provider fault sequences", () => {
         [
           { status: 429, window: "long" },
           { status: 401 },
-          // Exhaust the default three transient retries before advancing the model.
+          // Exhaust the provider-reported three-retry cap before advancing the model.
           ...Array.from({ length: 4 }, () => ({ status: 500 as const })),
           { status: 200, text: "fallback chain ok" },
         ],

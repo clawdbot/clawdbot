@@ -1,7 +1,5 @@
-// Public chat transcript renderer and DOM shell.
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
-import { sessionRefFromPath } from "../../../app-session-route-paths.ts";
 import { markdownBlocks } from "../../../components/markdown-blocks.ts";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import {
@@ -9,7 +7,6 @@ import {
   markdownFileLinkFromKeyboardEvent,
 } from "../../../components/markdown-file-links.ts";
 import {
-  markdownSessionHref,
   markdownSessionLinkFromEvent,
   markdownSessionLinkFromKeyboardEvent,
 } from "../../../components/markdown-session-links.ts";
@@ -109,13 +106,8 @@ function renderTranscriptShell(
           props.onOpenWorkspaceFile?.(target);
           return;
         }
-        const sessionTarget =
-          markdownSessionLinkFromKeyboardEvent(event) ??
-          (event.key === "Enter"
-            ? markdownSessionHref(event, sessionRefFromPath, props.basePath)
-            : null);
+        const sessionTarget = markdownSessionLinkFromKeyboardEvent(event, props.basePath);
         if (sessionTarget) {
-          event.preventDefault();
           props.onOpenSessionLink?.(sessionTarget);
           return;
         }
@@ -137,9 +129,7 @@ function renderTranscriptShell(
           props.onOpenWorkspaceFile?.(target);
           return;
         }
-        const sessionTarget =
-          markdownSessionLinkFromEvent(event) ??
-          markdownSessionHref(event, sessionRefFromPath, props.basePath);
+        const sessionTarget = markdownSessionLinkFromEvent(event, props.basePath);
         if (sessionTarget && shouldHandleNavigationClick(event)) {
           event.preventDefault();
           props.onOpenSessionLink?.(sessionTarget);

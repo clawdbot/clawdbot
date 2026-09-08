@@ -48,6 +48,13 @@ type WizardRunnerOptions = {
 type WizardSession = {
   client: GatewayBrowserClient;
   sessionId: string;
+  authChoice: string;
+  admitted?: boolean;
+  suspended?: boolean;
+  retired?: boolean;
+  retirementGeneration: number;
+  terminalResult?: WizardNextResult;
+  cancellationPromise?: Promise<WizardStatusResult>;
   abortController: AbortController;
   startMethod: ModelSetupWizardStartMethod;
   activationTargetId?: string;
@@ -58,11 +65,59 @@ type WizardSession = {
 export class ModelSetupWizardRunner {
   private currentState: ModelSetupWizardState = { phase: "idle" };
   private session: WizardSession | null = null;
+  private retirementGeneration = 0;
 
   constructor(private readonly options: WizardRunnerOptions) {}
 
   get state(): ModelSetupWizardState {
     return this.currentState;
+  }
+
+  get hasAdmittedSession(): boolean {
+    return this.session?.admitted === true;
+  }
+
+  suspend(): void {
+    const session = this.session;
+    if (!session) {
+      return;
+    }
+    session.suspended = true;
+    session.abortController.abort();
+    this.setState({ phase: "starting", authChoice: session.authChoice });
+  }
+
+  async resume(): Promise<ModelSetupWizardCompletion | null> {
+    const previous = this.session;
+    const client = this.options.getClient();
+    if (!previous?.admitted || !client) {
+      return null;
+    }
+    // Retire the old request handle, not its Gateway-owned wizard. A reply or
+    // timeout from the old transport must not cancel the resumed operation.
+    previous.retired = true;
+    previous.abortController.abort();
+    const session: WizardSession = {
+      ...previous,
+      client,
+      abortController: new AbortController(),
+      cancellationPromise: undefined,
+      suspended: false,
+      retired: false,
+    };
+    this.session = session;
+    this.setState({ phase: "starting", authChoice: session.authChoice });
+    try {
+      if (session.terminalResult) {
+        return this.applyResult(session, session.authChoice, session.terminalResult);
+      }
+      // Never repeat start or the last answer: either may have committed before
+      // the socket closed. The existing wizard owns the next visible step.
+      return await this.requestNext(session, session.authChoice);
+    } catch (error) {
+      this.handleError(error, session);
+      return null;
+    }
   }
 
   async start(
@@ -71,8 +126,9 @@ export class ModelSetupWizardRunner {
       ModelSetupWizardStartMethod,
       "openclaw.setup.activate.start"
     > = "openclaw.setup.auth.start",
+    preferences: Pick<SystemAgentSetupActivateParams, "nativeSessionCatalogsEnabled"> = {},
   ): Promise<ModelSetupWizardCompletion | null> {
-    return this.startSession(authChoice, startMethod, { authChoice });
+    return this.startSession(authChoice, startMethod, { authChoice, ...preferences });
   }
 
   activate(
@@ -100,6 +156,8 @@ export class ModelSetupWizardRunner {
     const session: WizardSession = {
       client,
       sessionId: generateUUID(),
+      retirementGeneration: this.retirementGeneration,
+      authChoice,
       abortController: new AbortController(),
       startMethod,
       activationTargetId,
@@ -134,6 +192,9 @@ export class ModelSetupWizardRunner {
           };
         });
       const started = await this.awaitWizardStart(session, request);
+      if (!started.done) {
+        session.admitted = true;
+      }
       if (session !== this.session && !started.done) {
         // Admission can finish after cancellation; release only its original session.
         await this.cancelSession(session);
@@ -177,7 +238,46 @@ export class ModelSetupWizardRunner {
     }
   }
 
-  close(): void {
+  async requestCancellation(): Promise<"cancelled" | "running" | undefined> {
+    const session = this.session;
+    if (!session) {
+      this.close();
+      return "cancelled";
+    }
+    let result: WizardStatusResult | undefined;
+    try {
+      result = await this.sendCancellation(session);
+    } catch (error) {
+      if (session !== this.session || this.isRetired(session) || session.suspended) {
+        return undefined;
+      }
+      if (isWizardNotFoundError(error)) {
+        this.handleError(error, session);
+        return undefined;
+      }
+      throw error;
+    }
+    if (session !== this.session || this.isRetired(session) || session.suspended) {
+      return undefined;
+    }
+    if (result?.status === "cancelled" || result?.status === "error") {
+      this.close();
+      return "cancelled";
+    }
+    // Protected preparation may decline cancellation. Keep the admitted wizard
+    // and its outstanding next request so the same auth flow can reach a checkpoint.
+    if (result?.status === "running") {
+      return "running";
+    }
+    return undefined;
+  }
+
+  close(options: { retireOwner?: boolean } = {}): void {
+    // Only owner loss retires detached cleanup. Ordinary close still lets a
+    // late same-owner admission be cancelled and its exact receipt be cleared.
+    if (options.retireOwner) {
+      this.retirementGeneration += 1;
+    }
     this.session?.abortController.abort();
     this.session = null;
     this.setState({ phase: "idle" });
@@ -229,6 +329,9 @@ export class ModelSetupWizardRunner {
     authChoice: string,
     answer?: { stepId: string; value?: unknown },
   ): Promise<ModelSetupWizardCompletion | null> {
+    if (session.suspended || this.isRetired(session)) {
+      return null;
+    }
     const { client, sessionId, abortController } = session;
     const signal = abortController.signal;
     let nextAnswer = answer;
@@ -257,8 +360,12 @@ export class ModelSetupWizardRunner {
     authChoice: string,
     result: WizardNextResult,
   ): ModelSetupWizardCompletion | null {
+    if (session === this.session && session.suspended && result.done) {
+      session.terminalResult = result;
+      return null;
+    }
     const isCurrent = this.reportTerminalResult(session, result);
-    if (session !== this.session) {
+    if (session !== this.session || session.suspended) {
       return null;
     }
     if (isCurrent?.() === false) {
@@ -289,7 +396,7 @@ export class ModelSetupWizardRunner {
   }
 
   private handleError(error: unknown, session: WizardSession): void {
-    if (session !== this.session) {
+    if (session !== this.session || session.suspended) {
       return;
     }
     this.session = null;
@@ -304,19 +411,38 @@ export class ModelSetupWizardRunner {
     this.setState({ phase: "error", message });
   }
 
-  private async cancelSession(session: WizardSession): Promise<void> {
+  private async cancelSession(session: WizardSession): Promise<WizardStatusResult | undefined> {
     try {
-      const result = await session.client.request<WizardStatusResult>(
-        "wizard.cancel",
-        { sessionId: session.sessionId },
-        { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS },
-      );
-      if (result.status === "cancelled" || result.status === "error") {
-        this.reportTerminalResult(session, { done: true, ...result });
-      }
+      return await this.sendCancellation(session);
     } catch {
-      // The Gateway may already have completed or purged the session.
+      // Detached cleanup is best effort; explicit cancellation surfaces failures.
+      return undefined;
     }
+  }
+
+  private async sendCancellation(session: WizardSession): Promise<WizardStatusResult | undefined> {
+    if (this.isRetired(session)) {
+      return undefined;
+    }
+    if (!session.cancellationPromise) {
+      // Explicit cancellation and detached cleanup share only the pending request.
+      session.cancellationPromise = session.client
+        .request<WizardStatusResult>(
+          "wizard.cancel",
+          { sessionId: session.sessionId },
+          { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS },
+        )
+        .then((result) => {
+          if (result.status === "cancelled" || result.status === "error") {
+            this.reportTerminalResult(session, { done: true, ...result });
+          }
+          return result;
+        })
+        .finally(() => {
+          session.cancellationPromise = undefined;
+        });
+    }
+    return session.cancellationPromise;
   }
 
   private reportTerminalResult(
@@ -325,12 +451,19 @@ export class ModelSetupWizardRunner {
   ): (() => boolean) | void {
     // Confirmed failure/cancellation owns exact receipt cleanup after presentation retires.
     // Success and visible state still require this runner's live session.
+    if (this.isRetired(session) || session.suspended) {
+      return;
+    }
     const failed = result.status === "cancelled" || result.status === "error";
     if (result.done && (session === this.session || failed)) {
       return session.admissionRejected
         ? session.onTerminalResult?.(result, true)
         : session.onTerminalResult?.(result);
     }
+  }
+
+  private isRetired(session: WizardSession): boolean {
+    return session.retired === true || session.retirementGeneration !== this.retirementGeneration;
   }
 
   private setState(state: ModelSetupWizardState): void {

@@ -352,7 +352,7 @@ See [Audit records](/cli/audit) for the full field reference and query filters.
 
 ## Message lifecycle events
 
-Set [`logging.audit.messages`](/gateway/configuration-reference#audit) to choose what
+Set [`logging.audit.messages`](/gateway/config-observability#audit) to choose what
 is recorded, then restart the Gateway:
 
 - `off` (default): no message records.
@@ -582,6 +582,6 @@ boundaries alongside the operator behavior above:
 ## Related
 
 - [Audit records CLI](/cli/audit)
-- [Configuration reference](/gateway/configuration-reference#audit)
+- [Configuration reference](/gateway/config-observability#audit)
 - [Gateway protocol](/gateway/protocol#audit-ledger-rpc)
 - [OpenTelemetry](/gateway/opentelemetry)

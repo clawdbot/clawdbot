@@ -1,3 +1,4 @@
+import { createServer } from "node:net";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -7,6 +8,32 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { createGatewayKernel } from "./server-kernel.js";
 import type { GatewayServer } from "./server-public.js";
+
+const startupTraceEventLoopDelay = vi.hoisted(() => ({
+  instances: [] as Array<{
+    disable: ReturnType<typeof vi.fn>;
+    enable: ReturnType<typeof vi.fn>;
+    percentile: ReturnType<typeof vi.fn>;
+    reset: ReturnType<typeof vi.fn>;
+  }>,
+}));
+
+vi.mock("node:perf_hooks", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:perf_hooks")>();
+  return {
+    ...actual,
+    monitorEventLoopDelay: vi.fn(() => {
+      const instance = {
+        disable: vi.fn(),
+        enable: vi.fn(),
+        percentile: vi.fn(() => 0),
+        reset: vi.fn(),
+      };
+      startupTraceEventLoopDelay.instances.push(instance);
+      return { ...instance, max: 0 };
+    }),
+  };
+});
 
 function createStartupTestState(label: string) {
   return createOpenClawTestState({
@@ -28,6 +55,92 @@ function createStartupTestState(label: string) {
 }
 
 describe("Gateway startup lifetime", () => {
+  it("closes startup tracing when invalid config prevents bootstrap from returning", async () => {
+    startupTraceEventLoopDelay.instances.length = 0;
+    const state = await createStartupTestState("gateway-invalid-config-startup-trace");
+    state.envVars.OPENCLAW_GATEWAY_STARTUP_TRACE = "1";
+    await state.writeConfig({ gateway: { mode: 42 } });
+    state.applyEnv();
+    try {
+      await expect(createGatewayKernel()).rejects.toThrow("Invalid config");
+      expect(startupTraceEventLoopDelay.instances[0]?.disable).toHaveBeenCalledOnce();
+    } finally {
+      await state.cleanup();
+    }
+  });
+
+  it("closes startup tracing when required TLS material is unavailable", async () => {
+    startupTraceEventLoopDelay.instances.length = 0;
+    const port = await getFreePort();
+    const state = await createStartupTestState("gateway-tls-startup-trace");
+    state.envVars.OPENCLAW_GATEWAY_STARTUP_TRACE = "1";
+    const token = "gateway-tls-startup-trace-token";
+    await state.writeConfig({
+      gateway: {
+        auth: { mode: "token", token },
+        controlUi: { enabled: false },
+        port,
+        tls: {
+          enabled: true,
+          autoGenerate: false,
+          certPath: state.path("missing-cert.pem"),
+          keyPath: state.path("missing-key.pem"),
+        },
+      },
+    });
+    state.applyEnv();
+    try {
+      await expect(
+        createGatewayKernel(port, {
+          auth: { mode: "token", token },
+          bind: "loopback",
+          controlUiEnabled: false,
+          sidecarStartup: "defer",
+        }),
+      ).rejects.toThrow("gateway tls: cert/key missing");
+      expect(startupTraceEventLoopDelay.instances[0]?.disable).toHaveBeenCalledOnce();
+    } finally {
+      await state.cleanup();
+    }
+  });
+
+  it("closes startup tracing when public startup cannot bind its listener", async () => {
+    startupTraceEventLoopDelay.instances.length = 0;
+    const port = await getFreePort();
+    const blocker = createServer();
+    await new Promise<void>((resolve, reject) => {
+      blocker.once("error", reject);
+      blocker.listen(port, "127.0.0.1", () => {
+        blocker.off("error", reject);
+        resolve();
+      });
+    });
+    const state = await createStartupTestState("gateway-public-startup-trace");
+    state.envVars.OPENCLAW_GATEWAY_STARTUP_TRACE = "1";
+    const token = "gateway-public-startup-trace-token";
+    await state.writeConfig({
+      gateway: { auth: { mode: "token", token }, controlUi: { enabled: false }, port },
+    });
+    state.applyEnv();
+    try {
+      const { startGatewayServerCore } = await import("./server-start.js");
+      await expect(
+        startGatewayServerCore(port, {
+          auth: { mode: "token", token },
+          bind: "loopback",
+          controlUiEnabled: false,
+          sidecarStartup: "defer",
+        }),
+      ).rejects.toThrow("another gateway instance is already listening");
+      expect(startupTraceEventLoopDelay.instances[0]?.disable).toHaveBeenCalledOnce();
+    } finally {
+      await new Promise<void>((resolve) => {
+        blocker.close(() => resolve());
+      });
+      await state.cleanup();
+    }
+  });
+
   it.for(["clean", "failed"] as const)(
     "joins deferred startup failure while reporting %s cleanup independently",
     async (cleanup, { signal }) => {
@@ -121,7 +234,15 @@ describe("Gateway startup lifetime", () => {
         expect(await startupOutcome).toBe(startupError);
         const outcome = await closeOutcome;
         if (cleanup === "failed") {
-          expect(outcome).toMatchObject({ errors: [{ cause: cleanupError }] });
+          expect(outcome).toMatchObject({
+            errors: [
+              {
+                message: expect.stringContaining("gateway lifetime sidecars"),
+                cause: cleanupError,
+              },
+              { message: expect.stringContaining("late sidecar cleanup"), cause: cleanupError },
+            ],
+          });
         } else {
           expect(outcome).toBeUndefined();
         }

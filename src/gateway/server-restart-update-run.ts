@@ -65,9 +65,15 @@ export async function finalizeRestartUpdateRun(
       const { createUpdateRunNotifier } = await import("./update-run-notice.runtime.js");
       await createUpdateRunNotifier(updateRun)(updateRun, "verifying");
     }
-    // The CLI still owns a pending handoff. A boot proves liveness, not that
-    // its validation finished; preserve the sentinel's existing retry flow.
-    if (pendingExpired || !isPendingControlPlaneUpdateRestartSentinel(payload)) {
+    // A managed handoff preserves its original trigger, while an unmanaged RPC
+    // also reaches restarting. Only the recorded owner can finish CLI verification.
+    const orchestratorOwnsVerification =
+      updateRun.status === "running" &&
+      (updateRun.trigger === "cli" || Boolean(payload.stats?.handoffId));
+    if (
+      !orchestratorOwnsVerification &&
+      (pendingExpired || !isPendingControlPlaneUpdateRestartSentinel(payload))
+    ) {
       updateRun = finishUpdateRun(updateRun.runId, {
         status:
           pendingExpired ||

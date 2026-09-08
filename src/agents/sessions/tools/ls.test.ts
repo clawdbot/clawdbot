@@ -129,7 +129,7 @@ describe("ls tool", () => {
 
     const dangling = await list();
     expect(dangling.content).toEqual([{ type: "text", text: '"a-broken"' }]);
-    expect(dangling.details).toBeUndefined();
+    expect(dangling.details).toEqual({ content: '"a-broken"' });
 
     await fs.mkdir(path.join(cwd, "target-dir"));
     await fs.symlink(path.join(cwd, "target-dir"), path.join(cwd, "link-to-dir"), symlinkType);
@@ -140,7 +140,7 @@ describe("ls tool", () => {
 
     const limited = await list(1);
     expect(textContent(limited).split("\n")[0]).toBe('"a-broken"');
-    expect(limited.details).toEqual({ nextAfter: "a-broken" });
+    expect(limited.details).toEqual({ content: textContent(limited), nextAfter: "a-broken" });
   });
 
   it("clamps non-positive limits instead of reporting a non-empty directory as empty", async () => {
@@ -163,7 +163,7 @@ describe("ls tool", () => {
     const result = await tool.execute("call-1", { limit: Number.NaN });
 
     expect(textContent(result)).toBe('"alpha.txt"\n"beta.txt"');
-    expect(result.details).toBeUndefined();
+    expect(result.details).toEqual({ content: '"alpha.txt"\n"beta.txt"' });
   });
 
   it("preserves a directory read failure and releases the abort listener", async () => {

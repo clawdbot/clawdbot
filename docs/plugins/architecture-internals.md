@@ -249,6 +249,12 @@ OpenClaw still owns the generic agent loop, failover, transcript handling, and
 tool policy. These hooks are the extension surface for provider-specific
 behavior without needing a whole custom inference transport.
 
+Hook lookup uses the prepared generation or a matching loaded registry first.
+On a miss, provider/model-scoped discovery reuses the loader's registry cache;
+explicit runtime-discovery invalidation clears that lookup rather than leaving
+another provider cache holding old hooks. Attempt-prepared provider handles
+retain their selected plugin, while each hook receives the current call context.
+
 Use manifest `setup.providers[].envVars` when the provider has env-based
 credentials that generic auth/status/model-picker paths should see without
 loading plugin runtime. Use manifest `providerAuthAliases`

@@ -8,6 +8,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { HealthSummary } from "./health/types.js";
+import { observeHeldGatewayWorkDrain } from "./server-held-work.test-support.js";
 import {
   connectOk,
   createGatewaySuiteHarness,
@@ -33,6 +34,7 @@ describe("public Gateway close health lifetime", () => {
     const selectedRoots: string[] = [];
     const collections: Promise<HealthSummary>[] = [];
     let healthSignal: AbortSignal | undefined;
+    const expectHeldWork = await observeHeldGatewayWorkDrain(() => healthSignal);
     collect.mockClear();
     collect.mockImplementation((params) => {
       const collection = (async () => {
@@ -49,7 +51,6 @@ describe("public Gateway close health lifetime", () => {
     const clients: WebSocket[] = [];
     const closing: Promise<void>[] = [];
     const finishedAtClose: number[] = [];
-    let releaseTimer: ReturnType<typeof setTimeout> | undefined;
     const unblock = () => release.resolve();
     signal.addEventListener("abort", unblock, { once: true });
     try {
@@ -79,9 +80,6 @@ describe("public Gateway close health lifetime", () => {
         second,
         (frame) => frame.type === "event" && frame.event === "shutdown",
       );
-      // Early close releases immediately on the baseline; the bounded release
-      // also lets the repaired owner finish without leaving a blocked collector.
-      releaseTimer = setTimeout(unblock, 5_000);
       for (let index = 0; index < 2; index++) {
         closing.push(
           gateway.server.close({ reason: "health lifetime proof" }).then(() => {
@@ -96,12 +94,13 @@ describe("public Gateway close health lifetime", () => {
         );
       }
       expect((await shutdown).payload.reason).toBe("health lifetime proof");
+      await expectHeldWork(Promise.all(closing));
+      unblock();
       await Promise.all(closing);
       await Promise.all(collections);
       expect(finishedAtClose).toEqual([1, 1]);
       expect(selectedRoots).toEqual([initialRoot]);
     } finally {
-      clearTimeout(releaseTimer);
       unblock();
       // Join the original producer even when the baseline public close returns early.
       await Promise.allSettled(collections);

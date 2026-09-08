@@ -161,6 +161,7 @@ export async function runGatewayLoop(params: {
   waitForHealthyChild?: (port: number, pid?: number, host?: string) => Promise<boolean>;
   beginBoot?: (startedAtMs: number) => void | Promise<void>;
   completeBoot?: (completion: GatewayBootLifecycleCompletion) => void;
+  onRestartStartupFailure?: (error: unknown, signal: AbortSignal) => Promise<void>;
 }) {
   // macOS/BSD process inspection reports process.title instead of the original
   // argv. Give the long-running Gateway a verifiable identity for lock readers.
@@ -204,6 +205,7 @@ export async function runGatewayLoop(params: {
   let pendingStartupForceExitTimer: ReturnType<typeof setTimeout> | null = null;
   let restartDrainingMarked = false;
   let startupFailedWithoutServerHandle = false;
+  let failureWork: { controller: AbortController; settled: Promise<void> } | undefined;
   const processInstanceId = randomUUID();
   const waitForHealthyChild = params.waitForHealthyChild ?? waitForHealthyGatewayChild;
   const getManagedUpdateOwner = () =>
@@ -758,6 +760,11 @@ export async function runGatewayLoop(params: {
         }
       };
       try {
+        // A stop/restart cancels triage at admission and joins its existing cleanup
+        // before process exit can strand an external fixing agent.
+        if (failureWork) {
+          await failureWork.settled;
+        }
         // On restart, wait for the canonical process activity inventory before
         // tearing down the server so active work can settle.
         if (isRestart) {
@@ -972,6 +979,7 @@ export async function runGatewayLoop(params: {
       restartIntent,
       hostedStop,
     };
+    failureWork?.controller.abort();
     if (shuttingDown) {
       const currentRestartRequest = pendingStartupRequest ?? activeRestartRequest;
       if (
@@ -1334,6 +1342,19 @@ export async function runGatewayLoop(params: {
           `gateway startup failed: ${errMsg}. ` +
             `Process will stay alive; fix the issue and restart.${errStack}`,
         );
+        const onRestartStartupFailure = params.onRestartStartupFailure;
+        if (!shuttingDown && onRestartStartupFailure) {
+          const controller = new AbortController();
+          failureWork = {
+            controller,
+            settled: Promise.resolve().then(() => onRestartStartupFailure(err, controller.signal)),
+          };
+          try {
+            await failureWork.settled;
+          } finally {
+            failureWork = undefined;
+          }
+        }
       }
       if (startupFailedBeforeServerHandle) {
         await new Promise<void>((resolve) => {

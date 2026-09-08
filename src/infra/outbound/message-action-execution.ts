@@ -202,7 +202,7 @@ export function projectGatewayQueuedDeliveryResult(error: unknown) {
   return {
     status: "delivery_queued",
     delivered: false as const,
-    message: `Message not delivered: ${error.message}. The gateway queued it and will retry automatically. Do not resend it.`,
+    message: `Delivery is pending: ${error.message}. The gateway owns retry or reconciliation; delivery is not yet confirmed. Do not resend it.`,
   };
 }
 
@@ -465,6 +465,10 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
       if (options.length < 2) {
         throw new Error("pollOption requires at least two values");
       }
+      let content = readToolStringParam(params, "message", { allowEmpty: true, trim: false });
+      if (content !== undefined && !content.trim()) {
+        content = "";
+      }
       const allowMultiselect = readBooleanParam(params, "pollMulti") ?? false;
       const durationHours = readPositiveIntegerParam(params, "pollDurationHours", {
         message: "pollDurationHours must be a positive integer",
@@ -473,7 +477,7 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
       return {
         to,
         question,
-        content: readToolStringParam(params, "message", { allowEmpty: true }) ?? undefined,
+        content,
         options,
         maxSelections: resolvePollMaxSelections(options.length, allowMultiselect),
         durationHours: durationHours ?? undefined,

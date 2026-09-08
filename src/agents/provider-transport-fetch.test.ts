@@ -2015,11 +2015,14 @@ describe("buildGuardedModelFetch", () => {
       expect(response.headers.get("x-should-retry")).toBe("false");
     });
 
-    it("parses retry-after-ms from OpenAI-compatible responses", async () => {
+    it.each<Record<string, string>>([
+      { "retry-after-ms": "90000" },
+      { "retry-after": "90", "retry-after-ms": "335" },
+    ])("caps SDK retries using both response floors: %j", async (headers) => {
       fetchWithSsrFGuardMock.mockResolvedValue({
         response: new Response(null, {
           status: 429,
-          headers: { "retry-after-ms": "90000" },
+          headers,
         }),
         finalUrl: "https://api.openai.com/v1/responses",
         release: vi.fn(async () => undefined),

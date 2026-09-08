@@ -14,6 +14,7 @@ import * as questionChannel from "../infra/question-channel-runtime.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { issueOperatorToken } from "./device-authz.test-helpers.js";
+import { observeHeldGatewayWorkDrain } from "./server-held-work.test-support.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { resetTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
@@ -240,6 +241,7 @@ describe("public Gateway close operator observer lifetime", () => {
     "retires $name before state release without changing the pairing decision",
     async ({ name, disconnected, read }, { signal }) => {
       const holdRead = read === "held-pending" || read === "held-absent";
+      const expectHeldWork = holdRead ? await observeHeldGatewayWorkDrain() : undefined;
       const entered = createDeferredCore();
       const releaseRead = createDeferredCore();
       const readPending = devicePairing.getPendingDevicePairing;
@@ -355,14 +357,14 @@ describe("public Gateway close operator observer lifetime", () => {
         }
         await nextTurn();
         expect(settled).toBe(false);
-        releaseTimer = setTimeout(() => {
-          if (holdRead) {
-            releaseRead.resolve();
-          } else if (!settled) {
-            emergencyRelease = true;
-            unblock();
-          }
-        }, 5_000);
+        if (!holdRead) {
+          releaseTimer = setTimeout(() => {
+            if (!settled) {
+              emergencyRelease = true;
+              unblock();
+            }
+          }, 5_000);
+        }
         if (read === "queued-wake") {
           // Queue a poll continuation before the synchronous close fence. The
           // notification itself is not a durable decision; pending state stays intact.
@@ -373,14 +375,14 @@ describe("public Gateway close operator observer lifetime", () => {
           .close({ reason: `scope observer lifetime proof: ${name}`, drainTimeoutMs: 0 })
           .then(() => {
             atClose = { observerSettled: settled, heldReadFinished };
-            // Early public close releases the original read immediately on a broken owner;
-            // a correct join stays blocked until the independently bounded gate release.
+            // Early public close releases the original read on a broken owner.
             releaseRead.resolve();
           });
-        if (holdRead) {
-          await nextTurn();
+        if (expectHeldWork) {
+          await expectHeldWork(closing);
           expect(atClose).toBeUndefined();
           expect(heldReadFinished).toBe(false);
+          releaseRead.resolve();
         }
         await closing;
         expect(emergencyRelease).toBe(false);

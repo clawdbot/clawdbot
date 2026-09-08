@@ -151,7 +151,7 @@ const mocks = vi.hoisted(() => {
         status: "pending" | "failed" | "completed";
       } | null
     >(() => null),
-    ackDelivery: vi.fn(async () => {}),
+    ackDelivery: vi.fn(async (_id: string) => {}),
     failDelivery: vi.fn(async () => {}),
     failDeliveryAfterPlatformSend: vi.fn(async () => {}),
     failDeliveryBeforePlatformSend: vi.fn(async () => {}),
@@ -815,7 +815,9 @@ describe("scheduleRestartSentinelWake", () => {
       completionRetention: "permanent",
       maxRetries: 45,
     });
-    expect(mocks.ackDelivery).toHaveBeenCalledWith("restart-sentinel-notice:agent:main:main:123");
+    expect(mocks.ackDelivery.mock.calls[0]?.[0]).toBe(
+      "restart-sentinel-notice:agent:main:main:123",
+    );
     expect(mocks.reserveDeliveryAttempt).toHaveBeenCalledWith(
       "restart-sentinel-notice:agent:main:main:123",
       45,
@@ -907,7 +909,7 @@ describe("scheduleRestartSentinelWake", () => {
   );
 
   it.each([false, true])(
-    "settles an exhausted pending handoff without overwriting CLI completion (%s)",
+    "bounds pending notice retries while preserving CLI run ownership (%s)",
     async (cliFinished) => {
       vi.useFakeTimers();
       const record = createUpdateRun({
@@ -934,7 +936,11 @@ describe("scheduleRestartSentinelWake", () => {
           status: "skipped",
           ts: 123,
           sessionKey: "agent:main:main",
-          stats: { runId: record.runId, reason: "restart-health-pending" },
+          stats: {
+            runId: record.runId,
+            handoffId: "managed-update-handoff",
+            reason: "restart-health-pending",
+          },
         },
       });
 
@@ -957,10 +963,30 @@ describe("scheduleRestartSentinelWake", () => {
       await vi.advanceTimersByTimeAsync(900);
 
       const result = getUpdateRun(record.runId)!;
-      expect(result.status).toBe(cliFinished ? "succeeded" : "failed");
-      expect(result.reason).toBe(cliFinished ? null : "restart-unhealthy");
+      expect(result.status).toBe(cliFinished ? "succeeded" : "running");
+      expect(result.reason).toBeNull();
+      if (!cliFinished) {
+        expect(result.finishedAtMs).toBeNull();
+        expect(result.verification.noticeDelivered).toBeUndefined();
+        expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledOnce();
+        expect(mocks.clearRestartSentinelIfRevision).not.toHaveBeenCalled();
+        const sentinelReads = mocks.readRestartSentinel.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(900);
+        expect(mocks.readRestartSentinel).toHaveBeenCalledTimes(sentinelReads);
+        finishUpdateRun(record.runId, {
+          status: "succeeded",
+          after: { version: resolveRuntimeServiceVersion() },
+        });
+        await scheduleRestartSentinelWake({ deps: {} as never });
+      }
+      const completed = getUpdateRun(record.runId)!;
+      expect(completed.status).toBe("succeeded");
+      expect(completed.verification.noticeDelivered).toBe(true);
       expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
-        expect.objectContaining({ text: renderUpdateRunReport(result).markdown }),
+        expect.objectContaining({
+          text: renderUpdateRunReport(completed).markdown,
+          idempotencyKey: `update-run-finished:${record.runId}`,
+        }),
       );
       expect(mocks.clearRestartSentinelIfRevision).toHaveBeenCalledOnce();
       expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(2);
@@ -1360,10 +1386,10 @@ describe("scheduleRestartSentinelWake", () => {
       deliveryQueueId: "restart-sentinel-notice:agent:main:main:123",
     });
     expect(mocks.ackDelivery).not.toHaveBeenCalled();
-    expect(mocks.failDelivery).toHaveBeenCalledWith(
+    expect(mocks.failDelivery.mock.calls[0]?.slice(0, 2)).toEqual([
       "restart-sentinel-notice:agent:main:main:123",
       "platform outcome unknown",
-    );
+    ]);
     expect(mocks.drainPendingDeliveries).toHaveBeenCalledOnce();
     expectRecordFields(mockCallArg(mocks.drainPendingDeliveries), {
       drainKey: "restart-recovery:restart-sentinel-notice:agent:main:main:123",
@@ -1393,10 +1419,10 @@ describe("scheduleRestartSentinelWake", () => {
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.failDeliveryAfterPlatformSend).toHaveBeenCalledWith(
+    expect(mocks.failDeliveryAfterPlatformSend.mock.calls[0]?.slice(0, 2)).toEqual([
       "restart-sentinel-notice:agent:main:main:123",
       "ack unavailable",
-    );
+    ]);
     expect(mocks.drainPendingDeliveries).toHaveBeenCalledOnce();
     expect(mocks.logWarn).toHaveBeenCalledWith(
       "restart summary: outbound delivery ack failed; queued for recovery: ack unavailable",
@@ -1430,10 +1456,10 @@ describe("scheduleRestartSentinelWake", () => {
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.failDelivery).toHaveBeenCalledWith(
+    expect(mocks.failDelivery.mock.calls[0]?.slice(0, 2)).toEqual([
       "restart-sentinel-notice:agent:main:main:123",
       "transport still not ready",
-    );
+    ]);
     expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenCalledTimes(1);
     expectContinuationDispatchFields({ routeSessionKey: "agent:main:main" }, { Body: "continue" });
   });

@@ -80,8 +80,8 @@ function supervisionConnectionFingerprint(): string {
   );
 }
 
-vi.mock("./session-binding.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./session-binding.js")>()),
+vi.mock("./auth-profile.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth-profile.js")>()),
   isCodexAppServerNativeAuthProfile: (...args: unknown[]) =>
     isCodexAppServerNativeAuthProfileMock(...args),
 }));

@@ -5,9 +5,14 @@ import {
   createOpenAiResponsesPartial,
   createOpenAiResponsesTextEvent,
 } from "../../agents/embedded-agent-subscribe.openai-responses.test-helpers.js";
+import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import * as activeThinkingPolicy from "../../plugins/provider-thinking-active.js";
+import { prepareModelCatalogThinkingPolicies } from "../../plugins/provider-thinking.js";
 import type { FinalizedTemplateContext as TemplateContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
@@ -32,6 +37,27 @@ const textRoutingMocks = vi.hoisted(() => ({
 const skillCommandMocks = vi.hoisted(() => ({
   listForWorkspace: vi.fn(),
 }));
+
+const directiveModel: ModelDefinitionConfig = {
+  id: "claude-opus-4-6",
+  name: "Directive fixture",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 200_000,
+  maxTokens: 8192,
+};
+const directiveCatalog = [{ provider: "anthropic", ...directiveModel }];
+const directiveMetadata = createPluginMetadataSnapshotFixture();
+const preparedDirectiveCatalog: ModelCatalogSnapshot = {
+  entries: directiveCatalog,
+  routeVariants: directiveCatalog,
+};
+prepareModelCatalogThinkingPolicies({
+  catalog: preparedDirectiveCatalog,
+  metadataSnapshot: directiveMetadata,
+  providers: [{ provider: { id: "anthropic", resolveThinkingProfile: () => undefined } }],
+});
 
 vi.mock("./get-reply-directives-apply.js", () => ({
   applyInlineDirectiveOverrides: (...args: unknown[]) => directiveApplyMocks.apply(...args),
@@ -119,39 +145,62 @@ async function resolveModelDirective(params: {
     Provider: surface,
     Surface: surface,
   } as TemplateContext;
-  const result = await resolveReplyDirectives({
-    ctx: buildTestCtx({
-      Body: agentText,
-      CommandBody: body,
-      CommandAuthorized: authorized,
-      Provider: surface,
-      Surface: surface,
-    }),
-    cfg: withFastReplyConfig(params.cfg ?? configWithModelAlias("fable")),
-    agentId: "main",
-    agentDir: "/tmp/main-agent",
-    workspaceDir: "/tmp",
-    agentCfg: params.agentCfg ?? {},
-    opts: params.opts,
-    sessionCtx,
-    sessionEntry,
-    sessionStore: { [sessionKey]: sessionEntry },
-    sessionKey,
-    sessionScope: "per-sender",
-    conversation: prepareReplyConversation({ ctx: sessionCtx, sessionEntry }),
-    isGroup: false,
-    triggerBodyNormalized: body,
-    resetTriggered: false,
-    commandAuthorized: authorized,
-    defaultProvider: "anthropic",
-    defaultModel: "claude-opus-4-6",
-    aliasIndex: createAliasIndex(),
-    provider: "anthropic",
-    model: "claude-opus-4-6",
-    hasResolvedHeartbeatModelOverride: false,
-    typing: makeTypingController(),
+  const cfg = withFastReplyConfig({
+    ...(params.cfg ?? configWithModelAlias("fable")),
+    models: {
+      providers: {
+        anthropic: { baseUrl: "https://directive.invalid", models: [directiveModel] },
+      },
+    },
   });
-  return { result, sessionEntry, sessionCtx };
+  const ambientPolicy = vi
+    .spyOn(activeThinkingPolicy, "resolveActiveProviderThinkingProfile")
+    .mockImplementation(() => {
+      throw new Error("Directive fixture attempted ambient model-policy discovery.");
+    });
+  try {
+    const result = await withPluginMetadataSnapshotScope(
+      directiveMetadata,
+      () =>
+        resolveReplyDirectives({
+          ctx: buildTestCtx({
+            Body: agentText,
+            CommandBody: body,
+            CommandAuthorized: authorized,
+            Provider: surface,
+            Surface: surface,
+          }),
+          cfg,
+          agentId: "main",
+          agentDir: "/tmp/main-agent",
+          workspaceDir: "/tmp",
+          agentCfg: params.agentCfg ?? {},
+          opts: params.opts,
+          sessionCtx,
+          sessionEntry,
+          sessionStore: { [sessionKey]: sessionEntry },
+          sessionKey,
+          sessionScope: "per-sender",
+          conversation: prepareReplyConversation({ ctx: sessionCtx, sessionEntry }),
+          isGroup: false,
+          triggerBodyNormalized: body,
+          resetTriggered: false,
+          commandAuthorized: authorized,
+          defaultProvider: "anthropic",
+          defaultModel: "claude-opus-4-6",
+          aliasIndex: createAliasIndex(),
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          hasResolvedHeartbeatModelOverride: false,
+          preparedModelCatalog: preparedDirectiveCatalog,
+          typing: makeTypingController(),
+        }),
+      { config: cfg, trustConfigIdentity: true },
+    );
+    return { result, sessionEntry, sessionCtx };
+  } finally {
+    ambientPolicy.mockRestore();
+  }
 }
 
 describe("reply directive resolution", () => {

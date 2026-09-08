@@ -63,7 +63,7 @@ test("resolves consecutive placement workspaces without decoding unrelated sessi
           errorMessage: "placement identity changed",
         });
         expect(resolved.entry.sessionId).toBe(sessionKey);
-        expect(resolved.worktree.path).toBe(`/synthetic/${sessionKey}`);
+        expect(resolved.workspace).toEqual({ kind: "local", path: `/synthetic/${sessionKey}` });
       }
       expect(
         parse.mock.calls.filter(([value]) => value.includes("unrelated-payload-")),

@@ -1,9 +1,10 @@
-export type SkillWorkshopProposalStatus =
-  | "pending"
-  | "applied"
-  | "rejected"
-  | "quarantined"
-  | "stale";
+import type {
+  SkillProposalEvaluation,
+  SkillsProposalsListResult,
+} from "@openclaw/gateway-protocol";
+import type { computeLineDiff } from "../chat/tool-call-diff.ts";
+
+export type SkillWorkshopProposalStatus = SkillsProposalsListResult["proposals"][number]["status"];
 
 type SkillWorkshopFile = {
   path: string;
@@ -11,23 +12,14 @@ type SkillWorkshopFile = {
   contents: string;
 };
 
-export type SkillWorkshopEvaluationFinding = {
-  ruleId: string;
-  severity: "info" | "warn" | "critical";
-  message: string;
-  file?: string;
-  line?: number;
-};
+type SkillWorkshopEvaluationResult = Extract<
+  SkillProposalEvaluation["outcomes"][number],
+  { status: "completed" }
+>["result"];
 
-type SkillWorkshopEvaluationResult = {
-  summary?: string;
-  findings?: SkillWorkshopEvaluationFinding[];
-  metrics?: Record<string, string | number | boolean>;
-  evaluatorVersion?: string;
-  mode?: string;
-  decision?: "pass" | "revise" | "block";
-  decisionReason?: string;
-};
+export type SkillWorkshopEvaluationFinding = NonNullable<
+  SkillWorkshopEvaluationResult["findings"]
+>[number];
 
 export type SkillWorkshopEvaluationOutcome = {
   pluginId: string;
@@ -38,15 +30,7 @@ export type SkillWorkshopEvaluationOutcome = {
   error?: string;
 };
 
-export type SkillWorkshopEvaluation = {
-  id: string;
-  proposedVersion: string;
-  revisionHash: string;
-  trigger: "manual" | "apply";
-  startedAt: string;
-  completedAt: string;
-  correlationId?: string;
-  targetTreeSha256?: string;
+export type SkillWorkshopEvaluation = Omit<SkillProposalEvaluation, "outcomes"> & {
   outcomes: SkillWorkshopEvaluationOutcome[];
 };
 
@@ -78,13 +62,43 @@ export type SkillWorkshopProposal = {
   recencyGroup: "today" | "yesterday" | "earlier";
   ageLabel: string;
   supportFiles: SkillWorkshopFile[];
-  isNew: boolean;
 };
 
-export type SkillWorkshopStatusFilter = "all" | SkillWorkshopProposalStatus;
 export type SkillWorkshopAction = "apply" | "evaluate" | "revise" | "reject";
-export type SkillWorkshopMode = "board" | "today";
-export type SkillWorkshopAppliedDiffMode = "changes" | "full";
+export type SkillWorkshopMode = "skills" | "suggestions";
+
+export type SkillWorkshopInstalledSkill = SkillsProposalsListResult["installedSkills"][number] & {
+  read?: SkillWorkshopInstalledSelection;
+};
+
+export type SkillWorkshopInstalledSelection =
+  | { status: "idle" }
+  | { status: "loading"; name: string }
+  | {
+      status: "ready";
+      name: string;
+      content: string;
+      savedVersions: Array<{
+        key: string;
+        appliedAt?: string;
+        diff: ReturnType<typeof computeLineDiff>;
+      }>;
+      savedVersionsError?: string;
+    }
+  | { status: "error"; name: string; error: string };
+
+export function changedSkillWorkshopVersion(read: SkillWorkshopInstalledSelection | undefined) {
+  return read?.status === "ready"
+    ? read.savedVersions.find(
+        (version) =>
+          // computeLineDiff marks unequal full inputs as truncated even when its
+          // bounded preview contains none of the edits.
+          version.diff.kind === "truncated" ||
+          version.diff.stat.added > 0 ||
+          version.diff.stat.removed > 0,
+      )
+    : undefined;
+}
 
 export type SkillWorkshopActionBusy = {
   key: string;
@@ -102,106 +116,14 @@ export type SkillWorkshopProposalDecision = {
   expectedRevisionHash: string | null;
 };
 
-type SkillWorkshopAppliedRevision = {
-  proposal: SkillWorkshopProposal;
-  version: number;
-  operation: SkillWorkshopProposal["kind"];
-  previous: SkillWorkshopProposal | null;
-};
-
-export type SkillWorkshopAppliedSkill = {
-  slug: string;
-  latest: SkillWorkshopProposal;
-  revisions: SkillWorkshopAppliedRevision[];
-};
-
-function compareWorkshopProposals(
-  left: SkillWorkshopProposal,
-  right: SkillWorkshopProposal,
-): number {
-  const timeDifference = (right.updatedAt ?? right.createdAt) - (left.updatedAt ?? left.createdAt);
-  if (timeDifference !== 0) {
-    return timeDifference;
-  }
-  if (left.key === right.key) {
-    return 0;
-  }
-  return left.key < right.key ? 1 : -1;
-}
-
-function matchesWorkshopQuery(proposal: SkillWorkshopProposal, query: string): boolean {
-  return `${proposal.name} ${proposal.oneLine} ${proposal.slug}`.toLowerCase().includes(query);
-}
-
-function groupSkillWorkshopAppliedSkills(
-  proposals: SkillWorkshopProposal[],
-): SkillWorkshopAppliedSkill[] {
-  const revisionsBySlug = new Map<string, [SkillWorkshopProposal, ...SkillWorkshopProposal[]]>();
-  const applied = proposals
-    .filter((proposal) => proposal.status === "applied")
-    .toSorted(compareWorkshopProposals);
-  for (const proposal of applied) {
-    const revisions = revisionsBySlug.get(proposal.slug);
-    if (revisions) {
-      revisions.push(proposal);
-    } else {
-      revisionsBySlug.set(proposal.slug, [proposal]);
-    }
-  }
-  return Array.from(revisionsBySlug, ([slug, proposalsForSkill]) => ({
-    slug,
-    latest: proposalsForSkill[0],
-    revisions: proposalsForSkill.map((proposal, index) => {
-      const version = proposalsForSkill.length - index;
-      return {
-        proposal,
-        version,
-        operation: proposal.kind,
-        previous: proposalsForSkill[index + 1] ?? null,
-      };
-    }),
-  }));
-}
-
-export function findSkillWorkshopAppliedPredecessor(
-  proposals: SkillWorkshopProposal[],
-  key: string,
-): SkillWorkshopProposal | null {
-  for (const skill of groupSkillWorkshopAppliedSkills(proposals)) {
-    const revision = skill.revisions.find(({ proposal }) => proposal.key === key);
-    if (revision) {
-      return revision.previous;
-    }
-  }
-  return null;
-}
-
-export function filterSkillWorkshopAppliedSkills(
-  proposals: SkillWorkshopProposal[],
-  query: string,
-): SkillWorkshopAppliedSkill[] {
-  const q = query.trim().toLowerCase();
-  return groupSkillWorkshopAppliedSkills(proposals).filter(
-    (skill) => !q || skill.revisions.some(({ proposal }) => matchesWorkshopQuery(proposal, q)),
-  );
-}
-
 export function filterSkillWorkshopProposals(
   proposals: SkillWorkshopProposal[],
-  statusFilter: SkillWorkshopStatusFilter,
   query: string,
 ): SkillWorkshopProposal[] {
   const q = query.trim().toLowerCase();
-  if (statusFilter === "applied") {
-    return filterSkillWorkshopAppliedSkills(proposals, query).map((skill) => skill.latest);
-  }
-  return proposals.filter((p) => {
-    if (statusFilter !== "all" && p.status !== statusFilter) {
-      return false;
-    }
-    if (q && !matchesWorkshopQuery(p, q)) {
-      return false;
-    }
-    return true;
-  });
+  return proposals.filter(
+    (proposal) =>
+      proposal.status === "pending" &&
+      (!q || `${proposal.name} ${proposal.oneLine} ${proposal.slug}`.toLowerCase().includes(q)),
+  );
 }

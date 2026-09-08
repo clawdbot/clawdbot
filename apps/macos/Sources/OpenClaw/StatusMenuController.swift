@@ -248,7 +248,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             _ = self.nodes.isLoading
             _ = self.nodes.lastError
             _ = self.nodes.localNodeIdentityState
-            _ = self.cron.jobs
+            _ = self.cron.summary
             _ = self.dashboard.gatewayEntries
             _ = self.sessions.rows
             _ = self.sessions.errorText

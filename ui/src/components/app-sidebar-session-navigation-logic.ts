@@ -11,6 +11,7 @@ import {
   resolveSessionWorkContext,
   resolveSessionWorkSubtitle,
 } from "../lib/session-display.ts";
+import { resolveSessionRenameValue } from "../lib/session-rename.ts";
 import { isSessionRunActive } from "../lib/session-run-state.ts";
 import { collectKnownSessionGroups } from "../lib/sessions/grouping.ts";
 import {
@@ -195,6 +196,7 @@ export function buildSidebarSessionNavigationState(input: {
       // a "Subagent:" prefix on named threads is noise (other surfaces keep it).
       label: resolveSessionDisplayName(row.key, row, { includeSubagentPrefix: false }),
       userLabel: row.label,
+      renameValue: resolveSessionRenameValue(row),
       subtitle: resolveSessionWorkSubtitle(row),
       workContext: resolveSessionWorkContext(row),
       active: row.key === navigation.activeRowKey,
@@ -399,17 +401,20 @@ export function resolveLatestSidebarAgentSession(input: {
   });
 }
 
-export function collectSidebarSessionCandidateRows(input: {
+export function collectSidebarSessionRowsByKey(input: {
   rows: readonly GatewaySessionRow[];
   childRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>;
-}): GatewaySessionRow[] {
-  return [
-    ...new Map(
-      [...Object.values(input.childRowsByParent).flat(), ...input.rows].map(
-        (row) => [row.key, row] as const,
-      ),
-    ).values(),
-  ];
+}): ReadonlyMap<string, GatewaySessionRow> {
+  const rowsByKey = new Map<string, GatewaySessionRow>();
+  for (const rows of Object.values(input.childRowsByParent)) {
+    for (const row of rows) {
+      rowsByKey.set(row.key, row);
+    }
+  }
+  for (const row of input.rows) {
+    rowsByKey.set(row.key, row);
+  }
+  return rowsByKey;
 }
 
 /**

@@ -36,6 +36,8 @@ export type PreparedAgentRunAdmission = Readonly<{
     runtimeKind: ExecutionIdentityAdmissionFacts["runtime"]["kind"],
     runtimeInstanceId?: string,
   ) => Promise<AdmittedRunContext>;
+  /** Checks latched source revocation after normal close; never grants execution authority. */
+  assertSourceCurrent: () => void;
   /** Idempotently closes the exact delegated approval lease, if admission occurred. */
   close: () => void;
 }>;
@@ -43,15 +45,22 @@ export type PreparedAgentRunAdmission = Readonly<{
 type DelegatedAuthorityLease = {
   authority: AgentRunDelegatedAuthority;
   foregroundClosed: boolean;
+  assertSourceCurrent?: () => void;
 };
 
 const delegatedAuthorityLeases = new WeakMap<AdmittedRunContext, DelegatedAuthorityLease>();
 const activeNativeHookRecoveryLeases = new Map<string, DelegatedAuthorityLease>();
 
-function bindAdmittedRunDelegatedAuthority(context: AdmittedRunContext): void {
+function bindAdmittedRunDelegatedAuthority(
+  context: AdmittedRunContext,
+  assertSourceCurrent?: () => void,
+): void {
+  const authority = claimAgentRunDelegatedAuthority(
+    context.operationalRunInstance,
+    assertSourceCurrent,
+  );
   activeNativeHookRecoveryLeases.delete(context.operationalRunInstance.runId);
-  const authority = claimAgentRunDelegatedAuthority(context.operationalRunInstance);
-  const lease = { authority, foregroundClosed: false };
+  const lease = { authority, foregroundClosed: false, assertSourceCurrent };
   delegatedAuthorityLeases.set(context, lease);
 }
 
@@ -118,6 +127,8 @@ export function retainAdmittedRunBeforeToolCallRecovery(
   }
   activeNativeHookRecoveryLeases.set(runId, lease);
   const assertActive = () => {
+    // Retaining native policy outlives the foreground claim, never its source owner.
+    lease.assertSourceCurrent?.();
     if (
       getAgentRunLifecycleGeneration() !== lease.authority.lifecycleGeneration ||
       activeNativeHookRecoveryLeases.get(runId) !== lease
@@ -207,8 +218,24 @@ export function prepareAgentRunAdmission(params: {
   operationalRunInstance: OperationalRunInstanceRef;
   recovery?: ExecutionIdentityRecoveryAdmission;
   onAdmitted?: (context: AdmittedRunContext) => void | Promise<void>;
+  assertSourceCurrent?: () => void;
 }): PreparedAgentRunAdmission {
   const operationalRunInstance = params.operationalRunInstance;
+  const sourceAssertion = params.assertSourceCurrent;
+  let sourceClosed = false;
+  const assertSourceCurrent =
+    sourceAssertion &&
+    (() => {
+      if (sourceClosed) {
+        throw new Error("source execution authority is no longer active");
+      }
+      try {
+        sourceAssertion();
+      } catch (error) {
+        sourceClosed = true;
+        throw error;
+      }
+    });
   if (operationalRunInstance.runId !== params.facts.runId) {
     throw new Error("operational run instance disagrees with prepared admission");
   }
@@ -219,6 +246,7 @@ export function prepareAgentRunAdmission(params: {
   let closed = false;
   return Object.freeze({
     operationalRunInstance,
+    assertSourceCurrent: () => assertSourceCurrent?.(),
     close: () => {
       closed = true;
       if (admittedContext) {
@@ -236,6 +264,7 @@ export function prepareAgentRunAdmission(params: {
       const fixedRuntimeKind = (admittedRuntimeKind ??= runtimeKind);
       admittedRuntimeInstanceId ??= runtimeInstanceId?.trim() || undefined;
       admitted ??= (async () => {
+        assertSourceCurrent?.();
         const facts = executionIdentitySpawnAdmission({
           operation: "attach",
           value: { ...params.facts, runtime: { kind: fixedRuntimeKind } },
@@ -248,6 +277,7 @@ export function prepareAgentRunAdmission(params: {
           runtimeInstanceId: admittedRuntimeInstanceId,
           ...(params.recovery ? { recovery: params.recovery } : {}),
         });
+        bindAdmittedRunDelegatedAuthority(context, assertSourceCurrent);
         admittedContext = context;
         try {
           await params.onAdmitted?.(context);
@@ -332,9 +362,7 @@ function admitPreparedAgentRun(params: {
     runId: params.facts.runId,
   });
   if (!isExecutionIdentityCollectionEnabled(params.cfg)) {
-    const context = Object.freeze({ operationalRunInstance });
-    bindAdmittedRunDelegatedAuthority(context);
-    return context;
+    return Object.freeze({ operationalRunInstance });
   }
   const executionIdentityToken =
     recovery.token ??
@@ -342,9 +370,7 @@ function admitPreparedAgentRun(params: {
       ? createExecutionIdentityAdmissionToken(params.facts.runId)
       : undefined);
   if (!executionIdentityToken) {
-    const context = Object.freeze({ operationalRunInstance });
-    bindAdmittedRunDelegatedAuthority(context);
-    return context;
+    return Object.freeze({ operationalRunInstance });
   }
 
   enqueueExecutionIdentityContextAtAdmission(params.facts, {
@@ -353,7 +379,5 @@ function admitPreparedAgentRun(params: {
     runtimeInstanceId: params.runtimeInstanceId,
     retryOnly: params.recovery?.retryOnly === true,
   });
-  const context = Object.freeze({ operationalRunInstance, executionIdentityToken });
-  bindAdmittedRunDelegatedAuthority(context);
-  return context;
+  return Object.freeze({ operationalRunInstance, executionIdentityToken });
 }

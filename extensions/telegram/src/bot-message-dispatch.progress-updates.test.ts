@@ -349,29 +349,50 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     expectDeliveredReply(0, { text: undefined, mediaUrl: "https://example.com/a.png" });
   });
 
-  it("shows Telegram progress drafts immediately for explicit tool starts", async () => {
-    const draftStream = createSequencedDraftStream(2001);
-    createTelegramDraftStream.mockReturnValue(draftStream);
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
-      await replyOptions?.onReplyStart?.();
-      await replyOptions?.onAssistantMessageStart?.();
-      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-      return { queuedFinal: false };
-    });
+  it.each(["partial", "block", "progress"] as const)(
+    "keeps one exec row without forcing summaries in %s mode",
+    async (mode) => {
+      const draftStream = createSequencedDraftStream(2001);
+      createTelegramDraftStream.mockReturnValue(draftStream);
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+        await replyOptions?.onReplyStart?.();
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start", toolCallId: "exec-1" });
+        await replyOptions?.onItemEvent?.({
+          itemId: "command:exec-1",
+          toolCallId: "exec-1",
+          kind: "command",
+          name: "exec",
+          status: "running",
+        });
+        if (replyOptions?.forceToolResultProgress) {
+          await replyOptions.onToolResult?.({ text: "🛠️ Exec" });
+        }
+        await replyOptions?.onCommandOutput?.({
+          toolCallId: "exec-1",
+          phase: "end",
+          name: "exec",
+          exitCode: 0,
+        });
+        return { queuedFinal: false };
+      });
 
-    await dispatchWithContext({
-      context: createContext(),
-      streamMode: "progress",
-      telegramCfg: {
-        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
-      },
-    });
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: mode,
+        telegramCfg: {
+          streaming: { mode, progress: { toolProgress: true, label: "Shelling" } },
+        },
+      });
 
-    expect(draftStream.updatePreview).toHaveBeenCalledWith(
-      telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
-    );
-    expect(draftStream.flush).toHaveBeenCalled();
-  });
+      expect(draftStream.updatePreview).toHaveBeenLastCalledWith(
+        telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
+      );
+      if (mode === "progress") {
+        expect(draftStream.flush).toHaveBeenCalled();
+      }
+    },
+  );
 
   it("keeps a dynamic tool lifecycle and formatted summary in one row", async () => {
     const draftStream = createSequencedDraftStream(2001);
@@ -560,7 +581,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     expect(draftStream.updatePreview).toHaveBeenLastCalledWith(
       telegramProgressPreview(
         "Shelling\n\n🛠️ exit 2; command false",
-        "<b>Shelling</b>\n<b>🛠️ Exec</b> <code>command false</code> <i>exit 2</i>",
+        "<b>Shelling</b>\n<b>🛠️ Exec</b> command false <i>exit 2</i>",
       ),
     );
   });
@@ -600,10 +621,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     });
 
     expect(draftStream.updatePreview).toHaveBeenLastCalledWith(
-      telegramProgressPreview(
-        "Shelling\n\n🛠️ exit 2",
-        "<b>Shelling</b>\n<b>🛠️ Exec</b> <code>exit 2</code>",
-      ),
+      telegramProgressPreview("Shelling\n\n🛠️ exit 2", "<b>Shelling</b>\n<b>🛠️ Exec</b> exit 2"),
     );
   });
 

@@ -81,6 +81,7 @@ export default definePluginEntry({
           order: "simple",
           run: (ctx) =>
             buildOpenAICompatibleProviderCatalog({
+              discoveryMode: "strict",
               ctx,
               providerId: provider.providerId,
               buildProvider: provider.buildProvider,

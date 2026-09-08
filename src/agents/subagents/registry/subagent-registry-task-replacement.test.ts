@@ -22,6 +22,7 @@ import {
   getAgentRunContextOwnership,
   getAgentRunContextOwnerStatus,
 } from "../../../infra/agent-run-registry.js";
+import { onSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { reloadTaskRuntimeStateFromStore } from "../../../tasks/runtime-internal.js";
 import { failFlow, getTaskFlowById } from "../../../tasks/task-flow-registry.js";
@@ -294,6 +295,17 @@ it.each(["successor", "task activation", "flow activation"] as const)(
     const flowId = terminalTask.parentFlowId!;
     expect(terminalTask.status).toBe("failed");
     expect(getTaskFlowById(flowId)?.status).toBe("failed");
+    previous.collect = true;
+    previous.swarmRequesterSessionKey = "agent:main:main";
+    previous.requesterAgentId = "main";
+    previous.groupId = "rollback-group";
+    persistSubagentRunsToDiskOrThrow(subagentRuns, [previous.runId]);
+    const parentEvents = vi.fn();
+    const unsubscribe = onSessionLifecycleEvent((event) => {
+      if (event.reason === "swarm") {
+        parentEvents(event);
+      }
+    });
     const database = openOpenClawStateDatabase().db;
     const triggerName = `reject_replacement_${
       rejectedWrite === "successor" ? "run" : rejectedWrite === "task activation" ? "task" : "flow"
@@ -329,7 +341,9 @@ it.each(["successor", "task activation", "flow activation"] as const)(
         .toBe(false);
     } finally {
       database.exec(`DROP TRIGGER ${triggerName}`);
+      unsubscribe();
     }
+    expect(parentEvents).not.toHaveBeenCalled();
     expect.soft(subagentRuns.get(previous.runId)).toBe(previous);
     expect.soft(subagentRuns.has("rollback-successor")).toBe(false);
     expect.soft(loadSubagentRegistryFromSqlite().has("rollback-successor")).toBe(false);

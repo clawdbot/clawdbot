@@ -141,6 +141,85 @@ describe("accepted input custody", () => {
     expect(() => receipt.run(() => {})).toThrow("ownership ended");
   });
 
+  it.each(["interrupted", "collected-consumed"] as const)(
+    "preserves request-bound receipts across legacy-hash rejection and re-upgrade (%s)",
+    async (disposition) => {
+      const runId = "versioned-input";
+      const requestFingerprint = "f".repeat(64);
+      const receipt = await stage(runId, { requestFingerprint });
+      if (disposition === "collected-consumed") {
+        const aggregate = bindSessionPendingInputSources([receipt], message("versioned-collect"))!;
+        receipts.push(aggregate);
+        await promote(aggregate);
+      }
+      receipt.finish("interrupted");
+      rotateAgentEventLifecycleGeneration();
+      const readStoredSource = () =>
+        database()
+          .db.prepare("SELECT * FROM session_pending_inputs WHERE input_id = ?")
+          .get(receipt.inputId);
+      const storedSource = readStoredSource();
+      expect(storedSource).toMatchObject({
+        request_hash: `request:${requestFingerprint}`,
+        consumed_event_id: disposition === "collected-consumed" ? expect.any(String) : null,
+      });
+      const transcript = await loadTranscriptEvents(scope());
+      const prepare = vi.fn((input: PersistedUserTurnMessage) => input);
+      const execute = vi.fn();
+      // v2026.9.2 always computes this unprefixed message hash and compares it
+      // before consumed-receipt handling. No legacy execution owner is minted.
+      await expect(stage(runId, { prepareMessageAfterIdempotencyCheck: prepare })).rejects.toThrow(
+        "idempotency key conflicts",
+      );
+      expect(() => receipt.run(execute)).toThrow();
+      expect(readStoredSource()).toEqual(storedSource);
+      expect(await loadTranscriptEvents(scope())).toEqual(transcript);
+      expect(listSessionPendingInputs(scope()).total).toBe(disposition === "interrupted" ? 1 : 0);
+
+      const renewed = await stage(runId, {
+        requestFingerprint,
+        prepareMessageAfterIdempotencyCheck: prepare,
+      });
+      expect(renewed.inputId).toBe(receipt.inputId);
+      expect(renewed.message).toEqual(receipt.message);
+      expect(prepare).not.toHaveBeenCalled();
+      if (disposition === "collected-consumed") {
+        expect(renewed.state).toBe("consumed");
+        expect(() => renewed.run(execute)).toThrow("already been consumed");
+        expect(readStoredSource()).toEqual(storedSource);
+        expect(await loadTranscriptEvents(scope())).toEqual(transcript);
+      } else {
+        expect(renewed.state).toBe("queued");
+        const appended = await renewed.run(async () => {
+          execute();
+          return appendTranscriptMessage(scope(), { message: renewed.message });
+        });
+        expect(appended).toMatchObject({
+          appended: true,
+          messageId: receipt.inputId,
+          message: receipt.message,
+        });
+        const committed = await loadTranscriptEvents(scope());
+        expect(
+          committed.filter(
+            (event) =>
+              typeof event === "object" &&
+              event !== null &&
+              "type" in event &&
+              event.type === "message",
+          ),
+        ).toEqual([expect.objectContaining({ id: receipt.inputId, message: receipt.message })]);
+        expect(await promote(renewed)).toMatchObject({
+          appended: false,
+          messageId: receipt.inputId,
+        });
+        expect(await loadTranscriptEvents(scope())).toEqual(committed);
+      }
+      expect(execute).toHaveBeenCalledTimes(disposition === "interrupted" ? 1 : 0);
+      expect(listSessionPendingInputs(scope())).toEqual({ total: 0, items: [] });
+    },
+  );
+
   it("rolls transcript promotion and custody consumption back together", async () => {
     const receipt = await stage("atomic");
     const before = await loadTranscriptEvents(scope());

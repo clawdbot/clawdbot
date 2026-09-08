@@ -51,6 +51,18 @@ function fixtureCard(index: number): WorkboardCard {
     position: index,
     createdAt: 1000 + index,
     updatedAt: 2000 + index,
+    ...(index % 2
+      ? {
+          execution: {
+            id: `${id}-execution`,
+            kind: "agent-session" as const,
+            mode: "autonomous" as const,
+            status: "done" as const,
+            startedAt: 0,
+            updatedAt: 1,
+          },
+        }
+      : {}),
     events: [{ id: `${id}-event`, kind: "created", at: 1000 + index }],
     metadata: {
       attempts: [{ id: `${id}-attempt`, status: "succeeded", startedAt: 1000 + index }],
@@ -147,6 +159,105 @@ describe("workboard sqlite batch card read", () => {
       }
     });
   });
+
+  it.each(["lookup", "entries"] as const)(
+    "preserves native, child, and execution error order through %s and remains reusable",
+    async (mode) => {
+      await withStores(async (dbPath) => {
+        const stores = createWorkboardSqliteStores({ dbPath });
+        const raw = new DatabaseSync(dbPath);
+        const card = fixtureCard(1);
+        card.events = [...(card.events ?? []), { id: "late-event", kind: "created", at: 1002 }];
+        const read = () =>
+          mode === "lookup" ? stores.cards.lookup(card.id) : stores.cards.entries();
+        try {
+          await stores.cards.register(card.id, { version: 1, card });
+          raw.prepare("UPDATE workboard_card_events SET kind = '' WHERE ordinal = 0").run();
+          raw
+            .prepare("UPDATE workboard_card_events SET ordinal = ? WHERE id = ?")
+            .run(9007199254740993n, "late-event");
+          await expect(read()).rejects.toMatchObject({ code: "ERR_OUT_OF_RANGE" });
+
+          raw
+            .prepare("UPDATE workboard_card_events SET ordinal = 1 WHERE id = ?")
+            .run("late-event");
+          await expect(read()).rejects.toThrow("workboard sqlite row missing kind");
+          raw
+            .prepare("UPDATE workboard_cards SET execution_mode = NULL, automation_json = '{'")
+            .run();
+          await expect(read()).rejects.toThrow(SyntaxError);
+          raw.prepare("UPDATE workboard_cards SET automation_json = NULL").run();
+          await expect(read()).rejects.toThrow("workboard sqlite row missing kind");
+          raw.prepare("UPDATE workboard_card_events SET kind = 'created'").run();
+          await expect(read()).rejects.toThrow("workboard sqlite row missing execution_mode");
+          raw.prepare("UPDATE workboard_cards SET execution_mode = 'autonomous'").run();
+
+          const expected = { version: 1, card };
+          await expect(read()).resolves.toEqual(
+            mode === "lookup" ? expected : [{ key: card.id, value: expected }],
+          );
+        } finally {
+          raw.close();
+          stores.close();
+        }
+      });
+    },
+  );
+
+  it.each([
+    { fault: "later JSON", expected: "owner_busy", revisionMatches: true, targetOnly: false },
+    { fault: "later integer", expected: "native-error", revisionMatches: true, targetOnly: false },
+    { fault: "later integer", expected: "conflict", revisionMatches: false, targetOnly: false },
+    { fault: "target integer", expected: "native-error", revisionMatches: true, targetOnly: true },
+  ] as const)(
+    "keeps claim precedence for $fault: $expected",
+    async ({ fault, expected, revisionMatches, targetOnly }) => {
+      await withStores(async (dbPath) => {
+        const stores = createWorkboardSqliteStores({ dbPath });
+        const raw = new DatabaseSync(dbPath);
+        const target = fixtureCard(2);
+        try {
+          if (!targetOnly) {
+            const busy = { ...fixtureCard(0), status: "running" as const, agentId: "slot-owner" };
+            await stores.cards.register(busy.id, { version: 1, card: busy });
+            await stores.cards.register("card-1", { version: 1, card: fixtureCard(1) });
+          }
+          await stores.cards.register(target.id, { version: 1, card: target });
+          if (fault === "later JSON") {
+            raw
+              .prepare("UPDATE workboard_cards SET automation_json = '{' WHERE id = 'card-1'")
+              .run();
+          } else {
+            raw
+              .prepare("UPDATE workboard_card_events SET ordinal = ? WHERE card_id = ?")
+              .run(9007199254740993n, targetOnly ? target.id : "card-1");
+          }
+          const before = sqliteStatements.count;
+          const claim = stores.cards.claimIfOwnerAvailable(
+            target.id,
+            { version: 1, card: { ...target, updatedAt: target.updatedAt + 1 } },
+            revisionMatches ? target.updatedAt : target.updatedAt - 1,
+            "slot-owner",
+            3000,
+          );
+          if (expected === "native-error") {
+            await expect(claim).rejects.toMatchObject({ code: "ERR_OUT_OF_RANGE" });
+          } else {
+            await expect(claim).resolves.toBe(expected);
+          }
+          if (expected === "conflict") {
+            expect(sqliteStatements.count - before).toBe(1);
+          }
+          expect(
+            raw.prepare("SELECT updated_at FROM workboard_cards WHERE id = ?").get(target.id),
+          ).toEqual({ updated_at: target.updatedAt });
+        } finally {
+          raw.close();
+          stores.close();
+        }
+      });
+    },
+  );
 
   it("reads each keyed collection once while preserving rows, binary order, and attachment joins", async () => {
     await withStores(async (dbPath) => {

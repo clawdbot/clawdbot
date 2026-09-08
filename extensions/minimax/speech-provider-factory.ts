@@ -222,10 +222,7 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
 
 export function buildMinimaxSpeechProvider({
   isProviderAuthProfileConfigured,
-}: Pick<
-  PluginCapabilityCatalogContext,
-  "isProviderAuthProfileConfigured" | "resolveAgentDir"
->): SpeechProviderPlugin {
+}: Pick<PluginCapabilityCatalogContext, "isProviderAuthProfileConfigured">): SpeechProviderPlugin {
   return {
     id: "minimax",
     label: "MiniMax",

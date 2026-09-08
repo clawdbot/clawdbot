@@ -255,7 +255,7 @@ async function installProviderRedirect() {
   const distDir = path.join(repoRoot, "dist");
   if (proofMode === "heartbeat-upgraded-restart") {
     const compactChunks = fs.readdirSync(distDir).filter((name) => {
-      if (!name.startsWith("compact-") || !name.endsWith(".js")) {
+      if (!name.startsWith("compact-") || !/\.m?js$/u.test(name)) {
         return false;
       }
       const source = fs.readFileSync(path.join(distDir, name), "utf8");
@@ -295,7 +295,7 @@ async function installProviderRedirect() {
   }
   const hostChunks = fs
     .readdirSync(distDir)
-    .filter((name) => name.startsWith("ai-transport-host-") && name.endsWith(".js"));
+    .filter((name) => name.startsWith("ai-transport-host-") && /\.m?js$/u.test(name));
   if (hostChunks.length !== 1) {
     throw new Error(`expected one built AI transport host chunk, found ${hostChunks.length}`);
   }

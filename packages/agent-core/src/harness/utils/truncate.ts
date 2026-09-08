@@ -91,29 +91,6 @@ function utf8ByteLength(content: string): number {
   return bytes;
 }
 
-function replaceUnpairedSurrogates(content: string): string {
-  let output = "";
-  for (let i = 0; i < content.length; i++) {
-    const code = content.charCodeAt(i);
-    if (code >= 0xd800 && code <= 0xdbff) {
-      if (i + 1 < content.length) {
-        const next = content.charCodeAt(i + 1);
-        if (next >= 0xdc00 && next <= 0xdfff) {
-          output += content.charAt(i) + content.charAt(i + 1);
-          i++;
-          continue;
-        }
-      }
-      output += "�";
-    } else if (code >= 0xdc00 && code <= 0xdfff) {
-      output += "�";
-    } else {
-      output += content.charAt(i);
-    }
-  }
-  return output;
-}
-
 /**
  * Format byte counts for compact tool-output diagnostics.
  */
@@ -320,7 +297,8 @@ function truncateStringToBytesFromEnd(str: string, maxBytes: number): string {
 
   let outputBytes = 0;
   let start = str.length;
-  let needsReplacement = false;
+  let unchangedEnd = str.length;
+  let repairedTail = "";
   for (let i = str.length; i > 0;) {
     let characterStart = i - 1;
     const code = str.charCodeAt(characterStart);
@@ -346,12 +324,15 @@ function truncateStringToBytesFromEnd(str: string, maxBytes: number): string {
     }
     outputBytes += characterBytes;
     start = characterStart;
-    needsReplacement ||= unpairedSurrogate;
+    if (unpairedSurrogate) {
+      // Selection already identified the lone surrogate; retain the valid span to its right.
+      repairedTail = "\uFFFD" + str.slice(i, unchangedEnd) + repairedTail;
+      unchangedEnd = characterStart;
+    }
     i = characterStart;
   }
 
-  const output = str.slice(start);
-  return needsReplacement ? replaceUnpairedSurrogates(output) : output;
+  return str.slice(start, unchangedEnd) + repairedTail;
 }
 
 /**

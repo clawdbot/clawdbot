@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { prepareEmbeddedAttemptBootstrap } from "../agents/embedded-agent-runner/run/attempt-bootstrap-prepare.js";
+import { createAttemptSetupFixture } from "../agents/embedded-agent-runner/run/attempt-setup.test-support.js";
 import type { EmbeddedRunAttemptParams } from "../agents/embedded-agent-runner/run/types.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
@@ -148,15 +149,16 @@ describe("managed local model setup verification", () => {
           trigger: "manual",
           isCanonicalWorkspace: bootstrapWorkspace === workspace,
           config: input.config,
+          bootstrapWorkspaceDir: bootstrapWorkspace,
         } as EmbeddedRunAttemptParams,
-        bootstrapWorkspaceDir: bootstrapWorkspace,
-        effectiveWorkspace: workspace,
+        setup: createAttemptSetupFixture({
+          effectiveCwd: workspace,
+          effectiveWorkspace: workspace,
+          resolvedWorkspace: workspace,
+          sessionAgentId: input.agentId!,
+        }),
         hasReadTool: true,
         isRawModelRun: false,
-        markStage: () => undefined,
-        resolvedWorkspace: workspace,
-        sessionAgentId: input.agentId!,
-        sessionLabel: input.sessionKey!,
       });
       const nonce = await readFixture(input);
       input.onAgentToolResult?.({

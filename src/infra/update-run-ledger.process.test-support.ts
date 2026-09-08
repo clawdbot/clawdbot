@@ -23,7 +23,15 @@ process.once("message", () => {
   } else {
     recordUpdateRunVerification(
       runId,
-      { booted: true, serviceRunning: true, versionMatch: true, channelsReady: true },
+      {
+        booted: true,
+        serviceRunning: true,
+        versionMatch: true,
+        channelsReady: true,
+        settled: true,
+        readyz: true,
+        pluginErrors: [],
+      },
       options,
     );
   }

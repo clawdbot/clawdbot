@@ -350,8 +350,7 @@ export function resolveFinalDoctorHealthContributions(params: {
       id: "doctor:whatsapp-responsiveness",
       label: "WhatsApp responsiveness",
       healthChecks: {
-        description:
-          "WhatsApp responsiveness pressure from degraded Gateway and local TUI clients.",
+        description: "Gateway pressure and local TUI observations when WhatsApp is enabled.",
         defaultEnabled: false,
         async detect(ctx) {
           const { collectWhatsappResponsivenessHealthFindings } =

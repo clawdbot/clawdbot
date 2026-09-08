@@ -88,6 +88,11 @@ jobs:
           cache-mode: restore
           install-bun: "false"
 
+      - name: Test packaged runtime ABI scanner
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+            -s apps/linux/tests -p 'test_packaged_runtime_smoke.py'
+
       - name: Check Rust formatting
         working-directory: apps/linux/src-tauri
         run: cargo +stable fmt --check
@@ -106,17 +111,18 @@ jobs:
       - name: Prepare pinned AppImage tools
         env:
           XDG_CACHE_HOME: ${{ runner.temp }}/openclaw-tauri-cache
-        run: |
+        run: | # zizmor: ignore[github-env] trusted checked-in helper returns the native runtime path
           set -euo pipefail
           apps/linux/scripts/tauri-appimage-tools.sh prepare
           apps/linux/scripts/tauri-appimage-tools.sh verify pre-build
+          runtime_file=$(apps/linux/scripts/tauri-appimage-tools.sh runtime-path)
+          printf 'LDAI_RUNTIME_FILE=%s\n' "$runtime_file" >> "$GITHUB_ENV"
 
       - name: Build Linux companion bundles
         working-directory: apps/linux/src-tauri
         env:
           # appimagetool strips fail on CI runners; Tauri documents NO_STRIP for Actions.
           NO_STRIP: "true"
-          LDAI_RUNTIME_FILE: ${{ runner.temp }}/openclaw-tauri-cache/tauri/.appimage-runtime-x86_64
           XDG_CACHE_HOME: ${{ runner.temp }}/openclaw-tauri-cache
         # PR builds have no TAURI_SIGNING_PRIVATE_KEY, and the configured updater
         # pubkey makes the bundler hard-require it. Skip updater artifacts here;

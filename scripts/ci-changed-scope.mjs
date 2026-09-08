@@ -56,8 +56,10 @@ const WORKER_DEPLOY_ARTIFACT_SCOPE_RE =
   /^src\/(?:agents\/github-exec-(?:launcher|credential)\.ts|shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$/;
 const IOS_BUILD_RE =
   /^(apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/|scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|scripts\/(?:ios-(?:configure-signing|screenshots|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|scripts\/lib\/(?:ios-fastlane\.sh|ios-version\.ts|release-version\.mjs|version-script-args\.ts)$)/;
+// Tests and WatchTests Swift sources belong only to retained native unit-test targets.
+// UITests, resources, and project changes still prove the screenshot target graph.
 const IOS_SCREENSHOT_APP_SCOPE_RE =
-  /^(?:apps\/ios\/|apps\/shared\/OpenClawKit\/|apps\/swabble\/|Swabble\/)/;
+  /^(?:apps\/ios\/(?!(?:Tests|WatchTests)\/.*\.swift$)|apps\/shared\/OpenClawKit\/|apps\/swabble\/|Swabble\/)/;
 const IOS_SCREENSHOT_SCRIPT_SCOPE_RE =
   /^scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|^scripts\/(?:ios-(?:configure-signing|screenshots|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|^scripts\/lib\/(?:ios-fastlane\.sh|ios-version\.ts|release-version\.mjs|version-script-args\.ts)$/;
 const ANDROID_NATIVE_RE = /^(apps\/android\/|apps\/shared\/)/;

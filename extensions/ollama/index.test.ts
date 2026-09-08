@@ -5,7 +5,7 @@ import {
   capturePluginRegistration,
   createPluginRuntimeMock,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { LiveModelCatalogHttpError } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 // Ollama tests cover index plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -96,7 +96,6 @@ vi.mock("./src/stream-registration.js", () => ({
 }));
 
 beforeEach(() => {
-  clearLiveCatalogCacheForTests();
   promptAndConfigureOllamaMock.mockClear();
   ensureOllamaModelPulledMock.mockClear();
   fetchWithSsrFGuardMock.mockReset();
@@ -1110,6 +1109,7 @@ describe("ollama plugin", () => {
 
     expect(buildOllamaProviderMock).toHaveBeenCalledOnce();
     expect(result).toEqual({
+      outcomes: [{ provider: "ollama", status: "ready" }],
       provider: {
         baseUrl: "http://127.0.0.1:11434",
         api: "ollama",
@@ -1179,13 +1179,16 @@ describe("ollama plugin", () => {
       resolveProviderApiKey: () => ({ apiKey: "" }),
     } as never);
 
-    expect(result).toBeNull();
+    expect(result).toMatchObject({
+      provider: { models: [] },
+      outcomes: [{ provider: "ollama", status: "ready" }],
+    });
     expect(buildOllamaProviderMock).toHaveBeenCalledWith("http://remote-ollama:11434", {
-      quiet: false,
+      discoveryMode: "strict",
     });
   });
 
-  it("keeps stored ollama-local marker auth on the quiet ambient path", async () => {
+  it("keeps stored ollama-local marker auth during discovery", async () => {
     const provider = registerProvider();
     mockDiscoveredOllamaProvider([], { once: true });
 
@@ -1201,7 +1204,7 @@ describe("ollama plugin", () => {
     expect(resultProvider.apiKey).toBe("ollama-local");
     expect(resultProvider.models).toEqual([]);
     expect(buildOllamaProviderMock).toHaveBeenCalledWith(undefined, {
-      quiet: true,
+      discoveryMode: "strict",
     });
   });
 
@@ -2222,7 +2225,7 @@ describe("ollama plugin", () => {
       expect(resultProvider.baseUrl).toBe("http://127.0.0.1:11434");
       expect(resultProvider.api).toBe("ollama");
       expect(buildOllamaProviderMock).toHaveBeenCalledWith(undefined, {
-        quiet: false,
+        discoveryMode: "strict",
       });
     },
   );
@@ -2337,6 +2340,58 @@ describe("ollama plugin", () => {
     expect(requireConfiguredStreamParams().providerBaseUrl).toBe("https://ollama.com");
   });
 
+  it.each(
+    ["ollama", "ollama-cloud"].flatMap((providerId) =>
+      [401, 403, 503, undefined].map((status) => ({ providerId, status })),
+    ),
+  )(
+    "reports $providerId discovery failure $status with its profile",
+    async ({ providerId, status }) => {
+      const provider = registerProvidersWithPluginConfig({}).find(
+        (entry) => entry.id === providerId,
+      );
+      buildOllamaProviderMock.mockRejectedValue(
+        status ? new LiveModelCatalogHttpError(providerId, status) : new Error("Endpoint offline"),
+      );
+      const result = await provider.catalog.run({
+        config: {},
+        env: {},
+        resolveProviderApiKey: () => ({
+          apiKey: "catalog-key",
+          discoveryApiKey: "catalog-key",
+          profileId: `${providerId}:default`,
+        }),
+      });
+      expect(result).toEqual({
+        providers: {},
+        outcomes: [
+          {
+            provider: providerId,
+            profileId: `${providerId}:default`,
+            ...(status === 401 || status === 403
+              ? { status: "auth-rejected", rejectionScope: "catalog" }
+              : { status: "unavailable" }),
+          },
+        ],
+      });
+    },
+  );
+
+  it.each(["ollama", "ollama-cloud"])("keeps %s live empties authoritative", async (providerId) => {
+    const provider = registerProvidersWithPluginConfig({}).find((entry) => entry.id === providerId);
+    mockDiscoveredOllamaProvider([], { once: true });
+    const result = await provider.catalog.run({
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: "catalog-key", discoveryApiKey: "catalog-key" }),
+    });
+    expect(result).toMatchObject({
+      provider: { models: [] },
+      outcomes: [{ provider: providerId, status: "ready" }],
+    });
+    expect(queryOllamaModelShowInfoMock).not.toHaveBeenCalled();
+  });
+
   it("uses Ollama Cloud auth for live catalog discovery", async () => {
     const provider = registerOllamaCloudProvider();
     mockDiscoveredOllamaProvider([buildOllamaModelDefinitionMock("glm-5.2")], {
@@ -2355,7 +2410,7 @@ describe("ollama plugin", () => {
 
     expect(buildOllamaProviderMock).toHaveBeenCalledWith("https://ollama.com", {
       apiKey: "cloud-key",
-      quiet: true,
+      discoveryMode: "strict",
     });
     expect(result?.provider.apiKey).toBe("OLLAMA_API_KEY");
     expect(result?.provider.models).toEqual(
@@ -2383,7 +2438,7 @@ describe("ollama plugin", () => {
 
     expect(buildOllamaProviderMock).toHaveBeenCalledWith("https://ollama.com", {
       apiKey: "cloud-key",
-      quiet: true,
+      discoveryMode: "strict",
     });
     expect(queryOllamaModelShowInfoMock).toHaveBeenCalledWith("https://ollama.com", "glm-5.2", {
       apiKey: "cloud-key",

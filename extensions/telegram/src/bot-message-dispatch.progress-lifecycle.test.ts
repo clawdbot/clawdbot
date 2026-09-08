@@ -335,7 +335,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-lifecycle", () => {
     expect(answerDraftStream.updatePreview).toHaveBeenLastCalledWith(
       telegramProgressPreview(
         "Shelling\n\n🛠️ Exec\n🔎 Web Search: docs lookup",
-        "<b>Shelling</b>\n<b>🛠️ Exec</b>\n<b>🔎 Web Search</b> <code>docs lookup</code>",
+        "<b>Shelling</b>\n<b>🛠️ Exec</b>\n<b>🔎 Web Search</b> docs lookup",
       ),
     );
     expect(deliverReplies).not.toHaveBeenCalled();
@@ -367,7 +367,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-lifecycle", () => {
       expect(answerDraftStream.updatePreview).toHaveBeenLastCalledWith(
         telegramProgressPreview(
           "Shelling\n\n🌐 API: GET /v1/users\n🌐 API: POST /v1/jobs",
-          "<b>Shelling</b>\n<b>🌐 API</b> <code>GET /v1/users</code>\n<b>🌐 API</b> <code>POST /v1/jobs</code>",
+          "<b>Shelling</b>\n<b>🌐 API</b> GET /v1/users\n<b>🌐 API</b> POST /v1/jobs",
         ),
       );
       expect(deliverReplies).not.toHaveBeenCalled();

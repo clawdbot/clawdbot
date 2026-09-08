@@ -30,8 +30,7 @@ import {
   toSessionToolAllowlist,
 } from "../tool-name-allowlist.js";
 import { splitSdkTools } from "../tool-split.js";
-import type { EmbeddedAttemptClientToolCallSlot } from "./attempt-result.js";
-import type { EmbeddedRunAttemptParams } from "./types.js";
+import type { EmbeddedAttemptClientToolCallSlot, EmbeddedRunAttemptParams } from "./types.js";
 
 export function prepareEmbeddedAttemptClientTools(params: {
   attempt: EmbeddedRunAttemptParams;

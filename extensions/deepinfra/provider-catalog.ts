@@ -1,4 +1,5 @@
 // Deepinfra provider module implements model/runtime integration.
+import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   buildSingleProviderApiKeyCatalog,
   type ProviderCatalogContext,
@@ -24,8 +25,12 @@ export async function buildDeepInfraProvider(options?: {
   hasApiKey?: boolean;
   env?: NodeJS.ProcessEnv;
   agentDir?: string;
+  discoveryMode?: "strict";
 }): Promise<ModelProviderConfig> {
-  const models = await discoverDeepInfraModels(options);
+  const models = await discoverDeepInfraModels({
+    ...options,
+    discoveryMode: options?.discoveryMode ?? "advisory",
+  });
   return {
     baseUrl: DEEPINFRA_BASE_URL,
     api: "openai-completions",
@@ -36,16 +41,19 @@ export async function buildDeepInfraProvider(options?: {
 export function buildDeepInfraApiKeyCatalog(
   ctx: ProviderCatalogContext,
 ): Promise<ProviderCatalogResult> {
-  return buildSingleProviderApiKeyCatalog({
-    ctx,
+  return runLiveProviderCatalog({
     providerId: "deepinfra",
-    // The shared API-key helper already resolved env/profile credentials.
-    // Pass that fact into discovery so profile-only setups get the live catalog.
-    buildProvider: () =>
-      buildDeepInfraProvider({
-        hasApiKey: true,
-        env: ctx.env,
-        agentDir: ctx.agentDir,
+    run: () =>
+      buildSingleProviderApiKeyCatalog({
+        ctx,
+        providerId: "deepinfra",
+        buildProvider: () =>
+          buildDeepInfraProvider({
+            hasApiKey: true,
+            discoveryMode: "strict",
+            env: ctx.env,
+            agentDir: ctx.agentDir,
+          }),
       }),
   });
 }

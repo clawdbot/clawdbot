@@ -190,6 +190,7 @@ describe("loadControlUiSessionPullRequests", () => {
   });
 
   it("does not reuse cached private PRs after the GitHub token is removed", async () => {
+    const cacheLifetime = new AbortController();
     vi.stubEnv("GH_TOKEN", "github-token-a");
     const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_input, init) => {
       const authorization = new Headers(init?.headers).get("Authorization");
@@ -203,26 +204,31 @@ describe("loadControlUiSessionPullRequests", () => {
         : githubJson({ message: "Not Found" }, 404);
     });
 
-    const first = await loadControlUiSessionPullRequests(
-      { sessionKey: "agent:main:main" },
-      { fetchImpl, resolveGitContext },
-    );
-
-    vi.stubEnv("GH_TOKEN", "");
-    await expect(
-      loadControlUiSessionPullRequests(
+    try {
+      const first = await loadControlUiSessionPullRequests(
         { sessionKey: "agent:main:main" },
-        { fetchImpl, resolveGitContext },
-      ),
-    ).rejects.toMatchObject({ statusCode: 404 });
+        { fetchImpl, resolveGitContext, cacheSignal: cacheLifetime.signal },
+      );
 
-    expect(first.pullRequests[0]?.title).toBe("private PR from token A");
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(fetchImpl.mock.calls[0]?.[1]?.headers).toHaveProperty(
-      "Authorization",
-      "Bearer github-token-a",
-    );
-    expect(fetchImpl.mock.calls[1]?.[1]?.headers).not.toHaveProperty("Authorization");
+      vi.stubEnv("GH_TOKEN", "");
+      await expect(
+        loadControlUiSessionPullRequests(
+          { sessionKey: "agent:main:main" },
+          { fetchImpl, resolveGitContext, cacheSignal: cacheLifetime.signal },
+        ),
+      ).rejects.toMatchObject({ statusCode: 404 });
+
+      expect(first.pullRequests[0]?.title).toBe("private PR from token A");
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(fetchImpl.mock.calls[0]?.[1]?.headers).toHaveProperty(
+        "Authorization",
+        "Bearer github-token-a",
+      );
+      expect(fetchImpl.mock.calls[1]?.[1]?.headers).not.toHaveProperty("Authorization");
+      expect(getEventListeners(cacheLifetime.signal, "abort")).toHaveLength(1);
+    } finally {
+      cacheLifetime.abort();
+    }
   });
 
   it("skips diff and check fetches for merged PRs", async () => {
@@ -902,3 +908,4 @@ describe("loadControlUiSessionPullRequests", () => {
     );
   });
 });
+import { getEventListeners } from "node:events";

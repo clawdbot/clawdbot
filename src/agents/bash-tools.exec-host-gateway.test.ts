@@ -3264,22 +3264,6 @@ EOF`,
     startupCancellationMocks.prepare.mockImplementationOnce(() =>
       controller.abort(new Error("cancelled while preparing")),
     );
-    startupCancellationMocks.spawn.mockImplementationOnce(async (input) => ({
-      runId: input.runId ?? "cancelled-startup",
-      pid: 1234,
-      startedAtMs: Date.now(),
-      cancel: vi.fn(),
-      wait: async () => ({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 0,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      }),
-    }));
 
     const result = await runGatewayAllowlist({
       command: "find . -maxdepth 1",

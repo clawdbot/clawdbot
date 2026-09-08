@@ -39,7 +39,13 @@ function normalizePackageRelativePath(value: unknown) {
   const normalized = toPosixPath(value)
     .trim()
     .replace(/^\.\/+/u, "");
-  if (!normalized || normalized.startsWith("../") || normalized.includes("/../")) {
+  if (
+    !normalized ||
+    path.posix.isAbsolute(normalized) ||
+    path.win32.isAbsolute(normalized) ||
+    normalized.startsWith("../") ||
+    normalized.includes("/../")
+  ) {
     return "";
   }
   return normalized;
@@ -227,13 +233,29 @@ function discoverStaticExtensionRuntimeOverlayAssets(params: StaticExtensionAsse
   return [...assetsByDest.values()].toSorted((left, right) => left.dest.localeCompare(right.dest));
 }
 
-/**
- * Lists generated dist output paths for declared static extension assets.
- */
-export function listStaticExtensionAssetOutputs(params: StaticExtensionAssetParams = {}) {
-  const assets = params.assets ?? discoverStaticExtensionAssets(params);
-  return assets
-    .map(({ dest }) => dest.replace(/\\/g, "/"))
+/** Lists static asset outputs declared by extension metadata inside a packed root. */
+export function listPackagedStaticExtensionAssetOutputs(
+  params: Pick<StaticExtensionAssetParams, "rootDir" | "fs"> = {},
+) {
+  const rootDir = params.rootDir ?? process.cwd();
+  const fsImpl = params.fs ?? fs;
+  return listDistExtensionPackageDirs(rootDir, fsImpl)
+    .flatMap(({ dirName, packageDir }) => {
+      const packageJsonPath = path.join(packageDir, "package.json");
+      if (!fsImpl.existsSync(packageJsonPath)) {
+        return [];
+      }
+      const packageJson = readJsonFile(packageJsonPath, fsImpl);
+      return readPackageStaticAssetEntries(packageJson).map((entry) => {
+        const output = normalizePackageRelativePath(entry.output);
+        if (!output) {
+          throw new Error(
+            `extension ${dirName} static asset output must be a package-relative path`,
+          );
+        }
+        return toPosixPath(path.posix.join("dist", "extensions", dirName, output));
+      });
+    })
     .toSorted((left, right) => left.localeCompare(right));
 }
 

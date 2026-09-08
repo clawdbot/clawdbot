@@ -173,6 +173,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     let activePluginChannelsAfterReload: ReadonlySet<ChannelKind> | null = null;
     let pluginReloadAborted = false;
     const isLifecycleReloadAborted = () => isGatewayReloadGenerationAborted(myGeneration);
+    const ownsCron = () =>
+      isCurrentGatewayReloadGeneration(myGeneration) &&
+      !isLifecycleReloadAborted() &&
+      !isRestartRetryStopped() &&
+      params.getState().cronState === nextState.cronState;
     const isPluginReloadAborted = () =>
       pluginReloadAborted || !isCurrent() || isLifecycleReloadAborted();
     let runtimeCommitted = false;
@@ -203,15 +208,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         return;
       }
       const commit = async () => {
-        if (plan.reconcileSystemJobs) {
-          // Runtime publication promises that durable monitor rows reflect this config.
-          // A retrying or superseded pass leaves the previous generation authoritative.
-          const reconciliation = await nextState.cronState.reconcileSystemJobs(nextConfig);
-          assertReloadPublicationCurrent(publication?.isCurrent() ?? true, isRestartRetryStopped());
-          if (reconciliation !== "converged") {
-            throw new GatewayHotReloadRecoveryError("cron monitor");
-          }
-        }
         if (plan.restartHeartbeat) {
           nextState.heartbeatRunner.updateConfig(nextConfig);
         }
@@ -233,10 +229,18 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         runtimeCommitted = true;
         onCommit?.();
         setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
-        if (plan.restartCron) {
-          params.cronReconciliation.invalidate();
-          params.onCronRestart?.();
-          if (cronExitWatcherHandoff) {
+      };
+      try {
+        await (publication ? publication.publish(commit, () => runtimeCommitted) : commit());
+      } finally {
+        // Commit removes the predecessor from runtime state. Drain it even if
+        // later publication fails or the replacement loses lifecycle ownership.
+        if (runtimeCommitted && plan.restartCron) {
+          if (ownsCron()) {
+            params.cronReconciliation.invalidate();
+            params.onCronRestart?.();
+          }
+          if (cronExitWatcherHandoff && ownsCron()) {
             await cronExitWatcherHandoff.next.adopt(cronExitWatcherHandoff.previous.current());
             await cronExitWatcherHandoff.previous.stopOwner();
           } else if (state.cronState.cron.stopAndDrain) {
@@ -245,38 +249,42 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             state.cronState.cron.stop();
             await state.cronState.stopStreamWatchers();
           }
-          startGatewayCronWithLogging({
-            cronState: nextState.cronState,
-            cronReconciliation: params.cronReconciliation,
-            reason: "reload",
-            config: nextConfig,
-            afterStart: async () => {
-              await Promise.all([
-                nextState.cronState.reconcileExitWatchers(),
-                nextState.cronState.reconcileStreamWatchers(),
-              ]);
-            },
-            logCron: params.logCron,
-            onStartError: (err) => {
-              if (
-                !isCurrentGatewayReloadGeneration(myGeneration) ||
-                params.getState().cronState !== nextState.cronState
-              ) {
-                return;
-              }
-              try {
-                scheduleRecoveryRestart("cron reload", err);
-              } catch (recoveryError) {
-                params.logCron.error(formatErrorMessage(recoveryError));
-              }
-            },
-          });
         }
-      };
-      if (publication) {
-        await publication.publish(commit, () => runtimeCommitted);
-      } else {
-        await commit();
+      }
+      if (!ownsCron()) {
+        return;
+      }
+      // Only accepted runtime state may own monitor writes and emitted events.
+      if (
+        plan.reconcileSystemJobs &&
+        (await nextState.cronState.reconcileSystemJobs()) === "retry-scheduled"
+      ) {
+        throw new GatewayHotReloadRecoveryError("cron monitor");
+      }
+      if (plan.restartCron && ownsCron()) {
+        startGatewayCronWithLogging({
+          cronState: nextState.cronState,
+          cronReconciliation: params.cronReconciliation,
+          reason: "reload",
+          config: nextConfig,
+          afterStart: async () => {
+            await Promise.all([
+              nextState.cronState.reconcileExitWatchers(),
+              nextState.cronState.reconcileStreamWatchers(),
+            ]);
+          },
+          logCron: params.logCron,
+          onStartError: (err) => {
+            if (!ownsCron()) {
+              return;
+            }
+            try {
+              scheduleRecoveryRestart("cron reload", err);
+            } catch (recoveryError) {
+              params.logCron.error(formatErrorMessage(recoveryError));
+            }
+          },
+        });
       }
     };
     const settleRecoveryRestart = (

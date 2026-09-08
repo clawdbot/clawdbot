@@ -262,7 +262,7 @@ try {
       DEPENDENCY_CACHE: "false", DEPENDENCY_CACHE_HIT: "false" };
     for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"]) delete installEnv[key];
     process.stderr.write("[crabbox] reconciling selected-source dependencies\n");
-    const install = spawnSync("bash", [installer], { cwd, env: installEnv, stdio: "inherit" });
+    const install = spawnSync("bash", [installer], { cwd, env: installEnv, stdio: ["inherit", 2, 2] });
     if (install.status !== 0) fail("selected-source frozen install failed; payload was not run");
     verifySource();
   }

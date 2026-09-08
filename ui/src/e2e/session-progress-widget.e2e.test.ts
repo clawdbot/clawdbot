@@ -24,7 +24,8 @@ suite.define(() => {
     { height: 900, name: "desktop", width: 1440, routeKey: sessionKey },
     { height: 844, name: "mobile", width: 390, routeKey: sessionKey },
     { height: 900, name: "bare-route", width: 1440, routeKey: "progress-dashboard" },
-  ])("keeps an older progress card paused during a later run on $name", async (viewport) => {
+    { height: 900, name: "inactive", width: 1440, routeKey: sessionKey },
+  ])("keeps unowned progress paused on $name", async (viewport) => {
     await suite.withPage({ viewport }, async ({ page }) => {
       const now = Date.now();
       const gateway = await installMockGateway(page, {
@@ -64,7 +65,7 @@ suite.define(() => {
             card: {
               sessionKey,
               revision: 3,
-              updatedAt: now - 5 * 60_000,
+              updatedAt: viewport.name === "inactive" ? now : now - 5 * 60_000,
               markdown: "**Earlier task** remains available for reference.",
               steps: [
                 { step: "Finish the earlier task", status: "completed" },
@@ -75,7 +76,7 @@ suite.define(() => {
           },
           "sessions.list": chatSessionListResponse([
             {
-              hasActiveRun: true,
+              hasActiveRun: viewport.name !== "inactive",
               key: sessionKey,
               kind: "direct",
               label: "Later active run",

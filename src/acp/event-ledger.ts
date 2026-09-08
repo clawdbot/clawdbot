@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import {
   executeSqliteQuerySync,
+  prepareSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
@@ -13,6 +14,7 @@ import {
   type OpenClawStateDatabaseOptions,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { estimateAcpEventRowBytes, estimateAcpSessionRowBytes } from "./event-ledger-bytes.js";
 import {
   cloneAcpLedgerValue,
   createAcpPromptUpdates,
@@ -41,6 +43,203 @@ type AcpReplayEventRow = Pick<
   "session_id" | "seq" | "at" | "session_key" | "run_id" | "update_json"
 >;
 
+type AcpReplaySessionRow = Pick<
+  AcpLedgerDatabase["acp_replay_sessions"],
+  "session_id" | "session_key" | "cwd" | "complete" | "next_seq"
+>;
+
+function createSqliteLedgerQueries(db: DatabaseSync) {
+  const query = getNodeSqliteKysely<AcpLedgerDatabase>(db);
+  return {
+    readSession: prepareSqliteQuerySync<string, AcpReplaySessionRow>(db, (parameter) =>
+      sqliteSessionMetadataQuery(db).where(
+        "session_id",
+        "=",
+        parameter((sessionId) => sessionId),
+      ),
+    ),
+    updateSessionMetadata: prepareSqliteQuerySync<{
+      sessionId: string;
+      sessionKey: string;
+      cwd: string;
+      complete: number;
+      now: number;
+      metadataDelta: number;
+    }>(db, (parameter) =>
+      query
+        .updateTable("acp_replay_sessions")
+        .set((eb) => ({
+          estimated_bytes: eb(
+            "estimated_bytes",
+            "+",
+            parameter((params) => params.metadataDelta),
+          ),
+          session_key: parameter((params) => params.sessionKey),
+          cwd: parameter((params) => params.cwd),
+          complete: parameter((params) => params.complete),
+          updated_at: parameter((params) => params.now),
+        }))
+        .where(
+          "session_id",
+          "=",
+          parameter((params) => params.sessionId),
+        ),
+    ),
+    insertEvent: prepareSqliteQuerySync<{
+      sessionId: string;
+      seq: number;
+      at: number;
+      sessionKey: string;
+      runId: string | null;
+      updateJson: string;
+      eventBytes: number;
+    }>(db, (parameter) =>
+      query.insertInto("acp_replay_events").values({
+        session_id: parameter((params) => params.sessionId),
+        seq: parameter((params) => params.seq),
+        at: parameter((params) => params.at),
+        session_key: parameter((params) => params.sessionKey),
+        run_id: parameter((params) => params.runId),
+        update_json: parameter((params) => params.updateJson),
+        estimated_bytes: parameter((params) => params.eventBytes),
+      }),
+    ),
+    updateSessionAfterAppend: prepareSqliteQuerySync<{
+      sessionId: string;
+      eventBytes: number;
+      now: number;
+      nextSeq: number;
+    }>(db, (parameter) =>
+      query
+        .updateTable("acp_replay_sessions")
+        .set((eb) => ({
+          estimated_bytes: eb(
+            "estimated_bytes",
+            "+",
+            parameter((params) => params.eventBytes),
+          ),
+          updated_at: parameter((params) => params.now),
+          next_seq: parameter((params) => params.nextSeq),
+        }))
+        .where(
+          "session_id",
+          "=",
+          parameter((params) => params.sessionId),
+        ),
+    ),
+    readOverCapSessions: prepareSqliteQuerySync<
+      number,
+      { session_id: string; event_count: number }
+    >(db, (parameter) =>
+      query
+        .selectFrom(
+          query
+            .selectFrom("acp_replay_sessions as s")
+            .leftJoin("acp_replay_events as e", "e.session_id", "s.session_id")
+            .select("s.session_id")
+            .select((eb) => eb.fn.count<number>("e.seq").as("event_count"))
+            .groupBy("s.session_id")
+            .as("counts"),
+        )
+        .select(["session_id", "event_count"])
+        .where(
+          "event_count",
+          ">",
+          parameter((limit) => limit),
+        ),
+    ),
+    readExcessSessions: prepareSqliteQuerySync<number, { session_id: string }>(db, (parameter) =>
+      query
+        .selectFrom("acp_replay_sessions")
+        .select("session_id")
+        .orderBy("updated_at", "desc")
+        .orderBy("session_id", "asc")
+        .limit(-1)
+        .offset(parameter((limit) => limit)),
+    ),
+    readTotalBytes: prepareSqliteQuerySync<void, { total: number }>(db, () =>
+      query
+        .selectFrom("acp_replay_sessions")
+        .select((eb) =>
+          eb.fn.coalesce(eb.fn.sum<number>("estimated_bytes"), eb.val(0)).as("total"),
+        ),
+    ),
+    readOldestSession: prepareSqliteQuerySync<void, { session_id: string }>(db, () =>
+      query
+        .selectFrom("acp_replay_sessions")
+        .select("session_id")
+        .orderBy("updated_at", "asc")
+        .orderBy("session_id", "asc")
+        .limit(1),
+    ),
+    deleteOldestEvents: prepareSqliteQuerySync<
+      { sessionId: string; limit: number },
+      { estimated_bytes: number }
+    >(db, (parameter) => {
+      const sessionId = parameter((params) => params.sessionId);
+      return query
+        .deleteFrom("acp_replay_events")
+        .where("session_id", "=", sessionId)
+        .where(
+          "seq",
+          "in",
+          query
+            .selectFrom("acp_replay_events")
+            .select("seq")
+            .where("session_id", "=", sessionId)
+            .orderBy("seq", "asc")
+            .limit(parameter((params) => params.limit)),
+        )
+        .returning("estimated_bytes");
+    }),
+    subtractSessionBytes: prepareSqliteQuerySync<{ sessionId: string; freed: number }>(
+      db,
+      (parameter) =>
+        query
+          .updateTable("acp_replay_sessions")
+          .set((eb) => ({
+            estimated_bytes: eb.fn<number>("max", [
+              eb.val(0),
+              eb(
+                "estimated_bytes",
+                "-",
+                parameter((params) => params.freed),
+              ),
+            ]),
+            complete: 0,
+          }))
+          .where(
+            "session_id",
+            "=",
+            parameter((params) => params.sessionId),
+          ),
+    ),
+    deleteSession: prepareSqliteQuerySync<string>(db, (parameter) =>
+      query.deleteFrom("acp_replay_sessions").where(
+        "session_id",
+        "=",
+        parameter((sessionId) => sessionId),
+      ),
+    ),
+  };
+}
+
+const sqliteLedgerQueries = new WeakMap<
+  DatabaseSync,
+  ReturnType<typeof createSqliteLedgerQueries>
+>();
+
+function getSqliteLedgerQueries(db: DatabaseSync) {
+  let queries = sqliteLedgerQueries.get(db);
+  if (!queries) {
+    // Retain compilation per physical connection; native statements and their
+    // invalidation remain owned by the bounded shared executor cache.
+    queries = createSqliteLedgerQueries(db);
+    sqliteLedgerQueries.set(db, queries);
+  }
+  return queries;
+}
+
 function sqliteRowToLedgerEvent(row: AcpReplayEventRow): AcpEventLedgerEntry | undefined {
   let update: unknown;
   try {
@@ -65,10 +264,7 @@ function sqliteSessionMetadataQuery(db: DatabaseSync) {
 }
 
 function readSqliteSessionById(db: DatabaseSync, sessionId: string) {
-  return executeSqliteQueryTakeFirstSync(
-    db,
-    sqliteSessionMetadataQuery(db).where("session_id", "=", sessionId),
-  );
+  return getSqliteLedgerQueries(db).readSession(sessionId).rows[0];
 }
 
 function readLatestCompleteSqliteSessionByKey(db: DatabaseSync, sessionKey: string) {
@@ -99,22 +295,21 @@ function upsertSqliteSession(
   if (existing) {
     const cwd = params.cwd || existing.cwd;
     const complete = normalizeSqliteInteger(existing.complete) === 1 || params.complete ? 1 : 0;
-    // SET expressions read the pre-update row, so the aggregate sheds the old
-    // key/cwd lengths and gains the new ones; drift here would silently
-    // unbound the byte budget.
-    db.prepare(
-      `UPDATE acp_replay_sessions
-          SET estimated_bytes = estimated_bytes - length(session_key) - length(cwd) + ?,
-              session_key = ?, cwd = ?, complete = ?, updated_at = ?
-        WHERE session_id = ?`,
-    ).run(
-      params.sessionKey.length + cwd.length,
-      params.sessionKey,
+    const metadataDelta =
+      estimateAcpSessionRowBytes({ ...params, cwd }) -
+      estimateAcpSessionRowBytes({
+        sessionId: params.sessionId,
+        sessionKey: existing.session_key,
+        cwd: existing.cwd,
+      });
+    getSqliteLedgerQueries(db).updateSessionMetadata({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
       cwd,
       complete,
       now,
-      params.sessionId,
-    );
+      metadataDelta,
+    });
     return normalizeSqliteInteger(existing.next_seq);
   }
 
@@ -123,7 +318,7 @@ function upsertSqliteSession(
   }
   // A fresh or reset session's footprint is just its own row overhead; event
   // bytes accumulate onto the aggregate as appends land.
-  const rowBytes = estimateSessionRowBytes({
+  const rowBytes = estimateAcpSessionRowBytes({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     cwd: params.cwd,
@@ -160,33 +355,8 @@ function upsertSqliteSession(
 // sums over at most maxSessions rows instead of scanning every event per
 // append, which was O(events) per message and quadratic while trimming.
 function estimateSqliteLedgerBytes(db: DatabaseSync): number {
-  const row = db
-    .prepare("SELECT COALESCE(SUM(estimated_bytes), 0) AS total FROM acp_replay_sessions")
-    .get() as { total?: number | bigint } | undefined;
+  const row = getSqliteLedgerQueries(db).readTotalBytes().rows[0];
   return normalizeSqliteInteger(row?.total ?? 0);
-}
-
-function estimateSessionRowBytes(params: {
-  sessionId: string;
-  sessionKey: string;
-  cwd: string;
-}): number {
-  return params.sessionId.length + params.sessionKey.length + params.cwd.length + 32;
-}
-
-function estimateEventRowBytes(params: {
-  sessionId: string;
-  sessionKey: string;
-  runId?: string;
-  updateJson: string;
-}): number {
-  return (
-    params.sessionId.length +
-    params.sessionKey.length +
-    params.updateJson.length +
-    (params.runId?.length ?? 0) +
-    32
-  );
 }
 
 const LEDGER_TRIM_EVENT_BATCH = 64;
@@ -194,28 +364,13 @@ const LEDGER_TRIM_EVENT_BATCH = 64;
 // Deletes up to `limit` oldest events for one session and returns the bytes
 // released, keeping the session aggregate in sync in the same statement pair.
 function deleteOldestSqliteEvents(db: DatabaseSync, sessionId: string, limit: number): number {
-  const rows = db
-    .prepare(
-      `DELETE FROM acp_replay_events
-        WHERE session_id = ?
-          AND seq IN (
-            SELECT seq FROM acp_replay_events
-             WHERE session_id = ?
-             ORDER BY seq ASC
-             LIMIT ?
-          )
-        RETURNING estimated_bytes`,
-    )
-    .all(sessionId, sessionId, limit) as Array<{ estimated_bytes: number | bigint }>;
+  const queries = getSqliteLedgerQueries(db);
+  const rows = queries.deleteOldestEvents({ sessionId, limit }).rows;
   if (rows.length === 0) {
     return 0;
   }
   const freed = rows.reduce((sum, row) => sum + normalizeSqliteInteger(row.estimated_bytes), 0);
-  db.prepare(
-    `UPDATE acp_replay_sessions
-        SET estimated_bytes = MAX(0, estimated_bytes - ?), complete = 0
-      WHERE session_id = ?`,
-  ).run(freed, sessionId);
+  queries.subtractSessionBytes({ sessionId, freed });
   return rows.length;
 }
 
@@ -225,16 +380,8 @@ function trimSqliteLedger(
 ): void {
   // Cheap precheck: only sessions actually above the per-session cap pay for
   // event deletion (Codex log-partition pattern).
-  const overCapSessions = db
-    .prepare(
-      `SELECT session_id, event_count FROM (
-         SELECT s.session_id AS session_id, COUNT(e.seq) AS event_count
-           FROM acp_replay_sessions s
-           LEFT JOIN acp_replay_events e ON e.session_id = s.session_id
-          GROUP BY s.session_id
-       ) WHERE event_count > ?`,
-    )
-    .all(state.maxEventsPerSession) as Array<{ session_id: string; event_count: number | bigint }>;
+  const queries = getSqliteLedgerQueries(db);
+  const overCapSessions = queries.readOverCapSessions(state.maxEventsPerSession).rows;
   for (const row of overCapSessions) {
     const overage = normalizeSqliteInteger(row.event_count) - state.maxEventsPerSession;
     if (overage > 0) {
@@ -242,16 +389,9 @@ function trimSqliteLedger(
     }
   }
 
-  const oldSessions = db
-    .prepare(
-      `SELECT session_id
-         FROM acp_replay_sessions
-        ORDER BY updated_at DESC, session_id ASC
-        LIMIT -1 OFFSET ?`,
-    )
-    .all(state.maxSessions) as Array<{ session_id: string }>;
+  const oldSessions = queries.readExcessSessions(state.maxSessions).rows;
   for (const session of oldSessions) {
-    db.prepare("DELETE FROM acp_replay_sessions WHERE session_id = ?").run(session.session_id);
+    queries.deleteSession(session.session_id);
   }
 
   // Byte budget: evict from the least-recently-updated session in bounded
@@ -259,20 +399,13 @@ function trimSqliteLedger(
   // Aggregates keep every recheck O(maxSessions); no event scans occur.
   let serializedBytes = estimateSqliteLedgerBytes(db);
   while (serializedBytes > state.maxSerializedBytes) {
-    const session = db
-      .prepare(
-        `SELECT session_id
-           FROM acp_replay_sessions
-          ORDER BY updated_at ASC, session_id ASC
-          LIMIT 1`,
-      )
-      .get() as { session_id: string } | undefined;
+    const session = queries.readOldestSession().rows[0];
     if (!session) {
       break;
     }
     const deleted = deleteOldestSqliteEvents(db, session.session_id, LEDGER_TRIM_EVENT_BATCH);
     if (deleted === 0) {
-      db.prepare("DELETE FROM acp_replay_sessions WHERE session_id = ?").run(session.session_id);
+      queries.deleteSession(session.session_id);
     }
     serializedBytes = estimateSqliteLedgerBytes(db);
   }
@@ -299,38 +432,29 @@ function appendSqliteUpdate(
   });
   const now = state.now();
   const updateJson = JSON.stringify(cloneAcpLedgerValue(params.update));
-  const eventBytes = estimateEventRowBytes({
+  const eventBytes = estimateAcpEventRowBytes({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     ...(params.runId !== undefined ? { runId: params.runId } : {}),
     updateJson,
   });
-  db.prepare(
-    `INSERT INTO acp_replay_events (session_id, seq, at, session_key, run_id, update_json, estimated_bytes)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    params.sessionId,
-    nextSeq,
-    now,
-    params.sessionKey,
-    params.runId ?? null,
+  const queries = getSqliteLedgerQueries(db);
+  queries.insertEvent({
+    sessionId: params.sessionId,
+    seq: nextSeq,
+    at: now,
+    sessionKey: params.sessionKey,
+    runId: params.runId ?? null,
     updateJson,
     eventBytes,
-  );
-  // The delta covers the new event plus any session-key length change; SET
-  // expressions read the pre-update row, keeping the aggregate exact.
-  db.prepare(
-    `UPDATE acp_replay_sessions
-        SET estimated_bytes = estimated_bytes - length(session_key) + ?,
-            session_key = ?, updated_at = ?, next_seq = ?
-      WHERE session_id = ?`,
-  ).run(
-    params.sessionKey.length + eventBytes,
-    params.sessionKey,
+  });
+  // Upsert already accounted for metadata; only the new event remains.
+  queries.updateSessionAfterAppend({
+    sessionId: params.sessionId,
+    eventBytes,
     now,
-    nextSeq + 1,
-    params.sessionId,
-  );
+    nextSeq: nextSeq + 1,
+  });
   trimSqliteLedger(db, state);
 }
 

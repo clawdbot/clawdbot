@@ -114,7 +114,7 @@ describe("placement reclaim with provider-owned node teardown", () => {
           payloadJSON: nodeSupport.workspaceCommandPayload(active.remoteWorkspaceDir, { stdout }),
         };
       });
-      transport.invoke = invoke;
+      transport.invoke = nodeSupport.withWorkspaceDrain(invoke);
       const transfer = nodeSupport.workspaceTransfer();
       transfer.closeAll = vi.fn(async () => {});
       transfer.prepareSync = vi.fn(async () => ({
@@ -136,7 +136,7 @@ describe("placement reclaim with provider-owned node teardown", () => {
         workspaceTransfer: transfer,
       });
       tunnels.bindWorkspaceBindingResolver(async () => ({
-        localPath: support.testState.root,
+        source: { kind: "local", path: support.testState.root },
         remoteWorkspaceDir: active.remoteWorkspaceDir,
         manifestRef: MANIFEST_REF,
       }));

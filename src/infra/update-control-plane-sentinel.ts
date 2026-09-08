@@ -81,6 +81,7 @@ function normalizeMeta(value: unknown): ControlPlaneUpdateSentinelMetaFile["meta
   const threadId = readNonBlankString(value.threadId);
   const handoffId = readNonBlankString(value.handoffId);
   const root = readNonBlankString(value.root);
+  const target = readNonBlankString(value.target);
   const triageContextPath = readNonBlankString(value.triageContextPath);
   const channel = isRecord(value.deliveryContext)
     ? readNonBlankString(value.deliveryContext.channel)
@@ -107,6 +108,7 @@ function normalizeMeta(value: unknown): ControlPlaneUpdateSentinelMetaFile["meta
       ? { serviceStoppedAtMs: value.serviceStoppedAtMs }
       : {}),
     ...(root ? { root } : {}),
+    ...(target ? { target } : {}),
     ...(triageContextPath ? { triageContextPath } : {}),
     ...(sessionKey ? { sessionKey } : {}),
     ...(deliveryContext ? { deliveryContext } : {}),

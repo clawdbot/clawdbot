@@ -6,6 +6,7 @@ import {
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -23,11 +24,7 @@ suite.define(() => {
   it.each(["named", "short"] as const)(
     "retains deferred history across %s chat canonicalization",
     async (reference) => {
-      const context = await suite.newBrowserContext({
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      });
+      const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
       const page = await context.newPage();
       const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
       const marker = "The selected conversation survived canonical navigation.";
@@ -110,11 +107,7 @@ suite.define(() => {
   );
 
   it("renders a failed history load in the transcript and retries it", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["chat.startup"],
@@ -165,11 +158,7 @@ suite.define(() => {
   });
 
   it("automatically resumes retryable history failures once after reconnect", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["chat.startup"],
@@ -215,11 +204,7 @@ suite.define(() => {
     }
   });
   it("keeps cached history visible and actionable when a refresh fails", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       historyMessages: [

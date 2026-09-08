@@ -25,6 +25,7 @@ export default defineSingleProviderPluginEntry({
       noteTitle: "Meta",
     },
     catalog: {
+      discoveryMode: "strict",
       buildProvider: buildMetaProvider,
       buildStaticProvider: buildMetaProvider,
       liveModelDiscovery: true,

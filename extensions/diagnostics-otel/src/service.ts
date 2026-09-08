@@ -601,7 +601,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         metricsActive
           ? undefined
           : tracesActive
-            ? { exclude: ["gateway.event_loop.sample"] }
+            ? { exclude: ["gateway.event_loop.sample", "diagnostic.gc"] }
             : { include: ["log.record", "security.event"] },
       );
       if (tracesActive) {

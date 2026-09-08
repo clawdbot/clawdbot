@@ -4,12 +4,18 @@ import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import {
+  persistSubagentRunsToDiskOrThrow,
+  clearSubagentRunsReadCacheForTest,
+} from "../agents/subagents/registry/subagent-registry-state.js";
+import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { setRuntimeConfigSnapshot } from "../config/io.js";
 import {
   deleteSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { boardStore } from "./board-store.js";
 import { progressCardStore } from "./progress-card-store.js";
@@ -22,6 +28,7 @@ import { createBoardHandlers } from "./server-methods/board.js";
 import { createProgressCardHandlers } from "./server-methods/progress-card.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
+import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { createSessionObserverAudience } from "./session-observer-audience.js";
@@ -797,5 +804,123 @@ describe("collaboration event scope guards", () => {
     expect(reader.socket.events).toEqual(["session.typing"]);
     expect(unrelated.socket.events).toEqual([]);
     expect(canReceiveSessionEvent).toHaveBeenCalledTimes(4);
+  });
+});
+
+it("delivers committed collector updates to a parent-only cross-agent viewer", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg: OpenClawConfig = {
+      ...rolePolicyConfig(),
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+    };
+    setRuntimeConfigSnapshot(cfg, cfg);
+    clearSubagentRunsReadCacheForTest();
+    const peers = ["parent-viewer", "child-viewer"].map((name) => {
+      const peer = makeClient(name, "operator", ["operator.read"]);
+      Object.assign(peer.client, roleClient("view", name));
+      return peer;
+    });
+    const parent = { sessionKey: "global", agentId: "ops" };
+    const child = { sessionKey: "agent:research:subagent:collector", agentId: "research" };
+    for (const [index, target] of [parent, child].entries()) {
+      await upsertSessionEntryCore(target, {
+        sessionId: peers[index]!.client.connId,
+        updatedAt: 1,
+        visibility: "draft",
+        createdActor: {
+          type: "human",
+          source: "profile",
+          id: peers[index]!.client.authenticatedUserProfile!.profileId,
+        },
+      });
+    }
+    invalidateSessionSharingSnapshot();
+    expect(
+      canReceiveSessionEventForClient({
+        cfg,
+        client: peers[0]!.client,
+        sessionKeys: [child.sessionKey],
+        agentId: child.agentId,
+        event: "sessions.changed",
+      }),
+    ).toBe(false);
+    const { broadcastToConnIds } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry(peers.map(({ client }) => client)),
+      canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
+        canReceiveSessionEventForClient({ cfg, client, sessionKeys, agentId, event, payload }),
+    });
+    const unsubscribe = onSessionLifecycleEvent(
+      createLifecycleEventBroadcastHandler({
+        broadcastToConnIds,
+        sessionEventSubscribers: {
+          getAll: () => new Set(peers.map(({ client }) => client.connId)),
+        },
+        chatAbortControllers: new Map([
+          [
+            "parent-run",
+            {
+              controller: new AbortController(),
+              sessionId: "parent-viewer",
+              sessionKey: parent.sessionKey,
+              agentId: parent.agentId,
+              startedAtMs: 1,
+              expiresAtMs: Date.now() + 60_000,
+              projectSessionActive: true,
+              executionStarted: true,
+            },
+          ],
+        ]),
+      }),
+    );
+    const run: SubagentRunRecord = {
+      runId: "collector",
+      childSessionKey: child.sessionKey,
+      requesterSessionKey: "agent:research:private-delivery",
+      requesterDisplayKey: "private child",
+      swarmRequesterSessionKey: parent.sessionKey,
+      requesterAgentId: parent.agentId,
+      collect: true,
+      groupId: "opaque-batch",
+      createdAt: 1,
+      cleanup: "keep",
+      task: "child-private task",
+      execution: { status: "queued" },
+      completion: { required: false },
+      delivery: { status: "not_required" },
+    };
+    const runs = new Map([[run.runId, run]]);
+    try {
+      persistSubagentRunsToDiskOrThrow(runs, [run.runId]);
+      run.execution = { status: "running", startedAt: 2 };
+      persistSubagentRunsToDiskOrThrow(runs, [run.runId]);
+      run.execution = { status: "terminal", endedAt: 3, outcome: { status: "error" } };
+      run.collectorCompletion = {
+        status: "failed",
+        structured: { private: "child-private result" },
+      };
+      persistSubagentRunsToDiskOrThrow(runs, [run.runId]);
+      runs.clear();
+      persistSubagentRunsToDiskOrThrow(runs, [run.runId]);
+      expect(peers[0]!.socket.events).toEqual(Array(4).fill("sessions.changed"));
+      expect(peers[1]!.socket.events).toEqual([]);
+      for (const [raw] of peers[0]!.socket.send.mock.calls) {
+        const event = JSON.parse(raw);
+        expect(event.payload).toMatchObject({
+          sessionKey: "global",
+          agentId: "ops",
+          reason: "swarm",
+          status: "running",
+          hasActiveRun: true,
+          activeRunIds: ["parent-run"],
+        });
+        expect(event.payload).not.toHaveProperty("phase");
+        expect(raw).not.toContain("child-private");
+        expect(raw).not.toContain(child.sessionKey);
+      }
+    } finally {
+      unsubscribe();
+      clearSubagentRunsReadCacheForTest();
+      invalidateSessionSharingSnapshot();
+    }
   });
 });

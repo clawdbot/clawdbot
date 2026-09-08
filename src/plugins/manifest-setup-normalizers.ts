@@ -182,12 +182,34 @@ export function normalizeManifestSetup(value: unknown): PluginManifestSetup | un
   const providers = normalizeManifestSetupProviders(value.providers);
   const cliBackends = normalizeTrimmedStringList(value.cliBackends);
   const configMigrations = normalizeTrimmedStringList(value.configMigrations);
+  const nativeSessionCatalog = isRecord(value.nativeSessionCatalog)
+    ? {
+        label: normalizeOptionalString(value.nativeSessionCatalog.label) ?? "",
+        description: normalizeOptionalString(value.nativeSessionCatalog.description),
+        nodeCommands: normalizeTrimmedStringList(value.nativeSessionCatalog.nodeCommands),
+        legacyDefaultEnabled: value.nativeSessionCatalog.legacyDefaultEnabled === true,
+      }
+    : undefined;
   const requiresRuntime =
     typeof value.requiresRuntime === "boolean" ? value.requiresRuntime : undefined;
   const setup = {
     ...(providers ? { providers } : {}),
     ...(cliBackends.length > 0 ? { cliBackends } : {}),
     ...(configMigrations.length > 0 ? { configMigrations } : {}),
+    ...(nativeSessionCatalog?.label
+      ? {
+          nativeSessionCatalog: {
+            label: nativeSessionCatalog.label,
+            ...(nativeSessionCatalog.legacyDefaultEnabled ? { legacyDefaultEnabled: true } : {}),
+            ...(nativeSessionCatalog.nodeCommands.length > 0
+              ? { nodeCommands: nativeSessionCatalog.nodeCommands }
+              : {}),
+            ...(nativeSessionCatalog.description
+              ? { description: nativeSessionCatalog.description }
+              : {}),
+          },
+        }
+      : {}),
     ...(requiresRuntime !== undefined ? { requiresRuntime } : {}),
   } satisfies PluginManifestSetup;
   return Object.keys(setup).length > 0 ? setup : undefined;

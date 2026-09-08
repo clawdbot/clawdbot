@@ -1,4 +1,10 @@
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import type { DatabaseSync } from "node:sqlite";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { ConfigMachineStateDatabase } from "../state/config-machine-state.js";
+import {
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   resolveInstalledPluginIndexStateDatabaseOptions,
@@ -14,15 +20,20 @@ export function readPersistedInstalledPluginIndexRowSync(
   if (options.filePath?.endsWith(".json")) {
     return undefined;
   }
-  return withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+  const read = ({ db }: { db: DatabaseSync }) => {
     if (!tableExists(db, "config_machine_state")) {
       return undefined;
     }
-    return (
-      db
-        .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
-        // SAFETY: config_machine_state.value_json is TEXT NOT NULL under STRICT.
-        .get(INSTALLED_PLUGIN_INDEX_STATE_KEY) as { value_json: string } | undefined
+    return executeSqliteQueryTakeFirstSync(
+      db,
+      getNodeSqliteKysely<ConfigMachineStateDatabase>(db)
+        .selectFrom("config_machine_state")
+        .select("value_json")
+        .where("state_key", "=", INSTALLED_PLUGIN_INDEX_STATE_KEY),
     );
-  }, resolveInstalledPluginIndexStateDatabaseOptions(options));
+  };
+  const databaseOptions = resolveInstalledPluginIndexStateDatabaseOptions(options);
+  return options.artifactPreservingReadOnly
+    ? withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(read, databaseOptions)
+    : withExistingOpenClawStateDatabaseReadOnly(read, databaseOptions);
 }

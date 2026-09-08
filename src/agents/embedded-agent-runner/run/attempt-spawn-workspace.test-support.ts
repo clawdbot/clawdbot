@@ -73,6 +73,7 @@ type SessionManagerMocks = {
   getLeafId: Mock<() => string | null>;
   getLeafEntry: UnknownMock;
   getEntry: UnknownMock;
+  getEntries: UnknownMock;
   getBoundaryCount: UnknownMock;
   branch: UnknownMock;
   resetLeaf: UnknownMock;
@@ -283,6 +284,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     getLeafId: vi.fn<() => string | null>(() => null),
     getLeafEntry: vi.fn(() => null),
     getEntry: vi.fn(() => undefined),
+    getEntries: vi.fn(() => []),
     getBoundaryCount: vi.fn(() => 0),
     branch: vi.fn(),
     resetLeaf: vi.fn(),
@@ -1145,6 +1147,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.sessionManager.getLeafId.mockReset().mockReturnValue(null);
   hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
   hoisted.sessionManager.getEntry.mockReset().mockReturnValue(undefined);
+  hoisted.sessionManager.getEntries.mockReset().mockReturnValue([]);
   hoisted.sessionManager.getBoundaryCount.mockReset().mockReturnValue(0);
   hoisted.sessionManager.branch.mockReset();
   hoisted.sessionManager.resetLeaf.mockReset();

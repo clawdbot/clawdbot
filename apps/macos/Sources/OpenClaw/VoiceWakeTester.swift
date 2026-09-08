@@ -302,22 +302,14 @@ final class VoiceWakeTester {
             transcript: transcript,
             triggers: triggers,
             segments: segments)
-        let gaps = Self.debugCandidateGaps(triggers: triggers, segments: segments)
-        let segmentSummary = Self.debugSegments(segments)
         let matchSummary = VoiceWakeRecognitionDebugSupport.matchSummary(match)
 
         self.logger.debug(
             "voicewake test transcript='\(transcript, privacy: .private)' textOnly=\(summary.textOnly) " +
                 "isFinal=\(isFinal) timing=\(summary.timingCount)/\(segments.count) " +
-                "\(matchSummary) gaps=[\(gaps, privacy: .private)] segments=[\(segmentSummary, privacy: .private)]")
-    }
-
-    private static func debugSegments(_ segments: [WakeWordSegment]) -> String {
-        segments.map { seg in
-            let start = String(format: "%.2f", seg.start)
-            let end = String(format: "%.2f", seg.end)
-            return "\(seg.text)@\(start)-\(end)"
-        }.joined(separator: ", ")
+                "\(matchSummary) " +
+                "gaps=[\(Self.debugCandidateGaps(triggers: triggers, segments: segments), privacy: .private)] " +
+                "segments=[\(VoiceWakeRecognitionDebugSupport.segmentSummary(segments), privacy: .private)]")
     }
 
     private static func debugCandidateGaps(triggers: [String], segments: [WakeWordSegment]) -> String {

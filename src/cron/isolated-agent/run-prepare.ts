@@ -445,6 +445,7 @@ export async function prepareCronRunContext(params: {
     if (!requestedThinkLevel) {
       requestedThinkLevel = resolveThinkingDefault({
         cfg: cfgWithAgentDefaults,
+        agentId: modelOwner.agentId,
         provider,
         model,
         catalog: thinkingSelection.catalog,

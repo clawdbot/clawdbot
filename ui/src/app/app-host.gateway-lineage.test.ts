@@ -422,7 +422,7 @@ describe("Control UI Gateway target lineage", () => {
     const surface = renderGatewaySurface(gateway);
 
     expect(gateway.snapshot.phase).toBe("starting");
-    expect(surface).toContain('class="connect-splash"');
+    expect(surface).toContain('class="connect-splash connect-splash--skeleton"');
     expect(surface).toContain("Gateway starting…");
     expect(surface).not.toContain("<openclaw-login-gate");
   });
@@ -500,7 +500,7 @@ describe("Control UI Gateway target lineage", () => {
 
       const surface = renderGatewaySurface(gateway, documentView);
 
-      expect(surface).toContain('class="connect-splash"');
+      expect(surface).toContain('class="connect-splash connect-splash--skeleton"');
       expect(surface).toContain("Gateway starting…");
     },
   );

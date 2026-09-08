@@ -15,6 +15,9 @@ vi.mock("../discovery.js", () => ({
 }));
 
 vi.mock("../manifest-registry.js", () => ({
+  loadBundledPluginManifestRegistry: (
+    ...args: Parameters<typeof registryJitiMocks.loadPluginManifestRegistry>
+  ) => registryJitiMocks.loadPluginManifestRegistry(...args),
   loadPluginManifestRegistryCore: (
     ...args: Parameters<typeof registryJitiMocks.loadPluginManifestRegistry>
   ) => registryJitiMocks.loadPluginManifestRegistry(...args),

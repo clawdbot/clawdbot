@@ -265,9 +265,12 @@ function mockMatrixVerificationSummary(overrides: Record<string, unknown> = {}) 
 }
 
 describe("matrix CLI verification commands", () => {
+  let previousExitCode: typeof process.exitCode;
+
   beforeEach(() => {
     vi.clearAllMocks();
-    process.exitCode = undefined;
+    previousExitCode = process.exitCode;
+    process.exitCode = 0;
     vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => consoleLogMock(...args));
     vi.spyOn(console, "error").mockImplementation((...args: unknown[]) =>
       consoleErrorMock(...args),
@@ -329,7 +332,7 @@ describe("matrix CLI verification commands", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-    process.exitCode = undefined;
+    process.exitCode = previousExitCode ?? 0;
   });
 
   it("sets non-zero exit code for device verification failures in JSON mode", async () => {
@@ -899,7 +902,7 @@ describe("matrix CLI verification commands", () => {
         expect(output).toContain(`Recovery key stored: ${recoveryKey === null ? "no" : "yes"}`);
         expect(output).not.toContain("test-recovery-key");
         expect(stdoutWriteMock).not.toHaveBeenCalled();
-        expect(process.exitCode).toBeUndefined();
+        expect(process.exitCode).toBe(0);
       },
     );
 
@@ -920,7 +923,7 @@ describe("matrix CLI verification commands", () => {
       });
       expect(JSON.parse(String(stdoutWriteArg()))).toEqual(status);
       expect(consoleLogMock).not.toHaveBeenCalled();
-      expect(process.exitCode).toBeUndefined();
+      expect(process.exitCode).toBe(0);
     });
   });
 
@@ -1345,7 +1348,7 @@ describe("matrix CLI verification commands", () => {
           status: matrixVerificationStatus(),
         });
       }
-      expect(process.exitCode).toBeUndefined();
+      expect(process.exitCode).toBe(0);
     },
   );
 
@@ -1462,7 +1465,7 @@ describe("matrix CLI verification commands", () => {
     });
     await runMatrixCli(["matrix", "encryption", "setup", "--json"]);
 
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
     const write = mockCallArg(matrixRuntimeReplaceConfigFileMock) as { nextConfig: CoreConfig };
     expect(write.nextConfig.channels?.matrix?.accessToken).toEqual(
       source.channels?.matrix?.accessToken,
@@ -1503,7 +1506,7 @@ describe("matrix CLI verification commands", () => {
     );
 
     expect(matrixRuntimeReplaceConfigFileMock).toHaveBeenCalledOnce();
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
     const result = JSON.parse(String(stdoutWriteArg()));
     expect(result.encryptionEnabled).toBe(true);
     expectRecordFields(result.verificationBootstrap, {
@@ -1579,7 +1582,7 @@ describe("matrix CLI verification commands", () => {
     await runMatrixCli(matrixAccountPasswordArgs());
 
     expect(matrixRuntimeReplaceConfigFileMock).toHaveBeenCalled();
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
     expect(console.log).toHaveBeenCalledWith("Saved matrix account: ops");
     expect(console.error).toHaveBeenCalledWith(
       "Matrix device health warning: homeserver unavailable",
@@ -1591,7 +1594,7 @@ describe("matrix CLI verification commands", () => {
     await runMatrixCli(matrixAccountPasswordArgs("ops", "--json"));
 
     expect(matrixRuntimeReplaceConfigFileMock).toHaveBeenCalled();
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
     const jsonOutput = stdoutWriteArg();
     expect(typeof jsonOutput).toBe("string");
     const payload = JSON.parse(String(jsonOutput)) as Record<string, unknown>;
@@ -1689,6 +1692,7 @@ describe("matrix CLI verification commands", () => {
       "mxc://example/avatar",
     ]);
 
+    expect(process.exitCode ?? 0).toBe(0);
     expectRecordFields(mockCallArg(updateMatrixOwnProfileMock), {
       accountId: "alerts",
       displayName: "Alerts Bot",

@@ -19,9 +19,13 @@ const CONTROL_UI_SESSION_PR_LOAD_CONCURRENCY = 4;
 
 type LoadSessionPullRequests = (
   params: ControlUiSessionPullRequestsParams,
+  cacheSignal?: AbortSignal,
 ) => Promise<ControlUiSessionPullRequests>;
 
 type WatchedKeyState = {
+  connIds: Set<string>;
+  // Retire cache pins with the shared key, without cancelling another watcher's load.
+  cacheLifetime: AbortController;
   hash?: string;
   snapshot?: ControlUiSessionPullRequestSnapshot;
 };
@@ -47,9 +51,10 @@ type ControlUiSessionPullRequestSubscriptions = {
 
 async function loadSessionPullRequests(
   params: ControlUiSessionPullRequestsParams,
+  cacheSignal?: AbortSignal,
 ): Promise<ControlUiSessionPullRequests> {
   const { loadControlUiSessionPullRequests } = await import("./control-ui-session-prs.js");
-  return await loadControlUiSessionPullRequests(params);
+  return await loadControlUiSessionPullRequests(params, { cacheSignal });
 }
 
 function pushedSnapshot(result: ControlUiSessionPullRequests): ControlUiSessionPullRequestSnapshot {
@@ -144,24 +149,21 @@ export function createControlUiSessionPullRequestSubscriptions(
   const scope = new AsyncWorkScope();
   let stopPromise: Promise<void> | undefined;
 
-  const subscribersForKey = (sessionKey: string): Set<string> => {
-    const connIds = new Set<string>();
-    for (const [connId, keys] of subscriptions) {
-      if (keys.has(sessionKey)) {
-        connIds.add(connId);
+  const removeMemberships = (
+    connId: string,
+    previous: ReadonlyMap<string, unknown> | undefined,
+    retained?: ReadonlyMap<string, unknown>,
+  ) => {
+    for (const key of previous?.keys() ?? []) {
+      if (!retained?.has(key)) {
+        const state = keyStates.get(key);
+        state?.connIds.delete(connId);
+        if (state?.connIds.size === 0) {
+          state.cacheLifetime.abort(null);
+          keyStates.delete(key);
+        }
       }
     }
-    return connIds;
-  };
-
-  const watchedKeys = (): Set<string> => {
-    const keys = new Set<string>();
-    for (const watched of subscriptions.values()) {
-      for (const key of watched.keys()) {
-        keys.add(key);
-      }
-    }
-    return keys;
   };
 
   const loadSnapshot = (
@@ -192,7 +194,7 @@ export function createControlUiSessionPullRequestSubscriptions(
           return UNAVAILABLE_SNAPSHOT;
         }
         // Fresh result identity acknowledges forced loads even when the failure is unchanged.
-        const snapshot = await load(loaderParams(sessionKey, refresh))
+        const snapshot = await load(loaderParams(sessionKey, refresh), state.cacheLifetime.signal)
           .then(pushedSnapshot)
           .catch(() => ({ ...UNAVAILABLE_SNAPSHOT }));
         if (keyStates.get(sessionKey) === state) {
@@ -201,7 +203,8 @@ export function createControlUiSessionPullRequestSubscriptions(
           Object.assign(state, { hash, snapshot });
           // Publish once at the shared owner, using the latest snapshot and watcher union.
           if (changed) {
-            push(subscribersForKey(sessionKey), sessionKey, snapshot);
+            // A send can synchronously retire a watcher; delivery acknowledges this snapshot only.
+            push(new Set(state.connIds), sessionKey, snapshot);
           }
         }
         return snapshot;
@@ -230,15 +233,6 @@ export function createControlUiSessionPullRequestSubscriptions(
       const watched = subscriptions.get(connId)?.get(sessionKey);
       if (watched) {
         watched.delivered = snapshot;
-      }
-    }
-  };
-
-  const pruneOrphans = () => {
-    const watched = watchedKeys();
-    for (const key of keyStates.keys()) {
-      if (!watched.has(key)) {
-        keyStates.delete(key);
       }
     }
   };
@@ -291,14 +285,25 @@ export function createControlUiSessionPullRequestSubscriptions(
         return;
       }
       subscriptions.set(normalizedConnId, subscription);
-      pruneOrphans();
+      removeMemberships(normalizedConnId, previousSubscription, subscription);
+      // Publish the whole replacement before cached hydration can send synchronously.
+      for (const key of subscription.keys()) {
+        let state = keyStates.get(key);
+        if (!state) {
+          keyStates.set(
+            key,
+            (state = { connIds: new Set(), cacheLifetime: new AbortController() }),
+          );
+        }
+        state.connIds.add(normalizedConnId);
+      }
       schedulePoll();
 
       await Promise.all(
         Array.from(subscription, async ([sessionKey, watched]) => {
-          let state = keyStates.get(sessionKey);
+          const state = keyStates.get(sessionKey);
           if (!state) {
-            keyStates.set(sessionKey, (state = {}));
+            return;
           }
           const isCurrent = () => subscriptions.get(normalizedConnId)?.get(sessionKey) === watched;
           const refresh = refreshSessionKeys.has(sessionKey);
@@ -325,8 +330,8 @@ export function createControlUiSessionPullRequestSubscriptions(
     if (!normalizedConnId) {
       return;
     }
+    removeMemberships(normalizedConnId, subscriptions.get(normalizedConnId));
     subscriptions.delete(normalizedConnId);
-    pruneOrphans();
     if (subscriptions.size === 0 && timer !== null) {
       clearTimer(timer);
       timer = null;
@@ -343,6 +348,9 @@ export function createControlUiSessionPullRequestSubscriptions(
       timer = null;
     }
     subscriptions.clear();
+    for (const state of keyStates.values()) {
+      state.cacheLifetime.abort(null);
+    }
     keyStates.clear();
     stopPromise = scope.drain().then(() => {
       inflight.clear();

@@ -1,5 +1,6 @@
 // Covers provider setup wizard prompts supplied by plugins.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import {
   buildProviderPluginMethodChoice,
   resolveProviderModelPickerEntries,
@@ -309,7 +310,29 @@ describe("provider wizard boundaries", () => {
     expectProviderResolutionCall({ config, env, count: 2 });
   });
 
-  it("routes model-selected hooks only to the matching provider", async () => {
+  it("uses the prepared matching provider when the runtime inventory does not contain it", async () => {
+    const onModelSelected = vi.fn(async () => {});
+    const preparedProvider = makeProvider({ id: "VLLM", label: "vLLM", onModelSelected });
+    const prompter = createWizardPrompter();
+    await runProviderModelSelectedHookCore({
+      config: {},
+      model: "vllm/fixture-model",
+      prompter,
+      env: createHomeEnv(),
+      preparedProvider,
+    });
+    expect(onModelSelected).toHaveBeenCalledOnce();
+    expect(onModelSelected).toHaveBeenCalledWith({
+      config: {},
+      model: "vllm/fixture-model",
+      prompter,
+      agentDir: undefined,
+      workspaceDir: undefined,
+    });
+    expect(resolvePluginProvidersCore).not.toHaveBeenCalled();
+  });
+
+  it("resolves a different model owner instead of using the prepared authentication provider", async () => {
     const matchingHook = vi.fn(async () => {});
     const otherHook = vi.fn(async () => {});
     setResolvedProviders(
@@ -333,6 +356,7 @@ describe("provider wizard boundaries", () => {
       agentDir: "/tmp/agent",
       workspaceDir: "/tmp/workspace",
       env,
+      preparedProvider: makeProvider({ id: "ollama", label: "Ollama", onModelSelected: otherHook }),
     });
 
     expectProviderResolutionCall({

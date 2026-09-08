@@ -51,7 +51,7 @@ import type {
   CodexPluginsManagementIO,
 } from "./command-plugins-management.js";
 import type { CodexControlRequestOptions } from "./command-rpc.js";
-import { codexConversationBindingRuntime } from "./conversation-binding.js";
+import { handleCodexConversationInboundClaim } from "./conversation-binding-hooks.js";
 import {
   steerCodexConversationTurn as steerCodexConversationTurnImpl,
   stopCodexConversationTurn as stopCodexConversationTurnImpl,
@@ -6688,7 +6688,7 @@ describe("codex command", () => {
       expect(testCodexAppServerBindingStore.read(identity)).toMatchObject(originalBinding);
 
       await expect(
-        codexConversationBindingRuntime.handleInboundClaim(
+        handleCodexConversationInboundClaim(
           {
             content: "continue original task",
             bodyForAgent: "continue original task",

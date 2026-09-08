@@ -204,6 +204,22 @@ describe("provider error utils", () => {
     }
   });
 
+  it("preserves the request timeout that interrupts an error body", async () => {
+    const timeout = Object.assign(new Error("request timed out"), { name: "TimeoutError" });
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.error(timeout);
+        },
+      }),
+      { status: 503 },
+    );
+
+    await expect(assertOkOrThrowProviderError(response, "Provider API error")).rejects.toBe(
+      timeout,
+    );
+  });
+
   it("propagates an already-expired lazy error-body deadline", async () => {
     const cancel = vi.fn();
     const response = new Response(

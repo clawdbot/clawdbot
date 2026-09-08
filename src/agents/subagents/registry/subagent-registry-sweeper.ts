@@ -32,7 +32,7 @@ import type {
   SubagentCompletionRequest,
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
-import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
+import { hasSubagentRunEnded, isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import {
   loadSubagentSessionEntry,
@@ -276,7 +276,14 @@ export function createSubagentRegistrySweeper(params: {
           // The restored FIFO callback owns this row until durable settlement.
           continue;
         }
-        if (entry.requesterSettleWake) {
+        // Yield freezes the parent's wake before its children finish. Keep
+        // terminal delivery priority while unfinished children reach recovery.
+        if (
+          entry.requesterSettleWake &&
+          entry.execution.status !== "running" &&
+          hasSubagentRunEnded(entry) &&
+          !entry.execution.restartRecovery
+        ) {
           params.resumeRequesterSettleWake(runId, entry);
           continue;
         }

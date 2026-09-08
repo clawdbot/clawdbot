@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { openAIRealtimeHost } from "./realtime-host.js";
 import {
@@ -518,9 +519,19 @@ describe("GPT-Live werift audio peer", () => {
       "bun",
       [
         "--eval",
-        'const { RTCPeerConnection, useOPUS } = await import("werift"); const peer = new RTCPeerConnection({ codecs: { audio: [useOPUS({ payloadType: 111 })], video: [] }, iceServers: [] }); peer.addTransceiver("audio", { direction: "sendrecv" }); const offer = await peer.createOffer(); await peer.setLocalDescription(offer); const sdp = peer.localDescription?.sdp ?? ""; if (!sdp.includes("a=sendrecv") || !sdp.includes("OPUS/48000/2")) throw new Error("invalid offer"); await peer.close();',
+        `const { RTCPeerConnection, useOPUS } = await import("werift");
+const peer = new RTCPeerConnection({ codecs: { audio: [useOPUS({ payloadType: 111 })], video: [] }, iceServers: [] });
+try {
+  peer.addTransceiver("audio", { direction: "sendrecv" });
+  const offer = await peer.createOffer();
+  const sdp = offer.sdp ?? "";
+  if (!sdp.includes("a=sendrecv") || !sdp.includes("OPUS/48000/2")) throw new Error("invalid offer");
+  if (peer.iceGatheringState !== "new") throw new Error("offer construction started ICE gathering");
+} finally {
+  await peer.close();
+}`,
       ],
-      { cwd: process.cwd(), encoding: "utf8", timeout: 30_000 },
+      { cwd: fileURLToPath(new URL(".", import.meta.url)), encoding: "utf8", timeout: 30_000 },
     );
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);

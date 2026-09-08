@@ -40,11 +40,13 @@ describe("MCP loopback OAuth tools", () => {
         auth: { order: { xai: ["xai:oauth"] } },
         plugins: { allow: ["xai"] },
       } as OpenClawConfig,
-      sessionKey: "agent:main:main",
-      agentId: "main",
-      modelProvider: "anthropic",
-      modelId: "claude-haiku-4-5",
-      senderIsOwner: true,
+      context: {
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        modelProvider: "anthropic",
+        modelId: "claude-haiku-4-5",
+        senderIsOwner: true,
+      },
       authProfileStore: {
         version: 1,
         profiles: {

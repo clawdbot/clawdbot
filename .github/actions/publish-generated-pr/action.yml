@@ -205,5 +205,10 @@ runs:
             gh pr merge "${published_pr_url}" --repo "${GITHUB_REPOSITORY}" \
               --auto --squash --match-head-commit "${published_commit}"
         }
+        disable_auto_merge() {
+          timeout --signal=TERM --kill-after=10s 60s \
+            gh pr merge "$1" --repo "${GITHUB_REPOSITORY}" --disable-auto
+        }
+        export -f disable_auto_merge
         export -f find_open_pr read_auto_merge_record_for_head ensure_auto_merge_compatible mutate_pr merge_pr
         exec python3 -I -S "$CI_GIT_OWNER" --policy "$PUBLISH_ACTION_PATH/policy.py"

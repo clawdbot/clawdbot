@@ -1,7 +1,10 @@
 {
   "id": "memory-lancedb",
   "doctorContract": {
-    "stateMigrations": true
+    "stateMigrations": [
+      { "id": "memory-lancedb-agent-scope" },
+      { "id": "memory-lancedb-legacy-envelope-rows", "doctorOnly": true }
+    ]
   },
   "name": "Memory LanceDB",
   "description": "OpenClaw LanceDB-backed long-term memory plugin with auto-recall, auto-capture, and vector search.",

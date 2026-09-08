@@ -432,10 +432,10 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     overlay: unknown = nothing,
     header: TranscriptHeader | null = null,
   ): TemplateResult {
-    const nextKeys = rows.map((row) => row.key);
     const rowModelChanged =
-      nextKeys.length !== this.rowKeys.length ||
-      nextKeys.some((key, index) => key !== this.rowKeys[index]);
+      rows.length !== this.rowKeys.length ||
+      rows.some((row, index) => row.key !== this.rowKeys[index]);
+    const nextKeys = rowModelChanged ? rows.map((row) => row.key) : this.rowKeys;
     const virtualizer = this.virtualizerController.getVirtualizer();
     const nextRowKeys = rowModelChanged
       ? nextKeys
@@ -637,7 +637,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     }
   }
 
-  private syncRows(nextKeys: string[]): void {
+  private syncRows(nextKeys: readonly string[]): void {
     const virtualizer = this.virtualizerController.getVirtualizer();
     const typingAdded =
       !this.rowIndexesByKey.has("presence:typing") && nextKeys.includes("presence:typing");

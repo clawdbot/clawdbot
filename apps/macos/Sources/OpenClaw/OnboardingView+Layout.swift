@@ -205,12 +205,13 @@ extension OnboardingView {
                 case .none:
                     break
                 }
-                // agents.list projects an effective model even when it only
-                // comes from an implicit runtime default. A label is not proof
-                // that inference is configured or usable, so first run must
-                // live-verify it before completing onboarding. A definitive
-                // verification failure falls through to normal detection.
-                await self.resumePendingSystemAgent(modelRef: modelRef, intent: intent).value
+                // A configured label is a display fact, not permission for a live
+                // completion. Existing routes appear in the same explicit picker.
+                if intent != .inspectOnly,
+                   knownAISetupPage || self.activePageIndex == self.aiPageIndex
+                {
+                    self.aiSetup.startIfNeeded()
+                }
             case .missing:
                 // A route-bound activation/verification can complete while the
                 // earlier agents.list request is suspended. Never let that

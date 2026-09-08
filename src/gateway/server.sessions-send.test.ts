@@ -16,6 +16,7 @@ import {
 } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
+import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
 import { testing as agentStepTesting } from "../agents/tools/agent-step.test-support.js";
 import { runSessionsSendA2AFlow } from "../agents/tools/sessions-send-tool.a2a.js";
 import {
@@ -160,6 +161,8 @@ beforeAll(async () => {
   process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
   process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
   server = await startTestGatewayServer(gatewayPort);
+  // Prepare the real history handler before the RPC deadline starts.
+  await import("./server-methods/chat.js");
 });
 
 beforeEach(async () => {
@@ -218,9 +221,13 @@ describe("sessions_send gateway loopback", () => {
   });
 
   it("returns reply when lifecycle ends before agent.wait", async () => {
-    const spy = agentCommandMock as unknown as Mock<(opts: unknown) => Promise<void>>;
-    spy.mockImplementation(async (opts: unknown) =>
-      emitLifecycleAssistantReply({
+    const body = "    const first = 1;\n        const second = 2;";
+    const spy = agentCommandMock as unknown as Mock<
+      (opts: AgentCommandGatewayIngressOpts) => Promise<void>
+    >;
+    spy.mockImplementation(async (opts) => {
+      await opts.userTurnTranscriptRecorder?.persistApproved();
+      await emitLifecycleAssistantReply({
         opts,
         defaultSessionId: "main",
         includeTimestamp: true,
@@ -233,24 +240,45 @@ describe("sessions_send gateway loopback", () => {
           }
           return "pong";
         },
-      }),
-    );
+      });
+    });
 
     const tool = getSessionsSendTool();
 
     const result = await tool.execute("call-loopback", {
       sessionKey: "main",
-      message: "ping",
+      message: body,
       timeoutSeconds: 5,
     });
     expectSessionsSendDetails(result, { reply: "pong", sessionKey: "main" });
 
-    const firstCall = spy.mock.calls.at(0)?.[0] as
-      | { lane?: string; inputProvenance?: { kind?: string; sourceTool?: string } }
-      | undefined;
+    const firstCall = spy.mock.calls.at(0)?.[0];
     expect(firstCall?.lane).toMatch(/^nested(?::|$)/);
     expect(firstCall?.inputProvenance?.kind).toBe("inter_session");
     expect(firstCall?.inputProvenance?.sourceTool).toBe("sessions_send");
+    expect(firstCall?.runId).toBeTypeOf("string");
+    expect(result.details).toMatchObject({ runId: firstCall?.runId });
+    expect(firstCall?.userTurnTranscriptRecorder?.hasPersisted()).toBe(true);
+
+    const { callGateway } = await import("./call.js");
+    const history = await callGateway<{ messages?: unknown[] }>({
+      method: "chat.history",
+      params: { sessionKey: "main", limit: 10 },
+      timeoutMs: 5_000,
+    });
+    // Observe both receiving and persisted body failures before ending the case.
+    expect.soft(firstCall?.message?.split("\n").slice(-2).join("\n")).toBe(body);
+    expect.soft(history.messages).toContainEqual(
+      expect.objectContaining({
+        role: "assistant",
+        idempotencyKey: `${firstCall?.runId}:user`,
+        content: body,
+        provenance: expect.objectContaining({
+          kind: "inter_session",
+          sourceTool: "sessions_send",
+        }),
+      }),
+    );
   });
 
   it.each([

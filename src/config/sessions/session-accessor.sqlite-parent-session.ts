@@ -261,7 +261,7 @@ export async function forkSessionEntryFromParentTarget(
           sessionEntry: cloneSessionEntry(next),
         };
       }, toDatabaseOptions(resolved));
-      emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
+      emitCommittedSessionIdentityDiff(resolved.agentId, previousIdentity, currentIdentity);
       return result;
     },
   );
@@ -293,7 +293,7 @@ function persistSqliteParentForkSkipPatch(params: {
     });
     currentIdentity = readSessionIdentitySnapshot(database, [params.sessionKey]);
   }, toDatabaseOptions(params.resolved));
-  emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
+  emitCommittedSessionIdentityDiff(params.resolved.agentId, previousIdentity, currentIdentity);
   return cloneSessionEntry(next);
 }
 

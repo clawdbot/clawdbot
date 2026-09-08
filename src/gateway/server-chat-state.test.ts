@@ -136,6 +136,63 @@ describe("createChatRunState", () => {
     },
   );
 
+  it.each(["full", "summary"] as const)(
+    "retains retry waits after completed work and clears them on resumed %s activity",
+    (mode) => {
+      const state = createChatRunState();
+      let seq = 0;
+      const event = (stream: string, data: Record<string, unknown>) =>
+        state.recordProgressEvent(
+          "run-1",
+          { runId: "run-1", seq: ++seq, stream, ts: seq, data },
+          mode,
+        );
+      event("tool", { phase: "result", toolCallId: "read-1", name: "read", result: "done" });
+      for (const stream of ["assistant", "tool", "item"]) {
+        const retry = {
+          phase: "retrying",
+          message: "Rate limited. Retrying in 2 seconds (attempt 2/8).",
+          retryAttempt: 2,
+          maxRetries: 8,
+          delayMs: 2_000,
+        };
+        event("run_status", retry);
+        event("usage", { outputTokens: 100 });
+        expect(state.runs.get("run-1")?.progressSnapshot?.events).toContainEqual(
+          expect.objectContaining({ stream: "run_status", data: retry }),
+        );
+        event(
+          stream,
+          stream === "assistant"
+            ? { text: "Continuing" }
+            : stream === "tool"
+              ? { phase: "start", toolCallId: "read-2", name: "read" }
+              : { kind: "preamble", itemId: "resumed", progressText: "Continuing" },
+        );
+        expect(
+          state.runs
+            .get("run-1")
+            ?.progressSnapshot?.events.some((entry) => entry.stream === "run_status"),
+        ).toBe(false);
+        if (stream === "assistant") {
+          expect(state.runs.get("run-1")?.progressSnapshot?.events).toContainEqual({
+            runId: "run-1",
+            seq,
+            stream: "assistant",
+            ts: seq,
+            data: {},
+          });
+        }
+        expect(state.runs.get("run-1")?.progressSnapshot?.events).toContainEqual(
+          expect.objectContaining({
+            stream: "tool",
+            data: expect.objectContaining({ toolCallId: "read-1", phase: "result" }),
+          }),
+        );
+      }
+    },
+  );
+
   it("keeps completed owners and standalone notices reconstructable until bounded eviction", () => {
     const state = createChatRunState();
     const event = (seq: number, stream: string, data: Record<string, unknown>) =>

@@ -174,7 +174,20 @@ vi.mock("./directive-handling.auth.js", () => ({
   },
 }));
 
-vi.mock("../../agents/auth-profiles/store.js", () => {
+vi.mock("../../agents/auth-profiles/store.js", async (importOriginal) => {
+  const store = () => ({
+    version: 1,
+    profiles: authProfilesStoreMock.profiles,
+  });
+  return {
+    ...(await importOriginal<typeof import("../../agents/auth-profiles/store.js")>()),
+    findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
+      authProfilesStoreMock.profiles[profileId],
+    getRuntimeAuthProfileStoreSnapshot: store,
+    hasAnyAuthProfileStoreSource: () => Object.keys(authProfilesStoreMock.profiles).length > 0,
+  };
+});
+vi.mock("../../agents/auth-profiles/store-runtime.js", () => {
   const store = () => ({
     version: 1,
     profiles: authProfilesStoreMock.profiles,
@@ -182,10 +195,6 @@ vi.mock("../../agents/auth-profiles/store.js", () => {
   return {
     ensureAuthProfileStore: store,
     ensureAuthProfileStoreForLocalUpdate: store,
-    findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
-      authProfilesStoreMock.profiles[profileId],
-    getRuntimeAuthProfileStoreSnapshot: store,
-    hasAnyAuthProfileStoreSource: () => Object.keys(authProfilesStoreMock.profiles).length > 0,
     loadAuthProfileStore: store,
     loadAuthProfileStoreForRuntime: store,
     loadAuthProfileStoreForSecretsRuntime: store,
@@ -331,6 +340,7 @@ import {
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import type { ElevatedLevel } from "../thinking.js";
+import { createModelSelectionStateFixture } from "./model-selection.test-support.js";
 
 let handleDirectiveOnly: typeof import("./directive-handling.impl.js").handleDirectiveOnly;
 let maybeHandleModelDirectiveInfo: typeof import("./directive-handling.model.js").maybeHandleModelDirectiveInfo;
@@ -339,7 +349,6 @@ let buildModelAliasIndex: typeof import("../../agents/model-selection.js").build
 let resolveModelSelectionFromDirective: typeof import("./directive-handling.model-selection.js").resolveModelSelectionFromDirective;
 let parseInlineSessionDirectives: typeof import("./directive-handling.parse.js").parseInlineSessionDirectives;
 let applyInlineDirectiveOverrides: typeof import("./get-reply-directives-apply.js").applyInlineDirectiveOverrides;
-let createFastTestModelSelectionState: typeof import("./model-selection.js").createFastTestModelSelectionState;
 
 beforeAll(async () => {
   ({ handleDirectiveOnly } = await import("./directive-handling.impl.js"));
@@ -350,7 +359,6 @@ beforeAll(async () => {
     await import("./directive-handling.model-selection.js"));
   ({ parseInlineSessionDirectives } = await import("./directive-handling.parse.js"));
   ({ applyInlineDirectiveOverrides } = await import("./get-reply-directives-apply.js"));
-  ({ createFastTestModelSelectionState } = await import("./model-selection.js"));
 });
 const queueMocks = vi.hoisted(() => ({
   refreshQueuedFollowupSession: vi.fn(),
@@ -619,7 +627,7 @@ async function persistModelDirectiveForTest(params: {
   const model = params.model ?? "claude-opus-4-6";
   const agentId = params.agentId ?? "main";
   const sessionKey = `agent:${agentId}:dm:1`;
-  const modelState = createFastTestModelSelectionState({
+  const modelState = createModelSelectionStateFixture({
     agentCfg: cfg.agents?.defaults,
     provider,
     model,

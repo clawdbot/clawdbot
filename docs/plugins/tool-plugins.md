@@ -174,14 +174,16 @@ call ID string instead.
 Concrete tools can provide `prepareArguments(args)` to normalize input before
 schema validation. The native agent loop also honors
 `executionMode: "sequential"` when tool calls must run one at a time. These
-runtime properties come from the current factory context even when the tool's
-descriptor is cached; argument preparation and execution use the same instance.
+runtime properties, schemas, and display metadata come from the current factory
+context whenever tools are assembled. Argument preparation and execution use the
+same instance. Retained tools stop working when their owning plugin registry is
+retired.
 
 Set `hideFromChannelProgress: true` on the concrete factory tool to keep its
 transient activity out of channel progress drafts. Lifecycle events and the
-final tool result still flow normally. OpenClaw preserves this flag when
-reusing a cached tool or normalizing its schema; omitted or `false` leaves
-normal progress behavior in place. See [Progress drafts](/concepts/progress-drafts).
+final tool result still flow normally. OpenClaw preserves the current factory's
+flag when normalizing its schema; omitted or `false` leaves normal progress
+behavior in place. See [Progress drafts](/concepts/progress-drafts).
 
 Factories still declare a fixed tool name up front. Use `definePluginEntry`
 directly when the plugin computes tool names dynamically or combines tools

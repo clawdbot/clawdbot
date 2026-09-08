@@ -106,6 +106,50 @@ describe("status-all diagnosis port checks", () => {
     gatewayMocks.summarizeLogTail.mockImplementation((lines: string[]) => lines);
   });
 
+  it("keeps first config issue locations and exact pairs before applying the display cap", async () => {
+    const params = createBaseParams([]);
+    const first = { path: "a", message: "b:c", sourceFile: "legacy.json", line: 7 };
+    const repeated = { ...first, sourceFile: "current.json", line: 9 };
+    params.snap = {
+      exists: true,
+      valid: false,
+      path: "config.json",
+      legacyIssues: [first, { path: "a:b", message: "c" }, first],
+      issues: [
+        repeated,
+        { path: "a", message: "different" },
+        ...Array.from({ length: 11 }, (_, index) => ({
+          path: `field${index}`,
+          message: "invalid",
+        })),
+        repeated,
+      ],
+    };
+    const original = structuredClone(params.snap);
+
+    await appendStatusAllDiagnosis(params);
+
+    const start = params.lines.indexOf("! Config: config.json");
+    const end = params.lines.indexOf("✓ Secret diagnostics (0)");
+    expect(params.lines.slice(start, end)).toEqual([
+      "! Config: config.json",
+      "  - legacy.json:7 — a: b:c",
+      "  - a:b: c",
+      "  - a: different",
+      "  - field0: invalid",
+      "  - field1: invalid",
+      "  - field2: invalid",
+      "  - field3: invalid",
+      "  - field4: invalid",
+      "  - field5: invalid",
+      "  - field6: invalid",
+      "  - field7: invalid",
+      "  - field8: invalid",
+      "  … +2 more",
+    ]);
+    expect(params.snap).toEqual(original);
+  });
+
   it("retains queue warnings from a successful gateway health snapshot", async () => {
     const params = createBaseParams([]);
     params.health = {

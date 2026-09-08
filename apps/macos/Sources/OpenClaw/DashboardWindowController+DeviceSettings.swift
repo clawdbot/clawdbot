@@ -55,6 +55,8 @@ extension DashboardWindowController {
             await self.openDeviceSettingsPanel(panel)
         case .checkForUpdates:
             if self.updater?.isAvailable == true { self.updater?.checkForUpdates(nil) }
+        case .installChromeExtension:
+            break // The queued handler returns the installer result directly.
         }
         // All Gateway windows show settings for this Mac; mutations must update each open view.
         NotificationCenter.default.post(name: .openclawDeviceSettingsChanged, object: nil)

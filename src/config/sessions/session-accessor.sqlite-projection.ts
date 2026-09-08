@@ -504,7 +504,11 @@ export async function applySessionEntryLifecycleMutation(params: {
         }),
       );
     }, toDatabaseOptions(resolved));
-    emitCommittedLifecycleIdentityMutations({ projected, removedSessionKeys });
+    emitCommittedLifecycleIdentityMutations({
+      agentId: resolved.agentId,
+      projected,
+      removedSessionKeys,
+    });
     return { archivedTranscripts, beforeCount, maintenancePlans, removedSessionKeys };
   }
 
@@ -649,7 +653,7 @@ export async function purgeDeletedAgentSessionEntries(
             }),
           );
         }, toDatabaseOptions(resolved));
-        emitCommittedSessionEntryRemovals(prepared.entryRemovals);
+        emitCommittedSessionEntryRemovals(resolved.agentId, prepared.entryRemovals);
         return { archivedTranscripts, maintenancePlans };
       }),
   );

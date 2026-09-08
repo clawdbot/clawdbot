@@ -261,7 +261,7 @@ describe("audit event persistence", () => {
     const database = createDatabaseOptions();
     const { db } = openOpenClawStateDatabase(database);
     db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('audit_events', ?)").run(
-      Number.MAX_SAFE_INTEGER,
+      BigInt(Number.MAX_SAFE_INTEGER),
     );
 
     expect(() => recordAuditEvent(auditInput(), database)).toThrow(

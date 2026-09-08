@@ -10,6 +10,21 @@ const withinRoot = (root: string, file: string) => {
   return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 };
 
+function findAncestorInstall(root: string, real: string): string | undefined {
+  let ancestor = path.dirname(root);
+  while (true) {
+    const install = path.join(ancestor, "node_modules");
+    if (withinRoot(install, real)) {
+      return install;
+    }
+    const parent = path.dirname(ancestor);
+    if (parent === ancestor) {
+      return undefined;
+    }
+    ancestor = parent;
+  }
+}
+
 export function createDeclarationInputBoundary(cwd: string) {
   const declared = path.resolve(cwd);
   const prefixes = [declared, fs.realpathSync(declared)];
@@ -33,8 +48,13 @@ export function createDeclarationInputBoundary(cwd: string) {
       }
       const real = fs.realpathSync.native(existing);
       if (!withinRoot(root, absolute) || !withinRoot(root, real)) {
+        // Hermetic declaration inputs must not inherit an ancestor install's exposed packages.
+        const ancestorInstall = findAncestorInstall(root, real);
+        const diagnosis = ancestorInstall
+          ? `This checkout is nested inside another install at ${ancestorInstall}; module resolution walked out of the checkout and read a package from it. Run this lane in a checkout that is not nested inside another node_modules, or repair that ancestor install to the repository's isolated layout (nodeLinker: isolated in pnpm-workspace.yaml), which keeps transitive packages out of its root rather than exposing them to nested checkouts.`
+          : `Install declaration dependencies inside ${root}; shared installs and external symlinks are unsupported.`;
         throw new Error(
-          `Declaration input escapes checkout: ${absolute} -> ${real}. Install declaration dependencies inside ${root}; shared installs and external symlinks are unsupported.`,
+          `Declaration input escapes checkout: ${absolute} -> ${real}. ${diagnosis} If the checkout is not nested inside another install, the compiled package imported a dependency it does not declare, which is the boundary violation this check exists to catch.`,
         );
       }
       return absolute;

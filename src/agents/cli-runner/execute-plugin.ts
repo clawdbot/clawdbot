@@ -19,10 +19,11 @@ import { FailoverError, isSignalTimeoutReason } from "../failover-error.js";
 import { withAgentQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import { runStructuredInput } from "../harness/structured-input-execution.js";
 import { compileStructuredInputQuestions } from "../harness/structured-input.js";
+import { recordAgentCleanupFailure } from "../run-cleanup-timeout.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
 import {
-  closeCliLiveSession,
+  restartCliLiveSession,
   createCliLiveSessionCapability,
   getCliLiveSessionApprovalGrants,
 } from "./cli-live-session-registry.js";
@@ -383,6 +384,9 @@ async function closePluginIterator(
         timeout.unref();
       }),
     ]);
+  } catch (error) {
+    recordAgentCleanupFailure();
+    throw error;
   } finally {
     clearTimeout(timeout);
   }
@@ -518,7 +522,7 @@ export async function executePluginOwnedProcess(params: {
       if (params.liveSession.requiredGeneration) {
         throw new Error("The required CLI live session cannot be replaced by a fresh process.");
       }
-      await closeCliLiveSession(params.context, "restart");
+      await restartCliLiveSession(params.context, signal);
     }
     assertCurrent();
     if (params.liveSession) {
@@ -532,8 +536,7 @@ export async function executePluginOwnedProcess(params: {
         claimResources: params.context.preparedBackend.claimLiveSessionResources,
       });
     }
-    run.assertCurrent?.();
-    signal.throwIfAborted();
+    assertCurrent();
     const execution = params.execute({
       command,
       argv0: params.executionArgv0,

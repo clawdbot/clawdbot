@@ -379,7 +379,7 @@ function collectChatWindowMessageIds(
 function isChatWindowHistoryContext(
   entry: NonNullable<TemplateContext["ChannelStructuredContext"]>[number],
 ): boolean {
-  if (!isChatWindowStructuredContext(entry)) {
+  if (!isChatWindowStructuredContext(entry) || entry.sessionTranscriptMode === "preserve") {
     return false;
   }
   const relation = normalizePromptMetadataString(entry.payload["relation"]);

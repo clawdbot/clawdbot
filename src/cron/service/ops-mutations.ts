@@ -68,6 +68,27 @@ import { armTimer } from "./timer.js";
 
 const RETRY_ADD_AFTER_SESSION_CLEANUP = new Error("retry add after session cleanup");
 
+/** Cancels only caller-corroborated definitions while the durable lifecycle fence holds. */
+export async function quiesceJobs(
+  state: CronServiceState,
+  jobs: readonly { id: string; revision: string }[],
+  commitGuard: () => void,
+): Promise<void> {
+  await locked(state, async () => {
+    await ensureLoadedForOperation(state);
+    for (const expected of jobs) {
+      const job = state.store?.jobs.find((candidate) => candidate.id === expected.id);
+      if (!job || resolveCronJobConfigRevision(job) !== expected.revision) {
+        throw new Error(`Cron job ${expected.id} changed before cancellation.`);
+      }
+    }
+    commitGuard();
+    for (const job of jobs) {
+      requestActiveCronJobCancellation(job.id, "Claw agent removal.");
+    }
+  });
+}
+
 async function resolveConfiguredChannelsForValidation(
   state: CronServiceState,
 ): Promise<readonly string[] | undefined> {
@@ -611,7 +632,7 @@ export async function remove(
       const done = new Promise<void>((resolve) => {
         finish = resolve;
       });
-      const release = registerPendingCronSessionCleanup(state, id, done);
+      const release = registerPendingCronSessionCleanup(state, id, done, agentId);
       sessionCleanup = {
         activeMarker,
         agentId,
@@ -643,8 +664,11 @@ export async function remove(
           sessionStorePath,
         });
       }
+      return undefined;
     } catch (error) {
-      state.deps.log.warn({ jobId: id, err: String(error) }, "cron: session cleanup failed");
+      const message = `Cron job ${id} was removed, but session cleanup failed: ${String(error)}. Use openclaw sessions list --json, then openclaw sessions delete to retry.`;
+      state.deps.log.warn({ jobId: id, err: message }, "cron: session cleanup failed");
+      return message;
     } finally {
       release();
       finish();
@@ -652,9 +676,12 @@ export async function remove(
   };
   if (activeMarker) {
     onCronJobInactive(activeMarker, () => void cleanup());
-    return result;
+    return { ...result, sessionCleanup: "pending" as const };
   }
-  await cleanup();
+  const cleanupError = await cleanup();
+  if (cleanupError) {
+    throw new Error(cleanupError);
+  }
   return result;
 }
 

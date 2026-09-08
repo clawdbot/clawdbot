@@ -191,7 +191,8 @@ export async function runWriteConfigHealth(
     }
   }
   if (
-    ctx.configResult.shouldRepairCronCodexModelRefsAfterConfigWrite !== true ||
+    (!ctx.prompter.shouldRepair &&
+      ctx.configResult.shouldRepairCronCodexModelRefsAfterConfigWrite !== true) ||
     ctx.postConfigWriteRepairsCommitted === true
   ) {
     return;
@@ -202,6 +203,10 @@ export async function runWriteConfigHealth(
     await import("../commands/doctor/cron/legacy-repair.js");
   const result = await repairCronCodexModelRefsAfterConfigWrite({
     cfg: ctx.cfg,
+    ...(ctx.configResult.retiredModelRefConfig
+      ? { retiredModelRefConfig: ctx.configResult.retiredModelRefConfig }
+      : {}),
+    repairRetiredModelRefs: ctx.prompter.shouldRepair,
     ...(ctx.configResult.blockedCodexModelIdentities?.length
       ? { blockedModelIdentities: new Set(ctx.configResult.blockedCodexModelIdentities) }
       : {}),

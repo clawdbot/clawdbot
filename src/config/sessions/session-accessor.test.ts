@@ -1392,16 +1392,21 @@ describe("session accessor seam", () => {
       storePath,
     };
 
-    const created = await createSessionEntryWithTranscript(scope, ({ sessionEntries }) => {
-      expect(sessionEntries).toEqual({});
-      return {
-        ok: true,
-        entry: {
-          sessionId: "session-1",
-          updatedAt: 10,
-        },
-      };
-    });
+    const created = await createSessionEntryWithTranscript(
+      scope,
+      ({ existingEntry, targetEntry, isLabelInUse }) => {
+        expect(existingEntry).toBeUndefined();
+        expect(targetEntry).toBeUndefined();
+        expect(isLabelInUse("unused")).toBe(false);
+        return {
+          ok: true,
+          entry: {
+            sessionId: "session-1",
+            updatedAt: 10,
+          },
+        };
+      },
+    );
 
     expect(created.ok).toBe(true);
     if (!created.ok) {
@@ -3120,6 +3125,7 @@ describe("session accessor seam", () => {
 
     expect(result.removedEntries).toBe(1);
     expect(notify).toHaveBeenCalledWith({
+      agentId: "main",
       kind: "delete",
       previous: { sessionId: scope.sessionId, sessionKeys: [scope.sessionKey] },
     });
@@ -3286,6 +3292,9 @@ describe("session accessor seam", () => {
       contextBudgetStatus,
       inputTokens: 10,
       outputTokens: 20,
+      cacheRead: 40,
+      cacheWrite: 10,
+      estimatedCostUsd: 0.02,
       sessionId,
       totalTokens: 30,
       totalTokensFresh: true,
@@ -3335,6 +3344,9 @@ describe("session accessor seam", () => {
     expect(updatedEntry?.contextBudgetStatus).toBeUndefined();
     expect(updatedEntry?.inputTokens).toBeUndefined();
     expect(updatedEntry?.outputTokens).toBeUndefined();
+    expect(updatedEntry?.cacheRead).toBeUndefined();
+    expect(updatedEntry?.cacheWrite).toBeUndefined();
+    expect(updatedEntry?.estimatedCostUsd).toBeUndefined();
     expect(updatedEntry?.totalTokens).toBeUndefined();
     expect(updatedEntry?.totalTokensFresh).toBeUndefined();
     expect(updates).toEqual([]);

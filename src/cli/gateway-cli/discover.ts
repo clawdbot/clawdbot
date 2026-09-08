@@ -1,6 +1,9 @@
 // Gateway discovery rendering helpers for Bonjour and wide-area DNS beacon output.
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
-import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
+import {
+  resolveGatewayDiscoveryEndpoint,
+  type GatewayBonjourBeacon,
+} from "../../infra/bonjour-discovery.js";
 import { buildGatewayDiscoveryTarget } from "../../infra/gateway-discovery-targets.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 
@@ -13,20 +16,12 @@ export function parseDiscoverTimeoutMs(raw: unknown, fallbackMs: number): number
   return parseTimeoutMsWithFallback(raw, fallbackMs, { invalidType: "error" });
 }
 
-export function pickBeaconHost(beacon: GatewayBonjourBeacon): string | null {
-  return buildGatewayDiscoveryTarget(beacon).endpoint?.host ?? null;
-}
-
-export function pickGatewayPort(beacon: GatewayBonjourBeacon): number | null {
-  return buildGatewayDiscoveryTarget(beacon).endpoint?.port ?? null;
-}
-
 export function dedupeBeacons(beacons: GatewayBonjourBeacon[]): GatewayBonjourBeacon[] {
   // Use display and endpoint fields; Bonjour can surface the same gateway on multiple interfaces.
   const out: GatewayBonjourBeacon[] = [];
   const seen = new Set<string>();
   for (const b of beacons) {
-    const host = pickBeaconHost(b) ?? "";
+    const host = resolveGatewayDiscoveryEndpoint(b)?.host ?? "";
     const key = [
       b.domain ?? "",
       b.instanceName ?? "",

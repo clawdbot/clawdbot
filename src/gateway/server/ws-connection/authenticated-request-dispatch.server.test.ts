@@ -299,6 +299,58 @@ describe("authenticated WebSocket request trace dispatch", () => {
   });
 
   it.each([
+    { change: "shared-auth", closeReason: "gateway auth changed" },
+    { change: "invalidated", closeReason: "client invalidated: device-token-revoked" },
+  ] as const)("exposes live $change authority to an active handler", async (testCase) => {
+    let generation = "current";
+    let observedAuthority: boolean | undefined;
+    const entered = createDeferredCore();
+    const held = createDeferredCore();
+    const checked = createDeferredCore();
+    const client = createClient();
+    if (testCase.change === "shared-auth") {
+      client.usesSharedGatewayAuth = true;
+      client.sharedGatewaySessionGeneration = generation;
+    }
+    const handler: NonNullable<GatewayWsMessageHandlerParams["extraHandlers"][string]> = async ({
+      hasCurrentClientAuthority,
+    }) => {
+      entered.resolve();
+      await held.promise;
+      observedAuthority = hasCurrentClientAuthority?.();
+      checked.resolve();
+    };
+    const harness = createDispatchTestHarness({
+      extraHandlers: { "test.trace": handler },
+      getRequiredSharedGatewaySessionGeneration: () => generation,
+    });
+
+    const dispatch = harness.dispatcher.dispatch(
+      { type: "req", id: "active", method: "test.trace", params: {} },
+      client,
+    );
+    try {
+      await entered.promise;
+      if (testCase.change === "shared-auth") {
+        generation = "rotated";
+      } else {
+        client.invalidated = true;
+        client.invalidatedReason = "device-token-revoked";
+      }
+    } finally {
+      held.resolve();
+      await dispatch;
+    }
+    await checked.promise;
+
+    expect(observedAuthority).toBe(false);
+    expect(harness.close).toHaveBeenCalledWith(4001, testCase.closeReason);
+    expect(harness.send).not.toHaveBeenCalledWith(
+      expect.objectContaining({ id: "active", ok: true }),
+    );
+  });
+
+  it.each([
     {
       label: "ordinary UI node invocation",
       method: "node.invoke",

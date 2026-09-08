@@ -458,6 +458,11 @@ const CARD_CHILD_TABLES = [
   "workboard_card_notifications",
 ] as const;
 
+type WorkboardCardDatabase = Record<
+  (typeof CARD_CHILD_TABLES)[number] | "workboard_cards" | "workboard_worker_protocol",
+  Row
+>;
+
 /**
  * Child rows for a whole batch of cards, grouped by card id.
  *
@@ -469,7 +474,7 @@ type CardChildRows = {
   workerProtocol: Map<string, Row>;
 };
 
-function groupByCardId(rows: Row[]): Map<string, Row[]> {
+function groupByCardId(rows: Iterable<Row>): Map<string, Row[]> {
   const grouped = new Map<string, Row[]>();
   for (const row of rows) {
     const cardId = stringValue(row, "card_id");
@@ -487,18 +492,26 @@ function groupByCardId(rows: Row[]): Map<string, Row[]> {
 }
 
 function loadCardChildRows(db: DatabaseSync): CardChildRows {
+  // Group raw rows only: every preload must finish before card decoding can fail.
+  const query = getNodeSqliteKysely<WorkboardCardDatabase>(db);
   const byTable = new Map<string, Map<string, Row[]>>();
   for (const table of CARD_CHILD_TABLES) {
     // Same order the per-card query produces, so grouped buckets stay ordinal-sorted.
     byTable.set(
       table,
       groupByCardId(
-        db.prepare(`SELECT * FROM ${table} ORDER BY card_id ASC, ordinal ASC`).all() as Row[],
+        iterateSqliteQuerySync(
+          db,
+          query.selectFrom(table).selectAll().orderBy("card_id", "asc").orderBy("ordinal", "asc"),
+        ),
       ),
     );
   }
   const workerProtocol = new Map<string, Row>();
-  for (const row of db.prepare("SELECT * FROM workboard_worker_protocol").all() as Row[]) {
+  for (const row of iterateSqliteQuerySync(
+    db,
+    query.selectFrom("workboard_worker_protocol").selectAll(),
+  )) {
     const cardId = stringValue(row, "card_id");
     if (cardId) {
       workerProtocol.set(cardId, row);
@@ -521,6 +534,7 @@ function childRows(
     cached.delete(cardId);
     return rows;
   }
+  // Finish native extraction before decoding; a later row can contain the first error.
   return db
     .prepare(`SELECT * FROM ${table} WHERE card_id = ? ORDER BY ordinal ASC`)
     .all(cardId) as Row[];
@@ -848,6 +862,7 @@ function readCard(db: DatabaseSync, row: Row, preloaded?: CardChildRows): Workbo
   };
   const metadata = readMetadata(db, row, preloaded);
   const events = readEvents(db, card.id, preloaded);
+  const execution = readExecution(row);
   return {
     ...card,
     ...(stringValue(row, "notes") ? { notes: stringValue(row, "notes") } : {}),
@@ -856,7 +871,7 @@ function readCard(db: DatabaseSync, row: Row, preloaded?: CardChildRows): Workbo
     ...(stringValue(row, "run_id") ? { runId: stringValue(row, "run_id") } : {}),
     ...(stringValue(row, "task_id") ? { taskId: stringValue(row, "task_id") } : {}),
     ...(stringValue(row, "source_url") ? { sourceUrl: stringValue(row, "source_url") } : {}),
-    ...(readExecution(row) ? { execution: readExecution(row) } : {}),
+    ...(execution ? { execution } : {}),
     ...(numberValue(row, "started_at") !== undefined
       ? { startedAt: numberValue(row, "started_at") }
       : {}),
@@ -905,13 +920,7 @@ function insertChildren<T>(
 function insertCard(db: DatabaseSync, card: WorkboardCard): void {
   const execution = card.execution;
   const metadata = card.metadata;
-  const query =
-    getNodeSqliteKysely<
-      Record<
-        (typeof CARD_CHILD_TABLES)[number] | "workboard_cards" | "workboard_worker_protocol",
-        Row
-      >
-    >(db);
+  const query = getNodeSqliteKysely<WorkboardCardDatabase>(db);
   // Keep payload getters and JSON serialization after native statement preparation.
   const parent = compileSqliteQueryBindings<void>((p) =>
     query
@@ -1201,6 +1210,21 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
 class WorkboardSqliteCardStore implements WorkboardCardStore {
   constructor(private readonly db: DatabaseSync) {}
 
+  private matchesUpdatedAt(key: string, expectedUpdatedAt: number): boolean {
+    const { compiled, bind } = compileSqliteQueryBindings<string>((parameter) =>
+      getNodeSqliteKysely<WorkboardCardDatabase>(this.db)
+        .selectFrom("workboard_cards")
+        .select("updated_at")
+        .where(
+          "id",
+          "=",
+          parameter((value) => value),
+        ),
+    );
+    const current = this.db.prepare(compiled.sql).get(...bind(key));
+    return isRecord(current) && numberValue(current, "updated_at") === expectedUpdatedAt;
+  }
+
   private validatePayload(key: string, value: PersistedWorkboardCard): void {
     if (value.version !== 1 || value.card.id !== key) {
       throw new Error("invalid workboard card payload");
@@ -1230,10 +1254,7 @@ class WorkboardSqliteCardStore implements WorkboardCardStore {
   ): Promise<boolean> {
     this.validatePayload(key, value);
     return runSqliteImmediateTransactionSync(this.db, () => {
-      const current = this.db
-        .prepare("SELECT updated_at FROM workboard_cards WHERE id = ?")
-        .get(key);
-      if (!isRecord(current) || numberValue(current, "updated_at") !== expectedUpdatedAt) {
+      if (!this.matchesUpdatedAt(key, expectedUpdatedAt)) {
         return false;
       }
       insertCard(this.db, value.card);
@@ -1250,10 +1271,7 @@ class WorkboardSqliteCardStore implements WorkboardCardStore {
   ): Promise<WorkboardOwnerClaimResult> {
     this.validatePayload(key, value);
     return runSqliteImmediateTransactionSync(this.db, () => {
-      const current = this.db
-        .prepare("SELECT updated_at FROM workboard_cards WHERE id = ?")
-        .get(key);
-      if (!isRecord(current) || numberValue(current, "updated_at") !== expectedUpdatedAt) {
+      if (!this.matchesUpdatedAt(key, expectedUpdatedAt)) {
         return "conflict";
       }
       const rows: Row[] = this.db.prepare("SELECT * FROM workboard_cards WHERE id <> ?").all(key);
@@ -1271,10 +1289,7 @@ class WorkboardSqliteCardStore implements WorkboardCardStore {
 
   async deleteIfUpdatedAt(key: string, expectedUpdatedAt: number): Promise<boolean> {
     return runSqliteImmediateTransactionSync(this.db, () => {
-      const current = this.db
-        .prepare("SELECT updated_at FROM workboard_cards WHERE id = ?")
-        .get(key);
-      if (!isRecord(current) || numberValue(current, "updated_at") !== expectedUpdatedAt) {
+      if (!this.matchesUpdatedAt(key, expectedUpdatedAt)) {
         return false;
       }
       this.deleteCard(key);
@@ -1390,39 +1405,39 @@ class WorkboardSqliteBoardStore implements WorkboardKeyedStore<PersistedWorkboar
       throw new Error("invalid workboard board payload");
     }
     const board = value.board;
-    this.db
-      .prepare(
-        `
-          INSERT INTO workboard_boards (
-            id, name, description, icon, color, automation_job_id, default_workspace_json,
-            orchestration_json, created_at, updated_at, archived_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(id) DO UPDATE SET
-            name = excluded.name,
-            description = excluded.description,
-            icon = excluded.icon,
-            color = excluded.color,
-            automation_job_id = excluded.automation_job_id,
-            default_workspace_json = excluded.default_workspace_json,
-            orchestration_json = excluded.orchestration_json,
-            created_at = excluded.created_at,
-            updated_at = excluded.updated_at,
-            archived_at = excluded.archived_at
-        `,
-      )
-      .run(
-        board.id,
-        bindNull(board.name),
-        bindNull(board.description),
-        bindNull(board.icon),
-        bindNull(board.color),
-        bindNull(board.automationJobId),
-        jsonValue(board.defaultWorkspace),
-        jsonValue(board.orchestration),
-        board.createdAt,
-        board.updatedAt,
-        bindNull(board.archivedAt),
-      );
+    // Native preparation must precede payload getters and JSON serialization.
+    const { compiled, bind } = compileSqliteQueryBindings<void>((parameter) =>
+      getNodeSqliteKysely<{ workboard_boards: Row }>(this.db)
+        .insertInto("workboard_boards")
+        .values({
+          id: parameter(() => board.id),
+          name: parameter(() => bindNull(board.name)),
+          description: parameter(() => bindNull(board.description)),
+          icon: parameter(() => bindNull(board.icon)),
+          color: parameter(() => bindNull(board.color)),
+          automation_job_id: parameter(() => bindNull(board.automationJobId)),
+          default_workspace_json: parameter(() => jsonValue(board.defaultWorkspace)),
+          orchestration_json: parameter(() => jsonValue(board.orchestration)),
+          created_at: parameter(() => board.createdAt),
+          updated_at: parameter(() => board.updatedAt),
+          archived_at: parameter(() => bindNull(board.archivedAt)),
+        })
+        .onConflict((conflict) =>
+          conflict.column("id").doUpdateSet((eb) => ({
+            name: eb.ref("excluded.name"),
+            description: eb.ref("excluded.description"),
+            icon: eb.ref("excluded.icon"),
+            color: eb.ref("excluded.color"),
+            automation_job_id: eb.ref("excluded.automation_job_id"),
+            default_workspace_json: eb.ref("excluded.default_workspace_json"),
+            orchestration_json: eb.ref("excluded.orchestration_json"),
+            created_at: eb.ref("excluded.created_at"),
+            updated_at: eb.ref("excluded.updated_at"),
+            archived_at: eb.ref("excluded.archived_at"),
+          })),
+        ),
+    );
+    this.db.prepare(compiled.sql).run(...bind());
   }
 
   async lookup(key: string): Promise<PersistedWorkboardBoard | undefined> {
@@ -1493,44 +1508,43 @@ class WorkboardSqliteSubscriptionStore implements WorkboardKeyedStore<PersistedW
       throw new Error("invalid workboard notification subscription payload");
     }
     const subscription = value.subscription;
-    this.db
-      .prepare(
-        `
-          INSERT INTO workboard_notification_subscriptions (
-            id, board_id, card_id, session_key, run_id, target, event_kinds_json,
-            last_event_at, last_event_id, last_event_sequence, delivered_event_ids_json,
-            created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(id) DO UPDATE SET
-            board_id = excluded.board_id,
-            card_id = excluded.card_id,
-            session_key = excluded.session_key,
-            run_id = excluded.run_id,
-            target = excluded.target,
-            event_kinds_json = excluded.event_kinds_json,
-            last_event_at = excluded.last_event_at,
-            last_event_id = excluded.last_event_id,
-            last_event_sequence = excluded.last_event_sequence,
-            delivered_event_ids_json = excluded.delivered_event_ids_json,
-            created_at = excluded.created_at,
-            updated_at = excluded.updated_at
-        `,
-      )
-      .run(
-        subscription.id,
-        subscription.boardId,
-        bindNull(subscription.cardId),
-        bindNull(subscription.sessionKey),
-        bindNull(subscription.runId),
-        bindNull(subscription.target),
-        jsonValue(subscription.eventKinds),
-        bindNull(subscription.lastEventAt),
-        bindNull(subscription.lastEventId),
-        bindNull(subscription.lastEventSequence),
-        jsonValue(subscription.deliveredEventIds),
-        subscription.createdAt,
-        subscription.updatedAt,
-      );
+    // Cursor fields must bind NULL when omitted, after native preparation succeeds.
+    const { compiled, bind } = compileSqliteQueryBindings<void>((parameter) =>
+      getNodeSqliteKysely<{ workboard_notification_subscriptions: Row }>(this.db)
+        .insertInto("workboard_notification_subscriptions")
+        .values({
+          id: parameter(() => subscription.id),
+          board_id: parameter(() => subscription.boardId),
+          card_id: parameter(() => bindNull(subscription.cardId)),
+          session_key: parameter(() => bindNull(subscription.sessionKey)),
+          run_id: parameter(() => bindNull(subscription.runId)),
+          target: parameter(() => bindNull(subscription.target)),
+          event_kinds_json: parameter(() => jsonValue(subscription.eventKinds)),
+          last_event_at: parameter(() => bindNull(subscription.lastEventAt)),
+          last_event_id: parameter(() => bindNull(subscription.lastEventId)),
+          last_event_sequence: parameter(() => bindNull(subscription.lastEventSequence)),
+          delivered_event_ids_json: parameter(() => jsonValue(subscription.deliveredEventIds)),
+          created_at: parameter(() => subscription.createdAt),
+          updated_at: parameter(() => subscription.updatedAt),
+        })
+        .onConflict((conflict) =>
+          conflict.column("id").doUpdateSet((eb) => ({
+            board_id: eb.ref("excluded.board_id"),
+            card_id: eb.ref("excluded.card_id"),
+            session_key: eb.ref("excluded.session_key"),
+            run_id: eb.ref("excluded.run_id"),
+            target: eb.ref("excluded.target"),
+            event_kinds_json: eb.ref("excluded.event_kinds_json"),
+            last_event_at: eb.ref("excluded.last_event_at"),
+            last_event_id: eb.ref("excluded.last_event_id"),
+            last_event_sequence: eb.ref("excluded.last_event_sequence"),
+            delivered_event_ids_json: eb.ref("excluded.delivered_event_ids_json"),
+            created_at: eb.ref("excluded.created_at"),
+            updated_at: eb.ref("excluded.updated_at"),
+          })),
+        ),
+    );
+    this.db.prepare(compiled.sql).run(...bind());
   }
 
   async lookup(key: string): Promise<PersistedWorkboardNotificationSubscription | undefined> {

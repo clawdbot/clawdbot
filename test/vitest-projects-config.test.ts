@@ -44,6 +44,7 @@ import {
   sharedVitestConfig,
 } from "./vitest/vitest.shared.config.ts";
 import { fullSuiteVitestShards } from "./vitest/vitest.test-shards.mjs";
+import { uiIsolatedTestFiles } from "./vitest/vitest.ui-isolated-paths.mjs";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 import { createUnitFastFakeTimersVitestConfig } from "./vitest/vitest.unit-fast-fake-timers.config.ts";
 import { createUnitFastIsolatedVitestConfig } from "./vitest/vitest.unit-fast-isolated.config.ts";
@@ -54,6 +55,7 @@ const patternFiles = createPatternFileHelper("openclaw-vitest-projects-config-")
 const scopedGatewayMethodsIsolatedTestFiles = [
   "server-methods/agent.test.ts",
   "server-methods/board.runtime-boundaries.test.ts",
+  "server-methods/system-agent-setup-control-ui.test.ts",
   "server-methods/usage.test.ts",
   "server-methods/usage.sessions-usage.test.ts",
 ];
@@ -115,8 +117,12 @@ describe("projects vitest config", () => {
     expect(serverIsolatedConfig.include).toEqual(gatewayServerIsolatedTestFiles);
     expect(methodsConfig.exclude).toContain("server-methods/agent.test.ts");
     expect(methodsConfig.exclude).toContain("server-methods/board.runtime-boundaries.test.ts");
+    expect(methodsConfig.exclude).toContain("server-methods/system-agent-setup-control-ui.test.ts");
     expect(gatewayFallback.exclude).toContain("server-methods/agent.test.ts");
     expect(gatewayFallback.exclude).toContain("server-methods/board.runtime-boundaries.test.ts");
+    expect(gatewayFallback.exclude).toContain(
+      "server-methods/system-agent-setup-control-ui.test.ts",
+    );
     expect(gatewayFallback.exclude).toContain("server.sessions.compaction-read-errors.test.ts");
   });
 
@@ -404,9 +410,18 @@ describe("projects vitest config", () => {
     ]);
   });
 
-  it("keeps the root ui lane on the shared non-isolated runner", () => {
+  it("keeps shared and isolated UI owners together in root and full runtime runs", () => {
+    for (const projects of [
+      rootVitestProjects,
+      fullSuiteVitestShards.find((shard) => shard.name === "core-runtime")?.projects ?? [],
+    ]) {
+      for (const config of ["vitest.ui.config.ts", "vitest.ui-isolated.config.ts"]) {
+        expect(projects.filter((project) => project === `test/vitest/${config}`)).toHaveLength(1);
+      }
+    }
     const config = createUiVitestConfig();
     const testConfig = requireTestConfig(config);
+    expect(testConfig.exclude).toEqual(expect.arrayContaining(uiIsolatedTestFiles));
     expect(testConfig.environment).toBe("jsdom");
     expect(testConfig.isolate).toBe(false);
     expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");

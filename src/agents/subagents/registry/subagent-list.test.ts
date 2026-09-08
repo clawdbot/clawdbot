@@ -3,9 +3,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { withEnvAsync } from "../../../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { buildSubagentList } from "./subagent-list.js";
 import {
@@ -36,6 +38,79 @@ beforeEach(() => {
 });
 
 describe("buildSubagentList", () => {
+  it("builds the subagent list without decoding unrelated saved prompts", async () => {
+    const stateDir = await fs.mkdtemp(path.join(testWorkspaceDir, "metadata-"));
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      try {
+        const storePath = path.join(stateDir, "agents/main/sessions/sessions.json");
+        const childSessionKey = "agent:main:subagent:target";
+        for (let i = 0; i < 20; i++) {
+          await replaceSessionEntry(
+            { storePath, sessionKey: `agent:main:subagent:other-${i}` },
+            {
+              sessionId: `other-${i}`,
+              updatedAt: 1,
+              skillsSnapshot: { prompt: `UNRELATED_PAYLOAD_${"x".repeat(4096)}`, skills: [] },
+            },
+          );
+        }
+        await replaceSessionEntry(
+          { storePath, sessionKey: childSessionKey },
+          {
+            sessionId: "target",
+            updatedAt: Date.now(),
+            inputTokens: 12,
+            outputTokens: 1000,
+            totalTokens: 197000,
+            totalTokensFresh: true,
+            totalTokensVersion: 1,
+            model: "demo/runtime-model",
+          },
+        );
+        const run = {
+          runId: "run-metadata-target",
+          childSessionKey,
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: "inspect metadata reads",
+          cleanup: "keep",
+          createdAt: Date.now(),
+          execution: { status: "queued" },
+        } satisfies SubagentRunRecord;
+        addSubagentRunForTests(run);
+
+        const parse = vi.spyOn(JSON, "parse");
+        try {
+          const list = buildSubagentList({
+            cfg: { session: { store: storePath } },
+            runs: [run],
+            recentMinutes: 30,
+            taskMaxChars: 110,
+          });
+          expect(list.active).toHaveLength(1);
+          expect(list.active[0]).toMatchObject({
+            runId: run.runId,
+            sessionKey: childSessionKey,
+            model: "demo/runtime-model",
+            status: "queued",
+            totalTokens: 197000,
+          });
+          expect(list.active[0]?.line).toContain("prompt/cache 197k");
+          const unrelatedParses = parse.mock.calls.filter(
+            ([value]) => typeof value === "string" && value.includes("UNRELATED_PAYLOAD_"),
+          ).length;
+          expect(unrelatedParses).toBe(0);
+        } finally {
+          parse.mockRestore();
+        }
+      } finally {
+        resetSubagentRegistryForTests();
+        await cleanupSessionStateForTest({ stateDir });
+        await fs.rm(stateDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   it("returns empty active and recent sections when no runs exist", () => {
     const cfg = {
       commands: { text: true },

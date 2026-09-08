@@ -1235,6 +1235,29 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("15:26");
   });
 
+  it("preserves the cached prefix when source delivery modes alternate", () => {
+    const prompts = (["automatic", "message_tool_only", "automatic"] as const).map(
+      (sourceReplyDeliveryMode) =>
+        buildAgentSystemPrompt({
+          workspaceDir: "/tmp/openclaw",
+          toolNames: ["message"],
+          sourceReplyDeliveryMode,
+          runtimeInfo: { channel: "telegram" },
+        }),
+    );
+    const prefixes = prompts.map((prompt) =>
+      prompt.slice(0, prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY)),
+    );
+
+    expect(prefixes[1]).toBe(prefixes[0]);
+    expect(prefixes[2]).toBe(prefixes[0]);
+    expect(prefixes[0]).not.toContain("## Assistant Output Directives");
+    expect(prefixes[0]).not.toContain("## Silent Replies");
+    expect(prompts[0]).toContain("Media attachment: own line `MEDIA:<path-or-url>` per item");
+    expect(prompts[1]).toContain("Current source visible reply MUST use `message(action=send)`");
+    expect(prompts[2]).toBe(prompts[0]);
+  });
+
   it("keeps date rollover and timezone changes below the prompt-cache boundary", () => {
     const buildPrompt = (userDate: string, userTimezone: string) =>
       buildAgentSystemPrompt({

@@ -183,7 +183,6 @@ describe("listChannelCatalogEntries", () => {
 
     expect(
       module.listChannelCatalogEntries({
-        installRecords: {},
         discovery: {
           candidates: [createChannelCandidate({ pluginId: "package-plugin" })],
           diagnostics: [],

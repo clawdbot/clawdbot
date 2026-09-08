@@ -21,5 +21,8 @@ export {
 } from "../infra/kysely-sync.js";
 export { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 export { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-readonly-location.js";
-export { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+export {
+  runSqliteImmediateTransaction,
+  runSqliteImmediateTransactionSync,
+} from "../infra/sqlite-transaction.js";
 export { tableExists } from "../state/openclaw-state-db-schema-helpers.js";

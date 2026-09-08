@@ -11,8 +11,8 @@ import ai.openclaw.app.GatewayCronRunSummary
 import ai.openclaw.app.GatewayCronScheduleEdit
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.resolveNativeText
-import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
+import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawListPanel
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPrimaryButton
@@ -635,7 +635,7 @@ private fun CronRunHistoryPanel(
 @Composable
 private fun CronRunHistoryRow(run: GatewayCronRunSummary) {
   val status = cronRunStatus(run.status)
-  ClawDetailRow(
+  ClawListItem(
     title = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(run.ts)),
     subtitle = cronRunSubtitle(run),
     leading = { ClawIconBadge(icon = Icons.Default.Schedule) },

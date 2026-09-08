@@ -312,7 +312,7 @@ function renderProgressCardReceipt(card: ToolCard, outcome: ToolCardOutcome) {
   return html`<div class="chat-tool-msg-collapse chat-progress-card-receipt">
     <div class="chat-tool-msg-summary chat-tool-row" role="status">
       <span class="chat-tool-msg-summary__icon">${renderToolIcon("listChecks")}</span>
-      <span class="chat-tool-msg-summary__label">${label}</span>
+      <span class="chat-progress-card-receipt__text">${label}</span>
     </div>
   </div>`;
 }

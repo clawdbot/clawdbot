@@ -54,6 +54,27 @@ describe("consumeRootOptionToken", () => {
 });
 
 describe("literal command discovery", () => {
+  it.each(["route", "command-path"] as const)(
+    "requires the root command before command options in %s mode",
+    (mode) => {
+      const options = { commandPath: ["models"], booleanFlags: ["--json"], mode };
+      expect(
+        getCommandPositionalsWithRootOptions(
+          ["node", "openclaw", "--json", "models", "status"],
+          options,
+        ),
+      ).toBeNull();
+      for (const args of [
+        ["models", "--json", "status"],
+        ["--profile", "models", "models", "--json", "status"],
+      ]) {
+        expect(
+          getCommandPositionalsWithRootOptions(["node", "openclaw", ...args], options),
+        ).toEqual(["status"]);
+      }
+    },
+  );
+
   it.each([
     { args: ["--", "config", "get"], expected: ["config", "get"] },
     { args: ["--profile", "work", "--", "config", "get"], expected: ["config", "get"] },

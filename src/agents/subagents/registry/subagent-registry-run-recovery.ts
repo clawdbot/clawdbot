@@ -149,19 +149,18 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     const sourceRequesterSettleWake = replaceParams.preserveRequesterSettleWake
       ? source.requesterSettleWake
       : undefined;
-    const inheritedRequesterSettleWake: RequesterSettleWakeState | undefined =
-      sourceRequesterSettleWake
+    const remapRequesterSettleWake = (
+      wake: RequesterSettleWakeState,
+    ): RequesterSettleWakeState => ({
+      ...wake,
+      ...(wake.batchRunIds
         ? {
-            ...sourceRequesterSettleWake,
-            ...(sourceRequesterSettleWake.batchRunIds
-              ? {
-                  batchRunIds: sourceRequesterSettleWake.batchRunIds
-                    .map((runId) => (runId === previousRunId ? nextRunId : runId))
-                    .toSorted(),
-                }
-              : {}),
+            batchRunIds: wake.batchRunIds
+              .map((runId) => (runId === previousRunId ? nextRunId : runId))
+              .toSorted(),
           }
-        : undefined;
+        : {}),
+    });
     const next: SubagentRunRecord = normalizeSubagentRunState({
       ...source,
       runId: nextRunId,
@@ -179,7 +178,9 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       browserCleanupDispatchedAt: undefined,
       deleteCleanupDispatchedAt: undefined,
       wakeOnDescendantSettle: undefined,
-      requesterSettleWake: inheritedRequesterSettleWake,
+      requesterSettleWake: sourceRequesterSettleWake
+        ? remapRequesterSettleWake(sourceRequesterSettleWake)
+        : undefined,
       execution: {
         status: "running",
         startedAt: now,
@@ -237,13 +238,36 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     }
     this.options.runs.set(nextRunId, next);
     const killReconciliationSnapshots = this.markOlderKillReconciliationsSuperseded(next);
+    const wakeSnapshots = new Map<SubagentRunRecord, RequesterSettleWakeState>();
+    // Every member carries the frozen cohort. Remap them atomically with the
+    // successor so a settled sibling cannot drop a still-running replacement.
+    for (const memberRunId of sourceRequesterSettleWake?.batchRunIds ?? []) {
+      const member = this.options.runs.get(memberRunId);
+      const wake = member?.requesterSettleWake;
+      if (
+        !member ||
+        member === next ||
+        member.requesterSessionKey !== source.requesterSessionKey ||
+        member.requesterAgentId !== source.requesterAgentId ||
+        !wake?.batchRunIds?.includes(previousRunId) ||
+        wake.rearmGeneration !== sourceRequesterSettleWake?.rearmGeneration
+      ) {
+        continue;
+      }
+      wakeSnapshots.set(member, wake);
+      member.requesterSettleWake = remapRequesterSettleWake(wake);
+    }
     const changedRunIds = [
       previousRunId,
       nextRunId,
       ...[...killReconciliationSnapshots.keys()].map((entry) => entry.runId),
+      ...[...wakeSnapshots.keys()].map((entry) => entry.runId),
     ];
     const rollbackReplacement = () => {
       this.restoreKillReconciliationSnapshots(killReconciliationSnapshots);
+      for (const [member, wake] of wakeSnapshots) {
+        member.requesterSettleWake = wake;
+      }
       this.options.runs.delete(nextRunId);
       this.options.runs.set(previousRunId, source);
     };

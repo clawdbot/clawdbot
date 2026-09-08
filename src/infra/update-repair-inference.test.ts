@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   catalog: vi.fn(),
 }));
 
-vi.mock("../agents/auth-profiles/store.js", () => ({
+vi.mock("../agents/auth-profiles/store-runtime.js", () => ({
   loadAuthProfileStoreForRuntime: () => ({ version: 1, profiles: {} }),
 }));
 vi.mock("../agents/model-auth-availability.js", () => ({

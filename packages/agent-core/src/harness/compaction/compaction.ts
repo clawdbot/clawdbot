@@ -120,6 +120,7 @@ export interface CompactionResult<T = unknown> {
 // this provider-independent 16K hard bound.
 export const MAX_COMPACTION_SUMMARY_CHARS = 16_000;
 export const SUMMARY_TRUNCATED_MARKER = "\n\n[Compaction summary truncated to fit budget]";
+const TURN_CONTEXT_PREFIX = "\n\n---\n\n**Turn Context (split turn):**\n\n";
 const MAX_LATEST_USER_REQUEST_CHARS = 800;
 const LATEST_USER_REQUEST_TRUNCATED_MARKER = "\n[... latest user request truncated ...]\n";
 
@@ -157,6 +158,47 @@ export function capCompactionSummary(
   const budget = maxChars - SUMMARY_TRUNCATED_MARKER.length - suffix.length;
   const prefix = suffix ? summary.slice(0, -suffix.length) : summary;
   return `${truncateUtf16Safe(prefix, budget)}${SUMMARY_TRUNCATED_MARKER}${suffix}`;
+}
+
+/** Let each summary owner preserve its structure before checking the foreground token budget. */
+export function fitCompactionSummary<T extends { summary: string }>(
+  tokenBudget: number | undefined,
+  render: (maxChars: number) => T | undefined,
+): Result<T, CompactionError> {
+  const full = render(MAX_COMPACTION_SUMMARY_CHARS);
+  if (
+    full &&
+    (tokenBudget === undefined ||
+      estimateStringChars(full.summary) / CHARS_PER_TOKEN_ESTIMATE <= tokenBudget)
+  ) {
+    return ok(full);
+  }
+  let low = 1;
+  let high = MAX_COMPACTION_SUMMARY_CHARS - 1;
+  let fitted: T | undefined;
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const candidate = render(mid);
+    if (!candidate) {
+      low = mid + 1;
+    } else if (
+      tokenBudget === undefined ||
+      estimateStringChars(candidate.summary) / CHARS_PER_TOKEN_ESTIMATE <= tokenBudget
+    ) {
+      fitted = candidate;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return fitted
+    ? ok(fitted)
+    : err(
+        new CompactionError(
+          "summarization_failed",
+          "The compaction summary cannot fit beside the foreground prompt and retained history.",
+        ),
+      );
 }
 
 /** Compaction thresholds and retention settings. */
@@ -431,19 +473,38 @@ interface CutPointResult {
   isSplitTurn: boolean;
 }
 
+/** Automatic callers supply the remaining foreground budget and its message estimator. */
+interface CompactionRetentionBudget {
+  maxTokens: number;
+  reserveTokens: number;
+  estimateTokens: (message: AgentMessage) => number;
+}
+
+interface CompactionRetentionConstraints {
+  /** An admitted, unprocessed user remains intact even before its budget is prepared. */
+  preserveFromEntryId?: string;
+  budget?: CompactionRetentionBudget;
+}
+
 /** Find the compaction cut point that keeps approximately the requested recent-token budget. */
 export function findCutPoint(
   entries: SessionTreeEntry[],
   startIndex: number,
   endIndex: number,
   keepRecentTokens: number,
+  constraints?: CompactionRetentionConstraints,
 ): CutPointResult {
+  const retention = constraints?.budget;
   // Projection validates persisted custom/branch timestamps even outside the
   // retained tail. Keep that eager validation without storing every cut point.
   let cutIndex: number | undefined;
+  let lastAllowedCut = endIndex - 1;
   for (let i = startIndex; i < endIndex; i++) {
     const entry = entries[i];
     const message = entry ? getMessageFromEntryForCompaction(entry) : undefined;
+    if (entry && entry.id === constraints?.preserveFromEntryId) {
+      lastAllowedCut = i;
+    }
     if (message && isCutPointMessage(message)) {
       cutIndex = i;
     }
@@ -467,10 +528,36 @@ export function findCutPoint(
     if (isCutPointMessage(message)) {
       cutIndex = i;
     }
-    accumulatedTokens += estimateTokens(message);
+    accumulatedTokens += retention?.estimateTokens(message) ?? estimateTokens(message);
     if (accumulatedTokens >= keepRecentTokens) {
       break;
     }
+  }
+  cutIndex = Math.min(cutIndex, lastAllowedCut);
+  if (retention) {
+    let retainedTokens = 0;
+    let fittingCut = endIndex;
+    let tailLimit = retention.maxTokens;
+    for (let i = endIndex - 1; i >= cutIndex; i--) {
+      const entry = entries[i];
+      const message = entry ? getMessageFromEntryForCompaction(entry) : undefined;
+      retainedTokens += message ? retention.estimateTokens(message) : 0;
+      if (retainedTokens > tailLimit) {
+        break;
+      }
+      if (i <= lastAllowedCut && message && isCutPointMessage(message)) {
+        if (fittingCut === endIndex) {
+          // The summary maximum is a reservation, not a minimum: small windows
+          // retain one complete atom and give the summary the remaining room.
+          tailLimit = Math.max(retainedTokens, retention.maxTokens - retention.reserveTokens);
+        }
+        fittingCut = i;
+      }
+    }
+    if (fittingCut === endIndex) {
+      return { firstKeptEntryIndex: endIndex, turnStartIndex: -1, isSplitTurn: false };
+    }
+    cutIndex = fittingCut;
   }
   while (cutIndex > startIndex) {
     const prevEntry = entries[cutIndex - 1];
@@ -725,6 +812,8 @@ export async function generateSummary(
 
 /** Prepared inputs for a compaction run. */
 export interface CompactionPreparation {
+  /** Remaining foreground summary tokens, independent of the summarizer's context window. */
+  summaryTokenBudget?: number;
   /** Entry id where retained history starts. */
   firstKeptEntryId: string;
   /** Messages summarized into the history summary. */
@@ -752,6 +841,7 @@ export function prepareCompaction(
   pathEntries: SessionTreeEntry[],
   settings: CompactionSettings,
   requestState?: "unresolved",
+  constraints?: CompactionRetentionConstraints,
 ): Result<CompactionPreparation | undefined, CompactionError> {
   const lastEntry = pathEntries.at(-1);
   if (
@@ -824,6 +914,7 @@ export function prepareCompaction(
   // units to the cut walk, capped at a one-token retained tail; otherwise a small transcript
   // can leave the cut at the first entry and free nothing.
   const triggerUnitScale =
+    !constraints?.budget &&
     totalEstimatedTokens > 0 &&
     Number.isFinite(totalEstimatedTokens) &&
     Number.isFinite(contextUsage.usageTokens)
@@ -843,7 +934,21 @@ export function prepareCompaction(
     settings.keepRecentTokens / triggerUnitScale + resetPreludeTokens,
   );
 
-  const cutPoint = findCutPoint(effectiveEntries, boundaryStart, boundaryEnd, keepRecentTokens);
+  const cutPoint = findCutPoint(
+    effectiveEntries,
+    boundaryStart,
+    boundaryEnd,
+    keepRecentTokens,
+    constraints,
+  );
+  if (cutPoint.firstKeptEntryIndex === boundaryEnd) {
+    return err(
+      new CompactionError(
+        "summarization_failed",
+        "No complete recent message fits beside the foreground prompt, tools, and summary. Reduce the request or select a larger context window.",
+      ),
+    );
+  }
   const firstKeptEntry = effectiveEntries[cutPoint.firstKeptEntryIndex];
   if (!firstKeptEntry?.id) {
     return err(
@@ -994,29 +1099,49 @@ export async function compact(
     if (!turnPrefixResult.ok) {
       return err(turnPrefixResult.error);
     }
-    latestContext = `\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult.value}`;
+    latestContext = `${TURN_CONTEXT_PREFIX}${turnPrefixResult.value}`;
   }
 
   const { readFiles, modifiedFiles } = computeFileLists(fileOps);
   const fileOperations = formatFileOperations(readFiles, modifiedFiles);
-  const preservedHistoryChars = Math.min(
-    historyResult.value.length,
-    Math.floor(MAX_COMPACTION_SUMMARY_CHARS / 2),
-  );
-  const latestContextBudget =
-    MAX_COMPACTION_SUMMARY_CHARS -
-    SUMMARY_TRUNCATED_MARKER.length -
-    fileOperations.length -
-    preservedHistoryChars;
-  latestContext = `${capCompactionSummary(latestContext, latestContextBudget)}${fileOperations}`;
   const unresolvedRequestContext = preparation.latestUnresolvedUserRequest
     ? `## Latest unresolved user request\n${JSON.stringify(preparation.latestUnresolvedUserRequest)}\n\n`
     : "";
-  const summary = capCompactionSummary(
-    `${unresolvedRequestContext}${historyResult.value}${latestContext}`,
-    MAX_COMPACTION_SUMMARY_CHARS,
-    latestContext,
-  );
+  const fitted = fitCompactionSummary(preparation.summaryTokenBudget, (maxChars) => {
+    const requiredChars = fileOperations.length + unresolvedRequestContext.length;
+    if (maxChars <= requiredChars + SUMMARY_TRUNCATED_MARKER.length) {
+      return undefined;
+    }
+    const preservedHistoryChars = Math.min(
+      historyResult.value.length,
+      Math.floor(
+        (preparation.summaryTokenBudget === undefined ? maxChars : maxChars - requiredChars) / 2,
+      ),
+    );
+    const latestContextBudget =
+      maxChars - requiredChars - SUMMARY_TRUNCATED_MARKER.length - preservedHistoryChars;
+    // Fitting must keep generated split-turn context beside required metadata,
+    // including its heading and loss marker when that context is shortened.
+    if (
+      preparation.summaryTokenBudget !== undefined &&
+      latestContext &&
+      latestContextBudget < TURN_CONTEXT_PREFIX.length + SUMMARY_TRUNCATED_MARKER.length + 1
+    ) {
+      return undefined;
+    }
+    const suffix = `${latestContextBudget > 0 ? capCompactionSummary(latestContext, latestContextBudget) : ""}${fileOperations}`;
+    return {
+      summary: `${unresolvedRequestContext}${capCompactionSummary(
+        `${historyResult.value}${suffix}`,
+        maxChars - unresolvedRequestContext.length,
+        suffix,
+      )}`,
+    };
+  });
+  if (!fitted.ok) {
+    return fitted;
+  }
+  const { summary } = fitted.value;
 
   return ok({
     summary,

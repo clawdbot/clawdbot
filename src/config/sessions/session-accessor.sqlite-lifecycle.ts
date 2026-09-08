@@ -173,7 +173,7 @@ export async function cleanupSessionLifecycleArtifactsCore(
               `SQLite session reclamation returned ${reclaimed.kind} for ${plan.kind}`,
             );
           }
-          emitCommittedSessionEntryRemovals(cleanupPlan.entries);
+          emitCommittedSessionEntryRemovals(resolved.agentId, cleanupPlan.entries);
           return reclaimed.value;
         });
       }),
@@ -261,6 +261,7 @@ export async function resetSessionEntryLifecycle(
         }, toDatabaseOptions(resolved));
         if (current) {
           emitSessionIdentityMutation({
+            agentId: resolved.agentId,
             kind: "reset",
             previous: {
               ...(current.entry.sessionId ? { sessionId: current.entry.sessionId } : {}),
@@ -273,6 +274,7 @@ export async function resetSessionEntryLifecycle(
           });
         } else {
           emitSessionIdentityMutation({
+            agentId: resolved.agentId,
             kind: "create",
             previous: { sessionKeys: [] },
             current: {
@@ -557,6 +559,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
       if (result.deleted) {
         // The deletion is committed; observers must invalidate even if receipt cleanup fails.
         emitSessionIdentityMutation({
+          agentId: resolved.agentId,
           kind: "delete",
           previous: {
             ...(prepared.current.entry.sessionId

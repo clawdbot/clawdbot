@@ -1,4 +1,3 @@
-// Msteams plugin module implements graph thread behavior.
 import { decodeHtmlEntities } from "openclaw/plugin-sdk/html-entity-runtime";
 import { fetchGraphJson, type GraphResponse } from "./graph.js";
 import type { MSTeamsRequestDeadline } from "./request-timeout.js";
@@ -113,19 +112,21 @@ export async function fetchThreadReplies(
   return res.value ?? [];
 }
 
-/**
- * Format thread messages into a context string for the agent.
- * Skips the current message (by id) and blank messages.
- */
-export function formatThreadContext(
+type ThreadContextMessage = {
+  message_id?: string;
+  sender: string;
+  body: string;
+};
+
+export function buildThreadContext(
   messages: GraphThreadMessage[],
   currentMessageId?: string,
-): string {
-  const lines: string[] = [];
+): ThreadContextMessage[] {
+  const context: ThreadContextMessage[] = [];
   for (const msg of messages) {
     if (msg.id && msg.id === currentMessageId) {
       continue;
-    } // Skip the triggering message.
+    }
     const sender = msg.from?.user?.displayName ?? msg.from?.application?.displayName ?? "unknown";
     const contentType = msg.body?.contentType ?? "text";
     const rawContent = msg.body?.content ?? "";
@@ -134,7 +135,7 @@ export function formatThreadContext(
     if (!content) {
       continue;
     }
-    lines.push(`${sender}: ${content}`);
+    context.push({ message_id: msg.id, sender, body: content });
   }
-  return lines.join("\n");
+  return context;
 }

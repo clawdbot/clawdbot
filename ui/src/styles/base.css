@@ -130,9 +130,6 @@
   --exec-highlight: #f97316;
   --moon-highlight: #fef3c7;
   --moon-base: #fbbf24;
-  --workshop-warm: #ff8a5c;
-  --workshop-teal: #14b8a6;
-  --workshop-cyan: #0891b2;
 
   /* Provider and product brand colors never follow the active UI theme. */
   --brand-codex: #10a37f;

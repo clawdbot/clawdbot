@@ -15,6 +15,7 @@ import {
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import {
+  clickBoardWidgetControl,
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
@@ -390,7 +391,7 @@ suite.define(() => {
           expect(await note.inputValue()).toBe("State survives rerenders");
           expect(await gateway.getRequests("canvas.document.view")).toHaveLength(1);
 
-          await board.getByRole("button", { name: "Record state" }).click();
+          await clickBoardWidgetControl(page, board.getByRole("button", { name: "Record state" }));
           await board.getByText("State recorded", { exact: true }).waitFor();
           expect((await gateway.getRequests("board.event"))[0]?.params).toEqual({
             ticket: "ticket",

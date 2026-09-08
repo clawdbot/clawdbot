@@ -46,8 +46,10 @@ export interface FindToolInput {
   limit?: number;
 }
 
+// Keep one text payload; duplicate truncation content can exceed Code Mode value bounds.
 export interface FindToolDetails {
-  truncation?: TruncationResult;
+  content: string;
+  truncation?: Omit<TruncationResult, "content">;
   resultLimitReached?: number;
 }
 
@@ -62,7 +64,8 @@ export interface GrepToolInput {
 }
 
 export interface GrepToolDetails {
-  truncation?: TruncationResult;
+  content: string;
+  truncation?: Omit<TruncationResult, "content">;
   matchLimitReached?: number;
   linesTruncated?: boolean;
 }
@@ -74,6 +77,7 @@ export interface LsToolInput {
 }
 
 export interface LsToolDetails {
+  content: string;
   nextAfter?: string;
 }
 

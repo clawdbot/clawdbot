@@ -92,6 +92,7 @@ vi.mock("../process/supervisor/index.js", () => ({
         input.onStdout?.("ok\n");
       }
       return {
+        activity: { resultSettled: true, lastOutputAtMs: Date.now() },
         runId: "mock-path-run",
         startedAtMs: Date.now(),
         stdin: undefined,
@@ -110,7 +111,6 @@ vi.mock("../process/supervisor/index.js", () => ({
     },
     cancel: vi.fn(),
     cancelScope: vi.fn(),
-    getRecord: vi.fn(),
   }),
 }));
 

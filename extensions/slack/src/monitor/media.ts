@@ -82,17 +82,6 @@ function createSlackMediaRequest(
   };
 }
 
-function isMockedFetch(fetchImpl: typeof fetch | undefined): boolean {
-  if (typeof fetchImpl !== "function") {
-    return false;
-  }
-  const candidate = fetchImpl as typeof fetch & {
-    mock?: unknown;
-    _isMockFunction?: unknown;
-  };
-  return candidate.mock !== undefined || candidate["_isMockFunction"] === true;
-}
-
 function createSlackMediaFetch(govSlack: boolean): FetchLike {
   return async (input, init) => {
     const url = resolveRequestUrl(input);
@@ -100,10 +89,7 @@ function createSlackMediaFetch(govSlack: boolean): FetchLike {
       throw new Error("Unsupported fetch input: expected string, URL, or Request");
     }
     const parsed = assertSlackFileUrl(url, govSlack);
-    const fetchImpl =
-      "dispatcher" in (init ?? {}) && !isMockedFetch(globalThis.fetch)
-        ? fetchWithRuntimeDispatcher
-        : globalThis.fetch;
+    const fetchImpl = "dispatcher" in (init ?? {}) ? fetchWithRuntimeDispatcher : globalThis.fetch;
     return fetchImpl(parsed.href, { ...init, redirect: "manual" });
   };
 }

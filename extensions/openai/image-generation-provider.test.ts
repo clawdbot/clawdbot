@@ -324,7 +324,11 @@ function expectNoJsonRequestUrlContaining(expectedFragment: string) {
 }
 
 describe("openai image generation provider", () => {
-  const provider = buildOpenAIImageGenerationProvider();
+  const provider = buildOpenAIImageGenerationProvider({
+    ensureAuthProfileStore: ensureAuthProfileStoreMock,
+    listProfilesForProvider: listProfilesForProviderMock,
+    isProviderApiKeyConfigured: isProviderApiKeyConfiguredMock,
+  });
   const emptyConfig: OpenClawConfig = {};
   type OpenAIImageRequest = Parameters<typeof provider.generateImage>[0];
   const generateOpenAIImage = (

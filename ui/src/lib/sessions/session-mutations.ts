@@ -24,6 +24,7 @@ import type {
   SessionState,
 } from "./session-capability.ts";
 import { areUiSessionKeysEquivalent } from "./session-key.ts";
+import type { SessionPermissionClaim } from "./session-permission-projection.ts";
 import { requestSessionPatch, requestSessionReset } from "./session-requests.ts";
 import type { SessionRefreshOutcome } from "./session-roster-refresh.ts";
 
@@ -37,12 +38,19 @@ type SessionMutationsHost = {
   readState: () => SessionState;
   publish: (state: SessionState, errorSource?: "session-observer" | "operation") => void;
   refreshReplacement: SessionCapability["refreshReplacement"];
-  refreshReplacementResult: (agentId?: string | null) => Promise<SessionRefreshOutcome>;
+  refreshReplacementResult: (
+    agentId?: string | null,
+    isErrorCurrent?: () => boolean,
+  ) => Promise<SessionRefreshOutcome>;
   publishedRow: (key: string) => GatewaySessionRow | undefined;
   redecorateLists: () => void;
   notifyCreated: (key: string, entry?: SessionCreateOutcome["entry"], agentId?: string) => void;
   clearThink: (key: string, agentId?: string | null) => void;
-  claimPermissionProjection: (key: string, agentId?: string | null) => () => boolean;
+  claimPermissionProjection: (
+    key: string,
+    agentId?: string | null,
+    expectedSessionId?: string,
+  ) => SessionPermissionClaim;
   retirePullRequestSummary: (key: string) => void;
 };
 
@@ -320,7 +328,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     let modelPatchStarted = false;
     let modelPatchRevision = 0;
     const modelPatchToken = Symbol("session-model-patch");
-    let ownsPermissionProjection = () => true;
+    let permissionProjection: SessionPermissionClaim | undefined;
     const ownsModelOverride = () => options.ownsModelOverride?.() !== false;
     const startModelPatch = () => {
       if (!managesModelOverride || modelPatchStarted || !ownsModelOverride()) {
@@ -464,7 +472,11 @@ export function createSessionMutations(host: SessionMutationsHost) {
       }
       startOptimisticPatch();
       if (Object.hasOwn(patchParams, "permissionMode")) {
-        ownsPermissionProjection = host.claimPermissionProjection(key, options.agentId);
+        permissionProjection = host.claimPermissionProjection(
+          key,
+          options.agentId,
+          options.expectedSessionId,
+        );
       }
       const result = await requestSessionPatch(scope.client, key, patchParams, options);
       if (!host.connection.isCurrent(scope)) {
@@ -474,21 +486,30 @@ export function createSessionMutations(host: SessionMutationsHost) {
       if (Object.hasOwn(patchParams, "thinkingLevel")) {
         host.clearThink(normalizedKey, options.agentId);
       }
-      if (Object.hasOwn(patchParams, "permissionMode")) {
-        if (!ownsPermissionProjection()) {
+      if (permissionProjection) {
+        const confirmation = permissionProjection.confirm({
+          sessionId: result.entry?.sessionId,
+          permissionMode: result.entry?.permissionMode,
+          updatedAt: result.entry?.updatedAt,
+        });
+        if (confirmation === "superseded") {
           settleOptimisticPatch(true);
           return result;
         }
         // The successful RPC is the first durable acknowledgement; events may
         // drop and the follow-up list may fail, so record its fenced fact now.
-        patchRowLocal(
-          key,
-          {
-            permissionMode: result.entry?.permissionMode,
-            ...(result.entry?.updatedAt === undefined ? {} : { updatedAt: result.entry.updatedAt }),
-          },
-          result.entry?.sessionId,
-        );
+        if (confirmation === "confirmed") {
+          patchRowLocal(
+            key,
+            {
+              permissionMode: result.entry?.permissionMode,
+              ...(result.entry?.updatedAt === undefined
+                ? {}
+                : { updatedAt: result.entry.updatedAt }),
+            },
+            result.entry?.sessionId,
+          );
+        }
       }
       if (archivedPresentationRow) {
         const archivedAt = result.entry?.archivedAt ?? Date.now();
@@ -532,7 +553,10 @@ export function createSessionMutations(host: SessionMutationsHost) {
       let refreshOutcome: SessionRefreshOutcome = { status: "refreshed" };
       if (!options.deferListRefresh) {
         if (Object.hasOwn(patchParams, "permissionMode")) {
-          refreshOutcome = await host.refreshReplacementResult(options.agentId);
+          refreshOutcome = await host.refreshReplacementResult(
+            options.agentId,
+            permissionProjection?.isCurrent,
+          );
         } else {
           await host.refreshReplacement(options.agentId);
         }
@@ -542,7 +566,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
             ? result
             : null;
         }
-        if (Object.hasOwn(patchParams, "permissionMode") && !ownsPermissionProjection()) {
+        if (permissionProjection?.isCurrent() === false) {
           settleOptimisticPatch(true);
           return result;
         }

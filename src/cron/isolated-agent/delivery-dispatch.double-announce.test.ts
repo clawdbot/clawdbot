@@ -202,7 +202,9 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { logError } from "../../logger.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { withTempCronHome } from "../isolated-agent.test-harness.js";
+import type { CronDelivery } from "../types.js";
 import {
   dispatchCronDelivery,
   queueCronMessageToolDeliveryAwareness,
@@ -262,6 +264,10 @@ function makeBaseParams(overrides: {
     ...makeResolvedDelivery(),
     mode: overrides.resolvedDeliveryMode ?? "explicit",
   } satisfies Extract<DeliveryTargetResolution, { ok: true }>;
+  const delivery: CronDelivery = {
+    mode: "announce",
+    bestEffort: overrides.deliveryBestEffort,
+  };
   const runStartedAt = overrides.runStartedAt ?? Date.now();
   return {
     cfg: {} as never,
@@ -274,7 +280,7 @@ function makeBaseParams(overrides: {
       sessionKey:
         overrides.sessionTarget === "current" ? "agent:main:webchat:direct:owner" : undefined,
       deleteAfterRun: false,
-      delivery: { mode: "announce", bestEffort: overrides.deliveryBestEffort },
+      delivery,
       payload: { kind: "agentTurn", message: "hello" },
     } as never,
     agentId: "main",
@@ -293,6 +299,7 @@ function makeBaseParams(overrides: {
     runEndedAt: runStartedAt,
     timeoutMs: 30_000,
     resolvedDelivery,
+    deliveryPlan: resolveCronDeliveryPlan({ delivery }),
     deliveryRequested: overrides.deliveryRequested ?? true,
     undeliveredRunStatus: "ok",
     skipDelivery: undefined,

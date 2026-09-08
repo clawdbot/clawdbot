@@ -98,22 +98,16 @@ function normalizeCompactionParts(parts: number, messageCount: number): number {
   return Math.min(Math.max(1, Math.floor(parts)), Math.max(1, messageCount));
 }
 
-type CompactionMessageGroup = {
-  messages: AgentMessage[];
-  tokens: number;
-};
-
-function groupCompactionMessages(
+function forEachCompactionMessageGroup(
   messages: AgentMessage[],
   perMessageTokens: number[],
-): CompactionMessageGroup[] {
-  const groups: CompactionMessageGroup[] = [];
-  let current: AgentMessage[] = [];
+  visit: (start: number, end: number, tokens: number) => void,
+): void {
+  let start = 0;
   let currentTokens = 0;
   let pendingToolCalls = createToolCallOccurrenceQueue<true>();
 
   for (const [index, message] of messages.entries()) {
-    current.push(message);
     currentTokens += perMessageTokens[index]!;
 
     if (message.role === "assistant") {
@@ -138,16 +132,15 @@ function groupCompactionMessages(
     // A displaced user turn still belongs to an unfinished call/result batch;
     // splitting it would make one of the resulting provider transcripts invalid.
     if (pendingToolCalls.size === 0) {
-      groups.push({ messages: current, tokens: currentTokens });
-      current = [];
+      visit(start, index + 1, currentTokens);
+      start = index + 1;
       currentTokens = 0;
     }
   }
 
-  if (current.length > 0) {
-    groups.push({ messages: current, tokens: currentTokens });
+  if (start < messages.length) {
+    visit(start, messages.length, currentTokens);
   }
-  return groups;
 }
 
 /** Chunks atomic tool-call groups without splitting a provider-visible call/result pair. */
@@ -158,26 +151,21 @@ function chunkCompactionMessageGroups(
   maxChunks = Number.POSITIVE_INFINITY,
 ): AgentMessage[][] {
   const chunks: AgentMessage[][] = [];
-  let current: AgentMessage[] = [];
+  let chunkStart = 0;
   let currentTokens = 0;
 
-  for (const group of groupCompactionMessages(messages, perMessageTokens)) {
-    if (
-      current.length > 0 &&
-      chunks.length < maxChunks - 1 &&
-      currentTokens + group.tokens > maxTokens
-    ) {
-      chunks.push(current);
-      current = [];
+  forEachCompactionMessageGroup(messages, perMessageTokens, (start, _end, tokens) => {
+    if (start > chunkStart && chunks.length < maxChunks - 1 && currentTokens + tokens > maxTokens) {
+      chunks.push(messages.slice(chunkStart, start));
+      chunkStart = start;
       currentTokens = 0;
     }
 
-    current.push(...group.messages);
-    currentTokens += group.tokens;
-  }
+    currentTokens += tokens;
+  });
 
-  if (current.length > 0) {
-    chunks.push(current);
+  if (chunkStart < messages.length) {
+    chunks.push(messages.slice(chunkStart));
   }
 
   return chunks;
@@ -231,29 +219,30 @@ export function buildOversizedFallbackPlan(params: {
   // Reuse one sanitized token estimate per message across atomic fallback groups.
   const perMessageTokens = estimatePerMessageTokens(params.messages);
   const oversizedThreshold = params.contextWindow * 0.5;
-  let messageIndex = 0;
 
-  for (const group of groupCompactionMessages(params.messages, perMessageTokens)) {
-    const retainedMessages: AgentMessage[] = [];
+  forEachCompactionMessageGroup(params.messages, perMessageTokens, (start, end) => {
     let omitToolBatch = false;
-    for (const message of group.messages) {
-      const tokens = perMessageTokens[messageIndex++]!;
+    for (let index = start; index < end; index++) {
+      const message = params.messages[index]!;
+      const tokens = perMessageTokens[index]!;
       if (tokens * SAFETY_MARGIN > oversizedThreshold) {
         oversizedNotes.push(
           `[Large ${message.role} (~${Math.round(tokens / 1000)}K tokens) omitted from summary]`,
         );
         omitToolBatch ||= message.role === "assistant" || message.role === "toolResult";
-      } else {
-        retainedMessages.push(message);
       }
     }
     // Displaced real user turns survive even when their surrounding tool batch cannot.
-    for (const message of retainedMessages) {
+    for (let index = start; index < end; index++) {
+      if (perMessageTokens[index]! * SAFETY_MARGIN > oversizedThreshold) {
+        continue;
+      }
+      const message = params.messages[index]!;
       if (!omitToolBatch || (message.role !== "assistant" && message.role !== "toolResult")) {
         smallMessages.push(message);
       }
     }
-  }
+  });
 
   return { smallMessages, oversizedNotes };
 }

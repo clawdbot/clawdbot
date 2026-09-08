@@ -1,6 +1,7 @@
 /** Agent-run lease admission for lifecycle-owned prepared model runtimes. */
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { getPreparedModelRuntimeBorrowedSnapshot } from "./prepared-model-runtime-generation-scope.js";
 import {
@@ -25,7 +26,7 @@ import {
   preparedPluginGenerationReusesBase,
   preparedPluginGenerationSupportsSelections,
 } from "./prepared-model-runtime.plugin-generation.js";
-import type { PreparedModelRuntimeCatalogMode } from "./prepared-model-runtime.types.js";
+import type { PreparedModelRuntimeLeaseOptions } from "./prepared-model-runtime.types.js";
 
 type PreparedModelRuntimeLeaseContext = {
   owners: Map<string, PreparedModelRuntimeOwner>;
@@ -86,34 +87,18 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
   rawInput: PreparedModelRuntimeInput,
   provenance: "run" | "ephemeral",
   context: PreparedModelRuntimeLeaseContext,
-  options: {
-    retainIdleRunOwner?: boolean;
-    catalogMode?: PreparedModelRuntimeCatalogMode;
-    pluginGeneration?: PreparedModelRuntimeOwner["pluginGeneration"];
-    pluginMetadataSnapshot?: PluginMetadataSnapshot;
-    abortSignal?: AbortSignal;
-  } = {},
+  options: PreparedModelRuntimeLeaseOptions = {},
 ): Promise<PreparedModelRuntimeLease> {
-  let normalizedInput = normalizePreparedModelRuntimeInput({
+  const deriveSelections = options.deriveRuntimePluginSelections;
+  // Caller choices belong to this invocation; only config-derived choices may change after a wait.
+  const requestedSelections = deriveSelections
+    ? structuredClone(rawInput.runtimePluginSelections ?? [])
+    : [];
+  let input = normalizePreparedModelRuntimeInput({
     ...rawInput,
     preserveWorkspaceDirOnRefresh:
       rawInput.preserveWorkspaceDirOnRefresh ?? rawInput.workspaceDir !== undefined,
   });
-  if (
-    provenance === "run" &&
-    context.getGatewayLifecycleActive() &&
-    !options.pluginGeneration &&
-    !context.getPendingReplacement()
-  ) {
-    try {
-      normalizedInput = rebindInputToCommittedConfiguredOwner(context.owners, normalizedInput);
-    } catch (error) {
-      if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
-        throw error;
-      }
-    }
-  }
-  let input = normalizedInput;
   let key = ownerKey(input);
   let owner: PreparedModelRuntimeOwner;
   let snapshot: PreparedModelRuntimeSnapshot;
@@ -129,12 +114,68 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       if (context.getPendingReplacement()) {
         continue;
       }
-      if (provenance === "run" && !options.pluginGeneration) {
-        input = rebindInputToCommittedConfiguredOwner(context.owners, input);
-        key = ownerKey(input);
-      }
-      continue;
+      throwIfLeaseAdmissionAborted(options.abortSignal);
     }
+    if (
+      provenance === "run" &&
+      !options.pluginGeneration &&
+      (replacement || context.getGatewayLifecycleActive())
+    ) {
+      try {
+        input = rebindInputToCommittedConfiguredOwner(context.owners, input);
+      } catch (error) {
+        if (replacement || !(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
+          throw error;
+        }
+        const existing = context.owners.get(ownerKey(input));
+        const staleDynamicOwner =
+          existing?.needsRefresh &&
+          !existing.pending &&
+          (existing.provenance === "run" || existing.provenance === "ephemeral");
+        if (!existing || staleDynamicOwner) {
+          const canActivateConfiglessSetup =
+            input.agentId !== undefined && isReservedSystemAgentId(input.agentId);
+          const configuredOwner = resolveConfiguredOwnerPublication(context.owners, input);
+          if (configuredOwner.matches || !canActivateConfiglessSetup) {
+            if (configuredOwner.pending) {
+              await racePromiseWithAbortSignal(configuredOwner.pending, options.abortSignal);
+              continue;
+            }
+            throw error;
+          }
+          // Reserved setup may borrow the configless Gateway before its first owner exists.
+        }
+      }
+    }
+    // Recipes run after config admission. Never carry a derived owner into a later rebind.
+    let pluginMetadataSnapshot = options.pluginMetadataSnapshot;
+    if (deriveSelections) {
+      pluginMetadataSnapshot =
+        options.pluginGeneration?.pluginMetadataSnapshot ??
+        pluginMetadataSnapshot ??
+        resolvePluginMetadataSnapshot({
+          config: input.config,
+          env: input.env,
+          workspaceDir: input.workspaceDir,
+          allowWorkspaceScopedCurrent: true,
+        });
+      const metadataSnapshot = pluginMetadataSnapshot;
+      input = withPluginMetadataSnapshotScope(
+        metadataSnapshot,
+        () => {
+          const derived = deriveSelections({
+            config: input.config,
+            metadataSnapshot,
+          });
+          return normalizePreparedModelRuntimeInput({
+            ...input,
+            runtimePluginSelections: [...requestedSelections, ...derived],
+          });
+        },
+        { trustConfigIdentity: true },
+      );
+    }
+    key = ownerKey(input);
     if (provenance === "run" && context.getGatewayLifecycleActive() && options.pluginGeneration) {
       const configuredOwner = resolveConfiguredOwner(context.owners, input);
       if (configuredOwner?.pending) {
@@ -180,47 +221,11 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
         );
       }
     }
-    let existing = context.owners.get(key);
-    let staleDynamicOwner =
+    const existing = context.owners.get(key);
+    const staleDynamicOwner =
       existing?.needsRefresh &&
       !existing.pending &&
       (existing.provenance === "run" || existing.provenance === "ephemeral");
-    if (
-      context.getGatewayLifecycleActive() &&
-      provenance === "run" &&
-      !options.pluginGeneration &&
-      (!existing || staleDynamicOwner)
-    ) {
-      // Dynamic workspaces still inherit the committed agent/config generation. Only their
-      // explicitly pinned workspace may differ from the configured owner. A stale leased owner
-      // can share this key, so rebase its input before publishing a replacement generation.
-      try {
-        input = rebindInputToCommittedConfiguredOwner(context.owners, input);
-        key = ownerKey(input);
-        existing = context.owners.get(key);
-        staleDynamicOwner =
-          existing?.needsRefresh &&
-          !existing.pending &&
-          (existing.provenance === "run" || existing.provenance === "ephemeral");
-      } catch (error) {
-        if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
-          throw error;
-        }
-        const canActivateConfiglessSetup =
-          input.agentId !== undefined && isReservedSystemAgentId(input.agentId);
-        const configuredOwner = resolveConfiguredOwnerPublication(context.owners, input);
-        if (configuredOwner.matches || !canActivateConfiglessSetup) {
-          const pending = configuredOwner.pending;
-          if (pending) {
-            await racePromiseWithAbortSignal(pending, options.abortSignal);
-            continue;
-          }
-          throw error;
-        }
-        // First-run Model Setup uses the reserved system-agent identity before a configless gateway
-        // has an owner to rebind. Keep ordinary agent runs fail-closed at this ownership boundary.
-      }
-    }
     // A static owner cannot satisfy explicit live discovery; publish a new exact generation.
     const ownerGenerationChanged =
       (options.pluginGeneration !== undefined &&
@@ -269,7 +274,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
           provenance,
           options.catalogMode,
           options.pluginGeneration,
-          options.pluginMetadataSnapshot,
+          pluginMetadataSnapshot,
         );
         // Publication installs its exact owner synchronously before exposing the pending promise.
         const publishingOwner = context.owners.get(key);

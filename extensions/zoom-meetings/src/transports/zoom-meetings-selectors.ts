@@ -14,6 +14,7 @@ export const ZOOM_MEETING_SELECTORS = {
   deviceSettings: ['button[aria-label="More audio controls" i]'],
   microphoneDevice: ['[aria-label*="microphone" i][role="combobox"]'],
   microphoneDeviceMenu: [".audio-option-menu__pop-menu", '[role="listbox"]', '[role="menu"]'],
+  microphoneDeviceScope: '[data-tid="device-settings-microphone"]',
   selectedMicrophoneDevice: [
     'a[role="button"][aria-label^="Select a microphone" i][aria-label$="selected" i]',
     "option:checked",

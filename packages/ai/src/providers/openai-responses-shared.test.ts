@@ -13,6 +13,7 @@ import {
 import { isInvalidEncryptedContentError } from "../transports/openai-responses-replay-internal.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model, Tool } from "../types.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import {
@@ -105,14 +106,7 @@ function createAssistantOutput(): AssistantMessage {
     api: nativeOpenAIModel.api,
     provider: nativeOpenAIModel.provider,
     model: nativeOpenAIModel.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsage(),
     stopReason: "stop",
     timestamp: 0,
     content: [],
@@ -453,14 +447,7 @@ describe("convertResponsesMessages", () => {
             api: nativeOpenAIModel.api,
             provider: nativeOpenAIModel.provider,
             model: nativeOpenAIModel.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "stop",
             timestamp: 1,
             content: [
@@ -518,14 +505,7 @@ describe("convertResponsesMessages", () => {
             api: nativeOpenAIModel.api,
             provider: nativeOpenAIModel.provider,
             model: nativeOpenAIModel.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "stop",
             timestamp: 1,
             content: [
@@ -565,14 +545,7 @@ describe("convertResponsesMessages", () => {
             api: nativeOpenAIModel.api,
             provider: nativeOpenAIModel.provider,
             model: nativeOpenAIModel.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "toolUse",
             timestamp: 1,
             content: [
@@ -653,14 +626,7 @@ describe("convertResponsesMessages", () => {
             api: nativeOpenAIModel.api,
             provider: nativeOpenAIModel.provider,
             model: nativeOpenAIModel.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "toolUse",
             timestamp: 1,
             content: [{ type: "toolCall", id: "call_plan", name: "update_plan", arguments: {} }],
@@ -698,14 +664,7 @@ describe("convertResponsesMessages", () => {
             api: nativeOpenAIModel.api,
             provider: nativeOpenAIModel.provider,
             model: nativeOpenAIModel.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "toolUse",
             timestamp: 1,
             content: [
@@ -747,14 +706,7 @@ describe("convertResponsesMessages", () => {
             api: nativeOpenAIModel.api,
             provider: nativeOpenAIModel.provider,
             model: nativeOpenAIModel.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "toolUse",
             timestamp: 1,
             content: [{ type: "toolCall", id: "call_audio", name: "audio", arguments: {} }],
@@ -820,14 +772,7 @@ describe("convertResponsesMessages", () => {
             api: nativeOpenAIModel.api,
             provider: nativeOpenAIModel.provider,
             model: nativeOpenAIModel.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "stop",
             timestamp: 1,
             content: [
@@ -3573,14 +3518,7 @@ describe("Azure OpenAI Responses content type support", () => {
             api: azureModel.api,
             provider: azureModel.provider,
             model: azureModel.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "stop",
             timestamp: 1,
             content: [

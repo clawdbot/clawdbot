@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
@@ -323,6 +323,8 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
   });
 
   it("atomically filters and restores direct tools plus the hidden catalog", () => {
+    onTestFinished(() => testing.setToolSearchCodeModeSupportedForTest(undefined));
+    testing.setToolSearchCodeModeSupportedForTest(true);
     const runtime = createRuntime({ tools: { toolSearch: true } });
     const compacted = runtime.compactTools(
       tools([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "read", "hidden_alpha", "hidden_beta"]),
@@ -351,6 +353,8 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
   });
 
   it("derives callable inventory after runtime schema projection", () => {
+    onTestFinished(() => testing.setToolSearchCodeModeSupportedForTest(undefined));
+    testing.setToolSearchCodeModeSupportedForTest(true);
     const runtime = createRuntime({ tools: { toolSearch: true } });
     const invalid = {
       ...createStubTool("invalid_hidden"),

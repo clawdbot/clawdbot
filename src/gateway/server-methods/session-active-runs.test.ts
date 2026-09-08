@@ -5,7 +5,9 @@ import {
   abortEmbeddedAgentRun,
   clearActiveEmbeddedRun,
   isEmbeddedAgentRunActive,
+  resolveEmbeddedAgentRunProgressState,
   setActiveEmbeddedRun,
+  waitForEmbeddedAgentRunEnd,
 } from "../../agents/embedded-agent-runner/runs.js";
 import {
   addSubagentRunForTests,
@@ -24,6 +26,7 @@ import {
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { registerChatAbortController } from "../chat-abort.js";
+import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import {
   createVisibleActiveSessionRunProjector,
   hasRegisteredChatRunForSessionKey,
@@ -675,3 +678,164 @@ it.each([
     clearAgentRunContext(runId);
   }
 });
+
+it("preserves the completed foreground row while hidden embedded maintenance remains operational", async () => {
+  const sessionKey = "agent:main:hidden-maintenance-handle";
+  const sessionId = "hidden-maintenance-session";
+  const runId = "hidden-maintenance-run";
+  let aborted = false;
+  const handle: EmbeddedAgentQueueHandle = {
+    runId,
+    abort: () => {
+      aborted = true;
+    },
+    isAborted: () => aborted,
+    isCompacting: () => false,
+    isStreaming: () => true,
+    queueMessage: async () => undefined,
+  };
+  registerAgentRunContext(runId, {
+    sessionKey,
+    sessionId,
+    projectSessionActive: false,
+    projectSessionLifecycle: false,
+    projectSessionMessages: false,
+    isControlUiVisible: false,
+  });
+  setActiveEmbeddedRun(sessionId, handle, sessionKey);
+  const state = () =>
+    resolveVisibleActiveSessionRunState({
+      context: {},
+      requestedKey: sessionKey,
+      canonicalKey: sessionKey,
+      sessionId,
+    });
+  const snapshot = () =>
+    buildGatewaySessionSnapshot({
+      sessionRow: {
+        key: sessionKey,
+        kind: "direct",
+        updatedAt: 20,
+        sessionId,
+        lastRunId: "completed-foreground",
+        status: "done",
+        runtimeMs: 273_418,
+      },
+      activeRunState: state(),
+      includeSession: true,
+    });
+  let settled = false;
+  const cleanup = waitForEmbeddedAgentRunEnd(sessionId, null).then((ended) => {
+    settled = true;
+    return ended;
+  });
+  try {
+    expect.soft(snapshot()).toMatchObject({
+      status: "done",
+      hasActiveRun: false,
+      lastRunId: "completed-foreground",
+      runtimeMs: 273_418,
+      session: { status: "done", hasActiveRun: false },
+    });
+    expect(isEmbeddedAgentRunActive(sessionId)).toBe(true);
+    expect(resolveEmbeddedAgentRunProgressState(sessionId)).toBe("running");
+    clearAgentRunContext(runId);
+    expect.soft(state()).toEqual({ active: false, runIds: [] });
+    expect(resolveEmbeddedAgentRunProgressState(sessionId)).toBe("running");
+    expect(abortEmbeddedAgentRun(sessionId)).toBe(true);
+    expect(aborted).toBe(true);
+    expect(isEmbeddedAgentRunActive(sessionId)).toBe(true);
+    expect(resolveEmbeddedAgentRunProgressState(sessionId)).toBeUndefined();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+  } finally {
+    clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+    clearAgentRunContext(runId);
+    await expect(cleanup).resolves.toBe(true);
+  }
+});
+
+it.each(["reply", "remote"] as const)(
+  "keeps a visible %s owner independent of hidden embedded maintenance",
+  (kind) => {
+    const sessionKey = `agent:main:hidden-with-${kind}`;
+    const sessionId = `hidden-with-${kind}`;
+    const runId = `hidden-${kind}`;
+    const visibleRunId = `visible-${kind}`;
+    const handle: EmbeddedAgentQueueHandle = {
+      runId,
+      abort: () => {},
+      isCompacting: () => false,
+      isStreaming: () => true,
+      queueMessage: async () => undefined,
+    };
+    registerAgentRunContext(runId, { sessionKey, sessionId, projectSessionActive: false });
+    setActiveEmbeddedRun(sessionId, handle, sessionKey);
+    let reply: ReturnType<typeof createReplyOperation> | undefined;
+    if (kind === "reply") {
+      reply = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+      reply.setPhase("running");
+      markReplyOperationExecutionStarted(reply);
+    } else {
+      registerAgentRunContext(visibleRunId, { sessionKey, sessionId, projectSessionActive: true });
+    }
+    const state = () =>
+      resolveVisibleActiveSessionRunState({
+        context: {},
+        requestedKey: sessionKey,
+        canonicalKey: sessionKey,
+        sessionId,
+      });
+    try {
+      expect(state().active).toBe(true);
+      reply?.complete();
+      clearAgentRunContext(visibleRunId);
+      expect(state()).toEqual({ active: false, runIds: [] });
+      expect(resolveEmbeddedAgentRunProgressState(sessionId)).toBe("running");
+    } finally {
+      reply?.complete();
+      clearAgentRunContext(visibleRunId);
+      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+      clearAgentRunContext(runId);
+    }
+  },
+);
+
+it.each([undefined, true])(
+  "keeps embedded activity independent of suppressed events with projection=%s",
+  (projectSessionActive) => {
+    const sessionKey = `agent:main:suppressed-events-${projectSessionActive}`;
+    const sessionId = `suppressed-events-${projectSessionActive}`;
+    const runId = `suppressed-events-run-${projectSessionActive}`;
+    const handle: EmbeddedAgentQueueHandle = {
+      runId,
+      abort: () => {},
+      isCompacting: () => false,
+      isStreaming: () => true,
+      queueMessage: async () => undefined,
+    };
+    registerAgentRunContext(runId, {
+      sessionKey,
+      sessionId,
+      projectSessionActive,
+      projectSessionLifecycle: false,
+      projectSessionMessages: false,
+      isControlUiVisible: false,
+    });
+    setActiveEmbeddedRun(sessionId, handle, sessionKey);
+    try {
+      clearAgentRunContext(runId);
+      expect(
+        resolveVisibleActiveSessionRunState({
+          context: {},
+          requestedKey: sessionKey,
+          canonicalKey: sessionKey,
+          sessionId,
+        }),
+      ).toEqual({ active: true });
+    } finally {
+      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+      clearAgentRunContext(runId);
+    }
+  },
+);

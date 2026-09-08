@@ -104,6 +104,9 @@ function createHarness(
     }>;
     node?: NodeWorkerSupervisorNodeProof;
     currentBundleStatus?: NodeWorkerBundleStatusObservation;
+    additionalManifestRefs?: Parameters<
+      typeof createNodeWorkspaceRetainCoordinator
+    >[0]["additionalManifestRefs"];
     invokeError?: string;
     onInvoke?: (index: number) => void;
   } = {},
@@ -148,6 +151,7 @@ function createHarness(
       list: () => (params.placements ?? [placement()]) as never,
       listPendingWorkspaceResults: () => params.pendingResults ?? [],
     } as Pick<WorkerSessionPlacementStore, "list" | "listPendingWorkspaceResults">,
+    additionalManifestRefs: params.additionalManifestRefs,
     warn,
   });
   coordinator.bindTransport(transport);
@@ -649,14 +653,37 @@ describe("node workspace retain coordinator", () => {
     await coordinator.stop();
   });
 
-  it("republishes an identical full snapshot for reconnect-scoped inventory", async () => {
-    const { coordinator, invoke } = createHarness();
-    await coordinator.start();
+  it("retains the immutable repository base after its accepted manifest advances and the node reconnects", async () => {
+    const baseManifest = `sha256:${"1".repeat(64)}`;
+    const firstManifest = `sha256:${"2".repeat(64)}`;
+    const latestManifest = `sha256:${"3".repeat(64)}`;
+    const placements = [placement({ workspaceBaseManifestRef: firstManifest })];
+    const options = {
+      placements,
+      node: { ...node, connId: "connection-1" },
+      additionalManifestRefs: () => [baseManifest],
+    };
+    const { coordinator, invoke } = createHarness(options);
+    try {
+      await coordinator.start();
+      expect(invoke.mock.calls[0]?.[0].params).toMatchObject({
+        retain: [expect.objectContaining({ manifestRefs: [baseManifest, firstManifest] })],
+      });
 
-    await coordinator.schedule("node-1");
+      placements[0] = placement({ workspaceBaseManifestRef: latestManifest });
+      options.node = { ...node, connId: "connection-2" };
+      await coordinator.schedule("node-1");
 
-    expect(invoke).toHaveBeenCalledTimes(2);
-    expect(invoke.mock.calls[1]?.[0].params).toMatchObject({ sequence: 2 });
-    await coordinator.stop();
+      expect(invoke).toHaveBeenCalledTimes(2);
+      expect(invoke.mock.calls[1]?.[0]).toMatchObject({
+        node: { connId: "connection-2" },
+        params: {
+          sequence: 2,
+          retain: [expect.objectContaining({ manifestRefs: [baseManifest, latestManifest] })],
+        },
+      });
+    } finally {
+      await coordinator.stop();
+    }
   });
 });

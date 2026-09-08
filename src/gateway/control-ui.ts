@@ -24,7 +24,6 @@ import { openLocalFileSafely, FsSafeError } from "../infra/fs-safe.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { isWithinDir } from "../infra/path-safety.js";
 import { assertLocalMediaAllowed, LocalMediaAccessError } from "../media/local-media-access.js";
-import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import {
   probePlaybackMediaFileDescriptor,
   toMediaProbeResult,
@@ -1087,7 +1086,6 @@ export async function handleControlUiHttpRequest(
           ? (resolveRuntimeServiceBuildId() ?? undefined)
           : undefined,
       devGitBranch: (await resolveDevInstallGitBranch()) ?? undefined,
-      localMediaPreviewRoots: [...getAgentScopedMediaLocalRoots(config ?? {}, assistantAgentId)],
       embedSandbox:
         config?.gateway?.controlUi?.embedSandbox === "trusted"
           ? "trusted"
@@ -1100,7 +1098,7 @@ export async function handleControlUiHttpRequest(
       environment: config?.gateway?.controlUi?.environment,
       communityInvite: config?.gateway?.controlUi?.communityInvite !== false,
       terminalEnabled,
-      cliAgentsEnabled: config?.gateway?.cliAgents?.enabled === true,
+      cliAgentsEnabled: config?.gateway?.cliAgents?.enabled !== false,
       pluginAssetsRequireAuth: opts?.auth !== undefined && opts.auth.mode !== "none",
       pluginFrameGrants: pluginFrameGrants.map(({ pluginId, path: grantPath, match }) => ({
         pluginId,
@@ -1243,7 +1241,8 @@ export async function handleControlUiHttpRequest(
   ) {
     // Future filesystem clocks must not make later replacements look unmodified;
     // clamp to response origination as in resolveByteResponse.
-    const lastModifiedMs = Math.floor(Math.min(safeFile.mtimeMs, Date.now()) / 1_000) * 1_000;
+    const originatedAtMs = Date.now();
+    const lastModifiedMs = Math.floor(Math.min(safeFile.mtimeMs, originatedAtMs) / 1_000) * 1_000;
     const representation = resolveOpenedControlUiRepresentation({
       req,
       sourceFile: safeFile,
@@ -1257,7 +1256,7 @@ export async function handleControlUiHttpRequest(
       return true;
     }
     // Negotiation failures precede preconditions; release the selected representation on 304.
-    if (isControlUiFileUnmodified(req, lastModifiedMs)) {
+    if (isControlUiFileUnmodified(req, lastModifiedMs, originatedAtMs)) {
       fs.closeSync(representation.bodyFile.fd);
       respondControlUiNotModified(res, { immutable: immutableAsset, lastModifiedMs });
       return true;

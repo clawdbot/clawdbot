@@ -1,6 +1,6 @@
 // Moonshot setup module handles plugin onboarding behavior.
 import {
-  createDefaultModelPresetAppliers,
+  createDefaultModelsPresetAppliers,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 import {
@@ -11,9 +11,9 @@ import {
   MOONSHOT_DEFAULT_MODEL_REF,
 } from "./provider-catalog.js";
 
-const moonshotPresetAppliers = createDefaultModelPresetAppliers<[string]>({
+const moonshotPresetAppliers = createDefaultModelsPresetAppliers<[string]>({
   primaryModelRef: MOONSHOT_DEFAULT_MODEL_REF,
-  resolveParams: (_cfg: OpenClawConfig, baseUrl: string) => {
+  resolveParams: (cfg: OpenClawConfig, baseUrl: string) => {
     const defaultModel = buildMoonshotProvider().models.find(
       ({ id }) => id === MOONSHOT_DEFAULT_MODEL_ID,
     );
@@ -22,7 +22,7 @@ const moonshotPresetAppliers = createDefaultModelPresetAppliers<[string]>({
           providerId: "moonshot",
           api: "openai-completions",
           baseUrl,
-          defaultModel,
+          defaultModels: cfg.models?.mode === "replace" ? [defaultModel] : [],
           defaultModelId: MOONSHOT_DEFAULT_MODEL_ID,
           aliases: [{ modelRef: MOONSHOT_DEFAULT_MODEL_REF, alias: "Kimi" }],
         }

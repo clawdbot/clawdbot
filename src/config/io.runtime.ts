@@ -117,6 +117,22 @@ export function getRuntimeConfig(options?: {
   return loadConfig(options);
 }
 
+/** Revalidate disk policy at a synchronous effect boundary without observing or repairing state. */
+export function readCurrentConfigForPolicyCheck(params: {
+  configPath: string;
+  env: NodeJS.ProcessEnv;
+}): OpenClawConfig {
+  return createConfigIO({
+    configPath: params.configPath,
+    env: cloneEnvWithPlatformSemantics(params.env),
+    observe: false,
+    pluginValidation: "core-only",
+    shellEnvFallback: "defer",
+    suppressFutureVersionWarning: true,
+    logger: { warn: () => {}, error: () => {} },
+  }).loadConfig({ skipSuspiciousRecovery: true });
+}
+
 export async function readBestEffortConfig(options?: {
   isolateEnv?: boolean;
   observe?: boolean;

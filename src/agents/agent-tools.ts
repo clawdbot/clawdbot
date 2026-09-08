@@ -26,6 +26,7 @@ import type {
 } from "../plugins/hook-types.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
+import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../security/dangerous-tools.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
@@ -52,6 +53,7 @@ import {
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isApplyPatchAllowedForModel } from "./apply-patch-model-policy.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { waitForExecScope } from "./bash-process-registry.js";
 import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import type { ProcessToolDefaults } from "./bash-tools.process.js";
@@ -194,6 +196,8 @@ type OpenClawCodingToolsOptions = {
   questionPrompt?: QuestionPromptDelivery;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
+  /** Host-admitted dashboard authoring without an originating inline renderer. */
+  pinnedWidgetAuthoring?: boolean;
   /** Out-of-band plugin bindings attached by the run initiator. */
   toolBindings?: Readonly<Record<string, unknown>>;
   /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
@@ -529,14 +533,28 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       toolNames: ["read"],
       warn: () => undefined,
     }).length === 1;
-  // Prefer sessionKey for process isolation scope to prevent cross-session process visibility/killing.
-  // Fallback to agentId if no sessionKey is available (e.g. legacy or global contexts).
+  // Borrowed tool restrictions do not transfer ownership of the policy session's processes.
   const scopeKey = resolveProcessToolScopeKey({
     scopeKey: options?.exec?.scopeKey,
-    sessionKey: options?.sessionKey,
+    sessionKey: executionSessionKey,
     sessionId: options?.sessionId,
-    agentId,
+    agentId: executionAgentId,
   });
+  if (options?.oneShotCliRun && scopeKey && options.registerRunCleanup) {
+    const supervisor = getProcessSupervisor();
+    // Sandbox runtimes retain their configured lifetime; host commands still
+    // need tree cleanup, including elevated commands from sandboxed sessions.
+    const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { processTree: "owned-only" });
+    options.registerRunCleanup(async () => {
+      // Transport closure can precede backend finalization. Join both owners
+      // before their local artifacts or the invocation state can be released.
+      const settled = await Promise.allSettled([cleanupScope(), waitForExecScope(scopeKey)]);
+      const failed = settled.find((result) => result.status === "rejected");
+      if (failed) {
+        throw failed.reason;
+      }
+    });
+  }
   options?.recordToolPrepStage?.("tool-policy");
   const execConfig = resolveExecToolConfig({ cfg: options?.config, agentId });
   const execRuntimeConfig = options?.exec?.config ?? options?.config;
@@ -618,7 +636,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
 
   const imageSanitization = resolveImageSanitizationLimits(options?.config);
   options?.recordToolPrepStage?.("workspace-policy");
-  const { cleanupMs: cleanupMsOverride, ...execDefaults } = options?.exec ?? {};
+  const execDefaults = options?.exec ?? {};
   const effectiveExecPolicy = sessionPermissionPolicy
     ? resolveSessionPermissionExecPolicy(sessionPermissionPolicy, options?.exec)
     : applyExecPolicyLayer(execConfig, options?.exec);
@@ -668,6 +686,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       safeBinTrustedDirs: options?.exec?.safeBinTrustedDirs ?? execConfig.safeBinTrustedDirs,
       safeBinProfiles: options?.exec?.safeBinProfiles ?? execConfig.safeBinProfiles,
       agentId,
+      cleanupMs: options?.exec?.cleanupMs ?? execConfig.cleanupMs,
       processToolAvailabilityRef,
       scopeKey,
       sessionKey: options?.sessionKey,
@@ -699,7 +718,6 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
         options?.exec?.notifyOnExitEmptySuccess ?? execConfig.notifyOnExitEmptySuccess,
     },
     processDefaults: {
-      cleanupMs: cleanupMsOverride ?? execConfig.cleanupMs,
       scopeKey,
     },
     recordToolPrepStage: options?.recordToolPrepStage,
@@ -897,6 +915,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             webFetchHostnameAllowlistRef: options?.webFetchHostnameAllowlistRef,
             webSearchEnabled: options?.webSearchEnabled,
             clientCaps: options?.clientCaps,
+            pinnedWidgetAuthoring: options?.pinnedWidgetAuthoring,
             toolBindings: options?.toolBindings,
             pluginToolAllowlist,
             pluginToolDenylist,

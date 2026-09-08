@@ -5,6 +5,8 @@
   },
   "include": [
     "../../src/agents/tools/**/*.test.ts",
-    "../../src/agents/tools/**/*.test.tsx"
+    "../../src/agents/tools/**/*.test.tsx",
+    "../../src/agents/bash-tools.exec-runtime*.test.ts",
+    "../../src/agents/bash-tools.exec-runtime*.test.tsx"
   ]
 }

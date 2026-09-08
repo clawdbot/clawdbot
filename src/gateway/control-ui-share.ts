@@ -24,23 +24,8 @@ export function serveControlUiShareDocument(
     respondNotFound(res);
     return;
   }
-  let origin: string;
-  try {
-    const protocol = req.socket instanceof TLSSocket ? "https" : "http";
-    const address = new URL(publicOrigin ?? `${protocol}://${req.headers.host}`);
-    if (
-      !/^https?:$/u.test(address.protocol) ||
-      address.username ||
-      address.password ||
-      address.pathname !== "/" ||
-      address.search ||
-      address.hash
-    ) {
-      respondNotFound(res);
-      return;
-    }
-    origin = address.origin;
-  } catch {
+  const origin = resolveControlUiShareOrigin(req, publicOrigin);
+  if (!origin) {
     respondNotFound(res);
     return;
   }
@@ -92,4 +77,27 @@ a:focus-visible{outline:3px solid #fff;outline-offset:5px}
   res.setHeader("X-Robots-Tag", "noindex, nofollow");
   res.setHeader("Content-Length", Buffer.byteLength(body));
   res.end(req.method === "HEAD" ? undefined : body);
+}
+
+export function resolveControlUiShareOrigin(
+  req: IncomingMessage,
+  publicOrigin?: string,
+): string | null {
+  try {
+    const protocol = req.socket instanceof TLSSocket ? "https" : "http";
+    const address = new URL(publicOrigin ?? `${protocol}://${req.headers.host}`);
+    if (
+      !/^https?:$/u.test(address.protocol) ||
+      address.username ||
+      address.password ||
+      address.pathname !== "/" ||
+      address.search ||
+      address.hash
+    ) {
+      return null;
+    }
+    return address.origin;
+  } catch {
+    return null;
+  }
 }

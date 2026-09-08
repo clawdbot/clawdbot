@@ -34,13 +34,13 @@ const formatSessionUsageCostSummaryMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
 const applySessionPatchProjectionMock = vi.fn();
 const projectSessionsPatchEntryMock = vi.fn();
+const projectSessionPatchResultMock = vi.fn();
 const createSessionGoalMock = vi.fn();
 const clearSessionGoalMock = vi.fn();
 const getSessionGoalMock = vi.fn();
 const updateSessionGoalObjectiveMock = vi.fn();
 const updateSessionGoalStatusMock = vi.fn();
 const loadAgentRuntimePluginRegistryHandleMock = vi.fn();
-const withPluginRuntimeRegistryScopeMock = vi.fn((_registry: unknown, run: () => unknown) => run());
 const ensureContextWindowCacheLoadedMock = vi.fn(async () => undefined);
 const runSessionStartupMigrationMock = vi.fn<(...args: unknown[]) => Promise<void>>(
   async () => undefined,
@@ -73,8 +73,11 @@ const loadCombinedSessionStoreForGatewayMock = vi.fn((_options?: unknown) => ({
   store: {},
 }));
 const getRuntimeConfigMock = vi.fn(() => ({}));
+type CatalogLoadParams = Parameters<
+  typeof import("../gateway/server-model-catalog.js").loadGatewayModelCatalog
+>[0];
 const loadGatewayModelCatalogMock = vi.fn(
-  (_params?: unknown): Array<{ id: string; name: string; provider: string }> => [],
+  (_params?: CatalogLoadParams): Array<{ id: string; name: string; provider: string }> => [],
 );
 const buildAllowedModelSetMock = vi.fn(({ catalog }: { catalog: unknown[] }) => ({
   allowedCatalog: catalog,
@@ -179,11 +182,6 @@ vi.mock("../agents/runtime-plugins.js", () => ({
     loadAgentRuntimePluginRegistryHandleMock(...args),
 }));
 
-vi.mock("../plugins/runtime/gateway-request-scope.js", () => ({
-  withPluginRuntimeRegistryScope: (...args: [unknown, () => unknown]) =>
-    withPluginRuntimeRegistryScopeMock(...args),
-}));
-
 vi.mock("../agents/context.js", () => ({
   ensureContextWindowCacheLoaded: () => ensureContextWindowCacheLoadedMock(),
 }));
@@ -280,8 +278,12 @@ vi.mock("../gateway/session-utils.js", () => ({
   resolveSessionModelRef: () => ({ provider: "openai", model: "gpt-5.4" }),
 }));
 
+vi.mock("../gateway/session-utils-model.js", () => ({
+  projectSessionPatchResult: (...args: unknown[]) => projectSessionPatchResultMock(...args),
+}));
+
 vi.mock("../gateway/server-model-catalog.js", () => ({
-  loadGatewayModelCatalog: (params?: unknown) => loadGatewayModelCatalogMock(params),
+  loadGatewayModelCatalog: (params?: CatalogLoadParams) => loadGatewayModelCatalogMock(params),
 }));
 
 vi.mock("../gateway/session-create-service.js", () => ({
@@ -391,7 +393,6 @@ describe("EmbeddedTuiBackend", () => {
       tokensUsed: 0,
     }));
     loadAgentRuntimePluginRegistryHandleMock.mockReset();
-    withPluginRuntimeRegistryScopeMock.mockClear();
     ensureContextWindowCacheLoadedMock.mockReset();
     ensureContextWindowCacheLoadedMock.mockResolvedValue(undefined);
     runSessionStartupMigrationMock.mockReset();
@@ -435,6 +436,16 @@ describe("EmbeddedTuiBackend", () => {
     );
     projectSessionsPatchEntryMock.mockReset();
     projectSessionsPatchEntryMock.mockResolvedValue({ ok: true, entry: {} });
+    projectSessionPatchResultMock.mockReset();
+    projectSessionPatchResultMock.mockImplementation(
+      (params: { canonicalKey: string; entry: unknown; storePath: string }) => ({
+        ok: true,
+        path: params.storePath,
+        key: params.canonicalKey,
+        entry: params.entry,
+        resolved: { modelProvider: "openai", model: "gpt-5.4" },
+      }),
+    );
     getRuntimeConfigMock.mockReset();
     getRuntimeConfigMock.mockReturnValue({});
     loadGatewayModelCatalogMock.mockReset();
@@ -744,10 +755,12 @@ describe("EmbeddedTuiBackend", () => {
         reasoning: undefined,
       },
     ]);
-    expect(loadGatewayModelCatalogMock).toHaveBeenCalledWith({ readOnly: false });
+    expect(loadGatewayModelCatalogMock).toHaveBeenCalledWith(
+      expect.objectContaining({ readOnly: false }),
+    );
   });
 
-  it("passes the selected agent into model filtering", async () => {
+  it("loads the selected agent catalog before applying its model policy", async () => {
     getRuntimeConfigMock.mockReturnValue({
       agents: {
         ownership: "explicit",
@@ -756,19 +769,23 @@ describe("EmbeddedTuiBackend", () => {
           work: { modelPolicy: { allow: ["fixture/work-model"] } },
         },
       },
-      models: {
-        mode: "replace",
-        providers: {
-          fixture: {
-            models: [{ id: "main-model" }, { id: "work-model" }],
-          },
-        },
-      },
+    });
+    loadGatewayModelCatalogMock.mockImplementation((params) => {
+      const id = `${params?.agentId ?? "main"}-model`;
+      return [{ id, name: id, provider: "fixture" }];
     });
 
     const backend = new EmbeddedTuiBackend();
 
-    await backend.listModels({ agentId: "work" });
+    await expect(backend.listModels({ agentId: "work" })).resolves.toEqual([
+      {
+        id: "work-model",
+        name: "work-model",
+        provider: "fixture",
+        contextWindow: undefined,
+        reasoning: undefined,
+      },
+    ]);
 
     expect(buildAllowedModelSetMock).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "work" }),
@@ -846,7 +863,9 @@ describe("EmbeddedTuiBackend", () => {
     expect(applySessionPatchProjectionMock).toHaveBeenCalledWith(
       expect.objectContaining({ sessionKeys: ["agent:main:main"] }),
     );
-    expect(loadGatewayModelCatalogMock).toHaveBeenCalledWith({ readOnly: false });
+    expect(loadGatewayModelCatalogMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main", readOnly: false }),
+    );
   });
 
   it("rejects a missing harness-owned session before a local patch can create it", async () => {
@@ -1473,54 +1492,43 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
-  it("clears a prior runtime registry after plugins are disabled", async () => {
-    const registry = {};
-    loadAgentRuntimePluginRegistryHandleMock
-      .mockReturnValueOnce(registry)
-      .mockReturnValueOnce(undefined);
-    loadSessionEntryMock.mockReturnValue({
-      cfg: {},
-      agentId: "main",
-      canonicalKey: "agent:main:main",
-      entry: {},
-    });
+  it("waits for the newest publication before returning model choices", async () => {
+    const initial = deferred<void>();
+    const replacement = deferred<void>();
+    refreshPreparedModelRuntimeSnapshotsMock
+      .mockReturnValueOnce(initial.promise)
+      .mockReturnValueOnce(replacement.promise);
     const backend = new EmbeddedTuiBackend();
+    backend.start();
+    const choices = backend.listModels({ agentId: "work" });
+    await flushMicrotasks();
+    expect(loadGatewayModelCatalogMock).not.toHaveBeenCalled();
 
-    await backend.loadHistory({ sessionKey: "agent:main:main" });
-    await backend.loadHistory({ sessionKey: "agent:main:main" });
-    withPluginRuntimeRegistryScopeMock.mockClear();
-    await backend.listModels();
+    configWriteListener?.({ runtimeConfig: {} });
+    initial.resolve();
+    await flushMicrotasks();
+    expect(loadGatewayModelCatalogMock).not.toHaveBeenCalled();
 
-    expect(withPluginRuntimeRegistryScopeMock).toHaveBeenCalledWith(
-      undefined,
-      expect.any(Function),
-    );
+    loadGatewayModelCatalogMock.mockReturnValue([
+      { provider: "fixture", id: "updated", name: "Updated" },
+    ]);
+    replacement.resolve();
+    await expect(choices).resolves.toMatchObject([{ id: "updated" }]);
+    await backend.stop();
   });
 
-  it("clears a prior runtime registry after a later preload fails", async () => {
-    const registry = {};
-    loadAgentRuntimePluginRegistryHandleMock
-      .mockReturnValueOnce(registry)
-      .mockImplementationOnce(() => {
-        throw new Error("runtime unavailable");
-      });
-    loadSessionEntryMock.mockReturnValue({
-      cfg: {},
-      agentId: "main",
-      canonicalKey: "agent:main:main",
-      entry: {},
-    });
+  it("reports publication failure instead of returning stale model choices", async () => {
+    const publication = deferred<void>();
+    refreshPreparedModelRuntimeSnapshotsMock.mockReturnValueOnce(publication.promise);
     const backend = new EmbeddedTuiBackend();
+    backend.start();
+    const choices = backend.listModels({ agentId: "work" });
+    const failure = expect(choices).rejects.toThrow("catalog publication failed");
 
-    await backend.loadHistory({ sessionKey: "agent:main:main" });
-    await backend.loadHistory({ sessionKey: "agent:main:main" });
-    withPluginRuntimeRegistryScopeMock.mockClear();
-    await backend.listModels();
-
-    expect(withPluginRuntimeRegistryScopeMock).toHaveBeenCalledWith(
-      undefined,
-      expect.any(Function),
-    );
+    publication.reject(new Error("catalog publication failed"));
+    await failure;
+    expect(loadGatewayModelCatalogMock).not.toHaveBeenCalled();
+    await backend.stop();
   });
 
   it.each(selectedGlobalSessionCases)(
@@ -3060,7 +3068,6 @@ describe("EmbeddedTuiBackend", () => {
       const resolveCanonical = vi
         .spyOn(sessionUtils, "resolveCanonicalGatewaySessionStoreKey")
         .mockReturnValue({ target, primaryKey: "global", entry });
-      const resolveModel = vi.spyOn(sessionUtils, "resolveSessionModelRef");
       projectSessionsPatchEntryMock.mockResolvedValueOnce({ ok: true, entry });
       const backend = new EmbeddedTuiBackend();
       const patch = {
@@ -3081,11 +3088,16 @@ describe("EmbeddedTuiBackend", () => {
             patch,
           }),
         );
-        expect.soft(resolveModel).toHaveBeenCalledWith(expect.anything(), entry, owner);
+        expect.soft(projectSessionPatchResultMock).toHaveBeenCalledWith({
+          canonicalKey: "global",
+          cfg: expect.anything(),
+          entry,
+          storePath: target.storePath,
+          targetAgentId: owner,
+        });
       } finally {
         resolveTarget.mockRestore();
         resolveCanonical.mockRestore();
-        resolveModel.mockRestore();
       }
     },
   );
@@ -3431,7 +3443,82 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
-  it("marks local embedded replacement deltas", async () => {
+  it.each([
+    {
+      name: "unkeyed replacement snapshots",
+      updates: [{ text: "Hello world" }, { text: "Goodbye world" }],
+      expectedDeltas: [
+        { deltaText: "Hello world", replace: undefined },
+        { deltaText: "Goodbye world", replace: true },
+      ],
+      expectedText: "Goodbye world",
+    },
+    {
+      name: "identical snapshots from distinct assistant items",
+      updates: [
+        { itemId: "first", text: "Echo" },
+        { itemId: "second", text: "Echo" },
+      ],
+      expectedDeltas: [
+        { deltaText: "Echo", replace: undefined },
+        { deltaText: "Echo", replace: undefined },
+      ],
+      expectedText: "EchoEcho",
+    },
+    {
+      name: "a new assistant item extending an earlier item's text",
+      updates: [
+        { itemId: "first", text: "Echo", delta: "Echo" },
+        { itemId: "second", text: "Echo!", delta: "Echo!" },
+      ],
+      expectedDeltas: [
+        { deltaText: "Echo", replace: undefined },
+        { deltaText: "Echo!", replace: undefined },
+      ],
+      expectedText: "EchoEcho!",
+    },
+    {
+      name: "replayed and growing snapshots of one assistant item",
+      updates: [
+        { itemId: "answer", text: "Echo", delta: "Echo" },
+        { itemId: "answer", text: "Echo", delta: "Echo" },
+        { itemId: "answer", text: "Echo again", delta: " again" },
+      ],
+      expectedDeltas: [
+        { deltaText: "Echo", replace: undefined },
+        { deltaText: " again", replace: undefined },
+      ],
+      expectedText: "Echo again",
+    },
+    {
+      name: "item-scoped deltas without snapshots",
+      updates: [
+        { itemId: "first", delta: "Echo" },
+        { itemId: "first", delta: "Echo" },
+        { itemId: "second", delta: "!" },
+      ],
+      expectedDeltas: [
+        { deltaText: "Echo", replace: undefined },
+        { deltaText: "Echo", replace: undefined },
+        { deltaText: "!", replace: undefined },
+      ],
+      expectedText: "EchoEcho!",
+    },
+    {
+      name: "empty corrections that remove only the current assistant item",
+      updates: [
+        { itemId: "first", text: "Hello" },
+        { itemId: "second", text: " world" },
+        { itemId: "second", text: "" },
+      ],
+      expectedDeltas: [
+        { deltaText: "Hello", replace: undefined },
+        { deltaText: " world", replace: undefined },
+        { deltaText: "Hello", replace: true },
+      ],
+      expectedText: "Hello",
+    },
+  ])("projects local embedded $name", async ({ updates, expectedDeltas, expectedText }) => {
     const pending = deferred<EmbeddedAgentResult>();
     agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
 
@@ -3441,18 +3528,11 @@ describe("EmbeddedTuiBackend", () => {
     backend.start();
     await sendMainChat(backend, "replace", "run-local-replace");
 
-    registeredListener?.({
-      runId: "run-local-replace",
-      stream: "assistant",
-      data: { text: "Hello world" },
-    });
-    registeredListener?.({
-      runId: "run-local-replace",
-      stream: "assistant",
-      data: { text: "Goodbye world" },
-    });
+    for (const data of updates) {
+      registeredListener?.({ runId: "run-local-replace", stream: "assistant", data });
+    }
 
-    pending.resolve({ payloads: [{ text: "Goodbye world" }], meta: {} });
+    pending.resolve({ payloads: [], meta: {} });
     await flushMicrotasks();
 
     const chatPayloads = events
@@ -3463,20 +3543,21 @@ describe("EmbeddedTuiBackend", () => {
             state?: string;
             deltaText?: string;
             replace?: boolean;
+            message?: { content?: Array<{ text?: string }> };
           },
       );
     expect(
       chatPayloads
         .filter((payload) => payload.state === "delta")
         .map((payload) => ({
-          state: payload.state,
           deltaText: payload.deltaText,
           replace: payload.replace,
         })),
-    ).toEqual([
-      { state: "delta", deltaText: "Hello world", replace: undefined },
-      { state: "delta", deltaText: "Goodbye world", replace: true },
-    ]);
+    ).toEqual(expectedDeltas);
+    expect(chatPayloads.at(-1)).toMatchObject({
+      state: "final",
+      message: { content: [{ text: expectedText }] },
+    });
   });
 
   it("keeps internal context private when local deltas split its delimiters", async () => {
@@ -3518,7 +3599,10 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
-  it("keeps a fallback response deliverable after a retryable lifecycle error", async () => {
+  it.each([
+    { name: "unkeyed fallback", itemId: undefined },
+    { name: "fallback reusing an assistant item ID", itemId: "answer" },
+  ])("keeps a $name deliverable after a retryable lifecycle error", async ({ itemId }) => {
     const pending = deferred<EmbeddedAgentResult>();
     agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
 
@@ -3528,6 +3612,14 @@ describe("EmbeddedTuiBackend", () => {
     backend.start();
     await sendMainChat(backend, "recover after timeout", "run-local-fallback");
 
+    if (itemId) {
+      for (const data of [
+        { itemId: "prefix", text: "Discarded attempt: " },
+        { itemId, text: "draft answer" },
+      ]) {
+        registeredListener?.({ runId: "run-local-fallback", stream: "assistant", data });
+      }
+    }
     registeredListener?.({
       runId: "run-local-fallback",
       stream: "lifecycle",
@@ -3554,7 +3646,14 @@ describe("EmbeddedTuiBackend", () => {
     registeredListener?.({
       runId: "run-local-fallback",
       stream: "assistant",
-      data: { text: "fallback answer", delta: "fallback answer" },
+      data: { itemId, text: "fallback answer", delta: "fallback answer" },
+    });
+    expect(events.at(-1)).toMatchObject({
+      event: "chat",
+      payload: {
+        state: "delta",
+        message: { content: [{ text: "fallback answer" }] },
+      },
     });
     registeredListener?.({
       runId: "run-local-fallback",
@@ -3583,9 +3682,15 @@ describe("EmbeddedTuiBackend", () => {
     { failureCount: 2, streamedText: "recovered answer", finalText: "recovered answer" },
     { failureCount: 1, streamedText: "outdated draft", finalText: "authoritative final answer" },
     { failureCount: 1, streamedText: undefined, finalText: "authoritative unstreamed answer" },
+    {
+      failureCount: 2,
+      streamedText: "recovered item answer",
+      finalText: "recovered item answer",
+      itemId: "answer",
+    },
   ])(
     "replaces $failureCount expired attempt failures with authoritative result '$finalText'",
-    async ({ failureCount, streamedText, finalText }) => {
+    async ({ failureCount, streamedText, finalText, itemId }) => {
       const pending = deferred<EmbeddedAgentResult>();
       agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
       const backend = new EmbeddedTuiBackend();
@@ -3595,6 +3700,14 @@ describe("EmbeddedTuiBackend", () => {
       backend.start();
       await sendMainChat(backend, "recover after a slow retry", runId);
       for (let attempt = 0; attempt < failureCount; attempt += 1) {
+        if (itemId) {
+          for (const data of [
+            { itemId: "prefix", text: `Discarded attempt ${attempt + 1}: ` },
+            { itemId, text: "draft answer" },
+          ]) {
+            registeredListener?.({ runId, stream: "assistant", data });
+          }
+        }
         registeredListener?.({
           runId,
           stream: "lifecycle",
@@ -3613,7 +3726,14 @@ describe("EmbeddedTuiBackend", () => {
         registeredListener?.({
           runId,
           stream: "assistant",
-          data: { text: streamedText, delta: streamedText },
+          data: { itemId, text: streamedText, delta: streamedText },
+        });
+        expect(events.at(-1)).toMatchObject({
+          event: "chat",
+          payload: {
+            state: "delta",
+            message: { content: [{ text: streamedText }] },
+          },
         });
       }
       registeredListener?.({

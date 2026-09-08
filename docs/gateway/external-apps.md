@@ -54,6 +54,12 @@ terminal result. For durable conversation state, use the `sessions.*` methods.
 For UI integrations, subscribe to Gateway events and render only the event
 families your app understands.
 
+`agent.wait` can return `status: "pending"` while a turn is queued. A timeout
+response without terminal metadata means the wait expired; continue waiting or
+consume lifecycle events. Terminal `status: "error"` can represent cancellation:
+`stopReason: "superseded"` means a newer session writer replaced the run. Preserve
+that reason when presenting the result.
+
 ## Cooperative host suspension
 
 Hosting controllers that freeze or snapshot a running process can use the

@@ -1,10 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  resetAgentEventsForTest,
+  rotateAgentEventLifecycleGeneration,
+} from "../../infra/agent-events.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createChatRunState } from "../server-chat-state.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { createInternalAgentTurnFacade } from "./internal-facade.js";
+import type { AgentTurnStartOwner } from "./internal-facade.types.js";
 
 const startTurn = vi.hoisted(() => vi.fn());
 const authorize = vi.hoisted(() => vi.fn(async () => ({ error: null })));
@@ -57,6 +62,7 @@ function createFacade(context = createContext()) {
 
 describe("createInternalAgentTurnFacade", () => {
   beforeEach(() => {
+    resetAgentEventsForTest();
     startTurn.mockReset();
     authorize.mockReset().mockResolvedValue({ error: null });
     envelope.mockReset().mockImplementation(async (run) => await run());
@@ -200,6 +206,107 @@ describe("createInternalAgentTurnFacade", () => {
       ),
     ).resolves.toMatchObject({ ok: true });
     expect(onExecutionStarted).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    "aborted",
+    "replaced",
+    "rotated",
+    "agent changed",
+    "session changed",
+    "gateway closed",
+    "request mutated",
+  ] as const)("keeps startup ownership bound to its registration through %s", async (change) => {
+    const context = createContext();
+    let gatewayCurrent = true;
+    let owner: AgentTurnStartOwner | undefined;
+    const onStartOwner = vi.fn((value: AgentTurnStartOwner) => {
+      owner = value;
+    });
+    const request = {
+      agentId: "main",
+      message: "resume",
+      idempotencyKey: "owned-start",
+      sessionKey: "agent:main:owned-start",
+      expectedExistingSessionId: "owned-session",
+    };
+    const register = () =>
+      registerChatAbortController({
+        chatAbortControllers: context.chatAbortControllers,
+        agentId: request.agentId,
+        runId: request.idempotencyKey,
+        sessionId: request.expectedExistingSessionId,
+        sessionKey: request.sessionKey,
+        kind: "agent",
+        timeoutMs: 60_000,
+      });
+    const registration = register();
+    if (!registration.registered) {
+      throw new Error("expected startup registration");
+    }
+    startTurn.mockImplementation(async ({ io }) => {
+      io.emitStartOwner?.(request.idempotencyKey, registration.entry);
+      io.emitAcceptance([true, { runId: request.idempotencyKey, status: "accepted" }, undefined], {
+        runId: request.idempotencyKey,
+      });
+    });
+    const facade = createInternalAgentTurnFacade({
+      client: createSyntheticPluginRuntimeClient(),
+      getContext: () => context,
+      assertContextCurrent: () => {
+        if (!gatewayCurrent) {
+          throw new Error("gateway closed");
+        }
+      },
+    });
+    await facade.dispatch(request, { onStartOwner });
+    if (!owner) {
+      throw new Error("expected captured startup owner");
+    }
+    expect(owner.observe()).toEqual({
+      executionStarted: false,
+      expiresAtMs: registration.entry.expiresAtMs,
+    });
+    let replacement: ReturnType<typeof register> | undefined;
+    switch (change) {
+      case "aborted":
+        registration.controller.abort();
+        break;
+      case "replaced":
+        registration.cleanup();
+        replacement = register();
+        break;
+      case "rotated":
+        rotateAgentEventLifecycleGeneration();
+        break;
+      case "agent changed":
+        registration.entry.agentId = "other-agent";
+        break;
+      case "session changed":
+        registration.entry.sessionId = "replacement-session";
+        break;
+      case "gateway closed":
+        gatewayCurrent = false;
+        break;
+      case "request mutated":
+        request.agentId = "other-agent";
+        request.idempotencyKey = "other-run";
+        request.sessionKey = "agent:other:other";
+        request.expectedExistingSessionId = "other-session";
+        break;
+    }
+    if (change === "request mutated") {
+      expect(owner.observe()).toBeDefined();
+      expect(owner.abort()).toBe(true);
+      expect(registration.controller.signal.aborted).toBe(true);
+    } else {
+      expect(owner.observe()).toBeUndefined();
+      expect(owner.abort()).toBe(false);
+    }
+    expect(replacement?.controller.signal.aborted ?? false).toBe(false);
+    expect(onStartOwner).toHaveBeenCalledOnce();
+    replacement?.cleanup();
+    registration.cleanup();
   });
 
   it("cancels only the accepted run when its opted-in dispatch deadline expires", async () => {

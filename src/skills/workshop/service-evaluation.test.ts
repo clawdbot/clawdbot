@@ -344,20 +344,24 @@ describe("Skill Workshop proposal evaluation", () => {
     expect((await inspectSkillProposal(proposal.record.id))?.record.evaluation).toBe(undefined);
   });
 
-  it.each(["skill.md", "SKILL.MD"])(
-    "preserves the target marker casing in evaluation bundles for %s",
-    async (skillFileName) => {
+  // Each row owns a distinct skill under the shared agent's Workshop root.
+  it.each([
+    { skillFileName: "skill.md", skillName: "existing-marker-lower" },
+    { skillFileName: "SKILL.MD", skillName: "existing-marker-upper" },
+  ])(
+    "preserves the target marker casing in evaluation bundles for $skillFileName",
+    async ({ skillFileName, skillName }) => {
       const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-filename-");
-      const skillDir = await createOwnedSkill(workspaceDir, "existing-marker-case");
+      const skillDir = await createOwnedSkill(workspaceDir, skillName);
       const canonicalSkillFile = path.join(skillDir, "SKILL.md");
       await fs.writeFile(
         canonicalSkillFile,
-        "---\nname: existing-marker-case\ndescription: Existing skill\n---\n\n# Existing\n",
+        `---\nname: ${skillName}\ndescription: Existing skill\n---\n\n# Existing\n`,
       );
       const proposal = await proposeUpdateSkill({
         workspaceDir,
         agentId: "main",
-        skillName: "existing-marker-case",
+        skillName,
         content: "# Existing\n\nUpdated.\n",
       });
       const intermediateSkillFile = path.join(skillDir, "marker.tmp");

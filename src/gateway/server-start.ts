@@ -137,7 +137,11 @@ export async function startGatewayServerCore(
                 },
               },
               { name: "gateway close prelude", run: runClosePrelude },
-              { name: "late sidecar cleanup", run: sealAndJoinRegisteredSidecarStops },
+              {
+                name: "late sidecar cleanup",
+                run: sealAndJoinRegisteredSidecarStops,
+                required: true,
+              },
               { name: "gateway close", run: close },
             ],
             onError: (message) => log.error(message),

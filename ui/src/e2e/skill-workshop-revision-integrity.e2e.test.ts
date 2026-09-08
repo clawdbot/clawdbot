@@ -35,7 +35,7 @@ const H2 = {
   updatedAt: "2026-08-18T10:01:00.000Z",
   version: "v2",
 };
-const staleMessage = /Proposal changed\. Review the updated draft/i;
+const staleMessage = /Suggestion changed\. Review the updated draft/i;
 const staleError = {
   code: "INVALID_REQUEST",
   message: "Skill proposal revision changed.",
@@ -62,6 +62,7 @@ const workshopFeatureMethods = [
 function proposalManifest(revision: ProposalRevision, status: ProposalStatus = "pending") {
   return {
     schema: "openclaw.skill-workshop.proposals-manifest.v1",
+    installedSkills: [],
     updatedAt: revision.updatedAt,
     proposals: [
       {
@@ -128,7 +129,7 @@ async function openReviewedProposal(page: Page): Promise<MockGatewayControls> {
   const response = await page.goto(`${suite.server.baseUrl}skills/workshop`);
   expect(response?.status()).toBe(200);
   await gateway.waitForRequest("skills.proposals.list");
-  await page.locator("#skill-workshop-mode-tab-board").click();
+  await page.locator("#skill-workshop-mode-tab-suggestions").click();
   await page.getByText(H1.body, { exact: true }).waitFor();
   return gateway;
 }
@@ -141,14 +142,14 @@ async function waitForProposalRefresh(
 ): Promise<void> {
   await gateway.waitForRequest("skills.proposals.list", { after: previousListCount });
   await gateway.waitForRequest("skills.proposals.inspect", { after: previousInspectCount });
-  await page.locator("#skill-workshop-mode-tab-board").click();
+  await page.locator("#skill-workshop-mode-tab-suggestions").click();
   await page.getByText(H2.body, { exact: true }).waitFor();
   await page.getByText(staleMessage).waitFor();
 }
 
 async function provePersistentStaleOutcome(page: Page): Promise<void> {
-  await page.locator("#skill-workshop-mode-tab-today").click();
-  await page.locator("#skill-workshop-mode-tab-board").click();
+  await page.locator("#skill-workshop-mode-tab-skills").click();
+  await page.locator("#skill-workshop-mode-tab-suggestions").click();
   await page.getByText(staleMessage).waitFor();
 }
 
@@ -247,11 +248,11 @@ suite.define(() => {
         await gateway.resolveDeferred(method, {});
         await gateway.waitForRequest("skills.proposals.list", { after: secondListCount });
         await gateway.waitForRequest("skills.proposals.inspect", { after: secondInspectCount });
-        await page
-          .locator(".sw-lifecycle-tab")
-          .filter({ hasText: status === "applied" ? "Applied" : "Rejected" })
-          .click();
-        await page.getByText(H2.body, { exact: true }).waitFor();
+        await expect.poll(() => page.locator(".sw-row").count()).toBe(0);
+        await expect
+          .poll(() => page.locator(".sw-action-toast").textContent())
+          .toContain(status === "applied" ? "Applied" : "Rejected");
+        expect(await page.getByText(H2.body, { exact: true }).count()).toBe(0);
         expect(await gateway.getRequests(method)).toHaveLength(secondActionCount + 1);
         await page.screenshot({
           animations: "disabled",

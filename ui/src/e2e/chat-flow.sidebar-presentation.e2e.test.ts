@@ -16,6 +16,7 @@ import {
   pauseVirtualClock,
   requireRecord,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const rosterMatch = { includeGlobal: true };
@@ -254,11 +255,7 @@ suite.define(() => {
   });
 
   it("keeps long sidebar labels clipped after a session switch", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await page.clock.install();
     const sessions = chatSessionListResponse();
@@ -682,11 +679,7 @@ suite.define(() => {
   });
 
   it("keeps the authenticated assistant avatar stable across same-agent switches", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const avatarBody = Buffer.from(
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nPcAAAAASUVORK5CYII=",

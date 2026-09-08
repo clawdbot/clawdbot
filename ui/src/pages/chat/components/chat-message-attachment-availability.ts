@@ -1,4 +1,3 @@
-import type { AssistantMediaContext } from "../../../app/assistant-media.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatUiExternalText } from "../../../lib/format-error.ts";
 import {
@@ -11,6 +10,7 @@ import {
   observeChatMediaResource,
   scheduleChatMediaResourceRefresh,
   type ChatMediaResource,
+  type ImageRenderOptions,
 } from "./chat-message-media.ts";
 
 type AssistantAttachmentAvailability =
@@ -44,28 +44,13 @@ export const ASSISTANT_ATTACHMENT_MEDIA_TICKET_MAX_REFRESH_RETRIES = 2;
 
 export function resolveAssistantAttachmentAvailability(
   source: string,
-  resourceBasePath: string | undefined,
-  authToken: string | null | undefined,
-  onRequestUpdate: (() => void) | undefined,
-  context?: AssistantMediaContext,
+  options: ImageRenderOptions = {},
   allowImage = false,
 ): AssistantAttachmentAvailability {
   if (!isLocalAssistantAttachmentSource(source)) {
     return { status: "available" };
   }
-  const normalizedAuthToken = authToken?.trim() ?? "";
-  const cacheKey = assistantAttachmentCacheKey(
-    source,
-    resourceBasePath,
-    normalizedAuthToken,
-    context,
-  );
-  const resource = observeChatMediaResource<AssistantAttachmentAvailability>(
-    "assistant-attachment",
-    cacheKey,
-    onRequestUpdate,
-    source,
-  );
+  const resource = observeAssistantAttachment(source, options);
   const cached = resource.value;
   let refreshingAvailability: Extract<
     AssistantAttachmentAvailability,
@@ -136,6 +121,7 @@ export function resolveAssistantAttachmentAvailability(
   };
   if (typeof fetch === "function") {
     const headers = new Headers({ Accept: "application/json" });
+    const normalizedAuthToken = options.authToken?.trim();
     if (normalizedAuthToken) {
       headers.set("Authorization", `Bearer ${normalizedAuthToken}`);
     }
@@ -150,9 +136,9 @@ export function resolveAssistantAttachmentAvailability(
     );
     const attachmentUrl = buildAssistantAttachmentUrl(
       source,
-      resourceBasePath,
+      options.resourceBasePath,
       refreshingAvailability?.mediaTicket,
-      context,
+      options,
     );
     const pending = fetch(`${attachmentUrl}&meta=1${allowImage ? "&allow=1" : ""}`, {
       method: allowImage ? "POST" : "GET",
@@ -244,29 +230,14 @@ export function resolveAssistantAttachmentAvailability(
 
 export function retryAssistantAttachmentAvailability(
   source: string,
-  resourceBasePath: string | undefined,
-  authToken: string | null | undefined,
-  onRequestUpdate: (() => void) | undefined,
-  context?: AssistantMediaContext,
+  options: ImageRenderOptions = {},
   allowImage = false,
 ): void {
   if (!isLocalAssistantAttachmentSource(source)) {
-    onRequestUpdate?.();
+    options.onRequestUpdate?.();
     return;
   }
-  const normalizedAuthToken = authToken?.trim() ?? "";
-  const cacheKey = assistantAttachmentCacheKey(
-    source,
-    resourceBasePath,
-    normalizedAuthToken,
-    context,
-  );
-  const resource = observeChatMediaResource<AssistantAttachmentAvailability>(
-    "assistant-attachment",
-    cacheKey,
-    onRequestUpdate,
-    source,
-  );
+  const resource = observeAssistantAttachment(source, options);
   resource.abortController?.abort();
   resource.abortController = undefined;
   resource.pending = undefined;
@@ -274,17 +245,10 @@ export function retryAssistantAttachmentAvailability(
   resource.retryAttempted = false;
   scheduleAssistantAttachmentRefresh(resource, { status: "checking" });
   if (allowImage) {
-    resolveAssistantAttachmentAvailability(
-      source,
-      resourceBasePath,
-      authToken,
-      onRequestUpdate,
-      context,
-      true,
-    );
+    resolveAssistantAttachmentAvailability(source, options, true);
   }
   notifyChatMediaResourceSubscribers(resource);
-  onRequestUpdate?.();
+  options.onRequestUpdate?.();
 }
 
 function createUnavailableAssistantAttachment(
@@ -303,21 +267,22 @@ function createUnavailableAssistantAttachment(
   };
 }
 
-function assistantAttachmentCacheKey(
-  source: string,
-  resourceBasePath: string | undefined,
-  authToken: string,
-  context: AssistantMediaContext | undefined,
-): string {
+function observeAssistantAttachment(source: string, options: ImageRenderOptions) {
   // Identical paths can have different project/protection policy in different sessions.
-  return JSON.stringify([
-    resourceBasePath ?? "",
-    authToken,
-    context?.sessionKey,
-    context?.agentId,
-    context?.policyKey,
+  const cacheKey = JSON.stringify([
+    options.resourceBasePath ?? "",
+    options.authToken?.trim() ?? "",
+    options.sessionKey,
+    options.agentId,
+    options.policyKey,
     source,
   ]);
+  return observeChatMediaResource<AssistantAttachmentAvailability>(
+    "assistant-attachment",
+    cacheKey,
+    options.onRequestUpdate,
+    source,
+  );
 }
 
 function setAssistantAttachmentAvailability(

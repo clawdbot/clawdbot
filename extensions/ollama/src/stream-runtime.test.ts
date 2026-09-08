@@ -1202,7 +1202,54 @@ describe("buildAssistantMessage", () => {
       },
     );
     const result = buildAssistantMessage(response, modelInfo);
-    expect(result.usage.cacheTelemetry).toEqual({ state: "unavailable" });
+    expect(result.usage).toMatchObject({
+      input: 10,
+      output: 2,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 12,
+      cacheTelemetry: { state: "unavailable" },
+    });
+  });
+
+  it("records an available zero cache read when Ollama reports it", () => {
+    const response = createAssistantResponse(
+      { content: "ok" },
+      {
+        prompt_eval_count: 10,
+        prompt_eval_cached_count: 0,
+        eval_count: 2,
+      },
+    );
+    const result = buildAssistantMessage(response, modelInfo);
+    expect(result.usage).toMatchObject({
+      input: 10,
+      output: 2,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 12,
+      cacheTelemetry: { state: "available" },
+    });
+  });
+
+  it("separates cached prompt tokens from uncached input without changing the total", () => {
+    const response = createAssistantResponse(
+      { content: "ok" },
+      {
+        prompt_eval_count: 10,
+        prompt_eval_cached_count: 6,
+        eval_count: 2,
+      },
+    );
+    const result = buildAssistantMessage(response, modelInfo);
+    expect(result.usage).toMatchObject({
+      input: 4,
+      output: 2,
+      cacheRead: 6,
+      cacheWrite: 0,
+      totalTokens: 12,
+      cacheTelemetry: { state: "available" },
+    });
   });
 });
 
@@ -1875,7 +1922,7 @@ describe("createOllamaStreamFn streaming events", () => {
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response("rate limited", {
         status: 429,
-        headers: { "Retry-After": "30" },
+        headers: { "Content-Type": "text/plain;charset=UTF-8", "Retry-After": "30" },
       }),
       release: vi.fn(async () => undefined),
     });

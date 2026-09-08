@@ -302,8 +302,6 @@ export async function executeCliProcess(params: {
         const managedRun = await supervisor.spawn({
           assertCurrent: params.assertCurrent,
           runId: runParams.runId,
-          sessionId: runParams.sessionId,
-          backendId: context.backendResolved.id,
           scopeKey,
           replaceExistingScope: Boolean(params.useResume && scopeKey),
           mode: "child",

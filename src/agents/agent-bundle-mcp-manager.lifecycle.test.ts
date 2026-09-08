@@ -10,6 +10,7 @@ import {
 } from "./agent-bundle-mcp-runtime-shared.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { testing as resolverTesting } from "./mcp-connection-resolver.js";
+import { createAgentCleanupScope } from "./run-cleanup-timeout.js";
 
 vi.mock("./agent-bundle-mcp-runtime.js", () => {
   throw new Error("Lifecycle-only MCP work must not import the transport runtime");
@@ -59,6 +60,7 @@ function createRuntimeFixture(input: Parameters<CreateSessionMcpRuntime>[0]): Se
     getCatalog: async () => ({ version: 1, generatedAt: 0, servers: {}, tools: [] }),
     peekCatalog: () => null,
     callTool: async () => ({ content: [] }),
+    joinCleanup: async () => {},
     dispose: vi.fn(async () => {}),
   };
 }
@@ -111,6 +113,33 @@ afterEach(async () => {
 });
 
 describe("MCP manager creation ownership", () => {
+  it("joins an unpublished disposal and reports its failure in the joining caller", async () => {
+    const manager = createManager(createRuntimeFixture);
+    const runtime = await manager.getOrCreate(params);
+    const closing = holdDisposal(runtime);
+    runtime.joinCleanup = async () => {
+      throw new Error("cleanup owner lost");
+    };
+    const first = manager.disposeSession(params.sessionId);
+    await closing.started;
+    const cleanupScope = createAgentCleanupScope();
+    let joined = false;
+    const second = cleanupScope.run(() =>
+      manager.disposeSession(params.sessionId).then(() => {
+        joined = true;
+      }),
+    );
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(joined).toBe(false);
+    closing.release();
+    await Promise.all([first, second]);
+    expect(runtime.dispose).toHaveBeenCalledOnce();
+    expect(cleanupScope.outcome).toBe("uncertain");
+    expect(manager.listRuntimeKeys()).toEqual([]);
+  });
+
   it("constructs and retires an empty manager without binding or importing transports", async () => {
     const manager = createManager();
 

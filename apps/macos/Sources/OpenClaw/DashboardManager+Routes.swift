@@ -175,10 +175,6 @@ extension DashboardManager {
         controller.navigateForward()
     }
 
-    func switchFrontmostDashboard(to target: DashboardGatewayTarget) {
-        self.performSwitchFrontmostDashboard(to: target)
-    }
-
     func confirmSetPrimary(_ target: DashboardGatewayTarget) {
         self.presentSetPrimaryConfirmation(target, source: nil)
     }

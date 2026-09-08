@@ -3,10 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { defineConfig } from "vitest/config";
 import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
-import {
-  resolveVitestIsolation,
-  shouldPassWithNoTestsForCliIncludes,
-} from "./vitest.scoped-config.ts";
+import { shouldPassWithNoTestsForCliIncludes } from "./vitest.scoped-config.ts";
 import {
   nonIsolatedRunnerPath,
   repoRoot,
@@ -106,7 +103,6 @@ export function createUnitVitestConfigWithOptions(
     passWithNoTests?: boolean;
   } = {},
 ) {
-  const isolate = resolveVitestIsolation(env);
   const argv = options.argv ?? process.argv;
   const envIncludePatterns = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
   const defaultIncludePatterns = options.includePatterns ?? unitTestIncludePatterns;
@@ -143,8 +139,8 @@ export function createUnitVitestConfigWithOptions(
     test: {
       ...sharedTest,
       name: options.name ?? "unit",
-      isolate,
-      ...(isolate ? { runner: undefined } : { runner: nonIsolatedRunnerPath }),
+      isolate: false,
+      runner: nonIsolatedRunnerPath,
       setupFiles: [
         ...new Set(
           [...(sharedTest.setupFiles ?? []), "test/setup-openclaw-runtime.ts"].map(

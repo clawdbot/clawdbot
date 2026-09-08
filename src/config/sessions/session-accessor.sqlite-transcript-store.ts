@@ -14,6 +14,7 @@ import {
   deferOpenClawAgentPostCommitPublication,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { advanceCliHistoryBoundaryInTransaction } from "./session-accessor.sqlite-cli-history-boundary.js";
 import type {
   TranscriptEvent,
   TranscriptMessageAppendOptions,
@@ -201,6 +202,7 @@ function appendTranscriptEvent(
     cursor.insertIdentity ??= createTranscriptIdentityInserter(database, scope.sessionId, true);
     cursor.insertIdentity({ ...identity, seq, createdAt });
   }
+  advanceCliHistoryBoundaryInTransaction(database, scope, seq);
   scheduleTranscriptProjectionReconcile(database, scope.sessionId, projectionNeedsRebuild, options);
   return eventJson;
 }
@@ -459,16 +461,24 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
     !projectionUnchanged &&
     shouldRebuildSessionTranscriptIndexSynchronously(database.db, resolved.sessionId);
   const db = getSessionKysely(database.db);
+  const rewrite = prepareSqliteQuerySync<(typeof rewrites)[number]>(database.db, (parameter) =>
+    db
+      .updateTable("transcript_events")
+      .set({ event_json: parameter((row) => row.eventJson) })
+      .where("session_id", "=", resolved.sessionId)
+      .where(
+        "seq",
+        "=",
+        parameter((row) => row.seq),
+      )
+      .where(
+        "event_json",
+        "=",
+        parameter((row) => row.expectedEventJson),
+      ),
+  );
   for (const row of rewrites) {
-    const result = executeSqliteQuerySync(
-      database.db,
-      db
-        .updateTable("transcript_events")
-        .set({ event_json: row.eventJson })
-        .where("session_id", "=", resolved.sessionId)
-        .where("seq", "=", row.seq)
-        .where("event_json", "=", row.expectedEventJson),
-    );
+    const result = rewrite(row);
     if (result.numAffectedRows !== 1n) {
       throw new Error(
         `Transcript row ${resolved.sessionId}:${row.seq} changed before exact rewrite`,
@@ -530,15 +540,19 @@ export function updateSqliteTranscriptEventJsonInTransaction(
     sessionId,
   );
   const db = getSessionKysely(database.db);
-  for (const { seq, eventJson } of updates) {
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .updateTable("transcript_events")
-        .set({ event_json: eventJson })
-        .where("session_id", "=", sessionId)
-        .where("seq", "=", seq),
-    );
+  const update = prepareSqliteQuerySync<(typeof updates)[number]>(database.db, (parameter) =>
+    db
+      .updateTable("transcript_events")
+      .set({ event_json: parameter((row) => row.eventJson) })
+      .where("session_id", "=", sessionId)
+      .where(
+        "seq",
+        "=",
+        parameter((row) => row.seq),
+      ),
+  );
+  for (const row of updates) {
+    update(row);
   }
   rotateTranscriptGenerationInTransaction(database, sessionId);
   reconcileRewrittenTranscriptIndex(database, sessionId, rebuildSynchronously);

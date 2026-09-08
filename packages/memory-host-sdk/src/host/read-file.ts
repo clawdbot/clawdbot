@@ -42,14 +42,20 @@ async function isAllowedAdditionalDirectoryPath(
   }
   try {
     await assertNoSymlinkParents({ rootDir: additionalPath, targetPath: absPath });
-  } catch {
+  } catch (err) {
+    if (err instanceof Error && "code" in err && !isFileMissingError(err)) {
+      throw err;
+    }
     return false;
   }
   if (!isPathInsideWithRealpath(additionalPath, absPath)) {
     try {
       await fs.lstat(absPath);
     } catch (err) {
-      return isFileMissingError(err);
+      if (isFileMissingError(err)) {
+        return true;
+      }
+      throw err;
     }
     return false;
   }
@@ -90,9 +96,19 @@ export async function readMemoryFile(params: {
   const inWorkspace = relPath.length > 0 && !relPath.startsWith("..") && !path.isAbsolute(relPath);
   const allowedWorkspace = inWorkspace && isMemoryPath(relPath);
   let allowedAdditional: false | "directory" | "file" = false;
+  let additionalPathError: Error | undefined;
   if (!allowedWorkspace && (params.extraPaths?.length ?? 0) > 0) {
     const additionalPaths = normalizeExtraMemoryPathEntries(params.workspaceDir, params.extraPaths);
     for (const additionalPath of additionalPaths) {
+      const matchesFile =
+        absPath === additionalPath.path && isExplicitExtraMarkdownFilePath(absPath);
+      const matchesDirectory =
+        absPath.endsWith(".md") &&
+        isPathInside(additionalPath.path, absPath) &&
+        matchesExtraMemoryPathEntry(additionalPath, absPath);
+      if (!matchesFile && !matchesDirectory) {
+        continue;
+      }
       try {
         const stat = await fs.lstat(additionalPath.path);
         if (stat.isSymbolicLink()) {
@@ -100,7 +116,7 @@ export async function readMemoryFile(params: {
         }
         if (stat.isDirectory()) {
           if (
-            matchesExtraMemoryPathEntry(additionalPath, absPath) &&
+            matchesDirectory &&
             (await isAllowedAdditionalDirectoryPath(additionalPath.path, absPath))
           ) {
             const candidateStat = await fs.lstat(absPath).catch(() => null);
@@ -112,19 +128,20 @@ export async function readMemoryFile(params: {
           }
           continue;
         }
-        if (
-          stat.isFile() &&
-          absPath === additionalPath.path &&
-          isExplicitExtraMarkdownFilePath(absPath)
-        ) {
+        if (stat.isFile() && matchesFile) {
           allowedAdditional = "file";
           break;
         }
-      } catch {}
+      } catch (err) {
+        if (err instanceof Error && !isFileMissingError(err)) {
+          // Another configured root may still authorize this file.
+          additionalPathError ??= err;
+        }
+      }
     }
   }
   if (!allowedWorkspace && !allowedAdditional) {
-    throw new Error("path required");
+    throw additionalPathError ?? new Error("path required");
   }
   if (!absPath.endsWith(".md") && allowedAdditional !== "file") {
     throw new Error("path required");

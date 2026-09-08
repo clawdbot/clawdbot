@@ -139,13 +139,7 @@ class MessageImageResourceDirective extends AsyncDirective {
     const subscriptionOptions = onRequestUpdate
       ? { ...options, onRequestUpdate: this.requestUpdate }
       : options;
-    const availability = resolveAssistantAttachmentAvailability(
-      image.url,
-      options?.resourceBasePath,
-      options?.authToken,
-      subscriptionOptions?.onRequestUpdate,
-      options,
-    );
+    const availability = resolveAssistantAttachmentAvailability(image.url, subscriptionOptions);
     const decodeFailed = this.retained?.status === "unavailable";
     // Tickets authorize new reads, not already decoded pixels. Only this
     // mounted image can survive an unconfirmed renewal; denial still clears it.
@@ -181,26 +175,11 @@ class MessageImageResourceDirective extends AsyncDirective {
         path: isLocalAssistantAttachmentSource(image.url) ? image.url : undefined,
         onAllow:
           !decodeFailed && availability.status === "unavailable" && availability.canAllow
-            ? () =>
-                retryAssistantAttachmentAvailability(
-                  image.url,
-                  options?.resourceBasePath,
-                  options?.authToken,
-                  subscriptionOptions?.onRequestUpdate,
-                  options,
-                  true,
-                )
+            ? () => retryAssistantAttachmentAvailability(image.url, subscriptionOptions, true)
             : undefined,
         onRetry:
           !decodeFailed && availability.status === "unavailable" && availability.recoverable
-            ? () =>
-                retryAssistantAttachmentAvailability(
-                  image.url,
-                  options?.resourceBasePath,
-                  options?.authToken,
-                  subscriptionOptions?.onRequestUpdate,
-                  options,
-                )
+            ? () => retryAssistantAttachmentAvailability(image.url, subscriptionOptions)
             : undefined,
       });
     }

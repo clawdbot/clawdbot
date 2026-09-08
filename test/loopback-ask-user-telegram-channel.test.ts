@@ -40,7 +40,7 @@ import {
 } from "../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { resolveMcpLoopbackClientGrant } from "../src/gateway/mcp-grant-store.js";
-import { ensureMcpLoopbackServer } from "../src/gateway/mcp-http.js";
+import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../src/gateway/mcp-http.js";
 import * as toolResolution from "../src/gateway/tool-resolution.js";
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
@@ -195,7 +195,7 @@ describe("loopback ask_user Telegram channel transport", () => {
               },
             };
             setRuntimeConfigSnapshot(config);
-            const server = await ensureMcpLoopbackServer();
+            await ensureMcpLoopbackServer();
             const { getActiveMcpLoopbackRuntime } =
               await import("../src/gateway/mcp-http.loopback-runtime.js");
             const runtime = expectDefined(getActiveMcpLoopbackRuntime(), "loopback runtime");
@@ -225,7 +225,7 @@ describe("loopback ask_user Telegram channel transport", () => {
             const requests: Promise<McpResponse>[] = [];
             const persist = vi.fn(async () => {});
             const request = async (token: string, method: "tools/list" | "tools/call") => {
-              const response = await fetch(`http://127.0.0.1:${server.port}/mcp`, {
+              const response = await fetch(`http://127.0.0.1:${runtime.port}/mcp`, {
                 method: "POST",
                 signal: requestController.signal,
                 headers: {
@@ -337,7 +337,7 @@ describe("loopback ask_user Telegram channel transport", () => {
                 }
               },
               () => Promise.allSettled(requests),
-              () => server.close(),
+              () => closeMcpLoopbackServer(),
               () => Promise.allSettled(toolCalls),
               () =>
                 runQaGatewayFixture(

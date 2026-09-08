@@ -1,5 +1,6 @@
 // Plugin state SQLite helpers persist plugin state in the OpenClaw state database.
 import type { DatabaseSync } from "node:sqlite";
+import { toUSVString } from "node:util";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { Insertable, Selectable } from "kysely";
@@ -8,6 +9,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
+  sqliteStringSet,
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
@@ -140,7 +142,11 @@ function wrapPluginStateError(
   });
 }
 
-function parseStoredJson(raw: string, operation: PluginStateStoreOperation): unknown {
+function parseStoredJson(
+  raw: string,
+  operation: PluginStateStoreOperation,
+  databasePath: string,
+): unknown {
   try {
     return JSON.parse(raw) as unknown;
   } catch (error) {
@@ -148,7 +154,7 @@ function parseStoredJson(raw: string, operation: PluginStateStoreOperation): unk
       code: "PLUGIN_STATE_CORRUPT",
       operation,
       message: "Plugin state entry contains corrupt JSON.",
-      path: resolveOpenClawStateSqlitePath(process.env),
+      path: databasePath,
       cause: error,
     });
   }
@@ -157,11 +163,12 @@ function parseStoredJson(raw: string, operation: PluginStateStoreOperation): unk
 function rowToEntry(
   row: PluginStateRow,
   operation: PluginStateStoreOperation,
+  databasePath: string,
 ): PluginStateEntry<unknown> {
   const expiresAt = normalizeSqliteNumber(row.expires_at);
   return {
     key: row.entry_key,
-    value: parseStoredJson(row.value_json, operation),
+    value: parseStoredJson(row.value_json, operation, databasePath),
     createdAt: normalizeSqliteNumber(row.created_at) ?? 0,
     ...(expiresAt != null ? { expiresAt } : {}),
   };
@@ -796,9 +803,9 @@ export function pluginStateImportBatch(
               registerPluginStateEntry(store, { ...params, ...entry }, retention),
             );
           } catch (error) {
-            // Corruption must reach the shared database owner so it evicts the
-            // damaged handle; an unsafe transaction cannot commit its prefix.
-            if (isSqliteCorruptionError(error)) {
+            // Only a surviving outer transaction can commit its prefix. Lost
+            // savepoints close the handle; corruption must still reach its owner.
+            if (!store.db.isOpen || !store.db.isTransaction || isSqliteCorruptionError(error)) {
               throw error;
             }
             return err(error);
@@ -1061,7 +1068,7 @@ export function pluginStateUpdate(params: {
           now,
         });
         const next = params.updateValueJson(
-          existing ? parseStoredJson(existing.value_json, "lookup") : undefined,
+          existing ? parseStoredJson(existing.value_json, "lookup", store.path) : undefined,
         );
         if (!next) {
           return false;
@@ -1126,14 +1133,14 @@ export function pluginStateLookup(params: {
   try {
     return withPluginStateDatabaseReadOnly(
       "lookup",
-      ({ db }) => {
+      ({ db, path: databasePath }) => {
         const row = selectPluginStateEntry(db, {
           pluginId: params.pluginId,
           namespace: params.namespace,
           key: params.key,
           now: Date.now(),
         });
-        return row ? parseStoredJson(row.value_json, "lookup") : undefined;
+        return row ? parseStoredJson(row.value_json, "lookup", databasePath) : undefined;
       },
       envOptions(params.env),
     );
@@ -1143,6 +1150,63 @@ export function pluginStateLookup(params: {
       "lookup",
       "PLUGIN_STATE_READ_FAILED",
       "Failed to read plugin state entry.",
+      pathname,
+    );
+  }
+}
+
+export function pluginStateLookupMany(params: {
+  pluginId: string;
+  namespace: string;
+  keys: readonly string[];
+  env?: NodeJS.ProcessEnv;
+}): Array<Result<unknown, PluginStateStoreError>> {
+  if (params.keys.length === 0) {
+    return [];
+  }
+  const pathname = resolveOpenClawStateSqlitePath(params.env ?? process.env);
+  try {
+    return (
+      withPluginStateDatabaseReadOnly(
+        "lookup",
+        ({ db, path: databasePath }) => {
+          const now = Date.now();
+          const rows = executeSqliteQuerySync(
+            db,
+            getPluginStateKysely(db)
+              .selectFrom("plugin_state_entries")
+              .select(["entry_key", "value_json"])
+              .where("plugin_id", "=", params.pluginId)
+              .where("namespace", "=", params.namespace)
+              .where("entry_key", "in", sqliteStringSet(params.keys))
+              .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", now)])),
+          ).rows;
+          const values = new Map(rows.map((row) => [row.entry_key, row.value_json]));
+          return params.keys.map((key): Result<unknown, PluginStateStoreError> => {
+            // Match node:sqlite text binding, including lone UTF-16 surrogates.
+            const raw = values.get(toUSVString(key));
+            try {
+              return ok(
+                raw === undefined ? undefined : parseStoredJson(raw, "lookup", databasePath),
+              );
+            } catch (error) {
+              // Let ordered readers stop before a later corrupt value, just as with lookup.
+              if (error instanceof PluginStateStoreError && error.code === "PLUGIN_STATE_CORRUPT") {
+                return err(error);
+              }
+              throw error;
+            }
+          });
+        },
+        envOptions(params.env),
+      ) ?? params.keys.map(() => ok(undefined))
+    );
+  } catch (error) {
+    throw wrapPluginStateError(
+      error,
+      "lookup",
+      "PLUGIN_STATE_READ_FAILED",
+      "Failed to read plugin state entries.",
       pathname,
     );
   }
@@ -1168,7 +1232,7 @@ export function pluginStateConsume(params: {
           return undefined;
         }
         deletePluginStateEntry(store.db, params);
-        return parseStoredJson(row.value_json, "consume");
+        return parseStoredJson(row.value_json, "consume", store.path);
       },
       envOptions(params.env),
     );
@@ -1216,14 +1280,14 @@ export function pluginStateDeleteIf(params: {
   try {
     return runWriteTransaction(
       "delete",
-      ({ db }) => {
+      ({ db, path: databasePath }) => {
         const row = selectPluginStateEntry(db, {
           pluginId: params.pluginId,
           namespace: params.namespace,
           key: params.key,
           now: Date.now(),
         });
-        if (!row || !params.predicate(parseStoredJson(row.value_json, "delete"))) {
+        if (!row || !params.predicate(parseStoredJson(row.value_json, "delete", databasePath))) {
           return false;
         }
         return deletePluginStateEntry(db, params) > 0;
@@ -1345,13 +1409,13 @@ export function pluginStateEntries(params: {
     return (
       withPluginStateDatabaseReadOnly(
         "entries",
-        ({ db }) => {
+        ({ db, path: databasePath }) => {
           const rows = selectPluginStateEntries(db, {
             pluginId: params.pluginId,
             namespace: params.namespace,
             now: Date.now(),
           });
-          return rows.map((row) => rowToEntry(row, "entries"));
+          return rows.map((row) => rowToEntry(row, "entries", databasePath));
         },
         envOptions(params.env),
       ) ?? []
@@ -1381,12 +1445,14 @@ type PluginStateKeyRangeParams = {
 export function pluginStateEntriesInKeyRange(
   params: PluginStateKeyRangeParams,
 ): PluginStateEntry<unknown>[] {
-  return readPluginStateRowsInKeyRange(params, (row) => rowToEntry(row, "entries"));
+  return readPluginStateRowsInKeyRange(params, (row, databasePath) =>
+    rowToEntry(row, "entries", databasePath),
+  );
 }
 
 function readPluginStateRowsInKeyRange<T>(
   params: PluginStateKeyRangeParams,
-  mapRow: (row: PluginStateRow) => T,
+  mapRow: (row: PluginStateRow, databasePath: string) => T,
 ): T[] {
   if (!Number.isSafeInteger(params.limit) || params.limit < 1) {
     throw createPluginStateError({
@@ -1407,7 +1473,7 @@ function readPluginStateRowsInKeyRange<T>(
     return (
       withPluginStateDatabaseReadOnly(
         "entries",
-        ({ db }) =>
+        ({ db, path: databasePath }) =>
           selectPluginStateEntriesInKeyRange(db, {
             pluginId: params.pluginId,
             namespace: params.namespace,
@@ -1416,7 +1482,7 @@ function readPluginStateRowsInKeyRange<T>(
             limit: params.limit,
             order: params.order ?? "asc",
             now: Date.now(),
-          }).map(mapRow),
+          }).map((row) => mapRow(row, databasePath)),
         envOptions(params.env),
       ) ?? []
     );

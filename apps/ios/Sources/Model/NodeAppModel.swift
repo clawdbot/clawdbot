@@ -1651,10 +1651,7 @@ final class NodeAppModel {
                 paramsJSON: #"{"keys":["ui.accent"]}"#,
                 timeoutSeconds: 8,
                 ifCurrentRoute: sourceRoute)
-            guard let json = try JSONSerialization.jsonObject(with: res) as? [String: Any],
-                  json["status"] as? String == "ok"
-            else { return nil }
-            return ColorHexSupport.profileAccentHex(entries: json["entries"] as? [String: Any])
+            return try GatewayUserPreferences.decodeProfileAccentHex(res)
         } catch {
             return nil
         }
@@ -3281,7 +3278,7 @@ extension NodeAppModel {
         }
     }
 
-    func sendDirectWatchSetup(includeVoice: Bool = false) async throws -> WatchNotificationSendResult {
+    func sendDirectWatchSetup() async throws -> WatchNotificationSendResult {
         struct SetupCodeResponse: Decodable {
             var setupCode: String
         }
@@ -3308,9 +3305,7 @@ extension NodeAppModel {
 
         let response = try await operatorGateway.request(
             method: "device.pair.setupCode",
-            paramsJSON: includeVoice
-                ? #"{"includeQr":false,"bootstrapProfile":"voice-node"}"#
-                : #"{"includeQr":false,"bootstrapProfile":"node"}"#,
+            paramsJSON: #"{"includeQr":false,"bootstrapProfile":"voice-node"}"#,
             timeoutSeconds: 20,
             ifCurrentRoute: route)
         let setup = try JSONDecoder().decode(SetupCodeResponse.self, from: response)

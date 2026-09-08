@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../../config/paths.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
@@ -22,15 +23,27 @@ export function resolveUnsafeUpdateRecoveryGuidance(
 
 export function resolveUpdateResultNextAction(params: {
   result: UpdateRunResult;
-  managedGatewayStopped: boolean;
+  serviceRunning?: boolean;
+  runningVersion?: string;
+  verificationFailure?: string;
   env: NodeJS.ProcessEnv;
 }): string | undefined {
   const { result, env } = params;
   if (result.status === "error") {
+    if (result.reason === "rollback-project-changed") {
+      return `Other global packages changed after staging; automatic rollback was refused to preserve them. Keep the candidate installed if its gateway is reachable; otherwise keep the gateway stopped. ${resolveUnsafeUpdateRecoveryGuidance(undefined, env)}`;
+    }
     const reason =
       result.recovery?.serviceRestartSafe === false ? result.recovery.reason : undefined;
+    const failure = truncateUtf16Safe(
+      params.verificationFailure ?? result.reason ?? reason ?? "",
+      240,
+    );
+    const runningVersion = truncateUtf16Safe(params.runningVersion ?? "", 120);
     const state = reason
-      ? `${params.managedGatewayStopped ? "Managed gateway remains stopped because update recovery" : "Update recovery"} could not prove a runnable installation (${reason}). ${params.managedGatewayStopped ? "Keep the gateway stopped until the update succeeds. " : ""}`
+      ? params.serviceRunning === true
+        ? `The gateway is running${runningVersion ? ` ${runningVersion}` : ""} but did not pass verification (${failure}). `
+        : `${params.serviceRunning === false ? "Managed gateway remains stopped because update recovery" : "Update recovery"} could not prove a runnable installation (${failure}). ${params.serviceRunning === false ? "Keep the gateway stopped until the update succeeds. " : ""}`
       : "";
     return `${state}${resolveUnsafeUpdateRecoveryGuidance(reason, env)}`;
   }

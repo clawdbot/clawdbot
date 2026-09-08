@@ -287,6 +287,7 @@ describe("renderChatComposer controls", () => {
       canSend: false,
       canAbort: true,
       onAbort,
+      gatewayQuestionPrompts: [{ ...questionPrompt("pending", "Continue?"), sessionKey: "main" }],
       disabledBanner: {
         kind: "composer-replacement",
         text: "This session is archived. Unarchive it to continue the conversation.",
@@ -299,6 +300,7 @@ describe("renderChatComposer controls", () => {
     expect(banner?.textContent).toContain("This session is archived.");
     expect(container.querySelector(".agent-chat__input")).toBeNull();
     expect(container.querySelector("textarea")).toBeNull();
+    expect(container.querySelector("openclaw-chat-question-panel")).toBeNull();
     expect(container.querySelector(".agent-chat__typing-indicator--outside")).toBeNull();
     banner?.querySelector<HTMLButtonElement>("button")?.click();
     expect(onAction).toHaveBeenCalledOnce();

@@ -11,8 +11,9 @@ await runCliWithExitFinalization({
     await withUpdateFailureTriage(
       { json: true, invocationCwd: root },
       { root, env: process.env },
-      () =>
-        finishUpdate({
+      async () => {
+        await finishUpdate({
+          mutationStarted: true,
           result: {
             status: "error",
             mode: "git",
@@ -55,7 +56,8 @@ await runCliWithExitFinalization({
           preUpdatePluginInstallRecords: {},
           startedAt: Date.now(),
           updateStepTimeoutMs: 1_000,
-        }),
+        });
+      },
     );
   },
   onError: (error) => {

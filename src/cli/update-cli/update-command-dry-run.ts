@@ -8,8 +8,28 @@ import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.js";
 import { printResult } from "./progress.js";
 import { formatSchemaRefusalLines, hasSchemaRefusal } from "./schema-preflight.js";
-import type { UpdateCommandOptions } from "./shared.js";
+import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-plan.js";
+
+export async function handleDryRunPreflightError(
+  error: unknown,
+  notes: string[],
+  refuseUpdate: (reason: string, message: string) => Promise<void>,
+): Promise<OpenClawDatabaseSchemaPreflight> {
+  if (!(error instanceof UpdatePreMutationError)) {
+    throw error;
+  }
+  if (
+    error.reason === "database-schema-preflight" ||
+    error.reason === "target-metadata-preflight"
+  ) {
+    // A best-effort preview reports incomplete admission; it never authorizes mutation.
+    notes.push(error.message.replace(/^Update refused:/u, "Would refuse update:"));
+    return { incompatible: [], indeterminate: [] };
+  }
+  await refuseUpdate(error.reason, error.message);
+  return { incompatible: [], indeterminate: [] };
+}
 
 type UpdateDryRunPreview = {
   runId: string;
@@ -94,6 +114,7 @@ export function printUpdateDryRun(params: {
   managedServiceRootRedirect: ManagedServiceRootRedirect | null;
   explicitTag: string | null;
   packageSchemaPreflight: OpenClawDatabaseSchemaPreflight;
+  preflightNotes?: readonly string[];
   opts: Pick<UpdateCommandOptions, "tag" | "json" | "run">;
 }): void {
   const actions: string[] = [];
@@ -123,7 +144,7 @@ export function printUpdateDryRun(params: {
       : "Skip restart (because --no-restart is set)",
   );
 
-  const notes: string[] = [];
+  const notes: string[] = [...(params.preflightNotes ?? [])];
   if (params.opts.tag && params.updateInstallKind === "git") {
     notes.push("--tag applies to npm installs only; git updates ignore it.");
   }
@@ -142,10 +163,8 @@ export function printUpdateDryRun(params: {
     notes.push(...formatSchemaRefusalLines(params.packageSchemaPreflight, true));
   }
   if (params.updateInstallKind === "git") {
-    // The git target revision is resolved inside the real update run, so its
-    // schema support cannot be previewed here without duplicating that flow.
     notes.push(
-      "Database schema compatibility of the git target is verified during the real update; this preview does not check it.",
+      "Git preview does not execute target scripts or select a build-tested development fallback. The real update repeats database admission before executing each candidate.",
     );
   }
 

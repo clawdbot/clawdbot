@@ -188,7 +188,7 @@ describe("status-overview-rows", () => {
   it("shows update restart state in fast status output", () => {
     const rows = buildStatusCommandOverviewRows(
       createStatusCommandOverviewRowsParams({
-        updateRestartValue: "failed · managed-service-handoff-failed",
+        updateRows: [{ Item: "Update restart", Value: "failed · managed-service-handoff-failed" }],
       }),
     );
 
@@ -269,8 +269,7 @@ describe("status-overview-rows", () => {
       osLabel: "macOS",
       configPath: "/tmp/openclaw.json",
       secretDiagnosticsCount: 2,
-      updateValue: "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1).",
-      updateRestartValue: "restart pending health verification",
+      updateRows: [{ Item: "Update restart", Value: "restart pending health verification" }],
       agentStatus: {
         bootstrapPendingCount: 1,
         totalSessions: 2,
@@ -282,7 +281,7 @@ describe("status-overview-rows", () => {
     expect(findRowValue(rows, "Version")).toBe(VERSION);
     expect(findRowValue(rows, "OS")).toBe("macOS");
     expect(findRowValue(rows, "Config")).toBe("/tmp/openclaw.json");
-    expect(findRowValue(rows, "Update")).toBe("✅ OpenClaw updated to 2026.9.2 (from 2026.9.1).");
+    expect(findRowValue(rows, "Update")).toContain("behind 2");
     expect(findRowValue(rows, "Update restart")).toBe("restart pending health verification");
     expect(findRowValue(rows, "Security")).toBe("Run: openclaw security audit --deep");
     expect(findRowValue(rows, "Degraded secrets")).toBe("1 degraded · capability:tts");

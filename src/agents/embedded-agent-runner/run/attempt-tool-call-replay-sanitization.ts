@@ -7,6 +7,7 @@ import {
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../../embedded-agent-helpers.js";
+import { mergeConsecutiveUserMessages } from "../../embedded-agent-helpers/turns.js";
 import type { AgentMessage, StreamFn } from "../../runtime/index.js";
 import {
   sanitizeToolUseResultPairing,
@@ -491,10 +492,13 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       nextMessages = stripTrailingAssistantPrefillTurns(nextMessages);
       strippedTrailingAssistantPrefill ||= nextMessages !== beforeStrip;
     }
+    // Appended Bedrock users need merging without revalidating unchanged signed tools.
     if (nextMessages === messages) {
-      return baseFn(model, context, options);
-    }
-    if (
+      if (modelApi !== "bedrock-converse-stream") {
+        return baseFn(model, context, options);
+      }
+      nextMessages = mergeConsecutiveUserMessages(nextMessages);
+    } else if (
       sanitized.droppedAssistantMessages > 0 ||
       transcriptPolicy?.validateAnthropicTurns ||
       strippedTrailingAssistantPrefill
@@ -508,10 +512,9 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
         });
       }
     }
-    const nextContext: typeof context = {
-      ...context,
-      messages: nextMessages as typeof context.messages,
-    };
-    return baseFn(model, nextContext, options);
+    if (nextMessages === messages) {
+      return baseFn(model, context, options);
+    }
+    return baseFn(model, { ...context, messages: nextMessages as typeof messages }, options);
   };
 }

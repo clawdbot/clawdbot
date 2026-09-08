@@ -71,7 +71,7 @@ export function readChatHistoryDelta(params: {
   }
 
   let projectionState: SessionMessageProjectionState = {
-    streamErrorFallbackPending: false,
+    assistantErrorPending: false,
     turnBoundaryPending: false,
   };
   const projectCurrentUserProfile = createCurrentUserProfileMessageProjector(
@@ -97,6 +97,11 @@ export function readChatHistoryDelta(params: {
       sessionSnapshot: params.sessionSnapshot,
     });
     projectionState = projected.projectionState;
+    // Recovery can remove this row from history, which an append-only delta cannot express.
+    // Keep the last accepted cursor before the error and let a full tail own reconciliation.
+    if (projectionState.assistantErrorPending) {
+      return { kind: "reset" };
+    }
     if (projected.payload) {
       messagesBytes += jsonUtf8BytesOrInfinity(projected.payload) + (messages.length > 0 ? 1 : 0);
       if (messagesBytes > maxBytes) {

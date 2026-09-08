@@ -1,5 +1,6 @@
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { extractBalancedJsonFragments, stableStringify } from "@openclaw/normalization-core";
+import { parseRetryAfterHeadersSeconds } from "../internal/retry-after.js";
 
 const NON_CREDENTIAL_FIELD_NAMES = new Set([
   "passwordfile",
@@ -169,6 +170,15 @@ export function projectDiagnosticValue(
     if (state.nodesRemaining-- <= 0) {
       state.changed = true;
       return "[Truncated]";
+    }
+    try {
+      // Brand-check without provider getters; retain only numeric retry timing.
+      Headers.prototype.has.call(value, "retry-after");
+      const seconds = parseRetryAfterHeadersSeconds(value);
+      state.changed = true;
+      return seconds === undefined ? {} : { "retry-after-ms": seconds * 1000 };
+    } catch {
+      // Other objects follow the bounded descriptor walk below.
     }
     const keys = Reflect.ownKeys(value).slice(0, 65);
     const descriptors = Object.fromEntries(

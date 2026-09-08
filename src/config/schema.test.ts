@@ -830,6 +830,26 @@ describe("config schema", () => {
     ).toBe("string");
   });
 
+  it("refreshes sensitive hints when only a plugin's SecretInput paths change", () => {
+    const plugin = {
+      id: "secret-path-cache",
+      configSchema: { type: "object", additionalProperties: true },
+    };
+    const build = (path: string) =>
+      buildConfigSchemaCore({ plugins: [{ ...plugin, configSecretInputPaths: [path] }] });
+    const first = build("routes.*.credential");
+    const second = build("routes.*.replacement");
+    expect(
+      first.uiHints["plugins.entries.secret-path-cache.config.routes.*.credential"]?.sensitive,
+    ).toBe(true);
+    expect(
+      second.uiHints["plugins.entries.secret-path-cache.config.routes.*.replacement"]?.sensitive,
+    ).toBe(true);
+    expect(
+      second.uiHints["plugins.entries.secret-path-cache.config.routes.*.credential"],
+    ).toBeUndefined();
+  });
+
   it("derives tags for security, network, storage, tools, and performance paths", () => {
     const tagged = applyDerivedTags({
       "gateway.auth.token": {},

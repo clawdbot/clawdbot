@@ -237,6 +237,8 @@ export type RunCliAgentParams = {
   messageProvider?: string;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
+  /** Trusted run-local capability to author pinned widgets without inline presentation. */
+  pinnedWidgetAuthoring?: boolean;
   currentChannelId?: string;
   chatId?: string;
   channelContext?: PluginHookChannelContext;
@@ -322,6 +324,10 @@ type CliPreparedBackend = {
   backend: CliBackendConfig;
   beforeExecution?: () => Promise<void>;
   cleanup?: () => Promise<void>;
+  /** Exact process cleanup retained across attempt copies and natural registry removal. */
+  closeLiveSession?: (
+    reason: import("../../plugins/cli-backend.types.js").CliBackendLiveSessionCloseReason,
+  ) => Promise<void>;
   /** Transfer process-owned native skill artifacts without claiming turn-scoped MCP/auth state. */
   claimLiveSessionResources?: () => (() => Promise<void>) | undefined;
   /** Private child-only credential transport; never serialized into env or public plugin state. */
@@ -391,6 +397,8 @@ export type PreparedCliRunContext = {
   /** Host-held, policy-selected personal Workshop tool for the paired-node adapter. */
   nodeSkillWorkshop?: import("../tools/common.js").AnyAgentTool;
   openClawHistoryPrompt?: string;
+  /** Live owner of the transcript account-coverage checkpoint, independent of native continuity. */
+  cliHistoryWriter?: import("../../config/sessions/cli-history-boundary.js").CliHistoryWriter;
   authEpoch?: string;
   /** Strict owner fingerprint captured for live inference verification only. */
   authBindingFingerprint?: string;

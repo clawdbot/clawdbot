@@ -12,6 +12,7 @@ import {
   sanitizeForPlainText,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
@@ -417,9 +418,16 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
     pairing: {
       text: {
         idLabel: "imessageSenderId",
-        message: "OpenClaw: your access has been approved.",
-        notify: async ({ id, cfg }) =>
-          await (await loadIMessageChannelRuntime()).notifyIMessageApproval({ id, cfg }),
+        message: PAIRING_APPROVED_MESSAGE,
+        notify: async (params) => {
+          await (
+            await loadIMessageChannelRuntime()
+          ).sendIMessageOutbound({
+            ...params,
+            to: params.id,
+            text: params.message,
+          });
+        },
       },
     },
     security: imessageSecurityAdapter,

@@ -6,27 +6,26 @@ import { renderSkillWorkshopHeaderControls } from "./header-controls.ts";
 import { createSkillWorkshopState } from "./proposals.ts";
 
 describe("skill workshop header tabs", () => {
-  it("renders the active mode and selects a different view", () => {
+  it("renders Skills by default and reports the requested section", () => {
     const state = createSkillWorkshopState();
-    const requestUpdate = vi.fn();
+    const onModeChange = vi.fn();
     const container = document.createElement("div");
     render(
-      renderSkillWorkshopHeaderControls(
-        state,
-        { selfLearning: null, onSelfLearningToggle: () => undefined },
-        requestUpdate,
-      ),
+      renderSkillWorkshopHeaderControls(state, {
+        selfLearning: null,
+        onSelfLearningToggle: () => undefined,
+        onModeChange,
+      }),
       container,
     );
 
-    expect(container.querySelector("#skill-workshop-mode-tab-today")?.hasAttribute("active")).toBe(
+    expect(container.querySelector("#skill-workshop-mode-tab-skills")?.hasAttribute("active")).toBe(
       true,
     );
     container
-      .querySelector("#skill-workshop-mode-tab-board")
+      .querySelector("#skill-workshop-mode-tab-suggestions")
       ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
 
-    expect(state.skillWorkshopMode).toBe("board");
-    expect(requestUpdate).toHaveBeenCalledOnce();
+    expect(onModeChange).toHaveBeenCalledWith("suggestions");
   });
 });

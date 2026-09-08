@@ -24,6 +24,10 @@ import {
   POST_CORE_UPDATE_CHANNEL_ENV,
   POST_CORE_UPDATE_ENV,
 } from "../../infra/update-post-core-context.js";
+import {
+  createManagedUpdateRequesterAuthority,
+  resolveManagedUpdateRequester,
+} from "../../infra/update-requester-authority.js";
 import { normalizeControlPlaneUpdateResult } from "../../infra/update-restart-sentinel-payload.js";
 import {
   createUpdateRun,
@@ -32,7 +36,7 @@ import {
   recordUpdateRunPhase,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
-import { summarizeUpdateStepFailure } from "../../infra/update-run-record.js";
+import { summarizeUpdateStepFailure, type UpdateRunStep } from "../../infra/update-run-record.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
@@ -88,7 +92,11 @@ export async function admitUpdateCommandRun(params: {
     },
     { env },
   );
-  return { runId: record.runId, env };
+  const requester = resolveManagedUpdateRequester(record.origin.requester);
+  const requesterAuthority = requester
+    ? await createManagedUpdateRequesterAuthority(requester, env)
+    : undefined;
+  return { runId: record.runId, env, ...(requesterAuthority ? { requesterAuthority } : {}) };
 }
 
 export function failUpdateCommandRun(
@@ -111,31 +119,48 @@ export function failUpdateCommandRun(
 export function createUpdateRunProgress(
   run: NonNullable<UpdateCommandOptions["run"]>,
   progress: UpdateStepProgress,
-): UpdateStepProgress {
+): UpdateStepProgress & {
+  deferLedgerWrites: () => void;
+  flushLedgerWrites: () => void;
+  pendingSteps: UpdateRunStep[];
+} {
+  let deferred = false;
+  const pendingSteps: UpdateRunStep[] = [];
+  const record = (step: UpdateRunStep) => {
+    if (deferred) {
+      pendingSteps.push(step);
+    } else {
+      recordUpdateRunStep(run.runId, step, { env: run.env });
+    }
+  };
   return {
+    pendingSteps,
+    deferLedgerWrites() {
+      // Candidate Doctor can advance SQLite beyond this process's reader. Hold
+      // activation receipts until the supported runtime owns ledger writes.
+      deferred = true;
+    },
+    flushLedgerWrites() {
+      deferred = false;
+      for (const step of pendingSteps.splice(0)) {
+        record(step);
+      }
+    },
     onStepStart(step) {
-      recordUpdateRunStep(
-        run.runId,
-        { step: step.name, status: "in_progress", startedAtMs: Date.now() },
-        { env: run.env },
-      );
+      record({ step: step.name, status: "in_progress", startedAtMs: Date.now() });
       progress.onStepStart?.(step);
     },
     onStepComplete(step) {
       const endedAtMs = Date.now();
-      recordUpdateRunStep(
-        run.runId,
-        {
-          step: step.name,
-          status: step.exitCode === 0 || step.advisory ? "completed" : "failed",
-          startedAtMs: Math.max(0, endedAtMs - step.durationMs),
-          endedAtMs,
-          ...(step.exitCode !== 0
-            ? { detail: step.advisory?.message ?? summarizeUpdateStepFailure(step) }
-            : {}),
-        },
-        { env: run.env },
-      );
+      record({
+        step: step.name,
+        status: step.exitCode === 0 || step.advisory ? "completed" : "failed",
+        startedAtMs: Math.max(0, endedAtMs - step.durationMs),
+        endedAtMs,
+        ...(step.exitCode !== 0
+          ? { detail: step.advisory?.message ?? summarizeUpdateStepFailure(step) }
+          : {}),
+      });
       progress.onStepComplete?.(step);
     },
   };
@@ -173,21 +198,30 @@ export function completeUpdateCommandRun(
       recordOptions,
     );
   }
-  finishUpdateRun(
-    run.runId,
-    {
-      status:
-        normalized.status === "ok"
-          ? "succeeded"
-          : normalized.status === "error"
-            ? "failed"
-            : "skipped",
-      reason: normalized.reason,
-      after: normalized.after,
-      downtimeMs,
-    },
-    recordOptions,
-  );
+  // Both finalization and outer CLI unwind come here. A verified restored generation
+  // stays with its helper until native recovery finishes; neither caller may close it early.
+  const helperRecoveryPending =
+    process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1" &&
+    result.recovery?.serviceRestartSafe === true &&
+    result.recovery.packageRollbackVerified === true &&
+    result.recovery.service === undefined;
+  if (!helperRecoveryPending) {
+    finishUpdateRun(
+      run.runId,
+      {
+        status:
+          normalized.status === "ok"
+            ? "succeeded"
+            : normalized.status === "error"
+              ? "failed"
+              : "skipped",
+        reason: normalized.reason,
+        after: normalized.after,
+        downtimeMs,
+      },
+      recordOptions,
+    );
+  }
   return { ...result, runId: run.runId };
 }
 

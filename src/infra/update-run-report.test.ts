@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import {
+  renderUpdateRunNotice,
   renderUpdateRunReport,
   updateRunReportInputFromResult,
   updateRunReportInputFromSentinel,
@@ -30,6 +31,34 @@ function run(patch: Partial<UpdateRunRecord> = {}): UpdateRunRecord {
 }
 
 describe("update run report", () => {
+  it.each([
+    ["requester-revoked", "A current command owner must start a new update"],
+    ["repair-requires-config-change", "run openclaw doctor --fix under your own authority"],
+  ])("renders the repair stop reason %s with an unambiguous next action", (reason, guidance) => {
+    const report = renderUpdateRunReport(
+      run({
+        status: "failed",
+        reason: "doctor-failed",
+        repair: [{ attempt: 1, status: "failed", startedAtMs: 1, reason }],
+      }),
+    );
+    expect(report.markdown).toContain(reason);
+    expect(report.markdown).toContain(guidance);
+  });
+
+  it("limits parking notices to the pre-updater milestone without loosening phase notices", () => {
+    const requested = run({ status: "running", phase: "requested" });
+    expect(renderUpdateRunNotice(requested, "parking")).toContain("Restarting the gateway now");
+    expect(renderUpdateRunNotice(requested, "activating")).toBeNull();
+    expect(renderUpdateRunNotice(requested, "verifying")).toBeNull();
+    for (const phase of ["staging", "activating", "verifying"] as const) {
+      const progressed = run({ status: "running", phase });
+      expect(renderUpdateRunNotice(progressed, "parking")).toBeNull();
+      expect(renderUpdateRunNotice(progressed, "ack")).toBeNull();
+    }
+    expect(renderUpdateRunNotice(run(), "parking")).toBeNull();
+  });
+
   it("reports changed git commits when the package version stays the same", () => {
     const report = renderUpdateRunReport(
       run({
@@ -113,11 +142,35 @@ describe("update run report", () => {
     expect(renderUpdateRunReport(run({ status: "failed", reason })).markdown).toContain(hint);
   });
 
-  it("keeps producer recovery commands scoped to the selected profile", () => {
-    const nextAction = "Run `openclaw --profile work triage` to repair this installation.";
-    const report = renderUpdateRunReport(run({ status: "failed", origin: { nextAction } }));
-    expect(report.lines).toContain(nextAction);
+  it.each([
+    { reason: null, source: "origin" },
+    { reason: "requester-revoked", source: "origin" },
+    { reason: "repair-requires-config-change", source: "origin" },
+    { reason: "requester-revoked", source: "options" },
+    { reason: "repair-requires-config-change", source: "options" },
+  ])("keeps $source recovery scoped to its profile after $reason", ({ reason, source }) => {
+    const originAction = "Run `openclaw --profile work triage` to repair this installation.";
+    const nextAction =
+      source === "options"
+        ? "Run `openclaw --profile team triage` to repair this installation."
+        : originAction;
+    const report = renderUpdateRunReport(
+      run({ status: "failed", reason, origin: { nextAction: originAction } }),
+      source === "options" ? { nextAction } : {},
+    );
+    expect(report.lines.at(-1)).toBe(nextAction);
+    expect(report.markdown.endsWith(nextAction)).toBe(true);
     expect(report.markdown).not.toContain("Run openclaw triage");
+    expect(report.markdown).not.toContain("run openclaw doctor --fix");
+    expect(report.markdown).not.toContain("operator can run openclaw triage locally");
+    if (source === "options") {
+      expect(report.markdown).not.toContain(originAction);
+    }
+    if (reason === "requester-revoked") {
+      expect(report.markdown).toContain("Further recovery requires a current command owner.");
+    } else if (reason === "repair-requires-config-change") {
+      expect(report.markdown).toContain("Rehearsal config changes were not promoted.");
+    }
   });
 
   it("keeps advisory steps out of failures and shows only the final diagnostic lines", () => {

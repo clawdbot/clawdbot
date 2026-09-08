@@ -150,10 +150,6 @@ const FULL_RELEASE_CHILD_DISPATCHES = [
   },
 ] as const;
 const REPO_ROOT = process.env.GITHUB_WORKSPACE ?? process.cwd();
-const RELEASE_MAINTAINER_SKILL = resolve(
-  REPO_ROOT,
-  ".agents/skills/release-openclaw-maintainer/SKILL.md",
-);
 const QA_LIVE_TRANSPORTS_WORKFLOW = ".github/workflows/qa-live-transports-convex.yml";
 const UPDATE_MIGRATION_WORKFLOW = ".github/workflows/update-migration.yml";
 const CI_CHECK_TESTBOX_WORKFLOW = ".github/workflows/ci-check-testbox.yml";
@@ -12002,13 +11998,6 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
   it("pins every documented raw Full Release Validation caller to one exact SHA", () => {
     const nightly = readFileSync(".agents/skills/release-openclaw-nightly/SKILL.md", "utf8");
     const releaseCi = readFileSync(".agents/skills/release-openclaw-ci/SKILL.md", "utf8");
-    const releaseCiNotes = readFileSync(
-      ".agents/skills/release-openclaw-ci/references/release-ci-notes.md",
-      "utf8",
-    );
-    const testing = readFileSync(".agents/skills/openclaw-testing/SKILL.md", "utf8");
-    const parallels = readFileSync(".agents/skills/openclaw-parallels-smoke/SKILL.md", "utf8");
-    const maintainer = readFileSync(RELEASE_MAINTAINER_SKILL, "utf8");
     const ciDocs = readFileSync("docs/ci.md", "utf8");
     const fullReleaseDocs = readFileSync("docs/reference/full-release-validation.md", "utf8");
     const releasingDocs = readFileSync("docs/reference/RELEASING.md", "utf8");
@@ -12030,10 +12019,6 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       "--target-ref release/YYYY.M.PATCH",
       '--workflow-sha "$TOOLING_SHA"',
     ]);
-    for (const text of [releaseCi, releaseCiNotes, testing, parallels, ciDocs, maintainer]) {
-      expect(text).toContain("Validation SHA + Tooling SHA");
-    }
-    expect(releaseCi).toContain("release lifecycle ledger: Code SHA, Release SHA, and Tooling SHA");
   });
 
   it("executes shared release candidate identity validation with its JSON input", () => {

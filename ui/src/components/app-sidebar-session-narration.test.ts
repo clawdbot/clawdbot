@@ -14,6 +14,7 @@ function runningRow(key: string): SidebarRecentSession {
   return {
     key,
     label: "Run",
+    renameValue: "",
     updatedAt: Date.now(),
     active: false,
     visuallyActive: false,

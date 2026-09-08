@@ -50,6 +50,7 @@ export type SessionPendingInputOwner = {
   config?: OpenClawConfig;
   assertCurrent: () => void;
   finish: (disposition: Exclude<SessionPendingInputState, "queued">) => void;
+  restartRecovered?: true;
   /** Aggregate authority is the exact source closures, never persisted source identifiers. */
   sources?: readonly SessionPendingInputOwner[];
 };
@@ -63,6 +64,11 @@ const owners = resolveGlobalSingleton(Symbol.for("openclaw.sessionPendingInputOw
   }>(),
   transactionRelocations: new WeakMap<DatabaseSync, Map<SessionPendingInputOwner, string>>(),
 }));
+
+const recoveredDedupeOwners = resolveGlobalSingleton(
+  Symbol.for("openclaw.sessionPendingInputDedupeRecoveries"),
+  () => new WeakSet<SessionPendingInputOwner>(),
+);
 
 registerAgentEventLifecycleRotationHandler("session-pending-inputs", () => {
   const failures: unknown[] = [];
@@ -191,6 +197,42 @@ export function projectSessionPendingInput(row: SessionPendingInputRow): Session
     acceptedAt: row.accepted_at,
     state: row.state,
   };
+}
+
+/** Only a current recovered source can supersede its previous request receipt, once. */
+export function claimCurrentSessionPendingInputDedupeRecovery(
+  database: PendingInputDatabase,
+  scope: Pick<ResolvedTranscriptScope, "sessionId" | "sessionKey">,
+  runId: string,
+): boolean {
+  const owner = owners.current.getStore();
+  if (
+    !owner ||
+    owner.sources ||
+    owner.restartRecovered !== true ||
+    recoveredDedupeOwners.has(owner) ||
+    owner.databasePath !== database.path ||
+    owner.sessionId !== scope.sessionId ||
+    owner.sessionKey !== scope.sessionKey ||
+    owner.idempotencyKey !== `${runId}:user`
+  ) {
+    return false;
+  }
+  assertPendingInputOwnerCurrent(owner);
+  const row = readSessionPendingInputByKey(database, scope, owner.idempotencyKey);
+  const current = Boolean(
+    row &&
+    row.input_id === owner.inputId &&
+    row.run_id === runId &&
+    row.message_json === owner.messageJson &&
+    row.state === "queued" &&
+    row.consumed_event_id == null &&
+    readSessionPendingInputOwnerIds(database, [row]).has(owner.inputId),
+  );
+  if (current) {
+    recoveredDedupeOwners.add(owner);
+  }
+  return current;
 }
 
 /** Query only the exact physical transcript; copied keys cannot adopt another generation. */

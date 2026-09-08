@@ -820,7 +820,7 @@ describe("worker placement dispatch reclaim", () => {
         const placement = begin();
         return placement.state === "reclaimed"
           ? placement
-          : await reclaim("/gateway/workspace", placement, authorize);
+          : await reclaim({ kind: "local", path: "/gateway/workspace" }, placement, authorize);
       },
     });
     const active = await harness.service.dispatch(REQUEST);
@@ -1041,7 +1041,7 @@ describe("worker placement dispatch reclaim", () => {
             const placement = begin();
             return placement.state === "reclaimed"
               ? placement
-              : await reclaim(root, placement, authorize);
+              : await reclaim({ kind: "local", path: root }, placement, authorize);
           },
         });
       },

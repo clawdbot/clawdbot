@@ -606,7 +606,7 @@ describe("native app i18n inventory", () => {
             (site) => site.path === "apps/ios/WatchApp/Sources/WatchInboxView.swift",
           ) &&
           entry.source ===
-            "Direct mode supports device info, status, and notifications. Set up standalone voice on iPhone to use Talk on Watch. Chat and approvals still use the iPhone.",
+            "Direct mode supports device info, status, and notifications. Voice is included when you connect from iPhone Settings → Apple Watch. Chat and approvals still use the iPhone.",
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "Session target")).toBe(true);
@@ -732,7 +732,7 @@ describe("native app i18n inventory", () => {
             (site) => site.path === "apps/ios/Sources/Design/SettingsProTabSections.swift",
           ) &&
           entry.source ===
-            "The watch receives a one-time pairing code and stores its own device token. Standalone voice also grants read and Talk access, without admin access. A reachable secure Gateway URL is required away from the iPhone.",
+            "The watch receives a one-time pairing code and its own device credentials. Voice is included with read and Talk access, without admin access. The microphone starts only when you tap Start on the watch. A reachable secure Gateway URL is required away from the iPhone.",
       ),
     ).toBe(true);
     expect(
@@ -745,8 +745,14 @@ describe("native app i18n inventory", () => {
     expect(
       entries.some(
         (entry) =>
+          hasSite(
+            entry,
+            (site) =>
+              site.path === "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift" &&
+              site.kind === "ui-localized-call-multiline",
+          ) &&
           entry.source ===
-          "The details are listed on each option above. You can fix the login and retry, or connect with an API key or token below.",
+            "Include existing %@ conversations in the sidebar. This discovers them in place; it does not copy transcripts.",
       ),
     ).toBe(true);
     expect(

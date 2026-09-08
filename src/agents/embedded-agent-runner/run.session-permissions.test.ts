@@ -139,7 +139,7 @@ describe("embedded run session permissions", () => {
         expect(attempt.permissionMode).toBe(after ?? undefined);
         expect(attempt.execOverrides?.mode).toBe(execMode);
         expect(attempt.sessionId).toBe(pluginHarnessRunParams.sessionId);
-        expect(attempt.prompt).toContain("Continue from the current transcript");
+        expect(attempt.prompt).toContain("Continue the current task from the existing transcript");
         expect(attempt.prompt).not.toBe(pluginHarnessRunParams.prompt);
         expect(attempt.suppressNextUserMessagePersistence).toBe(true);
         expect(attempt.skipPreparedUserTurnMessage).toBe(true);

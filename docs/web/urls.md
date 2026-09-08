@@ -194,6 +194,62 @@ app shows the login page or no image, check for proxy redirects on both preview
 requests. Ordinary dashboard URLs remain protected and do not gain crawler
 access from this feature.
 
+## Public session transcripts
+
+Session owners and Gateway admins can open the session's sharing menu and select
+**Public access → Enable public access**. Confirming publishes the session's
+existing and future conversation text to anyone with its public URL. Recipients
+do not need an account or Gateway credentials. **Copy public link** copies that
+URL; **Disable public access** revokes it.
+
+Public access is separate from teammate visibility and editing permissions.
+Publishing does not let anonymous visitors send messages, invoke tools, open
+private dashboards, or connect to the Gateway. Incognito sessions cannot be
+published. Review the conversation before enabling public access: text can
+contain sensitive information, and disabling access cannot recall saved copies.
+
+The public page shows user messages and assistant final answers, with Markdown
+formatting. Tool output, reasoning, files, images, executable widgets, internal
+metadata, and hidden messages are omitted. Recognized credential patterns are
+redacted, but this is not a guarantee that all sensitive text is detected.
+The latest view refreshes every 15 seconds. **Older messages** opens earlier
+pages without automatic refresh; **Back to latest** returns to the live view.
+Each page is bounded, and oversized content is explicitly marked as omitted.
+The initial page and its social metadata work without JavaScript.
+
+Public URLs have this form, prefixed by the configured Control UI base path:
+
+```text
+/share/session?token=<opaque-publication-token>
+```
+
+The token is an encrypted bearer capability. It does not expose the agent,
+session key, session ID, or internal publication ID in the URL. Anyone who has
+the complete URL can read the published text, so handle it like any other
+public link. Copying the link again can produce a different token for the same
+publication; every copy remains valid until public access is disabled.
+
+The publication is bound to one exact session instance. Resetting, replacing,
+forking, or deleting the session does not transfer public access to another
+instance. Disabling and enabling again creates a new URL; the old link remains
+invalid. The publication record lives with existing session metadata and does
+not require a database schema migration. Normal session retention still applies.
+
+Tokens are bound to the Gateway installation identity, not its login token or
+password. Rotating Gateway authentication does not break public links. A full
+OpenClaw backup preserves both the installation identity and agent session
+databases, so links survive a full restore. Restoring only an agent database to
+another installation, or replacing the installation identity during repair,
+invalidates its existing links; disable and enable public access again to issue
+new links.
+
+Behind a login proxy, apply the same narrow `/share/*` routing described in
+[Behind a login proxy](/web/urls#behind-a-login-proxy). Keep all other routes protected.
+The proxy must overwrite `X-Forwarded-Proto` with the external request scheme;
+public session reads require its exact value to be `https`. The viewer and social
+card must both be reachable without cookies. OpenClaw
+does not change the proxy's access policies automatically.
+
 ## Person activity URLs
 
 Open a person's recent sessions with a readable Activity link:

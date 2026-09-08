@@ -238,7 +238,7 @@ describe("qa test file scenario runner", () => {
       result: {
         status: "fail",
         failure: {
-          reason: "node exited with 1",
+          reason: `${path.basename(process.execPath)} exited with 1`,
         },
       },
     });
@@ -452,7 +452,7 @@ describe("qa test file scenario runner", () => {
 
       const firstRun = await runQaTestFileScenarios(runParams);
       expect(firstRun.results[0]).toMatchObject({ status: "pass" });
-      await expect(fs.access(reportPath)).resolves.toBeUndefined();
+      await fs.access(reportPath);
 
       writeReport = false;
       const secondRun = await runQaTestFileScenarios(runParams);

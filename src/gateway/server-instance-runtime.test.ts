@@ -53,12 +53,7 @@ describe("createGatewayInstanceRuntime", () => {
     const rawAgent = vi.fn<NonNullable<GatewayRequestHandlers["agent"]>>(({ respond }) => {
       respond(true, { raw: true });
     });
-    const rawAbort = vi.fn<NonNullable<GatewayRequestHandlers["chat.abort"]>>(
-      ({ params, respond }) => {
-        respond(true, { aborted: true, runIds: [(params as { runId: string }).runId] });
-      },
-    );
-    const registry = createRegistry({ agent: rawAgent, "chat.abort": rawAbort });
+    const registry = createRegistry({ agent: rawAgent });
     const context = createContext();
     const runtime = createGatewayInstanceRuntime({
       getContext: () => context,
@@ -71,22 +66,6 @@ describe("createGatewayInstanceRuntime", () => {
       runtime.recovery.dispatchAgent({ message: "test", idempotencyKey: "run-unavailable" }),
     ).rejects.toThrow("Gateway instance dispatch unavailable");
     available = true;
-    await expect(
-      runtime.recovery.abortAgent({
-        agentId: "main",
-        runId: "run-1",
-        sessionKey: "agent:main:main",
-      }),
-    ).resolves.toEqual({ aborted: true, runIds: ["run-1"] });
-    expect(rawAbort).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: {
-          agentId: "main",
-          runId: "run-1",
-          sessionKey: "agent:main:main",
-        },
-      }),
-    );
     await expect(runtime.recovery.waitForAgent({ runId: "run-1", timeoutMs: 0 })).resolves.toEqual({
       runId: "run-1",
       status: "timeout",

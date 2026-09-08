@@ -56,6 +56,7 @@ const SUBAGENT_TOOL_DENY_ALWAYS = [
   "openclaw",
   // Status/scheduling - main agent coordinates
   "session_status",
+  "progress_card",
   AUTOMATIONS_TOOL_NAME,
   // Direct user/session sends - subagents communicate through announce chain
   "message",

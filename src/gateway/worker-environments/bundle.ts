@@ -1,12 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
 import { resolveStateDir } from "../../config/paths.js";
 import { isExactSemverVersion, resolveNpmJsonEntries } from "../../infra/npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
   DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
@@ -196,7 +196,9 @@ async function verifyPublishedNpmRelease(params: {
   runCommand?: WorkerNpmProofCommandRunner;
 }): Promise<string> {
   const runCommand = params.runCommand ?? runCommandWithTimeout;
-  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worker-npm-proof-"));
+  const temporaryRoot = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-worker-npm-proof-"),
+  );
   try {
     const published = parseNpmPackageIdentity(
       unwrapNpmJsonEntry(

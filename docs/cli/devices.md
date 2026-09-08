@@ -132,6 +132,7 @@ A non-admin paired-device caller can revoke only its **own** device token. Revok
 
 - These commands require `operator.pairing` (or `operator.admin`) scope. Non-operator device roles always require `operator.admin`; see [Operator scopes](/gateway/operator-scopes).
 - Token rotation and revocation stay inside the device's approved pairing role set and scope baseline. A stray cached token entry does not grant a token-management target.
+- Removing a device or revoking its node token also clears node runtime state. A worker cleanup error does not keep affected connections authorized or open.
 - For operator tokens, the CLI first reads the pairing list, then requests pairing plus the target token's scopes (or explicit rotate scopes). If the target is not visible, it requests admin access for cross-device management. A narrowed token does not inherit a broader device approval baseline; the caller must already be authorized for the requested scopes.
 - For paired-device token sessions, cross-device management (`remove`, `rename`, `rotate`, `revoke`) is self-only unless the caller has `operator.admin`.
 - Token rotation returns a new token (sensitive) — treat it like a secret.

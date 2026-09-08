@@ -6,6 +6,44 @@ import WebKit
 @testable import OpenClaw
 
 struct DashboardGatewayCatalogTests {
+    @Test func `primary remote label uses the SSH host or resolved direct endpoint`() {
+        let cases: [(AppState.RemoteTransport, String?, String?, String?)] = [
+            (.ssh, "user@studio.local", "127.0.0.1:18789", "studio.local"),
+            (.ssh, "studio.local:2222", "127.0.0.1:18789", "studio.local"),
+            (.ssh, " user@studio.local:2222 \n", nil, "studio.local"),
+            (.ssh, " \n", "resolved.example", "resolved.example"),
+            (.ssh, nil, nil, nil),
+            (.direct, "user@studio.local", "direct.example:443", "direct.example:443"),
+        ]
+        for (transport, sshTarget, resolvedHostLabel, expected) in cases {
+            #expect(DashboardGatewayCatalog.primaryRemoteHostLabel(
+                transport: transport,
+                sshTarget: sshTarget,
+                resolvedHostLabel: resolvedHostLabel) == expected)
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `unconfigured catalog omits primary and retains saved gateways`(hasProfiles: Bool) throws {
+        let url = try #require(URL(string: "wss://studio.example"))
+        let entries = DashboardGatewayCatalog.entries(
+            mode: .unconfigured,
+            primaryRemoteURL: url,
+            resolvedRemoteURL: url,
+            resolvedRemoteHostLabel: "studio.example",
+            profiles: hasProfiles ? [.init(
+                profile: .init(id: "studio", name: "Studio", url: url),
+                canPromote: true)] : [],
+            primaryHealth: .unknown)
+
+        #expect(entries.map(\.id) == (hasProfiles ? ["profile:studio"] : []))
+        #expect(!entries.contains { $0.isPrimary })
+        if hasProfiles {
+            #expect(entries.first?.name == "Studio")
+            #expect(entries.first?.canPromote == true)
+        }
+    }
+
     @Test(arguments: [false, true])
     func `catalog keeps browser authority separate from the primary route`(usesBrowserIdentity: Bool) throws {
         let primaryURL = try #require(URL(string: "wss://studio.example/control"))
@@ -706,7 +744,7 @@ struct DashboardManagerGatewayTargetTests {
                 }
             } else if scenario == "reselect-current" {
                 secondary.show()
-                manager.switchFrontmostDashboard(to: .profile("secondary"))
+                manager.openOrFocusDashboard(for: .profile("secondary"))
             }
             await gate.release()
             if scenario == "command-during-refresh" {
@@ -742,7 +780,7 @@ struct DashboardManagerGatewayTargetTests {
             }
 
             let expected: [String] = switch scenario {
-            case "switch-away-and-back", "reselect-current": []
+            case "switch-away-and-back": []
             case "command-during-refresh": ["new-session", "palette", "palette", "palette"]
             default: ["new-session", "palette", "palette"]
             }
@@ -830,7 +868,7 @@ struct DashboardManagerGatewayTargetTests {
         #expect(manager.frontmostDashboardTarget == nil)
     }
 
-    @Test(arguments: ["bridge", "open-menu", "switch-menu", "closed-source", "replaced-source"])
+    @Test(arguments: ["bridge", "open-menu", "new-window-menu", "closed-source", "replaced-source"])
     func `window requests cannot outlive their admitting owner`(_ entry: String) async throws {
         try await self.withConfiguredPrimary {
             let server = try await DashboardHTTPFixture.start()
@@ -860,7 +898,7 @@ struct DashboardManagerGatewayTargetTests {
                 manager.handleGatewayRequest(.openWindow(target), from: source)
             default:
                 source.closeDashboard()
-                manager.switchFrontmostDashboard(to: target)
+                manager.openNewDashboardWindow(for: target)
             }
             if entry != "closed-source", entry != "replaced-source" { manager.close() }
             let deadline = ContinuousClock.now + .seconds(1)
@@ -873,62 +911,14 @@ struct DashboardManagerGatewayTargetTests {
         }
     }
 
-    @Test func `main menu switch replaces the frontmost dashboard in place`() async throws {
+    @Test func `main menu opens or focuses a gateway and can open another independent window`() async throws {
         let server = try await DashboardHTTPFixture.start()
         defer { server.stop() }
-        let replacementServer = try await DashboardHTTPFixture.start()
-        defer { replacementServer.stop() }
-        let studio = "studio-\(UUID().uuidString)"
-        let sourceURL = server.url("/#token=current")
-        let controller = DashboardWindowController(
-            url: sourceURL,
-            auth: DashboardWindowAuth(
-                gatewayUrl: server.websocketURL("/").absoluteString,
-                token: "current",
-                password: nil),
-            websiteDataStore: .nonPersistent(),
-            windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)",
-            requestBrowserProfileImportOffer: { _ in false })
-        defer { controller.closeDashboard() }
-        let frame = NSRect(x: 190, y: 190, width: 940, height: 700)
-        controller.window?.setFrame(frame, display: false)
-        controller.show()
-        // CI display bounds clamp window frames during show, so compare replacement against the actual source frame.
-        let originalWindow = try #require(controller.window)
-        let sourceFrame = originalWindow.frame
-        let entries = DashboardGatewayTestEntries.withProfiles([studio])
-        let manager = DashboardManager._testMake(
-            profileEndpointProvider: { profileID in
-                let url = replacementServer.websocketURL("")
-                return GatewayConnection.EndpointSnapshot(
-                    config: (url: url, token: profileID, password: nil),
-                    routeAuthority: nil)
-            },
-            gatewayEntriesProvider: { entries })
-        manager._testSetController(controller)
-        defer { manager.close() }
-
-        await manager._testSwitchFrontmostDashboard(to: .profile(studio))
-
-        #expect(manager._testMainTarget() == .profile(studio))
-        #expect(manager.frontmostDashboardTarget == .profile(studio))
-        #expect(manager._testController() !== controller)
-        #expect(manager._testController()?.currentURL.port == Int(replacementServer.port))
-        #expect(manager._testController()?.window === originalWindow)
-        #expect(manager._testController()?.window?.frame == sourceFrame)
-        let profileAutosaveName = try #require(manager._testController()?.window?.frameAutosaveName)
-        #expect(profileAutosaveName.hasPrefix("OpenClawDashboardWindow-Test-"))
-        #expect(profileAutosaveName.hasSuffix("-\(studio)"))
-    }
-
-    @Test func `main menu switch opens requested gateway when no dashboard exists`() async throws {
-        let replacementServer = try await DashboardHTTPFixture.start()
-        defer { replacementServer.stop() }
         let studio = "studio"
         let entries = DashboardGatewayTestEntries.withProfiles([studio])
         let profileEndpoint: @Sendable (String) async throws -> GatewayConnection.EndpointSnapshot = { profileID in
             GatewayConnection.EndpointSnapshot(
-                config: (url: replacementServer.websocketURL(""), token: profileID, password: nil),
+                config: (url: server.websocketURL(""), token: profileID, password: nil),
                 routeAuthority: nil)
         }
         let manager = DashboardManager._testMake(
@@ -936,16 +926,39 @@ struct DashboardManagerGatewayTargetTests {
             gatewayEntriesProvider: { entries })
         defer { manager.close() }
 
-        await manager._testSwitchFrontmostDashboard(to: .profile(studio))
+        manager.openOrFocusDashboard(for: .profile(studio))
+        let openDeadline = ContinuousClock.now + .seconds(5)
+        while manager.frontmostDashboardTarget != .profile(studio), ContinuousClock.now < openDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
 
         let windows = manager._testAuxiliaryWindows()
         #expect(windows.count == 1)
         #expect(windows.first?.target == .profile(studio))
         #expect(windows.first?.controller.isWindowOpen == true)
         #expect(manager.frontmostDashboardTarget == .profile(studio))
-        let autosaveName = try #require(windows.first?.controller.window?.frameAutosaveName)
+        let window = try #require(windows.first?.controller.window)
+        let autosaveName = window.frameAutosaveName
         #expect(autosaveName.hasPrefix("OpenClawDashboardWindow-Test-"))
         #expect(autosaveName.hasSuffix("-\(studio)"))
+
+        manager.openOrFocusDashboard(for: .profile(studio))
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(manager._testAuxiliaryWindows().count == 1)
+        #expect(manager._testAuxiliaryWindows().first?.controller.window === window)
+        #expect(manager.frontmostDashboardTarget == .profile(studio))
+
+        manager.openNewDashboardWindow(for: .profile(studio))
+        let newWindowDeadline = ContinuousClock.now + .seconds(5)
+        while manager._testAuxiliaryWindows().count < 2, ContinuousClock.now < newWindowDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let newWindows = manager._testAuxiliaryWindows()
+        #expect(newWindows.count == 2)
+        #expect(newWindows.allSatisfy { $0.target == .profile(studio) && $0.controller.isWindowOpen })
+        let newWindow = try #require(newWindows.first { $0.controller.window !== window }?.controller.window)
+        #expect(newWindow.frameAutosaveName != autosaveName)
+        #expect(newWindow.frameAutosaveName.hasPrefix("OpenClawDashboardWindow-Test-"))
 
         let otherManager = DashboardManager._testMake(
             profileEndpointProvider: profileEndpoint,

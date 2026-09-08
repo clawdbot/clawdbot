@@ -1,16 +1,21 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import * as providerAuth from "../../agents/model-provider-auth.js";
 import { PreparedModelCatalogConfigReplacedError } from "../../agents/prepared-model-catalog.errors.js";
 import { setPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 
 const catalogMocks = vi.hoisted(() => ({
   loadSnapshot: vi.fn(),
   loadPublishedOwner: vi.fn(),
+  getPreparedOwner: vi.fn(),
   authStore: { version: 1, profiles: {} } as AuthProfileStore,
+  authModes: {} as PreparedAgentCredentialModes,
   isCurrent: (): boolean => true,
 }));
 
@@ -18,7 +23,10 @@ vi.mock("../../agents/prepared-model-catalog.js", () => {
   const loadOwner = async (...args: unknown[]) => {
     const owner = {
       modelCatalog: await catalogMocks.loadSnapshot(...args),
-      authModes: {},
+      authModes: catalogMocks.authModes,
+      metadataSnapshot: createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "anthropic", cliBackends: ["claude-cli"] }],
+      }),
       isCurrent: catalogMocks.isCurrent,
     };
     setPreparedModelRuntimeAuthStore(owner, catalogMocks.authStore);
@@ -32,6 +40,7 @@ vi.mock("../../agents/prepared-model-catalog.js", () => {
       read: (owner: Awaited<ReturnType<typeof loadOwner>>) => unknown,
     ) => read(await loadOwner(params)),
     loadPublishedPreparedModelCatalogOwnerSnapshot: catalogMocks.loadPublishedOwner,
+    getPreparedModelCatalogOwnerSnapshot: catalogMocks.getPreparedOwner,
   };
 });
 
@@ -46,16 +55,179 @@ const replacementCfg = {
   agents: { defaults: { model: { primary: "openai/gpt-5.6-luna" } } },
 } as OpenClawConfig;
 
+beforeEach(() => {
+  // Semantic projections must not exhaust their deadline through host CPU load.
+  vi.useFakeTimers({ toFake: ["Date"] });
+});
+
 afterEach(() => {
   catalogMocks.loadSnapshot.mockReset();
   catalogMocks.loadPublishedOwner.mockReset();
+  catalogMocks.getPreparedOwner.mockReset();
   vi.useRealTimers();
   catalogMocks.authStore = { version: 1, profiles: {} };
+  catalogMocks.authModes = {};
   catalogMocks.isCurrent = () => true;
+  cliBackendsTesting.resetDepsForTest();
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
 describe("/models browse catalog recovery", () => {
+  it.each([
+    { nativeAuth: true, providerKey: false, disabled: false, visible: true, slowCatalog: false },
+    { nativeAuth: false, providerKey: false, disabled: false, visible: false, slowCatalog: false },
+    { nativeAuth: false, providerKey: true, disabled: false, visible: false, slowCatalog: false },
+    { nativeAuth: true, providerKey: true, disabled: true, visible: false, slowCatalog: false },
+    { nativeAuth: true, providerKey: false, disabled: false, visible: true, slowCatalog: true },
+  ])(
+    "lists bound models using native auth=$nativeAuth, provider key=$providerKey, disabled=$disabled, slow catalog=$slowCatalog",
+    async ({ nativeAuth, providerKey, disabled, visible, slowCatalog }) => {
+      if (slowCatalog) {
+        vi.useRealTimers();
+        vi.useFakeTimers();
+      }
+      vi.stubEnv("ANTHROPIC_API_KEY", providerKey ? "synthetic-provider-key" : "");
+      cliBackendsTesting.setDepsForTest({
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "claude-cli",
+            modelProvider: "anthropic",
+            pluginId: "anthropic",
+            config: { command: "claude" },
+          },
+        ],
+      });
+      catalogMocks.authModes = nativeAuth ? { "claude-cli": "api_key" } : {};
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-5" },
+            modelPolicy: { allow: [] },
+            models: {
+              "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        },
+        ...(disabled ? { plugins: { entries: { anthropic: { enabled: false } } } } : {}),
+      };
+      const snapshot = {
+        entries: [
+          { provider: "anthropic", id: "claude-opus-4-5", name: "Default" },
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "Bound" },
+          { provider: "anthropic", id: "claude-haiku-4-5", name: "Unbound" },
+        ],
+        routeVariants: [],
+      };
+      const preparedOwner = {
+        modelCatalog: snapshot,
+        authModes: catalogMocks.authModes,
+        metadataSnapshot: createPluginMetadataSnapshotFixture({
+          plugins: [{ id: "anthropic", cliBackends: ["claude-cli"] }],
+        }),
+        isCurrent: () => true,
+      };
+      setPreparedModelRuntimeAuthStore(preparedOwner, catalogMocks.authStore);
+      catalogMocks.getPreparedOwner.mockReturnValue(preparedOwner);
+      catalogMocks.loadSnapshot.mockReturnValue(
+        slowCatalog ? new Promise(() => {}) : Promise.resolve(snapshot),
+      );
+
+      const replyPromise = resolveModelsCommandReply({
+        cfg,
+        commandBodyNormalized: "/models anthropic",
+        agentId: "main",
+      });
+      if (slowCatalog) {
+        await vi.advanceTimersByTimeAsync(750);
+      }
+      const reply = await replyPromise;
+
+      expect(reply?.text?.includes("- anthropic/claude-sonnet-4-6")).toBe(visible);
+      expect(reply?.text?.includes("- anthropic/claude-haiku-4-5")).toBe(providerKey);
+      expect(reply?.text).toContain("- anthropic/claude-opus-4-5");
+    },
+  );
+
+  it("keeps unprepared setup hints on provider auth", async () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          pluginId: "anthropic",
+          config: { command: "claude" },
+        },
+      ],
+    });
+    const checker = providerAuth.createProviderAuthChecker({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        },
+      },
+      env: { ANTHROPIC_API_KEY: "synthetic-provider-key" },
+      discoverExternalCliAuth: false,
+      allowPluginSyntheticAuth: false,
+      allowPreparedRuntimeAuth: false,
+    });
+
+    await expect(checker("anthropic", { modelId: "claude-sonnet-4-6" })).resolves.toBe(true);
+  });
+
+  it.each(["pinnedProfileId", "requiredProfileId"] as const)(
+    "does not replace an expired %s with a prepared native login",
+    async (selection) => {
+      cliBackendsTesting.setDepsForTest({
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "claude-cli",
+            modelProvider: "anthropic",
+            pluginId: "anthropic",
+            config: { command: "claude" },
+          },
+        ],
+      });
+      const checker = providerAuth.createProviderAuthChecker({
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
+              },
+            },
+          },
+        },
+        env: {},
+        discoverExternalCliAuth: false,
+        allowPluginSyntheticAuth: false,
+        allowPreparedRuntimeAuth: true,
+        preparedAuth: {
+          authModes: { "claude-cli": "api_key" },
+          authStore: {
+            version: 1,
+            profiles: {
+              selected: {
+                provider: "anthropic",
+                type: "token",
+                token: "synthetic-expired-token",
+                expires: 1,
+              },
+            },
+          },
+        },
+      });
+
+      await expect(
+        checker("anthropic", { modelId: "claude-sonnet-4-6", [selection]: "selected" }),
+      ).resolves.toBe(false);
+    },
+  );
+
   it.each([
     { view: "default", delayMs: 0 },
     { view: "all", delayMs: 1_000 },
@@ -63,6 +235,7 @@ describe("/models browse catalog recovery", () => {
   ] as const)(
     "recovers supersession during $view auth projection within its deadline (delay=$delayMs)",
     async ({ view, delayMs }) => {
+      vi.useRealTimers();
       vi.useFakeTimers();
       let current = true;
       catalogMocks.isCurrent = () => current;
@@ -321,6 +494,7 @@ describe("/models browse catalog recovery", () => {
   });
 
   it("uses one browse deadline across repeated owner replacements", async () => {
+    vi.useRealTimers();
     vi.useFakeTimers();
     const intermediateCfg = {
       agents: { defaults: { model: { primary: "google/gemini-3.1-pro" } } },
@@ -356,6 +530,7 @@ describe("/models browse catalog recovery", () => {
   });
 
   it("keeps explicit full-catalog recovery unbounded across late supersession", async () => {
+    vi.useRealTimers();
     vi.useFakeTimers();
     catalogMocks.loadSnapshot
       .mockImplementationOnce(
@@ -386,6 +561,7 @@ describe("/models browse catalog recovery", () => {
   });
 
   it("bounds current-owner reacquisition by the original browse deadline", async () => {
+    vi.useRealTimers();
     vi.useFakeTimers();
     const fallbackCfg = {
       agents: {

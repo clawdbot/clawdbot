@@ -2,10 +2,13 @@
 summary: "Adds OpenRouter model provider support to OpenClaw."
 read_when:
   - You are installing, configuring, or auditing the openrouter plugin
-title: "OpenRouter plugin"
+title: "OpenRouter plugin reference"
 ---
 
-# OpenRouter plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 Adds OpenRouter model provider support to OpenClaw.
 
@@ -16,7 +19,8 @@ Adds OpenRouter model provider support to OpenClaw.
 
 ## Surface
 
-providers: `openrouter`; contracts: `imageGenerationProviders`, `mediaUnderstandingProviders`, `musicGenerationProviders`, `speechProviders`, `usageProviders`, `videoGenerationProviders`
+- Providers: `openrouter`
+- Contracts: `imageGenerationProviders`, `mediaUnderstandingProviders`, `musicGenerationProviders`, `speechProviders`, `usageProviders`, `videoGenerationProviders`
 
 ## Related docs
 

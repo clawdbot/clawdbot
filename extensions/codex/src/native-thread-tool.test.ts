@@ -218,34 +218,25 @@ describe("native Codex thread tool", () => {
       expect(request).toHaveBeenCalledTimes(2);
     }));
 
-  it("requires explicit supervision permission for raw transcript reads", () =>
+  it.each([
+    {
+      action: "read",
+      params: { action: "read", thread_id: "thread-1", include_turns: true },
+      error: "Codex raw transcript reads are disabled",
+    },
+    {
+      action: "search",
+      params: { action: "list", search: "private transcript phrase" },
+      error: "search is disabled while raw transcript access is disabled",
+    },
+  ])("requires raw-transcript permission for $action", ({ params, error }) =>
     withFixture(async () => {
       const request = vi.fn();
       const tool = createTool({ omitHomeScope: true, supervision: true, request });
-
-      await expect(
-        tool?.execute("call-blocked-read", {
-          action: "read",
-          thread_id: "thread-1",
-          include_turns: true,
-        }),
-      ).rejects.toThrow("Codex raw transcript reads are disabled");
+      await expect(tool?.execute("call-blocked-transcript", params)).rejects.toThrow(error);
       expect(request).not.toHaveBeenCalled();
-    }));
-
-  it("does not expose transcript search matches when raw transcript access is disabled", () =>
-    withFixture(async () => {
-      const request = vi.fn();
-      const tool = createTool({ omitHomeScope: true, supervision: true, request });
-
-      await expect(
-        tool?.execute("call-blocked-search", {
-          action: "list",
-          search: "private transcript phrase",
-        }),
-      ).rejects.toThrow("search is disabled while raw transcript access is disabled");
-      expect(request).not.toHaveBeenCalled();
-    }));
+    }),
+  );
 
   it("preserves supervised transcript fields when raw reads are explicitly enabled", () =>
     withFixture(async () => {
@@ -544,31 +535,42 @@ describe("native Codex thread tool", () => {
       }
     }));
 
-  it("does not replace a locked session binding with an attached fork", () =>
+  it.each([
+    { action: "fork", params: { action: "fork", thread_id: "source-thread" } },
+    {
+      action: "archive",
+      params: { action: "archive", thread_id: "bound-thread", confirm: true },
+    },
+  ])("does not change a locked session binding via $action", ({ params }) =>
     withFixture(async () => {
       await writeCodexAppServerBinding("session-id", {
         threadId: "bound-thread",
         cwd: "/tmp/project",
       });
-      const request = vi.fn(async () => ({
-        thread: { id: "forked-thread", cwd: "/tmp/project", status: { type: "idle" } },
-      }));
+      const request = vi.fn();
       const tool = createTool({ request, modelSelectionLocked: true });
-
-      await expect(
-        tool?.execute("call-locked-fork", {
-          action: "fork",
-          thread_id: "source-thread",
-        }),
-      ).rejects.toThrow(MODEL_SELECTION_LOCKED_MESSAGE);
-
+      await expect(tool?.execute("call-locked-mutation", params)).rejects.toThrow(
+        MODEL_SELECTION_LOCKED_MESSAGE,
+      );
       expect(request).not.toHaveBeenCalled();
       await expect(readCodexAppServerBinding("session-id")).resolves.toMatchObject({
         threadId: "bound-thread",
       });
-    }));
+    }),
+  );
 
-  it("keeps an attached fork off a private supervision connection", () =>
+  it.each([
+    {
+      action: "fork",
+      params: { action: "fork", thread_id: "source-thread" },
+      error: "Supervised Codex forks must stay detached",
+    },
+    {
+      action: "archive",
+      params: { action: "archive", thread_id: "bound-thread", confirm: true },
+      error: "Refusing to replace supervised Codex thread",
+    },
+  ])("preserves private supervision ownership during $action", ({ params, error }) =>
     withFixture(async () => {
       await writeCodexAppServerBinding("session-id", {
         threadId: "bound-thread",
@@ -581,25 +583,21 @@ describe("native Codex thread tool", () => {
         conversationSourceTransferComplete: true,
         historyCoveredThrough: new Date().toISOString(),
       });
-      const request = vi.fn(async () => ({
-        thread: { id: "forked-thread", cwd: "/tmp/project", status: { type: "idle" } },
-      }));
+      const request = vi.fn();
       const tool = createTool({
         omitHomeScope: true,
         supervision: true,
         allowWriteControls: true,
         request,
       });
-
-      await expect(
-        tool?.execute("call-supervised-fork", {
-          action: "fork",
-          thread_id: "source-thread",
-        }),
-      ).rejects.toThrow("Supervised Codex forks must stay detached");
-
+      await expect(tool?.execute("call-supervised-mutation", params)).rejects.toThrow(error);
       expect(request).not.toHaveBeenCalled();
-    }));
+      await expect(readCodexAppServerBinding("session-id")).resolves.toMatchObject({
+        threadId: "bound-thread",
+        connectionScope: "supervision",
+      });
+    }),
+  );
 
   it("keeps an attached fork off a supervision-only connection without a binding", () =>
     withFixture(async () => {
@@ -798,27 +796,46 @@ describe("native Codex thread tool", () => {
     }),
   );
 
-  it("does not archive and clear the thread bound to a locked session", () =>
+  it("reserves archive ownership before cold imports let a later binding mutation run", () =>
     withFixture(async () => {
       await writeCodexAppServerBinding("session-id", {
-        threadId: "bound-thread",
+        threadId: "original-thread",
         cwd: "/tmp/project",
       });
-      const request = vi.fn(async () => ({}));
-      const tool = createTool({ request, modelSelectionLocked: true });
-
-      await expect(
-        tool?.execute("call-locked-archive", {
-          action: "archive",
-          thread_id: "bound-thread",
-          confirm: true,
-        }),
-      ).rejects.toThrow(MODEL_SELECTION_LOCKED_MESSAGE);
-
-      expect(request).not.toHaveBeenCalled();
-      await expect(readCodexAppServerBinding("session-id")).resolves.toMatchObject({
-        threadId: "bound-thread",
+      const request = vi.fn(async (_config, method: string) => {
+        if (method === CODEX_CONTROL_METHODS.readThread) {
+          return { thread: { id: "archive-target", status: { type: "idle" } } };
+        }
+        return method === CODEX_CONTROL_METHODS.listThreads ? { data: [] } : {};
       });
+      const tool = createTool({ request });
+      if (!tool) {
+        throw new Error("expected the owner native thread tool");
+      }
+      const archiving = tool.execute("call-archive-admission", {
+        action: "archive",
+        thread_id: "archive-target",
+        confirm: true,
+      });
+      const lateAttachment = writeCodexAppServerBinding("session-id", {
+        threadId: "archive-target",
+        cwd: "/tmp/project",
+      });
+      try {
+        await Promise.all([
+          expect(lateAttachment).rejects.toThrow(
+            "binding mutation blocked while a native archive is in progress",
+          ),
+          expect(archiving).resolves.toMatchObject({
+            details: { action: "archive", threadId: "archive-target" },
+          }),
+        ]);
+        await expect(readCodexAppServerBinding("session-id")).resolves.toMatchObject({
+          threadId: "original-thread",
+        });
+      } finally {
+        await Promise.allSettled([archiving, lateAttachment]);
+      }
     }));
 
   it("rechecks a binding attached while archive waits for its ownership fence", () =>
@@ -852,38 +869,6 @@ describe("native Codex thread tool", () => {
       await expect(readCodexAppServerBinding("session-id")).resolves.toMatchObject({
         threadId: "newly-bound-thread",
       });
-    }));
-
-  it("does not archive a private supervised binding even if the public lock is unavailable", () =>
-    withFixture(async () => {
-      await writeCodexAppServerBinding("session-id", {
-        threadId: "bound-thread",
-        connectionScope: "supervision",
-        supervisionSourceThreadId: "source-thread",
-        cwd: "/tmp/project",
-        model: "gpt-5.5",
-        modelProvider: "openai",
-        preserveNativeModel: true,
-        conversationSourceTransferComplete: true,
-        historyCoveredThrough: new Date().toISOString(),
-      });
-      const request = vi.fn(async () => ({}));
-      const tool = createTool({
-        omitHomeScope: true,
-        supervision: true,
-        allowWriteControls: true,
-        request,
-      });
-
-      await expect(
-        tool?.execute("call-supervised-archive", {
-          action: "archive",
-          thread_id: "bound-thread",
-          confirm: true,
-        }),
-      ).rejects.toThrow("Refusing to replace supervised Codex thread");
-
-      expect(request).not.toHaveBeenCalled();
     }));
 
   it("allows a locked session to archive an unowned unrelated thread", () =>

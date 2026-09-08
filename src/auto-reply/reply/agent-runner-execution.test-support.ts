@@ -21,6 +21,7 @@ import {
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import type { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import type { FollowupRun } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
@@ -615,6 +616,31 @@ export function makeTestSessionStorePath(): string {
     useAutoCleanupTempDirTracker(onTestFinished).make("openclaw-agent-execution-store-"),
     "sessions.json",
   );
+}
+
+export function createFailureRunAgentTurnParams(): AgentTurnParams {
+  return {
+    commandBody: "hello",
+    followupRun: createFollowupRun(),
+    sessionCtx: {
+      Provider: "whatsapp",
+      MessageSid: "msg",
+    },
+    opts: {},
+    typingSignals: createMockTypingSignaler(),
+    blockReplyPipeline: null,
+    blockStreamingEnabled: false,
+    resolvedBlockStreamingBreak: "message_end",
+    applyReplyToMode: (payload) => payload,
+    shouldEmitToolResult: () => true,
+    shouldEmitToolOutput: () => false,
+    pendingToolTasks: new Set(),
+    resetSessionAfterRoleOrderingConflict: async () => false,
+    isHeartbeat: false,
+    sessionKey: "main",
+    getActiveSessionEntry: () => undefined,
+    resolvedVerboseLevel: "off",
+  };
 }
 
 export function createMinimalRunAgentTurnParams(overrides?: {

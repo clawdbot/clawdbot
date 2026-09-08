@@ -107,50 +107,34 @@ export async function resolvePendingSkillProposal(input: {
   name?: string;
   workspaceDir?: string;
 }): Promise<SkillProposalReadResult> {
-  const proposalId = normalizeOptionalString(input.proposalId);
-  if (proposalId) {
-    const direct = await reconcilePendingCreateProposal(
-      await readRequiredProposal(proposalId, input.env, input.agentId, {
-        config: input.config,
-      }),
-      { agentId: input.agentId, env: input.env, config: input.config },
-    );
-    if (direct.record.status !== "pending") {
-      throw new Error(
-        `Only pending proposals can be revised. Current status: ${direct.record.status}.`,
-      );
+  let proposalId = normalizeOptionalString(input.proposalId);
+  if (!proposalId) {
+    const name = normalizeOptionalString(input.name);
+    if (!name) {
+      throw new Error("proposal_id or name required.");
     }
-    return direct;
-  }
-  const name = normalizeOptionalString(input.name);
-  if (!name) {
-    throw new Error("proposal_id or name required.");
-  }
-  const manifest = await listSkillProposals({
-    agentId: input.agentId,
-    env: input.env,
-    config: input.config,
-  });
-  const matches = manifest.proposals.filter(
-    (proposal) => proposal.status === "pending" && proposalMatchesName(proposal, name),
-  );
-  if (matches.length === 0) {
-    throw new Error(`No pending skill proposal matched: ${name}`);
-  }
-  if (matches.length > 1) {
-    const candidates = matches
-      .slice(0, 8)
-      .map((proposal) => `${proposal.id} (${resolveSkillProposalName(proposal.kind, proposal)})`)
-      .join(", ");
-    throw new Error(`Multiple pending skill proposals matched ${name}: ${candidates}`);
+    const manifest = await listSkillProposals({
+      agentId: input.agentId,
+      env: input.env,
+      config: input.config,
+    });
+    const matches = manifest.proposals.filter(
+      (proposal) => proposal.status === "pending" && proposalMatchesName(proposal, name),
+    );
+    if (matches.length === 0) {
+      throw new Error(`No pending skill proposal matched: ${name}`);
+    }
+    if (matches.length > 1) {
+      const candidates = matches
+        .slice(0, 8)
+        .map((proposal) => `${proposal.id} (${resolveSkillProposalName(proposal.kind, proposal)})`)
+        .join(", ");
+      throw new Error(`Multiple pending skill proposals matched ${name}: ${candidates}`);
+    }
+    proposalId = expectDefined(matches[0], "matches capture group 0").id;
   }
   const matched = await reconcilePendingCreateProposal(
-    await readRequiredProposal(
-      expectDefined(matches[0], "matches capture group 0").id,
-      input.env,
-      input.agentId,
-      { config: input.config },
-    ),
+    await readRequiredProposal(proposalId, input.env, input.agentId, { config: input.config }),
     { agentId: input.agentId, env: input.env, config: input.config },
   );
   if (matched.record.status !== "pending") {

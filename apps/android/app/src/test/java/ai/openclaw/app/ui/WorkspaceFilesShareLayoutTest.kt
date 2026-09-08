@@ -4,6 +4,7 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.SecurePrefs
+import ai.openclaw.app.bindNodeRuntimeTestFixture
 import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.ui.design.ClawDesignTheme
@@ -126,7 +127,7 @@ class WorkspaceFilesShareLayoutTest {
     prefs.setManualTls(false)
     prefs.saveGatewayCredentials(gateway.endpoint.stableId, token = "synthetic-workspace-share-proof")
     runtime = NodeRuntime(app, prefs)
-    bindRuntime(runtime)
+    bindNodeRuntimeTestFixture(app, runtime)
     val model = MainViewModel(app, prefs, SavedStateHandle())
     models.put("workspace", model)
     model.setForeground(true)
@@ -288,13 +289,6 @@ class WorkspaceFilesShareLayoutTest {
 
   private fun readExport(uri: Uri): ByteArray = requireNotNull(app.contentResolver.openInputStream(uri)).use { it.readBytes() }
 
-  private fun bindRuntime(value: NodeRuntime?) {
-    NodeApp::class.java
-      .getDeclaredField("runtimeInstance")
-      .apply { isAccessible = true }
-      .set(app, value)
-  }
-
   private fun tearDown() {
     try {
       models.clear()
@@ -303,7 +297,7 @@ class WorkspaceFilesShareLayoutTest {
         if (::runtime.isInitialized) closeNodeRuntimeTestFixture(runtime)
       } finally {
         try {
-          if (::app.isInitialized) bindRuntime(previousRuntime)
+          if (::app.isInitialized) bindNodeRuntimeTestFixture(app, previousRuntime)
         } finally {
           try {
             if (::gateway.isInitialized) gateway.close()

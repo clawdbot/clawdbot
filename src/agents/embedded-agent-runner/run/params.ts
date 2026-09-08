@@ -35,6 +35,7 @@ import type {
 } from "../../../skills/workshop/types.js";
 import type { AdmittedRunContext, PreparedAgentRunAdmission } from "../../admitted-run-context.js";
 import type { ModelFallbackAvailability } from "../../agent-scope.js";
+import type { AssistantErrorTranscript } from "../../assistant-error-transcript.js";
 import type { ExecApprovalContinuationPromptRange } from "../../bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../../bootstrap-mode.js";
@@ -114,6 +115,8 @@ export type RunEmbeddedAgentParams = {
   messageProvider?: string;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
+  /** Host-admitted dashboard authoring without an originating inline renderer. */
+  pinnedWidgetAuthoring?: boolean;
   /** Out-of-band plugin bindings attached by the run initiator. */
   toolBindings?: Readonly<Record<string, unknown>>;
   chatType?: ChatType;
@@ -453,7 +456,7 @@ export type RunEmbeddedAgentParams = {
   allowTransientCooldownProbe?: boolean;
   suppressNextUserMessagePersistence?: boolean;
   suppressTranscriptOnlyAssistantPersistence?: boolean;
-  suppressAssistantErrorPersistence?: boolean;
+  assistantErrorTranscript?: AssistantErrorTranscript;
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   /** Context engine resolved once by the outer logical-turn owner. */
   contextEngineLogicalTurnLease?: ContextEngineLogicalTurnLease;
@@ -463,9 +466,6 @@ export type RunEmbeddedAgentParams = {
   skipPreparedUserTurnMessage?: boolean;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
   onUserMessagePersistenceInvalidated?: () => void;
-  onAssistantErrorMessagePersisted?: (
-    message: Extract<AgentMessage, { role: "assistant" }>,
-  ) => void;
   /**
    * Dispose bundled MCP runtimes when the overall run ends instead of preserving
    * the session-scoped cache. Intended for one-shot local CLI runs that must
@@ -518,6 +518,8 @@ export type EmbeddedForegroundPromptContext = Pick<
   | "githubPublicationAvailable"
   | "conversationRecall"
   | "toolOverrides"
+  | "permissionMode"
+  | "execOverrides"
   | "skillsSnapshot"
   | "currentInboundEventKind"
   | "clientTools"

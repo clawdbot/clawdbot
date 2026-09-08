@@ -46,11 +46,13 @@ export function buildSingleRowStoreChildSessionsByKey(params: {
   store: Record<string, SessionEntry>;
   key: string;
   now: number;
+  subagentRuns?: SessionListRowContext["subagentRuns"];
 }): Map<string, string[]> {
   return buildStoreChildSessionIndex({
     store: params.store,
     keys: [params.key],
     now: params.now,
+    subagentRuns: params.subagentRuns,
     requireCurrentController: true,
   });
 }

@@ -732,7 +732,7 @@ describe("Codex delegation capability", () => {
           enabled: false,
         },
       });
-      expect(request.developerInstructions).toContain("`message(action=send)`");
+      expect(request.developerInstructions).not.toContain("`message(action=send)`");
       expect(request.developerInstructions).not.toContain("`spawn_agent`");
       expect(request.developerInstructions).not.toContain("`tool_search`");
     }
@@ -1483,8 +1483,7 @@ describe("Codex app-server native code mode config", () => {
       "Deferred searchable OpenClaw dynamic tools available: alpha_tool, skill_workshop, zeta_tool.",
     );
     expect(instructions).toContain("## Skill Workshop");
-    expect(instructions).toContain("Visible source replies are not automatically delivered");
-    expect(instructions).toContain("Use `message(action=send)`");
+    expect(instructions).not.toContain("Visible source replies are not automatically delivered");
     expect(instructions).not.toContain("`openclaw_direct.sessions_yield`");
   });
 
@@ -1533,25 +1532,6 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(instructions).not.toContain("Deferred searchable OpenClaw dynamic tools available");
-  });
-
-  it("instructs Codex to mark only completed message-tool-only source replies final", () => {
-    const params = createAttemptParams({ provider: "openai" });
-    params.sourceReplyDeliveryMode = "message_tool_only";
-
-    const instructions = buildDeveloperInstructions(params, {
-      dynamicTools: [
-        {
-          type: "function",
-          name: "message",
-          description: "Send a message",
-          inputSchema: { type: "object" },
-        },
-      ],
-    });
-
-    expect(instructions).toContain("For progress, set `final=false`.");
-    expect(instructions).toContain("Set `final=true`, or omit it,");
   });
 
   it("keeps durable dynamic tool fingerprints scoped to loading mode", () => {
@@ -1907,6 +1887,10 @@ describe("Codex app-server native code mode config", () => {
       expect(request).not.toHaveProperty("collaborationMode");
       expect(request).not.toHaveProperty("personality");
       expect(request.additionalContext).toEqual({
+        openclaw_source_delivery: {
+          kind: "application",
+          value: expect.stringContaining("reply normally in your final assistant message"),
+        },
         openclaw_temporal_context: {
           kind: "application",
           value: expect.stringContaining("## Temporal Context"),

@@ -251,7 +251,14 @@ export async function prepareSource(input: {
   const diagnostics = transformed.diagnostics ?? [];
   if (diagnostics.some((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error)) {
     const message = diagnostics
-      .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"))
+      .map((diagnostic) => {
+        const diagnosticMessage = ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n");
+        if (!diagnostic.file || diagnostic.start === undefined) {
+          return diagnosticMessage;
+        }
+        const position = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start);
+        return `openclaw-code-mode:user.ts:${position.line + 1}:${position.character + 1}: ${diagnosticMessage}`;
+      })
       .join("\n");
     throw new ToolInputError(`typescript transform failed: ${message}`);
   }

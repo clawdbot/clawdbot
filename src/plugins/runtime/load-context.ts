@@ -2,7 +2,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { createSubsystemLogger } from "../../logging.js";
-import type { PluginLoadOptions } from "../loader.js";
+import type { PluginLoadOptions } from "../loader-types.js";
 import type { PluginManifestRegistry } from "../manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../registry-types.js";

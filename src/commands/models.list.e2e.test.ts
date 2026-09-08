@@ -119,9 +119,12 @@ vi.mock("../agents/auth-profiles/profile-list.js", () => ({
   listProfilesForProvider,
 }));
 
-vi.mock("../agents/auth-profiles/store.js", () => ({
-  ensureAuthProfileStore,
+vi.mock("../agents/auth-profiles/store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/auth-profiles/store.js")>()),
   getRuntimeAuthProfileStoreSnapshot: vi.fn(() => undefined),
+}));
+vi.mock("../agents/auth-profiles/store-runtime.js", () => ({
+  ensureAuthProfileStore,
   loadAuthProfileStoreWithoutExternalProfiles: ensureAuthProfileStore,
   updateAuthProfileStoreWithLock: vi.fn(async () => ensureAuthProfileStore()),
 }));

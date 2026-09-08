@@ -1,3 +1,4 @@
+import { normalizeAgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { err, ok } from "@openclaw/normalization-core/result";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { withAgentCommandExecutionIdentitySpawnFacts } from "../../agents/agent-command-execution-identity-spawn.js";
@@ -15,7 +16,6 @@ import {
 import { isTimeoutError } from "../../agents/failover-error.js";
 import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
-import { normalizeAgentRunTimeoutPhase } from "../../agents/run-timeout-attribution.js";
 import { runWithCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
 import {
   createExecutionStartedOwnerBinding,

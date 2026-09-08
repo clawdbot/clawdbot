@@ -6,7 +6,6 @@ import {
   asOptionalRecord,
   normalizeOptionalString as trimToUndefined,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import WebSocket from "ws";
 import { XAI_BASE_URL } from "./model-definitions.js";
 import {
   isValidXaiTtsVoice,
@@ -14,6 +13,7 @@ import {
   normalizeXaiTtsBaseUrl,
 } from "./speech-provider-metadata.js";
 import { xaiUserAgentHeaderFor } from "./src/xai-user-agent.js";
+import { WebSocket } from "./ws-runtime.js";
 
 const DEFAULT_TTS_MAX_BYTES = 16 * 1024 * 1024;
 const XAI_TTS_VOICE_LIST_TIMEOUT_MS = 30_000;

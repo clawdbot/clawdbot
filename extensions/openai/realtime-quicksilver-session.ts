@@ -13,7 +13,7 @@ import type {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-request-guards";
 import WebSocket, { type RawData } from "ws";
-import { openAIRealtimeHost } from "./realtime-host.js";
+import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverDelegationController } from "./realtime-quicksilver-delegation-controller.js";
 import {
   applyRealtimeOfferCorsHeaders,
@@ -101,13 +101,16 @@ type OpenAIRealtimeOfferMetrics = {
   totalOfferMs: number;
 };
 
-export function createOpenAIQuicksilverBrowserSessionBroker(params: {
-  getConfig: () => OpenClawConfig | undefined;
-  logger: Pick<PluginLogger, "debug" | "warn">;
-  fetchImpl?: typeof fetch;
-  webSocketFactory?: OpenAIQuicksilverSocketFactory;
-  onCleanupComplete?: () => void;
-}): {
+export function createOpenAIQuicksilverBrowserSessionBroker(
+  params: {
+    getConfig: () => OpenClawConfig | undefined;
+    logger: Pick<PluginLogger, "debug" | "warn">;
+    fetchImpl?: typeof fetch;
+    webSocketFactory?: OpenAIQuicksilverSocketFactory;
+    onCleanupComplete?: () => void;
+  },
+  context: OpenAIRealtimeHost,
+): {
   broker: {
     capabilities: Partial<RealtimeVoiceProviderCapabilities> & { handlesAgentConsult: true };
     createBrowserSession: (
@@ -450,7 +453,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
                       signal: AbortSignal.timeout(OPENAI_QUICKSILVER_UPSTREAM_TIMEOUT_MS),
                       fetchImpl: params.fetchImpl,
                     },
-                    openAIRealtimeHost,
+                    context,
                   ),
               });
               activeSessionLease.expireIn(session, OPENAI_QUICKSILVER_SESSION_TTL_MS);
@@ -458,7 +461,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
             signal: upstreamSignal,
             fetchImpl: params.fetchImpl,
           },
-          openAIRealtimeHost,
+          context,
         );
         const active = activeSessions.get(token);
         if (call.kind !== "ga-sideband" || !active) {
@@ -508,7 +511,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
           signal: upstreamSignal,
           fetchImpl: params.fetchImpl,
         },
-        openAIRealtimeHost,
+        context,
       );
       if (call.kind === "ga-realtime") {
         respondRealtimeOffer(res, call.status, call.answerSdp, "application/sdp");
@@ -526,7 +529,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
           signal: lifecycleSignal,
           url: call.sidebandUrl,
         },
-        openAIRealtimeHost,
+        context,
       );
       if (lifecycleSignal.aborted) {
         connected.socket.close(1000, "session stopped");
@@ -564,7 +567,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
           runAgentConsult,
           signal: abortController.signal,
         },
-        openAIRealtimeHost.formatErrorMessage,
+        context.formatErrorMessage,
       );
       session = activeSessionLease.adopt(token, {
         detach: () => delegations.detach(),

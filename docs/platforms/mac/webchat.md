@@ -73,6 +73,24 @@ saved profiles. The picker remembers the most recently used profile. Every
 selection creates a new independent window, so the same Gateway can appear in
 multiple windows with different active sessions and navigation state.
 
+The main **Gateways** menu is always present. It lists the primary Gateway, when
+configured, then saved Gateways, with Command-1 through Command-9 in that order.
+Select an item to open its dashboard window or bring its existing window to the
+front. Hold Option for **New … Window**, or use Option-Command with the same digit,
+to open another independent window. Cards show health, version and shortened build
+ID, endpoint, latency, and open dashboard window count. Browser-authenticated
+profiles show **Access** and session expiry. A **Primary** badge identifies the
+primary Gateway, and a front-window marker follows the frontmost dashboard
+window. **Manage Gateways…** opens **Connection → Gateways**, even when the list is
+empty. For SSH-tunneled primaries, the primary row uses the SSH host name rather
+than the loopback tunnel endpoint, unless a matching saved Gateway supplies its name.
+
+The menu probes health only while open, retaining cached facts between openings.
+Before the first result a card shows **checking…**; failed probes show
+**unreachable** and the last successful contact time when known. Closing the menu
+cancels in-flight probes and closes idle probe connections for saved Gateways with
+no open dashboard windows. It never disconnects the primary Gateway.
+
 The dashboard also reopens your selected Gateway after an app restart.
 Choosing **Primary** switches startup back to the primary Gateway. Background
 connection refreshes do not change this selection.

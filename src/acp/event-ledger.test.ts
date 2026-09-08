@@ -9,6 +9,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { createInMemoryAcpEventLedger, createSqliteAcpEventLedger } from "./event-ledger.js";
+import { expectAcpReplayUtf8Accounting } from "./event-ledger.test-support.js";
 
 describe("ACP event ledger", () => {
   afterEach(() => {
@@ -234,6 +235,74 @@ describe("ACP event ledger", () => {
     });
   });
 
+  it.each(["UTF-8", "UTF-16le"])(
+    "counts UTF-8 fields through metadata changes and resets in %s databases",
+    async (encoding) => {
+      await withTestDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
+        const databasePath = path.join(dir, "openclaw.sqlite");
+        const { DatabaseSync } = requireNodeSqlite();
+        const seed = new DatabaseSync(databasePath);
+        seed.exec(
+          `PRAGMA encoding = '${encoding}'; CREATE TABLE encoding_seed (id INTEGER); DROP TABLE encoding_seed;`,
+        );
+        seed.close();
+        const ledger = createSqliteAcpEventLedger({ path: databasePath });
+        const session = {
+          sessionId: "session-漢\0\ud800",
+          sessionKey: "\udc00-key😀",
+          cwd: "/é/e\u0301/台\0😀",
+          complete: true,
+        };
+        const { db } = openOpenClawStateDatabase({ path: databasePath });
+        await ledger.startSession(session);
+        const initial = expectAcpReplayUtf8Accounting(db);
+        for (let count = 0; count < 10; count++) {
+          await ledger.startSession(session);
+          expect(expectAcpReplayUtf8Accounting(db)).toBe(initial);
+        }
+        for (const runId of [undefined, "run-😀\0\ud800"]) {
+          await ledger.recordUpdate({
+            ...session,
+            runId,
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: "漢😀\0\ud800é e\u0301" },
+            },
+          });
+          expectAcpReplayUtf8Accounting(db);
+        }
+        await ledger.startSession({ ...session, sessionKey: "new-台😀", cwd: "/new-😀\0" });
+        expectAcpReplayUtf8Accounting(db);
+        expect(db.prepare("SELECT COUNT(*) AS count FROM acp_replay_events").get()?.count).toBe(2);
+        await ledger.startSession({ ...session, reset: true });
+        expect(expectAcpReplayUtf8Accounting(db)).toBe(initial);
+        expect(db.prepare("SELECT COUNT(*) AS count FROM acp_replay_events").get()?.count).toBe(0);
+      });
+    },
+  );
+
+  it("marks a Unicode replay incomplete when its UTF-8 content exceeds the byte cap", async () => {
+    await withTestDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
+      const ledger = createSqliteAcpEventLedger({
+        path: path.join(dir, "state.sqlite"),
+        maxSerializedBytes: 1024,
+      });
+      const session = { sessionId: "s", sessionKey: "key", cwd: "", complete: true };
+      await ledger.startSession(session);
+      await ledger.recordUpdate({
+        ...session,
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "漢".repeat(400) },
+        },
+      });
+      await expect(ledger.readReplayBySessionId(session)).resolves.toEqual({
+        complete: false,
+        events: [],
+      });
+    });
+  });
+
   it("keeps footprint aggregates consistent while the byte budget evicts", async () => {
     await withTestDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
       const databasePath = path.join(dir, "openclaw.sqlite");
@@ -244,24 +313,22 @@ describe("ACP event ledger", () => {
       });
       for (let session = 0; session < 3; session += 1) {
         await ledger.startSession({
-          sessionId: `session-${session}`,
-          sessionKey: `agent:main:budget-${session}`,
-          cwd: "/work",
+          sessionId: `session-😀-${session}`,
+          sessionKey: `agent:main:预算-${session}`,
+          cwd: "/台\0工作",
           complete: true,
         });
         for (let index = 0; index < 40; index += 1) {
           // Halfway through, the provisional key becomes a longer canonical
           // key: the row-overhead component of the aggregate must follow.
           const sessionKey =
-            index < 20
-              ? `agent:main:budget-${session}`
-              : `agent:main:budget-${session}:canonical-rebound`;
+            index < 20 ? `agent:main:预算-${session}` : `agent:main:预算-${session}:canonical-😀`;
           await ledger.recordUpdate({
-            sessionId: `session-${session}`,
+            sessionId: `session-😀-${session}`,
             sessionKey,
             update: {
               sessionUpdate: "agent_message_chunk",
-              content: { type: "text", text: `payload-${session}-${index}-${"x".repeat(64)}` },
+              content: { type: "text", text: `payload-${session}-${index}-${"漢😀".repeat(32)}` },
             },
           });
         }
@@ -270,23 +337,7 @@ describe("ACP event ledger", () => {
       const { DatabaseSync } = requireNodeSqlite();
       const db = new DatabaseSync(databasePath, { readOnly: true });
       try {
-        // The maintained aggregate must equal ground truth recomputed from
-        // stored rows: drift here would silently unbound the ledger again.
-        const aggregate = db
-          .prepare("SELECT COALESCE(SUM(estimated_bytes), 0) AS total FROM acp_replay_sessions")
-          .get() as { total: number | bigint };
-        const groundTruth = db
-          .prepare(
-            `SELECT
-               (SELECT COALESCE(SUM(length(session_id) + length(session_key) + length(cwd) + 32), 0)
-                  FROM acp_replay_sessions)
-             + (SELECT COALESCE(SUM(length(session_id) + length(session_key) + length(update_json)
-                   + COALESCE(length(run_id), 0) + 32), 0)
-                  FROM acp_replay_events) AS total`,
-          )
-          .get() as { total: number | bigint };
-        expect(Number(aggregate.total)).toBe(Number(groundTruth.total));
-        expect(Number(aggregate.total)).toBeLessThanOrEqual(4_096);
+        expect(expectAcpReplayUtf8Accounting(db)).toBeLessThanOrEqual(4_096);
       } finally {
         db.close();
       }

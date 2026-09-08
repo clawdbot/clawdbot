@@ -579,6 +579,15 @@ function normalizeModelCatalogSuppressions(value: unknown): ModelCatalogSuppress
       continue;
     }
     const reason = normalizeOptionalString(entry.reason) ?? "";
+    const replacedBy = isRecord(entry.retirement)
+      ? normalizeOptionalString(entry.retirement.replacedBy)
+      : undefined;
+    const retirement =
+      isRecord(entry.retirement) && (entry.retirement.replacedBy === undefined || replacedBy)
+        ? replacedBy
+          ? { replacedBy }
+          : {}
+        : undefined;
     const rawWhen = isRecord(entry.when) ? entry.when : undefined;
     const baseUrlHosts = normalizeTrimmedStringList(rawWhen?.baseUrlHosts).map((host) =>
       host.toLowerCase(),
@@ -593,10 +602,22 @@ function normalizeModelCatalogSuppressions(value: unknown): ModelCatalogSuppress
             ...(providerConfigApiIn.length > 0 ? { providerConfigApiIn } : {}),
           }
         : undefined;
+    // A malformed retirement scope must never broaden a persistent model repair.
+    if (
+      retirement &&
+      entry.when !== undefined &&
+      (!rawWhen ||
+        !when ||
+        (rawWhen.baseUrlHosts !== undefined && baseUrlHosts.length === 0) ||
+        (rawWhen.providerConfigApiIn !== undefined && providerConfigApiIn.length === 0))
+    ) {
+      continue;
+    }
     suppressions.push({
       provider,
       model,
       ...(reason ? { reason } : {}),
+      ...(retirement ? { retirement } : {}),
       ...(when ? { when } : {}),
     });
   }

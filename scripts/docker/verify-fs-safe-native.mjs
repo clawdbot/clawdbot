@@ -25,7 +25,8 @@ function parseArgs(argv) {
       "usage: verify-fs-safe-native.mjs --package-root <path> --mode <require|fallback>",
     );
   }
-  return { mode, packageRoot: path.resolve(packageRoot) };
+  // createRequire keeps symlinked bases; pnpm dependencies belong to the physical package.
+  return { mode, packageRoot: fs.realpathSync(packageRoot) };
 }
 
 const { mode, packageRoot } = parseArgs(process.argv.slice(2));

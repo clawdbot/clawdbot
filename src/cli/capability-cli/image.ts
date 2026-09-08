@@ -32,13 +32,11 @@ import { readInputFiles, writeOutputAsset } from "../media-output.js";
 import { collectOption } from "../program/helpers.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
 import type { CapabilityEnvelope } from "./metadata.js";
+import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
 import {
-  emitJsonOrText,
-  formatEnvelopeForText,
   parseOptionalPositiveInteger,
   parseOptionalTimeoutMs,
   providerHasGenericConfig,
-  providerSummaryText,
   requireProviderModelOverride,
   resolveCapabilityAgentOption,
   resolveCapabilityProviderAgentId,

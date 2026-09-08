@@ -27,6 +27,50 @@ describe("truncate utilities", () => {
   });
 
   it.each([
+    { tail: "\uD800", maxBytes: 3, expected: "\uFFFD" },
+    { tail: "\uDC00", maxBytes: 3, expected: "\uFFFD" },
+    { tail: "\uD800\uD800", maxBytes: 6, expected: "\uFFFD\uFFFD" },
+    { tail: "\uD800a\uDC00", maxBytes: 7, expected: "\uFFFDa\uFFFD" },
+    { tail: "\uD800\uD800\uDC00", maxBytes: 7, expected: "\uFFFD\uD800\uDC00" },
+    { tail: "\uDC00\uD800\uDC00", maxBytes: 7, expected: "\uFFFD\uD800\uDC00" },
+    { tail: "🙂\uD800", maxBytes: 7, expected: "🙂\uFFFD" },
+    { tail: "\uD800", maxBytes: 2, expected: "" },
+    { tail: "\uD800🙂", maxBytes: 4, expected: "🙂" },
+    { tail: "🙂\uDC00", maxBytes: 3, expected: "\uFFFD" },
+    { tail: "\uDC00\uD800\uDC00", maxBytes: 4, expected: "\uD800\uDC00" },
+  ])(
+    "repairs only retained lone surrogates within $maxBytes bytes: $tail",
+    ({ tail, maxBytes, expected }) => {
+      const content = `discarded-${tail}`;
+      expect(truncateTail(content, { maxBytes })).toEqual({
+        content: expected,
+        truncated: true,
+        truncatedBy: "bytes",
+        totalLines: 1,
+        totalBytes: Buffer.byteLength(content),
+        outputLines: 1,
+        outputBytes: Buffer.byteLength(expected),
+        lastLinePartial: true,
+        firstLineExceedsLimit: false,
+        maxLines: 2000,
+        maxBytes,
+      });
+    },
+  );
+
+  it("preserves malformed strings when they fit without truncation", () => {
+    const content = "\uD800🙂\uDC00";
+    expect(truncateTail(content, { maxBytes: 10 })).toMatchObject({
+      content,
+      truncated: false,
+      truncatedBy: null,
+      totalBytes: 10,
+      outputBytes: 10,
+      lastLinePartial: false,
+    });
+  });
+
+  it.each([
     {
       name: "CRLF",
       content: "a\r\n\r\nb\r\n",

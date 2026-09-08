@@ -262,8 +262,8 @@ describe("LabsPage", () => {
     },
     {
       label: "CLI agents",
-      sourceConfig: {},
-      expectedPatch: { gateway: { cliAgents: { enabled: true } } },
+      sourceConfig: { gateway: { cliAgents: { enabled: false } } },
+      expectedPatch: { gateway: { cliAgents: { enabled: null } } },
       note: "labs: update cliAgents",
     },
     {
@@ -372,6 +372,59 @@ describe("LabsPage", () => {
     });
     expect(labRow(overridden.page, "Code Mode").textContent).toContain("Default: Disabled");
     expect(labRow(overridden.page, "Swarm").textContent).toContain("Default: Enabled");
+  });
+});
+
+describe("LabsPage CLI agents enablement", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it.each([
+    { label: "unset", config: {}, expected: true, overridden: false },
+    {
+      label: "empty object",
+      config: { gateway: { cliAgents: {} } },
+      expected: true,
+      overridden: false,
+    },
+    {
+      label: "explicit enabled",
+      config: { gateway: { cliAgents: { enabled: true } } },
+      expected: true,
+      overridden: true,
+    },
+    {
+      label: "explicit disabled",
+      config: { gateway: { cliAgents: { enabled: false } } },
+      expected: false,
+      overridden: true,
+    },
+  ])(
+    "reads $label as $expected with an enabled default",
+    async ({ config, expected, overridden }) => {
+      const { page } = await mountPage(config);
+
+      expect(labToggle(page, "CLI agents").checked).toBe(expected);
+      expect(labRow(page, "CLI agents").textContent).toContain(
+        overridden ? "Default: Enabled" : "Using default: Enabled",
+      );
+    },
+  );
+
+  it("writes an explicit opt-out when disabling the default", async () => {
+    const { page, runtimeConfig } = await mountPage({});
+    const toggle = labToggle(page, "CLI agents");
+    expect(toggle.checked).toBe(true);
+
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+
+    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    expect(runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: { gateway: { cliAgents: { enabled: false } } },
+      note: "labs: update cliAgents",
+    });
   });
 });
 

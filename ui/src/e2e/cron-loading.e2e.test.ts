@@ -104,6 +104,64 @@ suite.define(() => {
     );
   });
 
+  it("pauses queued automation reads while hidden and catches up once on show", async () => {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        heldMethods: ["cron.list", "cron.runs"],
+        methodResponses: {
+          "cron.list": emptyList,
+          "cron.runs": { entries: [], total: 0, offset: 0, limit: 50, hasMore: false },
+          "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}cron`);
+      await page.locator('[data-test-id="cron-jobs-loading"]').waitFor({ state: "visible" });
+      await gateway.waitForRequest("cron.runs");
+      const counts = async () => ({
+        table: tableListRequests(await gateway.getRequests("cron.list")).length,
+        runs: (await gateway.getRequests("cron.runs")).length,
+      });
+      const before = await counts();
+      for (let event = 0; event < 20; event += 1) {
+        await gateway.emitGatewayEvent("cron", { jobId: "synthetic-job", action: "finished" });
+      }
+      // Exercise the document visibility contract deterministically in Chromium.
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          get: () => "hidden",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await gateway.resolveDeferred("cron.list");
+      await gateway.resolveDeferred("cron.runs");
+      await page.getByText("No automations yet").waitFor({ state: "visible" });
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            setTimeout(resolve, 0);
+          }),
+      );
+      expect(await counts()).toEqual(before);
+      await page.screenshot({ path: path.join(suite.artifactDir, "hidden-refresh-paused.png") });
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          get: () => "visible",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+        globalThis.dispatchEvent(new Event("focus"));
+      });
+      await expect.poll(counts).toEqual({ table: before.table + 1, runs: before.runs + 1 });
+      await page.getByText("No automations yet").waitFor({ state: "visible" });
+      writeFileSync(
+        path.join(suite.artifactDir, "hidden-refresh-requests.json"),
+        JSON.stringify({ before, after: await counts() }, null, 2),
+      );
+      await page.screenshot({ path: path.join(suite.artifactDir, "visible-refresh-complete.png") });
+    });
+  });
+
   it("shows pending before empty and keeps empty visible after a run-history failure", async () => {
     await suite.withPage(
       {

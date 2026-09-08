@@ -12,9 +12,14 @@ import { createClientHarness } from "./test-support.js";
 import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
 describe("Codex app-server attempt client cleanup", () => {
-  it.each([true, false])(
-    "drains the full terminal inventory and accepts a concurrent exit (%s)",
-    async (terminated) => {
+  it.each([
+    { terminated: true, oneShot: false },
+    { terminated: false, oneShot: false },
+    { terminated: true, oneShot: true },
+    { terminated: false, oneShot: true },
+  ])(
+    "drains native terminals without claiming OS cleanup (terminated=$terminated, oneShot=$oneShot)",
+    async ({ terminated, oneShot }) => {
       const request = vi
         .fn()
         .mockResolvedValueOnce({
@@ -24,15 +29,29 @@ describe("Codex app-server attempt client cleanup", () => {
         .mockResolvedValueOnce({ terminated })
         .mockResolvedValueOnce({ terminated: true })
         .mockResolvedValueOnce({ data: [], nextCursor: null });
-      await expect(
-        terminateCodexBackgroundTerminals({ request } as never, "thread-1"),
-      ).resolves.toBeUndefined();
+      const cleanup = terminateCodexBackgroundTerminals({ request } as never, "thread-1", oneShot);
+      if (oneShot) {
+        await expect(cleanup).rejects.toThrow("Codex background-terminal cleanup");
+      } else {
+        await expect(cleanup).resolves.toBeUndefined();
+      }
       expect(request.mock.calls.map(([method, params]) => [method, params])).toEqual([
         ["thread/backgroundTerminals/list", { threadId: "thread-1" }],
         ["thread/backgroundTerminals/terminate", { threadId: "thread-1", processId: "10" }],
         ["thread/backgroundTerminals/terminate", { threadId: "thread-1", processId: "20" }],
         ["thread/backgroundTerminals/list", { threadId: "thread-1", limit: 1 }],
       ]);
+    },
+  );
+
+  it.each([false, true])(
+    "accepts an empty native terminal inventory (oneShot=%s)",
+    async (oneShot) => {
+      const request = vi.fn().mockResolvedValue({ data: [], nextCursor: null });
+      await expect(
+        terminateCodexBackgroundTerminals({ request } as never, "thread-1", oneShot),
+      ).resolves.toBeUndefined();
+      expect(request).toHaveBeenCalledOnce();
     },
   );
 

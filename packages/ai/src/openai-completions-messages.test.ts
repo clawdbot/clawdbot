@@ -3,6 +3,7 @@ import { convertMessages } from "./openai-completions-messages.js";
 import type { ProviderContext, ProviderModel } from "./provider-types.js";
 import { resolveOpenAICompletionsCompat } from "./transports/openai-completions-compat.js";
 import type { AssistantMessage, Context, Model } from "./types.js";
+import { createZeroUsage } from "./usage.test-support.js";
 
 const model: Model<"openai-completions"> = {
   id: "test-model",
@@ -17,14 +18,7 @@ const model: Model<"openai-completions"> = {
   maxTokens: 4_096,
 };
 
-const emptyUsage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const emptyUsage = createZeroUsage();
 
 describe("convertMessages assistant text replay", () => {
   it("serializes advertised video in ordered Chat Completions user content", () => {

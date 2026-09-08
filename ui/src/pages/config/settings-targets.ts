@@ -9,6 +9,7 @@ export const CONNECTION_SETTINGS_TARGET_IDS = {
 // preserves old deep links and the settings-search hash.
 export const COMMUNICATION_SETTINGS_TARGET_IDS = {
   notifications: "settings-communications-notifications",
+  meetingCapture: "settings-communications-meeting-capture",
 } as const;
 
 export const PROFILE_SETTINGS_TARGET_IDS = {
@@ -29,6 +30,21 @@ export type SettingsSearchTarget = {
 // Keep destinations and translation keys together without importing page
 // renderers: settings search runs before the destination page is loaded.
 export const SETTINGS_SEARCH_TARGETS = {
+  meetingCapture: {
+    routeId: "communications",
+    labelKey: "meetingCapture.title",
+    search: "?section=transcripts",
+    hash: `#${COMMUNICATION_SETTINGS_TARGET_IDS.meetingCapture}`,
+    searchKeys: ["meetingCapture.description", "meetingCapture.sources"],
+    aliases: "recording transcription meetings autoStart",
+  },
+  meetings: {
+    routeId: "meetings",
+    labelKey: "tabs.meetings",
+    hash: "",
+    searchKeys: ["subtitles.meetings"],
+    aliases: "meeting notes library reader archive",
+  },
   device: {
     routeId: "device",
     labelKey: "tabs.device",

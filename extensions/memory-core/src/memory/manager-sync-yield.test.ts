@@ -175,7 +175,7 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
     return 1;
   }
 
-  protected pruneEmbeddingCacheIfNeeded(): void {}
+  protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {}
 
   protected resetProviderInitializationForRetry(): void {}
 

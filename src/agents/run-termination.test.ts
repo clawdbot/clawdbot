@@ -295,6 +295,30 @@ describe("resolveAgentRunErrorLifecycleFields", () => {
     });
   });
 
+  it.each([false, true])("preserves restart cancellation before caller abort=%s", (hasSignal) => {
+    const signal = hasSignal ? new AbortController().signal : undefined;
+    expect(resolveAgentRunErrorLifecycleFields(createAgentRunRestartAbortError(), signal)).toEqual({
+      aborted: true,
+      stopReason: "restart",
+    });
+  });
+
+  it.each(["user", "timeout"] as const)(
+    "keeps prior %s cancellation over a restart error",
+    (reason) => {
+      const controller = new AbortController();
+      controller.abort(
+        reason === "timeout" ? new DOMException("deadline elapsed", "TimeoutError") : undefined,
+      );
+      expect(
+        resolveAgentRunErrorLifecycleFields(createAgentRunRestartAbortError(), controller.signal),
+      ).toEqual({
+        aborted: true,
+        stopReason: reason === "timeout" ? "timeout" : "aborted",
+      });
+    },
+  );
+
   it("attributes structured provider watchdog timeouts", () => {
     const error = createCliWatchdogError();
 

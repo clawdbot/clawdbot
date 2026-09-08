@@ -30,10 +30,10 @@ import {
   selectLlamaServerAsset,
   type LlamaServerAsset,
 } from "./llama-server-install.js";
+import type { ManagedLlamaChatModel } from "./llama-server-preset.js";
 import {
   ensureLlamaCppModel,
   prepareManagedLlamaServer,
-  type ManagedLlamaChatModel,
   type ManagedLlamaServer,
 } from "./managed-server.js";
 import { recommendLlamaCppModel, resolveLlamaCppModelCandidates } from "./model-catalog.js";

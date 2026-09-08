@@ -32,10 +32,8 @@ import {
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
 import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
-import {
-  adoptCurrentPluginMetadataSnapshotIfAbsentRuntime,
-  registerPluginMetadataSnapshotReaders,
-} from "./plugin-metadata-snapshot.runtime.js";
+import { registerPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot-readers.js";
+import { adoptCurrentPluginMetadataSnapshotIfAbsentRuntime } from "./plugin-metadata-snapshot.runtime.js";
 import type {
   LoadPluginMetadataSnapshotParams,
   PluginMetadataSnapshot,
@@ -632,4 +630,7 @@ function loadPluginMetadataSnapshotImpl(
 // Light bridges (plugin-metadata-snapshot.runtime.ts) serve loads through this
 // instance whenever the metadata system is loaded; the require fallback only
 // covers cold processes.
-registerPluginMetadataSnapshotReaders({ resolvePluginMetadataSnapshot });
+registerPluginMetadataSnapshotReaders({
+  resolvePluginMetadataSnapshot,
+  loadPluginMetadataSnapshot,
+});

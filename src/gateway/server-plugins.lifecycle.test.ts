@@ -25,6 +25,7 @@ import {
   installInstanceBindingProbeCoordinator,
   writeChannelBindingProbePlugin,
   writeInstanceBindingProbePlugin,
+  withPluginServiceStopDeadline,
   type ChannelBindingMonitor,
   type ChannelBindingProof,
   type InstanceBindingProbeCoordinator,
@@ -777,7 +778,9 @@ describe("gateway plugin instance bindings", () => {
 
       const socket = await connectWebchatClient({ port, scopes: ["operator.admin"] });
       sockets.push(socket);
-      const reload = await patchInstanceBindingTestConfig(socket);
+      const reload = await withPluginServiceStopDeadline(coordinator, () =>
+        patchInstanceBindingTestConfig(socket),
+      );
       expect(reload).toMatchObject({
         ok: false,
         error: {

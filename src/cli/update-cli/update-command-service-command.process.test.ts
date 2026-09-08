@@ -68,7 +68,7 @@ it.each(["restart", "install", "missing candidate"] as const)(
               '  compileCacheDisabled: process.env.NODE_DISABLE_COMPILE_CACHE,',
               '}));',
             ].join("\n"));
-            assert.equal(await runUpdatedInstallGatewayCommand(params, scenario, true), true);
+            assert.equal(await runUpdatedInstallGatewayCommand(params, scenario, true), "unverified");
             const observed = JSON.parse(await fs.readFile(receipt, "utf8"));
             assert.deepEqual(observed, {
               args: ["gateway", scenario, scenario === "install" ? "--force" : "--preserve-definition", "--json"],

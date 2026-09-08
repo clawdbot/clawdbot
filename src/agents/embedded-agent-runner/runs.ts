@@ -35,7 +35,10 @@ import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../infra/agent-events.js";
-import { getActiveAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
+import {
+  getActiveAgentRunDelegatedAuthority,
+  getAgentRunContext,
+} from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   getDiagnosticSessionActivitySnapshot,
@@ -967,13 +970,23 @@ export function isEmbeddedAgentRunActive(sessionId: string): boolean {
   return active;
 }
 
-/**
- * Returns whether a registry-owned run is still doing user-visible work.
- * Terminal reply operations and aborted handles retain their lane for cleanup,
- * but must not keep session activity projections in the running state.
- */
+/** Operational progress includes maintenance, including permission changes and cancellation. */
 export function resolveEmbeddedAgentRunProgressState(
   sessionId: string,
+): "queued" | "running" | undefined {
+  return resolveEmbeddedRunProgressState(sessionId, "operational");
+}
+
+/** Session presentation excludes handles whose producer suppresses shared activity. */
+export function resolveEmbeddedAgentSessionProgressState(
+  sessionId: string,
+): "queued" | "running" | undefined {
+  return resolveEmbeddedRunProgressState(sessionId, "session");
+}
+
+function resolveEmbeddedRunProgressState(
+  sessionId: string,
+  scope: "operational" | "session",
 ): "queued" | "running" | undefined {
   const replyOperation = resolveActiveReplyOperationForSessionId(sessionId);
   const replyPhase = replyOperation?.phase;
@@ -982,7 +995,11 @@ export function resolveEmbeddedAgentRunProgressState(
     replyPhase !== "completed" &&
     replyPhase !== "failed" &&
     replyPhase !== "aborted";
-  const handleInProgress = isEmbeddedRunHandleInProgress(ACTIVE_EMBEDDED_RUNS.get(sessionId));
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  const handleInProgress =
+    isEmbeddedRunHandleInProgress(handle) &&
+    (scope === "operational" ||
+      ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle)?.projectSessionActive !== false);
   // Reply operations and embedded handles are independent lifecycle owners.
   // A retained terminal owner must not hide a newer live owner for the session.
   if (
@@ -1503,7 +1520,12 @@ export function setActiveEmbeddedRun(
   // The dispatch scope carries the admitted instance across both core and
   // plugin attempts. A handle's public runId alone cannot confer wait authority.
   const operationalRunInstance = caller?.operationalRunInstance;
+  const runContext = handle.runId ? getAgentRunContext(handle.runId) : undefined;
   ACTIVE_EMBEDDED_RUN_REGISTRATIONS.set(handle, {
+    projectSessionActive:
+      runContext?.lifecycleGeneration === incomingLifecycleGeneration
+        ? runContext.projectSessionActive
+        : undefined,
     toolAuthority,
     sessionId,
     agentId,

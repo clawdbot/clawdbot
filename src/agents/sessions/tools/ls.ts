@@ -82,7 +82,7 @@ function formatLsContinuation(after: string): string {
 export function createLsToolDefinition(
   cwd: string,
   options?: LsToolOptions,
-): ToolDefinition<typeof lsSchema, LsToolDetails | undefined> {
+): ToolDefinition<typeof lsSchema, LsToolDetails> {
   const ops = options?.operations ?? defaultLsOperations;
   const resolvePath = options?.operations ? resolveToCwd : resolveLocalPathToCwd;
   return {
@@ -120,7 +120,7 @@ export function createLsToolDefinition(
           if (entries.length === 0) {
             return {
               content: [{ type: "text" as const, text: "(empty directory)" }],
-              details: undefined,
+              details: { content: "(empty directory)" },
             };
           }
           const fitsPage = (text: string) =>
@@ -150,7 +150,7 @@ export function createLsToolDefinition(
             if (fitsPage(output)) {
               return {
                 content: [{ type: "text" as const, text: output }],
-                details: nextAfter === undefined ? undefined : { nextAfter },
+                details: { content: output, ...(nextAfter === undefined ? {} : { nextAfter }) },
               };
             }
             lines.pop();
@@ -196,6 +196,6 @@ export function createLsToolDefinition(
 export function createLsTool(
   cwd: string,
   options?: LsToolOptions,
-): AgentTool<typeof lsSchema, LsToolDetails | undefined> {
+): AgentTool<typeof lsSchema, LsToolDetails> {
   return wrapToolDefinition(createLsToolDefinition(cwd, options));
 }

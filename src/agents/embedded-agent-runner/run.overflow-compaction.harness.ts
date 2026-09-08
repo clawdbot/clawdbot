@@ -807,6 +807,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     resolveProviderAuthProfileId: vi.fn(() => undefined),
     resolveProviderReasoningOutputModeWithPlugin: vi.fn(() => undefined),
     shouldPreferProviderRuntimeResolvedModel: vi.fn(() => false),
+    providerOwnsDynamicModelPreparation: vi.fn(() => false),
     prepareProviderExtraParams: vi.fn(async () => ({})),
     wrapProviderStreamFn: vi.fn((_cfg: unknown, _model: unknown, fn: unknown) => fn),
   }));

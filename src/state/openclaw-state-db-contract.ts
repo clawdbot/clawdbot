@@ -19,6 +19,9 @@ export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 // their feature-local first write. The canonical SQL still owns their shape.
 export const FIRST_USE_STATE_TABLES = [
   "update_runs",
+  "session_repository_workspaces",
+  "github_repository_publication_requests",
+  "github_publication_session_lifecycles",
   "skill_library_entries",
   "skill_library_revisions",
   "skill_library_events",
@@ -41,6 +44,8 @@ export const FIRST_USE_STATE_TABLES = [
 export const FIRST_USE_STATE_INDEXES = [
   "idx_update_runs_created",
   "idx_update_runs_active",
+  "idx_github_repository_publication_shared_request",
+  "idx_github_repository_publication_personal_request",
   "idx_github_personal_publication_owner_session",
   "idx_github_personal_publication_pending",
   "idx_node_worker_launches_terminal_completed",

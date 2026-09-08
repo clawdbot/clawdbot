@@ -10,7 +10,7 @@ const settlingCronTaskRuns = new Map<Promise<unknown>, { retirementTimer?: NodeJ
 const activeCronTaskRunDrainWaiters = new Set<() => void>();
 // Restart drain may retire an abort-ignoring core after a bounded grace, but a
 // host snapshot must keep refusing readiness until that core actually settles.
-const suspensionVisibleCronTaskRuns = new Set<Promise<unknown>>();
+const suspensionVisibleCronTaskRuns = new Map<Promise<unknown>, string | undefined>();
 const CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS = 60_000;
 
 function notifyActiveCronTaskRunDrainWaitersIfEmpty(): void {
@@ -94,9 +94,10 @@ export function abortActiveCronTaskRuns(reason = "Gateway restarting."): number 
 export function trackActiveCronTaskRunSettlement(
   promise: Promise<unknown>,
   abortSignal?: AbortSignal,
+  agentId?: string,
 ): void {
   settlingCronTaskRuns.set(promise, {});
-  suspensionVisibleCronTaskRuns.add(promise);
+  suspensionVisibleCronTaskRuns.set(promise, agentId);
   // Cancellation belongs to this core only; sibling jobs must remain drain-visible.
   const startSettlementGrace = () => startActiveCronTaskRunSettlementGrace(promise);
   abortSignal?.addEventListener("abort", startSettlementGrace, { once: true });
@@ -118,8 +119,18 @@ export function trackActiveCronTaskRunSettlement(
 }
 
 /** Cron cores that can still mutate state even after timeout/cancel returned. */
-export function getSuspensionVisibleCronTaskRunCount(): number {
-  return suspensionVisibleCronTaskRuns.size;
+export function getSuspensionVisibleCronTaskRunCount(scope?: { agentId: string }): number {
+  if (!scope) {
+    return suspensionVisibleCronTaskRuns.size;
+  }
+  let count = 0;
+  for (const agentId of suspensionVisibleCronTaskRuns.values()) {
+    // An unclassified core cannot establish that an agent's filesystem is safe.
+    if (!agentId || agentId === scope.agentId) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 /** Retires restart-drain bookkeeping without hiding still-running cores from suspension. */

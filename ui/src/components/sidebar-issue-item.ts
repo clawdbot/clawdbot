@@ -173,7 +173,7 @@ export function renderSidebarApprovalItem(params: {
 }
 
 export function renderSidebarUpdateSurface(params: {
-  context: ApplicationContext | undefined;
+  context: Pick<ApplicationContext, "gateway" | "overlays"> | undefined;
   onDismiss?: () => void;
   onNavigate: () => void;
   visible: boolean;
@@ -206,11 +206,7 @@ export function renderSidebarUpdateSurface(params: {
     .refreshRequired=${false}
     .onHoldUpdate=${() => context.overlays.holdUpdate()}
     .onReviewUpdate=${params.onNavigate}
-    .onDismiss=${
-      snapshot.updateRun && snapshot.updateRun.status !== "running"
-        ? () => context.overlays.acknowledgeUpdateRun()
-        : params.onDismiss
-    }
+    .onDismiss=${params.onDismiss}
   ></openclaw-sidebar-update-card>`;
 }
 

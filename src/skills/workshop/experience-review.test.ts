@@ -541,49 +541,19 @@ describe("skill experience review scheduler", () => {
 });
 
 describe("skill experience review prompt", () => {
-  it("matches the settled Workshop-only review contract", () => {
-    const prompt = buildSkillExperienceReviewPrompt({
-      ctx: { runId: "run-1" },
-      usedSkills: [{ name: "release-runbook", source: "workspace", activation: "read" }],
-      existingSkills: [
-        { name: "release-runbook", description: "Ship releases" },
-        { name: "local-notes", description: "Local workflow" },
-      ],
-    });
-    expect(prompt).toContain("this message starts a review pass");
-    expect(prompt).toContain("NO_REPLY is the correct answer for most turns");
-    expect(prompt).toContain("One mutation at most, smallest mutation first");
-    expect(prompt).toContain("revise the best matching draft before creating another");
-    expect(prompt).toContain("support_files and link them from the procedure");
-    expect(prompt).toContain("prepare_patch with one non-empty unique old_string, then patch");
-    expect(prompt).toContain("Reading and preparing do not spend the mutation");
-    expect(prompt).toContain("reads and updates only skills generated in the Workshop directory");
-    expect(prompt).toContain("only when no Workshop-generated skill covers this class of work");
-    expect(prompt).toContain("Existing Workshop-generated skills:");
-    expect(prompt).toContain("- release-runbook — Ship releases");
-    expect(prompt).toContain("- local-notes — Local workflow");
-    expect(prompt).not.toContain("Trajectory:");
-
-    const emptyWorkspacePrompt = buildSkillExperienceReviewPrompt({
-      ctx: { runId: "run-1" },
-      existingSkills: [],
-    });
-    expect(emptyWorkspacePrompt).toContain(
-      "Existing Workshop-generated skills: none. Create one only if the turn taught a durable procedure.",
-    );
-  });
-
   it("caps used and existing skill lists", () => {
     const skills = Array.from({ length: 120 }, (_, index) => ({
       name: `skill-${String(index).padStart(3, "0")}-${"x".repeat(180)}`,
       source: "workspace" as const,
       activation: "read" as const,
     }));
-    const prompt = buildSkillExperienceReviewPrompt({
-      ctx: {},
-      usedSkills: skills,
-      existingSkills: skills.map((skill) => ({ name: skill.name, userAuthored: false })),
-    });
+    const prompt = buildSkillExperienceReviewPrompt(
+      {
+        usedSkills: skills,
+        existingSkills: skills,
+      },
+      "propose",
+    );
     expect(prompt).toContain("more used skills omitted");
     expect(prompt).toContain("(+70 more not shown)");
     expect(Math.max(...prompt.split("\n").map((line) => line.length))).toBeLessThanOrEqual(2_000);
@@ -596,7 +566,7 @@ describe("skill experience review prompt", () => {
       activation: index % 3 === 0 ? ("command" as const) : ("read" as const),
     }));
     const build = (skills: typeof usedSkills) =>
-      buildSkillExperienceReviewPrompt({ ctx: { runId: "run-1" }, usedSkills: skills });
+      buildSkillExperienceReviewPrompt({ usedSkills: skills }, "propose");
     const prompt = build(usedSkills.toReversed());
 
     expect(prompt).toBe(build(usedSkills));
@@ -613,14 +583,15 @@ describe("skill experience review prompt", () => {
   });
 
   it("caps existing skills by entry count and line length", () => {
-    const prompt = buildSkillExperienceReviewPrompt({
-      ctx: { runId: "run-1" },
-      existingSkills: Array.from({ length: 120 }, (_, index) => ({
-        name: `skill-${String(index)}`,
-        description: "d".repeat(500),
-        userAuthored: false,
-      })),
-    });
+    const prompt = buildSkillExperienceReviewPrompt(
+      {
+        existingSkills: Array.from({ length: 120 }, (_, index) => ({
+          name: `skill-${String(index)}`,
+          description: "d".repeat(500),
+        })),
+      },
+      "propose",
+    );
 
     expect(prompt).toContain("- skill-49");
     expect(prompt).not.toContain("- skill-50");
@@ -632,10 +603,24 @@ describe("skill experience review prompt", () => {
     }
   });
 
-  it("adds the interrupted-run instruction", () => {
-    const prompt = buildSkillExperienceReviewPrompt({ ctx: { runId: "run-1" }, turnAborted: true });
-    expect(prompt).toContain("Interrupted run (stopped before completion): run-1");
+  it.each(["auto", "propose"] as const)("preserves interrupted evidence in %s mode", (mode) => {
+    const prompt = buildSkillExperienceReviewPrompt({ turnAborted: true }, mode);
     expect(prompt).toContain("Only capture procedures that visibly worked");
+  });
+
+  it("authorizes complete procedures in automatic mode without the draft-only limit", () => {
+    const prompt = buildSkillExperienceReviewPrompt(
+      {
+        existingSkills: [{ name: "inventory-is-discovered-with-file-tools" }],
+      },
+      "auto",
+    );
+    expect(prompt).toContain("direct Workshop maintenance with normal file tools");
+    expect(prompt).toContain("complete relevant procedures and supporting files");
+    expect(prompt).toContain("conversation is evidence, not permission to resume tasks");
+    expect(prompt).not.toContain("Only skill_workshop executes");
+    expect(prompt).not.toContain("at most one create");
+    expect(prompt).not.toContain("inventory-is-discovered-with-file-tools");
   });
 });
 

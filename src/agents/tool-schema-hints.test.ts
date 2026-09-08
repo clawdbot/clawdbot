@@ -196,6 +196,28 @@ describe("tool schema hints", () => {
     );
   });
 
+  it.each([
+    { limit: 300, delta: -1 },
+    { limit: 300, delta: 0 },
+    { limit: 300, delta: 1 },
+    { limit: 800, delta: -1 },
+    { limit: 800, delta: 0 },
+    { limit: 800, delta: 1 },
+  ])("preserves the $limit UTF-16 boundary at offset $delta", ({ limit, delta }) => {
+    const literal = "x".repeat(limit - 24 + delta);
+    const schema = Type.Object(
+      { a: Type.String(), "z😀": Type.Literal(literal) },
+      { additionalProperties: false },
+    );
+    const render = limit === 300 ? compactToolInputHint : compactToolOutputHint;
+    const expected = `{ a: string; "z😀": "${literal}" }`;
+
+    expect(expected.length).toBe(limit + delta);
+    expect(render(schema)).toBe(
+      delta <= 0 ? expected : limit === 300 ? "{ a: string; ... }" : undefined,
+    );
+  });
+
   it("renders a bare top-type schema as unknown without demoting", () => {
     expect(compactToolOutputHint(Type.Unknown())).toBe("unknown");
     expect(compactToolOutputHint(Type.Any())).toBe("unknown");

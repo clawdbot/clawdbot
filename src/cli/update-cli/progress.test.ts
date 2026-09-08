@@ -117,6 +117,8 @@ describe("update progress", () => {
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
     presentation = createUpdateProgress(false, context);
+    presentation.suspend();
+    presentation.resume();
     presentation.progress.onStepStart?.(step);
     presentation.progress.onStepComplete?.({ ...step, durationMs: 1, exitCode: 0 });
     presentation.stop();
@@ -125,5 +127,47 @@ describe("update progress", () => {
     printResult(result, { json: true, run: context });
     expect(log).not.toHaveBeenCalled();
     expect(writeJson).toHaveBeenCalledExactlyOnceWith({ ...result, run });
+  });
+
+  it("suspends every ledger reader through activation and resumes the recorded timeline", () => {
+    vi.useFakeTimers();
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    presentation = createUpdateProgress(true, context);
+    presentation.suspend();
+    const read = vi
+      .mocked(getUpdateRun)
+      .mockClear()
+      .mockImplementation(() => {
+        throw new Error("candidate owns the migrated ledger");
+      });
+    presentation.progress.onStepStart?.(step);
+    presentation.progress.onStepComplete?.({ ...step, durationMs: 10, exitCode: 0 });
+    vi.advanceTimersByTime(500);
+    expect(read).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith("build...");
+
+    run.phase = "verifying";
+    run.steps.push(
+      { step: "activating", status: "completed" },
+      { step: "restarting", status: "completed" },
+      { step: "verifying", status: "in_progress" },
+    );
+    read.mockImplementation(() => run);
+    presentation.resume();
+    vi.advanceTimersByTime(500);
+    expect(read).toHaveBeenCalled();
+    expect(
+      log.mock.calls.flat().filter((line) => typeof line === "string" && line.startsWith("Phase:")),
+    ).toEqual(["Phase: requested", "Phase: activating", "Phase: restarting", "Phase: verifying"]);
+
+    presentation.suspend();
+    read.mockClear().mockImplementation(() => {
+      throw new Error("candidate owns the migrated ledger");
+    });
+    presentation.dispose();
+    presentation.dispose();
+    presentation.resume();
+    vi.advanceTimersByTime(500);
+    expect(read).not.toHaveBeenCalled();
   });
 });

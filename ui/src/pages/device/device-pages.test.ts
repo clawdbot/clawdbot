@@ -35,6 +35,7 @@ function createCapability(
     openSystemSettings: vi.fn(),
     openPanel: vi.fn(),
     checkForUpdates: vi.fn(),
+    installChromeExtension: vi.fn(),
     refresh: vi.fn(),
     dispose: vi.fn(),
   } satisfies NativeDeviceSettingsCapability;
@@ -90,6 +91,22 @@ afterEach(() => {
 });
 
 describe("native device settings pages", () => {
+  it("requests setup only on click and reports Chrome approval separately from installation", async () => {
+    const { capability } = createCapability();
+    capability.installChromeExtension.mockResolvedValue({
+      nativeHostRegistered: true,
+      installRequested: true,
+      discoveredProfiles: 0,
+    });
+    const page = await mount("openclaw-device-page", capability);
+    expect(capability.installChromeExtension).not.toHaveBeenCalled();
+    row(page, "Set up Chrome on this Mac").querySelector<HTMLButtonElement>("button")!.click();
+    await vi.waitFor(() => expect(page.textContent).toContain("installation requested"));
+    expect(page.textContent).not.toContain("Native host registered and extension found");
+    capability.installChromeExtension.mockRejectedValueOnce(new Error("CLI missing"));
+    row(page, "Set up Chrome on this Mac").querySelector<HTMLButtonElement>("button")!.click();
+    await vi.waitFor(() => expect(page.textContent).toContain("Setup could not finish"));
+  });
   it.each(["openclaw-device-page", "openclaw-device-permissions-page"] as const)(
     "shows an app-only state without a bridge and waits for the initial snapshot on %s",
     async (tag) => {

@@ -1,11 +1,20 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
+import { createApplicationOverlays } from "../app/overlays.ts";
+import { updateRunHarness } from "../app/update-run.test-support.ts";
 import { SESSION_NAVIGATION_KEY_PARAM } from "../lib/sessions/route-navigation.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
+import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
-import { renderSidebarIssueItem, renderSidebarMentionItem } from "./sidebar-issue-item.ts";
+import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
+import {
+  renderSidebarIssueItem,
+  renderSidebarMentionItem,
+  renderSidebarUpdateSurface,
+} from "./sidebar-issue-item.ts";
 
 const item: SidebarAttentionItem = {
   type: "attention",
@@ -128,4 +137,74 @@ describe("renderSidebarMentionItem", () => {
     expect(context.navigate).toHaveBeenCalledExactlyOnceWith("chat", navigation);
     expect(onClosePanel).toHaveBeenCalledOnce();
   });
+});
+
+describe("renderSidebarUpdateSurface", () => {
+  beforeEach(() => {
+    document.body.append(container);
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    vi.stubGlobal("localStorage", createStorageMock());
+  });
+  afterEach(() => {
+    container.remove();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  it.each(["acknowledged", "expired", "visible"] as const)(
+    "dismisses the producer's current notice beside a %s terminal run",
+    async (state) => {
+      const run = createUpdateRunFixture({
+        status: "succeeded",
+        phase: "finished",
+        finishedAtMs: Date.now() - (state === "expired" ? 25 * 60 * 60 * 1_000 : 0),
+      });
+      const harness = updateRunHarness(async () => ({
+        lastRun: run,
+        updateAvailable: { currentVersion: "2.0.0", latestVersion: "3.0.0", channel: "stable" },
+      }));
+      harness.update({
+        hello: {
+          ...harness.gateway.snapshot.hello!,
+          server: { version: "2.0.0", bootId: "fixture-boot" },
+          features: { methods: ["update.run", "update.status"] },
+        },
+      });
+      const overlays = createApplicationOverlays(harness.gateway);
+      const context = { gateway: harness.gateway, overlays };
+      try {
+        await overlays.refreshUpdateStatus();
+        if (state === "acknowledged") {
+          overlays.acknowledgeUpdateRun();
+        }
+        const dismissal = resolveSidebarUpdateAttention(context).dismissal;
+        const expected = {
+          kind: "updateAvailable",
+          signature: JSON.stringify(
+            state === "visible" ? ["run", run.runId] : ["3.0.0", "fixture-boot"],
+          ),
+        };
+        const dismiss = vi.fn();
+        render(
+          renderSidebarUpdateSurface({
+            context,
+            onDismiss: () => dismiss(dismissal),
+            onNavigate: vi.fn(),
+            visible: true,
+            watchUpdateProgress: undefined,
+          }),
+          container,
+        );
+        const card = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+          "openclaw-sidebar-update-card",
+        )!;
+        await card.updateComplete;
+        expect(container.textContent).toContain(state === "visible" ? "OpenClaw updated" : "3.0.0");
+        container.querySelector<HTMLButtonElement>(".sidebar-issues-panel__dismiss")!.click();
+        expect(dismiss).toHaveBeenCalledExactlyOnceWith(expected);
+        expect(overlays.snapshot.updateRunAcknowledged).toBe(state === "acknowledged");
+      } finally {
+        overlays.dispose();
+      }
+    },
+  );
 });

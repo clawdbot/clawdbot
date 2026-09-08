@@ -4,7 +4,7 @@ import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { upsertAuthProfile } from "../../agents/auth-profiles/profiles.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles/store.js";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles/store-runtime.js";
 import { readConfigFileSnapshot, resetConfigRuntimeState } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeEnv } from "../../runtime.js";

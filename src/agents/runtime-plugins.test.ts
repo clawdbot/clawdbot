@@ -1,5 +1,5 @@
 // Verifies agent runtime plugin loads stay scoped to prepared-runtime handles.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(),
@@ -111,6 +111,14 @@ describe("agent runtime plugin registries", () => {
     hoisted.resolveAgentRuntimePluginSelections
       .mockReset()
       .mockImplementation((_config, selections) => selections);
+  });
+
+  afterEach(() => {
+    for (const [options] of hoisted.loadPluginRegistryHandle.mock.calls) {
+      expect(options).not.toHaveProperty("capabilityCatalogContext");
+      expect(options.runtimeOptions ?? {}).not.toHaveProperty("modelAuth");
+      expect(options.runtimeOptions ?? {}).not.toHaveProperty("modelConfig");
+    }
   });
 
   it("adopts full-only runtime capabilities from the active composition-root registry", () => {

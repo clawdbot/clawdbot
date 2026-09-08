@@ -910,6 +910,20 @@ describe("loadConfigForInstall", () => {
     );
   });
 
+  it("reports unrelated config errors before an unsupported recovery include", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue(
+      makeSnapshot({
+        parsed: { $include: "./external.json5", plugins: {} },
+        issues: [{ path: "gateway.mode", message: "invalid mode" }],
+      }),
+    );
+
+    await expect(loadConfigForInstall(discordNpmRequest)).rejects.toMatchObject({
+      code: "INVALID_CONFIG",
+      message: expect.stringContaining("Config invalid outside the plugin recovery path"),
+    });
+  });
+
   it("rejects non-Discord install requests when config is invalid", async () => {
     readConfigFileSnapshotMock.mockResolvedValue(makeSnapshot());
 

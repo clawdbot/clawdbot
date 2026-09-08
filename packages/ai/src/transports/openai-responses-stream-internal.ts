@@ -1,3 +1,4 @@
+import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseOutputItem } from "openai/resources/responses/responses.js";
 import {
@@ -181,7 +182,7 @@ export async function processResponsesStream<TApi extends Api>(
     }
   };
   const appendThinkingDelta = (slot: ThinkingOutputSlot, delta: string): void => {
-    slot.block.thinking += delta;
+    appendAssistantThinking(slot.block, delta);
     stream.push({
       type: "thinking_delta",
       contentIndex: slot.contentIndex,

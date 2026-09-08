@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { portableRelativePath } from "../../scripts/lib/build-artifact-cache.mts";
 import { BoundaryInputSnapshot } from "../../scripts/lib/extension-boundary-inputs.mts";
+import { createDeclarationInputBoundary } from "../../scripts/lib/tsdown-declaration-boundary.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   installNativeAncestorTypes,
@@ -14,6 +15,28 @@ import {
 } from "./native-boundary-fixture.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
+
+it.each([true, false])(
+  "diagnoses declaration escapes with an ancestor install=%s",
+  (ancestorInstall) => {
+    const ancestor = fs.realpathSync.native(roots.make("declaration-escape-diagnosis-"));
+    const root = path.join(ancestor, ".claude/worktrees/validation");
+    fs.mkdirSync(root, { recursive: true });
+    const install = path.join(ancestor, ancestorInstall ? "node_modules" : "other/node_modules");
+    const file = path.join(install, "synthetic-package/package.json");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, "{}");
+    const boundary = createDeclarationInputBoundary(root);
+    const diagnosis = ancestorInstall
+      ? `This checkout is nested inside another install at ${install}; module resolution walked out of the checkout and read a package from it. Run this lane in a checkout that is not nested inside another node_modules, or repair that ancestor install to the repository's isolated layout (nodeLinker: isolated in pnpm-workspace.yaml), which keeps transitive packages out of its root rather than exposing them to nested checkouts.`
+      : `Install declaration dependencies inside ${root}; shared installs and external symlinks are unsupported.`;
+    expect(() => boundary.assert(file)).toThrow(
+      new Error(
+        `Declaration input escapes checkout: ${file} -> ${file}. ${diagnosis} If the checkout is not nested inside another install, the compiled package imported a dependency it does not declare, which is the boundary violation this check exists to catch.`,
+      ),
+    );
+  },
+);
 
 function createNativeFixture(root: string, declared = root) {
   fs.mkdirSync(root, { recursive: true });

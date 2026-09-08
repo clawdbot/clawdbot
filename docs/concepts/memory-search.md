@@ -107,6 +107,11 @@ MMR then reorders the scored hybrid candidate set to reduce redundant
 snippets. It does not change scores, threshold eligibility, or make another
 provider call.
 
+Search preserves keyword matches when every ranked result falls below the
+configured minimum score. Hybrid search can also fill remaining result slots
+with keyword-only matches. These rules also apply in project sessions;
+semantic-only matches still need to meet the configured minimum score.
+
 ## Deterministic trigger recall
 
 On eligible interactive turns, the builtin engine also compares the inbound
@@ -125,7 +130,8 @@ tools or Active Memory escalation, but are never injected automatically.
 and search with keywords only. Leaving `provider` unset or set to `"auto"`
 falls back to keyword-only ranking when embedding setup or a request fails, as
 does `provider: "local"` (the GGUF/llama.cpp provider). Creation-time fallback
-still indexes text for keyword search, and `memory_search` includes the
+still indexes text for keyword search, including manual and background indexing
+before the first search. `memory_search` includes the
 redacted embedding-bootstrap reason in `debug.embeddingBootstrap` even when
 there are no matches.
 

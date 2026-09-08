@@ -3,35 +3,42 @@ import { prependSystemPromptAdditionAfterCacheBoundary } from "@openclaw/ai/inte
 import { Type } from "typebox";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { addSession, deleteSession } from "../../bash-process-registry.js";
+import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import { buildBootstrapBudgetState } from "../../bootstrap-budget.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 // Prompt assembly consumes a prepared provider handle; discovery belongs to attempt setup.
-vi.mock("../../../plugins/providers.runtime.js", () => {
+const providerRegistryMocks = vi.hoisted(() => {
   const rejectProviderDiscovery = () => {
     throw new Error("Prompt fixture unexpectedly discovered provider runtime");
   };
   return {
-    isPluginProvidersLoadInFlight: rejectProviderDiscovery,
-    resolvePluginProvidersCore: rejectProviderDiscovery,
+    isPluginProvidersLoadInFlight: vi.fn(rejectProviderDiscovery),
+    resolvePluginProvidersCore: vi.fn(rejectProviderDiscovery),
   };
 });
 
+vi.mock("../../../plugins/providers.runtime-core.js", () => ({
+  createProviderRegistryResolver: () => providerRegistryMocks,
+}));
+
 let buildAttemptSystemPrompt: typeof import("./attempt-system-prompt.js").buildAttemptSystemPrompt;
 let prepareEmbeddedAttemptSystemPrompt: typeof import("./attempt-system-prompt-prepare.js").prepareEmbeddedAttemptSystemPrompt;
-let providerRuntime: typeof import("../../../plugins/providers.runtime.js");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeAll(async () => {
   ({ buildAttemptSystemPrompt } = await import("./attempt-system-prompt.js"));
   ({ prepareEmbeddedAttemptSystemPrompt } = await import("./attempt-system-prompt-prepare.js"));
-  providerRuntime = await import("../../../plugins/providers.runtime.js");
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
+  providerRegistryMocks.isPluginProvidersLoadInFlight.mockClear();
+  providerRegistryMocks.resolvePluginProvidersCore.mockClear();
 });
 
 const baseProviderTransform = {
@@ -51,6 +58,8 @@ const transformProviderSystemPrompt: Parameters<
 async function preparePermissionPrompt(
   isRawModelRun = false,
   thinkLevel?: EmbeddedRunAttemptParams["thinkLevel"],
+  requireExplicitMessageTarget?: boolean,
+  session?: Pick<EmbeddedRunAttemptParams, "sessionKey" | "sandboxSessionKey">,
 ) {
   const tool = (name: string): AgentTool => ({
     name,
@@ -62,7 +71,13 @@ async function preparePermissionPrompt(
   const read = tool("read");
   const write = tool("write");
   const exec = tool("exec");
-  const tools = [read, write, exec];
+  const tools = [
+    read,
+    write,
+    exec,
+    ...(session ? [tool("process")] : []),
+    ...(requireExplicitMessageTarget === undefined ? [] : [tool("message")]),
+  ];
   const attempt = {
     provider: "openai",
     modelId: "gpt-5.6-luna",
@@ -76,9 +91,12 @@ async function preparePermissionPrompt(
     promptMode: "full",
     sessionId: "permission-prompt",
     sessionKey: "agent:main:permission-prompt",
+    ...session,
     workspaceDir: "/tmp/openclaw",
     config: {},
     thinkLevel,
+    sourceReplyDeliveryMode:
+      requireExplicitMessageTarget === undefined ? undefined : "message_tool_only",
   } as EmbeddedRunAttemptParams;
   const capabilityToolNames = new Set(tools.map(({ name }) => name));
   const prepared = await prepareEmbeddedAttemptSystemPrompt({
@@ -93,16 +111,20 @@ async function preparePermissionPrompt(
       workspaceNotes: [],
     },
     capabilityToolNames,
-    effectiveCwd: "/tmp/openclaw",
+    requireExplicitMessageTarget,
     effectiveTools: tools,
-    effectiveWorkspace: "/tmp/openclaw",
-    getProviderRuntimeHandle: () => ({ provider: attempt.provider, modelId: attempt.modelId }),
+    setup: createAttemptSetupFixture({
+      effectiveCwd: "/tmp/openclaw",
+      effectiveWorkspace: "/tmp/openclaw",
+      getProviderRuntimeHandle: () => ({
+        provider: attempt.provider,
+        modelId: attempt.modelId,
+        prepared: true,
+      }),
+      sandboxSessionKey: attempt.sandboxSessionKey ?? attempt.sessionKey ?? attempt.sessionId,
+    }),
     isRawModelRun,
-    markStage: vi.fn(),
     modelToolsEnabled: true,
-    proactiveSubagentOrchestration: false,
-    sandboxSessionKey: attempt.sessionKey!,
-    sessionAgentId: "main",
     skillsPrompt: "",
     toolSearchDirectoryEnabled: false,
     toolSearchRuntimeConfig: attempt.config,
@@ -122,6 +144,29 @@ async function preparePermissionPrompt(
 }
 
 describe("buildAttemptSystemPrompt", () => {
+  it.each([undefined, "agent:main:execution"])(
+    "shows only execution-owned processes with sessionKey=%s and borrowed policy",
+    async (sessionKey) => {
+      const owned = createProcessSessionFixture({ id: "execution-owned", backgrounded: true });
+      owned.scopeKey = sessionKey ?? "permission-prompt";
+      const other = createProcessSessionFixture({ id: "policy-owned", backgrounded: true });
+      other.scopeKey = "agent:main:policy";
+      addSession(owned);
+      addSession(other);
+      try {
+        const { prepared } = await preparePermissionPrompt(false, undefined, undefined, {
+          sessionKey,
+          sandboxSessionKey: other.scopeKey,
+        });
+        expect(prepared.systemPromptText).toContain(owned.id);
+        expect(prepared.systemPromptText).not.toContain(other.id);
+      } finally {
+        deleteSession(owned.id);
+        deleteSession(other.id);
+      }
+    },
+  );
+
   it("keeps model instructions identical when only reasoning effort changes", async () => {
     const prompts = [];
     for (const effort of ["low", "high", "medium"] as const) {
@@ -138,7 +183,6 @@ describe("buildAttemptSystemPrompt", () => {
   ])(
     "reports the selected sandbox policy for a global attempt ($sandboxSessionKey)",
     async (testCase) => {
-      const providerDiscovery = vi.spyOn(providerRuntime, "resolvePluginProvidersCore");
       const workspaceDir = tempDirs.make("openclaw-global-system-prompt-");
       const config = {
         agents: {
@@ -169,18 +213,21 @@ describe("buildAttemptSystemPrompt", () => {
         } as never,
         activeContextEngine: undefined,
         capabilityToolNames: new Set(),
-        effectiveCwd: workspaceDir,
         effectiveTools: [],
-        effectiveWorkspace: workspaceDir,
-        // Attempt setup binds even an absent provider plugin to the selected model.
-        // Omitting that binding makes this policy test rediscover runtime plugins.
-        getProviderRuntimeHandle: () => ({ provider: attempt.provider, modelId: attempt.modelId }),
+        setup: createAttemptSetupFixture({
+          effectiveCwd: workspaceDir,
+          effectiveWorkspace: workspaceDir,
+          // Preserve the prepared model binding instead of discovering provider plugins.
+          getProviderRuntimeHandle: () => ({
+            provider: attempt.provider,
+            modelId: attempt.modelId,
+            prepared: true,
+          }),
+          sandboxSessionKey: testCase.sandboxSessionKey,
+          sessionAgentId: "marketing",
+        }),
         isRawModelRun: true,
-        markStage: vi.fn(),
         modelToolsEnabled: false,
-        proactiveSubagentOrchestration: false,
-        sandboxSessionKey: testCase.sandboxSessionKey,
-        sessionAgentId: "marketing",
         skillsPrompt: "",
         toolSearchDirectoryEnabled: false,
         toolSearchRuntimeConfig: config,
@@ -190,7 +237,7 @@ describe("buildAttemptSystemPrompt", () => {
         mode: testCase.mode,
         sandboxed: testCase.sandboxed,
       });
-      expect(providerDiscovery).not.toHaveBeenCalled();
+      expect(providerRegistryMocks.resolvePluginProvidersCore).not.toHaveBeenCalled();
     },
   );
   it("replaces an intermediate permission prompt after later changes", async () => {
@@ -257,10 +304,11 @@ describe("buildAttemptSystemPrompt", () => {
   it("does not invoke ambient contributors during settled finalization", async () => {
     const getProviderRuntimeHandle = vi.fn();
     const markStage = vi.fn();
+    const setup = createAttemptSetupFixture({ getProviderRuntimeHandle });
+    setup.prepStages.mark = markStage;
     const result = await prepareEmbeddedAttemptSystemPrompt({
       attempt: { operation: "settled-tool-finalization" },
-      getProviderRuntimeHandle,
-      markStage,
+      setup,
     } as never);
 
     expect(result.systemPromptText).toBe("");
@@ -475,4 +523,16 @@ describe("buildAttemptSystemPrompt", () => {
     expect(result.baseSystemPrompt).toContain("BOOTSTRAP.md below; follow before normal reply.");
     expect(result.systemPrompt).toBe("");
   });
+});
+
+describe("embedded prepared message-target guidance", () => {
+  it.each([false, true])(
+    "carries the prepared target requirement (%s) through prompt assembly",
+    async (required) => {
+      const { prepared } = await preparePermissionPrompt(false, undefined, required);
+      expect(prepared.systemPromptText).toContain(
+        required ? "target required this turn" : "current source is default target",
+      );
+    },
+  );
 });

@@ -83,6 +83,10 @@ Agent-turn jobs default to the creating conversation when session context is ava
   </Accordion>
 </AccordionGroup>
 
+Removing an isolated automation stops future runs and cleans up its reusable session after active work stops. The JSON removal response includes `sessionCleanup: "pending"` while that cleanup is deferred. Run history is retained.
+
+If session cleanup fails, the error is logged. A removal with no active run also returns the cleanup error to the caller. Use `openclaw sessions list --json` to find the remaining session, then `openclaw sessions delete <key> --yes` to retry cleanup after the Gateway or worker recovers.
+
 ## Delivery
 
 `openclaw automations add`, `openclaw automations list`, and `openclaw automations show <job-id>` preview the resolved delivery route. For `channel: "last"`, the preview shows whether the route resolved from the main or current session, or will fail closed.
@@ -157,6 +161,8 @@ For isolated jobs that target a local configured model provider (base URL on loo
 Automation jobs, pending runtime state, and run history live in the shared SQLite state database. Legacy `jobs.json`, `<name>-state.json`, and `runs/*.jsonl` files are imported once and renamed with a `.migrated` suffix. After import, edit schedules with `openclaw automations add|edit|remove` instead of editing JSON files.
 
 ### Manual runs
+
+Manually running a disabled job does not enable its schedule or create automatic retries. Use `openclaw automations enable <job-id>` to resume scheduled runs.
 
 `openclaw automations run <job-id>` force-runs by default and returns as soon as the manual run is queued. Successful responses include `{ ok: true, enqueued: true, runId }`. Use the returned `runId` to inspect the later result:
 

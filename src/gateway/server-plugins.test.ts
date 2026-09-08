@@ -281,7 +281,11 @@ function createTestLog() {
 }
 
 function createTestContext(label: string): GatewayRequestContext {
-  return bindTestAgentTurns({ label } as unknown as GatewayRequestContext);
+  const config = {};
+  return bindTestAgentTurns({
+    label,
+    getRuntimeConfig: () => config,
+  } as unknown as GatewayRequestContext);
 }
 
 function bindTestAgentTurns(context: GatewayRequestContext): GatewayRequestContext {

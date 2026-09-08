@@ -1,5 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { shouldPreferProviderRuntimeResolvedModel } from "../../plugins/provider-runtime.js";
+import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import {
   resolveProviderModelMaterializationAuthMode,
   resolveProviderModelRouteAuthRequirement,
@@ -151,14 +153,46 @@ export function hasPreparedAuthAttemptModelMetadata(params: {
   );
 }
 
+const ROUTE_MODEL_MEMO_MAX_ENTRIES = 64;
+
+// Plans are fresh objects each turn; only their model-selection facts are reusable.
+function routeModelMemoKey(
+  plan: AgentRuntimeAuthPlan,
+  params: {
+    provider: string;
+    modelId: string;
+    requestedProfileId?: string;
+    providerUsesProfileScopedModelMetadata: boolean;
+  },
+): string {
+  const route = plan.modelRoute;
+  return JSON.stringify([
+    params.provider,
+    params.modelId,
+    plan.forwardedAuthProfileId ?? "",
+    plan.selectedAuthMode ?? "",
+    route?.api ?? "",
+    route?.baseUrl ?? "",
+    route?.authRequirement ?? "",
+    params.requestedProfileId?.trim() ?? "",
+    params.providerUsesProfileScopedModelMetadata,
+  ]);
+}
+
 export function createPreparedRuntimeModelMaterializer<Model extends RuntimeRouteModel>(params: {
   provider: string;
   modelId: string;
   config?: OpenClawConfig;
+  workspaceDir?: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
   getModel(): Model;
   nativeModelOwned: boolean;
   requestedProfileId?: string;
   providerUsesProfileScopedModelMetadata: boolean;
+  /** Dynamic preparation owns its refresh cadence and must run on every turn. */
+  providerOwnsDynamicModelRefresh?: boolean;
+  /** Optional generation-owned memo; omit to keep run-local caching only. */
+  generationRouteModelMemo?: Map<string, Promise<Model>>;
   resolveModel(request: {
     config: OpenClawConfig;
     authProfileId?: string;
@@ -182,6 +216,8 @@ export function createPreparedRuntimeModelMaterializer<Model extends RuntimeRout
         provider: params.provider,
         modelId: params.modelId,
         config: params.config,
+        workspaceDir: params.workspaceDir,
+        metadataSnapshot: params.metadataSnapshot,
         model,
         // Credential-scoped providers must replace metadata whenever the
         // prepared profile or direct auth source changes.
@@ -197,17 +233,47 @@ export function createPreparedRuntimeModelMaterializer<Model extends RuntimeRout
     );
   };
   const materialize = (plan: AgentRuntimeAuthPlan): Promise<Model> => {
-    if (!plan.modelRoute) {
+    // Only resolver output can cross turns. Native-owned and unchanged base
+    // models belong to their individual run, while dynamic hooks own refresh.
+    const willResolve = shouldForceCredentialScopedModelResolve(
+      plan,
+      params.requestedProfileId,
+      params.providerUsesProfileScopedModelMetadata,
+    );
+    const memo =
+      params.nativeModelOwned || !willResolve || params.providerOwnsDynamicModelRefresh
+        ? undefined
+        : params.generationRouteModelMemo;
+    if (!plan.modelRoute && !memo) {
       return materializeUncached(plan);
     }
-    const cached = materializedRouteModels.get(plan);
-    if (cached) {
-      return cached;
+    if (plan.modelRoute) {
+      const cached = materializedRouteModels.get(plan);
+      if (cached) {
+        return cached;
+      }
     }
-    // Prepared plans are immutable within one run. Carry their exact model
-    // tuple into auth initialization instead of repeating provider discovery.
-    const materialized = materializeUncached(plan);
-    materializedRouteModels.set(plan, materialized);
+    const materialized = memo
+      ? getOrCreatePromise(
+          memo,
+          routeModelMemoKey(plan, params),
+          () => {
+            // FIFO bounds retained metadata for a long-lived generation. The
+            // shared promise helper evicts only its own rejection, even after churn.
+            if (memo.size >= ROUTE_MODEL_MEMO_MAX_ENTRIES) {
+              const oldest = memo.keys().next().value;
+              if (oldest !== undefined) {
+                memo.delete(oldest);
+              }
+            }
+            return materializeUncached(plan);
+          },
+          { cacheRejections: false },
+        )
+      : materializeUncached(plan);
+    if (plan.modelRoute) {
+      materializedRouteModels.set(plan, materialized);
+    }
     return materialized;
   };
   return { materialize, materializeUncached };

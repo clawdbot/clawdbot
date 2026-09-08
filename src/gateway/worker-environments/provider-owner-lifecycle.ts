@@ -215,6 +215,7 @@ export function createWorkerProviderOwnerLifecycle(
     destroyOptions: {
       requireUnattached?: boolean;
       abandonment?: WorkerEnvironmentAbandonment;
+      retryRequested?: boolean;
     } = {},
   ) => {
     const stopping = options.isStopping();
@@ -254,6 +255,14 @@ export function createWorkerProviderOwnerLifecycle(
         throw serviceError(
           "invalid_state",
           "Attached cloud workers must be stopped through sessions.reclaim",
+        );
+      }
+      // Environment reconciliation owns retries of accepted cleanup. A background
+      // placement projection must not replay its failed provider call or claim success.
+      if (destroyOptions.retryRequested === false && record.destroyRequestedAtMs !== null) {
+        throw serviceError(
+          "invalid_state",
+          `Worker environment cleanup is still pending: ${record.lastError ?? record.state}`,
         );
       }
       record = store.requestDestroy({

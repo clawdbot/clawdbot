@@ -130,6 +130,7 @@ export type PluginManifestRecord = {
   configSchema?: Record<string, unknown>;
   configUiHints?: Record<string, PluginConfigUiHint>;
   contracts?: PluginManifestContracts;
+  transcriptSources?: PluginManifest["transcriptSources"];
   mediaUnderstandingProviderMetadata?: Record<
     string,
     PluginManifestMediaUnderstandingProviderMetadata

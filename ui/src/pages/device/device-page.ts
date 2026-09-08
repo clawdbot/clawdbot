@@ -4,6 +4,7 @@ import { state } from "lit/decorators.js";
 import { live } from "lit/directives/live.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import type {
+  NativeChromeExtensionSetupResult,
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
   SettingKey,
@@ -67,6 +68,9 @@ class DevicePage extends OpenClawLightDomElement {
   private context!: ApplicationContext;
 
   @state() private newDomain = "";
+  @state() private extensionSetupRunning = false;
+  @state() private extensionSetupResult: NativeChromeExtensionSetupResult | null = null;
+  @state() private extensionSetupFailed = false;
   private targetProfileTimer: {
     capability: NativeDeviceSettingsCapability;
     timer: ReturnType<typeof setTimeout>;
@@ -171,6 +175,52 @@ class DevicePage extends OpenClawLightDomElement {
       this.newDomain = "";
     };
     return html`
+      ${renderSettingsSection(
+        { title: t("configPage.deviceSettings.chromeExtension") },
+        renderSettingsRow({
+          title: t("configPage.deviceSettings.chromeExtensionSetup"),
+          description: t("configPage.deviceSettings.chromeExtensionHint"),
+          stacked: true,
+          control: html`
+            <div class="device-extension-setup">
+              <div class="device-extension-setup__actions">
+                <button
+                  type="button"
+                  class="btn"
+                  ?disabled=${this.extensionSetupRunning}
+                  @click=${() => this.installChromeExtension()}
+                >
+                  ${t(this.extensionSetupRunning ? "configPage.deviceSettings.chromeExtensionPreparing" : "configPage.deviceSettings.chromeExtensionSetup")}
+                </button>
+                <a
+                  href="https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  >${t("appsPage.ctaChromeWebStore")}</a
+                >
+                ${renderLearnMoreLink("https://docs.openclaw.ai/tools/chrome-extension")}
+              </div>
+              <p role="status">
+                ${
+                  this.extensionSetupFailed
+                    ? t("configPage.deviceSettings.chromeExtensionFailed")
+                    : this.extensionSetupResult
+                      ? t(
+                          this.extensionSetupResult.nativeHostRegistered
+                            ? this.extensionSetupResult.discoveredProfiles > 0
+                              ? "configPage.deviceSettings.chromeExtensionInstalled"
+                              : this.extensionSetupResult.installRequested
+                                ? "configPage.deviceSettings.chromeExtensionPending"
+                                : "configPage.deviceSettings.chromeExtensionStoreRequired"
+                            : "configPage.deviceSettings.chromeExtensionFailed",
+                        )
+                      : nothing
+                }
+              </p>
+            </div>
+          `,
+        }),
+      )}
       ${
         snapshot.browser.importAvailable || !sync.available
           ? renderSettingsSection(
@@ -292,6 +342,28 @@ class DevicePage extends OpenClawLightDomElement {
           : nothing
       }
     `;
+  }
+
+  private async installChromeExtension() {
+    const capability = this.context.nativeDeviceSettings;
+    if (!capability || this.extensionSetupRunning) {
+      return;
+    }
+    this.extensionSetupRunning = true;
+    this.extensionSetupFailed = false;
+    this.extensionSetupResult = null;
+    try {
+      const result = await capability.installChromeExtension();
+      if (this.isConnected && this.context.nativeDeviceSettings === capability) {
+        this.extensionSetupResult = result;
+      }
+    } catch {
+      if (this.isConnected && this.context.nativeDeviceSettings === capability) {
+        this.extensionSetupFailed = true;
+      }
+    } finally {
+      this.extensionSetupRunning = false;
+    }
   }
 
   private renderSettings(snapshot: NativeDeviceSettingsSnapshot) {

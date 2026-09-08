@@ -151,10 +151,11 @@ describe("ensurePluginRegistryLoaded", () => {
   });
 
   it("loads configured channel owners through the canonical root loader", () => {
+    const env = { HOME: "/tmp/openclaw-home" };
     const config = { channels: { demo: { enabled: true } } };
     mocks.resolveConfiguredChannelPluginIds.mockReturnValue(["demo-channel"]);
 
-    ensurePluginRegistryLoaded({ scope: "configured-channels", config: config as never });
+    ensurePluginRegistryLoaded({ scope: "configured-channels", config: config as never, env });
 
     expect(mocks.resolveConfiguredChannelPluginIds).toHaveBeenCalledWith(
       expect.objectContaining({ config, workspaceDir: "/resolved-workspace" }),
@@ -177,14 +178,15 @@ describe("ensurePluginRegistryLoaded", () => {
   });
 
   it("loads effective plugin ids for the all scope", () => {
+    const env = { HOME: "/tmp/openclaw-home" };
     const config = { plugins: { enabled: true } };
     mocks.resolveEffectivePluginIds.mockReturnValue(["demo", "memory-core"]);
 
-    ensurePluginRegistryLoaded({ scope: "all", config });
+    ensurePluginRegistryLoaded({ scope: "all", config, env });
 
     expect(mocks.resolveEffectivePluginIds).toHaveBeenCalledWith({
       config,
-      env: process.env,
+      env,
       workspaceDir: "/resolved-workspace",
     });
     expect(requireLoadOptions()).toEqual(
@@ -311,6 +313,7 @@ describe("ensurePluginRegistryLoaded", () => {
   });
 
   it("loads only the selected memory backend and embedding provider owners", () => {
+    const env = { HOME: "/tmp/openclaw-home" };
     const config = {
       memory: { search: { provider: "openai" } },
       plugins: {
@@ -321,7 +324,7 @@ describe("ensurePluginRegistryLoaded", () => {
     };
     mocks.collectConfiguredMemoryEmbeddingProviderIds.mockReturnValue(new Set(["openai"]));
 
-    ensurePluginRegistryLoaded({ scope: "memory", config });
+    ensurePluginRegistryLoaded({ scope: "memory", config, env });
 
     expect(mocks.collectConfiguredMemoryEmbeddingProviderIds).toHaveBeenCalledWith(config);
     expect(requireLoadOptions()).toEqual(

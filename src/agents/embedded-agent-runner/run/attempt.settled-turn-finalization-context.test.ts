@@ -67,6 +67,11 @@ describe("settled post-tool turn finalization context", () => {
   it.each([
     { kind: "transient", error: transientFinalCallFailure(), captures: true },
     { kind: "non-transient", error: new Error("invalid api key"), captures: false },
+    {
+      kind: "incomplete-completions-stream",
+      error: new Error("Stream ended without finish_reason"),
+      captures: true,
+    },
   ])("$kind final provider failure captures context=$captures", async ({ error, captures }) => {
     const result = await runSettledTurnWithFailedFinalCall(
       "agent:main:telegram:direct:settled",

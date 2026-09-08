@@ -18,7 +18,7 @@ Talk mode covers these runtime shapes:
 
 Native Talk is a continuous loop: listen for speech, send the transcript to the model through the active session, wait for the response, then speak it via the configured Talk provider (`talk.speak`).
 
-Apple Watch also retains **Talk to Claw**, the separate [one-turn companion flow](/platforms/ios#talk-to-claw-with-the-iphone): native dictation, text relayed through the iPhone, and system-voice readback. **Talk on Watch** is the separately enabled realtime path; see [standalone voice setup](/platforms/ios#standalone-voice).
+Apple Watch also retains **Talk to Claw**, the separate [one-turn companion flow](/platforms/ios#talk-to-claw-with-the-iphone): native dictation, text relayed through the iPhone, and system-voice readback. **Talk on Watch** is the realtime path included in normal Watch setup; see [standalone voice setup](/platforms/ios#standalone-voice).
 
 ## Choose a Talk voice from chat
 
@@ -446,8 +446,9 @@ to waitlist-enabled Platform access.
 
 ## Apple Watch UI
 
-Tap **Enable Standalone Voice** in iPhone **Settings → Apple Watch**, then open
-**Talk on Watch** and tap **Start**. The Watch asks you to choose an agent when
+Tap **Connect Apple Watch** in iPhone **Settings → Apple Watch**, then open
+**Talk on Watch** and tap **Start**. Voice is included without a separate enable
+setting; setup alone does not activate the microphone. The Watch asks you to choose an agent when
 more than one is available, creates a separate chat for the call, and shows
 the latest speech transcripts with **Mute** and **End** controls. It does not run
 the agent or stock Codex runtime locally.

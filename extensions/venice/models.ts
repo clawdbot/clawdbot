@@ -161,6 +161,6 @@ function projectVeniceModels(
 export const VENICE_MODEL_DISCOVERY_OPTIONS = {
   timeoutMs: VENICE_DISCOVERY_TIMEOUT_MS,
   ttlMs: VENICE_DISCOVERY_CACHE_TTL_MS,
-  buildRequestHeaders: () => ({ Accept: "application/json" }),
+  authentication: "none",
   projectRows: projectVeniceModels,
 } as const;

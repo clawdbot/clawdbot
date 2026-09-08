@@ -304,6 +304,106 @@ describe("discord components", () => {
     ).toThrow("components.modal.fields[0].minValues/maxValues");
   });
 
+  it.each([
+    {
+      label: "top-level text",
+      raw: { text: "    body  " },
+      expected: [{ type: 10, content: "    body  " }],
+    },
+    {
+      label: "text block",
+      raw: { blocks: [{ type: "text", text: "    body  " }] },
+      expected: [{ type: 10, content: "    body  " }],
+    },
+    {
+      label: "section text",
+      raw: {
+        blocks: [
+          {
+            type: "section",
+            text: "    body  ",
+            accessory: {
+              type: "button",
+              button: { label: " Read ", style: "link", url: "https://example.com" },
+            },
+          },
+        ],
+      },
+      expected: [
+        {
+          type: 9,
+          components: [{ type: 10, content: "    body  " }],
+          accessory: { label: "Read" },
+        },
+      ],
+    },
+    {
+      label: "section texts",
+      raw: {
+        blocks: [
+          {
+            type: "section",
+            texts: ["    first  ", "    second  "],
+            accessory: {
+              type: "button",
+              button: { label: " Read ", style: "link", url: "https://example.com" },
+            },
+          },
+        ],
+      },
+      expected: [
+        {
+          type: 9,
+          components: [
+            { type: 10, content: "    first  " },
+            { type: 10, content: "    second  " },
+          ],
+          accessory: { label: "Read" },
+        },
+      ],
+    },
+  ])("preserves $label whitespace through parsing and serialization", ({ raw, expected }) => {
+    const spec = readDiscordComponentSpec(raw);
+    if (!spec) {
+      throw new Error("Expected component spec to be parsed");
+    }
+    expect(buildDiscordComponentMessage({ spec }).components[0]?.serialize()).toMatchObject({
+      type: 17,
+      components: expected,
+    });
+  });
+
+  it.each([
+    {
+      raw: { blocks: [{ type: "text", text: " \n\t " }] },
+      error: "components.blocks[0].text cannot be empty",
+    },
+    {
+      raw: { blocks: [{ type: "text", text: 1 }] },
+      error: "components.blocks[0].text must be a string",
+    },
+    {
+      raw: { blocks: [{ type: "section", texts: [" \n\t "] }] },
+      error: "components.blocks[0].texts[0] cannot be empty",
+    },
+  ])("retains required component body validation: $error", ({ raw, error }) => {
+    expect(() => readDiscordComponentSpec(raw)).toThrow(error);
+  });
+
+  it("keeps optional blank component text absent", () => {
+    const spec = readDiscordComponentSpec({
+      text: " \n\t ",
+      blocks: [{ type: "text", text: "fallback" }],
+    });
+    if (!spec) {
+      throw new Error("Expected component spec to be parsed");
+    }
+    expect(buildDiscordComponentMessage({ spec }).components[0]?.serialize()).toMatchObject({
+      type: 17,
+      components: [{ type: 10, content: "fallback" }],
+    });
+  });
+
   it("parses stringified component specs from MCP object transports", () => {
     const raw = JSON.stringify({ blocks: [{ type: "text", text: "Choose" }] });
 

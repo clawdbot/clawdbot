@@ -5,6 +5,7 @@ import type {
   QuestionWaitAnswerResult,
 } from "../../../packages/gateway-protocol/src/schema/questions.js";
 import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import {
@@ -109,11 +110,12 @@ function isTerminalAgentQuestionError(error: unknown): boolean {
 type QuestionInputAuthority = { kind: "run" | "source-bound"; assertCurrent: () => void };
 
 /** One reservation owns both dispatch refusal and the prompt's release notification. */
-function reserveQuestionInput(
-  state: PendingAgentGatewayQuestion,
-  authority?: QuestionInputAuthority,
-) {
-  if (authority?.kind === "source-bound" && !state.supportsSourceBound) {
+function reserveQuestionInput(state: PendingAgentQuestion, authority?: QuestionInputAuthority) {
+  if (
+    state.kind === "gateway" &&
+    authority?.kind === "source-bound" &&
+    !state.supportsSourceBound
+  ) {
     throw new QuestionDispatchRefusedError(
       "source-bound question input requires the default or a version 2 dispatcher",
     );
@@ -137,29 +139,34 @@ function reserveQuestionInput(
   };
   assertCurrent();
   state.resolving = true;
-  let finish!: () => void;
-  state.resolution = new Promise<void>((resolve) => {
-    finish = resolve;
-  });
+  let finish: (() => void) | undefined;
+  if (state.kind === "gateway") {
+    state.resolution = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+  }
   return {
     assertCurrent,
     wasRefused: () => refused,
-    extra: state.supportsSourceBound
-      ? {
-          dispatchAuthority: {
-            version: 2 as const,
-            kind: authority?.kind ?? ("run" as const),
-            assertCurrent,
-          },
-        }
-      : undefined,
+    extra:
+      state.kind === "gateway" && state.supportsSourceBound
+        ? {
+            dispatchAuthority: {
+              version: 2 as const,
+              kind: authority?.kind ?? ("run" as const),
+              assertCurrent,
+            },
+          }
+        : undefined,
     finish: (consumed: boolean) => {
       state.resolving = consumed;
-      if (!consumed) {
-        state.cancelRequested = false;
+      if (state.kind === "gateway") {
+        if (!consumed) {
+          state.cancelRequested = false;
+        }
+        state.resolution = undefined;
       }
-      state.resolution = undefined;
-      finish();
+      finish?.();
     },
   };
 }
@@ -245,6 +252,7 @@ export async function claimPendingAgentQuestionAnswerFromCaller(params: {
   sessionKey?: string;
   text: string;
   persist?: () => Promise<void>;
+  sourceRecorder?: UserTurnTranscriptRecorder;
   caller: ReplyToolAuthorityOverlay;
   assertSourceCurrent: () => void;
 }): Promise<boolean> {
@@ -253,6 +261,7 @@ export async function claimPendingAgentQuestionAnswerFromCaller(params: {
     sessionKey: params.sessionKey,
     text: params.text,
     persist: params.persist,
+    sourceRecorder: params.sourceRecorder,
     authority: {
       kind: "source-bound",
       assertCurrent: () => {
@@ -284,6 +293,7 @@ export async function claimPendingAgentQuestionAnswer(params: {
   sessionKey?: string;
   text: string;
   persist?: () => Promise<void>;
+  sourceRecorder?: UserTurnTranscriptRecorder;
   authority?: QuestionInputAuthority;
 }): Promise<boolean> {
   const sessionKey = params.sessionKey?.trim();
@@ -292,16 +302,13 @@ export async function claimPendingAgentQuestionAnswer(params: {
     return false;
   }
   params.authority?.assertCurrent();
-  if (state.kind === "secret") {
-    state.answerAuthority?.assertActive();
-    state.resolving = true;
-    return state.settle(params.text);
-  }
+  const sourceRecorder = params.sourceRecorder;
+  const stagedSource = sourceRecorder?.getPendingInputMessage?.() !== undefined;
   const reservation = reserveQuestionInput(state, params.authority);
   let consumed = false;
   let retainReservation = false;
   try {
-    if (!state.answer) {
+    if (state.kind === "gateway" && !state.answer) {
       // Both registration owners attach the answer before this continuation.
       // Failed registration leaves this input available for ordinary steering.
       try {
@@ -314,8 +321,32 @@ export async function claimPendingAgentQuestionAnswer(params: {
       }
     }
     reservation.assertCurrent();
-    await params.persist?.();
+    // Secret answers never create transcript custody. Only commit source bytes
+    // the caller already staged; ordinary callbacks retain their shipped behavior.
+    if (state.kind !== "secret" || stagedSource) {
+      if (sourceRecorder) {
+        try {
+          await sourceRecorder.persistApproved();
+          if (stagedSource && !sourceRecorder.hasPersisted()) {
+            throw new Error("staged question source was not committed");
+          }
+        } catch (error) {
+          if (stagedSource) {
+            throw new QuestionDispatchRefusedError("Question answer source was not persisted", {
+              cause: error,
+            });
+          }
+          throw error;
+        }
+      } else {
+        await params.persist?.();
+      }
+    }
     reservation.assertCurrent();
+    if (state.kind === "secret") {
+      consumed = state.settle(params.text);
+      return consumed;
+    }
     const parsed = buildAgentHarnessUserInputAnswers(state.questions, params.text);
     const answers: QuestionAnswers = {
       answers: Object.fromEntries(

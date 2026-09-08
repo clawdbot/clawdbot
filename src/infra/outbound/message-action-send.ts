@@ -110,7 +110,7 @@ export async function buildMessagePayload(params: {
     typeof rawLocation === "string" && normalizeOptionalString(rawLocation) === undefined
       ? undefined
       : normalizeOutboundLocation(rawLocation);
-  const caption = readToolStringParam(actionParams, "caption", { allowEmpty: true }) ?? "";
+  const caption = readToolStringParam(actionParams, "caption", { trim: false }) ?? "";
   const voiceText = readToolStringParam(actionParams, "voiceText");
   const voiceProvider = readToolStringParam(actionParams, "voiceProvider");
   const voiceId = readToolStringParam(actionParams, "voiceId");
@@ -118,12 +118,13 @@ export async function buildMessagePayload(params: {
     readToolStringParam(actionParams, "message", {
       required: !hasMediaHint && !hasPresentation && !hasInteractive && !location && !voiceText,
       allowEmpty: true,
+      trim: false,
     }) ?? "";
   if (message.includes("\\n")) {
     message = message.replaceAll("\\n", "\n");
   }
-  if (!message.trim() && caption.trim()) {
-    message = caption;
+  if (!message.trim()) {
+    message = caption.trim() ? caption : "";
   }
 
   const parsed = parseInlineDirectives(message, {

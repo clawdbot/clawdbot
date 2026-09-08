@@ -80,7 +80,8 @@ describe("Telegram live QA scenario gate", () => {
 
   beforeEach(() => {
     previousExitCode = process.exitCode;
-    process.exitCode = undefined;
+    // Bun does not clear a previous failure when assigned undefined.
+    process.exitCode = 0;
     vi.clearAllMocks();
     delete process.env[SUT_COMMAND_ENV];
     tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-qa-telegram-gate-"));
@@ -94,7 +95,7 @@ describe("Telegram live QA scenario gate", () => {
   });
 
   afterEach(() => {
-    process.exitCode = previousExitCode;
+    process.exitCode = previousExitCode ?? 0;
     rmSync(tempRoot, { force: true, recursive: true });
   });
 
@@ -128,7 +129,7 @@ describe("Telegram live QA scenario gate", () => {
       providerMode: "mock-openai",
     });
 
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
   });
 
   it("permits genuinely executed failed scenarios when failures are explicitly allowed", async () => {
@@ -139,7 +140,7 @@ describe("Telegram live QA scenario gate", () => {
       allowFailures: true,
     });
 
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
   });
 
   it.each([
@@ -176,7 +177,7 @@ describe("Telegram live QA scenario gate", () => {
           allowFailures: true,
         }),
       ).rejects.toThrow(expected);
-      expect(process.exitCode).toBeUndefined();
+      expect(process.exitCode).toBe(0);
     },
   );
 

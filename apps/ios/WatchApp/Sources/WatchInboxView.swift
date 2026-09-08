@@ -381,7 +381,7 @@ private struct WatchControlSurfaceView: View {
             WatchDetailText(
                 text: .verbatim(String(localized: """
                 Direct mode supports device info, status, and notifications. \
-                Set up standalone voice on iPhone to use Talk on Watch. \
+                Voice is included when you connect from iPhone Settings → Apple Watch. \
                 Chat and approvals still use the iPhone.
                 """)))
 

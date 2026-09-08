@@ -6,6 +6,7 @@ import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js
 import type { ClawCronGateway } from "./cron.js";
 import type { ConfigCommit } from "./lifecycle-config-removal.js";
 import type { ClawTrashPath, RemovedWorkspaceFile } from "./lifecycle-delete-support.js";
+import type { ClawMonitorCleanupGateway } from "./monitor-cleanup-contract.js";
 import type {
   ClawPackageRemovalResult,
   ClawReferencedCleanup,
@@ -70,6 +71,7 @@ export type ClawRemovePlanOptions = OpenClawStateDatabaseOptions & {
   listMcpServers?: typeof listConfiguredMcpServers;
   packageDeps?: PackageRemovalDeps;
   referencedCleanup?: ClawReferencedCleanup;
+  monitorGateway?: ClawMonitorCleanupGateway;
 };
 
 export type ClawRemoveApplyOptions = ClawRemovePlanOptions & {

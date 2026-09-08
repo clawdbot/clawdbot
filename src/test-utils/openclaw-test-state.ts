@@ -7,7 +7,7 @@ import {
   closeAuthProfileReadPool,
   resolveAuthProfileDatabasePath,
 } from "../agents/auth-profiles/sqlite.js";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import * as configRuntime from "../config/config.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../gateway/test-helpers.env.js";

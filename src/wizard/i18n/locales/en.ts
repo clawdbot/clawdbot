@@ -282,18 +282,13 @@ export const en = {
       websocketUrl: "Gateway WebSocket URL",
     },
     guided: {
-      quickstartSilentFailures:
-        "{count} detected option(s) did not respond; continuing with the verified route.",
       laneQuestion: "How would you like to start?",
       laneSecurityLine:
         "OpenClaw runs an AI agent with real access to this machine. Security guide: https://docs.openclaw.ai/gateway/security",
       laneQuickLabel: "Quick start (recommended)",
-      laneQuickHint: "Find AI access on this machine, verify it, then open the web dashboard.",
+      laneQuickHint: "Find AI access, choose a connection to verify, then open the web dashboard.",
       laneCustomLabel: "Custom setup",
       laneCustomHint: "Walk through every setup option.",
-      quickstartRoute: "Using {label}. You can change it later in the dashboard or setup wizard.",
-      quickstartManual:
-        'Quick start found no usable AI access. Continuing with manual provider setup; quick-start defaults are kept (agent "main", full access).',
       quickstartDashboard: "Dashboard: {url}",
       quickstartForeground: "Gateway is running in the foreground. Press Ctrl+C to stop.",
       quickstartBackground:
@@ -304,13 +299,13 @@ export const en = {
         "The browser handoff did not finish. The Gateway is still running; open the dashboard when you are ready.",
       quickstartGatewayPending:
         "The Gateway is not reachable yet. Keep this terminal open and run openclaw gateway status to check startup.",
-      accessFullHint: "Recommended. I look for AI apps and keys on this machine and test them.",
+      accessFullHint:
+        "I find AI apps and keys on this machine; you choose which connection to test.",
       accessFullLabel: "Full access — find everything automatically",
       accessGuardedHint: "I ask once before looking around, or you configure manually.",
       accessGuardedLabel: "Ask first — check with me before looking around",
       accessQuestion: "How should I set things up?",
       aiAccessTitle: "AI access",
-      apiKeyPrompt: "API key or token for {label}",
       appliedTitle: "Inference ready",
       alreadySetUp: "Everything's already set up here — your AI just passed a fresh check.",
       applyFailedFallback:
@@ -325,21 +320,14 @@ export const en = {
         "I can see {labels} on this machine — good taste. Once your AI works I can bring their memories along too.",
       controlUiPreparing: "Preparing the Control UI…",
       custodianIntro: "Hi — I'm OpenClaw. I keep this system running. Let's get you set up.",
-      failedOptionsIntro: "These didn't work just now:",
       findMeLater:
         "You can always find me later — run `openclaw` in a terminal, or open Settings in the dashboard.",
       hatchingNow: "Hatching your agent now…",
-      keepingCurrent: "Keeping the working AI you already have.",
       lookAroundManual: "No — I'll configure it manually",
       lookAroundQuestion: "May I look around to find your AI access?",
       lookAroundYes: "Yes, take a look",
-      routeConfirm: "Use {label}?",
-      routeOther: "See other options",
-      routeUse: "Continue with {label} — recommended",
       settingUp: "Setting up your workspace, gateway, and sessions…",
       setupDone: "Everything's in place.",
-      silentFailures:
-        '{count} detected option(s) didn\'t respond — details under "See other options".',
       complete: "OpenClaw is ready.",
       completeWithoutAi: "OpenClaw setup is saved. Connect AI before opening chat.",
       detected: "AI detection complete.",
@@ -348,7 +336,6 @@ export const en = {
       detectedGroupPrompt: "Use which detected AI?",
       detectedTitle: "AI found",
       detecting: "Looking for AI you already use…",
-      enterApiKey: "Enter API key — {label}",
       existingModelKept:
         "Your configured default model was kept unchanged. Choose how to continue below — retry it, connect another provider, or exit. The check runs outside your workspace, so a workspace-plugin model can fail here while still working in the agent.",
       escapeHatches: "For the full step-by-step wizard, run `openclaw onboard --classic`.",
@@ -378,14 +365,11 @@ export const en = {
       openChatNow: "Open the chat now?",
       recommendedSuffix: " — recommended",
       repliedIn: "AI check: replied in {seconds}s",
-      retryCandidate: "Retry {label} ({detail})",
       testFailed: "AI check failed.",
       testFailure: "✗ {label}: {reason}\n{detail}",
       testPassed: "AI check passed.",
-      unavailableTitle: "Detected but not auto-tested",
+      unavailableTitle: "Detected but unavailable",
       unavailableCandidate: "{label} — {detail}. {reason}",
-      testingCandidate: "Testing {label} ({modelRef}) — real completion, not a ping…",
-      testingManualProvider: "Testing {label} — real completion, not a ping…",
       tryCandidate: "Try {label} ({detail})",
       ttyRequired:
         "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.",

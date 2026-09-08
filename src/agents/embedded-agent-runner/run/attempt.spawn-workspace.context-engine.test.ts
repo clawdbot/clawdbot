@@ -2819,7 +2819,7 @@ describe("runEmbeddedAttempt context engine mid-turn precheck integration", () =
     expect(loopHookParams.midTurnPrecheck).toBeUndefined();
   });
 
-  it("recovers when the runtime persists the mid-turn precheck as an assistant error", async () => {
+  it("recovers when the runtime emits the mid-turn precheck as an assistant error", async () => {
     hoisted.installToolResultContextGuardMock.mockImplementation((...args: unknown[]) => {
       const params = args[0] as ToolResultGuardInstallParams;
       params.midTurnPrecheck?.onMidTurnPrecheck?.({

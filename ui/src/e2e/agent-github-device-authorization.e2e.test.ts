@@ -320,7 +320,7 @@ suite.define(() => {
       const section = page.locator("#settings-profile-github-connections");
       const signIn = page.locator("#settings-profile-identity");
       await expect(signIn).toContainText("@signin-octocat");
-      await section.getByRole("button", { name: "Connect GitHub", exact: true }).click();
+      await section.getByRole("button", { name: "Manage connections", exact: true }).click();
       await expect(section.getByRole("radio", { name: "For me", exact: true })).toBeChecked();
       await gateway.deferNext("users.github.authorize.start");
       await section.getByRole("button", { name: "Continue with GitHub" }).click();

@@ -1,4 +1,4 @@
-import type { Result } from "@openclaw/normalization-core/result";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { getRuntimeConfig } from "../config/config.js";
 import {
   appendSessionTranscriptReport,
@@ -13,6 +13,7 @@ import {
   WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
   WORKSPACE_RECOVERY_FAILURE_TRANSCRIPT_TYPE,
   type WorkerWorkspaceRecoveryFailureReport,
+  type WorkspaceResultConflictLookup,
 } from "./worker-environments/workspace-conflicts.js";
 
 export function createWorkerWorkspaceConflictTranscriptHandlers(
@@ -26,7 +27,7 @@ export function createWorkerWorkspaceConflictTranscriptHandlers(
     run: (target: SessionTranscriptWriteScope) => Promise<Result<T, unknown>>,
     missingMessage?: string,
     strictIdentity = false,
-  ): Promise<T | undefined> {
+  ): Promise<Result<T, "session-unavailable">> {
     const runtime = await loadSessionRuntime();
     const target = runtime.resolveGatewaySessionStoreTargetWithStore({
       cfg: getRuntimeConfig(),
@@ -35,11 +36,11 @@ export function createWorkerWorkspaceConflictTranscriptHandlers(
       clone: false,
       exactRead: true,
     });
-    const lostSession = () => {
+    const lostSession = (): Result<T, "session-unavailable"> => {
       if (missingMessage) {
         throw new Error(`${missingMessage} lost session ${identity.sessionId}`);
       }
-      return undefined;
+      return err("session-unavailable");
     };
     const entry = runtime.resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
     if (
@@ -55,7 +56,7 @@ export function createWorkerWorkspaceConflictTranscriptHandlers(
       sessionKey: target.canonicalKey,
       storePath: target.storePath,
     });
-    return result.ok ? result.value : lostSession();
+    return result.ok ? ok(result.value) : lostSession();
   }
 
   return {
@@ -63,15 +64,19 @@ export function createWorkerWorkspaceConflictTranscriptHandlers(
       sessionId: string;
       sessionKey: string;
       agentId: string;
-    }) => {
-      const transcriptEntry = await withWorkerTranscript(identity, (target) =>
+    }): Promise<WorkspaceResultConflictLookup> => {
+      const result = await withWorkerTranscript(identity, (target) =>
         readLatestSessionTranscriptReport(target, [
           WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
           WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
         ]),
       );
+      if (!result.ok) {
+        return { kind: "unknown", reason: result.error };
+      }
+      const transcriptEntry = result.value;
       if (transcriptEntry?.customType !== WORKSPACE_CONFLICT_TRANSCRIPT_TYPE) {
-        return undefined;
+        return { kind: "absent" };
       }
       const details = transcriptEntry.details as
         | { paths?: unknown; stagedResultRef?: unknown; totalCount?: unknown }
@@ -88,13 +93,16 @@ export function createWorkerWorkspaceConflictTranscriptHandlers(
             (details.totalCount as number) >= details.paths.length)) &&
         /^refs\/openclaw\/worker-results\/[A-Za-z0-9-]+$/u.test(details.stagedResultRef)
       ) {
-        return projectWorkspaceResultConflict(
-          details.paths,
-          details.stagedResultRef,
-          details.totalCount as number | undefined,
-        );
+        return {
+          kind: "conflict",
+          conflict: projectWorkspaceResultConflict(
+            details.paths,
+            details.stagedResultRef,
+            details.totalCount as number | undefined,
+          ),
+        };
       }
-      return undefined;
+      return { kind: "unknown", reason: "malformed-report" };
     },
     reportWorkspaceResultConflict: async (
       conflict: { sessionId: string; sessionKey: string; agentId: string } & (

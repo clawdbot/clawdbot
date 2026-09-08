@@ -14,6 +14,7 @@ import {
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
 import { dockChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const rosterMatch = { includeGlobal: true };
@@ -481,11 +482,7 @@ suite.define(() => {
   });
 
   it("opens current context and latest-run usage from the composer ring", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page, {
       historyMessages: [
@@ -576,11 +573,7 @@ suite.define(() => {
   });
 
   it("routes page typing to the active composer without stealing text input focus", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page, {
       historyMessages: [
@@ -623,11 +616,7 @@ suite.define(() => {
   });
 
   it("keeps stale context visible as approximate without warning", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page, {
       methodResponses: {
@@ -672,11 +661,7 @@ suite.define(() => {
   });
 
   it("keeps chat usable while sessions are still loading", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.list"],
@@ -718,11 +703,7 @@ suite.define(() => {
   });
 
   it("keeps every sidebar session stable while selecting sessions and supports sort modes", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const createdSessionKeys = Array.from(
       { length: 11 },
@@ -811,11 +792,7 @@ suite.define(() => {
   });
 
   it("releases a retained queued send after the canonical session list records idle", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const firstKey = "agent:main:thread:aaaaaaaa-1111-4111-8111-111111111111";
     const secondKey = "agent:main:thread:bbbbbbbb-2222-4222-8222-222222222222";
@@ -948,11 +925,7 @@ suite.define(() => {
   });
 
   it("keeps derived sidebar titles and accessible state after session patch refreshes", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const initialKey = "agent:main:session-a";
     const key = "agent:main:session-b";

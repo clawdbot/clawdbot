@@ -9,12 +9,14 @@ final class CronSourceFixture: @unchecked Sendable {
         let gateway: String
         let id: String
         let method: String
+        let limit: Int?
+        let total: Int
         let socket: GatewayTestWebSocketTask
     }
 
     let endpoint = LockIsolated(CronSourceFixture.endpoint(revision: 1))
     let requests = LockIsolated<[Request]>([])
-    let emptyJobLists = LockIsolated(false)
+    let catalogTotal = LockIsolated(1)
     let gateway: GatewayConnection
 
     init(
@@ -23,7 +25,7 @@ final class CronSourceFixture: @unchecked Sendable {
     {
         let endpoint = self.endpoint
         let requests = self.requests
-        let emptyJobLists = self.emptyJobLists
+        let catalogTotal = self.catalogTotal
         let session = GatewayTestWebSocketSession(taskFactory: {
             let owner = endpoint.value.revision == 1 ? "A" : "B"
             return GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
@@ -33,13 +35,16 @@ final class CronSourceFixture: @unchecked Sendable {
                       let id = frame["id"] as? String,
                       let requestMethod = frame["method"] as? String
                 else { return }
+                let params = frame["params"] as? [String: Any]
                 let request = Request(
                     gateway: owner,
                     id: id,
                     method: requestMethod,
+                    limit: params?["limit"] as? Int,
+                    total: catalogTotal.value,
                     socket: socket)
                 requests.withValue { $0.append(request) }
-                if requestMethod != method { Self.respond(request, emptyJobList: emptyJobLists.value) }
+                if requestMethod != method { Self.respond(request) }
             })
         })
         self.gateway = GatewayConnection(
@@ -82,16 +87,30 @@ final class CronSourceFixture: @unchecked Sendable {
         request.socket.emitReceiveSuccess(.data(Data(response.utf8)))
     }
 
-    static func respond(_ request: Request, emptyJobList: Bool = false) {
-        let payload = switch request.method {
+    static func respond(_ request: Request) {
+        let payload: String
+        switch request.method {
         case "cron.list":
-            emptyJobList ? #"{"jobs":[]}"# : #"""
-            {"jobs":[{"id":"shared-job","name":"Gateway \#(request.gateway)","enabled":true,
-            "createdAtMs":0,"updatedAtMs":0,"schedule":{"kind":"every","everyMs":1000},
-            "sessionTarget":"isolated","wakeMode":"now","payload":{"kind":"systemEvent","text":"fixture"},"state":{}}]}
+            let defaultLimit = request.total == 0 ? 50 : request.total
+            let limit = min(request.limit ?? defaultLimit, 200)
+            let count = min(request.total, limit)
+            // GRDB also overloads joined; these interpolations must remain JSON strings.
+            let jobs = (0..<count).map { index -> String in
+                let id = index == 0 ? "shared-job" : "shared-job-\(index)"
+                return #"""
+                {"id":"\#(id)","name":"Gateway \#(request.gateway)","enabled":true,
+                "createdAtMs":0,"updatedAtMs":0,"schedule":{"kind":"every","everyMs":1000},
+                "sessionTarget":"main","wakeMode":"now","payload":{"kind":"systemEvent","text":"fixture"},"state":{}}
+                """#
+            }.joined(separator: ",")
+            let nextOffset = count < request.total ? String(count) : "null"
+            payload = #"""
+            {"jobs":[\#(jobs)],"total":\#(request.total),"offset":0,"limit":\#(limit),
+            "hasMore":\#(count < request.total),"nextOffset":\#(nextOffset),
+            "snapshotRevision":"fixture-\#(request.gateway)-\#(request.total)"}
             """#
         default:
-            #"{"ok":true}"#
+            payload = #"{"ok":true}"#
         }
         request.socket.emitReceiveSuccess(.data(Data(
             #"{"type":"res","id":"\#(request.id)","ok":true,"payload":\#(payload)}"#.utf8)))
@@ -124,13 +143,14 @@ struct CronGatewayOwnershipTests {
                 let replacePrimary = scenario != "inactive same route"
                 store.start()
                 try await self
-                    .waitUntil { store.jobs.count == 1 && control?.state == .connected }
-                #expect(store.jobs.first?.name == "Gateway A")
+                    .waitUntil { store.summary.jobs.count == 1 && control?.state == .connected }
+                #expect(store.summary.jobs.first?.name == "Gateway A")
+                #expect(store.summary.total == 1)
                 let requestCount = fixture.requests.value.count
 
                 if inactive {
                     store.stop()
-                    #expect(store.jobs.first?.name == "Gateway A")
+                    #expect(store.summary.jobs.first?.name == "Gateway A")
                 }
                 unavailable.setValue(true)
                 if replacePrimary { fixture.adoptB() }
@@ -143,10 +163,12 @@ struct CronGatewayOwnershipTests {
                     // must not display a foreign cache before its failed acquisition ends.
                     try await fixture.gateway.adoptSelectedEndpoint()
                     store.start()
-                    #expect(store.jobs.isEmpty == replacePrimary)
+                    #expect(store.summary.jobs.isEmpty == replacePrimary)
                 }
 
-                #expect(store.jobs.isEmpty == replacePrimary)
+                let summary = store.summary
+                #expect(summary.jobs.isEmpty == replacePrimary)
+                #expect(summary.total == (replacePrimary ? 0 : 1))
                 #expect(fixture.requests.value.dropFirst(requestCount).allSatisfy { $0.gateway == "A" })
             } catch {
                 await cleanup()
@@ -166,7 +188,7 @@ struct CronGatewayOwnershipTests {
             fixture.adoptB()
             CronSourceFixture.respond(held)
             await refresh.value
-            #expect(store.jobs.isEmpty)
+            #expect(store.summary.jobs.isEmpty)
         } catch {
             store.stop()
             refresh.cancel()

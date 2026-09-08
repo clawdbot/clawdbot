@@ -70,7 +70,7 @@ describe("worker tunnel manager", () => {
     try {
       await expect(
         handle.syncWorkspace({
-          localPath,
+          source: { kind: "local", path: localPath },
           sessionId: "session:one",
           generation: 7,
           gitAuthor: {
@@ -139,7 +139,7 @@ describe("worker tunnel manager", () => {
 
     await expect(
       handle.syncWorkspace({
-        localPath: tempDirs.make("openclaw-worker-sync-failure-"),
+        source: { kind: "local", path: tempDirs.make("openclaw-worker-sync-failure-") },
         sessionId: "session:two",
         generation: 2,
       }),
@@ -189,7 +189,11 @@ describe("worker tunnel manager", () => {
 
     try {
       await expect(
-        handle.syncWorkspace({ localPath, sessionId: "session:fallback", generation: 1 }),
+        handle.syncWorkspace({
+          source: { kind: "local", path: localPath },
+          sessionId: "session:fallback",
+          generation: 1,
+        }),
       ).resolves.toEqual({ mode: "plain", remoteWorkspaceDir, manifestRef });
       await expect(handle.runWorkspaceCommand(PWD_COMMAND)).resolves.toEqual(success());
 
@@ -255,7 +259,11 @@ describe("worker tunnel manager", () => {
 
     try {
       await expect(
-        handle.syncWorkspace({ localPath, sessionId: "session:malformed", generation: 1 }),
+        handle.syncWorkspace({
+          source: { kind: "local", path: localPath },
+          sessionId: "session:malformed",
+          generation: 1,
+        }),
       ).rejects.toThrow("Worker workspace setup returned an invalid response");
       await expect(fs.readFile(sentinel, "utf8")).resolves.toBe("keep\n");
       expect(fake.runs.some((entry) => entry.argv[0] === "rsync")).toBe(false);
@@ -422,7 +430,7 @@ describe("worker tunnel manager", () => {
 
       try {
         const syncing = handle.syncWorkspace({
-          localPath,
+          source: { kind: "local", path: localPath },
           sessionId: "session:convergent-sync",
           generation: 1,
         });
@@ -645,7 +653,7 @@ describe("worker tunnel manager", () => {
       try {
         await expect(
           handle.syncWorkspace({
-            localPath,
+            source: { kind: "local", path: localPath },
             sessionId: "session:retry-owner",
             generation: 1,
           }),
@@ -710,7 +718,11 @@ describe("worker tunnel manager", () => {
 
       try {
         await expect(
-          handle.syncWorkspace({ localPath, sessionId: "session:probe", generation: 1 }),
+          handle.syncWorkspace({
+            source: { kind: "local", path: localPath },
+            sessionId: "session:probe",
+            generation: 1,
+          }),
         ).rejects.toThrow(`Worker workspace sync failed: ${message}`);
         expect(fake.runs.some((entry) => entry.argv[0] === "rsync")).toBe(false);
       } finally {
@@ -768,7 +780,7 @@ describe("worker tunnel manager", () => {
 
     try {
       const plain = await handle.syncWorkspace({
-        localPath: plainPath,
+        source: { kind: "local", path: plainPath },
         sessionId: "session:plain-sync",
         generation: 1,
       });
@@ -794,7 +806,7 @@ describe("worker tunnel manager", () => {
 
       await expect(
         handle.syncWorkspace({
-          localPath: gitPath,
+          source: { kind: "local", path: gitPath },
           sessionId: "session:symlink-sync",
           generation: 2,
         }),

@@ -441,7 +441,7 @@ export class DraftSubmissionFlow {
       const placementTarget = startup ? null : this.placement().target;
       const hasInitialTurn = message || apiAttachments?.length;
       const remoteProject =
-        !startup && !pendingPlacement && (placementTarget || !hasInitialTurn)
+        !startup && !pendingPlacement && !placementTarget && !hasInitialTurn
           ? this.place.browser.remoteProject
           : null;
       if (remoteProject && !remoteProject.projectId && !this.place.browser.projectId) {

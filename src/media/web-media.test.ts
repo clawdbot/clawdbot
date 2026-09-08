@@ -14,7 +14,11 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { createImageProcessor, resizeToJpeg } from "./media-services.js";
+import {
+  createImageProcessor,
+  readImageMetadataFromHeader,
+  resizeToJpeg,
+} from "./media-services.js";
 import { encodePngRgba, fillPixel } from "./png-encode.js";
 
 let effectiveImageBytesCap: typeof import("./web-media.js").effectiveImageBytesCap;
@@ -480,6 +484,45 @@ describe("loadWebMedia", () => {
     expect(many.sides[0]).toBe(1280);
     expect(many.qualities).toEqual([70, 60, 50, 40]);
   });
+
+  it.each(["png", "jpeg", "webp"] as const)(
+    "preserves accepted original %s bytes and metadata with and without hard limits",
+    async (format) => {
+      const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
+      const sourcePng = createSolidPngBuffer(32, 16, { r: 12, g: 34, b: 56 });
+      let buffer =
+        format === "png"
+          ? sourcePng
+          : (await createImageProcessor().encode(sourcePng, { format })).data;
+      if (format === "jpeg") {
+        const orientation = Buffer.from(
+          "ffe1002245786966000049492a0008000000010012010300010000000600000000000000",
+          "hex",
+        );
+        buffer = Buffer.concat([buffer.subarray(0, 2), orientation, buffer.subarray(2)]);
+        expect(readImageMetadataFromHeader(buffer)).toEqual({ width: 16, height: 32 });
+      }
+      const original = Buffer.from(buffer);
+      const contentType = `image/${format}`;
+      const fileName = `portrait.${format}`;
+      for (const imageCompression of [
+        undefined,
+        { models: [{ maxSidePx: 32, maxPixels: 1024 }] },
+      ]) {
+        const result = await optimizeImageBufferForWebMedia({
+          buffer,
+          contentType,
+          fileName,
+          maxBytes: 1024 * 1024,
+          imageCompression,
+        });
+        expect(result.buffer).toBe(buffer);
+        expect(result.buffer).toEqual(original);
+        expect(result.contentType).toBe(contentType);
+        expect(result.fileName).toBe(fileName);
+      }
+    },
+  );
 
   it("preserves in-limit GIF buffers when optimizing direct image buffers", async () => {
     const { optimizeImageBufferForWebMedia } = await import("./web-media.js");

@@ -41,6 +41,8 @@ export type CompactEmbeddedAgentSessionParams = Pick<
   messageProvider?: string;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
+  /** Dashboard authoring retained only within the admitted recovery run. */
+  pinnedWidgetAuthoring?: boolean;
   chatType?: ChatType;
   agentAccountId?: string;
   /** Raw peer observed by the inbound routing owner, before identity linking. */
