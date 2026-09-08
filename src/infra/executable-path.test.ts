@@ -122,10 +122,10 @@ describe("executable path helpers", () => {
     },
   );
 
-  it("prefers a PATHEXT match over an extensionless shim of the same name", async () => {
+  it("spawn resolution prefers a PATHEXT match over an extensionless npm shim", async () => {
     // A global npm install drops a POSIX shim next to the real launcher, so `claude` and
     // `claude.cmd` share a directory on PATH. Windows cannot CreateProcess the bare shim,
-    // so probing it first made every spawn fail.
+    // so the spawn resolver probes PATHEXT first and keeps the bare name as a fallback.
     await withMockedPlatform("win32", async () => {
       await withTestDir({ prefix: "openclaw-exec-shim-" }, async (binDir) => {
         const shimPath = path.join(binDir, "claude");
@@ -134,8 +134,25 @@ describe("executable path helpers", () => {
         await fs.writeFile(commandPath, "@echo off\n");
 
         expect(
-          resolveExecutableFromPathEnv("claude", binDir, { PATHEXT: ".COM;.EXE;.BAT;.CMD" }),
+          resolveExecutablePath("claude", {
+            env: { PATH: binDir, PATHEXT: ".COM;.EXE;.BAT;.CMD" },
+          }),
         ).toBe(commandPath);
+      });
+    });
+  });
+
+  it("spawn resolution still finds a host that only ships a bare executable", async () => {
+    await withMockedPlatform("win32", async () => {
+      await withTestDir({ prefix: "openclaw-exec-bare-" }, async (binDir) => {
+        const barePath = path.join(binDir, "bare-host");
+        await fs.writeFile(barePath, "#!/bin/sh\nexit 0\n");
+
+        expect(
+          resolveExecutablePath("bare-host", {
+            env: { PATH: binDir, PATHEXT: ".COM;.EXE;.BAT;.CMD" },
+          }),
+        ).toBe(barePath);
       });
     });
   });

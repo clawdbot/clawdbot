@@ -46,10 +46,7 @@ function resolveWindowsExecutableExtensions(
     return [""];
   }
   const extensions = [...resolveWindowsExecutableExtSet(env)];
-  // Windows cannot CreateProcess an extensionless file, and a global npm install drops a
-  // POSIX shim beside the real launcher (`claude` next to `claude.cmd`). Probing the bare
-  // name first matched that shim and the spawn failed, so PATHEXT candidates come first.
-  return includeExtensionless ? [...extensions, ""] : extensions;
+  return includeExtensionless ? ["", ...extensions] : extensions;
 }
 
 function resolveWindowsExecutableExtSet(env: NodeJS.ProcessEnv | undefined): Set<string> {
@@ -194,7 +191,15 @@ export function resolveExecutablePath(
     resolveEnvironmentValue(options?.env, "PATH") ??
     resolveEnvironmentValue(process.env, "PATH") ??
     "";
-  return resolveExecutableFromPathEnv(candidate, envPath, options?.env);
+  // This resolves a command that is about to be spawned. Windows cannot CreateProcess an
+  // extensionless file, and a global npm install drops a POSIX shim beside its launcher
+  // (`claude` next to `claude.cmd`), so probe PATHEXT first and keep the bare name as the
+  // fallback for hosts that genuinely ship one. resolveNodeHostExecutable does the same.
+  return (
+    resolveExecutableFromPathEnv(candidate, envPath, options?.env, {
+      includeExtensionless: false,
+    }) ?? resolveExecutableFromPathEnv(candidate, envPath, options?.env)
+  );
 }
 
 /**
