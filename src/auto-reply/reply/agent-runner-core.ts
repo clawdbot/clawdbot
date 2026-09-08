@@ -86,20 +86,40 @@ function isTransportUnreachableFailoverReason(reason: FailoverReason): boolean {
   );
 }
 
-function isPositiveNonTransportResponseEvidence(reason: FailoverReason): boolean {
+type SilentFallbackAttemptEvidence = {
+  reason: FailoverReason;
+  /** Present only when a provider call produced a classified status. Local cooldown/session skips omit it. */
+  status?: number;
+};
+
+function isPositiveNonTransportResponseEvidence(attempt: SilentFallbackAttemptEvidence): boolean {
   // Only claim the backend "responded" when attempt reasons establish an
   // application-level failure (e.g. format/4xx), not transport/unknown/mixed.
-  if (isTransportUnreachableFailoverReason(reason)) {
+  if (isTransportUnreachableFailoverReason(attempt.reason)) {
     return false;
   }
-  if (reason === "unknown" || reason === "unclassified" || reason === "no_error_details") {
+  if (
+    attempt.reason === "unknown" ||
+    attempt.reason === "unclassified" ||
+    attempt.reason === "no_error_details"
+  ) {
     return false;
   }
-  return reason === "empty_response" || resolveFailoverStatus(reason) !== undefined;
+  // format / empty_response imply an application-level outcome from a contacted backend.
+  if (attempt.reason === "empty_response" || attempt.reason === "format") {
+    return true;
+  }
+  // Local cooldown/session skips record auth/billing/rate_limit/etc. without a
+  // provider status. Do not treat resolveFailoverStatus's synthetic mapping as
+  // proof the backend was contacted (#141725 / ClawSweeper P2).
+  if (attempt.status === undefined) {
+    return false;
+  }
+  return resolveFailoverStatus(attempt.reason) !== undefined;
 }
 
 function shouldClaimConfiguredBackendUnreachable(
-  attempts: ReadonlyArray<{ reason: FailoverReason }>,
+  attempts: ReadonlyArray<SilentFallbackAttemptEvidence>,
 ): boolean {
   return (
     attempts.length > 0 &&
@@ -108,18 +128,18 @@ function shouldClaimConfiguredBackendUnreachable(
 }
 
 function shouldClaimConfiguredBackendResponded(
-  attempts: ReadonlyArray<{ reason: FailoverReason }>,
+  attempts: ReadonlyArray<SilentFallbackAttemptEvidence>,
 ): boolean {
   return (
     attempts.length > 0 &&
-    attempts.every((attempt) => isPositiveNonTransportResponseEvidence(attempt.reason))
+    attempts.every((attempt) => isPositiveNonTransportResponseEvidence(attempt))
   );
 }
 
 export function buildSilentFallbackFailurePayload(params: {
   fallbackTransition: ReturnType<typeof resolveFallbackTransition>;
   fallbackFailureKnown: boolean;
-  fallbackAttempts?: ReadonlyArray<{ reason: FailoverReason }>;
+  fallbackAttempts?: ReadonlyArray<SilentFallbackAttemptEvidence>;
   isHeartbeat: boolean;
   hasSuccessfulTerminalDelivery: boolean;
   allowEmptyAssistantReplyAsSilent?: boolean;

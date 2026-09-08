@@ -124,4 +124,33 @@ describe("buildSilentFallbackFailurePayload", () => {
     expect(payload?.text).not.toContain("responded");
     expect(payload?.text).not.toContain("couldn't reach");
   });
+
+  it("uses neutral wording for local auth cooldown skips without provider status", () => {
+    const payload = buildSilentFallbackFailurePayload({
+      ...base,
+      fallbackAttempts: [{ reason: "auth" }],
+    });
+    expect(payload?.text).toContain("produced no usable reply");
+    expect(payload?.text).not.toContain("responded");
+    expect(payload?.text).not.toContain("couldn't reach");
+  });
+
+  it("uses responded wording for real auth failures that carry provider status", () => {
+    const payload = buildSilentFallbackFailurePayload({
+      ...base,
+      fallbackAttempts: [{ reason: "auth", status: 401 }],
+    });
+    expect(payload?.text).toContain("responded but produced no usable reply");
+    expect(payload?.text).not.toContain("couldn't reach");
+  });
+
+  it("uses neutral wording when a skipped primary leaves an empty fallback path", () => {
+    const payload = buildSilentFallbackFailurePayload({
+      ...base,
+      fallbackAttempts: [{ reason: "auth" }, { reason: "rate_limit" }],
+    });
+    expect(payload?.text).toContain("produced no usable reply");
+    expect(payload?.text).not.toContain("responded");
+    expect(payload?.text).not.toContain("couldn't reach");
+  });
 });
