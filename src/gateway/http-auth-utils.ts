@@ -1,6 +1,7 @@
 // Gateway HTTP auth helpers.
 // Authenticates HTTP endpoints and derives trusted operator scopes.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { TLSSocket } from "node:tls";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -48,6 +49,7 @@ import {
   CLI_DEFAULT_OPERATOR_SCOPES,
   authorizeOperatorScopesForMethod,
 } from "./method-scopes.js";
+import { isLocalDirectRequest, isLoopbackHost, resolveHostName } from "./net.js";
 import { resolveBrowserOriginPolicy } from "./origin-check.js";
 import { withSerializedCredentialFallbackAttempt } from "./rate-limit-attempt-serialization.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
@@ -433,6 +435,11 @@ export function setControlUiPluginAuthCookieForRequest(
   if (grants.length > 0) {
     return setControlUiPluginAuthCookie(res, grants, {
       generation: authGeneration,
+      basePath: getRuntimeConfig().gateway?.controlUi?.basePath,
+      allowInsecureNativeAssets:
+        !(req.socket instanceof TLSSocket) &&
+        isLocalDirectRequest(req) &&
+        isLoopbackHost(resolveHostName(req.headers.host)),
       ...(authenticatedProfileId ? { profileId: authenticatedProfileId } : {}),
     });
   }

@@ -8,6 +8,7 @@ import {
   CONTROL_UI_PLUGIN_AUTH_PROBE_ORIGIN_QUERY,
   CONTROL_UI_PLUGIN_AUTH_PROBE_QUERY,
 } from "./control-ui-contract.js";
+import { controlUiPluginAssetPrefix } from "./control-ui-plugin-assets-contract.js";
 import type { ControlUiPluginTabAuthGrant } from "./control-ui-plugin-tabs.js";
 import { isOperatorScope, type OperatorScope } from "./operator-scopes.js";
 import { resolvePluginRoutePathContext } from "./server/plugins-http/path-context.js";
@@ -28,6 +29,14 @@ type PluginAuthCookiePayload = {
   generation: string;
   exp: number;
   profileId?: string;
+};
+
+type PluginAuthCookieOptions = {
+  generation: string | undefined;
+  profileId?: string;
+  nowMs?: number;
+  basePath?: string;
+  allowInsecureNativeAssets?: boolean;
 };
 
 function signPayload(encodedPayload: string): string {
@@ -91,11 +100,7 @@ function normalizeCookiePath(path: string): string | undefined {
 
 function createControlUiPluginAuthCookie(
   grant: ControlUiPluginTabAuthGrant,
-  params: {
-    generation: string | undefined;
-    profileId?: string;
-    nowMs?: number;
-  },
+  params: PluginAuthCookieOptions,
 ) {
   const path = normalizeCookiePath(grant.path);
   if (!path || !grant.pluginId || !params.generation) {
@@ -121,29 +126,27 @@ function createControlUiPluginAuthCookie(
   };
   const encodedPayload = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
   const sig = signPayload(encodedPayload);
+  const isNativeAsset =
+    grant.match === "prefix" &&
+    path === controlUiPluginAssetPrefix(grant.pluginId, params.basePath);
+  // Native assets load in the UI's own origin. Only a verified direct HTTP
+  // loopback request may omit Secure so WebKit can retain and send the cookie.
+  const secure = !isNativeAsset || !params.allowInsecureNativeAssets;
   // The sandboxed frame has an opaque origin, so descendant requests are
   // cross-site for cookie purposes even when the panel URL is same-host.
   // CHIPS cannot be used here: its cross-site-ancestor key prevents nested
   // opaque frames from receiving the grant. HTTP auth limits it to safe reads.
-  return `${cookieNameForPlugin(grant.pluginId)}=v1.${encodedPayload}.${sig}; Path=${path}; HttpOnly; Secure; SameSite=None; Max-Age=${Math.ceil(CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS / 1000)}`;
+  return `${cookieNameForPlugin(grant.pluginId)}=v1.${encodedPayload}.${sig}; Path=${path}; HttpOnly;${secure ? " Secure;" : ""} SameSite=${isNativeAsset ? "Strict" : "None"}; Max-Age=${Math.ceil(CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS / 1000)}`;
 }
 
 export function setControlUiPluginAuthCookie(
   res: ServerResponse,
   grants: readonly ControlUiPluginTabAuthGrant[],
-  params: {
-    generation: string | undefined;
-    profileId?: string;
-    nowMs?: number;
-  },
+  params: PluginAuthCookieOptions,
 ) {
   const issuedGrants: ControlUiPluginTabAuthGrant[] = [];
   const cookiesToAdd = grants.flatMap((grant) => {
-    const cookie = createControlUiPluginAuthCookie(grant, {
-      generation: params.generation,
-      profileId: params.profileId,
-      nowMs: params.nowMs,
-    });
+    const cookie = createControlUiPluginAuthCookie(grant, params);
     if (!cookie) {
       return [];
     }

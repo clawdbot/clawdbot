@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { TLSSocket } from "node:tls";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -22,8 +23,10 @@ import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import {
   AUTH_NONE,
   AUTH_TOKEN,
+  createRequest,
   createResponse,
   createTestGatewayServer,
+  dispatchRequest,
   sendRequest,
   withGatewayServer,
 } from "./server-http.test-harness.js";
@@ -221,6 +224,9 @@ describe("native Control UI browser assets", () => {
           expect(cookieHeaders).toHaveLength(requiresAuth ? 1 : 0);
           for (const header of cookieHeaders) {
             expect(header).toContain(`Path=${assetPath};`);
+            expect(header).toContain("HttpOnly;");
+            expect(header).toContain("SameSite=Strict;");
+            expect(header).not.toContain("; Secure;");
           }
           const cookie = cookieHeaders.map((value) => String(value).split(";")[0]).join("; ");
           for (const { assetUrl, source } of [
@@ -248,6 +254,77 @@ describe("native Control UI browser assets", () => {
       });
     },
   );
+
+  it("limits native asset HTTP cookies to direct loopback origins", async () => {
+    await withTempConfig({
+      cfg: {
+        gateway: {
+          controlUi: { basePath: "/openclaw" },
+          trustedProxies: ["127.0.0.1", "::1"],
+        },
+      },
+      run: async () => {
+        activateFixture();
+        const server = createTestGatewayServer({
+          resolvedAuth: AUTH_TOKEN,
+          overrides: { controlUiEnabled: true, controlUiBasePath: "/openclaw" },
+        });
+        const cases = [
+          { host: "127.0.0.1:18789", remoteAddress: "127.0.0.1", secure: false },
+          { host: "[::1]:18789", remoteAddress: "::1", secure: false },
+          { host: "localhost:18789", remoteAddress: "127.0.0.1", tls: true, secure: true },
+          { host: "localhost:18789", remoteAddress: "192.0.2.1", secure: true },
+          { host: "gateway.example:18789", remoteAddress: "127.0.0.1", secure: true },
+          ...["forwarded", "x-forwarded-for", "x-forwarded-proto", "x-real-ip"].map((header) => ({
+            host: "localhost:18789",
+            remoteAddress: "127.0.0.1",
+            headers: {
+              "x-forwarded-for": "192.0.2.2",
+              [header]:
+                header === "x-forwarded-proto"
+                  ? "https"
+                  : header === "forwarded"
+                    ? "for=192.0.2.2;proto=https"
+                    : "192.0.2.2",
+            },
+            secure: true,
+          })),
+        ];
+        for (const scenario of cases) {
+          const request = createRequest({
+            path: "/openclaw/control-ui-config.json",
+            authorization: "Bearer test-token",
+            ...scenario,
+          });
+          const tlsSocket =
+            "tls" in scenario && scenario.tls ? new TLSSocket(request.socket) : undefined;
+          if (tlsSocket) {
+            Object.defineProperty(tlsSocket, "remoteAddress", { value: scenario.remoteAddress });
+            request.socket = tlsSocket;
+          }
+          try {
+            const response = createResponse();
+            await dispatchRequest(server, request, response.res);
+            expect(response.res.statusCode, JSON.stringify(scenario)).toBe(200);
+            const cookies = response.setHeader.mock.calls
+              .filter(([name]) => name === "Set-Cookie")
+              .flatMap(([, value]) => (Array.isArray(value) ? value : [value]));
+            expect(cookies).toHaveLength(1);
+            expect(cookies[0]).toContain(
+              "Path=/openclaw/__openclaw__/plugins/control-ui/native-ui/;",
+            );
+            expect(cookies[0]).toContain("SameSite=Strict;");
+            expect(String(cookies[0]).includes("; Secure;"), JSON.stringify(scenario)).toBe(
+              scenario.secure,
+            );
+          } finally {
+            tlsSocket?.destroy();
+            request.destroy();
+          }
+        }
+      },
+    });
+  });
 
   it("serves authenticated immutable builds and preserves the last working revision on failure", async () => {
     const fixture = activateFixture();
