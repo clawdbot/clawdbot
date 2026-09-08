@@ -3,6 +3,7 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.AndroidScreenshotFixture
 import ai.openclaw.app.AndroidScreenshotScene
 import ai.openclaw.app.GatewayAgentSummary
+import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeRuntime
@@ -144,6 +145,7 @@ import androidx.window.layout.WindowInfoTracker
 import androidx.window.layout.WindowInfoTrackerDecorator
 import androidx.window.layout.WindowLayoutInfo
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
@@ -151,6 +153,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -1424,6 +1427,384 @@ class ChatComposerLayoutTest {
     val caretTop = with(composeRule.density) { caret.top.toDp() }
     val caretBottom = with(composeRule.density) { caret.bottom.toDp() }
     assertTrue("The whole caret must be visible inside the editor: $caret within $bounds", caretTop >= bounds.top && caretBottom <= bounds.bottom)
+  }
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun backgroundTasksInitialReadStartsBeforeNativePlacement() {
+    var beforePlacement: Boolean? = null
+    val fixture = AndroidScreenshotFixture.createRequester()
+    withBackgroundTaskRequests(
+      response = { method, params ->
+        if (beforePlacement == null) {
+          beforePlacement = ShadowDialog
+            .getLatestDialog()
+            ?.window
+            ?.decorView
+            ?.isLaidOut != true
+        }
+        fixture(method, params)
+      },
+    ) { _, calls ->
+      openBackgroundTasks()
+      assertEquals("The initial read must not wait for placed-geometry admission", true, beforePlacement)
+      assertEquals(listOf("tasks.list", "tasks.list"), calls.map { it.first })
+    }
+  }
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun backgroundTasksDisposalCancelsOnlyOwnedReads() {
+    val cancelled = ConcurrentLinkedQueue<String>()
+    withBackgroundTaskRequests(
+      response = { method, _ ->
+        try {
+          awaitCancellation()
+        } finally {
+          cancelled.add(method)
+        }
+      },
+    ) { _, calls ->
+      composeRule.onNodeWithContentDescription(nativeString("Chat actions")).performClick()
+      composeRule.onNodeWithText(nativeString("Background tasks")).performClick()
+      composeRule.waitUntil { calls.size == 1 }
+      composeRule.runOnIdle {
+        runBlocking { sheetFeatures.publish(listOf(testFold(Rect(0, 0, 800, 800)))) }
+      }
+      composeRule.onNode(isDialog()).assertDoesNotExist()
+      composeRule.waitUntil { cancelled.size == 1 }
+      assertEquals(listOf("tasks.list"), calls.map { it.first })
+    }
+  }
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun backgroundTasksSafeRemapsRetainListDetailScrollAndComposerSelection() {
+    withBackgroundTaskRequests { _, calls ->
+      val editor = composeRule.onNode(hasSetTextAction())
+      editor.performTextReplacement("retained task draft")
+      editor.performSemanticsAction(SemanticsActions.SetSelection) { assertTrue(it(3, 8, false)) }
+      val editorId = editor.fetchSemanticsNode().id
+      val dialog = openBackgroundTasks()
+
+      fun sheetScroll() = composeRule.onNode(hasScrollAction() and hasAnyAncestor(isDialog()))
+      sheetScroll().performScrollToNode(hasText("Release task 03"))
+      val listId = sheetScroll().fetchSemanticsNode().id
+      assertTrue(sheetScroll().fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > 0f)
+      composeRule.runOnIdle {
+        runBlocking { sheetFeatures.publish(listOf(testFold(Rect(390, 0, 410, 800)))) }
+      }
+      assertEquals(listId, sheetScroll().fetchSemanticsNode().id)
+      assertTrue(sheetScroll().fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > 0f)
+      composeRule.onNodeWithText("Release task 03").performClick()
+      composeRule.waitUntil {
+        composeRule.onAllNodesWithText("Checklist section 24", substring = true, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+      }
+      sheetScroll().performTouchInput { swipeUp() }
+      val detailId = sheetScroll().fetchSemanticsNode().id
+      assertTrue(sheetScroll().fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > 0f)
+      composeRule.runOnIdle {
+        runBlocking { sheetFeatures.publish(listOf(testFold(Rect(0, 390, 800, 410)))) }
+      }
+      assertEquals(detailId, sheetScroll().fetchSemanticsNode().id)
+      assertTrue(sheetScroll().fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > 0f)
+      assertTrue("Safe remaps must not replace the native window", dialog === ShadowDialog.getLatestDialog())
+      assertEquals("Safe remaps do not reload or reset selected detail", 1, calls.count { it.first == "tasks.get" })
+      composeRule.runOnIdle { dialog.onBackPressedDispatcher.onBackPressed() }
+      composeRule.onNode(isDialog()).assertDoesNotExist()
+      editor.assertTextEquals("retained task draft")
+      assertEquals(editorId, editor.fetchSemanticsNode().id)
+      assertEquals(TextRange(3, 8), editor.fetchSemanticsNode().config[SemanticsProperties.TextSelectionRange])
+    }
+  }
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun backgroundTasksDetailBackRejectsLateSuccess() = assertBackgroundDetailCompletion(error = false, retire = false)
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun backgroundTasksDetailBackRejectsLateError() = assertBackgroundDetailCompletion(error = true, retire = false)
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun backgroundTasksRetirementRejectsLateSuccess() = assertBackgroundDetailCompletion(error = false, retire = true)
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun backgroundTasksRetirementRejectsLateError() = assertBackgroundDetailCompletion(error = true, retire = true)
+
+  private fun assertBackgroundDetailCompletion(
+    error: Boolean,
+    retire: Boolean,
+  ) {
+    val reply = CompletableDeferred<Result<String>>()
+    val completed = ConcurrentLinkedQueue<String>()
+    val fixture = AndroidScreenshotFixture.createRequester()
+    try {
+      withBackgroundTaskRequests(
+        response = { method, params ->
+          if (method == "tasks.get") {
+            val result = withContext(NonCancellable) { reply.await() }
+            completed.add(method)
+            result.getOrThrow()
+          } else {
+            fixture(method, params)
+          }
+        },
+      ) { _, calls ->
+        val old = openBackgroundTasks()
+        composeRule.onNodeWithText("Release task 08").performClick()
+        composeRule.waitUntil { calls.any { it.first == "tasks.get" } }
+        val back =
+          checkNotNull(
+            composeRule
+              .onNodeWithContentDescription(nativeString("Back to background tasks"))
+              .fetchSemanticsNode()
+              .config[SemanticsActions.OnClick]
+              .action,
+          )
+
+        fun completeDetail() {
+          reply.complete(
+            if (error) {
+              Result.failure(IllegalStateException("retired detail failure"))
+            } else {
+              Result.success(fixture("tasks.get", """{"taskId":"screenshot-ledger-8"}"""))
+            },
+          )
+        }
+        composeRule.mainClock.autoAdvance = false
+        composeRule.runOnUiThread {
+          if (retire) {
+            runBlocking {
+              sheetFeatures.publish(listOf(testFold(Rect(0, 0, 800, 800))))
+              sheetFeatures.publish(emptyList())
+            }
+          }
+          // Saved Compose semantics require the original node to remain attached.
+          back()
+          if (!retire) completeDetail()
+        }
+        composeRule.mainClock.autoAdvance = true
+        composeRule.waitForIdle()
+        if (retire) {
+          composeRule.onNode(isDialog()).assertDoesNotExist()
+          val fresh = openBackgroundTasks()
+          assertNotSame(old.window, fresh.window)
+          composeRule.runOnUiThread {
+            old.onBackPressedDispatcher.onBackPressed()
+            completeDetail()
+          }
+          composeRule.waitUntil { completed.size == 1 }
+          composeRule.waitForIdle()
+          assertTrue("A's late native Back and detail completion cannot close or alter B", fresh.isShowing)
+        } else {
+          composeRule.waitUntil { completed.size == 1 }
+          composeRule.waitForIdle()
+        }
+        composeRule.onNodeWithContentDescription(nativeString("Refresh background tasks")).assertIsDisplayed()
+        composeRule.onNodeWithContentDescription(nativeString("Back to background tasks")).assertDoesNotExist()
+        composeRule.onNodeWithText("retired detail failure").assertDoesNotExist()
+        composeRule.onNodeWithText("Release task 08").assertIsDisplayed()
+      }
+    } finally {
+      reply.complete(Result.failure(IllegalStateException("test finished")))
+      composeRule.mainClock.autoAdvance = true
+    }
+  }
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun backgroundTasksRejectSavedRefreshAndRowAcrossUnsafeRecoveryAndReplacement() {
+    withBackgroundTaskRequests { _, calls ->
+      val old = openBackgroundTasks()
+      val refresh =
+        checkNotNull(
+          composeRule
+            .onNodeWithContentDescription(nativeString("Refresh background tasks"))
+            .fetchSemanticsNode()
+            .config[SemanticsActions.OnClick]
+            .action,
+        )
+      val select =
+        checkNotNull(
+          composeRule
+            .onNodeWithText("Release task 08")
+            .fetchSemanticsNode()
+            .config[SemanticsActions.OnClick]
+            .action,
+        )
+      val before = calls.size
+      composeRule.mainClock.autoAdvance = false
+      composeRule.runOnUiThread {
+        runBlocking {
+          sheetFeatures.publish(listOf(testFold(Rect(0, 0, 800, 800))))
+          sheetFeatures.publish(emptyList())
+        }
+        refresh()
+        select()
+        old.onBackPressedDispatcher.onBackPressed()
+      }
+      composeRule.mainClock.autoAdvance = true
+      composeRule.waitForIdle()
+      assertEquals("Retired callbacks cannot start reads after unsafe-to-safe publication", before, calls.size)
+      composeRule.onNode(isDialog()).assertDoesNotExist()
+      val fresh = openBackgroundTasks()
+      val freshCalls = calls.size
+      composeRule.runOnUiThread {
+        old.onBackPressedDispatcher.onBackPressed()
+      }
+      composeRule.waitForIdle()
+      assertEquals("A's late dismissal cannot trigger reads in B", freshCalls, calls.size)
+      assertTrue("A's late native dismissal cannot close B", fresh.isShowing)
+      assertNotSame(old.window, fresh.window)
+      composeRule.onNodeWithText("Release task 08").performClick()
+      composeRule.onNodeWithContentDescription(nativeString("Back to background tasks")).assertIsDisplayed().performClick()
+    }
+  }
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun backgroundTasksKeepReadOnlyOpeningOnSameOwnerDisconnectAndRetry() {
+    var failRead = false
+    val fixture = AndroidScreenshotFixture.createRequester()
+    withBackgroundTaskRequests(
+      response = { method, params ->
+        if (failRead) error("ordinary offline task read")
+        fixture(method, params)
+      },
+    ) { model, _ ->
+      composeRule.runOnIdle {
+        @Suppress("UNCHECKED_CAST")
+        val scopes =
+          NodeRuntime::class.java
+            .getDeclaredField("_operatorScopes")
+            .apply { isAccessible = true }
+            .get(runtime) as MutableStateFlow<List<String>>
+        scopes.value = listOf("operator.read")
+      }
+      val owner = model.captureChatShareOwner()
+      val dialog = openBackgroundTasks()
+      composeRule.runOnIdle {
+        @Suppress("UNCHECKED_CAST")
+        val display =
+          NodeRuntime::class.java
+            .getDeclaredField("_gatewayConnectionDisplay")
+            .apply { isAccessible = true }
+            .get(runtime) as MutableStateFlow<GatewayConnectionDisplay>
+        display.value = display.value.copy(isConnected = false)
+        failRead = true
+      }
+      composeRule.waitUntil { !model.gatewayConnectionDisplay.value.isConnected }
+      assertTrue(model.isCurrentChatComposerOwner(owner))
+      composeRule.onNodeWithContentDescription(nativeString("Refresh background tasks")).performClick()
+      composeRule.onNodeWithText("ordinary offline task read").assertIsDisplayed()
+      composeRule.onNodeWithContentDescription(nativeString("Refresh background tasks")).assertIsDisplayed()
+      assertTrue("A same-owner disconnect must retain the native opening", dialog.isShowing)
+      composeRule.runOnIdle { failRead = false }
+      composeRule.onNodeWithContentDescription(nativeString("Refresh background tasks")).performClick()
+      composeRule.onNodeWithText("ordinary offline task read").assertDoesNotExist()
+      composeRule.onNodeWithText("Release task 08").assertIsDisplayed()
+      assertTrue(dialog === ShadowDialog.getLatestDialog())
+    }
+  }
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun backgroundTasksRetireWhenCanonicalChatOwnerChanges() {
+    withBackgroundTaskRequests { model, _ ->
+      val owner = model.captureChatShareOwner()
+      openBackgroundTasks()
+      val other = model.chatSessions.value.first { it.key != controller.sessionKey.value }
+      composeRule.runOnIdle { model.switchChatSession(other.key, other.ownerAgentId) }
+      composeRule.waitUntil { !model.isCurrentChatComposerOwner(owner) }
+      composeRule.waitForIdle()
+      composeRule.onNode(isDialog()).assertDoesNotExist()
+    }
+  }
+
+  private fun openBackgroundTasks(): ComponentDialog {
+    composeRule.onNodeWithContentDescription(nativeString("Chat actions")).performClick()
+    composeRule.onNodeWithText(nativeString("Background tasks")).performClick()
+    composeRule.waitUntil {
+      composeRule.onAllNodesWithText("Release task 08").fetchSemanticsNodes().isNotEmpty()
+    }
+    composeRule.onNodeWithContentDescription(nativeString("Refresh background tasks")).assertIsDisplayed()
+    return checkNotNull(ShadowDialog.getLatestDialog()) as ComponentDialog
+  }
+
+  private fun withBackgroundTaskRequests(
+    response: suspend (String, String?) -> String = { method, params -> AndroidScreenshotFixture.createRequester()(method, params) },
+    assertions: (MainViewModel, ConcurrentLinkedQueue<Pair<String, String?>>) -> Unit,
+  ) {
+    val model = showChat(viewportWidth = 720.dp, viewportHeight = { 720.dp })
+    val calls = ConcurrentLinkedQueue<Pair<String, String?>>()
+    val rawField = ChatController::class.java.getDeclaredField("requestGateway").apply { isAccessible = true }
+    val leaseField = ChatController::class.java.getDeclaredField("captureRequestLease").apply { isAccessible = true }
+
+    @Suppress("UNCHECKED_CAST")
+    val raw = rawField.get(controller) as suspend (String, String?) -> String
+
+    @Suppress("UNCHECKED_CAST")
+    val capture = leaseField.get(controller) as (ChatCacheScope?) -> GatewaySession.RequestLease?
+    val read: suspend (String, String?) -> String = { method, params ->
+      calls.add(method to params)
+      response(method, params)
+    }
+    val direct: suspend (String, String?) -> String = { method, params ->
+      if (method == "tasks.list" || method == "tasks.get") read(method, params) else raw(method, params)
+    }
+    val leased: (ChatCacheScope?) -> GatewaySession.RequestLease? = { gatewayScope ->
+      capture(gatewayScope)?.let { lease ->
+        GatewaySession.RequestLease(
+          lease.endpointStableId,
+          isCurrentImpl = lease::isCurrent,
+          commitIfCurrentImpl = lease::commitIfCurrent,
+        ) { method, params, timeout, enqueue ->
+          if (method == "tasks.list" || method == "tasks.get") {
+            enqueue {}
+            read(method, params)
+          } else {
+            lease.request(method, params, timeout, enqueue)
+          }
+        }
+      }
+    }
+    try {
+      rawField.set(controller, direct)
+      leaseField.set(controller, leased)
+      assertions(model, calls)
+    } finally {
+      rawField.set(controller, raw)
+      leaseField.set(controller, capture)
+    }
+  }
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun backgroundTasksSurfaceStaysInsideTheActivityFoldPane() {
+    showChat(viewportWidth = 720.dp, viewportHeight = { 720.dp })
+    composeRule.onNodeWithContentDescription(nativeString("Chat actions")).performClick()
+    composeRule.onNodeWithText(nativeString("Background tasks")).performClick()
+    composeRule.waitUntil {
+      composeRule.onAllNodesWithText("Release task 08", substring = true).fetchSemanticsNodes().isNotEmpty()
+    }
+    val dialog = checkNotNull(ShadowDialog.getLatestDialog()) as ComponentDialog
+    assertNotSame(chatActivity.window, dialog.window)
+    for ((features, pane) in listOf(
+      emptyList<DisplayFeature>() to Rect(0, 0, 800, 800),
+      listOf(testFold(Rect(390, 0, 410, 800))) to Rect(0, 0, 390, 800),
+      listOf(testFold(Rect(0, 390, 800, 410))) to Rect(0, 0, 800, 390),
+    )) {
+      composeRule.runOnIdle { runBlocking { sheetFeatures.publish(features) } }
+      composeRule.waitForIdle()
+      val surface = effortSheetSurfaceBounds(dialog)
+      assertTrue("The actual Tasks Material Surface $surface must fit Activity pane $pane", pane.contains(surface))
+      assertTrue("Safe remaps retain the native Tasks opening", dialog === ShadowDialog.getLatestDialog())
+    }
+    composeRule.runOnIdle { dialog.onBackPressedDispatcher.onBackPressed() }
+    composeRule.onNode(isDialog()).assertDoesNotExist()
   }
 
   @Test

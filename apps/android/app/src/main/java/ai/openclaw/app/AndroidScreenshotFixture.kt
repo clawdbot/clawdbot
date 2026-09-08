@@ -5,6 +5,7 @@ import ai.openclaw.app.gateway.QuestionListResult
 import ai.openclaw.app.gateway.QuestionRecord
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -56,6 +57,8 @@ internal object AndroidScreenshotFixture {
         "chat.history" -> chatHistory()
         "sessions.list" -> sessionList(paramsJson)
         "chat.metadata" -> chatMetadata()
+        "tasks.list" -> backgroundTasks(paramsJson)
+        "tasks.get" -> backgroundTask(paramsJson)
         "question.list" -> Json.encodeToString(QuestionListResult(listOf(pendingQuestion)))
         "cron.list" -> cronList()
         "cron.get" -> cronJob().toString()
@@ -64,6 +67,69 @@ internal object AndroidScreenshotFixture {
         else -> error("Screenshot fixture does not implement gateway method $method with params $paramsJson")
       }
     }
+  }
+
+  private fun taskRecords(): List<JsonObject> =
+    (1..16).map { index ->
+      buildJsonObject {
+        put("id", JsonPrimitive("screenshot-ledger-$index"))
+        put("taskId", JsonPrimitive("screenshot-runtime-$index"))
+        put("agentId", JsonPrimitive(if (index == 16) "other-agent" else "main"))
+        put("title", JsonPrimitive("Release task ${index.toString().padStart(2, '0')}"))
+        put("status", JsonPrimitive(if (index <= 8) "running" else "completed"))
+        put("runtime", JsonPrimitive("subagent"))
+        put("createdAt", JsonPrimitive(1_783_555_200_000L + index))
+        put("updatedAt", JsonPrimitive(1_783_555_260_000L + index))
+        put("progressSummary", JsonPrimitive("Reviewing the synthetic release checklist, item $index."))
+      }
+    }
+
+  private fun backgroundTasks(paramsJson: String?): String {
+    val params = Json.parseToJsonElement(checkNotNull(paramsJson)).jsonObject
+    val agentId = params["agentId"]?.jsonPrimitive?.contentOrNull
+    val statuses = (params["status"] as? JsonArray)?.map { it.jsonPrimitive.content }?.toSet()
+    val limit =
+      params["limit"]
+        ?.jsonPrimitive
+        ?.content
+        ?.toIntOrNull()
+        ?.coerceAtLeast(0) ?: 100
+    val tasks =
+      taskRecords()
+        .filter {
+          (agentId == null || it["agentId"]?.jsonPrimitive?.content == agentId) &&
+            (statuses == null || it["status"]?.jsonPrimitive?.content in statuses)
+        }.take(limit)
+    return buildJsonObject { put("tasks", JsonArray(tasks)) }.toString()
+  }
+
+  private fun backgroundTask(paramsJson: String?): String {
+    val id =
+      Json
+        .parseToJsonElement(checkNotNull(paramsJson))
+        .jsonObject["taskId"]
+        ?.jsonPrimitive
+        ?.content
+    val task =
+      taskRecords().firstOrNull { it["id"]?.jsonPrimitive?.content == id }
+        ?: error("Screenshot fixture has no task with canonical ledger ID $id")
+    val detail =
+      buildJsonObject {
+        task.forEach { (key, value) -> put(key, value) }
+        put(
+          "prompt",
+          JsonPrimitive(
+            (1..24).joinToString("\n\n") { "Checklist section $it: inspect the release notes and report the result without changing any files." },
+          ),
+        )
+        put(
+          "terminalSummary",
+          JsonPrimitive(
+            (1..24).joinToString("\n\n") { "Result section $it: the synthetic release checklist remains readable and selectable across layout changes." },
+          ),
+        )
+      }
+    return buildJsonObject { put("task", detail) }.toString()
   }
 
   val agents =

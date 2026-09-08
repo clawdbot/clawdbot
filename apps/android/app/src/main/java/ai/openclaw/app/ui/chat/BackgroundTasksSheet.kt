@@ -7,6 +7,7 @@ import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.foldAwareSheet
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -32,6 +33,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -44,49 +46,100 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+
+private class BackgroundTaskReads {
+  var disposed = false
+  var listToken: Any? = null
+  var detailToken: Any? = null
+  var listJob: Job? = null
+  var detailJob: Job? = null
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun BackgroundTasksSheet(
   viewModel: MainViewModel,
-  agentId: String,
+  opening: ChatModelPickerSession,
+  admit: () -> Boolean,
   onDismiss: () -> Unit,
 ) {
-  var tasks by remember(agentId) { mutableStateOf<List<BackgroundTask>>(emptyList()) }
-  var selectedTask by remember(agentId) { mutableStateOf<BackgroundTask?>(null) }
-  var loading by remember(agentId) { mutableStateOf(true) }
-  var detailLoading by remember(agentId) { mutableStateOf(false) }
-  var error by remember(agentId) { mutableStateOf<String?>(null) }
+  var tasks by remember(opening) { mutableStateOf<List<BackgroundTask>>(emptyList()) }
+  var selectedTask by remember(opening) { mutableStateOf<BackgroundTask?>(null) }
+  var loading by remember(opening) { mutableStateOf(true) }
+  var detailLoading by remember(opening) { mutableStateOf(false) }
+  var listError by remember(opening) { mutableStateOf<String?>(null) }
+  var detailError by remember(opening) { mutableStateOf<String?>(null) }
+  val reads = remember(opening) { BackgroundTaskReads() }
   val scope = rememberCoroutineScope()
 
-  suspend fun loadTasks() {
+  // Reads can finish before first placement or after a same-owner disconnect.
+  // Only user actions require placed geometry; neither completion gate requires a live socket.
+  fun isCurrent() = !reads.disposed && !opening.geometry.revoked && viewModel.isCurrentChatComposerOwner(opening.composerOwner)
+
+  fun loadTasks() {
+    if (!isCurrent()) return
+    val token = Any()
+    reads.listToken = token
+    reads.listJob?.cancel()
     loading = true
-    error = null
-    runCatching { viewModel.listBackgroundTasks(agentId) }
-      .onSuccess { tasks = it }
-      .onFailure {
-        if (it is CancellationException) throw it
-        error = it.message ?: nativeString("Couldn’t load background tasks")
+    listError = null
+    reads.listJob =
+      scope.launch {
+        if (!isCurrent() || reads.listToken !== token) return@launch
+        try {
+          val result = viewModel.listBackgroundTasks(opening.composerOwner.agentId)
+          if (isCurrent() && reads.listToken === token) tasks = result
+        } catch (failure: Exception) {
+          if (failure is CancellationException) throw failure
+          if (isCurrent() && reads.listToken === token) {
+            listError = failure.message ?: nativeString("Couldn’t load background tasks")
+          }
+        } finally {
+          if (isCurrent() && reads.listToken === token) loading = false
+        }
       }
-    loading = false
   }
 
-  LaunchedEffect(agentId) { loadTasks() }
-  LaunchedEffect(selectedTask?.id) {
-    val task = selectedTask ?: return@LaunchedEffect
+  fun selectTask(task: BackgroundTask) {
+    if (!admit()) return
+    val token = Any()
+    reads.detailToken = token
+    reads.detailJob?.cancel()
+    selectedTask = task
     detailLoading = true
-    error = null
-    runCatching { viewModel.getBackgroundTask(task.id) }
-      .onSuccess { selectedTask = it }
-      .onFailure {
-        if (it is CancellationException) throw it
-        error = it.message ?: nativeString("Couldn’t load task details")
+    detailError = null
+    reads.detailJob =
+      scope.launch {
+        if (!isCurrent() || reads.detailToken !== token) return@launch
+        try {
+          val result = viewModel.getBackgroundTask(task.id)
+          if (isCurrent() && reads.detailToken === token) selectedTask = result
+        } catch (failure: Exception) {
+          if (failure is CancellationException) throw failure
+          if (isCurrent() && reads.detailToken === token) {
+            detailError = failure.message ?: nativeString("Couldn’t load task details")
+          }
+        } finally {
+          if (isCurrent() && reads.detailToken === token) detailLoading = false
+        }
       }
-    detailLoading = false
+  }
+
+  LaunchedEffect(opening) { loadTasks() }
+  DisposableEffect(opening) {
+    onDispose {
+      reads.disposed = true
+      reads.listToken = null
+      reads.detailToken = null
+      reads.listJob?.cancel()
+      reads.detailJob?.cancel()
+    }
   }
 
   ModalBottomSheet(
+    modifier = Modifier.foldAwareSheet(opening.geometry),
     onDismissRequest = onDismiss,
     sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
     containerColor = ClawTheme.colors.surface,
@@ -96,19 +149,25 @@ internal fun BackgroundTasksSheet(
       BackgroundTaskDetail(
         task = selectedTask!!,
         loading = detailLoading,
-        error = error,
+        error = detailError,
         onBack = {
-          selectedTask = null
-          error = null
+          if (admit()) {
+            // Retire the detail result before cancellation or deferred Compose removal.
+            reads.detailToken = null
+            reads.detailJob?.cancel()
+            selectedTask = null
+            detailLoading = false
+            detailError = null
+          }
         },
       )
     } else {
       BackgroundTaskList(
         tasks = tasks,
         loading = loading,
-        error = error,
-        onRefresh = { scope.launch { loadTasks() } },
-        onSelect = { selectedTask = it },
+        error = listError,
+        onRefresh = { if (admit()) loadTasks() },
+        onSelect = ::selectTask,
       )
     }
   }
