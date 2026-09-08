@@ -20,10 +20,17 @@ export function replacePatternBounded(
     return text.replace(pattern, replacer);
   }
 
-  let output = "";
+  let output: string | undefined;
+  // Preserve every chunk-local replacement; only defer assembling unchanged output.
   // Chunking may miss matches spanning chunk boundaries; use only for token-like redaction patterns.
   for (let index = 0; index < text.length; index += chunkSize) {
-    output += text.slice(index, index + chunkSize).replace(pattern, replacer);
+    const chunk = text.slice(index, index + chunkSize);
+    const replaced = chunk.replace(pattern, replacer);
+    if (output !== undefined) {
+      output += replaced;
+    } else if (replaced !== chunk) {
+      output = text.slice(0, index) + replaced;
+    }
   }
-  return output;
+  return output ?? text;
 }

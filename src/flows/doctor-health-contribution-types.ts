@@ -55,7 +55,7 @@ export type DoctorHealthFlowContext = {
   /** The finalized config-flow candidate crossed the atomic writer boundary. */
   configResultWriteCommitted?: boolean;
   /** The requested config write was refused; later repairs must not consume its candidate. */
-  configWriteRefusal?: "validation" | "cron-owner-safety";
+  configWriteRefusal?: "validation" | "cron-owner-safety" | "include-ownership";
   /** One-shot repairs that require a durable config write have completed. */
   postConfigWriteRepairsCommitted?: boolean;
   sourceConfigValid: boolean;

@@ -17,6 +17,7 @@ androidx-wear-compose = "1.6.2"
 androidx-wear-input = "1.2.0"
 androidx-wear-protolayout = "1.4.2"
 androidx-wear-tiles = "1.6.2"
+androidx-window = "1.5.1"
 bcprov = "1.85.2"
 commonmark = "0.30.0"
 coil = "3.6.1"
@@ -71,6 +72,7 @@ androidx-wear-input = { module = "androidx.wear:wear-input", version.ref = "andr
 androidx-wear-protolayout = { module = "androidx.wear.protolayout:protolayout", version.ref = "androidx-wear-protolayout" }
 androidx-wear-protolayout-material = { module = "androidx.wear.protolayout:protolayout-material3", version.ref = "androidx-wear-protolayout" }
 androidx-wear-tiles = { module = "androidx.wear.tiles:tiles", version.ref = "androidx-wear-tiles" }
+androidx-window = { module = "androidx.window:window", version.ref = "androidx-window" }
 bcprov = { module = "org.bouncycastle:bcprov-jdk18on", version.ref = "bcprov" }
 barcode-scanning = { module = "com.google.mlkit:barcode-scanning", version.ref = "barcode-scanning" }
 commonmark = { module = "org.commonmark:commonmark", version.ref = "commonmark" }

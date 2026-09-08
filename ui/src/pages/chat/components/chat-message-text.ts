@@ -85,8 +85,8 @@ export function resolveMessageDisplayMarkdown(
     .flatMap((item) => (item.type === "text" && typeof item.text === "string" ? [item.text] : []))
     .join("\n");
   return normalizeRoleForGrouping(normalizedMessage.role) === "assistant"
-    ? stripThinkingTags(markdown).trim()
-    : markdown.trim();
+    ? stripThinkingTags(markdown)
+    : markdown;
 }
 
 // Character length owns normal disclosure; this high line cap only bounds newline-heavy prompts.

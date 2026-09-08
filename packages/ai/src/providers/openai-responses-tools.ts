@@ -1,12 +1,11 @@
 // OpenAI Responses tool helpers convert runtime tools to Responses API schemas.
-import { createHash } from "node:crypto";
 import type { FunctionTool } from "openai/resources/responses/responses.js";
 import { getAiTransportHost } from "../host.js";
+import { resolveOpenAIStrictToolFlagWithDiagnostics } from "../transports/openai-transport-params.js";
 import type { Model, Tool } from "../types.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
 import { projectOpenAITools, type OpenAIToolProjection } from "./openai-tool-projection.js";
 import {
-  findOpenAIStrictToolProjectionDiagnostics,
   normalizeOpenAIStrictToolParameters,
   resolveOpenAIProjectedToolsStrictToolFlag,
 } from "./openai-tool-schema.js";
@@ -27,35 +26,33 @@ type ResponsesFunctionTool = {
   strict?: boolean | null;
 };
 
-type ConvertedResponsesTools = {
-  projection: OpenAIToolProjection;
-  tools: FunctionTool[];
-};
-
-// Converts OpenClaw tool schemas to OpenAI Responses tools, including strict-mode compatibility.
-const LOG_SUBSYSTEM = "llm/openai-responses";
-const MAX_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS = 64;
-const loggedStrictToolDowngradeDiagnosticKeys = new Set<string>();
-
-/** Converts and returns the projection used to reconcile tool choices. */
+/** Projects direct provider descriptors before resolving their strict policy. */
 export function convertResponsesToolPayload(
   tools: Tool[],
   options?: ConvertResponsesToolsOptions,
-  resolveStrict?: (
-    projection: OpenAIToolProjection,
-    setting: boolean | null | undefined,
-  ) => boolean | undefined,
-): ConvertedResponsesTools {
+): FunctionTool[] {
   const projection = projectOpenAITools(tools);
-  const strict = resolveStrict
-    ? resolveStrict(projection, options?.strict)
-    : resolveResponsesStrictToolFlag(
-        projection,
-        resolveResponsesStrictToolSetting(options),
-        options?.model,
-      );
+  return convertProjectedResponsesTools(
+    projection,
+    resolveResponsesStrictToolSetting(options),
+    options?.model,
+  );
+}
+
+/** Uses caller-prepared facts without rereading descriptors or resolving host policy again. */
+export function convertProjectedResponsesTools(
+  projection: OpenAIToolProjection,
+  strictSetting: boolean | null | undefined,
+  model?: Model,
+): FunctionTool[] {
+  const strict = model
+    ? resolveOpenAIStrictToolFlagWithDiagnostics(projection, strictSetting, {
+        transport: "responses",
+        model,
+      })
+    : resolveOpenAIProjectedToolsStrictToolFlag(projection, strictSetting);
   // Sort tools before request construction so prompt-cache bytes stay deterministic.
-  const convertedTools = sortPromptCacheToolsByName(projection.tools).map((tool) => {
+  return sortPromptCacheToolsByName(projection.tools).map((tool) => {
     const result: ResponsesFunctionTool = {
       type: "function",
       name: tool.name,
@@ -63,7 +60,7 @@ export function convertResponsesToolPayload(
       parameters: normalizeOpenAIStrictToolParameters(
         tool.parameters,
         strict === true,
-        options?.model?.compat as OpenAIToolSchemaCompat,
+        model?.compat as OpenAIToolSchemaCompat,
       ),
     };
     if (strict !== undefined) {
@@ -72,7 +69,6 @@ export function convertResponsesToolPayload(
     // Compatible endpoints can require strict to be absent; the SDK declares it required.
     return result as FunctionTool;
   });
-  return { projection, tools: convertedTools };
 }
 
 function resolveResponsesStrictToolSetting(
@@ -88,65 +84,4 @@ function resolveResponsesStrictToolSetting(
     });
   }
   return false;
-}
-
-function resolveResponsesStrictToolFlag(
-  projection: OpenAIToolProjection,
-  strictSetting: boolean | null | undefined,
-  model: Model | undefined,
-): boolean | undefined {
-  const strict = resolveOpenAIProjectedToolsStrictToolFlag(projection, strictSetting);
-  if (strictSetting === true && strict === false && model) {
-    getAiTransportHost().logDebug(LOG_SUBSYSTEM, () => {
-      const diagnostics = findOpenAIStrictToolProjectionDiagnostics(projection);
-      if (!shouldLogStrictToolDowngradeDiagnostic(diagnostics, model)) {
-        return null;
-      }
-      const sample = diagnostics.slice(0, 5).map((entry) => ({
-        tool: entry.toolName ?? `tool[${entry.toolIndex}]`,
-        violations: entry.violations.slice(0, 8),
-      }));
-      return {
-        message:
-          `OpenAI responses tool schema strict mode downgraded to strict=false for ` +
-          `${model.provider ?? "unknown"}/${model.id ?? "unknown"} because ` +
-          `${diagnostics.length} tool schema(s) are not strict-compatible`,
-        data: {
-          provider: model.provider,
-          model: model.id,
-          incompatibleToolCount: diagnostics.length,
-          sample,
-        },
-      };
-    });
-  }
-  return strict;
-}
-
-function shouldLogStrictToolDowngradeDiagnostic(
-  diagnostics: ReturnType<typeof findOpenAIStrictToolProjectionDiagnostics>,
-  model: Model,
-): boolean {
-  // Strict downgrade diagnostics can repeat per turn; hash details and cap memory.
-  const key = createHash("sha256")
-    .update(
-      JSON.stringify({
-        provider: model.provider,
-        model: model.id,
-        diagnostics: diagnostics.map((entry) => ({
-          toolIndex: entry.toolIndex,
-          toolName: entry.toolName ?? null,
-          violations: entry.violations,
-        })),
-      }),
-    )
-    .digest("hex");
-  if (loggedStrictToolDowngradeDiagnosticKeys.has(key)) {
-    return false;
-  }
-  if (loggedStrictToolDowngradeDiagnosticKeys.size >= MAX_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS) {
-    loggedStrictToolDowngradeDiagnosticKeys.clear();
-  }
-  loggedStrictToolDowngradeDiagnosticKeys.add(key);
-  return true;
 }

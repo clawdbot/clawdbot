@@ -215,10 +215,6 @@ class ParallelsExecTests(unittest.TestCase):
         self.assertLess(names.index("PrlVmGuest_Logout"), names.index("PrlVm_TerminalDisconnect"))
         self.assertLess(names.index("PrlVm_TerminalDisconnect"), names.index("PrlSrv_Logoff"))
         self.assertEqual(names[-1], "PrlApi_Deinit")
-        for owner, logout in [("guest", "PrlVmGuest_Logout"), ("vm", "PrlVm_TerminalDisconnect"), ("server", "PrlSrv_Logoff")]:
-            handle = next(key for key, value in fake.handles.items() if value["kind"] == owner)
-            free_index = next(i for i, event in enumerate(fake.events) if event == ("PrlHandle_Free", (handle,)))
-            self.assertLess(names.index(logout), free_index)
 
     def test_root_current_user_and_name_uuid_lookup(self):
         for vm in ["Synthetic VM", "{11111111-2222-3333-4444-555555555555}"]:

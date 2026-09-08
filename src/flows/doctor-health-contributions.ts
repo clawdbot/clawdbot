@@ -63,8 +63,10 @@ async function reportDeferredLegacyState(ctx: DoctorHealthFlowContext): Promise<
   const omittedDetailCount = pendingDetails.length - displayedDetails.length;
   const remediation =
     ctx.configWriteRefusal === "validation"
-      ? 'Fix the config errors above, then rerun "openclaw doctor --fix".'
-      : 'Resolve the Gateway or cron-store condition above, then rerun "openclaw doctor --fix".';
+      ? "Fix the config errors above."
+      : ctx.configWriteRefusal === "include-ownership"
+        ? "Repair the include boundary named above by hand."
+        : "Resolve the Gateway or cron-store condition above.";
   note(
     [
       "Pending owners and blockers:",

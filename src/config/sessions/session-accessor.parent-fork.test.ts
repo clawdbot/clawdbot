@@ -264,6 +264,7 @@ describe("forkSessionFromParentTranscript", () => {
     })) as Record<string, unknown>[];
     const forkedHeader = forkedEntries[0];
     expect(forkedHeader?.type).toBe("session");
+    expect(forkedHeader?.version).toBe(3);
     expect(forkedHeader?.id).toBe(fork.sessionId);
     expect(forkedHeader?.cwd).toBe(cwd);
     expect(
@@ -823,6 +824,7 @@ describe("forkSessionFromParentTranscript", () => {
     expect(records).toHaveLength(1);
     const header = records[0];
     expect(header?.type).toBe("session");
+    expect(header?.version).toBe(4);
     expect(header?.id).toBe(fork.sessionId);
     expect(
       parseSqliteSessionFileMarker(

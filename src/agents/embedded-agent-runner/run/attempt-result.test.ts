@@ -58,14 +58,12 @@ function createResultFixture(params?: {
     currentAttemptCompletedAssistant: params?.currentAttemptCompletedAssistant,
     successfulNestedToolNames: params?.successfulNestedToolNames ?? [],
     attemptUsage: undefined,
-    cacheBreak: null,
     lastCallUsage: undefined,
     promptCache: undefined,
   };
   const prompt: Parameters<typeof completeEmbeddedAttemptResult>[2] = {
     preflightRecovery: undefined,
     contextBudgetStatus: undefined,
-    promptCacheChangesForTurn: null,
     yieldAborted: false,
     sessionIdUsed: settled.sessionIdUsed,
     sessionFileUsed: undefined,
@@ -138,7 +136,7 @@ function createResultFixture(params?: {
     },
     preparedStreamRuntime: {
       stream: { subscription },
-      cache: { observabilityEnabled: false },
+      cache: {},
     },
   };
   return { input, state, settled, prompt, hookRunner };

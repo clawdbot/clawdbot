@@ -223,6 +223,17 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       this.closeTerminalPanel();
       return;
     }
+    if (detail?.catalogStart) {
+      event.stopImmediatePropagation();
+      this.dockLayout.setOpen(true);
+      detail.catalogStart.respondWith(
+        this.terminalSessions.startCatalogSession(
+          detail.catalogStart.params,
+          detail.catalogStart.isCurrent,
+        ),
+      );
+      return;
+    }
     if (detail?.terminalSessionId || detail?.catalog || detail?.open === true) {
       if (!this.available) {
         return;

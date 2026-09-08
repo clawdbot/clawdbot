@@ -154,7 +154,6 @@ async function runCommandWithOutputEncoding(
   const cancelController = new AbortController();
   let termination: CommandTerminationReason | undefined;
   let childExitState: { code: number | null; signal: NodeJS.Signals | null } | undefined;
-  let childExited = false;
   let commandSettled = false;
   let combinedOutputBytes = 0;
   let combinedCapturedBytes = 0;
@@ -183,21 +182,41 @@ async function runCommandWithOutputEncoding(
     windowsVerbatimArguments: options.windowsVerbatimArguments,
   });
   const nodeChild = child.nodeChildProcess;
-  const releaseOutput = releaseChildProcessOutputAfterExit(nodeChild);
-  nodeChild.once("exit", (code, signalValue) => {
-    childExited = true;
-    childExitState = { code, signal: signalValue };
-  });
+  const ownsExitedProcessTree = Boolean(killProcessTree && process.platform !== "win32");
+  const shouldTrackOutputTimeout =
+    typeof noOutputTimeoutMs === "number" &&
+    Number.isFinite(noOutputTimeoutMs) &&
+    noOutputTimeoutMs > 0;
+  const resolvedNoOutputTimeoutMs = shouldTrackOutputTimeout
+    ? resolveTimerTimeoutMs(noOutputTimeoutMs, 1)
+    : undefined;
+  const ownsOutputDeadline =
+    ownsExitedProcessTree &&
+    (resolvedTimeoutMs !== undefined || resolvedNoOutputTimeoutMs !== undefined);
+  let releaseOutput: (() => void) | undefined;
   const terminationController = createCommandTerminationController({
     child: nodeChild,
     cancelController,
     baseEnv,
     env,
     processTree: killProcessTree ? { mode: "graceful" } : undefined,
-    isChildExited: () => childExited,
+    isChildExited: () => childExitState !== undefined,
     isCommandSettled: () => commandSettled,
     killGraceMs: resolvedKillGraceMs,
     killSignal,
+  });
+  nodeChild.once("exit", (code, signalValue) => {
+    childExitState = { code, signal: signalValue };
+    // Successful tree output belongs to its command deadline, not the diagnostic
+    // idle cutoff. Failed, terminated, and unowned output still gets a bounded drain.
+    if (!ownsOutputDeadline || code !== 0 || termination) {
+      releaseOutput = releaseChildProcessOutputAfterExit(nodeChild);
+    }
+    // An inner timeout can become an ordinary failed exit while its descendants survive.
+    // Retain the existing tree owner through its drain without changing that exit result.
+    if (killProcessTree && !termination && code !== 0) {
+      terminationController.terminate();
+    }
   });
 
   const clearNoOutputTimer = () => {
@@ -206,37 +225,35 @@ async function runCommandWithOutputEncoding(
       noOutputTimer = undefined;
     }
   };
-  const ownsExitedProcessTree = Boolean(killProcessTree && process.platform !== "win32");
   const cancel = (reason: Exclude<CommandTerminationReason, "exit">) => {
-    // Direct exit ends ordinary timer/abort ownership; releaseChildProcessOutputAfterExit
-    // still bounds inherited pipes. POSIX tree mode must reap descendants, while
-    // output caps remain meaningful for bytes drained after exit.
+    // Failed roots already own a drain; later deadlines must preserve their exit result.
+    // Successful POSIX roots retain deadline ownership of inherited descendants.
+    // Output caps remain meaningful for bytes drained after either exit.
     if (
       termination ||
       commandSettled ||
-      (childExited && reason !== "output-limit" && !ownsExitedProcessTree)
+      (childExitState &&
+        reason !== "output-limit" &&
+        (!ownsExitedProcessTree || childExitState.code !== 0))
     ) {
       return;
     }
     termination = reason;
+    if (childExitState) {
+      // An escaped pipe holder can survive group termination; bound its final drain.
+      releaseOutput ??= releaseChildProcessOutputAfterExit(nodeChild);
+    }
     const abortDeferred = terminationController.terminate();
     if (!abortDeferred) {
       cancelController.abort();
     }
   };
-  const shouldTrackOutputTimeout =
-    typeof noOutputTimeoutMs === "number" &&
-    Number.isFinite(noOutputTimeoutMs) &&
-    noOutputTimeoutMs > 0;
-  const resolvedNoOutputTimeoutMs = shouldTrackOutputTimeout
-    ? resolveTimerTimeoutMs(noOutputTimeoutMs, 1)
-    : undefined;
   const armNoOutputTimer = () => {
     if (
       resolvedNoOutputTimeoutMs === undefined ||
       commandSettled ||
       termination ||
-      (childExited && !ownsExitedProcessTree)
+      (childExitState && !ownsExitedProcessTree)
     ) {
       return;
     }
@@ -385,7 +402,7 @@ async function runCommandWithOutputEncoding(
     }
     clearNoOutputTimer();
     signal?.removeEventListener("abort", onAbort);
-    releaseOutput();
+    releaseOutput?.();
   });
   let cleanup = await terminationController.settle();
   const resolvedSignal = result.signal ?? childExitState?.signal ?? nodeChild.signalCode ?? null;

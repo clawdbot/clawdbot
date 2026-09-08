@@ -7,13 +7,16 @@ import {
   readAgentDeletionJournal,
 } from "../state/agent-deletion-journal.js";
 import { readAgentProvenance, recordAgentProvenance } from "../state/agent-provenance.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
-  beginAgentDeletion,
+  closeOpenClawStateDatabaseForTest,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
+import {
   captureAgentLifecycleBinding,
   claimCompletedAgentDeletion,
   isAgentDeletionBlocked,
   matchesAgentLifecycleBinding,
+  withAgentDeletion,
 } from "./agent-lifecycle-registry.js";
 
 const tempDirs: string[] = [];
@@ -65,65 +68,85 @@ describe("agent lifecycle registry", () => {
     });
   });
 
-  it("refuses capture and matching while deletion owns the agent id", () => {
+  it("refuses capture and matching until deletion rolls back before roster commit", async () => {
     const options = createOptions();
     const config = { agents: { entries: { main: {} } } };
     recordAgentProvenance("main", { createdVia: "operator" }, options);
     const binding = captureAgentLifecycleBinding(config, "main", options);
-    const deletion = beginAgentDeletion(createEntry("main"), options);
-
-    expect(captureAgentLifecycleBinding(config, "main", options)).toBeUndefined();
-    expect(binding && matchesAgentLifecycleBinding(config, binding, options)).toBe(false);
-    deletion.rollback();
-    expect(binding && matchesAgentLifecycleBinding(config, binding, options)).toBe(true);
+    await withAgentDeletion(
+      "main",
+      async (begin) => {
+        const deletion = begin(createEntry("main"));
+        expect(captureAgentLifecycleBinding(config, "main", options)).toBeUndefined();
+        expect(binding && matchesAgentLifecycleBinding(config, binding, options)).toBe(false);
+        deletion.rollback();
+        expect(readAgentDeletionJournal("main", options)).toBeUndefined();
+        expect(binding && matchesAgentLifecycleBinding(config, binding, options)).toBe(true);
+      },
+      options,
+    );
   });
 
-  it("removes only the completing operation's provenance and keeps partial cleanup fenced", () => {
+  it("removes only the completing operation's provenance and keeps partial cleanup fenced", async () => {
     const options = createOptions();
     const config = { agents: { entries: { main: {}, kept: {} } } };
     recordAgentProvenance("main", { createdVia: "claw" }, { ...options, nowMs: 1 });
     recordAgentProvenance("kept", { createdVia: "operator" }, options);
     const before = readAgentProvenance("main", options);
     const binding = captureAgentLifecycleBinding(config, "main", options);
-    const first = beginAgentDeletion(createEntry("main"), options);
+    const first = await withAgentDeletion(
+      "main",
+      async (begin) => begin(createEntry("main")),
+      options,
+    );
 
     expect(readAgentProvenance("main", options)).toEqual(before);
     expect(isAgentDeletionBlocked("main", options)).toBe(true);
     expect(binding && matchesAgentLifecycleBinding(config, binding, options)).toBe(false);
     expect(captureAgentLifecycleBinding(config, "main", options)).toBeUndefined();
 
-    const recovery = beginAgentDeletion(createEntry("main"), options);
-    first.finish();
-    expect(readAgentProvenance("main", options)).toEqual(before);
-    recovery.finish();
+    const recovery = await withAgentDeletion(
+      "main",
+      async (begin) => {
+        const deletion = begin(createEntry("main"));
+        expect(() => first.finish()).toThrow("no longer owns");
+        expect(readAgentProvenance("main", options)).toEqual(before);
+        runOpenClawStateWriteTransaction(deletion.completeInTransaction, options);
+        return deletion;
+      },
+      options,
+    );
     expect(readAgentProvenance("main", options)).toBeUndefined();
     expect(readAgentProvenance("kept", options)?.createdVia).toBe("operator");
 
     expect(claimCompletedAgentDeletion("main", recovery.entry.operationId, options)).toBe(true);
     recordAgentProvenance("main", { createdVia: "operator" }, { ...options, nowMs: 2 });
-    first.finish();
-    recovery.finish();
+    expect(() => first.finish()).toThrow("no longer owns");
+    expect(() => recovery.finish()).toThrow("no longer owns");
     expect(readAgentProvenance("main", options)?.createdAtMs).toBe(2);
     expect(binding && matchesAgentLifecycleBinding(config, binding, options)).toBe(false);
   });
 
-  it("keeps a completed deletion fenced until recreation claims cleanup", () => {
+  it("keeps a completed deletion fenced until recreation claims cleanup", async () => {
     const options = createOptions();
-    const deletion = beginAgentDeletion(createEntry("Recreated-Agent"), options);
-
-    expect(isAgentDeletionBlocked("recreated-agent", options)).toBe(true);
-    expect(readAgentDeletionJournal("RECREATED-AGENT", options)).toMatchObject({
-      agentId: "recreated-agent",
-      agentDir: "/agents/Recreated-Agent",
-    });
-    expect(isAgentDeletionBlocked("RECREATED-AGENT", options)).toBe(true);
-
-    deletion.finish();
+    const deletion = await withAgentDeletion(
+      "Recreated-Agent",
+      async (begin) => {
+        const operation = begin(createEntry("Recreated-Agent"));
+        expect(isAgentDeletionBlocked("recreated-agent", options)).toBe(true);
+        expect(readAgentDeletionJournal("RECREATED-AGENT", options)).toMatchObject({
+          agentId: "recreated-agent",
+          agentDir: "/agents/Recreated-Agent",
+        });
+        operation.finish();
+        return operation;
+      },
+      options,
+    );
     expect(readAgentDeletionJournal("recreated-agent", options)).toMatchObject({
       cleanupCompleted: true,
     });
     expect(isAgentDeletionBlocked("recreated-agent", options)).toBe(true);
-
     expect(
       claimCompletedAgentDeletion("recreated-agent", deletion.entry.operationId, options),
     ).toBe(true);
@@ -131,18 +154,8 @@ describe("agent lifecycle registry", () => {
     expect(isAgentDeletionBlocked("recreated-agent", options)).toBe(false);
   });
 
-  it("releases the durable fence when deletion rolls back before roster commit", () => {
+  it("retains pre-resolved cleanup targets when recovery claims the journal", async () => {
     const options = createOptions();
-    const deletion = beginAgentDeletion(createEntry("rollback-agent"), options);
-    deletion.rollback();
-
-    expect(readAgentDeletionJournal("rollback-agent", options)).toBeUndefined();
-    expect(isAgentDeletionBlocked("rollback-agent", options)).toBe(false);
-  });
-
-  it("retains pre-resolved cleanup targets when recovery claims the journal", () => {
-    const options = createOptions();
-    const first = beginAgentDeletion(createEntry("cleanup-recovery-agent"), options);
     const cleanupPaths = [
       {
         path: "/real/workspace",
@@ -167,59 +180,90 @@ describe("agent lifecycle registry", () => {
         done: false,
       },
     ];
-    first.fenceCleanupPaths(cleanupPaths);
-
-    const recovery = beginAgentDeletion(createEntry("cleanup-recovery-agent"), options);
-
-    expect(recovery.entry.cleanupPaths).toEqual(cleanupPaths);
-    expect(readAgentDeletionJournal("cleanup-recovery-agent", options)?.cleanupPaths).toEqual(
-      cleanupPaths,
+    await withAgentDeletion(
+      "cleanup-recovery-agent",
+      async (begin) => {
+        begin(createEntry("cleanup-recovery-agent")).fenceCleanupPaths(cleanupPaths);
+      },
+      options,
     );
-    recovery.rollback();
+    await withAgentDeletion(
+      "cleanup-recovery-agent",
+      async (begin) => {
+        const recovery = begin(createEntry("cleanup-recovery-agent"));
+        expect(recovery.entry.cleanupPaths).toEqual(cleanupPaths);
+        expect(readAgentDeletionJournal("cleanup-recovery-agent", options)?.cleanupPaths).toEqual(
+          cleanupPaths,
+        );
+        recovery.rollback();
+      },
+      options,
+    );
   });
 
-  it("does not let a stale operation clear a journal claimed by recovery", () => {
-    const options = createOptions();
-    const first = beginAgentDeletion(createEntry("claimed-agent"), options);
-    const recovery = beginAgentDeletion(createEntry("claimed-agent"), options);
-
-    first.finish();
-    expect(readAgentDeletionJournal("claimed-agent", options)?.operationId).toBe(
-      recovery.entry.operationId,
-    );
-    expect(isAgentDeletionBlocked("claimed-agent", options)).toBe(true);
-
-    recovery.finish();
-    expect(isAgentDeletionBlocked("claimed-agent", options)).toBe(true);
-    expect(claimCompletedAgentDeletion("claimed-agent", recovery.entry.operationId, options)).toBe(
-      true,
-    );
-    expect(isAgentDeletionBlocked("claimed-agent", options)).toBe(false);
-  });
-
-  it("lets recovery roll back after a stale operation also tries to roll back", () => {
-    const options = createOptions();
-    const first = beginAgentDeletion(createEntry("rollback-claimed-agent"), options);
-    const recovery = beginAgentDeletion(createEntry("rollback-claimed-agent"), options);
-
-    first.rollback();
-    expect(isAgentDeletionBlocked("rollback-claimed-agent", options)).toBe(true);
-    recovery.rollback();
-    expect(isAgentDeletionBlocked("rollback-claimed-agent", options)).toBe(false);
-  });
-
-  it("observes a tombstone claimed outside the lifecycle wrapper", () => {
-    const options = createOptions();
-    const deletion = beginAgentDeletion(createEntry("cross-process-agent"), options);
-    deletion.finish();
-
-    expect(
-      claimCompletedAgentDeletionJournal(
-        "cross-process-agent",
-        deletion.entry.operationId,
+  it.each(["finish", "rollback"] as const)(
+    "rejects stale %s after recovery claims the journal",
+    async (action) => {
+      const options = createOptions();
+      const first = await withAgentDeletion(
+        "claimed-agent",
+        async (begin) => begin(createEntry("claimed-agent")),
         options,
-      ),
-    ).toBe(true);
-    expect(isAgentDeletionBlocked("cross-process-agent", options)).toBe(false);
+      );
+      await withAgentDeletion(
+        "claimed-agent",
+        async (begin) => {
+          const recovery = begin(createEntry("claimed-agent"));
+          expect(() => first[action]()).toThrow("no longer owns");
+          expect(readAgentDeletionJournal("claimed-agent", options)?.operationId).toBe(
+            recovery.entry.operationId,
+          );
+          expect(isAgentDeletionBlocked("claimed-agent", options)).toBe(true);
+          recovery[action]();
+          if (action === "finish") {
+            expect(
+              claimCompletedAgentDeletion("claimed-agent", recovery.entry.operationId, options),
+            ).toBe(true);
+          }
+          expect(isAgentDeletionBlocked("claimed-agent", options)).toBe(false);
+        },
+        options,
+      );
+    },
+  );
+
+  it("allows refusal without a journal and revokes retained admission after settlement", async () => {
+    const options = createOptions();
+    const retained = await withAgentDeletion("main", async (begin) => begin, options);
+    expect(readAgentDeletionJournal("main", options)).toBeUndefined();
+    expect(() => retained(createEntry("main"))).toThrow("already began or has a different target");
+    await withAgentDeletion(
+      "main",
+      async (begin) => {
+        const deletion = begin(createEntry("main"));
+        expect(() => begin(createEntry("main"))).toThrow("already began or has a different target");
+        deletion.rollback();
+      },
+      options,
+    );
+  });
+  it("observes a tombstone claimed outside the lifecycle wrapper", async () => {
+    const options = createOptions();
+    await withAgentDeletion(
+      "cross-process-agent",
+      async (begin) => {
+        const deletion = begin(createEntry("cross-process-agent"));
+        deletion.finish();
+        expect(
+          claimCompletedAgentDeletionJournal(
+            "cross-process-agent",
+            deletion.entry.operationId,
+            options,
+          ),
+        ).toBe(true);
+        expect(isAgentDeletionBlocked("cross-process-agent", options)).toBe(false);
+      },
+      options,
+    );
   });
 });

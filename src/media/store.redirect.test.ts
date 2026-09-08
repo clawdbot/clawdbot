@@ -2,6 +2,9 @@
 import fs from "node:fs/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
+import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -121,22 +124,102 @@ describe("media store remote sources", () => {
     await expect(fs.readFile(saved.path, "utf8")).resolves.toBe("custom");
   });
 
-  it("cancels a never-ending error body before canonical status handling", async () => {
+  it("reports HTTP failure while cancelling a nonempty never-ending body", async () => {
     await useActualSaveRemoteMedia();
     const cancel = vi.fn(() => new Promise<void>(() => {}));
     runtimeFetchMock.mockResolvedValueOnce(
-      new Response(new ReadableStream<Uint8Array>({ cancel }), {
-        status: 500,
-        statusText: "Internal Server Error",
-      }),
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("synthetic upstream failure"));
+          },
+          cancel,
+        }),
+        {
+          status: 500,
+          statusText: "Internal Server Error",
+        },
+      ),
     );
 
     await expect(saveMediaSource("https://example.com/stalled-error.bin")).rejects.toMatchObject({
       name: "MediaFetchError",
       code: "http_error",
       status: 500,
+      message:
+        "Failed to fetch media from https://example.com/stalled-error.bin: HTTP 500 Internal Server Error",
     });
     expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("reports real HTTP failures while closing discarded bodies and retaining readable bodies", async () => {
+    const media = await vi.importActual<typeof import("./fetch.js")>("./fetch.js");
+    const transport = await vi.importActual<typeof import("../infra/net/runtime-fetch.js")>(
+      "../infra/net/runtime-fetch.js",
+    );
+    saveRemoteMediaMock.mockImplementationOnce(media.saveRemoteMedia);
+    runtimeFetchMock.mockImplementation(transport.fetchWithRuntimeDispatcher);
+    setMediaStoreNetworkDepsForTest({
+      resolvePinnedHostname: async (hostname) => {
+        const addresses = ["127.0.0.1"];
+        return { hostname, addresses, lookup: createPinnedLookup({ hostname, addresses }) };
+      },
+    });
+    const responseClosed = createDeferredCore<boolean>();
+    const socketClosed = createDeferredCore();
+    const body = "synthetic upstream unavailable";
+
+    await withEnvAsync({ no_proxy: "127.0.0.1" }, () =>
+      withServer(
+        (request, response) => {
+          const leaveOpen = request.url === "/open-error";
+          if (leaveOpen) {
+            response.once("close", () => responseClosed.resolve(response.writableFinished));
+            request.socket.once("close", () => socketClosed.resolve());
+          }
+          response.writeHead(503, "Service Unavailable", { "content-type": "text/plain" });
+          if (leaveOpen) {
+            response.write(body);
+          } else {
+            response.end(body);
+          }
+        },
+        async (baseUrl) => {
+          const openUrl = `${baseUrl}/open-error`;
+          const failure = await saveMediaSource(openUrl, undefined, "real-http-error", 64).catch(
+            (error: unknown) => error,
+          );
+          expect(failure).toMatchObject({
+            name: "MediaFetchError",
+            code: "http_error",
+            status: 503,
+          });
+          // The helper destroys remaining sockets on exit; observe closure before checking the message.
+          const [finished] = await Promise.all([responseClosed.promise, socketClosed.promise]);
+          expect(finished).toBe(false);
+          await expect(
+            fs.readdir(testState.statePath("media", "real-http-error")),
+          ).resolves.toEqual([]);
+
+          const closedUrl = `${baseUrl}/closed-error`;
+          await expect(
+            media.readRemoteMediaBuffer({
+              url: closedUrl,
+              fetchImpl: transport.fetchWithRuntimeDispatcher,
+              ssrfPolicy: { allowedOrigins: [baseUrl] },
+            }),
+          ).rejects.toMatchObject({
+            name: "MediaFetchError",
+            code: "http_error",
+            status: 503,
+            message: `Failed to fetch media from ${closedUrl}: HTTP 503 Service Unavailable; body: ${body}`,
+          });
+          expect(failure).toMatchObject({
+            message: `Failed to fetch media from ${openUrl}: HTTP 503 Service Unavailable`,
+          });
+        },
+      ),
+    );
   });
 
   it("keeps redirect cancellation and cross-origin header stripping in the guard", async () => {

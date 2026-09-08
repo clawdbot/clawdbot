@@ -7,12 +7,12 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
   projectChatDisplayMessage,
   resolveEffectiveChatHistoryMaxChars,
 } from "../chat-display-projection.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
@@ -21,7 +21,7 @@ import {
 } from "./chat-broadcast.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
-import { resolveRequestedChatAgentId, validateChatSelectedAgent } from "./chat-origin-routing.js";
+import { validateChatSelectedAgent } from "./chat-origin-routing.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import { appendAssistantTranscriptMessage } from "./chat-transcript-persistence.js";
@@ -68,17 +68,17 @@ export const chatHandlers: GatewayRequestHandlers = {
     // Load session to find transcript file
     const rawSessionKey = p.sessionKey;
     const agentIdOverride = normalizeOptionalText(p.agentId);
-    const requestedAgent = resolveRequestedChatAgentId({
-      cfg: (context as { getRuntimeConfig?: () => OpenClawConfig }).getRuntimeConfig?.(),
-      requestedSessionKey: rawSessionKey,
-      agentId: agentIdOverride,
-    });
+    const requestedAgent = resolveRequestedSessionAgentId(
+      context.getRuntimeConfig(),
+      rawSessionKey,
+      agentIdOverride,
+    );
     if (!requestedAgent.ok) {
       respond(false, undefined, requestedAgent.error);
       return;
     }
     const requestedAgentId = requestedAgent.agentId;
-    const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
+    const sessionLoadOptions = { agentId: requestedAgentId };
     const {
       cfg,
       storePath,

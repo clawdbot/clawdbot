@@ -46,7 +46,6 @@ type NodeBridgeSession = {
   lastClearAt?: string;
   lastInputBytes: number;
   lastOutputBytes: number;
-  closedAt?: string;
   clearCount: number;
   outputGeneration: number;
   outputWriteWaiters: Set<NodeOutputWriteWaiter>;
@@ -205,7 +204,6 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
       session.queuedInputBytes = 0;
       if (!session.closed) {
         session.closed = true;
-        session.closedAt = new Date().toISOString();
       }
       wake(session);
     }
@@ -222,7 +220,6 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
             return;
           }
           session.closed = true;
-          session.closedAt = new Date().toISOString();
           wake(session);
         });
     session.stopPromise = Promise.all([
@@ -605,7 +602,6 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     mode: session.mode,
     closed: session.closed,
     createdAt: session.createdAt,
-    closedAt: session.closedAt,
     lastInputAt: session.lastInputAt,
     lastOutputAt: session.lastOutputAt,
     lastInputBytes: session.lastInputBytes,

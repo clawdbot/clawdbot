@@ -6,6 +6,8 @@ export type ActiveTaskRestartBlocker = {
   taskId: string;
   status: Extract<TaskStatus, "running">;
   runtime: TaskRecord["runtime"];
+  /** Internal classification; omitted from suspension task metadata. */
+  taskKind?: TaskRecord["taskKind"];
   runId?: string;
   label?: string;
   title?: string;

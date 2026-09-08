@@ -88,7 +88,7 @@ describe("commitGatewayConfigWrite", () => {
     expect(configMocks.replaceConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({
         baseHash: "missing-config-revision",
-        nextConfig: {},
+        sourceConfig: {},
       }),
     );
   });

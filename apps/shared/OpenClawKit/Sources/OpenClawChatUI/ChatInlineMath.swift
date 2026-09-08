@@ -46,7 +46,7 @@ enum ChatInlineMathScanner {
             }
 
             guard markdown[cursor...].hasPrefix(#"\("#),
-                  !self.isEscaped(at: cursor, in: markdown)
+                  !ChatMarkdownBlockSyntax.isEscaped(at: cursor, in: markdown)
             else {
                 cursor = markdown.index(after: cursor)
                 continue
@@ -114,7 +114,7 @@ enum ChatInlineMathScanner {
                 containsNewline = true
             }
             if markdown[cursor...].hasPrefix(#"\)"#),
-               !self.isEscaped(at: cursor, in: markdown)
+               !ChatMarkdownBlockSyntax.isEscaped(at: cursor, in: markdown)
             {
                 return Candidate(
                     closeStart: cursor,
@@ -146,7 +146,7 @@ enum ChatInlineMathScanner {
                 start: cursor,
                 end: end,
                 length: markdown.distance(from: cursor, to: end),
-                canOpen: !self.isEscaped(at: cursor, in: markdown)))
+                canOpen: !ChatMarkdownBlockSyntax.isEscaped(at: cursor, in: markdown)))
             cursor = end
         }
 
@@ -195,18 +195,6 @@ enum ChatInlineMathScanner {
             end = markdown.index(after: end)
         }
         return end
-    }
-
-    private static func isEscaped(at index: String.Index, in markdown: String) -> Bool {
-        var cursor = index
-        var slashCount = 0
-        while cursor > markdown.startIndex {
-            let previous = markdown.index(before: cursor)
-            guard markdown[previous] == "\\" else { break }
-            slashCount += 1
-            cursor = previous
-        }
-        return slashCount.isMultiple(of: 2) == false
     }
 }
 

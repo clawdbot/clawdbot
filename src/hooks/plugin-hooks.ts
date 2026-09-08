@@ -1,13 +1,8 @@
 // Plugin hook helpers discover hooks contributed by installed plugins.
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  normalizePluginsConfigWithResolver,
-  resolvePolicyPluginActivationState,
-} from "../plugins/config-policy.js";
-import { resolveMemorySlotDecision } from "../plugins/config-state.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { hasKind } from "../plugins/slots.js";
+import { iteratePluginRootContributions } from "../plugins/plugin-root-contributions.js";
 
 type PluginHookDirEntry = {
   dir: string;
@@ -34,46 +29,15 @@ export function resolvePluginHookDirs(params: {
     return [];
   }
 
-  const normalizedPlugins = normalizePluginsConfigWithResolver(
-    params.config?.plugins,
-    metadataSnapshot.normalizePluginId,
-  );
-  const memorySlot = normalizedPlugins.slots.memory;
-  let selectedMemoryPluginId: string | null = null;
   const seen = new Set<string>();
   const resolved: PluginHookDirEntry[] = [];
 
-  for (const record of registry.plugins) {
-    if (!record.hooks || record.hooks.length === 0) {
-      continue;
-    }
-    const activationState = resolvePolicyPluginActivationState({
-      id: record.id,
-      origin: record.origin,
-      channelIds: record.channels,
-      config: normalizedPlugins,
-      rootConfig: params.config,
-    });
-    if (!activationState.activated) {
-      continue;
-    }
-
-    const memoryDecision = resolveMemorySlotDecision({
-      id: record.id,
-      kind: record.kind,
-      slot: memorySlot,
-      selectedId: selectedMemoryPluginId,
-    });
-    if (!memoryDecision.enabled) {
-      continue;
-    }
-    // Memory plugin hooks follow the same slot winner as runtime memory
-    // providers so disabled memory implementations cannot register hooks.
-    if (memoryDecision.selected && hasKind(record.kind, "memory")) {
-      selectedMemoryPluginId = record.id;
-    }
-
-    for (const raw of record.hooks) {
+  for (const { record, roots } of iteratePluginRootContributions({
+    metadataSnapshot,
+    config: params.config,
+    contribution: "hooks",
+  })) {
+    for (const raw of roots) {
       const trimmed = raw.trim();
       if (!trimmed) {
         continue;

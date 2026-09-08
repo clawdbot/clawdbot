@@ -32,7 +32,7 @@ export async function bootstrapCommandOwnerFromPairing(params: {
     ownerAllowFrom: [ownerEntry],
   };
   await replaceConfigFile({
-    nextConfig,
+    sourceConfig: nextConfig,
     snapshot,
     writeOptions,
     afterWrite: { mode: "auto" },

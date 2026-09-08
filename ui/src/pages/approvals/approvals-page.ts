@@ -377,14 +377,14 @@ class ApprovalsPage extends OpenClawLightDomElement {
       <p class="settings-section-subtitle">${t("standingGrants.description")}</p>
       ${this.grantsError ? html`<div class="callout danger">${this.grantsError}</div>` : nothing}
       <div class="data-table-container">
-        <table class="data-table standing-grants-table">
+        <table class="data-table standing-grants-table settings-table--stacked" role="table">
           <thead>
             <tr>
-              <th>${t("standingGrants.columns.automation")}</th>
-              <th>${t("standingGrants.columns.command")}</th>
-              <th>${t("standingGrants.columns.uses")}</th>
-              <th>${t("standingGrants.columns.state")}</th>
-              <th></th>
+              <th scope="col">${t("standingGrants.columns.automation")}</th>
+              <th scope="col">${t("standingGrants.columns.command")}</th>
+              <th scope="col">${t("standingGrants.columns.uses")}</th>
+              <th scope="col">${t("standingGrants.columns.state")}</th>
+              <th scope="col"></th>
             </tr>
           </thead>
           <tbody>
@@ -402,10 +402,16 @@ class ApprovalsPage extends OpenClawLightDomElement {
                 : this.grants.map(
                     (grant) => html`
                       <tr>
-                        <td>${grant.cronJobName ?? grant.cronJobId}</td>
-                        <td class="mono">${grant.command}</td>
-                        <td>${grant.useCount}</td>
-                        <td>${grantStateLabel(grant, nowMs)}</td>
+                        <td data-label=${t("standingGrants.columns.automation")}>
+                          ${grant.cronJobName ?? grant.cronJobId}
+                        </td>
+                        <td class="mono" data-label=${t("standingGrants.columns.command")}>
+                          ${grant.command}
+                        </td>
+                        <td data-label=${t("standingGrants.columns.uses")}>${grant.useCount}</td>
+                        <td data-label=${t("standingGrants.columns.state")}>
+                          ${grantStateLabel(grant, nowMs)}
+                        </td>
                         <td>
                           ${
                             grantIsActive(grant, nowMs)
@@ -443,16 +449,16 @@ class ApprovalsPage extends OpenClawLightDomElement {
     }
     return html`
       <div class="data-table-container">
-        <table class="data-table approval-history-table">
+        <table class="data-table approval-history-table settings-table--stacked" role="table">
           <thead>
             <tr>
-              <th>${t("approvalHistory.columns.resolved")}</th>
-              <th>${t("approvalHistory.columns.kind")}</th>
-              <th>${t("approvalHistory.columns.request")}</th>
-              <th>${t("approvalHistory.columns.decision")}</th>
-              <th>${t("approvalHistory.columns.reason")}</th>
-              <th>${t("approvalHistory.columns.source")}</th>
-              <th>${t("approvalHistory.columns.resolver")}</th>
+              <th scope="col">${t("approvalHistory.columns.resolved")}</th>
+              <th scope="col">${t("approvalHistory.columns.kind")}</th>
+              <th scope="col">${t("approvalHistory.columns.request")}</th>
+              <th scope="col">${t("approvalHistory.columns.decision")}</th>
+              <th scope="col">${t("approvalHistory.columns.reason")}</th>
+              <th scope="col">${t("approvalHistory.columns.source")}</th>
+              <th scope="col">${t("approvalHistory.columns.resolver")}</th>
             </tr>
           </thead>
           <tbody>
@@ -474,16 +480,28 @@ class ApprovalsPage extends OpenClawLightDomElement {
                 : this.items.map(
                     (item) => html`
                       <tr>
-                        <td>${formatResolvedAt(item.resolvedAtMs)}</td>
-                        <td>${kindLabel(item.presentation.kind)}</td>
-                        <td class="mono">${requestLabel(item)}</td>
-                        <td>
+                        <td data-label=${t("approvalHistory.columns.resolved")}>
+                          ${formatResolvedAt(item.resolvedAtMs)}
+                        </td>
+                        <td data-label=${t("approvalHistory.columns.kind")}>
+                          ${kindLabel(item.presentation.kind)}
+                        </td>
+                        <td class="mono" data-label=${t("approvalHistory.columns.request")}>
+                          ${requestLabel(item)}
+                        </td>
+                        <td data-label=${t("approvalHistory.columns.decision")}>
                           ${statusLabel(item.status)} ·
                           ${decisionLabel("decision" in item ? item.decision : undefined)}
                         </td>
-                        <td>${reasonLabel(item.reason)}</td>
-                        <td class="mono">${sourceLabel(item)}</td>
-                        <td class="mono">${resolverLabel(item)}</td>
+                        <td data-label=${t("approvalHistory.columns.reason")}>
+                          ${reasonLabel(item.reason)}
+                        </td>
+                        <td class="mono" data-label=${t("approvalHistory.columns.source")}>
+                          ${sourceLabel(item)}
+                        </td>
+                        <td class="mono" data-label=${t("approvalHistory.columns.resolver")}>
+                          ${resolverLabel(item)}
+                        </td>
                       </tr>
                     `,
                   )

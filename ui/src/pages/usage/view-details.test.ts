@@ -24,7 +24,7 @@ function point(overrides: Partial<TimeSeriesPoint> = {}): TimeSeriesPoint {
   };
 }
 
-function session(): UsageSessionEntry {
+function session(): UsageSessionEntry & { usage: NonNullable<UsageSessionEntry["usage"]> } {
   return {
     key: "agent:main:detail",
     label: "Detail session",
@@ -52,7 +52,7 @@ function session(): UsageSessionEntry {
         errors: 0,
       },
     },
-  } as UsageSessionEntry;
+  };
 }
 
 function mount(
@@ -70,9 +70,8 @@ function mount(
     timeSeries?: string;
     sessionLogs?: string;
     sessionLogsData?: SessionLogEntry[];
+    session?: UsageSessionEntry;
     stale?: boolean;
-    onRetryTimeSeries?: () => void;
-    onRetrySessionLogs?: () => void;
     contextWeight?: UsageSessionEntry["contextWeight"];
     contextExpanded?: boolean;
     onToggleContextExpanded?: () => void;
@@ -82,15 +81,15 @@ function mount(
     error: error ?? null,
     hasLoaded: errors.stale ?? false,
     stale: errors.stale ?? false,
+    awaitingGateway: false,
   });
   const container = document.createElement("div");
   render(
     renderSessionDetailPanel(
-      { ...session(), contextWeight: errors.contextWeight },
+      { ...(errors.session ?? session()), contextWeight: errors.contextWeight },
       { points },
       false,
       status(errors.timeSeries),
-      errors.onRetryTimeSeries ?? vi.fn(),
       "per-turn",
       vi.fn(),
       breakdownMode,
@@ -105,7 +104,6 @@ function mount(
       errors.sessionLogsData ?? [],
       false,
       status(errors.sessionLogs),
-      errors.onRetrySessionLogs ?? vi.fn(),
       false,
       vi.fn(),
       { roles: [], tools: [], hasTools: false, query: "" },
@@ -119,7 +117,6 @@ function mount(
         loading: false,
         status: status(),
       },
-      vi.fn(),
       errors.contextExpanded ?? false,
       errors.onToggleContextExpanded ?? vi.fn(),
       vi.fn(),
@@ -243,6 +240,60 @@ describe("renderSessionDetailPanel filtered usage", () => {
     ).toContain("47");
   });
 
+  it.each(["tool", "toolResult"] as const)(
+    "counts repeated assistant calls without counting %s results in the selected range",
+    (resultRole) => {
+      const start = Date.parse("2026-08-20T12:00:00Z");
+      const end = start + 2000;
+      const entry = session();
+      entry.usage = {
+        ...entry.usage,
+        toolUsage: {
+          totalCalls: 2,
+          uniqueTools: 2,
+          tools: [
+            { name: "read", count: 1 },
+            { name: "exec", count: 1 },
+          ],
+        },
+      };
+      const logs: SessionLogEntry[] = [
+        { timestamp: start, role: "assistant", content: "[Tool: read]\n[Tool: read]" },
+        {
+          timestamp: start + 500,
+          role: resultRole,
+          content: "[Tool: read]\n[Tool Result]\nFirst file",
+        },
+        {
+          timestamp: start + 1000,
+          role: resultRole,
+          content: "[Tool: read]\n[Tool Result]\nSecond file",
+        },
+        { timestamp: end, role: "assistant", content: "Both files reviewed." },
+        { timestamp: end + 1000, role: "assistant", content: "[Tool: exec]" },
+      ];
+      const points = [start, end, end + 1000].map((timestamp) => point({ timestamp }));
+      const data = { session: entry, sessionLogsData: logs };
+      const selected = mount(points, start, end, "total", {}, data);
+      expect(selected.querySelectorAll(".session-summary-value")[1]?.textContent).toBe("2");
+      expect(selected.querySelectorAll(".session-summary-meta")[1]?.textContent?.trim()).toBe(
+        "1 tools used",
+      );
+      expect(
+        [...selected.querySelectorAll(".usage-list-item")].map((item) => [
+          item.firstElementChild?.textContent,
+          item.querySelector(".usage-list-value > span")?.textContent,
+        ]),
+      ).toEqual([
+        ["read", "2"],
+        ["exec", "0"],
+      ]);
+      expect(selected.querySelector(".session-log-tools-pill")?.textContent?.trim()).toBe(
+        "read × 2",
+      );
+    },
+  );
+
   it("accepts a reversed range and falls back to full totals when no points match", () => {
     const reversed = mount(
       [point({ timestamp: 1000, totalTokens: 50 }), point({ timestamp: 2000, totalTokens: 75 })],
@@ -265,9 +316,7 @@ describe("renderSessionDetailPanel filtered usage", () => {
     expect(container.textContent).not.toContain("Invalid Date");
   });
 
-  it("renders independent retry actions for detail request failures", () => {
-    const onRetryTimeSeries = vi.fn();
-    const onRetrySessionLogs = vi.fn();
+  it("renders detail request failure messages without retry buttons", () => {
     const container = mount(
       [],
       null,
@@ -277,8 +326,6 @@ describe("renderSessionDetailPanel filtered usage", () => {
       {
         timeSeries: "timeline unavailable",
         sessionLogs: "logs unavailable",
-        onRetryTimeSeries,
-        onRetrySessionLogs,
       },
     );
 
@@ -293,10 +340,8 @@ describe("renderSessionDetailPanel filtered usage", () => {
       "Could not load conversation: logs unavailable",
     );
 
-    timelineError?.querySelector("button")?.click();
-    conversationError?.querySelector("button")?.click();
-    expect(onRetryTimeSeries).toHaveBeenCalledOnce();
-    expect(onRetrySessionLogs).toHaveBeenCalledOnce();
+    expect(timelineError?.querySelector("button")).toBeNull();
+    expect(conversationError?.querySelector("button")).toBeNull();
   });
 
   it("keeps loaded details visible and marks them stale after refresh failures", () => {

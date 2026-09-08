@@ -6,38 +6,8 @@ let dashboardWindowLogger = Logger(subsystem: "ai.openclaw", category: "Dashboar
 
 enum DashboardWindowLayout {
     static let windowSize = NSSize(width: 1240, height: 860)
-    // The dashboard can use its compact navigation below 600pt; keeping the
-    // expanded rail's width here would stop the browser near half the window.
-    static let mainBrowserMinWidth: CGFloat = 400
-    static let linkBrowserMinWidth: CGFloat = 320
     static let windowMinSize = NSSize(width: 922, height: 620)
-    static let linkBrowserPreferredFraction: CGFloat = 0.5
-    static let linkBrowserTabBarHeight: CGFloat = 30
-    static let linkBrowserToolbarHeight: CGFloat = 52
-    static let linkBrowserToolbarWithTabsHeight: CGFloat = 78
-    static let linkBrowserWidthDefaultsKey = "OpenClawDashboardLinkBrowserWidth"
     static let windowFrameAutosaveName = "OpenClawDashboardWindow"
-
-    static func linkBrowserWidth(
-        splitWidth: CGFloat,
-        dividerThickness: CGFloat,
-        persistedWidth: CGFloat?) -> CGFloat
-    {
-        let availableWidth = max(0, splitWidth - dividerThickness)
-        let maximumWidth = max(0, availableWidth - self.mainBrowserMinWidth)
-        guard maximumWidth >= self.linkBrowserMinWidth else { return maximumWidth }
-        let preferredWidth = if let persistedWidth, persistedWidth.isFinite, persistedWidth > 0 {
-            persistedWidth
-        } else {
-            availableWidth * self.linkBrowserPreferredFraction
-        }
-        return min(max(preferredWidth, self.linkBrowserMinWidth), maximumWidth)
-    }
-
-    static func dividerMoved(from originalPosition: CGFloat?, to finalPosition: CGFloat?) -> Bool {
-        guard let originalPosition, let finalPosition else { return false }
-        return abs(finalPosition - originalPosition) >= 0.5
-    }
 }
 
 /// Raw values are window event names the Control UI handles. `newSession`

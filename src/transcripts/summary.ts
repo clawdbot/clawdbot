@@ -36,16 +36,29 @@ const RISK_PATTERNS =
 
 function firstSentences(utterances: TranscriptUtterance[], limit: number): string {
   const text = normalizeStringEntries(utterances.map((utterance) => utterance.text)).join(" ");
-  const sentences = text.match(/[^.!?]+[.!?]?/g) ?? [];
-  return normalizeStringEntries(sentences.slice(0, limit)).join(" ");
+  const sentences: string[] = [];
+  for (const match of text.matchAll(/[^.!?]+[.!?]?/g)) {
+    sentences.push(match[0]);
+    // Whitespace-only matches count toward the limit before normalization.
+    if (sentences.length >= limit) {
+      break;
+    }
+  }
+  return normalizeStringEntries(sentences).join(" ");
 }
 
 function collectMatches(utterances: TranscriptUtterance[], pattern: RegExp): string[] {
-  return utterances
-    .filter((utterance) => pattern.test(utterance.text))
-    .map(formatSpeakerLine)
-    .filter(Boolean)
-    .slice(0, 12);
+  const matches: string[] = [];
+  utterances.some((utterance) => {
+    if (pattern.test(utterance.text)) {
+      const line = formatSpeakerLine(utterance);
+      if (line) {
+        matches.push(line);
+      }
+    }
+    return matches.length >= 12;
+  });
+  return matches;
 }
 
 function sanitizeUtterance(utterance: TranscriptUtterance): TranscriptUtterance {

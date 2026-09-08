@@ -2892,7 +2892,7 @@ describe("Tool Search", () => {
     expect(target.execute).toHaveBeenCalledWith(
       "tool_search_code:call-schema-directory:fake_message:1",
       { action: "send", message: "hello" },
-      undefined,
+      expect.objectContaining({ aborted: false }),
       undefined,
       undefined,
     );
@@ -3715,8 +3715,17 @@ describe("Tool Search", () => {
     );
     expect(secondExecuteInput.parentToolCallId).toBe("call-lifecycle-structured");
     expect(secondExecuteInput.input).toEqual({ value: "structured" });
-    expect(secondExecuteInput.signal).toBe(abortController.signal);
+    expect(secondExecuteInput.signal).toBeInstanceOf(AbortSignal);
     expect(secondExecuteInput.onUpdate).toBe(onUpdate);
+    const forwardedSignal = secondExecuteInput.signal;
+    if (!(forwardedSignal instanceof AbortSignal)) {
+      throw new Error("expected catalog cancellation signal");
+    }
+    expect(forwardedSignal.aborted).toBe(false);
+    const reason = new Error("cancel lifecycle caller");
+    abortController.abort(reason);
+    expect(forwardedSignal.aborted).toBe(true);
+    expect(forwardedSignal.reason).toBe(reason);
   });
 
   it("does not execute fire-and-forget bridged calls after code returns", async () => {

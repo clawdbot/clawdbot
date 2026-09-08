@@ -1,6 +1,8 @@
 // Real-browser proof for opening workspace files from chat links and the workspace browser.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type Browser } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -37,56 +39,172 @@ describeControlUiE2e("Control UI chat file links", () => {
     await server?.close();
   });
 
-  it("shows the Review panel before a clicked file finishes loading", async () => {
-    const context = await browser.newContext({
-      recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
-    try {
-      const file = {
-        root: "/workspace",
-        sessionKey: "agent:main:main",
-        file: {
-          content: "export const loaded = true;\n",
-          kind: "read",
-          missing: false,
-          name: "slow.ts",
-          path: "src/slow.ts",
-          workspacePath: "src/slow.ts",
-        },
-      };
-      const gateway = await installMockGateway(page, {
-        deferredMethods: ["sessions.files.get"],
-        historyMessages: [
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "Review `src/slow.ts`." }],
-            timestamp: 1,
-          },
-        ],
-        methodResponses: { "sessions.files.get": file },
+  it.each(["file", "task", "close", "list"] as const)(
+    "shows Review before file completion and honors the %s intent",
+    async (intent) => {
+      const context = await browser.newContext({
+        recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
+        viewport: { height: 900, width: 1280 },
       });
-      await page.goto(`${server.baseUrl}chat`);
+      const page = await context.newPage();
+      page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
+      try {
+        const file = {
+          root: "/workspace",
+          sessionKey: "agent:main:main",
+          file: {
+            content: "export const loaded = true;\n",
+            kind: "read",
+            missing: false,
+            name: "slow.ts",
+            path: "src/slow.ts",
+            workspacePath: "src/slow.ts",
+          },
+        };
+        const task = {
+          id: "review-intent-task",
+          taskId: "review-intent-task",
+          kind: "subagent",
+          runtime: "subagent",
+          status: "running",
+          title: "Inspect current task",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          ownerKey: "agent:main:main",
+          childSessionKey: "agent:main:subagent:review-intent",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          startedAt: Date.now(),
+          lastActivity: "Inspect the current task",
+        };
+        const gateway = await installMockGateway(page, {
+          deferredMethods: [
+            "sessions.files.get",
+            ...(intent === "list" ? ["sessions.files.list"] : []),
+          ],
+          historyMessages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "Review `src/slow.ts`." }],
+              timestamp: 1,
+            },
+          ],
+          methodResponses: {
+            "sessions.files.get": file,
+            "sessions.files.list": {
+              sessionKey: file.sessionKey,
+              root: file.root,
+              files: [],
+              browser: { path: "", entries: [] },
+            },
+            "tasks.list": { tasks: intent === "task" ? [task] : [] },
+            "chat.history": {
+              cases: [
+                {
+                  match: { sessionKey: task.childSessionKey },
+                  response: {
+                    sessionId: "review-intent-child",
+                    thinkingLevel: null,
+                    messages: [
+                      {
+                        role: "assistant",
+                        content: [{ type: "text", text: "Current task result." }],
+                        timestamp: Date.now(),
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        });
+        const response = await page.goto(`${server.baseUrl}chat`);
+        expect(response?.status()).toBe(200);
+        const indexSha256 = createHash("sha256")
+          .update(await response!.body())
+          .digest("hex");
+        if (intent === "task") {
+          await page.locator('button[data-subagent-task-id="review-intent-task"]').waitFor();
+        } else if (intent === "list") {
+          await openChatSidePanelType(page, "Files");
+          await gateway.waitForRequest("sessions.files.list");
+        }
 
-      await page.locator('a.markdown-file-link[data-file-path="src/slow.ts"]').click();
-      await gateway.waitForRequest("sessions.files.get");
+        await page.locator('a.markdown-file-link[data-file-path="src/slow.ts"]').click();
+        await gateway.waitForRequest("sessions.files.get");
 
-      await page.locator('[data-region-header="side"]').waitFor({ state: "visible" });
-      expect(await page.locator(".sidebar-file-view").count()).toBe(0);
-      await page.screenshot({ path: path.join(artifactDir, "latency-panel-before-file.png") });
+        await page.locator('[data-region-header="side"]').waitFor({ state: "visible" });
+        expect(await page.locator(".sidebar-file-view").count()).toBe(0);
+        await page.screenshot({ path: path.join(artifactDir, "latency-panel-before-file.png") });
 
-      await gateway.resolveDeferred("sessions.files.get");
-      await page.locator(".sidebar-file-view").waitFor({ state: "visible" });
-      await expect
-        .poll(() => page.locator(".cm-content").textContent())
-        .toContain("export const loaded = true;");
-      await page.screenshot({ path: path.join(artifactDir, "latency-file-loaded.png") });
-    } finally {
-      await context.close();
-    }
-  });
+        if (intent === "task") {
+          await page.locator('button[data-subagent-task-id="review-intent-task"]').click();
+        } else if (intent === "close") {
+          await page.getByRole("button", { name: "Close Review", exact: true }).click();
+          await page.locator('[data-panel-slot="detail"]').waitFor({ state: "detached" });
+          expect(await page.locator('[data-panel-slot="detail"]').count()).toBe(0);
+        } else if (intent === "list") {
+          await gateway.resolveDeferred("sessions.files.list");
+          await gateway.waitForRequest("artifacts.list");
+        }
+
+        await gateway.resolveDeferred("sessions.files.get");
+        await page.evaluate(
+          "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+        );
+        const fileView = page.locator(".sidebar-file-view");
+        const taskView = page.locator("[data-task-detail-panel]");
+        // Capture either settled outcome before the strict assertion, including a failing baseline.
+        if ((await fileView.count()) > 0) {
+          await expect
+            .poll(() => fileView.locator(".cm-content").textContent())
+            .toContain("export const loaded = true;");
+        } else if (intent === "task" && (await taskView.count()) > 0) {
+          await taskView.getByText("Current task result.", { exact: true }).waitFor();
+        }
+        fs.writeFileSync(
+          path.join(artifactDir, "intent-requests.json"),
+          JSON.stringify(
+            {
+              intent,
+              bundle: {
+                indexSha256,
+                assets: await page.evaluate(
+                  "performance.getEntriesByType('resource').map(entry => new URL(entry.name).pathname).filter(path => path.includes('/assets/'))",
+                ),
+              },
+              files: await gateway.getRequests("sessions.files.get"),
+              lists: await gateway.getRequests("sessions.files.list"),
+              taskHistory: (await gateway.getRequests("chat.history")).filter(
+                (request) => asNullableRecord(request.params)?.sessionKey === task.childSessionKey,
+              ),
+            },
+            null,
+            2,
+          ),
+        );
+        await page.screenshot({ path: path.join(artifactDir, `intent-${intent}-settled.png`) });
+        if (intent === "task") {
+          expect(await taskView.count()).toBe(1);
+          expect(await taskView.textContent()).toContain("Inspect current task");
+          expect(await taskView.textContent()).toContain("Current task result.");
+          expect(await fileView.count()).toBe(0);
+        } else if (intent === "close") {
+          expect(await page.locator('[data-panel-slot="detail"]').count()).toBe(0);
+          expect(
+            await page.getByRole("button", { name: "Close Review", exact: true }).count(),
+          ).toBe(0);
+        } else {
+          expect(await fileView.count()).toBe(1);
+          expect(await fileView.locator(".cm-content").textContent()).toContain(
+            "export const loaded = true;",
+          );
+        }
+      } finally {
+        await context.close();
+      }
+    },
+  );
 
   it("opens the selected file from chat and the workspace root", async () => {
     const context = await browser.newContext({

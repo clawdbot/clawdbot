@@ -77,6 +77,7 @@ export type ChannelHandler = {
   textChunkLimit?: number;
   preserveMarkdownDetails?: boolean;
   supportsMedia: boolean;
+  supportsMediaPayload?: boolean;
   sanitizeText?: (payload: ReplyPayload) => string;
   normalizePayload?: (payload: ReplyPayload) => ReplyPayload | null;
   normalizePayloadBatch?: (

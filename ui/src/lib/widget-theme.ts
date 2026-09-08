@@ -1,30 +1,9 @@
-const WIDGET_THEME_TOKENS = [
-  "surface",
-  "card",
-  "elevated",
-  "text",
-  "text-strong",
-  "muted",
-  "border",
-  "border-strong",
-  "accent",
-  "accent-fill",
-  "accent-fg",
-  "ok",
-  "warn",
-  "danger",
-  "info",
-  "radius",
-  "radius-full",
-  "scrollbar-size",
-  "scrollbar-thumb-inset",
-  "scrollbar-thumb",
-  "scrollbar-thumb-hover",
-  "font-body",
-  "font-mono",
-] as const;
-
-type WidgetThemeToken = (typeof WIDGET_THEME_TOKENS)[number];
+import {
+  WIDGET_THEME_MESSAGE_TYPE,
+  WIDGET_THEME_TOKENS,
+  type WidgetThemeMessage,
+  type WidgetThemeToken,
+} from "../../../src/shared/widget-theme.ts";
 
 const HOST_TOKEN_SOURCES: Record<WidgetThemeToken, string> = {
   surface: "--bg",
@@ -63,15 +42,11 @@ function collectWidgetThemeTokens(read: (hostVar: string) => string): Record<str
   return tokens;
 }
 
-export function buildWidgetThemeMessage(): {
-  type: "openclaw:widget-theme";
-  mode: "light" | "dark";
-  tokens: Record<string, string>;
-} {
+export function buildWidgetThemeMessage(): WidgetThemeMessage {
   const root = document.documentElement;
   const styles = getComputedStyle(root);
   return {
-    type: "openclaw:widget-theme",
+    type: WIDGET_THEME_MESSAGE_TYPE,
     mode: root.dataset.themeMode === "light" ? "light" : "dark",
     tokens: collectWidgetThemeTokens((hostVar) => styles.getPropertyValue(hostVar)),
   };

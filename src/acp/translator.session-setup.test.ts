@@ -10,8 +10,11 @@ import {
   sessionUpdatePayloads,
   expectSessionUpdate,
 } from "./translator.bridge-test-helpers.js";
-import { AcpGatewayAgent } from "./translator.js";
-import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
+import {
+  createAcpConnection,
+  createAcpGateway,
+  createAcpGatewayAgent,
+} from "./translator.test-helpers.js";
 
 vi.mock("./commands.js", () => ({
   getAvailableCommands: () => [],
@@ -22,7 +25,7 @@ describe("acp unsupported bridge session setup", () => {
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();
     const sessionUpdate = connection["__sessionUpdateMock"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(), {
+    const agent = createAcpGatewayAgent(connection, createAcpGateway(), {
       sessionStore,
     });
 
@@ -41,7 +44,7 @@ describe("acp unsupported bridge session setup", () => {
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();
     const sessionUpdate = connection["__sessionUpdateMock"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(), {
+    const agent = createAcpGatewayAgent(connection, createAcpGateway(), {
       sessionStore,
     });
 
@@ -60,7 +63,7 @@ describe("acp unsupported bridge session setup", () => {
 describe("acp session UX bridge behavior", () => {
   it("uses a non-runtime namespace for generated bridge sessions", async () => {
     const sessionStore = createInMemorySessionStore();
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
       sessionStore,
     });
 
@@ -73,7 +76,7 @@ describe("acp session UX bridge behavior", () => {
 
   it("returns initial modes and thought-level config options for new sessions", async () => {
     const sessionStore = createInMemorySessionStore();
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
       sessionStore,
     });
 
@@ -159,7 +162,7 @@ describe("acp session UX bridge behavior", () => {
       }
       return { ok: true };
     }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
       sessionStore,
     });
 
@@ -259,7 +262,7 @@ describe("acp session UX bridge behavior", () => {
       }
       return { ok: true };
     }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+    const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
       sessionStore,
     });
 

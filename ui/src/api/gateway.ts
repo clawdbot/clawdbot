@@ -426,6 +426,9 @@ export class GatewayBrowserClient {
     if (deviceIdentity) {
       selectedAuth = this.selectConnectAuth({ role, deviceId: deviceIdentity.deviceId });
     }
+    // The single secret input uses token; retain explicit native passwords and
+    // copy only selected shared auth, never bootstrap or device credentials.
+    selectedAuth.authPassword ??= selectedAuth.authToken;
     const scopes = resolveGatewayConnectScopes({
       requestedScopes: selectedAuth.authBootstrapToken
         ? this.opts.bootstrapProfile === CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT

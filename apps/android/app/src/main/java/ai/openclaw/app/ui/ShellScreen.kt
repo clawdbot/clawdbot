@@ -90,6 +90,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -106,6 +107,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.window.layout.DisplayFeature
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -133,6 +135,7 @@ private const val overviewRecentSessionVisibleLimit = 3
 fun ShellScreen(
   viewModel: MainViewModel,
   modifier: Modifier = Modifier,
+  features: List<DisplayFeature> = emptyList(),
 ) {
   val appearanceThemeMode by viewModel.appearanceThemeMode.collectAsState()
   val appearanceThemeFamily by viewModel.appearanceThemeFamily.collectAsState()
@@ -144,255 +147,277 @@ fun ShellScreen(
     val nav = rememberSaveable(saver = ShellNavigation.Saver) { ShellNavigation() }
     var commandOpen by rememberSaveable { mutableStateOf(false) }
     var conversationScreenWasActive by rememberSaveable { mutableStateOf(false) }
-    val sidebarDrawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
-    var sidebarRowDragging by remember { mutableStateOf(false) }
-    val coroutineScope = rememberCoroutineScope()
-    val requestedHomeDestination by viewModel.requestedHomeDestination.collectAsState()
     val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
-    val runtimeInitialized by viewModel.runtimeInitialized.collectAsState()
-    val gatewayAgents by viewModel.gatewayAgents.collectAsState()
-    val gatewayDefaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
-    val chatSessionOwnerAgentId by viewModel.chatSessionOwnerAgentId.collectAsState()
-    val chatSessions by viewModel.chatSessions.collectAsState()
-    val chatSessionKey by viewModel.chatSessionKey.collectAsState()
-    val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
-
-    LaunchedEffect(requestedHomeDestination) {
-      val destination = requestedHomeDestination ?: return@LaunchedEffect
-      // HomeDestination is a one-shot command from launch intents and settings
-      // actions; consume it after translating to local shell state.
-      nav.selectTab(
-        when (destination) {
-          HomeDestination.Connect -> Tab.Overview
-          HomeDestination.Chat -> Tab.Chat
-          HomeDestination.Voice -> Tab.Chat
-          HomeDestination.Settings -> Tab.Settings
-        },
-      )
-      // Screenshot scenes can target a settings detail route alongside the tab.
-      viewModel.requestedSettingsRoute.value?.let { route ->
-        nav.openSettingsRoute(route)
-        viewModel.clearRequestedSettingsRoute()
+    FoldAwareContent(
+      features = features,
+      modifier = modifier.background(ClawTheme.colors.canvas),
+      bookPanesEnabled = !commandOpen && pendingTrust == null,
+      tabletopEnabled = nav.activeTab == Tab.Chat && !commandOpen && pendingTrust == null,
+    ) { foldBounds ->
+      val bookPanes = foldBounds.book
+      val permanentSidebar = bookPanes != null
+      // Mode changes discard modal operations and their drag state, not the two content slots.
+      val sidebarDrawerState = key(permanentSidebar) { rememberDrawerState(initialValue = DrawerValue.Closed) }
+      var sidebarRowDragging by remember(sidebarDrawerState) { mutableStateOf(false) }
+      val drawerScope = key(sidebarDrawerState) { rememberCoroutineScope() }
+      val openSidebar: () -> Unit = {
+        if (!permanentSidebar) drawerScope.launch { sidebarDrawerState.open() }
       }
-      sidebarDrawerState.close()
-      viewModel.clearRequestedHomeDestination()
-    }
-
-    LaunchedEffect(nav.activeTab, runtimeInitialized) {
-      val conversationScreenActive = nav.activeTab == Tab.Chat
-      if (conversationScreenActive || conversationScreenWasActive || runtimeInitialized) {
-        viewModel.setVoiceScreenActive(conversationScreenActive)
+      val closeSidebar: () -> Unit = {
+        if (!permanentSidebar) drawerScope.launch { sidebarDrawerState.close() }
       }
-      conversationScreenWasActive = conversationScreenActive
-    }
+      val requestedHomeDestination by viewModel.requestedHomeDestination.collectAsState()
+      val runtimeInitialized by viewModel.runtimeInitialized.collectAsState()
+      val gatewayAgents by viewModel.gatewayAgents.collectAsState()
+      val gatewayDefaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
+      val chatSessionOwnerAgentId by viewModel.chatSessionOwnerAgentId.collectAsState()
+      val chatSessions by viewModel.chatSessions.collectAsState()
+      val chatSessionKey by viewModel.chatSessionKey.collectAsState()
+      val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
 
-    BackHandler(
-      enabled =
-        sidebarDrawerState.currentValue == DrawerValue.Closed &&
-          sidebarDrawerState.targetValue == DrawerValue.Closed &&
-          nav.activeTab != Tab.Overview,
-    ) {
-      nav.back()
-    }
-
-    BackHandler(enabled = commandOpen) {
-      commandOpen = false
-    }
-
-    LaunchedEffect(commandOpen, pendingTrust) {
-      if (commandOpen || pendingTrust != null) sidebarDrawerState.close()
-    }
-
-    val activeSidebarDestination =
-      when {
-        nav.activeTab == Tab.Settings && nav.settingsRoute != SettingsRoute.Skills -> SidebarDestination.Settings
-        nav.activeTab == Tab.Overview -> SidebarDestination.Work
-        nav.activeTab == Tab.Chat -> SidebarDestination.Home
-        nav.activeTab == Tab.Settings && nav.settingsRoute == SettingsRoute.Skills -> SidebarDestination.Skills
-        nav.activeTab == Tab.Sessions -> SidebarDestination.Threads
-        else -> null
+      LaunchedEffect(requestedHomeDestination) {
+        val destination = requestedHomeDestination ?: return@LaunchedEffect
+        // HomeDestination is a one-shot command from launch intents and settings
+        // actions; consume it after translating to local shell state.
+        nav.selectTab(
+          when (destination) {
+            HomeDestination.Connect -> Tab.Overview
+            HomeDestination.Chat -> Tab.Chat
+            HomeDestination.Voice -> Tab.Chat
+            HomeDestination.Settings -> Tab.Settings
+          },
+        )
+        // Screenshot scenes can target a settings detail route alongside the tab.
+        viewModel.requestedSettingsRoute.value?.let { route ->
+          nav.openSettingsRoute(route)
+          viewModel.clearRequestedSettingsRoute()
+        }
+        closeSidebar()
+        viewModel.clearRequestedHomeDestination()
       }
-    val openSidebar: () -> Unit = {
-      coroutineScope.launch { sidebarDrawerState.open() }
-    }
-    val closeSidebar: () -> Unit = {
-      coroutineScope.launch { sidebarDrawerState.close() }
-    }
-    val selectSidebarDestination: (SidebarDestination) -> Unit = { destination ->
-      when (destination) {
-        SidebarDestination.Settings -> nav.openSettingsRoute(SettingsRoute.Home)
-        SidebarDestination.Work -> nav.selectTab(Tab.Overview)
-        SidebarDestination.Home -> nav.selectTab(Tab.Chat)
-        SidebarDestination.Skills -> nav.openSettingsRoute(SettingsRoute.Skills)
-        SidebarDestination.Threads -> nav.selectTab(Tab.Sessions)
-      }
-      closeSidebar()
-    }
 
-    Box(modifier = modifier.fillMaxSize().background(ClawTheme.colors.canvas)) {
-      SidebarNavigationShell(
-        drawerState = sidebarDrawerState,
-        gesturesEnabled = !sidebarRowDragging,
-        drawerContent = {
-          OpenClawSidebar(
-            viewModel = viewModel,
-            agents = gatewayAgents,
-            selectedAgentId = chatSessionOwnerAgentId ?: gatewayDefaultAgentId,
-            sessions = chatSessions,
-            activeSessionKey = chatSessionKey,
-            activeDestination = activeSidebarDestination,
-            connection = gatewayConnectionDisplay,
-            drawerActive = sidebarDrawerState.isOpen,
-            showCloseButton = true,
-            onClose = closeSidebar,
-            onDragActiveChange = { sidebarRowDragging = it },
-            onNewSession = {
-              viewModel.startNewChat(worktree = false)
-              nav.selectTab(Tab.Chat)
-              closeSidebar()
-            },
-            onSelectAgent = { agentId ->
-              viewModel.selectChatAgent(agentId)
-              nav.selectTab(Tab.Chat)
-              closeSidebar()
-            },
-            onSelectSession = { session ->
-              viewModel.switchChatSession(session.key, session.ownerAgentId)
-              nav.selectTab(Tab.Chat)
-              closeSidebar()
-            },
-            onSelectCatalogSession = { session ->
-              viewModel.continueSessionCatalogEntry(session) { continued ->
-                if (continued) {
-                  nav.selectTab(Tab.Chat)
-                  closeSidebar()
-                }
-              }
-            },
-            onCreateCatalogSession = { catalogId ->
-              nav.selectTab(Tab.Chat)
-              closeSidebar()
-              viewModel.createSessionCatalogEntry(catalogId)
-            },
-            onSelectDestination = selectSidebarDestination,
-          )
-        },
+      LaunchedEffect(nav.activeTab, runtimeInitialized) {
+        val conversationScreenActive = nav.activeTab == Tab.Chat
+        if (conversationScreenActive || conversationScreenWasActive || runtimeInitialized) {
+          viewModel.setVoiceScreenActive(conversationScreenActive)
+        }
+        conversationScreenWasActive = conversationScreenActive
+      }
+
+      BackHandler(
+        enabled =
+          (
+            permanentSidebar ||
+              (
+                sidebarDrawerState.currentValue == DrawerValue.Closed &&
+                  sidebarDrawerState.targetValue == DrawerValue.Closed
+              )
+          ) &&
+            nav.activeTab != Tab.Overview,
       ) {
-        when (nav.activeTab) {
-          Tab.Overview -> {
-            OverviewScreen(
-              viewModel = viewModel,
-              showSidebarButton = true,
-              onOpenSidebar = openSidebar,
-              onSelectTab = nav::selectTab,
-              onOpenSettingsRoute = nav::openSettingsRoute,
-              onOpenCommand = { commandOpen = true },
-            )
-          }
+        nav.back()
+      }
 
-          Tab.Chat -> {
-            UnifiedChatShellScreen(
-              viewModel = viewModel,
-              showSidebarButton = true,
-              onOpenSidebar = openSidebar,
-              onOpenDashboard = nav::openSessionDashboard,
-              onOpenGatewaySettings = { nav.openSettingsRoute(SettingsRoute.Gateway) },
-              onOpenProvidersModels = { nav.openDetailTab(Tab.ProvidersModels) },
-            )
-          }
+      BackHandler(enabled = commandOpen) {
+        commandOpen = false
+      }
 
-          Tab.ProvidersModels -> {
-            ProvidersModelsScreen(
-              viewModel = viewModel,
-              onBack = nav::back,
-            )
-          }
+      LaunchedEffect(commandOpen, pendingTrust, sidebarDrawerState) {
+        if (commandOpen || pendingTrust != null) closeSidebar()
+      }
 
-          Tab.Sessions -> {
-            SessionsScreen(
-              viewModel = viewModel,
-              showSidebarButton = true,
-              onOpenSidebar = openSidebar,
-              onOpenChat = { nav.selectTab(Tab.Chat) },
-            )
-          }
+      val activeSidebarDestination =
+        when {
+          nav.activeTab == Tab.Settings && nav.settingsRoute != SettingsRoute.Skills -> SidebarDestination.Settings
+          nav.activeTab == Tab.Overview -> SidebarDestination.Work
+          nav.activeTab == Tab.Chat -> SidebarDestination.Home
+          nav.activeTab == Tab.Settings && nav.settingsRoute == SettingsRoute.Skills -> SidebarDestination.Skills
+          nav.activeTab == Tab.Sessions -> SidebarDestination.Threads
+          else -> null
+        }
+      val selectSidebarDestination: (SidebarDestination) -> Unit = { destination ->
+        when (destination) {
+          SidebarDestination.Settings -> nav.openSettingsRoute(SettingsRoute.Home)
+          SidebarDestination.Work -> nav.selectTab(Tab.Overview)
+          SidebarDestination.Home -> nav.selectTab(Tab.Chat)
+          SidebarDestination.Skills -> nav.openSettingsRoute(SettingsRoute.Skills)
+          SidebarDestination.Threads -> nav.selectTab(Tab.Sessions)
+        }
+        closeSidebar()
+      }
 
-          Tab.Files -> {
-            WorkspaceFilesScreen(
+      Box(modifier = Modifier.fillMaxSize().background(ClawTheme.colors.canvas)) {
+        SidebarNavigationShell(
+          drawerState = sidebarDrawerState,
+          bookPanes = bookPanes,
+          sidebarBand = foldBounds.sidebarBand,
+          gesturesEnabled = !sidebarRowDragging,
+          drawerContent = {
+            OpenClawSidebar(
               viewModel = viewModel,
-              onBack = nav::back,
+              rowHostBand = foldBounds.sidebarBand,
+              agents = gatewayAgents,
+              selectedAgentId = chatSessionOwnerAgentId ?: gatewayDefaultAgentId,
+              sessions = chatSessions,
+              activeSessionKey = chatSessionKey,
+              activeDestination = activeSidebarDestination,
+              connection = gatewayConnectionDisplay,
+              visible =
+                !commandOpen && pendingTrust == null &&
+                  (permanentSidebar || sidebarDrawerState.isOpen || sidebarDrawerState.targetValue == DrawerValue.Open),
+              showCloseButton = !permanentSidebar,
+              onClose = closeSidebar,
+              onDragActiveChange = { sidebarRowDragging = it },
+              onNewSession = {
+                viewModel.startNewChat(worktree = false)
+                nav.selectTab(Tab.Chat)
+                closeSidebar()
+              },
+              onSelectAgent = { agentId ->
+                viewModel.selectChatAgent(agentId)
+                nav.selectTab(Tab.Chat)
+                closeSidebar()
+              },
+              onSelectSession = { session ->
+                viewModel.switchChatSession(session.key, session.ownerAgentId)
+                nav.selectTab(Tab.Chat)
+                closeSidebar()
+              },
+              onSelectCatalogSession = { session ->
+                viewModel.continueSessionCatalogEntry(session) { continued ->
+                  if (continued) {
+                    nav.selectTab(Tab.Chat)
+                    closeSidebar()
+                  }
+                }
+              },
+              onCreateCatalogSession = { catalogId ->
+                nav.selectTab(Tab.Chat)
+                closeSidebar()
+                viewModel.createSessionCatalogEntry(catalogId)
+              },
+              onSelectDestination = selectSidebarDestination,
             )
-          }
+          },
+        ) {
+          when (nav.activeTab) {
+            Tab.Overview -> {
+              OverviewScreen(
+                viewModel = viewModel,
+                showSidebarButton = !permanentSidebar,
+                onOpenSidebar = openSidebar,
+                onSelectTab = nav::selectTab,
+                onOpenSettingsRoute = nav::openSettingsRoute,
+                onOpenCommand = { commandOpen = true },
+              )
+            }
 
-          Tab.Dashboard -> {
-            SessionDashboardScreen(
-              viewModel = viewModel,
-              sessionKey = nav.dashboardSessionKey,
-              onBack = nav::back,
-            )
-          }
+            Tab.Chat -> {
+              UnifiedChatShellScreen(
+                viewModel = viewModel,
+                tabletopPanes = foldBounds.tabletop,
+                features = features,
+                showSidebarButton = !permanentSidebar,
+                onOpenSidebar = openSidebar,
+                onOpenDashboard = nav::openSessionDashboard,
+                onOpenGatewaySettings = { nav.openSettingsRoute(SettingsRoute.Gateway) },
+                onOpenProvidersModels = { nav.openDetailTab(Tab.ProvidersModels) },
+              )
+            }
 
-          Tab.Settings -> {
-            SettingsShellScreen(
-              viewModel = viewModel,
-              route = nav.settingsRoute,
-              showSidebarButton = true,
-              onOpenSidebar = openSidebar,
-              onRouteChange = nav::openSettingsRouteFromHome,
-              onBack = nav::back,
-              onOpenCommand = { commandOpen = true },
-            )
+            Tab.ProvidersModels -> {
+              ProvidersModelsScreen(
+                viewModel = viewModel,
+                onBack = nav::back,
+              )
+            }
+
+            Tab.Sessions -> {
+              SessionsScreen(
+                viewModel = viewModel,
+                showSidebarButton = !permanentSidebar,
+                onOpenSidebar = openSidebar,
+                onOpenChat = { nav.selectTab(Tab.Chat) },
+              )
+            }
+
+            Tab.Files -> {
+              WorkspaceFilesScreen(
+                viewModel = viewModel,
+                onBack = nav::back,
+              )
+            }
+
+            Tab.Dashboard -> {
+              SessionDashboardScreen(
+                viewModel = viewModel,
+                sessionKey = nav.dashboardSessionKey,
+                onBack = nav::back,
+              )
+            }
+
+            Tab.Settings -> {
+              SettingsShellScreen(
+                viewModel = viewModel,
+                route = nav.settingsRoute,
+                showSidebarButton = !permanentSidebar,
+                onOpenSidebar = openSidebar,
+                onRouteChange = nav::openSettingsRouteFromHome,
+                onBack = nav::back,
+                onOpenCommand = { commandOpen = true },
+              )
+            }
           }
         }
-      }
 
-      if (commandOpen) {
-        CommandPalette(
-          viewModel = viewModel,
-          onDismiss = { commandOpen = false },
-          onOpen = { action ->
-            when (action) {
-              CommandAction.Chat, CommandAction.Voice -> {
-                nav.selectTab(Tab.Chat)
-              }
+        if (commandOpen) {
+          CommandPalette(
+            viewModel = viewModel,
+            onDismiss = { commandOpen = false },
+            onOpen = { action ->
+              when (action) {
+                CommandAction.Chat, CommandAction.Voice -> {
+                  nav.selectTab(Tab.Chat)
+                }
 
-              CommandAction.Sessions -> {
-                nav.openDetailTab(Tab.Sessions)
-              }
+                CommandAction.Sessions -> {
+                  nav.openDetailTab(Tab.Sessions)
+                }
 
-              is CommandAction.Settings -> {
-                when {
-                  // Keep the provider command on its standalone screen; entering
-                  // Settings detail would also start the Home summary refreshes.
-                  action.route == SettingsRoute.ProvidersModels -> nav.openDetailTab(Tab.ProvidersModels)
+                is CommandAction.Settings -> {
+                  when {
+                    // Keep the provider command on its standalone screen; entering
+                    // Settings detail would also start the Home summary refreshes.
+                    action.route == SettingsRoute.ProvidersModels -> nav.openDetailTab(Tab.ProvidersModels)
 
-                  action.route != SettingsRoute.Home && nav.activeTab == Tab.Settings && nav.settingsRoute == SettingsRoute.Home -> nav.openSettingsRouteFromHome(action.route)
+                    action.route != SettingsRoute.Home && nav.activeTab == Tab.Settings && nav.settingsRoute == SettingsRoute.Home -> nav.openSettingsRouteFromHome(action.route)
 
-                  else -> nav.openSettingsRoute(action.route)
+                    else -> nav.openSettingsRoute(action.route)
+                  }
                 }
               }
-            }
-            commandOpen = false
-          },
-          onOpenSession = { sessionKey, ownerAgentId ->
-            viewModel.switchChatSession(sessionKey, ownerAgentId)
-            nav.selectTab(Tab.Chat)
-            commandOpen = false
-          },
-        )
-      }
+              commandOpen = false
+            },
+            onOpenSession = { sessionKey, ownerAgentId ->
+              viewModel.switchChatSession(sessionKey, ownerAgentId)
+              nav.selectTab(Tab.Chat)
+              commandOpen = false
+            },
+          )
+        }
 
-      pendingTrust?.let { prompt ->
-        // Gateway certificate trust is modal across the shell so navigation
-        // cannot hide a changed TLS identity prompt.
-        GatewayTrustDialog(
-          prompt = prompt,
-          confirmLabel = stringResource(R.string.trust_and_continue),
-          cancelLabel = stringResource(R.string.cancel),
-          onAccept = viewModel::acceptGatewayTrustPrompt,
-          onUseSystemTrust = viewModel::useSystemGatewayTrustPrompt,
-          onDecline = viewModel::declineGatewayTrustPrompt,
-        )
+        pendingTrust?.let { prompt ->
+          // Gateway certificate trust is modal across the shell so navigation
+          // cannot hide a changed TLS identity prompt.
+          GatewayTrustDialog(
+            prompt = prompt,
+            confirmLabel = stringResource(R.string.trust_and_continue),
+            cancelLabel = stringResource(R.string.cancel),
+            onAccept = viewModel::acceptGatewayTrustPrompt,
+            onUseSystemTrust = viewModel::useSystemGatewayTrustPrompt,
+            onDecline = viewModel::declineGatewayTrustPrompt,
+          )
+        }
       }
     }
   }

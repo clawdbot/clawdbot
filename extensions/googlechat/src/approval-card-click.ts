@@ -1,15 +1,8 @@
-import {
-  resolveApprovalOverGateway,
-  type ApprovalResolveResult,
-} from "openclaw/plugin-sdk/approval-gateway-runtime";
-import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
+import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import { updateGoogleChatMessage } from "./api.js";
 import { googleChatApprovalAuth } from "./approval-auth.js";
 import {
-  claimGoogleChatApprovalCardBinding,
-  completeGoogleChatApprovalCardBinding,
-  getGoogleChatApprovalCardBinding,
-  releaseGoogleChatApprovalCardBinding,
+  googleChatApprovalControls,
   readGoogleChatApprovalActionToken,
 } from "./approval-card-actions.js";
 import { buildGoogleChatCanonicalApprovalTerminalCards } from "./approval-terminal-card.js";
@@ -33,7 +26,7 @@ export async function maybeHandleGoogleChatApprovalCardClick(params: {
     return false;
   }
 
-  const binding = getGoogleChatApprovalCardBinding(token);
+  const binding = googleChatApprovalControls.get(token);
   if (!binding) {
     logIgnored(params.target, "unknown or expired card token");
     return true;
@@ -68,20 +61,8 @@ export async function maybeHandleGoogleChatApprovalCardClick(params: {
     return true;
   }
 
-  const claim = claimGoogleChatApprovalCardBinding(token);
-  if (claim.kind === "missing") {
-    logIgnored(params.target, "card token already consumed");
-    return true;
-  }
-  if (claim.kind === "in-flight") {
-    logIgnored(params.target, "card token resolve already in flight");
-    return true;
-  }
-  const consumed = claim.binding;
-
-  let result: ApprovalResolveResult;
-  try {
-    result = await resolveApprovalOverGateway({
+  const outcome = await googleChatApprovalControls.settle(token, async (consumed) => {
+    const result = await resolveApprovalOverGateway({
       cfg: params.target.config,
       approvalId: consumed.approvalId,
       approvalKind: consumed.approvalKind,
@@ -95,21 +76,24 @@ export async function maybeHandleGoogleChatApprovalCardClick(params: {
       messageName: consumed.messageName,
       cardsV2: buildGoogleChatCanonicalApprovalTerminalCards(result),
     });
-  } catch (error) {
-    if (isApprovalNotFoundError(error)) {
-      // Missing approvals cannot recover; retire the card instead of rearming its token.
-      completeGoogleChatApprovalCardBinding(token);
-      logIgnored(params.target, `approval expired or no longer exists id=${consumed.approvalId}`);
-      return true;
-    }
-    releaseGoogleChatApprovalCardBinding(token);
-    throw error;
+    return result;
+  });
+  if (outcome.kind !== "settled") {
+    logIgnored(
+      params.target,
+      outcome.kind === "missing"
+        ? "card token already consumed"
+        : outcome.kind === "in-flight"
+          ? "card token resolve already in flight"
+          : `approval expired or no longer exists id=${outcome.binding.approvalId}`,
+    );
+    return true;
   }
-  completeGoogleChatApprovalCardBinding(token);
-  const outcome = result.applied ? "resolved" : "already resolved";
+  const { binding: consumed, result } = outcome;
+  const label = result.applied ? "resolved" : "already resolved";
   const decision = "decision" in result.approval ? result.approval.decision : "none";
   params.target.runtime.log?.(
-    `[${params.target.account.accountId}] googlechat approval ${outcome} id=${consumed.approvalId} status=${result.approval.status} decision=${decision} sender=${actor || "unknown"}`,
+    `[${params.target.account.accountId}] googlechat approval ${label} id=${consumed.approvalId} status=${result.approval.status} decision=${decision} sender=${actor || "unknown"}`,
   );
   return true;
 }

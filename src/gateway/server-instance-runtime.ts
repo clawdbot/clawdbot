@@ -129,6 +129,7 @@ export function createGatewayInstanceRuntime(
         dispatchOptions.allowSyntheticModelOverride === true ||
         dispatchOptions.allowSyntheticCronRunContinuation === true ||
         dispatchOptions.internalDeliveryMediaUrls ||
+        dispatchOptions.runtimeContextFragments ||
         dispatchOptions.internalDeliverySuppressText === true ||
         delegatedToolPolicyHandoffId ||
         dispatchOptions.scopes ||
@@ -143,6 +144,7 @@ export function createGatewayInstanceRuntime(
                 dispatchOptions.allowSyntheticModelOverride === true,
               cronRunContinuation: dispatchOptions.allowSyntheticCronRunContinuation === true,
               internalDeliveryMediaUrls: dispatchOptions.internalDeliveryMediaUrls,
+              runtimeContextFragments: dispatchOptions.runtimeContextFragments,
               internalDeliverySuppressText: dispatchOptions.internalDeliverySuppressText,
               delegatedToolPolicyHandoffId,
               scopes: dispatchOptions.scopes ?? dispatchOptions.syntheticScopes,

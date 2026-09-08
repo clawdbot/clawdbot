@@ -190,7 +190,6 @@ const RETIRED_TUNING_PATHS = [
   ["acp", "stream", "hiddenBoundarySeparator"],
   ["acp", "maxConcurrentSessions"],
   ["acp", "runtime", "ttlMinutes"],
-  ["mcp", "sessionIdleTtlMs"],
   ["worktrees"],
   ["transcripts", "maxUtterances"],
   ["hooks", "maxBodyBytes"],

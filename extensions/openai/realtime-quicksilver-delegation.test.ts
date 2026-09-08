@@ -562,9 +562,27 @@ describe("GPT-Live sideband protocol", () => {
   });
 
   it.each([
-    { kind: "failure", error: new Error("workspace unavailable") },
-    { kind: "timeout", error: new DOMException("agent timed out", "TimeoutError") },
-  ])("returns a speakable failure for a delegated $kind", async ({ error }) => {
+    {
+      kind: "failure",
+      error: new Error("workspace unavailable"),
+      expectedReason: "workspace unavailable",
+    },
+    {
+      kind: "timeout",
+      error: new DOMException("agent timed out", "TimeoutError"),
+      expectedReason: "agent timed out",
+    },
+    {
+      kind: "Unicode failure",
+      error: new Error(`${"x".repeat(179)}🤖`),
+      expectedReason: "x".repeat(179),
+    },
+    {
+      kind: "Unicode at the limit",
+      error: new Error(`${"x".repeat(178)}🤖`),
+      expectedReason: `${"x".repeat(178)}🤖`,
+    },
+  ])("returns a speakable failure for a delegated $kind", async ({ error, expectedReason }) => {
     const runAgentConsult = vi.fn<ConsultRunner>(async () => {
       throw error;
     });
@@ -586,7 +604,9 @@ describe("GPT-Live sideband protocol", () => {
       }),
     );
     expect(socket.sent.join("\n")).not.toContain(error.message);
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining(error.message));
+    expect(logger.warn).toHaveBeenCalledWith(
+      `OpenAI GPT-Live delegation consult failed: ${expectedReason}`,
+    );
   });
 
   it("handles structured delegated failures with a non-string message", async () => {

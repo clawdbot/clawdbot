@@ -3,6 +3,7 @@
  *
  * Reads child session output, detects waiting states, and formats completion findings for announcements.
  */
+import { formatCompactTokenCount } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
@@ -15,7 +16,7 @@ import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { isAnnounceSkip } from "../../tools/sessions-send-tokens.js";
 import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
-import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
+import { recordLatestSubagentRun } from "../registry/subagent-run-generation.js";
 import { classifySubagentTerminalOutcome } from "../subagent-terminal-outcome.js";
 import {
   captureSubagentCompletionReplyUsing,
@@ -553,10 +554,7 @@ export function dedupeLatestChildCompletionRows(
 ) {
   const latestByChildSessionKey = new Map<string, (typeof children)[number]>();
   for (const child of children) {
-    const existing = latestByChildSessionKey.get(child.childSessionKey);
-    if (!existing || compareSubagentRunGeneration(child, existing) > 0) {
-      latestByChildSessionKey.set(child.childSessionKey, child);
-    }
+    recordLatestSubagentRun(latestByChildSessionKey, child.childSessionKey, child);
   }
   return [...latestByChildSessionKey.values()];
 }
@@ -602,19 +600,7 @@ function formatTokenCount(value?: number) {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return "0";
   }
-  if (value >= 1_000_000) {
-    return `${(value / 1_000_000).toFixed(1)}m`;
-  }
-  if (value >= 1_000) {
-    const formattedThousands = (value / 1_000).toFixed(1);
-    // Keep the compact stats unit scheme stable when one-decimal rounding
-    // reaches the next unit, e.g. 999_999 -> 1000.0k.
-    if (Number(formattedThousands) >= 1_000) {
-      return `${(value / 1_000_000).toFixed(1)}m`;
-    }
-    return `${formattedThousands}k`;
-  }
-  return String(Math.round(value));
+  return formatCompactTokenCount(value);
 }
 
 export async function buildCompactAnnounceStatsLine(params: {

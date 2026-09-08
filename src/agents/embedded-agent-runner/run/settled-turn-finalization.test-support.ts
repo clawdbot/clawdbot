@@ -161,14 +161,12 @@ export function projectSettledProviderFailureAttempt(
     currentAttemptCompletedAssistant: assistant,
     successfulNestedToolNames: [],
     attemptUsage: undefined,
-    cacheBreak: null,
     lastCallUsage: undefined,
     promptCache: undefined,
   };
   const prompt: Parameters<typeof completeEmbeddedAttemptResult>[2] = {
     preflightRecovery: undefined,
     contextBudgetStatus: undefined,
-    promptCacheChangesForTurn: null,
     yieldAborted: false,
     sessionIdUsed: base.sessionIdUsed,
     sessionFileUsed: undefined,

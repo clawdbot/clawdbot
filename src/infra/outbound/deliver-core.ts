@@ -365,9 +365,10 @@ export async function deliverOutboundPayloadsCore(
       let mediaMessageIds: { first?: string; last?: string } | undefined;
       if (
         deliveryHandler.sendPayload &&
-        payloadRequiresDurablePayloadTransport(effectivePayload, {
-          sendTextOnlyErrorPayloads: deliveryHandler.sendTextOnlyErrorPayloads,
-        })
+        ((deliveryHandler.supportsMediaPayload && payloadSummary.mediaUrls.length > 1) ||
+          payloadRequiresDurablePayloadTransport(effectivePayload, {
+            sendTextOnlyErrorPayloads: deliveryHandler.sendTextOnlyErrorPayloads,
+          }))
       ) {
         const delivery = await deliveryHandler.sendPayload(
           effectivePayload,

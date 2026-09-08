@@ -1000,10 +1000,10 @@ printf 'status=%s\\n' "$status"
   });
 
   it("rejects non-root smoke Node runtimes without node:sqlite", () => {
-    const result = runNonrootNodePreflight("22.22.3", { sqlite: false });
+    const result = runNonrootNodePreflight("24.16.0", { sqlite: false });
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("unsupported node 22.22.3: missing node:sqlite");
+    expect(result.stderr).toContain("unsupported node 24.16.0: missing node:sqlite");
   });
 
   it("rejects non-root smoke Node runtimes with vulnerable system SQLite", () => {
@@ -1014,9 +1014,11 @@ printf 'status=%s\\n' "$status"
   });
 
   it("accepts non-root smoke Node runtimes that match the installer runtime floor", () => {
-    expect(runNonrootNodePreflight("22.22.3").status).toBe(0);
+    expect(runNonrootNodePreflight("22.23.2").status).toBe(1);
     expect(runNonrootNodePreflight("24.16.0").status).toBe(0);
-    expect(runNonrootNodePreflight("25.9.0").status).toBe(0);
+    expect(runNonrootNodePreflight("25.9.0").status).toBe(1);
+    expect(runNonrootNodePreflight("26.0.0").status).toBe(1);
+    expect(runNonrootNodePreflight("26.1.0").status).toBe(0);
   });
 
   it("runs the root Dockerfile build with the CI heap limit", () => {
@@ -1631,6 +1633,8 @@ describe("install-sh E2E runner", () => {
     );
     expect(script).toContain('timeout --kill-after=15s "${AGENT_TURN_TIMEOUT_SECONDS}s"');
     expect(script).toContain('\\"timeoutSeconds\\":${OPENAI_PROVIDER_TIMEOUT_SECONDS}');
+    expect(script).toContain('openclaw --profile "$profile" agent \\');
+    expect(script).not.toContain("\n    --local \\\n");
   });
 
   it("normalizes agent JSON when structured lifecycle diagnostics follow the result", () => {
@@ -1778,10 +1782,12 @@ if (args[0] === "--version") {
   if (before === "2026.9.1" && (args.includes("--no-restart") || process.env.FAKE_SCENARIO === "candidate refusal")) process.exit(21);
   fs.writeFileSync(process.env.FAKE_VERSION_FILE, "2026.9.1");
   console.log(JSON.stringify({
-    status: "ok", before: { version: before }, after: { version: "2026.9.1" },
+    status: before === "2026.9.1" ? "skipped" : "ok",
+    ...(before === "2026.9.1" ? { reason: "already-current" } : {}),
+    before: { version: before, buildId: "candidate-build" }, after: { version: "2026.9.1", buildId: "candidate-build" },
     steps: [
       { name: "global update", exitCode: 0, command: "npm install " + args[args.indexOf("--tag") + 1] },
-      { name: "openclaw doctor", exitCode: 0 },
+      ...(before === "2026.9.1" ? [] : [{ name: "openclaw doctor", exitCode: 0 }]),
     ],
   }));
 }
@@ -1912,6 +1918,63 @@ fs.readFileSync = (file, ...args) => {
     ]);
   });
 
+  it.each([
+    ["2026.8.2", "2026.9.3", 0],
+    ["2026.9.2", "2026.9.3", 0],
+    ["2026.9.2", "2026.9.4", 0],
+    ["2026.9.1", "2026.9.3", 0],
+    ["2026.9.2", "2026.9.3", 17],
+  ])(
+    "routes installer transition %s → %s and preserves exit %s",
+    (baseline, candidate, failure) => {
+      const runner = readFileSync(SMOKE_RUNNER_PATH, "utf8");
+      const start = runner.indexOf("run_update_smoke() {");
+      const body = runner.slice(start, runner.indexOf("\nrun_update_candidate()", start));
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `
+set -eu
+${body}
+resolve_update_baseline_version() { :; }
+npm_install_global() { :; }
+print_install_audit() { :; }
+verify_installed_cli() { :; }
+assert_update_smoke_offline() { echo idle; }
+run_historical_external_transition() { echo external; return 99; }
+run_update_candidate() { echo "self-update:$1:$*"; if [[ "$1" == "$UPDATE_BASELINE_VERSION" ]]; then return "$FAILURE"; fi; }
+verify_candidate_ai_runtime() { echo verified; }
+run_update_smoke
+`,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PACKAGE_NAME: "openclaw",
+            UPDATE_BASELINE_VERSION: baseline,
+            UPDATE_EXPECT_VERSION: candidate,
+            UPDATE_BASELINE_TAG_URL: "",
+            UPDATE_TAG_URL: "https://fixture.invalid/candidate.tgz",
+            FAILURE: String(failure),
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(failure);
+      expect(result.stdout).toContain("idle\n");
+      expect(result.stdout).toContain(`self-update:${baseline}:${baseline} applied --no-restart\n`);
+      expect(result.stdout).not.toContain("external\n");
+      if (failure === 0) {
+        expect(result.stdout).toContain(`self-update:${candidate}:${candidate} already-current\n`);
+        expect(result.stdout).toContain("verified\n");
+      } else {
+        expect(result.stdout).not.toContain(`self-update:${candidate}:`);
+        expect(result.stdout).not.toContain("verified\n");
+      }
+    },
+  );
+
   it("wraps long npm/update operations with heartbeat and install-size audits", () => {
     const script = readFileSync(SMOKE_RUNNER_PATH, "utf8");
 
@@ -1935,6 +1998,83 @@ fs.readFileSync = (file, ...args) => {
     expect(script).toContain("unterminated update JSON object");
     expect(script).toContain("verify_candidate_ai_runtime");
     expect(script).toContain("openclaw infer image providers --json");
+  });
+
+  it.each([
+    ["verified same-build no-op", {}, "already-current", 0],
+    ["unrelated skip", { reason: "dirty" }, "already-current", 1],
+    ["changed build", { after: { version: "2026.9.3", buildId: "other" } }, "already-current", 1],
+    ["missing build identity", { before: { version: "2026.9.3" } }, "already-current", 1],
+    [
+      "unexpected activation",
+      {
+        steps: [
+          {
+            name: "global update",
+            exitCode: 0,
+            command: "npm install http://candidate.invalid/openclaw.tgz",
+          },
+          { name: "global install swap", exitCode: 0 },
+        ],
+      },
+      "already-current",
+      1,
+    ],
+    ["skipped first upgrade", {}, "applied", 1],
+  ])("validates explicit installer outcome: %s", (_label, overrides, outcome, expectedExit) => {
+    const url = "http://candidate.invalid/openclaw.tgz";
+    const payload = {
+      status: "skipped",
+      reason: "already-current",
+      before: { version: "2026.9.3", buildId: "candidate-build" },
+      after: { version: "2026.9.3", buildId: "candidate-build" },
+      steps: [{ name: "global update", exitCode: 0, command: `npm install ${url}` }],
+      ...overrides,
+    };
+    const result = spawnSync(process.execPath, ["-"], {
+      encoding: "utf8",
+      input: extractInstallSmokeUpdateJsonParser(),
+      env: {
+        ...process.env,
+        UPDATE_JSON: JSON.stringify(payload),
+        UPDATE_EXPECT_VERSION: "2026.9.3",
+        UPDATE_BASELINE_VERSION: "2026.9.3",
+        UPDATE_TAG_URL: url,
+        UPDATE_EXPECT_OUTCOME: outcome,
+      },
+    });
+    expect(result.status, result.stderr).toBe(expectedExit);
+  });
+
+  it("accepts legacy same-version apply only with the frozen-target compatibility flag", () => {
+    const url = "http://candidate.invalid/openclaw.tgz";
+    const payload = {
+      status: "ok",
+      before: { version: "2026.7.33" },
+      after: { version: "2026.7.33" },
+      steps: [
+        { name: "global update", exitCode: 0, command: `npm install ${url}` },
+        { name: "global install swap", exitCode: 0 },
+        { name: "openclaw doctor", exitCode: 0 },
+      ],
+    };
+    const run = (allowLegacy: boolean) =>
+      spawnSync(process.execPath, ["-"], {
+        encoding: "utf8",
+        input: extractInstallSmokeUpdateJsonParser(),
+        env: {
+          ...process.env,
+          UPDATE_JSON: JSON.stringify(payload),
+          UPDATE_EXPECT_VERSION: "2026.7.33",
+          UPDATE_BASELINE_VERSION: "2026.7.33",
+          UPDATE_TAG_URL: url,
+          UPDATE_EXPECT_OUTCOME: "already-current",
+          ...(allowLegacy ? { OPENCLAW_INSTALL_ALLOW_LEGACY_SAME_VERSION_APPLY: "1" } : {}),
+        },
+      });
+
+    expect(run(false).status).toBe(1);
+    expect(run(true).status).toBe(0);
   });
 
   it.each([
@@ -2023,6 +2163,7 @@ fs.readFileSync = (file, ...args) => {
 
     expect(script).toContain("SMOKE_RUNNER_ENV_ARGS=()");
     for (const envName of [
+      "OPENCLAW_INSTALL_ALLOW_LEGACY_SAME_VERSION_APPLY",
       "OPENCLAW_INSTALL_ALLOW_LEGACY_UPDATE_WARNING",
       "OPENCLAW_INSTALL_SELF_UPDATE_WARNING_FIXED_VERSION",
       "OPENCLAW_INSTALL_SMOKE_COMMAND_TIMEOUT",
@@ -2825,6 +2966,12 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
           "${{ runner.temp }}/install-smoke-candidate-payload",
         OPENCLAW_INSTALL_SMOKE_GROUP: testCase.group,
       });
+      if (testCase.consumerName === "installer_smoke_update") {
+        expect(run.env).toMatchObject({
+          OPENCLAW_INSTALL_ALLOW_LEGACY_SAME_VERSION_APPLY:
+            "${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}",
+        });
+      }
       if (typeof run.run !== "string") {
         throw new Error(`missing run body: ${testCase.testName}`);
       }

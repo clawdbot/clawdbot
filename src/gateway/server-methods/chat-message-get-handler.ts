@@ -7,7 +7,6 @@ import {
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { readSessionPendingInput } from "../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import {
   augmentChatHistoryWithCanvasBlocks,
@@ -18,11 +17,12 @@ import {
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
 import { readChatHistoryMessageId } from "../session-history-tail.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { readSessionMessagesAroundIdWithStatsAsync } from "../session-transcript-anchor-reader.js";
 import { readSessionMessageByIdAsync } from "../session-transcript-readers.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { readChatHistoryPage } from "./chat-history-pages.js";
-import { resolveRequestedChatAgentId, validateChatSelectedAgent } from "./chat-origin-routing.js";
+import { validateChatSelectedAgent } from "./chat-origin-routing.js";
 import { projectPendingInputMessage } from "./chat-pending-inputs.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -94,21 +94,19 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       maxChars?: number;
     };
     const agentIdOverride = normalizeOptionalText((params as { agentId?: string }).agentId);
-    const requestedAgent = resolveRequestedChatAgentId({
-      cfg: (context as { getRuntimeConfig?: () => OpenClawConfig }).getRuntimeConfig?.(),
-      requestedSessionKey: sessionKey,
-      agentId: agentIdOverride,
-    });
+    const requestedAgent = resolveRequestedSessionAgentId(
+      context.getRuntimeConfig(),
+      sessionKey,
+      agentIdOverride,
+    );
     if (!requestedAgent.ok) {
       respond(false, undefined, requestedAgent.error);
       return;
     }
     const requestedAgentId = requestedAgent.agentId;
-    const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
-    const { cfg, storePath, entry, canonicalKey } = loadGatewaySessionEntryReadOnly(
-      sessionKey,
-      sessionLoadOptions,
-    );
+    const { cfg, storePath, entry, canonicalKey } = loadGatewaySessionEntryReadOnly(sessionKey, {
+      agentId: requestedAgentId,
+    });
     const selectedAgent = validateChatSelectedAgent({
       cfg,
       requestedSessionKey: sessionKey,

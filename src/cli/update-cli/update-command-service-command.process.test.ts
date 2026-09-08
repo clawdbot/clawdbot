@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { formatCliProcessFailure, runCliProcessChild } from "../cli-process-child.test-helpers.js";
 
-it.each(["restart", "install", "missing candidate"] as const)(
+it.each(["restart", "install", "stop", "missing candidate"] as const)(
   "handles %s after replacing the updater's module files",
   async (scenario) => {
     await withOpenClawTestState(
@@ -71,7 +71,7 @@ it.each(["restart", "install", "missing candidate"] as const)(
             assert.equal(await runUpdatedInstallGatewayCommand(params, scenario, true), "unverified");
             const observed = JSON.parse(await fs.readFile(receipt, "utf8"));
             assert.deepEqual(observed, {
-              args: ["gateway", scenario, scenario === "install" ? "--force" : "--preserve-definition", "--json"],
+              args: ["gateway", scenario, scenario === "restart" ? "--preserve-definition" : "--force", "--json"],
               node: process.execPath,
               config: process.env.OPENCLAW_CONFIG_PATH,
               compileCacheDisabled: "1",

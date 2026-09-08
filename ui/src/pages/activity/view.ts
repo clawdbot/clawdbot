@@ -17,7 +17,7 @@ const STATUS_ORDER: ActivityStatus[] = ["running", "done", "error"];
 
 type ActivityProps = {
   basePath: string;
-  entries: ActivityEntry[];
+  entries: readonly ActivityEntry[];
   filterText: string;
   statusFilters: Record<ActivityStatus, boolean>;
   toolFilter: string;
@@ -100,7 +100,7 @@ function matchesEntry(entry: ActivityEntry, needle: string): boolean {
   return haystack.includes(needle);
 }
 
-function resolveToolNames(entries: ActivityEntry[]): string[] {
+function resolveToolNames(entries: readonly ActivityEntry[]): string[] {
   return sortUniqueStrings(entries.map((entry) => entry.toolName));
 }
 

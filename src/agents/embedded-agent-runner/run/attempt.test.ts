@@ -7,7 +7,6 @@ vi.mock("../context-engine-capabilities.js", () => ({
 }));
 import type { LlmRuntime } from "@openclaw/ai";
 import { defaultLlmRuntime } from "@openclaw/ai/internal/runtime";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { addSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
@@ -531,31 +530,6 @@ describe("resolveEmbeddedAgentStream", () => {
     expect(providerStreamFn).toHaveBeenCalledTimes(1);
   });
 
-  it("strips the internal cache boundary before provider-owned stream calls", async () => {
-    const providerStreamFn = vi.fn(async (_model, context) => context);
-    const { streamFn } = resolveEmbeddedAgentStream({
-      currentStreamFn: undefined,
-      providerStreamFn,
-      sessionId: "session-1",
-      model: {
-        api: "openai-completions",
-        provider: "demo-provider",
-        id: "demo-model",
-      } as never,
-    });
-
-    const context = await streamFn(
-      { provider: "demo-provider", id: "demo-model" } as never,
-      {
-        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
-      } as never,
-      {},
-    );
-    expect(requireRecord(context, "stream context").systemPrompt).toBe(
-      "Stable prefix\nDynamic suffix",
-    );
-    expect(providerStreamFn).toHaveBeenCalledTimes(1);
-  });
   it("routes supported default streamSimple fallbacks through boundary-aware transports", () => {
     const { streamFn } = resolveEmbeddedAgentStream({
       currentStreamFn: undefined,

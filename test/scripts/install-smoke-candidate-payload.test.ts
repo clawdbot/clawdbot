@@ -1,5 +1,4 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   existsSync,
   chmodSync,
@@ -19,6 +18,14 @@ import {
   verifyInstallSmokeCandidatePayload,
 } from "../../scripts/install-smoke-candidate-payload.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  assertGuestProbe,
+  assertLogBoundary,
+  assertMounts,
+  createPayloadFixture,
+  createTarball,
+  sha256,
+} from "./fixtures/install-smoke-isolation.mjs";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const IDENTITY = {
@@ -32,55 +39,150 @@ const IDENTITY = {
 const PACKAGE_VERSION = "2026.8.1-beta.3";
 const DATA_HELPER = path.resolve("scripts/docker/pack-candidate-data.py");
 
-function sha256(filePath: string): string {
-  return createHash("sha256").update(readFileSync(filePath)).digest("hex");
-}
-
-function createTarball(archivePath: string, sourceDir: string, entries: string[]): void {
-  execFileSync("tar", ["-czf", archivePath, "-C", sourceDir, ...entries], {
-    // The candidate packer runs in Linux; prevent macOS tar from adding AppleDouble files.
-    env: { ...process.env, COPYFILE_DISABLE: "1" },
-  });
-}
-
 function createFixture(
   options: { symlinkInstaller?: boolean; symlinkPackage?: boolean } = {},
   root = tempDirs.make("install-smoke-candidate-payload-"),
 ) {
-  const archiveRoot = path.join(root, "candidate-root");
-  const scriptsDir = path.join(archiveRoot, "scripts");
-  const packageRoot = path.join(root, "package-root");
-  const packageContents = path.join(packageRoot, "package");
-  const packageDir = path.join(root, "package-output");
-  const payloadDir = path.join(root, "payload");
-  mkdirSync(scriptsDir, { recursive: true });
-  mkdirSync(packageContents, { recursive: true });
-  mkdirSync(packageDir, { recursive: true });
-  mkdirSync(payloadDir, { recursive: true });
-
-  writeFileSync(path.join(scriptsDir, "install-target.sh"), "#!/bin/sh\necho install\n");
-  if (options.symlinkInstaller) {
-    symlinkSync("install-target.sh", path.join(scriptsDir, "install.sh"));
-  } else {
-    writeFileSync(path.join(scriptsDir, "install.sh"), "#!/bin/sh\necho install\n");
-  }
-  writeFileSync(path.join(scriptsDir, "install-cli.sh"), "#!/bin/sh\necho cli\n");
-  const archivePath = path.join(root, "candidate.tar.gz");
-  createTarball(archivePath, root, ["candidate-root"]);
-
-  writeFileSync(
-    path.join(packageContents, "package.json"),
-    `${JSON.stringify({ name: "openclaw", version: PACKAGE_VERSION })}\n`,
-  );
-  writeFileSync(path.join(packageContents, "index.js"), "console.log('openclaw');\n");
-  const packagePath = path.join(packageDir, "candidate.tgz");
-  createTarball(packagePath, packageRoot, ["package"]);
-  if (options.symlinkPackage) {
-    unlinkSync(packagePath);
-    symlinkSync(path.join(root, "candidate.tar.gz"), packagePath);
-  }
-  return { archivePath, packageDir, packagePath, packageContents, payloadDir, root };
+  return createPayloadFixture(root, options);
 }
+
+describe("installer isolation proof assertions", () => {
+  const token = "ab".repeat(32);
+  const probe = {
+    phase: "candidate-pack",
+    uid: 1000,
+    environment: [],
+    socket: false,
+    gitMetadata: false,
+    paths: Array.from({ length: 3 }, () => ({
+      read: false,
+      write: false,
+      readError: "ENOENT",
+      writeError: "ENOENT",
+    })),
+  };
+  const line = `OPENCLAW_ISOLATION_PROBE ${JSON.stringify(probe)}\n`;
+  const framed = `::notice::trusted host before\n::stop-commands::${token}\n${line}::${token}::\n::notice::trusted host after\n`;
+
+  it("accepts genuine framing and blocked guest canaries without starting Docker", () => {
+    expect(assertLogBoundary(framed)).toEqual([probe]);
+    expect(() => assertGuestProbe(probe)).not.toThrow();
+  });
+
+  it("imports proof support without executing its CLI or Docker", () => {
+    const root = tempDirs.make("isolation-import-");
+    const docker = path.join(root, "docker");
+    writeFileSync(docker, "#!/bin/sh\necho unexpected-docker >&2\nexit 97\n", { mode: 0o755 });
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `await import(${JSON.stringify(new URL("./fixtures/install-smoke-isolation.mjs", import.meta.url).href)}); console.log("imported");`,
+      ],
+      {
+        encoding: "utf8",
+        timeout: 5_000,
+        env: { PATH: `${root}:${process.env.PATH}`, GITHUB_ACTIONS: "true" },
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("imported\n");
+    expect(result.stderr).toBe("");
+  });
+
+  it.each([0o022, 0o002, 0o077])(
+    "keeps synthetic canaries writable across guest UIDs with host umask %s",
+    (mask) => {
+      const root = tempDirs.make("isolation-canary-permissions-");
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `
+import { statSync } from "node:fs";
+import { createHostCanaries } from ${JSON.stringify(new URL("./fixtures/install-smoke-isolation.mjs", import.meta.url).href)};
+process.umask(${mask});
+const files = createHostCanaries(${JSON.stringify(root)});
+console.log(JSON.stringify(files.map((file) => statSync(file).mode & 0o777)));
+`,
+        ],
+        { encoding: "utf8", timeout: 5_000 },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual([0o666, 0o666, 0o666]);
+    },
+  );
+
+  it.each([
+    `##[${token}]`,
+    `##[${token.toUpperCase()}]`,
+    `##[${token};property=value]`,
+    `::${token.toUpperCase()}::`,
+    `::${token} property=value::`,
+    "::STOP-COMMANDS::another-token",
+    "##[stop-commands]another-token",
+  ])("rejects premature or additional runner command boundary %s", (resume) => {
+    expect(() => assertLogBoundary(framed.replace(line, `${resume}\n${line}`))).toThrow(
+      /unexpected stop\/resume/u,
+    );
+  });
+
+  it.each([
+    (text: string) => text.replace(line, ""),
+    (text: string) => `${line}${text}`,
+    (text: string) => `${text}${line}`,
+    (text: string) => `${text}::warning::synthetic candidate command\n`,
+    (text: string) => text.replace(`::${token}::`, `::${token.toUpperCase()}::`),
+  ])("rejects absent or unframed probes and noncanonical final resume", (mutate) => {
+    expect(() => assertLogBoundary(mutate(framed))).toThrow();
+  });
+
+  it.each([
+    { uid: 0 },
+    { environment: ["GITHUB_ENV"] },
+    { socket: true },
+    { gitMetadata: true },
+    { paths: [] },
+    { paths: probe.paths.map((entry) => ({ ...entry, read: true })) },
+    { paths: probe.paths.map((entry) => ({ ...entry, write: true })) },
+    { paths: probe.paths.map((entry) => ({ ...entry, readError: "EIO" })) },
+  ])("rejects missing isolation or infrastructure failure: %j", (delta) => {
+    expect(() => assertGuestProbe({ ...probe, ...delta })).toThrow();
+  });
+
+  it("requires exact mount paths, modes and multiplicity", () => {
+    const mounts = [
+      "/owned/source.tar.gz:/input/candidate.tar.gz:ro",
+      "/owned/harness:/harness:ro",
+    ];
+    const args = [
+      "run",
+      "--cap-drop",
+      "ALL",
+      "--security-opt",
+      "no-new-privileges",
+      ...mounts.flatMap((mount) => ["-v", mount]),
+    ];
+    expect(() => assertMounts(args, mounts)).not.toThrow();
+    for (const extra of [
+      ["-v", "/owned/source.tar.gz:/input/candidate.tar.gz:ro"],
+      ["-v", "/owned:/parent:ro"],
+      ["-v", "/alias:/input/candidate.tar.gz:ro"],
+      ["--mount", "type=bind,src=/owned,dst=/extra"],
+      ["-e", "GITHUB_TOKEN"],
+    ]) {
+      expect(() => assertMounts([...args, ...extra], mounts)).toThrow();
+    }
+    expect(() =>
+      assertMounts(
+        args.map((arg) => arg.replace("/harness:ro", "/harness:rw")),
+        mounts,
+      ),
+    ).toThrow(/mount tuple/u);
+  });
+});
 
 async function sealFixture(
   options: { symlinkInstaller?: boolean; symlinkPackage?: boolean } = {},

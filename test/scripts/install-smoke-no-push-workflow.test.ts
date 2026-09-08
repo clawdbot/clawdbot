@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { workflowStep } from "./fixtures/install-smoke-isolation.mjs";
 
 const INSTALL_SMOKE = ".github/workflows/install-smoke.yml";
 const INSTALL_SMOKE_REUSABLE = ".github/workflows/install-smoke-reusable.yml";
@@ -258,6 +259,7 @@ process.exit(99);
           CAPTURE: capture,
           CALLS: calls,
           SCENARIO: JSON.stringify(scenario),
+          OPENCLAW_FS_SAFE_NATIVE_CONTRACT: "required",
         },
       },
     );
@@ -285,6 +287,9 @@ process.exit(99);
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));
+    expect(invocations.find((args) => args[0] === "run")).toContain(
+      "OPENCLAW_FS_SAFE_NATIVE_CONTRACT=required",
+    );
     expect(invocations.some((args) => args[0] === "info" || args[1] === "inspect")).toBe(false);
     const removals = invocations.filter((args) => args[0] === "rm");
     expect(removals).toEqual(
@@ -293,6 +298,94 @@ process.exit(99);
     if (!scenario.inventoryFailure) {
       expect(invocations.at(-1)?.slice(0, 2)).toEqual(["container", "ls"]);
     }
+  });
+});
+
+describe("standalone installer isolation caller", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  it.each([
+    { delta: {}, enabled: true },
+    { delta: { EVENT_NAME: "schedule" }, enabled: true },
+    {
+      delta: {
+        CALLER_WORKFLOW_REF:
+          "openclaw/openclaw/.github/workflows/openclaw-release-checks.yml@refs/heads/main",
+      },
+      enabled: false,
+    },
+    {
+      delta: {
+        CALLER_WORKFLOW_REF: "openclaw/openclaw/.github/workflows/other.yml@refs/heads/main",
+      },
+      enabled: false,
+    },
+    {
+      delta: {
+        CALLER_WORKFLOW_REF: "other/openclaw/.github/workflows/install-smoke.yml@refs/heads/main",
+      },
+      enabled: false,
+    },
+    {
+      delta: {
+        CALLER_WORKFLOW_REF: "openclaw/openclaw/.github/workflows/install-smoke.yml@refs/tags/v1",
+      },
+      enabled: false,
+    },
+    { delta: { CALLER_WORKFLOW_REF: "" }, enabled: false },
+    { delta: { CALLER_WORKFLOW_SHA: "invalid" }, enabled: false },
+    { delta: { CALLED_WORKFLOW_SHA: "b".repeat(40) }, enabled: false },
+    { delta: { TARGET_SHA: "b".repeat(40) }, enabled: false },
+    { delta: { FROZEN_TARGET: "true" }, enabled: false },
+    { delta: { RUN_BUN: "false" }, enabled: false },
+    { delta: { EVENT_NAME: "pull_request" }, enabled: false },
+  ])("admits only the canonical standalone caller: %j", ({ delta, enabled }) => {
+    const output = path.join(tempDirs.make("installer-caller-"), "output");
+    const result = spawnSync(
+      "bash",
+      [
+        "-e",
+        "-c",
+        workflowStep(path.resolve("."), "preflight", "Select standalone installer isolation proof")
+          .run,
+      ],
+      {
+        encoding: "utf8",
+        timeout: 5_000,
+        env: {
+          PATH: process.env.PATH,
+          GITHUB_OUTPUT: output,
+          CALLER_WORKFLOW_REF:
+            "openclaw/openclaw/.github/workflows/install-smoke.yml@refs/heads/main",
+          CALLER_WORKFLOW_SHA: "a".repeat(40),
+          CALLED_WORKFLOW_SHA: "a".repeat(40),
+          TARGET_SHA: "a".repeat(40),
+          EVENT_NAME: "workflow_dispatch",
+          FROZEN_TARGET: "false",
+          RUN_BUN: "true",
+          ...delta,
+        },
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(output, "utf8")).toBe(`enabled=${enabled}\n`);
+  });
+
+  it("keeps fixed real proof cases serial and out of release callers and unit collection", () => {
+    const workflow = readWorkflow(INSTALL_SMOKE_REUSABLE);
+    const proof = job(workflow, "installer_isolation_proof");
+    expect(proof.if).toBe("needs.preflight.outputs.run_isolation_proof == 'true'");
+    expect(proof.needs).toEqual(["preflight", "installer_smoke_candidate_payload"]);
+    expect(proof.permissions).toEqual({ contents: "read", actions: "read" });
+    expect(proof["timeout-minutes"]).toBe(75);
+    expect(proof.strategy).toEqual({
+      "fail-fast": false,
+      "max-parallel": 1,
+      matrix: { case: ["containment", "package-registry", "registry-only", "empty-required"] },
+    });
+    expect(step(proof, "Prove installer isolation boundary").run).toContain(
+      "node .release-harness/test/scripts/fixtures/install-smoke-isolation.mjs",
+    );
+    expect(workflow.on?.workflow_call?.inputs).not.toHaveProperty("run_isolation_proof");
   });
 });
 
@@ -362,6 +455,13 @@ describe("install smoke no-push root image transport", () => {
     );
     expect(workflowIdentity.run).toContain("job.workflow_sha must be a full lowercase commit SHA");
     expect(workflowIdentity.run).not.toContain("EXPECTED_WORKFLOW_SHA");
+    expect(step(preflight, "Materialize selected-source contract resolver").with).toMatchObject({
+      repository: "${{ steps.workflow.outputs.workflow_repository }}",
+      ref: "${{ steps.workflow.outputs.workflow_sha }}",
+      path: ".release-harness",
+      "persist-credentials": false,
+      "sparse-checkout": "scripts/resolve-fs-safe-native-contract.mjs",
+    });
 
     const identityResult = spawnSync(
       "bash",
@@ -371,6 +471,7 @@ describe("install smoke no-push root image transport", () => {
         env: {
           ...process.env,
           EXPECTED_WORKFLOW_REPOSITORY: "openclaw/openclaw",
+          GITHUB_OUTPUT: "/dev/null",
           GITHUB_WORKFLOW_SHA: "a".repeat(40),
           JOB_CONTEXT: JSON.stringify({
             workflow_repository: "openclaw/openclaw",
@@ -381,7 +482,11 @@ describe("install smoke no-push root image transport", () => {
     );
     expect(identityResult.status, identityResult.stderr).toBe(0);
     const workflowText = JSON.stringify(workflow);
-    expect(workflowText).not.toContain("${{ github.workflow_sha }}");
+    expect(workflowIdentity.env).not.toHaveProperty("CALLER_WORKFLOW_SHA");
+    expect(step(preflight, "Select standalone installer isolation proof").env).toMatchObject({
+      CALLER_WORKFLOW_SHA: "${{ github.workflow_sha }}",
+      CALLED_WORKFLOW_SHA: "${{ steps.workflow.outputs.workflow_sha }}",
+    });
     expect(workflowText).not.toContain("fromJSON(toJSON(job)).workflow_");
     const trustedJobs: string[] = [];
     for (const [jobName, workflowJob] of Object.entries(workflow.jobs)) {
@@ -402,6 +507,7 @@ describe("install smoke no-push root image transport", () => {
         "job.workflow_sha must be a full lowercase commit SHA",
       );
       expect(resolver.run, jobName).toContain('"fetch"');
+      expect(JSON.stringify(resolver)).not.toContain("${{ github.workflow_sha }}");
       expect(resolver.run, jobName).toContain(
         "`repository=${repository}\\nsha=${job.workflow_sha}\\n`",
       );
@@ -421,6 +527,7 @@ describe("install smoke no-push root image transport", () => {
       [
         "bun_global_install_smoke",
         "installer_smoke_candidate_payload",
+        "installer_isolation_proof",
         "installer_smoke_nonroot",
         "installer_smoke_nonroot_image",
         "installer_smoke_update",
@@ -462,14 +569,25 @@ describe("install smoke no-push root image transport", () => {
       OPENCLAW_CI_WORKFLOW_BUN_GLOBAL_INSTALL_SMOKE:
         "${{ inputs.run_bun_global_install_smoke || 'false' }}",
     });
-    expect(manifest.run).toContain(
+    const manifestRun = manifest.run;
+    expect(manifestRun).toBeDefined();
+    if (!manifestRun) {
+      throw new Error("Build install-smoke CI manifest must have a run script");
+    }
+    expect(manifestRun).toContain(
       'dockerfile_image="openclaw-dockerfile-smoke-local:${target_sha}"',
     );
-    expect(manifest.run).toContain(
+    expect(manifestRun).toContain(
       'run_bun_global_install_smoke="$workflow_bun_global_install_smoke"',
     );
-    expect(manifest.run).not.toContain("event_name");
-    expect(manifest.run).not.toContain("workflow_call");
+    expect(manifestRun).not.toContain("event_name");
+    expect(manifestRun).not.toContain("workflow_call");
+    expect(manifestRun).toContain(
+      "refs/heads/extended-stable/*:refs/remotes/origin/extended-stable/*",
+    );
+    expect(
+      manifestRun.indexOf("git fetch --quiet --unshallow --no-tags --filter=blob:none origin"),
+    ).toBeLessThan(manifestRun.indexOf("resolve-fs-safe-native-contract.mjs"));
 
     const text = readFileSync(INSTALL_SMOKE_REUSABLE, "utf8");
     expect(text).not.toContain("packages: write");

@@ -84,8 +84,10 @@ flow:
               updatedAt:
                 ref: now
               label: QA compaction retry historical transcript
+              # Exceed the mock provider byte limit without triggering proactive compaction.
+              # Keep each tail large enough that recent-history retention still prunes block 10.
               messages:
-                expr: "[...Array.from({ length: 32 }, (_, index) => [{ role: 'user', text: `historical user block ${String(index).padStart(2, '0')} ${'u'.repeat(8192)}`, timestamp: now - (70000 - index * 2000) }, { role: 'assistant', text: `historical assistant block ${String(index).padStart(2, '0')} ${'a'.repeat(8192)}`, timestamp: now - (69000 - index * 2000) }]).flat(), ...Array.from({ length: 16 }, (_, index) => ({ role: 'user', text: `${index === 10 ? config.bulkyMarker + ' ' : ''}post-marker historical user block ${String(index).padStart(2, '0')} ${Array.from({ length: 4096 }, (_, tokenIndex) => `tail_${String(index).padStart(2, '0')}_${String(tokenIndex).padStart(4, '0')}`).join(' ')}`, timestamp: now - (6000 - index * 300) })), { role: 'assistant', text: config.checkpointMarker, timestamp: now - 1000 }]"
+                expr: "[...Array.from({ length: 32 }, (_, index) => [{ role: 'user', text: `historical user block ${String(index).padStart(2, '0')} ${'u'.repeat(128)}`, timestamp: now - (70000 - index * 2000) }, { role: 'assistant', text: `historical assistant block ${String(index).padStart(2, '0')} ${'a'.repeat(128)}`, timestamp: now - (69000 - index * 2000) }]).flat(), ...Array.from({ length: 16 }, (_, index) => ({ role: 'user', text: `${index === 10 ? config.bulkyMarker + ' ' : ''}post-marker historical user block ${String(index).padStart(2, '0')} ${Array.from({ length: 1280 }, (_, tokenIndex) => `tail_${String(index).padStart(2, '0')}_${String(tokenIndex).padStart(4, '0')}`).join(' ')}`, timestamp: now - (6000 - index * 300) })), { role: 'assistant', text: config.checkpointMarker, timestamp: now - 1000 }]"
         - set: requestCursorBefore
           value:
             expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"

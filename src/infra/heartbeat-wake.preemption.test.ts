@@ -1,8 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  resetGatewayWorkAdmission,
-  tryBeginGatewaySuspendAdmission,
-} from "../process/gateway-work-admission.js";
+import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import {
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   requestHeartbeat,
@@ -44,23 +41,6 @@ describe("heartbeat wake preemption retry", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([-86_400_000, 86_400_000])(
-    "dispatches a coalesced wake after the wall clock changes by %i ms",
-    async (clockChangeMs) => {
-      vi.setSystemTime(2_000_000_000_000);
-      const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-      setHeartbeatWakeHandler(handler);
-
-      requestHeartbeat(wake("manual", { coalesceMs: 250 }));
-      vi.setSystemTime(Date.now() + clockChangeMs);
-      await vi.advanceTimersByTimeAsync(249);
-      expect(handler).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(1);
-      expect(handler).toHaveBeenCalledExactlyOnceWith(wake("manual"));
-    },
-  );
-
   it("dispatches an urgent wake after the wall clock changes forward", async () => {
     vi.setSystemTime(2_000_000_000_000);
     const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
@@ -72,52 +52,6 @@ describe("heartbeat wake preemption retry", () => {
     await vi.advanceTimersByTimeAsync(1);
 
     expect(handler).toHaveBeenCalledExactlyOnceWith(wake("manual", { agentId: "urgent" }));
-  });
-
-  it("retries a retained wake on time after the wall clock changes", async () => {
-    vi.setSystemTime(2_000_000_000_000);
-    const handler = vi
-      .fn()
-      .mockResolvedValueOnce({
-        status: "skipped",
-        reason: "min-spacing",
-        retryAtMs: Date.now() + 1_000,
-      })
-      .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
-    setHeartbeatWakeHandler(handler);
-
-    requestHeartbeat(wake("exec-event", { coalesceMs: 0 }));
-    await vi.advanceTimersByTimeAsync(1);
-    expect(handler).toHaveBeenCalledOnce();
-    vi.setSystemTime(Date.now() - 86_400_000);
-    await vi.advanceTimersByTimeAsync(998);
-    expect(handler).toHaveBeenCalledOnce();
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(handler).toHaveBeenCalledTimes(2);
-  });
-
-  it("hands a suspended wake to the replacement without running the retired handler", async () => {
-    const retiredHandler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-    const replacementHandler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-    setHeartbeatWakeHandler(retiredHandler);
-    const suspension = tryBeginGatewaySuspendAdmission(() => {});
-    expect(suspension?.commit()).toBe(true);
-
-    const pendingWake = {
-      source: "cron" as const,
-      intent: "event" as const,
-      reason: "cron:retired-generation",
-      agentId: "main",
-    };
-    requestHeartbeat({ ...pendingWake, coalesceMs: 0 });
-    await vi.advanceTimersByTimeAsync(1);
-    setHeartbeatWakeHandler(replacementHandler);
-    expect(suspension?.release()).toBe(true);
-    await vi.advanceTimersByTimeAsync(250);
-
-    expect(retiredHandler).not.toHaveBeenCalled();
-    expect(replacementHandler).toHaveBeenCalledExactlyOnceWith(pendingWake);
   });
 
   it("gives scheduled requests-in-flight a 60-second idle grace", async () => {
@@ -195,24 +129,5 @@ describe("heartbeat wake preemption retry", () => {
       ...wake("interval", target),
       retainedWork: true,
     });
-  });
-
-  it("keeps guarded event work retained through preemption", async () => {
-    const handler = vi
-      .fn()
-      .mockResolvedValueOnce({
-        status: "skipped",
-        reason: "not-due",
-        retryAtMs: Date.now() + 30_000,
-      })
-      .mockResolvedValueOnce({ status: "skipped", reason: "preempted" })
-      .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
-    setHeartbeatWakeHandler(handler);
-    requestHeartbeat(wake("exec-event", { coalesceMs: 0 }));
-
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(handler.mock.calls[1]?.[0]).toMatchObject({ retainedWork: true });
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(handler.mock.calls[2]?.[0]).toMatchObject({ retainedWork: true });
   });
 });

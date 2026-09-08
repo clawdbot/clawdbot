@@ -118,7 +118,11 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
       storePath: fixture.storePath,
     });
     expect(recoveredEvents).toHaveLength(4);
-    expect(recoveredEvents[0]).toMatchObject({ type: "session", id: successorEntry.sessionId });
+    expect(recoveredEvents[0]).toMatchObject({
+      type: "session",
+      id: successorEntry.sessionId,
+      version: 3,
+    });
     expect(JSON.stringify(recoveredEvents)).toContain("preserve the whole transcript");
 
     const repeated = await recoverSessionEntryFromRestartTombstone({
