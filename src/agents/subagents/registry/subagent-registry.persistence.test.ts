@@ -6,7 +6,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
+import {
+  patchSessionEntryCore,
+  replaceSessionEntry,
+} from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { callGateway } from "../../../gateway/call.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
@@ -277,6 +280,9 @@ describe("subagent registry persistence", () => {
       sessionId: "sess-timing",
       updatedAt: startedAt - 1,
     });
+    await patchSessionEntryCore({ storePath, sessionKey: "agent:main:subagent:timing" }, () => ({
+      lastRunError: "Previous setup failed",
+    }));
     await persistSubagentSessionTiming({
       runId: "run-session-timing",
       childSessionKey: "agent:main:subagent:timing",
@@ -295,6 +301,7 @@ describe("subagent registry persistence", () => {
     expect(persisted?.endedAt).toBe(endedAt);
     expect(persisted?.runtimeMs).toBe(500);
     expect(persisted?.status).toBe("done");
+    expect(persisted?.lastRunError).toBeUndefined();
     expect(persisted?.startedAt).toBeGreaterThanOrEqual(startedAt);
     expect(persisted?.startedAt).toBeLessThanOrEqual(endedAt);
   });

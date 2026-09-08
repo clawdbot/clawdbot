@@ -53,6 +53,7 @@ const workshopFeatureMethods = [
   ...defaultControlUiFeatureMethods,
   "sessions.list",
   "skills.proposals.apply",
+  "skills.proposals.evaluate",
   "skills.proposals.inspect",
   "skills.proposals.list",
   "skills.proposals.reject",
@@ -247,13 +248,15 @@ suite.define(() => {
         await setProposalRevision(gateway, H2, status);
         await gateway.resolveDeferred(method, {});
         await gateway.waitForRequest("skills.proposals.list", { after: secondListCount });
-        await gateway.waitForRequest("skills.proposals.inspect", { after: secondInspectCount });
         await expect.poll(() => page.locator(".sw-row").count()).toBe(0);
         await expect
           .poll(() => page.locator(".sw-action-toast").textContent())
           .toContain(status === "applied" ? "Applied" : "Rejected");
         expect(await page.getByText(H2.body, { exact: true }).count()).toBe(0);
         expect(await gateway.getRequests(method)).toHaveLength(secondActionCount + 1);
+        expect(await gateway.getRequests("skills.proposals.inspect")).toHaveLength(
+          secondInspectCount,
+        );
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
@@ -264,6 +267,109 @@ suite.define(() => {
       }
     },
   );
+
+  it("disables missing-draft actions and safely rejects beside an inspectable suggestion", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport,
+      recordVideo: { dir: artifactDir, size: viewport },
+    });
+    const page = await context.newPage();
+    try {
+      const validManifest = proposalManifest(H1);
+      const missing = {
+        ...validManifest.proposals[0],
+        id: "missing-draft",
+        title: "Missing draft suggestion",
+        kind: "update",
+        degradedState: "draft-missing",
+        revisionHash: H2_HASH,
+      };
+      const gateway = await installMockGateway(page, {
+        featureMethods: workshopFeatureMethods,
+        methodResponses: {
+          "skills.proposals.list": {
+            ...validManifest,
+            proposals: [...validManifest.proposals, missing],
+          },
+          "skills.proposals.inspect": proposalInspect(H1),
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}skills/workshop`);
+      await page.locator("#skill-workshop-mode-tab-suggestions").click();
+      await page.getByText(H1.body, { exact: true }).waitFor();
+      await page.locator(".sw-row").filter({ hasText: missing.title }).click();
+      await page.getByText("This suggestion's draft is missing.", { exact: false }).waitFor();
+      for (const action of ["Apply", "Evaluate", "Revise"]) {
+        expect(
+          await page
+            .locator(".sw-action-bar")
+            .getByRole("button", { name: action, exact: true })
+            .isDisabled(),
+        ).toBe(true);
+      }
+      expect(
+        await page
+          .locator(".sw-action-bar")
+          .getByRole("button", { name: "Reject", exact: true })
+          .isEnabled(),
+      ).toBe(true);
+      await page.screenshot({
+        animations: "disabled",
+        fullPage: true,
+        path: path.join(artifactDir, "missing-draft-unavailable.png"),
+      });
+
+      await gateway.deferNext("skills.proposals.reject", { proposalId: missing.id });
+      await page
+        .locator(".sw-action-bar")
+        .getByRole("button", { name: "Reject", exact: true })
+        .click();
+      const rejected = await gateway.waitForRequest("skills.proposals.reject");
+      expect(requestParams(rejected)).toEqual({
+        agentId: "main",
+        proposalId: missing.id,
+        expectedRevisionHash: H2_HASH,
+      });
+      await gateway.setMethodResponse("skills.proposals.list", {
+        ...validManifest,
+        proposals: [...validManifest.proposals, { ...missing, status: "rejected" }],
+      });
+      await gateway.resolveDeferred("skills.proposals.reject", {});
+      await page.getByText(H1.body, { exact: true }).waitFor();
+      await expect.poll(() => page.locator(".sw-action-toast").textContent()).toContain("Rejected");
+      expect(await page.locator(".sw-error").count()).toBe(0);
+      expect(await page.locator(".sw-row").count()).toBe(1);
+      for (const action of ["Apply", "Evaluate", "Revise", "Reject"]) {
+        expect(
+          await page
+            .locator(".sw-action-bar")
+            .getByRole("button", { name: action, exact: true })
+            .isEnabled(),
+        ).toBe(true);
+      }
+      const inspections = await gateway.getRequests("skills.proposals.inspect");
+      expect(inspections.length).toBeGreaterThan(0);
+      expect(
+        inspections.every((request) => requestParams(request).proposalId === PROPOSAL_ID),
+      ).toBe(true);
+      for (const method of [
+        "skills.proposals.apply",
+        "skills.proposals.evaluate",
+        "skills.proposals.requestRevision",
+      ]) {
+        expect(await gateway.getRequests(method)).toHaveLength(0);
+      }
+      await page.screenshot({
+        animations: "disabled",
+        fullPage: true,
+        path: path.join(artifactDir, "missing-draft-rejected-valid-suggestion.png"),
+      });
+    } finally {
+      await closeProofContext({ context });
+    }
+  });
 
   it("returns a stale natural Revision to H2 without retrying H1", async () => {
     const caseDir = path.join(artifactDir, "revision");

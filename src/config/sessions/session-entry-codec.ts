@@ -5,7 +5,7 @@ import type {
   SessionEntry,
   SessionHeader,
 } from "../../agents/sessions/session-manager-types.js";
-import { CURRENT_SESSION_VERSION } from "./version.js";
+import { MIN_READABLE_SESSION_VERSION } from "./version.js";
 
 const sessionEntryTypeSchema = z.enum([
   "message",
@@ -135,7 +135,7 @@ export function findSessionTranscriptHeader(entries: Iterable<unknown>): Session
 }
 
 export function assertCurrentSessionTranscriptHeader(header: SessionHeader | undefined): void {
-  if ((header?.version ?? 1) < CURRENT_SESSION_VERSION) {
+  if ((header?.version ?? 1) < MIN_READABLE_SESSION_VERSION) {
     throw new Error(
       "Persisted legacy session transcripts require doctor/import migration before runtime use",
     );
@@ -219,7 +219,7 @@ export function classifySessionFileEntry(rawEntry: unknown, sourceVersion: numbe
   const entry = normalizePersistedLegacyHookMessage(rawEntry);
   // Legacy rows can lack modern IDs; avoid constructing a discarded validation error for each one.
   if (
-    (sourceVersion < CURRENT_SESSION_VERSION && isReadableLegacySessionEntry(entry)) ||
+    (sourceVersion < MIN_READABLE_SESSION_VERSION && isReadableLegacySessionEntry(entry)) ||
     isIndexedSessionEntry(entry)
   ) {
     return { entry, recognized: true as const };

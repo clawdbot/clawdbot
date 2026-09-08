@@ -221,34 +221,22 @@ export function parseUsageCostTranscriptEntry(
   resolveCost: UsageCostResolver,
 ): ParsedTranscriptEntry | null {
   const entry = parseTranscriptEntry(parsed);
-  if (!entry?.usage) {
+  // Recorded estimates include request-time service tiers the current catalog cannot recover.
+  if (
+    !entry?.usage ||
+    (entry.costTotal ?? 0) > 0 ||
+    entry.costBreakdown?.totalOrigin === "provider-billed" ||
+    shouldPreserveRecordedZeroCost(entry.costBreakdown)
+  ) {
     return entry;
   }
   const cost = resolveCost({ provider: entry.provider, model: entry.model });
-  const usageTotals = computeUsageTokenTotals(entry.usage);
-  const pricingKnown = isModelPricingKnown(cost);
-  // Provider billing is authoritative even when catalog tiers would estimate a different total.
-  const preserveRecordedCost =
-    entry.costBreakdown?.totalOrigin === "provider-billed" ||
-    shouldPreserveRecordedZeroCost(entry.costBreakdown);
-  if (preserveRecordedCost) {
-    return entry;
-  }
-  if (
-    !pricingKnown &&
-    (entry.costTotal === undefined || entry.costTotal === 0) &&
-    usageTotals.totalTokens > 0
-  ) {
+  const { totalTokens } = computeUsageTokenTotals(entry.usage);
+  if (!isModelPricingKnown(cost) && totalTokens > 0) {
     entry.costTotal = undefined;
     entry.costBreakdown = undefined;
-  } else if (
-    cost?.tieredPricing?.length ||
-    entry.costTotal === undefined ||
-    (entry.costTotal === 0 && pricingKnown && usageTotals.totalTokens > 0)
-  ) {
+  } else if (entry.costTotal === undefined || totalTokens > 0) {
     const estimated = cost ? calculateUsageCost(entry.usage, cost) : undefined;
-    // Repricing replaces the total and its allocation together, or summaries lose
-    // the input/output/cache breakdown while still displaying the correct total.
     entry.costBreakdown = estimated && Number.isFinite(estimated.total) ? estimated : undefined;
     entry.costTotal = entry.costBreakdown?.total;
   }

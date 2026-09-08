@@ -18,6 +18,22 @@ If people must not access each other's sessions, tools, credentials, or files, g
 
 An authenticated Control UI administrator with `operator.admin` can [manage any automation conversationally](/automation/cron-jobs#conversational-management) on that Gateway, including jobs created from another channel or by another person. This authority comes from the admitted administrator turn, without matching channel identities to Gateway profiles. It does not transfer the job's creator attribution or scheduled execution policy.
 
+## World-readable session links
+
+Authenticated teammate visibility and public transcript access are separate.
+Changing a session between **Shared**, **Read-only**, **Suggest**, and **Draft**
+controls signed-in collaborators; none of those settings creates a public link.
+
+The session creator or a Gateway admin can explicitly enable **Public access**.
+Anyone with the resulting bearer URL can then read existing and future conversation
+text without signing in, while tools, reasoning, files, images, widgets, hidden
+messages, and internal metadata remain excluded. Assigning a different owner does
+not transfer this authority. Disable public access to revoke every URL for that
+publication, remembering that downloaded copies cannot be recalled. See
+[Share a session publicly](/web/control-ui/sessions-and-sidebar#share-a-session-publicly)
+for the user flow and [Public session transcripts](/web/urls#public-session-transcripts)
+for the security and deployment contract.
+
 ## The three ownership layers
 
 Every session carries up to three layers of attribution:
@@ -117,7 +133,9 @@ When the loaded session list contains fewer than two distinct owner identities a
 
 ## People cards
 
-Hover, focus, click, or tap a person in the sidebar's **Online** section to open their information card. Under **Group by Person**, the avatar and name in another person's section header open the same card; the chevron still collapses the section. An owner who is not connected gets a card marked **Offline** with only their recent sessions and the Activity link. For a qualified Gateway profile, select **View activity** in the card to open that person's Activity page. Unqualified viewers still have connection details and visible watched sessions, but no profile Activity link.
+Click or tap a person in the sidebar's **Online** section to open their Activity page. Hover or focus the row to open their information card; **View activity** in the card opens the same page. Unqualified viewers have no profile Activity page, so clicking or tapping their row opens only the card, with connection details and visible watched sessions.
+
+Under **Group by Person**, the avatar and name in another person's section header open the same card; the chevron still collapses the section. An owner who is not connected gets a card marked **Offline** with only their recent sessions and the Activity link.
 
 The card shows how long the person has been continuously connected, their reported app/device context and time zone, and their last observed activity during that online period. Opening a different session, typing, and sending a new message count as activity; connection heartbeats and agent responses do not. **Not observed yet** means no qualifying activity has been recorded, not that the person is inactive. These timing facts are ephemeral and reset after the person's final connection closes or the Gateway restarts.
 
@@ -135,13 +153,15 @@ The picker includes known Gateway profiles eligible to read the session, includi
 
 Mentions work for ordinary messages, queued or steered input, and the first message of a new session, including a remotely placed session. They are unavailable in incognito, Goal, catalog, suggestion-only, command-send, or terminal-launch modes. If selected mentions remain after switching to an unsupported mode, the composer blocks the send and asks you to remove them or return to a normal chat. It does not silently discard selected recipients.
 
-## Temporary mentions Inbox
+<a id="temporary-mentions-inbox" />
+
+## Mentions Inbox
 
 Open **Inbox → Mentions** to see messages addressed to your signed-in profile across accessible agents. Opening a mention opens its session without dismissing it. Select **Dismiss** to remove the entry from your Inbox; that change follows the same profile across connected browsers, without deleting the chat message.
 
-Mentions are kept in Gateway memory for **up to seven days**, with at most **100 entries per profile**. Older entries can be evicted earlier by capacity limits. Refreshing or reconnecting to the same running Gateway reloads its current Inbox. A Gateway restart, including one during an upgrade, clears it. Old transcript messages do not repopulate the Inbox after restart. This is a temporary attention list, not a durable notification archive or delivery guarantee.
+Mentions and dismissals survive Gateway restarts and upgrades. Entries keep their original identifiers and expiry times: **up to seven days**, with at most **100 entries per profile** and **10,000 across the Gateway**. Older entries can be evicted earlier by capacity limits. Refreshing or reconnecting reloads the retained Inbox without resending old browser alerts. Old transcript messages are not scanned to rebuild missing entries.
 
-Human mentions add no SQLite tables, columns, or schema migration. The Inbox and its dismissals stay in memory; mention annotations use the existing message JSON, and notification preferences use existing preference records.
+The Inbox and its replay bookkeeping use the shared database's existing machine-state records, with no SQLite schema change. Mention annotations stay in the existing message JSON, and notification preferences use existing preference records. See [Inbox storage and retention](/reference/database-schemas#mentions-inbox).
 
 The Inbox works without browser notification permission. For optional alerts while away from the Control UI, enable **Someone mentions me** in [Notifications](/web/notifications#receive-human-mention-alerts). See [WebChat](/web/webchat#human-mention-delivery) for the send and retry contract.
 

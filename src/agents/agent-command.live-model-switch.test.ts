@@ -49,6 +49,7 @@ import {
   resolveTestModelRefFromString,
 } from "./agent-command.live-model-switch.test-helpers.js";
 import type { FailoverReason } from "./failover/signal.js";
+import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -630,7 +631,15 @@ vi.mock("./auth-profiles.js", () => ({
 }));
 
 vi.mock("./auth-profiles/store-runtime.js", () => ({
-  ensureAuthProfileStore: () => state.authProfileStoreMock,
+  ensureAuthProfileStore: vi.fn(() => state.authProfileStoreMock),
+}));
+
+vi.mock("./auth-profiles/store.js", async (importOriginal) => ({
+  // Native loader bootstrap still needs the real auth-store factory exports.
+  ...(await importOriginal<typeof import("./auth-profiles/store.js")>()),
+  getRuntimeAuthProfileStoreSnapshot: () => state.authProfileStoreMock,
+  findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
+    state.authProfileStoreMock.profiles[profileId],
 }));
 
 vi.mock("./auth-profiles/session-override.js", () => ({
@@ -4896,6 +4905,49 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(autoProbeWrites).toHaveLength(0);
   });
 
+  it.each([
+    { source: "user" as const, profileProvider: "openai", preserve: true },
+    { source: "auto" as const, profileProvider: "openai", preserve: false },
+    { source: "user" as const, profileProvider: "anthropic", preserve: false },
+  ])(
+    "handles removed $source $profileProvider selections without replacing explicit same-provider intent",
+    async ({ source, profileProvider, preserve }) => {
+      const profileId = `${profileProvider}:selected`;
+      state.sessionEntryMock = createCommandSessionEntry({
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        providerOverride: "openai",
+        modelOverride: "gpt-future",
+        authProfileOverride: profileId,
+        authProfileOverrideSource: source,
+        skillsSnapshot: { prompt: "", skills: [], version: 0 },
+      });
+      state.runtimeConfigMock = {
+        agents: { defaults: { models: { "openai/gpt-future": {} } } },
+      };
+      setupSingleAttemptFallback();
+      state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-future"));
+      state.authProfileStoreMock = {
+        profiles: { [profileId]: { type: "api_key", provider: profileProvider, key: "synthetic" } },
+      };
+      await runBasicAgentCommand();
+      if (profileProvider === "openai") {
+        expect(state.clearSessionAuthProfileOverrideMock).not.toHaveBeenCalled();
+      }
+      state.clearSessionAuthProfileOverrideMock.mockClear();
+      state.authProfileStoreMock = { profiles: {} };
+
+      await runBasicAgentCommand();
+
+      expect(state.clearSessionAuthProfileOverrideMock).toHaveBeenCalledTimes(preserve ? 0 : 1);
+      const { ensureAuthProfileStore } = await import("./auth-profiles/store-runtime.js");
+      expect(ensureAuthProfileStore).toHaveBeenCalledWith(
+        "/tmp/agent",
+        expect.objectContaining({ profileId, allowKeychainPrompt: false }),
+      );
+    },
+  );
+
   it("keeps aliased session auth profiles for codex-cli runs", async () => {
     let capturedAuthProfileProvider: string | undefined;
     const sessionEntry = {
@@ -5245,28 +5297,24 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   it("sends internal completion wakes to ACP sessions as plain prompt text", async () => {
     setupAcpSession();
 
+    const internalEvents: AgentInternalEvent[] = [
+      {
+        type: "task_completion",
+        source: "subagent",
+        childSessionKey: "agent:main:subagent:child",
+        childSessionId: "child-session-id",
+        announceType: "subagent task",
+        taskLabel: "inspect ACP delivery",
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: "child output",
+        replyInstruction: "Summarize the result for the user.",
+      },
+    ];
     await agentCommand({
-      message: [
-        INTERNAL_RUNTIME_CONTEXT_BEGIN,
-        "OpenClaw runtime context (internal):",
-        "hidden task completion event",
-        INTERNAL_RUNTIME_CONTEXT_END,
-      ].join("\n"),
+      message: formatAgentInternalEventsForPrompt(internalEvents),
       sessionKey: "agent:main:main",
-      internalEvents: [
-        {
-          type: "task_completion",
-          source: "subagent",
-          childSessionKey: "agent:main:subagent:child",
-          childSessionId: "child-session-id",
-          announceType: "subagent task",
-          taskLabel: "inspect ACP delivery",
-          status: "ok",
-          statusLabel: "completed successfully",
-          result: "child output",
-          replyInstruction: "Summarize the result for the user.",
-        },
-      ],
+      internalEvents,
     });
 
     expect(state.acpRunTurnMock).toHaveBeenCalledTimes(1);

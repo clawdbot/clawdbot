@@ -1,6 +1,7 @@
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import type { RealtimeVoiceBridge } from "../talk/provider-types.js";
 import {
   closeTalkClientGatewayControlSession,
@@ -552,27 +553,69 @@ describe("Talk client Gateway control owner", () => {
     }
   });
 
-  it("closes the provider and logical session when the owning client disconnects", async () => {
-    const closeProvider = vi.fn(async () => undefined);
-    const closeLogicalSession = vi.fn(async () => undefined);
-    const owner = createTalkClientGatewayControlOwner({
-      voiceSessionId: "voice-disconnect",
-      sessionTarget,
-      connId: "conn-disconnect",
-      context: controlContext(),
-      runAgentConsult: vi.fn(async () => ({ text: "done" })),
-      appendTranscript: vi.fn(async () => undefined),
-      flushTranscript: vi.fn(async () => undefined),
-      closeLogicalSession,
-    });
-    await owner.adoptProvider(closeProvider);
-    owner.activate();
+  it.each([false, true])(
+    "joins provider and logical cleanup when the owning client disconnects (provider rejects: %s)",
+    async (rejectProvider) => {
+      const providerStarted = createDeferred();
+      const finishProvider = createDeferred();
+      const failure = new Error("provider close failed");
+      const closeProvider = vi.fn(async () => {
+        providerStarted.resolve();
+        await finishProvider.promise;
+        if (rejectProvider) {
+          throw failure;
+        }
+      });
+      const closeLogicalSession = vi.fn(async () => undefined);
+      const ownerWarn = vi.fn();
+      const context = controlContext(ownerWarn);
+      const log = { warn: vi.fn() };
+      const owner = createTalkClientGatewayControlOwner({
+        voiceSessionId: "voice-disconnect",
+        sessionTarget,
+        connId: "conn-disconnect",
+        context,
+        runAgentConsult: vi.fn(async () => ({ text: "done" })),
+        appendTranscript: vi.fn(async () => undefined),
+        flushTranscript: vi.fn(async () => undefined),
+        closeLogicalSession,
+      });
+      await owner.adoptProvider(closeProvider);
+      owner.activate();
 
-    cleanupTalkConnection("conn-disconnect", { warn: vi.fn() });
-
-    await vi.waitFor(() => expect(closeLogicalSession).toHaveBeenCalledOnce());
-    expect(closeProvider).toHaveBeenCalledOnce();
-  });
+      cleanupTalkConnection("conn-disconnect", log);
+      await providerStarted.promise;
+      let drained = false;
+      const draining = drainGlobalSingletonLifecycleState("restart").then(() => {
+        drained = true;
+      });
+      try {
+        expect(() => owner.assertOpen()).toThrow("closed");
+        await nextEventLoopTurn();
+        expect(drained).toBe(false);
+        expect(closeLogicalSession).not.toHaveBeenCalled();
+        finishProvider.resolve();
+        await draining;
+        expect(closeLogicalSession).toHaveBeenCalledOnce();
+        expect(closeProvider).toHaveBeenCalledOnce();
+        if (rejectProvider) {
+          expect(ownerWarn).toHaveBeenCalledWith(
+            "talk disconnected Gateway control close failed: provider close failed",
+          );
+          await expect(owner.close()).rejects.toBe(failure);
+        } else {
+          expect(ownerWarn).not.toHaveBeenCalled();
+        }
+        expect(log.warn).not.toHaveBeenCalled();
+        cleanupTalkConnection("conn-disconnect", log);
+        await nextEventLoopTurn();
+        expect(closeProvider).toHaveBeenCalledOnce();
+      } finally {
+        finishProvider.resolve();
+        await Promise.allSettled([owner.close(), draining]);
+      }
+    },
+  );
 
   it("finishes logical cleanup when provider teardown fails", async () => {
     const closeLogicalSession = vi.fn(async () => undefined);

@@ -190,9 +190,9 @@ describe("stripThinkingTags", () => {
     expect(stripThinkingTags("Hello\n</think>")).toBe("Hello\n");
   });
 
-  it("drops malformed reasoning before orphan close tags when final text follows", () => {
+  it("drops malformed reasoning while preserving the visible suffix spacing", () => {
     expect(stripThinkingTags("private chain of thought </think> Visible answer")).toBe(
-      "Visible answer",
+      " Visible answer",
     );
   });
 

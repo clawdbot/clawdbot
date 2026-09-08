@@ -81,6 +81,7 @@ export async function runUpdateCommandRepair(params: {
           observe: false,
         });
         rehearsal = await prepareUpdateCandidateRehearsal({
+          candidateRoot: params.candidateRoot ?? params.root,
           config: snapshot.config,
           sourceConfigHash: snapshot.hash,
           stateDir: target.stateDir,

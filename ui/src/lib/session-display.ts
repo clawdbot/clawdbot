@@ -334,19 +334,10 @@ export function resolveSessionDisplayName(
 
 export function isCronSessionKey(key: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(key);
-  if (!normalized) {
-    return false;
-  }
-  if (normalized.startsWith("cron:")) {
-    return true;
-  }
-  if (!normalized.startsWith("agent:")) {
-    return false;
-  }
   const parts = normalized.split(":").filter(Boolean);
-  if (parts.length < 3) {
-    return false;
-  }
-  const rest = parts.slice(2).join(":");
-  return rest.startsWith("cron:");
+  // Display classification also accepts whitespace-only owners; routing rejects them.
+  return (
+    normalized.startsWith("cron:") ||
+    (normalized.startsWith("agent:") && parts.length >= 4 && parts[2] === "cron")
+  );
 }

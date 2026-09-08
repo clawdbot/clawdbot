@@ -14,6 +14,7 @@ export const cliProcessTestFiles = [
   "src/cli/plugins-authoring.process.test.ts",
   "src/cli/mcp-cli.import-boundary.test.ts",
   "src/cli/gateway-cli/run-loop.direct-stop-active-work.process.test.ts",
+  "src/cli/gateway-cli/run-loop.restart-liveness.process.test.ts",
   "src/cli/update-dry-run-state.process.test.ts",
   "src/cli/doctor-output.process.test.ts",
   "src/cli/update-cli/update-command-handoff.test.ts",

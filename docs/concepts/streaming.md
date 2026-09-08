@@ -81,6 +81,14 @@ single-file config meets the [startup migration conditions](/gateway/doctor#deta
 
 ### Media delivery with block streaming
 
+When a plugin uses `before_agent_finalize` to validate the built-in runtime's
+answer, assistant replies stay deferred until that decision completes. A later
+answer supersedes deferred text from earlier tool turns, including when the
+final answer is `NO_REPLY`. This applies to both reply blocks and preview
+updates; it does not retract replies that were already sent. Commentary remains
+live, and media, reasoning, and completed answers to earlier user inputs are
+preserved. Media from a superseded answer is delivered without its old caption.
+
 With block streaming off, media-bearing assistant messages can still be sent at
 message boundaries, with their captions attached. Preview updates do not count
 as separately delivered captions.

@@ -19,6 +19,12 @@ const RUN_DEADLINE_MS = 45 * 60_000;
 const STOP_TIMEOUT_MS = 30_000;
 type RunKind = "closed-day" | "intraday" | "manual";
 type ActiveRun = { id: string; controller: AbortController; done: Promise<void> };
+export type TeamReportsHealth = {
+  running: boolean;
+  lastRun?: { status: "ok" | "error"; kind: RunKind; finishedAtMs: number };
+  nextDueMs?: number;
+  warnings: number;
+};
 
 function nextClosedDayDue(nowMs: number, schedule: TeamReportsConfig["schedule"]): number {
   const random = Math.random();
@@ -97,6 +103,10 @@ export class TeamReportsScheduler {
     }
   }
 
+  orgs(): string[] {
+    return this.options.config.github.orgs;
+  }
+
   people(): Person[] {
     return this.roster;
   }
@@ -108,18 +118,43 @@ export class TeamReportsScheduler {
       nextDue: { ...this.due },
       runs: this.options.store.listRuns(),
       periods: this.options.store.listPeriods(),
-      sourceWarnings: this.options.store
-        .listPeriods({ period: "day", limit: 1 })
-        .flatMap((entry) => {
-          const stored = this.options.store.getPeriod("day", entry.key);
-          return stored
-            ? stored.report.sources.github.warnings.concat(
-                stored.report.sources.discord?.warnings ?? [],
-                stored.summary?.warnings ?? [],
-              )
-            : [];
-        }),
+      sourceWarnings: this.sourceWarnings(),
     };
+  }
+
+  health(): TeamReportsHealth {
+    const finished = [
+      ...this.options.store.listRuns(1, { status: "ok" }),
+      ...this.options.store.listRuns(1, { status: "error" }),
+    ].toSorted(
+      (a, b) => (b.finishedAtMs ?? 0) - (a.finishedAtMs ?? 0) || b.startedAtMs - a.startedAtMs,
+    )[0];
+    const due = Object.values(this.due).filter((value) => value !== undefined);
+    return {
+      running: this.accepting,
+      ...(finished && finished.status !== "running" && finished.finishedAtMs !== null
+        ? {
+            lastRun: {
+              status: finished.status,
+              kind: finished.kind,
+              finishedAtMs: finished.finishedAtMs,
+            },
+          }
+        : {}),
+      ...(due.length ? { nextDueMs: Math.min(...due) } : {}),
+      warnings: this.sourceWarnings().length,
+    };
+  }
+
+  private sourceWarnings(): string[] {
+    const latest = this.options.store.listPeriods({ period: "day", limit: 1 })[0];
+    const stored = latest ? this.options.store.getPeriod("day", latest.key) : undefined;
+    return stored
+      ? stored.report.sources.github.warnings.concat(
+          stored.report.sources.discord?.warnings ?? [],
+          stored.summary?.warnings ?? [],
+        )
+      : [];
   }
 
   generate(params: { date?: string; intraday?: boolean } = {}): string {

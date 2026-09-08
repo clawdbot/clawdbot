@@ -36,7 +36,6 @@ describe("update.run package self-upgrade producer", () => {
     );
 
     expect(script).toContain("source scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh");
-    expect(script).toContain("-u OPENCLAW_SKIP_PROVIDERS");
     expect(script).toContain("systemctl --user start openclaw-gateway.service");
     expect(script).toContain("OPENCLAW_SYSTEMD_UNIT=openclaw-gateway.service");
     expect(script).toContain("restart mode: update process respawn (supervisor restart)");

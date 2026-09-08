@@ -472,6 +472,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
 
   override render() {
     const pendingMessage = this.submission.pendingMessage;
+    const identity = this.context?.gateway.snapshot.selfUser?.identity;
     const incognito = this.submission.visibility === "incognito";
     return html`
       <div
@@ -490,6 +491,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
         ${renderNewSessionBody({
           error: this.submission.error,
           pendingMessage,
+          userId: identity?.type === "profile" ? identity.id : null,
           submitting: this.submission.submitting,
           renderDraft: () => this.renderWelcome(),
           onOpenImage: this.setImageLightbox,

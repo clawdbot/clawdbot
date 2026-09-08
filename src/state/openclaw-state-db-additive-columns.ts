@@ -1,77 +1,174 @@
 type BareNullableSqliteDatatype = "ANY" | "BLOB" | "INT" | "INTEGER" | "REAL" | "TEXT";
-type LazyAdditiveStateColumnDefinition = {
-  columnName: string;
-  dataType: BareNullableSqliteDatatype;
-  tableName: string;
-};
+type LazyColumn = readonly [
+  tableName: string,
+  columnName: string,
+  dataType: BareNullableSqliteDatatype,
+  firstUseOnly?: true,
+];
 
-// Added after v6 shipped. Every definition stays bare and nullable so older v6
-// writers can omit it safely when a newer build has already ensured the column.
-export const CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS = [
-  { columnName: "bootstrap_content_digest", dataType: "TEXT", tableName: "claw_installs" },
-  { columnName: "bootstrap_source_path", dataType: "TEXT", tableName: "claw_installs" },
-  { columnName: "desktop_json", dataType: "TEXT", tableName: "worker_environments" },
-  { columnName: "bootstrap_install_kind", dataType: "TEXT", tableName: "worker_environments" },
-  { columnName: "extension_adapter_identity", dataType: "TEXT", tableName: "claw_package_refs" },
-  { columnName: "extension_detected_format", dataType: "TEXT", tableName: "claw_package_refs" },
-  { columnName: "extension_format", dataType: "TEXT", tableName: "claw_package_refs" },
-  { columnName: "extension_id", dataType: "TEXT", tableName: "claw_package_refs" },
-  { columnName: "extension_mapped_json", dataType: "TEXT", tableName: "claw_package_refs" },
-  { columnName: "extension_unavailable_json", dataType: "TEXT", tableName: "claw_package_refs" },
-  { columnName: "shared_host", dataType: "INTEGER", tableName: "worker_environments" },
-  { columnName: "node_setup_id", dataType: "TEXT", tableName: "worker_environments" },
-  { columnName: "node_device_id", dataType: "TEXT", tableName: "worker_environments" },
-  { columnName: "terminal_reason", dataType: "TEXT", tableName: "worker_session_placements" },
-  { columnName: "terminal_at_ms", dataType: "INTEGER", tableName: "worker_session_placements" },
-  {
-    columnName: "repository_workspace_id",
-    dataType: "TEXT",
-    tableName: "worker_workspace_pending_results",
-  },
-  {
-    columnName: "abandon_source",
-    dataType: "INTEGER",
-    tableName: "worker_session_placement_moves",
-  },
-  {
-    columnName: "target_machine_class",
-    dataType: "TEXT",
-    tableName: "worker_session_placement_moves",
-  },
-  { columnName: "run_end_cleanup_json", dataType: "TEXT", tableName: "worktrees" },
-  { columnName: "setup_id", dataType: "TEXT", tableName: "device_bootstrap_tokens" },
-  { columnName: "cwd", dataType: "TEXT", tableName: "session_groups" },
-  { columnName: "worktree", dataType: "INTEGER", tableName: "session_groups" },
-  { columnName: "allowed_hosts", dataType: "TEXT", tableName: "secret_store_entries" },
-  { columnName: "device_id", dataType: "TEXT", tableName: "web_push_subscriptions" },
-  { columnName: "user_profile_id", dataType: "TEXT", tableName: "web_push_subscriptions" },
-  { columnName: "preferences_json", dataType: "TEXT", tableName: "web_push_subscriptions" },
-] as const satisfies readonly LazyAdditiveStateColumnDefinition[];
+// Added after v6 shipped; first-use-only columns stay absent until their feature writes.
+const lazyColumns = [
+  ["claw_installs", "bootstrap_content_digest", "TEXT"],
+  ["claw_installs", "bootstrap_source_path", "TEXT"],
+  ["worker_environments", "desktop_json", "TEXT"],
+  ["worker_environments", "bootstrap_install_kind", "TEXT"],
+  ["claw_package_refs", "extension_adapter_identity", "TEXT"],
+  ["claw_package_refs", "extension_detected_format", "TEXT"],
+  ["claw_package_refs", "extension_format", "TEXT"],
+  ["claw_package_refs", "extension_id", "TEXT"],
+  ["claw_package_refs", "extension_mapped_json", "TEXT"],
+  ["claw_package_refs", "extension_unavailable_json", "TEXT"],
+  ["worker_environments", "shared_host", "INTEGER"],
+  ["worker_environments", "node_setup_id", "TEXT"],
+  ["worker_environments", "node_device_id", "TEXT"],
+  ["worker_session_placements", "terminal_reason", "TEXT"],
+  ["worker_session_placements", "terminal_at_ms", "INTEGER"],
+  ["worker_workspace_pending_results", "repository_workspace_id", "TEXT", true],
+  ["worker_session_placement_moves", "abandon_source", "INTEGER", true],
+  ["worker_session_placement_moves", "target_machine_class", "TEXT", true],
+  ["worktrees", "run_end_cleanup_json", "TEXT"],
+  ["device_bootstrap_tokens", "setup_id", "TEXT", true],
+  ["session_groups", "cwd", "TEXT", true],
+  ["session_groups", "worktree", "INTEGER", true],
+  ["secret_store_entries", "allowed_hosts", "TEXT"],
+  ["web_push_subscriptions", "device_id", "TEXT", true],
+  ["web_push_subscriptions", "user_profile_id", "TEXT", true],
+  ["web_push_subscriptions", "preferences_json", "TEXT", true],
+] as const satisfies readonly LazyColumn[];
 
-function isFirstUseAdditiveStateColumn({
-  columnName,
-  tableName,
-}: LazyAdditiveStateColumnDefinition): boolean {
-  return (
-    (tableName === "device_bootstrap_tokens" && columnName === "setup_id") ||
-    (tableName === "worker_workspace_pending_results" &&
-      columnName === "repository_workspace_id") ||
-    (tableName === "worker_session_placement_moves" &&
-      (columnName === "abandon_source" || columnName === "target_machine_class")) ||
-    (tableName === "session_groups" && (columnName === "cwd" || columnName === "worktree")) ||
-    (tableName === "web_push_subscriptions" &&
-      (columnName === "device_id" ||
-        columnName === "user_profile_id" ||
-        columnName === "preferences_json"))
-  );
+function lazyColumnDefinitions(firstUseOnly?: boolean) {
+  return lazyColumns
+    .filter((definition) => firstUseOnly === undefined || Boolean(definition[3]) === firstUseOnly)
+    .map(([tableName, columnName, dataType]) => ({ columnName, dataType, tableName }));
 }
 
-// Most same-version columns repair during a writable shared-state open. These
-// feature-owned columns stay absent until their feature first uses them.
-export const CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS =
-  CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS.filter(
-    (definition) => !isFirstUseAdditiveStateColumn(definition),
-  );
+export const CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS = lazyColumnDefinitions();
+export const CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS = lazyColumnDefinitions(false);
+export const CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS = lazyColumnDefinitions(true);
 
-export const CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS =
-  CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS.filter(isFirstUseAdditiveStateColumn);
+// Historical repairs retain these groups at their original backfill boundaries.
+export const ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS = {
+  packageUpdatedAt: [["claw_package_refs", "updated_at_ms INTEGER NOT NULL DEFAULT 0"]],
+  packageIntegrity: [
+    [
+      "claw_package_refs",
+      "package_integrity TEXT NOT NULL DEFAULT 'sha256:0000000000000000000000000000000000000000000000000000000000000000'",
+    ],
+  ],
+  diagnosticSequence: [["diagnostic_events", "sequence INTEGER NOT NULL DEFAULT 0"]],
+  cronRunLogs: [
+    ["worktrees", "provisioned_paths_json TEXT"],
+    ["apns_registrations", "relay_origin TEXT"],
+    ["device_pairing_pending", "refreshed_at_ms INTEGER"],
+    ["device_pairing_pending", "browser_origin TEXT"],
+    ["device_pairing_paired", "approved_via TEXT"],
+    ["device_pairing_paired", "browser_origin TEXT"],
+    ["device_pairing_paired", "operator_label TEXT"],
+    ["device_pairing_paired", "node_surface_json TEXT"],
+    ["device_pairing_paired", "pending_node_surface_json TEXT"],
+    ["cron_run_logs", "status TEXT"],
+    ["cron_run_logs", "error TEXT"],
+    ["cron_run_logs", "summary TEXT"],
+    ["cron_run_logs", "diagnostics_summary TEXT"],
+    ["cron_run_logs", "delivery_status TEXT"],
+    ["cron_run_logs", "delivery_error TEXT"],
+    ["cron_run_logs", "delivered INTEGER"],
+    ["cron_run_logs", "session_id TEXT"],
+    ["cron_run_logs", "session_key TEXT"],
+    ["cron_run_logs", "run_id TEXT"],
+    ["cron_run_logs", "run_at_ms INTEGER"],
+    ["cron_run_logs", "duration_ms INTEGER"],
+    ["cron_run_logs", "next_run_at_ms INTEGER"],
+    ["cron_run_logs", "model TEXT"],
+    ["cron_run_logs", "provider TEXT"],
+    ["cron_run_logs", "total_tokens INTEGER"],
+    ["cron_run_logs", "entry_json TEXT NOT NULL DEFAULT '{}'"],
+    ["cron_run_logs", "created_at INTEGER NOT NULL DEFAULT 0"],
+  ],
+  acpReplay: [
+    ["acp_replay_events", "estimated_bytes INTEGER NOT NULL DEFAULT 0"],
+    ["acp_replay_sessions", "estimated_bytes INTEGER NOT NULL DEFAULT 0"],
+  ],
+  cronJobs: [
+    ["cron_jobs", "description TEXT"],
+    ["cron_jobs", "declaration_key TEXT"],
+    ["cron_jobs", "owner_agent_id TEXT"],
+    ["cron_jobs", "name TEXT NOT NULL DEFAULT ''"],
+    ["cron_jobs", "enabled INTEGER NOT NULL DEFAULT 1"],
+    ["cron_jobs", "agent_id TEXT"],
+    ["cron_jobs", "payload_kind TEXT NOT NULL DEFAULT 'message'"],
+    ["cron_jobs", "state_json TEXT NOT NULL DEFAULT '{}'"],
+    ["cron_jobs", "runtime_updated_at_ms INTEGER"],
+    ["cron_jobs", "schedule_identity TEXT"],
+    ["cron_jobs", "sort_order INTEGER NOT NULL DEFAULT 0"],
+  ],
+  deliveryQueue: [
+    ["sandbox_registry_entries", "session_key TEXT"],
+    ["sandbox_registry_entries", "backend_id TEXT"],
+    ["sandbox_registry_entries", "runtime_label TEXT"],
+    ["sandbox_registry_entries", "image TEXT"],
+    ["sandbox_registry_entries", "created_at_ms INTEGER"],
+    ["sandbox_registry_entries", "last_used_at_ms INTEGER"],
+    ["sandbox_registry_entries", "config_label_kind TEXT"],
+    ["sandbox_registry_entries", "config_hash TEXT"],
+    ["sandbox_registry_entries", "cdp_port INTEGER"],
+    ["sandbox_registry_entries", "no_vnc_port INTEGER"],
+    ["delivery_queue_entries", "entry_kind TEXT"],
+    ["delivery_queue_entries", "session_key TEXT"],
+    ["delivery_queue_entries", "channel TEXT"],
+    ["delivery_queue_entries", "target TEXT"],
+    ["delivery_queue_entries", "account_id TEXT"],
+    ["delivery_queue_entries", "retry_count INTEGER NOT NULL DEFAULT 0"],
+    ["delivery_queue_entries", "last_attempt_at INTEGER"],
+    ["delivery_queue_entries", "last_error TEXT"],
+    ["delivery_queue_entries", "recovery_state TEXT"],
+    ["delivery_queue_entries", "platform_send_started_at INTEGER"],
+  ],
+  originalMediaRoot: [
+    ["managed_outgoing_image_records", "original_media_root TEXT NOT NULL DEFAULT ''"],
+  ],
+  beforeTaskAttribution: [
+    ["managed_outgoing_image_records", "agent_id TEXT"],
+    [
+      "managed_outgoing_image_records",
+      "cleanup_pending INTEGER NOT NULL DEFAULT 0 CHECK (cleanup_pending IN (0, 1))",
+    ],
+    ["current_conversation_bindings", "conversation_kind TEXT NOT NULL DEFAULT 'channel'"],
+    ["device_bootstrap_tokens", "pending_profile_json TEXT"],
+    ["gateway_restart_handoff", "restart_trace_started_at INTEGER"],
+    ["gateway_restart_handoff", "restart_trace_last_at INTEGER"],
+    ["gateway_restart_intent", "reason TEXT"],
+    ["gateway_restart_sentinel", "delivery_channel TEXT"],
+    ["gateway_restart_sentinel", "delivery_to TEXT"],
+    ["gateway_restart_sentinel", "delivery_account_id TEXT"],
+    ["gateway_restart_sentinel", "message TEXT"],
+    ["gateway_restart_sentinel", "continuation_json TEXT"],
+    ["gateway_restart_sentinel", "doctor_hint TEXT"],
+    ["gateway_restart_sentinel", "stats_json TEXT"],
+    ["gateway_boot_lifecycle", "startup_reason TEXT"],
+    ["official_external_plugin_catalog_snapshots", "trust_mode TEXT"],
+    ["official_external_plugin_catalog_snapshots", "trust_key_id TEXT"],
+    ["official_external_plugin_catalog_snapshots", "trust_signature_count INTEGER"],
+    ["official_external_plugin_catalog_snapshots", "trust_threshold INTEGER"],
+    ["official_external_plugin_catalog_snapshots", "trust_verified_at TEXT"],
+  ],
+  taskRequester: [["task_runs", "requester_agent_id TEXT"]],
+  taskRunDetails: [
+    ["task_runs", "tool_use_count INTEGER"],
+    ["task_runs", "last_tool_name TEXT"],
+    ["task_runs", "detail_json TEXT"],
+  ],
+  workerEnvironments: [
+    ["worker_environments", "bootstrap_bundle_hash TEXT"],
+    ["worker_environments", "bootstrap_openclaw_version TEXT"],
+    ["worker_environments", "bootstrap_protocol_features_json TEXT"],
+    ["worker_environments", "bootstrap_install_kind TEXT"],
+    ["worker_environments", "owner_epoch INTEGER NOT NULL DEFAULT 0 CHECK (owner_epoch >= 0)"],
+    ["worker_environments", "ssh_host_key TEXT"],
+    ["worker_workspace_pending_results", "staged_result_ref TEXT"],
+    [
+      "worker_environments",
+      "teardown_terminal_state TEXT CHECK (teardown_terminal_state IN ('destroyed', 'failed'))",
+    ],
+  ],
+} as const;

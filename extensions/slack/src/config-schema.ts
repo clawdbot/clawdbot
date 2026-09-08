@@ -13,8 +13,7 @@ import {
   ChannelStreamingProgressSchema,
   ProviderCommandsSchema,
   ReplyToModeSchema,
-  requireAllowlistAllowFrom,
-  requireOpenAllowFrom,
+  refineChannelDmPolicy,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
@@ -214,23 +213,7 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
     return;
   }
 
-  const dmPolicy = value.dmPolicy ?? "pairing";
-  const allowFrom = value.allowFrom;
-  requireOpenAllowFrom({
-    policy: dmPolicy,
-    allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message: 'channels.slack.dmPolicy="open" requires channels.slack.allowFrom to include "*"',
-  });
-  requireAllowlistAllowFrom({
-    policy: dmPolicy,
-    allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.slack.dmPolicy="allowlist" requires channels.slack.allowFrom to contain at least one sender ID',
-  });
+  refineChannelDmPolicy({ channelId: "slack", value, ctx });
 
   const requireRelayConfig = (
     relay: { url?: unknown; authToken?: unknown; gatewayId?: unknown } | undefined,
@@ -278,24 +261,7 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
       ...value.relay,
       ...account.relay,
     };
-    const effectivePolicy = account.dmPolicy ?? value.dmPolicy ?? "pairing";
-    const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
-    requireOpenAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.slack.accounts.*.dmPolicy="open" requires channels.slack.accounts.*.allowFrom (or channels.slack.allowFrom) to include "*"',
-    });
-    requireAllowlistAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.slack.accounts.*.dmPolicy="allowlist" requires channels.slack.accounts.*.allowFrom (or channels.slack.allowFrom) to contain at least one sender ID',
-    });
+    refineChannelDmPolicy({ channelId: "slack", value, accountId, ctx });
     if (accountMode !== "http") {
       if (accountMode === "relay") {
         requireRelayConfig(effectiveRelay, ["accounts", accountId, "relay"]);

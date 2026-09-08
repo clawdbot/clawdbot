@@ -76,6 +76,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
   ) {
     state = await createOpenClawTestState({ prefix: "doctor-authority-" });
     const { root, home, stateDir, configPath } = state;
+    await fs.chmod(stateDir, 0o700);
     const installedStateDir = blockedTarget ? path.join(root, "installed-state") : stateDir;
     const unitPath = path.join(home, ".config/systemd/user/openclaw-gateway.service");
     const environmentPath = path.join(stateDir, "gateway.systemd.env");
@@ -171,7 +172,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
         throw new Error("Unexpected fixture runtime process");
       }
       return {
-        stdout: JSON.stringify({ nodeVersion: "24.15.0", sqliteVersion: "3.51.3" }),
+        stdout: JSON.stringify({ nodeVersion: "24.16.0", sqliteVersion: "3.51.3" }),
         stderr: "",
       };
     });

@@ -173,50 +173,51 @@ function normalizeXaiResponsesToolResultPayload(
   }
 
   const includeImages = Array.isArray(model.input) && model.input.includes("image");
-  const imageContentParts: Array<Record<string, unknown>> = [];
+  let imageContentParts: Array<Record<string, unknown>> = [];
   let toolResultIndex = 0;
-  const normalizedInput = payloadObj.input.map((item: unknown) => {
+  const normalizedInput = payloadObj.input.flatMap((item: unknown, index, input) => {
     const itemObj = asOptionalRecord(item);
     if (itemObj?.type !== "function_call_output") {
-      return item;
+      return [item];
     }
     // String outputs also occupy a result position, even though they carry no images.
     toolResultIndex += 1;
-    if (!Array.isArray(itemObj.output)) {
-      return item;
-    }
-
-    const outputParts = itemObj.output as Array<Record<string, unknown>>;
-    let textOutput = "";
-    const imageStart = imageContentParts.length;
-    for (const part of outputParts) {
-      if (part.type === "input_text" && typeof part.text === "string") {
-        textOutput += part.text;
-      }
-      if (includeImages && isReplayableInputImagePart(part)) {
-        // Emit one ownership label before this result's first replayable image.
-        if (imageContentParts.length === imageStart) {
-          imageContentParts.push({
-            type: "input_text",
-            text: `Image(s) from tool result #${toolResultIndex}:`,
-          });
+    let normalizedItem = item;
+    if (Array.isArray(itemObj.output)) {
+      const outputParts = itemObj.output as Array<Record<string, unknown>>;
+      let textOutput = "";
+      const imageStart = imageContentParts.length;
+      for (const part of outputParts) {
+        if (part.type === "input_text" && typeof part.text === "string") {
+          textOutput += part.text;
         }
-        imageContentParts.push(part);
+        if (includeImages && isReplayableInputImagePart(part)) {
+          // Emit one ownership label before this result's first replayable image.
+          if (imageContentParts.length === imageStart) {
+            imageContentParts.push({
+              type: "input_text",
+              text: `Image(s) from tool result #${toolResultIndex}:`,
+            });
+          }
+          imageContentParts.push(part);
+        }
       }
+      normalizedItem = {
+        ...itemObj,
+        output: textOutput || describeXaiFunctionOutputMediaPlaceholder(outputParts) || "",
+      };
     }
-    return {
-      ...itemObj,
-      output: textOutput || describeXaiFunctionOutputMediaPlaceholder(outputParts) || "",
-    };
+    // Keep parallel outputs together, then anchor their images before later history.
+    if (
+      imageContentParts.length === 0 ||
+      asOptionalRecord(input[index + 1])?.type === "function_call_output"
+    ) {
+      return [normalizedItem];
+    }
+    const carrier = { type: "message", role: "user", content: imageContentParts };
+    imageContentParts = [];
+    return [normalizedItem, carrier];
   });
-
-  if (imageContentParts.length > 0) {
-    normalizedInput.push({
-      type: "message",
-      role: "user",
-      content: imageContentParts,
-    });
-  }
 
   payloadObj.input = normalizedInput;
 }

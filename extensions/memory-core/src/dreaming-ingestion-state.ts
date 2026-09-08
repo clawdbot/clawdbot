@@ -22,8 +22,10 @@ export type DailyIngestionState = {
 export type SessionIngestionFileState = {
   mtimeMs: number;
   size: number;
+  /** Canonical hash of the full exported snapshot described by lineCount. */
   contentHash: string;
   lineCount: number;
+  /** Consumption cursor within that snapshot; it may trail lineCount. */
   lastContentLine: number;
   excludedReason?: string;
 };

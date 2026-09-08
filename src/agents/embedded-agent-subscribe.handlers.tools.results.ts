@@ -23,7 +23,10 @@ import {
   filterToolResultMediaUrls,
 } from "./embedded-agent-tool-media.js";
 import { extractToolResultText, truncateLiveExecOutput } from "./embedded-agent-tool-results.js";
-import type { ProcessTerminalDiagnostic } from "./tool-error-summary.js";
+import {
+  hasTerminalControlCharacter,
+  type ProcessTerminalDiagnostic,
+} from "./tool-error-summary.js";
 import { readToolResultDetails } from "./tool-result-error.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 import { getCoreTtsToolResultMediaUrls } from "./tools/tts-tool-result-provenance.js";
@@ -66,16 +69,6 @@ export function isMiddlewareToolResultError(result: unknown): boolean {
     !Array.isArray(details) &&
     (details as { middlewareError?: unknown }).middlewareError === true,
   );
-}
-
-export function hasTerminalControlCharacter(value: string): boolean {
-  for (const char of value) {
-    const code = char.charCodeAt(0);
-    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 const PROCESS_TERMINATION_REASONS = new Set([

@@ -265,9 +265,7 @@ describe("generic plugin-owned live session registry", () => {
     expect(owner.controller.signal.aborted).toBe(false);
     expect(() => owner.capability.current()).toThrow("caller is no longer active");
     expect(() => owner.capability.activate(owner.session)).toThrow("caller is no longer active");
-    await expect(restartCliLiveSession(owner.context)).rejects.toThrow(
-      "caller is no longer active",
-    );
+    await expect(owner.capability.restart()).rejects.toThrow("caller is no longer active");
     expect(owner.close).not.toHaveBeenCalled();
     await closeCliLiveSession(owner.context, "restart");
     expect(owner.close).toHaveBeenCalledOnce();
@@ -286,7 +284,7 @@ describe("generic plugin-owned live session registry", () => {
       });
       owner.register();
       const restarting = await createOwner({ sessionId: owner.sessionId });
-      const run = restartCliLiveSession(restarting.context);
+      const run = restarting.capability.restart();
       const observed = run.then(
         () => "restarted",
         (error: unknown) => error,
@@ -341,7 +339,7 @@ describe("generic plugin-owned live session registry", () => {
         expect(cleanupScope.outcome).toBe("uncertain");
         const next = await createOwner({ sessionId: owner.sessionId });
         next.context.params.oneShotCliRun = true;
-        const nextRestart = restartCliLiveSession(next.context).then(
+        const nextRestart = next.capability.restart().then(
           () => undefined,
           (error: unknown) => error,
         );
@@ -368,7 +366,7 @@ describe("generic plugin-owned live session registry", () => {
     original.register();
     const next = await createOwner({ sessionId: original.sessionId });
     let settled = false;
-    const restarting = restartCliLiveSession(next.context).then(() => {
+    const restarting = next.capability.restart().then(() => {
       settled = true;
     });
     original.capability.remove(original.session);
@@ -439,6 +437,22 @@ describe("generic plugin-owned live session registry", () => {
       expect(original.capability.current()).toBe(original.session);
     },
   );
+
+  it("refuses plugin restart when the exact live generation is required", async () => {
+    const original = await createOwner({ generation: "required-live-process" });
+    original.register();
+    const resumed = await createOwner({
+      sessionId: original.sessionId,
+      requiredGeneration: original.session.generation,
+    });
+    expect(resumed.capability.current()).toBe(original.session);
+    await expect(resumed.capability.restart()).rejects.toMatchObject({
+      reason: "session_expired",
+      code: "cli_live_session_changed",
+    });
+    expect(original.close).not.toHaveBeenCalled();
+    expect(original.capability.current()).toBe(original.session);
+  });
 
   it("transfers admitted MCP authority to the original private process before capture", async () => {
     const original = await createOwner({

@@ -266,7 +266,7 @@ suite.define(() => {
       const mainKey = sessionKey.endsWith(":workspace") ? "workspace" : "main";
       const gateway = await installMockGateway(page, {
         sessionKey,
-        sessionScope: sessionKey === "global" ? "global" : "agent",
+        sessionScope: sessionKey === "global" ? "global" : "per-sender",
         mainSessionKey: sessionKey === "global" ? "global" : `agent:main:${mainKey}`,
         methodResponses: {
           "agents.list": {

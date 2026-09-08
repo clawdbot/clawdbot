@@ -120,6 +120,26 @@ suite.define(() => {
             ),
           )
           .toBeLessThanOrEqual(1);
+        const current = page.getByRole("region", { name: "Active sessions", exact: true });
+        await expect
+          .poll(() =>
+            current.evaluate((element) => {
+              const rows = element.querySelector(".activity-current-work__rows");
+              const feedback = element.querySelector(".activity-current-work__feedback");
+              if (!rows || !feedback) {
+                return false;
+              }
+              const clip = rows.getBoundingClientRect();
+              const content = feedback.getBoundingClientRect();
+              return (
+                content.height > 0 &&
+                content.top >= clip.top - 1 &&
+                content.bottom <= clip.bottom + 1
+              );
+            }),
+          )
+          .toBe(true);
+        await page.screenshot({ path: path.join(suite.artifactDir, "05-live-burst.png") });
         await page.getByRole("tab", { name: "Sessions", exact: true }).click();
         await expect.poll(() => row.textContent()).toContain("Latest activity");
       },

@@ -602,7 +602,19 @@ describe("scripts/docker/setup.sh", () => {
   it("precreates agent data dirs to avoid EACCES in container", async () => {
     const activeSandbox = requireSandbox(sandbox);
     const configDir = join(activeSandbox.rootDir, "config-agent-dirs");
-    const workspaceDir = join(activeSandbox.rootDir, "workspace-agent-dirs");
+    const workspaceDir = join(configDir, "workspace");
+    const stateFiles = [
+      "identity/owned.txt",
+      "agents/workspace/owned.txt",
+      "workspace-archive/owned.txt",
+    ];
+    const workspaceFile = "workspace/project/user.txt";
+    for (const relative of [...stateFiles, workspaceFile]) {
+      const path = join(configDir, relative);
+      await mkdir(join(path, ".."), { recursive: true });
+      await writeFile(path, "fixture");
+    }
+    expect((await stat(workspaceDir)).dev).toBe((await stat(configDir)).dev);
 
     const result = runDockerSetup(activeSandbox, {
       OPENCLAW_CONFIG_DIR: configDir,
@@ -619,7 +631,11 @@ describe("scripts/docker/setup.sh", () => {
     const log = await readDockerLog(activeSandbox);
     const chownIdx = log.indexOf("--user root");
     const safePathIdx = log.indexOf(`${prestartSafePath}; export PATH`);
-    const stateRepairIdx = log.indexOf(noFollowOwnershipRepair("/home/node/.openclaw"));
+    const stateRepair = log.match(/\/usr\/bin\/find -P \/home\/node\/\.openclaw [^;]+/u)?.[0];
+    if (!stateRepair) {
+      throw new Error("Missing generated state ownership repair");
+    }
+    const stateRepairIdx = log.indexOf(stateRepair);
     const onboardIdx = log.indexOf("onboard");
     expect(chownIdx).toBeGreaterThanOrEqual(0);
     expect(safePathIdx).toBeGreaterThan(chownIdx);
@@ -627,7 +643,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(onboardIdx).toBeGreaterThan(chownIdx);
     expect(log).toContain("run --rm --no-deps --user root --entrypoint sh openclaw-gateway -c");
     expect(log).toContain("/usr/bin/chown -h node:node /home/node/.config");
-    expect(log).toContain(noFollowOwnershipRepair("/home/node/.openclaw"));
+    expect(stateRepair).toContain("-execdir /usr/bin/chown -h node:node {} +");
     expect(log).toContain(noFollowOwnershipRepair("/home/node/.config/openclaw"));
     expect(log).toContain("[ ! -L /home/node/.openclaw/workspace/.openclaw ]");
     expect(log).toContain(noFollowOwnershipRepair("/home/node/.openclaw/workspace/.openclaw"));
@@ -636,6 +652,27 @@ describe("scripts/docker/setup.sh", () => {
     expect(log).not.toContain("-exec chown");
     expect(log).not.toContain(" chown node:node");
     expect(log).not.toContain("chown -R node:node /home/node/.openclaw/workspace/.openclaw");
+
+    // Execute the generated traversal, replacing only the ownership side effect.
+    // Same-device workspace mounts are not excluded by find's -xdev option.
+    const selection = stateRepair
+      .replaceAll("/home/node/.openclaw", '"$repair_root"')
+      .replace(/-execdir \/usr\/bin\/chown -h node:node \{\} \+$/u, "-print");
+    expect(selection).not.toContain("chown");
+    const traversal = spawnSync(
+      "bash",
+      ["-c", 'repair_root="$(cd "$1" && pwd)"; ' + selection, "ownership-repair", configDir],
+      { encoding: "utf8" },
+    );
+    expect(traversal.status, traversal.stderr).toBe(0);
+    const selected = traversal.stdout.trim().split(/\r?\n/u);
+    const selectedRoot = selected[0];
+    expect(selectedRoot).toMatch(/\/config-agent-dirs$/u);
+    for (const relative of stateFiles) {
+      expect(selected).toContain(`${selectedRoot}/${relative}`);
+    }
+    expect(selected).toContain(`${selectedRoot}/workspace`);
+    expect(selected).not.toContain(`${selectedRoot}/${workspaceFile}`);
   });
 
   it("precreates auth profile secret key dir outside the mounted state dir", async () => {

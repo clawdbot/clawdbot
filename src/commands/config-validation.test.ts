@@ -2,10 +2,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import { createCompatibilityNotice } from "../plugins/status.test-fixtures.js";
-import { requireValidConfig } from "./config-validation.js";
+import { requireValidConfig, requireValidConfigForWrite } from "./config-validation.js";
 
-const { readConfigFileSnapshot, buildPluginCompatibilitySnapshotNotices } = vi.hoisted(() => ({
+const {
+  readConfigFileSnapshot,
+  readConfigFileSnapshotForWrite,
+  buildPluginCompatibilitySnapshotNotices,
+} = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
+  readConfigFileSnapshotForWrite: vi.fn(),
   buildPluginCompatibilitySnapshotNotices: vi.fn<
     (_params?: unknown) => PluginCompatibilityNotice[]
   >(() => []),
@@ -13,6 +18,7 @@ const { readConfigFileSnapshot, buildPluginCompatibilitySnapshotNotices } = vi.h
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot,
+  readConfigFileSnapshotForWrite,
 }));
 
 vi.mock("../plugins/status.js", () => ({
@@ -58,6 +64,50 @@ describe("requireValidConfig", () => {
     return String(message);
   }
 
+  it("retains native write ownership and the read-time environment after an await", async () => {
+    const writeSnapshot = {
+      snapshot: {
+        exists: true,
+        valid: true,
+        config: {},
+        sourceConfig: {},
+        path: "/tmp/owned.json",
+      },
+      writeOptions: {
+        expectedConfigPath: "/tmp/owned.json",
+        envSnapshotForRestore: { CONFIG_READ_TOKEN: "at-read" },
+        includeFileHashesForWrite: { "/tmp/include.json": "read-hash" },
+      },
+    };
+    readConfigFileSnapshotForWrite.mockResolvedValue(writeSnapshot);
+    const result = await requireValidConfigForWrite(createRuntime());
+    await Promise.resolve();
+    expect(result).toBe(writeSnapshot);
+    expect(result?.writeOptions.envSnapshotForRestore).toEqual({ CONFIG_READ_TOKEN: "at-read" });
+    expect(readConfigFileSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("reports invalid native write reads without returning a writable snapshot", async () => {
+    readConfigFileSnapshotForWrite.mockResolvedValue({
+      snapshot: {
+        path: "/tmp/owned.json",
+        exists: true,
+        valid: false,
+        raw: "{}",
+        parsed: {},
+        sourceConfig: {},
+        config: {},
+        issues: [{ path: "gateway.mode", message: "Invalid mode" }],
+        legacyIssues: [],
+      },
+      writeOptions: { expectedConfigPath: "/tmp/owned.json" },
+    });
+    const runtime = createRuntime();
+    expect(await requireValidConfigForWrite(runtime)).toBeNull();
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.error).toHaveBeenCalledWith("Fix: openclaw doctor --fix");
+  });
+
   it("returns config without emitting compatibility advice by default", async () => {
     createValidSnapshot();
     const runtime = createRuntime();
@@ -65,6 +115,7 @@ describe("requireValidConfig", () => {
     const config = await requireValidConfig(runtime);
 
     expect(config).toEqual({ plugins: {} });
+    expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
     expect(buildPluginCompatibilitySnapshotNotices).not.toHaveBeenCalled();
@@ -102,6 +153,7 @@ describe("requireValidConfig", () => {
     });
 
     expect(config).toEqual({ plugins: {} });
+    expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
     expect(requireFirstLog(runtime)).toBe(

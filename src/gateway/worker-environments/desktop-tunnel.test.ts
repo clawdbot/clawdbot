@@ -90,6 +90,17 @@ function fakeRunner(
   return { runner, runs, starts };
 }
 
+function readyRunner() {
+  const fake = fakeRunner();
+  const start = fake.runner.start.bind(fake.runner);
+  fake.runner.start = (argv, options) => {
+    const child = start(argv, options);
+    fake.starts.at(-1)!.process.becomeReady();
+    return child;
+  };
+  return fake;
+}
+
 function launchApp(
   manager: ReturnType<typeof createWorkerDesktopTunnels>,
   app: "browser" | "terminal" = "browser",
@@ -364,13 +375,7 @@ describe("worker desktop tunnels", () => {
   });
 
   it("does not cancel a same-epoch retry when its retained predecessor exits", async () => {
-    const fake = fakeRunner();
-    const start = fake.runner.start.bind(fake.runner);
-    fake.runner.start = (argv, options) => {
-      const child = start(argv, options);
-      fake.starts.at(-1)!.process.becomeReady();
-      return child;
-    };
+    const fake = readyRunner();
     const manager = createWorkerDesktopTunnels({ runner: fake.runner });
     await acquire(manager, 1, { protocol: "rfb", port: 5900 });
     const failure = new Error("transport still running");
@@ -449,13 +454,7 @@ describe("worker desktop tunnels", () => {
   });
 
   it("cancels a replacement while the previous desktop is stopping", async () => {
-    const fake = fakeRunner();
-    const start = fake.runner.start.bind(fake.runner);
-    fake.runner.start = (argv, options) => {
-      const child = start(argv, options);
-      fake.starts.at(-1)!.process.becomeReady();
-      return child;
-    };
+    const fake = readyRunner();
     const manager = createWorkerDesktopTunnels({ runner: fake.runner });
     await acquire(manager, 1, { protocol: "rfb", port: 5900 });
     const child = fake.starts[0]!.process;

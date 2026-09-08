@@ -7,7 +7,7 @@ import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
-// This zero-install hook runs on Node 22.22.3+, where native TypeScript stripping is enabled.
+// This zero-install hook runs on Node 24.16.0+, where native TypeScript stripping is enabled.
 import { truncateUtf16Safe } from "../../packages/normalization-core/src/utf16-slice.ts";
 import { cancelResponseReaderSoon, readBoundedResponseText } from "../lib/bounded-response.mjs";
 import { pnpmLockfileDocuments } from "../lib/pnpm-lockfile-documents.mjs";

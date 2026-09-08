@@ -7,6 +7,8 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
+const TERMINAL_UPLOAD_RETENTION_MS = 24 * 60 * 60 * 1000;
+
 type CreateOptions = {
   parent: HTMLElement;
   terminalOptions?: { fontFamily?: string };
@@ -87,6 +89,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
   afterEach(async () => {
     document.body.replaceChildren();
     createGhosttyTerminalMock.mockReset();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
     await i18n.setLocale("en");
   });
@@ -143,7 +146,17 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
     expect(controller.terminal.paste).not.toHaveBeenCalledWith(expect.stringContaining("\n"));
   });
 
-  it("shows file progress and retries only the failed remainder", async () => {
+  it.each([
+    "retry",
+    "insert",
+    "cancel",
+    "expired-retry",
+    "expired-insert",
+    "expired-completion",
+  ] as const)("preserves completed upload paths during %s recovery", async (recovery) => {
+    const readNow = Date.now;
+    let elapsedMs = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => readNow() + elapsedMs);
     const controller = createTerminalController();
     createGhosttyTerminalMock.mockResolvedValue(controller);
     const requests: Array<{ method: string; params: unknown; signal?: AbortSignal }> = [];
@@ -204,8 +217,26 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
     });
     expect(controller.terminal.paste).not.toHaveBeenCalled();
 
+    const expectExpiredBatch = async () => {
+      await waitForFast(() => {
+        expect(panel.renderRoot.querySelector(".tp-upload-card--failed")?.textContent).toContain(
+          "Uploaded files may have expired. Cancel this batch and choose the files again.",
+        );
+        expect(panel.renderRoot.querySelector(".tp-upload-retry")).toBeNull();
+        expect(panel.renderRoot.querySelector(".tp-upload-insert")).toBeNull();
+      });
+      expect(controller.terminal.paste).not.toHaveBeenCalled();
+      expect(requests.filter(({ method }) => method === "terminal.upload")).toHaveLength(2);
+    };
+    if (recovery === "expired-completion") {
+      elapsedMs = TERMINAL_UPLOAD_RETENTION_MS;
+      failedUpload.resolve({ path: "/tmp/openclaw upload/notes.txt", size: 4 });
+      await expectExpiredBatch();
+      return;
+    }
+
     failedUpload.reject(
-      Object.assign(new Error("paired node went offline"), {
+      Object.assign(new Error("terminal upload staging is full"), {
         gatewayCode: "UNAVAILABLE",
         retryable: false,
       }),
@@ -213,9 +244,44 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
     await waitForFast(() => {
       const failed = panel.renderRoot.querySelector(".tp-upload-card--failed");
       expect(failed?.textContent).toContain("Upload failed");
-      expect(failed?.textContent).toContain("paired node went offline");
+      expect(failed?.textContent).toContain("terminal upload staging is full");
       expect(panel.renderRoot.querySelector<HTMLButtonElement>(".tp-upload-retry")).not.toBeNull();
+      if (recovery === "insert" || recovery === "expired-insert") {
+        expect(
+          panel.renderRoot.querySelector<HTMLButtonElement>(".tp-upload-insert"),
+        ).not.toBeNull();
+      }
     });
+
+    if (recovery === "expired-retry" || recovery === "expired-insert") {
+      elapsedMs = TERMINAL_UPLOAD_RETENTION_MS;
+      panel.renderRoot
+        .querySelector<HTMLButtonElement>(
+          recovery === "expired-retry" ? ".tp-upload-retry" : ".tp-upload-insert",
+        )
+        ?.click();
+      await expectExpiredBatch();
+      return;
+    }
+    if (recovery === "insert" || recovery === "cancel") {
+      panel.renderRoot
+        .querySelector<HTMLButtonElement>(
+          recovery === "insert" ? ".tp-upload-insert" : ".tp-upload-cancel",
+        )
+        ?.click();
+      await waitForFast(() => {
+        expect(panel.renderRoot.querySelector(".tp-upload-card")).toBeNull();
+      });
+      if (recovery === "insert") {
+        expect(controller.terminal.paste).toHaveBeenCalledExactlyOnceWith(
+          "'/tmp/openclaw upload/scan final.pdf'",
+        );
+      } else {
+        expect(controller.terminal.paste).not.toHaveBeenCalled();
+      }
+      expect(requests.filter(({ method }) => method === "terminal.upload")).toHaveLength(2);
+      return;
+    }
     panel.renderRoot.querySelector<HTMLButtonElement>(".tp-upload-retry")?.click();
 
     await waitForFast(() => {

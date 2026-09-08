@@ -295,7 +295,7 @@ const awsMacosPackageManagerScriptTargets = new Set([
   "scripts/package-mac-dist.sh",
   "scripts/restart-mac.sh",
 ]);
-const minimumBlacksmithCrabboxVersion = [0, 22, 0];
+const minimumBlacksmithCrabboxVersion = [0, 48, 0];
 const minimumSourceCapsuleCrabboxVersion = [0, 37, 0];
 const minimumBrokeredDaytonaCrabboxVersion = [0, 40, 0];
 const shellControlCommandPrefixes = new Set([
@@ -3933,17 +3933,6 @@ if (provider && !isProviderAdvertised(provider, providers)) {
   process.exit(2);
 }
 
-if (
-  needsSourceCapsule(normalizedArgs, provider) &&
-  !satisfiesMinimumCrabboxVersion(version.text, minimumSourceCapsuleCrabboxVersion)
-) {
-  console.error(
-    `[crabbox] source capsule requires Crabbox >= ${formatVersionTuple(minimumSourceCapsuleCrabboxVersion)} for sync-plan --json; update Crabbox and rerun.`,
-  );
-  console.error(`[crabbox] selected binary reported version=${version.text || "unknown"}.`);
-  process.exit(2);
-}
-
 if (canonicalProvider === "blacksmith-testbox") {
   // The delegated provider rejects uploaded scripts before acquiring a lease.
   if (
@@ -3997,6 +3986,16 @@ if (canonicalProvider === "blacksmith-testbox") {
 
 const explicitProviderRequested = Boolean(commandProviderValue);
 enforceBrokeredDaytonaVersion(normalizedArgs, provider, version.text, explicitProviderRequested);
+if (
+  needsSourceCapsule(normalizedArgs, provider) &&
+  !satisfiesMinimumCrabboxVersion(version.text, minimumSourceCapsuleCrabboxVersion)
+) {
+  console.error(
+    `[crabbox] source capsule requires Crabbox >= ${formatVersionTuple(minimumSourceCapsuleCrabboxVersion)} for sync-plan --json; update Crabbox and rerun.`,
+  );
+  console.error(`[crabbox] selected binary reported version=${version.text || "unknown"}.`);
+  process.exit(2);
+}
 enforceBrokeredCloud(
   normalizedArgs,
   provider,

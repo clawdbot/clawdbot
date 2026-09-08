@@ -200,6 +200,10 @@ describe("stripReasoningTagsFromText", () => {
         expected: "`<final>` in code, visible outside",
       },
       {
+        input: "  `<final>literal</final>`  ",
+        expected: "`<final>literal</final>`",
+      },
+      {
         input: "A <FINAL data-x='1'>visible</Final> B",
         expected: "A visible B",
       },

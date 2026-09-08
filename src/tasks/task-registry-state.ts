@@ -5,11 +5,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
-import {
-  cloneTaskDeliveryState,
-  cloneTaskRecord,
-  normalizeTaskTimestamps,
-} from "./task-registry-records.js";
+import { cloneTaskRecord, normalizeTaskTimestamps } from "./task-registry-records.js";
 import { getTaskRegistryProcessState } from "./task-registry.process-state.js";
 import {
   getTaskRegistryObservers,
@@ -144,51 +140,17 @@ export function emitTaskRegistryObserverEvent(createEvent: () => TaskRegistryObs
   }
 }
 
-export function persistTaskRegistry(): boolean {
-  try {
-    getTaskRegistryStore().saveSnapshot({
-      tasks,
-      deliveryStates: taskDeliveryStates,
-    });
-    return true;
-  } catch (error) {
-    taskRegistryLog.warn("Failed to persist task registry snapshot", { error });
-    return false;
-  }
-}
-
-function persistTaskUpsert(task: TaskRecord, pendingDeliveryState?: TaskDeliveryState): void {
-  const store = getTaskRegistryStore();
-  const deliveryState = pendingDeliveryState ?? taskDeliveryStates.get(task.taskId);
-  if (store.upsertTaskWithDeliveryState) {
-    store.upsertTaskWithDeliveryState({
-      task,
-      ...(deliveryState ? { deliveryState } : {}),
-    });
-    return;
-  }
-  if (!deliveryState && store.upsertTask) {
-    store.upsertTask(task);
-    return;
-  }
-  // Snapshot fallback: project the pending upsert so the snapshot is correct
-  // even though we persist before mutating memory. Delivery state must stay in
-  // the same write as its task; split upserts can leave a durable half-create.
-  store.saveSnapshot({
-    tasks: new Map(tasks).set(task.taskId, task),
-    deliveryStates: deliveryState
-      ? new Map(taskDeliveryStates).set(task.taskId, deliveryState)
-      : taskDeliveryStates,
-  });
-}
-
 export function tryPersistTaskUpsert(
   task: TaskRecord,
   operation: string,
   pendingDeliveryState?: TaskDeliveryState,
 ): boolean {
   try {
-    persistTaskUpsert(task, pendingDeliveryState);
+    const deliveryState = pendingDeliveryState ?? taskDeliveryStates.get(task.taskId);
+    getTaskRegistryStore().upsertTaskWithDeliveryState({
+      task,
+      ...(deliveryState ? { deliveryState } : {}),
+    });
     return true;
   } catch (error) {
     taskRegistryLog.warn("Failed to persist task registry upsert", {
@@ -201,36 +163,9 @@ export function tryPersistTaskUpsert(
   }
 }
 
-function persistTaskDelete(taskId: string) {
-  const store = getTaskRegistryStore();
-  if (store.deleteTaskWithDeliveryState) {
-    // Composite delete removes the task row and its delivery state in a single
-    // transaction. This is the only atomic "remove both records" store
-    // primitive, and the one the default sqlite store uses.
-    store.deleteTaskWithDeliveryState(taskId);
-    return;
-  }
-  // No atomic composite delete is available: persist the removal of BOTH the
-  // task and its delivery state in one projected snapshot. saveSnapshot is a
-  // required store method and writes atomically. Using the separate deleteTask
-  // / deleteDeliveryState methods instead would either leave the delivery-state
-  // row behind (a task-only delete) or, if both were called, reintroduce a
-  // two-write divergence window when the second delete threw before the
-  // in-memory mutation. Projecting both deletions into a single snapshot keeps
-  // the persisted store consistent under the persist-before-in-memory ordering.
-  const projectedTasks = new Map(tasks);
-  projectedTasks.delete(taskId);
-  const projectedDeliveryStates = new Map(taskDeliveryStates);
-  projectedDeliveryStates.delete(taskId);
-  store.saveSnapshot({
-    tasks: projectedTasks,
-    deliveryStates: projectedDeliveryStates,
-  });
-}
-
 export function tryPersistTaskDelete(taskId: string): boolean {
   try {
-    persistTaskDelete(taskId);
+    getTaskRegistryStore().deleteTaskWithDeliveryState(taskId);
     return true;
   } catch (error) {
     taskRegistryLog.warn("Failed to persist task registry delete", {
@@ -241,23 +176,9 @@ export function tryPersistTaskDelete(taskId: string): boolean {
   }
 }
 
-function persistTaskDeliveryStateUpsert(state: TaskDeliveryState) {
-  const store = getTaskRegistryStore();
-  if (store.upsertDeliveryState) {
-    store.upsertDeliveryState(state);
-    return;
-  }
-  const projectedDeliveryStates = new Map(taskDeliveryStates);
-  projectedDeliveryStates.set(state.taskId, cloneTaskDeliveryState(state));
-  store.saveSnapshot({
-    tasks,
-    deliveryStates: projectedDeliveryStates,
-  });
-}
-
 export function tryPersistTaskDeliveryStateUpsert(state: TaskDeliveryState): boolean {
   try {
-    persistTaskDeliveryStateUpsert(state);
+    getTaskRegistryStore().upsertDeliveryState(state);
     return true;
   } catch (error) {
     taskRegistryLog.warn("Failed to persist task delivery state", {

@@ -473,11 +473,7 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]): C
   };
 }
 
-function collectResultFailures(
-  results: CaseResult[],
-  options: { processMetricsRequired?: boolean } = {},
-): BenchmarkFailure[] {
-  const processMetricsRequired = options.processMetricsRequired ?? true;
+function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
   const failures: BenchmarkFailure[] = [];
   for (const result of results) {
     result.samples.forEach((sample, index) => {
@@ -491,13 +487,11 @@ function collectResultFailures(
       if (sample.completionMs == null) {
         missing.push("completion");
       }
-      if (processMetricsRequired) {
-        if (sample.cpuMs == null || sample.cpuCoreRatio == null) {
-          missing.push("cpu");
-        }
-        if (sample.maxRssMb == null) {
-          missing.push("rss");
-        }
+      if (sample.cpuMs == null || sample.cpuCoreRatio == null) {
+        missing.push("cpu");
+      }
+      if (sample.maxRssMb == null) {
+        missing.push("rss");
       }
       if (missing.length > 0) {
         failures.push({

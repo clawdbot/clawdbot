@@ -5,7 +5,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { handleCopyButton } from "../../components/copy-button.ts";
-import { renderSettingsSection } from "../../components/settings-ui.ts";
+import { renderSettingsSection, renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
 import { formatDurationCompact } from "../../lib/format.ts";
@@ -69,28 +69,6 @@ function handleDailyBarKeydown(
 
   event.preventDefault();
   onSelectDay(day, event.shiftKey);
-}
-
-function renderUsageToggle<Value extends string>(
-  current: Value,
-  onChange: (value: Value) => void,
-  options: ReadonlyArray<{ value: Value; labelKey: string }>,
-  className = "chart-toggle small",
-) {
-  return html`
-    <div class=${className}>
-      ${options.map(
-        ({ value, labelKey }) => html`
-          <button
-            class="btn btn--sm toggle-btn ${current === value ? "active" : ""}"
-            @click=${() => onChange(value)}
-          >
-            ${t(labelKey)}
-          </button>
-        `,
-      )}
-    </div>
-  `;
 }
 
 function renderFilterChips(
@@ -294,15 +272,19 @@ function renderDailyChartCompact(
   return html`
     <div class="daily-chart-compact">
       <div class="daily-chart-header">
-        ${renderUsageToggle(
-          dailyChartMode,
-          onDailyChartModeChange,
-          [
-            { value: "total", labelKey: "usage.daily.total" },
-            { value: "by-type", labelKey: "usage.daily.byType" },
+        ${renderSettingsSegmented({
+          mode: "buttons",
+          variant: "accent",
+          ariaPressed: false,
+          className: "small sessions-toggle",
+          value: dailyChartMode,
+          onChange: onDailyChartModeChange,
+          onReselect: onDailyChartModeChange,
+          options: [
+            { value: "total", label: t("usage.daily.total") },
+            { value: "by-type", label: t("usage.daily.byType") },
           ],
-          "chart-toggle small sessions-toggle",
-        )}
+        })}
         <div class="card-title">
           ${isTokenMode ? t("usage.daily.tokensTitle") : t("usage.daily.costTitle")}
           ${
@@ -995,10 +977,19 @@ function renderSessionsCard(
               >${totalErrors} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))}</span
             >
           </div>
-          ${renderUsageToggle(sessionsTab, onSessionsTabChange, [
-            { value: "all", labelKey: "usage.sessions.all" },
-            { value: "recent", labelKey: "usage.sessions.recent" },
-          ])}
+          ${renderSettingsSegmented({
+            mode: "buttons",
+            variant: "accent",
+            ariaPressed: false,
+            className: "small",
+            value: sessionsTab,
+            onChange: onSessionsTabChange,
+            onReselect: onSessionsTabChange,
+            options: [
+              { value: "all", label: t("usage.sessions.all") },
+              { value: "recent", label: t("usage.sessions.recent") },
+            ],
+          })}
           <label class="sessions-sort">
             <span>${t("usage.sessions.sort")}</span>
             <select
@@ -1102,7 +1093,6 @@ export {
   renderInsightList,
   renderSessionsCard,
   renderUsageInsights,
-  renderUsageToggle,
   USAGE_TOKEN_CATEGORIES,
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

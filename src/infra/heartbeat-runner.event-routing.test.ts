@@ -5,8 +5,10 @@ import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-e
 import { getReplySystemEventContext } from "../auto-reply/reply/system-event-session-key.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { resetCronActiveJobs } from "../cron/active-jobs.js";
-import { runHeartbeatOnce } from "./heartbeat-runner.js";
+import { runHeartbeatOnce, startHeartbeatRunner } from "./heartbeat-runner.js";
 import {
   getFirstReplyContext,
   mockCallAt,
@@ -15,6 +17,7 @@ import {
   setupTelegramHeartbeatPluginRuntimeForTests,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
+import { requestHeartbeatAndWait, setHeartbeatWakeHandler } from "./heartbeat-wake.js";
 import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
 
 beforeEach(() => {
@@ -23,7 +26,15 @@ beforeEach(() => {
   resetCronActiveJobs();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  setHeartbeatWakeHandler(async () => ({ status: "ran", durationMs: 0 }));
+  await requestHeartbeatAndWait({
+    source: "manual",
+    intent: "immediate",
+    reason: "wake",
+    coalesceMs: 0,
+  });
+  setHeartbeatWakeHandler(null);
   resetSystemEventsForTest();
   vi.restoreAllMocks();
 });
@@ -261,6 +272,79 @@ describe("Heartbeat event routing", () => {
     },
   );
 
+  it("retains a legacy queue's explicit base until its mixed cron follow-up completes", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, replySpy }) => {
+      const baseKey = "agent:ops:alerts:heartbeat";
+      const isolatedKey = `${baseKey}:heartbeat`;
+      const queueKey = `${isolatedKey}:heartbeat`;
+      const storeTemplate = `${tmpDir}/agents/{agentId}/sessions/sessions.json`;
+      const storePath = resolveSessionStorePathCore(storeTemplate, { agentId: "ops" });
+      const cfg = createLastTargetConfig({
+        tmpDir,
+        storePath: storeTemplate,
+        isolatedSession: true,
+      });
+      cfg.agents!.list = [{ id: "ops" }];
+      cfg.agents!.defaults!.heartbeat = {
+        every: "0m",
+        isolatedSession: true,
+        session: "alerts:heartbeat",
+        target: "last",
+      };
+      await writeTelegramSessionStore(storePath, baseKey, { sessionId: "base-conversation" });
+      await seedSessionStore(storePath, queueKey, {
+        sessionId: "old-isolated",
+        heartbeatIsolatedBaseSessionKey: baseKey,
+      });
+      const readEntry = (sessionKey: string) =>
+        loadExactSessionEntryReadOnly({ storePath, agentId: "ops", sessionKey })?.entry;
+      expect(readEntry(baseKey)?.sessionId).toBe("base-conversation");
+      enqueueSystemEvent("Exec completed (legacy, code 0) :: ready", { sessionKey: queueKey });
+      enqueueSystemEvent("Reminder: Legacy queue work", {
+        sessionKey: queueKey,
+        contextKey: "cron:legacy",
+      });
+      enqueueSystemEvent("Unrelated base event", { sessionKey: baseKey });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "delivered" });
+      replySpy.mockImplementation(async (ctx) => ({
+        text: ctx.InternalTurnSource === "exec" ? "Command completed" : "Reminder handled",
+      }));
+      const runner = startHeartbeatRunner({
+        cfg,
+        runOnce: (opts) =>
+          runHeartbeatOnce({
+            ...opts,
+            cfg,
+            deps: { getReplyFromConfig: replySpy, telegram: sendTelegram },
+          }),
+      });
+      try {
+        await requestHeartbeatAndWait({
+          source: "exec-event",
+          intent: "event",
+          reason: "exec-event",
+          agentId: "ops",
+          sessionKey: queueKey,
+          coalesceMs: 0,
+        });
+        await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(2));
+        expect(
+          replySpy.mock.calls.map(([ctx]) => [ctx.AgentId, ctx.SessionKey, ctx.InternalTurnSource]),
+        ).toEqual([
+          ["ops", isolatedKey, "exec"],
+          ["ops", isolatedKey, "cron"],
+        ]);
+        await vi.waitFor(() => expect(peekSystemEvents(queueKey)).toEqual([]));
+        expect(peekSystemEvents(baseKey)).toEqual(["Unrelated base event"]);
+        expect(readEntry(baseKey)?.sessionId).toBe("base-conversation");
+        expect(readEntry(queueKey)).toBeUndefined();
+        expect(readEntry(isolatedKey)?.heartbeatIsolatedBaseSessionKey).toBe(baseKey);
+      } finally {
+        runner.stop();
+      }
+    });
+  });
+
   it.each([
     { name: "legacy isolated", queue: "legacy", dedicated: "none", busy: false },
     { name: "canonical isolated", queue: "isolated", dedicated: "none", busy: false },
@@ -352,7 +436,7 @@ describe("Heartbeat event routing", () => {
       expect(context.SessionKey).toBe(queue === "shared" ? baseKey : isolatedKey);
       expect(context.InternalTurnSource).toBe(dedicated === "none" ? "heartbeat" : dedicated);
       if (queue === "legacy") {
-        expect(legacyRowRemovedAtReply).toBe(true);
+        expect(legacyRowRemovedAtReply).toBe(dedicated !== "exec");
       }
       if (queue === "base") {
         expect(formatted ?? "").not.toContain(generic);

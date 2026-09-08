@@ -48,7 +48,7 @@ Multiple flags:
 ```json
 {
   "diagnostics": {
-    "flags": ["telegram.http", "brave.http", "gateway.*"]
+    "flags": ["telegram.http", "brave.http", "health"]
   }
 }
 ```

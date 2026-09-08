@@ -68,7 +68,8 @@ import { page as workboardPage } from "./pages/workboard/route.ts";
 import { page as worktreesPage } from "./pages/worktrees/route.ts";
 
 type AppRouteModule = {
-  render: (data: unknown, loaderPending: boolean) => unknown;
+  render: (data: unknown, loaderPending: boolean, presented?: boolean) => unknown;
+  retainOnNavigate?: boolean;
   renderOwnerKey?: (
     match: Pick<RouteMatch, "data" | "location">,
     settled: Pick<RouteMatch, "data" | "location"> | undefined,

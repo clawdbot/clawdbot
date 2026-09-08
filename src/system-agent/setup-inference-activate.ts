@@ -110,8 +110,7 @@ export async function activateSetupInference(
       error: await redactSetupInferenceError(result.error, params.apiKey, codexCliApiKey?.key),
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const redacted = await redactSetupInferenceError(message, params.apiKey, codexCliApiKey?.key);
+    const redacted = await redactSetupInferenceError(error, params.apiKey, codexCliApiKey?.key);
     if (error instanceof WizardCancelledError) {
       throw new WizardCancelledError(redacted);
     }
@@ -182,6 +181,7 @@ async function activateSetupInferenceUnredacted(
       ...(params.apiKey !== undefined ? { apiKey: params.apiKey } : {}),
       cfg,
       sourceCfg,
+      configSnapshot: snapshot,
       workspaceDir: tempDir,
       pluginWorkspaceDir: workspace,
       agentDir: testAgentDir,
@@ -352,9 +352,8 @@ async function activateSetupInferenceUnredacted(
           // The installed package belongs to this probe's generation; the running
           // Gateway keeps its startup inventory until the persisted change restarts it.
           const refreshPluginRegistry =
-            deps.refreshPluginRegistryAfterConfigMutation ??
-            (await import("../plugins/registry-refresh.js"))
-              .refreshPluginRegistryAfterConfigMutation;
+            deps.refreshPluginRegistryForPreparedConfig ??
+            (await import("../plugins/registry-refresh.js")).refreshPluginRegistryForPreparedConfig;
           let registryRefreshWarning: string | undefined;
           await refreshPluginRegistry({
             config: testPlan.config,
@@ -472,6 +471,7 @@ async function activateSetupInferenceUnredacted(
       testPlan.config,
       requestedAgentId,
       routeDeps,
+      snapshot,
     );
     if (
       !stagedRoute ||
@@ -628,6 +628,7 @@ async function activateSetupInferenceUnredacted(
             latestRuntime,
             requestedAgentId,
             routeDeps,
+            latestSnapshot,
           )
         : null;
       if (!latestResolvedRoute) {
@@ -726,7 +727,7 @@ async function activateSetupInferenceUnredacted(
     if (codexMetadataNeedsRestore) {
       // The probe owns a private registry. Restore only its staged metadata;
       // Gateway reload owns runtime replacement and the prepared auth generation.
-      await restoreSetupPluginMetadata({ readSnapshot, workspaceDir: workspace, deps });
+      await restoreSetupPluginMetadata({ workspaceDir: workspace, deps });
     }
     await cleanupSetupInferenceTempDir({ tempDir, deps, runtime: params.runtime });
     if (codexCleanupError) {

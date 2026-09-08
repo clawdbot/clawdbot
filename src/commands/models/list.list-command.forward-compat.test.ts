@@ -1191,16 +1191,27 @@ describe("modelsListCommand forward-compat", () => {
       {
         authModes: { "claude-cli": "api_key" as const },
         providerApiKey: false,
+        registryAvailableKeys: new Set<string>(),
         available: true,
       },
-      { authModes: {}, providerApiKey: false, available: null },
-      { authModes: {}, providerApiKey: true, available: null },
+      {
+        authModes: {},
+        providerApiKey: false,
+        registryAvailableKeys: new Set<string>(),
+        available: null,
+      },
+      {
+        authModes: {},
+        providerApiKey: true,
+        registryAvailableKeys: new Set(["anthropic/claude-opus-5"]),
+        available: null,
+      },
     ])(
       "uses the prepared CLI runtime auth result ($available) with provider key=$providerApiKey",
-      async ({ authModes, providerApiKey, available }) => {
+      async ({ authModes, providerApiKey, registryAvailableKeys, available }) => {
         vi.stubEnv("ANTHROPIC_API_KEY", providerApiKey ? "test-key" : "");
         const config = configureClaudeRuntime();
-        primeModelRegistry([ANTHROPIC_CLI_MODEL]);
+        primeModelRegistry([ANTHROPIC_CLI_MODEL], registryAvailableKeys);
         mocks.prepareScopedReadOnlyModelAuthModes.mockResolvedValueOnce(authModes);
 
         await modelsListCommand({ provider: "anthropic", json: true }, createRuntime() as never);
@@ -1233,7 +1244,7 @@ describe("modelsListCommand forward-compat", () => {
       mocks.prepareScopedReadOnlyModelAuthModes.mockResolvedValueOnce({
         "claude-cli": "api_key",
       });
-      primeModelRegistry([ANTHROPIC_CLI_MODEL]);
+      primeModelRegistry([ANTHROPIC_CLI_MODEL], new Set(["anthropic/claude-opus-5"]));
 
       await modelsListCommand({ provider: "anthropic", json: true }, createRuntime() as never);
 

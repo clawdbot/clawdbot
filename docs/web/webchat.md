@@ -89,7 +89,7 @@ The supporting RPCs require `operator.read` and use the authenticated profile, n
 | `mentions.dismiss`  | Pass `{ ids }` containing up to 100 distinct visible entry ids. Returns the same snapshot shape after dismissal.                                                                                                                           |
 | `mentions.changed`  | Targeted `{ gatewayInstanceId, revision }` invalidation; fetch `mentions.list` again. Revisions describe that connection's authorized view, not global Gateway activity.                                                                   |
 
-Delivery is best-effort. The Inbox and replay bookkeeping are bounded and process-local; a restart clears them, and capacity limits can skip alerts. Notification failures do not retry or undo the posted chat message. Browser push does not provide exactly-once delivery. See [temporary Inbox retention](/concepts/multi-user#temporary-mentions-inbox) and [notification preferences](/web/notifications#receive-human-mention-alerts).
+Delivery is best-effort. The Inbox and replay bookkeeping survive Gateway restarts within their retention limits; capacity limits can still skip alerts. Restarting or reconnecting does not resend old browser notifications or restore dismissed entries. Notification failures do not retry or undo the posted chat message. Browser push does not provide exactly-once delivery. See [Inbox retention](/concepts/multi-user#temporary-mentions-inbox) and [notification preferences](/web/notifications#receive-human-mention-alerts).
 
 ## Control UI agents tools panel
 

@@ -39,8 +39,6 @@ type RuntimeInfoInput = {
   channel?: string;
   chatType?: ChatType;
   capabilities?: string[];
-  /** Supported message actions for the current channel (e.g., react, edit, unsend) */
-  channelActions?: string[];
   repoRoot?: string;
   activeNode?: string;
 };

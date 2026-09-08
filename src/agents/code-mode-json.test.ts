@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   boundCodeModeError,
-  boundCodeModeValue,
   captureCodeModeOutput,
   captureCodeModeValue,
   CodeModeOutputState,
@@ -30,7 +29,10 @@ describe("Code Mode JSON normalization", () => {
     { limit: 108, prefix: '"', omittedBytes: 999 },
     { limit: 109, prefix: '"a', omittedBytes: 998 },
   ])("fits marker digit-width transitions at $limit bytes", ({ limit, prefix, omittedBytes }) => {
-    expect(boundCodeModeValue("a".repeat(998), limit)).toEqual({
+    expect(
+      new CodeModeOutputState(limit).take({ value: captureCodeModeValue("a".repeat(998), limit) })
+        .value,
+    ).toEqual({
       truncated: true,
       omittedBytes,
       guidance: "Output truncated; rerun with narrower args.",

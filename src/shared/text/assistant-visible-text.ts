@@ -10,7 +10,12 @@ import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair
 import { findCodeRegions, isInsideCode, stripLinesOutsideCode } from "./code-regions.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
 import { stripReasoningTagsFromText } from "./reasoning-tags.js";
-import { applyTextFilters, trimTextFilter, type TextFilter } from "./text-projection.js";
+import {
+  applyTextFilters,
+  leadingEmptyLinesTextFilter,
+  trimTextFilter,
+  type TextFilter,
+} from "./text-projection.js";
 
 const MEMORY_TAG_RE = /<\s*(\/?)\s*relevant[-_]memories\b[^<>]*>/gi;
 const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
@@ -748,7 +753,7 @@ export function assistantVisibleTextFilters(
     return cached;
   }
   const preserve = profile === "internal-scaffolding";
-  const trim = preserve ? "start" : profile === "history" ? "none" : "both";
+  const trim = preserve || profile === "history" ? "none" : "both";
   const reasoning: TextFilter = {
     activationTokens: ["<"],
     transform: (text) =>
@@ -783,7 +788,7 @@ export function assistantVisibleTextFilters(
   } else {
     filters.push(reasoning);
   }
-  filters.push(trimTextFilter(trim));
+  filters.push(preserve ? leadingEmptyLinesTextFilter : trimTextFilter(trim));
   profileFilters.set(key, filters);
   return filters;
 }
