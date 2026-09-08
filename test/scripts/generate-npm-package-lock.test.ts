@@ -122,6 +122,19 @@ describe("generate-npm-package-lock", () => {
     });
   });
 
+  it("preserves version selectors on both sides of parent-child overrides", () => {
+    expect(
+      normalizeOverrides({
+        "bar>foo@1": "2",
+        "bar@>=1 <2>@scope/unused": "-",
+        "bar@>=1 <2>@scope/foo@>=3 <4": "4",
+      }),
+    ).toEqual({
+      bar: { "foo@1": "2" },
+      "bar@>=1 <2": { "@scope/foo@>=3 <4": "4" },
+    });
+  });
+
   it.each([false, true])(
     "retains parent and child overrides during normalization (childrenFirst=%s)",
     (childrenFirst) => {
