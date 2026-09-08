@@ -65,13 +65,16 @@ export type CaptureEventRecord = {
   metaJson?: string;
 };
 
-export type CaptureQueryPreset =
-  | "double-sends"
-  | "retry-storms"
-  | "cache-busting"
-  | "ws-duplicate-frames"
-  | "missing-ack"
-  | "error-bursts";
+export const CAPTURE_QUERY_PRESETS = [
+  "double-sends",
+  "retry-storms",
+  "cache-busting",
+  "ws-duplicate-frames",
+  "missing-ack",
+  "error-bursts",
+] as const;
+
+export type CaptureQueryPreset = (typeof CAPTURE_QUERY_PRESETS)[number];
 
 export type CaptureQueryRow = Record<string, string | number | null>;
 

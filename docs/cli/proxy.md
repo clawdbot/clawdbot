@@ -77,6 +77,8 @@ The debug proxy's direct upstream forwarding opens upstream sockets for diagnost
 - `missing-ack`
 - `error-bursts`
 
+Unknown or empty preset names exit with code 1 and list the accepted values.
+
 `coverage`, `sessions`, and `query` already return JSON by default. They also
 accept `--json` as an explicit machine-output spelling for consistent scripts.
 In that mode, `coverage` keeps its report object, while `sessions` and `query`

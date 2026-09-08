@@ -1,48 +1,24 @@
 import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion";
 // Commander registration for debug proxy capture, validation, query, and blob commands.
-import { InvalidArgumentError, type Command } from "commander";
-import type { CaptureQueryPreset } from "../proxy-capture/types.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { InvalidArgumentError, Option, type Command } from "commander";
+import { CAPTURE_QUERY_PRESETS, type CaptureQueryPreset } from "../proxy-capture/types.js";
+import { createLazyPromise } from "../shared/lazy-promise.js";
+import { collectOption, parseStrictPositiveIntOption } from "./program/helpers.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { isProxyMachineOutput } from "./proxy-output-mode.js";
 
-type ProxyCliRuntime = typeof import("./proxy-cli.runtime.js");
-
-const proxyCliRuntimeLoader = createLazyImportLoader<ProxyCliRuntime>(
-  () => import("./proxy-cli.runtime.js"),
-);
-
-async function loadProxyCliRuntime(): Promise<ProxyCliRuntime> {
-  // Keep proxy CA/server/sqlite dependencies out of normal CLI startup.
-  return await proxyCliRuntimeLoader.load();
-}
-
-function parseIntegerOption(value: string | undefined, flag: string): number {
-  const parsed = parseStrictInteger(value);
-  if (parsed === undefined) {
-    throw new InvalidArgumentError(`${flag} must be an integer.`);
-  }
-  return parsed;
-}
+// Keep proxy CA/server/sqlite dependencies out of normal CLI startup.
+const loadProxyCliRuntime = createLazyPromise(() => import("./proxy-cli.runtime.js"));
 
 function parsePortOption(value: string | undefined): number {
-  const parsed = parseIntegerOption(value, "--port");
+  const parsed = parseStrictInteger(value);
+  if (parsed === undefined) {
+    throw new InvalidArgumentError("--port must be an integer.");
+  }
   if (parsed < 0 || parsed > 65_535) {
     throw new InvalidArgumentError("--port must be between 0 and 65535.");
   }
   return parsed;
-}
-
-function parsePositiveIntegerOption(value: string | undefined, flag: string): number {
-  const parsed = parseIntegerOption(value, flag);
-  if (parsed <= 0) {
-    throw new InvalidArgumentError(`${flag} must be a positive integer.`);
-  }
-  return parsed;
-}
-
-function collectOption(value: string, previous: string[] | undefined): string[] {
-  return [...(previous ?? []), value];
 }
 
 export function registerProxyCli(program: Command) {
@@ -93,7 +69,7 @@ export function registerProxyCli(program: Command) {
     .option("--apns-reachable", "Also verify sandbox APNs HTTP/2 is reachable through the proxy")
     .option("--apns-authority <url>", "APNs authority to probe with --apns-reachable")
     .option("--timeout-ms <ms>", "Per-request timeout in milliseconds", (value) =>
-      parsePositiveIntegerOption(value, "--timeout-ms"),
+      parseStrictPositiveIntOption(value, "--timeout-ms"),
     )
     .action(
       async (opts: {
@@ -134,7 +110,7 @@ export function registerProxyCli(program: Command) {
     .description("List recent capture sessions")
     .option("--json", "Print machine-readable JSON")
     .option("--limit <count>", "Maximum sessions to show", (value) =>
-      parsePositiveIntegerOption(value, "--limit"),
+      parseStrictPositiveIntOption(value, "--limit"),
     )
     .action(async (opts: { json?: boolean; limit?: number }) => {
       const runtime = await loadProxyCliRuntime();
@@ -144,9 +120,10 @@ export function registerProxyCli(program: Command) {
   proxy
     .command("query")
     .description("Run a built-in query preset against captured traffic")
-    .requiredOption(
-      "--preset <name>",
-      "Query preset: double-sends, retry-storms, cache-busting, ws-duplicate-frames, missing-ack, error-bursts",
+    .addOption(
+      new Option("--preset <name>", "Query preset")
+        .choices(CAPTURE_QUERY_PRESETS)
+        .makeOptionMandatory(),
     )
     .option("--json", "Print machine-readable JSON")
     .option("--session <id>", "Restrict to a capture session id")

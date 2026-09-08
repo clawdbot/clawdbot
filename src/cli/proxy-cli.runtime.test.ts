@@ -2,6 +2,7 @@
 import { EventEmitter } from "node:events";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
+import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 
@@ -49,7 +50,9 @@ import {
   closeDebugProxyCaptureStore,
   getDebugProxyCaptureStore,
 } from "../proxy-capture/store.sqlite.js";
+import type { CaptureEventKind } from "../proxy-capture/types.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { registerProxyCli } from "./proxy-cli.js";
 import * as proxyCliRuntime from "./proxy-cli.runtime.js";
 
 describe("proxy cli runtime", () => {
@@ -120,6 +123,76 @@ describe("proxy cli runtime", () => {
       }
     }
     cleanupTempDirs(tempDirs);
+  });
+
+  function recordQueryEvents(kind: CaptureEventKind) {
+    const store = getDebugProxyCaptureStore();
+    for (const ts of [1, 2]) {
+      store.recordEvent({
+        sessionId: "query-capture",
+        ts,
+        sourceScope: "openclaw",
+        sourceProcess: "openclaw",
+        protocol: kind === "ws-frame" ? "wss" : "https",
+        direction: "outbound",
+        kind,
+        flowId: "query-flow",
+        host: "synthetic.invalid",
+        path: "/events?cursor=1",
+        method: "POST",
+        status: 429,
+        dataSha256: "same-payload",
+      });
+    }
+  }
+
+  function createQueryProgram() {
+    const writeErr = vi.fn();
+    const program = new Command().exitOverride().configureOutput({ writeErr });
+    registerProxyCli(program);
+    return { program, writeErr };
+  }
+
+  it.each([
+    { preset: "double-sends", kind: "request", countKey: "duplicateCount" },
+    { preset: "retry-storms", kind: "response", countKey: "errorCount" },
+    { preset: "cache-busting", kind: "request", countKey: "variantCount" },
+    { preset: "ws-duplicate-frames", kind: "ws-frame", countKey: "duplicateFrames" },
+    { preset: "missing-ack", kind: "ws-frame", countKey: "outboundFrames" },
+    { preset: "error-bursts", kind: "error", countKey: "errorCount" },
+  ] as const)(
+    "runs the registered query preset $preset against captured events",
+    async ({ preset, kind, countKey }) => {
+      recordQueryEvents(kind);
+      const { program } = createQueryProgram();
+
+      await program.parseAsync(
+        ["proxy", "query", "--preset", preset, "--session", "query-capture", "--json"],
+        { from: "user" },
+      );
+
+      expect(process.stdout["write"]).toHaveBeenCalledOnce();
+      const output = String(vi.mocked(process.stdout["write"]).mock.calls[0]?.[0] ?? "");
+      expect(JSON.parse(output)).toEqual({
+        rows: [expect.objectContaining({ host: "synthetic.invalid", [countKey]: 2 })],
+      });
+    },
+  );
+
+  it.each(["error-burst", ""])("rejects malformed query preset %j visibly", async (preset) => {
+    recordQueryEvents("error");
+    const { program, writeErr } = createQueryProgram();
+
+    await expect(
+      program.parseAsync(
+        ["proxy", "query", "--preset", preset, "--session", "query-capture", "--json"],
+        { from: "user" },
+      ),
+    ).rejects.toMatchObject({ code: "commander.invalidArgument", exitCode: 1 });
+
+    expect(process.stdout["write"]).not.toHaveBeenCalled();
+    expect(writeErr).toHaveBeenCalledWith(expect.stringContaining("Allowed choices are"));
+    expect(writeErr).toHaveBeenCalledWith(expect.stringContaining("error-bursts"));
   });
 
   it("prints proxy validation text and leaves exit code unset on success", async () => {

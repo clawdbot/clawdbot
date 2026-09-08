@@ -120,9 +120,9 @@ describe("proxy cli", () => {
   });
 
   it.each([
-    [["proxy", "sessions", "--limit", "abc"], /--limit must be an integer/],
+    [["proxy", "sessions", "--limit", "abc"], /--limit must be a positive integer/],
     [["proxy", "sessions", "--limit", "0"], /--limit must be a positive integer/],
-    [["proxy", "validate", "--timeout-ms", "1.5"], /--timeout-ms must be an integer/],
+    [["proxy", "validate", "--timeout-ms", "1.5"], /--timeout-ms must be a positive integer/],
     [["proxy", "validate", "--timeout-ms", "0"], /--timeout-ms must be a positive integer/],
     [["proxy", "start", "--port", "abc"], /--port must be an integer/],
     [["proxy", "start", "--port", "-1"], /--port must be between 0 and 65535/],
@@ -131,6 +131,42 @@ describe("proxy cli", () => {
     const program = createProgram();
 
     expect(() => program.parse(["node", "openclaw", ...args])).toThrow(expected);
+  });
+
+  it("requires a query preset", () => {
+    const program = createProgram();
+
+    expect(() => program.parse(["proxy", "query", "--json"], { from: "user" })).toThrow(
+      "required option '--preset <name>' not specified",
+    );
+    expect(runDebugProxyQueryCommand).not.toHaveBeenCalled();
+  });
+
+  it("preserves the order of repeated validation destinations", async () => {
+    const program = createProgram();
+
+    await program.parseAsync(
+      [
+        "proxy",
+        "validate",
+        "--allowed-url",
+        "https://first.example/",
+        "--denied-url",
+        "https://blocked.example/",
+        "--allowed-url",
+        "https://second.example/",
+        "--denied-url",
+        "https://also-blocked.example/",
+      ],
+      { from: "user" },
+    );
+
+    expect(runProxyValidateCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedUrls: ["https://first.example/", "https://second.example/"],
+        deniedUrls: ["https://blocked.example/", "https://also-blocked.example/"],
+      }),
+    );
   });
 
   it("normalizes signed decimal numeric options through the shared parser", async () => {
