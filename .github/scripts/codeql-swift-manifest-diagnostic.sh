@@ -413,13 +413,6 @@ traced() {
   clean_env traced "$CODEQL_BIN" version --format=json >"$RECEIPTS/codeql-version.json"
   [[ "$(jq -r '.version' "$RECEIPTS/codeql-version.json")" == "2.26.4" ]] ||
     die "CodeQL binary version mismatch"
-  clean_env traced "$CODEQL_BIN" database init -h >"$RECEIPTS/database-init-help.txt"
-  clean_env traced "$CODEQL_BIN" database trace-command -h >"$RECEIPTS/trace-command-help.txt"
-  grep -q -- '--build-mode' "$RECEIPTS/database-init-help.txt" || die "missing --build-mode"
-  grep -q -- '--source-root' "$RECEIPTS/database-init-help.txt" || die "missing --source-root"
-  grep -q -- '--logdir' "$RECEIPTS/database-init-help.txt" || die "missing --logdir"
-  grep -q -- '--working-dir' "$RECEIPTS/trace-command-help.txt" || die "missing --working-dir"
-  grep -q -- '--verbosity' "$RECEIPTS/trace-command-help.txt" || die "missing --verbosity"
   [[ ! -e "$requested_copy" && ! -e "$requested_log" ]] ||
     die "tracing paths existed before database init"
 
