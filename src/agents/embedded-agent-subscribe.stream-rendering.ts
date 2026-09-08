@@ -424,6 +424,7 @@ export function createStreamRendering({
 
     // Only check committed (successful) messaging tool texts - checking pending texts
     // is risky because if the tool fails after suppression, the user gets no response
+    const assistantText = chunk;
     const normalizedChunk = normalizeTextForComparison(chunk);
     const normalizedReplaySuffix = prefixReplayCandidate
       ? normalizeTextForComparison(blockReplySuffix.trimStart())
@@ -503,6 +504,11 @@ export function createStreamRendering({
       !audioAsVoice &&
       !hasPendingFinalMedia
     ) {
+      // Presentation removes NO_REPLY, but terminal resolution still needs the
+      // authored silence to distinguish it from a genuinely empty response.
+      if (splitResult.isSilent && assistantText) {
+        pushAssistantText(assistantText, normalizedChunk);
+      }
       if (slicedPrefixReplay) {
         markBlockReplyTextHandled();
       }
