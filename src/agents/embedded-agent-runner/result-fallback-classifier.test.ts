@@ -355,7 +355,7 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     expect(result).toBeNull();
   });
 
-  it("does not retry non-business transport error payloads", () => {
+  it("retries transient transport error payloads via the shared timeout lane (#138531)", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "custom",
       model: "llama-3.1",
@@ -372,7 +372,31 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
       },
     });
 
-    expect(result).toBeNull();
+    expect(result).toEqual({
+      message: "custom/llama-3.1 ended with a provider error: HTTP 500: internal server error",
+      reason: "timeout",
+      code: "embedded_error_payload",
+      rawError: "HTTP 500: internal server error",
+    });
+  });
+
+  it("classifies generic isError 'LLM request failed.' payloads as timeout fallback (#138531)", () => {
+    const rawError = "LLM request failed.";
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "custom",
+      model: "llama-3.1",
+      result: {
+        payloads: [{ isError: true, text: rawError }],
+        meta: { durationMs: 42 },
+      },
+    });
+
+    expect(result).toEqual({
+      message: `custom/llama-3.1 ended with a provider error: ${rawError}`,
+      reason: "timeout",
+      code: "embedded_error_payload",
+      rawError,
+    });
   });
 
   it("keeps tool-authored incomplete summaries fallback-eligible", () => {
