@@ -720,13 +720,14 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 
 ### User settings
 
-| Key                                     | Type      | Default       | Description                                                                                                                      |
-| --------------------------------------- | --------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`                               | `boolean` | `true`        | Enable or disable dreaming entirely                                                                                              |
-| `frequency`                             | `string`  | `0 3 * * *`   | Optional cron cadence for the full dreaming sweep                                                                                |
-| `model`                                 | `string`  | default model | Optional Dream Diary subagent model override                                                                                     |
-| `phases.deep.maxPromotedSnippetTokens`  | `number`  | `160`         | Maximum estimated tokens kept from each short-term recall snippet promoted into `MEMORY.md`; provenance metadata remains visible |
-| `phases.deep.maxPriorEntryLossFraction` | `number`  | `0.25`        | Reject a consolidation rewrite that removes more than this fraction of prior entries                                             |
+| Key                                     | Type      | Default       | Description                                                                                                                                                                                                 |
+| --------------------------------------- | --------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                               | `boolean` | `true`        | Enable or disable dreaming entirely                                                                                                                                                                         |
+| `frequency`                             | `string`  | `0 3 * * *`   | Optional cron cadence for the full dreaming sweep                                                                                                                                                           |
+| `model`                                 | `string`  | default model | Optional Dream Diary subagent model override                                                                                                                                                                |
+| `phases.deep.maxPromotedSnippetTokens`  | `number`  | `160`         | Maximum estimated tokens kept from each short-term recall snippet promoted into `MEMORY.md`; provenance metadata remains visible                                                                            |
+| `phases.deep.maxPriorEntryLossFraction` | `number`  | `0.25`        | Reject a consolidation rewrite that removes more than this fraction of prior entries                                                                                                                        |
+| `execution.defaults.timeoutMs`          | `number`  | `60000`       | Completion timeout (ms) for Dream Diary narrative generation only (other dreaming work keeps its own fixed timeouts); raise for slow local models. Per-phase override: `phases.<phase>.execution.timeoutMs` |
 
 ### Example
 
