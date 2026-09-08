@@ -1,4 +1,3 @@
-import type { ProviderRequestCapabilities } from "../agents/provider-attribution.js";
 /**
  * Public SDK type surface for model provider and model definition config.
  */
@@ -14,10 +13,10 @@ export type ProviderFastModePolicyContext = {
   runtimeId?: string;
   modelParams?: Record<string, unknown>;
   params?: Record<string, unknown>;
-  requestCapabilities: Pick<
-    ProviderRequestCapabilities,
-    "endpointClass" | "allowsAnthropicServiceTier"
-  >;
+  requestCapabilities: {
+    endpointClass: string;
+    allowsAnthropicServiceTier: boolean;
+  };
 };
 
 export type {
