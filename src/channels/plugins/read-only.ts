@@ -3,6 +3,8 @@
  *
  * Builds lightweight channel plugin views from config, manifests, and setup metadata.
  */
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   sortUniqueStrings,
   uniqueStrings,
@@ -11,23 +13,16 @@ import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { tryResolveConfiguredAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { resolveConfigWidePluginManifestRegistry } from "../../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   hasExplicitChannelConfig,
   listConfiguredChannelIdsForReadOnlyScope,
   resolveDiscoverableScopedChannelPluginIds,
 } from "../../plugins/channel-plugin-ids.js";
-import {
-  channelPluginIdBelongsToManifest,
-  resolveSetupChannelRegistration,
-} from "../../plugins/loader-channel-setup.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { getPluginCache } from "../../plugins/plugin-cache.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { getCachedPluginModuleLoader } from "../../plugins/plugin-module-loader-cache.js";
 import { resolveNormalizedAccountEntry } from "../../routing/account-lookup.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -44,9 +39,11 @@ import {
   resolveReadOnlyChannelCommandDefaults,
 } from "./read-only-command-defaults.js";
 import { listChannelPlugins } from "./registry.js";
+import {
+  loadSetupChannelPluginFromManifestRecord,
+  type ChannelSetupPluginLoadFailure,
+} from "./setup-entry-loader.js";
 import type { ChannelPlugin } from "./types.plugin.js";
-
-const log = createSubsystemLogger("channels");
 
 type ReadOnlyChannelPluginOptions = {
   env?: NodeJS.ProcessEnv;
@@ -63,15 +60,9 @@ type ReadOnlyChannelPluginResolution = {
   manifestRecords: readonly PluginManifestRecord[];
   configuredChannelIds: string[];
   missingConfiguredChannelIds: string[];
-  loadFailures: ReadOnlyChannelPluginLoadFailure[];
+  loadFailures: ChannelSetupPluginLoadFailure[];
 };
 type ManifestChannelConfigRecord = NonNullable<PluginManifestRecord["channelConfigs"]>[string];
-type ReadOnlyChannelPluginLoadFailure = {
-  channelId: string;
-  pluginId: string;
-  message: string;
-  source?: string;
-};
 
 function addChannelPlugins(
   byId: Map<string, ChannelPlugin>,
@@ -200,25 +191,25 @@ function resolveManifestChannelDefaultAccountId(cfg: OpenClawConfig, channelId: 
   });
 }
 
-function resolveManifestChannelAccountConfig(params: {
+function resolveManifestChannelAccount(params: {
   cfg: OpenClawConfig;
   channelId: string;
   accountId?: string | null;
-}): Record<string, unknown> {
+}): ReturnType<ManifestChannelPlugin["config"]["resolveAccount"]> {
   const channelConfig = getChannelConfigRecord(params.cfg, params.channelId);
-  const resolvedAccountId = normalizeAccountId(params.accountId);
-  const accounts = channelConfig.accounts;
-  if (accounts && typeof accounts === "object" && !Array.isArray(accounts)) {
-    const accountConfig = resolveNormalizedAccountEntry(
-      accounts as Record<string, unknown>,
-      resolvedAccountId,
-      normalizeManifestAccountConfigKey,
-    );
-    if (accountConfig && typeof accountConfig === "object" && !Array.isArray(accountConfig)) {
-      return accountConfig as Record<string, unknown>;
-    }
-  }
-  return channelConfig;
+  const accountId = normalizeAccountId(params.accountId);
+  const accounts = asOptionalRecord(channelConfig.accounts);
+  const config =
+    asOptionalRecord(
+      accounts
+        ? resolveNormalizedAccountEntry(accounts, accountId, normalizeManifestAccountConfigKey)
+        : undefined,
+    ) ?? channelConfig;
+  return {
+    accountId,
+    name: normalizeOptionalString(readOwnRecordValue(config, "name")),
+    config,
+  };
 }
 
 function buildManifestChannelPlugin(params: {
@@ -308,15 +299,11 @@ function createManifestChannelPlugin(params: {
     config: {
       listAccountIds: (cfg) => listManifestChannelAccountIds(cfg, params.channelId),
       defaultAccountId: (cfg) => resolveManifestChannelDefaultAccountId(cfg, params.channelId),
-      resolveAccount: (cfg, accountId) => ({
-        accountId: normalizeAccountId(accountId),
-        config: resolveManifestChannelAccountConfig({
-          cfg,
-          channelId: params.channelId,
-          accountId,
-        }),
-      }),
-      isEnabled: (_account, cfg) => getChannelConfigRecord(cfg, params.channelId).enabled !== false,
+      resolveAccount: (cfg, accountId) =>
+        resolveManifestChannelAccount({ cfg, channelId: params.channelId, accountId }),
+      isEnabled: (account, cfg) =>
+        getChannelConfigRecord(cfg, params.channelId).enabled !== false &&
+        account.config.enabled !== false,
       isConfigured: (_account, cfg) =>
         hasExplicitChannelConfig({
           config: cfg,
@@ -342,61 +329,6 @@ function canUseManifestChannelPlugin(record: PluginManifestRecord, channelId: st
 }
 
 export { resolveReadOnlyChannelCommandDefaults };
-
-function loadSetupChannelPluginFromManifestRecord(params: {
-  record: PluginManifestRecord;
-  channelId: string;
-}): { plugin?: ChannelPlugin; failure?: ReadOnlyChannelPluginLoadFailure } {
-  if (!params.record.setupSource || !params.record.channels.includes(params.channelId)) {
-    return {};
-  }
-  try {
-    const moduleLoader = getCachedPluginModuleLoader({
-      modulePath: params.record.setupSource,
-      rootDir: params.record.rootDir,
-      importerUrl: import.meta.url,
-      preferBuiltDist: true,
-      loaderFilename: import.meta.url,
-      tryNative: true,
-      cacheScopeKey: "read-only-setup-entry",
-    });
-    const registration = resolveSetupChannelRegistration(moduleLoader(params.record.setupSource));
-    if (registration.loadError) {
-      return {
-        failure: {
-          channelId: params.channelId,
-          pluginId: params.record.id,
-          source: params.record.setupSource,
-          message: `failed to load setup entry: ${formatErrorMessage(registration.loadError)}`,
-        },
-      };
-    }
-    if (!registration.plugin) {
-      return {};
-    }
-    if (
-      !channelPluginIdBelongsToManifest({
-        channelId: registration.plugin.id,
-        pluginId: params.record.id,
-        manifestChannels: params.record.channels,
-      })
-    ) {
-      return {};
-    }
-    return { plugin: registration.plugin };
-  } catch (error) {
-    const detail = formatErrorMessage(error);
-    log.warn(`[channels] failed to load channel setup ${params.record.id}: ${detail}`);
-    return {
-      failure: {
-        channelId: params.channelId,
-        pluginId: params.record.id,
-        source: params.record.setupSource,
-        message: `failed to load setup entry: ${detail}`,
-      },
-    };
-  }
-}
 
 function rebindChannelPluginConfig(
   config: ChannelPlugin["config"],
@@ -561,25 +493,6 @@ function addManifestChannelPlugins(
   }
 }
 
-function resolveReadOnlyWorkspaceDir(
-  cfg: OpenClawConfig,
-  options: ReadOnlyChannelPluginOptions,
-): string | undefined {
-  return options.workspaceDir ?? tryResolveConfiguredAgentWorkspaceDir(cfg, options.env);
-}
-
-function listExternalChannelManifestRecords(
-  records: readonly PluginManifestRecord[],
-): PluginManifestRecord[] {
-  return records.filter((plugin) => plugin.origin !== "bundled" && plugin.channels.length > 0);
-}
-
-function listBundledChannelManifestRecords(
-  records: readonly PluginManifestRecord[],
-): PluginManifestRecord[] {
-  return records.filter((plugin) => plugin.origin === "bundled" && plugin.channels.length > 0);
-}
-
 function resolveExternalReadOnlyChannelPluginIds(params: {
   cfg: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
@@ -627,7 +540,8 @@ export function resolveReadOnlyChannelPluginsForConfig(
   options: ReadOnlyChannelPluginOptions = {},
 ): ReadOnlyChannelPluginResolution {
   const env = options.env ?? process.env;
-  const workspaceDir = resolveReadOnlyWorkspaceDir(cfg, options);
+  const workspaceDir =
+    options.workspaceDir ?? tryResolveConfiguredAgentWorkspaceDir(cfg, options.env);
   const includeSetupFallbackPlugins = options.includeSetupFallbackPlugins === true;
   const loadedChannelPlugins = listChannelPlugins();
   const manifestRecords =
@@ -645,8 +559,12 @@ export function resolveReadOnlyChannelPluginsForConfig(
           stateDir: options.stateDir,
           env,
         }).plugins);
-  const bundledManifestRecords = listBundledChannelManifestRecords(manifestRecords);
-  const externalManifestRecords = listExternalChannelManifestRecords(manifestRecords);
+  const bundledManifestRecords = manifestRecords.filter(
+    (plugin) => plugin.origin === "bundled" && plugin.channels.length > 0,
+  );
+  const externalManifestRecords = manifestRecords.filter(
+    (plugin) => plugin.origin !== "bundled" && plugin.channels.length > 0,
+  );
   const activationSourceConfig = options.activationSourceConfig ?? cfg;
   const configuredChannelIds = uniqueStrings([
     ...listConfiguredChannelIdsForReadOnlyScope({
@@ -669,7 +587,7 @@ export function resolveReadOnlyChannelPluginsForConfig(
         })),
   ]).filter(isSafeManifestChannelId);
   const byId = new Map<string, ChannelPlugin>();
-  const loadFailures: ReadOnlyChannelPluginLoadFailure[] = [];
+  const loadFailures: ChannelSetupPluginLoadFailure[] = [];
 
   addChannelPlugins(byId, loadedChannelPlugins);
 
@@ -684,12 +602,13 @@ export function resolveReadOnlyChannelPluginsForConfig(
           loadSetupChannelPluginFromManifestRecord({
             record,
             channelId,
+            env,
           }),
         );
       loadFailures.push(
         ...setupResults
           .map((result) => result.failure)
-          .filter((failure): failure is ReadOnlyChannelPluginLoadFailure => Boolean(failure)),
+          .filter((failure): failure is ChannelSetupPluginLoadFailure => Boolean(failure)),
       );
       const bundledSetupPlugin =
         setupResults.map((result) => result.plugin).find((plugin) => plugin) ??
@@ -745,6 +664,7 @@ export function resolveReadOnlyChannelPluginsForConfig(
         const setupResult = loadSetupChannelPluginFromManifestRecord({
           record,
           channelId: firstChannelId,
+          env,
         });
         const failure = setupResult.failure;
         if (failure) {
@@ -784,4 +704,3 @@ export function resolveReadOnlyChannelPluginsForConfig(
     loadFailures,
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

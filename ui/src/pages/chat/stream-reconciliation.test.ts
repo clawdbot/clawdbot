@@ -15,6 +15,7 @@ import {
 } from "./stream-reconciliation.ts";
 import {
   discardStreamSegmentIndexes,
+  pruneHistoryReplacedStreamSegments,
   prunePersistedToolStreamMessages,
 } from "./stream-segment-pruning.ts";
 import { rememberLiveTerminalRun } from "./terminal-message-identity.ts";
@@ -166,6 +167,35 @@ describe("stream reconciliation", () => {
       "final reply",
     ]);
   });
+
+  it.each(["run-active", "run-other", undefined])(
+    "reconciles a reused commentary item with history owner %s before the user boundary loads",
+    (persistedRunId) => {
+      const persisted = {
+        role: "assistant",
+        content: [{ type: "text", text: "Saved commentary" }],
+        timestamp: 1,
+        __openclaw: { id: "saved", seq: 1, runId: persistedRunId },
+        openclawStreamFallback: { itemId: "shared-item", source: "segment" },
+      };
+      const segment = {
+        text: "Current commentary",
+        ts: 2,
+        itemId: "shared-item",
+        runId: "run-active",
+      };
+      const state = makeIdleStreamState({
+        chatRunId: "run-active",
+        chatStreamSegments: [segment],
+      });
+      const foreignRun = persistedRunId === "run-other";
+      expect(
+        materializeVisibleStreamState([persisted], state, visibleStreamOptions).map(messageText),
+      ).toEqual(foreignRun ? ["Saved commentary", "Current commentary"] : ["Saved commentary"]);
+      pruneHistoryReplacedStreamSegments([persisted], state, visibleStreamOptions);
+      expect(state.chatStreamSegments).toEqual(foreignRun ? [segment] : []);
+    },
+  );
 
   it("does not replay a keyed preamble across a same-run steer boundary", () => {
     const state = makeIdleStreamState({

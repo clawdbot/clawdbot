@@ -150,34 +150,24 @@ export function resolveSessionMcpConfigSummary(params: {
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
 }): { fingerprint: string; serverNames: string[] } {
-  const { loaded, fingerprint } = loadSessionMcpConfig({
-    workspaceDir: params.workspaceDir,
-    cfg: params.cfg,
-    logDiagnostics: false,
-    manifestRegistry: params.manifestRegistry,
-    toolOverrides: params.toolOverrides,
-  });
-  const serverNames = Object.keys(loaded.mcpServers).toSorted((a, b) => a.localeCompare(b));
-  if (serverNames.length === 0) {
-    return { fingerprint, serverNames };
-  }
+  const loaded = loadEmbeddedAgentMcpConfig(params);
+  const declaredServerNames = Object.keys(loaded.mcpServers);
+  const serverNames = declaredServerNames.toSorted((a, b) => a.localeCompare(b));
   // Mirror getOrCreate: the bare-keyed runtime folds full-set safe names into
   // its fingerprint and excludes requester-scoped servers from its partition.
   // Compare apples-to-apples or tools.effective reports stale-config forever.
-  const safeServerNamesByServer = assignSafeServerNames(Object.keys(loaded.mcpServers));
+  const safeServerNamesByServer = assignSafeServerNames(declaredServerNames);
   const { requesterScopedServerNames } = partitionMcpServersByConnectionScope(loaded.mcpServers);
-  const { fingerprint: bareRuntimeFingerprint } = loadSessionMcpConfig({
-    workspaceDir: params.workspaceDir,
-    cfg: params.cfg,
+  const { fingerprint } = loadSessionMcpConfig({
+    ...params,
+    loaded,
     logDiagnostics: false,
-    manifestRegistry: params.manifestRegistry,
-    toolOverrides: params.toolOverrides,
     ...(requesterScopedServerNames.length > 0
       ? { excludeServerNames: new Set(requesterScopedServerNames) }
       : {}),
     safeServerNamesByServer,
   });
-  return { fingerprint: bareRuntimeFingerprint, serverNames };
+  return { fingerprint, serverNames };
 }
 
 /** Reads the enabled static MCP server set without opening transports or listing tools. */

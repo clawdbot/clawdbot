@@ -5,7 +5,7 @@ import {
   collectDeliveredMediaUrls,
   hasCompleteAutomaticMediaDeliveryOutcomeEvidence,
   hasCompletedSourceReplyDeliveryEvidence,
-  hasPayloadOutcomeSendEvidence,
+  getAutomaticDeliveryEvidence,
   hasUnaccountedMessagingToolAggregateEvidence,
   hasVisibleOutboundDeliveryEvidence,
   resolveExplicitFinalSourceReplyDeliveryEvidence,
@@ -255,7 +255,7 @@ describe("queued delivery evidence", () => {
         ],
       },
     };
-    expect(hasPayloadOutcomeSendEvidence(complete)).toBe(true);
+    expect(getAutomaticDeliveryEvidence(complete).mayHaveSent).toBe(true);
     expect(collectAmbiguousAutomaticMediaUrls(complete)).toEqual(["/tmp/proof.png"]);
     expect(hasCompleteAutomaticMediaDeliveryOutcomeEvidence(complete, ["/tmp/proof.png"])).toBe(
       true,

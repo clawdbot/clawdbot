@@ -77,13 +77,14 @@ vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => ({
     spawn: async (input: {
       argv?: string[];
-      ptyCommand?: string;
       env?: NodeJS.ProcessEnv;
       onStdout?: (chunk: string) => void;
     }) => {
-      const command = unwrapSnapshotEvalCommand(input.ptyCommand ?? input.argv?.at(-1) ?? "");
+      const command = unwrapSnapshotEvalCommand(input.argv?.at(-1) ?? "");
       const env = input.env ?? {};
-      if (command.includes("OPENCLAW_SHELL")) {
+      if (command.includes("GIT_PAGER")) {
+        input.onStdout?.(JSON.stringify({ GIT_PAGER: env.GIT_PAGER, PAGER: env.PAGER }));
+      } else if (command.includes("OPENCLAW_SHELL")) {
         input.onStdout?.(env.OPENCLAW_SHELL ?? "");
       } else if (command.includes("SSLKEYLOGFILE")) {
         input.onStdout?.(env.SSLKEYLOGFILE ?? "");
@@ -93,6 +94,7 @@ vi.mock("../process/supervisor/index.js", () => ({
         input.onStdout?.("ok\n");
       }
       return {
+        activity: { resultSettled: true, lastOutputAtMs: Date.now() },
         runId: "mock-path-run",
         startedAtMs: Date.now(),
         stdin: undefined,
@@ -111,7 +113,6 @@ vi.mock("../process/supervisor/index.js", () => ({
     },
     cancel: vi.fn(),
     cancelScope: vi.fn(),
-    getRecord: vi.fn(),
   }),
 }));
 
@@ -305,6 +306,18 @@ describe("exec PATH login shell merge", () => {
     ).rejects.toThrow(/Security Violation: Custom 'PATH' variable is forbidden/);
 
     expect(shellPathMock).not.toHaveBeenCalled();
+  });
+
+  it("runs exact no-pager requests with empty rather than executable pager values", async () => {
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+    const result = await tool.execute("call-no-pager", {
+      command: "echo GIT_PAGER PAGER",
+      env: { GIT_PAGER: "cat", PAGER: "cat" },
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
+    });
+    expect(normalizeText(result.content.find((c) => c.type === "text")?.text)).toBe(
+      JSON.stringify({ GIT_PAGER: "", PAGER: "" }),
+    );
   });
 
   it("fails closed when a blocked runtime override key is requested", async () => {

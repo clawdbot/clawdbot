@@ -1,6 +1,8 @@
 // Message tool policy tests cover message tool availability during cron runs.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createAgentLifecycleTerminalBackstop } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createSourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import { applyJobPatch } from "../service/jobs.js";
@@ -408,6 +410,12 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
           cronSession: makeCronSession() as unknown as MutableCronSession,
           commandBody,
           persistSessionEntry: async () => undefined,
+          lifecycle: createAgentLifecycleTerminalBackstop({
+            runId: "test-session-id",
+            sessionKey: "cron:message-tool-policy:run:test-session-id",
+            getLifecycleGeneration: getAgentEventLifecycleGeneration,
+            resolveTerminationFields: () => ({}),
+          }),
           abortReason: () => "aborted",
           isAborted: () => false,
           ...overrides,
@@ -484,6 +492,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(result.error).toBeUndefined();
     expect(result.summary).toBe("Final cron report from the agent.");
     expect(result.outputText).toBe("Final cron report from the agent.");
+    expect(result.replyDisposition).toBe("visible");
     expect(resolveCronPayloadOutcomeMock).toHaveBeenCalledWith(
       expect.objectContaining({
         finalAssistantVisibleText: "Final cron report from the agent.",
@@ -494,6 +503,31 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       deliveryRequested: false,
       deliveryPayloads: [{ text: "Final cron report from the agent." }],
     });
+  });
+
+  it("records an exact NO_REPLY as a silent bare no-deliver result", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: false,
+      mode: "none",
+    });
+    runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [{ text: "NO_REPLY" }],
+      meta: {
+        finalAssistantVisibleText: "NO_REPLY",
+        finalAssistantRawText: "NO_REPLY",
+        agentMeta: { usage: { input: 10, output: 20 } },
+      },
+    });
+
+    const result = await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeMessageToolPolicyJob({ mode: "none" }),
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.replyDisposition).toBe("silent");
+    expect(result.delivered).toBe(false);
   });
 
   it('suppresses automatic exec completion notifications when delivery.mode is "none"', async () => {
@@ -605,11 +639,17 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       accountId: undefined,
       error: undefined,
     });
-    runEmbeddedAgentMock.mockResolvedValue(
-      makeMessageToolRunResult([
-        { tool: "message", provider: "topicchat", to: "room#42", threadId: "42" },
-      ]),
-    );
+    const embeddedResult = makeMessageToolRunResult([
+      { tool: "message", provider: "topicchat", to: "room#42", threadId: "42" },
+    ]);
+    runEmbeddedAgentMock.mockResolvedValue({
+      ...embeddedResult,
+      meta: {
+        ...embeddedResult.meta,
+        finalAssistantVisibleText: "NO_REPLY",
+        finalAssistantRawText: "NO_REPLY",
+      },
+    });
 
     const result = await runCronIsolatedAgentTurn({
       ...makeParams(),
@@ -638,6 +678,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
     expect(result.delivered).toBe(true);
     expect(result.deliveryAttempted).toBe(true);
+    expect(result.replyDisposition).toBe("silent");
     expectDeliveryFields(result.delivery, {
       intended: { channel: "topicchat", to: "room#42", threadId: 42, source: "explicit" },
       messageToolSentTo: [{ channel: "topicchat", to: "room#42", threadId: "42" }],
@@ -1172,7 +1213,6 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     resolveCronSessionMock.mockImplementation(() => makeCronSession());
     const { claimAgentRunContext, getAgentRunContext } =
       await import("../../infra/agent-run-registry.js");
-    const { getAgentEventLifecycleGeneration } = await import("../../infra/agent-events.js");
     let invocationCount = 0;
     let releaseFirst = () => {};
     let releaseSecond = () => {};
@@ -1235,8 +1275,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     runEmbeddedAgentMock.mockRejectedValueOnce(new Error("runner failed"));
     const { claimAgentRunContext, getAgentRunContext } =
       await import("../../infra/agent-run-registry.js");
-    const { getAgentEventLifecycleGeneration, rotateAgentEventLifecycleGeneration } =
-      await import("../../infra/agent-events.js");
+    const { rotateAgentEventLifecycleGeneration } = await import("../../infra/agent-events.js");
     claimAgentRunContext("test-session-id", {
       sessionKey: "agent:default:cron:message-tool-policy",
       sessionId: "test-session-id",

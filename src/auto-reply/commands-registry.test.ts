@@ -21,7 +21,11 @@ import {
   serializeCommandArgs,
   shouldHandleTextCommands,
 } from "./commands-registry.js";
-import type { ChatCommandDefinition, NativeCommandSpec } from "./commands-registry.types.js";
+import type {
+  ChatCommandDefinition,
+  CommandArgValues,
+  NativeCommandSpec,
+} from "./commands-registry.types.js";
 
 type NativeCommandNameResolver = (params: { commandKey: string; defaultName: string }) => string;
 
@@ -301,6 +305,17 @@ describe("commands registry", () => {
     expect(resolveTextCommand("/learn first line\nsecond line")?.args).toBe(
       "first line\nsecond line",
     );
+  });
+
+  it("registers /dashboard as a standard tools command with optional requirements", () => {
+    const dashboard = requireChatCommand("dashboard");
+    expect(dashboard.nativeName).toBe("dashboard");
+    expect(dashboard.textAliases).toEqual(["/dashboard"]);
+    expect(dashboard.category).toBe("tools");
+    expect(dashboard.tier).toBe("standard");
+    expect(dashboard.acceptsArgs).toBe(true);
+    expect(requireCommandArg(dashboard, "request").required).not.toBe(true);
+    expect(resolveTextCommand("/dashboard release health")?.args).toBe("release health");
   });
 
   it("registers /loop as a standard tools command with an optional spec", () => {
@@ -736,6 +751,54 @@ describe("commands registry args", () => {
     );
   });
 
+  const structuredArgCases: Array<{
+    command: string;
+    values: CommandArgValues;
+    expected: string;
+  }> = [
+    {
+      command: "config",
+      values: { action: " GET ", path: " agents.defaults.model " },
+      expected: "/config get agents.defaults.model",
+    },
+    {
+      command: "config",
+      values: { action: "set", path: "agents.defaults.model" },
+      expected: "/config set agents.defaults.model",
+    },
+    {
+      command: "mcp",
+      values: { action: "get", path: "servers.github" },
+      expected: "/mcp get servers.github",
+    },
+    { command: "mcp", values: { action: "get" }, expected: "/mcp get" },
+    {
+      command: "plugins",
+      values: { action: "get", path: "discord" },
+      expected: "/plugins get discord",
+    },
+    {
+      command: "plugins",
+      values: { action: "list", path: "ignored" },
+      expected: "/plugins list",
+    },
+    {
+      command: "debug",
+      values: { action: "show", path: "ignored" },
+      expected: "/debug show",
+    },
+    { command: "debug", values: { action: "unset" }, expected: "/debug unset" },
+  ];
+
+  it.each(structuredArgCases)(
+    "serializes structured $command args through its registry definition",
+    (testCase) => {
+      expect(buildCommandTextFromArgs(requireChatCommand(testCase.command), testCase)).toBe(
+        testCase.expected,
+      );
+    },
+  );
+
   it("resolves auto arg menus when missing a choice arg", () => {
     const command = createUsageModeCommand();
 
@@ -749,14 +812,16 @@ describe("commands registry args", () => {
     ]);
   });
 
-  it("keeps verbose full available while preserving no-arg status dispatch", () => {
+  it("offers all verbose choices when no argument is provided", () => {
     const verbose = requireChatCommand("verbose");
 
     const modeArg = requireCommandArgAt(verbose, 0);
     expect(modeArg.choices).toEqual(["on", "off", "full"]);
-    expect(
-      resolveCommandArgMenu({ command: verbose, args: undefined, cfg: {} as never }),
-    ).toBeNull();
+    expect(requireCommandArgMenu({ command: verbose }).choices).toEqual([
+      { label: "on", value: "on" },
+      { label: "off", value: "off" },
+      { label: "full", value: "full" },
+    ]);
   });
 
   it("does not show menus when arg already provided", () => {

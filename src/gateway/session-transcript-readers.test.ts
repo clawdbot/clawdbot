@@ -7,6 +7,7 @@ import {
   replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -21,6 +22,7 @@ import {
   readSessionMessagesAsync,
   readSessionMessagesPageWithStatsAsync,
   readLatestSessionUsageFromTranscriptAsync,
+  visitSessionMessagesAsync,
   type SessionTranscriptReadScope,
 } from "./session-transcript-readers.js";
 
@@ -95,6 +97,14 @@ describe("session transcript reader facade", () => {
     await expect(
       readSessionMessagesAsync(scope, { mode: "full", reason: "facade active branch test" }),
     ).resolves.toMatchObject([{ content: "root prompt" }, { content: "active answer" }]);
+    const visited: Array<{ message: unknown; seq: number }> = [];
+    await expect(
+      visitSessionMessagesAsync(scope, (message, seq) => visited.push({ message, seq })),
+    ).resolves.toBe(2);
+    expect(visited).toEqual([
+      { message: { role: "user", content: "root prompt" }, seq: 1 },
+      { message: { role: "assistant", content: "active answer" }, seq: 2 },
+    ]);
     await expect(readSessionMessageCountAsync(scope)).resolves.toBe(2);
     await expect(readSessionMessageByIdAsync(scope, "active")).resolves.toMatchObject({
       found: true,
@@ -114,6 +124,61 @@ describe("session transcript reader facade", () => {
       totalMessages: 2,
     });
   });
+
+  test.each(["visitor", "parse"] as const)(
+    "acquires messages incrementally and releases the cursor after %s failure",
+    async (failure) => {
+      const sessionId = `reader-stream-${failure}`;
+      const scope = await writeTranscript(sessionId, [
+        { type: "session", version: 3, id: sessionId },
+        {
+          type: "message",
+          id: "first",
+          parentId: null,
+          message: { role: "user", content: "first prompt" },
+        },
+        {
+          type: "message",
+          id: "later",
+          parentId: "first",
+          message: { role: "assistant", content: "later answer" },
+        },
+      ]);
+      const database = openOpenClawAgentDatabase({
+        agentId: "main",
+        path: path.join(tempDir, "openclaw-agent.sqlite"),
+      });
+      // Keep the ready projection, but poison a later payload: an early abort must never parse it.
+      database.db
+        .prepare(
+          `UPDATE transcript_events SET event_json = '{malformed'
+           WHERE session_id = ? AND seq = (
+             SELECT MAX(seq) FROM transcript_events WHERE session_id = ?
+           )`,
+        )
+        .run(sessionId, sessionId);
+      const stopped = new Error("visitor stopped");
+      const visited: Array<{ message: unknown; seq: number }> = [];
+      const traversal = visitSessionMessagesAsync(scope, (message, seq) => {
+        expect(database.db.isTransaction).toBe(true);
+        visited.push({ message, seq });
+        if (failure === "visitor") {
+          throw stopped;
+        }
+      });
+      if (failure === "visitor") {
+        await expect(traversal).rejects.toBe(stopped);
+      } else {
+        await expect(traversal).rejects.toBeInstanceOf(SyntaxError);
+      }
+      expect(visited).toEqual([{ message: { role: "user", content: "first prompt" }, seq: 1 }]);
+      expect(database.db.isTransaction).toBe(false);
+      // A surviving read cursor prevents checkpointing even after transaction rollback.
+      expect(database.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toMatchObject({
+        busy: 0,
+      });
+    },
+  );
 
   test("preserves Date.parse semantics for numeric-looking record timestamps", async () => {
     const scope = await writeTranscript("reader-numeric-looking-timestamps", [
@@ -431,6 +496,11 @@ describe("session transcript reader facade", () => {
     });
     markProjectionNeedsRebuild(sessionId);
 
+    const visited: unknown[] = [];
+    await expect(
+      visitSessionMessagesAsync(scope, (message) => visited.push(message)),
+    ).rejects.toBeInstanceOf(SessionTranscriptProjectionUnavailableError);
+    expect(visited).toEqual([]);
     await expect(readSessionMessageCountAsync(scope)).resolves.toBe(2);
   });
 

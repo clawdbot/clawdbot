@@ -29,7 +29,7 @@ The Gateway binds to loopback by default. Give teammates access through authenti
 
 - **Tailnet (recommended):** put the host on your tailnet and enable [Tailscale Serve](/gateway/tailscale). With `gateway.auth.allowTailscale`, Control UI sign-in can use each person's Tailscale identity - no shared secret to distribute.
 - **Trusted proxy:** front the Gateway with an identity-aware proxy such as Cloudflare Access - see [Trusted proxy auth](/gateway/trusted-proxy-auth).
-- **Shared secret:** token or password auth works for small teams, but skips per-person identity - see [Authentication](/gateway/authentication).
+- **Shared secret:** token or password auth works for small teams, but everyone uses one owner profile instead of per-person identity - see [Authentication](/gateway/authentication).
 
 The identity-backed options are worth the setup: they are what turns "someone did something" into "who did what" in the session UI and commit credit below.
 
@@ -54,19 +54,23 @@ Connect the channel your team lives in. Example: a Slack bot, allowed in one tea
 }
 ```
 
-Group chats are a first-class deployment. The defaults are already team-shaped: group access is allowlisted per room, replies require a mention, and DMs stay on the pairing default - the first time a teammate DMs the bot they get a pairing code, approved with `openclaw pairing approve slack <code>`. So the bot participates when addressed and stays quiet otherwise. In a private room whose members you trust, that is all the gating you need; for broad or public rooms, add sender allowlists and `contextVisibility` - see [Groups](/channels/groups).
+Group chats are a first-class deployment. The defaults are already team-shaped. Group access is allowlisted per room, and replies require a mention. DMs stay on the pairing default: the first time a teammate DMs the bot they get a pairing code. Approve it with `openclaw pairing approve slack <code>`. So the bot participates when addressed and stays quiet otherwise. In a private room whose members you trust, that is all the gating you need. For broad or public rooms, add sender allowlists and `contextVisibility` - see [Groups](/channels/groups).
 
 If the same people should be allowed across several channels, define the list once as an [access group](/channels/access-groups) and reference it from each channel's allowlist.
 
 ## Step 3: Sign the team in to the Control UI
 
-Each teammate opens the [Control UI](/web/control-ui) through the ingress from step 1 and gets a durable Gateway profile: display name, avatar, and per-person appearance preferences. With Cloudflare Access or Tailscale Serve, GitHub-backed sign-in verifies the account behind the profile - see [User model](/concepts/user-model).
+With per-person sign-in, each teammate opens the [Control UI](/web/control-ui) through the ingress from step 1. Each one gets a durable Gateway profile: display name, avatar, and per-person appearance preferences. Shared-secret connections use the same owner profile. With Cloudflare Access or Tailscale Serve, GitHub-backed sign-in verifies the account behind the profile - see [User model](/concepts/user-model).
+
+Teammates can also create and import [personal skills](/tools/skills#personal-skills-on-a-shared-gateway) under **Plugins → Skills** without permission to change shared Gateway configuration. Skills stay personal until explicitly shared with the team. A session retains its selected revisions when another teammate joins; changing its assignee does not replace its skills. Your existing workspace skills remain in place, and extra channel identities for one operator do not enable the team-specific guidance.
 
 ## Step 4: Work in shared sessions
 
-A conversation that starts in the team channel can continue as a session the whole team can open, steer, and take over. [Multi-user mode](/concepts/multi-user) gives every session three layers of attribution - an immutable creator, an assignable owner (assign sessions like GitHub issues from the session context menu), and the history of people who actually prompted - plus live [presence](/concepts/presence): who is viewing, and who is typing, with drafts that never reach the model or the transcript.
+A conversation that starts in the team channel can continue as a session the whole team can open, steer, and take over. [Multi-user mode](/concepts/multi-user) gives every session three layers of attribution: an immutable creator, an assignable owner, and the history of people who actually prompted. Assign sessions like GitHub issues from the session context menu. Multi-user mode also adds live [presence](/concepts/presence). Presence shows who is viewing and who is typing, with drafts that never reach the model or the transcript.
 
 For coding work, verified GitHub identity pays off at the commit: with **Git co-author credit** enabled, commits from a shared session carry `Co-authored-by` trailers for the people who steered it, and generated pull requests link back to the session so reviewers can read the conversation that produced the diff.
+
+Teammates can add their own provider accounts under **Settings → Profile → Connected accounts**, using the sign-in methods offered by each provider. Their new sessions prefer that account without making it a Gateway-wide default. Collaborators use the session's selected account, and shared same-provider failover can still apply - see [Per-person model accounts](/concepts/multi-user#per-person-model-accounts).
 
 ## Step 5: Bound what each person can do
 
@@ -96,6 +100,40 @@ Named operator roles bind authenticated profiles to a policy: which sessions the
 ```
 
 Assign roles with the `users.setRole` Gateway method; see [Named operator roles](/gateway/operator-scopes#named-operator-roles) for the full policy surface and [Permission modes](/gateway/permission-modes) for per-session tool posture.
+
+### Coding as a guest
+
+A sandbox-required guest can work without an administrator role. With the default
+`workspaceAccess: "none"`, file and shell tools use a writable private workspace,
+not the shared agent workspace. Managed skill instructions stay read-only.
+Child sessions inherit the parent's sandbox requirement, even when the agent's
+default sandbox mode is off.
+
+Local container sandboxes have no network by default. If guests need to clone
+public repositories or install project-local dependencies, explicitly enable
+outbound networking for the coding agent, for example:
+
+```json5
+{
+  agents: {
+    entries: {
+      roboclaw: {
+        sandbox: {
+          workspaceAccess: "none",
+          docker: { network: "bridge" },
+        },
+      },
+    },
+  },
+}
+```
+
+Network access does not grant host execution or inject shared credentials. Use a
+sandbox image with the required runtimes already installed; the read-only root
+filesystem still prevents system package installation. Enabling egress allows
+requests to destinations reachable from the container, so use a restricted
+container network when that access needs tighter controls. See
+[Sandboxing](/gateway/sandboxing#workspace-access) for workspace and network policy.
 
 ## Verify
 

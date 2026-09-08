@@ -55,7 +55,9 @@ function createDependencyHealthRegistry(
   });
 }
 
-function createDependencyHealthFixture() {
+function createDependencyHealthFixture(
+  identity: { pluginId?: string; packageName?: string; bundledDist?: false } = {},
+) {
   const rootDir = makeTrackedTempDir("openclaw-plugin-dependency-health", tempDirs);
   const pluginRoot = path.join(rootDir, "plugin");
   const bundledRoot = path.join(rootDir, "bundled");
@@ -63,12 +65,21 @@ function createDependencyHealthFixture() {
   fs.mkdirSync(bundledRoot);
   const fixture = createColdPluginFixture({
     rootDir: pluginRoot,
-    pluginId: "missing-dependency-plugin",
+    pluginId: identity.pluginId ?? "missing-dependency-plugin",
+    packageName: identity.packageName,
     packageJson: {
       dependencies: { "missing-runtime": "1.0.0", "optional-runtime": "1.0.0" },
       optionalDependencies: { "optional-runtime": "2.0.0" },
     },
   });
+  if (identity.bundledDist === false) {
+    const packageJsonPath = path.join(pluginRoot, "package.json");
+    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+      openclaw: Record<string, unknown>;
+    };
+    packageJson.openclaw.build = { bundledDist: false };
+    fs.writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2), "utf8");
+  }
   return {
     fixture,
     reportParams: {
@@ -134,6 +145,40 @@ describe("plugin dependency health projection", () => {
     expect(report.plugins[0]?.dependencyStatus).toBeUndefined();
     expect(report.plugins[0]?.status).toBe("loaded");
     expect(report.diagnostics).toEqual([]);
+  });
+
+  it("projects runtime dependency health onto generic source-external bundled plugins", () => {
+    const { fixture, reportParams } = createDependencyHealthFixture({ bundledDist: false });
+    loaderState.registry = createDependencyHealthRegistry(fixture.pluginId, {
+      dependencyStatus: undefined,
+      origin: "bundled",
+    });
+
+    const report = buildPluginDiagnosticsReport(reportParams);
+
+    expect(report.plugins[0]?.dependencyStatus).toEqual(
+      expect.objectContaining({ requiredInstalled: false, missing: ["missing-runtime"] }),
+    );
+    expect(report.plugins[0]?.status).toBe("error");
+  });
+
+  it("projects dependency health onto bundled official plugins distributed externally", () => {
+    const { fixture, reportParams } = createDependencyHealthFixture({
+      pluginId: "discord",
+      packageName: "@openclaw/discord",
+    });
+    loaderState.registry = createDependencyHealthRegistry(fixture.pluginId, {
+      dependencyStatus: undefined,
+      origin: "bundled",
+      packageName: "@openclaw/discord",
+    });
+
+    const report = buildPluginDiagnosticsReport(reportParams);
+
+    expect(report.plugins[0]?.dependencyStatus).toEqual(
+      expect.objectContaining({ requiredInstalled: false, missing: ["missing-runtime"] }),
+    );
+    expect(report.plugins[0]?.status).toBe("error");
   });
 
   it("preserves an existing error diagnostic when dependency health also fails", () => {

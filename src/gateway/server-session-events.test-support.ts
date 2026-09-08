@@ -14,7 +14,7 @@ const sessionRow = vi.hoisted(() => ({
   thinkingDefault: "medium",
   agentRuntime: { id: "openclaw", source: "model" },
 }));
-const resolveEmbeddedAgentRunProgressStateMock = vi.hoisted(() => vi.fn());
+const resolveEmbeddedAgentSessionProgressStateMock = vi.hoisted(() => vi.fn());
 const loadGatewaySessionRowMock = vi.hoisted(() => vi.fn());
 const projectChatDisplayMessageMock = vi.hoisted(() => vi.fn((message: unknown) => message));
 const listAccessorSessionEntriesReadOnlyMock = vi.hoisted(() => vi.fn());
@@ -59,8 +59,8 @@ vi.mock("../agents/embedded-agent-runner/runs.js", async () => {
   );
   return {
     ...actual,
-    resolveEmbeddedAgentRunProgressState: (...args: unknown[]) =>
-      resolveEmbeddedAgentRunProgressStateMock(...args),
+    resolveEmbeddedAgentSessionProgressState: (...args: unknown[]) =>
+      resolveEmbeddedAgentSessionProgressStateMock(...args),
   };
 });
 
@@ -178,7 +178,7 @@ export {
   projectChatDisplayMessageMock,
   readSessionMessageByIdAsyncMock,
   readSessionMessageCountAsyncMock,
-  resolveEmbeddedAgentRunProgressStateMock,
+  resolveEmbeddedAgentSessionProgressStateMock,
   resolveTranscriptSessionKeyBySessionIdMock,
   runtimeConfigState,
   sessionRow,

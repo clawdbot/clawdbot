@@ -1,3 +1,7 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { resolvePreparedExecEnvironment } from "./bash-tools.exec-request-preparation.js";
@@ -19,7 +23,7 @@ afterEach(() => {
 });
 
 function prepare(
-  host: "gateway" | "node" | "sandbox",
+  host: "gateway" | "sandbox",
   prepared?: {
     credentialScrubEnv: Readonly<Record<string, string>>;
     localIdentityEnv: Readonly<Record<string, string>>;
@@ -59,7 +63,7 @@ describe("exec GitHub identity", () => {
       localIdentityEnv: { GH_CONFIG_DIR: "/private/managed-gh", GIT_AUTHOR_NAME: "Managed" },
       managedLocalIdentity: true,
     };
-    for (const host of ["gateway", "node", "sandbox"] as const) {
+    for (const host of ["gateway", "sandbox"] as const) {
       const result = prepare(host, prepared);
       expect(result.env.GH_TOKEN).toBe("");
       expect(result.env.GITHUB_TOKEN).toBe("");
@@ -158,7 +162,7 @@ describe("exec GitHub identity", () => {
   it.each([
     { identity: "native", managed: false },
     { identity: "managed", managed: true },
-  ])("blanks a custom preview env ref for $identity exec on every host", ({ managed }) => {
+  ])("blanks a custom preview env ref for $identity local and sandbox exec", ({ managed }) => {
     setTestEnvValue("GH_TOKEN", "ambient-token");
     setTestEnvValue("PREVIEW_SERVICE_TOKEN", "ambient-preview-token");
     const config = managed
@@ -178,7 +182,7 @@ describe("exec GitHub identity", () => {
       agentId: "main",
     });
 
-    for (const host of ["gateway", "node", "sandbox"] as const) {
+    for (const host of ["gateway", "sandbox"] as const) {
       const result = prepare(host, prepared);
       expect(result.env.PREVIEW_SERVICE_TOKEN).toBe("");
       expect(result.requestedEnv?.PREVIEW_SERVICE_TOKEN).toBe("");
@@ -197,34 +201,54 @@ describe("exec GitHub identity", () => {
       const config = managed
         ? { tools: { github: { profileId: "ghp_88888888888888888888888888888888" } } }
         : {};
-      const preparedRunEnvironment = prepareGitHubToolEnvironment({
-        config,
-        sourceConfig: {
-          gateway: {
-            controlUi: {
-              github: {
-                token: { source: "store", provider: "default", id: "PREVIEW_STORE_TOKEN" },
+      const profileRoot = await fs.realpath(
+        await fs.mkdtemp(path.join(os.tmpdir(), "exec-github-identity-")),
+      );
+      try {
+        const preparedRunEnvironment = prepareGitHubToolEnvironment({
+          config,
+          env: { OPENCLAW_STATE_DIR: profileRoot },
+          sourceConfig: {
+            gateway: {
+              controlUi: {
+                github: {
+                  token: { source: "store", provider: "default", id: "PREVIEW_STORE_TOKEN" },
+                },
               },
             },
           },
-        },
-        agentId: "main",
-      });
-      expect(preparedRunEnvironment.credentialScrubEnv.PREVIEW_STORE_TOKEN).toBe("");
-      const tool = createExecTool({
-        host: "gateway",
-        security: "full",
-        ask: "off",
-        config,
-        agentId: "main",
-        preparedRunEnvironment,
-      });
+          agentId: "main",
+        });
+        if (managed) {
+          const profileDir = expectDefined(
+            preparedRunEnvironment.localIdentityEnv.GH_CONFIG_DIR,
+            "managed GitHub profile",
+          );
+          await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
+          await fs.writeFile(
+            path.join(profileDir, "hosts.yml"),
+            "github.com:\n  oauth_token: synthetic-managed-token\n",
+            { mode: 0o600 },
+          );
+        }
+        expect(preparedRunEnvironment.credentialScrubEnv.PREVIEW_STORE_TOKEN).toBe("");
+        const tool = createExecTool({
+          host: "gateway",
+          security: "full",
+          ask: "off",
+          config,
+          agentId: "main",
+          preparedRunEnvironment,
+        });
 
-      await tool.execute(`store-ref-${managed ? "managed" : "native"}`, { command: "echo ok" });
+        await tool.execute(`store-ref-${managed ? "managed" : "native"}`, { command: "echo ok" });
 
-      expect(storeMocks.readSecretStoreExecEnvironment).toHaveBeenCalledWith(
-        expect.objectContaining({ excludeNames: ["PREVIEW_STORE_TOKEN"] }),
-      );
+        expect(storeMocks.readSecretStoreExecEnvironment).toHaveBeenCalledWith(
+          expect.objectContaining({ excludeNames: ["PREVIEW_STORE_TOKEN"] }),
+        );
+      } finally {
+        await fs.rm(profileRoot, { recursive: true, force: true });
+      }
     },
   );
 });

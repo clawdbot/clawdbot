@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui.design
 
 import ai.openclaw.app.ui.rememberSystemAnimationsEnabled
+import androidx.compose.animation.core.withInfiniteAnimationFrameNanos
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -8,7 +9,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -84,7 +84,7 @@ fun OpenClawMascot(
       return@LaunchedEffect
     }
     while (true) {
-      withFrameNanos { frameTimeNanos ->
+      withInfiniteAnimationFrameNanos { frameTimeNanos ->
         val timeSeconds = frameTimeNanos / 1_000_000_000.0
         animator.setMood(effectiveMascotMood(mood = mood, tinted = tint != null), timeSeconds)
         pose = animator.poseAt(timeSeconds)
@@ -233,6 +233,7 @@ private fun DrawScope.drawMouth(pose: MascotPose) {
         size = Size(radiusX * 2f, radiusY * 2f),
       )
     }
+
     pose.mouthOpen > 0.05 -> {
       val grin =
         Path().apply {
@@ -242,6 +243,7 @@ private fun DrawScope.drawMouth(pose: MascotPose) {
         }
       drawPath(grin, EyeDark)
     }
+
     kotlin.math.abs(pose.mouthCurve) > 0.05 -> {
       val curve =
         Path().apply {
@@ -298,7 +300,8 @@ private fun DrawScope.drawHardHat(
 
 private fun DrawScope.drawEffect(pose: MascotPose) {
   when (pose.effect) {
-    MascotEffect.None -> Unit
+    MascotEffect.None -> {}
+
     MascotEffect.Sparkles -> {
       repeat(6) { index ->
         val phase = (pose.effectPhase + index * 0.37) % 1.0
@@ -318,6 +321,7 @@ private fun DrawScope.drawEffect(pose: MascotPose) {
         }
       }
     }
+
     MascotEffect.Zzz -> {
       repeat(3) { index ->
         val phase = (pose.effectPhase + index * 0.33) % 1.0
@@ -335,6 +339,7 @@ private fun DrawScope.drawEffect(pose: MascotPose) {
         }
       }
     }
+
     MascotEffect.Sparks -> {
       repeat(5) { index ->
         val rawPhase = pose.effectPhase - index * 0.025
@@ -356,6 +361,7 @@ private fun DrawScope.drawEffect(pose: MascotPose) {
         }
       }
     }
+
     MascotEffect.Sweat -> {
       val alpha = effectBell(pose.effectPhase)
       if (alpha > 0.02) {

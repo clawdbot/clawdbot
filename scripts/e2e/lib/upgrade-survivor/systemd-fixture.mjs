@@ -5,7 +5,8 @@ import path from "node:path";
 
 const unitName = "openclaw-gateway.service";
 const unitPath = path.join(process.env.HOME, ".config/systemd/user", unitName);
-const loadedPath = `${process.env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE || "/tmp/openclaw-systemctl-shim.pid"}.loaded-unit`;
+// Native clients omit fixture-only env; loaded state must follow the inspected unit.
+const loadedPath = `${unitPath}.loaded-unit`;
 const manager = "org.freedesktop.systemd1";
 const root = "/org/freedesktop/systemd1";
 const object = `${root}/unit/openclaw_2dgateway_2eservice`;
@@ -166,6 +167,10 @@ function run() {
   const [operation, ...args] = process.argv.slice(2);
   if (operation === "reload" && !args.length) {
     readUnit(true);
+    return;
+  }
+  if (operation === "load-state" && !args.length) {
+    console.log(readUnit() ? "loaded" : "not-found");
     return;
   }
   if (operation === "command" && !args.length) {

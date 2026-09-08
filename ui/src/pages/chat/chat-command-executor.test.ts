@@ -1,5 +1,6 @@
-// @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+// @vitest-environment node
+import { contextBudgetStatusFixture } from "../../../../src/config/sessions/context-budget.test-support.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
@@ -8,7 +9,8 @@ import type {
 } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
-import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import {
   createResolvedModelPatch,
   createModelCatalog,
@@ -18,8 +20,8 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { executeSlashCommand as executeSlashCommandImpl } from "./chat-command-executor.ts";
 
-function createTestSessionCapability(client: GatewayBrowserClient): SessionCapability {
-  const sessions = createSessionCapability({
+function createCommandSessionCapability(client: GatewayBrowserClient): SessionCapability {
+  const sessions = createTestSessionCapability({
     snapshot: { client, phase: "connected", hello: sessionMutationGatewayHello() },
     subscribe: () => () => undefined,
     subscribeEvents: () => () => undefined,
@@ -56,7 +58,7 @@ function executeSlashCommand(
     ...rest
   } = context;
   return executeSlashCommandImpl(client, sessionKey, commandName, args, {
-    sessions: createTestSessionCapability(client),
+    sessions: createCommandSessionCapability(client),
     ...rest,
     sessionAccessSnapshot,
   });
@@ -140,7 +142,7 @@ describe("executeSlashCommand directives", () => {
     });
     const client = createTestGatewayClient(request);
     const snapshot = { client, phase: "connected" as const, hello: sessionMutationGatewayHello() };
-    const sessions = createSessionCapability({
+    const sessions = createTestSessionCapability({
       snapshot,
       subscribe: () => () => undefined,
       subscribeEvents: () => () => undefined,
@@ -200,7 +202,7 @@ describe("executeSlashCommand directives", () => {
       );
     const ownsModelOverride = vi.fn(() => true);
     const sessions = {
-      ...createTestSessionCapability(client),
+      ...createCommandSessionCapability(client),
       patch,
     } as SessionCapability;
 
@@ -587,17 +589,24 @@ describe("executeSlashCommand directives", () => {
     });
   });
 
-  it("passes selected-agent scope for global compaction", async () => {
+  it("refreshes successful compaction without a duplicate command message", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.compact") {
-        return { ok: true, compacted: false };
+        return { ok: true, compacted: true };
       }
       throw new Error(`unexpected method: ${method}`);
     });
 
-    await executeSlashCommand(createTestGatewayClient(request), "global", "compact", "", {
-      agentId: "work",
-    });
+    const result = await executeSlashCommand(
+      createTestGatewayClient(request),
+      "global",
+      "compact",
+      "",
+      {
+        agentId: "work",
+      },
+    );
+    expect(result).toEqual({ action: "refresh" });
 
     expect(request).toHaveBeenCalledWith("sessions.compact", {
       key: "global",
@@ -1748,3 +1757,22 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+it("reports the last-run prompt budget through /usage", async () => {
+  const request = vi.fn(async () => ({
+    sessions: [
+      row("agent:main:main", {
+        totalTokens: 160_000,
+        contextTokens: 200_000,
+        contextBudgetStatus: contextBudgetStatusFixture(),
+      }),
+    ],
+  }));
+  const result = await executeSlashCommand(
+    createTestGatewayClient(request),
+    "agent:main:main",
+    "usage",
+    "",
+  );
+  expect(result.content).toContain("Prompt budget (last run): **89%** of 180k");
+});

@@ -1,7 +1,21 @@
 import type { ClawDiagnostic } from "../claws/types.js";
 import type { ClawUpdatePlan } from "../claws/update-plan.js";
 import { redactSensitiveText } from "../logging/redact.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+
+export function emitClawFailure(
+  runtime: RuntimeEnv,
+  json: boolean | undefined,
+  message: string,
+  payload: unknown,
+): void {
+  if (json) {
+    writeRuntimeJson(runtime, payload);
+  } else {
+    runtime.error(message);
+  }
+  runtime.exit(1);
+}
 
 export function formatClawDiagnostics(diagnostics: readonly ClawDiagnostic[]): string {
   return diagnostics

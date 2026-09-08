@@ -348,24 +348,26 @@ class OpenClawImageLightbox extends OpenClawLitElement {
           <header class="header">
             <strong class="title">${title}</strong>
             <div class="actions">
-              ${this.openOriginalUrl
-                ? html`
-                    <a
-                      class="action open-original"
-                      href=${this.openOriginalUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      aria-label=${t("chat.imageLightbox.openOriginal")}
-                    >
-                      <span class="open-original-label">
-                        ${t("chat.imageLightbox.openOriginal")}
-                      </span>
-                      <span class="open-original-icon" aria-hidden="true">
-                        ${icons.externalLink}
-                      </span>
-                    </a>
-                  `
-                : nothing}
+              ${
+                this.openOriginalUrl
+                  ? html`
+                      <a
+                        class="action open-original"
+                        href=${this.openOriginalUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        aria-label=${t("chat.imageLightbox.openOriginal")}
+                      >
+                        <span class="open-original-label">
+                          ${t("chat.imageLightbox.openOriginal")}
+                        </span>
+                        <span class="open-original-icon" aria-hidden="true">
+                          ${icons.externalLink}
+                        </span>
+                      </a>
+                    `
+                  : nothing
+              }
               <button
                 class="action close"
                 type="button"
@@ -384,56 +386,60 @@ class OpenClawImageLightbox extends OpenClawLitElement {
             @pointercancel=${this.resetBackdropPointer}
             @dblclick=${this.handleDoubleClick}
           >
-            ${this.mediaKind === "video"
-              ? html`<video
-                  class="video"
-                  src=${this.src}
-                  aria-label=${title}
-                  controls
-                  autoplay
-                  playsinline
-                  tabindex="0"
-                ></video>`
-              : html`<img
-                  class=${this.scale > 1 ? "image zoomed" : "image"}
-                  src=${this.src}
-                  alt=${title}
-                  @load=${this.handleImageLoad}
-                  @error=${this.handleImageError}
-                  @dragstart=${(event: DragEvent) => event.preventDefault()}
-                />`}
+            ${
+              this.mediaKind === "video"
+                ? html`<video
+                    class="video"
+                    src=${this.src}
+                    aria-label=${title}
+                    controls
+                    autoplay
+                    playsinline
+                    tabindex="0"
+                  ></video>`
+                : html`<img
+                    class=${this.scale > 1 ? "image zoomed" : "image"}
+                    src=${this.src}
+                    alt=${title}
+                    @load=${this.handleImageLoad}
+                    @error=${this.handleImageError}
+                    @dragstart=${(event: DragEvent) => event.preventDefault()}
+                  />`
+            }
           </div>
-          ${this.mediaKind === "image"
-            ? html`<div class="zoom-controls">
-                <button
-                  class="action zoom-control"
-                  type="button"
-                  aria-label=${t("chat.imageLightbox.zoomOut")}
-                  ?disabled=${!canZoom || this.scale <= 1}
-                  @click=${this.zoomOut}
-                >
-                  −
-                </button>
-                <button
-                  class="action zoom-control zoom-level"
-                  type="button"
-                  aria-label=${t("chat.imageLightbox.resetZoom")}
-                  ?disabled=${!canZoom || this.scale === 1}
-                  @click=${this.resetZoom}
-                >
-                  ${Math.round(this.scale * 100)}%
-                </button>
-                <button
-                  class="action zoom-control"
-                  type="button"
-                  aria-label=${t("chat.imageLightbox.zoomIn")}
-                  ?disabled=${!canZoom || this.scale >= MAX_SCALE}
-                  @click=${this.zoomIn}
-                >
-                  +
-                </button>
-              </div>`
-            : nothing}
+          ${
+            this.mediaKind === "image"
+              ? html`<div class="zoom-controls">
+                  <button
+                    class="action zoom-control"
+                    type="button"
+                    aria-label=${t("chat.imageLightbox.zoomOut")}
+                    ?disabled=${!canZoom || this.scale <= 1}
+                    @click=${this.zoomOut}
+                  >
+                    −
+                  </button>
+                  <button
+                    class="action zoom-control zoom-level"
+                    type="button"
+                    aria-label=${t("chat.imageLightbox.resetZoom")}
+                    ?disabled=${!canZoom || this.scale === 1}
+                    @click=${this.resetZoom}
+                  >
+                    ${Math.round(this.scale * 100)}%
+                  </button>
+                  <button
+                    class="action zoom-control"
+                    type="button"
+                    aria-label=${t("chat.imageLightbox.zoomIn")}
+                    ?disabled=${!canZoom || this.scale >= MAX_SCALE}
+                    @click=${this.zoomIn}
+                  >
+                    +
+                  </button>
+                </div>`
+              : nothing
+          }
         </section>
       </openclaw-modal-dialog>
     `;

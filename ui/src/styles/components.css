@@ -22,6 +22,115 @@
   font-size: 14px;
 }
 
+.connect-splash--skeleton {
+  position: relative;
+  align-items: stretch;
+}
+
+.connect-splash__layout {
+  display: grid;
+  grid-template-columns: 248px minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.connect-splash__sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 28px 24px;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.connect-splash__new-session {
+  height: 40px;
+  margin: 16px 0;
+}
+
+.connect-splash--skeleton .connect-splash__status {
+  position: absolute;
+  inset: auto 24px 12px;
+  margin: 0;
+  text-align: center;
+}
+
+.loading-skeleton {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: min(50dvh, 360px);
+  padding: 24px 32px 40px;
+}
+
+.loading-skeleton__header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.loading-skeleton__avatar {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-full);
+}
+
+.loading-skeleton__title {
+  width: 140px;
+}
+
+.loading-skeleton__messages {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 48px;
+  width: min(100%, 760px);
+  margin: 24px auto 0;
+}
+
+.loading-skeleton__message {
+  display: grid;
+  gap: 14px;
+  width: 85%;
+}
+
+.loading-skeleton__message--user {
+  align-self: flex-end;
+  width: 48%;
+}
+
+.loading-skeleton__composer {
+  flex: none;
+  width: min(100%, 760px);
+  height: 112px;
+  margin: auto auto 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+@media (max-width: 768px) {
+  .connect-splash__layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .connect-splash__sidebar {
+    display: none;
+  }
+
+  .loading-skeleton {
+    gap: 24px;
+    padding: 20px 20px 40px;
+  }
+}
+
 openclaw-session-owner-chip {
   display: inline-flex;
   flex: none;
@@ -170,6 +279,12 @@ openclaw-session-owner-chip {
   pointer-events: none;
 }
 
+/* With no artwork to wrap, the ring collapses to the 12px spinner the trailing
+   slot used to draw; a full-size empty circle reads as a missing icon. */
+.session-glyph--bare .session-glyph__ring {
+  inset: 4px;
+}
+
 .session-glyph__badge {
   position: absolute;
   z-index: 1;
@@ -206,6 +321,9 @@ openclaw-session-owner-chip {
 
 /* ===========================================
    Login Gate
+   One card, two layouts. data-mode="form": the operator fixes the connection
+   here, so the form leads. data-mode="status": the fix happens on the Gateway
+   host, so the explanation and one command lead and the form folds away.
    =========================================== */
 
 .login-gate {
@@ -221,153 +339,115 @@ openclaw-session-owner-chip {
 }
 
 .login-gate__card {
-  width: min(520px, 100%);
+  width: min(560px, 100%);
   margin-block: auto;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 32px;
+  padding: 24px 32px 28px;
+  box-shadow: var(--shadow-sm);
   animation: scale-in 0.25s var(--ease-out);
 }
 
-.login-gate__header {
-  text-align: center;
+.login-gate__brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin-bottom: 24px;
+  font-size: 13px;
+  line-height: 1;
 }
 
 .login-gate__logo {
-  width: 48px;
-  height: 48px;
-  margin-bottom: 12px;
+  width: 22px;
+  height: 22px;
 }
 
-.login-gate__title {
+.login-gate__brand-name {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+}
+
+.login-gate__body {
+  display: grid;
+  gap: 20px;
+}
+
+/* ── Title block ── */
+
+.login-gate__status-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.login-gate__status-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-full);
+  color: var(--login-gate-tone, var(--accent));
+  background: color-mix(in srgb, var(--login-gate-tone, var(--accent)) 12%, transparent);
+}
+
+.login-gate__status-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.login-gate__failure[data-tone="pending"] {
+  --login-gate-tone: var(--accent);
+}
+
+.login-gate__failure[data-tone="warn"] {
+  --login-gate-tone: var(--warn);
+}
+
+.login-gate__failure[data-tone="danger"] {
+  --login-gate-tone: var(--danger);
+}
+
+.login-gate__status-text {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.login-gate__heading,
+.login-gate__failure-title {
+  margin: 0;
   font-size: 22px;
   font-weight: 700;
+  line-height: 1.2;
   letter-spacing: -0.02em;
+  color: var(--text-strong);
 }
 
-.login-gate__sub {
-  color: var(--muted);
-  font-size: 14px;
-  margin-top: 4px;
-}
-
-.login-gate__form {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.login-gate__connect {
-  margin-top: 4px;
-  width: 100%;
-  justify-content: center;
-  padding: 10px 16px;
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.login-gate__failure {
-  margin-top: 14px;
-}
-
-.login-gate__failure-title {
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--text);
-}
-
+.login-gate__lede,
 .login-gate__failure-summary {
-  margin-top: 6px;
-  font-size: 13px;
-  line-height: 1.45;
-}
-
-.login-gate__failure-steps {
-  margin: 10px 0 0;
-  padding-left: 18px;
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.login-gate__failure-steps .login-gate__command {
-  display: inline-flex;
-  box-sizing: border-box;
-  max-width: 100%;
-  margin: 2px 3px;
-  vertical-align: middle;
-}
-
-.login-gate__failure-steps .login-gate__command code {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.login-gate__failure-steps li + li {
-  margin-top: 4px;
-}
-
-.login-gate__failure-detail {
-  margin-top: 10px;
-  font-size: 12px;
-}
-
-.login-gate__failure-detail summary {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
   color: var(--muted);
 }
 
-.login-gate__failure-raw {
-  margin-top: 6px;
-  overflow-wrap: anywhere;
-  color: var(--muted);
+/* ── Hero command: the one thing to run ── */
+
+.login-gate__hero {
+  display: grid;
+  gap: 6px;
 }
 
-.login-gate__failure-docs {
-  display: inline-flex;
-  margin-top: 10px;
-  font-size: 12px;
-}
-
-.login-gate__help {
-  margin-top: 20px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border);
-}
-
-.login-gate__help-title {
+.login-gate__hero-label {
+  font-size: 11px;
   font-weight: 600;
-  font-size: 12px;
-  color: var(--text);
-}
-
-.login-gate__steps {
-  margin: 10px 0 0;
-  padding-left: 20px;
-  font-size: 12px;
-  line-height: 1.6;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--muted);
-}
-
-.login-gate__steps li {
-  margin-bottom: 6px;
-}
-
-.login-gate__steps li:last-child {
-  margin-bottom: 0;
-}
-
-.login-gate__steps code {
-  display: block;
-  margin: 4px 0 2px;
-  padding: 5px 10px;
-  font-family: var(--mono);
-  font-size: 12px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  color: var(--text);
-  user-select: all;
 }
 
 .login-gate__command {
@@ -400,6 +480,268 @@ openclaw-session-owner-chip {
   border: 0;
 }
 
+.login-gate__command--hero {
+  margin: 0;
+  padding: 12px 10px 12px 14px;
+  border-color: var(--border-strong);
+  background: var(--bg-accent);
+  border-radius: var(--radius-md);
+}
+
+.login-gate__command--hero code {
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+
+/* The prompt glyph is decorative; copying still yields the bare command. */
+.login-gate__command--hero code::before {
+  content: "$ ";
+  color: var(--muted);
+  user-select: none;
+}
+
+.login-gate__command--hero .chat-copy-btn {
+  flex: 0 0 auto;
+  padding: 6px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.login-gate__command--hero:hover .chat-copy-btn {
+  border-color: var(--border);
+  background: var(--card);
+}
+
+/* The copy glyph swap normally ships with chat styles, which the gate renders
+   without; own it here so the check never shows beside the copy icon. */
+.login-gate .chat-copy-btn__icon {
+  position: relative;
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+}
+
+.login-gate .chat-copy-btn__icon-copy,
+.login-gate .chat-copy-btn__icon-check {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.login-gate .chat-copy-btn__icon-check,
+.login-gate .chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-copy {
+  opacity: 0;
+}
+
+.login-gate .chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-check {
+  opacity: 1;
+}
+
+/* ── Steps ── */
+
+.login-gate__failure-steps {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.login-gate__failure-steps li + li {
+  margin-top: 6px;
+}
+
+.login-gate__failure-steps li::marker {
+  color: var(--muted);
+}
+
+.login-gate__failure-steps .login-gate__command {
+  display: inline-flex;
+  box-sizing: border-box;
+  max-width: 100%;
+  margin: 1px 2px;
+  padding: 1px 4px 1px 8px;
+  vertical-align: middle;
+  font-size: 12px;
+}
+
+.login-gate__failure-steps .login-gate__command code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.login-gate__failure-steps .login-gate__command .chat-copy-btn {
+  padding: 3px 4px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.login-gate__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.login-gate__failure-refresh {
+  justify-self: start;
+}
+
+/* ── Form ── */
+
+.login-gate__form {
+  display: grid;
+  gap: 14px;
+}
+
+.login-gate__form .field {
+  gap: 6px;
+}
+
+.login-gate__form .field label {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.login-gate__form .field input[aria-invalid="true"] {
+  border-color: var(--login-gate-tone, var(--danger));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--login-gate-tone, var(--danger)) 14%, transparent);
+}
+
+.login-gate__connect {
+  margin-top: 2px;
+  justify-content: center;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.login-gate__form .login-gate__connect {
+  width: 100%;
+}
+
+/* ── Folded connection summary (status mode) ── */
+
+.login-gate__connection {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.login-gate__connection > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  list-style: none;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: var(--cursor-action);
+}
+
+.login-gate__connection > summary::-webkit-details-marker {
+  display: none;
+}
+
+.login-gate__connection-target {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.login-gate__connection-target span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.login-gate__connection-target svg {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+}
+
+.login-gate__connection-cred {
+  flex: 1;
+  white-space: nowrap;
+}
+
+.login-gate__connection-change {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.login-gate__connection[open] .login-gate__connection-change {
+  color: var(--muted);
+}
+
+.login-gate__connection[open] > summary {
+  margin-bottom: 14px;
+}
+
+/* ── Footer ── */
+
+.login-gate__foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.login-gate__failure-detail {
+  min-width: 0;
+  flex: 1;
+}
+
+.login-gate__failure-detail summary {
+  color: var(--muted);
+  cursor: var(--cursor-action);
+}
+
+.login-gate__failure-raw {
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+
+.login-gate__failure-docs {
+  flex: 0 0 auto;
+}
+
+/* ── First-run help (no failure yet) ── */
+
+.login-gate__help {
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.login-gate__help-title {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.login-gate__steps {
+  margin: 10px 0 0;
+  padding-left: 20px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.login-gate__steps li {
+  margin-bottom: 6px;
+}
+
+.login-gate__steps li:last-child {
+  margin-bottom: 0;
+}
+
 .login-gate__docs {
   margin-top: 10px;
   font-size: 12px;
@@ -415,7 +757,17 @@ openclaw-session-owner-chip {
   }
 
   .login-gate__card {
-    padding: 24px 20px;
+    padding: 20px 20px 24px;
+  }
+
+  .login-gate__status-icon {
+    width: 36px;
+    height: 36px;
+  }
+
+  .login-gate__heading,
+  .login-gate__failure-title {
+    font-size: 20px;
   }
 
   /* 44px touch targets per platform guidelines. */
@@ -433,6 +785,14 @@ openclaw-session-owner-chip {
   .login-gate__connect {
     min-height: 44px;
   }
+
+  .login-gate__actions .login-gate__connect {
+    width: 100%;
+  }
+
+  .login-gate__connection-cred {
+    display: none;
+  }
 }
 
 /* The standalone body already owns safe-area insets. Reusing them inside the
@@ -441,6 +801,139 @@ openclaw-session-owner-chip {
   (display-mode: standalone) and (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .login-gate {
     padding: 16px 12px;
+  }
+}
+
+/* ===========================================
+   Gateway switch confirmation
+   A link pointed this browser at another Gateway. Show where it goes and what
+   travels with it; the guard is honest, not alarmed.
+   =========================================== */
+
+.gateway-switch {
+  display: grid;
+  gap: 18px;
+  width: min(520px, 100%);
+  padding: 22px 24px 24px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+
+.gateway-switch__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.gateway-switch__icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-full);
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+
+.gateway-switch__icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.gateway-switch__text {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.gateway-switch__title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+}
+
+.gateway-switch__summary {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.gateway-switch__hosts {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.gateway-switch__host {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-accent);
+}
+
+.gateway-switch__host--next {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+}
+
+.gateway-switch__label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.gateway-switch__host code {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+
+.gateway-switch__arrow {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.gateway-switch__arrow svg {
+  width: 18px;
+  height: 18px;
+}
+
+.gateway-switch__note {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.gateway-switch__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+@media (max-width: 560px) {
+  .gateway-switch__hosts {
+    grid-template-columns: 1fr;
+  }
+
+  .gateway-switch__arrow {
+    justify-self: center;
+    transform: rotate(90deg);
   }
 }
 
@@ -706,6 +1199,26 @@ openclaw-session-owner-chip {
   box-shadow: var(--shadow-lg);
 }
 
+/* Settings outcomes can use the lower corner without covering chat controls.
+ * Keep this opt-in so anchored notices and the shell's top placement stay intact. */
+.app-toast--bottom {
+  top: auto;
+  bottom: calc(20px + var(--safe-area-bottom));
+  width: min(380px, calc(100vw - 32px));
+  padding: 8px 8px 8px 16px;
+  border-radius: var(--radius-lg);
+  transition:
+    opacity 180ms ease-out,
+    translate 180ms ease-out;
+}
+
+@starting-style {
+  .app-toast--bottom {
+    opacity: 0;
+    translate: 0 8px;
+  }
+}
+
 .app-toast--anchored {
   right: auto;
   left: var(--app-toast-anchor-center);
@@ -771,7 +1284,8 @@ openclaw-session-owner-chip {
 
   /* The unanchored chat toast shares the viewport with shell and pane chrome.
      Anchored permission toasts already carry a measured pane-header offset. */
-  openclaw-toast-host[data-toast-placement="shell"] .app-toast:not(.app-toast--anchored) {
+  openclaw-toast-host[data-toast-placement="shell"]
+    .app-toast:not(.app-toast--anchored, .app-toast--bottom) {
     top: var(--app-toast-shell-top, calc(20px + var(--safe-area-top)));
   }
 
@@ -779,6 +1293,10 @@ openclaw-session-owner-chip {
     left: max(12px, var(--safe-area-left));
     right: max(12px, var(--safe-area-right));
     max-width: none;
+  }
+
+  .app-toast--bottom {
+    width: auto;
   }
 
   .app-toast--anchored {
@@ -853,7 +1371,32 @@ openclaw-session-owner-chip {
   line-height: 1;
 }
 
+.app-toast--bottom .app-toast__icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-full);
+  background: var(--bg-muted);
+  color: var(--text-strong);
+}
+
+.app-toast--bottom .app-toast__message {
+  flex: 1 1 auto;
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.app-toast--bottom .app-toast__dismiss {
+  width: 44px;
+  height: 44px;
+}
+
+.app-toast--bottom .app-toast__dismiss svg {
+  width: 16px;
+  height: 16px;
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .app-toast--bottom,
   .app-toast--anchored,
   .app-toast--anchored[data-active="true"],
   .app-toast--anchored[data-active="false"] {
@@ -1038,6 +1581,10 @@ openclaw-session-progress-hovercard-provider {
   background: var(--ok);
 }
 
+.person-activity-card__status--offline > span {
+  background: var(--muted);
+}
+
 .person-activity-card__facts {
   display: grid;
   gap: 12px;
@@ -1209,293 +1756,6 @@ openclaw-session-progress-hovercard-provider {
   .person-activity-card a {
     min-height: 44px;
     align-items: center;
-  }
-}
-
-.github-link-hovercard {
-  position: fixed;
-  inset: auto;
-  margin: 0;
-  z-index: 1990;
-  width: min(440px, calc(100vw - 24px));
-  min-height: 112px;
-  padding: 16px;
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--card) 96%, var(--bg) 4%);
-  box-shadow: var(--overlay-shadow);
-  color: var(--text);
-  font-family: var(--font-body);
-  /* Interactive by design: hover intent and text selection both need the card to
-     receive pointer events (see github-link-hovercard.runtime.ts). */
-  pointer-events: auto;
-  opacity: 0;
-  transform: translateY(-5px) scale(0.99);
-  transform-origin: bottom left;
-  transition:
-    opacity var(--duration-normal) var(--ease-out),
-    transform var(--duration-normal) var(--ease-out);
-}
-
-.github-link-hovercard[data-side="bottom"] {
-  transform: translateY(5px) scale(0.99);
-  transform-origin: top left;
-}
-
-.github-link-hovercard[data-open="true"] {
-  opacity: 1;
-  transform: translateY(0) scale(1);
-}
-
-.github-link-hovercard__header,
-.github-link-hovercard__footer {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-.github-link-hovercard__header {
-  gap: 9px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
-.github-link-hovercard__state {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 9px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, currentColor 12%, transparent);
-  font-weight: 600;
-}
-
-.github-link-hovercard__state[data-tone="open"] {
-  color: var(--ok);
-}
-
-.github-link-hovercard__state[data-tone="danger"] {
-  color: var(--danger);
-}
-
-.github-link-hovercard__state[data-tone="purple"] {
-  color: var(--pr-merged);
-}
-
-.github-link-hovercard__state-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: currentColor;
-  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 14%, transparent);
-}
-
-/* The repo reference, author and files chip are links too, but the title owns
-   the card's only underline; the rest stay text until hovered or focused. */
-.github-link-hovercard__repo {
-  min-width: 0;
-  color: inherit;
-  overflow: hidden;
-  text-decoration: none;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.github-link-hovercard__repo:hover,
-.github-link-hovercard__repo:focus-visible,
-.github-link-hovercard__author:hover,
-.github-link-hovercard__author:focus-visible {
-  color: var(--text-strong);
-  text-decoration: none;
-}
-
-.github-link-hovercard__time {
-  flex: 0 0 auto;
-  margin-left: auto;
-  white-space: nowrap;
-}
-
-.github-link-hovercard__title {
-  display: block;
-  margin: 15px 0 17px;
-  color: var(--text-strong);
-  font-size: var(--control-ui-text-lg);
-  font-weight: 650;
-  letter-spacing: -0.012em;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-  text-decoration: none;
-}
-
-.github-link-hovercard__title:hover,
-.github-link-hovercard__title:focus-visible {
-  text-decoration: underline;
-}
-
-.github-link-hovercard__footer {
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.github-link-hovercard__author,
-.github-link-hovercard__metrics {
-  display: inline-flex;
-  align-items: center;
-}
-
-.github-link-hovercard__coauthors {
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
-  margin-left: 6px;
-}
-
-/* Overlap reads as one group; the ring keeps faces separable against the card. */
-.github-link-hovercard__coauthors .github-link-hovercard__avatar {
-  width: 21px;
-  height: 21px;
-  box-shadow: 0 0 0 2px var(--surface-1);
-}
-
-.github-link-hovercard__coauthors .github-link-hovercard__avatar + .github-link-hovercard__avatar {
-  margin-left: -7px;
-}
-
-.github-link-hovercard__coauthors-more {
-  margin-left: 5px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.github-link-hovercard__author {
-  min-width: 0;
-  gap: 8px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-md);
-  overflow: hidden;
-  text-decoration: none;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.github-link-hovercard__avatar {
-  width: 25px;
-  height: 25px;
-  flex: 0 0 auto;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 82%, transparent);
-  border-radius: 50%;
-  background: var(--bg-muted);
-  object-fit: cover;
-}
-
-.github-link-hovercard__metrics {
-  flex: 0 0 auto;
-  gap: 6px;
-}
-
-.github-link-hovercard__metric {
-  padding: 4px 8px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--bg-muted) 82%, transparent);
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-sm);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.github-link-hovercard__metric--files {
-  text-decoration: none;
-}
-
-.github-link-hovercard__metric--files:hover,
-.github-link-hovercard__metric--files:focus-visible {
-  background: var(--bg-muted);
-  color: var(--text-strong);
-  text-decoration: none;
-}
-
-.github-link-hovercard__metric--additions {
-  color: var(--ok);
-}
-
-.github-link-hovercard__metric--deletions {
-  color: var(--danger);
-}
-
-.github-link-hovercard__unavailable {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 80px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
-.github-link-hovercard__skeleton .skeleton {
-  display: block;
-  height: 14px;
-  border-radius: var(--radius-sm);
-}
-
-.github-link-hovercard__skeleton .github-link-hovercard__placeholder--badge {
-  width: 60px;
-  height: 25px;
-  flex-shrink: 0;
-  border-radius: var(--radius-full);
-}
-
-.github-link-hovercard__placeholder--repo {
-  width: 45%;
-}
-
-.github-link-hovercard__placeholder--time {
-  width: 14%;
-  margin-left: auto;
-}
-
-.github-link-hovercard__skeleton .github-link-hovercard__placeholder--title {
-  width: 90%;
-  height: 20px;
-}
-
-.github-link-hovercard__placeholder--author {
-  width: 35%;
-}
-
-.github-link-hovercard__skeleton .github-link-hovercard__placeholder--metrics {
-  width: 38%;
-  height: 25px;
-}
-
-@media (max-width: 560px) {
-  .github-link-hovercard {
-    padding: 14px;
-  }
-
-  .github-link-hovercard__header {
-    flex-wrap: wrap;
-  }
-
-  .github-link-hovercard__time {
-    margin-left: 0;
-  }
-
-  .github-link-hovercard__title {
-    margin: 13px 0 15px;
-  }
-
-  .github-link-hovercard__footer {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 10px;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .github-link-hovercard {
-    transition: none;
   }
 }
 
@@ -1902,7 +2162,7 @@ select.input {
   color: var(--ok);
 }
 
-/* Pending routes share the native mascot without exposing transient panel text. */
+/* Pending routes reserve the content layout without exposing transient panel text. */
 .lazy-view-state--loading {
   display: grid;
   flex: 1 1 auto;
@@ -1984,60 +2244,6 @@ select.input {
   font-size: 11px;
   line-height: 1.5;
   overflow-wrap: anywhere;
-}
-
-/* Compaction indicator */
-.compaction-indicator {
-  align-self: center;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  line-height: 1.2;
-  padding: 6px 14px;
-  margin-bottom: 8px;
-  border-radius: var(--radius-full);
-  border: 1px solid var(--border);
-  background: var(--panel-strong);
-  color: var(--text);
-  white-space: nowrap;
-  user-select: none;
-  animation: fade-in 0.2s var(--ease-out);
-}
-
-.compaction-indicator svg {
-  width: 16px;
-  height: 16px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  flex-shrink: 0;
-}
-
-.compaction-indicator--active {
-  color: var(--info);
-  border-color: color-mix(in srgb, var(--info) 35%, transparent);
-}
-
-.compaction-indicator--active svg {
-  animation: compaction-spin 1s linear infinite;
-}
-
-.compaction-indicator--complete {
-  color: var(--ok);
-  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
-}
-
-.compaction-indicator--fallback {
-  color: var(--warn-strong);
-  border-color: color-mix(in srgb, var(--warn-strong) 35%, transparent);
-}
-
-.compaction-indicator--fallback-cleared {
-  color: var(--ok);
-  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
 }
 
 @keyframes compaction-spin {
@@ -2498,7 +2704,6 @@ openclaw-chat-session-rail {
 }
 
 :root[data-theme-mode="light"] .code-block,
-:root[data-theme-mode="light"] .list-item,
 :root[data-theme-mode="light"] .chip {
   background: var(--bg);
 }
@@ -2734,69 +2939,8 @@ openclaw-chat-session-rail {
   container-type: inline-size;
 }
 
-.list-item {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(200px, 260px);
-  gap: 16px;
-  align-items: start;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 12px;
-  background: var(--card);
-  transition: border-color var(--duration-fast) ease;
-}
-
-.list-item-clickable {
-  text-decoration: none;
-}
-
-.list-item-clickable:hover {
-  border-color: var(--border-strong);
-}
-
-.list-main {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
 .list-title {
   font-weight: 500;
-}
-
-.list-sub {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.list-meta {
-  text-align: right;
-  color: var(--muted);
-  font-size: 12px;
-  display: grid;
-  gap: 4px;
-  min-width: 200px;
-}
-
-.list-meta .btn {
-  padding: 6px 10px;
-}
-
-.list-meta .field input,
-.list-meta .field textarea,
-.list-meta .field select {
-  width: 100%;
-}
-
-@container (max-width: 560px) {
-  .list-item {
-    grid-template-columns: 1fr;
-  }
-
-  .list-meta {
-    min-width: 0;
-    text-align: left;
-  }
 }
 
 /* ===========================================
@@ -3100,116 +3244,6 @@ td.data-table-key-col {
 .data-table-pagination__controls button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
-}
-
-/* ===========================================
-   Log Stream
-   =========================================== */
-
-.log-stream {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--card);
-  max-height: calc(100vh - 280px);
-  min-height: 200px;
-  overflow: auto;
-  container-type: inline-size;
-}
-
-.log-row {
-  display: grid;
-  grid-template-columns: 90px 70px minmax(140px, 200px) minmax(0, 1fr);
-  gap: 12px;
-  align-items: start;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
-  font-size: 12px;
-  transition: background var(--duration-fast) ease;
-}
-
-.log-row:hover {
-  background: var(--bg-hover);
-}
-
-.log-row:last-child {
-  border-bottom: none;
-}
-
-.log-time {
-  color: var(--muted);
-  font-family: var(--mono);
-}
-
-.log-level {
-  font-size: 12px; /* was 11px */
-  font-weight: 500;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 2px 6px;
-  width: fit-content;
-}
-
-.log-level.trace,
-.log-level.debug {
-  color: var(--muted);
-}
-
-.log-level.info {
-  color: var(--info);
-  border-color: color-mix(in srgb, var(--info) 30%, transparent);
-}
-
-.log-level.warn {
-  color: var(--warn);
-  border-color: var(--warn-subtle);
-}
-
-.log-level.error,
-.log-level.fatal {
-  color: var(--danger);
-  border-color: var(--danger-subtle);
-}
-
-.log-chip.trace,
-.log-chip.debug {
-  color: var(--muted);
-}
-
-.log-chip.info {
-  color: var(--info);
-  border-color: color-mix(in srgb, var(--info) 30%, transparent);
-}
-
-.log-chip.warn {
-  color: var(--warn);
-  border-color: var(--warn-subtle);
-}
-
-.log-chip.error,
-.log-chip.fatal {
-  color: var(--danger);
-  border-color: var(--danger-subtle);
-}
-
-.log-subsystem {
-  color: var(--muted);
-  font-family: var(--mono);
-}
-
-.log-message {
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: var(--mono);
-}
-
-@container (max-width: 620px) {
-  .log-row {
-    grid-template-columns: 70px 60px minmax(0, 1fr);
-  }
-
-  .log-subsystem {
-    display: none;
-  }
 }
 
 /* ===========================================
@@ -3702,13 +3736,18 @@ td.data-table-key-col {
   min-width: 0;
 }
 
-.agent-scope-control__label {
+.agent-scope-control__label,
+.agent-scope-control .agent-select__menu-title {
   color: var(--muted);
   font-size: 11px;
   font-weight: 650;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+.agent-scope-control .agent-select__menu-title {
+  padding: 4px 8px 2px;
 }
 
 .agent-scope-control openclaw-agent-select {
@@ -3751,6 +3790,9 @@ td.data-table-key-col {
   background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
   color: var(--text);
+  /* Keep page content from showing through Web Awesome's menu fade.
+   * The scale animation still communicates that the picker opened. */
+  opacity: 1 !important;
 }
 
 .agent-select__trigger {
@@ -3774,7 +3816,7 @@ td.data-table-key-col {
 }
 
 :root[data-theme-mode="light"] .agent-select__trigger {
-  background: white;
+  background: var(--bg-elevated);
 }
 
 .agent-select__trigger:focus-visible {
@@ -3858,9 +3900,17 @@ td.data-table-key-col {
 }
 
 .agent-select__option {
+  --wa-color-neutral-fill-normal: var(--bg-hover);
+
+  padding: 6px 8px;
+  border-radius: var(--menu-item-radius);
   color: var(--text);
   font: inherit;
   font-size: 13px;
+}
+
+.agent-select__option[data-selected] {
+  background: var(--menu-selected);
 }
 
 .agent-select__separator {
@@ -4026,80 +4076,6 @@ td.data-table-key-col {
 .workspace-link:hover {
   opacity: 0.75;
   text-decoration: underline;
-}
-
-.agent-chip-input {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  background: var(--bg-accent);
-  min-height: 38px;
-  cursor: text;
-  transition: border-color var(--duration-fast) ease;
-}
-
-.agent-chip-input:focus-within {
-  border-color: var(--accent);
-}
-
-.agent-chip-input input,
-.agent-chip-input input:focus-visible {
-  flex: 1;
-  min-width: 120px;
-  border: none;
-  background: transparent;
-  outline: none;
-  box-shadow: none;
-  font-size: 13px;
-  padding: 0;
-}
-
-.agent-chip-input .chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 100%;
-}
-
-.agent-chip-input .chip-remove {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  margin: 0;
-  border: none;
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--muted);
-  line-height: 1;
-  transition:
-    background var(--duration-fast) var(--ease-out),
-    color var(--duration-fast) var(--ease-out),
-    opacity var(--duration-fast) var(--ease-out);
-}
-
-.agent-chip-input .chip-remove:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text);
-}
-
-.agent-chip-input .chip-remove:focus-visible:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text);
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.agent-chip-input .chip-remove:disabled {
-  opacity: 0.45;
-  cursor: default;
 }
 
 .agent-file-field {
@@ -5670,8 +5646,7 @@ td.data-table-key-col {
   display: inline;
 }
 
-/* Session row primitives shared by sidebar recents and the chat session picker.
-   Reserve hover-action width without moving the row or hiding trailing state. */
+/* Session rows reserve hover-action space while keeping activity in the leading slot. */
 .session-row-host {
   --session-row-actions-reserve: 52px;
   position: relative;
@@ -5747,16 +5722,6 @@ td.data-table-key-col {
   transition: opacity var(--duration-fast) ease;
   /* Display-only, and its opacity transition forms a stacking context that
      would otherwise sit above the action buttons and swallow their clicks. */
-  pointer-events: none;
-}
-
-.session-row-state {
-  display: inline-grid;
-  grid-auto-flow: column;
-  grid-auto-columns: 14px;
-  align-items: center;
-  justify-items: center;
-  gap: 6px;
   pointer-events: none;
 }
 
@@ -5919,8 +5884,8 @@ td.data-table-key-col {
   }
 }
 
-.session-row-host--pinned .session-action--pin {
-  color: var(--accent);
+.session-row-host--pinned .session-action--pin svg {
+  fill: currentColor;
 }
 
 .session-run-spinner {
@@ -5939,7 +5904,6 @@ td.data-table-key-col {
   animation: session-run-spin 1.6s linear infinite;
 }
 
-.session-run-spinner--queued,
 .session-glyph__ring--queued {
   animation-play-state: paused;
 }
@@ -6127,4 +6091,12 @@ td.data-table-key-col {
 .person-activity-avatar-link {
   display: block;
   line-height: 0;
+}
+
+.plugin-ui-recovery {
+  position: fixed;
+  right: max(12px, env(safe-area-inset-right));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  z-index: 110;
+  box-shadow: var(--shadow-md);
 }

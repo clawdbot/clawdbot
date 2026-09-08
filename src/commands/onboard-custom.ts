@@ -234,7 +234,7 @@ async function applyCustomApiRetryChoice(params: {
   return { baseUrl, apiKey, resolvedApiKey, modelId };
 }
 
-/** Prompts for a custom API provider, verifies it, and persists the selected model. */
+/** Prompts for a custom API provider and prepares its verified endpoint config without writing it. */
 export async function promptCustomApiConfig(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
@@ -430,7 +430,7 @@ export async function promptCustomApiConfig(params: {
     ...(params.setAsPrimary === false ? { setAsPrimary: false } : {}),
   });
 
-  if (result.providerIdRenamedFrom && result.providerId) {
+  if (result.providerIdRenamedFrom) {
     await prompter.note(
       t("wizard.customProvider.endpointIdRenamed", {
         from: result.providerIdRenamedFrom,
@@ -440,6 +440,6 @@ export async function promptCustomApiConfig(params: {
     );
   }
 
-  runtime.log(`Configured custom provider: ${result.providerId}/${result.modelId}`);
+  runtime.log(`Prepared custom provider: ${result.providerId}/${result.modelId}`);
   return result;
 }

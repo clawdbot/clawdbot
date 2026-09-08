@@ -30,25 +30,30 @@ function resolveAccount(cfg: OpenClawConfig, accountId: string): ResolvedTelegra
 }
 
 describe("createTelegramPluginBase config duplicate token guard", () => {
-  it("wires the top-level models menu adapter into the production plugin", () => {
-    const channelData = telegramPluginBase.commands?.buildModelsMenuChannelData?.({
-      providers: [
-        { id: "anthropic", count: 2 },
-        { id: "openai", count: 3 },
-      ],
-    });
-
-    expect(channelData).toEqual({
-      telegram: {
-        buttons: [
-          [
-            { text: "anthropic (2)", callback_data: "mdl_list_anthropic_1" },
-            { text: "openai (3)", callback_data: "mdl_list_openai_1" },
-          ],
+  it.each(["buildModelsMenuChannelData", "buildModelsProviderChannelData"] as const)(
+    "%s renders providers and preserves the empty fallback",
+    (hook) => {
+      const render = telegramPluginBase.commands?.[hook];
+      const channelData = render?.({
+        providers: [
+          { id: "anthropic", count: 2 },
+          { id: "openai", count: 3 },
         ],
-      },
-    });
-  });
+      });
+
+      expect(channelData).toEqual({
+        telegram: {
+          buttons: [
+            [
+              { text: "anthropic (2)", callback_data: "mdl_list_anthropic_1" },
+              { text: "openai (3)", callback_data: "mdl_list_openai_1" },
+            ],
+          ],
+        },
+      });
+      expect(render?.({ providers: [] })).toBeNull();
+    },
+  );
 
   it("wires the guided add-provider adapter into the production plugin", () => {
     const channelData = telegramPluginBase.commands?.buildModelsAddProviderChannelData?.({

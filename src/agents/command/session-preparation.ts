@@ -74,6 +74,7 @@ export async function prepareEmbeddedSessionState(params: {
     config: params.cfg,
     agentId: params.sessionAgentId,
     existingSnapshot: params.isNewSession ? undefined : currentSkillsSnapshot,
+    librarySelections: sessionEntry?.skillLibrarySelections,
     skillFilter,
     eligibility: {
       nodeSkills: nodeSkillsEligibility,

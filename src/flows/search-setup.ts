@@ -16,13 +16,13 @@ import {
 } from "../config/types.secrets.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
 import { enablePluginInConfig, enablePluginWithCapabilityConsent } from "../plugins/enable.js";
+import { sortPluginEntriesById } from "../plugins/plugin-entry-order.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import {
   resolveWebSearchInstallCatalogEntries,
   type WebSearchInstallCatalogEntry,
 } from "../plugins/web-search-install-catalog.js";
 import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
-import { sortWebSearchProviders } from "../plugins/web-search-providers.shared.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveWebSearchProviderId } from "../web-search/runtime.js";
 import { t } from "../wizard/i18n/index.js";
@@ -100,7 +100,7 @@ function buildSearchProviderSetupContribution(params: {
 function resolveSearchProviderSetupContributions(
   config?: OpenClawConfig,
 ): SearchProviderSetupContribution[] {
-  const runtimeProviders = sortWebSearchProviders(
+  const runtimeProviders = sortPluginEntriesById(
     resolvePluginWebSearchProviders({
       config,
       env: process.env,
@@ -123,11 +123,10 @@ function resolveSearchProviderSetupContributions(
           enabledByDefault: true,
         }).enabled,
     )
-    .map(
-      (entry): SearchProviderEntryWithInstall =>
-        Object.assign({}, entry.provider, { [SEARCH_INSTALL_CATALOG_ENTRY]: entry }),
+    .map((entry): SearchProviderEntryWithInstall =>
+      Object.assign({}, entry.provider, { [SEARCH_INSTALL_CATALOG_ENTRY]: entry }),
     );
-  const providers = sortWebSearchProviders([...runtimeProviders, ...installCatalogProviders]);
+  const providers = sortPluginEntriesById([...runtimeProviders, ...installCatalogProviders]);
   return sortFlowContributionsByLabel(
     providers.filter(showsSearchProviderInSetup).map((provider) =>
       buildSearchProviderSetupContribution({

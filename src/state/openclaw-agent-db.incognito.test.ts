@@ -110,6 +110,13 @@ describe("incognito agent database", () => {
     expect(first.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
     });
+    expect(() =>
+      withOpenClawAgentDatabaseReadOnly(
+        ({ db }) => db.prepare("SELECT * FROM missing_readonly_table").all(),
+        { agentId: "main", env, path: sentinel },
+      ),
+    ).toThrow(/no such table: missing_readonly_table/);
+    expect(first.db.isOpen).toBe(true);
     expect(fs.existsSync(sentinel)).toBe(false);
     expect(fs.existsSync(path.dirname(sentinel))).toBe(false);
 

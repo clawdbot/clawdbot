@@ -54,4 +54,10 @@ as `openclaw tui`.
 
 The bearer token is passed through environment variables, not argv. OpenClaw launches Claude Code with `--strict-mcp-config --mcp-config <path>` so ambient Claude MCP servers do not join the attached session. Normal launches (without `--print-config`) revoke the grant when the Claude Code process exits.
 
+If an attached tool asks a structured question, answer it through the question
+controls in the Control UI or native app. An attach grant scopes tools to a
+session but does not identify an active OpenClaw run or its original caller
+permissions, so ordinary channel text cannot claim that question. See
+[Ask user](/tools/ask-user).
+
 See also: [Control UI URLs](/web/urls), [Devices](/cli/devices), [Gateway CLI](/cli/gateway), [MCP CLI](/cli/mcp), and [ACP CLI](/cli/acp).

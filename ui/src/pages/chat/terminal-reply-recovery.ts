@@ -58,7 +58,7 @@ export function readTerminalReplyRecoveryState(
   terminalReplySignatures: ReadonlySet<string>;
 } {
   const scope = readChatSessionProjectionScope(state);
-  const projection = getChatSessionProjection(state, state.chatMessages, scope);
+  const projection = getChatSessionProjection(state, scope);
   const run = projection.runs[runId];
   const candidates: unknown[] = run?.message === undefined ? [] : [run.message];
   for (const message of projection.messages) {

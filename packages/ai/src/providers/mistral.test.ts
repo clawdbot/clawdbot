@@ -1,8 +1,13 @@
-import { toolCallFromJSON, type ToolCall } from "@mistralai/mistralai/models/components";
+import {
+  contentChunkFromJSON,
+  toolCallFromJSON,
+  type ToolCall,
+} from "@mistralai/mistralai/models/components";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 import type { Context, Model } from "../types.js";
+import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 
 const mistralMockState = vi.hoisted(() => ({
@@ -239,6 +244,35 @@ describe("Mistral provider", () => {
 
   afterEach(() => {
     configureAiTransportHost({});
+  });
+
+  it("reports every parsed Mistral event as request activity", async () => {
+    const events = [
+      { data: { id: "resp-activity", model: "mistral-large-latest", choices: [], usage: {} } },
+      {
+        data: {
+          id: "resp-activity",
+          model: "mistral-large-latest",
+          choices: [{ finishReason: "stop", delta: { content: "ok" } }],
+        },
+      },
+    ];
+    mistralMockState.streamResult = {
+      async *[Symbol.asyncIterator]() {
+        yield* events;
+      },
+    };
+    const controller = new AbortController();
+    const onActivity = vi.fn();
+    const unsubscribe = onLlmRequestActivity(controller.signal, onActivity);
+
+    try {
+      await runMistralFixture(context, { signal: controller.signal });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(onActivity).toHaveBeenCalledTimes(events.length);
   });
 
   it("reports the real HTTP response captured by the Mistral HTTPClient hook", async () => {
@@ -661,6 +695,84 @@ describe("Mistral provider", () => {
       { name: "computer", arguments: { step: 2 } },
     ]);
     expect(new Set(toolCalls.map((toolCall) => toolCall.id)).size).toBe(2);
+  });
+
+  it("rejects a continuation whose existing id and name identify different siblings", async () => {
+    const { result, toolCalls } = await runMistralToolFixture("response-conflicting-identities", [
+      [
+        { id: "explicitA", function: { name: "first_tool", arguments: '{"value"' } },
+        { id: "explicitB", function: { name: "second_tool", arguments: '{"value"' } },
+      ],
+      [{ id: "explicitA", function: { name: "second_tool", arguments: ":1}" } }],
+    ]);
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe(
+      "Mistral streamed tool-call identities conflict; refusing to merge arguments",
+    );
+    expect(toolCalls).toEqual([]);
+  });
+
+  it("joins thinking text before sanitizing and skips empty reference-only chunks", async () => {
+    const thinkingParts = [
+      [
+        { type: "reference", reference_ids: [1] },
+        { type: "text", text: "" },
+      ],
+      [
+        { type: "text", text: "" },
+        { type: "text", text: "\ud83d" },
+        { type: "tool_reference", tool: "search", title: "source" },
+        { type: "text", text: "\ude00 " },
+        { type: "text", text: "\ud83dx" },
+        { type: "text", text: "" },
+      ],
+      [],
+    ];
+    const chunks = thinkingParts.map((thinking) => {
+      const parsed = contentChunkFromJSON(JSON.stringify({ type: "thinking", thinking }));
+      if (!parsed.ok) {
+        throw new Error("Mistral SDK failed to parse thinking fixture");
+      }
+      return parsed.value;
+    });
+    mistralMockState.streamResult = {
+      async *[Symbol.asyncIterator]() {
+        for (const content of [...chunks.map((chunk) => [chunk]), "done"]) {
+          yield {
+            data: {
+              id: "response-thinking-parts",
+              model: "mistral-large-latest",
+              choices: [{ finishReason: "stop", delta: { content } }],
+            },
+          };
+        }
+      },
+    };
+    const stream = streamMistral(makeMistralModel(), context, { apiKey: "fixture" });
+    const events: string[] = [];
+    const deltas: string[] = [];
+    for await (const event of stream) {
+      events.push(event.type);
+      if (event.type === "thinking_delta") {
+        deltas.push(event.delta);
+      }
+    }
+    expect((await stream.result()).content).toEqual([
+      { type: "thinking", thinking: "😀 x" },
+      { type: "text", text: "done" },
+    ]);
+    expect(deltas).toEqual(["😀 x"]);
+    expect(events).toEqual([
+      "start",
+      "thinking_start",
+      "thinking_delta",
+      "thinking_end",
+      "text_start",
+      "text_delta",
+      "text_end",
+      "done",
+    ]);
   });
 
   it("fails locally when a pinned Mistral tool choice is skipped", async () => {

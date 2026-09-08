@@ -104,7 +104,6 @@ export function startGatewayMaintenanceTimers(params: {
   agentRunSeq: Map<string, number>;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   isNixMode?: boolean;
-  mediaCleanupTtlMs?: number;
   getRuntimeConfig: () => OpenClawConfig;
   runWorktreeGc?: () => Promise<unknown>;
   runDeliveryQueueMediaGc?: () => Promise<unknown>;
@@ -216,7 +215,6 @@ export function startGatewayMaintenanceTimers(params: {
         // Chat runs avoid registry acquire/bump writes; recent session metadata substitutes for
         // worktree activity so idle GC cannot remove a checkout still used by the session.
         ...createManagedWorktreeOwnerPolicy(cfg),
-        // Read limits per run so a config edit applies at the next hourly sweep.
         limits: resolveWorktreeCleanupLimits(),
       });
     });
@@ -472,13 +470,13 @@ export function startGatewayMaintenanceTimers(params: {
 
   let mediaCleanupInFlight: Promise<void> | null = null;
   const runMediaCleanup = () => {
-    const ttlMs = params.mediaCleanupTtlMs;
     if (mediaCleanupInFlight) {
       return mediaCleanupInFlight;
     }
+    const ttlHours = params.getRuntimeConfig().attachments?.ttlHours;
     const cleanup =
-      typeof ttlMs === "number"
-        ? cleanOldMedia(ttlMs, { recursive: true, pruneEmptyDirs: true })
+      ttlHours !== undefined
+        ? cleanOldMedia(ttlHours * 60 * 60_000, { recursive: true, pruneEmptyDirs: true })
         : pruneOutboundMedia();
     mediaCleanupInFlight = cleanup
       .catch((err: unknown) => {

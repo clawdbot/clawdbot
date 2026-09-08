@@ -510,22 +510,24 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
           <div class="body">
             <aside class="list">
               <div class="list-section">${listLabel} · ${filteredFiles.length}</div>
-              ${filteredFiles.length === 0
-                ? html`<div class="empty-list">${t("filePreview.noMatches")}</div>`
-                : filteredFiles.map(
-                    (file) => html`
-                      <button
-                        class="item ${file.path === activeFile?.path ? "is-active" : ""}"
-                        @pointerdown=${this.preventItemPointerFocus}
-                        @mousedown=${this.preventItemPointerFocus}
-                        @click=${() => this.emitSelect(file.path)}
-                      >
-                        <span class="item-icon">${iconForFile(file.path)}</span>
-                        <span class="item-name">${file.path}</span>
-                        <span class="item-meta">${file.size}</span>
-                      </button>
-                    `,
-                  )}
+              ${
+                filteredFiles.length === 0
+                  ? html`<div class="empty-list">${t("filePreview.noMatches")}</div>`
+                  : filteredFiles.map(
+                      (file) => html`
+                        <button
+                          class="item ${file.path === activeFile?.path ? "is-active" : ""}"
+                          @pointerdown=${this.preventItemPointerFocus}
+                          @mousedown=${this.preventItemPointerFocus}
+                          @click=${() => this.emitSelect(file.path)}
+                        >
+                          <span class="item-icon">${iconForFile(file.path)}</span>
+                          <span class="item-name">${file.path}</span>
+                          <span class="item-meta">${file.size}</span>
+                        </button>
+                      `,
+                    )
+              }
             </aside>
             ${activeFile ? this.renderFile(activeFile) : this.renderEmpty()}
           </div>
@@ -547,9 +549,11 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
         <div class="detail-head">
           <div class="detail-title-row">
             <h2 class="title">${file.path}</h2>
-            ${file.contents
-              ? renderCopyButton(file.contents, this.copyLabel || t("filePreview.copyFile"))
-              : ""}
+            ${
+              file.contents
+                ? renderCopyButton(file.contents, this.copyLabel || t("filePreview.copyFile"))
+                : ""
+            }
           </div>
           <div class="chips">
             <span class="chip accent">${fileKind(file.path)}</span>

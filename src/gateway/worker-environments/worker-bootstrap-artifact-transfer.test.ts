@@ -80,6 +80,10 @@ describe("worker bootstrap artifact transfer", () => {
     };
   }
 
+  it("rejects an empty archive before granting download authority", async () => {
+    await expect(prepare("")).rejects.toThrow("Worker artifact archive is invalid");
+  });
+
   it("delivers exactly one artifact, only on its digest route with a header bearer", async () => {
     const { artifact, url, headers } = await prepare();
     for (const rejectedUrl of [

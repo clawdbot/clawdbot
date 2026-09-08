@@ -255,7 +255,11 @@ describe("msteamsPlugin", () => {
     expect(msteamsPlugin.approvalCapability?.authorizeActorAction?.(authorization)).toEqual(
       msTeamsApprovalAuth.authorizeActorAction?.(authorization),
     );
-    expect(msteamsPlugin.approvalCapability?.nativeRuntime?.eventKinds).toEqual(["exec", "plugin"]);
+    expect(msteamsPlugin.approvalCapability?.nativeRuntime?.eventKinds).toEqual([
+      "exec",
+      "plugin",
+      "system-agent",
+    ]);
   });
 
   it("advertises legacy and group-management message-tool actions together", () => {

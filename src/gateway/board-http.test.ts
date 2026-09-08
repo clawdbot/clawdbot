@@ -17,6 +17,7 @@ import type { GatewayRequestContext } from "./server-methods/types.js";
 
 const stateDir = mkdtempSync(path.join(tmpdir(), "openclaw-board-http-"));
 const store = createTestBoardStore({ stateDir });
+const mainSession = { sessionKey: "agent:main:main", agentId: "main" };
 const nowMs = 1_800_000_000_000;
 const statusHtml = "<!doctype html><p>Status 界</p>";
 const gatewayA = {} as GatewayRequestContext;
@@ -57,7 +58,7 @@ beforeAll(async () => {
     declared: { tools: ["rejected.read"] },
   });
   store.grant(
-    "agent:main:main",
+    mainSession,
     "rejected",
     "rejected",
     1,
@@ -124,7 +125,7 @@ afterAll(async () => {
 });
 
 function ticketFor(name: string, revision = 1, issuedAtMs = nowMs): string {
-  const document = store.readWidgetHtml("agent:main:main", name);
+  const document = store.readWidgetHtml(mainSession, name);
   if (!document) {
     throw new Error(`missing HTML widget: ${name}`);
   }
@@ -159,6 +160,36 @@ function request(
 }
 
 describe("board widget HTTP", () => {
+  it("binds global widget tickets to their canonical session and selected owner", async () => {
+    for (const agentId of ["main", "work"]) {
+      store.putWidget({
+        sessionKey: "global",
+        agentId,
+        name: "global-status",
+        content: { kind: "html", html: `<p>${agentId}</p>` },
+      });
+    }
+    for (const agentId of ["main", "work"]) {
+      const target = { sessionKey: "global", agentId };
+      const document = store.readWidgetHtml(target, "global-status")!;
+      const { ticket } = issueTicket({
+        ...target,
+        name: "global-status",
+        revision: document.revision,
+        viewGeneration: document.viewGeneration,
+        nowMs,
+      });
+      const read = (owner: string) =>
+        fetch(
+          `${baseUrl}/__openclaw__/board/agent%3A${owner}%3Aglobal/global-status/index.html?bt=${encodeURIComponent(ticket)}`,
+        );
+      const response = await read(agentId);
+      expect(response.status).toBe(200);
+      await expect(response.text()).resolves.toBe(`<p>${agentId}</p>`);
+      expect((await read(agentId === "main" ? "work" : "main")).status).toBe(401);
+    }
+  });
+
   it("serves a ticket only through its issuing live Gateway", async () => {
     gatewayAActive = true;
     requestGatewayContext = gatewayA;
@@ -167,7 +198,7 @@ describe("board widget HTTP", () => {
 
     requestGatewayContext = gatewayB;
     expect((await request("status", { ticket })).status).toBe(503);
-    const document = store.readWidgetHtml("agent:main:main", "status");
+    const document = store.readWidgetHtml(mainSession, "status");
     if (!document) {
       throw new Error("missing status widget");
     }
@@ -190,7 +221,7 @@ describe("board widget HTTP", () => {
   });
 
   it("round-trips self-contained claims covered by a two-minute HMAC ticket", () => {
-    const document = store.readWidgetHtml("agent:main:main", "status");
+    const document = store.readWidgetHtml(mainSession, "status");
     if (!document || !("html" in document)) {
       throw new Error("missing status widget");
     }
@@ -289,11 +320,11 @@ describe("board widget HTTP", () => {
     expect((await request("grantable", { ticket })).status).toBe(401);
 
     store.grant(
-      "agent:main:main",
+      mainSession,
       "grantable",
       "granted",
       1,
-      store.getSnapshot("agent:main:main").widgets.find((widget) => widget.name === "grantable")
+      store.getSnapshot(mainSession).widgets.find((widget) => widget.name === "grantable")
         ?.instanceId,
     );
     const response = await request("grantable", { ticket });
@@ -324,7 +355,7 @@ describe("board widget HTTP", () => {
       content: { kind: "html", html: "<p>old</p>" },
     });
     const stale = ticketFor("recreated");
-    store.applyOps("agent:main:main", [{ kind: "widget_remove", name: "recreated" }]);
+    store.applyOps(mainSession, [{ kind: "widget_remove", name: "recreated" }]);
     store.putWidget({
       sessionKey: "agent:main:main",
       name: "recreated",
@@ -357,7 +388,10 @@ describe("board widget HTTP", () => {
       name: "slash-key",
       content: { kind: "html", html: "slash" },
     });
-    const document = store.readWidgetHtml("session/with/slash", "slash-key");
+    const document = store.readWidgetHtml(
+      { sessionKey: "session/with/slash", agentId: "main" },
+      "slash-key",
+    );
     if (!document || !("html" in document)) {
       throw new Error("missing slash-key widget");
     }

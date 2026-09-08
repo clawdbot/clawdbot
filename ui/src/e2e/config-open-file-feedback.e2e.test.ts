@@ -1,7 +1,7 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -11,7 +11,6 @@ const suite = createControlUiE2eSuite({
 });
 const configPath = "/tmp/openclaw-config-open-feedback/openclaw.json";
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofPath = path.resolve(".artifacts/control-ui-e2e/config-open-file-feedback/after.png");
 
 async function installClipboardProof(page: Page): Promise<void> {
   await page.addInitScript(() => {
@@ -79,6 +78,34 @@ async function expectOpenFailure(page: Page, message: string): Promise<void> {
 }
 
 suite.define(() => {
+  it("announces when the host opener succeeds", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      await openRawSettings(page, { ok: true, path: configPath });
+      const proofDir = captureProof
+        ? createControlUiE2eArtifactDir("config-open-file-feedback")
+        : null;
+      if (proofDir) {
+        const proofPath = path.join(proofDir, "initial.png");
+        await page.screenshot({ animations: "disabled", fullPage: true, path: proofPath });
+      }
+
+      await page.getByRole("button", { name: "Open", exact: true }).click();
+
+      const status = page
+        .getByRole("status")
+        .filter({ hasText: "Configuration file opened on Gateway host." });
+      await expect.poll(() => status.count()).toBe(1);
+      expect(await status.textContent()).not.toContain(configPath);
+      expect(await page.evaluate(() => Reflect.get(globalThis, "configOpenFileCopied"))).toEqual(
+        [],
+      );
+      if (proofDir) {
+        const proofPath = path.join(proofDir, "success-after.png");
+        await page.screenshot({ animations: "disabled", fullPage: true, path: proofPath });
+      }
+    });
+  });
+
   it("announces the path fallback when the host opener returns a failure", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       await openRawSettings(page, {
@@ -91,7 +118,10 @@ suite.define(() => {
 
       await expectOpenFailure(page, "No desktop opener is available.");
       if (captureProof) {
-        await mkdir(path.dirname(proofPath), { recursive: true });
+        const proofPath = path.join(
+          createControlUiE2eArtifactDir("config-open-file-feedback"),
+          "after.png",
+        );
         await page.screenshot({ animations: "disabled", fullPage: true, path: proofPath });
       }
     });

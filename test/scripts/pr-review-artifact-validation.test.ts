@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   REVIEWED_PR,
   REVIEWED_HEAD,
+  validClawsweeperReviewCommentPages,
   validReview,
   writeReviewArtifacts,
   type ReviewArtifactFixtureOptions,
@@ -133,6 +134,7 @@ function runMergeVerification(
     "invalid-json": "printf '%s\\n' 'not valid JSON'",
     "invalid-row": `printf '%s\\n' '["malformed required row"]'`,
   }[checks];
+  const reviewComments = JSON.stringify(validClawsweeperReviewCommentPages(42, head));
 
   return spawnSync(
     "bash",
@@ -149,8 +151,10 @@ function runMergeVerification(
         `refresh_main_snapshot() { PR_MAIN_SHA=${"b".repeat(40)}; }`,
         "mark_pr_operation_side_effects_started() { :; }",
         "git() { :; }",
-        "node() { :; }",
-        `gh_plain() { case "$*" in *"--json name,bucket,state"*) ${checksResponse};; *"--json state,isDraft,headRefOid"*) printf '%s\\n' '{"isDraft":false,"headRefOid":"${head}"}';; *) return 0;; esac; }`,
+        'node() { case "$1" in */watch-pr-ci.mjs) return 0;; *) command node "$@";; esac; }',
+        "MERGE_REPO_NAME=fixture/repo",
+        "MERGE_REPO_HOST=github.com",
+        `gh_plain() { case "$*" in *"issues/42/comments?per_page=100"*) printf '%s\\n' ${JSON.stringify(reviewComments)};; *"--json name,bucket,state"*) ${checksResponse};; *"--json state,isDraft,headRefOid"*) printf '%s\\n' '{"isDraft":false,"headRefOid":"${head}"}';; *) return 0;; esac; }`,
         "merge_verify 42 || exit 1",
       ].join("\n"),
       "pr-merge-verification",

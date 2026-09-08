@@ -8,6 +8,7 @@ import {
   schemaType,
   type JsonSchema,
 } from "../../components/config-form.ts";
+import { renderSettingsLoadingSkeleton } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatChannelExtraValue, resolveChannelConfigValue } from "../../lib/channels/index.ts";
 import type { ChannelsProps } from "./view.types.ts";
@@ -134,23 +135,26 @@ function renderChannelConfigForm(props: ChannelConfigFormProps) {
 export function renderChannelConfigSection(params: { channelId: string; props: ChannelsProps }) {
   const { channelId, props } = params;
   const disabled = props.configSaving || props.configSchemaLoading;
+  if (props.configSchemaLoading) {
+    return renderSettingsLoadingSkeleton({ label: t("channels.config.loadingSchema"), rows: 2 });
+  }
   return html`
     <div class="settings-row settings-row--stacked">
-      ${props.configSchemaLoading
-        ? html`<div class="settings-row__desc">${t("channels.config.loadingSchema")}</div>`
-        : renderChannelConfigForm({
-            channelId,
-            configValue: props.configForm,
-            schema: props.configSchema,
-            uiHints: props.configUiHints,
-            disabled,
-            showAdvanced: props.showAdvancedSettings,
-            onShowAdvanced: props.onShowAdvancedSettings,
-            onPatch: props.onConfigPatch,
-          })}
-      ${props.configError
-        ? html`<div class="callout danger" role="alert">${props.configError}</div>`
-        : null}
+      ${renderChannelConfigForm({
+        channelId,
+        configValue: props.configForm,
+        schema: props.configSchema,
+        uiHints: props.configUiHints,
+        disabled,
+        showAdvanced: props.showAdvancedSettings,
+        onShowAdvanced: props.onShowAdvancedSettings,
+        onPatch: props.onConfigPatch,
+      })}
+      ${
+        props.configError
+          ? html`<div class="callout danger" role="alert">${props.configError}</div>`
+          : null
+      }
       <div class="settings-row__control">
         <button
           class="btn primary"

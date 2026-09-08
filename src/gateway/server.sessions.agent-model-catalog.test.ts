@@ -1,6 +1,12 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  createColdPluginFixture,
+  isColdPluginRuntimeLoaded,
+} from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { PrepareGatewaySessionLifecycle } from "./session-lifecycle-preparation.js";
 import { writeSessionStore } from "./test-helpers.js";
@@ -37,16 +43,21 @@ type ModelSelectionCase = {
   agentAllow?: string[];
   globalAlias?: string;
   agentAlias?: string;
+  agentRuntime?: string;
+  harness?: "enabled" | "disabled" | "denied";
+  codexDenied?: boolean;
   model: string;
   expectedModel: string;
   denied?: boolean;
+  error?: string;
 };
 
 function configureAgentModels(
   scenario: Pick<
     ModelSelectionCase,
-    "globalAllow" | "agentAllow" | "globalAlias" | "agentAlias"
+    "globalAllow" | "agentAllow" | "globalAlias" | "agentAlias" | "agentRuntime"
   > & { subagentModel?: string },
+  runtimeModel = workRef,
 ) {
   testState.agentConfig = {
     model: { primary: "synthetic/base" },
@@ -65,13 +76,50 @@ function configureAgentModels(
         id: "work",
         subagents: scenario.subagentModel ? { model: scenario.subagentModel } : undefined,
         ...(scenario.agentAllow ? { modelPolicy: { allow: scenario.agentAllow } } : {}),
-        models: scenario.agentAlias ? { [workRef]: { alias: scenario.agentAlias } } : {},
+        models: {
+          [workRef]: scenario.agentAlias ? { alias: scenario.agentAlias } : {},
+          ...(scenario.agentRuntime
+            ? { [runtimeModel]: { agentRuntime: { id: scenario.agentRuntime } } }
+            : {}),
+        },
       },
     ],
   };
 }
 
 const cases: ModelSelectionCase[] = [
+  {
+    label: "rejects configured Codex selection when its harness is denied",
+    globalAllow: [],
+    agentRuntime: "codex",
+    codexDenied: true,
+    model: "openai/gpt-5.4",
+    expectedModel: "openai/gpt-5.4",
+    denied: true,
+    error:
+      'Model openai/gpt-5.4 requires agent harness "codex", but no enabled plugin provides it. Install and enable its plugin, restart the Gateway, then select the model again.',
+  },
+  {
+    label: "preserves the session when the selected model requires an unavailable harness",
+    globalAllow: [],
+    agentRuntime: "missing-harness",
+    model: workRef,
+    expectedModel: workRef,
+    denied: true,
+    error:
+      'Model work-provider/work-only requires agent harness "missing-harness", but no enabled plugin provides it. Install and enable its plugin, restart the Gateway, then select the model again.',
+  },
+  ...(["enabled", "disabled", "denied"] as const).map((harness) => ({
+    label: `checks an installed ${harness} harness without loading its runtime`,
+    globalAllow: [],
+    agentRuntime: "fixture-harness",
+    harness,
+    model: workRef,
+    expectedModel: workRef,
+    denied: harness !== "enabled",
+    error:
+      'Model work-provider/work-only requires agent harness "fixture-harness", but no enabled plugin provides it. Install and enable its plugin, restart the Gateway, then select the model again.',
+  })),
   {
     label: "loads the explicit agent model catalog",
     explicitAgent: true,
@@ -158,8 +206,30 @@ const cases: ModelSelectionCase[] = [
 
 describe.each(["sessions.create", "sessions.patch"] as const)("%s", (method) => {
   test.each(cases)("$label", async (scenario) => {
-    const { workStorePath } = await createSelectedGlobalSessionStore();
-    configureAgentModels(scenario);
+    const { dir, workStorePath } = await createSelectedGlobalSessionStore();
+    configureAgentModels(scenario, scenario.expectedModel);
+    let fixture: ReturnType<typeof createColdPluginFixture> | undefined;
+    if (scenario.harness) {
+      const rootDir = await fs.mkdtemp(path.join(dir, "harness-"));
+      fixture = createColdPluginFixture({
+        rootDir,
+        pluginId: "fixture-harness",
+        manifest: { activation: { onAgentHarnesses: ["fixture-harness"] } },
+      });
+      const { writeConfigFile } = await getGatewayConfigModule();
+      await writeConfigFile({
+        plugins: {
+          load: { paths: [rootDir] },
+          ...(scenario.harness === "denied"
+            ? {}
+            : { entries: { "fixture-harness": { enabled: scenario.harness !== "disabled" } } }),
+          ...(scenario.harness === "denied" ? { deny: ["fixture-harness"] } : {}),
+        },
+      });
+    } else if (scenario.codexDenied) {
+      const { writeConfigFile } = await getGatewayConfigModule();
+      await writeConfigFile({ plugins: { deny: ["codex"] } });
+    }
     const key = "agent:work:dashboard:catalog-owner";
     const access = { agentId: "work", sessionKey: key, storePath: workStorePath };
     if (method === "sessions.patch") {
@@ -177,26 +247,51 @@ describe.each(["sessions.create", "sessions.patch"] as const)("%s", (method) => 
       });
     }
     const before = loadSessionEntry(access);
+    const configModule = await getGatewayConfigModule();
+    const { readConfigFileSnapshot } = configModule;
+    const beforeConfig = await readConfigFileSnapshot();
     const loadGatewayModelCatalog = createAgentModelCatalogLoader();
-    const result = await directSessionReq<{ entry?: SessionEntry }>(
-      method,
-      {
-        key,
-        ...(scenario.explicitAgent ? { agentId: "work" } : {}),
-        model: scenario.model,
-        label: "Updated label",
-      },
-      { context: { loadGatewayModelCatalog } },
-    );
+    const configMutations = vi.spyOn(configModule, "mutateConfigFileWithRetry");
+    let result: Awaited<ReturnType<typeof directSessionReq<{ entry?: SessionEntry }>>>;
+    try {
+      result = await directSessionReq<{ entry?: SessionEntry }>(
+        method,
+        {
+          key,
+          ...(scenario.explicitAgent ? { agentId: "work" } : {}),
+          model: scenario.model,
+          label: "Updated label",
+        },
+        {
+          context: { loadGatewayModelCatalog },
+          ...(scenario.error
+            ? { client: { connect: { scopes: ["operator.admin"] } } as never }
+            : {}),
+        },
+      );
+    } finally {
+      // Admin patches persist defaults in the background; join their writes before
+      // the shared config fixture resets for the next case.
+      await Promise.allSettled(
+        configMutations.mock.results
+          .filter((mutation) => mutation.type === "return")
+          .map((mutation) => mutation.value),
+      );
+      configMutations.mockRestore();
+    }
 
     expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ agentId: "work" });
+    if (fixture) {
+      expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
+    }
     if (scenario.denied) {
       expect.soft(result.ok).toBe(false);
       expect.soft(result.error).toMatchObject({
         code: "INVALID_REQUEST",
-        message: `model not allowed: ${scenario.expectedModel}`,
+        message: scenario.error ?? `model not allowed: ${scenario.expectedModel}`,
       });
       expect(loadSessionEntry(access)).toEqual(before);
+      expect((await readConfigFileSnapshot()).config).toEqual(beforeConfig.config);
       return;
     }
     expect(result.ok, result.error?.message).toBe(true);

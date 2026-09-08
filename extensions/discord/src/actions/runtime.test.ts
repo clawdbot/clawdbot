@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 // Discord tests cover runtime plugin behavior.
 import {
   ChannelType,
+  ComponentType,
   MessageFlags,
   PermissionFlagsBits,
   type RESTGetAPIGuildEmojisResult,
@@ -650,21 +651,13 @@ describe("handleDiscordMessagingAction", () => {
   });
 
   it("rejects Discord reaction reads for non-allowlisted target channels", async () => {
-    const cfg = {
-      channels: {
-        discord: {
-          token: "token",
-          groupPolicy: "allowlist",
-          guilds: {
-            "111": {
-              channels: {
-                "222": { enabled: true },
-              },
-            },
-          },
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          "222": { enabled: true },
         },
       },
-    } as OpenClawConfig;
+    });
 
     await expect(
       handleMessagingAction(
@@ -1204,21 +1197,13 @@ describe("handleDiscordMessagingAction", () => {
   });
 
   it("rejects Discord permission reads for non-allowlisted target channels", async () => {
-    const cfg = {
-      channels: {
-        discord: {
-          token: "token",
-          groupPolicy: "allowlist",
-          guilds: {
-            "111": {
-              channels: {
-                "222": { enabled: true },
-              },
-            },
-          },
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          "222": { enabled: true },
         },
       },
-    } as OpenClawConfig;
+    });
 
     await expect(
       handleMessagingAction("permissions", { channelId: "444" }, enableAllActions, cfg),
@@ -1292,21 +1277,13 @@ describe("handleDiscordMessagingAction", () => {
       guild_id: "111",
       type: ChannelType.GuildText,
     });
-    const cfg = {
-      channels: {
-        discord: {
-          token: "token",
-          groupPolicy: "allowlist",
-          guilds: {
-            "111": {
-              channels: {
-                "222": { enabled: true },
-              },
-            },
-          },
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          "222": { enabled: true },
         },
       },
-    } as OpenClawConfig;
+    });
 
     await handleMessagingAction("readMessages", { channelId: "222" }, enableAllActions, cfg);
 
@@ -1504,21 +1481,13 @@ describe("handleDiscordMessagingAction", () => {
       id: "111",
       name: "Friends of OpenClaw",
     });
-    const cfg = {
-      channels: {
-        discord: {
-          token: "token",
-          groupPolicy: "allowlist",
-          guilds: {
-            "friends-of-openclaw": {
-              channels: {
-                "222": { enabled: true },
-              },
-            },
-          },
+    const cfg = discordAllowlistCfg({
+      "friends-of-openclaw": {
+        channels: {
+          "222": { enabled: true },
         },
       },
-    } as OpenClawConfig;
+    });
 
     await handleMessagingAction("readMessages", { channelId: "222" }, enableAllActions, cfg);
 
@@ -1531,21 +1500,13 @@ describe("handleDiscordMessagingAction", () => {
   });
 
   it("rejects Discord reads for non-allowlisted target channels", async () => {
-    const cfg = {
-      channels: {
-        discord: {
-          token: "token",
-          groupPolicy: "allowlist",
-          guilds: {
-            "111": {
-              channels: {
-                "222": { enabled: true },
-              },
-            },
-          },
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          "222": { enabled: true },
         },
       },
-    } as OpenClawConfig;
+    });
 
     await expect(
       handleMessagingAction("readMessages", { channelId: "333" }, enableAllActions, cfg),
@@ -1617,21 +1578,13 @@ describe("handleDiscordMessagingAction", () => {
       id: "111",
       name: "Friends of OpenClaw",
     });
-    const cfg = {
-      channels: {
-        discord: {
-          token: "token",
-          groupPolicy: "allowlist",
-          guilds: {
-            "friends-of-openclaw": {
-              channels: {
-                "222": { enabled: true },
-              },
-            },
-          },
+    const cfg = discordAllowlistCfg({
+      "friends-of-openclaw": {
+        channels: {
+          "222": { enabled: true },
         },
       },
-    } as OpenClawConfig;
+    });
 
     await handleMessagingAction(
       "fetchMessage",
@@ -1645,21 +1598,13 @@ describe("handleDiscordMessagingAction", () => {
   });
 
   it("rejects Discord message links for non-allowlisted target channels", async () => {
-    const cfg = {
-      channels: {
-        discord: {
-          token: "token",
-          groupPolicy: "allowlist",
-          guilds: {
-            "111": {
-              channels: {
-                "222": { enabled: true },
-              },
-            },
-          },
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          "222": { enabled: true },
         },
       },
-    } as OpenClawConfig;
+    });
 
     await expect(
       handleMessagingAction(
@@ -1693,21 +1638,13 @@ describe("handleDiscordMessagingAction", () => {
       }
       return { id: channelId, guild_id: "111", type: ChannelType.GuildText };
     });
-    const cfg = {
-      channels: {
-        discord: {
-          token: "token",
-          groupPolicy: "allowlist",
-          guilds: {
-            "111": {
-              channels: {
-                "222": { enabled: true },
-              },
-            },
-          },
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          "222": { enabled: true },
         },
       },
-    } as OpenClawConfig;
+    });
 
     await handleMessagingAction(
       "fetchMessage",
@@ -1726,21 +1663,13 @@ describe("handleDiscordMessagingAction", () => {
       name: "allowed-channel",
       type: 0,
     }));
-    const cfg = {
-      channels: {
-        discord: {
-          token: "token",
-          groupPolicy: "allowlist",
-          guilds: {
-            "111": {
-              channels: {
-                "allowed-channel": { enabled: true },
-              },
-            },
-          },
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          "allowed-channel": { enabled: true },
         },
       },
-    } as OpenClawConfig;
+    });
 
     await expect(
       handleMessagingAction(
@@ -1765,21 +1694,13 @@ describe("handleDiscordMessagingAction", () => {
         name: "allowed-channel",
         type: 0,
       }));
-      const cfg = {
-        channels: {
-          discord: {
-            token: "token",
-            groupPolicy: "allowlist",
-            guilds: {
-              "111": {
-                channels: {
-                  "allowed-channel": { enabled: true },
-                },
-              },
-            },
+      const cfg = discordAllowlistCfg({
+        "111": {
+          channels: {
+            "allowed-channel": { enabled: true },
           },
         },
-      } as OpenClawConfig;
+      });
 
       await expect(
         handleMessagingAction(action, { channelId: "333" }, enableAllActions, cfg),
@@ -1803,21 +1724,13 @@ describe("handleDiscordMessagingAction", () => {
   });
 
   it("rejects Discord pin reads for non-allowlisted target channels", async () => {
-    const cfg = {
-      channels: {
-        discord: {
-          token: "token",
-          groupPolicy: "allowlist",
-          guilds: {
-            "111": {
-              channels: {
-                "222": { enabled: true },
-              },
-            },
-          },
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          "222": { enabled: true },
         },
       },
-    } as OpenClawConfig;
+    });
 
     await expect(
       handleMessagingAction("listPins", { channelId: "444" }, enableAllActions, cfg),
@@ -1848,21 +1761,13 @@ describe("handleDiscordMessagingAction", () => {
   });
 
   it("rejects Discord searches for non-allowlisted target channels", async () => {
-    const cfg = {
-      channels: {
-        discord: {
-          token: "token",
-          groupPolicy: "allowlist",
-          guilds: {
-            "111": {
-              channels: {
-                "222": { enabled: true },
-              },
-            },
-          },
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          "222": { enabled: true },
         },
       },
-    } as OpenClawConfig;
+    });
 
     await expect(
       handleMessagingAction(
@@ -1876,21 +1781,13 @@ describe("handleDiscordMessagingAction", () => {
   });
 
   it("requires explicit Discord search targets when channels are allowlisted", async () => {
-    const cfg = {
-      channels: {
-        discord: {
-          token: "token",
-          groupPolicy: "allowlist",
-          guilds: {
-            "111": {
-              channels: {
-                "222": { enabled: true },
-              },
-            },
-          },
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          "222": { enabled: true },
         },
       },
-    } as OpenClawConfig;
+    });
 
     await expect(
       handleMessagingAction(
@@ -1943,21 +1840,13 @@ describe("handleDiscordMessagingAction", () => {
   });
 
   it("allows guild-wide Discord searches when the guild has a wildcard channel allowlist", async () => {
-    const cfg = {
-      channels: {
-        discord: {
-          token: "token",
-          groupPolicy: "allowlist",
-          guilds: {
-            "111": {
-              channels: {
-                "*": { enabled: true },
-              },
-            },
-          },
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          "*": { enabled: true },
         },
       },
-    } as OpenClawConfig;
+    });
 
     await handleMessagingAction(
       "searchMessages",
@@ -2270,7 +2159,22 @@ describe("handleDiscordMessagingAction", () => {
         {
           to: "channel:123",
           content: "fallback text",
-          components: JSON.stringify({ blocks: [{ type: "text", text: "Gateway proof" }] }),
+          components: JSON.stringify({
+            blocks: [
+              { type: "text", text: "Gateway proof" },
+              {
+                type: "actions",
+                select: {
+                  type: "string",
+                  options: [{ label: "One", value: "one" }],
+                },
+              },
+              { type: "actions", select: { type: "user" } },
+              { type: "actions", select: { type: "role" } },
+              { type: "actions", select: { type: "mentionable" } },
+              { type: "actions", select: { type: "channel" } },
+            ],
+          }),
         },
         enableAllActions,
       );
@@ -2279,14 +2183,21 @@ describe("handleDiscordMessagingAction", () => {
       expect(post).toBeDefined();
       const body = JSON.parse(post?.body ?? "{}") as Record<string, unknown>;
       expect(body.flags).toBe(MessageFlags.IsComponentsV2);
-      expect(body.components).toEqual([
-        {
-          type: 17,
-          components: [
-            { type: 10, content: "fallback text" },
-            { type: 10, content: "Gateway proof" },
-          ],
-        },
+      const container = (body.components as Array<{ components?: unknown[] }>)[0];
+      expect(container?.components?.slice(0, 2)).toEqual([
+        { type: ComponentType.TextDisplay, content: "fallback text" },
+        { type: ComponentType.TextDisplay, content: "Gateway proof" },
+      ]);
+      expect(
+        container?.components
+          ?.slice(2)
+          .map((row) => (row as { components?: Array<{ type?: number }> }).components?.[0]?.type),
+      ).toEqual([
+        ComponentType.StringSelect,
+        ComponentType.UserSelect,
+        ComponentType.RoleSelect,
+        ComponentType.MentionableSelect,
+        ComponentType.ChannelSelect,
       ]);
     } finally {
       await loopback.close();

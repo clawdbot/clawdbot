@@ -36,6 +36,7 @@ function createTimeoutTestAdapter(): TimeoutTestAdapter {
 
   return {
     pid: 1234,
+    supportsRawOutput: false,
     onStdout: (listener) => {
       stdoutListener = listener;
     },
@@ -102,16 +103,11 @@ describe("process supervisor oversized timer deadlines", () => {
               adapterMock.mockResolvedValue(adapter);
 
               const supervisor = createProcessSupervisor();
-              const commonInput = {
-                backendId: "test",
-                sessionId: `timeout-overflow-${mode}`,
+              const run = await supervisor.spawn({
                 [timeoutField]: durationMs,
-              };
-              const run = await supervisor.spawn(
-                mode === "child"
-                  ? { ...commonInput, mode: "child", argv: [process.execPath, "-e", ""] }
-                  : { ...commonInput, mode: "pty", ptyCommand: "printf running" },
-              );
+                mode,
+                argv: [process.execPath, "-e", ""],
+              });
 
               try {
                 expect(setTimeoutSpy.mock.calls.map(([, delay]) => delay)).toEqual([
@@ -192,16 +188,11 @@ describe("process supervisor oversized timer deadlines", () => {
           const adapterMock = mode === "child" ? createChildAdapterMock : createPtyAdapterMock;
           adapterMock.mockResolvedValue(adapter);
 
-          const commonInput = {
-            backendId: "test",
-            sessionId: `late-timeout-${mode}`,
+          const run = await createProcessSupervisor().spawn({
             [timeoutField]: MAX_TIMER_TIMEOUT_MS + trailingDurationMs,
-          };
-          const run = await createProcessSupervisor().spawn(
-            mode === "child"
-              ? { ...commonInput, mode: "child", argv: [process.execPath, "-e", ""] }
-              : { ...commonInput, mode: "pty", ptyCommand: "printf running" },
-          );
+            mode,
+            argv: [process.execPath, "-e", ""],
+          });
 
           try {
             if (refreshOutput) {

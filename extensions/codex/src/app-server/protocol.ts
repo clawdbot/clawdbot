@@ -36,7 +36,6 @@ import type { JsonObject, JsonValue } from "./protocol-json.js";
 import type * as CodexMcpProtocol from "./protocol-mcp.js";
 
 export type {
-  CodexConfigEdit,
   CodexConfigReadResponse,
   CodexConfigRequirementsReadResponse,
   CodexPluginDetail,
@@ -44,7 +43,14 @@ export type {
   CodexPluginReadResponse,
 } from "./protocol-control-plane.js";
 export type { CodexListMcpServerStatusResponse, CodexMcpServerStatus } from "./protocol-mcp.js";
-export type { JsonObject, JsonValue } from "./protocol-json.js";
+export { isRpcResponse } from "./protocol-json.js";
+export type {
+  JsonObject,
+  JsonValue,
+  RpcMessage,
+  RpcRequest,
+  RpcResponse,
+} from "./protocol-json.js";
 
 export type CodexServiceTier = string;
 export type CodexApprovalPolicy =
@@ -74,24 +80,6 @@ export type CodexAppServerRequestResult<M extends CodexAppServerRequestMethod> =
   M extends keyof CodexAppServerRequestResultMap
     ? CodexAppServerRequestResultMap[M]
     : JsonValue | undefined;
-
-export type RpcRequest = {
-  id?: number | string;
-  method: string;
-  params?: JsonValue;
-};
-
-export type RpcResponse = {
-  id: number | string;
-  result?: JsonValue;
-  error?: {
-    code?: number;
-    message: string;
-    data?: JsonValue;
-  };
-};
-
-export type RpcMessage = RpcRequest | RpcResponse;
 
 export type CodexInitializeParams = {
   clientInfo: {
@@ -237,6 +225,22 @@ export type CodexThreadForkParams = JsonObject & {
   excludeTurns?: boolean;
 };
 
+/** Asserts the experimental beforeTurnId request field before it crosses the app-server boundary. */
+export function assertCodexThreadForkParams(value: unknown): CodexThreadForkParams {
+  if (
+    !isRecord(value) ||
+    typeof value.threadId !== "string" ||
+    !value.threadId.trim() ||
+    (value.beforeTurnId !== undefined &&
+      value.beforeTurnId !== null &&
+      typeof value.beforeTurnId !== "string")
+  ) {
+    throw new Error("Invalid Codex app-server thread/fork params");
+  }
+  // SAFETY: The required id and optional fork boundary are checked; native Codex validates other options.
+  return value as CodexThreadForkParams;
+}
+
 export type CodexThreadForkResponse = CodexThreadStartResponse;
 
 export const CODEX_INTERACTIVE_THREAD_SOURCE_KINDS = ["cli", "vscode"] as const;
@@ -295,6 +299,18 @@ export type CodexThreadTurnsListResponse = {
   data: CodexTurn[];
   nextCursor?: string | null;
   backwardsCursor?: string | null;
+};
+
+export type CodexThreadItemsListParams = JsonObject & {
+  threadId: string;
+  cursor?: string;
+  limit: number;
+  sortDirection: "desc";
+};
+
+export type CodexThreadItemsListResponse = {
+  data: Array<{ turnId: string; item: CodexThreadItem }>;
+  nextCursor?: string | null;
 };
 
 type CodexInitialTurnsPage = Omit<CodexThreadTurnsListResponse, "data"> & {
@@ -413,6 +429,15 @@ export type CodexTurnStartResponse = {
   turn: CodexTurn;
 };
 
+type CodexTurnSteerParams = JsonObject &
+  Pick<CodexTurnStartParams, "threadId" | "input" | "additionalContext"> & {
+    expectedTurnId: string;
+  };
+
+type CodexTurnSteerResponse = {
+  turnId: string;
+};
+
 export type CodexTurn = {
   id: string;
   threadId?: string;
@@ -426,6 +451,7 @@ export type CodexTurn = {
 
 export type CodexThread = {
   id: string;
+  forkedFromId?: string | null;
   sessionId?: string;
   path?: string | null;
   projectId: string | null;
@@ -437,6 +463,8 @@ export type CodexThread = {
   updatedAt?: number | null;
   status?: CodexThreadStatus | null;
   canAcceptDirectInput?: boolean | null;
+  /** Codex 0.153+: current loaded selection, otherwise latest persisted model. */
+  model?: string | null;
   modelProvider?: string | null;
   cwd?: string | null;
   source?: CodexSessionSource | null;
@@ -673,8 +701,10 @@ type CodexAppServerRequestParamsOverride = {
   "thread/inject_items": CodexThreadInjectItemsParams;
   "thread/list": CodexThreadListParams;
   "thread/turns/list": CodexThreadTurnsListParams;
+  "thread/items/list": CodexThreadItemsListParams;
   "thread/name/set": CodexThreadSetNameParams;
   "thread/read": CodexThreadReadParams;
+  "thread/resume": CodexThreadResumeParams;
   "thread/start": CodexThreadStartParams;
   "thread/unarchive": CodexThreadArchiveParams;
   "thread/unsubscribe": CodexThreadUnsubscribeParams;
@@ -682,6 +712,8 @@ type CodexAppServerRequestParamsOverride = {
   "thread/goal/get": CodexThreadGoalGetParams;
   "thread/goal/clear": CodexThreadGoalClearParams;
   "turn/interrupt": CodexTurnInterruptParams;
+  "turn/start": CodexTurnStartParams;
+  "turn/steer": CodexTurnSteerParams;
   "mcpServer/resource/read": CodexMcpProtocol.ResourceReadParams;
   "mcpServer/tool/call": CodexMcpProtocol.ToolCallParams;
 };
@@ -724,6 +756,7 @@ type CodexAppServerRequestResultMap = {
   "thread/inject_items": JsonValue;
   "thread/list": CodexThreadListResponse;
   "thread/turns/list": CodexThreadTurnsListResponse;
+  "thread/items/list": CodexThreadItemsListResponse;
   "thread/name/set": JsonValue;
   "thread/read": CodexThreadReadResponse;
   "thread/resume": CodexThreadResumeResponse;
@@ -735,13 +768,9 @@ type CodexAppServerRequestResultMap = {
   "thread/goal/clear": CodexThreadGoalClearResponse;
   "turn/interrupt": JsonValue;
   "turn/start": CodexTurnStartResponse;
-  "turn/steer": JsonValue;
+  "turn/steer": CodexTurnSteerResponse;
 };
 
 export function isJsonObject(value: unknown): value is JsonObject {
   return isRecord(value);
-}
-
-export function isRpcResponse(message: RpcMessage): message is RpcResponse {
-  return "id" in message && !("method" in message);
 }

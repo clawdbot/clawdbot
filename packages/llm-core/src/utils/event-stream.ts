@@ -1,39 +1,65 @@
-// LLM Core module implements event stream behavior.
 import type {
   AssistantMessage,
   AssistantMessageEvent,
   AssistantMessageEventStreamContract,
+  ThinkingContent,
 } from "../types.js";
+
+// Only the mutation owner can prove an append: transport indices and mutable
+// partial snapshots alone do not establish that their previous prefix survived.
+const thinkingAppends = new WeakMap<
+  ThinkingContent,
+  { before: string; after: string; delta: string }
+>();
+
+/** Package-internal mutation fact for native reasoning projection. */
+export function appendAssistantThinking(block: ThinkingContent, delta: string): void {
+  const before = block.thinking;
+  block.thinking += delta;
+  thinkingAppends.set(block, { before, after: block.thinking, delta });
+}
+
+/** Returns only an append whose current and previously observed snapshots still match. */
+export function readAssistantThinkingAppend(
+  block: ThinkingContent,
+  previous: string,
+): string | undefined {
+  const append = thinkingAppends.get(block);
+  return append?.before === previous && append.after === block.thinking ? append.delta : undefined;
+}
+
+// Completion belongs to the producer, independently of queued-event consumption.
+// Keep it outside the mutable stream surface: result() decorators may repair
+// messages and release consumer-owned state when explicitly awaited.
+const eventStreamCompletions = new WeakMap<object, Promise<unknown>>();
+
+/** Observe native producer settlement without invoking consumer result decorators. */
+export function getEventStreamCompletion(stream: object): Promise<unknown> | undefined {
+  return eventStreamCompletions.get(stream);
+}
 
 /** Generic async-iterable event stream with a separately awaited final result. */
 export class EventStream<T, R = T> implements AsyncIterable<T> {
-  private queue: T[] = [];
+  private queue: (T | undefined)[] = [];
   private queueHead = 0;
   private waiting: ((value: IteratorResult<T>) => void)[] = [];
-  private done = false;
+  protected done = false;
   private resultSettled = false;
   private finalResultPromise: Promise<R>;
-  private resolveFinalResult: (result: R) => void;
-  private rejectFinalResult: (error: Error) => void;
+  // Promise invokes its executor before construction returns.
+  private resolveFinalResult!: (result: R) => void;
+  private rejectFinalResult!: (error: Error) => void;
   private isComplete: (event: T) => boolean;
   private extractResult: (event: T) => R;
 
   constructor(isComplete: (event: T) => boolean, extractResult: (event: T) => R) {
     this.isComplete = isComplete;
     this.extractResult = extractResult;
-    const resolvers: Array<(result: R) => void> = [];
-    const rejecters: Array<(error: Error) => void> = [];
     this.finalResultPromise = new Promise((resolve, reject) => {
-      resolvers.push(resolve);
-      rejecters.push(reject);
+      this.resolveFinalResult = resolve;
+      this.rejectFinalResult = reject;
     });
-    const resolveFinalResult = resolvers.at(0);
-    const rejectFinalResult = rejecters.at(0);
-    if (!resolveFinalResult || !rejectFinalResult) {
-      throw new Error("event stream result promise did not initialize its resolver");
-    }
-    this.resolveFinalResult = resolveFinalResult;
-    this.rejectFinalResult = rejectFinalResult;
+    eventStreamCompletions.set(this, this.finalResultPromise);
   }
 
   push(event: T): void {
@@ -85,6 +111,8 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
     while (true) {
       if (this.queueHead < this.queue.length) {
         const event = this.queue[this.queueHead] as T;
+        // The consumer owns this event now; compaction must not delay payload release.
+        this.queue[this.queueHead] = undefined;
         this.queueHead += 1;
         // Compact only after a substantial consumed prefix reaches half the
         // backing array, keeping dequeue amortized O(1) when consumers lag.
@@ -117,6 +145,46 @@ export class AssistantMessageEventStream
   extends EventStream<AssistantMessageEvent, AssistantMessage>
   implements AssistantMessageEventStreamContract
 {
+  private activeThinkingBlocks?: Set<ThinkingContent>;
+
+  override push(event: AssistantMessageEvent): void {
+    if (event.type === "thinking_delta" || event.type === "thinking_end") {
+      const block = event.partial.content[event.contentIndex];
+      if (block?.type === "thinking") {
+        if (this.done || event.type === "thinking_end") {
+          thinkingAppends.delete(block);
+          this.activeThinkingBlocks?.delete(block);
+        } else if (thinkingAppends.has(block)) {
+          (this.activeThinkingBlocks ??= new Set()).add(block);
+        }
+      }
+    }
+    if (event.type === "done" || event.type === "error") {
+      this.clearThinkingAppends(event.type === "done" ? event.message : event.error);
+    }
+    super.push(event);
+  }
+
+  override end(result?: AssistantMessage): void {
+    this.clearThinkingAppends(result);
+    super.end(result);
+  }
+
+  private clearThinkingAppends(message?: AssistantMessage): void {
+    // Deferred transports can withhold all deltas until terminal classification.
+    for (const block of message?.content ?? []) {
+      if (block.type === "thinking") {
+        thinkingAppends.delete(block);
+      }
+    }
+    // Historical blocks survive in transcripts. Do not let their WeakMap keys
+    // retain a previous full reasoning string after the stream releases it.
+    for (const block of this.activeThinkingBlocks ?? []) {
+      thinkingAppends.delete(block);
+    }
+    this.activeThinkingBlocks = undefined;
+  }
+
   constructor() {
     super(
       (event) => event.type === "done" || event.type === "error",

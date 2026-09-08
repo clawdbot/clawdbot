@@ -273,6 +273,32 @@ describe("skills-cli", () => {
       expect(output).toContain("Spreadsheet helpers");
     });
 
+    it("prefers the exact skill name over another skill's key in either discovery order", () => {
+      const alias = createMockSkill({ name: "another-skill", skillKey: "requested-skill" });
+      const target = createMockSkill({ name: "requested-skill", skillKey: "target-key" });
+
+      for (const skills of [
+        [alias, target],
+        [target, alias],
+      ]) {
+        const output = formatSkillInfo(createMockReport(skills), "requested-skill", { json: true });
+        expect(JSON.parse(output).name).toBe("requested-skill");
+      }
+    });
+
+    it("rejects an ambiguous exact skill key instead of selecting the first discovered skill", () => {
+      const first = createMockSkill({ name: "first-skill", skillKey: "shared-key" });
+      const second = createMockSkill({ name: "second-skill", skillKey: "shared-key" });
+
+      for (const skills of [
+        [first, second],
+        [second, first],
+      ]) {
+        const output = formatSkillInfo(createMockReport(skills), "shared-key", { json: true });
+        expect(JSON.parse(output)).toMatchObject({ ok: false, skill: "shared-key" });
+      }
+    });
+
     it("returns not found for ambiguous case-insensitive matches", () => {
       const report = createMockReport([
         createMockSkill({ name: "First Skill", skillKey: "Excel-XLSX", description: "first" }),

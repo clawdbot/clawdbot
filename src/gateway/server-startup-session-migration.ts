@@ -15,19 +15,16 @@ export async function runStartupSessionMigration(params: {
   log: SessionStartupMigrationLogger;
   deps?: SessionMigrationDeps;
 }): Promise<void> {
-  const databases = await runSessionStartupMigration(params);
-  if (databases.length === 0) {
-    return;
-  }
-  const reconcile =
-    params.deps?.reconcileSessionTranscriptIndexes ??
-    (await import("../config/sessions/session-transcript-reconcile.js"))
-      .reconcileSessionTranscriptIndexes;
+  let reconcile = params.deps?.reconcileSessionTranscriptIndexes;
   let reconciledSessions = 0;
-  for (const database of databases) {
-    const result = await reconcile(database);
-    reconciledSessions += result.reconciledSessions;
-  }
+  await runSessionStartupMigration({
+    ...params,
+    handoffDatabase: async (database) => {
+      reconcile ??= (await import("../config/sessions/session-transcript-reconcile.js"))
+        .reconcileSessionTranscriptIndexes;
+      reconciledSessions += (await reconcile(database)).reconciledSessions;
+    },
+  });
   if (reconciledSessions > 0) {
     params.log.info(
       `session: rebuilt ${reconciledSessions} transcript projection(s) before serving history`,

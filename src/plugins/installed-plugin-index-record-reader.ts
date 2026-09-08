@@ -14,6 +14,7 @@ import { isPrereleaseResolutionAllowed, parseRegistryNpmSpec } from "../infra/np
 import { isNotFoundPathError, normalizeWindowsPathForComparison } from "../infra/path-guards.js";
 import { compareValidSemver } from "../infra/semver.js";
 import {
+  isPluginNpmProjectDir,
   resolveDefaultPluginNpmDir,
   resolvePluginNpmProjectsDir,
   validatePluginId,
@@ -360,6 +361,52 @@ function mergeRecoveredManagedNpmMetadata(
   return next;
 }
 
+function isForeignManagedNpmInstallRecord(params: {
+  npmRoot: string;
+  record: PluginInstallRecord | undefined;
+}): boolean {
+  if (params.record?.source !== "npm") {
+    return false;
+  }
+  const installPath = params.record.installPath;
+  if (!installPath) {
+    return false;
+  }
+  const packageInfo = resolveRetainedManagedNpmInstallPackageInfo(installPath);
+  if (!packageInfo) {
+    return false;
+  }
+  const projectsDir = path.dirname(packageInfo.projectRoot);
+  if (path.basename(projectsDir) !== "projects") {
+    return false;
+  }
+  const previousNpmRoot = path.dirname(projectsDir);
+  if (
+    normalizeInstallPathForComparison(previousNpmRoot) ===
+    normalizeInstallPathForComparison(params.npmRoot)
+  ) {
+    return false;
+  }
+  // Exact package-specific project shape proves ownership. A directory named
+  // npm or an arbitrary node_modules tree remains operator-owned.
+  return isPluginNpmProjectDir({
+    packageName: packageInfo.packageName,
+    projectDir: packageInfo.projectRoot,
+    npmDir: previousNpmRoot,
+  });
+}
+
+/** Lists existing npm projects that could be copied managed state or external installs. */
+export function findForeignManagedNpmInstallRecordPluginIds(
+  persisted: Record<string, PluginInstallRecord> | null,
+  options: InstalledPluginIndexStoreOptions,
+): string[] {
+  const npmRoot = resolveRecoveredManagedNpmRoot(options);
+  return Object.entries(persisted ?? {}).flatMap(([pluginId, record]) =>
+    isForeignManagedNpmInstallRecord({ npmRoot, record }) ? [pluginId] : [],
+  );
+}
+
 function mergeRecoveredManagedNpmRecord(params: {
   npmRoot: string;
   persisted: PluginInstallRecord | undefined;
@@ -385,6 +432,7 @@ function mergeRecoveredManagedNpmRecord(params: {
   return params.persisted ?? params.recovered;
 }
 
+/** Merges persisted records with managed npm installs recovered from the current root. */
 function mergeRecoveredManagedNpmInstallRecords(
   persisted: Record<string, PluginInstallRecord> | null,
   options: InstalledPluginIndexStoreOptions,

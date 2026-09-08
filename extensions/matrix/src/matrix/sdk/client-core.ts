@@ -462,6 +462,10 @@ export abstract class MatrixClientCore extends MatrixClientBase {
     } = {},
   ): Promise<MatrixRelationsPage> {
     const result = await this.client.relations(roomId, eventId, relationType, eventType, opts);
+    // Untyped relation queries include ciphertext even without cached room state;
+    // the SDK only awaits decryption itself for an explicitly encrypted query.
+    const events = result.originalEvent ? [result.originalEvent, ...result.events] : result.events;
+    await Promise.all(events.map((event) => this.client.decryptEventIfNeeded(event)));
     return {
       originalEvent: result.originalEvent ? matrixEventToRaw(result.originalEvent) : null,
       events: result.events.map((event) => matrixEventToRaw(event)),

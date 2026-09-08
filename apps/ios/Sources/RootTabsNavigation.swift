@@ -1,5 +1,7 @@
 import CoreGraphics
 import Foundation
+import OpenClawChatUI
+import OpenClawKit
 import SwiftUI
 
 extension RootTabs {
@@ -88,6 +90,28 @@ extension RootTabs {
             }
         }
 
+        var screen: SidebarScreen {
+            switch self {
+            case .activity: .dashboard(DashboardRouteMap.activityPagePath)
+            case .workboard: .dashboard(DashboardRouteMap.workboardPagePath)
+            case .skillWorkshop: .dashboard(DashboardRouteMap.skillWorkshopPagePath)
+            case .instances: .dashboard(DashboardRouteMap.devicesSettingsPath)
+            case .dreaming: .dashboard(DashboardRouteMap.dreamingPagePath)
+            case .usage: .dashboard(DashboardRouteMap.usagePagePath)
+            case .cron: .dashboard(DashboardRouteMap.cronJobsPagePath)
+            case .chat: .chat
+            case .overview: .overview
+            case .agents: .agents
+            case .sessions: .sessions
+            case .files: .files
+            case .desktop: .desktop
+            case .terminal: .terminal
+            case .docs: .docs
+            case .settings: .settings
+            case .gateway: .gateway
+            }
+        }
+
         var settingsRoute: SettingsRoute? {
             switch self {
             case .gateway:
@@ -101,9 +125,38 @@ extension RootTabs {
         }
     }
 
+    enum SidebarScreen: Equatable {
+        case dashboard(String)
+        case chat, overview, agents, sessions, files, desktop, terminal, docs, settings, gateway
+    }
+
+    static func notificationSettingsPath(servingEnabled: Bool, disclosureAccepted: Bool) -> String {
+        servingEnabled && disclosureAccepted
+            ? DashboardRouteMap.devicePermissionsSettingsPath
+            : DashboardRouteMap.deviceSettingsPath
+    }
+
     enum SidebarLayoutMode: Equatable {
         case drawer
         case split
+    }
+
+    enum SidebarSessionPresentation: Equatable {
+        case chat
+        case dashboard
+    }
+
+    struct SidebarDashboardTarget: Equatable {
+        let sessionKey: String
+        let agentId: String?
+    }
+
+    static func sidebarPresentation(for session: OpenClawChatSessionEntry) -> SidebarSessionPresentation {
+        session.boardFace == "dashboard" ? .dashboard : .chat
+    }
+
+    static func sidebarDashboardTarget(for session: OpenClawChatSessionEntry) -> SidebarDashboardTarget {
+        SidebarDashboardTarget(sessionKey: session.key, agentId: session.agentId)
     }
 
     static func sidebarLayoutContainerSize(contentSize: CGSize, windowSize: CGSize?) -> CGSize {

@@ -92,7 +92,7 @@ describe("gateway request scope", () => {
     const second = await importGatewayRequestScopeModule();
 
     expect(second.getGatewayContextResolver(owner)).toBe(resolver);
-    expect(second.getSharedGatewayContextResolver([owner])).toBe(resolver);
+    expect(second.getSharedGatewayContextResolver([owner])?.()).toBe(TEST_SCOPE.context);
     expect(second.getGatewayContextResolver({})).toBeUndefined();
 
     second.clearGatewayContextResolver(owner);

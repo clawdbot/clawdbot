@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sha256File, sha256Hex } from "../../infra/crypto-digest.js";
 
 const EXCLUDED_METADATA_DIRS = new Set([".clawhub", ".clawdhub"]);
 
@@ -34,11 +34,13 @@ async function collectEntries(root: string, relativeDir = ""): Promise<SkillTree
     if (stat.nlink > 1) {
       throw new Error(`Skill tree contains hard-linked file ${JSON.stringify(portablePath)}.`);
     }
-    const content = await fs.readFile(path.join(root, relativePath));
+    // Bound nonempty files to their initial size so appends cannot prolong hashing.
+    // Empty files retain readFile's EOF behavior.
+    const end = stat.size > 0 ? stat.size - 1 : undefined;
     collected.push({
       path: portablePath,
       type: "file",
-      sha256: createHash("sha256").update(content).digest("hex"),
+      sha256: await sha256File(path.join(root, relativePath), end),
     });
   }
   return collected;
@@ -47,5 +49,5 @@ async function collectEntries(root: string, relativeDir = ""): Promise<SkillTree
 /** Digests every installed skill file except OpenClaw's own provenance metadata. */
 export async function digestClawHubSkillTree(skillDir: string): Promise<string> {
   const entries = await collectEntries(skillDir);
-  return `sha256:${createHash("sha256").update(JSON.stringify(entries)).digest("hex")}`;
+  return `sha256:${sha256Hex(JSON.stringify(entries))}`;
 }

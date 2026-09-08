@@ -9,6 +9,11 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "./types.js";
+import {
+  SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
+  SESSION_WORK_START_CHANGED_ERROR_CODE,
+  SESSION_WORK_START_INVALIDATED_ERROR_CODE,
+} from "./work-start-error.js";
 
 type SessionLifecycleEntry = Pick<
   SessionEntry,
@@ -41,8 +46,7 @@ export function isRestartRecoveryTombstone(
 
 /** Stable Gateway error detail for stale session lifecycle requests. */
 export const SESSION_LIFECYCLE_CHANGED_ERROR_REASON = "session-changed";
-const SESSION_WORK_START_INVALIDATED_ERROR_CODE = "SESSION_WORK_START_INVALIDATED";
-export const SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE = "SESSION_RESTART_RECOVERY_TOMBSTONE";
+export { SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE };
 
 export class SessionWorkStartInvalidatedError extends Error {
   readonly code = SESSION_WORK_START_INVALIDATED_ERROR_CODE;
@@ -53,15 +57,34 @@ export class SessionWorkStartInvalidatedError extends Error {
   }
 }
 
+export class SessionWorkStartChangedError extends Error {
+  readonly code = SESSION_WORK_START_CHANGED_ERROR_CODE;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "SessionWorkStartChangedError";
+  }
+}
+
+export function createSessionWorkStartChangedError(
+  sessionKey: string,
+): SessionWorkStartChangedError {
+  return new SessionWorkStartChangedError(
+    `Session "${sessionKey}" changed while starting work. Retry.`,
+  );
+}
+
 export function isSessionWorkStartInvalidatedError(
   error: unknown,
-): error is SessionWorkStartInvalidatedError {
+): error is SessionWorkStartInvalidatedError | SessionWorkStartChangedError {
   return (
     error instanceof SessionWorkStartInvalidatedError ||
+    error instanceof SessionWorkStartChangedError ||
     (typeof error === "object" &&
       error !== null &&
       "code" in error &&
-      error.code === SESSION_WORK_START_INVALIDATED_ERROR_CODE)
+      (error.code === SESSION_WORK_START_INVALIDATED_ERROR_CODE ||
+        error.code === SESSION_WORK_START_CHANGED_ERROR_CODE))
   );
 }
 
@@ -196,7 +219,7 @@ export function resolveSessionLifecycleTimestamps(params: {
   };
 }
 
-export function resolveTerminalMainSessionTranscriptRegistryCheck(
+function resolveTerminalMainSessionTranscriptRegistryCheck(
   params: TerminalMainSessionTranscriptRegistryParams,
 ): TerminalMainSessionTranscriptRegistryCheck | undefined {
   if (!params.entry || !params.sessionKey) {

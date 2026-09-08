@@ -23,6 +23,8 @@ function mergeProviderIntoRegistry(
         documentModels: provider.documentModels ?? existing.documentModels,
       }
     : provider;
+  // Own undefined hooks reset earlier owners; absent hooks inherit. Hydrate after
+  // merging so providers sharing a normalized id retain that distinction.
   registry.set(normalizedKey, hydrateModelBackedMediaProvider(merged));
 }
 
@@ -68,8 +70,6 @@ export function buildMediaUnderstandingRegistry(
       mergeProviderIntoRegistry(registry, {
         id: normalizedKey,
         capabilities: ["image"],
-        describeImage: describeImageWithModel,
-        describeImages: describeImagesWithModel,
       });
     }
   }

@@ -11,8 +11,8 @@ private enum TalkWaveformClock {
 /// TimelineView so lobes flow continuously instead of re-randomizing per power
 /// change.
 ///
-/// This file is also compiled directly into the watch target, which links no
-/// packages (see `apps/ios/project.yml`). Keep it dependency-free SwiftUI.
+/// This file is also compiled directly into the Watch target for shared styling
+/// (see `apps/ios/project.yml`). Keep it dependency-free SwiftUI.
 public enum TalkWaveformPhase: Equatable, Sendable {
     /// Voice surface is off or unavailable: flat, static, dimmed.
     case idle

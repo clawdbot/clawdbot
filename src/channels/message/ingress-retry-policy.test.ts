@@ -163,4 +163,164 @@ describe("ingress retry policy", () => {
       attempt: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
     });
   });
+
+  it.each([
+    'Session "agent:main:main" ended during restart recovery. Use /new or /reset to start a replacement session.',
+    "This generation is terminal.",
+  ])("dead-letters a restart tombstone by structured code: %s", (message) => {
+    const wrapped = Object.assign(new Error("BotError in middleware"), {
+      error: new Error("telegram spooled update processing failed", {
+        cause: Object.assign(new Error(message), {
+          code: "SESSION_RESTART_RECOVERY_TOMBSTONE",
+        }),
+      }),
+    });
+    expect(
+      resolveIngressFailureDisposition({
+        err: wrapped,
+        event: { receivedAt: 1_000, attempts: 0 },
+        formatError: coerceErrorMessage,
+        config: { maxAttempts: 8, deadLetterMinAgeMs: 24 * 60 * 60 * 1000 },
+        now: 2_000,
+      }),
+    ).toEqual({
+      kind: "fail",
+      reason: "restart-recovery-tombstone",
+      message: wrapped.message,
+      attempt: 1,
+    });
+    expect(
+      resolveIngressFailureDisposition({
+        err: Object.assign(new Error(message), {
+          code: "SESSION_RESTART_RECOVERY_TOMBSTONE",
+        }),
+        event: { receivedAt: 1_000, attempts: 425 },
+        formatError: coerceErrorMessage,
+        now: 2_000,
+      }),
+    ).toMatchObject({ kind: "fail", reason: "restart-recovery-tombstone", attempt: 426 });
+  });
+
+  it.each([undefined, "SESSION_WORK_START_INVALIDATED"])(
+    "keeps tombstone-like text retryable without its code: %s",
+    (code) => {
+      const err = Object.assign(
+        new Error("Session ended during restart recovery. Use /new or /reset."),
+        { code },
+      );
+      expect(
+        resolveIngressFailureDisposition({
+          err,
+          event: { receivedAt: 1_000, attempts: 0 },
+          formatError: coerceErrorMessage,
+          now: 2_000,
+        }),
+      ).toEqual({ kind: "release", attempt: 1, message: err.message });
+    },
+  );
+
+  it.each(["code", "cause", "reason", "original", "error", "data", "errors"])(
+    "releases a transient failure when its %s getter throws",
+    (field) => {
+      const err = Object.defineProperty(new Error("temporary failure"), field, {
+        get() {
+          throw new Error("unavailable diagnostic field");
+        },
+      });
+      expect(
+        resolveIngressFailureDisposition({
+          err,
+          event: { receivedAt: 1_000, attempts: 0 },
+          formatError: coerceErrorMessage,
+          now: 2_000,
+        }),
+      ).toEqual({ kind: "release", attempt: 1, message: "temporary failure" });
+    },
+  );
+
+  it("finds the terminal code beside an inaccessible wrapper field", () => {
+    const err = Object.assign(new Error("reply admission refused"), {
+      error: Object.assign(new Error("terminal generation"), {
+        code: "SESSION_RESTART_RECOVERY_TOMBSTONE",
+      }),
+    });
+    Object.defineProperty(err, "cause", {
+      get() {
+        throw new Error("unavailable diagnostic field");
+      },
+    });
+    expect(
+      resolveIngressFailureDisposition({
+        err,
+        event: { receivedAt: 1_000, attempts: 0 },
+        formatError: coerceErrorMessage,
+        now: 2_000,
+      }),
+    ).toEqual({
+      kind: "fail",
+      reason: "restart-recovery-tombstone",
+      attempt: 1,
+      message: "reply admission refused",
+    });
+  });
+
+  it("bounds a wrapped session-start conflict at the configured attempt budget", () => {
+    const maxAttempts = 3;
+    const message = 'Session "agent:main:telegram:direct:1" changed while starting work. Retry.';
+    const conflict = Object.assign(new Error(message), {
+      code: "SESSION_WORK_START_CHANGED",
+    });
+    const wrapped = Object.assign(new Error("BotError in middleware"), {
+      error: new Error("telegram spooled update processing failed", { cause: conflict }),
+    });
+    const beforeLimit = resolveIngressFailureDisposition({
+      err: wrapped,
+      event: {
+        receivedAt: 1_000,
+        attempts: maxAttempts - 2,
+      },
+      formatError: coerceErrorMessage,
+      config: { maxAttempts },
+      now: 2_000,
+    });
+    expect(beforeLimit).toMatchObject({
+      kind: "release",
+      attempt: maxAttempts - 1,
+    });
+    expect(
+      resolveIngressFailureDisposition({
+        err: new Error(message),
+        event: { receivedAt: 1_000, attempts: maxAttempts - 1 },
+        formatError: coerceErrorMessage,
+        config: { maxAttempts },
+        now: 2_000,
+      }),
+    ).toMatchObject({ kind: "release", attempt: maxAttempts });
+    expect(
+      resolveIngressFailureDisposition({
+        err: Object.assign(new Error(message), { code: "SESSION_WORK_START_INVALIDATED" }),
+        event: { receivedAt: 1_000, attempts: maxAttempts - 1 },
+        formatError: coerceErrorMessage,
+        config: { maxAttempts },
+        now: 2_000,
+      }),
+    ).toMatchObject({ kind: "release", attempt: maxAttempts });
+
+    const atLimit = resolveIngressFailureDisposition({
+      err: wrapped,
+      event: {
+        receivedAt: 1_000,
+        attempts: maxAttempts - 1,
+      },
+      formatError: coerceErrorMessage,
+      config: { maxAttempts },
+      now: 2_000,
+    });
+    expect(atLimit).toEqual({
+      kind: "fail",
+      reason: "session-start-conflict-retry-limit",
+      message: wrapped.message,
+      attempt: maxAttempts,
+    });
+  });
 });

@@ -2,7 +2,7 @@
  * Sends typed JSON-RPC requests to the Codex app-server with sandbox guard
  * checks, shared-client leasing, and isolated-client shutdown handling.
  */
-import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-bridge.js";
+import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-profile.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import type {
@@ -11,15 +11,7 @@ import type {
   CodexAppServerRequestResult,
   JsonValue,
 } from "./protocol.js";
-import { resolveCodexAppServerDirectSandboxBypassBlock } from "./sandbox-guard.js";
-import {
-  createIsolatedCodexAppServerClient,
-  getLeasedSharedCodexAppServerClient,
-  isCodexAppServerStartSelectionChangedError,
-  releaseLeasedSharedCodexAppServerClient,
-  retireSharedCodexAppServerClientIfCurrent,
-  type CodexAppServerClientOptions,
-} from "./shared-client.js";
+import type { CodexAppServerClientOptions } from "./shared-client.js";
 import { withTimeout } from "./timeout.js";
 
 type CodexAppServerClientRequestParams = {
@@ -27,6 +19,8 @@ type CodexAppServerClientRequestParams = {
   method: string;
   requestParams?: unknown;
   timeoutMs?: number;
+  signal?: AbortSignal;
+  assertCurrent?: () => void;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   sessionKey?: string;
   sessionId?: string;
@@ -36,6 +30,7 @@ type CodexAppServerClientRequestParams = {
 export async function requestCodexAppServerClientJson<T = JsonValue | undefined>(
   params: CodexAppServerClientRequestParams,
 ): Promise<T> {
+  const { resolveCodexAppServerDirectSandboxBypassBlock } = await import("./sandbox-guard.js");
   const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock({
     method: params.method,
     requestParams: params.requestParams,
@@ -48,7 +43,13 @@ export async function requestCodexAppServerClientJson<T = JsonValue | undefined>
   }
   const timeoutMs = params.timeoutMs ?? 60_000;
   return await withTimeout(
-    params.client.request<T>(params.method, params.requestParams, { timeoutMs }),
+    params.client.request<T>(params.method, params.requestParams, {
+      timeoutMs,
+      signal: params.signal,
+      ...(params.assertCurrent
+        ? { assertCurrent: () => assertRequestOwnerCurrent(params.assertCurrent) }
+        : {}),
+    }),
     timeoutMs,
     `codex app-server ${params.method} timed out`,
   );
@@ -70,6 +71,7 @@ type CodexAppServerJsonClientOptions = Pick<
   sessionKey?: string;
   sessionId?: string;
   isolated?: boolean;
+  assertCurrent?: () => void;
 };
 
 /** Sends a typed Codex app-server request and returns the method-specific response shape. */
@@ -86,6 +88,7 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(
   params: CodexAppServerJsonClientOptions & { method: string; requestParams?: unknown },
 ): Promise<T> {
   // Fail closed before spawning or leasing a client for a guard-blocked method.
+  const { resolveCodexAppServerDirectSandboxBypassBlock } = await import("./sandbox-guard.js");
   const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock({
     method: params.method,
     requestParams: params.requestParams,
@@ -108,11 +111,23 @@ export type CodexAppServerScopedRequest = <T = JsonValue | undefined>(request: {
   requestParams?: unknown;
 }) => Promise<T>;
 
-/** A scoped guard rejected the request before it reached the physical client. */
+/** A scoped guard rejected the request before a physical write. */
 export class CodexAppServerScopedRequestRejectedError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = "CodexAppServerScopedRequestRejectedError";
+  }
+}
+
+// Preserve pre-write rejection identity so callers do not retire a healthy shared client.
+function assertRequestOwnerCurrent(assertCurrent?: () => void): void {
+  try {
+    assertCurrent?.();
+  } catch (cause) {
+    throw new CodexAppServerScopedRequestRejectedError(
+      cause instanceof Error ? cause.message : String(cause),
+      { cause },
+    );
   }
 }
 
@@ -232,6 +247,15 @@ export async function withCodexAppServerJsonClient<T>(
   try {
     return await withTimeout(
       (async () => {
+        const { resolveCodexAppServerDirectSandboxBypassBlock } =
+          await import("./sandbox-guard.js");
+        const {
+          createIsolatedCodexAppServerClient,
+          getLeasedSharedCodexAppServerClient,
+          isCodexAppServerStartSelectionChangedError,
+          releaseLeasedSharedCodexAppServerClient,
+          retireSharedCodexAppServerClientIfCurrent,
+        } = await import("./shared-client.js");
         for (let attempt = 0; attempt < 2; attempt += 1) {
           throwIfAbandoned();
           const acquireClient = params.isolated
@@ -258,6 +282,7 @@ export async function withCodexAppServerJsonClient<T>(
                 "Codex app-server request scope is closed",
               );
             }
+            assertRequestOwnerCurrent(params.assertCurrent);
           };
           try {
             assertCurrent();

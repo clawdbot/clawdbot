@@ -1,6 +1,5 @@
-/**
- * Owns the run deadline and compaction grace.
- */
+/** Owns the execution deadline, approval pauses, and one compaction grace. */
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { observeAgentRunApprovalWait } from "../../agent-run-approval-wait.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { log } from "../logger.js";
@@ -10,113 +9,133 @@ import {
 } from "./compaction-timeout.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-type AttemptCompactionState = {
-  isCompacting(): boolean;
-};
+type ExecutionDeadline =
+  | { kind: "bounded"; deadlineAtMs: number; compactionGraceUsed: boolean }
+  | { kind: "paused"; remainingMs: number; compactionGraceUsed: boolean }
+  | { kind: "unlimited" }
+  | { kind: "closed" };
 
 type EmbeddedAttemptTimeoutParams = Pick<
   EmbeddedRunAttemptParams,
-  "onAttemptTimeoutArmed" | "runId" | "sessionId" | "timeoutMs"
+  "onAttemptDeadlineChanged" | "onAttemptTimeoutArmed" | "runId" | "sessionId" | "timeoutMs"
 >;
 
 export function prepareEmbeddedAttemptTimeout(input: {
   attempt: EmbeddedAttemptTimeoutParams;
   activeSession: Pick<AgentSession, "isCompacting" | "isStreaming">;
-  compactionState: AttemptCompactionState;
+  compactionState: { isCompacting(): boolean };
   compactionTimeoutMs: number;
+  runAbortSignal: AbortSignal;
   isProbeSession: boolean;
   abortRun: (isTimeout?: boolean, reason?: unknown) => void;
   markTimedOutDuringCompaction: () => void;
   markTimedOutByRunBudget: () => void;
 }) {
-  const { activeSession, attempt } = input;
-  let abortWarnTimer: NodeJS.Timeout | undefined;
+  const { activeSession, attempt, runAbortSignal } = input;
+  let deadline: ExecutionDeadline = { kind: "unlimited" };
   let abortTimer: NodeJS.Timeout | undefined;
-  let runAbortDeadlineAtMs = Date.now() + attempt.timeoutMs;
-  let compactionGraceUsed = false;
-  let pausedRemainingMs = 0;
+  let abortWarnTimer: NodeJS.Timeout | undefined;
   const approvalWait = observeAgentRunApprovalWait(attempt);
+  const clearTimers = () => {
+    deadline = { kind: "closed" };
+    approvalWait.dispose();
+    runAbortSignal.removeEventListener("abort", clearTimers);
+    clearTimeout(abortTimer);
+    clearTimeout(abortWarnTimer);
+  };
+  const timeout = {
+    getRunAbortDeadlineAtMs: () =>
+      deadline.kind === "bounded" ? deadline.deadlineAtMs : undefined,
+    clearTimers,
+  };
+  if (runAbortSignal.aborted) {
+    clearTimers();
+    return timeout;
+  }
+  runAbortSignal.addEventListener("abort", clearTimers, { once: true });
 
-  const scheduleAbortTimer = (delayMs: number, reason: "initial" | "compaction-grace") => {
-    runAbortDeadlineAtMs = Date.now() + Math.max(1, delayMs);
+  const scheduleAbortTimer = (delayMs: number, compactionGraceUsed: boolean) => {
+    const armed = {
+      kind: "bounded" as const,
+      deadlineAtMs: Date.now() + Math.max(1, delayMs),
+      compactionGraceUsed,
+    };
+    deadline = armed;
     abortTimer = setTimeout(
       () => {
-        const timeoutAction = resolveRunTimeoutDuringCompaction({
+        if (deadline !== armed) {
+          return;
+        }
+        const compaction = {
           isCompactionPendingOrRetrying: input.compactionState.isCompacting(),
           isCompactionInFlight: activeSession.isCompacting,
-          graceAlreadyUsed: compactionGraceUsed,
+        };
+        const timeoutAction = resolveRunTimeoutDuringCompaction({
+          ...compaction,
+          graceAlreadyUsed: armed.compactionGraceUsed,
         });
         if (timeoutAction === "extend") {
-          compactionGraceUsed = true;
           if (!input.isProbeSession) {
             log.warn(
               `embedded run timeout reached during compaction; extending deadline: ` +
                 `runId=${attempt.runId} sessionId=${attempt.sessionId} extraMs=${input.compactionTimeoutMs}`,
             );
           }
-          scheduleAbortTimer(input.compactionTimeoutMs, "compaction-grace");
+          scheduleAbortTimer(input.compactionTimeoutMs, true);
           return;
         }
 
+        // Close scheduling before abort callbacks can resolve approvals or dispose
+        // the attempt. Arm the warning first so synchronous cleanup can clear it.
+        clearTimers();
+        abortWarnTimer = setTimeout(() => {
+          if (activeSession.isStreaming && !input.isProbeSession) {
+            log.warn(
+              `embedded run abort still streaming: runId=${attempt.runId} sessionId=${attempt.sessionId}`,
+            );
+          }
+        }, 10_000);
         if (!input.isProbeSession) {
           log.warn(
-            reason === "compaction-grace"
+            armed.compactionGraceUsed
               ? `embedded run timeout after compaction grace: runId=${attempt.runId} sessionId=${attempt.sessionId} timeoutMs=${attempt.timeoutMs} compactionGraceMs=${input.compactionTimeoutMs}`
               : `embedded run timeout: runId=${attempt.runId} sessionId=${attempt.sessionId} timeoutMs=${attempt.timeoutMs}`,
           );
         }
-        if (
-          shouldFlagCompactionTimeout({
-            isTimeout: true,
-            isCompactionPendingOrRetrying: input.compactionState.isCompacting(),
-            isCompactionInFlight: activeSession.isCompacting,
-          })
-        ) {
+        if (shouldFlagCompactionTimeout({ isTimeout: true, ...compaction })) {
           input.markTimedOutDuringCompaction();
         }
-        // Settlement owns partial-output publication because abort or failure
-        // can still supersede this timeout while queued events drain.
+        // Settlement revalidates timeout ownership before publishing partial output.
         input.markTimedOutByRunBudget();
         input.abortRun(true);
-        if (!abortWarnTimer) {
-          abortWarnTimer = setTimeout(() => {
-            if (!activeSession.isStreaming) {
-              return;
-            }
-            if (!input.isProbeSession) {
-              log.warn(
-                `embedded run abort still streaming: runId=${attempt.runId} sessionId=${attempt.sessionId}`,
-              );
-            }
-          }, 10_000);
-        }
       },
       Math.max(1, delayMs),
     );
+    attempt.onAttemptDeadlineChanged?.({ kind: "bounded", deadlineAtMs: armed.deadlineAtMs });
   };
 
   approvalWait.onChange = (pending) => {
-    if (pending) {
-      // Human review consumes neither the run budget nor an active compaction grace window.
-      pausedRemainingMs = Math.max(1, runAbortDeadlineAtMs - Date.now());
+    if (pending && deadline.kind === "bounded") {
+      // Human review preserves the unused execution or compaction-grace budget;
+      // the lane and async-task waiter must not retain its old wall-clock deadline.
+      deadline = {
+        kind: "paused",
+        remainingMs: Math.max(1, deadline.deadlineAtMs - Date.now()),
+        compactionGraceUsed: deadline.compactionGraceUsed,
+      };
       clearTimeout(abortTimer);
-    } else {
-      scheduleAbortTimer(pausedRemainingMs, compactionGraceUsed ? "compaction-grace" : "initial");
+      attempt.onAttemptDeadlineChanged?.({ kind: "unlimited" });
+    } else if (!pending && deadline.kind === "paused") {
+      scheduleAbortTimer(deadline.remainingMs, deadline.compactionGraceUsed);
     }
   };
-  scheduleAbortTimer(attempt.timeoutMs, "initial");
-  attempt.onAttemptTimeoutArmed?.();
-
-  return {
-    getRunAbortDeadlineAtMs: () => runAbortDeadlineAtMs,
-    clearTimers: () => {
-      approvalWait.dispose();
-      if (abortTimer) {
-        clearTimeout(abortTimer);
-      }
-      if (abortWarnTimer) {
-        clearTimeout(abortWarnTimer);
-      }
-    },
-  };
+  if (attempt.timeoutMs >= MAX_TIMER_TIMEOUT_MS) {
+    attempt.onAttemptDeadlineChanged?.({ kind: "unlimited" });
+  } else {
+    scheduleAbortTimer(attempt.timeoutMs, false);
+  }
+  if (!runAbortSignal.aborted) {
+    attempt.onAttemptTimeoutArmed?.();
+  }
+  return timeout;
 }

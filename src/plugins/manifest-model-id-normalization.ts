@@ -1,7 +1,7 @@
 /** Applies manifest-declared model-id normalization policies to provider model refs. */
 import {
   collectManifestModelIdNormalizationPolicies,
-  normalizeProviderModelIdWithPolicies,
+  type ManifestModelIdNormalizationProvider,
 } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
@@ -12,20 +12,29 @@ import {
   getCurrentPluginMetadataSnapshotRuntime,
   resolvePluginMetadataSnapshotRuntime,
 } from "./plugin-metadata-snapshot.runtime.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { getActivePluginRegistryWorkspaceDirFromStateCore } from "./runtime-workspace-state.js";
+
+/** Caller-owned declarations or facts from an already selected metadata snapshot. */
+export type ManifestModelIdNormalizationSource =
+  | readonly Pick<PluginManifestRecord, "modelIdNormalization">[]
+  | { owners: Pick<PluginMetadataSnapshot["owners"], "modelIdNormalizationPolicies"> };
 
 type ManifestModelIdNormalizationLookupParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-  plugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
+  plugins?: ManifestModelIdNormalizationSource;
 };
 
-function resolveManifestModelIdNormalizationRecords(
+export function resolveManifestModelIdNormalizationPolicies(
   params: ManifestModelIdNormalizationLookupParams = {},
-): readonly Pick<PluginManifestRecord, "modelIdNormalization">[] {
+): ReadonlyMap<string, ManifestModelIdNormalizationProvider> {
   if (params.plugins) {
-    return params.plugins;
+    // Prepared views keep their selected generation; caller-owned arrays remain live inputs.
+    return "owners" in params.plugins
+      ? params.plugins.owners.modelIdNormalizationPolicies
+      : collectManifestModelIdNormalizationPolicies(params.plugins);
   }
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromStateCore();
@@ -37,7 +46,7 @@ function resolveManifestModelIdNormalizationRecords(
       requireDefaultDiscoveryContext: true,
     });
     if (currentSnapshot) {
-      return currentSnapshot.plugins;
+      return currentSnapshot.owners.modelIdNormalizationPolicies;
     }
   }
   const snapshot = resolvePluginMetadataSnapshotRuntime({
@@ -46,28 +55,5 @@ function resolveManifestModelIdNormalizationRecords(
     workspaceDir,
     allowWorkspaceScopedCurrent: true,
   });
-  return snapshot?.plugins ?? [];
-}
-
-/** Normalizes a provider model id using plugin manifest-declared model-id policies. */
-export function normalizeProviderModelIdWithManifest(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  plugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
-  context: {
-    provider: string;
-    modelId: string;
-  };
-}): string | undefined {
-  return normalizeProviderModelIdWithPolicies({
-    provider: params.provider,
-    policies: collectManifestModelIdNormalizationPolicies(
-      resolveManifestModelIdNormalizationRecords(params),
-    ),
-    context: {
-      modelId: params.context.modelId,
-    },
-  });
+  return snapshot ? snapshot.owners.modelIdNormalizationPolicies : new Map();
 }

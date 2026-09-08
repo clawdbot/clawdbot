@@ -5,7 +5,7 @@
     <string name="model" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Modell"</string>
     <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Steuerelemente"</string>
     <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sprechen"</string>
-    <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Watch-Audio fehlgeschlagen"</string>
+    <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Audio der Uhr fehlgeschlagen"</string>
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Diktieren"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Live"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Thread"</string>
@@ -15,47 +15,47 @@
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tippen"</string>
     <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Doppeltippen"</string>
     <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Neue Nachrichten anzeigen"</string>
-    <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Starte Live, um die Unterhaltung hier zu sehen."</string>
+    <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Starten Sie den Live-Modus, um die Unterhaltung hier zu sehen."</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Neu"</string>
     <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Eingeben"</string>
     <string name="message" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nachricht"</string>
-    <string name="message_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nachricht an den Agenten"</string>
+    <string name="message_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Agenten eine Nachricht senden"</string>
     <string name="send" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Senden"</string>
-    <string name="speak_to_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mit deinem Agenten sprechen"</string>
-    <string name="stop_speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sprechen beenden"</string>
-    <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Neueste Antwort vorlesen"</string>
-    <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Spricht"</string>
+    <string name="speak_to_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mit Ihrem Agenten sprechen"</string>
+    <string name="stop_speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sprachausgabe beenden"</string>
+    <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Letzte Antwort vorlesen"</string>
+    <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sprachausgabe läuft"</string>
     <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Hört zu"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Verbindung wird hergestellt"</string>
-    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Denken"</string>
-    <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Schreibt"</string>
+    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nachdenken"</string>
+    <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tippt"</string>
     <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Wird gesendet"</string>
     <string name="agent_working" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Agent arbeitet"</string>
     <string name="error" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Fehler"</string>
     <string name="ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bereit"</string>
-    <string name="you" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Du"</string>
+    <string name="you" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sie"</string>
     <string name="agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Agent"</string>
     <string name="system" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"System"</string>
-    <string name="start_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Unterhaltung beginnen"</string>
+    <string name="start_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Unterhaltung starten"</string>
     <string name="start_conversation_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sprechen oder tippen Sie auf Ihrer Uhr. Das gekoppelte Smartphone sendet die Nachricht über seine authentifizierte OpenClaw-Sitzung."</string>
     <string name="current_session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aktuelle Sitzung"</string>
     <string name="context_label_value" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"%1$s: %2$s"</string>
     <string name="close" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Schließen"</string>
     <string name="search" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Suchen"</string>
-    <string name="search_sessions" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Sitzungen suchen"</string>
+    <string name="search_sessions" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Sitzungen durchsuchen"</string>
     <string name="search_models" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Modelle suchen"</string>
     <string name="load_more" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Mehr laden"</string>
     <string name="active_on_phone" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Auf dem Telefon aktiv"</string>
-    <string name="open_on_watch" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Auf der Uhr öffnen"</string>
-    <string name="no_matches" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Keine Übereinstimmungen"</string>
-    <string name="search_sessions_title" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Eine Sitzung finden"</string>
-    <string name="search_models_title" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Ein Modell finden"</string>
+    <string name="open_on_watch" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Auf der Smartwatch öffnen"</string>
+    <string name="no_matches" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Keine Treffer"</string>
+    <string name="search_sessions_title" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Sitzung suchen"</string>
+    <string name="search_models_title" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Modell suchen"</string>
     <string name="appearance" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Erscheinungsbild"</string>
     <string name="theme_dark" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dunkel"</string>
     <string name="theme_light" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Hell"</string>
     <string name="auto_speak" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Antworten automatisch vorlesen"</string>
     <string name="reply_alerts" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Antwortbenachrichtigungen"</string>
-    <string name="enable_alerts" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Benachrichtigungen aktivieren"</string>
+    <string name="enable_alerts" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Warnmeldungen aktivieren"</string>
     <string name="abort_run" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ausführung abbrechen"</string>
     <string name="open_notification_settings" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Benachrichtigungseinstellungen öffnen"</string>
     <string name="on" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ein"</string>
@@ -63,48 +63,48 @@
     <string name="connection" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Verbindung"</string>
     <string name="gateway" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway"</string>
     <string name="security_boundary" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sicherheit"</string>
-    <string name="phone_controlled" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Vom Smartphone gesteuert"</string>
-    <string name="phone_controlled_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway-Anmeldedaten und Identität verbleiben auf dem gekoppelten Smartphone. Die Uhr verwendet ausschließlich den Wear Data Layer."</string>
-    <string name="checking_phone" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Telefon wird überprüft"</string>
+    <string name="phone_controlled" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Telefongesteuert"</string>
+    <string name="phone_controlled_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway-Zugangsdaten und Identität bleiben auf dem gekoppelten Smartphone. Die Uhr verwendet nur den Wear Data Layer."</string>
+    <string name="checking_phone" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Telefon wird geprüft"</string>
     <string name="reading_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Agenten, Sitzungen und Chat werden gelesen"</string>
     <string name="phone_ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Telefon bereit"</string>
     <string name="gateway_connected" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway verbunden"</string>
     <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway offline"</string>
-    <string name="gateway_offline_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Verbinden Sie das Gateway in OpenClaw auf dem gekoppelten Telefon erneut."</string>
-    <string name="open_phone_app" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw auf dem Telefon öffnen"</string>
-    <string name="phone_not_ready_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Die Smartwatch startet oder authentifiziert das Gateway niemals selbst."</string>
+    <string name="gateway_offline_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Den Gateway in OpenClaw auf dem gekoppelten Telefon erneut verbinden."</string>
+    <string name="open_phone_app" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw auf dem Smartphone öffnen"</string>
+    <string name="phone_not_ready_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Die Uhr startet oder authentifiziert den Gateway niemals selbst."</string>
     <string name="phone_unavailable" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Telefon nicht erreichbar"</string>
-    <string name="phone_unavailable_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Lassen Sie das gekoppelte Telefon in der Nähe und installieren Sie die passende OpenClaw-App."</string>
+    <string name="phone_unavailable_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Halten Sie das gekoppelte Telefon in der Nähe und installieren Sie die passende OpenClaw-App."</string>
     <string name="selection_not_found" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Auswahl nicht mehr verfügbar"</string>
     <string name="message_not_sent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aktion nicht akzeptiert"</string>
     <string name="something_went_wrong" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Etwas ist schiefgelaufen"</string>
-    <string name="refresh_and_try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aktualisieren Sie die Listen und versuchen Sie es erneut."</string>
-    <string name="try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Versuchen Sie es erneut über die Smartwatch."</string>
+    <string name="refresh_and_try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Die Listen aktualisieren und erneut versuchen."</string>
+    <string name="try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Versuchen Sie es erneut über die Uhr."</string>
     <string name="update_required" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aktualisierung erforderlich"</string>
-    <string name="update_required_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aktualisieren Sie OpenClaw auf dem Telefon und der Smartwatch."</string>
+    <string name="update_required_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aktualisieren Sie OpenClaw auf dem Smartphone und der Uhr."</string>
     <string name="refresh" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aktualisieren"</string>
     <string name="retry" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Erneut versuchen"</string>
     <string name="notification_channel_name" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw-Antworten"</string>
     <string name="notification_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Antworten"</string>
     <string name="notification_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw-Antwort"</string>
     <string name="notification_reply_failed_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Antwort nicht gesendet"</string>
-    <string name="notification_reply_failed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Telefon nicht verfügbar. Tippe auf „Antworten“, um es erneut zu versuchen."</string>
-    <string name="notification_phone_changed_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw öffnen, um zu antworten"</string>
-    <string name="notification_phone_changed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dein bevorzugtes Telefon hat sich geändert. Öffne die App, um die Sitzung vor dem Antworten neu zu laden."</string>
+    <string name="notification_reply_failed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Telefon nicht verfügbar. Tippen Sie auf Antworten, um es erneut zu versuchen."</string>
+    <string name="notification_phone_changed_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw zum Antworten öffnen"</string>
+    <string name="notification_phone_changed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ihr bevorzugtes Telefon hat sich geändert. Öffnen Sie die App, um die Sitzung vor dem Antworten neu zu laden."</string>
     <string name="tile_label" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw"</string>
-    <string name="tile_description" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sitzungen öffnen und über dein gekoppeltes Telefon antworten"</string>
+    <string name="tile_description" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sitzungen öffnen und über Ihr gekoppeltes Telefon antworten"</string>
     <string name="tile_open" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ÖFFNEN"</string>
     <string name="tile_phone_proxy" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"TELEFON-PROXY"</string>
-    <string name="pulse" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Pulse"</string>
+    <string name="pulse" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Puls"</string>
     <string name="pulse_tasks" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Hintergrundaufgaben"</string>
-    <string name="pulse_swarm" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Sitzungs-Swarm"</string>
+    <string name="pulse_swarm" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Sitzungsschwarm"</string>
     <string name="pulse_attention" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Achtung"</string>
     <string name="pulse_status" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Status: %1$s"</string>
     <string name="pulse_ready" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Bereit"</string>
     <string name="pulse_refreshing" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Wird aktualisiert"</string>
     <string name="pulse_unavailable" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Nicht verfügbar"</string>
     <string name="pulse_loading" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Pulse wird geladen"</string>
-    <string name="pulse_loading_detail" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Begrenzte Aggregate vom gekoppelten Telefon werden gelesen."</string>
+    <string name="pulse_loading_detail" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Begrenzte aggregierte Daten werden vom gekoppelten Telefon gelesen."</string>
     <string name="pulse_queued" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"In Warteschlange"</string>
     <string name="pulse_running" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Wird ausgeführt"</string>
     <string name="pulse_completed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Abgeschlossen"</string>
@@ -112,13 +112,13 @@
     <string name="pulse_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Fehlgeschlagen"</string>
     <string name="pulse_groups" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Gruppen"</string>
     <string name="pulse_pending_requests" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Ausstehende Anfragen"</string>
-    <string name="pulse_task_snapshot_bounded" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Begrenzter Aktiv- und aktueller Snapshot"</string>
-    <string name="pulse_active_at_limit" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Aktive Aufgabenliste hat ihr Limit erreicht"</string>
-    <string name="pulse_recent_at_limit" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Aktuelle Aufgabenliste hat ihr Limit erreicht"</string>
+    <string name="pulse_task_snapshot_bounded" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Begrenzte Momentaufnahme aktiver und kürzlich verwendeter Elemente"</string>
+    <string name="pulse_active_at_limit" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Die Liste aktiver Aufgaben hat ihr Limit erreicht"</string>
+    <string name="pulse_recent_at_limit" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Die Liste der letzten Aufgaben hat ihr Limit erreicht"</string>
     <string name="pulse_swarm_active" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Aktiv"</string>
     <string name="pulse_swarm_idle" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Inaktiv"</string>
     <string name="pulse_phase" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Phase %1$d"</string>
-    <string name="pulse_phase_counts" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"In Warteschlange %1$d, Läuft %2$d, Fertig %3$d, Fehlgeschlagen %4$d, Ausgeblendet %5$d"</string>
+    <string name="pulse_phase_counts" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"In Warteschlange %1$d, In Ausführung %2$d, Abgeschlossen %3$d, Fehlgeschlagen %4$d, Ausgeblendet %5$d"</string>
     <string name="pulse_more_phases" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Weitere Phasen nicht angezeigt"</string>
     <string name="pulse_unknown" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Unbekannt"</string>
 </resources>

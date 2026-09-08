@@ -1,5 +1,7 @@
 // Synology Chat tests cover webhook handler plugin behavior.
+import { createServer } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
+import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { makeFormBody, makeReq, makeRes, makeStalledReq } from "./test-http-utils.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
@@ -304,20 +306,66 @@ describe("createWebhookHandler", () => {
     expect(res.status).toBe(400);
   });
 
-  it("returns 408 when request body times out", async () => {
+  it.each([
+    {
+      name: "413 when the upload exceeds the pre-auth body limit",
+      bodyTimeoutMs: 5_000,
+      // Declared and sent in one write: the shape whose rejection used to race the flush.
+      body: "x".repeat(64 * 1024 + 1),
+      contentLength: undefined,
+      statusLine: "HTTP/1.1 413 Payload Too Large",
+      responseBody: JSON.stringify({ error: "Payload too large" }),
+    },
+    {
+      name: "408 when the sender stalls mid-upload",
+      bodyTimeoutMs: 50,
+      // Promises more than is ever sent, so the read deadline fires with the request open.
+      body: "x".repeat(16),
+      contentLength: 64 * 1024,
+      statusLine: "HTTP/1.1 408 Request Timeout",
+      responseBody: JSON.stringify({ error: "Request body timeout" }),
+    },
+  ])("delivers $name and then closes the connection", async (scenario) => {
+    const deliver = vi.fn();
     const handler = createWebhookHandler({
       account: makeAccount(),
-      deliver: vi.fn(),
+      deliver,
       log,
-      bodyTimeoutMs: 1,
+      bodyTimeoutMs: scenario.bodyTimeoutMs,
     });
+    const server = createServer((req, res) => {
+      void handler(req, res);
+    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => {
+          server.removeListener("error", reject);
+          resolve();
+        });
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected the Synology webhook test server to have a TCP address");
+      }
 
-    const req = makeStalledReq("POST");
-    const res = makeRes();
-    await handler(req, res);
+      const result = await postRawWebhook({
+        url: `http://127.0.0.1:${address.port}/webhook/synology`,
+        body: scenario.body,
+        contentLength: scenario.contentLength,
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+      });
 
-    expect(res.status).toBe(408);
-    expect(res.body).toContain("timeout");
+      expect(result.statusLine).toBe(scenario.statusLine);
+      expect(result.body).toBe(scenario.responseBody);
+      expect(result.closedByServer).toBe(true);
+      expect(deliver).not.toHaveBeenCalled();
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 
   it("rejects excess concurrent pre-auth body reads from the same remote IP", async () => {

@@ -2,7 +2,7 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { PluginCapabilityConsentReview } from "../../plugins/capability-consent.js";
+import type { PluginCapabilityConsentReview } from "../../plugins/capability-summary.js";
 import { recordInstalledPluginIndexInstallOwner } from "../../plugins/installed-plugin-index-install-owner.js";
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
 import { createInstalledPluginIndexSnapshot } from "../../plugins/status.test-fixtures.js";
@@ -196,15 +196,14 @@ function expectLastReplaceConfig(enabled: boolean) {
   expectPluginEnabledInConfig(payloadRecord.nextConfig, enabled);
 }
 
-function expectLastRegistryRefresh(enabled: boolean) {
+function expectLastRegistryRefresh() {
   const calls = (refreshPluginRegistryAfterConfigMutationMock as unknown as MockCalls).mock.calls;
   const [payload] = calls.at(-1) ?? [];
   const payloadRecord = requireRecord(payload, "registry refresh payload");
-  expect(Object.keys(payloadRecord).toSorted()).toEqual(["config", "logger", "reason"]);
+  expect(Object.keys(payloadRecord).toSorted()).toEqual(["logger", "reason"]);
   expect(payloadRecord.reason).toBe("policy-changed");
   const logger = getNestedRecord(payloadRecord, "logger", "registry refresh logger");
   expect(logger.warn).toEqual(expect.any(Function));
-  expectPluginEnabledInConfig(payloadRecord.config, enabled);
 }
 
 describe("handlePluginsCommand", () => {
@@ -454,7 +453,7 @@ describe("handlePluginsCommand", () => {
 
     expect(result?.reply?.text).toContain('Plugin "superpowers" disabled');
     expectLastReplaceConfig(false);
-    expectLastRegistryRefresh(false);
+    expectLastRegistryRefresh();
   });
 
   it("enables and disables a discovered plugin", async () => {
@@ -468,7 +467,7 @@ describe("handlePluginsCommand", () => {
     const enableResult = await handlePluginsCommand(enableParams, true);
     expect(enableResult?.reply?.text).toContain('Plugin "superpowers" enabled');
     expectLastReplaceConfig(true);
-    expectLastRegistryRefresh(true);
+    expectLastRegistryRefresh();
 
     const disableParams = buildPluginsParams("/plugins disable superpowers", buildCfg(), {
       gatewayClientScopes: WRITE_GATEWAY_SCOPES,
@@ -478,7 +477,7 @@ describe("handlePluginsCommand", () => {
     const disableResult = await handlePluginsCommand(disableParams, true);
     expect(disableResult?.reply?.text).toContain('Plugin "superpowers" disabled');
     expectLastReplaceConfig(false);
-    expectLastRegistryRefresh(false);
+    expectLastRegistryRefresh();
   });
 
   it("does not enable a managed plugin when capability consent is required", async () => {
@@ -539,7 +538,7 @@ describe("handlePluginsCommand", () => {
 
     expect(accepted?.reply?.text).toContain('Plugin "superpowers" enabled');
     expectLastReplaceConfig(true);
-    expectLastRegistryRefresh(true);
+    expectLastRegistryRefresh();
   });
 
   it.each([

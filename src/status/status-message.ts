@@ -313,8 +313,8 @@ const readUsageFromSessionLog = (
   | {
       input: number;
       output: number;
-      cacheRead: number;
-      cacheWrite: number;
+      cacheRead?: number;
+      cacheWrite?: number;
       promptTokens: number;
       total: number;
       totalTokensFresh: boolean;
@@ -344,9 +344,9 @@ const readUsageFromSessionLog = (
 
     const input = snapshot.inputTokens ?? 0;
     const output = snapshot.outputTokens ?? 0;
-    const cacheRead = snapshot.cacheRead ?? 0;
-    const cacheWrite = snapshot.cacheWrite ?? 0;
-    const promptTokens = snapshot.totalTokens ?? input + cacheRead + cacheWrite;
+    const cacheRead = snapshot.cacheRead;
+    const cacheWrite = snapshot.cacheWrite;
+    const promptTokens = snapshot.totalTokens ?? input + (cacheRead ?? 0) + (cacheWrite ?? 0);
     const total = promptTokens + output;
     if (promptTokens === 0 && total === 0) {
       return undefined;
@@ -386,12 +386,9 @@ const formatCacheHitValue = (
   cacheRead?: number | null,
   cacheWrite?: number | null,
 ) => {
-  if (!cacheRead && !cacheWrite) {
-    return null;
-  }
   if (
-    (typeof cacheRead !== "number" || cacheRead <= 0) &&
-    (typeof cacheWrite !== "number" || cacheWrite <= 0)
+    (typeof cacheRead !== "number" || cacheRead < 0) &&
+    (typeof cacheWrite !== "number" || cacheWrite < 0)
   ) {
     return null;
   }
@@ -725,16 +722,24 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
         outputTokens = logUsage.output;
       }
       if (typeof cacheRead !== "number" || cacheRead <= 0) {
-        cacheRead = logUsage.cacheRead;
+        cacheRead = logUsage.cacheRead ?? cacheRead;
       }
       if (typeof cacheWrite !== "number" || cacheWrite <= 0) {
-        cacheWrite = logUsage.cacheWrite;
+        cacheWrite = logUsage.cacheWrite ?? cacheWrite;
       }
     }
   }
 
   const activeModelLabel = formatProviderModelRef(activeProvider, activeModel) || "unknown";
   const runtimeDiffersFromSelected = activeModelLabel !== (modelRefs.selected.label || "unknown");
+  const runtimeAliasModelEquivalent = areRuntimeModelRefsEquivalent(
+    modelRefs.selected.label || "unknown",
+    activeModelLabel,
+    { config: args.config },
+  );
+  const activeModelProvider = runtimeAliasModelEquivalent
+    ? selectedLookupProvider
+    : contextLookupProvider;
   const selectedContextTokens = resolveContextTokensForModel({
     cfg: contextConfig,
     provider: selectedLookupProvider,
@@ -786,15 +791,14 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     authoredContextTokens: resolveAuthoredModelContextTokens({
       cfg: contextConfig,
       provider: contextLookupProvider,
+      modelProvider: activeModelProvider,
       model: contextLookupModel,
     }),
   });
   const runtimeSnapshotHasFallbackProvenance =
     initialFallbackState.active ||
     hasSessionAutoModelFallbackProvenance(entry) ||
-    areRuntimeModelRefsEquivalent(activeModelLabel, modelRefs.selected.label || "unknown", {
-      config: args.config,
-    });
+    runtimeAliasModelEquivalent;
   // A transcript-derived previous model must not pin a newly selected model to
   // its old window. Once fallback provenance is established, the shared
   // projector owns authored caps, runtime telemetry, and locked-session state.
@@ -914,11 +918,6 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     .join(" · ");
 
   const selectedModelLabel = modelRefs.selected.label || "unknown";
-  const runtimeAliasModelEquivalent = areRuntimeModelRefsEquivalent(
-    selectedModelLabel,
-    activeModelLabel,
-    { config: args.config },
-  );
   const selectedAuthMode =
     normalizeAuthMode(args.modelAuth) ?? resolveModelAuthMode(selectedLookupProvider, args.config);
   const rawSelectedAuthLabelValue =

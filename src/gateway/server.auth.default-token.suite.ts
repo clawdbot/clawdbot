@@ -175,6 +175,10 @@ export function registerDefaultAuthTokenSuite(): void {
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,
       );
       expect(payload?.features?.capabilities).toContain(
+        GATEWAY_SERVER_CAPS.SESSION_SETTINGS_CONTRACT,
+      );
+      expect(payload?.features?.capabilities).toContain(GATEWAY_SERVER_CAPS.SESSION_SETTINGS_CAS);
+      expect(payload?.features?.capabilities).toContain(
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
       );
       expect(payload?.features?.capabilities).toContain(
@@ -354,6 +358,7 @@ export function registerDefaultAuthTokenSuite(): void {
         expect(Object.keys(auth ?? {}).toSorted()).toEqual([
           "deviceToken",
           "issuedAtMs",
+          "method",
           "recoveryMigrationAllowed",
           "recoveryScope",
           "role",
@@ -382,6 +387,7 @@ export function registerDefaultAuthTokenSuite(): void {
         expect(Object.keys(auth ?? {}).toSorted()).toEqual([
           "deviceToken",
           "issuedAtMs",
+          "method",
           "recoveryMigrationAllowed",
           "recoveryScope",
           "role",

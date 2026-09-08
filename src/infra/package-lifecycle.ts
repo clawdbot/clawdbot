@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
+  PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH,
   PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
 } from "../../scripts/lib/package-lifecycle-marker.mjs";
 
@@ -157,14 +158,22 @@ export async function completePendingPackageLifecycle(params: {
     if (!(await isPackageLifecyclePending(paths))) {
       return false;
     }
+    const finalizeLegacyMarker = !(await pathExists(
+      path.join(packageRoot, PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH),
+    ));
     // Promote the shipped 2026.8.1 dist guard before preinstall removes it.
-    // Postinstall alone clears the canonical marker after all lifecycle work succeeds.
+    // Modern postinstall clears the canonical marker after all lifecycle work succeeds.
     await ensurePendingMarker(paths.pending);
     const runScript =
       params.runScript ??
       ((script) => runPackageLifecycleScript(packageRoot, script, scriptTimeoutMs));
     for (const script of PACKAGE_LIFECYCLE_SCRIPTS) {
       await runScript(script);
+    }
+    if (finalizeLegacyMarker) {
+      // Legacy postinstall cannot clear this marker. Package capability survives
+      // interrupted promotion, so successful retries can still finalize it.
+      await fs.rm(paths.pending, { force: true });
     }
     if (await isPackageLifecyclePending(paths)) {
       throw new Error("OpenClaw package postinstall did not complete its lifecycle marker");

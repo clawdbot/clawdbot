@@ -365,17 +365,67 @@ function isProviderModelListPath(path: PathSegment[]): boolean {
   );
 }
 
+type MergePath = {
+  parent?: MergePath;
+  segment: PathSegment;
+};
+
+function appendMergePath(parent: MergePath | undefined, segment: PathSegment): MergePath {
+  return { parent, segment };
+}
+
+function toMergePath(path: PathSegment[]): MergePath | undefined {
+  let current: MergePath | undefined;
+  for (const segment of path) {
+    current = appendMergePath(current, segment);
+  }
+  return current;
+}
+
+function isProviderModelListMergePath(path: MergePath): boolean {
+  const provider = path.parent;
+  const providers = provider?.parent;
+  const models = providers?.parent;
+  return (
+    path.segment === "models" &&
+    providers?.segment === "providers" &&
+    models?.segment === "models" &&
+    models.parent === undefined
+  );
+}
+
 function mergeConfigValue(existing: unknown, patch: unknown, path: PathSegment[]): unknown {
   if (isProviderModelListPath(path) && Array.isArray(existing) && Array.isArray(patch)) {
     return mergeModelArrays(existing, patch);
   }
   if (isPlainRecord(existing) && isPlainRecord(patch)) {
     const next: Record<string, unknown> = { ...existing };
-    for (const [key, value] of Object.entries(patch)) {
-      next[key] =
-        hasOwnPathKey(next, key) && isPlainRecord(next[key]) && isPlainRecord(value)
-          ? mergeConfigValue(next[key], value, [...path, key])
-          : value;
+    // Linked paths keep deep merges linear while preserving descendant-specific merge policy.
+    const pending = [{ target: next, patch, path: toMergePath(path) }];
+    while (pending.length > 0) {
+      const frame = pending.pop()!;
+      for (const [key, value] of Object.entries(frame.patch)) {
+        const current = frame.target[key];
+        const childPath = appendMergePath(frame.path, key);
+        if (
+          hasOwnPathKey(frame.target, key) &&
+          isProviderModelListMergePath(childPath) &&
+          Array.isArray(current) &&
+          Array.isArray(value)
+        ) {
+          frame.target[key] = mergeModelArrays(current, value);
+        } else if (
+          hasOwnPathKey(frame.target, key) &&
+          isPlainRecord(current) &&
+          isPlainRecord(value)
+        ) {
+          const child = { ...current };
+          frame.target[key] = child;
+          pending.push({ target: child, patch: value, path: childPath });
+        } else {
+          frame.target[key] = value;
+        }
+      }
     }
     return next;
   }
@@ -468,25 +518,7 @@ export function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]):
   if (last === undefined) {
     return { removed: false };
   }
-  let current: unknown = root;
-  for (const segment of path.slice(0, -1)) {
-    if (!current || typeof current !== "object") {
-      return { removed: false };
-    }
-    if (Array.isArray(current)) {
-      const index = parseIndexSegment(segment);
-      if (index === undefined || index >= current.length) {
-        return { removed: false };
-      }
-      current = current[index];
-      continue;
-    }
-    const record = current as Record<string, unknown>;
-    if (!hasOwnPathKey(record, segment)) {
-      return { removed: false };
-    }
-    current = record[segment];
-  }
+  const current = getAtPath(root, path.slice(0, -1)).value;
 
   if (Array.isArray(current)) {
     const index = parseIndexSegment(last);

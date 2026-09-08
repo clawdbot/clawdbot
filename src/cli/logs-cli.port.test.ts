@@ -17,10 +17,15 @@ import { registerLogsCli } from "./logs-cli.js";
 afterEach(() => vi.restoreAllMocks());
 
 async function withLogsGateway(
-  options: { source?: "config" | "environment"; denied?: boolean },
+  options: {
+    source?: "config" | "environment";
+    denied?: boolean;
+    failure?: "timeout" | "disconnect" | "malformed";
+  },
   run: (fixture: {
     port: string;
     requests: string[];
+    tailParams: Array<Record<string, unknown>>;
     stdout: string[];
     stderr: string[];
   }) => Promise<void>,
@@ -44,6 +49,7 @@ async function withLogsGateway(
       });
       const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
       const requests: string[] = [];
+      const tailParams: Array<Record<string, unknown>> = [];
       server.on("connection", (socket) => {
         sendMinimalGatewayConnectChallenge(socket);
         socket.on("message", (data) => {
@@ -52,12 +58,21 @@ async function withLogsGateway(
             return;
           }
           requests.push(frame.method);
+          if (frame.method === "logs.tail") {
+            tailParams.push(frame.params ?? {});
+          }
           if (frame.method === "connect") {
             sendMinimalGatewayResponse(
               socket,
               frame.id,
               buildMinimalGatewayHelloOkPayload({ methods: ["logs.tail"] }),
             );
+          } else if (options.failure) {
+            if (options.failure === "disconnect") {
+              socket.terminate();
+            } else if (options.failure === "malformed") {
+              sendMinimalGatewayResponse(socket, frame.id, null);
+            }
           } else if (options.denied) {
             socket.send(
               JSON.stringify({
@@ -92,7 +107,7 @@ async function withLogsGateway(
         throw new ExitError(code);
       });
       try {
-        await run({ port, requests, stdout, stderr });
+        await run({ port, requests, tailParams, stdout, stderr });
       } finally {
         await closeMinimalGatewayServer(server);
       }
@@ -116,6 +131,44 @@ describe("logs local port selection", () => {
     },
   );
 
+  it.each(["--limit", "--max-bytes", "--interval"])(
+    "rejects an explicitly empty numeric %s before contacting Gateway",
+    async (flag) => {
+      await withLogsGateway({}, async ({ port, requests }) => {
+        await expect(
+          runLogs(["--port", port, flag, "", "--json", "--timeout", "1500"]),
+        ).rejects.toThrow(`${flag} must be a positive integer.`);
+        expect(requests).toEqual([]);
+      });
+    },
+  );
+
+  it("preserves omitted defaults and forwards valid numeric limits to Gateway", async () => {
+    await withLogsGateway({}, async ({ port, requests, tailParams }) => {
+      await runLogs(["--port", port, "--json", "--timeout", "1500"]);
+      await expect(
+        runLogs([
+          "--port",
+          port,
+          "--limit",
+          "7",
+          "--max-bytes",
+          "4096",
+          "--interval",
+          "2",
+          "--json",
+          "--timeout",
+          "1500",
+        ]),
+      ).resolves.toBeUndefined();
+      expect(requests).toEqual(["connect", "logs.tail", "connect", "logs.tail"]);
+      expect(tailParams).toEqual([
+        { limit: 200, maxBytes: 250_000 },
+        { limit: 7, maxBytes: 4096 },
+      ]);
+    });
+  });
+
   it.each(["text", "json"])(
     "reports the rejection reason and selected port when the RPC fails in %s mode",
     async (mode) => {
@@ -134,7 +187,7 @@ describe("logs local port selection", () => {
         if (mode === "json") {
           expect(JSON.parse(output)).toMatchObject({
             type: "error",
-            message: "Gateway not reachable. Is it running and accessible?",
+            message: "logs unavailable for this client",
             error: "logs unavailable for this client",
             details: { url: `ws://127.0.0.1:${port}` },
           });
@@ -142,6 +195,37 @@ describe("logs local port selection", () => {
           expect(output).not.toContain("Gateway not reachable");
           expect(output).toContain(`Gateway target: ws://127.0.0.1:${port}`);
         }
+      });
+    },
+  );
+
+  it.each([
+    { failure: "timeout" as const, error: /timeout|timed out/ },
+    { failure: "disconnect" as const, error: /gateway closed/ },
+    { failure: "malformed" as const, error: /^Unexpected logs\.tail response$/ },
+  ])(
+    "uses the failure reason as the JSON summary after a post-hello $failure",
+    async ({ failure, error }) => {
+      await withLogsGateway({ failure }, async ({ port, requests, stdout, stderr }) => {
+        await expect(
+          runLogs([
+            "--url",
+            `ws://127.0.0.1:${port}`,
+            "--token",
+            "fixture-token",
+            "--json",
+            "--timeout",
+            "1500",
+          ]),
+        ).rejects.toBeInstanceOf(ExitError);
+        expect(requests).toEqual(["connect", "logs.tail"]);
+        expect(stdout.join("")).toBe("");
+        expect(JSON.parse(stderr.join(""))).toMatchObject({
+          type: "error",
+          message: expect.stringMatching(error),
+          error: expect.stringMatching(error),
+          details: { url: `ws://127.0.0.1:${port}` },
+        });
       });
     },
   );

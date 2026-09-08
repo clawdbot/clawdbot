@@ -75,6 +75,7 @@ export function createCodexDynamicToolExecutionRegistry() {
 
 export function resolveCodexDynamicToolDirectNames(
   params: EmbeddedRunAttemptParams,
+  registeredTools: readonly { name: string }[],
   hostSystemAgentActive = false,
 ): string[] {
   // Tools with catalogMode=direct-only use the model-only namespace. This list
@@ -85,11 +86,10 @@ export function resolveCodexDynamicToolDirectNames(
   if (hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow)) {
     names.push("openclaw");
   }
-  if (params.sourceReplyDeliveryMode === "message_tool_only") {
+  // Registration owns persistent layout; a turn may narrow execution without
+  // moving this tool into a namespace and changing the thread fingerprint.
+  if (registeredTools.some((tool) => tool.name === "message")) {
     names.push("message");
   }
-  // OpenClaw disables Codex's native update_plan on every thread. Keep its
-  // replacement in the initial context or the run has no visible progress tool.
-  names.push("progress_card");
   return names;
 }

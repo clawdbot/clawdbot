@@ -41,9 +41,12 @@ function getGlobalToolHookMatcherScope(hookName: "before_tool_call" | "after_too
   return registry ? getToolHookMatcherScope(registry, hookName) : undefined;
 }
 
-function nativePreToolUseMayRunLoopDetection(
-  registration: ActiveNativeHookRelayRegistration,
-): boolean {
+type NativeHookRelayPolicy = Pick<
+  ActiveNativeHookRelayRegistration,
+  "preToolUseLoopDetection" | "sessionKey" | "config" | "agentId"
+>;
+
+function nativePreToolUseMayRunLoopDetection(registration: NativeHookRelayPolicy): boolean {
   if (!registration.preToolUseLoopDetection || !registration.sessionKey) {
     return false;
   }
@@ -55,7 +58,7 @@ function nativePreToolUseMayRunLoopDetection(
 }
 
 export function nativeHookRelayEventHasLocalWork(
-  registration: ActiveNativeHookRelayRegistration,
+  registration: NativeHookRelayPolicy,
   event: NativeHookRelayEvent,
 ): boolean {
   if (event === "pre_tool_use") {
@@ -73,7 +76,7 @@ export function nativeHookRelayEventHasLocalWork(
 }
 
 export function nativeHookRelayEventToolMatcher(
-  registration: ActiveNativeHookRelayRegistration,
+  registration: NativeHookRelayPolicy,
   event: NativeHookRelayEvent,
 ): readonly string[] | undefined {
   if (event === "pre_tool_use") {

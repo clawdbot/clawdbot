@@ -4,6 +4,7 @@ import type {
   PluginManifestChannelConfig,
   PluginManifestContracts,
   PluginManifestProviderEndpoint,
+  PluginManifestNativeSessionCatalogSetup,
 } from "./manifest-types.js";
 import type {
   OpenClawPackageManifest,
@@ -75,7 +76,9 @@ type OfficialExternalCatalogChannel = PluginPackageChannel & {
 /** Manifest-like metadata stored in official external catalog entries. */
 export type OfficialExternalPluginCatalogManifest = {
   legacyPluginIds?: readonly string[];
+  legacyNpmPackageNames?: readonly string[];
   setupFeatures?: OpenClawPackageManifest["setupFeatures"];
+  setup?: { nativeSessionCatalog?: PluginManifestNativeSessionCatalogSetup };
   plugin?: {
     id?: string;
     label?: string;
@@ -121,7 +124,6 @@ export type OfficialExternalPluginCatalogEntry = {
   name?: string;
   version?: string;
   description?: string;
-  icon?: string;
   source?: string;
   kind?: string;
   featured?: boolean;

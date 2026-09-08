@@ -402,6 +402,17 @@ describe("agent runtime identity token", () => {
         cronCreatorAuthorityGrant,
       }),
     ).rejects.toThrow("require final tool-surface provenance");
+    const managementToken = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      operationalRunInstance: run.operationalRunInstance,
+      cronManagementGrant: cronCreatorAuthorityGrant,
+    });
+    await expect(
+      runtimeToken.verifyAgentRuntimeIdentityToken(managementToken),
+    ).resolves.toMatchObject({
+      cronManagementGrant: cronCreatorAuthorityGrant,
+    });
   });
 
   it("does not mint local credentials while rejecting invalid presented tokens", async () => {

@@ -11,7 +11,7 @@ import {
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { streamWithIdleTimeout } from "./run/llm-idle-timeout.js";
-import { resolveEmbeddedAgentStreamFn } from "./stream-resolution.js";
+import { resolveEmbeddedAgentStream } from "./stream-resolution.js";
 
 const model = {
   api: "openai-completions",
@@ -21,17 +21,17 @@ const model = {
 const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function resolveProviderStream(
-  providerStreamFn: Parameters<typeof resolveEmbeddedAgentStreamFn>[0]["providerStreamFn"],
+  providerStreamFn: Parameters<typeof resolveEmbeddedAgentStream>[0]["providerStreamFn"],
   runSignal: AbortSignal,
 ) {
-  return resolveEmbeddedAgentStreamFn({
+  return resolveEmbeddedAgentStream({
     llmRuntime: defaultLlmRuntime,
     currentStreamFn: undefined,
     providerStreamFn,
     sessionId: "session-1",
     signal: runSignal,
     model,
-  });
+  }).streamFn;
 }
 
 afterEach(() => {

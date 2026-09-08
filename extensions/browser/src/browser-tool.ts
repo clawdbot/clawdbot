@@ -346,6 +346,8 @@ export function createBrowserTool(
         requestedTimeoutMs,
         action,
         isUserBrowserProfile,
+        usesPersistentPlaywright: profileCapabilities?.usesPersistentPlaywright === true,
+        isNodeProxy: proxyRequest !== null,
         resolvedBrowser,
       });
       const sessionTabs = createBrowserToolSessionTabs({

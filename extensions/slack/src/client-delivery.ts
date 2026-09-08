@@ -1,6 +1,7 @@
 // Slack plugin module owns WebClient-scoped message and file delivery primitives.
 import type { MessageMetadata } from "@slack/types";
 import type { Block, ChatPostMessageResponse, KnownBlock, WebClient } from "@slack/web-api";
+import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import {
   extractErrorCode,
   PlatformMessageNotDispatchedError,
@@ -333,7 +334,7 @@ export async function uploadSlackFile(params: {
         init: {
           method: "POST",
           ...(contentType ? { headers: { "Content-Type": contentType } } : {}),
-          body: new Uint8Array(buffer) as BodyInit,
+          body: new Blob([bufferToBlobPart(buffer)]),
         },
         // The signal bounds the whole transfer; the guarded timeout also applies
         // the same budget to Undici's connect, header, and body phases.
@@ -370,8 +371,8 @@ export async function uploadSlackFile(params: {
   }
 
   await params.onPlatformSendDispatch?.();
-  // Slack allows this finalize call only once. Keep only the pre-connect DNS
-  // retry; a timeout or broader retry would create an unknown-send state.
+  // Completion is single-use after acceptance. Slack's method contract permits
+  // the write client's explicit-429 retries; this owner retries pre-connect DNS only.
   // Dispatch is already recorded above, so this call is the ambiguous send:
   // no rejection here may claim non-dispatch, however definitive its code reads.
   const completionClient = params.completionClient ?? params.client;

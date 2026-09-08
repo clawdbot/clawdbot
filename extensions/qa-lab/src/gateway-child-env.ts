@@ -68,6 +68,7 @@ export function buildQaRuntimeEnv(params: {
   bundledPluginsDir?: string;
   stagedBundledPluginsRoot?: string | null;
   compatibilityHostVersion?: string;
+  developmentSourceRoot: string | null;
   providerMode?: QaProviderMode;
   baseEnv?: NodeJS.ProcessEnv;
   runtimeEnvPatch?: NodeJS.ProcessEnv;
@@ -122,9 +123,17 @@ export function buildQaRuntimeEnv(params: {
   delete normalizedEnv.OPENCLAW_SKIP_CHANNELS;
   delete normalizedEnv.OPENCLAW_SKIP_PROVIDERS;
   Object.assign(normalizedEnv, params.runtimeEnvPatch);
+  if (params.developmentSourceRoot === null) {
+    delete normalizedEnv.OPENCLAW_DEV_SOURCE_ROOT;
+  } else {
+    normalizedEnv.OPENCLAW_DEV_SOURCE_ROOT = params.developmentSourceRoot;
+  }
+  // Direct Gateway launches need the same private-QA build and SDK admission
+  // as the QA CLI; caller patches cannot disable either half of that contract.
+  normalizedEnv.OPENCLAW_BUILD_PRIVATE_QA = "1";
+  normalizedEnv.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
   // Parent shell startup controls must be removed after caller patches so no
   // launcher or runtime child can import them before its own allowlist runs.
-  normalizedEnv.OPENCLAW_BUILD_PRIVATE_QA = "1";
   delete normalizedEnv[QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV];
   delete normalizedEnv[QA_LIVE_SETUP_TOKEN_VALUE_ENV];
   return scrubQaGatewayChildEnv(scrubQaGatewayChildTestRunnerEnv(normalizedEnv));
@@ -136,6 +145,7 @@ export async function stageQaCodexMockModelCatalog(params: {
   providerMode: QaProviderMode;
   primaryModel?: string;
   alternateModel?: string;
+  autoCompactTokenLimit?: number;
 }): Promise<string | undefined> {
   if (params.forcedRuntime !== "codex" || params.providerMode !== "mock-openai") {
     return undefined;
@@ -144,11 +154,16 @@ export async function stageQaCodexMockModelCatalog(params: {
   const selectedModelRefs = [params.primaryModel, params.alternateModel].filter(
     (model): model is string => typeof model === "string" && model.length > 0,
   );
-  await fs.writeFile(
-    modelCatalogPath,
-    `${JSON.stringify({ models: listMockCodexModelInfos(selectedModelRefs) }, null, 2)}\n`,
-    { encoding: "utf8", mode: 0o600 },
-  );
+  const models = listMockCodexModelInfos(selectedModelRefs);
+  if (params.autoCompactTokenLimit !== undefined) {
+    for (const model of models) {
+      Object.assign(model, { auto_compact_token_limit: params.autoCompactTokenLimit });
+    }
+  }
+  await fs.writeFile(modelCatalogPath, `${JSON.stringify({ models }, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
   return modelCatalogPath;
 }
 

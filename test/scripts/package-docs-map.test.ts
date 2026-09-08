@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { renderDocsHeadingMap } from "../../scripts/docs-list.js";
@@ -123,4 +123,28 @@ describe("package docs map", () => {
     expect(existsSync(changelogBackupPath)).toBe(false);
     expect(existsSync(receiptPath)).toBe(false);
   });
+
+  it.each([".openclaw-lifecycle-pending", "dist/openclaw-install-guard"])(
+    "retains the lifecycle lock when %s cannot be removed",
+    async (relativePath) => {
+      const root = makePackageRoot();
+      const markerPath = path.join(root, relativePath);
+      const receiptPath = path.join(root, ".artifacts/package-docs-map/receipt.json");
+      await preparePackageDocsMap(root);
+      await preparePackageChangelog(root);
+      mkdirSync(markerPath, { recursive: true });
+      writeFileSync(path.join(markerPath, "retain"), "filesystem fault fixture\n");
+
+      await expect(restorePrepackArtifacts(root)).rejects.toMatchObject({ code: "ERR_FS_EISDIR" });
+      expect(existsSync(receiptPath)).toBe(true);
+      await expect(preparePackageDocsMap(root)).rejects.toMatchObject({
+        code: "PACKAGE_DOCS_MAP_ACTIVE",
+      });
+
+      rmSync(markerPath, { recursive: true });
+      await restorePrepackArtifacts(root);
+      expect(existsSync(receiptPath)).toBe(false);
+      expect(readFileSync(path.join(root, "CHANGELOG.md"), "utf8")).toBe(sourceChangelog);
+    },
+  );
 });

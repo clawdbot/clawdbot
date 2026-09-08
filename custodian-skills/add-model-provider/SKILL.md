@@ -44,10 +44,10 @@ To change a default model, use the in-session `set_default_model` action (with `
 ## Repair
 
 ```
-openclaw doctor --non-interactive
+openclaw doctor --lint
 ```
 
-If it reports a config repair, get approval, run `openclaw doctor --fix --non-interactive`, then re-run the Gather reads.
+`doctor --lint` can exit `1` for findings: read the report and continue the remaining checks. Ordinary `doctor` and `doctor --non-interactive` can write config/state; do not use them for diagnosis before approval. If a repair is needed, get explicit approval, run `openclaw doctor --fix --non-interactive`, then re-run the Gather reads.
 
 ## Prove
 

@@ -10,6 +10,7 @@ export type {
 } from "./auth-profiles/credential-state.js";
 export type { AuthProfileEligibilityReasonCode } from "./auth-profiles/order.js";
 export { resolveAuthProfileDisplayLabel } from "./auth-profiles/display.js";
+export { resolveAuthProfileMetadata } from "./auth-profiles/identity.js";
 export { formatAuthDoctorHint } from "./auth-profiles/doctor.js";
 export {
   externalCliDiscoveryForConfigStatus,
@@ -26,6 +27,7 @@ export {
   isConfiguredAwsSdkAuthProfileForProvider,
   isStoredCredentialCompatibleWithAuthProvider,
   resolveAuthProfileEligibility,
+  resolveExplicitAuthOrderSelection,
   resolveAuthProfileOrder,
 } from "./auth-profiles/order.js";
 export {
@@ -59,24 +61,26 @@ export {
 } from "./auth-profiles/portability.js";
 export {
   clearRuntimeAuthProfileStoreSnapshot,
-  ensureAuthProfileStore,
-  ensureAuthProfileStoreWithoutExternalProfiles,
   getPreparedRuntimeAuthProfileStoreSnapshot,
   getRuntimeAuthProfileStoreSnapshot,
   getRuntimeAuthProfileStoreSnapshotRevision,
   hasAuthProfileStoreSourceForProvider,
   hasAnyAuthProfileStoreSource,
   hasLocalAuthProfileStoreSource,
-  loadAuthProfileStoreForSecretsRuntime,
-  loadAuthProfileStoreWithoutExternalProfiles,
-  loadAuthProfileStoreForRuntime,
-  loadAuthProfileStore,
-  saveAuthProfileStore,
   findPersistedAuthProfileCredential,
   resolvePersistedAuthProfileOwnerAgentDir,
   withEnvOnlyAuthProfileStore,
   withAuthProfileStoreAgentDir,
 } from "./auth-profiles/store.js";
+export {
+  ensureAuthProfileStore,
+  ensureAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreForSecretsRuntime,
+  loadAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreForRuntime,
+  loadAuthProfileStore,
+  saveAuthProfileStore,
+} from "./auth-profiles/store-runtime.js";
 export {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
@@ -92,6 +96,7 @@ export type {
   AuthProfileStore,
   OAuthCredential,
   ProfileUsageStats,
+  RuntimeAuthProfileStore,
   TokenCredential,
 } from "./auth-profiles/types.js";
 export {
@@ -104,7 +109,6 @@ export {
   markAuthProfileBlockedUntil,
   markAuthProfileFailure,
   markInlineProviderApiKeyFailure,
-  resolveInlineProviderApiKeyUnusableUntil,
   resolveInlineProviderApiKeyUsageId,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntilForDisplay,

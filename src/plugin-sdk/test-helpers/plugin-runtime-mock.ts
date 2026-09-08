@@ -386,19 +386,18 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         resolved.admission ?? preflight.admission ?? ({ kind: "dispatch" } as const);
       let dispatchResult;
       if ("runDispatch" in resolved) {
-        const lifecycle = resolved.runDispatchLifecycle;
-        if (!lifecycle) {
-          throw new Error(
-            "runChannelInboundEvent prepared turns must declare runDispatchLifecycle when creating runDispatch",
-          );
-        }
-        if (
-          params.turnAdoptionLifecycle &&
-          lifecycle.turnAdoptionLifecycle !== params.turnAdoptionLifecycle
-        ) {
-          throw new Error(
-            "runChannelInboundEvent prepared turn runDispatchLifecycle must own the top-level turnAdoptionLifecycle",
-          );
+        if (params.turnAdoptionLifecycle) {
+          const lifecycle = resolved.runDispatchLifecycle;
+          if (!lifecycle) {
+            throw new Error(
+              "runChannelInboundEvent prepared turns must declare runDispatchLifecycle when creating runDispatch",
+            );
+          }
+          if (lifecycle.turnAdoptionLifecycle !== params.turnAdoptionLifecycle) {
+            throw new Error(
+              "runChannelInboundEvent prepared turn runDispatchLifecycle must own the top-level turnAdoptionLifecycle",
+            );
+          }
         }
         const prepared =
           "route" in resolved
@@ -687,6 +686,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       listVoices: vi.fn<PluginRuntime["tts"]["listVoices"]>(),
     },
     mediaUnderstanding: {
+      resolveAudioInputBudget: vi
+        .fn<PluginRuntime["mediaUnderstanding"]["resolveAudioInputBudget"]>()
+        .mockResolvedValue({ enabled: true, maxBytes: 20 * 1024 * 1024 }),
       runFile: vi.fn<PluginRuntime["mediaUnderstanding"]["runFile"]>(),
       describeImageFile: vi.fn<PluginRuntime["mediaUnderstanding"]["describeImageFile"]>(),
       describeImageFileWithModel:
@@ -1005,12 +1007,34 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       } as PluginRuntime["tasks"]["flows"],
       managedFlows: taskFlow,
     },
+    modelConfig: {
+      resolveDefaultModelForAgent:
+        vi.fn<PluginRuntime["modelConfig"]["resolveDefaultModelForAgent"]>(),
+      resolveAllowedModelRef: vi.fn<PluginRuntime["modelConfig"]["resolveAllowedModelRef"]>(),
+    },
     modelAuth: {
+      resolveProviderIdForAuth: vi.fn<PluginRuntime["modelAuth"]["resolveProviderIdForAuth"]>(
+        (provider) => provider,
+      ),
+      ensureAuthProfileStore: vi.fn<PluginRuntime["modelAuth"]["ensureAuthProfileStore"]>(() => ({
+        version: 1,
+        profiles: {},
+      })),
+      resolveAuthProfileOrder: vi.fn<PluginRuntime["modelAuth"]["resolveAuthProfileOrder"]>(
+        () => [],
+      ),
+      listProfilesForProvider: vi.fn<PluginRuntime["modelAuth"]["listProfilesForProvider"]>(
+        () => [],
+      ),
+      isProviderApiKeyConfigured: vi.fn<PluginRuntime["modelAuth"]["isProviderApiKeyConfigured"]>(
+        () => false,
+      ),
       getApiKeyForModel: vi.fn<PluginRuntime["modelAuth"]["getApiKeyForModel"]>(),
       getRuntimeAuthForModel: vi.fn<PluginRuntime["modelAuth"]["getRuntimeAuthForModel"]>(),
       resolveApiKeyForProvider: vi.fn<PluginRuntime["modelAuth"]["resolveApiKeyForProvider"]>(),
     },
     subagent: {
+      complete: vi.fn(),
       run: vi.fn(),
       waitForRun: vi.fn(),
       getSessionMessages: vi.fn(),

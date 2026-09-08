@@ -1,19 +1,35 @@
-import { mkdir } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   createNewSessionPageE2eSuite,
+  controlUiSessionUrl,
   installMockGateway,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "inference-setup-gate");
+let proofDir: string;
+beforeEach(() => {
+  if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+    proofDir = createControlUiE2eArtifactDir("inference-setup-gate");
+  }
+});
 
 async function captureProof(page: import("playwright").Page, fileName: string) {
   if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
+  if (page.video()) {
+    await writeFile(
+      path.join(proofDir, fileName),
+      await takeControlUiViewportScreenshot(page, page.locator(".custodian-surface"), [
+        page.locator(".custodian__messages"),
+      ]),
+    );
+    return;
+  }
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
@@ -123,57 +139,107 @@ suite.define(() => {
     }
   });
 
-  it("distinguishes a configured provider that fails its live check", async () => {
-    const context = await suite.browser.newContext({
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1660 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      deferredMethods: ["openclaw.chat"],
-      featureMethods: ["chat.metadata", "chat.startup", "openclaw.chat"],
-      methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "main",
-              identity: { name: "OpenClaw" },
-              model: { primary: "openai/gpt-5.5" },
-              name: "OpenClaw",
-            },
-          ],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
+  it.each(["page", "panel"])(
+    "keeps %s history and the runtime error visible until retry succeeds",
+    async (surface) => {
+      const viewport = { height: 900, width: 1660 };
+      const context = await suite.browser.newContext({
+        colorScheme: "dark",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport,
+        ...(process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+          ? { recordVideo: { dir: proofDir, size: viewport } }
+          : {}),
+      });
+      const page = await context.newPage();
+      const runtimeError =
+        "OpenClaw requires working inference: The configured runtime could not start. Repair the launcher and retry.";
+      const gateway = await installMockGateway(page, {
+        sessionKey: "agent:main:work",
+        deferredMethods: ["openclaw.chat"],
+        featureMethods: [
+          "chat.metadata",
+          "chat.startup",
+          "chat.history",
+          "chat.send",
+          "openclaw.chat",
+          "openclaw.chat.history",
+        ],
+        methodResponses: {
+          "openclaw.chat.history": {
+            turns: [
+              {
+                role: "assistant",
+                text: "Your earlier conversation is still here.",
+                at: 1_700_000_101_000,
+              },
+            ],
+          },
         },
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}custodian`);
-      await gateway.waitForRequest("openclaw.chat");
-      await gateway.rejectDeferred("openclaw.chat", {
-        code: "UNAVAILABLE",
-        details: { code: "system_agent_inference_unavailable" },
-        message: "OpenClaw requires working inference: provider authentication failed",
       });
 
-      await page.getByRole("heading", { name: "Configured AI needs attention" }).waitFor();
-      await expect.poll(() => page.locator(".agent-chat__composer-shell").count()).toBe(0);
-      await expect
-        .poll(() => page.getByRole("button", { name: "Review connection" }).count())
-        .toBe(1);
-      await expect.poll(() => page.getByRole("button", { name: "Retry" }).count()).toBe(1);
-      await captureProof(page, "custodian-provider-unavailable.png");
+      try {
+        await page.goto(
+          surface === "page"
+            ? `${suite.server.baseUrl}custodian`
+            : controlUiSessionUrl(suite.server.baseUrl, "agent:main:work"),
+        );
+        if (surface === "panel") {
+          await page.locator(".sidebar-footer-bar__home").click();
+          await page
+            .locator("openclaw-assistant-panel")
+            .getByRole("button", { name: "Ask OpenClaw", exact: true })
+            .click();
+        }
+        const chat = page.locator("openclaw-custodian-surface");
+        await gateway.waitForRequest("openclaw.chat");
+        await gateway.rejectDeferred("openclaw.chat", {
+          code: "UNAVAILABLE",
+          details: { code: "system_agent_inference_unavailable" },
+          message: runtimeError,
+        });
+        await chat.locator(".custodian__setup-state, .custodian__error").waitFor();
+        await captureProof(page, "01-runtime-error.png");
+        await expect
+          .poll(() => chat.locator(".custodian__error").textContent())
+          .toContain(runtimeError);
+        await chat.getByText("Your earlier conversation is still here.").waitFor();
+        expect(await chat.getByRole("button", { name: "Review connection" }).count()).toBe(0);
+        expect(await chat.locator(".agent-chat__composer-shell").count()).toBe(1);
+        expect(await chat.getByRole("textbox").isDisabled()).toBe(true);
 
-      await page.getByRole("button", { name: "Review connection" }).click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
-      const modelsLink = page.locator('.settings-sidebar__item[href="/settings/model-providers"]');
-      await expect.poll(() => modelsLink.getAttribute("aria-current")).toBe("page");
-    } finally {
-      await context.close();
-    }
-  });
+        // Each deferral is consumed by one request, including the failed startup check.
+        await gateway.deferNext("openclaw.chat");
+        await chat.getByRole("button", { name: "Retry", exact: true }).click();
+        const retry = await gateway.waitForRequest("openclaw.chat", { after: 1 });
+        expect(retry.params).not.toHaveProperty("message");
+        expect(await chat.getByRole("textbox").isDisabled()).toBe(true);
+        await gateway.resolveDeferred("openclaw.chat", {
+          sessionId: "runtime-recovered",
+          reply: "Ready to help again.",
+          action: "none",
+        });
+        await chat.getByText("Ready to help again.").waitFor();
+        await expect.poll(() => chat.getByRole("textbox").isEnabled()).toBe(true);
+        expect(await chat.locator(".custodian__error").count()).toBe(0);
+        await captureProof(page, "02-runtime-recovered.png");
+
+        await gateway.deferNext("openclaw.chat", { message: "Check my setup" });
+        await chat.getByRole("textbox").fill("Check my setup");
+        await chat.getByRole("button", { name: "Send", exact: true }).click();
+        const turn = await gateway.waitForRequest("openclaw.chat", { after: 2 });
+        expect(turn.params).toMatchObject({ message: "Check my setup" });
+        await gateway.resolveDeferred("openclaw.chat", {
+          sessionId: "runtime-recovered",
+          reply: "Your setup is working.",
+          action: "none",
+        });
+        await chat.getByText("Your setup is working.").waitFor();
+        await captureProof(page, "03-user-turn-succeeded.png");
+      } finally {
+        await context.close();
+      }
+    },
+  );
 });

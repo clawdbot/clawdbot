@@ -1,11 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { resetConfigRuntimeState } from "../config/config.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import { listAgentIds } from "../agents/agent-scope.js";
+import { type AgentsConfig, getRuntimeConfig, resetConfigRuntimeState } from "../config/config.js";
 import { drainSystemEvents, enqueueSystemEvent } from "../infra/system-events.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { GatewayClient, GatewayClientRequestError } from "./client.js";
 import { createGatewayConfigOverrides } from "./test-helpers.config-runtime.js";
-import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import {
+  connectGatewayClient,
+  disconnectGatewayClient,
+  startGatewayWithClient,
+} from "./test-helpers.e2e.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   installGatewayTestHooks,
@@ -23,6 +30,70 @@ const envBeforeSuite = {
 installGatewayTestHooks();
 
 describe("Gateway test environment lifecycle", () => {
+  it.each(["connect error", "start error"] as const)(
+    "joins %s client cleanup before rejecting acquisition",
+    async (failureMode) => {
+      await withGatewayServer(async ({ port }) => {
+        // oxlint-disable-next-line typescript/unbound-method -- Each call binds the acquired client.
+        const { start, stopAndWait } = GatewayClient.prototype;
+        const startError = new Error("client start failed after allocating its socket");
+        let stopAcquiredClient: (() => Promise<void>) | undefined;
+        let stopping: Promise<void> | undefined;
+        let stopSettled = false;
+        const startSpy = vi
+          .spyOn(GatewayClient.prototype, "start")
+          .mockImplementation(function (this: GatewayClient) {
+            stopAcquiredClient = () => stopAndWait.call(this, { timeoutMs: 1_000 });
+            start.call(this);
+            if (failureMode === "start error") {
+              throw startError;
+            }
+          });
+        const stopSpy = vi
+          .spyOn(GatewayClient.prototype, "stopAndWait")
+          .mockImplementation(function (this: GatewayClient, options) {
+            // Observe the actual client completion without holding its socket.
+            stopping = stopAndWait.call(this, options).then(() => {
+              stopSettled = true;
+            });
+            return stopping;
+          });
+
+        await runQaGatewayFixture(
+          async () => {
+            const failure: unknown = await connectGatewayClient({
+              url: `ws://127.0.0.1:${port}`,
+              token:
+                failureMode === "connect error"
+                  ? "wrong-gateway-token-1234567890"
+                  : "test-gateway-token-1234567890",
+            }).then(
+              () => undefined,
+              (error: unknown) => error,
+            );
+            if (failureMode === "connect error") {
+              expect(failure).toBeInstanceOf(GatewayClientRequestError);
+              expect(failure).toMatchObject({
+                details: { code: "AUTH_TOKEN_MISMATCH" },
+              });
+            } else {
+              expect(failure).toBe(startError);
+            }
+            expect(stopSpy).toHaveBeenCalledExactlyOnceWith({ timeoutMs: 1_000 });
+            expect(stopSettled).toBe(true);
+          },
+          async () => {
+            // The pre-fix helper can reject without owning a stop at all.
+            await stopAcquiredClient?.();
+            await stopping;
+          },
+          () => stopSpy.mockRestore(),
+          () => startSpy.mockRestore(),
+        );
+      });
+    },
+  );
+
   it("records the process-wide startup environment", async () => {
     await withGatewayServer(async ({ port }) => {
       expect(process.env.OPENCLAW_GATEWAY_PORT).toBe(String(port));
@@ -57,16 +128,32 @@ describe("Gateway test environment lifecycle", () => {
     },
   );
 
-  it.each(["session store", "config mock"])(
-    "keeps config readable while the %s fixture publishes an update",
-    async (fixture) => {
+  it.each([
+    { fixture: "session store", roster: "entries" },
+    { fixture: "config mock", roster: "entries" },
+    { fixture: "session store", roster: "list" },
+  ])(
+    "keeps authored config readable while the $fixture publishes canonical $roster overrides",
+    async ({ fixture, roster }) => {
       const actual = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
       const { writeConfigFile } = createGatewayConfigOverrides(actual);
-      await writeConfigFile({ session: { reset: { idleMinutes: 30 } } });
       const configPath = process.env.OPENCLAW_CONFIG_PATH!;
-      const readIdleMinutes = () =>
-        actual.loadConfig({ pin: false, skipPluginValidation: true, skipShellEnvFallback: true })
-          .session?.reset?.idleMinutes;
+      const workspace = path.dirname(configPath);
+      const agents = {
+        ownership: "explicit",
+        entries: { main: {}, authored: {} },
+        defaults: { userTimezone: "UTC", timeoutSeconds: 90 },
+      } satisfies AgentsConfig;
+      await writeConfigFile({ agents, session: { reset: { idleMinutes: 30 } } });
+      const fixtureEntries = { main: {}, fixture: { workspace } };
+      testState.agentsConfig =
+        roster === "list"
+          ? { list: [{ id: "main" }, { id: "fixture", workspace }] }
+          : { ownership: "explicit", entries: fixtureEntries };
+      testState.agentConfig = { workspace, timeoutSeconds: 45 };
+      const readAuthoredConfig = () =>
+        actual.loadConfig({ pin: false, skipPluginValidation: true, skipShellEnvFallback: true });
+      const readIdleMinutes = () => readAuthoredConfig().session?.reset?.idleMinutes;
       expect(readIdleMinutes()).toBe(30);
       const writeFile = fs.writeFile.bind(fs);
       const writeSpy = vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
@@ -87,9 +174,23 @@ describe("Gateway test environment lifecycle", () => {
           testState.sessionConfig = { reset: { idleMinutes: 60 } };
           await writeSessionStore({ entries: {} });
         } else {
-          await writeConfigFile({ session: { reset: { idleMinutes: 60 } } });
+          await writeConfigFile({ agents, session: { reset: { idleMinutes: 60 } } });
         }
         expect(readIdleMinutes()).toBe(60);
+        const realConfig = actual.getRuntimeConfig();
+        expect(realConfig.agents?.entries).toEqual(fixtureEntries);
+        expect(realConfig.agents?.list).toBeUndefined();
+        expect(realConfig.agents?.defaults).toMatchObject({
+          userTimezone: "UTC",
+          workspace,
+          timeoutSeconds: 45,
+        });
+        expect(realConfig.session?.store).toBe(testState.sessionStorePath);
+        expect(getRuntimeConfig()).toEqual(realConfig);
+        const authoredConfig = readAuthoredConfig();
+        expect(listAgentIds(authoredConfig)).toEqual(["main", "authored"]);
+        expect(authoredConfig.agents?.defaults).toMatchObject(agents.defaults);
+        expect(JSON.parse(await fs.readFile(configPath, "utf8")).agents).toEqual(agents);
       } finally {
         writeSpy.mockRestore();
       }

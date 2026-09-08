@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { buildCodexMessagesSnapshot } from "./event-projector-snapshot.js";
 import {
   buildEmptyToolTelemetry,
+  createCodexTestModel,
   createProjector,
   forCurrentTurn,
   registerCodexEventProjectorTestLifecycle,
@@ -17,10 +18,14 @@ import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 registerCodexEventProjectorTestLifecycle();
 
 function buildSnapshot(trigger: EmbeddedRunAttemptParams["trigger"]): AgentMessage[] {
+  const model = createCodexTestModel();
   return buildCodexMessagesSnapshot({
     runParams: {
       prompt: "Pre-compaction memory flush",
       sessionId: "session-1",
+      provider: model.provider,
+      modelId: model.id,
+      model,
       trigger,
     } as EmbeddedRunAttemptParams,
     turnId: "turn-1",
@@ -43,12 +48,6 @@ function buildSnapshot(trigger: EmbeddedRunAttemptParams["trigger"]): AgentMessa
       content: [{ type: "text", text: "NO_REPLY" }],
       timestamp: Date.now() + 1,
     } as AssistantMessage,
-    createAssistantMirrorMessage: (title, text) =>
-      ({
-        role: "assistant",
-        content: [{ type: "text", text: `[${title}] ${text}` }],
-        timestamp: Date.now(),
-      }) as AssistantMessage,
   });
 }
 

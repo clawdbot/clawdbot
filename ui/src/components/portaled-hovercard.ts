@@ -21,6 +21,29 @@ export class PortaledHovercardController {
   private stopPositioning: (() => void) | null = null;
   private trigger: HTMLElement | null = null;
   private unmountContents: (() => void) | null = null;
+  private readonly handleCardPointerEnter = (event: PointerEvent) => {
+    if (event.currentTarget === this.card) {
+      this.pointerOverCard = true;
+      this.clearClose();
+    }
+  };
+  private readonly handleCardFocusIn = (event: FocusEvent) => {
+    if (event.currentTarget === this.card) {
+      this.cardFocusInside = true;
+      this.clearClose();
+    }
+  };
+  private readonly handleCardFocusOut = (event: FocusEvent) => {
+    const card = this.card;
+    if (!card || event.currentTarget !== this.card) {
+      return;
+    }
+    if (event.relatedTarget instanceof Node && card.contains(event.relatedTarget)) {
+      return;
+    }
+    this.cardFocusInside = false;
+    this.scheduleClose();
+  };
 
   constructor(
     private readonly close: () => void,
@@ -37,17 +60,11 @@ export class PortaledHovercardController {
     );
   }
 
-  schedulePointerExit(event: PointerEvent, target: HTMLElement, bridgeMs = 220): void {
+  schedulePointerExit(bridgeMs = 220): void {
     this.pointerInside = false;
-    const side = this.card?.dataset.side;
-    const rect = target.getBoundingClientRect();
-    const towardCard =
-      (event.relatedTarget instanceof Node && this.card?.contains(event.relatedTarget)) ||
-      (side === "right" && event.clientX >= rect.right) ||
-      (side === "left" && event.clientX <= rect.left) ||
-      (side === "bottom" && event.clientY >= rect.bottom) ||
-      (side === "top" && event.clientY <= rect.top);
-    this.scheduleClose(towardCard ? bridgeMs : this.closeDelayMs);
+    // Portaled cards can be viewport-clamped diagonally from their trigger, so
+    // exit coordinates cannot reliably tell whether the pointer is crossing the gap.
+    this.scheduleClose(bridgeMs);
   }
 
   focusables(): HTMLElement[] {
@@ -102,6 +119,7 @@ export class PortaledHovercardController {
     this.clearCard();
     this.anchor = anchor;
     this.card = card;
+    this.attachCardHoldListeners(card);
     this.placement = placement;
     this.unmountContents = unmountContents ?? null;
     this.stopPositioning = mountPortaledHovercard({
@@ -111,6 +129,12 @@ export class PortaledHovercardController {
       placement,
       observeVisualViewport,
     });
+  }
+
+  private attachCardHoldListeners(card: HTMLDivElement): void {
+    card.addEventListener("pointerenter", this.handleCardPointerEnter);
+    card.addEventListener("focusin", this.handleCardFocusIn);
+    card.addEventListener("focusout", this.handleCardFocusOut);
   }
 
   clearCard(exitDurationMs = 0): void {

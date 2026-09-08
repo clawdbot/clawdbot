@@ -14,6 +14,7 @@ export type DockerE2eLane = {
   estimateSeconds?: number;
   live: boolean;
   name: string;
+  needsPackage?: boolean;
   needsLiveImage?: boolean;
   noOutputTimeoutMs?: number;
   prepublishPluginPackages?: string[];
@@ -63,6 +64,8 @@ const updateMigrationCommand = upgradeSurvivorScriptCommand(
 );
 const updateRunPackageSelfUpgradeCommand =
   "OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-run-package-self-upgrade";
+const updateFirstHopCompatCommand =
+  "OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-first-hop-compat";
 const CODEX_HARNESS_API_KEY_ENV = "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key";
 const npmOnboardLaneOptions = {
   prepublishPluginPackages: ["@openclaw/codex"],
@@ -112,6 +115,7 @@ function lane(name: string, command: string, options: LaneOptions = {}): DockerE
     live: options.live === true,
     noOutputTimeoutMs: options.noOutputTimeoutMs,
     name,
+    ...(options.needsPackage ? { needsPackage: true } : {}),
     needsLiveImage: options.needsLiveImage,
     prepublishPluginPackages: options.prepublishPluginPackages,
     retryPatterns: options.retryPatterns ?? [],
@@ -242,6 +246,12 @@ function createPackageUpdateMaintenanceLanes() {
       upgradeSurvivorScenario: "base",
       weight: 3,
     }),
+    npmLane("update-first-hop-compat", updateFirstHopCompatCommand, {
+      resources: ["service"],
+      stateScenario: "upgrade-survivor",
+      timeoutMs: 25 * 60 * 1000,
+      weight: 3,
+    }),
     npmLane("update-run-package-self-upgrade", updateRunPackageSelfUpgradeCommand, {
       resources: ["service"],
       stateScenario: "upgrade-survivor",
@@ -356,6 +366,14 @@ function kitchenSinkRpcLane() {
   );
 }
 
+export const fleetCacheLane = lane("fleet-cache", "pnpm test:docker:fleet-cache", {
+  e2eImageKind: false,
+  needsPackage: true,
+  resources: ["docker", "service", "npm"],
+  timeoutMs: 30 * 60 * 1000,
+  weight: 4,
+});
+
 export const mainLanes: DockerE2eLane[] = [
   lane(
     "docker-selected-plugins",
@@ -384,8 +402,10 @@ export const mainLanes: DockerE2eLane[] = [
   ),
   npmLane(
     "docker-package-install",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:package-install",
+    "OPENCLAW_SKIP_DOCKER_BUILD=0 pnpm test:docker:package-install",
     {
+      e2eImageKind: false,
+      needsPackage: true,
       stateScenario: "empty",
       timeoutMs: 20 * 60 * 1000,
       weight: 3,
@@ -881,17 +901,28 @@ const releasePathPackageUpdateOpenAiLanes = [
   ...scheduledLaneList("root-managed-vps-upgrade", "update-restart-auth"),
 ];
 
-const releasePathPackageUpdateCoreLanes = scheduledLaneList(
+// Balance the npm-limited rows without raising per-runner resource caps.
+const releasePathPackageOnboardingLanes = scheduledLaneList(
   "npm-onboard-channel-agent",
   "npm-onboard-discord-channel-agent",
   "npm-onboard-slack-channel-agent",
   "doctor-switch",
-  "update-channel-switch",
   "skill-install",
-  "upgrade-survivor",
+);
+const releasePathPackageMigrationLanes = scheduledLaneList(
+  "update-channel-switch",
   "published-upgrade-survivor",
+);
+const releasePathPackageSelfUpgradeLanes = scheduledLaneList(
+  "upgrade-survivor",
+  "update-first-hop-compat",
   "update-run-package-self-upgrade",
 );
+const releasePathPackageUpdateCoreLanes = [
+  ...releasePathPackageOnboardingLanes,
+  ...releasePathPackageMigrationLanes,
+  ...releasePathPackageSelfUpgradeLanes,
+];
 
 const primaryReleasePathChunks: Record<string, DockerE2eLane[]> = {
   core: [
@@ -908,7 +939,9 @@ const primaryReleasePathChunks: Record<string, DockerE2eLane[]> = {
     ),
   ],
   "package-update-openai": releasePathPackageUpdateOpenAiLanes,
-  "package-update-core": releasePathPackageUpdateCoreLanes,
+  "package-update-onboarding": releasePathPackageOnboardingLanes,
+  "package-update-migrations": releasePathPackageMigrationLanes,
+  "package-update-self-upgrade": releasePathPackageSelfUpgradeLanes,
   "plugins-runtime-plugins": releasePathPluginRuntimePluginLanes,
   "plugins-runtime-services": releasePathPluginRuntimeServiceLanes,
   "plugins-runtime-install-a": bundledPluginInstallUninstallLanes.slice(0, 3),
@@ -925,7 +958,9 @@ const primaryReleasePathChunks: Record<string, DockerE2eLane[]> = {
 const primaryReleasePathChunkProfiles: Record<string, DockerE2eReleaseProfile[]> = {
   core: ["stable", "full"],
   "package-update-openai": ["beta", "stable", "full"],
-  "package-update-core": ["beta", "stable", "full"],
+  "package-update-onboarding": ["beta", "stable", "full"],
+  "package-update-migrations": ["beta", "stable", "full"],
+  "package-update-self-upgrade": ["beta", "stable", "full"],
   "plugins-runtime-plugins": ["stable", "full"],
   "plugins-runtime-services": ["stable", "full"],
   "plugins-runtime-install-a": ["stable", "full"],
@@ -941,6 +976,7 @@ const primaryReleasePathChunkProfiles: Record<string, DockerE2eReleaseProfile[]>
 
 const legacyReleasePathChunks: Record<string, DockerE2eLane[]> = {
   "package-update": [...releasePathPackageUpdateOpenAiLanes, ...releasePathPackageUpdateCoreLanes],
+  "package-update-core": releasePathPackageUpdateCoreLanes,
   "plugins-runtime-core": releasePathPluginRuntimeCoreLanes,
   "plugins-runtime": releasePathPluginRuntimeLanes,
   "plugins-integrations": [...releasePathPluginRuntimeLanes, ...releasePathBundledChannelLanes],

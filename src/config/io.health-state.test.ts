@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -36,6 +37,15 @@ const healthState = {
 };
 
 describe("config health-state warnings", () => {
+  it("reads an absent health store without creating shared state", () => {
+    const deps = createHealthDeps();
+    const databasePath = resolveOpenClawStateSqlitePath(deps.env);
+
+    const state = readConfigHealthStateFromStore(deps);
+    expect(fs.existsSync(databasePath)).toBe(false);
+    expect(state).toEqual({});
+  });
+
   it("deduplicates write failures across fresh sync and async config reads", async () => {
     const deps = createHealthDeps();
     const configPath = path.join(deps.env.HOME, "openclaw.json");
@@ -57,7 +67,7 @@ describe("config health-state warnings", () => {
     );
   });
 
-  it("reports a newer database schema once across failed reads and writes", () => {
+  it("propagates a newer database schema from health writes", () => {
     const deps = createHealthDeps();
     const databasePath = resolveOpenClawStateSqlitePath(deps.env);
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
@@ -67,11 +77,57 @@ describe("config health-state warnings", () => {
 
     for (let i = 0; i < 3; i++) {
       expect(readConfigHealthStateFromStore(deps)).toEqual({});
-      writeConfigHealthStateToStore(deps, healthState);
+      expect(() => writeConfigHealthStateToStore(deps, healthState)).toThrow(
+        `uses newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
+      );
     }
-    expect(deps.logger.warn).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining(`uses newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`),
+    expect(deps.logger.warn).not.toHaveBeenCalled();
+  });
+
+  it("propagates audit migration required from health writes and config snapshots", async () => {
+    const deps = createHealthDeps();
+    const { path: databasePath } = openOpenClawStateDatabase(deps);
+    closeOpenClawStateDatabaseForTest();
+    const db = new DatabaseSync(databasePath);
+    db.exec(`
+      DROP TABLE audit_events;
+      CREATE TABLE audit_events (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id TEXT NOT NULL UNIQUE,
+        source_id TEXT NOT NULL UNIQUE,
+        source_sequence INTEGER NOT NULL,
+        occurred_at INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        action TEXT NOT NULL,
+        status TEXT NOT NULL,
+        error_code TEXT,
+        actor_type TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        session_key TEXT,
+        session_id TEXT,
+        run_id TEXT NOT NULL,
+        tool_call_id TEXT,
+        tool_name TEXT
+      );
+    `);
+    db.close();
+    let failure: unknown;
+    try {
+      writeConfigHealthStateToStore(deps, healthState);
+    } catch (error) {
+      failure = error;
+    }
+    expect(findStartupMaintenanceRequiredError(failure)).toMatchObject({
+      kind: "audit-events-v2",
+      pathname: databasePath,
+    });
+    const configPath = path.join(deps.env.HOME, "openclaw.json");
+    fs.writeFileSync(configPath, JSON.stringify({ gateway: { mode: "local" } }));
+    await expect(createConfigIO({ ...deps, configPath }).readConfigFileSnapshot()).rejects.toThrow(
+      "audit-events-v2",
     );
+    expect(deps.logger.warn).not.toHaveBeenCalled();
   });
 
   it("reports changed failures and re-arms only after a successful health write", () => {

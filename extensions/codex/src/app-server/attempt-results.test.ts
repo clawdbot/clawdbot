@@ -45,106 +45,26 @@ describe("Codex app-server attempt results", () => {
     ).toBe("first \n\nsecond");
   });
 
-  it("builds timeout outcomes from completion and side-effect evidence", () => {
-    expect(
-      buildCodexAppServerPromptTimeoutOutcome({
-        result: createResult(),
-        turnCompletionIdleTimedOut: false,
-      }),
-    ).toBeUndefined();
-    expect(
-      buildCodexAppServerPromptTimeoutOutcome({
-        result: createResult(),
-        turnCompletionIdleTimedOut: true,
-        turnWatchTimeoutKind: "progress",
-      }),
-    ).toBeUndefined();
-    expect(
-      buildCodexAppServerPromptTimeoutOutcome({
-        result: createResult({
-          assistantTexts: ["Salvaged answer."],
-        }),
-        turnCompletionIdleTimedOut: true,
-        turnWatchTimeoutKind: "terminal",
-      }),
-    ).toBeUndefined();
-    expect(
-      buildCodexAppServerPromptTimeoutOutcome({
-        result: createResult({
-          itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
-        }),
-        turnCompletionIdleTimedOut: true,
-        turnWatchTimeoutKind: "completion",
-      }),
-    ).toEqual({
-      message:
-        "Codex stopped before confirming the turn was complete. The response may be incomplete; retry if needed.",
-    });
-    expect(
-      buildCodexAppServerPromptTimeoutOutcome({
-        result: createResult({
-          replayMetadata: {
-            hadPotentialSideEffects: true,
-            replaySafe: false,
-          },
-        }),
-        turnCompletionIdleTimedOut: true,
-        turnWatchTimeoutKind: "completion",
-      }),
-    ).toEqual({
-      message:
-        "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
-      replayInvalid: true,
-      livenessState: "abandoned",
-    });
-    expect(
-      buildCodexAppServerPromptTimeoutOutcome({
-        result: createResult({
-          assistantTexts: ["I am changing the data model now..."],
-        }),
-        turnCompletionIdleTimedOut: true,
-        turnWatchTimeoutKind: "completion",
-      }),
-    ).toEqual({
-      message:
-        "Codex stopped before confirming the turn was complete. The response may be incomplete; retry if needed.",
-      replayInvalid: true,
-      livenessState: "abandoned",
-    });
-    expect(
-      buildCodexAppServerPromptTimeoutOutcome({
-        result: createResult({
-          toolMetas: [{ toolName: "exec" }],
-        }),
-        turnCompletionIdleTimedOut: true,
-        turnWatchTimeoutKind: "completion",
-      }),
-    ).toEqual({
-      message:
-        "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
-      replayInvalid: true,
-      livenessState: "abandoned",
-    });
+  it("does not invent a timeout outcome without a deadline failure", () => {
+    expect(buildCodexAppServerPromptTimeoutOutcome(undefined)).toBeUndefined();
   });
 
-  it("builds an honest terminal-idle outcome instead of budget advice", () => {
-    expect(
-      buildCodexAppServerPromptTimeoutOutcome({
-        result: createResult({}),
-        turnCompletionIdleTimedOut: true,
-        turnWatchTimeoutKind: "terminal",
-      }),
-    ).toEqual({
+  it.each([
+    {
+      kind: "execution" as const,
       message:
-        "Codex stopped responding: no activity arrived for the turn's liveness window, so the turn was ended and the connection was replaced. Retry to continue on a fresh session.",
-    });
+        "Codex reached the configured execution time limit. Some work may already have been performed; verify the current state before continuing.",
+    },
+    {
+      kind: "settlement" as const,
+      message:
+        "Codex finished its turn, but OpenClaw could not finish processing the result. Some work may already have been performed; verify the current state before continuing.",
+    },
+  ])("reports the $kind owner and prevents automatic replay", ({ kind, message }) => {
     expect(
-      buildCodexAppServerPromptTimeoutOutcome({
-        result: createResult({ toolMetas: [{ toolName: "exec" }] }),
-        turnCompletionIdleTimedOut: true,
-        turnWatchTimeoutKind: "terminal",
-      }),
-    ).toMatchObject({
+      buildCodexAppServerPromptTimeoutOutcome({ kind, elapsedMs: 120_000, timeoutMs: 120_000 }),
+    ).toEqual({
+      message,
       replayInvalid: true,
       livenessState: "abandoned",
     });

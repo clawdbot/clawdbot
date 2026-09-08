@@ -26,7 +26,7 @@ interface NpmUpdateScriptInput {
   updateTarget: string;
 }
 
-const windowsStalePostSwapImportRegex = String.raw`node_modules\\openclaw\\dist\\[^\\]+-[A-Za-z0-9_-]+\.js`;
+const windowsStalePostSwapImportRegex = String.raw`node_modules\\openclaw\\dist\\[^\\]+-[A-Za-z0-9_-]+\.m?js`;
 const startupMigrationRestartPrefix =
   "OpenClaw plugin migration inputs changed during startup convergence;";
 const macosGuestPath =

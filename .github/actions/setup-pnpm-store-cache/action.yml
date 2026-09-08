@@ -100,7 +100,16 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        store_path="$(pnpm store path --silent)"
+        store_path=""
+        for attempt in 1 2 3; do
+          if store_path="$(pnpm store path --silent)"; then
+            break
+          fi
+          if [[ "$attempt" -eq 3 ]]; then
+            exit 1
+          fi
+          sleep $((attempt * 5))
+        done
         node -e "require('node:fs').mkdirSync(process.argv[1], { recursive: true })" "$store_path"
         echo "path=$store_path" >> "$GITHUB_OUTPUT"
 

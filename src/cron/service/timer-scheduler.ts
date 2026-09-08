@@ -29,6 +29,7 @@ import {
   setCronRunCapacityListener,
   tryAcquireCronRunSlots,
 } from "./run-admission.js";
+import { skipCronJobsWithoutOwners } from "./run-owner.js";
 import {
   recomputeUnownedCronSchedules,
   recoverNonTerminalCronRunReceipts,
@@ -149,7 +150,7 @@ export async function onTimer(state: CronServiceState) {
   try {
     // A restart signal can be rejected after temporarily closing admission.
     // Wait for that decision so the consumed timer is not silently lost.
-    admission = await beginGatewayRootWorkAdmissionWhenOpen();
+    admission = await beginGatewayRootWorkAdmissionWhenOpen("cron:timer-tick");
   } catch (err) {
     if (err instanceof GatewayDrainingError) {
       return;
@@ -198,7 +199,11 @@ async function onAdmittedTimer(state: CronServiceState) {
         await ensureLoaded(state, { forceReload: true, skipRecompute: true });
       }
       const dueCheckNow = state.deps.nowMs();
-      const due = collectRunnableJobs(state, dueCheckNow);
+      const due = skipCronJobsWithoutOwners(
+        state,
+        collectRunnableJobs(state, dueCheckNow),
+        dueCheckNow,
+      );
 
       if (due.length === 0) {
         if (!state.store?.jobs.some((job) => needsCronTimerMaintenance(job, dueCheckNow))) {

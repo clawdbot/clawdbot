@@ -31,11 +31,17 @@ function createProfileAppearanceGateway(profileId: string | null) {
     hello: { auth: { role: "operator", scopes: ["operator.write"] } },
   } as ApplicationGatewaySnapshot;
   const refreshTheme = vi.fn();
+  const connectionBootstrap = {
+    reset: vi.fn(),
+    run: (_key: string, task: () => Promise<unknown>) => task(),
+    synchronize: vi.fn(),
+  };
   const context = {
     gateway: {
       connection: { gatewayUrl: "ws://profile.test" },
       snapshot,
     },
+    connectionBootstrap,
     runtimeConfig: {
       canPatch: false,
       ensureLoaded: vi.fn(async () => undefined),
@@ -62,11 +68,12 @@ function createProfileAppearanceGateway(profileId: string | null) {
     runtimeConfigClient: null,
     runtimeConfigSource: null,
     sessionKeyClient: null,
-    sidebarWorkboardRuntime: null,
-    syncSidebarWorkboard: vi.fn(),
   } as unknown as ShellGatewayHost;
   return {
-    completeProfileAppearance(this: void, accent = "#336699") {
+    async completeProfileAppearance(this: void, accent = "#336699") {
+      await vi.waitFor(() => {
+        expect(pendingResponses).toHaveLength(1);
+      });
       const respond = pendingResponses.shift();
       expect(respond, "pending users.prefs.get response").toBeDefined();
       // Config reconciliation can also refresh the theme. Arm this only when
@@ -109,6 +116,26 @@ describe("ShellGatewayOwner profile appearance integration", () => {
     });
 
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the cached agent roster when hello lands", async () => {
+    const { context, host, owner, snapshot } = createProfileAppearanceGateway(null);
+    const agentsList = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender" as const,
+      agents: [{ id: "main" }],
+    };
+    const ensureList = vi.fn(async () => agentsList);
+    Object.assign(context, {
+      agents: { state: { agentsList, agentsListCached: true }, ensureList },
+    });
+    host.routeState.routeId = "chat";
+
+    owner.synchronizeGateway(snapshot);
+    await Promise.resolve();
+
+    expect(ensureList).toHaveBeenCalledOnce();
   });
 
   it("loads profile appearance when authenticated presence appears on an existing connection", async () => {

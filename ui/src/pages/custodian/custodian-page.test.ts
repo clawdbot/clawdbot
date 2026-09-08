@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import * as uuid from "../../lib/uuid.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext, mountPage } from "./custodian-page.test-harness.ts";
 
@@ -10,7 +11,7 @@ describe("custodian page", () => {
     // A persisted companion id would turn every mount into a rejoin candidate;
     // tests exercising the rejoin path seed the key explicitly instead.
     localStorage.clear();
-    vi.spyOn(crypto, "randomUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
+    vi.spyOn(uuid, "generateUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
     window.history.replaceState({}, "", "/");
   });
 
@@ -451,14 +452,13 @@ describe("custodian page", () => {
     expect(replacementRequest).not.toHaveBeenCalled();
   });
 
-  it("keeps loaded transcript rows when a welcome retry cannot refresh them", async () => {
+  it("keeps loaded transcript rows while retrying the welcome without reloading history", async () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({
         turns: [{ role: "assistant", text: "Loaded transcript row", at: 1 }],
       })
       .mockRejectedValueOnce(new Error("temporary welcome failure"))
-      .mockRejectedValueOnce(new Error("temporary history failure"))
       .mockResolvedValueOnce({
         sessionId: "engine-session-after-retry",
         reply: "Recovered welcome.",
@@ -474,13 +474,12 @@ describe("custodian page", () => {
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "openclaw.chat.history",
       "openclaw.chat",
-      "openclaw.chat.history",
       "openclaw.chat",
     ]);
     expect(page.textContent).toContain("Loaded transcript row");
   });
 
-  it("keeps failed sensitive replies masked for correction and retry", async () => {
+  it("keeps a sent sensitive reply masked when its response fails", async () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({
@@ -489,7 +488,10 @@ describe("custodian page", () => {
         sensitive: true,
         action: "none",
       })
-      .mockRejectedValueOnce(new Error("Request failed"));
+      .mockImplementationOnce((_method, _params, options?: { onSent?: () => void }) => {
+        options?.onSent?.();
+        return Promise.reject(new Error("Request failed"));
+      });
     const { context } = createContext(request);
     const { page } = await mountPage(context);
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
@@ -510,6 +512,7 @@ describe("custodian page", () => {
     await waitForFast(() => expect(page.querySelector('[role="alert"]')).not.toBeNull());
     await page.updateComplete;
     expect(input.isConnected).toBe(true);
+    expect(input.value).toBe("");
     expect(page.textContent).toContain("Sensitive reply sent");
     expect(page.innerHTML).not.toContain("test-token-placeholder");
   });

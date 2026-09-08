@@ -41,9 +41,11 @@ import {
   clearPaneSessionHandoff,
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
+import { isTranscriptScrollKey } from "./chat-scroll-input.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import { persistChatComposerState } from "./composer-persistence.ts";
+import { publishChatSessionProjectionMessages } from "./history-merge.ts";
 import {
   captureChatSessionScrollPosition,
   saveChatSessionScrollPosition,
@@ -237,7 +239,9 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     const root = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
     let upward =
       (event instanceof WheelEvent && event.deltaY < 0) ||
-      (event instanceof KeyboardEvent && CHAT_HISTORY_UPWARD_KEYS.has(event.key));
+      (event instanceof KeyboardEvent &&
+        CHAT_HISTORY_UPWARD_KEYS.has(event.key) &&
+        isTranscriptScrollKey(event));
     if (typeof TouchEvent !== "undefined" && event instanceof TouchEvent) {
       const touchY = event.touches[0]?.clientY ?? null;
       if (event.type === "touchstart") {
@@ -379,7 +383,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         const messages = Array.isArray(result.messages) ? result.messages : [];
         const nextMessages = this.prependUniqueNativeMessages(messages, state.chatMessages);
         const grew = nextMessages.length > state.chatMessages.length;
-        state.chatMessages = nextMessages;
+        publishChatSessionProjectionMessages(state, nextMessages);
         const appliedPagination: ChatHistoryPagination = exhausted
           ? {
               hasMore: false,
@@ -587,6 +591,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       persistChatComposerState(state, result.sessionKey, {
         agentId: parseAgentSessionKey(result.sessionKey)?.agentId,
         draft: editorText,
+        mentions: [],
       });
       preparePaneSessionHandoff(this.context, this.paneId, result.sessionKey, {
         attachments: replaceChatAttachmentsFromEditor([], result.editorAttachments),

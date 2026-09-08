@@ -114,7 +114,7 @@ export default definePluginEntry({
         order: "late",
         run: async (ctx) => {
           const providerSetup = await loadProviderSetup();
-          return await providerSetup.discoverLmstudioProvider(ctx);
+          return await providerSetup.discoverLmstudioProvider(ctx, { discoveryMode: "strict" });
         },
       },
       resolveSyntheticAuth: ({ providerConfig }) => {

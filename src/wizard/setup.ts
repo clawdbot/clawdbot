@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOnboardingSetupTarget } from "../commands/onboard-agent-target.js";
 import * as firstAgentOnboarding from "../commands/onboard-first-agent.js";
@@ -290,8 +289,8 @@ async function runSetupWizardOnce(
     flow = "quickstart";
     break;
   }
-  const importSuppliedRoster = usedImportFlow && listAgentEntries(baseConfig).length > 0;
-  if (importSuppliedRoster && opts.agentName !== undefined) {
+  const hasAuthoredRoster = hasResolvedRosterBeforeMigrations(currentSetupSnapshot);
+  if (usedImportFlow && hasAuthoredRoster && opts.agentName !== undefined) {
     runtime.error(
       "--agent-name cannot be combined with an import that supplies an agent roster. Remove --agent-name or choose an import without agents.",
     );
@@ -491,8 +490,6 @@ async function runSetupWizardOnce(
 
   const { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } =
     await loadOnboardConfigModule();
-  const hasAuthoredRoster =
-    importSuppliedRoster || hasResolvedRosterBeforeMigrations(currentSetupSnapshot);
   const { workspaceDir, allowWorkspaceChange } = await resolveSetupWorkspaceSelection({
     baseConfig,
     requestedWorkspaceDir,
@@ -552,11 +549,13 @@ async function runSetupWizardOnce(
   const onboardingAgent = await ensureOnboardingAgent({
     config: gateway.nextConfig,
     workspace: workspaceDir,
-    preserveCandidateRoster: usedImportFlow,
-    baseConfig,
+    preserveCandidateRoster: usedImportFlow && hasAuthoredRoster,
+    // Pending setup choices must remain changes relative to the saved snapshot.
+    baseConfig: setupConfigMergeBase,
     ...(firstAgent ? { firstAgent } : {}),
   });
   nextConfig = onboardingAgent.config;
+  setupConfigMergeBase = structuredClone(onboardingAgent.configBase);
   const migrationWarnings = onboardingAgent.sessionMigrationWarnings;
   await firstAgentOnboarding.showSessionMigrationWarnings(prompter, migrationWarnings);
 

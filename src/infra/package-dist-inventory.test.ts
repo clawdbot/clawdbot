@@ -303,14 +303,14 @@ describe("package dist inventory", () => {
     );
   });
 
-  it("keeps publishable externalized bundled plugin dist trees out of the inventory", async () => {
+  it.each(["index.js", ""])("omits externalized plugin entry %j", async (entry) => {
     await withTestDir({ prefix: "openclaw-dist-inventory-externalized-" }, async (packageRoot) => {
       const externalizedRuntime = path.join(
         packageRoot,
         "dist",
         "extensions",
         "external-chat",
-        "index.js",
+        entry,
       );
       const bundledRuntime = path.join(
         packageRoot,

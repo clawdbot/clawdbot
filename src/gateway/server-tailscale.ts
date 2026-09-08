@@ -9,7 +9,7 @@ import {
 } from "../infra/tailscale.js";
 import { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
 import type { GatewayTailscaleIngressEndpoint } from "./ingress-attribution.js";
-import { prepareMcpAppChannelOrigin } from "./mcp-app-channel-origin.js";
+import { prepareTailscalePublishedOrigin } from "./tailscale-published-origin.js";
 
 export async function startGatewayTailscaleExposure(params: {
   tailscaleMode: "off" | "serve" | "funnel";
@@ -51,7 +51,12 @@ export async function startGatewayTailscaleExposure(params: {
 
   let claim: Awaited<ReturnType<typeof claimTailscaleRoute>> | undefined;
   try {
-    claim = await claimTailscaleRoute(params.tailscaleMode, backendTarget);
+    claim = await claimTailscaleRoute(
+      params.tailscaleMode,
+      backendTarget,
+      params.port,
+      params.logTailscale.info,
+    );
     const host = await (
       params.tailscaleMode === "serve" ? getTailnetHostnameAfterServe() : getTailnetHostname()
     ).catch(() => null);
@@ -65,9 +70,9 @@ export async function startGatewayTailscaleExposure(params: {
         tailnetHost: host,
       });
       if (publicHost) {
-        clearPublishedOrigin = prepareMcpAppChannelOrigin({
+        clearPublishedOrigin = prepareTailscalePublishedOrigin({
           origin: `https://${publicHost}`,
-          reachability: effectiveMode === "funnel" ? "internet" : "tailnet",
+          mode: effectiveMode,
         });
         params.logTailscale.info(
           `${params.tailscaleMode} enabled: https://${publicHost}${uiPath} (WS via wss://${publicHost})`,

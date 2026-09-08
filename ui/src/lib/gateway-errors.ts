@@ -54,6 +54,12 @@ export function isMissingOperatorReadScopeError(err: unknown): boolean {
   return detailCode === ConnectErrorDetailCodes.AUTH_UNAUTHORIZED;
 }
 
+export function isArchiveAccessDeniedError(err: unknown): boolean {
+  return (
+    asRecord(err)?.gatewayCode === ErrorCodes.FORBIDDEN || isMissingOperatorReadScopeError(err)
+  );
+}
+
 export function formatMissingOperatorReadScopeMessage(feature: string): string {
   return `This connection is missing operator.read, so ${feature} cannot be loaded yet.`;
 }

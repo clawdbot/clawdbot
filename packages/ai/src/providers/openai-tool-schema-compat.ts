@@ -51,14 +51,16 @@ function normalizeOpenAIStrictCompatSchemaMap(schema: unknown): unknown {
   }
 
   let changed = false;
-  const normalized: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(schema as Record<string, unknown>)) {
-    const next = normalizeOpenAIStrictCompatSchemaRecursive(value, {
-      promoteEmptyObject: false,
-    });
-    normalized[key] = next;
-    changed ||= next !== value;
-  }
+  // Schema names are literal data; indexed writes would invoke __proto__'s setter.
+  const normalized = Object.fromEntries<unknown>(
+    Object.entries(schema).map(([key, value]) => {
+      const next = normalizeOpenAIStrictCompatSchemaRecursive(value, {
+        promoteEmptyObject: false,
+      });
+      changed ||= next !== value;
+      return [key, next];
+    }),
+  );
   return changed ? normalized : schema;
 }
 
@@ -84,18 +86,13 @@ function normalizeOpenAIStrictCompatSchemaRecursive(
   const record = schema as Record<string, unknown>;
   let changed = false;
   let hadNullType = false;
-  const normalized: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(record)) {
+  const entries = Object.entries(record).flatMap(([key, value]): Array<[string, unknown]> => {
     // Repair only null-valued entries that carry no constraint semantics.
     // Null constraints stay invalid so projection quarantines the tool.
-    if (value === null && OPENAI_NULLABLE_ANNOTATION_KEYS.has(key)) {
+    if (value === null && (OPENAI_NULLABLE_ANNOTATION_KEYS.has(key) || key === "type")) {
+      hadNullType ||= key === "type";
       changed = true;
-      continue;
-    }
-    if (value === null && key === "type") {
-      hadNullType = true;
-      changed = true;
-      continue;
+      return [];
     }
     const next = OPENAI_STRICT_COMPAT_SCHEMA_MAP_KEYS.has(key)
       ? normalizeOpenAIStrictCompatSchemaMap(value)
@@ -104,9 +101,10 @@ function normalizeOpenAIStrictCompatSchemaRecursive(
             promoteEmptyObject: false,
           })
         : value;
-    normalized[key] = next;
     changed ||= next !== value;
-  }
+    return [[key, next]];
+  });
+  const normalized = Object.fromEntries<unknown>(entries);
 
   if (Object.keys(normalized).length === 0) {
     if (!options.promoteEmptyObject) {

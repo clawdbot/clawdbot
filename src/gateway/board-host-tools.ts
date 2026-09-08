@@ -3,9 +3,15 @@ import {
   errorShape,
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
+import { boardWidgetHasGrantedTool } from "../boards/board-capabilities.js";
 import { CORE_BOARD_DATA_BINDING_IDS } from "../boards/board-host-capability-ids.js";
 import { BoardValidationError } from "../boards/board-layout.js";
 import { BoardEventPayloadError } from "../boards/board-notices.js";
+import type { BoardStore, BoardSessionTarget } from "../boards/board-store.js";
+import {
+  GITHUB_ACTIONS_BINDING_ID,
+  resolveGitHubActionsRequest,
+} from "../boards/github-actions-capability.js";
 import {
   capturePluginRegistryLifecycleEpoch,
   isPluginRegistryLifecycleEpochActive,
@@ -19,12 +25,15 @@ import {
   BoardGatewayUnavailableError,
   type BoardViewTicketAuthorityInput,
 } from "./board-view-ticket.js";
+import { resolveAuthorizedBoardWidgetView } from "./board-widget-view.js";
 import { agentsHandlers } from "./server-methods/agents.js";
 import { cronHandlers } from "./server-methods/cron.js";
 import { healthHandlers } from "./server-methods/health.js";
 import { sessionReadHandlers } from "./server-methods/sessions-read.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import { usageHandlers } from "./server-methods/usage.js";
+import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
+import { resolveSessionStoreKey } from "./session-store-key.js";
 
 type BoardDataBindingId = (typeof CORE_BOARD_DATA_BINDING_IDS)[number];
 type GatewayHandlerInvocation = Parameters<GatewayRequestHandlers[string]>[0];
@@ -34,6 +43,74 @@ export type BoardRequestAuthority = {
   pluginRegistry?: PluginRegistry;
   ticketAuthority: BoardViewTicketAuthorityInput;
 };
+
+export type BoardCapabilityAuthority = BoardRequestAuthority & {
+  boardSession: Required<BoardSessionTarget>;
+};
+
+export function boardDataBindingCapability(
+  bindingId: string,
+  params: Record<string, unknown>,
+): string {
+  return bindingId === GITHUB_ACTIONS_BINDING_ID
+    ? resolveGitHubActionsRequest(params).capability
+    : bindingId;
+}
+
+/** Retained reads/actions own the exact live widget grant, not just its Gateway. */
+export function captureBoardCapabilityAuthority(
+  store: BoardStore,
+  ticket: string,
+  invocation: GatewayHandlerInvocation,
+  capability: string,
+): BoardCapabilityAuthority {
+  const authority = captureBoardRequestAuthority(invocation);
+  const resolveSession = () => {
+    authority.assertActive();
+    const view = resolveAuthorizedBoardWidgetView(store, ticket, {
+      gatewayContext: invocation.context,
+    });
+    const cfg = invocation.context.getRuntimeConfig();
+    const selected = resolveRequestedSessionAgentId(cfg, view.sessionKey, view.agentId);
+    if (
+      !selected.ok ||
+      resolveSessionStoreKey({
+        cfg,
+        sessionKey: view.sessionKey,
+        storeAgentId: selected.agentId,
+      }) !== view.sessionKey
+    ) {
+      throw new BoardValidationError(
+        "invalid_operation",
+        "board widget session identity changed; reload the dashboard",
+      );
+    }
+    if (!boardWidgetHasGrantedTool(view.document.declared, view.document.grantState, capability)) {
+      throw new BoardValidationError(
+        "invalid_operation",
+        `board widget tool is not granted: ${capability}`,
+      );
+    }
+    return { sessionKey: view.sessionKey, agentId: selected.agentId };
+  };
+  const boardSession = resolveSession();
+  return {
+    ...authority,
+    boardSession,
+    assertActive: () => {
+      const current = resolveSession();
+      if (
+        current.agentId !== boardSession.agentId ||
+        current.sessionKey !== boardSession.sessionKey
+      ) {
+        throw new BoardValidationError(
+          "invalid_operation",
+          "board widget session identity changed; reload the dashboard",
+        );
+      }
+    },
+  };
+}
 
 export function captureBoardRequestAuthority(
   invocation: GatewayHandlerInvocation,
@@ -51,6 +128,10 @@ export function captureBoardRequestAuthority(
     : undefined;
   const assertActive = () => {
     try {
+      // Retained board work also belongs to the requesting caller and session authorization.
+      invocation.signal?.throwIfAborted();
+      invocation.sessionMutationCommitGuard?.();
+      invocation.sessionMutationAuthorization?.assertCurrent();
       if (
         isGatewaySubordinateWorkAdmissionClosed() ||
         resolveGatewayContext() !== context ||
@@ -157,8 +238,13 @@ export async function readBoardDataBinding(
   bindingId: string,
   params: Record<string, unknown>,
   invocation: GatewayHandlerInvocation,
-  authority: BoardRequestAuthority = captureBoardRequestAuthority(invocation),
+  authority: BoardCapabilityAuthority,
 ): Promise<unknown> {
+  if (bindingId === GITHUB_ACTIONS_BINDING_ID) {
+    const { readBoardGitHubActions } = await import("./github-actions-read.js");
+    authority.assertActive();
+    return await readBoardGitHubActions(params, invocation.context, authority);
+  }
   if (isBoardDataBindingId(bindingId)) {
     return await invokeGatewayHandler(
       BOARD_DATA_HANDLERS[bindingId],
@@ -188,7 +274,7 @@ export async function runBoardActionVerb(
   actionId: string,
   params: Record<string, unknown>,
   invocation: GatewayHandlerInvocation,
-  authority: BoardRequestAuthority = captureBoardRequestAuthority(invocation),
+  authority: BoardCapabilityAuthority,
 ): Promise<unknown> {
   const registration = authority.pluginRegistry?.dashboardActionVerbs.get(actionId);
   if (!registration) {
@@ -222,7 +308,7 @@ export async function runBoardActionVerb(
 export async function triggerBoardCronJob(
   jobId: string,
   invocation: GatewayHandlerInvocation,
-  authority: BoardRequestAuthority = captureBoardRequestAuthority(invocation),
+  authority: BoardCapabilityAuthority,
 ): Promise<unknown> {
   return await invokeGatewayHandler(
     cronHandlers["cron.run"]!,

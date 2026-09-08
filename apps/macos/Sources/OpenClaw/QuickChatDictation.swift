@@ -74,7 +74,7 @@ final class QuickChatDictation: @unchecked Sendable {
     typealias UpdateHandler = @MainActor @Sendable (Event) -> Void
 
     private let queue = DispatchQueue(label: "ai.openclaw.quickchat.dictation")
-    private var recognizer: SFSpeechRecognizer?
+    private var recognizerCache = SpeechRecognizerCache()
     private var audioEngine: AVAudioEngine?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
@@ -106,15 +106,13 @@ final class QuickChatDictation: @unchecked Sendable {
         let sessionID = UUID()
         self.sessionID = sessionID
 
-        let recognizer = SFSpeechRecognizer(locale: Locale(identifier: Locale.current.identifier))
+        let recognizer = self.recognizerCache.recognizer(localeID: Locale.current.identifier)
         guard let recognizer, recognizer.isAvailable else {
             throw NSError(
                 domain: "QuickChatDictation",
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "Recognizer unavailable"])
         }
-        self.recognizer = recognizer
-
         let request = SFSpeechAudioBufferRecognitionRequest()
         SpeechRecognitionRequestPolicy.configureInteractiveTranscription(request)
         self.recognitionRequest = request
@@ -171,7 +169,6 @@ final class QuickChatDictation: @unchecked Sendable {
         self.recognitionTask?.cancel()
         self.recognitionTask = nil
         self.recognitionRequest = nil
-        self.recognizer = nil
         if self.audioEngine?.isRunning == true {
             self.audioEngine?.stop()
             self.audioEngine?.reset()

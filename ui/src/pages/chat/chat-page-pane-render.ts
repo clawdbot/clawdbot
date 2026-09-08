@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, noChange, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
@@ -16,6 +16,7 @@ import type { ChatSplitPane } from "./split-layout-types.ts";
 
 type ChatPagePaneRenderOptions = {
   active: boolean;
+  presented: boolean;
   chatMessagesBySession: ChatMessageCache;
   sessionSnapshotStore: SessionSnapshotStore;
   consumedDraftData: SessionChatRouteData | null;
@@ -57,9 +58,9 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
   const sessions = options.context?.sessions?.state.result?.sessions ?? [];
   return html`
     <div
-      class="chat-split-view__cell ${options.splitMode && options.active
-        ? "chat-split-view__cell--active"
-        : ""} ${options.narrow && !options.active ? "chat-split-view__cell--narrow-hidden" : ""}"
+      class="chat-split-view__cell ${
+        options.splitMode && options.active ? "chat-split-view__cell--active" : ""
+      } ${options.narrow && !options.active ? "chat-split-view__cell--narrow-hidden" : ""}"
       aria-current=${options.splitMode && options.active ? "true" : nothing}
       style="flex: ${options.weight} 1 0"
       @pointerdown=${() => options.onFocusPane(options.pane.id)}
@@ -73,8 +74,12 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
             const visible =
               sessionKey === options.pane.sessionKey ||
               areUiSessionKeysEquivalent(sessionKey, options.pane.sessionKey);
-            const presented = visible && (!options.narrow || options.active);
+            const presented = options.presented && visible && (!options.narrow || options.active);
             const active = options.active && visible;
+            const routeData =
+              options.data && areUiSessionKeysEquivalent(sessionKey, options.data.sessionKey)
+                ? options.data
+                : undefined;
             const draft = active
               ? routeDraft(options.data, options.consumedDraftData, sessionKey)
               : undefined;
@@ -86,11 +91,11 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
               sessions.find((row) => areUiSessionKeysEquivalent(row.key, resolvedKey)),
             );
             return html`<openclaw-chat-pane
-              class="chat-pane-cache__pane ${visible
-                ? "chat-pane-cache__pane--visible"
-                : ""} ${active ? "chat-pane-cache__pane--active" : ""} ${options.splitMode
-                ? "chat-split-view__pane"
-                : ""}"
+              class="chat-pane-cache__pane ${
+                visible ? "chat-pane-cache__pane--visible" : ""
+              } ${active ? "chat-pane-cache__pane--active" : ""} ${
+                options.splitMode ? "chat-split-view__pane" : ""
+              }"
               data-mcp-app-owner-key=${JSON.stringify([options.ownerKey, sessionKey])}
               aria-hidden=${presented ? "false" : "true"}
               ?inert=${!presented}
@@ -109,7 +114,8 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
                 sessionKey,
                 options.data,
               )}
-              .routeFace=${options.data?.face ?? "chat"}
+              .dashboardExpanded=${routeData ? routeData.dashboardExpanded === true : noChange}
+              .routeFace=${routeData ? (routeData.face ?? "chat") : noChange}
               .paneTitle=${title}
               .narrow=${options.narrow}
               .mergedChrome=${options.mergedChrome && active}

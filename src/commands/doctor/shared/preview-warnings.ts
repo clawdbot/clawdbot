@@ -6,23 +6,20 @@ import {
   resolveProviderToolPolicy,
   resolveProviderToolPolicyEntry,
 } from "../../../agents/provider-tool-policy.js";
-import { pickSandboxToolPolicy } from "../../../agents/sandbox-tool-policy.js";
-import {
-  isToolAllowedByPolicies,
-  isToolAllowedByPolicyName,
-} from "../../../agents/tool-policy-match.js";
+import { isToolAllowedByPolicyName } from "../../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../../agents/tool-policy.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type {
-  AgentToolsConfig,
-  ToolPolicyConfig,
-  ToolsConfig,
-} from "../../../config/types.tools.js";
+import type { ToolPolicyConfig } from "../../../config/types.tools.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../../../plugins/current-plugin-metadata-snapshot.js";
 import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 import { VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE } from "./configured-runtime-plugin-installs.js";
 import type { BlockedLegacyOpenAICodexProviderPlan } from "./legacy-config-migrations.runtime.models.js";
+import {
+  collectUnavailableSourceReplyTargets,
+  resolveMessageToolAvailability,
+  SOURCE_REPLY_RUNTIME_MESSAGE_ALLOW,
+} from "./preview-message-tool-policy.js";
 import { resolveDoctorPrimaryModelRef } from "./primary-model-ref.js";
 
 type ChannelDoctorModule = typeof import("./channel-doctor.js");
@@ -31,20 +28,8 @@ const channelDoctorModuleLoader = createLazyImportLoader<ChannelDoctorModule>(
   () => import("./channel-doctor.js"),
 );
 
-function loadChannelDoctorModule(): Promise<ChannelDoctorModule> {
-  return channelDoctorModuleLoader.load();
-}
-
-function listAgentRecords(cfg: OpenClawConfig): Record<string, unknown>[] {
+function listAgentRecords(cfg: OpenClawConfig) {
   return listAgentEntries(cfg).filter(hasRecord);
-}
-
-function hasChannels(cfg: OpenClawConfig): boolean {
-  return hasRecord(cfg.channels);
-}
-
-function hasPlugins(cfg: OpenClawConfig): boolean {
-  return hasRecord(cfg.plugins);
 }
 
 function hasPluginLoadPaths(cfg: OpenClawConfig): boolean {
@@ -98,119 +83,14 @@ function hasConfiguredSafeBins(cfg: OpenClawConfig): boolean {
   });
 }
 
-type VisibleReplyPolicyProvenance = "default" | "global-explicit" | "group-explicit";
-function resolveMessageToolAvailability(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  globalTools?: ToolsConfig;
-  agentTools?: AgentToolsConfig;
-  runtimeAlsoAllow?: string[];
-}): boolean {
-  const agentConfig = params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined;
-  const modelRef = resolveDoctorPrimaryModelRef(params.cfg, agentConfig?.model);
-  const providerPolicy = resolveProviderToolPolicy({
-    byProvider: params.globalTools?.byProvider,
-    modelProvider: modelRef.provider,
-    modelId: modelRef.model,
-  });
-  const agentProviderPolicy = resolveProviderToolPolicy({
-    byProvider: params.agentTools?.byProvider,
-    modelProvider: modelRef.provider,
-    modelId: modelRef.model,
-  });
-  const profile = params.agentTools?.profile ?? params.globalTools?.profile;
-  const configuredAlsoAllow = Array.isArray(params.agentTools?.alsoAllow)
-    ? params.agentTools.alsoAllow
-    : Array.isArray(params.globalTools?.alsoAllow)
-      ? params.globalTools.alsoAllow
-      : [];
-  const providerAlsoAllow = Array.isArray(agentProviderPolicy?.alsoAllow)
-    ? agentProviderPolicy.alsoAllow
-    : Array.isArray(providerPolicy?.alsoAllow)
-      ? providerPolicy.alsoAllow
-      : [];
-  const profileAlsoAllow = [...configuredAlsoAllow, ...(params.runtimeAlsoAllow ?? [])];
-  const providerProfileAlsoAllow = [...providerAlsoAllow, ...(params.runtimeAlsoAllow ?? [])];
-  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), profileAlsoAllow);
-  const providerProfilePolicy = mergeAlsoAllowPolicy(
-    resolveToolProfilePolicy(agentProviderPolicy?.profile ?? providerPolicy?.profile),
-    providerProfileAlsoAllow,
-  );
-  return isToolAllowedByPolicies("message", [
-    profilePolicy,
-    providerProfilePolicy,
-    pickSandboxToolPolicy(providerPolicy),
-    pickSandboxToolPolicy(agentProviderPolicy),
-    pickSandboxToolPolicy(params.globalTools),
-    pickSandboxToolPolicy(params.agentTools),
-  ]);
-}
-
-const SOURCE_REPLY_RUNTIME_MESSAGE_ALLOW = ["message"];
-
-function resolveSourceReplyMessageToolAvailability(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  globalTools?: ToolsConfig;
-  agentTools?: AgentToolsConfig;
-}): boolean {
-  return resolveMessageToolAvailability({
-    ...params,
-    runtimeAlsoAllow: SOURCE_REPLY_RUNTIME_MESSAGE_ALLOW,
-  });
-}
-
-function sourceReplyRuntimeMayAllowMessageTool(cfg: OpenClawConfig): boolean {
-  const groupPolicy = resolveGroupVisibleReplyProvenance(cfg);
-  if (groupPolicy.value === "message_tool") {
-    return true;
-  }
-  if (cfg.messages?.visibleReplies === "message_tool") {
-    return true;
-  }
-  return false;
-}
-
-function collectMessageToolUnavailableTargets(
-  cfg: OpenClawConfig,
-  options: { sourceReplyRuntimeGrant?: boolean } = {},
-): string[] {
-  const agents = listAgentRecords(cfg);
-  if (agents.length === 0) {
-    const available = options.sourceReplyRuntimeGrant
-      ? resolveSourceReplyMessageToolAvailability({ cfg, globalTools: cfg.tools })
-      : resolveMessageToolAvailability({ cfg, globalTools: cfg.tools });
-    return available ? [] : ["default tool policy"];
-  }
-  return agents.flatMap((agent) => {
-    const agentId = typeof agent.id === "string" ? agent.id : "unknown";
-    const available = options.sourceReplyRuntimeGrant
-      ? resolveSourceReplyMessageToolAvailability({
-          cfg,
-          agentId,
-          globalTools: cfg.tools,
-          agentTools: agent.tools as AgentToolsConfig | undefined,
-        })
-      : resolveMessageToolAvailability({
-          cfg,
-          agentId,
-          globalTools: cfg.tools,
-          agentTools: agent.tools as AgentToolsConfig | undefined,
-        });
-    return available ? [] : [`agent "${agentId}"`];
-  });
-}
-
-function resolveGroupVisibleReplyProvenance(cfg: OpenClawConfig): {
+function resolveGroupVisibleReplyPolicy(cfg: OpenClawConfig): {
   path: "messages.groupChat.visibleReplies" | "messages.visibleReplies";
-  provenance: VisibleReplyPolicyProvenance;
   value: "automatic" | "message_tool";
 } {
   const groupVisibleReplies = cfg.messages?.groupChat?.visibleReplies;
   if (groupVisibleReplies) {
     return {
       path: "messages.groupChat.visibleReplies",
-      provenance: "group-explicit",
       value: groupVisibleReplies,
     };
   }
@@ -218,13 +98,11 @@ function resolveGroupVisibleReplyProvenance(cfg: OpenClawConfig): {
   if (globalVisibleReplies) {
     return {
       path: "messages.visibleReplies",
-      provenance: "global-explicit",
       value: globalVisibleReplies,
     };
   }
   return {
     path: "messages.groupChat.visibleReplies",
-    provenance: "default",
     value: "automatic",
   };
 }
@@ -238,10 +116,10 @@ function formatTargets(targets: string[]): string {
 
 /** Warn when visible-reply policy selects message_tool but message is unavailable. */
 function collectVisibleReplyToolPolicyWarnings(cfg: OpenClawConfig): string[] {
-  const groupPolicy = resolveGroupVisibleReplyProvenance(cfg);
+  const groupPolicy = resolveGroupVisibleReplyPolicy(cfg);
   const warnings: string[] = [];
   if (groupPolicy.value === "message_tool") {
-    const targets = collectMessageToolUnavailableTargets(cfg, { sourceReplyRuntimeGrant: true });
+    const targets = collectUnavailableSourceReplyTargets(cfg);
     if (targets.length === 0) {
       return warnings;
     }
@@ -254,7 +132,7 @@ function collectVisibleReplyToolPolicyWarnings(cfg: OpenClawConfig): string[] {
 
   const globalVisibleReplies = cfg.messages?.visibleReplies;
   if (globalVisibleReplies === "message_tool" && groupPolicy.path !== "messages.visibleReplies") {
-    const targets = collectMessageToolUnavailableTargets(cfg, { sourceReplyRuntimeGrant: true });
+    const targets = collectUnavailableSourceReplyTargets(cfg);
     if (targets.length === 0) {
       return warnings;
     }
@@ -267,40 +145,26 @@ function collectVisibleReplyToolPolicyWarnings(cfg: OpenClawConfig): string[] {
   return warnings;
 }
 
-function formatChannelList(channels: string[]): string {
-  if (channels.length <= 2) {
-    return channels.map((channel) => `"${channel}"`).join(" and ");
-  }
-  return `${channels
-    .slice(0, 2)
-    .map((channel) => `"${channel}"`)
-    .join(", ")}, and ${channels.length - 2} more`;
-}
-
 /** Warn when routed channel agents lack the message tool required for channel actions. */
 function collectChannelBoundMessageToolPolicyWarnings(cfg: OpenClawConfig): string[] {
   return collectChannelRouteTargets(cfg).flatMap((target) => {
     const agentTools = resolveAgentConfig(cfg, target.agentId)?.tools;
-    const runtimeMayAllowMessage = sourceReplyRuntimeMayAllowMessageTool(cfg);
-    const messageToolAvailable = runtimeMayAllowMessage
-      ? resolveSourceReplyMessageToolAvailability({
-          cfg,
-          agentId: target.agentId,
-          globalTools: cfg.tools,
-          agentTools,
-        })
-      : resolveMessageToolAvailability({
-          cfg,
-          agentId: target.agentId,
-          globalTools: cfg.tools,
-          agentTools,
-        });
+    const runtimeMayAllowMessage =
+      cfg.messages?.groupChat?.visibleReplies === "message_tool" ||
+      cfg.messages?.visibleReplies === "message_tool";
+    const messageToolAvailable = resolveMessageToolAvailability({
+      cfg,
+      agentId: target.agentId,
+      globalTools: cfg.tools,
+      agentTools,
+      runtimeAlsoAllow: runtimeMayAllowMessage ? SOURCE_REPLY_RUNTIME_MESSAGE_ALLOW : undefined,
+    });
     if (messageToolAvailable) {
       return [];
     }
     return [
-      `- Agent "${target.agentId}" is routed from channel ${formatChannelList(
-        target.channels,
+      `- Agent "${target.agentId}" is routed from channel ${formatTargets(
+        target.channels.map((channel) => `"${channel}"`),
       )}, but the message tool is unavailable for that agent; explicit channel actions such as sendAttachment, upload-file, thread-reply, or reply can fail. Add "message" to the agent tool allowlist, add "group:messaging", or switch the agent to a profile that includes messaging tools.`,
     ];
   });
@@ -346,36 +210,44 @@ function readPreviewStringList(value: unknown): string[] | undefined {
     : undefined;
 }
 
-function collectUncoveredConfiguredToolSectionGrantEntries(
-  configuredEntries: ConfiguredToolSectionGrantEntry[],
-  profilePolicy: ToolPolicyConfig | undefined,
-): ConfiguredToolSectionGrantEntry[] {
-  if (!profilePolicy) {
+function collectProfileConfiguredSectionWarnings(params: {
+  configuredEntries: ConfiguredToolSectionGrantEntry[];
+  profilePolicy: ToolPolicyConfig | undefined;
+  profile: string;
+  profilePath: string;
+  advicePath?: string;
+  profileKind: "active" | "provider" | "inherited provider";
+  hasAllow: boolean;
+}): string[] {
+  if (!params.profilePolicy) {
     return [];
   }
-  return configuredEntries
+  const uncoveredEntries = params.configuredEntries
     .map((entry) => ({
       ...entry,
       grants: entry.grants.filter(
-        (toolName) => !isToolAllowedByPolicyName(toolName, profilePolicy),
+        (toolName) => !isToolAllowedByPolicyName(toolName, params.profilePolicy),
       ),
     }))
     .filter((entry) => entry.grants.length > 0);
-}
-
-function formatProfileConfiguredSectionGrantAdvice(params: {
-  pathLabel: string;
-  grants: string[];
-  hasAllow: boolean;
-  provider?: boolean;
-}): string {
-  const providerSuffix = params.provider ? " for that provider" : "";
-  if (params.hasAllow) {
-    return `Add these grants to ${params.pathLabel}.allow and set ${params.pathLabel}.profile to "full" if these tools should be available${providerSuffix}.`;
+  if (uncoveredEntries.length === 0) {
+    return [];
   }
-  return `Add ${params.pathLabel}.alsoAllow: [${formatQuotedList(
-    params.grants,
-  )}] if these tools should be available${providerSuffix}.`;
+  const grants = [...new Set(uncoveredEntries.flatMap((entry) => entry.grants))];
+  const advicePath = params.advicePath ?? params.profilePath;
+  const providerSuffix = params.profileKind === "active" ? "" : " for that provider";
+  const advice = params.hasAllow
+    ? `Add these grants to ${advicePath}.allow and set ${advicePath}.profile to "full" if these tools should be available${providerSuffix}.`
+    : `Add ${advicePath}.alsoAllow: [${formatQuotedList(
+        grants,
+      )}] if these tools should be available${providerSuffix}.`;
+  return [
+    `- ${params.profilePath}.profile is "${params.profile}" and ${uncoveredEntries
+      .map((entry) => entry.label)
+      .join(
+        " / ",
+      )} is configured, but configured sections no longer widen the ${params.profileKind} profile. ${advice}`,
+  ];
 }
 
 function collectProfileConfiguredToolSectionScopeWarnings(params: {
@@ -409,29 +281,14 @@ function collectProfileConfiguredToolSectionScopeWarnings(params: {
     ? tools.alsoAllow.filter((entry): entry is string => typeof entry === "string")
     : params.inheritedAlsoAllow;
   const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), alsoAllow);
-  if (!profilePolicy) {
-    return [];
-  }
-  const uncoveredEntries = collectUncoveredConfiguredToolSectionGrantEntries(
+  return collectProfileConfiguredSectionWarnings({
     configuredEntries,
     profilePolicy,
-  );
-  if (uncoveredEntries.length === 0) {
-    return [];
-  }
-  const uncoveredGrants = [...new Set(uncoveredEntries.flatMap((entry) => entry.grants))];
-  const advice = formatProfileConfiguredSectionGrantAdvice({
-    pathLabel: params.pathLabel,
-    grants: uncoveredGrants,
+    profile,
+    profilePath: params.pathLabel,
+    profileKind: "active",
     hasAllow: hasNonEmptyStringList(tools?.allow),
   });
-  return [
-    `- ${params.pathLabel}.profile is "${profile}" and ${uncoveredEntries
-      .map((entry) => entry.label)
-      .join(
-        " / ",
-      )} is configured, but configured sections no longer widen the active profile. ${advice}`,
-  ];
 }
 
 function collectByProviderConfiguredToolSectionWarnings(params: {
@@ -463,31 +320,14 @@ function collectByProviderConfiguredToolSectionWarnings(params: {
     const alsoAllow =
       readPreviewStringList(policy.alsoAllow) ?? readPreviewStringList(inheritedPolicy?.alsoAllow);
     const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), alsoAllow);
-    if (!profilePolicy) {
-      return [];
-    }
-    const uncoveredEntries = collectUncoveredConfiguredToolSectionGrantEntries(
-      params.configuredEntries,
+    return collectProfileConfiguredSectionWarnings({
+      configuredEntries: params.configuredEntries,
       profilePolicy,
-    );
-    if (uncoveredEntries.length === 0) {
-      return [];
-    }
-    const providerPath = `${params.pathLabel}.byProvider.${providerKey}`;
-    const uncoveredGrants = [...new Set(uncoveredEntries.flatMap((entry) => entry.grants))];
-    const advice = formatProfileConfiguredSectionGrantAdvice({
-      pathLabel: providerPath,
-      grants: uncoveredGrants,
+      profile,
+      profilePath: `${params.pathLabel}.byProvider.${providerKey}`,
+      profileKind: "provider",
       hasAllow: hasNonEmptyStringList(policy.allow),
-      provider: true,
     });
-    return [
-      `- ${providerPath}.profile is "${profile}" and ${uncoveredEntries
-        .map((entry) => entry.label)
-        .join(
-          " / ",
-        )} is configured, but configured sections no longer widen the provider profile. ${advice}`,
-    ];
   });
 }
 
@@ -510,15 +350,6 @@ function resolveInheritedProviderPolicyForPreview(
   return policy && hasRecord(policy) ? policy : undefined;
 }
 
-function resolveProviderPolicyEntryForPreview(params: {
-  byProvider?: Record<string, unknown>;
-  modelProvider?: string;
-  modelId?: string;
-}): { key: string; policy: Record<string, unknown> } | undefined {
-  const entry = resolveProviderToolPolicyEntry(params);
-  return entry ? { key: entry.key, policy: entry.policy } : undefined;
-}
-
 function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
   inheritedTools?: Record<string, unknown> | null;
   inheritedPathLabel: string;
@@ -537,7 +368,7 @@ function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
   const overridingByProvider = hasRecord(params.overridingTools?.byProvider)
     ? params.overridingTools.byProvider
     : undefined;
-  const inheritedEntryForModel = resolveProviderPolicyEntryForPreview({
+  const inheritedEntryForModel = resolveProviderToolPolicyEntry({
     byProvider: inheritedByProvider,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
@@ -556,7 +387,7 @@ function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
       return [];
     }
     const overridingEntry =
-      resolveProviderPolicyEntryForPreview({
+      resolveProviderToolPolicyEntry({
         byProvider: overridingByProvider,
         modelProvider: params.modelProvider,
         modelId: params.modelId,
@@ -572,34 +403,15 @@ function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
       readPreviewStringList(overridingPolicy?.alsoAllow) ??
       readPreviewStringList(inheritedPolicy.alsoAllow);
     const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), alsoAllow);
-    if (!profilePolicy) {
-      return [];
-    }
-    const uncoveredEntries = collectUncoveredConfiguredToolSectionGrantEntries(
-      params.configuredEntries,
+    return collectProfileConfiguredSectionWarnings({
+      configuredEntries: params.configuredEntries,
       profilePolicy,
-    );
-    if (uncoveredEntries.length === 0) {
-      return [];
-    }
-    const overridePath = `${params.overridingPathLabel}.byProvider.${
-      overridingEntry?.key ?? providerKey
-    }`;
-    const inheritedPath = `${params.inheritedPathLabel}.byProvider.${providerKey}`;
-    const uncoveredGrants = [...new Set(uncoveredEntries.flatMap((entry) => entry.grants))];
-    const advice = formatProfileConfiguredSectionGrantAdvice({
-      pathLabel: overridePath,
-      grants: uncoveredGrants,
+      profile,
+      profilePath: `${params.inheritedPathLabel}.byProvider.${providerKey}`,
+      advicePath: `${params.overridingPathLabel}.byProvider.${overridingEntry?.key ?? providerKey}`,
+      profileKind: "inherited provider",
       hasAllow: hasNonEmptyStringList(overridingPolicy?.allow),
-      provider: true,
     });
-    return [
-      `- ${inheritedPath}.profile is "${profile}" and ${uncoveredEntries
-        .map((entry) => entry.label)
-        .join(
-          " / ",
-        )} is configured, but configured sections no longer widen the inherited provider profile. ${advice}`,
-    ];
   });
 }
 
@@ -716,8 +528,8 @@ export async function collectDoctorPreviewNotes(params: {
   const infoNotes: string[] = [];
   const warnings: string[] = [];
   const env = params.env ?? process.env;
-  const hasChannelConfig = hasChannels(params.cfg);
-  const hasPluginConfig = hasPlugins(params.cfg);
+  const hasChannelConfig = hasRecord(params.cfg.channels);
+  const hasPluginConfig = hasRecord(params.cfg.plugins);
 
   warnings.push(...collectVisibleReplyToolPolicyWarnings(params.cfg));
   warnings.push(...collectChannelBoundMessageToolPolicyWarnings(params.cfg));
@@ -755,7 +567,7 @@ export async function collectDoctorPreviewNotes(params: {
       allowExec: params.allowExec,
     });
     warnings.push(...channelPreviewConfig.diagnostics);
-    const { collectChannelDoctorPreviewWarnings } = await loadChannelDoctorModule();
+    const { collectChannelDoctorPreviewWarnings } = await channelDoctorModuleLoader.load();
     const channelDoctorWarnings = await collectChannelDoctorPreviewWarnings({
       cfg: channelPreviewConfig.cfg,
       doctorFixCommand: params.doctorFixCommand,
@@ -849,7 +661,7 @@ export async function collectDoctorPreviewNotes(params: {
   }
 
   if (hasChannelConfig) {
-    const { createChannelDoctorEmptyAllowlistPolicyHooks } = await loadChannelDoctorModule();
+    const { createChannelDoctorEmptyAllowlistPolicyHooks } = await channelDoctorModuleLoader.load();
     const { scanEmptyAllowlistPolicyWarnings } = await import("./empty-allowlist-scan.js");
     const emptyAllowlistHooks = createChannelDoctorEmptyAllowlistPolicyHooks({
       cfg: params.cfg,
@@ -931,6 +743,9 @@ export async function collectDoctorPreviewNotes(params: {
     }),
   );
 
+  const { repairMergedGatewayOwnerProfile } =
+    await import("../../../state/user-profiles-owner-migration.js");
+  warnings.push(...repairMergedGatewayOwnerProfile({ env, shouldRepair: false }).warnings);
+
   return { infoNotes, warningNotes: warnings };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

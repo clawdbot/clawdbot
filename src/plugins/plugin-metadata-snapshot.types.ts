@@ -4,6 +4,7 @@ import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.types.js";
 import type {
   PluginDiagnostic,
+  PluginManifestModelIdNormalizationProvider,
   PluginManifestProviderEndpoint,
   PluginManifestProviderRequestProvider,
 } from "./manifest-types.js";
@@ -11,10 +12,17 @@ import type {
   PluginRegistrySnapshotDiagnostic,
   PluginRegistrySnapshotSource,
 } from "./plugin-registry-snapshot.types.js";
+import type { DeclaredProviderOwnerIndex } from "./provider-owner-index.js";
 
 export type PluginMetadataSnapshotPluginIdScope = {
-  key: string;
   resolve: (params: { index: InstalledPluginIndex }) => readonly string[] | undefined;
+};
+
+export type PluginProviderAuthAliasCandidate = {
+  plugin: PluginManifestRecord;
+  target: string;
+  /** First eligible declaration owns public map order, even if a later candidate wins. */
+  order: number;
 };
 
 export type PluginMetadataSnapshotOwnerMaps = {
@@ -26,6 +34,9 @@ export type PluginMetadataSnapshotOwnerMaps = {
   setupProviders: ReadonlyMap<string, readonly string[]>;
   commandAliases: ReadonlyMap<string, readonly string[]>;
   contracts: ReadonlyMap<string, readonly string[]>;
+  /** Empty views must not fall through to process-current model normalization policies. */
+  modelIdNormalizationPolicies: ReadonlyMap<string, PluginManifestModelIdNormalizationProvider>;
+  providerAuthAliases?: ReadonlyMap<string, readonly PluginProviderAuthAliasCandidate[]>;
   providerEndpoints?: readonly PluginManifestProviderEndpoint[];
   providerRequests?: ReadonlyMap<string, PluginManifestProviderRequestProvider>;
 };
@@ -57,14 +68,17 @@ export type PluginMetadataSnapshot = {
   byPluginId: ReadonlyMap<string, PluginManifestRecord>;
   normalizePluginId: (pluginId: string) => string;
   owners: PluginMetadataSnapshotOwnerMaps;
+  /** Strict first-winner literal/setup ownership, separate from public alias maps. */
+  declaredProviderOwners: DeclaredProviderOwnerIndex;
   metrics: PluginMetadataSnapshotMetrics;
   discovery?: PluginDiscoveryResult;
 };
 
 export type PluginMetadataRegistryView = Pick<
   PluginMetadataSnapshot,
-  "index" | "manifestRegistry" | "discovery"
->;
+  "index" | "manifestRegistry" | "discovery" | "workspaceDir"
+> &
+  Partial<Pick<PluginMetadataSnapshot, "declaredProviderOwners">>;
 
 export type PluginMetadataManifestView = Pick<PluginMetadataSnapshot, "index" | "plugins">;
 

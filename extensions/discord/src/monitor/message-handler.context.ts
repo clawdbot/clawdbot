@@ -55,10 +55,6 @@ function normalizeDiscordDmOwnerEntry(entry: string): string | undefined {
   return typeof candidate === "string" && /^\d+$/.test(candidate) ? candidate : undefined;
 }
 
-function isContextAborted(abortSignal?: AbortSignal): boolean {
-  return Boolean(abortSignal?.aborted);
-}
-
 export async function buildDiscordMessageProcessContext(params: {
   ctx: DiscordMessagePreflightContext;
   text: string;
@@ -184,12 +180,12 @@ export async function buildDiscordMessageProcessContext(params: {
         })
       : body;
   const bodyWithMediaNotice = appendMediaUnavailableNotice(text) ?? text;
-  // Agent-facing body prefers the framed transcript and falls back to typed
-  // text; machine transcriptions are always labeled untrusted for the model.
+  // Keep prepared message content separate from command provenance; machine
+  // transcriptions are always labeled untrusted for the model.
   const agentFacingBody =
     preflightAudioTranscript !== undefined
       ? formatAudioTranscriptForAgent(preflightAudioTranscript)
-      : (baseText ?? text);
+      : text;
   let combinedBody = formatInboundEnvelope({
     channel: "Discord",
     from: fromLabel,
@@ -498,7 +494,7 @@ export async function buildDiscordMessageProcessContext(params: {
                     abortSignal,
                   },
                 );
-                return isContextAborted(abortSignal)
+                return abortSignal?.aborted
                   ? []
                   : await toInboundMediaFactsWithMetadata(referencedReplyMediaList, {
                       messageId: replyContext.id,

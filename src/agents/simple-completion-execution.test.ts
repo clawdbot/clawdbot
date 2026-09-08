@@ -1,5 +1,6 @@
 import { reasoningTagTextPolicy } from "@openclaw/ai/internal/openai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { findSourceImportBackedges } from "../../test/helpers/source-import-closure.js";
 import type { Model } from "../llm/types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -13,9 +14,17 @@ vi.mock("@openclaw/ai/transports", async (importOriginal) => ({
   prepareModelForSimpleCompletion: mocks.prepareModel,
 }));
 
-import { completeWithPreparedSimpleCompletionModel } from "./simple-completion-runtime.js";
+import { completeWithPreparedSimpleCompletionModel } from "./simple-completion-execution.js";
 
 const context = { messages: [{ role: "user" as const, content: "pong", timestamp: 1 }] };
+
+function completionRequests() {
+  return mocks.complete.mock.calls.map(([model, completionContext, options]) => ({
+    model,
+    context: completionContext,
+    options,
+  }));
+}
 
 const baseModel = {
   provider: "openai",
@@ -35,6 +44,17 @@ beforeEach(() => {
   mocks.complete.mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
   mocks.prepareModel.mockReset();
   mocks.prepareModel.mockImplementation((params: { model: unknown }) => params.model);
+});
+
+describe("prepared completion import boundary", () => {
+  it.each([
+    "src/agents/host-prepared-isolated-completion.ts",
+    "src/plugin-sdk/simple-completion-runtime.ts",
+  ])("%s does not import model/auth preparation", (entry) => {
+    expect(findSourceImportBackedges(entry, ["src/agents/simple-completion-runtime.ts"])).toEqual(
+      [],
+    );
+  });
 });
 
 describe("completeWithPreparedSimpleCompletionModel", () => {
@@ -68,9 +88,9 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
       model,
       cfg,
     });
-    expect(mocks.complete).toHaveBeenCalledWith(preparedModel, context, {
-      apiKey: "ollama-local",
-    });
+    expect(completionRequests()).toEqual([
+      { model: preparedModel, context, options: { apiKey: "ollama-local" } },
+    ]);
   });
 
   it.each([
@@ -97,10 +117,13 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
       context,
       options: { reasoning },
     });
-    expect(mocks.complete).toHaveBeenCalledWith(model, context, {
-      ...(expected ? { reasoning: expected } : {}),
-      apiKey: "sk-test",
-    });
+    expect(completionRequests()).toEqual([
+      {
+        model,
+        context,
+        options: { ...(expected ? { reasoning: expected } : {}), apiKey: "sk-test" },
+      },
+    ]);
   });
 
   it("carries strict visibility internally without adding a wire option", async () => {
@@ -142,9 +165,8 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
       options: { reasoning: "off" },
     });
 
-    expect(mocks.complete).toHaveBeenCalledWith(preparedModel, context, {
-      reasoning: "off",
-      apiKey: "sk-test",
-    });
+    expect(completionRequests()).toEqual([
+      { model: preparedModel, context, options: { reasoning: "off", apiKey: "sk-test" } },
+    ]);
   });
 });

@@ -1,22 +1,26 @@
 ---
-summary: "Adds the Clickclack channel surface for sending and receiving OpenClaw messages."
+summary: "OpenClaw ClickClack channel plugin."
 read_when:
   - You are installing, configuring, or auditing the clickclack plugin
-title: "Clickclack plugin"
+title: "Clickclack plugin reference"
 ---
 
-# Clickclack plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
-Adds the Clickclack channel surface for sending and receiving OpenClaw messages.
+OpenClaw ClickClack channel plugin.
 
 ## Distribution
 
 - Package: `@openclaw/clickclack`
-- Install route: npm; ClawHub: `clawhub:@openclaw/clickclack`
+- Install route: npm or ClawHub: `clawhub:@openclaw/clickclack`
 
 ## Surface
 
-channels: `clickclack`; contracts: `tools`
+- Channels: `clickclack`
+- Contracts: `tools`
 
 <!-- openclaw-plugin-reference:manual-start -->
 

@@ -1,5 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { collectBaseArrayPaths } from "../../../../src/config/patch-replace-paths.js";
+
+type CloudWorkerConfigPatch = { patch: Record<string, unknown>; replacePaths: string[] };
 
 export type CloudWorkerProfileDraft = {
   id: string;
@@ -139,7 +142,7 @@ export function buildCloudWorkerUpsertPatch(
   config: Readonly<Record<string, unknown>>,
   draft: CloudWorkerProfileDraft,
   editingId: string | null,
-): { patch: Record<string, unknown> } | { error: CloudWorkerDraftError } {
+): CloudWorkerConfigPatch | { error: CloudWorkerDraftError } {
   const profiles = profileRecords(config);
   const error = validateCloudWorkerDraft(draft, profiles, editingId);
   if (error) {
@@ -156,40 +159,40 @@ export function buildCloudWorkerUpsertPatch(
   ) {
     return { error: "profileMissing" };
   }
+  const setup = draft.setup.trim();
+  const clearSetupEnv =
+    !setup && Array.isArray(existingSettings.setupEnv) && existingSettings.setupEnv.length > 0;
+  // Omitted settings merge in place; resending opaque nulls would delete them.
   const settings = {
-    ...existingSettings,
     provider: draft.backend.trim(),
     class: draft.machineClass.trim(),
     ttl: draft.ttl.trim(),
     idleTimeout: draft.idleTimeout.trim(),
-    setup: draft.setup.trim() || null,
-    ...(draft.setup.trim() ||
-    !Array.isArray(existingSettings.setupEnv) ||
-    existingSettings.setupEnv.length === 0
-      ? {}
-      : { setupEnv: null }),
+    setup: setup || null,
+    ...(clearSetupEnv ? { setupEnv: null } : {}),
     desktop: draft.desktop ? true : null,
     binary: draft.binary.trim() || null,
   };
   const profile = {
-    ...existing,
     provider: normalizeOptionalString(existing.provider) ?? "crabbox",
     install: existing.install === "npm" ? "npm" : "bundle",
     settings,
   };
   return {
-    patch: {
-      cloudWorkers: {
-        profiles: { ...profiles, [id]: profile },
-      },
-    },
+    patch: { cloudWorkers: { profiles: { [id]: profile } } },
+    replacePaths: clearSetupEnv
+      ? collectBaseArrayPaths(
+          existingSettings.setupEnv,
+          `cloudWorkers.profiles.${id}.settings.setupEnv`,
+        )
+      : [],
   };
 }
 
 export function buildCloudWorkerDeletePatch(
   config: Readonly<Record<string, unknown>>,
   profileId: string,
-): { patch: Record<string, unknown> } | { error: "profileMissing" } {
+): CloudWorkerConfigPatch | { error: "profileMissing" } {
   const profiles = profileRecords(config);
   if (!Object.hasOwn(profiles, profileId)) {
     return { error: "profileMissing" };
@@ -206,12 +209,13 @@ export function buildCloudWorkerDeletePatch(
   return {
     patch: {
       cloudWorkers: {
-        profiles: { ...profiles, [profileId]: null },
+        profiles: { [profileId]: null },
         ...(Object.keys(removedProjectProfiles).length > 0
           ? { projectProfiles: removedProjectProfiles }
           : {}),
       },
     },
+    replacePaths: collectBaseArrayPaths(profiles[profileId], `cloudWorkers.profiles.${profileId}`),
   };
 }
 

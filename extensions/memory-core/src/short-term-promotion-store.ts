@@ -26,7 +26,7 @@ const SHORT_TERM_STORE_NAMESPACES = {
   phase: SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
 };
 
-async function readShortTermStore(
+export async function readShortTermStore(
   workspaceDir: string,
   kind: keyof typeof SHORT_TERM_STORE_NAMESPACES,
   nowIso: string,

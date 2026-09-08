@@ -13,11 +13,6 @@ export type IMessageApprovalConversationKey = {
   handle?: string;
 };
 
-/** Strip the `p:<n>/` part prefix Messages puts on some GUIDs so keys match. */
-export function normalizeIMessageGuid(value: string): string {
-  return value.trim().replace(/^p:\d+\//iu, "");
-}
-
 function chatIdToKeyValue(chatId: number | string | undefined): string | null {
   if (chatId == null || chatId === "") {
     return null;

@@ -110,7 +110,7 @@ describe("onboarding main-agent creation", () => {
   });
 
   it("preserves an explicit imported candidate roster", async () => {
-    const config = { agents: { list: [{ id: "main", default: true }] } };
+    const config = { agents: { entries: { main: {} } } };
 
     await expect(
       ensureOnboardingAgent({
@@ -120,6 +120,7 @@ describe("onboarding main-agent creation", () => {
       }),
     ).resolves.toEqual({
       config,
+      configBase: config,
       agentId: "main",
       bootstrapPending: false,
       createdAgent: false,
@@ -140,7 +141,7 @@ describe("onboarding main-agent creation", () => {
   });
 
   it("omits the config hash when no agent had to be created", async () => {
-    const config = { agents: { list: [{ id: "main", default: true }] } };
+    const config = { agents: { entries: { main: {} } } };
 
     const result = await ensureOnboardingAgent({
       config,

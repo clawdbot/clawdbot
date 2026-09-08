@@ -6,7 +6,10 @@
  * no context and fail mid-run. RPC-triggered runs already inherit a scope from
  * their caller and must keep it.
  */
-import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  bindGatewayContextResolver,
+  withPluginRuntimeGatewayContextResolver,
+} from "../plugins/runtime/gateway-request-scope.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 type ScheduledGatewayContextResolver = () => GatewayRequestContext | undefined;
@@ -32,10 +35,13 @@ export function fenceScheduledGatewayContextResolver(
   if (!resolveGatewayContext) {
     return undefined;
   }
-  return () => {
+  const resolveScheduledContext = () => {
     const context = resolveGatewayContext();
     return context?.resolveGatewayContext?.() ?? undefined;
   };
+  // Keep the execution fence while retaining the host identity used by shutdown.
+  bindGatewayContextResolver(resolveScheduledContext, resolveGatewayContext);
+  return resolveScheduledContext;
 }
 
 /**

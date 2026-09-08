@@ -25,6 +25,62 @@ function parseResult(result: string) {
 }
 
 describe("Claude CLI output validation", () => {
+  it("projects Claude CLI compaction status lifecycle without inferring from the boundary", () => {
+    const backend = buildAnthropicCliBackend();
+    const parseLifecycle = (event: unknown) =>
+      backend.parseJsonlLifecycleEvent?.(JSON.stringify(event), {
+        backendId: backend.id,
+        backend: backend.config,
+      });
+
+    const compactionEvents = [
+      {
+        type: "system",
+        subtype: "status",
+        status: "compacting",
+        uuid: "00000000-0000-4000-8000-000000000001",
+        session_id: "00000000-0000-4000-8000-000000000002",
+      },
+      {
+        type: "system",
+        subtype: "status",
+        status: null,
+        compact_result: "success",
+        uuid: "00000000-0000-4000-8000-000000000003",
+        session_id: "00000000-0000-4000-8000-000000000002",
+      },
+      {
+        type: "system",
+        subtype: "status",
+        status: null,
+        compact_result: "failed",
+        uuid: "00000000-0000-4000-8000-000000000004",
+        session_id: "00000000-0000-4000-8000-000000000002",
+      },
+    ];
+
+    expect(parseLifecycle(compactionEvents[0])).toEqual({
+      kind: "compaction",
+      phase: "start",
+    });
+    expect(parseLifecycle(compactionEvents[1])).toEqual({
+      kind: "compaction",
+      phase: "end",
+      completed: true,
+    });
+    expect(parseLifecycle(compactionEvents[2])).toEqual({
+      kind: "compaction",
+      phase: "end",
+      completed: false,
+    });
+    expect(parseLifecycle({ compact_result: "success" })).toEqual({
+      kind: "compaction",
+      phase: "end",
+      completed: true,
+    });
+    expect(parseLifecycle({ type: "system", subtype: "compact_boundary" })).toBeNull();
+  });
+
   it("rejects mocked raw tool protocol returned as terminal assistant text", () => {
     expect(parseResult(MOCK_RAW_TOOL_OUTPUT)).toEqual({
       kind: "result",

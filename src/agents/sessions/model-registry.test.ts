@@ -94,6 +94,7 @@ function pluginOwnerSnapshotEntries(
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
   };
 }

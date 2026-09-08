@@ -178,23 +178,24 @@ describe("bare-root session URL options", () => {
   const argv = (...args: string[]) => ["node", "openclaw", ...args];
 
   it.each([
-    ["--token", "token"],
-    ["--password", "password"],
-    ["--tls-fingerprint", "tlsFingerprint"],
-    ["--thinking", "thinking"],
-    ["--message", "message"],
-    ["--timeout-ms", "timeoutMs"],
-    ["--history-limit", "historyLimit"],
-  ] as const)("parses %s symmetrically before and after the URL", (flag, key) => {
+    ["--token", "token", "sentinel"],
+    ["--password", "password", "sentinel"],
+    ["--tls-fingerprint", "tlsFingerprint", "sentinel"],
+    ["--thinking", "thinking", "sentinel"],
+    ["--message", "message", "sentinel"],
+    ["--message", "message", "https://example.com/article"],
+    ["--timeout-ms", "timeoutMs", "sentinel"],
+    ["--history-limit", "historyLimit", "sentinel"],
+  ] as const)("parses %s (%s=%s) before and after the URL", (flag, key, value) => {
     for (const args of [
-      [flag, "sentinel", target],
-      [`${flag}=sentinel`, target],
-      [target, flag, "sentinel"],
-      [target, `${flag}=sentinel`],
+      [flag, value, target],
+      [`${flag}=${value}`, target],
+      [target, flag, value],
+      [target, `${flag}=${value}`],
     ]) {
       expect(parseBareSessionInvocation(argv(...args))).toEqual({
         target,
-        options: { [key]: "sentinel" },
+        options: { [key]: value },
       });
     }
   });

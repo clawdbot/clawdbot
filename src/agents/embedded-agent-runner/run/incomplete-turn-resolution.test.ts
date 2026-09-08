@@ -12,6 +12,37 @@ import {
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 describe("incomplete-turn terminal metadata", () => {
+  it("keeps the side-effect warning when the terminal error is a provider refusal", () => {
+    const assistant = buildEmbeddedRunnerAssistant({
+      provider: "anthropic",
+      stopReason: "error",
+      diagnostics: [
+        {
+          type: "provider_refusal",
+          timestamp: 0,
+          details: { provider: "anthropic", category: "cyber" },
+        },
+      ],
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+    });
+
+    expect(
+      resolveIncompleteTurnPayloadText({
+        payloadCount: 0,
+        aborted: false,
+        externalAbort: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(
+      "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying.",
+    );
+  });
+
   it("uses the current completed assistant instead of stale session tool-use evidence", () => {
     const staleAssistant = buildEmbeddedRunnerAssistant({ stopReason: "toolUse" });
     const currentAssistant = buildEmbeddedRunnerAssistant({
@@ -35,12 +66,14 @@ describe("incomplete-turn terminal metadata", () => {
     ).toBeNull();
   });
 
-  it("keeps stale session tool-use evidence incomplete without a current assistant", () => {
+  it("keeps completed tool-use evidence incomplete when the current transcript slice is absent", () => {
+    const assistant = buildEmbeddedRunnerAssistant({ stopReason: "toolUse" });
     const attempt = makeEmbeddedRunnerAttempt({
       assistantTexts: ["Let me update the file..."],
       toolMetas: [{ toolName: "write" }],
-      lastAssistant: buildEmbeddedRunnerAssistant({ stopReason: "toolUse" }),
+      lastAssistant: assistant,
       currentAttemptAssistant: undefined,
+      currentAttemptCompletedAssistant: assistant,
     });
 
     expect(

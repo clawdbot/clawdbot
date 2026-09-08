@@ -20,8 +20,6 @@ type CompactionSafeguardTestApi = {
   formatFileOperations: CallableFunction;
   computeAdaptiveChunkRatio: CallableFunction;
   readWorkspaceContextForSummary: CallableFunction;
-  hasMeaningfulConversationContent: CallableFunction;
-  isRealConversationMessage: CallableFunction;
   BASE_CHUNK_RATIO: number;
   MIN_CHUNK_RATIO: number;
   SAFETY_MARGIN: number;

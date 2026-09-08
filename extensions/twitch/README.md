@@ -74,7 +74,7 @@ Multi-account config (advanced):
 1. Create a dedicated Twitch account for the bot, then generate credentials: [Twitch Token Generator](https://twitchtokengenerator.com/)
    - Select **Bot Token**
    - Verify scopes `chat:read` and `chat:write` are selected
-   - Copy the **Access Token** to `token` property
+   - Copy the **Access Token** to `accessToken` property
    - Copy the **Client ID** to `clientId` property
 2. Start the gateway
 

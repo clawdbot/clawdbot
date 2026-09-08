@@ -19,7 +19,7 @@ mock.module(new URL("../config/config.ts", import.meta.url), {
   namedExports: { getRuntimeConfig: () => ({}) },
 });
 mock.module(new URL("./session-store-targets.ts", import.meta.url), {
-  namedExports: { resolveSessionStoreTargetsOrExit: () => [{ agentId: "main", storePath }] },
+  namedExports: { resolveCommandSessionStoreTargets: () => [{ agentId: "main", storePath }] },
 });
 mock.module(new URL("../config/sessions.ts", import.meta.url), {
   namedExports: {

@@ -465,9 +465,11 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   private renderSeek(progress: number) {
     const waveformPeaks = this.waveformPeaks;
     const seek = html`<input
-      class=${waveformPeaks
-        ? "chat-audio-player__seek chat-audio-player__seek--waveform"
-        : "chat-audio-player__seek"}
+      class=${
+        waveformPeaks
+          ? "chat-audio-player__seek chat-audio-player__seek--waveform"
+          : "chat-audio-player__seek"
+      }
       type="range"
       min="0"
       max=${String(this.duration || 0)}
@@ -550,39 +552,42 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
           visualMode: "preview-with-favicon",
           voiceNote: this.voiceNote,
         })}
-        ${this.sourceController.readiness === "preparing"
-          ? html`<div class="chat-assistant-attachment-card__reason chat-media-preparing">
-              ${t("chat.mediaPlayer.preparing")}
-            </div>`
-          : html`<div
-              class="chat-audio-player"
-              tabindex="0"
-              @keydown=${(event: KeyboardEvent) => this.handlePlayerKeydown(event)}
-            >
-              <button
-                type="button"
-                class="chat-audio-player__toggle"
-                ?disabled=${this.playback === "transcode" &&
-                this.sourceController.readiness !== "ready"}
-                aria-label=${t(this.playing ? "chat.mediaPlayer.pause" : "chat.mediaPlayer.play")}
-                @click=${() => this.togglePlayback()}
+        ${
+          this.sourceController.readiness === "preparing"
+            ? html`<div class="chat-assistant-attachment-card__reason chat-media-preparing">
+                ${t("chat.mediaPlayer.preparing")}
+              </div>`
+            : html`<div
+                class="chat-audio-player"
+                tabindex="0"
+                @keydown=${(event: KeyboardEvent) => this.handlePlayerKeydown(event)}
               >
-                ${this.playing ? icons.pause : icons.play}
-              </button>
-              <div class="chat-audio-player__time" aria-live="off">
-                <span>${timeLabel}</span>
-              </div>
-              <div class="chat-audio-player__timeline">${this.renderSeek(progress)}</div>
-              <button
-                type="button"
-                class="chat-audio-player__volume"
-                aria-label=${t(this.muted ? "chat.mediaPlayer.unmute" : "chat.mediaPlayer.mute")}
-                aria-pressed=${this.muted ? "true" : "false"}
-                @click=${() => this.toggleMuted()}
-              >
-                ${this.muted ? icons.volumeX : icons.volume2}
-              </button>
-            </div>`}
+                <button
+                  type="button"
+                  class="chat-audio-player__toggle"
+                  ?disabled=${
+                    this.playback === "transcode" && this.sourceController.readiness !== "ready"
+                  }
+                  aria-label=${t(this.playing ? "chat.mediaPlayer.pause" : "chat.mediaPlayer.play")}
+                  @click=${() => this.togglePlayback()}
+                >
+                  ${this.playing ? icons.pause : icons.play}
+                </button>
+                <div class="chat-audio-player__time" aria-live="off">
+                  <span>${timeLabel}</span>
+                </div>
+                <div class="chat-audio-player__timeline">${this.renderSeek(progress)}</div>
+                <button
+                  type="button"
+                  class="chat-audio-player__volume"
+                  aria-label=${t(this.muted ? "chat.mediaPlayer.unmute" : "chat.mediaPlayer.mute")}
+                  aria-pressed=${this.muted ? "true" : "false"}
+                  @click=${() => this.toggleMuted()}
+                >
+                  ${this.muted ? icons.volumeX : icons.volume2}
+                </button>
+              </div>`
+        }
         <audio
           class="chat-audio-player__media"
           preload="metadata"

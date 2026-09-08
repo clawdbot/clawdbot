@@ -68,6 +68,7 @@ private typealias GatewayTailscaleSettingsSaver = @MainActor @Sendable (
 struct TailscaleIntegrationSection: View {
     let connectionMode: AppState.ConnectionMode
     let isPaused: Bool
+    let isActive: Bool
 
     @Environment(TailscaleService.self) private var tailscaleService
 
@@ -77,65 +78,79 @@ struct TailscaleIntegrationSection: View {
     @State private var password: String = ""
     @State private var statusMessage: String?
     @State private var validationMessage: String?
-    @State private var statusTimer: Timer?
     @State private var lastAppliedSettings: GatewayTailscaleSettingsSnapshot?
 
-    init(connectionMode: AppState.ConnectionMode, isPaused: Bool) {
+    init(connectionMode: AppState.ConnectionMode, isPaused: Bool, isActive: Bool) {
         self.connectionMode = connectionMode
         self.isPaused = isPaused
+        self.isActive = isActive
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Tailscale (dashboard access)")
-                .font(.callout.weight(.semibold))
-
-            self.statusRow
+        Section {
+            LabeledContent {
+                Button("Refresh") {
+                    Task { await self.tailscaleService.checkTailscaleStatus() }
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(self.statusColor)
+                        .frame(width: 8, height: 8)
+                    Text(self.statusText)
+                }
+            }
 
             if !self.tailscaleService.isInstalled {
-                self.installButtons
+                self.installRow
             } else {
-                self.modePicker
+                Picker("Exposure", selection: self.$tailscaleMode) {
+                    ForEach(GatewayTailscaleMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
                 if self.tailscaleMode != .off {
                     self.accessURLRow
                 }
                 if self.tailscaleMode == .serve {
-                    self.serveAuthSection
+                    Toggle("Require credentials", isOn: self.$requireCredentialsForServe)
+                    if self.requireCredentialsForServe {
+                        self.passwordRow
+                    }
                 }
                 if self.tailscaleMode == .funnel {
-                    self.funnelAuthSection
+                    self.passwordRow
                 }
             }
-
-            if self.connectionMode != .local {
-                Text("Local mode required. Update settings on the gateway host.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            if let validationMessage {
-                Text(validationMessage)
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            } else if let statusMessage {
-                Text(statusMessage)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        } header: {
+            Text("Tailscale")
+        } footer: {
+            VStack(alignment: .leading, spacing: 4) {
+                if self.tailscaleService.isInstalled {
+                    Text(self.tailscaleModeFooter)
+                }
+                if self.connectionMode != .local {
+                    Text("Local mode required. Update settings on the gateway host.")
+                }
+                if let validationMessage {
+                    Text(validationMessage)
+                        .foregroundStyle(.orange)
+                } else if let statusMessage {
+                    Text(statusMessage)
+                }
             }
         }
-        .padding(12)
-        .background(Color.gray.opacity(0.08))
-        .cornerRadius(10)
         .disabled(self.connectionMode != .local)
-        .task {
-            guard !self.hasLoaded else { return }
-            await self.loadConfig()
-            self.hasLoaded = true
-            await self.tailscaleService.checkTailscaleStatus()
-            self.startStatusTimer()
-        }
-        .onDisappear {
-            self.stopStatusTimer()
+        .task(id: self.isActive) {
+            guard self.isActive else { return }
+            if !self.hasLoaded {
+                await self.loadConfig()
+            }
+            guard !Task.isCancelled else { return }
+            // Connection tabs stay mounted; only the active tab owns polling.
+            repeat {
+                await self.tailscaleService.checkTailscaleStatus()
+            } while await SimpleTaskSupport.waitForNextOperation(interval: 5)
         }
         .onChange(of: self.tailscaleMode) { _, _ in
             Task { await self.applySettings() }
@@ -145,19 +160,14 @@ struct TailscaleIntegrationSection: View {
         }
     }
 
-    private var statusRow: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(self.statusColor)
-                .frame(width: 10, height: 10)
-            Text(self.statusText)
-                .font(.callout)
-            Spacer()
-            Button("Refresh") {
-                Task { await self.tailscaleService.checkTailscaleStatus() }
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+    private var tailscaleModeFooter: String {
+        switch self.tailscaleMode {
+        case .off, .funnel:
+            self.tailscaleMode.description
+        case .serve:
+            self.requireCredentialsForServe
+                ? self.tailscaleMode.description
+                : "\(self.tailscaleMode.description) Serve uses Tailscale identity headers; no password required."
         }
     }
 
@@ -173,107 +183,78 @@ struct TailscaleIntegrationSection: View {
         return "Tailscale is installed but not running"
     }
 
-    private var installButtons: some View {
-        HStack(spacing: 12) {
-            Button("App Store") { self.tailscaleService.openAppStore() }
-                .buttonStyle(.link)
-            Button("Direct Download") { self.tailscaleService.openDownloadPage() }
-                .buttonStyle(.link)
-            Button("Setup Guide") { self.tailscaleService.openSetupGuide() }
-                .buttonStyle(.link)
+    private var installRow: some View {
+        LabeledContent("Install Tailscale") {
+            HStack(spacing: 12) {
+                Button("App Store") { self.tailscaleService.openAppStore() }
+                Button("Direct Download") { self.tailscaleService.openDownloadPage() }
+                Button("Setup Guide") { self.tailscaleService.openSetupGuide() }
+            }
+            .buttonStyle(.link)
         }
-        .controlSize(.small)
     }
 
-    private var modePicker: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Exposure mode")
-                .font(.callout.weight(.semibold))
-            Picker("Exposure", selection: self.$tailscaleMode) {
-                ForEach(GatewayTailscaleMode.allCases) { mode in
-                    Text(mode.label).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-            Text(self.tailscaleMode.description)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
+    static func dashboardURL(host: String, localBasePath: String? = nil) -> URL? {
+        guard let gatewayURL = URL(string: "wss://\(host)") else { return nil }
+        let config: GatewayConnection.Config = (gatewayURL, nil, nil)
+        return try? GatewayEndpointStore.dashboardURL(
+            for: config,
+            mode: .local,
+            localBasePath: localBasePath)
     }
 
     @ViewBuilder
     private var accessURLRow: some View {
         if let host = self.tailscaleService.tailscaleHostname {
-            let url = "https://\(host)/ui/"
-            HStack(spacing: 8) {
-                Text("Dashboard URL:")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if let link = URL(string: url) {
-                    Link(url, destination: link)
-                        .font(.system(.caption, design: .monospaced))
+            LabeledContent("Dashboard URL") {
+                if let url = Self.dashboardURL(host: host) {
+                    Link(url.absoluteString, destination: url)
+                        .font(.callout.monospaced())
                 } else {
-                    Text(url)
-                        .font(.system(.caption, design: .monospaced))
+                    Text(host)
+                        .font(.callout.monospaced())
                 }
             }
         } else if !self.tailscaleService.isRunning {
-            Text("Start Tailscale to get your tailnet hostname.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            LabeledContent("Dashboard URL") {
+                Text("Start Tailscale to get your tailnet hostname.")
+                    .foregroundStyle(.secondary)
+            }
         }
 
         if self.tailscaleService.isAppInstalled, !self.tailscaleService.isRunning {
-            Button("Start Tailscale") { self.tailscaleService.openTailscaleApp() }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-        }
-    }
-
-    private var serveAuthSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Toggle("Require credentials", isOn: self.$requireCredentialsForServe)
-                .toggleStyle(.checkbox)
-            if self.requireCredentialsForServe {
-                self.authFields
-            } else {
-                Text("Serve uses Tailscale identity headers; no password required.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            LabeledContent("Tailscale app") {
+                Button("Start Tailscale") { self.tailscaleService.openTailscaleApp() }
             }
         }
     }
 
-    private var funnelAuthSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Funnel requires authentication.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            self.authFields
+    private var passwordRow: some View {
+        LabeledContent {
+            HStack(spacing: 8) {
+                SecureField("Password", text: self.$password)
+                    .labelsHidden()
+                    .multilineTextAlignment(.leading)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 220)
+                    .onSubmit { Task { await self.applySettings() } }
+                Button("Update") { Task { await self.applySettings() } }
+            }
+        } label: {
+            Text("Password")
+            Text("Stored in ~/.openclaw/openclaw.json. Prefer OPENCLAW_GATEWAY_PASSWORD for production.")
         }
     }
 
-    @ViewBuilder
-    private var authFields: some View {
-        SecureField("Password", text: self.$password)
-            .textFieldStyle(.roundedBorder)
-            .frame(maxWidth: 240)
-            .onSubmit { Task { await self.applySettings() } }
-        Text("Stored in ~/.openclaw/openclaw.json. Prefer OPENCLAW_GATEWAY_PASSWORD for production.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        Button("Update password") { Task { await self.applySettings() } }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-    }
-
     private func loadConfig() async {
-        let root = await ConfigStore.load()
-        let loaded = TailscaleIntegrationSection.loadedSettings(from: root)
+        let document = await ConfigStore.load()
+        guard !Task.isCancelled, document.isCurrent else { return }
+        let loaded = TailscaleIntegrationSection.loadedSettings(from: document.root)
         self.tailscaleMode = loaded.snapshot.mode
         self.requireCredentialsForServe = loaded.snapshot.requireCredentialsForServe
         self.password = loaded.displayPassword
         self.lastAppliedSettings = loaded.snapshot
+        self.hasLoaded = true
     }
 
     private func applySettings() async {
@@ -309,10 +290,11 @@ struct TailscaleIntegrationSection: View {
             mode: tailscaleMode,
             requireCredentialsForServe: requireCredentialsForServe,
             password: password)
-        let root = await self.buildTailscaleConfigRoot(root: ConfigStore.load(), settings: settings)
+        var document = await ConfigStore.load()
+        document.root = self.buildTailscaleConfigRoot(root: document.root, settings: settings)
 
         do {
-            try await ConfigStore.save(root, allowGatewayAuthMutation: true)
+            try await ConfigStore.save(document, allowGatewayAuthMutation: true)
             return (true, nil)
         } catch {
             return (false, error.localizedDescription)
@@ -483,26 +465,16 @@ struct TailscaleIntegrationSection: View {
     @MainActor
     private static func saveTailscaleSettings(
         settings: GatewayTailscaleSettingsSnapshot,
-        connectionMode _: AppState.ConnectionMode,
+        connectionMode: AppState.ConnectionMode,
         isPaused _: Bool) async -> (Bool, String?)
     {
-        await self.buildAndSaveTailscaleConfig(
+        guard connectionMode == .local, AppStateStore.shared.connectionMode == .local else {
+            return (false, "Local mode required. Update settings on the gateway host.")
+        }
+        return await self.buildAndSaveTailscaleConfig(
             tailscaleMode: settings.mode,
             requireCredentialsForServe: settings.requireCredentialsForServe,
             password: settings.password)
-    }
-
-    private func startStatusTimer() {
-        self.stopStatusTimer()
-        if ProcessInfo.processInfo.isRunningTests { return }
-        self.statusTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
-            Task { await self.tailscaleService.checkTailscaleStatus() }
-        }
-    }
-
-    private func stopStatusTimer() {
-        self.statusTimer?.invalidate()
-        self.statusTimer = nil
     }
 }
 

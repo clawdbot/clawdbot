@@ -18,15 +18,10 @@ function turn(overrides: Partial<SessionPlacementTurnParams> = {}): SessionPlace
   } as SessionPlacementTurnParams;
 }
 
-function authority(
-  overrides: Partial<SessionPlacementTurnParams> = {},
-  githubPublicationAvailable = false,
-  portalAvailable = false,
-) {
+function authority(overrides: Partial<SessionPlacementTurnParams> = {}, portalAvailable = false) {
   return resolveWorkerToolAuthority({
     modelRef: { provider: "openai", model: "gpt-test" },
     turn: turn(overrides),
-    githubPublicationAvailable,
     portalAvailable,
   }).allowedToolNames;
 }
@@ -129,22 +124,13 @@ describe("resolveWorkerToolAuthority", () => {
     expect(authority({ toolsAllow: ["web_search"] })).toEqual([]);
     expect(authority({ toolsAllow: ["sessions_send"] })).toEqual(["sessions_send"]);
     expect(authority({ toolsAllow: ["portal"] })).toEqual([]);
-    expect(authority({ toolsAllow: ["portal"] }, false, true)).toEqual(["portal"]);
-    expect(authority({ toolsAllow: ["github_publish"] })).toEqual([]);
-    expect(authority({ toolsAllow: ["github_publish"] }, true)).toEqual(["github_publish"]);
-  });
-
-  it("adds publication only when the Gateway prepared its capability", () => {
-    expect(authority()).not.toContain("github_publish");
-    expect(authority({}, true)).toContain("github_publish");
+    expect(authority({ toolsAllow: ["portal"] }, true)).toEqual(["portal"]);
   });
 
   it("exposes portals only for SSH-backed placements and allowed capability policy", () => {
     expect(authority()).not.toContain("portal");
-    expect(authority({}, false, true)).toContain("portal");
-    expect(authority({ config: { tools: { deny: ["portal"] } } }, false, true)).not.toContain(
-      "portal",
-    );
+    expect(authority({}, true)).toContain("portal");
+    expect(authority({ config: { tools: { deny: ["portal"] } } }, true)).not.toContain("portal");
     expect(
       authority(
         {
@@ -154,7 +140,6 @@ describe("resolveWorkerToolAuthority", () => {
             tools: { sandbox: { tools: { deny: ["portal"] } } },
           },
         },
-        false,
         true,
       ),
     ).not.toContain("portal");

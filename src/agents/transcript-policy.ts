@@ -3,6 +3,7 @@
  * Combines provider plugin replay hooks with core transport fallbacks so chat
  * history sanitization, tool IDs, thinking blocks, and turn validation align.
  */
+import { bindsClaudeThinkingPrefix } from "@openclaw/llm-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
@@ -27,6 +28,7 @@ export type TranscriptPolicy = {
   preserveNativeAnthropicToolUseIds: boolean;
   repairToolUseResultPairing: boolean;
   preserveSignatures: boolean;
+  appendOnlyRuntimeContext?: boolean;
   sanitizeThoughtSignatures?: {
     allowBase64Only?: boolean;
     includeCamelCase?: boolean;
@@ -65,6 +67,17 @@ export function shouldAllowProviderOwnedThinkingReplay(params: {
   );
 }
 
+/**
+ * Bedrock Converse still requires strict role alternation, so only the direct
+ * Messages API keeps consecutive user turns separate under append-only replay.
+ */
+export function shouldMergeConsecutiveUserTurns(
+  policy: Pick<TranscriptPolicy, "appendOnlyRuntimeContext">,
+  modelApi?: string | null,
+): boolean {
+  return !(policy.appendOnlyRuntimeContext && modelApi === "anthropic-messages");
+}
+
 const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   sanitizeMode: "images-only",
   sanitizeToolCallIds: false,
@@ -73,6 +86,7 @@ const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   preserveNativeAnthropicToolUseIds: false,
   repairToolUseResultPairing: true,
   preserveSignatures: false,
+  appendOnlyRuntimeContext: false,
   sanitizeThoughtSignatures: undefined,
   dropThinkingBlocks: false,
   dropReasoningFromHistory: false,
@@ -153,7 +167,15 @@ function buildUnownedProviderTransportReplayFallback(params: {
           toolCallIdMode: "strict" as const,
         }
       : {}),
-    ...(isAnthropic ? { preserveSignatures: true } : {}),
+    ...(isAnthropic
+      ? {
+          preserveSignatures: true,
+          appendOnlyRuntimeContext: bindsClaudeThinkingPrefix({
+            id: modelId,
+            params: params.model?.params,
+          }),
+        }
+      : {}),
     ...(isGoogle
       ? {
           sanitizeThoughtSignatures: {
@@ -239,6 +261,9 @@ function mergeTranscriptPolicy(
       : {}),
     ...(typeof policy.preserveSignatures === "boolean"
       ? { preserveSignatures: policy.preserveSignatures }
+      : {}),
+    ...(typeof policy.appendOnlyRuntimeContext === "boolean"
+      ? { appendOnlyRuntimeContext: policy.appendOnlyRuntimeContext }
       : {}),
     ...(policy.sanitizeThoughtSignatures
       ? { sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures }

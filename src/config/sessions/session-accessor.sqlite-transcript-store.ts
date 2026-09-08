@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { getCodeModeSourceAppend } from "../../agents/transcript-code-mode-source.js";
@@ -13,6 +14,7 @@ import {
   deferOpenClawAgentPostCommitPublication,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { advanceCliHistoryBoundaryInTransaction } from "./session-accessor.sqlite-cli-history-boundary.js";
 import type {
   TranscriptEvent,
   TranscriptMessageAppendOptions,
@@ -41,8 +43,14 @@ import {
   deleteSessionTranscriptIndexInTransaction,
   markSessionTranscriptIndexDirtyInTransaction,
   reconcileSessionTranscriptIndexInTransaction,
+  sessionTranscriptIndexNeedsReconcile,
   shouldRebuildSessionTranscriptIndexSynchronously,
 } from "./session-transcript-index.js";
+import {
+  extractTranscriptIndexEntry,
+  hasTranscriptMessage,
+  transcriptEventContextEligibility,
+} from "./session-transcript-projection-rebuild.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 
@@ -64,7 +72,7 @@ type TranscriptAppendCursor = {
   insertIdentity?: ReturnType<typeof createTranscriptIdentityInserter>;
 };
 
-function createTranscriptEventInserter(database: OpenClawAgentDatabase, sessionId: string) {
+export function createTranscriptEventInserter(database: OpenClawAgentDatabase, sessionId: string) {
   return prepareSqliteQuerySync<{ seq: number; eventJson: string; createdAt: number }>(
     database.db,
     (parameter) =>
@@ -105,12 +113,13 @@ function createTranscriptIdentityInserter(
   );
 }
 
+/** Returns the exact committed JSON, or false when an existing identity owns the event. */
 export function appendTranscriptEventInTransaction(
   database: OpenClawAgentDatabase,
   scope: ResolvedTranscriptScope,
   event: TranscriptEvent,
   options: TranscriptAppendOptions = {},
-): boolean {
+): string | false {
   return appendTranscriptEvent(database, scope, event, options);
 }
 
@@ -120,7 +129,7 @@ function appendTranscriptEvent(
   event: TranscriptEvent,
   options: TranscriptAppendOptions,
   cursor: TranscriptAppendCursor = {},
-): boolean {
+): string | false {
   const persistedEvent = canonicalizeTranscriptEventMedia(event);
   const db = getSessionKysely(database.db);
   const createdAt = readEventTimestamp(persistedEvent) ?? Date.now();
@@ -157,7 +166,8 @@ function appendTranscriptEvent(
   }
   const seq = cursor.nextSeq ?? readNextTranscriptSeq(database, scope.sessionId);
   cursor.insertEvent ??= createTranscriptEventInserter(database, scope.sessionId);
-  cursor.insertEvent({ seq, eventJson: JSON.stringify(persistedEvent), createdAt });
+  const eventJson = JSON.stringify(persistedEvent);
+  cursor.insertEvent({ seq, eventJson, createdAt });
   cursor.nextSeq = seq + 1;
   if (options.touchMutation !== false) {
     touchTranscriptMutationInTransaction(database, scope.sessionId);
@@ -192,8 +202,9 @@ function appendTranscriptEvent(
     cursor.insertIdentity ??= createTranscriptIdentityInserter(database, scope.sessionId, true);
     cursor.insertIdentity({ ...identity, seq, createdAt });
   }
+  advanceCliHistoryBoundaryInTransaction(database, scope, seq);
   scheduleTranscriptProjectionReconcile(database, scope.sessionId, projectionNeedsRebuild, options);
-  return true;
+  return eventJson;
 }
 
 function scheduleTranscriptProjectionReconcile(
@@ -244,7 +255,7 @@ export function appendTranscriptEventsInTransaction(
       }
       // Streaming imports acknowledge only inserted rows in their byte-dedupe
       // spool; ordinary array iterators ignore this feedback.
-      next = iterator.next(inserted);
+      next = iterator.next(inserted !== false);
     }
   } catch (error) {
     try {
@@ -269,8 +280,6 @@ export function appendTranscriptEventsInTransaction(
 }
 
 function appendTranscriptEventRowInTransaction(
-  database: OpenClawAgentDatabase,
-  scope: ResolvedTranscriptScope,
   event: TranscriptEvent,
   seq: number,
   state: {
@@ -278,6 +287,7 @@ function appendTranscriptEventRowInTransaction(
     seenMessageIdempotencyKeys: Set<string>;
     insertEvent: ReturnType<typeof createTranscriptEventInserter>;
     insertIdentity: ReturnType<typeof createTranscriptIdentityInserter>;
+    appendToIndex: ReturnType<typeof createTranscriptIndexAppenderInTransaction>;
   },
   createdAtOverride?: number,
 ): boolean {
@@ -288,8 +298,7 @@ function appendTranscriptEventRowInTransaction(
     return false;
   }
   state.insertEvent({ seq, eventJson: JSON.stringify(persistedEvent), createdAt });
-  const appendToIndex = createTranscriptIndexAppenderInTransaction(database.db, scope.sessionId);
-  appendToIndex({
+  state.appendToIndex({
     seq,
     event: persistedEvent,
     eventId: identity?.eventId ?? null,
@@ -385,12 +394,12 @@ export function replaceSqliteTranscriptEventsInTransaction(
     seenMessageIdempotencyKeys: new Set<string>(),
     insertEvent: createTranscriptEventInserter(database, resolved.sessionId),
     insertIdentity: createTranscriptIdentityInserter(database, resolved.sessionId, false),
+    // The reset/dirty transition above owns the initial projection state for this whole batch.
+    appendToIndex: createTranscriptIndexAppenderInTransaction(database.db, resolved.sessionId),
   };
   for (const [eventIndex, event] of events.entries()) {
     if (
       appendTranscriptEventRowInTransaction(
-        database,
-        resolved,
         event,
         seq,
         state,
@@ -439,22 +448,37 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
   if (rows.length === 0) {
     return;
   }
-  const rebuildSynchronously = shouldRebuildSessionTranscriptIndexSynchronously(
-    database.db,
-    resolved.sessionId,
-  );
-  const db = getSessionKysely(database.db);
-  for (const row of rows) {
-    const persistedEvent = canonicalizeTranscriptEventMedia(row.event);
-    const result = executeSqliteQuerySync(
-      database.db,
-      db
-        .updateTable("transcript_events")
-        .set({ event_json: JSON.stringify(persistedEvent) })
-        .where("session_id", "=", resolved.sessionId)
-        .where("seq", "=", row.seq)
-        .where("event_json", "=", row.expectedEventJson),
+  const rewrites = rows.map((row) => ({
+    ...row,
+    eventJson: JSON.stringify(canonicalizeTranscriptEventMedia(row.event)),
+  }));
+  const projectionUnchanged =
+    !sessionTranscriptIndexNeedsReconcile(database.db, resolved.sessionId) &&
+    rewrites.every((row) =>
+      transcriptRewritePreservesProjection(row.expectedEventJson, row.eventJson),
     );
+  const rebuildSynchronously =
+    !projectionUnchanged &&
+    shouldRebuildSessionTranscriptIndexSynchronously(database.db, resolved.sessionId);
+  const db = getSessionKysely(database.db);
+  const rewrite = prepareSqliteQuerySync<(typeof rewrites)[number]>(database.db, (parameter) =>
+    db
+      .updateTable("transcript_events")
+      .set({ event_json: parameter((row) => row.eventJson) })
+      .where("session_id", "=", resolved.sessionId)
+      .where(
+        "seq",
+        "=",
+        parameter((row) => row.seq),
+      )
+      .where(
+        "event_json",
+        "=",
+        parameter((row) => row.expectedEventJson),
+      ),
+  );
+  for (const row of rewrites) {
+    const result = rewrite(row);
     if (result.numAffectedRows !== 1n) {
       throw new Error(
         `Transcript row ${resolved.sessionId}:${row.seq} changed before exact rewrite`,
@@ -463,12 +487,40 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
   }
   rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
   touchTranscriptMutationInTransaction(database, resolved.sessionId);
+  if (!projectionUnchanged) {
+    reconcileRewrittenTranscriptIndex(database, resolved.sessionId, rebuildSynchronously);
+  }
+}
+
+function transcriptRewritePreservesProjection(beforeJson: string, afterJson: string): boolean {
+  const before: unknown = JSON.parse(beforeJson);
+  const after: unknown = JSON.parse(afterJson);
+  if (!isRecord(before) || !isRecord(after)) {
+    return false;
+  }
+  const { message: _beforeMessage, ...beforeEnvelope } = before;
+  const { message: _afterMessage, ...afterEnvelope } = after;
+  // Equal envelopes preserve tree topology and timestamp; exact rewrites retain created_at,
+  // so the index extractor's fallback timestamp is identical for both versions as well.
+  return (
+    isDeepStrictEqual(beforeEnvelope, afterEnvelope) &&
+    hasTranscriptMessage(before) === hasTranscriptMessage(after) &&
+    transcriptEventContextEligibility(before) === transcriptEventContextEligibility(after) &&
+    isDeepStrictEqual(extractTranscriptIndexEntry(before, 0), extractTranscriptIndexEntry(after, 0))
+  );
+}
+
+function reconcileRewrittenTranscriptIndex(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  rebuildSynchronously: boolean,
+): void {
+  // Dirty state revokes prepared claims and hides old rows; reconcile alone owns their deletion.
+  markSessionTranscriptIndexDirtyInTransaction(database.db, sessionId);
   if (rebuildSynchronously) {
-    deleteSessionTranscriptIndexInTransaction(database.db, resolved.sessionId);
-    reconcileSessionTranscriptIndexInTransaction(database.db, resolved.sessionId);
+    reconcileSessionTranscriptIndexInTransaction(database.db, sessionId);
   } else {
-    markSessionTranscriptIndexDirtyInTransaction(database.db, resolved.sessionId);
-    scheduleTranscriptProjectionReconcile(database, resolved.sessionId, true, {});
+    scheduleTranscriptProjectionReconcile(database, sessionId, true, {});
   }
 }
 
@@ -488,43 +540,31 @@ export function updateSqliteTranscriptEventJsonInTransaction(
     sessionId,
   );
   const db = getSessionKysely(database.db);
-  for (const { seq, eventJson } of updates) {
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .updateTable("transcript_events")
-        .set({ event_json: eventJson })
-        .where("session_id", "=", sessionId)
-        .where("seq", "=", seq),
-    );
+  const update = prepareSqliteQuerySync<(typeof updates)[number]>(database.db, (parameter) =>
+    db
+      .updateTable("transcript_events")
+      .set({ event_json: parameter((row) => row.eventJson) })
+      .where("session_id", "=", sessionId)
+      .where(
+        "seq",
+        "=",
+        parameter((row) => row.seq),
+      ),
+  );
+  for (const row of updates) {
+    update(row);
   }
   rotateTranscriptGenerationInTransaction(database, sessionId);
-  if (rebuildSynchronously) {
-    deleteSessionTranscriptIndexInTransaction(database.db, sessionId);
-    reconcileSessionTranscriptIndexInTransaction(database.db, sessionId);
-  } else {
-    markSessionTranscriptIndexDirtyInTransaction(database.db, sessionId);
-  }
-  // Minimally advance transcript_updated_at (prev+1), NOT to now. This is a one-time maintenance
-  // rewrite: bumping to now would reorder legacy sessions to the top of every recency view
-  // (sqlite-history.ts orders by transcript_updated_at). But the watermark must still change,
-  // because it is the in-flight projection-rebuild worker's stale-snapshot key
-  // (session-transcript-projection-rebuild.ts sourceSnapshotMatches) and seq is unchanged here;
-  // leaving it identical would let a concurrent worker apply a stale pre-rewrite index. A null
-  // watermark (session absent from recency views) has no recency to preserve, so touch to now.
-  const currentUpdatedAt = readTranscriptMutationStateInTransaction(database, sessionId).updatedAt;
-  if (currentUpdatedAt === null) {
-    touchTranscriptMutationInTransaction(database, sessionId);
-  } else {
-    advanceTranscriptMutationAtInTransaction(database, sessionId, currentUpdatedAt, {
-      strictly: true,
-    });
-  }
-  scheduleTranscriptProjectionReconcile(database, sessionId, !rebuildSynchronously, {});
+  reconcileRewrittenTranscriptIndex(database, sessionId, rebuildSynchronously);
+  recordTranscriptReplacementMutation(
+    database,
+    sessionId,
+    readTranscriptMutationStateInTransaction(database, sessionId).updatedAt,
+  );
 }
 
 function readIdempotencyKeyOwner(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
   idempotencyKey: string,
 ): { eventId: string; seq: number } | undefined {
@@ -543,7 +583,7 @@ function readIdempotencyKeyOwner(
 }
 
 function readTranscriptMessageByIdempotencyKey(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   scope: ResolvedTranscriptScope,
   idempotencyKey: string,
 ): { messageId: string; message: unknown } | undefined {
@@ -552,7 +592,7 @@ function readTranscriptMessageByIdempotencyKey(
 }
 
 export function readTranscriptMessageByScopedIdempotencyKey(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   scope: ResolvedTranscriptScope,
   idempotencyKey: string,
   lookup: TranscriptMessageAppendOptions<unknown>["idempotencyLookup"],
@@ -583,7 +623,7 @@ export function readTranscriptMessageByEventId(
 }
 
 function readTranscriptMessageByIdentity(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   scope: ResolvedTranscriptScope,
   identity: { eventId: string; seq: number },
 ): { messageId: string; message: unknown } | undefined {

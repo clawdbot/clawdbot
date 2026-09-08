@@ -57,6 +57,87 @@ describe("shared automation mutation options", () => {
     callGatewayFromCli.mockResolvedValue({ ok: true });
   });
 
+  it.each([
+    { operation: "add", flag: "--every" },
+    { operation: "add", flag: "--stagger" },
+    { operation: "edit", flag: "--every" },
+    { operation: "edit", flag: "--stagger" },
+  ])(
+    "rejects out-of-range configured duration precision for $operation $flag before RPC",
+    async ({ operation, flag }) => {
+      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const args =
+        operation === "add"
+          ? [
+              "add",
+              "--name",
+              "Duration boundary",
+              "--agent",
+              "main",
+              "--system-event",
+              "test",
+              "--disabled",
+            ]
+          : ["edit", "job-1"];
+      try {
+        await expect(
+          createMutationProgram().parseAsync(
+            [
+              ...args,
+              ...(flag === "--stagger" ? ["--cron", "0 * * * *", "--tz", "UTC"] : []),
+              flag,
+              "8640000000000001ms",
+            ],
+            { from: "user" },
+          ),
+        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+        expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(`Invalid ${flag}`));
+        expect(callGatewayFromCli).not.toHaveBeenCalled();
+      } finally {
+        errorSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each(["--every", "--stagger"])(
+    "accepts the inclusive configured duration precision limit for %s",
+    async (flag) => {
+      await createMutationProgram().parseAsync(
+        [
+          "add",
+          "--name",
+          "Duration boundary",
+          "--agent",
+          "main",
+          "--system-event",
+          "test",
+          "--disabled",
+          ...(flag === "--stagger" ? ["--cron", "0 * * * *"] : []),
+          flag,
+          "8640000000000000ms",
+        ],
+        { from: "user" },
+      );
+
+      expect(callGatewayFromCli).toHaveBeenCalledWith(
+        "cron.add",
+        expect.anything(),
+        expect.objectContaining({
+          enabled: false,
+          schedule:
+            flag === "--every"
+              ? { kind: "every", everyMs: 8_640_000_000_000_000 }
+              : {
+                  kind: "cron",
+                  expr: "0 * * * *",
+                  tz: undefined,
+                  staggerMs: 8_640_000_000_000_000,
+                },
+        }),
+      );
+    },
+  );
+
   it("updates an existing automation to an exit-triggered schedule", async () => {
     await createMutationProgram().parseAsync(
       ["edit", "job-1", "--on-exit", "./watch.sh", "--on-exit-cwd", "/repo"],

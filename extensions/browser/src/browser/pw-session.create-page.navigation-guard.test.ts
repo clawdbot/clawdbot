@@ -1,4 +1,5 @@
 // Browser tests cover pw session.create page.navigation guard plugin behavior.
+import { EventEmitter } from "node:events";
 import { chromium } from "playwright-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
@@ -78,7 +79,8 @@ function installBrowserMocks() {
   });
   const mainFrame = {};
   const contextOn = vi.fn();
-  const browserOn = vi.fn();
+  const browserEvents = new EventEmitter();
+  const browserOn = vi.fn(browserEvents.on.bind(browserEvents));
   const browserClose = vi.fn(async () => {});
   const sessionSend = vi.fn(async (method: string) => {
     if (method === "Target.getTargetInfo") {
@@ -116,6 +118,7 @@ function installBrowserMocks() {
   const browser = {
     contexts: () => [context],
     on: browserOn,
+    off: browserEvents.off.bind(browserEvents),
     close: browserClose,
   } as unknown as import("playwright-core").Browser;
 
@@ -247,6 +250,36 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
 
     expect(created.targetId).toBe("TARGET_1");
     expect(pageGoto).not.toHaveBeenCalled();
+  });
+
+  it("closes a new page when cancellation wins target resolution", async () => {
+    const { pageClose, sessionSend } = installBrowserMocks();
+    let releaseTargetInfo: (() => void) | undefined;
+    let markTargetInfoStarted: (() => void) | undefined;
+    const targetInfoStarted = new Promise<void>((resolve) => {
+      markTargetInfoStarted = resolve;
+    });
+    const targetInfoReleased = new Promise<void>((resolve) => {
+      releaseTargetInfo = resolve;
+    });
+    sessionSend.mockImplementationOnce(async () => {
+      markTargetInfoStarted?.();
+      await targetInfoReleased;
+      return { targetInfo: { targetId: "TARGET_1" } };
+    });
+    const controller = new AbortController();
+
+    const creation = createPageViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      url: "about:blank",
+      signal: controller.signal,
+    });
+    await targetInfoStarted;
+    controller.abort(new Error("cancelled page creation"));
+    releaseTargetInfo?.();
+
+    await expect(creation).rejects.toThrow("cancelled page creation");
+    expect(pageClose).toHaveBeenCalledOnce();
   });
 
   it("blocks hostname navigation when strict SSRF policy is configured", async () => {

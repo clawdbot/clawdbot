@@ -2,11 +2,11 @@
 import { describe, expect, it } from "vitest";
 import {
   assertCodexModelListResponse,
-  assertCodexThreadForkParams,
   readCodexTurn,
   assertCodexThreadStartResponse,
   assertCodexThreadResumeResponse,
 } from "./protocol-validators.js";
+import { assertCodexThreadForkParams } from "./protocol.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 function makeMinimalThread(overrides: Record<string, unknown> = {}) {

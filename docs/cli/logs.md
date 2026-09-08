@@ -32,6 +32,8 @@ Tail Gateway file logs over RPC. Works in remote mode.
 
 Passing `--url` skips auto-applied config credentials; include `--token` explicitly if the target Gateway requires auth.
 
+`--port` requires an integer from `1` to `65535`; empty or whitespace-only values are invalid. Omit the option to use the configured or environment target.
+
 ## Examples
 
 ```bash
@@ -65,6 +67,8 @@ profile uses `openclaw-YYYY-MM-DD.log`, while named profiles use
 In `--json` mode, invalid `--port`, `--limit`, `--interval`, or `--max-bytes` values and conflicting `--url`/`--port` options produce the standard CLI failure envelope on stdout: `{"ok":false,"error":{"type":"cli_error","message":"..."}}`. Terminal log-fetch failures instead emit `{"type":"error",...}` on stderr. Both exit with status `1`.
 
 In text mode, terminal log-fetch failures print the redacted error reason, selected Gateway connection details, and a doctor hint on stderr. A received RPC rejection is shown as the error, rather than reported as a Gateway reachability failure.
+
+In JSON mode, terminal log-fetch errors use the same redacted failure reason for `message` and `error`, including RPC rejections, timeouts, disconnects, and invalid response payloads. The record retains connection `details` and a doctor `hint` on stderr; the command still exits with status `1`.
 
 ## Related
 

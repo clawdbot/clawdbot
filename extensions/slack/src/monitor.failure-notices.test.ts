@@ -272,9 +272,12 @@ describe("Slack thread failure notices", () => {
     );
 
     await dispatchEvent({ text: "<@bot-user> please help", ts: "105.040000" });
-    slackTestState.sendMock.mockRejectedValueOnce(new Error("Slack delivery unavailable"));
+    const failure = new Error("Slack delivery unavailable");
+    slackTestState.sendMock.mockRejectedValueOnce(failure);
 
-    await dispatchEvent({ ts: "105.040001", thread_ts: "105.040000", parent_user_id: "U1" });
+    await expect(
+      dispatchEvent({ ts: "105.040001", thread_ts: "105.040000", parent_user_id: "U1" }),
+    ).rejects.toBe(failure);
     await dispatchEvent({ ts: "105.040002", thread_ts: "105.040000", parent_user_id: "U1" });
 
     expect(slackTestState.sendMock).toHaveBeenCalledTimes(2);

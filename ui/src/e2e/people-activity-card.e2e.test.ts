@@ -1,7 +1,9 @@
-import { mkdir } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProofEnabled,
@@ -14,7 +16,12 @@ import {
 const suite = createChatFlowE2eSuite();
 const selected = "agent:main:card-selected";
 const watched = "agent:main:card-viewing";
-const proofDirectory = path.resolve(".artifacts/control-ui-e2e/presence-namespaces");
+let proofDirectory: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    proofDirectory = createControlUiE2eArtifactDir("presence-namespaces");
+  }
+});
 const recentLabel = "Review the complete cross-platform launch readiness checklist before release";
 const updatedRecentLabel = `${recentLabel} with every regional owner`;
 const focusUpdatedRecentLabel = `${updatedRecentLabel} and final approval`;
@@ -104,7 +111,6 @@ async function capturePeopleCard(page: Page, filename: string) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(proofDirectory, { recursive: true });
   await page.screenshot({
     path: path.join(proofDirectory, filename),
     fullPage: true,
@@ -113,7 +119,54 @@ async function capturePeopleCard(page: Page, filename: string) {
 }
 
 suite.define(() => {
-  it("opens one person row, preserves focus on updates, and keeps activity navigation in the card", async () => {
+  it.each(["click", "Enter", "tap"] as const)(
+    "opens a person's Activity page directly on %s",
+    async (action) => {
+      const touch = action === "tap";
+      await suite.withPage(
+        {
+          hasTouch: touch,
+          isMobile: touch,
+          viewport: touch ? { width: 390, height: 650 } : { width: 1280, height: 900 },
+        },
+        async ({ page }) => {
+          const gateway = await installMockGateway(page, scenario());
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
+          if (touch) {
+            await page
+              .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
+              .first()
+              .click();
+          }
+          const person = page.locator('[data-online-user-id="alice"]');
+          if (action === "Enter") {
+            await person.focus();
+            await page
+              .getByRole("dialog", { name: "Activity for Alice" })
+              .waitFor({ state: "visible" });
+            await person.press("Enter");
+          } else if (touch) {
+            await person.tap();
+          } else {
+            await person.click();
+          }
+          await expect.poll(() => new URL(page.url()).pathname).toBe("/activity/alice");
+          await expect
+            .poll(() => page.getByRole("dialog", { name: "Activity for Alice" }).count())
+            .toBe(0);
+          await expect
+            .poll(
+              async () =>
+                (await gateway.getRequests("sessions.list", { involvingProfileId: "alice" }))
+                  .length,
+            )
+            .toBeGreaterThan(0);
+        },
+      );
+    },
+  );
+
+  it("opens person details on hover, preserves focus on updates, and follows the card activity link", async () => {
     await suite.withPage(
       {
         hasTouch: false,
@@ -131,7 +184,7 @@ suite.define(() => {
         const row = page
           .locator(".sidebar-online__row")
           .filter({ has: page.locator('[data-online-user-id="alice"]') });
-        const person = row.getByRole("button", { name: "Details for Alice" });
+        const person = row.getByRole("link", { name: "Activity for Alice" });
         const card = page.getByRole("dialog", { name: "Activity for Alice" });
         await person.waitFor({ state: "visible" });
         expect(await card.count()).toBe(0);
@@ -151,7 +204,14 @@ suite.define(() => {
           );
         expect(await card.innerHTML()).not.toContain("agent:private:hidden");
         await expectInlineLastActivity(card);
-        await capturePeopleCard(page, "desktop-light-open.png");
+        if (captureUiProofEnabled) {
+          await writeFile(
+            path.join(proofDirectory, "desktop-light-open.png"),
+            await takeControlUiViewportScreenshot(page, card, [
+              card.getByRole("link", { name: "View activity", exact: true }),
+            ]),
+          );
+        }
         const bounds = await row.boundingBox();
         const cardBounds = await card.boundingBox();
         if (!bounds || !cardBounds) {
@@ -172,10 +232,7 @@ suite.define(() => {
         expect(initialShift).not.toBe("");
         const listRequests = (await gateway.getRequests("sessions.list")).length;
         const updatedScenario = scenario(updatedRecentLabel);
-        await gateway.setMethodResponse(
-          "sessions.list",
-          updatedScenario.methodResponses["sessions.list"],
-        );
+        await gateway.setSessionsListResponse(updatedScenario.methodResponses["sessions.list"]);
         await gateway.emitGatewayEvent("sessions.changed", {
           reason: "update",
           sessionKey: "agent:main:card-recent",
@@ -242,8 +299,7 @@ suite.define(() => {
         );
         const focusedListRequests = (await gateway.getRequests("sessions.list")).length;
         const focusUpdatedScenario = scenario(focusUpdatedRecentLabel);
-        await gateway.setMethodResponse(
-          "sessions.list",
+        await gateway.setSessionsListResponse(
           focusUpdatedScenario.methodResponses["sessions.list"],
         );
         await gateway.emitGatewayEvent("sessions.changed", {
@@ -275,22 +331,21 @@ suite.define(() => {
         await page.keyboard.press("Escape");
         await expect.poll(() => card.count()).toBe(0);
         expect(await person.evaluate((element) => document.activeElement === element)).toBe(true);
-        await person.click();
+        await page.mouse.click(1100, 200);
+        await person.hover();
         await card.waitFor({ state: "visible" });
-        await page.mouse.move(1100, 200);
-        expect(await card.count()).toBe(1);
         await page.mouse.click(1100, 200);
         await expect.poll(() => card.count()).toBe(0);
-        await person.click();
+        await person.hover();
         await card.waitFor({ state: "visible" });
         await card.getByRole("link", { name: "View activity", exact: true }).click();
-        await expect.poll(() => page.url()).toContain("/activity?person=alice");
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/activity/alice");
         await expect.poll(() => card.count()).toBe(0);
       },
     );
   });
 
-  it("opens touch details inside a narrow viewport and follows the session's saved face", async () => {
+  it("opens focused details inside a narrow touch viewport and follows the session's saved face", async () => {
     await suite.withPage(
       {
         hasTouch: true,
@@ -308,8 +363,8 @@ suite.define(() => {
           .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
           .first()
           .click();
-        const person = page.getByRole("button", { name: "Details for Alice" });
-        await person.tap();
+        const person = page.getByRole("link", { name: "Activity for Alice" });
+        await person.focus();
         const card = page.getByRole("dialog", { name: "Activity for Alice" });
         await card.waitFor({ state: "visible" });
         await page.keyboard.press("Tab");
@@ -317,7 +372,8 @@ suite.define(() => {
         await expect.poll(() => card.count()).toBe(0);
         expect(await person.isVisible()).toBe(true);
         expect(await person.evaluate((element) => document.activeElement === element)).toBe(true);
-        await person.tap();
+        await page.keyboard.press("Shift+Tab");
+        await person.focus();
         await card.waitFor({ state: "visible" });
         expect(await card.evaluate((element) => getComputedStyle(element).pointerEvents)).toBe(
           "auto",
@@ -384,13 +440,12 @@ suite.define(() => {
           methodResponses: { "sessions.list": sessions },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
-        const profileButton = page.getByRole("button", {
-          name: "Details for Profile person",
+        const profileButton = page.getByRole("link", {
+          name: "Activity for Profile person",
           exact: true,
         });
         await profileButton.waitFor({ state: "visible" });
         if (captureUiProofEnabled) {
-          await mkdir(proofDirectory, { recursive: true });
           await page.screenshot({
             path: path.join(proofDirectory, "initial.png"),
             animations: "disabled",
@@ -444,7 +499,7 @@ suite.define(() => {
           ],
         });
         await expect.poll(() => rawCard.count()).toBe(0);
-        await profileButton.click();
+        await profileButton.hover();
         const profileCard = page.getByRole("dialog", {
           name: "Activity for Profile person",
           exact: true,
@@ -452,7 +507,7 @@ suite.define(() => {
         await profileCard.waitFor({ state: "visible" });
         expect(await profileCard.getByRole("link", { name: /^Raw watch(?:\s|$)/ }).count()).toBe(0);
         const activity = profileCard.getByRole("link", { name: "View activity", exact: true });
-        expect(await activity.getAttribute("href")).toBe(`/activity?person=${id}`);
+        expect(await activity.getAttribute("href")).toBe(`/activity/${id}`);
         if (captureUiProofEnabled) {
           await page.screenshot({
             path: path.join(proofDirectory, "profile-card.png"),
@@ -494,7 +549,10 @@ suite.define(() => {
           });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
           await page
-            .getByRole("button", { name: `Details for ${peer.name}`, exact: true })
+            .getByRole(qualified ? "button" : "link", {
+              name: `${qualified ? "Details" : "Activity"} for ${peer.name}`,
+              exact: true,
+            })
             .waitFor({ state: "visible" });
           expect(await page.locator(".sidebar-online__person").count()).toBe(1);
           await expect

@@ -3,6 +3,7 @@ export type ServiceChildStart = {
   generation: string;
   command: string;
   args: string[];
+  argv0?: string;
   cwd?: string;
   env?: Record<string, string>;
   stdinMode: "inherit" | "pipe-open" | "pipe-closed";
@@ -56,7 +57,6 @@ export type ServiceChildAnchorMessage = ServiceChildAnchorPayload & {
 
 export type ServiceChildRelayMessage =
   | ServiceChildStart
-  | { type: "anchor-exit"; generation: string; code: number | null; signal: NodeJS.Signals | null }
   | { type: "relay-error"; generation: string; error: string };
 
 export function encodeServiceChildMessage(

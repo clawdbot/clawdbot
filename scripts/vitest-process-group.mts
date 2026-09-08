@@ -22,7 +22,6 @@ type CleanupParams = ProcessGroupParams & {
   forceSignal?: VitestProcessSignal | null;
   forceSignalDelayMs?: number;
   forwardedSignals?: VitestProcessSignal[];
-  onSignal?: (signal: VitestProcessSignal) => void;
   processObject?: NodeJS.Process;
 };
 type DiagnosticsProbe = (
@@ -581,17 +580,15 @@ function waitForChildCompletionEvent(child: ChildProcess, event: "exit" | "close
  * Resolves only after the child completion contract and any owned POSIX group are joined.
  */
 export function createVitestProcessCompletion(params: CompletionParams) {
-  const exitCompletion = waitForChildCompletionEvent(params.child, "exit");
-  const platform = params.platform ?? process.platform;
-  if (!params.detached || !shouldUseDetachedVitestProcessGroup(platform)) {
-    return exitCompletion;
-  }
-
-  const closeCompletion = waitForChildCompletionEvent(params.child, "close");
+  const { child, detached, platform = process.platform } = params;
+  const exitCompletion = waitForChildCompletionEvent(child, "exit");
+  const closeCompletion = waitForChildCompletionEvent(child, "close");
   // `close` drains inherited pipes, while the group join proves pipe-independent
   // descendants are gone before a sequential caller advances.
   const groupCompletion = exitCompletion.then(async (result) => {
-    await joinVitestProcessGroup(params.child, platform, params.kill ?? process.kill.bind(process));
+    if (detached && shouldUseDetachedVitestProcessGroup(platform)) {
+      await joinVitestProcessGroup(child, platform, params.kill ?? process.kill.bind(process));
+    }
     return result;
   });
   return Promise.all([groupCompletion, closeCompletion]).then(([result]) => result);
@@ -633,9 +630,10 @@ export function installVitestProcessGroupCleanup(params: CleanupParams) {
   const forceSignalDelayMs = params.forceSignalDelayMs ?? 0;
   const forwardedSignals = params.forwardedSignals ?? ["SIGINT", "SIGTERM"];
   const child = params.child;
-  const onSignal = params.onSignal;
 
   let active = true;
+  // Parent interruption remains authoritative after teardown; exit cleanup must not claim it.
+  let forwardedSignal: VitestProcessSignal | undefined;
 
   const forward = (signal: VitestProcessSignal) => {
     if (!active) {
@@ -652,7 +650,7 @@ export function installVitestProcessGroupCleanup(params: CleanupParams) {
   const signalHandlers = new Map<VitestProcessSignal, () => void>();
   for (const signal of forwardedSignals) {
     const handler = () => {
-      onSignal?.(signal);
+      forwardedSignal ??= signal;
       forward(signal);
       if (forceSignal) {
         if (forceSignalDelayMs > 0) {
@@ -673,14 +671,17 @@ export function installVitestProcessGroupCleanup(params: CleanupParams) {
   ensureProcessListenerCapacity(processObject, "exit");
   processObject.on("exit", exitHandler);
 
-  return () => {
-    if (!active) {
-      return;
-    }
-    active = false;
-    for (const [signal, handler] of signalHandlers) {
-      processObject.off(signal, handler);
-    }
-    processObject.off("exit", exitHandler);
+  return {
+    getForwardedSignal: () => forwardedSignal,
+    teardown: () => {
+      if (!active) {
+        return;
+      }
+      active = false;
+      for (const [signal, handler] of signalHandlers) {
+        processObject.off(signal, handler);
+      }
+      processObject.off("exit", exitHandler);
+    },
   };
 }

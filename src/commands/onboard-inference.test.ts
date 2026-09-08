@@ -1,5 +1,9 @@
 // Inference backend detection tests cover the documented ladder and login-awareness.
-import { afterAll, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as facadeRuntime from "../plugin-sdk/facade-runtime.js";
 import type { LocalCommandProbe } from "../system-agent/probes.js";
 import {
   ANTHROPIC_API_DEFAULT_MODEL_REF,
@@ -36,6 +40,7 @@ const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
     setupProviders: new Map(),
     commandAliases: new Map(),
     contracts: new Map(),
+    modelIdNormalizationPolicies: new Map(),
   },
   metrics: {
     registrySnapshotMs: 0,
@@ -57,6 +62,17 @@ afterAll(() => {
   vi.resetModules();
 });
 
+beforeEach(() => {
+  vi.spyOn(facadeRuntime, "tryLoadActivatedBundledPluginPublicSurfaceModule").mockResolvedValue(
+    null,
+  );
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
+
 function probeDeps(found: Record<string, boolean>) {
   return async (command: string): Promise<LocalCommandProbe> => ({
     command,
@@ -65,6 +81,85 @@ function probeDeps(found: Record<string, boolean>) {
 }
 
 describe("detectInferenceBackends", () => {
+  it.each([false, true])(
+    "keeps native detection passive with stored Codex credentials: %s",
+    async (stored) => {
+      const calls: Array<{ command: string; args: string[] }> = [];
+      const candidates = await detectInferenceBackends({
+        env: {},
+        platform: "linux",
+        deps: {
+          probeLocalCommand: async (command, args = ["--version"]) => {
+            calls.push({ command, args });
+            return { command, found: command === "codex" || command === "claude" };
+          },
+          readCodexCliCredentials: () => (stored ? { type: "oauth" } : null),
+          randomInt: () => 0,
+        },
+      });
+      expect(facadeRuntime.tryLoadActivatedBundledPluginPublicSurfaceModule).not.toHaveBeenCalled();
+      expect(calls.every(({ args }) => args.length === 1 && args[0] === "--version")).toBe(true);
+      expect(candidates).toMatchObject([
+        { kind: "claude-cli", detail: "installed; login status unverified" },
+        {
+          kind: "codex-cli",
+          detail: stored
+            ? "installed; stored credentials found; login status unverified"
+            : "installed; login status unverified",
+        },
+      ]);
+      expect(candidates.every((candidate) => candidate.credentials === undefined)).toBe(true);
+    },
+  );
+
+  it.each(["home", "codex-home"] as const)(
+    "reads passive credentials only from selected %s",
+    async (selection) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-passive-login-"));
+      try {
+        const processHome = path.join(root, "process");
+        const selectedHome = path.join(root, "selected");
+        const codexHome =
+          selection === "home" ? path.join(selectedHome, ".codex") : path.join(root, "override");
+        await fs.mkdir(processHome, { recursive: true });
+        await fs.mkdir(codexHome, { recursive: true });
+        const authPath = path.join(codexHome, "auth.json");
+        const raw = JSON.stringify({
+          auth_mode: "chatgpt",
+          tokens: {
+            access_token: "synthetic-access",
+            refresh_token: "synthetic-refresh",
+          },
+        });
+        await fs.writeFile(authPath, raw);
+        vi.stubEnv("HOME", processHome);
+        vi.stubEnv("CODEX_HOME", "");
+        const candidates = await detectInferenceBackends({
+          env: {
+            HOME: selectedHome,
+            ...(selection === "codex-home" ? { CODEX_HOME: codexHome } : {}),
+          },
+          platform: "darwin",
+          deps: { probeLocalCommand: probeDeps({ codex: true }) },
+        });
+        expect(candidates).toMatchObject([
+          {
+            kind: "codex-cli",
+            detail: "installed; stored credentials found; login status unverified",
+          },
+        ]);
+        expect(candidates[0]?.credentials).toBeUndefined();
+        expect(await fs.readFile(authPath, "utf8")).toBe(raw);
+        expect(JSON.stringify(candidates)).not.toContain("synthetic-");
+        expect(
+          facadeRuntime.tryLoadActivatedBundledPluginPublicSurfaceModule,
+        ).not.toHaveBeenCalled();
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("returns nothing when no backend exists", async () => {
     const candidates = await detectInferenceBackends({
       env: {},
@@ -125,20 +220,20 @@ describe("detectInferenceBackends", () => {
     expect(candidates.map((candidate) => candidate.kind)).toEqual([
       "existing-model",
       "claude-cli",
-      "codex-cli",
       "openai-api-key",
       "anthropic-api-key",
+      "codex-cli",
       "gemini-cli",
     ]);
     expect(candidates[0]?.modelRef).toBe("zai/glm-5.2");
     expect(candidates[0]?.detail).toBe("zai/glm-5.2 — already configured");
     expect(candidates[1]?.modelRef).toBe(CLAUDE_CLI_DEFAULT_MODEL_REF);
     expect(candidates[2]?.modelRef).toBe("openai/gpt-5.6-sol");
-    expect(candidates[3]?.modelRef).toBe("openai/gpt-5.6-sol");
-    expect(candidates[4]?.modelRef).toBe(ANTHROPIC_API_DEFAULT_MODEL_REF);
+    expect(candidates[3]?.modelRef).toBe(ANTHROPIC_API_DEFAULT_MODEL_REF);
+    expect(candidates[4]?.modelRef).toBe("openai/gpt-5.6-sol");
   });
 
-  it("ranks a logged-in Codex subscription before an OpenAI environment key", async () => {
+  it("keeps stored Codex evidence behind an OpenAI environment key", async () => {
     const candidates = await detectInferenceBackends({
       env: { OPENAI_API_KEY: "sk-x" },
       platform: "linux",
@@ -148,7 +243,7 @@ describe("detectInferenceBackends", () => {
       },
     });
 
-    expect(candidates.map((candidate) => candidate.kind)).toEqual(["codex-cli", "openai-api-key"]);
+    expect(candidates.map((candidate) => candidate.kind)).toEqual(["openai-api-key", "codex-cli"]);
   });
 
   it("keeps status-only Codex login after env keys without verifiable OAuth tokens", async () => {
@@ -163,7 +258,10 @@ describe("detectInferenceBackends", () => {
     });
 
     expect(candidates.map((candidate) => candidate.kind)).toEqual(["openai-api-key", "codex-cli"]);
-    expect(candidates[1]).toMatchObject({ credentials: true, detail: "logged in" });
+    expect(candidates[1]).toMatchObject({
+      credentials: true,
+      detail: "logged in · authentication method unavailable",
+    });
   });
 
   it("keeps API-key-helper-backed Claude after environment keys", async () => {
@@ -201,7 +299,7 @@ describe("detectInferenceBackends", () => {
     );
   });
 
-  it("labels a Claude CLI subscription reported by its status command", async () => {
+  it("preserves caller-provided Claude subscription classification", async () => {
     const candidates = await detectInferenceBackends({
       env: {},
       platform: "linux",
@@ -218,7 +316,7 @@ describe("detectInferenceBackends", () => {
       {
         kind: "claude-cli",
         credentials: true,
-        detail: "logged in · Claude subscription",
+        detail: "logged in · Claude account · email unavailable",
       },
     ]);
   });
@@ -273,8 +371,8 @@ describe("detectInferenceBackends", () => {
 
     expect(candidates.map((candidate) => candidate.kind)).toEqual([
       "existing-model",
-      "codex-cli",
       "openai-api-key",
+      "codex-cli",
       "gemini-cli",
       "claude-cli",
     ]);
@@ -341,7 +439,7 @@ describe("detectInferenceBackends", () => {
       },
     });
     expect(candidates.map((candidate) => candidate.kind)).toEqual(["codex-cli", "claude-cli"]);
-    expect(candidates[0]?.credentials).toBe(true);
+    expect(candidates[0]?.credentials).toBeUndefined();
     expect(candidates[1]?.credentials).toBe(false);
     expect(candidates[1]?.detail).toBe(
       "installed, not logged in — run `claude auth login`, then check again",
@@ -361,17 +459,11 @@ describe("detectInferenceBackends", () => {
     });
 
     expect(candidates).toMatchObject([
-      {
-        kind: "gemini-cli",
-        detail: "installed; login status unavailable",
-      },
+      { kind: "codex-cli", detail: "installed; login status unverified" },
+      { kind: "gemini-cli", detail: "installed; login status unavailable" },
       {
         kind: "claude-cli",
         detail: "installed, not logged in — run `claude auth login`, then check again",
-      },
-      {
-        kind: "codex-cli",
-        detail: "installed, not logged in — run `codex login`, then check again",
       },
     ]);
     expect(
@@ -379,70 +471,7 @@ describe("detectInferenceBackends", () => {
     ).toBeUndefined();
   });
 
-  it.each([
-    ["ChatGPT", "Logged in using ChatGPT", "logged in · ChatGPT subscription"],
-    [
-      "API key",
-      "Logged in using an API key - sk-proj-1***23456",
-      "logged in · API key (usage-billed)",
-    ],
-    ["unrecognized auth", "Logged in using access token", "logged in"],
-  ])("classifies Codex %s login status", async (_auth, loginOutput, expectedDetail) => {
-    const probe = async (command: string, args: string[] = ["--version"]) => ({
-      command,
-      found: command === "codex",
-      version: args[0] === "login" ? loginOutput : "codex 1.0",
-    });
-    const candidates = await detectInferenceBackends({
-      env: {},
-      platform: "linux",
-      deps: {
-        probeLocalCommand: probe,
-      },
-    });
-
-    expect(candidates).toMatchObject([
-      { kind: "codex-cli", credentials: true, detail: expectedDetail },
-    ]);
-  });
-
-  it("keeps Codex store logout indeterminate for custom provider credentials", async () => {
-    const candidates = await detectInferenceBackends({
-      env: {},
-      platform: "darwin",
-      deps: {
-        probeLocalCommand: async (command: string, args: string[] = ["--version"]) => ({
-          command,
-          found: command === "codex",
-          ...(args[0] === "login" ? { version: "Not logged in", error: "exited 1" } : {}),
-        }),
-      },
-    });
-
-    expect(candidates).toMatchObject([{ kind: "codex-cli", detail: "installed" }]);
-    expect(candidates[0]?.credentials).toBeUndefined();
-  });
-
-  it("keeps an indeterminate Codex status error distinct from logout", async () => {
-    const candidates = await detectInferenceBackends({
-      env: {},
-      platform: "linux",
-      deps: {
-        probeLocalCommand: async (command: string, args: string[] = ["--version"]) => ({
-          command,
-          found: command === "codex",
-          ...(args[0] === "login"
-            ? { version: "Error checking login status: keyring unavailable", error: "exited 1" }
-            : {}),
-        }),
-      },
-    });
-
-    expect(candidates).toMatchObject([{ kind: "codex-cli", detail: "installed" }]);
-    expect(candidates[0]?.credentials).toBeUndefined();
-  });
-
-  it("treats working Claude and Codex logins as randomized peers", async () => {
+  it("keeps verified Claude ahead of stored Codex evidence regardless of tie randomization", async () => {
     const detectWithPick = async (pick: number) =>
       await detectInferenceBackends({
         env: {},
@@ -463,8 +492,8 @@ describe("detectInferenceBackends", () => {
       "codex-cli",
     ]);
     expect((await detectWithPick(1)).map((candidate) => candidate.kind)).toEqual([
-      "codex-cli",
       "claude-cli",
+      "codex-cli",
     ]);
   });
 
@@ -484,7 +513,7 @@ describe("detectInferenceBackends", () => {
     expect(candidates[0]?.detail).toBe("installed");
   });
 
-  it("checks login status with the Codex executable discovered in a macOS app", async () => {
+  it("only checks the version of a Codex executable discovered in a macOS app", async () => {
     const command = "/Applications/ChatGPT.app/Contents/Resources/codex";
     const probed: Array<{ command: string; args: string[]; timeoutMs?: number }> = [];
     const candidates = await detectInferenceBackends({
@@ -502,10 +531,14 @@ describe("detectInferenceBackends", () => {
       },
     });
 
-    expect(candidates).toMatchObject([{ kind: "codex-cli", detail: "installed" }]);
+    expect(candidates).toMatchObject([
+      { kind: "codex-cli", detail: "installed; login status unverified" },
+    ]);
     expect(candidates[0]?.credentials).toBeUndefined();
     expect(probed).toContainEqual({ command, args: ["--version"], timeoutMs: 3_000 });
-    expect(probed).toContainEqual({ command, args: ["login", "status"], timeoutMs: 3_000 });
+    expect(probed.filter((entry) => entry.command === command)).toEqual([
+      { command, args: ["--version"], timeoutMs: 3_000 },
+    ]);
   });
 
   it("allows a cold ChatGPT app probe more time than generic CLI discovery", async () => {
@@ -514,12 +547,9 @@ describe("detectInferenceBackends", () => {
       env: { HOME: "/Users/tester" },
       platform: "darwin",
       deps: {
-        probeLocalCommand: async (probedCommand, args = ["--version"], opts = {}) => {
+        probeLocalCommand: async (probedCommand, _args = ["--version"], opts = {}) => {
           if (probedCommand !== command) {
             return { command: probedCommand, found: false };
-          }
-          if (args[0] === "login") {
-            return { command: probedCommand, found: true, version: "Logged in using ChatGPT" };
           }
           return opts.timeoutMs === 3_000
             ? { command: probedCommand, found: true, version: "codex-cli 0.149.0" }
@@ -536,8 +566,7 @@ describe("detectInferenceBackends", () => {
     expect(candidates).toMatchObject([
       {
         kind: "codex-cli",
-        credentials: true,
-        detail: "logged in · ChatGPT subscription",
+        detail: "installed; login status unverified",
       },
     ]);
   });
@@ -571,7 +600,7 @@ describe("detectInferenceBackends", () => {
     expect(candidates).toHaveLength(1);
     expect(candidates[0]).toMatchObject({
       kind: "codex-cli",
-      detail: "installed",
+      detail: "installed; login status unverified",
     });
   });
 
@@ -595,7 +624,9 @@ describe("detectInferenceBackends", () => {
       },
     });
 
-    expect(candidates).toMatchObject([{ kind: "codex-cli", detail: "installed" }]);
+    expect(candidates).toMatchObject([
+      { kind: "codex-cli", detail: "installed; login status unverified" },
+    ]);
     expect(probed).toContain(chatGPTCli);
     expect(probed).not.toContain(legacyCodexCli);
   });

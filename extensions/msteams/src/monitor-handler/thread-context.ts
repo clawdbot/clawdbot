@@ -1,13 +1,12 @@
-// Msteams plugin module owns thread routing and Graph parent context.
 import { resolveInboundSupplementalSenderAllowed } from "openclaw/plugin-sdk/channel-inbound";
 import { filterSupplementalContextItems } from "openclaw/plugin-sdk/context-visibility-runtime";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import { formatUnknownError } from "../errors.js";
 import {
+  buildThreadContext,
   fetchChannelMessage,
   fetchChatMessageText,
   fetchThreadReplies,
-  formatThreadContext,
   type GraphThreadMessage,
 } from "../graph-thread.js";
 import type { extractMSTeamsQuoteInfo } from "../inbound.js";
@@ -80,6 +79,7 @@ export function prepareMSTeamsThreadRouting(params: {
 
   return {
     route,
+    threadRootId: params.conversationMessageId ?? params.context.activity.replyToId,
     deadline,
     resolveTeamAadGroupId,
     getTeamAadGroupId: () => teamAadGroupId,
@@ -128,9 +128,10 @@ export async function resolveMSTeamsThreadContext(params: {
     }
   }
 
-  let threadContext: string | undefined;
-  const threadParentId = activity.replyToId;
-  if (threadParentId && params.isChannel && teamAadGroupId) {
+  let threadContext: ReturnType<typeof buildThreadContext> = [];
+  // Use the same root as session routing; Teams can omit replyToId on replies.
+  const threadParentId = params.routing.threadRootId;
+  if (threadParentId && threadParentId !== activity.id && params.isChannel && teamAadGroupId) {
     try {
       const graphToken = await withMSTeamsRequestDeadline({
         deadline,
@@ -218,7 +219,7 @@ export async function resolveMSTeamsThreadContext(params: {
         kind: "thread",
         isSenderAllowed: isThreadSenderAllowed,
       });
-      threadContext = formatThreadContext(threadMessages, activity.id) || undefined;
+      threadContext = buildThreadContext(threadMessages, activity.id);
     } catch (err) {
       params.log.debug?.("failed to fetch thread history", {
         error: formatUnknownError(err),

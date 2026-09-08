@@ -6,6 +6,17 @@ import { closedObject } from "./closed-object.js";
 const SuspensionTokenSchema = Type.String({ minLength: 1, maxLength: 128, pattern: "\\S" });
 const CountSchema = Type.Integer({ minimum: 0 });
 
+/** Public admission state only; never includes the controller's suspension token. */
+export const GatewaySuspensionSchema = closedObject({
+  phase: Type.Union([
+    Type.Literal("accepting"),
+    Type.Literal("preparing"),
+    Type.Literal("draining"),
+    Type.Literal("prepared"),
+  ]),
+});
+export type GatewaySuspension = Static<typeof GatewaySuspensionSchema>;
+
 export const GatewaySuspendTaskBlockerSchema = closedObject({
   taskId: Type.String(),
   status: Type.Literal("running"),
@@ -113,6 +124,21 @@ export const GatewaySuspendResumeResultSchema = closedObject({
   resumed: Type.Boolean(),
 });
 
+/** Arms cleanup for the next SIGTERM; the external host still owns replacement. */
+export const GatewaySuspendHandoffParamsSchema = closedObject({
+  suspensionId: SuspensionTokenSchema,
+  target: closedObject({
+    pid: Type.Integer({ minimum: 1 }),
+    processInstanceId: SuspensionTokenSchema,
+  }),
+});
+
+export const GatewaySuspendHandoffResultSchema = closedObject({
+  status: Type.Literal("armed"),
+  suspensionId: SuspensionTokenSchema,
+  expiresAtMs: CountSchema,
+});
+
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
 export type GatewaySuspendTaskBlocker = Static<typeof GatewaySuspendTaskBlockerSchema>;
@@ -123,3 +149,5 @@ export type GatewaySuspendStatusParams = Static<typeof GatewaySuspendStatusParam
 export type GatewaySuspendStatusResult = Static<typeof GatewaySuspendStatusResultSchema>;
 export type GatewaySuspendResumeParams = Static<typeof GatewaySuspendResumeParamsSchema>;
 export type GatewaySuspendResumeResult = Static<typeof GatewaySuspendResumeResultSchema>;
+export type GatewaySuspendHandoffParams = Static<typeof GatewaySuspendHandoffParamsSchema>;
+export type GatewaySuspendHandoffResult = Static<typeof GatewaySuspendHandoffResultSchema>;

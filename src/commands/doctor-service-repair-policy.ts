@@ -1,7 +1,9 @@
 /** Doctor policy for native gateway service ownership and repair. */
 import { isContainerEnvironment } from "../infra/container-environment.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import { UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV } from "./doctor/shared/update-phase.js";
 
 type ServiceRepairPolicy = "auto" | "external";
 const GATEWAY_SERVICE_MANAGER_TIMEOUT_MS = 5_000;
@@ -10,6 +12,12 @@ export const SERVICE_REPAIR_POLICY_ENV = "OPENCLAW_SERVICE_REPAIR_POLICY";
 
 export const EXTERNAL_SERVICE_REPAIR_NOTE =
   "Gateway service is managed externally; skipped service install/start repair. Start or repair the gateway through your supervisor.";
+
+/** Missing activation policy belongs to legacy parents, not an explicit denial. */
+export function resolveUpdateParentGatewayActivation(env: NodeJS.ProcessEnv): boolean | undefined {
+  const policy = env[UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV];
+  return policy === undefined ? undefined : isTruthyEnvValue(policy);
+}
 
 export async function shouldManageGatewayService(
   env: NodeJS.ProcessEnv = process.env,

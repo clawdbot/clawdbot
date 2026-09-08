@@ -187,11 +187,13 @@ it("binds a first native chat.send before streaming and persists its stopped par
     await terminal.promise;
     await providerClosed.promise;
     await vi.waitFor(() => expect(runtime.chatAbortControllers.has(runId)).toBe(false));
-    expect.soft(loadExactSessionEntryReadOnly({ sessionKey })?.entry).toMatchObject({
-      sessionId: committed.entry.sessionId,
-      status: "killed",
-      abortedLastRun: true,
-    });
+    expect
+      .soft(loadExactSessionEntryReadOnly({ sessionKey })?.entry, JSON.stringify(lifecycle))
+      .toMatchObject({
+        sessionId: committed.entry.sessionId,
+        status: "killed",
+        abortedLastRun: true,
+      });
     expect(lifecycle).toContainEqual(
       expect.objectContaining({
         phase: "end",

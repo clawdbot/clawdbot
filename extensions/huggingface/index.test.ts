@@ -1,82 +1,71 @@
-// Huggingface tests cover index plugin behavior.
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { afterAll, describe, expect, it, vi } from "vitest";
-
-const buildHuggingfaceProviderMock = vi.hoisted(() =>
-  vi.fn(async () => ({
-    baseUrl: "https://router.huggingface.co/v1",
-    api: "openai-completions",
-    models: [],
-  })),
-);
-
-vi.mock("./provider-catalog.js", () => ({
-  buildHuggingfaceProvider: buildHuggingfaceProviderMock,
-}));
-
-vi.mock("./onboard.js", () => ({
-  applyHuggingfaceConfig: vi.fn((cfg) => cfg),
-  HUGGINGFACE_DEFAULT_MODEL_REF: "huggingface/deepseek-ai/DeepSeek-R1",
-}));
-
+import { createTestPluginApi, type TestPluginApiInput } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  buildManifestModelProviderConfig,
+  type ProviderCatalogContext,
+} from "openclaw/plugin-sdk/provider-catalog-shared";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
+
+const bundledProvider = {
+  baseUrl: "https://router.huggingface.co/v1",
+  api: "openai-completions",
+  models: [
+    { id: "deepseek-ai/DeepSeek-R1", name: "DeepSeek R1", contextWindow: 131072 },
+    { id: "deepseek-ai/DeepSeek-V3.1", name: "DeepSeek V3.1" },
+    { id: "openai/gpt-oss-120b", name: "GPT-OSS 120B" },
+  ],
+};
 
 function registerProvider() {
-  return registerProviderWithPluginConfig({});
-}
-
-function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>) {
-  const registerProviderMock = vi.fn();
-
-  plugin.register(
-    createTestPluginApi({
-      id: "huggingface",
-      name: "Hugging Face",
-      source: "test",
-      config: {},
-      pluginConfig,
-      runtime: {} as never,
-      registerProvider: registerProviderMock,
-    }),
-  );
-
-  expect(registerProviderMock).toHaveBeenCalledTimes(1);
-  const firstCall = registerProviderMock.mock.calls[0];
-  if (!firstCall) {
-    throw new Error("expected huggingface provider registration");
-  }
-  return firstCall[0];
+  const register = vi.fn<NonNullable<TestPluginApiInput["registerProvider"]>>();
+  plugin.register(createTestPluginApi({ registerProvider: register }));
+  return register.mock.calls[0]?.[0];
 }
 
 describe("huggingface plugin", () => {
-  afterAll(() => {
-    vi.doUnmock("./provider-catalog.js");
-    vi.doUnmock("./onboard.js");
-    vi.resetModules();
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
-  it("skips catalog discovery when plugin discovery is disabled", async () => {
-    const provider = registerProvider();
+  it("exposes the bundled catalog to manifest-only model selection", () => {
+    expect(
+      buildManifestModelProviderConfig({
+        providerId: "huggingface",
+        catalog: manifest.modelCatalog.providers.huggingface,
+      }),
+    ).toMatchObject(bundledProvider);
+  });
 
-    const result = await provider.catalog.run({
+  it.each([
+    { label: "no key is configured", config: {}, apiKey: undefined },
+    {
+      label: "discovery is disabled",
       config: {
         plugins: {
-          entries: {
-            huggingface: {
-              config: {
-                discovery: { enabled: false },
-              },
-            },
-          },
+          entries: { huggingface: { config: { discovery: { enabled: false } } } },
         },
       },
-      resolveProviderApiKey: () => ({
-        apiKey: "hf_test_token",
-        discoveryApiKey: "hf_test_token",
-      }),
-    } as never);
+      apiKey: "hf_test_token",
+    },
+  ])("keeps the bundled catalog offline when $label", async ({ config, apiKey }) => {
+    const fetch = vi.spyOn(globalThis, "fetch");
+    const resolveProviderApiKey = vi.fn(() => ({ apiKey, discoveryApiKey: apiKey }));
+    const context: ProviderCatalogContext = {
+      config,
+      env: {},
+      resolveProviderApiKey,
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+    };
+    const provider = registerProvider();
 
-    expect(result).toBeNull();
-    expect(buildHuggingfaceProviderMock).not.toHaveBeenCalled();
+    await expect(provider?.catalog?.run(context)).resolves.toBeNull();
+    resolveProviderApiKey.mockClear();
+    const result = await provider?.staticCatalog?.run(context);
+
+    expect(result).toMatchObject({ provider: bundledProvider });
+    expect(result).not.toHaveProperty("provider.apiKey");
+    expect(resolveProviderApiKey).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

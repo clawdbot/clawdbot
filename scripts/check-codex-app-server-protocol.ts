@@ -334,14 +334,10 @@ import type {
   CodexGetAccountResponse,
   CodexModelListResponse,
   CodexServerNotification,
-  CodexThreadForkParams,
   CodexThreadForkResponse,
-  CodexThreadResumeParams,
   CodexThreadResumeResponse,
-  CodexThreadStartParams,
   CodexThreadStartResponse,
   CodexTurnEnvironmentParams,
-  CodexTurnStartParams,
   v2,
 } from ${JSON.stringify(protocolImport)};
 import type { AppSummary } from ${JSON.stringify(generatedImport("v2/AppSummary.ts"))};
@@ -386,6 +382,8 @@ import type { StrictReviewRequiredNotification } from ${JSON.stringify(generated
 import type { TurnEnvironmentParams } from ${JSON.stringify(generatedImport("v2/TurnEnvironmentParams.ts"))};
 import type { TurnInterruptParams } from ${JSON.stringify(generatedImport("v2/TurnInterruptParams.ts"))};
 import type { TurnStartParams } from ${JSON.stringify(generatedImport("v2/TurnStartParams.ts"))};
+import type { TurnSteerParams } from ${JSON.stringify(generatedImport("v2/TurnSteerParams.ts"))};
+import type { TurnSteerResponse } from ${JSON.stringify(generatedImport("v2/TurnSteerResponse.ts"))};
 
 declare const openClawAppsInstalledParams: CodexAppServerRequestParams<"app/installed">;
 const generatedAppsInstalledParams: AppsInstalledParams = openClawAppsInstalledParams;
@@ -418,18 +416,27 @@ declare const openClawDynamicToolSpec: CodexDynamicToolSpec;
 const generatedDynamicToolSpec: DynamicToolSpec = openClawDynamicToolSpec;
 declare const openClawTurnEnvironmentParams: CodexTurnEnvironmentParams;
 const generatedTurnEnvironmentParams: TurnEnvironmentParams = openClawTurnEnvironmentParams;
-declare const openClawThreadStartParams: CodexThreadStartParams;
+declare const openClawThreadStartParams: CodexAppServerRequestParams<"thread/start">;
 const generatedThreadStartParams: ThreadStartParams = openClawThreadStartParams;
-declare const openClawThreadResumeParams: CodexThreadResumeParams;
+declare const openClawThreadResumeParams: CodexAppServerRequestParams<"thread/resume">;
 const generatedThreadResumeParams: ThreadResumeParams = openClawThreadResumeParams;
-declare const openClawThreadForkParams: CodexThreadForkParams;
+declare const openClawThreadForkParams: CodexAppServerRequestParams<"thread/fork">;
 const generatedThreadForkParams: ThreadForkParams = openClawThreadForkParams;
 declare const openClawThreadDeleteParams: CodexAppServerRequestParams<"thread/delete">;
 const generatedThreadDeleteParams: ThreadDeleteParams = openClawThreadDeleteParams;
 declare const openClawTurnInterruptParams: CodexAppServerRequestParams<"turn/interrupt">;
 const generatedTurnInterruptParams: TurnInterruptParams = openClawTurnInterruptParams;
-declare const openClawTurnStartParams: CodexTurnStartParams;
+declare const openClawTurnStartParams: CodexAppServerRequestParams<"turn/start">;
 const generatedTurnStartParams: TurnStartParams = openClawTurnStartParams;
+declare const openClawTurnSteerParams: CodexAppServerRequestParams<"turn/steer">;
+const generatedTurnSteerParams: TurnSteerParams = openClawTurnSteerParams;
+// Method-map omissions must not silently weaken required wire fields to unknown.
+// @ts-expect-error Thread resume requires its target thread.
+const threadResumeWithoutThread: CodexAppServerRequestParams<"thread/resume"> = {};
+// @ts-expect-error Starting a turn requires its input.
+const turnStartWithoutInput: CodexAppServerRequestParams<"turn/start"> = { threadId: "thread" };
+// @ts-expect-error Steering requires the active-turn precondition.
+const turnSteerWithoutExpectedTurn: CodexAppServerRequestParams<"turn/steer"> = { threadId: "thread", input: [] };
 declare const openClawMcpResourceReadParams: CodexAppServerRequestParams<"mcpServer/resource/read">;
 const generatedMcpResourceReadParams: McpResourceReadParams = openClawMcpResourceReadParams;
 declare const openClawConfigReadParams: CodexAppServerRequestParams<"config/read">;
@@ -503,6 +510,10 @@ const openClawStrictReviewRequiredNotification: OpenClawStrictReviewRequiredNoti
 declare const generatedThreadDeleteResponse: ThreadDeleteResponse;
 const openClawThreadDeleteResponse: CodexAppServerRequestResult<"thread/delete"> =
   generatedThreadDeleteResponse;
+declare const generatedTurnSteerResponse: TurnSteerResponse;
+const openClawTurnSteerResponse: CodexAppServerRequestResult<"turn/steer"> =
+  generatedTurnSteerResponse;
+const generatedExactTurnSteerResponse: TurnSteerResponse = openClawTurnSteerResponse;
 
 // Thread and turn bodies are normalized behind checked-in JSON schemas. Their
 // raw generated shapes must not be confused with the projector-facing types.

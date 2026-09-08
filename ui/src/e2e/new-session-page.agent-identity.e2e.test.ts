@@ -12,12 +12,6 @@ const suite = createNewSessionPageE2eSuite();
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const proofStage = process.env.OPENCLAW_AGENT_IDENTITY_PROOF_STAGE ?? "after";
 const captureBefore = proofStage === "before";
-const proofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "new-session-agent-identity",
-);
 
 const agentsList = {
   agents: [
@@ -87,11 +81,16 @@ async function capture(page: Page, name: string) {
   if (!captureProof) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
+  await mkdir(path.join(suite.artifactDir, "new-session-agent-identity", proofStage), {
+    recursive: true,
+  });
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
-    path: path.join(proofDir, `${proofStage}-${name}`),
+    path: path.join(
+      path.join(suite.artifactDir, "new-session-agent-identity", proofStage),
+      `${proofStage}-${name}`,
+    ),
   });
 }
 
@@ -99,10 +98,15 @@ async function captureElement(locator: Locator, name: string) {
   if (!captureProof) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
+  await mkdir(path.join(suite.artifactDir, "new-session-agent-identity", proofStage), {
+    recursive: true,
+  });
   await locator.screenshot({
     animations: "disabled",
-    path: path.join(proofDir, `${proofStage}-${name}`),
+    path: path.join(
+      path.join(suite.artifactDir, "new-session-agent-identity", proofStage),
+      `${proofStage}-${name}`,
+    ),
   });
 }
 
@@ -205,6 +209,10 @@ suite.define(() => {
         await pollLocatorText(sidebar.locator(".sidebar-agent-card__name")).toContain("Pacino");
         await hero.waitFor();
         await picker.locator(".agent-select__label").waitFor();
+        await page.waitForLoadState("networkidle");
+        const identityRequests = await gateway.getRequests("agent.identity.get");
+        expect(identityRequests).toHaveLength(1);
+        expect(identityRequests[0]).toMatchObject({ params: { agentId: "main" } });
         await picker.locator(".agent-select__trigger").click();
         await capture(page, `${theme}-named-picker-open.png`);
         await captureElement(

@@ -4,9 +4,9 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
-import { coerceSqliteNumber } from "./session-accessor.sqlite-normalize.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import {
@@ -19,6 +19,32 @@ import {
   normalizeStoreSessionKey,
   resolveDeliveryProvenCanonicalSessionKey,
 } from "./store-entry.js";
+
+export type SessionTranscriptContextVersion = {
+  generation: string | null;
+  rawSeq: number | null;
+};
+
+export function readTranscriptContextVersionInTransaction(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionId: string,
+) {
+  const db = getSessionKysely(database.db);
+  return executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select((eb) => [
+        eb.fn.max<number | null>("seq").as("rawSeq"),
+        eb
+          .selectFrom("transcript_rewrite_watermarks")
+          .select("generation")
+          .where("session_id", "=", sessionId)
+          .as("generation"),
+      ])
+      .where("session_id", "=", sessionId),
+  )!;
+}
 
 function createTranscriptGeneration(): string {
   return randomUUID().replaceAll("-", "");
@@ -212,7 +238,7 @@ export function readNextTranscriptSeq(database: OpenClawAgentDatabase, sessionId
       .where("session_id", "=", sessionId),
   );
   const maxSeq =
-    row?.max_seq === null || row?.max_seq === undefined ? -1 : coerceSqliteNumber(row.max_seq);
+    row?.max_seq === null || row?.max_seq === undefined ? -1 : sqliteNumber(row.max_seq);
   return maxSeq + 1;
 }
 

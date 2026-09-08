@@ -9,7 +9,11 @@ import {
   hasExplicitlyVisibleAgentPayload,
   type AgentDeliveryEvidence,
 } from "../agents/embedded-agent-runner/delivery-evidence.js";
-import { formatGeneratedMediaDeliveryRetryForPrompt } from "../agents/internal-events.js";
+import {
+  buildGeneratedMediaDeliveryContext,
+  formatGeneratedMediaDeliveryRetryForPrompt,
+} from "../agents/internal-events.js";
+import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
 import { resolveDurableCompletionDeliveryMode } from "../auto-reply/reply/completion-delivery-policy.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -40,7 +44,6 @@ import {
   attachManagedOutgoingMediaToMessage,
   createManagedOutgoingMediaBlocks,
 } from "./managed-image-attachments.js";
-import { prepareGatewayInjectedAssistantContent } from "./server-methods/chat-transcript-inject.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { dispatchGatewayLifecycleMethod as dispatchGatewayMethodInProcess } from "./server-recovery-runtime-context.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -308,6 +311,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
   agentId: string;
   storePath: string;
   entry: QueuedSessionDelivery;
+  runtimeContextFragments?: RuntimeContextFragment[];
   sessionEntry?: SessionEntry;
   stateDir?: string;
   resolveGatewayContext?: GatewayContextResolver;
@@ -395,7 +399,8 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
                     params.sessionEntry.cronRunContinuation.lifecycleRevision,
                 }
               : {}),
-            content: prepareGatewayInjectedAssistantContent(content),
+            content: [],
+            displayContent: content,
             idempotencyKey: `${queuedRunId}:generated-media-transcript`,
             updateMode: "inline",
           });
@@ -500,6 +505,16 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
         ...(cronSessionId ? { allowSyntheticCronRunContinuation: true } : {}),
         expectFinal: true,
         forceSyntheticClient: true,
+        runtimeContextFragments:
+          (entry.expectedMediaUrls?.length ?? 0) > 0
+            ? [
+                ...((entry.agentRunAttempt ?? 0) > 0 ? [] : (params.runtimeContextFragments ?? [])),
+                ...buildGeneratedMediaDeliveryContext(
+                  entry.expectedMediaUrls ?? [],
+                  (entry.agentRunAttempt ?? 0) > 0,
+                ),
+              ]
+            : params.runtimeContextFragments,
         internalDeliveryMediaUrls: entry.expectedMediaUrls ?? [],
         ...(entry.suppressTextDelivery === true ? { internalDeliverySuppressText: true } : {}),
         ...(params.resolveGatewayContext

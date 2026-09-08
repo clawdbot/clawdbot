@@ -125,7 +125,7 @@ export function createWorkerTurnRunOwner(params: {
   } satisfies EmbeddedAgentQueueHandle;
   setActiveEmbeddedRunLifecycleGeneration(handle, lifecycleGeneration);
   turn.replyOperation?.attachBackend(handle);
-  setActiveEmbeddedRun(claim.sessionId, handle, sessionKey, turn.sessionFile);
+  setActiveEmbeddedRun(claim.sessionId, handle, sessionKey, turn.sessionFile, turn.agentId);
   if (!signal.aborted) {
     activeOwners.set(claim.sessionId, owner);
   }

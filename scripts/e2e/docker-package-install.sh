@@ -4,48 +4,57 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
-IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-docker-e2e-bare:local")"
+# This mixed-platform lane owns its images; shared bare/functional tags belong to other lanes.
+IMAGE_NAME="openclaw-package-install-bare:$$"
+MUSL_IMAGE_NAME="openclaw-package-install-musl:$$"
 PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz docker-package-install "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
 IDENTITY_PATH="${OPENCLAW_DOCKER_ARTIFACT_IDENTITY_PATH:-$ROOT_DIR/.artifacts/docker-tests/docker-package-install-identities.json}"
 NPM_PROOF_CONTAINER="openclaw-package-npm-proof-$$"
 PNPM_PROOF_CONTAINER="openclaw-package-pnpm-proof-$$"
 BUN_PROOF_CONTAINER="openclaw-package-bun-proof-$$"
+MUSL_PROOF_CONTAINER="openclaw-package-musl-proof-$$"
 DOCKER_RUN_TIMEOUT="${OPENCLAW_DOCKER_PACKAGE_INSTALL_RUN_TIMEOUT:-120s}"
-BUN_HARNESS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-bun-harness.XXXXXX")"
+PACKAGE_HARNESS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-package-harness.XXXXXX")"
+docker_e2e_package_mount_args "$PACKAGE_TGZ"
 
 cleanup() {
   docker_e2e_docker_cmd rm -f \
     "$NPM_PROOF_CONTAINER" \
     "$PNPM_PROOF_CONTAINER" \
-    "$BUN_PROOF_CONTAINER" >/dev/null 2>&1 || true
+    "$BUN_PROOF_CONTAINER" \
+    "$MUSL_PROOF_CONTAINER" >/dev/null 2>&1 || true
+  docker_e2e_docker_cmd image rm "$IMAGE_NAME" "$MUSL_IMAGE_NAME" >/dev/null 2>&1 || true
   docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"
-  rm -rf "$BUN_HARNESS_DIR"
+  rm -rf "$PACKAGE_HARNESS_DIR"
 }
 trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" docker-package-install "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" bare
+docker_e2e_build_or_reuse "$MUSL_IMAGE_NAME" docker-package-install-musl "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" musl
 
-# The bun smoke runs the shared openclaw-e2e-instance library (mock provider
-# servers included), so copy its whole script roots instead of a per-file list
-# that silently drifts when the library grows a dependency. The repo checkout
-# itself stays unmounted: the lane proves the packaged artifact, not sources.
+# The package proofs share the registry and lifecycle harness. Copy its complete
+# script roots so all three managers install the same candidate dependency bytes.
 for harness_path in \
   packages/normalization-core/src \
   scripts; do
-  mkdir -p "$BUN_HARNESS_DIR/$(dirname "$harness_path")"
-  cp -R "$ROOT_DIR/$harness_path" "$BUN_HARNESS_DIR/$harness_path"
+  mkdir -p "$PACKAGE_HARNESS_DIR/$(dirname "$harness_path")"
+  cp -R "$ROOT_DIR/$harness_path" "$PACKAGE_HARNESS_DIR/$harness_path"
 done
-chmod -R a+rX "$BUN_HARNESS_DIR"
+chmod -R a+rX "$PACKAGE_HARNESS_DIR"
 
 echo "Installing the real OpenClaw package artifact with npm as root..."
 DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
   --name "$NPM_PROOF_CONTAINER" \
   --user root \
-  -v "$PACKAGE_TGZ:/tmp/openclaw-current.tgz:ro" \
+  -e OPENCLAW_FS_SAFE_NATIVE_CONTRACT \
+  "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
+  -v "$PACKAGE_HARNESS_DIR:/repo:ro" \
+  -v "$ROOT_DIR/scripts/docker/verify-fs-safe-native.mjs:/tmp/verify-fs-safe-native.mjs:ro" \
   "$IMAGE_NAME" \
   bash -lc '
     set -euo pipefail
     npm install -g /tmp/openclaw-current.tgz --no-fund --no-audit
+    node /tmp/verify-fs-safe-native.mjs --package-root /usr/local/lib/node_modules/openclaw --mode require
     test "$(command -v openclaw)" = "/usr/local/bin/openclaw"
     # Root installed the global package; a non-root user must still be able to
     # run it. A same-user install can never catch an installed tree that ends
@@ -61,7 +70,10 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
 echo "Installing the real OpenClaw package artifact with pnpm..."
 DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
   --name "$PNPM_PROOF_CONTAINER" \
-  -v "$PACKAGE_TGZ:/tmp/openclaw-current.tgz:ro" \
+  -e OPENCLAW_FS_SAFE_NATIVE_CONTRACT \
+  "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
+  -v "$PACKAGE_HARNESS_DIR:/repo:ro" \
+  -v "$ROOT_DIR/scripts/docker/verify-fs-safe-native.mjs:/tmp/verify-fs-safe-native.mjs:ro" \
   "$IMAGE_NAME" \
   bash -lc '
     set -euo pipefail
@@ -77,6 +89,7 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
     # Tarball builds require their dependency path, relative to the install group.
     artifact_build="$(node -p "const path = require(\"node:path\"); \"openclaw@file:\" + path.relative(path.resolve(process.argv[1], \"../..\"), \"/tmp/openclaw-current.tgz\")" "$package_root")"
     pnpm approve-builds --global "$artifact_build"
+    node /tmp/verify-fs-safe-native.mjs --package-root "$package_root" --mode require
     printf "%s\n" "$package_root" > /tmp/openclaw-package-root
     openclaw --version > /tmp/openclaw-version
     openclaw --help > /tmp/openclaw-help
@@ -116,8 +129,9 @@ SOURCE_LINK
 echo "Installing the real OpenClaw package artifact with Bun..."
 DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
   --name "$BUN_PROOF_CONTAINER" \
-  -v "$PACKAGE_TGZ:/tmp/openclaw-current.tgz:ro" \
-  -v "$BUN_HARNESS_DIR:/repo:ro" \
+  -e OPENCLAW_FS_SAFE_NATIVE_CONTRACT \
+  "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
+  -v "$PACKAGE_HARNESS_DIR:/repo:ro" \
   "$IMAGE_NAME" \
   bash -lc '
     set -euo pipefail
@@ -128,6 +142,20 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
       OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ=/tmp/openclaw-current.tgz \
       OPENCLAW_BUN_GLOBAL_SMOKE_PROOF_PATH=/tmp/openclaw-bun-proof.json \
       bash scripts/e2e/bun-global-install-smoke.sh
+    touch /tmp/openclaw-proof-ready
+    exec sleep infinity
+  ' >/dev/null
+
+echo "Installing the real OpenClaw package artifact with npm on musl..."
+DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
+  --name "$MUSL_PROOF_CONTAINER" \
+  -e OPENCLAW_FS_SAFE_NATIVE_CONTRACT \
+  "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
+  "$MUSL_IMAGE_NAME" \
+  sh -lc '
+    set -eu
+    npm install -g /tmp/openclaw-current.tgz --no-fund --no-audit
+    node /tmp/verify-fs-safe-native.mjs --package-root /usr/local/lib/node_modules/openclaw --mode require
     touch /tmp/openclaw-proof-ready
     exec sleep infinity
   ' >/dev/null
@@ -148,7 +176,7 @@ wait_for_proof() {
   return 1
 }
 
-for container_name in "$NPM_PROOF_CONTAINER" "$PNPM_PROOF_CONTAINER" "$BUN_PROOF_CONTAINER"; do
+for container_name in "$NPM_PROOF_CONTAINER" "$PNPM_PROOF_CONTAINER" "$BUN_PROOF_CONTAINER" "$MUSL_PROOF_CONTAINER"; do
   wait_for_proof "$container_name"
 done
 
@@ -174,6 +202,13 @@ for installed_version in "$NPM_INSTALLED_VERSION" "$PNPM_INSTALLED_VERSION" "$BU
   fi
 done
 
+# The legacy contract intentionally skips native verification; evidence must not
+# present that omission as an executed native proof.
+MUSL_FS_SAFE_NATIVE_OUTCOME="passed"
+if [[ "${OPENCLAW_FS_SAFE_NATIVE_CONTRACT:-required}" == "not-applicable" ]]; then
+  MUSL_FS_SAFE_NATIVE_OUTCOME="not-applicable"
+fi
+
 node --import tsx "$ROOT_DIR/scripts/e2e/lib/docker-artifact-proof/write-identities.ts" \
   --scenario docker-package-install \
   --output "$IDENTITY_PATH" \
@@ -182,12 +217,14 @@ node --import tsx "$ROOT_DIR/scripts/e2e/lib/docker-artifact-proof/write-identit
   --container "npm=$NPM_PROOF_CONTAINER" \
   --container "pnpm=$PNPM_PROOF_CONTAINER" \
   --container "bun=$BUN_PROOF_CONTAINER" \
+  --container "musl=$MUSL_PROOF_CONTAINER" \
   --detail "npm:installedPackageRoot=$NPM_PACKAGE_ROOT" \
   --detail "npm:installedPackageVersion=$PACKAGE_VERSION" \
   --detail "npm:openclawVersion=$NPM_INSTALLED_VERSION" \
   --detail "npm:openclawPath=/usr/local/bin/openclaw" \
   --detail "npm:helpCommand=passed" \
   --detail "npm:nonRootExecution=passed" \
+  --detail "musl:fsSafeNative=$MUSL_FS_SAFE_NATIVE_OUTCOME" \
   --detail "pnpm:installedPackageRoot=$PNPM_PACKAGE_ROOT" \
   --detail "pnpm:installedPackageVersion=$PNPM_PACKAGE_VERSION" \
   --detail "pnpm:openclawVersion=$PNPM_INSTALLED_VERSION" \

@@ -6,6 +6,7 @@ import type {
   DeviceBootstrapProfile,
   PairingSetupAccess,
 } from "../shared/device-bootstrap-profile.js";
+import type { NodeHostStats } from "../shared/node-host-stats.js";
 
 /** Pending device pairing request awaiting owner approval. */
 export type DevicePairingPendingRequest = {
@@ -91,6 +92,7 @@ export type PairedDeviceNodeSurface = {
   approvedAtMs: number;
   lastConnectedAtMs?: number;
   lastDisconnectedAtMs?: number;
+  lastHostStats?: NodeHostStats;
 };
 
 /**

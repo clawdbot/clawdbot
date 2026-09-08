@@ -27,7 +27,7 @@ function createMemoryReindexBusyError(lockPath: string): Error & { code: string 
 }
 
 /** Try to acquire the build lock without locking readers of the live agent database. */
-export function tryAcquireMemoryReindexLock(dbPath: string): MemoryReindexLockHandle | undefined {
+function tryAcquireMemoryReindexLock(dbPath: string): MemoryReindexLockHandle | undefined {
   return tryAcquireMemorySqliteLease(resolveMemoryReindexLockPath(dbPath), "exclusive");
 }
 

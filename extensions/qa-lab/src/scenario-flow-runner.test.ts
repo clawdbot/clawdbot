@@ -13,6 +13,7 @@ import {
 } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
+import type { QaSuiteStep } from "./suite-types.js";
 
 function readWebchatTranscriptWaitFlow() {
   const scenario = readQaScenarioById("webchat-direct-reply-routing");
@@ -743,13 +744,10 @@ describe("scenario-flow-runner", () => {
           execution: { kind: "flow" },
         },
         config: {},
-        runScenario: async (
-          _name: string,
-          steps: Array<{ name: string; run: () => Promise<string | void> }>,
-        ) => {
+        runScenario: async (_name: string, steps: QaSuiteStep[]) => {
           const stepResults = [];
           for (const step of steps) {
-            const details = await step.run();
+            const details = (await step.run())?.details;
             stepResults.push({
               name: step.name,
               status: "pass" as const,
@@ -816,13 +814,10 @@ describe("scenario-flow-runner", () => {
           execution: { kind: "flow" },
         },
         config: {},
-        runScenario: async (
-          _name: string,
-          steps: Array<{ name: string; run: () => Promise<string | void> }>,
-        ) => {
+        runScenario: async (_name: string, steps: QaSuiteStep[]) => {
           const stepResults = [];
           for (const step of steps) {
-            const details = await step.run();
+            const details = (await step.run())?.details;
             stepResults.push({
               name: step.name,
               status: "pass" as const,
@@ -881,10 +876,7 @@ describe("scenario-flow-runner", () => {
           execution: { kind: "flow" },
         },
         config: {},
-        runScenario: async (
-          _name: string,
-          steps: Array<{ name: string; run: () => Promise<string | void> }>,
-        ) => {
+        runScenario: async (_name: string, steps: QaSuiteStep[]) => {
           try {
             await steps[0]?.run();
           } catch (error) {

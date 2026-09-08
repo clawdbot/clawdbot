@@ -1,7 +1,10 @@
-import type { ConnectPairingRequiredReason } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 // Gateway WebSocket node pairing can finish a fresh capability-free request over SSH.
+import { isDeepStrictEqual } from "node:util";
+import type { ConnectPairingRequiredReason } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
+import { getRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { approveDevicePairing } from "../../../infra/device-pairing-approval.js";
 import { getPairedDevice } from "../../../infra/device-pairing.js";
+import { isScopelessNodePairingRequest } from "../../node-pairing-auto-approve.js";
 import {
   planNodePairingSshVerify,
   startNodePairingSshVerify,
@@ -51,27 +54,23 @@ export function startGatewayNodePairingSshApproval(params: {
   // scopeless from an SSH-verifiable host. SSH auto-approval must stay
   // limited to a fresh node request that carries no roles/scopes
   // beyond node.
-  const pendingReq = pairing.request;
-  const pendingIsFreshScopelessNode =
-    (pendingReq.scopes ?? []).length === 0 &&
-    (pendingReq.role === undefined || pendingReq.role === "node") &&
-    (pendingReq.roles ?? []).every((pendingRole) => pendingRole === "node");
-  if (!pendingIsFreshScopelessNode) {
+  if (!isScopelessNodePairingRequest(pairing.request)) {
     return false;
   }
+  const eligibility = {
+    existingPairedDevice: Boolean(existingPairedDevice),
+    role,
+    reason: params.reason,
+    scopes,
+    hasBrowserOriginHeader,
+    isControlUi,
+    isWebchat,
+    reportedClientIpSource,
+    reportedClientIp,
+  };
   const sshVerifyPlan = planNodePairingSshVerify({
     config: configSnapshot.gateway?.nodes?.pairing?.sshVerify,
-    eligibility: {
-      existingPairedDevice: Boolean(existingPairedDevice),
-      role,
-      reason: params.reason,
-      scopes,
-      hasBrowserOriginHeader,
-      isControlUi,
-      isWebchat,
-      reportedClientIpSource,
-      reportedClientIp,
-    },
+    eligibility,
   });
   const sshVerify = sshVerifyPlan
     ? startNodePairingSshVerify({
@@ -93,16 +92,42 @@ export function startGatewayNodePairingSshApproval(params: {
           );
           return;
         }
-        // Approving the pending requestId keeps this race-safe: a
-        // superseded or owner-resolved request simply returns null.
         const approvedBySsh = await approveDevicePairing(pendingRequestId, {
           callerScopes: scopes,
           accessMetadata: clientAccessMetadata,
           approvedVia: "ssh-verified",
+          isApprovalCurrent: ({ pending, existing }) => {
+            const currentConfig = getRuntimeConfigSnapshot();
+            if (
+              !currentConfig ||
+              pending.deviceId !== device.id ||
+              pending.publicKey !== devicePublicKey ||
+              !isScopelessNodePairingRequest(pending)
+            ) {
+              return false;
+            }
+            // SSH proves this exact policy, not a later user/key/scope selection.
+            // The approval owner runs this after lock waits, directly before commit.
+            return isDeepStrictEqual(
+              sshVerifyPlan,
+              planNodePairingSshVerify({
+                config: currentConfig.gateway?.nodes?.pairing?.sshVerify,
+                eligibility: {
+                  ...eligibility,
+                  existingPairedDevice: Boolean(existing),
+                  scopes: pending.scopes ?? [],
+                },
+              }),
+            );
+          },
         });
         if (approvedBySsh?.status !== "approved") {
+          const reason =
+            approvedBySsh?.status === "forbidden"
+              ? approvedBySsh.reason
+              : "request superseded or already resolved";
           logGateway.info(
-            `node pairing ssh-verify approval skipped device=${device.id} (request superseded or already resolved)`,
+            `node pairing ssh-verify approval skipped device=${device.id} (${reason})`,
           );
           return;
         }

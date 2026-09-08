@@ -1,7 +1,10 @@
 import type { RouteMatch, Router } from "@openclaw/uirouter";
-import { nothing } from "lit";
+import { html, nothing } from "lit";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { property } from "lit/decorators.js";
+import { keyed } from "lit/directives/keyed.js";
+import { createRef, ref } from "lit/directives/ref.js";
+import { isSessionRouteId } from "../app-route-paths.ts";
 import { renderLazyViewError } from "../components/lazy-view-error.ts";
 import { renderLoadingState } from "../components/loading-state.ts";
 import { McpAppUnmountGate } from "../components/mcp-app-unmount.ts";
@@ -21,7 +24,8 @@ import {
 export { selectRenderedRouteMatch } from "./router-outlet-controller.ts";
 
 type RenderableModule<TData> = {
-  render: (data: TData | undefined) => unknown;
+  render: (data: TData | undefined, loaderPending: boolean, presented?: boolean) => unknown;
+  retainOnNavigate?: boolean;
   renderOwnerKey?: (
     match: Pick<RouteMatch<string, unknown, TData>, "data" | "location">,
     settled: Pick<RouteMatch<string, unknown, TData>, "data" | "location"> | undefined,
@@ -30,6 +34,7 @@ type RenderableModule<TData> = {
 
 type RouterOutletOptions<TLoadContext = unknown> = {
   retryContext?: TLoadContext;
+  presented?: boolean;
 };
 
 function isRenderableModule<TData>(module: unknown): module is RenderableModule<TData> {
@@ -156,14 +161,18 @@ function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TDat
       : null;
   }
   const renderedPage = () =>
-    measureRoutedRender(routeId, () => routeModule.render(renderedMatch.data));
+    measureRoutedRender(routeId, () =>
+      options.presented === false
+        ? routeModule.render(renderedMatch.data, renderedMatch.isFetching === "loader", false)
+        : routeModule.render(renderedMatch.data, renderedMatch.isFetching === "loader"),
+    );
   return renderedMatch.error
     ? renderError<TRouteId, TLoadContext, TModule, TData>(
         router,
         options.retryContext,
         renderedMatch.error,
         routeId,
-        renderedPage,
+        routeModule.retainOnNavigate ? undefined : renderedPage,
       )
     : renderedPage();
 }
@@ -208,6 +217,30 @@ class LitRouterOutletController<
   }
 }
 
+/** Presentation can retire immediately while its connected subtree finishes MCP teardown. */
+class OpenClawRoutePresentation extends OpenClawLightDomElement {
+  @property({ attribute: false }) ownerKey = "";
+  @property({ attribute: false }) renderPage: (presented: boolean) => unknown = () => nothing;
+  private presentedValue = false;
+
+  @property({ attribute: false })
+  get presented(): boolean {
+    return this.presentedValue;
+  }
+  set presented(value: boolean) {
+    const previous = this.presentedValue;
+    this.presentedValue = value;
+    this.style.display = value ? "contents" : "none";
+    this.toggleAttribute("inert", !value);
+    this.setAttribute("aria-hidden", value ? "false" : "true");
+    this.requestUpdate("presented", previous);
+  }
+
+  override render() {
+    return this.renderPage(this.presented);
+  }
+}
+
 class OpenClawRouterOutlet<
   TRouteId extends string = string,
   TLoadContext = unknown,
@@ -223,7 +256,69 @@ class OpenClawRouterOutlet<
     onNotFound: this.onNotFound,
     notFoundRecoveryReady: this.notFoundRecoveryReady,
   }));
-  private readonly mcpAppUnmountGate = new McpAppUnmountGate(this);
+  @property({ attribute: false }) retentionScope?: object;
+  private readonly retainedUnmountGate = new McpAppUnmountGate(this);
+  private readonly transientUnmountGate = new McpAppUnmountGate(this);
+  private readonly retainedPresentation = createRef<OpenClawRoutePresentation>();
+  private retainedMatch?: RouteMatch<TRouteId, TModule, TData>;
+  private retainedOwnerKey?: string;
+  private retainedPresented = false;
+  private scopeRouter?: Router<TRouteId, TLoadContext, TModule, TData>;
+  private scopeOwner?: object;
+  private scopeInitialized = false;
+  private scopeGeneration = 0;
+  private scopeRefreshing = false;
+  private retiredSessionMatches = new Set<string>();
+
+  private synchronizeRetentionScope(router: Router<TRouteId, TLoadContext, TModule, TData>): void {
+    const routerChanged = this.scopeRouter !== router;
+    const changed =
+      this.scopeInitialized && (routerChanged || this.scopeOwner !== this.retentionScope);
+    this.scopeInitialized = true;
+    this.scopeRouter = router;
+    this.scopeOwner = this.retentionScope;
+    if (!changed) {
+      return;
+    }
+    const generation = ++this.scopeGeneration;
+    this.retainedMatch = undefined;
+    this.retainedOwnerKey = undefined;
+    this.retainedPresented = false;
+    this.scopeRefreshing = false;
+    this.retiredSessionMatches = new Set(
+      routerChanged
+        ? []
+        : [...router.getState().matches, ...router.getState().pendingMatches]
+            .filter((match) => isSessionRouteId(match.routeId))
+            .map((match) => match.id),
+    );
+    if (routerChanged) {
+      return;
+    }
+    const context = this.retryContext;
+    const scope = this.retentionScope;
+    const state = router.getState();
+    const target = state.pendingMatches[0] ?? state.matches[0];
+    if (context === undefined || !target || !isSessionRouteId(target.routeId)) {
+      return;
+    }
+    this.scopeRefreshing = true;
+    // Session loader dependencies carry this same scope. Navigating the exact
+    // target retires the old load without reusing its cache or changing history.
+    void router
+      .navigate(target.routeId, context, { history: "none", revalidate: true }, target.location)
+      .finally(() => {
+        if (
+          this.router === router &&
+          this.retentionScope === scope &&
+          this.scopeGeneration === generation
+        ) {
+          this.scopeRefreshing = false;
+          this.requestUpdate();
+        }
+      })
+      .catch(() => undefined);
+  }
 
   override render() {
     const router = this.router;
@@ -232,27 +327,104 @@ class OpenClawRouterOutlet<
     }
     const snapshot = this.outlet.snapshot;
     const renderedMatch = selectRenderedRouteMatch(snapshot.active, snapshot.pending);
+    this.synchronizeRetentionScope(router);
+    const ready = renderedMatch?.status === "success" && renderedMatch.error === undefined;
+    const retiredSession =
+      renderedMatch !== undefined && this.retiredSessionMatches.has(renderedMatch.id);
+    const scopeReady = !this.scopeRefreshing && !retiredSession;
     const routeKey = renderedMatch ? `${renderedMatch.routeId}:${renderedMatch.status}` : "empty";
     const routeModule = renderedMatch?.module;
-    const declaredOwnerKey =
-      renderedMatch && isRenderableModule<TData>(routeModule)
-        ? routeModule.renderOwnerKey?.(renderedMatch, snapshot.settled)
-        : undefined;
+    const module = isRenderableModule<TData>(routeModule) ? routeModule : undefined;
+    const declaredOwnerKey = renderedMatch
+      ? module?.renderOwnerKey?.(renderedMatch, snapshot.settled)
+      : undefined;
     const explicitOwnerKey = renderedMatch?.error === undefined ? declaredOwnerKey : undefined;
-    const retainCurrent =
+    const waiting = renderedMatch?.status === "pending" || renderedMatch?.isFetching === "loader";
+    const retainPending =
+      waiting && this.retainedPresented && this.retainedOwnerKey === explicitOwnerKey;
+    const presentRetained =
+      scopeReady &&
+      module?.retainOnNavigate === true &&
       explicitOwnerKey !== undefined &&
-      renderedMatch?.status === "pending" &&
-      renderedMatch.data === undefined;
-    return this.mcpAppUnmountGate.render(
-      explicitOwnerKey ?? routeKey,
-      () =>
-        renderRouterOutlet(router, snapshot, renderedMatch, {
-          retryContext: this.retryContext,
-        }),
-      () => [this],
-      { retainRenderedValue: retainCurrent },
-    );
+      (ready || retainPending);
+    if (presentRetained && ready) {
+      this.retainedMatch = renderedMatch;
+      this.retainedOwnerKey = explicitOwnerKey;
+    } else if (snapshot.status === "idle" || (scopeReady && module?.retainOnNavigate && !waiting)) {
+      // Invalid session destinations still replace their old owner; only a
+      // successful session page opts into retention across unrelated routes.
+      this.retainedMatch = undefined;
+      this.retainedOwnerKey = undefined;
+    }
+    this.retainedPresented = presentRetained;
+    const retained = this.retainedMatch;
+    const retainedKey = `${this.scopeGeneration}:${this.retainedOwnerKey ?? "empty"}`;
+    const transientKey = presentRetained ? "empty" : (explicitOwnerKey ?? routeKey);
+    const renderTransient = () => {
+      if (isSessionRouteId(renderedMatch?.routeId) && !scopeReady) {
+        return !retiredSession && renderedMatch?.error !== undefined
+          ? renderError(router, this.retryContext, renderedMatch.error, renderedMatch.routeId)
+          : renderLoadingState();
+      }
+      // Returning from another page must not revive the previously selected
+      // session while the requested destination is still unresolved.
+      if (module?.retainOnNavigate && waiting) {
+        return renderLoadingState();
+      }
+      return renderRouterOutlet(router, snapshot, renderedMatch, {
+        retryContext: this.retryContext,
+      });
+    };
+    const rendered = html`
+      ${this.retainedUnmountGate.render(
+        retainedKey,
+        () =>
+          retained
+            ? keyed(
+                retainedKey,
+                html`<openclaw-route-presentation
+                  ${ref(this.retainedPresentation)}
+                  .ownerKey=${retainedKey}
+                  .presented=${presentRetained}
+                  .renderPage=${(presented: boolean) =>
+                    renderRouterOutlet(router, snapshot, retained, {
+                      retryContext: this.retryContext,
+                      presented,
+                    })}
+                ></openclaw-route-presentation>`,
+              )
+            : nothing,
+        () => (this.retainedPresentation.value ? [this.retainedPresentation.value] : []),
+      )}
+      ${this.transientUnmountGate.render(
+        transientKey,
+        () => (presentRetained ? nothing : renderTransient()),
+        () => [...this.children].filter((child) => child !== this.retainedPresentation.value),
+        {
+          retainRenderedValue:
+            !module?.retainOnNavigate &&
+            explicitOwnerKey !== undefined &&
+            renderedMatch?.status === "pending" &&
+            renderedMatch.data === undefined,
+        },
+      )}
+      ${presentRetained && this.retainedUnmountGate.retiring ? renderLoadingState() : nothing}
+    `;
+    // The gates publish retirement during render and schedule surviving MCP
+    // restarts before these presentation updates. A returning owner stays inert
+    // throughout teardown, even when its key matches the still-connected subtree.
+    if (this.retainedPresentation.value) {
+      this.retainedPresentation.value.presented =
+        presentRetained &&
+        !this.retainedUnmountGate.retiring &&
+        this.retainedPresentation.value.ownerKey === retainedKey;
+    }
+    return rendered;
   }
+}
+
+if (!customElements.get("openclaw-route-presentation")) {
+  customElements.define("openclaw-route-presentation", OpenClawRoutePresentation);
 }
 
 if (!customElements.get("openclaw-router-outlet")) {

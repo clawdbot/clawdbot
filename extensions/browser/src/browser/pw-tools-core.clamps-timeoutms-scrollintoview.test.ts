@@ -22,7 +22,10 @@ describe("pw-tools-core", () => {
       timeoutMs: 50,
     });
 
-    expect(scrollIntoViewIfNeeded).toHaveBeenCalledWith({ timeout: 500 });
+    expect(scrollIntoViewIfNeeded).toHaveBeenCalledWith({
+      timeout: 500,
+      signal: expect.any(AbortSignal),
+    });
   });
   it.each([
     {

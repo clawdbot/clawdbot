@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
 import "./modal-dialog.ts";
+import "./tooltip.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
 let container: HTMLDivElement;
@@ -38,6 +39,61 @@ async function mountModal(host = container, variant = "", autofocus = true) {
 }
 
 describe.runIf(browserMode)("modal native focus ownership", () => {
+  it.each(["drawer", "viewport-edge-to-edge"])(
+    "keeps the bottom action reachable in scrollable viewport content (%s)",
+    async (variant) => {
+      const { userEvent } = await import("vitest/browser");
+      const { modal } = await mountModal(container, variant, false);
+      const content = document.createElement("section");
+      content.style.cssText = "display: flex; height: 100%; width: 100%;";
+      const scroller = document.createElement("div");
+      scroller.style.cssText = "width: 100%; min-height: 0; overflow: auto;";
+      const longContent = document.createElement("div");
+      longContent.style.height = "200dvh";
+      const action = document.createElement("button");
+      action.textContent = "Bottom action";
+      let clicked = false;
+      action.addEventListener("click", () => {
+        clicked = true;
+      });
+      scroller.append(longContent, action);
+      content.append(scroller);
+      modal.replaceChildren(content);
+
+      await expect.poll(() => scroller.clientHeight).toBeGreaterThan(0);
+      expect(scroller.clientHeight).toBeLessThanOrEqual(window.innerHeight);
+      expect(scroller.scrollHeight).toBeGreaterThan(scroller.clientHeight);
+      await userEvent.click(action);
+      expect(clicked).toBe(true);
+      expect(action.getBoundingClientRect().bottom).toBeLessThanOrEqual(window.innerHeight);
+    },
+  );
+
+  it("dismisses a tooltip before native modal cancellation and preserves the draft", async () => {
+    const { userEvent } = await import("vitest/browser");
+    const { modal, dialog, notes } = await mountModal();
+    notes.value = "Unsaved draft";
+    const tooltip = document.createElement("openclaw-tooltip");
+    tooltip.content = "Draft editing help";
+    tooltip.anchor = notes;
+    modal.append(tooltip);
+    await tooltip.updateComplete;
+    notes.focus();
+    const popup = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
+    await expect.poll(() => popup.open).toBe(true);
+
+    await userEvent.keyboard("{Escape}");
+
+    await expect.poll(() => popup.open).toBe(false);
+    expect(dialog.open).toBe(true);
+    expect(modal.open).toBe(true);
+    expect(notes.value).toBe("Unsaved draft");
+    expect(document.activeElement).toBe(notes);
+
+    await userEvent.keyboard("{Escape}");
+    await expect.poll(() => dialog.open).toBe(false);
+  });
+
   it.each(["", "palette", "drawer"])(
     "preserves selected content through chrome focus and retained reopen (%s)",
     async (variant) => {

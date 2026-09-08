@@ -26,12 +26,17 @@ import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
 import { danger } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../../utils/absolute-deadline.js";
 import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
-import { requireValidConfigFileSnapshot } from "../config-validation.js";
+import {
+  requireValidConfigFileSnapshot,
+  requireValidConfigForWrite,
+} from "../config-validation.js";
 import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { formatChannelAccountLabel } from "./shared.js";
 
 export type ChannelsCapabilitiesOptions = {
+  agent?: string;
   channel?: string;
   account?: string;
   target?: string;
@@ -54,55 +59,22 @@ type ChannelCapabilitiesReport = {
 
 const CHANNEL_CAPABILITIES_TIMEOUT_MAX_MS = 30_000;
 
-type ChannelCapabilitiesStepResult<T> =
-  | { kind: "value"; value: T }
-  | { kind: "error"; error: unknown }
-  | { kind: "timeout" };
-
-function resolveChannelCapabilitiesTimeoutMs(timeoutMs: number) {
-  return Math.min(timeoutMs, CHANNEL_CAPABILITIES_TIMEOUT_MAX_MS);
-}
-
-async function raceChannelCapabilitiesStep<T>(params: {
-  timeoutMs: number;
-  run: () => Promise<T> | T;
-}): Promise<ChannelCapabilitiesStepResult<T>> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<ChannelCapabilitiesStepResult<T>>((resolve) => {
-    timeout = setTimeout(() => resolve({ kind: "timeout" }), params.timeoutMs);
-    timeout.unref?.();
-  });
-  const resultPromise: Promise<ChannelCapabilitiesStepResult<T>> = Promise.resolve()
-    .then(params.run)
-    .then(
-      (value): ChannelCapabilitiesStepResult<T> => ({ kind: "value", value }),
-      (error: unknown): ChannelCapabilitiesStepResult<T> => ({ kind: "error", error }),
-    );
-  const result = await Promise.race([resultPromise, timeoutPromise]);
-  if (timeout) {
-    clearTimeout(timeout);
-  }
-  return result;
-}
-
+// These CLI waits need a referenced deadline so stalled plugins still produce a report.
 async function runChannelCapabilitiesProbe(params: {
   timeoutMs: number;
   run: () => unknown;
 }): Promise<unknown> {
-  const result = await raceChannelCapabilitiesStep(params);
-  switch (result.kind) {
-    case "value":
-      return result.value;
-    case "timeout":
-      return {
-        ok: false,
-        timedOut: true,
-        error: `probe timed out after ${params.timeoutMs}ms`,
-      };
-    case "error":
-      return { ok: false, error: formatErrorMessage(result.error) };
+  try {
+    const result = await awaitWithinDeadline(
+      async () => params.run(),
+      Date.now() + params.timeoutMs,
+    );
+    return result === ABSOLUTE_DEADLINE_EXPIRED
+      ? { ok: false, timedOut: true, error: `probe timed out after ${params.timeoutMs}ms` }
+      : result;
+  } catch (error) {
+    return { ok: false, error: formatErrorMessage(error) };
   }
-  return undefined;
 }
 
 async function runChannelCapabilitiesDiagnostics(params: {
@@ -112,31 +84,22 @@ async function runChannelCapabilitiesDiagnostics(params: {
     | ChannelCapabilitiesDiagnostics
     | undefined;
 }): Promise<ChannelCapabilitiesDiagnostics | undefined> {
-  const result = await raceChannelCapabilitiesStep(params);
-  switch (result.kind) {
-    case "value":
-      return result.value;
-    case "timeout":
-      return {
-        lines: [
-          {
-            text: `Diagnostics: timed out after ${params.timeoutMs}ms`,
-            tone: "error",
-          },
-        ],
-        details: { timedOut: true },
-      };
-    case "error":
-      return {
-        lines: [
-          {
-            text: `Diagnostics: failed (${formatErrorMessage(result.error)})`,
-            tone: "error",
-          },
-        ],
-      };
+  try {
+    const result = await awaitWithinDeadline(
+      async () => params.run(),
+      Date.now() + params.timeoutMs,
+    );
+    return result === ABSOLUTE_DEADLINE_EXPIRED
+      ? {
+          lines: [{ text: `Diagnostics: timed out after ${params.timeoutMs}ms`, tone: "error" }],
+          details: { timedOut: true },
+        }
+      : result;
+  } catch (error) {
+    return {
+      lines: [{ text: `Diagnostics: failed (${formatErrorMessage(error)})`, tone: "error" }],
+    };
   }
-  return undefined;
 }
 
 function formatSupport(capabilities?: ChannelCapabilities) {
@@ -316,15 +279,20 @@ export async function channelsCapabilitiesCommand(
   opts: ChannelsCapabilitiesOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const configSnapshot = await requireValidConfigFileSnapshot(runtime);
+  const rawChannel = normalizeLowercaseStringOrEmpty(opts.channel);
+  const canInstall = Boolean(rawChannel && rawChannel !== "all");
+  const writeSnapshot = canInstall ? await requireValidConfigForWrite(runtime) : null;
+  const configSnapshot = canInstall
+    ? writeSnapshot?.snapshot
+    : await requireValidConfigFileSnapshot(runtime);
   if (!configSnapshot) {
     return;
   }
   let cfg = await resolveCapabilitiesRuntimeConfig(configSnapshot.config, runtime);
-  const timeoutMs = resolveChannelCapabilitiesTimeoutMs(
+  const timeoutMs = Math.min(
     parseTimeoutMsWithFallback(opts.timeout, 10_000, { invalidType: "error" }),
+    CHANNEL_CAPABILITIES_TIMEOUT_MAX_MS,
   );
-  const rawChannel = normalizeLowercaseStringOrEmpty(opts.channel);
   const rawTarget = normalizeOptionalString(opts.target) ?? "";
 
   if ((!rawChannel || rawChannel === "all") && (opts.account || rawTarget)) {
@@ -343,6 +311,7 @@ export async function channelsCapabilitiesCommand(
           const resolved = await resolveInstallableChannelPlugin({
             cfg: configSnapshot.sourceConfig,
             runtime,
+            agentId: opts.agent,
             rawChannel,
             allowInstall: true,
           });
@@ -351,6 +320,7 @@ export async function channelsCapabilitiesCommand(
               cfg: resolved.cfg,
               pluginInstalled: resolved.pluginInstalled,
               baseHash: configSnapshot.hash,
+              writeOptions: writeSnapshot?.writeOptions,
               runtime,
             });
             // The writer refreshes the active runtime snapshot; probes must use that prepared

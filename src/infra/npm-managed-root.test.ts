@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { CommandOptions } from "../process/exec.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
@@ -10,11 +11,9 @@ import { captureEnv } from "../test-utils/env.js";
 import {
   listMissingRequiredPlatformPackages,
   repairManagedNpmRootOpenClawPeer,
-  removeManagedNpmRootDependency,
   readManagedNpmRootInstalledDependency,
   readOpenClawManagedNpmRootOverrides,
   resolveManagedNpmRootDependencySpec,
-  restoreManagedNpmRootPeerDependencySnapshot,
   syncManagedNpmRootPeerDependencies,
   upsertManagedNpmRootDependency,
 } from "./npm-managed-root.js";
@@ -76,17 +75,6 @@ async function expectPathMissing(targetPath: string): Promise<void> {
     return;
   }
   throw new Error(`Expected path to be missing: ${targetPath}`);
-}
-
-function requireFirstMockCall<T extends unknown[]>(
-  mock: { mock: { calls: T[] } },
-  label: string,
-): T {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
 }
 
 function requireCommandOptions(
@@ -546,56 +534,6 @@ describe("managed npm root", () => {
     });
   });
 
-  it("realigns restored managed peer pins with manifest overrides", async () => {
-    const npmRoot = await makeTempRoot();
-    await fs.writeFile(
-      path.join(npmRoot, "package.json"),
-      `${JSON.stringify(
-        {
-          private: true,
-          dependencies: {
-            plugin: "1.0.0",
-            "runtime-peer": "4.12.18",
-          },
-          overrides: {
-            "runtime-peer": "4.12.18",
-          },
-          openclaw: {
-            managedOverrides: ["runtime-peer"],
-            managedPeerDependencies: ["runtime-peer"],
-          },
-        },
-        null,
-        2,
-      )}\n`,
-    );
-
-    await restoreManagedNpmRootPeerDependencySnapshot({
-      npmRoot,
-      snapshot: {
-        dependencies: { "runtime-peer": "4.12.23" },
-        managedPeerDependencies: ["runtime-peer"],
-      },
-    });
-
-    await expect(
-      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
-    ).resolves.toEqual({
-      private: true,
-      dependencies: {
-        plugin: "1.0.0",
-        "runtime-peer": "4.12.18",
-      },
-      overrides: {
-        "runtime-peer": "4.12.18",
-      },
-      openclaw: {
-        managedOverrides: ["runtime-peer"],
-        managedPeerDependencies: ["runtime-peer"],
-      },
-    });
-  });
-
   it("resolves workspace pnpm overrides from packaged dist chunks", async () => {
     const packageRoot = await makeTempRoot();
     await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
@@ -859,7 +797,10 @@ describe("managed npm root", () => {
 
     await expect(syncManagedNpmRootPeerDependencies({ npmRoot, runCommand })).resolves.toBe(true);
 
-    const [args, rawOptions] = requireFirstMockCall(runCommand, "npm peer plan command");
+    const [args, rawOptions] = expectDefined(
+      runCommand.mock.calls[0],
+      "npm peer plan command call",
+    );
     const options = requireCommandOptions(rawOptions, "npm peer plan");
     expect(args).toEqual([
       "npm",
@@ -1308,44 +1249,6 @@ describe("managed npm root", () => {
     });
   });
 
-  it("removes one managed dependency without dropping unrelated metadata", async () => {
-    const npmRoot = await makeTempRoot();
-    await fs.writeFile(
-      path.join(npmRoot, "package.json"),
-      `${JSON.stringify(
-        {
-          private: true,
-          dependencies: {
-            "@openclaw/discord": "2026.5.2",
-            "@openclaw/voice-call": "2026.5.2",
-          },
-          devDependencies: {
-            fixture: "1.0.0",
-          },
-        },
-        null,
-        2,
-      )}\n`,
-    );
-
-    await removeManagedNpmRootDependency({
-      npmRoot,
-      packageName: "@openclaw/voice-call",
-    });
-
-    await expect(
-      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
-    ).resolves.toEqual({
-      private: true,
-      dependencies: {
-        "@openclaw/discord": "2026.5.2",
-      },
-      devDependencies: {
-        fixture: "1.0.0",
-      },
-    });
-  });
-
   it("repairs stale managed openclaw peer state without dropping plugin packages", async () => {
     const npmRoot = await makeTempRoot();
     await fs.mkdir(path.join(npmRoot, "node_modules", "openclaw"), { recursive: true });
@@ -1419,7 +1322,10 @@ describe("managed npm root", () => {
     const runCommand = vi.fn().mockResolvedValue(successfulSpawn);
     await expect(repairManagedNpmRootOpenClawPeer({ npmRoot, runCommand })).resolves.toBe(true);
     expect(runCommand).toHaveBeenCalledTimes(1);
-    const [repairArgs, rawRepairOptions] = requireFirstMockCall(runCommand, "repair command");
+    const [repairArgs, rawRepairOptions] = expectDefined(
+      runCommand.mock.calls[0],
+      "repair command call",
+    );
     const repairOptions = requireCommandOptions(rawRepairOptions, "repair");
     expect(repairArgs).toEqual([
       "npm",

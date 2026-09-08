@@ -9,6 +9,7 @@ const validationMocks = vi.hoisted(() => ({
 
 vi.mock("../../../config/validation.js", () => ({
   validateConfigObjectWithPlugins: validationMocks.validateConfigObjectWithPlugins,
+  validateConfigObjectRawWithPlugins: validationMocks.validateConfigObjectWithPlugins,
 }));
 
 vi.mock("./legacy-config-issues.js", () => ({

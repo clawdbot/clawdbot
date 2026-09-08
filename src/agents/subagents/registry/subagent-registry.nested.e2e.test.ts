@@ -20,7 +20,6 @@ vi.mock("../../../config/config.js", async () => {
 
 vi.mock("../announce/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
-  buildSubagentSystemPrompt: vi.fn(() => "test prompt"),
 }));
 
 let subagentRegistry: typeof import("./subagent-registry.test-helpers.js");

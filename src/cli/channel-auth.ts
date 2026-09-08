@@ -9,7 +9,8 @@ import {
   normalizeChannelId,
 } from "../channels/plugins/index.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
-import { requireValidConfigFileSnapshot } from "../commands/config-validation.js";
+import { assertAccountSelectorForMutation } from "../commands/channels/account-selector.js";
+import { requireValidConfigForWrite } from "../commands/config-validation.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { callGateway } from "../gateway/call.js";
@@ -24,6 +25,7 @@ import { formatCliCommand } from "./command-format.js";
 import { formatUnsupportedChannelActionMessage } from "./error-format.js";
 
 type ChannelAuthOptions = {
+  agent?: string;
   channel?: string;
   account?: string;
   verbose?: boolean;
@@ -102,12 +104,16 @@ async function resolveChannelPluginForMode(
   channelId: string;
   plugin: ChannelPlugin;
 } | null> {
-  const snapshot = await requireValidConfigFileSnapshot(runtime);
-  if (!snapshot) {
+  assertAccountSelectorForMutation(opts.account);
+  const writeSnapshot = await requireValidConfigForWrite(runtime);
+  if (!writeSnapshot) {
     return null;
   }
   // Runtime defaults are not authored plugin enablement intent.
-  const autoEnabled = applyPluginAutoEnable({ config: snapshot.sourceConfig, env: process.env });
+  const autoEnabled = applyPluginAutoEnable({
+    config: writeSnapshot.snapshot.sourceConfig,
+    env: process.env,
+  });
   const cfg = autoEnabled.config;
   const explicitChannel = opts.channel?.trim();
   const channelInput = explicitChannel || resolveConfiguredAuthChannelInput(mode);
@@ -116,6 +122,7 @@ async function resolveChannelPluginForMode(
   const resolved = await resolveInstallableChannelPlugin({
     cfg,
     runtime,
+    agentId: opts.agent,
     rawChannel: channelInput,
     ...(normalizedChannelId ? { channelId: normalizedChannelId } : {}),
     allowInstall: true,
@@ -139,8 +146,9 @@ async function resolveChannelPluginForMode(
   }
   if (autoEnabled.changes.length > 0 || resolved.configChanged) {
     await commitConfigWithPendingPluginInstalls({
-      nextConfig: resolved.cfg,
-      baseHash: snapshot.hash,
+      sourceConfig: resolved.cfg,
+      baseHash: writeSnapshot.snapshot.hash,
+      writeOptions: writeSnapshot.writeOptions,
     });
   }
   return {

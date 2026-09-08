@@ -109,11 +109,11 @@ vi.mock("../config/config.js", async (importActual) => {
     ) => {
       const snapshot = await gatewayOnboardConfigSnapshotMock();
       const previousHash = snapshot.hash ?? null;
-      const transformed = await params.transform(snapshot.sourceConfig, {
-        snapshot,
-        previousHash,
-        attempt: 0,
-      });
+      const transformed = await params.transform(
+        snapshot.sourceConfig,
+        { snapshot, previousHash, attempt: 0 },
+        {},
+      );
       const committed = await params.commit!({
         nextConfig: transformed.nextConfig,
         snapshot,

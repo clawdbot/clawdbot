@@ -150,6 +150,7 @@ export async function loginOpenAICodexOAuth(params: {
   isRemote: boolean;
   openUrl: (url: string) => Promise<void>;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
   onManualCodeInput?: () => Promise<string>;
   localBrowserMessage?: string;
 }): Promise<OAuthCredentials | null> {
@@ -157,7 +158,11 @@ export async function loginOpenAICodexOAuth(params: {
 
   ensureGlobalUndiciEnvProxyDispatcher();
 
-  const preflight = await runOpenAIOAuthTlsPreflight();
+  const preflight = await runOpenAIOAuthTlsPreflight({
+    signal: params.signal,
+    assertCurrent: params.assertCurrent,
+  });
+  params.assertCurrent?.();
   if (!preflight.ok && preflight.kind === "tls-cert") {
     const hint = formatOpenAIOAuthTlsPreflightFix(preflight);
     await prompter.note(hint, "OAuth prerequisites");
@@ -233,6 +238,7 @@ export async function loginOpenAICodexOAuth(params: {
         }),
       onProgress: (msg: string) => updateProgress(msg),
       signal: params.signal,
+      assertCurrent: params.assertCurrent,
     });
     stopProgress("OpenAI OAuth complete");
     return creds ?? null;

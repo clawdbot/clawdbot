@@ -1,6 +1,8 @@
 // Register setup tests cover setup command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerCoreCliCommands } from "./command-registry-core.js";
+import { createProgramContext } from "./context.js";
 import { registerOnboardCommand } from "./register.onboard.js";
 import { registerSetupCommand, resolveSetupCommandRoute } from "./register.setup.js";
 
@@ -341,17 +343,24 @@ describe("registerSetupCommand", () => {
     expect(runSystemAgentMock).not.toHaveBeenCalled();
   });
 
-  it("registers a hidden retired-name alias", async () => {
-    const program = new Command();
-    registerSetupCommand(program);
+  it.each(["direct", "lazy"])(
+    "registers a hidden retired-name alias through %s registration",
+    async (mode) => {
+      const program = new Command().name("openclaw");
+      if (mode === "direct") {
+        registerSetupCommand(program);
+      } else {
+        registerCoreCliCommands(program, createProgramContext(), ["node", "openclaw", "--help"]);
+      }
 
-    expect(program.helpInformation()).not.toContain("crestodian"); // hidden alias
-    await program.parseAsync(["crestodian", "--message", "status"], { from: "user" }); // hidden alias
-    expect(runSystemAgentMock).toHaveBeenCalledWith(
-      { message: "status", yes: false, json: false },
-      runtime,
-    );
-  });
+      expect(program.helpInformation()).not.toContain("crestodian");
+      await program.parseAsync(["crestodian", "--message", "status"], { from: "user" });
+      expect(runSystemAgentMock).toHaveBeenCalledWith(
+        { message: "status", yes: false, json: false },
+        runtime,
+      );
+    },
+  );
 
   it("runs setup wizard command by default", async () => {
     await runCli(["setup", "--workspace", "/tmp/ws"]);
@@ -475,7 +484,7 @@ describe("registerSetupCommand", () => {
     },
   );
 
-  it.each(["not-a-port", "70000"])(
+  it.each(["", " \t ", "not-a-port", "70000"])(
     "rejects invalid --gateway-port %s before onboarding dispatch",
     async (gatewayPort) => {
       await runCli(["setup", "--gateway-port", gatewayPort]);

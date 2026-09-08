@@ -21,4 +21,5 @@ export const POST_UPGRADE_PROBE_CODES = [
   "plugin.index_unavailable",
   "plugin.entry_unresolved",
   "plugin.manifest_drift",
+  "plugin.version_drift",
 ] as const;

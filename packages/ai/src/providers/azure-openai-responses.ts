@@ -201,6 +201,7 @@ function createClient(
       defaultHeaders: headers,
       baseURL: baseUrl,
       fetch: guardedFetch,
+      maxRetries: 0,
     });
   }
 
@@ -211,6 +212,7 @@ function createClient(
     defaultHeaders: headers,
     baseURL: baseUrl,
     fetch: guardedFetch,
+    maxRetries: 0,
   });
 }
 

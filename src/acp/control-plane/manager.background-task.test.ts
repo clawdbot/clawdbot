@@ -72,6 +72,7 @@ describe("resolveBackgroundTaskContext", () => {
       deps: fakeDeps(),
       cfg: {} as unknown as OpenClawConfig,
       sessionKey: "child-session",
+      agentId: "qa",
       requestId: "run-1",
       text: `${"y".repeat(158)}${LOBSTER}tail`,
     });
@@ -84,6 +85,7 @@ describe("resolveBackgroundTaskContext", () => {
       deps: fakeDeps(),
       cfg: {} as unknown as OpenClawConfig,
       sessionKey: "child-session",
+      agentId: "qa",
       requestId: "run-2",
       text: `summarize ${LOBSTER} feedback`,
     });
@@ -124,6 +126,8 @@ describe("ACP background task execution binding", () => {
         };
         const record = createBackgroundTaskRecord(
           {
+            agentId: "qa",
+            requesterAgentId: "main",
             requesterSessionKey: "agent:main:main",
             childSessionKey: "agent:qa:child",
             runId: "run-acp",
@@ -184,6 +188,8 @@ describe("ACP background task execution binding", () => {
           };
           const record = createBackgroundTaskRecord(
             {
+              agentId: "qa",
+              requesterAgentId: "main",
               requesterSessionKey: "agent:main:main",
               childSessionKey: "agent:qa:child",
               runId: "run-acp",

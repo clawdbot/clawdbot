@@ -129,16 +129,13 @@ export function registerTabAccessEvents({
     })();
   });
 
-  const onGroupChanged = (group) => {
+  const onGroupChanged = (group, removed = false) => {
     const eventRevision = ++groupEventRevision;
     scheduleTabsSync();
-    policy.invalidateDocumentGroup(group);
+    policy.invalidateGroup(group, removed);
     if (policy.mode !== ACCESS_MODE_SELECTED) {
       return;
     }
-    // Group title/removal changes mutate the selected-mode ACL. Retire every
-    // attachment epoch synchronously before any readiness or Chrome lookup.
-    policy.invalidateAll(group);
     const generations = [...attachments]
       .filter(([, record]) => !record.retired)
       .map(([tabId, generation]) => [tabId, generation, policy.capture(tabId)]);
@@ -164,7 +161,6 @@ export function registerTabAccessEvents({
       if (eventRevision !== groupEventRevision) {
         return;
       }
-      let newerTabEventOwnsAccess = false;
       for (const [tabId, generation, epoch] of generations) {
         if (!selected.has(tabId) || attachments.get(tabId) !== generation) {
           continue;
@@ -174,8 +170,8 @@ export function registerTabAccessEvents({
           return;
         }
         if (!policy.epochIsCurrent(tabId, epoch)) {
-          // A newer tab event owns this attachment's revision.
-          newerTabEventOwnsAccess = true;
+          // The newer tab event owns validation. Replaying this old group event
+          // would revoke commands admitted after that validation completed.
           continue;
         }
         if (state.accessible) {
@@ -187,14 +183,8 @@ export function registerTabAccessEvents({
           }
         }
       }
-      if (eventRevision !== groupEventRevision) {
-        return;
-      }
-      if (newerTabEventOwnsAccess) {
-        onGroupChanged();
-      }
     });
   };
   chromeApi.tabGroups.onUpdated.addListener(onGroupChanged);
-  chromeApi.tabGroups.onRemoved.addListener((group) => onGroupChanged(group));
+  chromeApi.tabGroups.onRemoved.addListener((group) => onGroupChanged(group, true));
 }

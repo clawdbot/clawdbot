@@ -72,6 +72,12 @@ async function addLifecycleCounters(page: Page): Promise<void> {
   );
 }
 
+async function waitForRecoveryDocument(page: Page): Promise<void> {
+  await page.waitForFunction((key) => sessionStorage.getItem(key) === "2", loadCountKey);
+  // The init-script counter advances before the new document arms its fallback timer.
+  await page.waitForLoadState("domcontentloaded");
+}
+
 const registeredElementSuite = createControlUiE2eSuite({
   name: "Control UI static mount fallback E2E",
   startServer: startRegisteredElementFixture,
@@ -96,7 +102,7 @@ registeredElementSuite.define(() => {
         ).toBeNull();
 
         await page.clock.runFor(12_001);
-        await page.waitForFunction((key) => sessionStorage.getItem(key) === "2", loadCountKey);
+        await waitForRecoveryDocument(page);
         await page.clock.runFor(12_001);
 
         await page.getByRole("heading", { name: "Control UI did not start" }).waitFor();
@@ -150,7 +156,7 @@ runtimeFailureSuite.define(() => {
         await page.waitForFunction(() => customElements.get("openclaw-app") !== undefined);
 
         await page.clock.runFor(12_001);
-        await page.waitForFunction((key) => sessionStorage.getItem(key) === "2", loadCountKey);
+        await waitForRecoveryDocument(page);
         await page.clock.runFor(12_001);
 
         await page.getByRole("heading", { name: "Control UI did not start" }).waitFor();

@@ -1,6 +1,10 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { ClickButton, EscalationReason } from "./driver-client.js";
 import { createCuaMcpDriver } from "./mcp-driver-client.js";
@@ -16,7 +20,8 @@ type FakeEndpoint = {
   socketPath: string;
   requests: RpcRequest[];
   respond: (request: RpcRequest, result: unknown) => void;
-  writeRaw: (request: RpcRequest, value: string) => void;
+  writeRaw: (request: RpcRequest, value: string | Buffer) => void;
+  writeRawStream: (request: RpcRequest, chunks: Iterable<Buffer>) => Promise<void>;
   close: () => Promise<void>;
 };
 
@@ -28,22 +33,8 @@ async function createFakeEndpoint(
   // Registered before the bind so a failed listen still removes the root.
   onTestFinished(async () => await fs.rm(directory, { recursive: true, force: true }));
   const socketPath = path.join(directory, "daemon.sock");
-  const binaryPath = path.join(directory, "cua-driver");
-  await fs.writeFile(
-    binaryPath,
-    `#!/usr/bin/env node
-const net = require("node:net");
-const args = process.argv.slice(2);
-if (args.length !== 4 || args[0] !== "mcp" || args[1] !== "--embedded" || args[2] !== "--socket") process.exit(64);
-if (process.env.CUA_DRIVER_EMBEDDED !== undefined || process.env.CUA_DRIVER_PERMISSION_MODE !== undefined || process.env.CUA_DRIVER_DANGEROUSLY_BYPASS_APPROVALS !== undefined || process.env.CUA_DRIVER_RS_TELEMETRY_ENABLED !== "false" || process.env.CUA_DRIVER_RS_UPDATE_CHECK !== "false") process.exit(65);
-const socket = net.createConnection(args[3]);
-process.stdin.pipe(socket);
-socket.pipe(process.stdout);
-socket.on("error", (error) => { process.stderr.write(error.message); process.exit(66); });
-socket.on("close", () => process.exit(0));
-`,
-    { mode: 0o700 },
-  );
+  // Keep the executable immutable: Linux rejects exec while an inode has a writer.
+  const binaryPath = fileURLToPath(new URL("../test/fixtures/mcp-proxy.cjs", import.meta.url));
 
   const requests: RpcRequest[] = [];
   const connections = new Set<net.Socket>();
@@ -89,9 +80,16 @@ socket.on("close", () => process.exit(0));
       const writer = request.id === undefined ? undefined : writers.get(request.id);
       writer?.write(`${JSON.stringify({ jsonrpc: "2.0", id: request.id, result })}\n`);
     },
-    writeRaw: (request: RpcRequest, value: string) => {
+    writeRaw: (request: RpcRequest, value: string | Buffer) => {
       const writer = request.id === undefined ? undefined : writers.get(request.id);
       writer?.write(value);
+    },
+    writeRawStream: async (request: RpcRequest, chunks: Iterable<Buffer>) => {
+      const writer = request.id === undefined ? undefined : writers.get(request.id);
+      if (!writer) {
+        throw new Error("fixture request has no connected writer");
+      }
+      await pipeline(Readable.from(chunks), writer, { end: false });
     },
     close: async () => {
       for (const connection of connections) {
@@ -231,6 +229,15 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
       isError: false,
     });
 
+    expect(endpoint.requests[0]).toMatchObject({
+      id: 0,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "openclaw-cua-computer", version: "1" },
+      },
+    });
     const startCalls = endpoint.requests.filter(
       (request) => request.method === "tools/call" && request.params?.name === "start_session",
     );
@@ -281,17 +288,327 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
     });
   });
 
-  it("fails closed on invalid proxy JSON", async () => {
+  it("preserves UTF-8 and routes multiple out-of-order responses", async () => {
+    const held: RpcRequest[] = [];
     const endpoint = await createFakeEndpoint((request, fake) => {
-      if (request.method === "initialize" && request.id !== undefined) {
-        fake.writeRaw(request, "not-json\n");
+      if (request.method === "initialize") {
+        fake.respond(request, {
+          protocolVersion: "2025-06-18",
+          capabilities: { tools: {} },
+          serverInfo: { name: "fake-cua-driver", version: "0.20.0" },
+        });
+      } else if (request.method === "tools/call" && request.params?.name === "start_session") {
+        fake.respond(request, sessionState("window"));
+      } else if (request.method === "tools/call" && request.params?.name === "list_windows") {
+        held.push(request);
+        if (held.length !== 2) {
+          return;
+        }
+        const firstRequest = held.find((call) => call.params?.arguments?.marker === "first");
+        const secondRequest = held.find((call) => call.params?.arguments?.marker === "second");
+        if (!firstRequest || !secondRequest) {
+          throw new Error("fixture did not receive both tagged requests");
+        }
+        const framed = Buffer.from(
+          `${JSON.stringify({ jsonrpc: "2.0", id: secondRequest.id, result: toolResult({ marker: "second", text: "β雪" }) })}\n\n${JSON.stringify({ jsonrpc: "2.0", id: firstRequest.id, result: toolResult({ marker: "first" }) })}\n`,
+        );
+        const split = framed.indexOf(Buffer.from("雪")) + 1;
+        expect(split).toBeGreaterThan(0);
+        // Receiving both requests owns the response; cold proxy startup is not a polling deadline.
+        fake.writeRaw(secondRequest, framed.subarray(0, split));
+        setImmediate(() => fake.writeRaw(secondRequest, framed.subarray(split)));
+      } else if (request.method === "tools/call" && request.params?.name === "end_session") {
+        fake.respond(request, toolResult({ session: "openclaw-test", active: false }));
       }
     });
     const driver = createCuaMcpDriver(endpoint);
     onTestFinished(() => driver.dispose());
-    await expect(driver.getDesktopState()).rejects.toThrow("COMPUTER_DRIVER_ERROR");
+    const settlement: string[] = [];
+    const firstCall = driver.callTool("list_windows", { marker: "first" }).then((result) => {
+      settlement.push("first");
+      return result;
+    });
+    const secondCall = driver.callTool("list_windows", { marker: "second" }).then((result) => {
+      settlement.push("second");
+      return result;
+    });
+    const [first, second] = await Promise.all([firstCall, secondCall]);
+    expect(JSON.parse(first.structuredJson!)).toEqual({ marker: "first" });
+    expect(JSON.parse(second.structuredJson!)).toEqual({ marker: "second", text: "β雪" });
+    expect(settlement).toEqual(["second", "first"]);
+    await driver.dispose();
+  });
+
+  it.each([
+    ["not-json\n", "invalid JSON"],
+    [" \n", "invalid JSON"],
+    [JSON.stringify({ jsonrpc: "1.0", id: 1, result: {} }) + "\n", "invalid JSON-RPC version"],
+    [JSON.stringify({ jsonrpc: "2.0", id: "1", result: {} }) + "\n", "invalid response id"],
+    [
+      JSON.stringify({ jsonrpc: "2.0", id: Number.MAX_SAFE_INTEGER + 1, result: {} }) + "\n",
+      "invalid response id",
+    ],
+    [
+      JSON.stringify({ jsonrpc: "2.0", id: 0, result: { protocolVersion: "2024-11-05" } }) + "\n",
+      "incompatible protocol version",
+    ],
+  ])("fails closed for %s", async (response, message) => {
+    const endpoint = await createFakeEndpoint((request, fake) => {
+      if (request.method === "initialize") {
+        fake.writeRaw(request, response);
+      }
+    });
+    const driver = createCuaMcpDriver(endpoint);
+    onTestFinished(() => driver.dispose());
+    await expect(driver.getDesktopState()).rejects.toThrow(message);
     expect(driver.isAvailable()).toBe(false);
     await driver.dispose();
+  });
+
+  it("retains completed responses before a later fatal frame and ignores unknown numeric IDs", async () => {
+    const held: RpcRequest[] = [];
+    const endpoint = await createFakeEndpoint((request, fake) => {
+      if (request.method === "initialize") {
+        fake.respond(request, { protocolVersion: "2025-06-18" });
+      } else if (request.params?.name === "start_session") {
+        fake.respond(request, sessionState("window"));
+      } else if (request.params?.name === "list_windows") {
+        held.push(request);
+        if (held.length === 2) {
+          const first = held[0];
+          const second = held[1];
+          if (!first || !second) {
+            throw new Error("expected both requests");
+          }
+          fake.writeRaw(
+            first,
+            JSON.stringify({ jsonrpc: "2.0", id: -5, result: {} }) +
+              "\n\n" +
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: first.id,
+                result: toolResult({ marker: "completed" }),
+              }) +
+              "\nnot-json\n" +
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: second.id,
+                result: toolResult({ marker: "too-late" }),
+              }) +
+              "\n",
+          );
+        }
+      }
+    });
+    const driver = createCuaMcpDriver(endpoint);
+    onTestFinished(() => driver.dispose());
+    const results = await Promise.allSettled([
+      driver.callTool("list_windows", {}),
+      driver.callTool("list_windows", {}),
+    ]);
+    expect(results[0]).toMatchObject({
+      status: "fulfilled",
+      value: { structuredJson: JSON.stringify({ marker: "completed" }) },
+    });
+    expect(results[1]).toMatchObject({
+      status: "rejected",
+      reason: expect.objectContaining({ message: expect.stringContaining("invalid JSON") }),
+    });
+    expect(driver.isAvailable()).toBe(false);
+    await driver.dispose();
+    const probe = net.createConnection(endpoint.socketPath);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        probe.once("connect", resolve);
+        probe.once("error", reject);
+      });
+    } finally {
+      probe.destroy();
+    }
+  });
+
+  it("keeps JSON-RPC request errors local and preserves their CUA error text", async () => {
+    const endpoint = await createFakeEndpoint((request, fake) => {
+      if (request.method === "initialize") {
+        fake.respond(request, { protocolVersion: "2025-06-18" });
+      } else if (request.params?.name === "start_session") {
+        fake.respond(request, sessionState("window"));
+      } else if (request.params?.arguments?.fail) {
+        fake.writeRaw(
+          request,
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: request.id,
+            error: { code: -32000, message: "fixture refusal" },
+          }) + "\n",
+        );
+      } else if (request.method === "tools/call") {
+        fake.respond(request, toolResult({ windows: [] }));
+      }
+    });
+    const driver = createCuaMcpDriver(endpoint);
+    onTestFinished(() => driver.dispose());
+    await expect(driver.callTool("list_windows", { fail: true })).rejects.toThrow(
+      "COMPUTER_DRIVER_ERROR: CUA MCP request failed: MCP error -32000: fixture refusal",
+    );
+    expect(driver.isAvailable()).toBe(true);
+    await expect(driver.callTool("list_windows", {})).resolves.toMatchObject({ isError: false });
+  });
+
+  it("preserves the CUA stopping error for pending calls during disposal", async () => {
+    let held = false;
+    const endpoint = await createFakeEndpoint((request, fake) => {
+      if (request.method === "initialize") {
+        fake.respond(request, { protocolVersion: "2025-06-18" });
+      } else if (request.params?.name === "start_session") {
+        fake.respond(request, sessionState("window"));
+      } else if (request.params?.arguments?.hold) {
+        held = true;
+      } else if (request.method === "tools/call") {
+        fake.respond(request, toolResult({ windows: [] }));
+      }
+    });
+    const driver = createCuaMcpDriver(endpoint);
+    onTestFinished(() => driver.dispose());
+    await driver.callTool("list_windows", {});
+    const pending = driver
+      .callTool("list_windows", { hold: true })
+      .catch((error: unknown) => error);
+    await vi.waitFor(() => expect(held).toBe(true));
+    await driver.dispose();
+    expect(await pending).toMatchObject({
+      message: "COMPUTER_DRIVER_UNAVAILABLE: CUA MCP proxy is stopping",
+    });
+  });
+
+  it("accepts a CUA screenshot larger than the default MCP buffer", async () => {
+    const image = "A".repeat(11 * 1024 * 1024);
+    const endpoint = await createFakeEndpoint((request, fake) => {
+      if (request.method === "initialize") {
+        fake.respond(request, { protocolVersion: "2025-06-18" });
+      } else if (request.params?.name === "start_session") {
+        fake.respond(request, sessionState("window"));
+      } else if (request.params?.name === "get_desktop_state") {
+        fake.respond(request, { content: [{ type: "image", data: image, mimeType: "image/png" }] });
+      } else if (request.params?.name === "end_session") {
+        fake.respond(request, toolResult({ active: false }));
+      }
+    });
+    const driver = createCuaMcpDriver(endpoint);
+    onTestFinished(() => driver.dispose());
+    const result = await driver.getDesktopState();
+    const actual = result.images[0]?.dataBase64;
+    if (typeof actual !== "string") {
+      throw new Error("expected CUA image data");
+    }
+    expect(createHash("sha256").update(actual).digest("hex")).toBe(
+      createHash("sha256").update(image).digest("hex"),
+    );
+  });
+
+  it("rejects an unfinished CUA frame beyond 256 MiB as a line-size overflow", async () => {
+    function* overflowChunks(): Iterable<Buffer> {
+      const chunk = Buffer.alloc(64 * 1024, 0x20);
+      for (let index = 0; index < 4096; index += 1) {
+        yield chunk;
+      }
+      yield Buffer.from([0x20]);
+    }
+    let streaming: Promise<void> | undefined;
+    const endpoint = await createFakeEndpoint((request, fake) => {
+      if (request.method === "initialize") {
+        fake.respond(request, { protocolVersion: "2025-06-18" });
+      } else if (request.params?.name === "start_session") {
+        fake.respond(request, sessionState("window"));
+      } else if (request.params?.name === "get_desktop_state") {
+        streaming = fake.writeRawStream(request, overflowChunks());
+        // Observe producer errors until the test checks them after the expected proxy retirement.
+        void streaming.catch(() => {});
+      }
+    });
+    const driver = createCuaMcpDriver(endpoint);
+    onTestFinished(() => driver.dispose());
+    await expect(driver.getDesktopState()).rejects.toThrow(
+      "COMPUTER_DRIVER_ERROR: CUA MCP response exceeded the line-size limit",
+    );
+    expect(driver.isAvailable()).toBe(false);
+    if (!streaming) {
+      throw new Error("expected overflow stream to start");
+    }
+    await streaming.catch((error: unknown) => {
+      expect(error).toMatchObject({
+        code: expect.stringMatching(/^(?:EPIPE|ECONNRESET|ERR_STREAM_PREMATURE_CLOSE)$/),
+      });
+    });
+    await driver.dispose();
+  });
+
+  it("retires a pending initialize at the shared startup deadline", async () => {
+    const endpoint = await createFakeEndpoint(() => {});
+    const deadline = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+    const driver = createCuaMcpDriver(endpoint);
+    onTestFinished(() => driver.dispose());
+    try {
+      const call = driver.getDesktopState();
+      const rejected = expect(call).rejects.toThrow(
+        "COMPUTER_DRIVER_UNAVAILABLE: CUA MCP initialize timed out after 10000ms",
+      );
+      await vi.waitFor(() =>
+        expect(endpoint.requests.some((request) => request.method === "initialize")).toBe(true),
+      );
+      deadline.abort(new Error("fixture startup deadline"));
+      await rejected;
+      expect(driver.isAvailable()).toBe(false);
+      expect(
+        endpoint.requests.some((request) => request.method === "notifications/initialized"),
+      ).toBe(false);
+    } finally {
+      timeout.mockRestore();
+      await driver.dispose();
+    }
+  });
+
+  it("makes a request timeout fatal without sending SDK cancellation notifications", async () => {
+    const held: RpcRequest[] = [];
+    const endpoint = await createFakeEndpoint((request, fake) => {
+      if (request.method === "initialize") {
+        fake.respond(request, { protocolVersion: "2025-06-18" });
+      } else if (request.params?.name === "start_session") {
+        fake.respond(request, sessionState("window"));
+      } else if (request.params?.arguments?.hold) {
+        held.push(request);
+      } else if (request.method === "tools/call") {
+        fake.respond(request, toolResult({ windows: [] }));
+      }
+    });
+    const driver = createCuaMcpDriver(endpoint);
+    onTestFinished(() => driver.dispose());
+    await driver.callTool("list_windows", {});
+    vi.useFakeTimers();
+    try {
+      const settled = Promise.allSettled([
+        driver.callTool("list_windows", { hold: true }),
+        driver.callTool("list_windows", { hold: true }),
+      ]);
+      await vi.waitFor(() => expect(held).toHaveLength(2));
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(await settled).toEqual(
+        Array.from({ length: 2 }, () => ({
+          status: "rejected",
+          reason: expect.objectContaining({
+            message: "COMPUTER_DRIVER_UNAVAILABLE: CUA MCP tools/call timed out after 120000ms",
+          }),
+        })),
+      );
+      expect(driver.isAvailable()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+    await driver.dispose();
+    expect(endpoint.requests.some((request) => request.method === "notifications/cancelled")).toBe(
+      false,
+    );
   });
 
   it("bounds pending calls and tears down the proxy on cancellation", async () => {
@@ -325,11 +642,30 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
     }
     await Promise.all(calls.slice(0, 64));
 
+    const alreadyAborted = new AbortController();
+    alreadyAborted.abort(new Error("pre-admission cancellation"));
+    await expect(driver.callTool("list_windows", {}, alreadyAborted.signal)).rejects.toThrow(
+      "request was cancelled",
+    );
+    expect(driver.isAvailable()).toBe(true);
+    expect(held).toHaveLength(64);
     const controller = new AbortController();
     const cancelled = driver.callTool("list_windows", {}, controller.signal);
-    await vi.waitFor(() => expect(held).toHaveLength(65));
+    const sibling = driver.callTool("list_windows", {});
+    const settled = Promise.allSettled([cancelled, sibling]);
+    await vi.waitFor(() => expect(held).toHaveLength(66));
     controller.abort(new Error("test cancellation"));
-    await expect(cancelled).rejects.toThrow("request was cancelled");
+    expect(await settled).toEqual(
+      Array.from({ length: 2 }, () => ({
+        status: "rejected",
+        reason: expect.objectContaining({
+          message: expect.stringContaining("request was cancelled"),
+        }),
+      })),
+    );
+    expect(endpoint.requests.some((request) => request.method === "notifications/cancelled")).toBe(
+      false,
+    );
     expect(driver.isAvailable()).toBe(false);
     await driver.dispose();
   });

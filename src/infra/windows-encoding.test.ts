@@ -1,7 +1,7 @@
 // Covers Windows command-output code page parsing and decoding.
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 const queryWindowsRegistryValueMock = vi.hoisted(() => vi.fn((): string | null => null));
@@ -36,8 +36,11 @@ const UTF16_OUTPUT_CASES = [
 ] as const;
 
 describe("windows output encoding", () => {
-  afterEach(() => {
+  afterAll(() => {
     vi.resetModules();
+  });
+
+  afterEach(() => {
     vi.restoreAllMocks();
     spawnSyncMock.mockReset();
     queryWindowsRegistryValueMock.mockReset();
@@ -169,6 +172,7 @@ describe("windows output encoding", () => {
       expect.any(String),
       ["/d", "/s", "/c", "chcp"],
       {
+        env: expect.any(Object),
         encoding: "utf8",
         killSignal: "SIGKILL",
         stdio: ["ignore", "pipe", "pipe"],
@@ -181,6 +185,7 @@ describe("windows output encoding", () => {
       "powershell.exe",
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "[Text.Encoding]::Default.CodePage"],
       {
+        env: expect.any(Object),
         encoding: "utf8",
         killSignal: "SIGKILL",
         stdio: ["ignore", "pipe", "pipe"],

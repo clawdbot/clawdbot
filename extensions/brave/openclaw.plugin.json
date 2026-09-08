@@ -2,7 +2,6 @@
   "id": "brave",
   "name": "Brave",
   "description": "OpenClaw Brave Search provider plugin for web search.",
-  "icon": "https://cdn.simpleicons.org/brave",
   "activation": {
     "onStartup": false
   },

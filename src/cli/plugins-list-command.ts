@@ -29,6 +29,7 @@ async function loadHumanListModules() {
 
   return {
     formatPluginLine: listFormat.formatPluginLine,
+    formatPluginStatus: listFormat.formatPluginStatus,
     formatPluginSourceForTable: sourceDisplay.formatPluginSourceForTable,
     formatCliCommand: commandFormat.formatCliCommand,
     getTerminalTableWidth: table.getTerminalTableWidth,
@@ -70,6 +71,7 @@ export async function runPluginsListCommand(
   const {
     formatCliCommand,
     formatPluginLine,
+    formatPluginStatus,
     formatPluginSourceForTable,
     getTerminalTableWidth,
     renderTable,
@@ -124,12 +126,7 @@ export async function runPluginsListCommand(
         Name: plugin.name || plugin.id,
         ID: plugin.name && plugin.name !== plugin.id ? plugin.id : "",
         Format: plugin.format ?? "openclaw",
-        Status:
-          plugin.status === "error"
-            ? theme.error("error")
-            : plugin.enabled
-              ? theme.success("enabled")
-              : theme.warn("disabled"),
+        Status: formatPluginStatus(plugin),
         Source: desc ? `${formattedSource.value}\n${desc}` : formattedSource.value,
         Version: plugin.version ?? "",
       };
@@ -169,7 +166,7 @@ export async function runPluginsListCommand(
 
   const lines: string[] = [];
   for (const plugin of list) {
-    lines.push(formatPluginLine(plugin, true));
+    lines.push(formatPluginLine(plugin));
     lines.push("");
   }
   runtime.log(lines.join("\n").trim());

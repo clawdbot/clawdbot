@@ -2,8 +2,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setLoggerOverride } from "../logging.js";
+import { getChildLogger, setLoggerOverride } from "../logging.js";
+import { flushLogger } from "../logging/logger.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -195,21 +197,28 @@ describe("channelsLogsCommand", () => {
     expect(JSON.stringify(payload)).not.toContain(fixtureCredential);
   });
 
-  it("preserves ordering and line limits for an explicit all filter", async () => {
+  it.each([
+    { lines: undefined, count: 200 },
+    { lines: 2, count: 2 },
+  ])("preserves ordering with line limit $lines", async ({ lines, count }) => {
+    const messages = Array.from({ length: 205 }, (_, index) => `message-${index}`);
     await fs.writeFile(
       logPath,
-      [
-        logLine({ module: "gateway/channels/slack/send", message: "first" }),
-        logLine({ module: "gateway/channels/external-chat/send", message: "second" }),
-        logLine({ module: "gateway/channels/slack/send", message: "third" }),
-      ].join(""),
+      messages
+        .map((message, index) =>
+          logLine({
+            module: `gateway/channels/${index % 2 ? "external-chat" : "slack"}/send`,
+            message,
+          }),
+        )
+        .join(""),
     );
 
-    await channelsLogsCommand({ channel: "all", lines: 2, json: true }, runtime);
+    await channelsLogsCommand({ channel: "all", lines, json: true }, runtime);
 
     const payload = readJsonPayload();
     expect(payload.channel).toBe("all");
-    expect(payload.lines.map((line) => line.message)).toEqual(["second", "third"]);
+    expect(payload.lines.map((line) => line.message)).toEqual(messages.slice(-count));
   });
 
   it("finds sparse channel records beyond the shared 5000-line cap", async () => {
@@ -291,23 +300,28 @@ describe("channelsLogsCommand", () => {
     expect(payload.lines.map((line) => line.message)).toEqual(["fallback sent"]);
   });
 
-  it("prefers the configured rolling log when it exists", async () => {
+  it("reads the active writer file instead of a newer stale configured rolling log", async () => {
     const configuredFile = path.join(tempDir, "openclaw-2026-04-26.log");
-    const fallbackFile = path.join(tempDir, "openclaw-2026-04-25.log");
-    setLoggerOverride({ file: configuredFile });
-    await fs.writeFile(
-      fallbackFile,
-      logLine({ module: "gateway/channels/external-chat/send", message: "fallback sent" }),
-    );
+    setLoggerOverride({ file: configuredFile, level: "info" });
+    getChildLogger({ module: "gateway/channels/external-chat/send" }).warn("current sent");
+    await flushLogger();
+
+    const writtenFiles = await fs.readdir(tempDir);
+    expect(writtenFiles).toEqual([expect.stringMatching(/^openclaw-\d{4}-\d{2}-\d{2}\.log$/)]);
+    const activeFile = path.join(tempDir, expectDefined(writtenFiles[0], "active log file"));
+    expect(activeFile).not.toBe(configuredFile);
+
     await fs.writeFile(
       configuredFile,
-      logLine({ module: "gateway/channels/external-chat/send", message: "current sent" }),
+      logLine({ module: "gateway/channels/external-chat/send", message: "stale sent" }),
     );
+    const newerMtime = new Date((await fs.stat(activeFile)).mtimeMs + 60_000);
+    await fs.utimes(configuredFile, newerMtime, newerMtime);
 
     await channelsLogsCommand({ channel: "external-chat", json: true }, runtime);
 
     const payload = readJsonPayload();
-    expect(payload.file).toBe(configuredFile);
+    expect(payload.file).toBe(activeFile);
     expect(payload.lines.map((line) => line.message)).toEqual(["current sent"]);
   });
 
@@ -327,9 +341,10 @@ describe("channelsLogsCommand", () => {
     expect(payload.lines).toStrictEqual([]);
   });
 
-  it("rejects partial line limits", async () => {
-    await expect(channelsLogsCommand({ lines: "2x", json: true }, runtime)).rejects.toThrow(
+  it.each(["2x", "", "   "])("rejects invalid line limit %j", async (lines) => {
+    await expect(channelsLogsCommand({ lines, json: true }, runtime)).rejects.toThrow(
       "--lines must be a positive integer.",
     );
+    expect(runtime.log).not.toHaveBeenCalled();
   });
 });

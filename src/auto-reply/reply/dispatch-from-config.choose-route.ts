@@ -27,7 +27,6 @@ import {
   DispatchReplyOperationAbortedError,
   runWithDispatchAbortSignal,
 } from "./dispatch-from-config.abort.js";
-import { createReplyDispatchEvent } from "./dispatch-from-config.events.js";
 import {
   hasExecApprovalPayload,
   requiresDurableToolResultDelivery,
@@ -35,6 +34,11 @@ import {
 import { suppressPendingFinalDelivery } from "./dispatch-from-config.pending-final.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.prepare-operation.js";
+import { runReplyDispatchTakeover } from "./dispatch-from-config.reply-dispatch-hook.js";
+import {
+  maybeRefuseRestrictedRuntimeTakeover,
+  runtimeTakeoverHooksAllowed,
+} from "./dispatch-from-config.restricted-runtime.js";
 import { createSessionMetadataChangeNotifier } from "./dispatch-from-config.session-metadata.js";
 import {
   captureDeliveredTranscriptMirror,
@@ -43,6 +47,10 @@ import {
   transcriptMirrorForDeliveredPayload,
 } from "./dispatch-from-config.transcript.js";
 import type { NormalizeReplySkipReason } from "./normalize-reply.js";
+import {
+  resolveRoutedReplyDeliveryOutcome,
+  shouldRetryReplyDispatch,
+} from "./reply-dispatch-outcome.js";
 import {
   attachReplyDispatchUndeliveredFallback,
   prepareReplyPayloadForDispatcher,
@@ -108,11 +116,6 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     ctx.InboundEventKind !== "room_event" &&
     !state.sendPolicyDenied &&
     params.replyOptions?.forceToolResultProgress === true;
-  const shouldDeliverFastModeAutoProgressDespiteSourceSuppression = () =>
-    state.suppressAutomaticSourceDelivery &&
-    state.sourceReplyDeliveryMode === "message_tool_only" &&
-    ctx.InboundEventKind !== "room_event" &&
-    !state.sendPolicyDenied;
   let finalReplyDeliveryStarted = false;
   const isSessionWriterDeliveryAuthorized = (payload: ReplyPayload) =>
     isDispatchFinalReplySessionWriterAuthorized(payload, sessionStoreEntry.storePath, sessionKey);
@@ -195,70 +198,58 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   };
   const deferFinalTtsText = shouldDeferFinalTtsText(captionedFinalTtsContext);
   const cleanDeferredFinalDirectives = shouldCleanTtsDirectiveText(captionedFinalTtsContext);
-  const deliveredBlockContentKeys = new Set<string>();
-  const blockDeliveryOutcomes = new Map<string, Array<Promise<ReplyDispatchDeliveryOutcome>>>();
-  const sendTrackedBlockReply = (payload: ReplyPayload): boolean => {
-    const contentKey = createBlockReplyContentKey(payload);
+  type BlockDelivery = { outcome: ReplyDispatchDeliveryOutcome; pending?: boolean };
+  const blockDeliveryOutcomes = new Map<string, Array<Promise<BlockDelivery>>>();
+  const recordBlockOutcome = (payload: ReplyPayload, outcome: Promise<BlockDelivery>) => {
+    const key = createBlockReplyContentKey(payload);
+    const outcomes = blockDeliveryOutcomes.get(key) ?? [];
+    outcomes.push(outcome);
+    blockDeliveryOutcomes.set(key, outcomes);
+  };
+  const sendTrackedBlockReply = (payload: ReplyPayload) => {
     const delivery = turnLedger.sendQueued("block", payload);
-    if (!delivery.queued) {
-      return false;
+    if (delivery.queued) {
+      recordBlockOutcome(
+        payload,
+        delivery.outcome?.then((outcome) => ({
+          outcome,
+          pending: delivery.hasPendingDelivery?.(),
+        })) ?? Promise.resolve({ outcome: "failed-deliver" }),
+      );
     }
-    const outcome = delivery.outcome ?? Promise.resolve("delivered" as const);
-    const outcomes = blockDeliveryOutcomes.get(contentKey);
-    if (outcomes) {
-      outcomes.push(outcome);
-    } else {
-      blockDeliveryOutcomes.set(contentKey, [outcome]);
-    }
-    return true;
+    return delivery;
   };
   const recordRoutedBlockReplyDelivery = (
     payload: ReplyPayload,
     result: Awaited<ReturnType<typeof sendPayloadAsync>>,
-  ): void => {
-    if (result && isRoutedReplyDelivered(result)) {
-      deliveredBlockContentKeys.add(createBlockReplyContentKey(payload));
+  ): ReplyDispatchDeliveryOutcome | undefined => {
+    if (!result) {
+      return undefined;
     }
+    const outcome = resolveRoutedReplyDeliveryOutcome(result);
+    recordBlockOutcome(
+      payload,
+      Promise.resolve({
+        outcome,
+        pending: result.queueCustody === "held" || result.ambiguous === true,
+      }),
+    );
+    return outcome;
   };
-  const wasReplyDeliveredAsBlock = async (
+  const getBlockReplyOutcome = async (
     payload: ReplyPayload,
     abortSignal?: AbortSignal,
-  ): Promise<boolean> => {
-    const contentKey = createBlockReplyContentKey(payload);
-    if (deliveredBlockContentKeys.has(contentKey)) {
-      return true;
+  ): Promise<BlockDelivery | undefined> => {
+    const outcomes = blockDeliveryOutcomes.get(createBlockReplyContentKey(payload));
+    if (!outcomes || abortSignal?.aborted) {
+      return undefined;
     }
-    const outcomes = blockDeliveryOutcomes.get(contentKey);
-    if (!outcomes) {
-      return false;
-    }
-    blockDeliveryOutcomes.delete(contentKey);
-    const settlement = Promise.all(outcomes).then((settledOutcomes) => ({
-      kind: "settled" as const,
-      outcomes: settledOutcomes,
-    }));
-    if (abortSignal?.aborted) {
-      return false;
-    }
-    let removeAbortListener: (() => void) | undefined;
-    const result = abortSignal
-      ? await Promise.race([
-          settlement,
-          new Promise<{ kind: "aborted" }>((resolve) => {
-            const onAbort = () => resolve({ kind: "aborted" });
-            abortSignal.addEventListener("abort", onAbort, { once: true });
-            removeAbortListener = () => abortSignal.removeEventListener("abort", onAbort);
-          }),
-        ]).finally(() => removeAbortListener?.())
-      : await settlement;
-    if (result.kind === "aborted") {
-      return false;
-    }
-    const delivered = result.outcomes.some((outcome) => outcome === "delivered");
-    if (delivered) {
-      deliveredBlockContentKeys.add(contentKey);
-    }
-    return delivered;
+    const settled = await runWithDispatchAbortSignal(abortSignal, () => Promise.all(outcomes));
+    return (
+      settled.find(({ outcome }) => outcome === "delivered") ??
+      settled.find(({ outcome, pending }) => pending || !shouldRetryReplyDispatch(outcome)) ??
+      settled[0]
+    );
   };
   const sendFinalPayload = async (
     inputPayload: ReplyPayload,
@@ -269,12 +260,14 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       skipTts?: boolean;
     } = {},
   ): Promise<{
-    dedupedAgainstBlock?: boolean;
+    blockDeliveryOutcome?: ReplyDispatchDeliveryOutcome;
+    pendingBlock?: boolean;
     queuedFinal: boolean;
     routedFinalCount: number;
     suppressionReason?: NormalizeReplySkipReason;
     sessionWriterDeliveryRevoked?: true;
     dispatcherOutcome?: Promise<ReplyDispatchDeliveryOutcome>;
+    routedOutcome?: ReplyDispatchDeliveryOutcome;
   }> => {
     const abortSignal =
       options.abortSignal === false
@@ -291,7 +284,9 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     throwIfFinalDeliveryAborted();
     const preparation = prepareReplyPayloadForDispatcher(dispatcher, "final", inputPayload);
     if (preparation.kind === "suppress") {
-      await suppressPendingFinalDelivery(inputPayload);
+      await suppressPendingFinalDelivery(inputPayload, {
+        preserveActivity: state.replyOperationRunState.heartbeat !== undefined,
+      });
       return {
         queuedFinal: false,
         routedFinalCount: 0,
@@ -305,7 +300,9 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     const sourceReplySessionBinding = resolvePreparedTranscriptBinding(
       payloadMetadata?.sourceReplyTranscriptMirror?.sessionKey,
     );
-    const sourceReplyTranscriptMirror = payloadMetadata?.sourceReplyTranscriptMirror
+    let sourceReplyTranscriptMirror: Parameters<
+      typeof mirrorDeliveredReplyToTranscript
+    >[0]["metadata"] = payloadMetadata?.sourceReplyTranscriptMirror
       ? {
           ...payloadMetadata.sourceReplyTranscriptMirror,
           ...(sourceReplySessionBinding
@@ -376,35 +373,70 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       normalizedPayload = buildCaptionedFinalTextFallback(ttsPayload);
     }
     throwIfFinalDeliveryAborted();
-    const deliveredAsBlock = await wasReplyDeliveredAsBlock(payload, abortSignal);
+    const block = await getBlockReplyOutcome(payload, abortSignal);
     throwIfFinalDeliveryAborted();
-    if (deliveredAsBlock) {
-      if (createBlockReplyContentKey(normalizedPayload) === createBlockReplyContentKey(payload)) {
-        return { dedupedAgainstBlock: true, queuedFinal: false, routedFinalCount: 0 };
+    const blockDeliveryOutcome = block?.outcome;
+    const pendingBlock = block?.pending && blockDeliveryOutcome !== "delivered";
+    if (blockDeliveryOutcome && (pendingBlock || !shouldRetryReplyDispatch(blockDeliveryOutcome))) {
+      if (
+        blockDeliveryOutcome === "channel-transform" ||
+        (blockDeliveryOutcome === "failed-deliver" && !pendingBlock) ||
+        createBlockReplyContentKey(normalizedPayload) === createBlockReplyContentKey(payload)
+      ) {
+        return { blockDeliveryOutcome, pendingBlock, queuedFinal: false, routedFinalCount: 0 };
       }
-      // Final-only transforms such as TTS still need delivery, but the block already
-      // made the text visible. Preserve only the newly added media/rich payload.
+      // The block already owns the text. Preserve final-only media without
+      // letting an audio receipt finalize the block's pending text completion.
       normalizedPayload = copyReplyPayloadMetadata(normalizedPayload, {
         ...normalizedPayload,
         text: undefined,
       });
+      if (pendingBlock) {
+        await suppressPendingFinalDelivery(payload, {
+          preserveActivity: state.replyOperationRunState.heartbeat !== undefined,
+        });
+        setReplyPayloadMetadata(normalizedPayload, { pendingFinalDeliveryCompletion: undefined });
+        sourceReplyTranscriptMirror = sourceReplyTranscriptMirror
+          ? transcriptMirrorForDeliveredPayload(sourceReplyTranscriptMirror, normalizedPayload)
+          : undefined;
+      }
       if (!hasOutboundReplyContent(normalizedPayload, { trimText: true })) {
-        return { dedupedAgainstBlock: true, queuedFinal: false, routedFinalCount: 0 };
+        return { blockDeliveryOutcome, pendingBlock, queuedFinal: false, routedFinalCount: 0 };
       }
     }
     if (!isSessionWriterDeliveryAuthorized(normalizedPayload)) {
       return { queuedFinal: false, routedFinalCount: 0, sessionWriterDeliveryRevoked: true };
     }
-    const result = await state.routeReplyToOriginating(normalizedPayload, {
+    let result = await state.routeReplyToOriginating(normalizedPayload, {
       abortSignal,
       kind: "final",
       ...(hasTranscriptOwner ? { mirror: false } : {}),
     });
     if (result) {
+      let routedOutcome = resolveRoutedReplyDeliveryOutcome(result);
       if (!result.ok) {
         logVerbose(
           `dispatch-from-config: route-reply (final) failed: ${result.error ?? "unknown error"}`,
         );
+      }
+      const fallbackText =
+        deferFinalTtsText && normalizedPayload.mediaUrl
+          ? normalizeOptionalString(normalizedPayload.text)
+          : undefined;
+      if (fallbackText && shouldRetryReplyDispatch(routedOutcome)) {
+        if (!isSessionWriterDeliveryAuthorized(normalizedPayload)) {
+          return { queuedFinal: false, routedFinalCount: 0, sessionWriterDeliveryRevoked: true };
+        }
+        result =
+          (await state.routeReplyToOriginating(
+            copyReplyPayloadMetadata(normalizedPayload, { text: fallbackText }),
+            {
+              abortSignal,
+              kind: "final",
+              ...(hasTranscriptOwner ? { mirror: false } : {}),
+            },
+          )) ?? result;
+        routedOutcome = resolveRoutedReplyDeliveryOutcome(result);
       }
       if (isRoutedReplyDelivered(result)) {
         await mirrorDeliveredReplyToTranscript({
@@ -412,33 +444,14 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
           cfg,
         });
       }
-      const fallbackText =
-        deferFinalTtsText && normalizedPayload.mediaUrl
-          ? normalizeOptionalString(normalizedPayload.text)
-          : undefined;
-      if (fallbackText && !isRoutedReplyDelivered(result)) {
-        if (!isSessionWriterDeliveryAuthorized(normalizedPayload)) {
-          return { queuedFinal: false, routedFinalCount: 0, sessionWriterDeliveryRevoked: true };
-        }
-        const fallbackResult = await state.routeReplyToOriginating(
-          copyReplyPayloadMetadata(normalizedPayload, { text: fallbackText }),
-          {
-            abortSignal,
-            kind: "final",
-            ...(hasTranscriptOwner ? { mirror: false } : {}),
-          },
-        );
-        if (fallbackResult && isRoutedReplyDelivered(fallbackResult)) {
-          await mirrorDeliveredReplyToTranscript({
-            metadata: sourceReplyTranscriptMirror,
-            cfg,
-          });
-          return { queuedFinal: true, routedFinalCount: 1 };
-        }
-      }
       return {
+        pendingBlock,
         queuedFinal: result.ok,
         routedFinalCount: isRoutedReplyDelivered(result) ? 1 : 0,
+        routedOutcome,
+        ...(result.reason === "channel_transform"
+          ? { suppressionReason: "channel_transform" as const }
+          : {}),
       };
     }
     throwIfFinalDeliveryAborted();
@@ -516,6 +529,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       );
     }
     return {
+      pendingBlock,
       queuedFinal,
       routedFinalCount: 0,
       ...(queuedFinal && dispatcherOutcome ? { dispatcherOutcome } : {}),
@@ -523,7 +537,11 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   };
 
   // Run before_dispatch hook — let plugins inspect or handle before model dispatch.
-  if (hookRunner?.hasHooks("before_dispatch")) {
+  if (
+    state.allowInboundHandlers &&
+    runtimeTakeoverHooksAllowed(params.replyOptions?.admittedSessionSettings) &&
+    hookRunner?.hasHooks("before_dispatch")
+  ) {
     // This outer lookup key is resolved from the routed context; fields inside
     // sessionStoreEntry.entry cannot redirect hook or requester lineage.
     const beforeDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
@@ -606,65 +624,20 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     }
   }
 
-  if (hookRunner?.hasHooks("reply_dispatch", { dispatchKind: state.dispatchKind })) {
-    const replyDispatchResult = await traceReplyPhase("reply.reply_dispatch_hooks", () =>
-      runWithDispatchLifecycleAdmission(
-        async () =>
-          await runWithDispatchAbortSignal(
-            getPreDispatchAbortSignal(),
-            () =>
-              hookRunner.runReplyDispatch(
-                createReplyDispatchEvent({
-                  ctx,
-                  runId: params.replyOptions?.runId,
-                  sessionKey: acpDispatchSessionKey,
-                  toolsAllow: params.replyOptions?.toolsAllow,
-                  images: params.replyOptions?.images,
-                  inboundAudio: state.inboundAudio,
-                  sessionTtsAuto,
-                  ttsChannel: deliveryChannel,
-                  suppressUserDelivery: state.suppressHookUserDelivery,
-                  suppressReplyLifecycle: state.suppressHookReplyLifecycle,
-                  sourceReplyDeliveryMode: state.sourceReplyDeliveryMode,
-                  shouldRouteToOriginating,
-                  originatingChannel: routeReplyChannel,
-                  originatingTo: routeReplyTo,
-                  originatingAccountId: replyContextAccountId,
-                  originatingThreadId: routeReplyThreadId,
-                  originatingChatType: replyRoute.chatType,
-                  shouldSendToolSummaries,
-                  shouldSendFullToolDetails: state.shouldEmitFullVerboseProgress(),
-                  sendPolicy: state.sendPolicy,
-                }),
-                {
-                  cfg,
-                  dispatchKind: state.dispatchKind,
-                  dispatcher: state.dispatchHookDispatcher,
-                  abortSignal: getPreDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
-                  onReplyStart: params.replyOptions?.onReplyStart,
-                  onAgentRunStart: params.replyOptions?.onAgentRunStart,
-                  userTurnTranscriptRecorder: params.replyOptions?.userTurnTranscriptRecorder,
-                  prepareAssistantTranscriptMessage:
-                    params.replyOptions?.prepareAssistantTranscriptMessage,
-                  recordProcessed,
-                  markIdle,
-                },
-              ),
-            trackDispatchLifecycleWork,
-          ),
-      ),
-    );
-    if (replyDispatchResult?.handled) {
-      commitInboundDedupeIfClaimed();
-      completeDispatchReplyOperation();
-      return {
-        status: "complete" as const,
-        result: attachSourceReplyDeliveryMode({
-          queuedFinal: replyDispatchResult.queuedFinal,
-          counts: replyDispatchResult.counts,
-        }),
-      };
-    }
+  const restrictedRuntimeRefusal = await maybeRefuseRestrictedRuntimeTakeover({
+    state,
+    sendFinalPayload,
+  });
+  if (restrictedRuntimeRefusal) {
+    return {
+      status: "complete" as const,
+      result: attachSourceReplyDeliveryMode(restrictedRuntimeRefusal),
+    };
+  }
+
+  const replyDispatchTakeover = await runReplyDispatchTakeover(state, shouldSendToolSummaries);
+  if (replyDispatchTakeover) {
+    return replyDispatchTakeover;
   }
 
   const dispatchAcquisition = await state.ensureDispatchReplyOperation(
@@ -686,14 +659,12 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     notifySessionMetadataChanges,
     shouldDeliverVerboseProgressDespiteSourceSuppression,
     shouldDeliverForcedToolProgressDespiteSourceSuppression,
-    shouldDeliverFastModeAutoProgressDespiteSourceSuppression,
     shouldSuppressLateTextOnlyToolProgress,
     flushPendingCommentaryProgress,
     noteCommentaryProgress,
     shouldSuppressMessageToolOnlyTextErrorProgress,
     sendTrackedBlockReply,
     recordRoutedBlockReplyDelivery,
-    wasReplyDeliveredAsBlock,
     sendFinalPayload,
     isSessionWriterDeliveryAuthorized,
     deferFinalTtsText,

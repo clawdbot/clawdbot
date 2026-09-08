@@ -19,13 +19,8 @@ import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/opencl
 import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
 import {
   buildSessionEntry,
-  listSessionFilesForAgent,
   listSessionTranscriptCorpusEntriesForAgent,
-  loadSessionTranscriptClassificationForAgent,
-  normalizeSessionTranscriptPathForComparison,
   parseCanonicalSessionSyncTargetFromPath,
-  resolveSessionIdentityForTranscriptFile,
-  resolveSessionFileForSyncTarget,
   statSessionEntrySync,
   type SessionFileEntry,
 } from "./session-files.js";
@@ -90,7 +85,7 @@ async function upsertTestSessionEntries(
   }
 }
 
-describe("listSessionFilesForAgent", () => {
+describe("session transcript archive discovery", () => {
   it("includes reset and deleted transcripts in session file listing", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     fsSync.mkdirSync(path.join(sessionsDir, "archive"), { recursive: true });
@@ -118,9 +113,9 @@ describe("listSessionFilesForAgent", () => {
       "",
     );
 
-    const files = await listSessionFilesForAgent("main");
+    const entries = await listSessionTranscriptCorpusEntriesForAgent("main");
 
-    expect(files.map((filePath) => path.basename(filePath)).toSorted()).toEqual(
+    expect(entries.map((entry) => path.basename(entry.sessionFile)).toSorted()).toEqual(
       included.toSorted(),
     );
   });
@@ -241,11 +236,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       },
     });
 
-    const classification = loadSessionTranscriptClassificationForAgent("main");
-
-    expect(classification.cronRunTranscriptPaths).toEqual(
-      new Set([normalizeSessionTranscriptPathForComparison(archivePath)]),
-    );
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toContainEqual({
       agentId: "main",
       artifactKind: "archive-artifact",
@@ -472,12 +462,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     });
 
     const expectedArchivePath = archivePath;
-    const classification = loadSessionTranscriptClassificationForAgent("main");
-
-    expect(classification.cronRunTranscriptPaths).toEqual(
-      new Set([normalizeSessionTranscriptPathForComparison(expectedArchivePath)]),
-    );
-    await expect(listSessionFilesForAgent("main")).resolves.toEqual([expectedArchivePath]);
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -506,7 +490,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       }),
     );
 
-    await expect(listSessionFilesForAgent("main")).resolves.toEqual([]);
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
   });
 
@@ -516,7 +499,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     const symlinkPath = path.join(sessionsDir, "linked.jsonl.deleted.2026-02-16T22-27-33.000Z");
     fsSync.mkdirSync(sessionsDir, { recursive: true });
     fsSync.writeFileSync(symlinkPath, "");
-    await expect(listSessionFilesForAgent("main")).resolves.toEqual([symlinkPath]);
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toContainEqual(
       expect.objectContaining({
         artifactKind: "archive-artifact",
@@ -535,7 +517,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     }
     expect(fsSync.lstatSync(symlinkPath).isSymbolicLink()).toBe(true);
 
-    await expect(listSessionFilesForAgent("main")).resolves.toEqual([]);
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
   });
 
@@ -552,7 +533,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       }),
     );
 
-    await expect(listSessionFilesForAgent("main")).resolves.toEqual([]);
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
   });
 
@@ -640,7 +620,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       },
     });
 
-    await expect(listSessionFilesForAgent("main")).resolves.toEqual([]);
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toContainEqual(
       expect.objectContaining({
         sessionFile: "agent:main:chat:custom",
@@ -665,7 +644,6 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     clearRuntimeConfigSnapshot();
     clearConfigCache();
 
-    await expect(listSessionFilesForAgent("main")).resolves.toEqual([archivePath]);
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([
       {
         agentId: "main",
@@ -704,7 +682,11 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       },
     });
 
-    await expect(listSessionFilesForAgent("main")).resolves.toEqual([archivePath]);
+    expect(
+      (await listSessionTranscriptCorpusEntriesForAgent("main"))
+        .filter((entry) => entry.artifactKind === "archive-artifact")
+        .map((entry) => entry.sessionFile),
+    ).toEqual([archivePath]);
   });
 
   it("keeps legacy session keys in non-main per-agent stores", async () => {
@@ -722,8 +704,8 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       }),
     );
 
-    await expect(listSessionFilesForAgent("ops")).resolves.toEqual([]);
-    await expect(listSessionFilesForAgent("main")).resolves.toEqual([]);
+    await expect(listSessionTranscriptCorpusEntriesForAgent("ops")).resolves.toEqual([]);
+    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
   });
 
   it("keeps legacy main aliases in a renamed default agent store", async () => {
@@ -749,7 +731,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     clearRuntimeConfigSnapshot();
     clearConfigCache();
 
-    await expect(listSessionFilesForAgent("ops")).resolves.toEqual([]);
+    await expect(listSessionTranscriptCorpusEntriesForAgent("ops")).resolves.toEqual([]);
   });
 });
 
@@ -771,62 +753,6 @@ describe("memory session sync targets", () => {
         path.join(tmpDir, "agents", "main", "sessions", "active.trajectory.jsonl"),
       ),
     ).toBeNull();
-  });
-
-  it("does not synthesize active transcript paths for identity sync targets", () => {
-    expect(resolveSessionFileForSyncTarget({ sessionId: "active" }, "main")).toBeNull();
-    expect(resolveSessionFileForSyncTarget({ agentId: "MAIN", sessionId: "active" })).toBeNull();
-  });
-
-  it("rejects identity sync targets that would escape the sessions directory", () => {
-    expect(resolveSessionFileForSyncTarget({ sessionId: "../outside" }, "main")).toBeNull();
-  });
-
-  it("rejects identity sync targets that normalize to another transcript", () => {
-    expect(resolveSessionFileForSyncTarget({ sessionId: "foo/../active" }, "main")).toBeNull();
-  });
-
-  it("does not read legacy sessions.json for persisted session-key sync targets", () => {
-    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-    fsSync.mkdirSync(sessionsDir, { recursive: true });
-    fsSync.writeFileSync(
-      path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
-        "agent:main:chat:thread-456": {
-          sessionFile: "active-thread-456.jsonl",
-          sessionId: "active",
-        },
-      }),
-    );
-
-    expect(
-      resolveSessionFileForSyncTarget({
-        agentId: "main",
-        sessionId: "active",
-        sessionKey: "agent:main:chat:thread-456",
-      }),
-    ).toBeNull();
-  });
-
-  it("resolves transcript file identities through persisted session keys", () => {
-    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-    fsSync.mkdirSync(sessionsDir, { recursive: true });
-    const sessionFile = path.join(sessionsDir, "active-thread-456.jsonl");
-    fsSync.writeFileSync(
-      path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
-        "agent:main:chat:thread-456": {
-          sessionFile: "active-thread-456.jsonl",
-          sessionId: "active",
-        },
-      }),
-    );
-
-    expect(resolveSessionIdentityForTranscriptFile(sessionFile)).toEqual({
-      agentId: "main",
-      sessionId: "active",
-      sessionKey: "agent:main:chat:thread-456",
-    });
   });
 });
 

@@ -1,7 +1,9 @@
+import { stripVTControlCharacters } from "node:util";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { recordInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
+import type { PluginInspectReport } from "../plugins/status.js";
 import {
   createInstalledPluginIndexSnapshot,
   createPluginRecord,
@@ -10,6 +12,7 @@ import {
   buildAllPluginInspectReportsMock,
   buildPluginDiagnosticsReportMock,
   buildPluginInspectReportMock,
+  buildPluginRegistrySnapshotReportMock,
   buildPluginSnapshotReportMock,
   pluginCliConfigMock,
   pluginsCliRuntimeLogs,
@@ -47,6 +50,55 @@ function setInspectInstallRecords(
   return metadata;
 }
 
+function createInspectReport(
+  overrides: Partial<PluginInspectReport> & Pick<PluginInspectReport, "plugin">,
+): PluginInspectReport {
+  return {
+    workspaceDir: "/workspace",
+    shape: "non-capability",
+    capabilityMode: "none",
+    capabilityCount: 0,
+    capabilities: [],
+    typedHooks: [],
+    customHooks: [],
+    tools: [],
+    commands: [],
+    cliCommands: [],
+    services: [],
+    gatewayDiscoveryServices: [],
+    gatewayMethods: [],
+    mcpServers: [],
+    lspServers: [],
+    httpRouteCount: 0,
+    bundleCapabilities: [],
+    diagnostics: [],
+    policy: { allowedModels: [], hasAllowedModelsConfig: false },
+    compatibility: [],
+    ...overrides,
+  };
+}
+
+type PluginHumanFormat = "detail" | "table" | "verbose";
+
+function readRenderedStatus(output: string, format: PluginHumanFormat): string | undefined {
+  const text = stripVTControlCharacters(output);
+  if (format === "detail") {
+    return /^Status: (.+)$/m.exec(text)?.[1];
+  }
+  if (format === "verbose") {
+    return /^Display \(display-probe\) (.+)$/m.exec(text)?.[1];
+  }
+  const lines = text.split("\n");
+  const cells = (line: string) =>
+    line
+      .split(/[│|]/u)
+      .slice(1, -1)
+      .map((cell) => cell.trim());
+  const header = lines.find((line) => line.includes("Name") && line.includes("Status"));
+  const row = lines.find((line) => line.includes("Display"));
+  return header && row ? cells(row)[cells(header).indexOf("Status")] : undefined;
+}
+
 describe("plugins cli inspect", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
@@ -54,6 +106,143 @@ describe("plugins cli inspect", () => {
     workshopMocks.loadMetadata.mockReset();
     workshopMocks.loadMetadata.mockReturnValue({ index: createInstalledPluginIndexSnapshot([]) });
   });
+
+  it.each([
+    { enabled: true, status: "loaded", expected: "enabled" },
+    { enabled: false, status: "disabled", expected: "disabled" },
+    { enabled: true, status: "error", expected: "error" },
+  ] as const)(
+    "renders cold $status records consistently across human commands",
+    async (testCase) => {
+      const plugin = createPluginRecord({
+        id: "display-probe",
+        name: "Display",
+        enabled: testCase.enabled,
+        status: testCase.status,
+        imported: false,
+      });
+      const report = { plugins: [plugin], diagnostics: [] };
+      const inspect = createInspectReport({ plugin });
+      buildPluginSnapshotReportMock.mockReturnValue(report);
+      buildPluginInspectReportMock.mockReturnValue(inspect);
+      buildAllPluginInspectReportsMock.mockReturnValue([inspect]);
+      buildPluginRegistrySnapshotReportMock.mockReturnValue({
+        ...report,
+        workspaceDir: "/workspace",
+        registrySource: "persisted",
+        registryDiagnostics: [],
+      });
+
+      const commands: Array<{ args: string[]; format: PluginHumanFormat }> = [
+        { args: ["list"], format: "table" },
+        { args: ["list", "--verbose"], format: "verbose" },
+        { args: ["inspect", plugin.id], format: "detail" },
+        { args: ["info", plugin.id], format: "detail" },
+        { args: ["inspect", "--all"], format: "table" },
+      ];
+      const renderedStatuses: Array<[string, string | undefined]> = [];
+      for (const { args, format } of commands) {
+        pluginsCliRuntimeLogs.length = 0;
+        await runPluginsCommand(["plugins", ...args]);
+        renderedStatuses.push([
+          args.join(" "),
+          readRenderedStatus(pluginsCliRuntimeLogs.join("\n"), format),
+        ]);
+      }
+      expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
+
+      for (const selection of [[plugin.id], ["--all"]]) {
+        pluginsCliRuntimeLogs.length = 0;
+        await runPluginsCommand(["plugins", "inspect", ...selection, "--json"]);
+        const json = JSON.parse(pluginsCliRuntimeLogs.at(-1) ?? "null");
+        const entry = Array.isArray(json) ? json[0] : json;
+        expect(entry.plugin).toMatchObject({
+          enabled: testCase.enabled,
+          status: testCase.status,
+          imported: false,
+        });
+      }
+      expect(renderedStatuses).toEqual(
+        commands.map(({ args }) => [args.join(" "), testCase.expected]),
+      );
+    },
+  );
+
+  it.each([
+    { args: ["inspect", "display-probe", "--runtime"], format: "detail" },
+    { args: ["inspect", "--all", "--runtime"], format: "table" },
+  ] as const)("retains actual runtime status for $format output", async ({ args, format }) => {
+    const plugin = createPluginRecord({ id: "display-probe", name: "Display", imported: true });
+    const report = { plugins: [plugin], diagnostics: [] };
+    const inspect = createInspectReport({ plugin });
+    buildPluginSnapshotReportMock.mockReturnValue(report);
+    buildPluginDiagnosticsReportMock.mockReturnValue(report);
+    buildPluginInspectReportMock.mockReturnValue(inspect);
+    buildAllPluginInspectReportsMock.mockReturnValue([inspect]);
+
+    await runPluginsCommand(["plugins", ...args]);
+
+    expect(readRenderedStatus(pluginsCliRuntimeLogs.join("\n"), format)).toBe("loaded");
+  });
+
+  it.each(
+    [false, true].flatMap((runtime) =>
+      [false, true].flatMap((json) =>
+        ["empty", "all", "single", "missing"].map((selection) => ({ runtime, json, selection })),
+      ),
+    ),
+  )(
+    "preserves global diagnostics on stderr with $selection, runtime=$runtime, json=$json",
+    async ({ runtime, json, selection }) => {
+      const plugin = createPluginRecord({ id: "shared-plugin" });
+      const diagnostic = { level: "warn" as const, pluginId: plugin.id, message: "Plugin warning" };
+      const inspect = createInspectReport({ plugin, diagnostics: [diagnostic] });
+      const reports = selection === "empty" || selection === "missing" ? [] : [inspect];
+      const report = {
+        plugins: reports.map((entry) => entry.plugin),
+        diagnostics: [
+          {
+            level: "warn" as const,
+            code: "workspace-scope-omitted",
+            message: "Workspace discovery was skipped; select the system owner.",
+          },
+          diagnostic,
+        ],
+      };
+      buildPluginSnapshotReportMock.mockReturnValue(report);
+      buildPluginDiagnosticsReportMock.mockReturnValue(report);
+      buildPluginInspectReportMock.mockReturnValue(inspect);
+      buildAllPluginInspectReportsMock.mockReturnValue(reports);
+      const args = [
+        "plugins",
+        "inspect",
+        selection === "single" ? plugin.id : selection === "missing" ? "missing-plugin" : "--all",
+        ...(runtime ? ["--runtime"] : []),
+        ...(json ? ["--json"] : []),
+      ];
+      const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      try {
+        const command = runPluginsCommand(args);
+        if (selection === "missing") {
+          await expect(command).rejects.toThrow("__exit__:1");
+          expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
+        } else {
+          await command;
+          if (json) {
+            expect(pluginsCliRuntimeLogs).toHaveLength(1);
+            expect(JSON.parse(pluginsCliRuntimeLogs[0] ?? "null")).toEqual(
+              selection === "single" ? inspect : reports,
+            );
+          }
+        }
+        const warnings = stderr.mock.calls.map(([chunk]) => String(chunk)).join("");
+        expect(warnings.match(/Workspace discovery was skipped/g)).toHaveLength(1);
+        expect(warnings).not.toContain("Plugin warning");
+      } finally {
+        stderr.mockRestore();
+      }
+    },
+  );
 
   it.each([false, true])(
     "reports package-owned install provenance with runtime=%s",
@@ -168,18 +357,12 @@ describe("plugins cli inspect", () => {
         plugins: [createPluginRecord({ id: pluginId, name: "Mem0" })],
         diagnostics: [],
       });
-      const inspectReport = {
-        workspaceDir: "/workspace",
+      const inspectReport = createInspectReport({
         plugin: createPluginRecord({ id: pluginId, name: "Mem0" }),
         shape: "hook-only",
         capabilityMode: "plain",
         capabilityCount: 1,
-        capabilities: [],
         typedHooks: [{ name: "agent_end" }],
-        customHooks: [],
-        tools: [],
-        commands: [],
-        cliCommands: [],
         services: ["mem0-background"],
         gatewayDiscoveryServices: ["mem0-discovery", "mem0-discovery-secondary"],
         mcpServers: [
@@ -187,18 +370,12 @@ describe("plugins cli inspect", () => {
           { name: "remote", hasStdioTransport: false },
           { name: "broken", hasStdioTransport: false, unsupported: true },
         ],
-        lspServers: [],
-        httpRouteCount: 0,
-        bundleCapabilities: [],
-        diagnostics: [],
         policy: {
           allowConversationAccess: true,
           allowedModels: [],
           hasAllowedModelsConfig: false,
         },
-        usesLegacyBeforeAgentStart: false,
-        compatibility: [],
-      };
+      });
       buildPluginInspectReportMock.mockReturnValue(inspectReport);
 
       await runPluginsCommand(["plugins", "inspect", pluginId]);
@@ -276,32 +453,15 @@ describe("plugins cli inspect", () => {
       ],
       diagnostics: [],
     });
-    buildPluginInspectReportMock.mockReturnValue({
-      workspaceDir: "/workspace",
-      plugin: createPluginRecord({ id: "openclaw-mem0", name: "Mem0" }),
-      shape: "hook-only",
-      capabilityMode: "plain",
-      capabilityCount: 1,
-      capabilities: [],
-      typedHooks: [],
-      customHooks: [],
-      tools: [],
-      commands: [],
-      cliCommands: [],
-      services: [],
-      gatewayDiscoveryServices: ["mem0-runtime-discovery"],
-      mcpServers: [],
-      lspServers: [],
-      httpRouteCount: 0,
-      bundleCapabilities: [],
-      diagnostics: [],
-      policy: {
-        allowedModels: [],
-        hasAllowedModelsConfig: false,
-      },
-      usesLegacyBeforeAgentStart: false,
-      compatibility: [],
-    });
+    buildPluginInspectReportMock.mockReturnValue(
+      createInspectReport({
+        plugin: createPluginRecord({ id: "openclaw-mem0", name: "Mem0" }),
+        shape: "hook-only",
+        capabilityMode: "plain",
+        capabilityCount: 1,
+        gatewayDiscoveryServices: ["mem0-runtime-discovery"],
+      }),
+    );
 
     for (const selector of ["openclaw-mem0", "Mem0"]) {
       await runPluginsCommand(["plugins", "inspect", selector, "--runtime"]);

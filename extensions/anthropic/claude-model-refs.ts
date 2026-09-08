@@ -3,14 +3,7 @@
  * ids to current Anthropic runtime refs while preserving auth-profile suffixes.
  */
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_MODEL_ALIASES } from "./cli-constants.js";
-
-const DEFAULT_CLAUDE_MODEL_BY_FAMILY: Record<string, string> = {
-  opus: "claude-opus-5",
-  sonnet: "claude-sonnet-5",
-  fable: "claude-fable-5",
-  haiku: "claude-haiku-4-5",
-};
+import { CLAUDE_CLI_BACKEND_ID, CLAUDE_MODEL_ID_ALIASES } from "./cli-constants.js";
 
 /** Normalized Claude CLI selection plus runtime refs used by setup migrations. */
 type ClaudeCliAnthropicModelRefs = {
@@ -60,9 +53,16 @@ function hasAnyRetiredVersionPrefix(normalized: string, prefixes: readonly strin
   return prefixes.some((prefix) => hasRetiredVersionPrefix(normalized, prefix));
 }
 
-function parseProviderModelRef(
+export function normalizeAnthropicProviderId(provider: string): string {
+  const normalized = normalizeLowercaseStringOrEmpty(provider);
+  if (normalized === "bedrock" || normalized === "aws-bedrock") {
+    return "amazon-bedrock";
+  }
+  return normalized;
+}
+
+export function parseAnthropicModelRef(
   raw: string,
-  defaultProvider: string,
 ): { provider: string; model: string; explicitProvider: boolean } | null {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -70,7 +70,7 @@ function parseProviderModelRef(
   }
   const slashIndex = trimmed.indexOf("/");
   if (slashIndex <= 0) {
-    return { provider: defaultProvider, model: trimmed, explicitProvider: false };
+    return { provider: "anthropic", model: trimmed, explicitProvider: false };
   }
   const provider = trimmed.slice(0, slashIndex).trim();
   const model = trimmed.slice(slashIndex + 1).trim();
@@ -78,7 +78,7 @@ function parseProviderModelRef(
     return null;
   }
   return {
-    provider: normalizeLowercaseStringOrEmpty(provider),
+    provider: normalizeAnthropicProviderId(provider),
     model,
     explicitProvider: true,
   };
@@ -98,14 +98,8 @@ function canonicalizeKnownClaudeCliModelId(modelId: string): string | null {
   if (normalized.startsWith("claude-")) {
     return attachModelAuthProfile(trimmed, split.profile);
   }
-  const defaultModel = DEFAULT_CLAUDE_MODEL_BY_FAMILY[normalized];
-  if (defaultModel) {
-    return attachModelAuthProfile(defaultModel, split.profile);
-  }
-  const aliasedModel = CLAUDE_CLI_MODEL_ALIASES[normalized];
-  return aliasedModel?.startsWith("claude-")
-    ? attachModelAuthProfile(aliasedModel, split.profile)
-    : null;
+  const aliasedModel = CLAUDE_MODEL_ID_ALIASES.get(normalized);
+  return aliasedModel ? attachModelAuthProfile(aliasedModel, split.profile) : null;
 }
 
 function upgradeOldClaudeModelId(normalized: string): string | null {
@@ -189,7 +183,7 @@ function upgradeOldClaudeModelId(normalized: string): string | null {
 export function resolveClaudeCliAnthropicModelRefs(
   raw: string,
 ): ClaudeCliAnthropicModelRefs | null {
-  const parsed = parseProviderModelRef(raw, "anthropic");
+  const parsed = parseAnthropicModelRef(raw);
   if (!parsed) {
     return null;
   }

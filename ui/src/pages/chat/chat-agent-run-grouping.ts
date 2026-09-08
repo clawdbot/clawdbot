@@ -11,6 +11,7 @@ import type {
 } from "./chat-thread-grouping.ts";
 import { isKeyedAssistantStreamFallbackMessage } from "./chat-thread-run-identity.ts";
 import { assistantGroupIsForwardedBoundary, chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
+import { extractMessageMediaText } from "./components/chat-message-media.ts";
 import { readLiveTerminalDisposition } from "./terminal-message-identity.ts";
 
 type AgentRunFramePart =
@@ -115,13 +116,12 @@ function messageCanOwnCompletedFrame(message: unknown, explicitOnly: boolean): b
   const stopReason = record?.stopReason;
   const metadata = asRecord(record?.["__openclaw"]);
   if (
-    !extractTextCached(message)?.trim() ||
+    !(extractTextCached(message)?.trim() || extractMessageMediaText(message)) ||
     isKeyedAssistantStreamFallbackMessage(message) ||
     messageIsInterrupted(message) ||
     phase === "commentary" ||
     stopReason === "toolUse" ||
     stopReason === "error" ||
-    metadata?.runtimeActivityKind === "context_compaction" ||
     (metadata?.mirrorOrigin === "codex-app-server" && metadata.runTerminal !== true)
   ) {
     return false;
@@ -143,12 +143,8 @@ function completedFrameActionOwner(
   if (lastPart?.kind !== "group" || lastPart.role !== "assistant") {
     return null;
   }
-  const lastMessage = lastPart.messages.at(-1);
-  return lastMessage
-    ? messageCanOwnCompletedFrame(lastMessage.message, false)
-      ? lastMessage
-      : null
-    : null;
+  const last = lastPart.messages.at(-1);
+  return last && messageCanOwnCompletedFrame(last.message, false) ? last : null;
 }
 
 export function agentRunFrameActiveStatusParts(

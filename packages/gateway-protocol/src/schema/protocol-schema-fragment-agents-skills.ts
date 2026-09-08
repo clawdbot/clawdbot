@@ -2,9 +2,23 @@ import * as agentsModelsSkills from "./agents-models-skills.js";
 import * as agentsWorkspace from "./agents-workspace.js";
 import * as artifacts from "./artifacts.js";
 import * as commands from "./commands.js";
-import * as skillWorkshop from "./skill-protocol-schemas.js";
+import * as skillHistory from "./skill-history.js";
+import * as skillLibrary from "./skill-library.js";
+import * as transcripts from "./transcripts.js";
 
 export const AgentSkillProtocolSchemas = {
+  TranscriptSessionSummary: transcripts.TranscriptSessionSummarySchema,
+  TranscriptsListParams: transcripts.TranscriptsListParamsSchema,
+  TranscriptsListResult: transcripts.TranscriptsListResultSchema,
+  TranscriptsGetParams: transcripts.TranscriptsGetParamsSchema,
+  TranscriptsGetResult: transcripts.TranscriptsGetResultSchema,
+  SkillsLibraryListParams: skillLibrary.SkillsLibraryListParamsSchema,
+  SkillsLibraryReadParams: skillLibrary.SkillsLibraryReadParamsSchema,
+  SkillsLibrarySaveParams: skillLibrary.SkillsLibrarySaveParamsSchema,
+  SkillsLibraryMutateParams: skillLibrary.SkillsLibraryMutateParamsSchema,
+  SkillsLibraryActivateParams: skillLibrary.SkillsLibraryActivateParamsSchema,
+  SkillsLibraryImportParams: skillLibrary.SkillsLibraryImportParamsSchema,
+  SkillsLibraryUploadParams: skillLibrary.SkillsLibraryUploadParamsSchema,
   AgentKind: agentsModelsSkills.AgentKindSchema,
   AgentSummary: agentsModelsSkills.AgentSummarySchema,
   AgentsCreateParams: agentsModelsSkills.AgentsCreateParamsSchema,
@@ -37,6 +51,7 @@ export const AgentSkillProtocolSchemas = {
   AgentsListResult: agentsModelsSkills.AgentsListResultSchema,
   ModelChoice: agentsModelsSkills.ModelChoiceSchema,
   ModelsAuthLogoutParams: agentsModelsSkills.ModelsAuthLogoutParamsSchema,
+  ModelsAuthOrderSetParams: agentsModelsSkills.ModelsAuthOrderSetParamsSchema,
   ModelsAuthStatusParams: agentsModelsSkills.ModelsAuthStatusParamsSchema,
   ModelsListParams: agentsModelsSkills.ModelsListParamsSchema,
   ModelsListResult: agentsModelsSkills.ModelsListResultSchema,
@@ -97,7 +112,17 @@ export const AgentSkillProtocolSchemas = {
   SkillsCuratorActionResult: agentsModelsSkills.SkillsCuratorActionResultSchema,
   SkillsCuratorStatusParams: agentsModelsSkills.SkillsCuratorStatusParamsSchema,
   SkillsCuratorStatusResult: agentsModelsSkills.SkillsCuratorStatusResultSchema,
-  ...skillWorkshop.SkillWorkshopProtocolSchemas,
+  SkillsProposalsListParams: agentsModelsSkills.SkillsProposalsListParamsSchema,
+  SkillsProposalsListResult: agentsModelsSkills.SkillsProposalsListResultSchema,
+  SkillsWorkshopReadParams: agentsModelsSkills.SkillsWorkshopReadParamsSchema,
+  SkillsWorkshopReadResult: agentsModelsSkills.SkillsWorkshopReadResultSchema,
+  SkillsProposalEvaluateParams: agentsModelsSkills.SkillsProposalEvaluateParamsSchema,
+  SkillsProposalEvaluateResult: agentsModelsSkills.SkillsProposalEvaluateResultSchema,
+  SkillsProposalEventsListParams: agentsModelsSkills.SkillsProposalEventsListParamsSchema,
+  SkillsProposalEventsListResult: agentsModelsSkills.SkillsProposalEventsListResultSchema,
+  SkillsProposalHistoryStatusParams: skillHistory.SkillsProposalHistoryStatusParamsSchema,
+  SkillsProposalHistoryScanParams: skillHistory.SkillsProposalHistoryScanParamsSchema,
+  SkillsProposalHistoryScanResult: skillHistory.SkillsProposalHistoryScanResultSchema,
   SkillsProposalInspectParams: agentsModelsSkills.SkillsProposalInspectParamsSchema,
   SkillsProposalInspectResult: agentsModelsSkills.SkillsProposalInspectResultSchema,
   SkillsProposalCreateParams: agentsModelsSkills.SkillsProposalCreateParamsSchema,
@@ -118,4 +143,8 @@ export const AgentSkillProtocolSchemas = {
   SkillsUploadCommitParams: agentsModelsSkills.SkillsUploadCommitParamsSchema,
   SkillsInstallParams: agentsModelsSkills.SkillsInstallParamsSchema,
   SkillsUpdateParams: agentsModelsSkills.SkillsUpdateParamsSchema,
+  TranscriptsExportParams: transcripts.TranscriptsExportParamsSchema,
+  TranscriptsExportResult: transcripts.TranscriptsExportResultSchema,
+  TranscriptsStatusParams: transcripts.TranscriptsStatusParamsSchema,
+  TranscriptsStatusResult: transcripts.TranscriptsStatusResultSchema,
 } as const;

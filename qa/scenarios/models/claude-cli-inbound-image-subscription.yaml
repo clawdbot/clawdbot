@@ -102,7 +102,7 @@ flow:
                 ref: outboundStartIndex
         - set: gatewayLog
           value:
-            expr: "String(readGatewayLogs() ?? '').slice(gatewayLogCursor)"
+            expr: "String(readGatewayLogs(gatewayLogCursor) ?? '')"
         - assert:
             expr: "gatewayLog.includes('cli exec: provider=claude-cli')"
             message:

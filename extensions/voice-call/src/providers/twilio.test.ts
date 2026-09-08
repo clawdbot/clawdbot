@@ -1,4 +1,5 @@
 // Voice Call tests cover twilio plugin behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { guardedJsonApiRequestMock } = vi.hoisted(() => ({
@@ -132,23 +133,12 @@ function createApiRequestMock(impl?: TwilioApiRequest) {
   return vi.fn<TwilioApiRequest>(impl ?? (async () => ({})));
 }
 
-function requireApiRequestCall(
-  apiRequest: ReturnType<typeof createApiRequestMock>,
-  index = 0,
-): Parameters<TwilioApiRequest> {
-  const call = apiRequest.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected Twilio API request call ${index}`);
-  }
-  return call;
-}
-
 function expectApiRequestEndpoint(
   apiRequest: ReturnType<typeof createApiRequestMock>,
   index: number,
   endpoint: string,
 ): void {
-  const [actualEndpoint] = requireApiRequestCall(apiRequest, index);
+  const [actualEndpoint] = expectDefined(apiRequest.mock.calls[index], `Twilio API call ${index}`);
   expect(actualEndpoint).toBe(endpoint);
 }
 
@@ -252,7 +242,7 @@ describe("TwilioProvider", () => {
 
     expect(result).toEqual({ providerCallId: "CA123", status: "queued" });
     expect(apiRequest).toHaveBeenCalledTimes(1);
-    const [endpoint, params] = requireApiRequestCall(apiRequest);
+    const [endpoint, params] = expectDefined(apiRequest.mock.calls[0], "Twilio API call");
     expect(endpoint).toBe("/Calls.json");
     expect(params.To).toBe("+14155550123");
     expect(params.From).toBe("+14155550100");
@@ -281,7 +271,7 @@ describe("TwilioProvider", () => {
     });
 
     expect(apiRequest).toHaveBeenCalledTimes(1);
-    const [endpoint, params] = requireApiRequestCall(apiRequest);
+    const [endpoint, params] = expectDefined(apiRequest.mock.calls[0], "Twilio API call");
     expect(endpoint).toBe("/Calls.json");
     expect(params.Url).toBe("https://example.ngrok.app/voice/webhook?callId=call-1");
     expect(params.StatusCallback).toBe(
@@ -554,7 +544,7 @@ describe("TwilioProvider", () => {
     });
 
     expectApiRequestEndpoint(apiRequest, 0, "/Calls/CA-inbound.json");
-    expect(requireApiRequestCall(apiRequest)[1]).toMatchObject({
+    expect(expectDefined(apiRequest.mock.calls[0], "Twilio API call")[1]).toMatchObject({
       Twiml: expect.stringContaining('action="https://example.ngrok.app/voice/twilio"'),
     });
   });
@@ -671,7 +661,7 @@ describe("TwilioProvider", () => {
       }),
     ).resolves.toBeUndefined();
     expect(apiRequest).toHaveBeenCalledTimes(1);
-    const [endpoint, params] = requireApiRequestCall(apiRequest) as [string, { Twiml?: string }];
+    const [endpoint, params] = expectDefined(apiRequest.mock.calls[0], "Twilio API call");
     expect(endpoint).toBe("/Calls/CA-nostream.json");
     expect(params.Twiml).toContain("<Say");
   });
@@ -722,7 +712,7 @@ describe("TwilioProvider", () => {
     ).resolves.toBeUndefined();
 
     expect(apiRequest).toHaveBeenCalledTimes(1);
-    const [endpoint, params] = requireApiRequestCall(apiRequest) as [string, { Twiml?: string }];
+    const [endpoint, params] = expectDefined(apiRequest.mock.calls[0], "Twilio API call");
     expect(endpoint).toBe("/Calls/CA-dtmf.json");
     expect(params.Twiml).toContain('<Play digits="ww123#"');
     expect(params.Twiml).toContain("<Redirect");

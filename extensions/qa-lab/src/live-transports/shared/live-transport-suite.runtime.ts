@@ -2,6 +2,7 @@ import { runQaSuiteCommand } from "../../cli.runtime.js";
 import type { QaProviderMode } from "../../providers/index.js";
 import { defaultQaModelForMode, normalizeQaProviderMode } from "../../run-config.js";
 import type { LiveTransportQaCommandOptions } from "./live-transport-cli.js";
+import { resolveLiveTransportQaScenarioIds } from "./scenario-selection.js";
 
 type LiveTransportScenarioSelection = (params: {
   profile?: string;
@@ -67,5 +68,25 @@ export async function runLiveTransportQaSuiteCommand(params: {
           credentialRole: options.credentialRole?.trim(),
         }),
     explicitScenarioSelection: Boolean(options.scenarioIds?.length),
+  });
+}
+
+export async function runStandardLiveTransportQaSuiteCommand(params: {
+  channelId: string;
+  options: LiveTransportQaCommandOptions;
+}) {
+  return await runLiveTransportQaSuiteCommand({
+    channelId: params.channelId,
+    defaultProviderMode: "live-frontier",
+    options: params.options,
+    selectScenarioIds: ({ profile, primaryModel, providerMode, scenarioIds }) =>
+      resolveLiveTransportQaScenarioIds({
+        channelId: params.channelId,
+        profile,
+        primaryModel,
+        providerMode,
+        scenarioIds,
+        supportsModuleFlows: true,
+      }),
   });
 }

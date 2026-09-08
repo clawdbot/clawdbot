@@ -6,7 +6,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureFullEnv } from "../../test-utils/env.js";
 import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./constants.js";
 
@@ -90,9 +90,14 @@ describe("ssh subprocess env sanitization", () => {
   const tempDirs: string[] = [];
   let envSnapshot: ReturnType<typeof captureFullEnv>;
 
-  beforeEach(async () => {
-    envSnapshot = captureFullEnv();
+  beforeAll(async () => {
     vi.resetModules();
+    ({ prepareSshSandboxExec, runSshSandboxCommand, uploadDirectoryToSshTarget } =
+      await import("./ssh.js"));
+  });
+
+  beforeEach(() => {
+    envSnapshot = captureFullEnv();
     vi.clearAllMocks();
     spawnCommandMock.mockResolvedValue({
       failed: false,
@@ -101,17 +106,18 @@ describe("ssh subprocess env sanitization", () => {
       stdout: Buffer.alloc(0),
       stderr: Buffer.alloc(0),
     });
-    ({ prepareSshSandboxExec, runSshSandboxCommand, uploadDirectoryToSshTarget } =
-      await import("./ssh.js"));
   });
 
   afterEach(async () => {
-    await Promise.all(
-      tempDirs.splice(0).map(async (dir) => {
-        await fs.rm(dir, { recursive: true, force: true });
-      }),
-    );
-    envSnapshot.restore();
+    try {
+      await Promise.all(
+        tempDirs.splice(0).map(async (dir) => {
+          await fs.rm(dir, { recursive: true, force: true });
+        }),
+      );
+    } finally {
+      envSnapshot.restore();
+    }
   });
 
   it("filters blocked secrets before spawning ssh commands", async () => {

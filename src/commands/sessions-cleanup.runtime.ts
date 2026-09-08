@@ -79,7 +79,12 @@ function warnUnavailableCleanupOwners(
   let hasLegacyCandidate = false;
   for (const [key, entry] of Object.entries(preview.beforeStore)) {
     const action = resolveSessionCleanupAction({ ...preview, key });
-    if (!entry.sessionId || action === "keep" || action === "archive-dashboard") {
+    if (
+      !entry.sessionId ||
+      action === "keep" ||
+      action === "archive-dashboard" ||
+      action === "archive-cap"
+    ) {
       continue;
     }
     if (entry.agentHarnessId) {

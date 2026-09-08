@@ -1,4 +1,4 @@
-import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Memory Core plugin entrypoint registers its OpenClaw integration.
 import {
@@ -16,6 +16,7 @@ import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-run
 import { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
+import "./src/memory/background-context.js";
 import {
   buildMemoryPromptSection,
   MEMORY_GET_TOOL_CONTRACT,
@@ -108,7 +109,7 @@ function createLazyStandingIntentTool(
     reportUnavailable("runtime config is unavailable for this turn");
     return null;
   }
-  const { sessionAgentId: agentId } = resolveSessionAgentIdsStrict({
+  const agentId = resolveSessionAgentIdStrict({
     sessionKey: ctx.sessionKey,
     config: cfg,
     agentId: ctx.agentId,
@@ -257,7 +258,7 @@ export default definePluginEntry({
           agentId: params.agentId,
           agentSessionKey: params.agentSessionKey,
         });
-        return context ? buildMemoryPromptSection({ ...params, sources: context.sources }) : [];
+        return context ? buildMemoryPromptSection(params) : [];
       },
       flushPlanResolver: buildMemoryFlushPlan,
       runtime: memoryRuntime,
@@ -295,7 +296,7 @@ export default definePluginEntry({
           return undefined;
         }
         const config = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
-        const { sessionAgentId: agentId } = resolveSessionAgentIdsStrict({
+        const agentId = resolveSessionAgentIdStrict({
           sessionKey: ctx.sessionKey,
           config,
           agentId: ctx.agentId,
@@ -331,7 +332,7 @@ export default definePluginEntry({
         try {
           const module = await loadStandingIntentsModule();
           const config = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
-          const { sessionAgentId: agentId } = resolveSessionAgentIdsStrict({
+          const agentId = resolveSessionAgentIdStrict({
             sessionKey: ctx.sessionKey,
             config,
             agentId: ctx.agentId,

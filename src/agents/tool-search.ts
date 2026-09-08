@@ -166,30 +166,27 @@ function boundToolSearchBatchResponse(results: ToolSearchBatchGroup[]): {
   let truncated = bounded.some((result) => result.truncated);
   const render = () => ({ results: bounded, ...(truncated ? { truncated: true as const } : {}) });
   while (JSON.stringify(render(), null, 2).length > MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS) {
-    const removable = bounded
-      .map((result, index) => ({
-        index,
-        rank: result.candidates.length,
-        candidate: result.candidates.at(-1),
-      }))
-      .filter(
-        (item): item is { index: number; rank: number; candidate: ToolSearchCandidate } =>
-          item.candidate !== undefined,
-      )
-      .toSorted(
-        (a, b) =>
-          b.rank - a.rank ||
-          JSON.stringify(b.candidate).length - JSON.stringify(a.candidate).length ||
-          a.index - b.index,
-      )[0];
+    let removable: ToolSearchBatchGroup | undefined;
+    for (const group of bounded) {
+      if (group.candidates.length === 0) {
+        continue;
+      }
+      // Keep the earlier request on exact ties, matching the batch's stable order.
+      if (
+        !removable ||
+        group.candidates.length > removable.candidates.length ||
+        (group.candidates.length === removable.candidates.length &&
+          JSON.stringify(group.candidates.at(-1)).length >
+            JSON.stringify(removable.candidates.at(-1)).length)
+      ) {
+        removable = group;
+      }
+    }
     if (!removable) {
       break;
     }
-    const group = bounded[removable.index];
-    group?.candidates.pop();
-    if (group) {
-      group.truncated = true;
-    }
+    removable.candidates.pop();
+    removable.truncated = true;
     truncated = true;
   }
   return render();
@@ -303,36 +300,44 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       name: TOOL_SEARCH_RAW_TOOL_NAME,
       label: "Tool Search",
       description:
-        "Search the effective Tool Search catalog. Pass exactly one of query for one search or queries for several independent searches in one call. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to tool_call; use tool_describe only when you need its input schema.",
+        "Search the effective Tool Search catalog. Pass query for one search or queries for several independent searches in one call; a non-empty query joins a non-empty batch first, with its own limit. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to tool_call; use tool_describe only when you need its input schema.",
       parameters: Type.Object({
         query: Type.Optional(
-          Type.String({
+          Type.Union([Type.String(), Type.Null()], {
             description:
-              "Single search query, in English. Do not set this when queries is present.",
+              "Single search query, in English. A non-empty query joins a non-empty batch first. Null or blank is ignored beside a non-empty batch.",
           }),
         ),
         limit: Type.Optional(
-          Type.Integer({ minimum: 1, description: "Maximum number of single-search results." }),
+          Type.Union([Type.Integer({ minimum: 1 }), Type.Null()], {
+            description:
+              "Maximum number of single-search results. Omitted or null uses the default. With only batch queries, omit this or set it to null; set limits on each batch entry.",
+          }),
         ),
         queries: Type.Optional(
-          Type.Array(
-            Type.Object({
-              query: Type.String({
-                minLength: 1,
-                maxLength: MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,
-                description: "Search query, in English. Describe the capability you need.",
-              }),
-              limit: Type.Optional(
-                Type.Integer({
-                  minimum: 1,
-                  description: `Maximum results for this query. Defaults to ${config.searchDefaultLimit} when omitted.`,
+          Type.Union(
+            [
+              // Let the parser handle empty or null batch placeholders beside a scalar.
+              Type.Array(
+                Type.Object({
+                  query: Type.String({
+                    minLength: 1,
+                    maxLength: MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,
+                    description: "Search query, in English. Describe the capability you need.",
+                  }),
+                  limit: Type.Optional(
+                    Type.Integer({
+                      minimum: 1,
+                      description: `Maximum results for this query. Defaults to ${config.searchDefaultLimit} when omitted.`,
+                    }),
+                  ),
                 }),
+                { maxItems: MAX_TOOL_SEARCH_BATCH_QUERIES },
               ),
-            }),
+              Type.Null(),
+            ],
             {
-              minItems: 1,
-              maxItems: MAX_TOOL_SEARCH_BATCH_QUERIES,
-              description: `Independent searches. Do not set query when this is present. Their effective limits may total at most ${MAX_TOOL_SEARCH_RESULTS}; an omitted item limit counts as ${config.searchDefaultLimit}. The serialized query strings may use at most ${MAX_TOOL_SEARCH_BATCH_QUERY_BYTES} UTF-8 bytes in total.`,
+              description: `Independent searches. Prefer this alone for several searches; a non-empty query beside it runs as the first entry. Their effective limits may total at most ${MAX_TOOL_SEARCH_RESULTS}; an omitted item limit counts as ${config.searchDefaultLimit}. The serialized query strings may use at most ${MAX_TOOL_SEARCH_BATCH_QUERY_BYTES} UTF-8 bytes in total.`,
             },
           ),
         ),
@@ -389,7 +394,17 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
             signal,
             onUpdate,
           });
-          const wrappedResult = formatToolSearchControlResult(callResult, runtime, toolCallId);
+          const { id, name, source } = callResult.tool;
+          // Invocation results need identity, not another copy of the discovery metadata.
+          // Keep full metadata in details for callers and the unchanged target result on both surfaces.
+          const wrappedResult = {
+            ...formatToolSearchControlResult(
+              { tool: { id, name, source }, result: callResult.result },
+              runtime,
+              toolCallId,
+            ),
+            details: callResult,
+          };
           const failureKind = resolveToolResultFailureKind(callResult.result);
           if (!failureKind) {
             return wrappedResult;

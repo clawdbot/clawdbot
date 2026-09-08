@@ -124,12 +124,12 @@ function resolveThresholds(
   const rssWarningBase = useBunRssCaps
     ? BUN_HEAP_WARNING_MAX_BYTES
     : useHeapForRss
-      ? heapWarningBytes
+      ? Math.max(DEFAULT_RSS_WARNING_BYTES, heapWarningBytes)
       : DEFAULT_RSS_WARNING_BYTES;
   const rssCriticalBase = useBunRssCaps
     ? BUN_HEAP_CRITICAL_MAX_BYTES
     : useHeapForRss
-      ? heapCriticalBytes
+      ? Math.max(DEFAULT_RSS_CRITICAL_BYTES, heapCriticalBytes)
       : DEFAULT_RSS_CRITICAL_BYTES;
   const processWarningBytes = hasProcessMemoryLimit
     ? Math.floor(usableProcessMemoryLimitBytes * DEFAULT_HEAP_WARNING_RATIO)

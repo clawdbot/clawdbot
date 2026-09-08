@@ -126,12 +126,13 @@ async function runOneShot(
   // The planner may take long enough for the verified route to change. Never
   // apply its result under a different inference owner.
   await requireVerifiedInference(opts);
+  const approved = opts.yes === true || !isPersistentSystemAgentOperation(operation);
+  if (approved && isPersistentSystemAgentOperation(operation)) {
+    await requirePersistentApplyInference(opts, runtime);
+  }
   await executeSystemAgentOperation(operation, runtime, {
-    approved: opts.yes === true || !isPersistentSystemAgentOperation(operation),
+    approved,
     deps: systemAgentCommandDepsFromOptions(opts),
-    beforePersistentApply: async () => {
-      await requirePersistentApplyInference(opts, runtime);
-    },
   });
 }
 

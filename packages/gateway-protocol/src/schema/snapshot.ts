@@ -4,6 +4,7 @@ import { Type } from "typebox";
 import { AgentOwnershipSchema } from "./agents-models-skills.js";
 import { closedObject } from "./closed-object.js";
 import { UpdateAvailableSchema, UpdateScheduleStateSchema } from "./config.js";
+import { GatewaySuspensionSchema } from "./gateway-suspend.js";
 import { NonEmptyString } from "./primitives.js";
 import { SessionPersonSchema } from "./session-participant.js";
 
@@ -236,6 +237,7 @@ export const StateVersionSchema = closedObject({
 
 /** Initial and incremental gateway state snapshot payload. */
 export const SnapshotSchema = closedObject({
+  suspension: Type.Optional(GatewaySuspensionSchema),
   presence: Type.Array(PresenceEntrySchema),
   health: HealthSnapshotSchema,
   stateVersion: StateVersionSchema,
@@ -245,6 +247,8 @@ export const SnapshotSchema = closedObject({
   configPath: Type.Optional(NonEmptyString),
   stateDir: Type.Optional(NonEmptyString),
   sessionDefaults: Type.Optional(SessionDefaultsSchema),
+  /** Credential-free browser sign-in endpoint advertised to authenticated operators. */
+  controlUiIdentityUrl: Type.Optional(NonEmptyString),
   authMode: Type.Optional(
     Type.Union([
       Type.Literal("none"),

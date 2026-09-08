@@ -1,22 +1,18 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
-import { controlUiSessionSlug } from "@openclaw/session-url-contract";
 import type { ControlUiSessionPreview } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { GatewaySessionRow } from "../api/types.ts";
 import { pathForSession } from "../app-session-path-builder.ts";
-import { sessionRefFromPath, type SessionPathTarget } from "../app-session-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import {
   areUiSessionKeysEquivalent,
-  buildAgentMainSessionKey,
-  normalizeAgentId,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
-import { sessionKeyUuid } from "../pages/chat/route-loader-short-cache.ts";
+import { findLocalSessionReference } from "../pages/chat/route-loader-short-cache.ts";
+import { markdownSessionPublicOrigin, parseMarkdownSessionUrl } from "./markdown-session-links.ts";
 
-const SESSION_LINK_SELECTOR = "a.markdown-session-link";
+const SESSION_LINK_SELECTOR = "a.markdown-session-link, [data-session-href]";
 const SUCCESS_CACHE_MS = 5 * 60_000;
 const FAILURE_CACHE_MS = 30_000;
 const CACHE_LIMIT = 100;
@@ -52,32 +48,15 @@ function titleFromPreview(value: unknown): SessionTitle {
   };
 }
 
-function titleFromRow(row: GatewaySessionRow, target: SessionTitleTarget): SessionTitle {
-  return {
-    ...target,
-    sessionKey: row.key,
-    agentId: row.agentId ?? parseAgentSessionKey(row.key)?.agentId ?? target.agentId,
-    title: row.displayName ?? row.derivedTitle,
-  };
-}
-
 export class SessionLinkTitler {
   client: GatewayBrowserClient | null = null;
   context: ApplicationContext | null = null;
 
   private readonly cache = new Map<string, CacheEntry>();
   private readonly observer = new MutationObserver((records) => {
-    for (const record of records) {
-      for (const node of record.addedNodes) {
-        if (!(node instanceof Element)) {
-          continue;
-        }
-        if (node instanceof HTMLAnchorElement && node.matches(SESSION_LINK_SELECTOR)) {
-          void this.decorate(node);
-        }
-        for (const anchor of node.querySelectorAll<HTMLAnchorElement>(SESSION_LINK_SELECTOR)) {
-          void this.decorate(anchor);
-        }
+    for (const node of records.flatMap((record) => [...record.addedNodes])) {
+      if (node instanceof HTMLElement) {
+        this.refresh(node);
       }
     }
   });
@@ -89,8 +68,11 @@ export class SessionLinkTitler {
     this.refresh();
   }
 
-  refresh(): void {
-    for (const anchor of this.host.querySelectorAll<HTMLAnchorElement>(SESSION_LINK_SELECTOR)) {
+  refresh(root = this.host): void {
+    if (root.matches(SESSION_LINK_SELECTOR)) {
+      void this.decorate(root);
+    }
+    for (const anchor of root.querySelectorAll<HTMLElement>(SESSION_LINK_SELECTOR)) {
       void this.decorate(anchor);
     }
   }
@@ -99,8 +81,19 @@ export class SessionLinkTitler {
     this.observer.disconnect();
   }
 
-  async decorate(anchor: HTMLAnchorElement, load = false): Promise<void> {
-    const target = this.targetForAnchor(anchor);
+  async decorate(element: HTMLElement, load = false): Promise<void> {
+    const target = this.targetForAnchor(element);
+    const anchor = element instanceof HTMLAnchorElement ? element : document.createElement("a");
+    if (element !== anchor && element.classList.contains("markdown-session-link")) {
+      anchor.dataset.sessionHref = element.dataset.sessionHref;
+      anchor.setAttribute("href", element.getAttribute("href") ?? "");
+      anchor.className = "markdown-session-link";
+      element.classList.remove("markdown-session-link");
+      element.removeAttribute("href");
+      element.removeAttribute("data-session-href");
+      element.replaceWith(anchor);
+      anchor.append(element);
+    }
     if (!target) {
       return;
     }
@@ -117,73 +110,51 @@ export class SessionLinkTitler {
   }
 
   private mainKey(): string {
-    const context = this.context;
-    return context
-      ? resolveUiConfiguredMainKey({
-          agentsList: context.agents.state.agentsList,
-          hello: context.gateway.snapshot.hello,
-        })
-      : "main";
+    return resolveUiConfiguredMainKey({
+      agentsList: this.context?.agents.state.agentsList,
+      hello: this.context?.gateway.snapshot.hello,
+    });
   }
 
-  private resolveShortTarget(target: Extract<SessionPathTarget, { kind: "short" }>): string | null {
-    const rows = this.context?.sessions.state.result?.sessions ?? [];
-    for (const row of rows) {
-      const parsed = parseAgentSessionKey(row.key);
-      const uuid = sessionKeyUuid(row.key);
-      if (
-        parsed &&
-        normalizeAgentId(parsed.agentId) === normalizeAgentId(target.agentId) &&
-        uuid?.startsWith(target.shortId.toLowerCase().replaceAll("-", "")) &&
-        (!target.slugHint || controlUiSessionSlug(row.displayName) === target.slugHint)
-      ) {
-        return row.key;
-      }
-    }
-    // Short refs are ambiguous without the loaded roster, so they never reach the preview RPC.
-    return null;
-  }
-
-  private targetForAnchor(anchor: HTMLAnchorElement): SessionTitleTarget | null {
+  private targetForAnchor(anchor: HTMLElement): SessionTitleTarget | null {
     const rawKey = anchor.dataset.sessionKey?.trim();
-    if (rawKey) {
+    if (rawKey && !anchor.dataset.sessionHref) {
       const parsed = parseAgentSessionKey(rawKey);
       return parsed ? { sessionKey: rawKey, agentId: parsed.agentId, namespace: "chat" } : null;
     }
-    let url: URL;
-    try {
-      url = new URL(anchor.href, globalThis.location?.href ?? "http://localhost/");
-    } catch {
-      return null;
-    }
-    if (url.origin !== globalThis.location?.origin) {
-      return null;
-    }
-    const target = sessionRefFromPath(url.pathname, this.context?.basePath ?? "", this.mainKey());
-    if (!target) {
-      return null;
-    }
-    const sessionKey =
-      target.kind === "main"
-        ? buildAgentMainSessionKey({ agentId: target.agentId, mainKey: this.mainKey() })
-        : target.kind === "literal"
-          ? target.sessionKey
-          : this.resolveShortTarget(target);
-    return sessionKey ? { sessionKey, agentId: target.agentId, namespace: target.namespace } : null;
-  }
-
-  private findSeedRow(target: SessionTitleTarget): GatewaySessionRow | undefined {
-    return this.context?.sessions.state.result?.sessions.find((row) =>
-      areUiSessionKeysEquivalent(row.key, target.sessionKey),
+    const path = parseMarkdownSessionUrl(
+      anchor.dataset.sessionHref ?? anchor.getAttribute("href") ?? "",
+      this.context?.basePath,
+      this.mainKey(),
     );
+    if (
+      !path ||
+      (path.url.origin !== globalThis.location.origin &&
+        path.url.origin !== markdownSessionPublicOrigin(this.context))
+    ) {
+      return null;
+    }
+    // Keep URL route intent (face, query, fragment) even when its identity is cached.
+    anchor.setAttribute("href", `${path.url.pathname}${path.url.search}${path.url.hash}`);
+    anchor.classList.add("markdown-session-link");
+    anchor.removeAttribute("target");
+    anchor.removeAttribute("rel");
+    anchor.removeAttribute("data-session-key");
+    const row = findLocalSessionReference(
+      this.context?.sessions.state.result?.sessions ?? [],
+      path.target,
+      this.mainKey(),
+    );
+    return row
+      ? { sessionKey: row.key, agentId: path.target.agentId, namespace: path.target.namespace }
+      : null;
   }
 
   private setCacheEntry(key: string, entry: CacheEntry): void {
     this.cache.delete(key);
     this.cache.set(key, entry);
-    while (this.cache.size > CACHE_LIMIT) {
-      const oldest = this.cache.keys().next().value;
-      if (!oldest) {
+    for (const oldest of this.cache.keys()) {
+      if (this.cache.size <= CACHE_LIMIT) {
         break;
       }
       this.cache.delete(oldest);
@@ -197,14 +168,19 @@ export class SessionLinkTitler {
       this.setCacheEntry(target.sessionKey, cached);
       return cached;
     }
-    if (cached) {
-      this.cache.delete(target.sessionKey);
-    }
-    const row = this.findSeedRow(target);
+    this.cache.delete(target.sessionKey);
+    const row = this.context?.sessions.state.result?.sessions.find((candidate) =>
+      areUiSessionKeysEquivalent(candidate.key, target.sessionKey),
+    );
     if (!row) {
       return undefined;
     }
-    const value = titleFromRow(row, target);
+    const value: SessionTitle = {
+      ...target,
+      sessionKey: row.key,
+      agentId: row.agentId ?? parseAgentSessionKey(row.key)?.agentId ?? target.agentId,
+      title: row.displayName ?? row.derivedTitle,
+    };
     const entry = { expiresAt: now + SUCCESS_CACHE_MS, promise: Promise.resolve(value), value };
     this.setCacheEntry(target.sessionKey, entry);
     return entry;
@@ -257,7 +233,9 @@ export class SessionLinkTitler {
       this.context?.basePath,
       { displayName: title, exactKey: true, mainKey: this.mainKey() },
     );
-    if (href && anchor.getAttribute("href") !== href) {
+    anchor.dataset.sessionKey = target.sessionKey;
+    anchor.classList.add("markdown-session-link");
+    if (!anchor.dataset.sessionHref && href && anchor.getAttribute("href") !== href) {
       anchor.setAttribute("href", href);
     }
     if (!title || anchor.classList.contains("markdown-session-link--titled")) {

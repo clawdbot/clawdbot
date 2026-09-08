@@ -8,6 +8,7 @@ import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
+import { createOpenClawTools } from "./openclaw-tools.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const shellSpies = vi.hoisted(() => ({
@@ -140,6 +141,16 @@ describe("createOpenClawCodingTools scheduled exec target", () => {
         security: "full",
         ask: "always",
         bypassHostApprovalFloors: false,
+      }),
+    );
+    expect(createOpenClawTools).toHaveBeenCalledWith(
+      expect.objectContaining({
+        execOverrides: expect.objectContaining({
+          host: "gateway",
+          mode: undefined,
+          security: "full",
+          ask: "always",
+        }),
       }),
     );
   });

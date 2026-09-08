@@ -1,5 +1,5 @@
 // Covers shell environment fallback loading.
-import { execFileSync } from "node:child_process";
+import childProcess, { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -111,7 +111,7 @@ describe("shell env fallback", () => {
     const etcShellsContent = `${shells.join("\n")}\n`;
     const readFileSyncSpy = vi
       .spyOn(fs, "readFileSync")
-      .mockImplementation((filePath, encoding) => {
+      .mockImplementation((filePath, encoding?: BufferEncoding | fs.ReadFileSyncOptions | null) => {
         if (filePath === "/etc/shells" && encoding === "utf8") {
           return etcShellsContent;
         }
@@ -343,66 +343,58 @@ describe("shell env fallback", () => {
     expect(exec).toHaveBeenCalledTimes(1);
   });
 
-  it("caches login-shell env probe failures for repeated fallback reads", () => {
-    const env: NodeJS.ProcessEnv = {};
+  it("retries failed login-shell env probes and caches the recovered environment", () => {
     const logger = { warn: vi.fn() };
-    const exec = vi.fn(() => {
-      throw new Error("shell unavailable");
-    });
+    const exec = vi
+      .fn(() => framedShellEnv("OPENAI_API_KEY=from-shell\0"))
+      .mockImplementationOnce(() => {
+        throw new Error("shell unavailable");
+      });
+
+    expect(
+      runShellEnvFallback({
+        enabled: true,
+        env: {},
+        expectedKeys: ["OPENAI_API_KEY"],
+        exec,
+        logger,
+      }),
+    ).toEqual({ ok: false, applied: [], error: "shell unavailable" });
 
     for (let i = 0; i < 2; i += 1) {
-      const result = loadShellEnvFallback({
-        enabled: true,
-        env,
-        expectedKeys: ["OPENAI_API_KEY"],
-        exec: exec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
-        logger,
-      });
-      expect(result).toEqual({
-        ok: false,
-        applied: [],
-        error: "shell unavailable",
-      });
+      const env: NodeJS.ProcessEnv = {};
+      expect(
+        runShellEnvFallback({
+          enabled: true,
+          env,
+          expectedKeys: ["OPENAI_API_KEY"],
+          exec,
+          logger,
+        }),
+      ).toEqual({ ok: true, applied: ["OPENAI_API_KEY"] });
+      expect(env.OPENAI_API_KEY).toBe("from-shell");
     }
 
-    expect(exec).toHaveBeenCalledTimes(1);
-    expect(logger.warn).toHaveBeenCalledTimes(2);
+    expect(exec).toHaveBeenCalledTimes(2);
+    expect(logger.warn).toHaveBeenCalledOnce();
   });
 
   it.each([
     {
       name: "successful",
       oldest: framedShellEnv("PROBE_RESULT=oldest\0"),
-      newest: new Error("newest failure"),
-      refreshOldest: false,
-    },
-    {
-      name: "failed",
-      oldest: new Error("oldest failure"),
       newest: framedShellEnv("PROBE_RESULT=newest\0"),
       refreshOldest: false,
     },
     {
       name: "recent successful",
       oldest: framedShellEnv("PROBE_RESULT=oldest\0"),
-      newest: new Error("newest failure"),
-      refreshOldest: true,
-    },
-    {
-      name: "recent failed",
-      oldest: new Error("oldest failure"),
       newest: framedShellEnv("PROBE_RESULT=newest\0"),
       refreshOldest: true,
     },
   ])("bounds $name probe entries with LRU eviction", ({ oldest, newest, refreshOldest }) => {
     const logger = { warn: vi.fn() };
-    const makeExec = (outcome: Buffer | Error) =>
-      vi.fn(() => {
-        if (outcome instanceof Error) {
-          throw outcome;
-        }
-        return outcome;
-      });
+    const makeExec = (outcome: Buffer) => vi.fn(() => outcome);
     const runProbe = (exec: ReturnType<typeof vi.fn>) =>
       runShellEnvFallback({
         enabled: true,
@@ -519,10 +511,12 @@ describe("shell env fallback", () => {
     expect(exec).toHaveBeenCalledOnce();
   });
 
-  it("returns null on shell env read failure and caches null", () => {
-    const exec = vi.fn(() => {
-      throw new Error("exec failed");
-    });
+  it("retries failed login-shell PATH reads and caches the recovered path", () => {
+    const exec = vi
+      .fn(() => framedShellEnv("PATH=/usr/local/bin:/usr/bin\0"))
+      .mockImplementationOnce(() => {
+        throw new Error("exec failed");
+      });
 
     const { first, second } = probeShellPathWithFreshCache({
       exec,
@@ -530,8 +524,15 @@ describe("shell env fallback", () => {
     });
 
     expect(first).toBeNull();
-    expect(second).toBeNull();
-    expect(exec).toHaveBeenCalledOnce();
+    expect(second).toBe("/usr/local/bin:/usr/bin");
+    expect(
+      getShellPathFromLoginShell({
+        env: {},
+        exec: exec as unknown as Parameters<typeof getShellPathFromLoginShell>[0]["exec"],
+        platform: "linux",
+      }),
+    ).toBe(second);
+    expect(exec).toHaveBeenCalledTimes(2);
   });
 
   it("returns null when login shell PATH is blank", () => {
@@ -672,6 +673,43 @@ describe("shell env fallback", () => {
     });
     expect(exec).toHaveBeenCalledOnce();
   });
+
+  it.skipIf(process.platform !== "linux" || !fs.existsSync("/bin/bash"))(
+    "runs the login-shell probe in its own session",
+    () => {
+      const shell = "/bin/bash";
+      const env: NodeJS.ProcessEnv = { SHELL: shell };
+      const realExec = execFileSync;
+      const probe = vi
+        .spyOn(childProcess, "execFileSync")
+        .mockImplementation((file, args, options) => {
+          expect(args).toStrictEqual(["-lic", "printf '\\0'; env -0"]);
+          return realExec(
+            file,
+            [
+              "-lic",
+              'printf \'\\0OPENCLAW_PROBE_PID=%s\\0OPENCLAW_PROBE_SID=%s\\0\' "$$" "$(ps -o sid= -p $$)"; env -0',
+            ],
+            options,
+          );
+        });
+      try {
+        withEtcShells([shell], () => {
+          expect(
+            loadShellEnvFallback({
+              enabled: true,
+              env,
+              expectedKeys: ["OPENCLAW_PROBE_PID", "OPENCLAW_PROBE_SID"],
+              exec: childProcess.execFileSync,
+            }),
+          ).toEqual({ ok: true, applied: ["OPENCLAW_PROBE_PID", "OPENCLAW_PROBE_SID"] });
+        });
+        expect(env.OPENCLAW_PROBE_SID?.trim()).toBe(env.OPENCLAW_PROBE_PID);
+      } finally {
+        probe.mockRestore();
+      }
+    },
+  );
 
   it("keeps Bash PATH discovery noninteractive and cached separately from env imports", () => {
     const shell = "/bin/bash";

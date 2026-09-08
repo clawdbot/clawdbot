@@ -105,6 +105,8 @@ export type MessageActionInput = {
   onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
   /** @internal Revalidates caller authority immediately before recipient-visible I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
+  /** @internal Synchronously fence the live owner after waits and before platform I/O. */
+  assertDirectAdapterHandoff?: () => void;
   /** @internal Keep ephemeral-authority sends out of replayable recovery. */
   skipQueue?: boolean;
   /** @internal Runs when broadcast converts a typed target denial into result text. */
@@ -183,15 +185,11 @@ export type MessageActionResult =
       dryRun: boolean;
     };
 
-export function resolveMessageSendOutcome(
+function resolveMessageSendOutcome(
   sendResult: MessageSendResult | undefined,
   action: "Message" | "Broadcast" = "Message",
 ): { ok: true } | { ok: false; error: string; sentBeforeError?: true } {
-  if (
-    !sendResult ||
-    sendResult.deliveryStatus === undefined ||
-    sendResult.deliveryStatus === "sent"
-  ) {
+  if (sendResult?.deliveryStatus === undefined || sendResult.deliveryStatus === "sent") {
     return { ok: true };
   }
   switch (sendResult.deliveryStatus) {
@@ -214,6 +212,7 @@ export function resolveMessageSendOutcome(
 
 export function resolveMessageActionOutcome(
   result: MessageActionResult,
+  action: "Message" | "Broadcast" = "Message",
 ): ReturnType<typeof resolveMessageSendOutcome> {
   if (result.kind === "broadcast") {
     const failure = result.payload.results.find((entry) => !entry.ok);
@@ -223,7 +222,9 @@ export function resolveMessageActionOutcome(
     return { ok: true };
   }
   const outcome =
-    result.kind === "send" ? resolveMessageSendOutcome(result.sendResult) : { ok: true as const };
+    result.kind === "send"
+      ? resolveMessageSendOutcome(result.sendResult, action)
+      : { ok: true as const };
   const payload = result.payload;
   if (!outcome.ok || !isRecord(payload) || payload.ok !== false) {
     return outcome;
@@ -232,7 +233,27 @@ export function resolveMessageActionOutcome(
     [payload.error, payload.warning, payload.hint, payload.reason]
       .map(normalizeOptionalString)
       .find(Boolean) ?? `Message ${result.action} failed.`;
-  return { ok: false, error };
+  return payload.sentBeforeError === true
+    ? { ok: false, error, sentBeforeError: true }
+    : { ok: false, error };
+}
+
+export function resolveMessageActionMessageId(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== "object") {
+    return undefined;
+  }
+  // SAFETY: The object check intentionally keeps array and prototype-backed payloads readable.
+  const record = payload as Record<string, unknown>;
+  const direct = normalizeOptionalString(record.messageId);
+  if (direct) {
+    return direct;
+  }
+  const result = record.result;
+  if (!result || typeof result !== "object") {
+    return undefined;
+  }
+  // SAFETY: The nested object check preserves the same permissive payload contract.
+  return normalizeOptionalString((result as Record<string, unknown>).messageId);
 }
 
 export type ResolvedActionContext = {

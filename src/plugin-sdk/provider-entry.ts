@@ -40,10 +40,20 @@ import type {
 import type { OpenAICompatibleModelDiscoveryOptions } from "./provider-catalog-live-runtime.js";
 
 // Registration needs static metadata; live discovery loads only when its catalog hook runs.
+const liveCatalogRuntime = createLazyRuntimeModule(
+  () => import("./provider-catalog-live-runtime.js"),
+);
 const buildOpenAICompatibleProviderCatalog = createLazyRuntimeMethod(
-  createLazyRuntimeModule(() => import("./provider-catalog-live-runtime.js")),
+  liveCatalogRuntime,
   (runtime) => runtime.buildOpenAICompatibleProviderCatalog,
 );
+const runLiveProviderCatalog = createLazyRuntimeMethod(
+  liveCatalogRuntime,
+  (runtime) => runtime.runLiveProviderCatalog,
+);
+
+// Auth descriptors are safe to construct before the lazy credential runtime is needed.
+export { createProviderApiKeyAuthMethod };
 
 type ApiKeyAuthMethodOptions = Parameters<typeof createProviderApiKeyAuthMethod>[0];
 
@@ -124,6 +134,7 @@ export type SingleProviderPluginCatalogOptions =
        * Discovers text/chat models from the provider's OpenAI-compatible model-list endpoint.
        */
       liveModelDiscovery?: true | OpenAICompatibleModelDiscoveryOptions;
+      discoveryMode?: "strict";
       run?: never;
       order?: never;
       staticRun?: never;
@@ -145,6 +156,7 @@ export type SingleProviderPluginCatalogOptions =
       buildStaticProvider?: never;
       allowExplicitBaseUrl?: never;
       liveModelDiscovery?: never;
+      discoveryMode?: never;
     };
 
 /**
@@ -454,27 +466,29 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
               ) {
                 return Promise.resolve(null);
               }
-              return provider.catalog.liveModelDiscovery
-                ? buildOpenAICompatibleProviderCatalog({
-                    ctx,
-                    providerId,
-                    providerAliases: [...(provider.aliases ?? []), ...(provider.hookAliases ?? [])],
-                    buildProvider,
-                    ...(provider.catalog.allowExplicitBaseUrl
-                      ? { allowExplicitBaseUrl: true }
-                      : {}),
-                    ...(provider.catalog.liveModelDiscovery === true
-                      ? {}
-                      : { modelDiscovery: provider.catalog.liveModelDiscovery }),
-                  })
-                : buildSingleProviderApiKeyCatalog({
-                    ctx,
-                    providerId,
-                    buildProvider,
-                    ...(provider.catalog.allowExplicitBaseUrl
-                      ? { allowExplicitBaseUrl: true }
-                      : {}),
-                  });
+              if (provider.catalog.liveModelDiscovery) {
+                return buildOpenAICompatibleProviderCatalog({
+                  ctx,
+                  providerId,
+                  providerAliases: [...(provider.aliases ?? []), ...(provider.hookAliases ?? [])],
+                  buildProvider,
+                  discoveryMode: provider.catalog.discoveryMode,
+                  ...(provider.catalog.allowExplicitBaseUrl ? { allowExplicitBaseUrl: true } : {}),
+                  ...(provider.catalog.liveModelDiscovery === true
+                    ? {}
+                    : { modelDiscovery: provider.catalog.liveModelDiscovery }),
+                });
+              }
+              const run = () =>
+                buildSingleProviderApiKeyCatalog({
+                  ctx,
+                  providerId,
+                  buildProvider,
+                  ...(provider.catalog.allowExplicitBaseUrl ? { allowExplicitBaseUrl: true } : {}),
+                });
+              return provider.catalog.discoveryMode === "strict"
+                ? runLiveProviderCatalog({ providerId, run })
+                : run();
             },
           };
         }

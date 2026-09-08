@@ -7,6 +7,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import type { CatalogSessionContinuedDetail } from "../lib/sessions/catalog-key.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import {
   refreshSessionCatalogsLive,
@@ -18,6 +19,7 @@ import {
   mergeSessionCatalogPage,
   sessionCatalogRequestError,
 } from "./app-sidebar-session-catalog-state.ts";
+import { bindAdoptedCatalogSession } from "./app-sidebar-session-catalogs.ts";
 import { sessionCatalogHostKey } from "./app-sidebar-session-types.ts";
 import type {
   SidebarSessionOwnerFilter,
@@ -125,17 +127,24 @@ export function scheduleSessionCatalogRefresh(
     return;
   }
   owner.sessionCatalogLive.scheduleActivation(queueIfActive, (shouldQueue) => {
-    const snapshot = owner.context?.gateway.snapshot;
-    owner.sessionCatalogLive.requestRefresh({
-      visible: document.visibilityState !== "hidden",
-      connected:
-        owner.isSessionDataHostConnected &&
-        owner.sessionCatalogAgentId !== null &&
-        Boolean(sessionCatalogListClient(snapshot, owner.sessionDataHostConnected)),
-      generation: owner.sessionScopeGeneration,
-      queueIfActive: shouldQueue,
-      refresh: () => void owner.refreshSessionCatalogs(),
-    });
+    requestSessionCatalogRefresh(owner, shouldQueue);
+  });
+}
+
+export function requestSessionCatalogRefresh(
+  owner: SessionCatalogDataOwner,
+  queueIfActive: boolean,
+): void {
+  const snapshot = owner.context?.gateway.snapshot;
+  owner.sessionCatalogLive.requestRefresh({
+    visible: document.visibilityState !== "hidden",
+    connected:
+      owner.isSessionDataHostConnected &&
+      owner.sessionCatalogAgentId !== null &&
+      Boolean(sessionCatalogListClient(snapshot, owner.sessionDataHostConnected)),
+    generation: owner.sessionScopeGeneration,
+    queueIfActive,
+    refresh: () => void owner.refreshSessionCatalogs(),
   });
 }
 
@@ -196,6 +205,29 @@ export function applySessionCatalogHostEvent(
   }
 }
 
+export function applySessionCatalogContinuation(
+  owner: SessionCatalogDataOwner,
+  detail: CatalogSessionContinuedDetail,
+): void {
+  const rawAgentId = typeof detail?.agentId === "string" ? detail.agentId.trim() : "";
+  const eventAgentId = rawAgentId ? normalizeAgentId(rawAgentId) : null;
+  const currentAgentId = owner.sessionCatalogAgentId
+    ? normalizeAgentId(owner.sessionCatalogAgentId)
+    : null;
+  if (!detail?.sessionKey || !eventAgentId || eventAgentId !== currentAgentId) {
+    return;
+  }
+  owner.sessionCatalogs = bindAdoptedCatalogSession(owner.sessionCatalogs, detail);
+  owner.requestSessionDataUpdate();
+  // Invalidate in-flight polls and load-more merges so a pre-adoption
+  // snapshot cannot clobber the patched rows; the 30s poll reconfirms.
+  owner.sessionCatalogRevision += 1;
+  owner.sessionCatalogRevisions.set(
+    detail.catalogId,
+    (owner.sessionCatalogRevisions.get(detail.catalogId) ?? 0) + 1,
+  );
+}
+
 export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Promise<void> {
   // Hidden pages resume through the coalesced activation handler. Starting
   // here without a timer makes catalog state updates poll at request latency.
@@ -234,7 +266,8 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
     applyError: (error) => {
       owner.sessionCatalogRefreshStatus = failPanelRefresh(
         owner.sessionCatalogRefreshStatus,
-        sessionCatalogRequestError(error).message,
+        error,
+        owner.context?.gateway.snapshot,
       );
       owner.requestSessionDataUpdate();
     },
@@ -276,6 +309,7 @@ export async function loadMoreSessionCatalog(
     const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
       agentId,
       catalogId,
+      hostIds: Object.keys(cursors),
       cursors,
     });
     if (!isCurrentSessionCatalogRequest(owner, catalogId, client, generation, revision)) {

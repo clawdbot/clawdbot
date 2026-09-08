@@ -203,9 +203,6 @@ export type CodexAppServerRuntimeOptions = {
   codeModeOnly: boolean;
   loopDetectionPreToolUseRelay: boolean;
   requestTimeoutMs: number;
-  turnCompletionIdleTimeoutMs: number;
-  turnAssistantCompletionIdleTimeoutMs?: number;
-  postToolRawAssistantCompletionIdleTimeoutMs?: number;
   approvalPolicy: CodexAppServerEffectiveApprovalPolicy;
   approvalPolicySource?: CodexAppServerApprovalPolicySource;
   sandbox: CodexAppServerSandboxMode;
@@ -249,9 +246,6 @@ export type CodexPluginConfig = {
     codeModeOnly?: boolean;
     loopDetectionPreToolUseRelay?: boolean;
     requestTimeoutMs?: number;
-    turnCompletionIdleTimeoutMs?: number;
-    turnAssistantCompletionIdleTimeoutMs?: number;
-    postToolRawAssistantCompletionIdleTimeoutMs?: number;
     approvalPolicy?: CodexAppServerApprovalPolicy;
     sandbox?: CodexAppServerSandboxMode;
     approvalsReviewer?: CodexAppServerApprovalsReviewer;

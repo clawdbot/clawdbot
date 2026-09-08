@@ -142,7 +142,7 @@ export function findDirectInlineSlashArgumentInvocation(
     }
     const start = match.index + match[0].indexOf("/");
     const args = prefix.slice(match.index + match[0].length).trim();
-    if (!args || /\s/u.test(args)) {
+    if (/\s/u.test(args) && !command.allowsInlineMultiWordArgs) {
       continue;
     }
     invocation = {

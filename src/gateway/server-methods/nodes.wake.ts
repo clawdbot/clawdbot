@@ -100,11 +100,11 @@ export async function maybeWakeNodeWithApns(
       force: opts?.force === true,
       throttleMs: nodeInvokePolicy.wakeThrottleMs,
       attempt: async (markAttempted) => {
-        const startedAtMs = Date.now();
+        const startedAtMs = performance.now();
         let attempted = false;
         const withDuration = (attempt: Omit<NodeWakeAttempt, "durationMs">): NodeWakeAttempt => ({
           ...attempt,
-          durationMs: Math.max(0, Date.now() - startedAtMs),
+          durationMs: Math.round(performance.now() - startedAtMs),
         });
         const markWakeAttempted = () => {
           attempted = true;
@@ -220,12 +220,12 @@ export async function maybeSendNodeWakeNudge(
     generation?: NodePairingGeneration;
   },
 ): Promise<NodeWakeNudgeAttempt> {
-  const startedAtMs = Date.now();
+  const startedAtMs = performance.now();
   const withDuration = (
     attempt: Omit<NodeWakeNudgeAttempt, "durationMs">,
   ): NodeWakeNudgeAttempt => ({
     ...attempt,
-    durationMs: Math.max(0, Date.now() - startedAtMs),
+    durationMs: Math.round(performance.now() - startedAtMs),
   });
   const lifecycleProvided = opts?.lifecycle !== undefined;
   const pairingGeneration = opts?.generation?.key;
@@ -356,9 +356,9 @@ export async function waitForNodeReconnect(params: {
 }): Promise<boolean> {
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, NODE_WAKE_RECONNECT_WAIT_MS, 1);
   const pollMs = resolveTimerTimeoutMs(params.pollMs, NODE_WAKE_RECONNECT_POLL_MS, 50);
-  const deadline = Date.now() + timeoutMs;
+  const deadline = performance.now() + timeoutMs;
 
-  while (Date.now() < deadline) {
+  while (performance.now() < deadline) {
     if (
       params.lifecycle &&
       !isNodeWakeLifecycleCurrent(params.nodeId, params.lifecycle, params.pairingGeneration)
@@ -371,7 +371,7 @@ export async function waitForNodeReconnect(params: {
     if (resolveDispatchableNodeSession(session)) {
       return true;
     }
-    await delayMs(Math.min(pollMs, Math.max(0, deadline - Date.now())));
+    await delayMs(Math.min(pollMs, Math.max(0, deadline - performance.now())));
   }
   if (
     params.lifecycle &&

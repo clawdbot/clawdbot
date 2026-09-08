@@ -312,28 +312,6 @@ describe("buildPluginRegistrySnapshotReport", () => {
     );
   });
 
-  it("does not project package-local dependency health onto bundled plugins", () => {
-    const tempRoot = makeTempDir();
-    const bundledRoot = path.join(tempRoot, "bundled");
-    const pluginRoot = path.join(bundledRoot, "bundled-demo");
-    fs.mkdirSync(pluginRoot, { recursive: true });
-    createColdPluginFixture({
-      rootDir: pluginRoot,
-      pluginId: "bundled-demo",
-      packageJson: { dependencies: { "missing-build-time-dependency": "1.0.0" } },
-    });
-
-    const report = buildPluginRegistrySnapshotReport({
-      config: { plugins: { entries: { "bundled-demo": { enabled: true } } } },
-      env: createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: bundledRoot }),
-    });
-    const plugin = requirePlugin(report.plugins, "bundled-demo");
-
-    expectFields(plugin, { origin: "bundled", status: "loaded" });
-    expect(plugin.dependencyStatus).toBeUndefined();
-    expect(report.diagnostics).toEqual([]);
-  });
-
   it.each([
     { consent: "missing", enabled: true, tracked: true, warns: true },
     { consent: "stale", enabled: true, tracked: true, warns: true },
@@ -555,16 +533,22 @@ describe("buildPluginRegistrySnapshotReport", () => {
       expect(report.workspaceDir).toBe(workspaceDir);
       expect(report.workspaceScope).toBe(workspaceScope);
       expect(report.registrySource).toBe(state === "persisted" ? "persisted" : "derived");
+      const expectedRegistryDiagnostic = {
+        level: state === "missing" ? "info" : "warn",
+        code: `persisted-registry-${state}`,
+        message: expect.any(String),
+        ...(state === "stale-source" && {
+          differences: [
+            {
+              pluginId: fixture.pluginId,
+              persistedSource: fixture.runtimeSource,
+              derivedSource: fixture.runtimeSource,
+            },
+          ],
+        }),
+      };
       expect(report.registryDiagnostics).toEqual(
-        state === "persisted"
-          ? []
-          : [
-              {
-                level: state === "missing" ? "info" : "warn",
-                code: `persisted-registry-${state}`,
-                message: expect.any(String),
-              },
-            ],
+        state === "persisted" ? [] : [expectedRegistryDiagnostic],
       );
       expect(report.diagnostics).toEqual(
         workspaceScope === "selected"

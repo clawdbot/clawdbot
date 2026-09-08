@@ -3,6 +3,7 @@ import type { CodexDynamicToolFunctionSpec, JsonObject } from "./protocol.js";
 import {
   codexDynamicToolsFingerprint,
   fingerprintCodexThreadConfig,
+  fingerprintUserMcpServersConfigPatch,
   readActiveCodexTurnIdsFromResume,
 } from "./thread-fingerprints.js";
 
@@ -42,6 +43,22 @@ describe("codexDynamicToolsFingerprint", () => {
       codexDynamicToolsFingerprint([
         createMessageTool("Send a message.", "Current Discord channel."),
       ]),
+    );
+  });
+
+  it("changes when a literal __proto__ input property changes", () => {
+    const tool = (description: string): CodexDynamicToolFunctionSpec => ({
+      type: "function",
+      name: "inspect",
+      description: "Inspect a record.",
+      inputSchema: {
+        type: "object",
+        properties: { ["__proto__"]: { type: "string", description } },
+      },
+    });
+
+    expect(codexDynamicToolsFingerprint([tool("Current value.")])).not.toBe(
+      codexDynamicToolsFingerprint([tool("Previous value.")]),
     );
   });
 
@@ -126,6 +143,16 @@ describe("fingerprintCodexThreadConfig", () => {
     );
   });
 
+  it("invalidates reuse when a literal __proto__ app link policy changes", () => {
+    const config = (reviewer: string) => ({
+      apps: { calendar: { links: { ["__proto__"]: { approvals_reviewer: reviewer } } } },
+    });
+
+    expect(fingerprintCodexThreadConfig({ ...request, config: config("user") })).not.toBe(
+      fingerprintCodexThreadConfig({ ...request, config: config("auto_review") }),
+    );
+  });
+
   it.each<{ setting: string; patch: JsonObject }>([
     { setting: "model", patch: { model: "gpt-5.6-terra" } },
     { setting: "requested model", patch: { requestedModel: null } },
@@ -139,6 +166,29 @@ describe("fingerprintCodexThreadConfig", () => {
     expect(fingerprintCodexThreadConfig({ ...request, ...patch }, "openai:personal")).toBe(
       fingerprintCodexThreadConfig(request, "openai:personal"),
     );
+  });
+});
+
+describe("fingerprintUserMcpServersConfigPatch", () => {
+  it.each(["server", "header"])("retains literal __proto__ %s keys during redaction", (scope) => {
+    const config = (value: string): JsonObject => ({
+      mcp_servers: {
+        [scope === "server" ? "__proto__" : "calendar"]: {
+          url: "https://example.test/mcp",
+          http_headers: {
+            Authorization: scope === "server" ? value : "synthetic-access-token",
+            ...(scope === "header" ? { ["__proto__"]: value } : {}),
+          },
+        },
+      },
+    });
+    const first = fingerprintUserMcpServersConfigPatch(config("synthetic-first"));
+    const second = fingerprintUserMcpServersConfigPatch(config("synthetic-second"));
+
+    expect(first).not.toBe(second);
+    expect(first).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(first).not.toContain("synthetic");
+    expect(second).not.toContain("synthetic");
   });
 });
 

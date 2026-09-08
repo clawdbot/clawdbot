@@ -25,12 +25,13 @@ describe("BoundedBuffer", () => {
       overflowCalls: 0,
     },
     {
-      name: "drops oldest values until the buffer fits",
-      capacity: 2,
+      name: "drops every oldest value needed to fit a larger append",
+      capacity: 8,
+      measure: (value) => value.length,
       overflow: () => ({ mode: "drop-oldest" }),
-      values: ["a", "b", "c"],
-      accepted: [true, true, true],
-      drained: ["b", "c"],
+      values: ["a", "bb", "ccc", "dddd"],
+      accepted: [true, true, true, true],
+      drained: ["ccc", "dddd"],
       overflowCalls: 0,
     },
     {

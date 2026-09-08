@@ -179,7 +179,8 @@ if (mode === "admission-rearm") {
   const credential = descriptor.admission.credential;
   finish(descriptor, {
     ...completedResult,
-    transcriptLeafId: "raw " + credential + " encoded " + encodeURIComponent(credential),
+    transcriptLeafId: "raw " + credential + " encoded " + encodeURIComponent(credential) +
+      (descriptor.assignment.github ? " github " + descriptor.assignment.github.token : ""),
   });
 } else if (mode === "overflow") {
   fs.writeSync(1, "x".repeat(70 * 1024));

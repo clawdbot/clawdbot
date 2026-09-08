@@ -3,13 +3,15 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type {
   PluginManifestProviderEndpoint,
   PluginManifestProviderRequestProvider,
 } from "../plugins/manifest.js";
 import { normalizePluginProviderBaseUrl } from "../plugins/plugin-metadata-provider-facts.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  getCurrentPluginMetadataSnapshotRequiredRuntime as getCurrentPluginMetadataSnapshot,
+  loadPluginMetadataSnapshotRuntime as loadPluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot-required.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
 import { asBoolean } from "../utils/boolean.js";
 import type { RuntimeVersionEnv } from "../version.js";
@@ -65,6 +67,7 @@ export type ProviderEndpointClass =
   | "openai-public"
   | "openai"
   | "opencode-native"
+  | "opencode-go-native"
   | "azure-openai"
   | "openrouter"
   | "xai-native"
@@ -400,6 +403,23 @@ function buildOpenAIAttributionPolicy(
   };
 }
 
+function buildOpenCodeGoAttributionPolicy(env: RuntimeVersionEnv): ProviderAttributionPolicy {
+  const identity = resolveProviderAttributionIdentity(env);
+  return {
+    provider: "opencode-go",
+    enabledByDefault: true,
+    verification: "vendor-documented",
+    hook: "request-headers",
+    docsUrl: "https://opencode.ai/docs/go/",
+    reviewNote:
+      "OpenCode Go requires coding agents to identify themselves with a specific User-Agent.",
+    ...identity,
+    headers: {
+      "User-Agent": formatOpenClawUserAgent(identity.version),
+    },
+  };
+}
+
 function buildXaiAttributionPolicy(
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
 ): ProviderAttributionPolicy {
@@ -444,6 +464,7 @@ function listProviderAttributionPolicies(
     buildNvidiaAttributionPolicy(env),
     buildGoogleAttributionPolicy(env),
     buildOpenAIAttributionPolicy(env),
+    buildOpenCodeGoAttributionPolicy(env),
     buildXaiAttributionPolicy(env),
     buildSdkHookOnlyPolicy(
       "anthropic",
@@ -515,6 +536,14 @@ export function resolveProviderRequestPolicy(
     if (usesXaiNativeAttributionHost || endpointClass === "default") {
       attributionProvider = "xai";
     }
+  } else if (
+    provider === "opencode-go" &&
+    policy?.enabledByDefault &&
+    endpointClass === "opencode-go-native"
+  ) {
+    // The documented identification contract belongs to Go's native endpoint.
+    // A custom baseUrl is a proxy and must not inherit OpenClaw attribution.
+    attributionProvider = "opencode-go";
   }
   if (!attributionProvider && endpointClass === "nvidia-native") {
     attributionProvider = "nvidia";
@@ -578,6 +607,7 @@ export function resolveProviderRequestCapabilities(
     endpointClass === "openai-public" ||
     endpointClass === "openai" ||
     endpointClass === "opencode-native" ||
+    endpointClass === "opencode-go-native" ||
     endpointClass === "azure-openai" ||
     endpointClass === "openrouter" ||
     endpointClass === "xai-native" ||

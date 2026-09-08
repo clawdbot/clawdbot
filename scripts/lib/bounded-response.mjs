@@ -21,7 +21,9 @@ export function createBoundedResponseTooLargeError(message) {
   return Object.assign(new Error(message), { code: "ETOOBIG" });
 }
 
-function cancelReaderSoon(reader) {
+// Defer cancellation so timeout/abort rejection wins the pending read.
+// Swallow cleanup rejection so it cannot surface as an unhandled rejection.
+export function cancelResponseReaderSoon(reader) {
   void Promise.resolve()
     .then(() => reader.cancel())
     .catch(() => undefined);
@@ -65,7 +67,7 @@ async function readResponseChunk(reader, label, signal, markCanceled) {
           "Non-Error rejection",
         ),
       );
-      cancelReaderSoon(reader);
+      cancelResponseReaderSoon(reader);
     };
     signal.addEventListener("abort", onAbort, { once: true });
     removeAbortListener = () => signal.removeEventListener("abort", onAbort);
@@ -88,7 +90,7 @@ async function readResponseChunkWithTimeout(reader, label, signal, timeoutPromis
   const timeoutReadPromise = timeoutPromise.catch((error) => {
     if (waitingForRead) {
       markCanceled();
-      cancelReaderSoon(reader);
+      cancelResponseReaderSoon(reader);
     }
     throw toLintErrorObject(error, `${label} response body read timed out`);
   });

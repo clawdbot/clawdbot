@@ -4,14 +4,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
-import { DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV } from "./lib/bundled-plugin-build-entries.mjs";
-import { shouldBuildBundledCluster } from "./lib/optional-bundled-clusters.mjs";
+import { collectSourceCheckoutPluginBuildEntries } from "./lib/bundled-plugin-build-entries.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
-import {
-  buildPluginNpmRuntime,
-  listPublishablePluginPackageDirs,
-  type PluginPackageJson,
-} from "./lib/plugin-npm-runtime-build.mts";
+import { buildPluginNpmRuntime } from "./lib/plugin-npm-runtime-build.mts";
 
 type ExternalPluginLocalDistParams = {
   repoRoot?: string;
@@ -19,26 +14,14 @@ type ExternalPluginLocalDistParams = {
   logLevel?: "silent" | "warn";
 };
 
-function readPluginPackageJson(repoRoot: string, packageDir: string): PluginPackageJson {
-  return JSON.parse(fs.readFileSync(path.join(repoRoot, packageDir, "package.json"), "utf8"));
-}
-
 /** Lists external first-party packages that need source-checkout dist output. */
 export function listExternalPluginLocalDistPackageDirs(
   params: Pick<ExternalPluginLocalDistParams, "repoRoot" | "env"> = {},
 ): string[] {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
-  const env = params.env ?? process.env;
-  if (env[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]?.trim()) {
-    return [];
-  }
-  return listPublishablePluginPackageDirs({ repoRoot }).filter((packageDir) => {
-    const packageJson = readPluginPackageJson(repoRoot, packageDir);
-    return (
-      packageJson.openclaw?.build?.bundledDist === false &&
-      shouldBuildBundledCluster(path.basename(packageDir), env, { packageJson })
-    );
-  });
+  return collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot, env: params.env })
+    .filter(({ isolated }) => isolated)
+    .map(({ id }) => `extensions/${id}`);
 }
 
 /** Builds isolated plugin graphs, then stages every output below its excluded root dist path. */

@@ -32,7 +32,7 @@ describe("renderSessionProgressCard", () => {
     vi.useRealTimers();
   });
 
-  it.each(["board", "composer", "hovercard"] as const)(
+  it.each(["board", "composer"] as const)(
     "shows relative activity for %s cards with and without checklist steps",
     (placement) => {
       const container = document.createElement("div");
@@ -94,19 +94,22 @@ describe("renderSessionProgressCard", () => {
     expect(container.querySelector("time")?.textContent).toBe("Updated 2m ago");
   });
 
-  it("refreshes relative time while connected and stops after disconnect", async () => {
+  it("refreshes relative time while connected and stops after disconnect", () => {
     const container = document.createElement("div");
-    render(
+    const part = render(
       renderSessionProgressCard({ ...progressCard, updatedAt: NOW_MS - 10_000 }, "composer"),
       container,
     );
     expect(container.querySelector("time")?.textContent).toBe("Updated just now");
 
-    await vi.advanceTimersByTimeAsync(60_000);
+    vi.advanceTimersByTime(60_000);
+    expect(container.querySelector("time")?.textContent).toBe("Updated 1m ago");
+
+    part.setConnected(false);
+    vi.advanceTimersByTime(60_000);
     expect(container.querySelector("time")?.textContent).toBe("Updated 1m ago");
 
     render(null, container);
-    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("labels activity from the last minute as just now", () => {
@@ -127,7 +130,7 @@ describe("renderSessionProgressCard", () => {
 
   it("renders sanitized markdown and one accessible typed checklist", () => {
     const container = document.createElement("div");
-    render(renderSessionProgressCard(progressCard, "hovercard"), container);
+    render(renderSessionProgressCard(progressCard, "board"), container);
 
     const card = container.querySelector(".session-progress-card");
     expect(card?.getAttribute("aria-label")).toBe("1 of 3 completed");
@@ -303,6 +306,79 @@ describe("renderSessionProgressCard", () => {
     expect(card?.open).toBe(true);
   });
 
+  it("expands after the matching final and collapses again for the next run", () => {
+    const container = document.createElement("div");
+    const renderRun = (activeRunId: string | null, completedRunId: string | null) =>
+      render(
+        renderSessionProgressCard(
+          progressCard,
+          "composer",
+          undefined,
+          activeRunId ? "running" : completedRunId ? "done" : undefined,
+          RUN_STARTED_MS,
+          completedRunId ? RUN_ENDED_MS : undefined,
+          activeRunId !== null,
+          true,
+          { activeRunId, completedRunId },
+        ),
+        container,
+      );
+
+    renderRun("run-1", null);
+    const card = container.querySelector<HTMLDetailsElement>(
+      '[data-progress-card-placement="composer"]',
+    );
+    expect(card?.open).toBe(false);
+
+    card!.open = true;
+    renderRun("run-1", null);
+    expect(card?.open).toBe(true);
+
+    card!.open = false;
+    renderRun(null, "run-1");
+    expect(card?.open).toBe(true);
+
+    card!.open = false;
+    renderRun(null, "run-1");
+    expect(card?.open).toBe(false);
+
+    renderRun("run-2", "run-1");
+    expect(card?.open).toBe(false);
+    renderRun(null, "run-2");
+    expect(card?.open).toBe(true);
+  });
+
+  it("does not change disclosure at run boundaries when auto-collapse is disabled", () => {
+    const container = document.createElement("div");
+    const renderRun = (activeRunId: string | null, completedRunId: string | null) =>
+      render(
+        renderSessionProgressCard(
+          progressCard,
+          "composer",
+          undefined,
+          activeRunId ? "running" : completedRunId ? "done" : undefined,
+          RUN_STARTED_MS,
+          completedRunId ? RUN_ENDED_MS : undefined,
+          activeRunId !== null,
+          false,
+          { activeRunId, completedRunId },
+        ),
+        container,
+      );
+
+    renderRun("run-1", null);
+    const card = container.querySelector<HTMLDetailsElement>(
+      '[data-progress-card-placement="composer"]',
+    );
+    expect(card?.open).toBe(true);
+
+    card!.open = false;
+    renderRun(null, "run-1");
+    expect(card?.open).toBe(false);
+    renderRun("run-2", null);
+    expect(card?.open).toBe(false);
+  });
+
   it("keeps the collapsed counter in the summary action column", () => {
     const container = document.createElement("div");
     render(renderSessionProgressCard(progressCard, "composer"), container);
@@ -391,7 +467,29 @@ describe("renderSessionProgressCard", () => {
 
     expect(container.querySelector("time")?.textContent).toBe("Updated 3m ago");
     expect(container.querySelector("[data-outcome=failed]")).toBeNull();
-    expect(container.querySelector(".session-run-spinner")).not.toBeNull();
+    expect(container.querySelector(".session-run-spinner")).toBeNull();
+    expect(container.querySelector(".session-progress-card__step--paused")).not.toBeNull();
+  });
+
+  it("renders a stale in-progress card as paused during a later active run", () => {
+    const container = document.createElement("div");
+    render(
+      renderSessionProgressCard(
+        { ...progressCard, updatedAt: RUN_STARTED_MS - 1 },
+        "board",
+        undefined,
+        "running",
+        RUN_STARTED_MS,
+        undefined,
+        true,
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".session-run-spinner")).toBeNull();
+    const pausedStep = container.querySelector(".session-progress-card__step--paused");
+    expect(pausedStep).not.toBeNull();
+    expect(pausedStep?.getAttribute("aria-label")).toBe("Wire the checklist, paused");
   });
 
   it("falls back safely for timestamps outside the Date range", () => {
@@ -414,7 +512,7 @@ describe("renderSessionProgressCard", () => {
     expect(container.querySelector("[data-outcome=failed]")).toBeNull();
   });
 
-  it("starts completed composer progress collapsed", () => {
+  it("starts completed composer progress collapsed without replaying an old final", () => {
     const container = document.createElement("div");
     render(
       renderSessionProgressCard(
@@ -425,6 +523,13 @@ describe("renderSessionProgressCard", () => {
           ),
         },
         "composer",
+        undefined,
+        "done",
+        RUN_STARTED_MS,
+        RUN_ENDED_MS,
+        false,
+        true,
+        { completedRunId: "run-before-mount" },
       ),
       container,
     );

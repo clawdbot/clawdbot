@@ -39,33 +39,8 @@ struct RealtimeTalkRelaySessionCancellationTests {
             onStatus: { _ in },
             onSpeakingChanged: { speakingStates.append($0) })
         session._test_setRelaySessionId("relay-1")
-        let audio: (String) -> EventFrame = { turnId in
-            EventFrame(
-                type: "event",
-                event: "talk.event",
-                payload: AnyCodable([
-                    "relaySessionId": "relay-1",
-                    "type": "audio",
-                    "audioBase64": Data([0x01]).base64EncodedString(),
-                    "talkEvent": ["turnId": turnId],
-                ]),
-                seq: nil,
-                stateversion: nil)
-        }
-        let clear: (String) -> EventFrame = { turnId in
-            EventFrame(
-                type: "event",
-                event: "talk.event",
-                payload: AnyCodable([
-                    "relaySessionId": "relay-1",
-                    "type": "clear",
-                    "talkEvent": ["turnId": turnId],
-                ]),
-                seq: nil,
-                stateversion: nil)
-        }
 
-        await session._test_handleGatewayEvent(audio("turn-7"))
+        await session._test_handleGatewayEvent(outputAudioEvent(turnId: "turn-7"))
         await session._test_handleGatewayEvent(playbackMarkEvent("cancelled-output"))
         session.cancelOutput(reason: "barge-in")
         try await requests.waitForRequestCount(1)
@@ -75,29 +50,29 @@ struct RealtimeTalkRelaySessionCancellationTests {
         #expect(request.params?["turnId"]?.stringValue == "turn-7")
         #expect(request.params?["reason"]?.stringValue == "barge-in")
 
-        await session._test_handleGatewayEvent(audio("turn-7"))
-        await session._test_handleGatewayEvent(audio("turn-8"))
+        await session._test_handleGatewayEvent(outputAudioEvent(turnId: "turn-7"))
+        await session._test_handleGatewayEvent(outputAudioEvent(turnId: "turn-8"))
         #expect(speakingStates.first == true)
         #expect(!speakingStates.dropFirst().contains(true))
-        await session._test_handleGatewayEvent(clear("turn-8"))
+        await session._test_handleGatewayEvent(outputClearEvent(turnId: "turn-8"))
         #expect(await requests.snapshot().count == 1)
-        await session._test_handleGatewayEvent(clear("turn-7"))
+        await session._test_handleGatewayEvent(outputClearEvent(turnId: "turn-7"))
         try await requests.waitForRequestCount(2)
         let acknowledgements = await requests.snapshot().filter {
             $0.method == "talk.session.acknowledgeMark"
         }
         #expect(acknowledgements.count == 1)
         #expect(acknowledgements.first?.params?["markName"]?.stringValue == "cancelled-output")
-        await session._test_handleGatewayEvent(audio("turn-7"))
+        await session._test_handleGatewayEvent(outputAudioEvent(turnId: "turn-7"))
         #expect(speakingStates == [true, false])
-        await session._test_handleGatewayEvent(audio("turn-8"))
+        await session._test_handleGatewayEvent(outputAudioEvent(turnId: "turn-8"))
         #expect(speakingStates == [true, false, true])
-        await session._test_handleGatewayEvent(clear("turn-7"))
+        await session._test_handleGatewayEvent(outputClearEvent(turnId: "turn-7"))
         #expect(await requests.snapshot().filter {
             $0.method == "talk.session.acknowledgeMark"
         }.count == 1)
         #expect(speakingStates == [true, false, true])
-        await session._test_handleGatewayEvent(clear("turn-8"))
+        await session._test_handleGatewayEvent(outputClearEvent(turnId: "turn-8"))
         #expect(speakingStates == [true, false, true, false])
     }
 
@@ -424,16 +399,7 @@ struct RealtimeTalkRelaySessionCancellationTests {
         #expect(session.cancelOutput())
         let cancellationTask = try #require(session._test_outputCancellationTask())
         try await barrier.waitUntilEntered()
-        await session._test_handleGatewayEvent(EventFrame(
-            type: "event",
-            event: "talk.event",
-            payload: AnyCodable([
-                "relaySessionId": "relay-1",
-                "type": "clear",
-                "talkEvent": ["turnId": "turn-1"],
-            ]),
-            seq: nil,
-            stateversion: nil))
+        await session._test_handleGatewayEvent(outputClearEvent(turnId: "turn-1"))
 
         #expect(session._test_enqueueMicrophoneFrame(Data([0x01])) == nil)
         await barrier.release()
@@ -449,9 +415,9 @@ struct RealtimeTalkRelaySessionCancellationTests {
     @Test(arguments: [
         #"{"ok":true}"#,
         #"{"ok":true,"status":"applied","turnId":"turn-1"}"#,
-    ])
+    ], [false, true])
     func `accepted cancellation response keeps fence until matching clear`(
-        response: String) async throws
+        response: String, providerClearBeforeResponse: Bool) async throws
     {
         let barrier = RealtimeRelayStartupBarrier()
         var speakingStates: [Bool] = []
@@ -478,8 +444,17 @@ struct RealtimeTalkRelaySessionCancellationTests {
         let cancellationTask = try #require(session._test_outputCancellationTask())
         do {
             try await barrier.waitUntilEntered()
-            await barrier.release()
-            await cancellationTask.value
+            if !providerClearBeforeResponse {
+                await barrier.release()
+                await cancellationTask.value
+            }
+            await session._test_handleGatewayEvent(outputClearEvent())
+            await session._test_handleGatewayEvent(outputClearEvent(
+                turnId: "turn-1", talkEventType: "output.audio.done"))
+            if providerClearBeforeResponse {
+                await barrier.release()
+                await cancellationTask.value
+            }
             #expect(session._test_enqueueMicrophoneFrame(Data([0x01])) == nil)
             await session._test_handleGatewayEvent(outputAudioEvent(turnId: "turn-2"))
             #expect(speakingStates == [true, false])

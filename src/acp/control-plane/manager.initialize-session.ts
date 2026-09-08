@@ -10,6 +10,10 @@ import { logVerbose } from "../../globals.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { AcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
+import {
+  assertAcpRuntimeOwnerSupport,
+  persistedAcpRuntimeHandle,
+} from "./manager.runtime-owner.js";
 import type {
   AcpInitializeSessionInput,
   AcpSessionManagerDeps,
@@ -27,17 +31,20 @@ import {
 export async function runManagerInitializeSession(params: {
   input: AcpInitializeSessionInput;
   sessionKey: string;
-  deps: Pick<AcpSessionManagerDeps, "requireRuntimeBackend">;
+  agentId: string;
+  deps: Pick<AcpSessionManagerDeps, "requireRuntimeBackend" | "loadSessionEntry">;
   runtimeHandles: ManagerRuntimeHandleCache;
   writeSessionMeta: WriteManagerSessionMeta;
 }): Promise<{
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
   meta: SessionAcpMeta;
+  sessionEntry: SessionEntry;
 }> {
-  const { input, sessionKey } = params;
+  const { input, sessionKey, agentId } = params;
   const backend = params.deps.requireRuntimeBackend(input.backendId || input.cfg.acp?.backend);
   const runtime = backend.runtime;
+  assertAcpRuntimeOwnerSupport(runtime, params);
   const agent = normalizeAgentId(input.agent);
   const initialRuntimeOptions = validateRuntimeOptionPatch({
     ...input.runtimeOptions,
@@ -46,10 +53,17 @@ export async function runManagerInitializeSession(params: {
   const requestedCwd = initialRuntimeOptions.cwd;
   const requestedModel = initialRuntimeOptions.model;
   const requestedThinking = initialRuntimeOptions.thinking;
-  const handle = await withAcpRuntimeErrorBoundary({
+  const previousMeta = params.deps.loadSessionEntry({ cfg: input.cfg, sessionKey, agentId })?.acp;
+  input.assertActive?.();
+  const ensured = await withAcpRuntimeErrorBoundary({
     run: async () =>
       await runtime.ensureSession({
         sessionKey,
+        agentId,
+        persistedHandle:
+          previousMeta?.backend === backend.id
+            ? persistedAcpRuntimeHandle(params, previousMeta)
+            : undefined,
         agent,
         mode: input.mode,
         resumeSessionId: input.resumeSessionId,
@@ -61,14 +75,15 @@ export async function runManagerInitializeSession(params: {
     fallbackCode: "ACP_SESSION_INIT_FAILED",
     fallbackMessage: "Could not initialize ACP session runtime.",
   });
+  const handle = { ...ensured, agentId, sessionKey };
   const effectiveCwd = normalizeText(handle.cwd) ?? requestedCwd;
-  const effectiveModel = resolveEffectiveSessionModel({
-    requestedModel,
-    appliedModel: handle.appliedModel,
-  });
   const effectiveRuntimeOptions = normalizeRuntimeOptions({
     ...initialRuntimeOptions,
-    model: effectiveModel,
+    model: handle.appliedModel
+      ? handle.appliedModel.kind === "applied"
+        ? handle.appliedModel.model
+        : undefined
+      : requestedModel,
     ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
   });
 
@@ -104,10 +119,12 @@ export async function runManagerInitializeSession(params: {
   const persisted = await persistInitializedSessionMeta({
     cfg: input.cfg,
     sessionKey,
+    agentId,
     meta,
     runtime,
     handle,
     writeSessionMeta: params.writeSessionMeta,
+    assertCommitAllowed: input.assertActive,
   });
   if (!persisted?.acp) {
     throw new AcpRuntimeError(
@@ -115,7 +132,7 @@ export async function runManagerInitializeSession(params: {
       `Could not persist ACP metadata for ${sessionKey}.`,
     );
   }
-  params.runtimeHandles.set(sessionKey, {
+  params.runtimeHandles.set(params, {
     runtime,
     handle,
     backend: handle.backend || backend.id,
@@ -128,23 +145,15 @@ export async function runManagerInitializeSession(params: {
     runtime,
     handle,
     meta,
+    sessionEntry: persisted,
   };
 }
 
-function resolveEffectiveSessionModel(params: {
-  requestedModel: string | undefined;
-  appliedModel: AcpRuntimeHandle["appliedModel"];
-}): string | undefined {
-  const { appliedModel } = params;
-  if (!appliedModel) {
-    return params.requestedModel;
-  }
-  return appliedModel.kind === "applied" ? appliedModel.model : undefined;
-}
-
 async function persistInitializedSessionMeta(params: {
+  assertCommitAllowed?: () => void;
   cfg: OpenClawConfig;
   sessionKey: string;
+  agentId: string;
   meta: SessionAcpMeta;
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
@@ -154,8 +163,10 @@ async function persistInitializedSessionMeta(params: {
     const persisted = await params.writeSessionMeta({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
+      agentId: params.agentId,
       mutate: () => params.meta,
       failOnError: true,
+      assertCommitAllowed: params.assertCommitAllowed,
     });
     if (persisted?.acp) {
       return persisted;
@@ -171,6 +182,7 @@ async function persistInitializedSessionMeta(params: {
 
 async function closeRuntimeAfterInitMetaFailure(params: {
   sessionKey: string;
+  agentId: string;
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
 }): Promise<void> {

@@ -6,6 +6,7 @@ import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { sortUniqueExecutionIdentityEntries } from "./execution-identity-ordering.js";
 import { executionIdentitySpawnAdmission } from "./execution-identity-spawn-admission.js";
 
 const EXECUTION_IDENTITY_ADMISSION_MAX_BYTES = 16 * 1024;
@@ -170,14 +171,6 @@ type ExecutionIdentityAdmissionSink = (work: ExecutionIdentityAdmissionWork) => 
 
 let admissionSink: ExecutionIdentityAdmissionSink | undefined;
 let admissionFailureWarned = false;
-
-function uniqueSorted<T>(values: readonly T[], key: (value: T) => string): T[] {
-  return [...new Map(values.map((value) => [key(value), value])).values()].toSorted((a, b) => {
-    const left = key(a);
-    const right = key(b);
-    return left < right ? -1 : left > right ? 1 : 0;
-  });
-}
 
 function freezeEnvelope<T>(value: T, seen = new WeakSet<object>()): T {
   if (!value || typeof value !== "object" || seen.has(value)) {
@@ -368,11 +361,11 @@ function captureExecutionIdentityAdmissionEnvelope(
       : facts.invoker?.state === "unknown"
         ? { invoker: { state: "unknown" as const } }
         : {}),
-    applicableGrants: uniqueSorted(
+    applicableGrants: sortUniqueExecutionIdentityEntries(
       facts.applicableGrants ?? [],
       (grant) => `${grant.rawGrantRef}\0${grant.state}`,
     ).map((grant) => ({ rawGrantRef: grant.rawGrantRef, state: grant.state })),
-    assurance: uniqueSorted(
+    assurance: sortUniqueExecutionIdentityEntries(
       assurance,
       (item) => `${item.kind}\0${item.rawEvidenceRef}\0${item.strength}`,
     ).map((item) => ({

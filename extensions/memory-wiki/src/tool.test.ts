@@ -132,6 +132,24 @@ describe("memory-wiki tools", () => {
     },
   );
 
+  it.each([-0.5, 999])(
+    "keeps wiki pages unchanged for out-of-range claim confidence %s",
+    async (confidence) => {
+      const { tool, pagePath, original } = await createApplyFixture();
+
+      await expect(
+        tool.execute("invalid-claim-confidence", {
+          op: "update_metadata",
+          lookup: "entity.alpha",
+          claims: [{ text: "Alpha fact", confidence }],
+        }),
+      ).rejects.toThrow(
+        `claims[0].confidence must be a number between 0 and 1; received ${confidence}.`,
+      );
+      await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(original);
+    },
+  );
+
   it("returns tool-safe relative report paths from wiki_lint", async () => {
     const { rootDir, config } = await harness.createVault({ initialize: true });
     await fs.mkdir(path.join(rootDir, "syntheses"), { recursive: true });

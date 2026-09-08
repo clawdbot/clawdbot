@@ -77,24 +77,11 @@ function normalizeOutboundChannelForResolution(params: {
   };
 }
 
-function resolveDirectFromRegistry(
-  registry: ReturnType<typeof getActivePluginRegistry>,
-  channel: string,
-): ChannelPlugin | undefined {
-  return findChannelPluginInRegistry(registry, channel);
-}
-
-function messageAdapterCanSendText(
-  message: ChannelMessageAdapterShape | undefined,
-): message is ChannelMessageAdapterShape {
-  return typeof message?.send?.text === "function";
-}
-
 function resolveSendCapableMessageAdapter(
   plugin: ChannelPlugin | undefined,
 ): ChannelMessageAdapterShape | undefined {
   const message = plugin?.message;
-  return messageAdapterCanSendText(message) ? message : undefined;
+  return typeof message?.send?.text === "function" ? message : undefined;
 }
 
 function channelPluginHasRuntimeOutboundSurface(plugin: ChannelPlugin | undefined): boolean {
@@ -148,7 +135,7 @@ function resolveValueFromRuntimeRegistry<TValue>(
   resolveValue: (plugin: ChannelPlugin) => TValue | undefined,
   registry: PluginRegistry | null | undefined = getOutboundRuntimeRegistry(),
 ): TValue | undefined {
-  const plugin = resolveDirectFromRegistry(registry ?? null, channel);
+  const plugin = findChannelPluginInRegistry(registry, channel);
   return plugin ? resolveValue(plugin) : undefined;
 }
 
@@ -187,6 +174,25 @@ export function resolveOutboundChannelPlugin(params: {
   } = normalizeOutboundChannelForResolution(params);
   if (!normalized) {
     return undefined;
+  }
+
+  const scopedPlugin = findChannelPluginInRegistry(
+    bootstrapRegistry ?? getPluginRuntimeGatewayRequestScope()?.pluginRegistry,
+    normalized,
+  );
+  if (scopedPlugin) {
+    // A selected registration owns absent capabilities too. Only explicit
+    // activation may replace a setup shell; never borrow a same-id sender.
+    if (params.allowBootstrap !== true || channelPluginHasActivatedOutboundSurface(scopedPlugin)) {
+      return scopedPlugin;
+    }
+    if (didBootstrap) {
+      return undefined;
+    }
+    return resolveActivatedOutboundPluginFromRuntimeRegistry(
+      normalized,
+      bootstrapOutboundChannelPlugin({ ...params, channel: normalized }),
+    );
   }
 
   const resolveLoaded = () => getLoadedChannelPlugin(normalized);
@@ -235,33 +241,5 @@ export function resolveOutboundChannelMessageAdapter(params: {
   agentId?: string;
   allowBootstrap?: boolean;
 }): ChannelMessageAdapterShape | undefined {
-  const {
-    channel: normalized,
-    didBootstrap,
-    bootstrapRegistry,
-  } = normalizeOutboundChannelForResolution(params);
-  if (!normalized) {
-    return undefined;
-  }
-  const current =
-    resolveSendCapableMessageAdapter(getLoadedChannelPlugin(normalized)) ??
-    resolveValueFromRuntimeRegistry(
-      normalized,
-      resolveSendCapableMessageAdapter,
-      bootstrapRegistry,
-    ) ??
-    resolveSendCapableMessageAdapter(getChannelPlugin(normalized));
-  if (current || params.allowBootstrap !== true || didBootstrap) {
-    return current;
-  }
-  const registry = bootstrapOutboundChannelPlugin({
-    channel: normalized,
-    cfg: params.cfg,
-    agentId: params.agentId,
-  });
-  return (
-    resolveSendCapableMessageAdapter(getLoadedChannelPlugin(normalized)) ??
-    resolveValueFromRuntimeRegistry(normalized, resolveSendCapableMessageAdapter, registry) ??
-    resolveSendCapableMessageAdapter(getChannelPlugin(normalized))
-  );
+  return resolveSendCapableMessageAdapter(resolveOutboundChannelPlugin(params));
 }

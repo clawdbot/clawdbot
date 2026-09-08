@@ -200,8 +200,14 @@ private fun ChatLinkPreview(
       ) {
         Text(domain, style = ClawTheme.type.captionSmall, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         when (val preview = result) {
-          null -> Text(nativeString("Loading preview…"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-          LinkPreviewResult.Failed -> Text(nativeString("No preview available"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+          null -> {
+            Text(nativeString("Loading preview…"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+          }
+
+          LinkPreviewResult.Failed -> {
+            Text(nativeString("No preview available"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+          }
+
           is LinkPreviewResult.Loaded -> {
             preview.metadata.title?.let { title ->
               Text(
@@ -282,10 +288,19 @@ fun ChatOutboxBubble(
   val statusColor = if (failed) ClawTheme.colors.danger else ClawTheme.colors.warning
   val statusLabel =
     when (item.status) {
-      ChatOutboxStatus.Queued -> nativeString("Queued — sends when reconnected")
-      ChatOutboxStatus.Sending -> nativeString("Sending…")
-      ChatOutboxStatus.Accepted -> nativeString("Sent — confirming delivery…")
-      ChatOutboxStatus.Failed ->
+      ChatOutboxStatus.Queued -> {
+        nativeString("Queued — sends when reconnected")
+      }
+
+      ChatOutboxStatus.Sending -> {
+        nativeString("Sending…")
+      }
+
+      ChatOutboxStatus.Accepted -> {
+        nativeString("Sent — confirming delivery…")
+      }
+
+      ChatOutboxStatus.Failed -> {
         chatOutboxDisplayError(item.lastError)
           ?.trim()
           ?.takeIf { it.isNotEmpty() }
@@ -298,6 +313,7 @@ fun ChatOutboxBubble(
               }
             nativeString("Failed — \$it", localized)
           } ?: nativeString("Failed")
+      }
     }
 
   ChatBubbleContainer(
@@ -326,12 +342,12 @@ fun ChatOutboxBubble(
         modifier = Modifier.weight(1f),
       )
       if (failed && retryEnabled) {
-        ChatOutboxAction(label = nativeString("Retry"), color = ClawTheme.colors.accent, onClick = onRetry)
+        ChatOutboxAction(label = nativeString("Retry"), borderColor = ClawTheme.colors.accent, onClick = onRetry)
       }
       // Sending rows are mid-dispatch and accepted rows may already be delivered; both stay
       // action-free until reconciliation resolves them, so a delete can never race a send.
       if (item.status == ChatOutboxStatus.Queued || failed) {
-        ChatOutboxAction(label = nativeString("Delete"), color = ClawTheme.colors.textMuted, onClick = onDelete)
+        ChatOutboxAction(label = nativeString("Delete"), borderColor = ClawTheme.colors.textMuted, onClick = onDelete)
       }
     }
   }
@@ -340,15 +356,15 @@ fun ChatOutboxBubble(
 @Composable
 private fun ChatOutboxAction(
   label: String,
-  color: Color,
+  borderColor: Color,
   onClick: () -> Unit,
 ) {
   Surface(
     onClick = onClick,
     shape = RoundedCornerShape(8.dp),
     color = Color.Transparent,
-    contentColor = color,
-    border = BorderStroke(1.dp, color.copy(alpha = 0.5f)),
+    contentColor = ClawTheme.colors.text,
+    border = BorderStroke(1.dp, borderColor.copy(alpha = 0.5f)),
   ) {
     Text(
       text = label,
@@ -401,8 +417,11 @@ internal fun ChatManagedImage(
   }
 
   when {
-    image != null -> ChatImagePreview(image = checkNotNull(image), description = label, stateKey = artifactId)
-    failed ->
+    image != null -> {
+      ChatImagePreview(image = checkNotNull(image), description = label, stateKey = artifactId)
+    }
+
+    failed -> {
       Surface(
         onClick = { retryGeneration += 1 },
         shape = RoundedCornerShape(10.dp),
@@ -417,13 +436,16 @@ internal fun ChatManagedImage(
           color = ClawTheme.colors.textMuted,
         )
       }
-    else ->
+    }
+
+    else -> {
       Text(
         nativeString("Loading image…"),
         modifier = Modifier.padding(12.dp),
         style = ClawTheme.type.caption,
         color = ClawTheme.colors.textMuted,
       )
+    }
   }
 }
 
@@ -507,11 +529,10 @@ fun ChatCodeBlock(
   isComplete: Boolean = true,
 ) {
   val display = code.trimEnd()
-  // Syntax roles reuse semantic colors that keep at least 4.5:1 contrast against codeBg;
-  // changing these mappings can make highlighted code less readable than plain code.
+  // A custom accent may be too light for keywords on the code surface.
   val tokenColors =
     CodeTokenColors(
-      keyword = ClawTheme.colors.accent,
+      keyword = ClawTheme.colors.codeText,
       string = ClawTheme.colors.success,
       comment = ClawTheme.colors.textMuted,
       number = ClawTheme.colors.danger,

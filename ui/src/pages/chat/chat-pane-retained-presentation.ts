@@ -1,14 +1,20 @@
+import "../../components/modal-dialog.ts";
+import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
+import { boardProviderCacheKey } from "../../lib/board/provider.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
 import { loadChatBranches, retireChatBranchRequests } from "./chat-history-branches.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneBoard } from "./chat-pane-board.ts";
 import {
   consumePaneSessionHandoff,
   type PaneSessionHandoff,
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
+import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
 import { setChatError } from "./chat-send-queue-state.ts";
@@ -20,17 +26,125 @@ import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
 import { resetTranscriptSession } from "./components/chat-thread-interactions.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 
+const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 600;
+const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
+
 /** Owns foreground resources and composer state that follow one retained presentation. */
 export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
-  protected abstract clearComposerPrefillAttention(): void;
-  protected abstract settleResetConfirmation(confirmed: boolean): void;
   protected abstract syncActiveBindings(): void;
+  protected abstract activateComposerPresentation(): void;
+
+  protected clearComposerPrefillAttention(): void {
+    if (this.composerPrefillAttentionTimer !== null) {
+      window.clearTimeout(this.composerPrefillAttentionTimer);
+      this.composerPrefillAttentionTimer = null;
+    }
+    this.composerPrefillAttentionTarget?.classList.remove(COMPOSER_PREFILL_ATTENTION_CLASS);
+    this.composerPrefillAttentionTarget = null;
+  }
+
+  protected showComposerPrefillAttention(input: HTMLElement): void {
+    this.clearComposerPrefillAttention();
+    // Force a fresh animation frame when the same mounted composer is prompted again.
+    void input.offsetWidth;
+    input.classList.add(COMPOSER_PREFILL_ATTENTION_CLASS);
+    this.composerPrefillAttentionTarget = input;
+    // Reduced motion disables animation events, so timer cleanup owns both modes.
+    this.composerPrefillAttentionTimer = window.setTimeout(() => {
+      if (this.composerPrefillAttentionTarget === input) {
+        this.clearComposerPrefillAttention();
+      }
+    }, COMPOSER_PREFILL_ATTENTION_DURATION_MS);
+  }
+
+  protected confirmConversationReset(): Promise<boolean> {
+    const board = this.resolveBoardView();
+    const scopeKey = boardProviderCacheKey(this.resolveBoardConversation());
+    const pending = this.resetConfirmation;
+    if (pending && pending.scopeKey !== scopeKey) {
+      this.settleResetConfirmation(false);
+    }
+    if (!board.hasBoard) {
+      return Promise.resolve(true);
+    }
+    if (this.resetConfirmation) {
+      return this.resetConfirmation.promise;
+    }
+    let resolve!: (confirmed: boolean) => void;
+    const promise = new Promise<boolean>((next) => {
+      resolve = next;
+    });
+    this.resetConfirmation = { scopeKey, promise, resolve };
+    this.resetConfirmationOpen = true;
+    return promise;
+  }
+
+  protected cancelResetConfirmationForSessionChange(): void {
+    const pending = this.resetConfirmation;
+    if (pending && pending.scopeKey !== boardProviderCacheKey(this.resolveBoardConversation())) {
+      this.settleResetConfirmation(false);
+    }
+  }
+
+  protected settleResetConfirmation(confirmed: boolean): void {
+    const pending = this.resetConfirmation;
+    if (!pending) {
+      return;
+    }
+    this.resetConfirmation = undefined;
+    this.resetConfirmationOpen = false;
+    pending.resolve(confirmed);
+  }
+
+  protected renderResetConfirmation() {
+    if (!this.resetConfirmationOpen) {
+      return nothing;
+    }
+    const title = t("chat.board.resetTitle");
+    const description = t("chat.board.resetDescription");
+    return html`
+      <openclaw-modal-dialog
+        label=${title}
+        description=${description}
+        @modal-cancel=${() => this.settleResetConfirmation(false)}
+      >
+        <div class="exec-approval-card board-reset-confirmation">
+          <div class="exec-approval-header">
+            <div>
+              <div class="exec-approval-title">${title}</div>
+              <div class="exec-approval-sub">${description}</div>
+            </div>
+          </div>
+          <div class="exec-approval-actions">
+            <button
+              class="btn primary"
+              type="button"
+              @click=${() => this.settleResetConfirmation(true)}
+            >
+              ${t("common.confirm")}
+            </button>
+            <button
+              class="btn"
+              type="button"
+              autofocus
+              @click=${() => this.settleResetConfirmation(false)}
+            >
+              ${t("common.cancel")}
+            </button>
+          </div>
+        </div>
+      </openclaw-modal-dialog>
+    `;
+  }
 
   protected override activeChanged(active: boolean): void {
     if (!this.isConnected) {
       return;
     }
     this.syncActiveBindings();
+    if (active) {
+      this.activateComposerPresentation();
+    }
     if (active && this.presented && this.state?.chatQueue.length) {
       void refreshCurrentChatSessionList(this.state).catch(() => undefined);
       void retryReconnectableQueuedChatSends(this.state);
@@ -48,6 +162,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     if (presented) {
       this.minutePoll.start();
       this.consumeSessionHandoff(this.sessionKey);
+      this.activateComposerPresentation();
       this.syncActiveBindings();
       const state = this.state;
       if (state) {
@@ -56,6 +171,15 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       const deferredHydrationActive = this.resumeDeferredSessionHydration();
       if (state && !deferredHydrationActive) {
         this.markSessionRead(selectedChatSessionRow(state));
+        if (
+          state.connected &&
+          this.resolveChatReadTarget() &&
+          (state.chatRunId || selectedChatSessionRow(state)?.hasActiveRun)
+        ) {
+          // Keep the retained transcript visible while reconciling the live run's
+          // authoritative start time and activity after a foreground return.
+          void loadChatHistory(state, { deferBranches: true });
+        }
       }
       if (
         state &&
@@ -72,6 +196,9 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     this.minutePoll.stop();
     if (this.state) {
       retireChatBranchRequests(this.state);
+      // Unwatch can cancel an admitted refresh before sync; a later presentation
+      // must not inherit a receipt for work its watch no longer owns.
+      retirePullRequestRefreshes(this.state);
     }
     this.swarmHydrator?.dispose();
     this.swarmHydrator = null;
@@ -108,6 +235,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       if (scope) {
         storeChatComposerMemoryFallback(state, scope, {
           message: state.chatMessage,
+          mentions: state.chatMentions,
           goalMode: state.chatGoalDraftMode,
           attachments: state.chatAttachments,
           draftRetry: persistResult,
@@ -119,6 +247,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       // fallbacks. This transfer carries only composer metadata and the draft.
       attachments: [],
       draft: state.chatMessage,
+      ...(state.chatMentions?.length ? { mentions: state.chatMentions } : {}),
       ...(state.chatGoalDraftMode ? { goalMode: state.chatGoalDraftMode } : {}),
       restore: true,
       storageFailed: persistResult.status === "storage-failed",
@@ -156,9 +285,10 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     }
     state.chatGoalDraftMode = handoff.goalMode ?? null;
     if (notifyDraftChange) {
-      state.handleChatDraftChange(handoff.draft);
+      state.handleChatDraftChange(handoff.draft, handoff.mentions ?? []);
     } else {
       state.chatMessage = handoff.draft;
+      state.chatMentions = handoff.mentions;
     }
     if (handoff.storageFailed) {
       state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;

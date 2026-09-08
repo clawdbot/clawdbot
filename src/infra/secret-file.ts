@@ -1,15 +1,19 @@
 // Exposes private secret file helpers with fs-safe defaults.
 import "./fs-safe-defaults.js";
+import path from "node:path";
 import { FsSafeError, type FsSafeErrorCode } from "@openclaw/fs-safe";
 import {
+  createSecretFileAtomic as createSecretFileAtomicImpl,
+  PRIVATE_SECRET_DIR_MODE,
   readSecretFileSync as readSecretFileSyncImpl,
   tryReadSecretFileSync as tryReadSecretFileSyncImpl,
+  writeSecretFileAtomic as writeSecretFileAtomicImpl,
   type SecretFileReadOptions as FsSafeSecretFileReadOptions,
 } from "@openclaw/fs-safe/secret";
 import { resolveUserPath } from "../utils.js";
+import { tightenPrivateDirChain } from "./private-dir-mode.js";
 
 export {
-  createSecretFileAtomic,
   DEFAULT_SECRET_FILE_MAX_BYTES,
   PRIVATE_SECRET_DIR_MODE,
   PRIVATE_SECRET_FILE_MODE,
@@ -17,7 +21,32 @@ export {
   readSecretFileSync,
   type SecretFileReadOptions,
 } from "@openclaw/fs-safe/secret";
-export { writeSecretFileAtomic as writePrivateSecretFileAtomic } from "@openclaw/fs-safe/secret"; // Sanctioned domain alias.
+
+type SecretFileWriteParams = Parameters<typeof writeSecretFileAtomicImpl>[0];
+
+// fs-safe 0.8 no longer repairs existing directory modes; OpenClaw keeps its
+// documented behavior of tightening its own secret directories before writing.
+function tightenSecretDirectoryModes(params: {
+  rootDir: string;
+  filePath: string;
+  dirMode?: number;
+}): Promise<void> {
+  return tightenPrivateDirChain(
+    params.rootDir,
+    path.dirname(params.filePath),
+    params.dirMode ?? PRIVATE_SECRET_DIR_MODE,
+  );
+}
+
+export async function writePrivateSecretFileAtomic(params: SecretFileWriteParams): Promise<void> {
+  await tightenSecretDirectoryModes(params);
+  await writeSecretFileAtomicImpl(params);
+}
+
+export async function createSecretFileAtomic(params: SecretFileWriteParams): Promise<void> {
+  await tightenSecretDirectoryModes(params);
+  await createSecretFileAtomicImpl(params);
+}
 
 export type SecretFileReadResult =
   | {

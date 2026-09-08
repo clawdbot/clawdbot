@@ -291,14 +291,22 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(sweep).not.toContain('cat "$uninstall_log"');
   });
 
-  it("keeps runtime command output capture bounded", async () => {
-    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+  it("uses the runtime output limit for command capture", async () => {
+    const runtimeSmoke = await importRuntimeSmokeWithEnv({
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_OUTPUT_CHARS: "5",
+    });
 
-    const first = runtimeSmoke.appendBoundedOutput({ text: "", truncatedChars: 0 }, "abcdef", 5);
-    expect(first).toEqual({ text: "bcdef", truncatedChars: 1 });
-
-    const second = runtimeSmoke.appendBoundedOutput(first, "ghij", 5);
-    expect(second).toEqual({ text: "fghij", truncatedChars: 5 });
+    await expect(
+      runtimeSmoke.runCommand(process.execPath, [
+        "-e",
+        "process.stdout.write('abcdef'); process.stderr.write('UVWXYZ');",
+      ]),
+    ).resolves.toEqual({
+      stdout: "bcdef",
+      stderr: "VWXYZ",
+      stdoutTruncatedChars: 1,
+      stderrTruncatedChars: 1,
+    });
   });
 
   it("preserves explicit nullish runtime RPC result fields", async () => {
@@ -1414,6 +1422,36 @@ describe("bundled plugin install/uninstall probe", () => {
     runtimeSmoke.cleanupIsolatedStateEnv(env);
 
     expect(fs.existsSync(path.dirname(env.HOME))).toBe(false);
+  });
+
+  it("uses the candidate TTS config dialect only for the selected legacy plugin profile", async () => {
+    const frozen = await withEnvAsync(
+      { OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT: "legacy" },
+      async () => {
+        const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+        const configured = runtimeSmoke.withSmokeTtsConfig(
+          { messages: { other: true } },
+          { enabled: false },
+        );
+        return { configured, tts: runtimeSmoke.readSmokeTtsConfig(configured) };
+      },
+    );
+    expect(frozen.configured).toEqual({ messages: { other: true, tts: { enabled: false } } });
+    expect(frozen.tts).toEqual({ enabled: false });
+
+    const current = await withEnvAsync(
+      { OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT: undefined },
+      async () => {
+        const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+        const configured = runtimeSmoke.withSmokeTtsConfig(
+          { messages: { other: true } },
+          { enabled: false },
+        );
+        return { configured, tts: runtimeSmoke.readSmokeTtsConfig(configured) };
+      },
+    );
+    expect(current.configured).toEqual({ messages: { other: true }, tts: { enabled: false } });
+    expect(current.tts).toEqual({ enabled: false });
   });
 
   it("selects packaged installable bundled sources instead of raw dist extension dirs", () => {

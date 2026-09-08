@@ -13,6 +13,19 @@ private struct GatewaySleepPrepareResponse: Decodable {
     let suspensionId: String?
 }
 
+struct GatewayEndpointTransition {
+    private var readyRevision: UInt64?
+
+    mutating func shouldRefresh(for state: GatewayEndpointState) -> Bool {
+        guard case .ready = state else {
+            self.readyRevision = nil
+            return false
+        }
+        defer { self.readyRevision = state.routeRevision }
+        return self.readyRevision != state.routeRevision
+    }
+}
+
 @MainActor
 @Observable
 final class GatewayConnectivityCoordinator {
@@ -20,14 +33,26 @@ final class GatewayConnectivityCoordinator {
 
     private var endpointTask: Task<Void, Never>?
     private var workspaceObservers: [NSObjectProtocol] = []
-    private var lastResolvedURL: URL?
-    private var lastRouteRevision: UInt64?
+    private var endpointTransition = GatewayEndpointTransition()
     @ObservationIgnored private var sleepCycleController: GatewaySleepCycleController?
 
     private(set) var endpointState: GatewayEndpointState?
-    private(set) var resolvedURL: URL?
-    private(set) var resolvedMode: AppState.ConnectionMode?
-    private(set) var resolvedHostLabel: String?
+
+    var resolvedURL: URL? {
+        guard case let .ready(_, url, _, _, _) = self.endpointState else { return nil }
+        return url
+    }
+
+    var resolvedMode: AppState.ConnectionMode? {
+        switch self.endpointState {
+        case let .ready(mode, _, _, _, _), let .connecting(mode, _, _), let .unavailable(mode, _, _): mode
+        case nil: nil
+        }
+    }
+
+    var resolvedHostLabel: String? {
+        self.resolvedURL.map(Self.hostLabel)
+    }
 
     private init() {
         self.sleepCycleController = GatewaySleepCycleController(
@@ -104,24 +129,11 @@ final class GatewayConnectivityCoordinator {
     }
 
     private func handleEndpointState(_ state: GatewayEndpointState) {
+        guard state.routeRevision == GatewayEndpointStore.shared.routeRevision else { return }
         self.endpointState = state
-        switch state {
-        case let .ready(mode, url, _, _, routeRevision):
-            self.resolvedMode = mode
-            self.resolvedURL = url
-            self.resolvedHostLabel = Self.hostLabel(for: url)
-            let routeChanged = self.lastResolvedURL?.absoluteString != url.absoluteString ||
-                self.lastRouteRevision != routeRevision
-            if routeChanged {
-                self.lastResolvedURL = url
-                self.lastRouteRevision = routeRevision
-                Task { await ControlChannel.shared.refreshEndpoint(reason: "endpoint changed") }
-            }
-        case let .connecting(mode, _):
-            self.resolvedMode = mode
-        case let .unavailable(mode, _):
-            self.resolvedMode = mode
-        }
+        let shouldRefresh = self.endpointTransition.shouldRefresh(for: state)
+        if case .ready = state, !shouldRefresh { return }
+        ControlChannel.shared.endpointDidChange(state)
     }
 
     private static func hostLabel(for url: URL) -> String {

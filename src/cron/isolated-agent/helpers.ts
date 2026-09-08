@@ -1,6 +1,10 @@
 /** Normalizes isolated cron run output into summaries, delivery payloads, and error state. */
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import { isExecLikeToolName } from "../../agents/tool-error-summary.js";
 import { isHeartbeatAcknowledgementText } from "../../auto-reply/heartbeat.js";
 import {
   getReplyPayloadMetadata,
@@ -211,16 +215,10 @@ function pickDeliverablePayloads(payloads: DeliveryPayload[]): DeliveryPayload[]
   return lastDeliverablePayload ? [lastDeliverablePayload] : [];
 }
 
-function isCronMessagePresentationWarning(text: string | undefined): boolean {
-  const normalized = normalizeOptionalString(text)?.toLowerCase();
-  return (
-    normalized === "⚠️ ✉️ message failed" ||
-    normalized?.startsWith("⚠️ ✉️ message failed:") === true
+function readToolErrorWarningName(payload: object | undefined): string | undefined {
+  return normalizeOptionalLowercaseString(
+    payload && getReplyPayloadMetadata(payload)?.toolErrorWarning?.toolName,
   );
-}
-
-function isCronToolWarning(text: string | undefined): boolean {
-  return normalizeOptionalString(text)?.startsWith("⚠️ 🛠️ ") === true;
 }
 
 function isNonTerminalToolErrorWarning(payload: object | undefined): boolean {
@@ -251,10 +249,10 @@ export function resolveCronPayloadOutcome(params: {
   const lastErrorPayloadIndex = params.payloads.findLastIndex(
     (payload) => payload?.isError === true,
   );
-  const lastErrorPayloadText = [...params.payloads]
-    .toReversed()
-    .find((payload) => payload?.isError === true && Boolean(payload?.text?.trim()))
-    ?.text?.trim();
+  const lastTextErrorPayload = params.payloads.findLast(
+    (payload) => payload?.isError === true && Boolean(payload?.text?.trim()),
+  );
+  const lastErrorPayloadText = lastTextErrorPayload?.text?.trim();
   const errorPayloads = params.payloads.filter((payload) => payload?.isError === true);
   const finalText = normalizeOptionalString(params.finalAssistantVisibleText);
   const normalizedFinalAssistantVisibleText =
@@ -284,7 +282,7 @@ export function resolveCronPayloadOutcome(params: {
     !params.runLevelError &&
     params.failureSignal?.fatalForCron !== true &&
     lastErrorPayloadIndex >= 0 &&
-    isCronMessagePresentationWarning(lastErrorPayloadText) &&
+    readToolErrorWarningName(lastTextErrorPayload) === "message" &&
     (normalizedFinalAssistantVisibleText !== undefined || hasSuccessfulPayloadBeforeLastError);
   const hasStructuredDeliveryPayloads = selectedDeliveryPayloads.some((payload) =>
     payloadHasStructuredDeliveryContent(payload),
@@ -295,7 +293,7 @@ export function resolveCronPayloadOutcome(params: {
     normalizedFinalAssistantVisibleText !== undefined &&
     !hasStructuredDeliveryPayloads &&
     errorPayloads.length > 0 &&
-    errorPayloads.every((payload) => isCronToolWarning(payload?.text));
+    errorPayloads.every((payload) => isExecLikeToolName(readToolErrorWarningName(payload) ?? ""));
   // Structured error payloads stay fatal unless later successful output or a
   // known non-terminal warning proves the agent recovered.
   const hasFatalStructuredErrorPayload =

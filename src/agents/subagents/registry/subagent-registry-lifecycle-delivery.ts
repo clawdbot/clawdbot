@@ -209,7 +209,8 @@ export const hasPriorRequesterDeliveryMirror = async (
         text === expectedText
       );
     });
-    if (mirror) {
+    // A late history result must not replace the newer requester delivery timestamp.
+    if (mirror && entry.delivery?.status !== "delivered") {
       ensureDeliveryState(entry).deliveredAt = (mirror as { timestamp: number }).timestamp;
     }
     return Boolean(mirror);
@@ -474,6 +475,7 @@ export const clearSubagentPendingDelivery = (entry: SubagentRunRecord) => {
   delivery.payload = undefined;
   delivery.createdAt = undefined;
   delivery.lastAttemptAt = undefined;
+  delivery.nextAttemptAt = undefined;
   delivery.attemptCount = undefined;
   delivery.lastError = undefined;
   delivery.suspendedAt = undefined;
@@ -502,7 +504,8 @@ export const loadPendingFinalDeliveryPayload = (
     spawnMode: entry.delivery?.payload?.spawnMode ?? entry.spawnMode,
     wakeOnDescendantSettle:
       entry.delivery?.payload?.wakeOnDescendantSettle ?? entry.wakeOnDescendantSettle,
-    terminalReply: entry.delivery?.payload?.terminalReply ?? entry.completion?.terminalReply,
+    // Completion is the terminal-reply owner; a retry payload can predate its final receipt.
+    terminalReply: entry.completion?.terminalReply ?? entry.delivery?.payload?.terminalReply,
   };
 };
 

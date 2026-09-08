@@ -13,6 +13,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { runExec } from "../process/exec.js";
 import { signalProcessTree } from "../process/kill-tree.js";
+import { extractTailscaleServeGatewayUrls } from "../shared/tailscale-status.js";
 import { isVitestRuntimeEnv } from "./env.js";
 import { toErrorObject } from "./errors.js";
 import { retryAsync } from "./retry.js";
@@ -28,6 +29,10 @@ const TAILSCALE_STATUS_ATTEMPTS = 3;
 const TAILSCALE_STATUS_RETRY_DELAY_MS = 500;
 const TAILSCALE_ROUTE_START_TIMEOUT_MS = 15_000;
 const TAILSCALE_ROUTE_STOP_TIMEOUT_MS = 4_000;
+// Sudo versions phrase `-n` credential failures differently. Require its prefix
+// so an authorized Tailscale retry keeps ownership of every operational error.
+const SUDO_NONINTERACTIVE_AUTH_ERROR =
+  /^sudo: (?:a password is required|no password was provided|a terminal is required|no tty present|no askpass program specified)/im;
 
 function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
   const trimmed = stdout.trim();
@@ -94,7 +99,7 @@ export async function findTailscaleBinary(): Promise<string | null> {
       return false;
     }
     try {
-      await runExec(filePath, ["--version"], { timeoutMs: 3000 });
+      await runExec(filePath, ["version"], { timeoutMs: 3000 });
       return true;
     } catch {
       return false;
@@ -226,13 +231,12 @@ type TailscaleRouteOwnerFailure = Pick<
   "code" | "stdout" | "stderr"
 >;
 
-function isPort443RouteConflict(message: TailscaleRouteOwnerFailure): boolean {
-  return /listener already exists for port 443/i.test(`${message.stderr}\n${message.stdout}`);
-}
-
-function routeClaimError(message: TailscaleRouteOwnerFailure): Error {
-  if (isPort443RouteConflict(message)) {
-    return new TailscaleRouteOwnershipConflictError();
+function routeClaimError(message: TailscaleRouteOwnerFailure, serveStatus: string): Error {
+  const conflict = /listener already exists for port (\d+)/i.exec(
+    `${message.stderr}\n${message.stdout}`,
+  );
+  if (conflict) {
+    return new TailscaleRouteOwnershipConflictError(Number(conflict[1]), serveStatus);
   }
   const detail = [message.stderr.trim(), message.stdout.trim()].find(Boolean);
   return Object.assign(new Error(detail || "Tailscale route owner exited before claiming route"), {
@@ -259,7 +263,10 @@ function waitWithTimeout(promise: Promise<void>, timeoutMs: number): Promise<boo
   });
 }
 
-async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteClaim> {
+async function startTailscaleRouteOwner(
+  argv: string[],
+  serveStatus: string,
+): Promise<TailscaleRouteClaim> {
   const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.tailscaleRouteOwner);
   const execArgv = workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined;
   const worker = fork(
@@ -267,6 +274,7 @@ async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteC
     [TAILSCALE_ROUTE_OWNER_ARG, JSON.stringify({ argv })],
     {
       execArgv,
+      detached: process.platform !== "win32",
       stdio: ["ignore", "ignore", "ignore", "ipc"],
     },
   );
@@ -274,7 +282,6 @@ async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteC
   let ready = false;
   let active = false;
   let stopping = false;
-  let startupSettled = false;
   let failure: Error | undefined;
   let resolveExit!: () => void;
   const exited = new Promise<void>((resolve) => {
@@ -283,10 +290,6 @@ async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteC
 
   const startup = new Promise<void>((resolve, reject) => {
     const settle = (error?: Error) => {
-      if (startupSettled) {
-        return;
-      }
-      startupSettled = true;
       clearTimeout(startupTimer);
       if (error) {
         reject(error);
@@ -322,11 +325,14 @@ async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteC
         ) {
           return;
         }
-        failure = routeClaimError({
-          code: event.code,
-          stdout: event.stdout,
-          stderr: event.stderr,
-        });
+        failure = routeClaimError(
+          {
+            code: event.code,
+            stdout: event.stdout,
+            stderr: event.stderr,
+          },
+          serveStatus,
+        );
         if (!ready) {
           settle(failure);
         }
@@ -383,18 +389,54 @@ async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteC
 
 export async function claimTailscaleRoute(
   mode: "serve" | "funnel",
-  target: number | string,
+  target: number,
+  gatewayPort: number,
+  info: (message: string) => void,
 ): Promise<TailscaleRouteClaim> {
   const tailscaleBin = await getTailscaleBinary();
-  const args = [mode, "--yes", "--bg=false", `${target}`];
+  let adopted = false;
+  const start = async (bin: string, prefix: string[] = []) => {
+    const exec = (args: string[]) =>
+      runExec(bin, [...prefix, ...args], { timeoutMs: 5000, maxBuffer: 400_000 });
+    const { stdout } = await exec(["serve", "status", "--json"]);
+    const routes = extractTailscaleServeGatewayUrls(stdout, gatewayPort, true);
+    // Foreground claims require a free port. Never clear sibling handlers or
+    // infer ownership from the new ephemeral backend instead of the Gateway port.
+    if (routes?.some((url) => !new URL(url).port)) {
+      await exec(["serve", "--yes", "--https=443", "--set-path=/", "off"]);
+      adopted = true;
+    }
+    return startTailscaleRouteOwner(
+      [bin, ...prefix, mode, "--yes", "--bg=false", `${target}`],
+      stdout,
+    );
+  };
+  let claim: TailscaleRouteClaim;
   try {
-    return await startTailscaleRouteOwner([tailscaleBin, ...args]);
+    claim = await start(tailscaleBin);
   } catch (error) {
     if (!isPermissionDeniedError(error)) {
       throw error;
     }
-    return await startTailscaleRouteOwner(["sudo", "-n", tailscaleBin, ...args]);
+    try {
+      claim = await start("sudo", ["-n", tailscaleBin]);
+    } catch (sudoError) {
+      const { stderr, message } = extractExecErrorText(sudoError);
+      const detail = stderr.trim() || message.trim();
+      if (!SUDO_NONINTERACTIVE_AUTH_ERROR.test(detail)) {
+        throw sudoError;
+      }
+      throw new Error(
+        `Tailscale ${mode} needs elevated access and non-interactive sudo failed: ${detail}. ` +
+          "Run `sudo tailscale set --operator=$USER` once so the unprivileged path succeeds.",
+        { cause: sudoError },
+      );
+    }
   }
+  if (adopted) {
+    info("Tailscale route adopted from a previous OpenClaw release");
+  }
+  return claim;
 }
 
 /** Resolve the hostname after Serve startup, while the local daemon may still be settling. */
@@ -609,14 +651,16 @@ export async function readTailscaleWhoisIdentity(
   if (!normalized) {
     return null;
   }
-  const now = Date.now();
-  const cached = readCachedWhois(normalized, now);
-  if (cached !== undefined) {
-    return cached;
-  }
-
   const cacheTtlMs = opts?.cacheTtlMs ?? 60_000;
   const errorTtlMs = opts?.errorTtlMs ?? 5_000;
+  const now = Date.now();
+  if (cacheTtlMs > 0) {
+    const cached = readCachedWhois(normalized, now);
+    if (cached !== undefined) {
+      return cached;
+    }
+  }
+
   try {
     const tailscaleBin = await getTailscaleBinary();
     const result = await exec(tailscaleBin, ["whois", "--json", normalized], {
@@ -625,10 +669,14 @@ export async function readTailscaleWhoisIdentity(
     });
     const parsed = result.stdout ? parsePossiblyNoisyJsonObject(result.stdout) : {};
     const identity = parseWhoisIdentity(parsed);
-    writeCachedWhois(normalized, identity, cacheTtlMs);
+    if (cacheTtlMs > 0) {
+      writeCachedWhois(normalized, identity, cacheTtlMs);
+    }
     return identity;
   } catch {
-    writeCachedWhois(normalized, null, errorTtlMs);
+    if (errorTtlMs > 0) {
+      writeCachedWhois(normalized, null, errorTtlMs);
+    }
     return null;
   }
 }

@@ -74,7 +74,7 @@ export async function collectMcpPaginatedItems<TInput, TOutput>(
   if (signal.aborted) {
     throw abortError(signal, params.label);
   }
-  const deadlineAtMs = Date.now() + timeoutMs;
+  const deadlineAtMs = performance.now() + timeoutMs;
   const timeoutError = new Error(`${params.label} timed out after ${timeoutMs}ms`);
   const deadlineTimer = setTimeout(() => deadlineController.abort(timeoutError), timeoutMs);
   deadlineTimer.unref?.();
@@ -82,7 +82,7 @@ export async function collectMcpPaginatedItems<TInput, TOutput>(
     if (signal.aborted) {
       throw abortError(signal, params.label);
     }
-    if (Date.now() >= deadlineAtMs) {
+    if (performance.now() >= deadlineAtMs) {
       deadlineController.abort(timeoutError);
       throw timeoutError;
     }

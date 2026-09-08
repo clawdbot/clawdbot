@@ -2,12 +2,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   appendSqliteSessionTranscriptEventForTest,
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerShortTermPromotionDreaming } from "./dreaming.js";
@@ -28,6 +30,7 @@ afterEach(async () => {
   await stopGateway?.();
   stopGateway = undefined;
   closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
   vi.useRealTimers();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -54,7 +57,8 @@ function createGateway(
     },
     ...(params.sessionStore ? { session: { store: params.sessionStore } } : {}),
   } as OpenClawConfig;
-  const hooks = new Map<string, GatewayHook>();
+  const onMock = vi.fn<OpenClawPluginApi["on"]>();
+  const services: OpenClawPluginService[] = [];
   const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const cron = {
     list: vi.fn(async () => {
@@ -68,27 +72,39 @@ function createGateway(
     remove: vi.fn(async () => ({ removed: false })),
     removeStaleJobFamily: vi.fn(async () => 0),
   };
-  const api = {
+  const api = createTestPluginApi({
     config,
     pluginConfig: {},
     logger,
-    runtime: { config: { current: () => config } },
-    on: (eventName: string, hook: GatewayHook) => hooks.set(eventName, hook),
-  } as unknown as OpenClawPluginApi;
+    on: onMock,
+    registerService: (service: OpenClawPluginService) => services.push(service),
+  });
+  Object.assign(api.runtime, { config: { current: () => config } });
   registerShortTermPromotionDreaming(api);
 
+  const service = services.find((entry) => entry.id === "memory-core-dreaming");
+  if (!service) {
+    throw new Error("memory-core-dreaming service missing");
+  }
+  const serviceContext = { config, stateDir, logger, getCron: () => cron };
+  const startService = async () => {
+    await service.start(serviceContext);
+  };
   const start = async () => {
-    const hook = hooks.get("gateway_start");
+    await startService();
+    const hook = onMock.mock.calls.find(([name]) => name === "gateway_start")?.[1] as
+      | GatewayHook
+      | undefined;
     if (!hook) {
       throw new Error("gateway_start hook missing");
     }
     await hook({ port: 0 }, { config, getCron: () => cron });
   };
   const stop = async () => {
-    await hooks.get("gateway_stop")?.({ reason: "test" }, {});
+    await service.stop?.(serviceContext);
   };
   stopGateway = stop;
-  return { config, cron, logger, start, stop };
+  return { config, cron, logger, start, startService, stop };
 }
 
 async function seedSession(params: {
@@ -212,6 +228,7 @@ describe("dreaming gateway restart cleanup", () => {
     expect(hasSession(interrupted)).toBe(true);
 
     await vi.advanceTimersByTimeAsync(1);
+    await gateway.stop();
 
     expect(hasSession(interrupted)).toBe(false);
     expect(hasSession(newlyStarted)).toBe(true);
@@ -241,6 +258,7 @@ describe("dreaming gateway restart cleanup", () => {
     // Wall-clock stalls can outlive agent.wait; that wait never cancels the agent run.
     vi.setSystemTime(Date.now() + ORPHAN_AGE_MS + 1);
     await vi.advanceTimersByTimeAsync(ORPHAN_AGE_MS);
+    await gateway.stop();
 
     expect(Date.now() - postStartupUpdatedAt).toBeGreaterThan(ORPHAN_AGE_MS);
     expect(hasSession(interruptedAtStartup)).toBe(false);
@@ -327,33 +345,39 @@ describe("dreaming gateway restart cleanup", () => {
     });
   });
 
-  it("replaces an earlier gateway generation's deferred cleanup timer", async () => {
+  it("does not repeat restart cleanup when the dreaming service is replaced", async () => {
     vi.useFakeTimers({ now: new Date("2026-08-01T12:00:00.000Z") });
     const interrupted = await seedSession({
       suffix: "dreaming-narrative-light-interrupted",
-      updatedAt: Date.now(),
-      transcriptAt: Date.now(),
+      updatedAt: Date.now() - 1,
+      transcriptAt: Date.now() - 1,
     });
     const gateway = createGateway();
 
     await gateway.start();
     await vi.advanceTimersByTimeAsync(120_000);
-    await gateway.start();
-    await vi.advanceTimersByTimeAsync(ORPHAN_AGE_MS - 120_000);
+    const currentRun = await seedSession({
+      suffix: "dreaming-narrative-rem-current",
+      updatedAt: Date.now(),
+      transcriptAt: Date.now(),
+    });
+    await gateway.stop();
+    await vi.advanceTimersByTimeAsync(ORPHAN_AGE_MS + 1);
+    const successor = createGateway();
+    await successor.startService();
+    await vi.advanceTimersByTimeAsync(ORPHAN_AGE_MS);
+    await successor.stop();
 
     expect(hasSession(interrupted)).toBe(true);
-
-    await vi.advanceTimersByTimeAsync(120_000);
-
-    expect(hasSession(interrupted)).toBe(false);
+    expect(hasSession(currentRun)).toBe(true);
   });
 
   it("cancels deferred orphan cleanup when the gateway stops", async () => {
     vi.useFakeTimers({ now: new Date("2026-08-01T12:00:00.000Z") });
     const interrupted = await seedSession({
       suffix: "dreaming-narrative-light-interrupted",
-      updatedAt: Date.now(),
-      transcriptAt: Date.now(),
+      updatedAt: Date.now() - 1,
+      transcriptAt: Date.now() - 1,
     });
     const gateway = createGateway();
 

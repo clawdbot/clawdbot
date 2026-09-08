@@ -20,7 +20,6 @@ import {
 } from "@openclaw/gateway-protocol/version";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { WebSocket } from "ws";
 import {
   isSensitiveUrlQueryParamName,
   normalizeTlsFingerprint,
@@ -59,6 +58,7 @@ import {
   isGatewayLoopbackHost,
   resolveGatewayWebSocketTransport,
 } from "./websocket-transport.js";
+import { WebSocket } from "./websocket.js";
 
 export type DeviceIdentity = {
   deviceId: string;
@@ -266,6 +266,7 @@ export type GatewayClientOptions = {
   clientBuildId?: string;
   platform?: string;
   deviceFamily?: string;
+  modelIdentifier?: string;
   mode?: GatewayClientMode;
   role?: string;
   scopes?: string[];
@@ -808,6 +809,7 @@ export class GatewayClient {
           buildId: this.opts.clientBuildId,
           platform,
           deviceFamily,
+          modelIdentifier: useLegacyNodeProtocolEnvelope ? undefined : this.opts.modelIdentifier,
           mode: clientMode,
           instanceId: this.opts.instanceId,
         },

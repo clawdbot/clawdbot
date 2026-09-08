@@ -37,7 +37,7 @@ import { loadPersistedAuthProfileState } from "../auth-profiles/state.js";
 import {
   loadAuthProfileStoreForSecretsRuntime,
   saveAuthProfileStoreWithPreparedOwner,
-} from "../auth-profiles/store.js";
+} from "../auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { getAgentDir } from "../config.js";
 import {
@@ -739,8 +739,9 @@ export class AuthStorage {
         }
 
         const refreshedCredential: OAuthCredential = {
-          type: "oauth",
+          ...cred,
           ...refreshed.newCredentials,
+          type: "oauth",
         };
         const merged: AuthStorageData = {
           ...currentData,

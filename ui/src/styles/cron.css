@@ -28,82 +28,12 @@
   min-width: 0;
 }
 
-.cron-overview-summary {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  min-width: 0;
-}
-
-.cron-stats {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
-.cron-stat {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-1);
-  min-width: 0;
-}
-
-/* Failing is still a drill-down into run history, but reads as one fact in the
-   summary rather than a third competing card. */
-.cron-stat--action {
-  position: relative;
-  display: inline-flex;
-  align-items: baseline;
-  gap: var(--space-1);
-  font: inherit;
-  color: inherit;
-  cursor: var(--cursor-action);
-  border: 0;
-  background: transparent;
-  padding: 2px;
-  margin: -2px;
-  border-radius: var(--radius-sm);
-  transition: color var(--duration-fast) var(--ease-out);
-}
-
-.cron-stat--action:hover {
-  color: var(--text-strong);
-}
-
-.cron-stat__label {
-  color: inherit;
-}
-
-.cron-stat__value {
-  color: var(--text-strong);
-  font-size: inherit;
-  font-weight: 650;
-}
-
-.cron-stat__value--danger {
-  color: var(--danger);
-}
-
-.cron-stat__value--time {
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.cron-stat__separator {
-  color: var(--border-strong);
-}
-
 .cron-admin-note {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
   min-width: 0;
-  margin-left: auto;
+  align-self: flex-end;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
@@ -141,7 +71,8 @@
 }
 
 .cron-toolbar__primary {
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  flex-wrap: nowrap;
+  margin-block: var(--space-2);
 }
 
 /* Toolbar buttons share the settings control height with the adjacent
@@ -190,11 +121,11 @@
   background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
 }
 
-.cron-toolbar__end {
-  margin-left: auto;
+.cron-toolbar__actions {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  margin-left: auto;
   flex: 0 0 auto;
 }
 
@@ -1179,6 +1110,43 @@
 }
 
 @media (max-width: 640px) {
+  .cron-toolbar__primary,
+  .cron-detail-meta,
+  .cron-detail-actions {
+    flex-wrap: wrap;
+  }
+
+  .cron-detail-header {
+    flex-direction: column;
+  }
+
+  .cron-detail-title,
+  .cron-detail-sub {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .cron-control {
+    width: 100%;
+    align-items: stretch;
+  }
+
+  .cron-control .cron-help {
+    text-align: start;
+  }
+
+  .cron-inline-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cron-editor-actions {
+    padding-bottom: calc(var(--space-3) + var(--safe-area-bottom));
+  }
+
+  .cron-editor-actions > .btn {
+    flex: 1 1 auto;
+  }
+
   .cron-run-entry__body table {
     display: block;
     overflow-x: auto;
@@ -1243,34 +1211,13 @@
 }
 
 @media (max-width: 560px) {
-  .cron-stats {
-    flex-wrap: wrap;
-  }
-
-  .cron-overview-summary {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: var(--space-2);
-  }
-
   .cron-admin-note {
-    margin-left: 0;
-  }
-
-  .cron-toolbar__filters {
-    flex-wrap: wrap;
-  }
-
-  .cron-search-box {
-    flex-basis: 100%;
-  }
-
-  .cron-filter-popover__trigger {
-    margin-left: auto;
+    align-self: flex-start;
   }
 
   .cron-new-task {
-    width: 32px;
+    width: 44px;
+    min-height: 44px;
     padding: 0;
     justify-content: center;
     font-size: 0;
@@ -1280,6 +1227,25 @@
     width: 14px;
     height: 14px;
   }
+}
+
+@media (max-width: 400px) {
+  .cron-table__row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cron-table__cell {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  }
+
+  .cron-table__actions {
+    padding-left: 0;
+  }
+}
+
+.shell--embed-settings .cron-editor-actions {
+  padding-bottom: calc(var(--space-3) + var(--safe-area-bottom));
 }
 
 /* Web Awesome popup surfaces own positioning, dismissal, and focus. */

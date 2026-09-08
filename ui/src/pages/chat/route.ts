@@ -2,6 +2,7 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
 import { INTERNAL_SESSION_PATH_PARAM, pathForRoute, routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 
 function sessionLoaderDeps(
@@ -18,7 +19,7 @@ function sessionLoaderDeps(
     search.delete(INTERNAL_SESSION_PATH_PARAM);
   }
   const serializedSearch = search.toString();
-  return `${bridgedPath ?? location.pathname}\u0000${
+  return `${gatewayPresentationScope(context.gateway).key}\u0000${bridgedPath ?? location.pathname}\u0000${
     serializedSearch ? `?${serializedSearch}` : ""
   }`;
 }
@@ -40,11 +41,13 @@ function sessionPage(face: BoardFace) {
         import("./route-view.ts"),
         import("../../styles/chat/composer-progress.css"),
         import("../../styles/chat/composer-queue.css"),
+        import("../../styles/chat/composer-status.css"),
       ]).then(([, { renderChatRoute, sessionRenderOwnerKey }]) => ({
         header: true,
         // ChatPage's bounded inner cache owns per-session teardown, so session
         // routes share the outer owner while their data and URL keep changing.
         renderOwnerKey: sessionRenderOwnerKey,
+        retainOnNavigate: true,
         render: renderChatRoute,
       })),
   });

@@ -3,6 +3,7 @@
  */
 export {
   callGatewayTool,
+  hasGatewayToolRoutingContext,
   listNodes,
   resolveNodeIdFromList,
 } from "openclaw/plugin-sdk/agent-harness-runtime";

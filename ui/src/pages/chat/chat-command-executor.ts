@@ -33,6 +33,7 @@ import {
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
+import { resolveSessionContextLimit } from "../../lib/sessions/context-budget.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   DEFAULT_AGENT_ID,
@@ -44,7 +45,7 @@ import { patchChatCommandSessionSettings, selectedGlobalScope } from "./chat-set
 
 type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */
-  content: string;
+  content?: string;
   /** Side-effect action the caller should perform after displaying the result. */
   action?: "refresh" | "export" | "new-session" | "reset" | "stop" | "clear" | "navigate-usage";
   /** Model-dependent tools need refreshing after a confirmed selection. */
@@ -221,17 +222,7 @@ async function executeCompact(
       };
     }
     if (result?.compacted) {
-      const before = result.result?.tokensBefore;
-      const after = result.result?.tokensAfter;
-      const tokenSummary =
-        typeof before === "number" && typeof after === "number"
-          ? t("chat.commandResults.compaction.tokenSummary", {
-              before: before.toLocaleString(),
-              after: after.toLocaleString(),
-            })
-          : "";
       return {
-        content: `${t("chat.commandResults.compaction.succeeded")}${tokenSummary}.`,
         action: "refresh",
       };
     }
@@ -546,7 +537,8 @@ async function executeUsage(
       ? (session.totalTokens ?? null)
       : cumulativeTotal;
     const totalTokensFresh = session.totalTokensFresh !== false;
-    const ctx = session.contextTokens ?? 0;
+    const limit = resolveSessionContextLimit(session);
+    const ctx = limit.tokens;
     const pct =
       contextSnapshotTotal !== null && totalTokensFresh && ctx > 0
         ? Math.round((contextSnapshotTotal / ctx) * 100)
@@ -568,10 +560,15 @@ async function executeUsage(
     ];
     if (pct !== null) {
       lines.push(
-        t("chat.commandResults.usage.context", {
-          percent: `**${pct}%**`,
-          total: formatCompactTokenCount(ctx),
-        }),
+        t(
+          limit.fromLastPrompt
+            ? "chat.commandResults.usage.promptBudget"
+            : "chat.commandResults.usage.context",
+          {
+            percent: `**${pct}%**`,
+            total: formatCompactTokenCount(ctx),
+          },
+        ),
       );
     }
     if (session.model) {
@@ -842,7 +839,7 @@ async function executeSteer(
     );
     const terminalAckContent = formatTerminalSteerAckContent(ackStatus);
     if (terminalAckContent) {
-      return { content: terminalAckContent };
+      return { content: terminalAckContent, failed: true };
     }
     const result: SlashCommandResult = { content: t("chat.commandResults.steer.succeeded") };
     if (ackStatus === "started" || ackStatus === "in_flight") {
@@ -883,7 +880,7 @@ async function executeRedirect(
     const ackStatus = normalizeSteerChatSendAckStatus(resp);
     const terminalAckContent = formatTerminalRedirectAckContent(ackStatus);
     if (terminalAckContent) {
-      return { content: terminalAckContent };
+      return { content: terminalAckContent, failed: true };
     }
     const runId = typeof resp?.runId === "string" ? resp.runId : undefined;
     return {

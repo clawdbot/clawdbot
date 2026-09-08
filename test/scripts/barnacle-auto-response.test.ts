@@ -43,10 +43,11 @@ function prContextBody(evidence: string, overrides: Record<string, string> = {})
   ].join("\n");
 }
 
-function file(filename: string, status = "modified") {
+function file(filename: string, status = "modified", previousFilename?: string) {
   return {
     filename,
     status,
+    ...(previousFilename ? { previous_filename: previousFilename } : {}),
   };
 }
 
@@ -282,39 +283,56 @@ describe("barnacle-auto-response", () => {
     ]);
   });
 
-  it("classifies only an added bundled skill for the ClawHub close", () => {
-    for (const filename of [
-      "src/skills/loading/plugin-skills.test.ts",
-      "src/skills/workspace.ts",
-      "skills/weather/SKILL.md",
+  it("classifies only changes confined to newly added ordinary skill roots for the ClawHub close", () => {
+    for (const files of [
+      [file("src/skills/loading/plugin-skills.test.ts")],
+      [file("src/skills/workspace.ts")],
+      [file("skills/weather/SKILL.md")],
+      [file("custodian-skills/weather/SKILL.md", "added")],
+      [file("skills/weather/SKILL.md", "added"), file("src/skills/workspace.ts")],
+      [
+        file("skills/weather/SKILL.md", "added"),
+        file("skills/weather/runtime.ts", "renamed", "src/skills/runtime.ts"),
+      ],
     ]) {
       expect(
-        classifyPullRequestCandidateLabels(pr("Fix linked skill behavior", "Fixes #127931"), [
-          file(filename),
-        ]),
+        classifyPullRequestCandidateLabels(pr("Fix linked skill behavior", "Fixes #127931"), files),
       ).not.toContain("r: skill");
     }
 
-    for (const filename of [
-      "skills/weather-helper/SKILL.md",
-      "skills/group/weather-helper/SKILL.md",
+    for (const files of [
+      [
+        file("skills/weather-helper/SKILL.md", "added"),
+        file("skills/weather-helper/references/usage.md", "added"),
+      ],
+      [
+        file("skills/Group/Weather-Helper/skill.md", "added"),
+        file("skills/Group/Weather-Helper/scripts/check.mjs", "added"),
+      ],
+      [
+        file("skills/weather-helper/SKILL.md", "added"),
+        file("skills/weather-helper/README.md", "added"),
+        file("skills/group/calendar-helper/SKILL.md", "added"),
+        file("skills/group/calendar-helper/assets/icon.svg", "added"),
+      ],
     ]) {
-      expect(
-        classifyPullRequestCandidateLabels(pr("Add weather helper skill"), [
-          file(filename, "added"),
-        ]),
-      ).toContain("r: skill");
+      expect(classifyPullRequestCandidateLabels(pr("Add weather helper skill"), files)).toContain(
+        "r: skill",
+      );
     }
   });
 
-  it("removes a stale automated skill close label from a core test-only PR", async () => {
-    const { calls, github } = barnacleGithub([file("src/skills/loading/plugin-skills.test.ts")]);
+  it("removes a stale automated skill close label from a mixed skill and core PR", async () => {
+    const { calls, github } = barnacleGithub([
+      file("skills/weather-helper/SKILL.md", "added"),
+      file("src/skills/loading/plugin-skills.test.ts"),
+    ]);
 
     await runBarnacleAutoResponse({
       github,
       context: barnacleContext(
         {
-          title: "Fix Windows symlink typing",
+          title: "Add a skill and fix Windows symlink typing",
           body: "Fixes #127931",
         },
         ["r: skill"],
@@ -334,8 +352,11 @@ describe("barnacle-auto-response", () => {
     expect(calls.update).toStrictEqual([]);
   });
 
-  it("closes a newly added bundled skill deterministically", async () => {
-    const { calls, github } = barnacleGithub([file("skills/weather-helper/SKILL.md", "added")]);
+  it("closes a newly added ordinary skill and its assets deterministically", async () => {
+    const { calls, github } = barnacleGithub([
+      file("skills/weather-helper/SKILL.md", "added"),
+      file("skills/weather-helper/references/usage.md", "added"),
+    ]);
 
     await runBarnacleAutoResponse({
       github,

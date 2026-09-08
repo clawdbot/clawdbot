@@ -18,8 +18,6 @@ repos:
       - id: check-added-large-files
         args: [--maxkb=500]
       - id: check-merge-conflict
-      - id: detect-private-key
-        exclude: '(^|/)(\.pre-commit-config\.yaml$|apps/ios/fastlane/Fastfile$|.*\.test\.ts$)'
   # Shell script linting
   - repo: https://github.com/koalaman/shellcheck-precommit
     rev: v0.11.0
@@ -71,6 +69,13 @@ repos:
   # Project checks (same commands as CI)
   - repo: local
     hooks:
+      # node scripts/detect-private-keys.mts (scanner owns its exclude list)
+      - id: detect-private-key
+        name: detect private key
+        entry: node scripts/detect-private-keys.mts
+        language: system
+        types: [text]
+
       # node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
       - id: pnpm-audit-prod
         name: pnpm-audit-prod

@@ -585,7 +585,7 @@ final class ComputerActionService {
                 guard let self else { throw CancellationError() }
                 try self.executionQueue.checkExecutionAllowed(lifecycleGeneration: generation)
             }
-            return OpenClawComputerActResult(ok: true, cursorX: 0, cursorY: 0)
+            return OpenClawComputerActResult(ok: true)
         }
     }
     #endif

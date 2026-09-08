@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import { decodeMountInfoPath } from "../packages/normalization-core/src/mountinfo-path.ts";
+import { BUNDLED_PLUGIN_BUILD_ENV_NAMES } from "./lib/bundled-plugin-build-entries.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
@@ -29,6 +30,7 @@ import {
 } from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
+import { sanitizeBundlerHelperDtsExportTree } from "./lib/sanitize-bundler-helper-dts-exports.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_UNIFIED_CONFIG_GROUP,
@@ -76,9 +78,62 @@ const ROOT_TSDOWN_OUTPUT_ROOTS = ["dist", "dist-runtime"];
 const PRESERVED_TSDOWN_OUTPUT_FILES = ["dist/cli-startup-metadata.json"];
 const PRESERVE_CLI_STARTUP_METADATA_ENV = "OPENCLAW_PRESERVE_CLI_STARTUP_METADATA";
 const GENERATED_SOURCE_DECLARATION_PATHSPEC = ":(glob)extensions/**/*.d.ts";
-const DECLARATION_EXTENSIONS = [".d.ts", ".d.mts", ".d.cts"];
+export const TSDOWN_DECLARATION_EXTENSIONS = [".d.ts", ".d.mts", ".d.cts"];
 const SOURCE_DECLARATION_SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"];
 const RUN_NODE_SKIP_DTS_BUILD_ENV = "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD";
+
+const TSDOWN_SOURCE_EXTENSIONS = [
+  ".cjs",
+  ".cts",
+  ".js",
+  ".json",
+  ".json5",
+  ".mjs",
+  ".mts",
+  ".sql",
+  ".ts",
+  ".tsx",
+  ".yaml",
+  ".yml",
+];
+
+export const TSDOWN_DECLARATION_TOOL_INPUTS = [
+  "package.json",
+  "pnpm-lock.yaml",
+  "tsconfig.json",
+  "scripts/tsdown-build.mts",
+  "scripts/build-all.mts",
+  "scripts/lib/build-artifact-cache.mts",
+  "scripts/lib/dist-artifact-ownership.mts",
+  "scripts/lib/managed-child-process.mts",
+  "scripts/lib/vitest-resource-ownership.mts",
+  "scripts/lib/direct-run.mjs",
+  "scripts/lib/repo-root.mjs",
+  "scripts/lib/local-check-runtime.mts",
+  "scripts/tsx.mjs",
+  "scripts/lib/tsx-cli-shim.mjs",
+  "scripts/lib/bundled-plugin-build-entries.mjs",
+  "scripts/lib/bundled-plugin-paths.mjs",
+  "scripts/lib/optional-bundled-clusters.mjs",
+  "scripts/lib/plugin-sdk-entries.mts",
+  "scripts/lib/plugin-sdk-entrypoints.json",
+  "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
+  "scripts/lib/plugin-sdk-deprecated-public-subpaths.json",
+  "scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json",
+  "scripts/lib/root-package-bundled-plugin-excludes.mjs",
+  "scripts/lib/tsdown-config-groups.mts",
+  "scripts/lib/tsdown-declaration-boundary.mts",
+  "scripts/lib/tsdown-output-roots.mts",
+];
+export const TSDOWN_PACKAGES_CACHE_INPUT = {
+  path: "packages",
+  extensions: TSDOWN_SOURCE_EXTENSIONS,
+  excludeDirectories: ["dist", "node_modules"],
+};
+export const TSDOWN_UNIFIED_CACHE_ENV = [
+  "OPENCLAW_BUILD_PRIVATE_QA",
+  ...BUNDLED_PLUGIN_BUILD_ENV_NAMES,
+];
 
 type OutputRootParams = {
   cwd?: string;
@@ -215,11 +270,9 @@ export function cleanTsdownOutputRoots(params: OutputRootParams = {}) {
   const rootPaths = assertTsdownCleanOutputRoots({ cwd, fs: fsImpl, pathImpl, roots });
   const protectedDeclarationPaths =
     env[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1"
-      ? listExistingDeclarationOutputPaths(cwd, fsImpl, roots)
+      ? listExistingGeneratedDeclarationOutputPaths(cwd, fsImpl, roots)
       : new Set<string>();
   const protectedPaths = new Set([
-    // Vite owns and cleans this subtree; runtime-only builds cannot recreate it.
-    path.resolve(cwd, "dist/control-ui"),
     ...protectedDeclarationPaths,
     ...listExistingPreservedOutputPaths(cwd, env, fsImpl),
   ]);
@@ -273,7 +326,11 @@ function cleanOutputRootExcept(rootPath: string, protectedPaths: Set<string>, fs
   }
 }
 
-function listExistingDeclarationOutputPaths(cwd: string, fsImpl: typeof fs, roots: string[]) {
+function listExistingGeneratedDeclarationOutputPaths(
+  cwd: string,
+  fsImpl: typeof fs,
+  roots: string[],
+) {
   const protectedPaths = new Set<string>();
   for (const root of roots) {
     collectDeclarationOutputPaths(path.resolve(cwd, root), protectedPaths, fsImpl);
@@ -282,7 +339,8 @@ function listExistingDeclarationOutputPaths(cwd: string, fsImpl: typeof fs, root
 }
 
 function listExistingPreservedOutputPaths(cwd: string, env: NodeJS.ProcessEnv, fsImpl: typeof fs) {
-  const protectedPaths = new Set<string>();
+  // Vite owns and cleans this subtree; tsdown cannot recreate its assets.
+  const protectedPaths = new Set([path.resolve(cwd, "dist/control-ui")]);
   // Mac packaging owns replacement of signed bundles. Rebuilding its JS must
   // leave the previous app (including its private runtime) usable on failure.
   const pendingDirectories = [path.join(cwd, "dist")];
@@ -319,6 +377,26 @@ function listExistingPreservedOutputPaths(cwd: string, env: NodeJS.ProcessEnv, f
   return protectedPaths;
 }
 
+/** Publish generated declarations without claiming runtime assets or protected subtrees. */
+export function listReplaceableTsdownDeclarationOutputs(params: OutputRootParams = {}) {
+  const cwd = path.resolve(params.cwd ?? process.cwd());
+  const fsImpl = params.fs ?? fs;
+  const roots = params.roots ?? listTsdownOutputRoots();
+  assertTsdownCleanOutputRoots({ ...params, cwd, fs: fsImpl, roots });
+  const protectedPaths = [
+    ...listExistingPreservedOutputPaths(cwd, params.env ?? process.env, fsImpl),
+  ];
+  return [...listExistingGeneratedDeclarationOutputPaths(cwd, fsImpl, roots)]
+    .filter(
+      (file) =>
+        !protectedPaths.some(
+          (protectedPath) =>
+            file === protectedPath || file.startsWith(`${protectedPath}${path.sep}`),
+        ),
+    )
+    .toSorted();
+}
+
 function collectDeclarationOutputPaths(
   rootPath: string,
   protectedPaths: Set<string>,
@@ -335,7 +413,7 @@ function collectDeclarationOutputPaths(
     const entryPath = path.join(rootPath, entry.name);
     if (entry.isDirectory()) {
       collectDeclarationOutputPaths(entryPath, protectedPaths, fsImpl);
-    } else if (DECLARATION_EXTENSIONS.some((extension) => entry.name.endsWith(extension))) {
+    } else if (TSDOWN_DECLARATION_EXTENSIONS.some((extension) => entry.name.endsWith(extension))) {
       protectedPaths.add(path.resolve(entryPath));
     }
   }
@@ -474,6 +552,14 @@ export function resolveTsdownCleanOutputRoots(args: string[] = []) {
     return [aiRoot, ...selectedMainRoots];
   }
   return listTsdownOutputRoots();
+}
+
+export function sanitizeTsdownBuildOutputRoots(args: string[] = [], cwd = process.cwd()): void {
+  const roots = resolveTsdownCleanOutputRoots(args);
+  const rootPaths = assertTsdownCleanOutputRoots({ cwd, roots });
+  for (const rootPath of rootPaths) {
+    sanitizeBundlerHelperDtsExportTree(rootPath);
+  }
 }
 
 function wrapperOwnsTsdownCleanup(args: string[]) {
@@ -1365,7 +1451,7 @@ function resolveSerializedMainConfigGroups(filters: string[]) {
   ) {
     return null;
   }
-  if (filters.includes(TSDOWN_UNIFIED_CONFIG_GROUP)) {
+  if (filters.includes(TSDOWN_UNIFIED_CONFIG_GROUP) && !filters.some(isUnifiedDtsGroup)) {
     return filters.includes(TSDOWN_PACKAGE_CONFIG_GROUP)
       ? SERIALIZED_MAIN_CONFIG_GROUPS
       : SERIALIZED_MAIN_CONFIG_GROUPS.slice(1);
@@ -1800,28 +1886,43 @@ export async function executeTsdownBuildPlan(
   return 1;
 }
 
-export async function runTsdownBuild(argv: string[] = process.argv.slice(2)): Promise<number> {
+export async function runTsdownBuild(
+  argv: string[] = process.argv.slice(2),
+  options: {
+    cwd?: string;
+    executeBuild?: (forwardedArgs: string[]) => Promise<number>;
+  } = {},
+): Promise<number> {
   const args = parseTsdownBuildArgs(argv);
   if (args.help) {
     console.log(tsdownBuildUsage());
     return 0;
   }
-  const plan = prepareTsdownBuildExecution(
-    { args: args.forwardedArgs },
-    {
-      reportShortfall(shortfall) {
-        if (shortfall.fatal) {
-          console.error(shortfall.message);
-        } else {
-          console.warn(shortfall.message);
-        }
+  let code: number;
+  if (options.executeBuild) {
+    code = await options.executeBuild(args.forwardedArgs);
+  } else {
+    const plan = prepareTsdownBuildExecution(
+      { args: args.forwardedArgs },
+      {
+        reportShortfall(shortfall) {
+          if (shortfall.fatal) {
+            console.error(shortfall.message);
+          } else {
+            console.warn(shortfall.message);
+          }
+        },
       },
-    },
-  );
-  if (!plan) {
-    return 1;
+    );
+    if (!plan) {
+      return 1;
+    }
+    code = await executeTsdownBuildPlan(plan);
   }
-  return executeTsdownBuildPlan(plan);
+  if (code === 0) {
+    sanitizeTsdownBuildOutputRoots(args.forwardedArgs, options.cwd);
+  }
+  return code;
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {

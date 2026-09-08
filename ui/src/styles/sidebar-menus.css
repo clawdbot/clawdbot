@@ -1,0 +1,107 @@
+.session-menu__compact-details {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 96px;
+  overflow: hidden;
+}
+
+wa-dropdown-item.session-menu__item--compact-details::part(label) {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+wa-dropdown-item.session-menu__item--compact-details {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+}
+
+wa-dropdown.sidebar-session-sort-menu::part(menu) {
+  box-sizing: border-box;
+  width: min(220px, calc(100dvw - 16px));
+}
+
+wa-dropdown-item.sidebar-session-owner-submenu::part(submenu) {
+  width: min(220px, calc(100dvw - 16px));
+  max-width: calc(100dvw - 16px);
+}
+
+wa-dropdown-item.sidebar-session-owner-submenu::part(submenu),
+.session-menu__item::part(submenu) {
+  max-height: calc(100dvh - 16px);
+  overflow: auto;
+}
+
+.row.session-menu__label {
+  min-width: 0;
+}
+
+wa-dropdown-item.sidebar-session-owner-submenu::part(submenu-icon) {
+  inset-inline-end: 8px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.sidebar-session-owner-submenu {
+  color: var(--text);
+}
+
+/* Web Awesome's details part is fixed-size and end-justified, so a selection
+   rail wider than its column spills leftward across the row label. Give the
+   row label its own width (capped so it can still truncate), let the details
+   part absorb the remaining width, and let the rail shrink into it so the
+   selected owner's name truncates before the label does. */
+wa-dropdown-item.sidebar-session-owner-submenu::part(label) {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-width: 0;
+  max-width: 60%;
+}
+
+/* Web Awesome also forces a 2em start margin on the slotted rail, which the
+   light DOM cannot outrank. Pull the part back by that margin so the rail keeps
+   the row's 8px gutter instead of stacking a ~30px one. */
+wa-dropdown-item.sidebar-session-owner-submenu::part(details) {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-inline-start: -2em;
+}
+
+.session-menu__shortcut.sidebar-session-owner-count {
+  min-width: 0;
+  margin-inline-end: -2px;
+  text-align: right;
+}
+
+.session-menu__shortcut.sidebar-session-owner-selection {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  width: auto;
+  max-width: 96px;
+  margin-inline-end: -2px;
+  font-family: inherit;
+}
+
+.sidebar-session-owner-selection .viewer-avatar {
+  flex: 0 0 auto;
+  border-color: var(--bg-elevated);
+}
+
+.sidebar-session-owner-selection__name {
+  display: block;
+  flex: 1 1 auto;
+  max-width: 72px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -52,6 +52,8 @@ export type ModelCallDiagnosticContext = {
   nextCallId: () => string;
   ownerGeneration?: CoreModelRequestOwnerGeneration;
   onStarted?: () => void;
+  onTerminal?: () => void;
+  onSucceeded?: (startedAt: number) => void;
   suppressPluginHooks?: boolean;
   requestTimeoutMs?: number;
 };
@@ -95,9 +97,10 @@ export type ModelCallObservationState = {
   outputMessages?: unknown[];
   usage?: ModelCallUsage;
   contentCapture?: DiagnosticModelContentCapturePolicy;
-  lastStreamProgressAt?: number;
   semanticProgressEmitted?: boolean;
   terminalEventEmitted?: boolean;
+  terminalError?: Error;
+  terminalSucceeded?: boolean;
   suppressPluginHooks?: boolean;
 };
 export type ModelCallObserver = {
@@ -279,10 +282,11 @@ function dispatchModelCallEndedHook(
   );
 }
 
-function emitModelCallCompleted(
+function emitModelCallEnded(
   eventBase: ModelCallEventBase,
   startedAt: number,
   observer: ModelCallObserver,
+  failure: { error: unknown } | undefined,
   ownerGeneration: CoreModelRequestOwnerGeneration | undefined,
 ): void {
   if (observer.state.terminalEventEmitted) {
@@ -291,66 +295,27 @@ function emitModelCallCompleted(
   observer.state.terminalEventEmitted = true;
   const durationMs = Date.now() - startedAt;
   const sizeTimingFields = observer.sizeTimingFields();
-  emitProviderRequestTimelineEvent(
-    eventBase,
-    startedAt,
-    durationMs,
-    true,
-    observer.state.responseStatus,
-    observer.state.providerAcceptanceKind,
-  );
-  emitCoreModelRequestEndedDiagnosticEvent(
-    {
-      type: "model.call.completed",
-      ...eventBase,
-      durationMs,
-      ...sizeTimingFields,
-      ...observer.usageField(),
-    },
-    ownerGeneration,
-    modelContentPrivateData(observer.completedContent()),
-  );
-  if (!observer.state.suppressPluginHooks) {
-    dispatchModelCallEndedHook(eventBase, {
-      durationMs,
-      outcome: "completed",
-      ...sizeTimingFields,
-    });
-  }
-}
-
-function emitModelCallError(
-  eventBase: ModelCallEventBase,
-  startedAt: number,
-  observer: ModelCallObserver,
-  err: unknown,
-  ownerGeneration: CoreModelRequestOwnerGeneration | undefined,
-): void {
-  if (observer.state.terminalEventEmitted) {
-    return;
-  }
-  observer.state.terminalEventEmitted = true;
-  const durationMs = Date.now() - startedAt;
-  const sizeTimingFields = observer.sizeTimingFields();
-  const fields = modelCallErrorFields(err);
-  const errorStatus = diagnosticHttpStatusCode(err);
+  const fields = failure ? modelCallErrorFields(failure.error) : undefined;
+  const terminal = fields
+    ? { type: "model.call.error" as const, ...fields }
+    : { type: "model.call.completed" as const };
+  const errorStatus = failure ? diagnosticHttpStatusCode(failure.error) : undefined;
   const responseStatus =
     observer.state.responseStatus ?? (errorStatus === undefined ? undefined : Number(errorStatus));
   emitProviderRequestTimelineEvent(
     eventBase,
     startedAt,
     durationMs,
-    false,
+    failure === undefined,
     responseStatus,
     observer.state.providerAcceptanceKind,
   );
   emitCoreModelRequestEndedDiagnosticEvent(
     {
-      type: "model.call.error",
+      ...terminal,
       ...eventBase,
       durationMs,
       ...sizeTimingFields,
-      ...fields,
       ...observer.usageField(),
     },
     ownerGeneration,
@@ -359,7 +324,7 @@ function emitModelCallError(
   if (!observer.state.suppressPluginHooks) {
     dispatchModelCallEndedHook(eventBase, {
       durationMs,
-      outcome: "error",
+      outcome: failure ? "error" : "completed",
       ...sizeTimingFields,
       ...fields,
     });
@@ -444,16 +409,37 @@ export function createModelLifecycle(params: {
   params.ctx.onStarted?.();
   const startedAt = Date.now();
   const propagatedOptions = withDiagnosticRequestContext(params.options, trace, observer, callId);
+  let terminalNotified = false;
   return {
     eventBase,
     observer,
     propagatedOptions,
     startedAt,
     emitCompleted() {
-      emitModelCallCompleted(eventBase, startedAt, observer, params.ctx.ownerGeneration);
+      // Iterator exhaustion can emit diagnostics before result() supplies the terminal response.
+      if (!terminalNotified && (observer.state.terminalSucceeded || observer.state.terminalError)) {
+        terminalNotified = true;
+        params.ctx.onTerminal?.();
+        if (observer.state.terminalSucceeded && !observer.state.terminalError) {
+          params.ctx.onSucceeded?.(startedAt);
+        }
+      }
+      emitModelCallEnded(
+        eventBase,
+        startedAt,
+        observer,
+        observer.state.terminalError ? { error: observer.state.terminalError } : undefined,
+        params.ctx.ownerGeneration,
+      );
     },
     emitError(err: unknown) {
-      emitModelCallError(eventBase, startedAt, observer, err, params.ctx.ownerGeneration);
+      emitModelCallEnded(
+        eventBase,
+        startedAt,
+        observer,
+        { error: err },
+        params.ctx.ownerGeneration,
+      );
     },
   };
 }

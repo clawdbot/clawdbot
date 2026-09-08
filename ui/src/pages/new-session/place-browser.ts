@@ -1,25 +1,23 @@
 import { html, nothing } from "lit";
-import type { FsListDirResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import type { PlaceBrowserState } from "./place-browser-state.ts";
 
 export function renderPlaceBrowser(params: {
-  listing: FsListDirResult | null;
+  browser: PlaceBrowserState;
+  id: string;
   label: string;
-  loading: boolean;
-  error: string | null;
-  pathDraft: string;
-  usablePath: string | null;
   registerProjectPath: string | null;
   registeringProject: boolean;
-  onPathDraftChange: (value: string) => void;
-  onNavigate: (path: string | undefined) => void;
   onBack: () => void;
   onRegisterProject: (path: string) => void;
   onClose: () => void;
   onApplyFolder: (path: string) => void;
 }) {
-  const entries = params.listing?.entries ?? [];
+  const { browser, id } = params;
+  const { entries, empty } = browser.view();
+  const highlighted = browser.highlightedEntry();
+  const usablePath = browser.usablePath();
   const registerProjectPath = params.registerProjectPath;
   return html`
     <div
@@ -40,8 +38,8 @@ export function renderPlaceBrowser(params: {
           title=${t("newSession.browserUp")}
           aria-label=${t("newSession.browserUp")}
           @click=${() => {
-            if (params.listing?.parent) {
-              params.onNavigate(params.listing.parent);
+            if (browser.listing?.parent) {
+              void browser.navigate(browser.listing.parent);
             } else {
               params.onBack();
             }
@@ -52,22 +50,46 @@ export function renderPlaceBrowser(params: {
         <input
           class="new-session-page__browser-path"
           type="text"
+          role="combobox"
+          aria-expanded="true"
+          aria-autocomplete="list"
+          aria-controls=${`${id}-list`}
+          aria-activedescendant=${highlighted ? `${id}-option-${browser.activeIndex}` : nothing}
           aria-label=${t("newSession.folder")}
           placeholder=${params.label}
-          .value=${params.pathDraft}
+          .value=${browser.draft}
           @input=${(event: Event) => {
-            params.onPathDraftChange((event.target as HTMLInputElement).value);
+            browser.setDraft((event.target as HTMLInputElement).value);
           }}
           @keydown=${(event: KeyboardEvent) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              params.onNavigate(params.pathDraft.trim() || undefined);
+            switch (event.key) {
+              case "ArrowDown":
+              case "ArrowUp":
+                event.preventDefault();
+                browser.moveHighlight(event.key === "ArrowDown" ? 1 : -1);
+                requestAnimationFrame(() =>
+                  document
+                    .getElementById(`${id}-option-${browser.activeIndex}`)
+                    ?.scrollIntoView({ block: "nearest" }),
+                );
+                break;
+              case "Enter":
+                event.preventDefault();
+                void browser.activate();
+                break;
+              case "Tab":
+                if (!event.shiftKey && browser.completeHighlighted()) {
+                  event.preventDefault();
+                }
+                break;
             }
           }}
         />
-        ${params.loading
-          ? html`<span class="new-session-page__browser-loading">${t("common.loading")}</span>`
-          : nothing}
+        ${
+          browser.loading
+            ? html`<span class="new-session-page__browser-loading">${t("common.loading")}</span>`
+            : nothing
+        }
         <button
           type="button"
           class="new-session-page__browser-nav"
@@ -78,20 +100,32 @@ export function renderPlaceBrowser(params: {
           ${icons.x}
         </button>
       </div>
-      ${params.error ? html`<div class="new-session-page__error">${params.error}</div>` : nothing}
-      <div class="new-session-page__browser-list" role="group" aria-label=${t("newSession.folder")}>
-        ${params.listing && entries.length === 0 && !params.loading
-          ? html`<div class="new-session-page__browser-empty">${t("newSession.browserEmpty")}</div>`
-          : nothing}
+      ${browser.error ? html`<div class="new-session-page__error">${browser.error}</div>` : nothing}
+      <div
+        class="new-session-page__browser-list"
+        role="listbox"
+        id=${`${id}-list`}
+        aria-label=${t("newSession.folder")}
+      >
+        ${
+          empty !== "none"
+            ? html`<div class="new-session-page__browser-empty">
+                ${t(empty === "no-matches" ? "newSession.browserNoMatches" : "newSession.browserEmpty")}
+              </div>`
+            : nothing
+        }
         ${entries.map(
-          (entry) => html`
+          (entry, index) => html`
             <button
               type="button"
-              class="new-session-page__browser-entry ${entry.hidden
-                ? "new-session-page__browser-entry--hidden"
-                : ""}"
+              role="option"
+              id=${`${id}-option-${index}`}
+              aria-selected=${index === browser.activeIndex}
+              class="new-session-page__browser-entry ${
+                index === browser.activeIndex ? "new-session-page__browser-entry--active" : ""
+              } ${entry.hidden ? "new-session-page__browser-entry--hidden" : ""}"
               title=${entry.hidden ? t("newSession.hiddenFolder") : nothing}
-              @click=${() => params.onNavigate(entry.path)}
+              @click=${() => void browser.navigate(entry.path)}
             >
               <span class="new-session-page__target-icon" aria-hidden="true">${icons.folder}</span>
               <span>${entry.name}</span>
@@ -100,25 +134,27 @@ export function renderPlaceBrowser(params: {
         )}
       </div>
       <div class="new-session-page__browser-actions">
-        ${registerProjectPath
-          ? html`
-              <button
-                type="button"
-                class="new-session-page__browser-register"
-                ?disabled=${params.registeringProject}
-                @click=${() => params.onRegisterProject(registerProjectPath)}
-              >
-                ${t("newSession.registerProject")}
-              </button>
-            `
-          : nothing}
+        ${
+          registerProjectPath
+            ? html`
+                <button
+                  type="button"
+                  class="new-session-page__browser-register"
+                  ?disabled=${params.registeringProject}
+                  @click=${() => params.onRegisterProject(registerProjectPath)}
+                >
+                  ${t("newSession.registerProject")}
+                </button>
+              `
+            : nothing
+        }
         <button
           type="button"
           class="new-session-page__browser-use"
-          ?disabled=${params.usablePath === null || params.registeringProject}
+          ?disabled=${usablePath === null || params.registeringProject}
           @click=${() => {
-            if (params.usablePath !== null) {
-              params.onApplyFolder(params.usablePath);
+            if (usablePath !== null) {
+              params.onApplyFolder(usablePath);
               params.onClose();
             }
           }}

@@ -14,7 +14,6 @@ import type { FailoverReason } from "./failover/signal.js";
 export {
   clearAllCliSessions,
   getCliSessionBinding,
-  getCliSessionId,
 } from "../config/sessions/cli-session-binding.js";
 
 const CLAUDE_CLI_BACKEND_ID = "claude-cli";
@@ -35,9 +34,37 @@ export function hashCliSessionText(value: string | undefined): string | undefine
   return crypto.createHash("sha256").update(trimmed).digest("hex");
 }
 
-/** Store a reusable CLI session ID without extra reuse guards. */
-export function setCliSessionId(entry: SessionEntry, provider: string, sessionId: string): void {
-  setCliSessionBinding(entry, provider, { sessionId });
+/** Projects explicit native continuity; diagnostic sessionId can name the local session. */
+export function applyCliSessionBindingResult(
+  entry: SessionEntry,
+  provider: string,
+  meta?: {
+    cliSessionBinding?: CliSessionBinding;
+    clearCliSessionBinding?: boolean;
+  },
+): boolean {
+  if (meta?.clearCliSessionBinding === true) {
+    clearCliSession(entry, provider);
+  } else if (meta?.cliSessionBinding?.sessionId.trim()) {
+    setCliSessionBinding(entry, provider, meta.cliSessionBinding);
+  } else {
+    return false;
+  }
+  return true;
+}
+
+/** Revalidates the exact turn owner at native continuity's synchronous commit edge. */
+export function assertCliSessionBindingResultCommitAllowed(
+  meta: { clearCliSessionBinding?: boolean } | undefined,
+  assertSettlementCurrent: () => void,
+  abortSignal?: AbortSignal,
+): void {
+  assertSettlementCurrent();
+  // Explicit invalidation is owner cleanup: abort may clear an unusable
+  // handle, but never through a closed, released, or replaced turn.
+  if (meta?.clearCliSessionBinding !== true) {
+    abortSignal?.throwIfAborted();
+  }
 }
 
 /** Store a CLI session binding and mirror it to legacy/simple session-id fields. */

@@ -64,15 +64,11 @@ export function updateSwarmCollectorCompletion(
         }
       : undefined;
   const resolvedStatus = resolveStatus(entry, captured?.structured !== undefined);
-  const next = {
+  entry.collectorCompletion = {
     status: schemaError && resolvedStatus === "done" ? ("failed" as const) : resolvedStatus,
     ...(captured?.structured !== undefined ? { structured: captured.structured } : {}),
     ...(schemaError ? { schemaError } : {}),
     ...(usage ? { usage } : {}),
   };
-  if (JSON.stringify(entry.collectorCompletion) === JSON.stringify(next)) {
-    return false;
-  }
-  entry.collectorCompletion = next;
   return true;
 }

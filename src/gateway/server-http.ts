@@ -11,28 +11,32 @@ import type { TlsOptions } from "node:tls";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { isCanvasDocumentHttpPath } from "../canvas/constants.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { runHttpConnectionRequest } from "../infra/http-request-lifecycle.js";
+import { readTailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { parseDevicePairingJoinRequestPath } from "../pairing/join-code.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveAssistantAgentId } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import {
-  parseControlUiUserAvatarPath,
-  parseControlUiResourcePath,
-  type ControlUiResourceRoute,
-} from "./control-ui-contract.js";
+import { parseControlUiUserAvatarPath, parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
+import { controlUiPluginAssetRoot } from "./control-ui-plugin-assets-contract.js";
+import { createControlUiPublicSessionRoute } from "./control-ui-public-session.js";
+import { resolveAssistantMediaRoutePath } from "./control-ui-resource-routes.js";
 import {
+  classifyControlUiRequest,
   isControlUiApprovalDocumentPath,
   isControlUiFocusDocumentPath,
   isControlUiPluginManagerRequest,
 } from "./control-ui-routing.js";
+import { isControlUiSharePath } from "./control-ui-share.js";
+import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import {
   classifyGatewayProbePath,
@@ -96,6 +100,9 @@ type WatchNodeHttpRequestHandler = (req: IncomingMessage, res: ServerResponse) =
 type McpOAuthCallbackHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 
 const getControlUiModule = createLazyRuntimeModule(() => import("./control-ui.js"));
+const getControlUiPluginAssetsModule = createLazyRuntimeModule(
+  () => import("./control-ui-plugin-assets.js"),
+);
 const getCanvasServeModule = createLazyRuntimeModule(() => import("../canvas/serve.runtime.js"));
 const getBoardHttpModule = createLazyRuntimeModule(() => import("./board-http.js"));
 const getEmbeddingsHttpModule = createLazyRuntimeModule(() => import("./embeddings-http.js"));
@@ -149,14 +156,11 @@ type GatewayHttpRequestStage = () => Promise<boolean> | boolean;
 /** Creates the gateway HTTP/HTTPS server and ordered request-stage router. */
 export function createGatewayHttpServer(opts: {
   clients: Set<GatewayWsClient>;
-  controlUiEnabled: boolean;
+  controlUiEnabled?: boolean;
   controlUiBasePath: string;
   controlUiRoot?: ControlUiRootState;
-  openAiChatCompletionsEnabled: boolean;
-  openAiChatCompletionsConfig?: import("../config/types.gateway.js").GatewayHttpChatCompletionsConfig;
-  openResponsesEnabled: boolean;
-  openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
-  strictTransportSecurityHeader?: string;
+  openAiChatCompletionsEnabled?: boolean;
+  openResponsesEnabled?: boolean;
   handleHooksRequest: HooksRequestHandler;
   handleMcpOAuthCallbackRequest?: McpOAuthCallbackHandler;
   handleWatchNodeRequest?: WatchNodeHttpRequestHandler;
@@ -187,14 +191,8 @@ export function createGatewayHttpServer(opts: {
 }): HttpServer {
   const {
     clients,
-    controlUiEnabled,
     controlUiBasePath,
     controlUiRoot,
-    openAiChatCompletionsEnabled,
-    openAiChatCompletionsConfig,
-    openResponsesEnabled,
-    openResponsesConfig,
-    strictTransportSecurityHeader,
     handleHooksRequest,
     handlePluginRequest,
     shouldEnforcePluginGatewayAuth,
@@ -207,9 +205,10 @@ export function createGatewayHttpServer(opts: {
   } = opts;
   const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
   const loadGatewayConfig = opts.getRuntimeConfig ?? getRuntimeConfig;
-  const openAiCompatEnabled = openAiChatCompletionsEnabled || openResponsesEnabled;
   const controlUiRouteBasePath =
     controlUiBasePath && controlUiBasePath !== "/" ? controlUiBasePath.replace(/\/$/, "") : "";
+  const pluginAssetRoot = controlUiPluginAssetRoot(controlUiRouteBasePath);
+  const publicSessionRoute = createControlUiPublicSessionRoute();
   const handleServerRequest = (
     req: IncomingMessage,
     res: ServerResponse,
@@ -251,9 +250,9 @@ export function createGatewayHttpServer(opts: {
     res: ServerResponse,
     expectation?: "continue" | "reject",
   ) {
-    setDefaultSecurityHeaders(res, {
-      strictTransportSecurity: strictTransportSecurityHeader,
-    });
+    // Read only the published snapshot: even liveness and rejection responses need
+    // current headers without depending on config IO or auth resolution.
+    setDefaultSecurityHeaders(res, getRuntimeConfigSnapshot()?.gateway?.http?.securityHeaders);
     // Preserve Node's version/token classification while deferring its response
     // until admission; reparsing Expect here would change HTTP/1.0 semantics.
     if (expectation === "reject") {
@@ -299,12 +298,27 @@ export function createGatewayHttpServer(opts: {
       }
 
       const configSnapshot = loadGatewayConfig();
+      const controlUiEnabled =
+        opts.controlUiEnabled ?? configSnapshot.gateway?.controlUi?.enabled ?? true;
+      // Pin endpoint admission and input limits to the same request snapshot.
+      // Only explicit server overrides survive config reloads.
+      const openAiChatCompletionsConfig = configSnapshot.gateway?.http?.endpoints?.chatCompletions;
+      const openResponsesConfig = configSnapshot.gateway?.http?.endpoints?.responses;
+      const openAiChatCompletionsEnabled =
+        opts.openAiChatCompletionsEnabled ?? openAiChatCompletionsConfig?.enabled ?? false;
+      const openResponsesEnabled =
+        opts.openResponsesEnabled ?? openResponsesConfig?.enabled ?? false;
+      const openAiCompatEnabled = openAiChatCompletionsEnabled || openResponsesEnabled;
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
       const ingressAttribution = prepareGatewayIngressAttribution({
         req,
         trustedProxies,
         allowRealIpFallback,
+        // HTTP authorization must observe Tailnet revocation on the next request.
+        // WebSocket upgrades retain the ordinary cache because they authenticate once.
+        tailscaleWhois: (ip) =>
+          readTailscaleWhoisIdentity(ip, undefined, { cacheTtlMs: 0, errorTtlMs: 0 }),
       });
       const scopedNodeCapability = normalizePluginNodeCapabilityScopedUrl(req.url ?? "/");
       if (scopedNodeCapability.malformedScopedPath) {
@@ -347,13 +361,29 @@ export function createGatewayHttpServer(opts: {
         config: configSnapshot,
         ...routeAuth,
       };
+      const loadControlUi = () => {
+        const url = req.url ? new URL(req.url, "http://localhost") : undefined;
+        // Media owns its method/query policy, including explicit-allow POSTs.
+        // Classify the current URL so plugin fallthrough cannot load unrelated UI code.
+        return url &&
+          (url.pathname === resolveAssistantMediaRoutePath(controlUiBasePath) ||
+            classifyControlUiRequest({
+              basePath: normalizeControlUiBasePath(controlUiBasePath),
+              pathname: url.pathname,
+              search: url.search,
+              method: req.method,
+              accept: req.headers.accept,
+            }).kind !== "not-control-ui")
+          ? getControlUiModule()
+          : undefined;
+      };
       const handleControlUiRequest = async () =>
-        (await getControlUiModule()).handleControlUiHttpRequest(req, res, {
+        (await loadControlUi())?.handleControlUiHttpRequest(req, res, {
           ...controlUiRouteOptions,
           terminalEnabled: opts.isTerminalEnabled?.() ?? isTerminalConfigEnabled(configSnapshot),
           agentId: resolveAssistantAgentId(configSnapshot),
           root: controlUiRoot,
-        });
+        }) ?? false;
       const handleStandaloneControlUiRequest = async () => {
         if (!controlUiEnabled) {
           respondNotFound(res);
@@ -484,6 +514,15 @@ export function createGatewayHttpServer(opts: {
           resolveGatewayContext: opts.getGatewayRequestContext?.()?.resolveGatewayContext,
         }),
       );
+      addAdmittedStage(scopedRequestPath.startsWith(pluginAssetRoot), async () => {
+        if (!controlUiEnabled) {
+          respondNotFound(res);
+          return true;
+        }
+        return await (
+          await getControlUiPluginAssetsModule()
+        ).handleControlUiPluginAssetRequest(req, res, controlUiRouteOptions);
+      });
       const userProfileAvatarRoute = parseControlUiUserAvatarPath(
         scopedRequestPath,
         controlUiRouteBasePath,
@@ -520,7 +559,25 @@ export function createGatewayHttpServer(opts: {
         basePath: controlUiBasePath,
         pathname: scopedRequestPath,
       });
-      addRequestStage(approvalDocument, handleStandaloneControlUiRequest);
+      const publicSessionPath = publicSessionRoute.matches(
+        scopedRequestPath,
+        controlUiRouteBasePath,
+      );
+      addRequestStage(!controlUiEnabled && publicSessionPath, () => publicSessionRoute.reject(res));
+      addAdmittedStage(controlUiEnabled && publicSessionPath, () =>
+        publicSessionRoute.serve({
+          req,
+          res,
+          basePath: controlUiRouteBasePath,
+          config: configSnapshot,
+          ingress: ingressAttribution,
+        }),
+      );
+      addRequestStage(
+        approvalDocument ||
+          (isControlUiSharePath(scopedRequestPath, controlUiRouteBasePath) && !publicSessionPath),
+        handleStandaloneControlUiRequest,
+      );
       addRequestStage(Boolean(nodeCapability), async () => {
         const { authorizePluginNodeCapabilityRequest } = await getPluginNodeCapabilityAuthModule();
         const ok = await authorizePluginNodeCapabilityRequest({
@@ -633,55 +690,43 @@ export function createGatewayHttpServer(opts: {
             { ...routeAuth, basePath: controlUiRouteBasePath },
           ),
       );
+      for (const [routes, loadHandler] of [
+        [
+          ["pluginIcon", "catalogIcon", "linkFavicon"],
+          async () => (await getPluginIconHttpModule()).handlePluginIconHttpRequest,
+        ],
+        [
+          ["workspaceIcon"],
+          async () => (await getWorkspaceIconHttpModule()).handleWorkspaceIconHttpRequest,
+        ],
+        [
+          ["channelAvatar"],
+          async () => (await getChannelAvatarHttpModule()).handleChannelAvatarHttpRequest,
+        ],
+      ] as const) {
+        addRequestStage(
+          controlUiEnabled &&
+            routes.some(
+              (route) =>
+                parseControlUiResourcePath(route, scopedRequestPath, controlUiRouteBasePath)
+                  .matched,
+            ),
+          async () => (await loadHandler())(req, res, controlUiRouteOptions),
+        );
+      }
       addRequestStage(
-        controlUiEnabled &&
-          (
-            [
-              "pluginIcon",
-              "catalogIcon",
-              "linkFavicon",
-            ] as const satisfies readonly ControlUiResourceRoute[]
-          ).some(
-            (route) =>
-              parseControlUiResourcePath(route, scopedRequestPath, controlUiRouteBasePath).matched,
-          ),
+        controlUiEnabled,
         async () =>
-          (await getPluginIconHttpModule()).handlePluginIconHttpRequest(
-            req,
-            res,
-            controlUiRouteOptions,
-          ),
+          (await loadControlUi())?.handleControlUiAssistantMediaRequest(req, res, {
+            ...controlUiRouteOptions,
+            agentId: resolveAssistantAgentId(configSnapshot),
+          }) ?? false,
       );
       addRequestStage(
-        controlUiEnabled &&
-          parseControlUiResourcePath("workspaceIcon", scopedRequestPath, controlUiRouteBasePath)
-            .matched,
+        controlUiEnabled,
         async () =>
-          (await getWorkspaceIconHttpModule()).handleWorkspaceIconHttpRequest(
-            req,
-            res,
-            controlUiRouteOptions,
-          ),
-      );
-      addRequestStage(
-        controlUiEnabled &&
-          parseControlUiResourcePath("channelAvatar", scopedRequestPath, controlUiRouteBasePath)
-            .matched,
-        async () =>
-          (await getChannelAvatarHttpModule()).handleChannelAvatarHttpRequest(
-            req,
-            res,
-            controlUiRouteOptions,
-          ),
-      );
-      addRequestStage(controlUiEnabled, async () =>
-        (await getControlUiModule()).handleControlUiAssistantMediaRequest(req, res, {
-          ...controlUiRouteOptions,
-          agentId: resolveAssistantAgentId(configSnapshot),
-        }),
-      );
-      addRequestStage(controlUiEnabled, async () =>
-        (await getControlUiModule()).handleControlUiAvatarRequest(req, res, controlUiRouteOptions),
+          (await loadControlUi())?.handleControlUiAvatarRequest(req, res, controlUiRouteOptions) ??
+          false,
       );
       addRequestStage(controlUiEnabled, handleControlUiRequest);
 

@@ -9,15 +9,151 @@ import {
   installSettingsStorageLifecycle,
   setTestLocation,
 } from "../test-helpers/settings-node.ts";
+import { createApplicationTheme } from "./bootstrap-theme.ts";
+import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
+import {
+  applyServerUiPrefs,
+  resetServerUiPrefsSync,
+  resolveServerUiPrefState,
+} from "./server-prefs.ts";
 import {
   loadLocalUserIdentity,
+  patchSettings,
+  persistSessionToken,
   loadSettings,
+  loadUiPreferences,
   normalizeChatMessageMaxWidth,
   saveSettings,
 } from "./settings.ts";
 
 describe("settings preference persistence", () => {
   installSettingsStorageLifecycle();
+
+  it.each([false, true])(
+    "keeps the live connection URL when a same-scope spelling was persisted (private storage: %s)",
+    (privateStorage) => {
+      setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
+      if (privateStorage) {
+        vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+          throw new Error("Storage unavailable");
+        });
+      }
+      saveSettings({
+        ...loadSettings(),
+        gatewayUrl: "wss://gateway.example/control/",
+        realtimeTalkInputDeviceId: "scoped-mic",
+      });
+      expect(loadUiPreferences("wss://gateway.example/control")).toMatchObject({
+        gatewayUrl: "wss://gateway.example/control",
+        realtimeTalkInputDeviceId: "scoped-mic",
+      });
+    },
+  );
+
+  it("keeps live preferences scoped through cross-tab edits, gateway switches, and credential rotation", () => {
+    setTestLocation({ protocol: "https:", host: "gateway-a.example", pathname: "/" });
+    const events = new EventTarget();
+    vi.stubGlobal("addEventListener", events.addEventListener.bind(events));
+    vi.stubGlobal("removeEventListener", events.removeEventListener.bind(events));
+    const first = {
+      ...loadSettings(),
+      realtimeTalkInputDeviceId: "mic-a",
+      chatSendShortcut: "modifier-enter" as const,
+    };
+    const second = {
+      ...first,
+      gatewayUrl: "wss://gateway-b.example",
+      realtimeTalkInputDeviceId: "mic-b",
+      chatSendShortcut: "enter" as const,
+    };
+    saveSettings(first);
+    saveSettings(second);
+    const { gateway } = createGatewayStoreTestStore({ settings: first });
+    const theme = createApplicationTheme(first, gateway);
+    try {
+      resetServerUiPrefsSync();
+      const key = `openclaw.control.settings.v1:${first.gatewayUrl}`;
+      const next = {
+        ...JSON.parse(localStorage.getItem(key) ?? "{}"),
+        realtimeTalkInputDeviceId: "cross-tab-mic",
+      };
+      localStorage.setItem(key, JSON.stringify(next));
+      const credentialReads = vi.spyOn(sessionStorage, "getItem");
+      events.dispatchEvent(Object.assign(new Event("storage"), { key }));
+      expect(theme.settings.realtimeTalkInputDeviceId).toBe("cross-tab-mic");
+      expect(credentialReads).not.toHaveBeenCalled();
+      expect(theme.settings).not.toHaveProperty("token");
+
+      const selectionKey = `openclaw.control.currentGateway.v1:${first.gatewayUrl}`;
+      localStorage.setItem(selectionKey, second.gatewayUrl);
+      events.dispatchEvent(Object.assign(new Event("storage"), { key: selectionKey }));
+      expect.soft(loadSettings().gatewayUrl).toBe(first.gatewayUrl);
+      expect
+        .soft(resolveServerUiPrefState({}, "chatSendShortcut", first.gatewayUrl).value)
+        .toBe("modifier-enter");
+      expect
+        .soft(
+          applyServerUiPrefs(
+            { ui: { prefs: { chatSendShortcut: "enter" } } },
+            {
+              scope: first.gatewayUrl,
+              onApplied: vi.fn(),
+            },
+          ),
+        )
+        .toBe(true);
+      expect.soft(theme.settings.chatSendShortcut).toBe("enter");
+      patchSettings({ chatSendShortcut: "modifier-enter" });
+      expect(theme.settings.chatSendShortcut).toBe("modifier-enter");
+      patchSettings({ chatSendShortcut: "enter" });
+      expect(theme.settings.gatewayUrl).toBe(first.gatewayUrl);
+      expect(JSON.parse(localStorage.getItem(key) ?? "{}").realtimeTalkInputDeviceId).toBe(
+        "cross-tab-mic",
+      );
+      gateway.connect({ gatewayUrl: second.gatewayUrl });
+      expect(theme.settings.realtimeTalkInputDeviceId).toBe("mic-b");
+      gateway.connect({ gatewayUrl: first.gatewayUrl });
+      expect(theme.settings.realtimeTalkInputDeviceId).toBe("cross-tab-mic");
+      expect(theme.settings.chatSendShortcut).toBe("enter");
+
+      persistSessionToken(first.gatewayUrl, "synthetic-rotated-credential");
+      credentialReads.mockClear();
+      patchSettings({ composerHoldToRecord: false });
+      expect(credentialReads.mock.calls.map(([readKey]) => readKey)).toEqual([
+        `openclaw.control.token.v1:${first.gatewayUrl}`,
+      ]);
+      expect(theme.settings.composerHoldToRecord).toBe(false);
+    } finally {
+      resetServerUiPrefsSync();
+      theme.dispose();
+      gateway.stop();
+    }
+  });
+
+  it("retains live private-storage edits and releases the mounted preference owner", () => {
+    setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
+    const initial = loadSettings();
+    const { gateway } = createGatewayStoreTestStore({ settings: initial });
+    const theme = createApplicationTheme(initial, gateway);
+    try {
+      vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+        throw new Error("Storage unavailable");
+      });
+      patchSettings({ realtimeTalkInputDeviceId: "private-mic" });
+      expect(theme.settings.realtimeTalkInputDeviceId).toBe("private-mic");
+      const reads = vi.spyOn(sessionStorage, "getItem");
+      for (let i = 0; i < 10; i++) {
+        expect(theme.settings.realtimeTalkInputDeviceId).toBe("private-mic");
+      }
+      expect(reads).not.toHaveBeenCalled();
+      theme.dispose();
+      patchSettings({ realtimeTalkInputDeviceId: "after-dispose" });
+      expect(theme.settings.realtimeTalkInputDeviceId).toBe("private-mic");
+    } finally {
+      theme.dispose();
+      gateway.stop();
+    }
+  });
 
   it("defaults the chat send shortcut to enter", () => {
     setTestLocation({

@@ -2,12 +2,21 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it } from "vitest";
+import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run/payloads.js";
 import type { ChannelThreadingAdapter } from "../../channels/plugins/types.public.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  sanitizeAssistantVisibleText,
+  stripAssistantInternalScaffolding,
+} from "../../shared/text/assistant-visible-text.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import {
+  resolveHeartbeatScratchProposalFromReplyResult,
+  resolveHeartbeatToolResponseFromReplyResult,
+} from "../heartbeat-tool-response.js";
 import {
   getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
@@ -16,6 +25,7 @@ import {
 import type { ReplyPayload } from "../types.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import { createBlockReplyContentKey, createBlockReplyPipeline } from "./block-reply-pipeline.js";
+import { normalizeReplyPayload } from "./normalize-reply.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 
 const baseParams = {
@@ -55,6 +65,54 @@ type DirectBlockDedupeCase = {
 function buildTestReplyPayloads(overrides: TestReplyPayloadParams) {
   return buildReplyPayloads({ ...baseParams, ...overrides });
 }
+
+describe("heartbeat reply scratch", () => {
+  it.each([
+    { notify: false, proposals: ["  PRIVATE_SCRATCH\n\n- keep exact spacing  \n"] },
+    { notify: true, proposals: ["  PRIVATE_SCRATCH\n\n- keep exact spacing  \n"] },
+    { notify: false, proposals: [""] },
+    { notify: true, proposals: [""] },
+    { notify: false, proposals: ["old proposal", "new proposal"] },
+    { notify: false, proposals: ["old proposal", undefined] },
+  ])(
+    "preserves the latest private decision through embedded and final payloads: %j",
+    async ({ notify, proposals }) => {
+      const responses = proposals.map((scratch, index) => ({
+        outcome: "done" as const,
+        notify,
+        summary: `Monitor checked ${index + 1}.`,
+        ...(scratch !== undefined ? { scratch } : {}),
+      }));
+      const payloads = responses.flatMap((heartbeatToolResponse) =>
+        buildEmbeddedRunPayloads({
+          assistantTexts: [],
+          lastAssistant: undefined,
+          sessionKey: "agent:main:main",
+          isHeartbeatTrigger: true,
+          heartbeatToolResponse,
+        }),
+      );
+      const expected = proposals.at(-1);
+      expect(resolveHeartbeatScratchProposalFromReplyResult(payloads)).toBe(expected);
+      const { replyPayloads } = await buildTestReplyPayloads({ isHeartbeat: true, payloads });
+
+      expect(replyPayloads).toHaveLength(proposals.length);
+      expect(resolveHeartbeatScratchProposalFromReplyResult(replyPayloads)).toBe(expected);
+      expect(resolveHeartbeatToolResponseFromReplyResult(replyPayloads)).toEqual({
+        outcome: "done",
+        notify,
+        summary: `Monitor checked ${proposals.length}.`,
+      });
+      const serialized = JSON.stringify(replyPayloads);
+      expect(serialized).not.toContain('"scratch"');
+      for (const scratch of proposals) {
+        if (scratch) {
+          expect(serialized).not.toContain(JSON.stringify(scratch));
+        }
+      }
+    },
+  );
+});
 
 type ResolveReplyTransportParams = Parameters<
   NonNullable<ChannelThreadingAdapter["resolveReplyTransport"]>
@@ -1180,6 +1238,38 @@ describe("buildReplyPayloads media filter integration", () => {
       isError: true,
     });
   });
+
+  it.each(["exec", "bash"])(
+    "delivers the real %s failure warning after a silent answer",
+    async (toolName) => {
+      const payloads = buildEmbeddedRunPayloads({
+        assistantTexts: ["NO_REPLY"],
+        lastAssistant: undefined,
+        lastToolError: { toolName, error: "Command not found" },
+        sessionKey: "agent:main:warning",
+      });
+      const { replyPayloads } = await buildTestReplyPayloads({ payloads });
+      const delivered = replyPayloads
+        .map((payload) => normalizeReplyPayload(payload))
+        .filter(Boolean);
+
+      expect(delivered).toEqual([
+        expect.objectContaining({
+          text: `⚠️ ${toolName === "exec" ? "Exec" : "Bash"} failed`,
+          isError: true,
+        }),
+      ]);
+      // Both channel text cleanup and Control UI display must retain the warning.
+      expect(sanitizeAssistantVisibleText(delivered[0]?.text ?? "")).toBe(delivered[0]?.text);
+      expect(stripAssistantInternalScaffolding(delivered[0]?.text ?? "")).toBe(delivered[0]?.text);
+      expect(
+        normalizeReplyPayload({
+          text: `⚠️ 🛠️ ${toolName === "exec" ? "Exec" : "Bash"} failed`,
+          isError: true,
+        }),
+      ).toBeNull();
+    },
+  );
 
   it("keeps voice media payloads during silent turns", async () => {
     const { replyPayloads } = await buildTestReplyPayloads({

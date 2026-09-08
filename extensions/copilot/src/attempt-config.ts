@@ -33,6 +33,7 @@ export { toCopilotError };
 export function createResult(
   params: AttemptParamsLike,
   state: {
+    acceptedSessionSpawns?: AgentHarnessAttemptResult["acceptedSessionSpawns"];
     aborted?: boolean;
     assistantTranscriptOwned?: boolean;
     assistantTranscriptIdempotencyKey?: string;
@@ -100,6 +101,9 @@ export function createResult(
     promptError !== undefined ? withPromptFailure(interruption, promptError) : interruption;
   return {
     terminal,
+    ...(state.acceptedSessionSpawns?.length
+      ? { acceptedSessionSpawns: state.acceptedSessionSpawns }
+      : {}),
     ...(state.assistantTranscriptOwned
       ? {
           assistantTranscriptOwned: true,

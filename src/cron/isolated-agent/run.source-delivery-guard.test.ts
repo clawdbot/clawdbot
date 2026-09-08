@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createAgentLifecycleTerminalBackstop } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createSourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { CronJob } from "../types.js";
@@ -405,6 +407,12 @@ function makeExecuteCronRunParams(overrides: Record<string, unknown> = {}) {
     cronSession: makeCronSession() as unknown as MutableCronSession,
     commandBody: "run a task",
     persistSessionEntry: vi.fn().mockResolvedValue(undefined),
+    lifecycle: createAgentLifecycleTerminalBackstop({
+      runId: "test-session-id",
+      sessionKey: "cron:source-delivery-guard:run:test-session-id",
+      getLifecycleGeneration: getAgentEventLifecycleGeneration,
+      resolveTerminationFields: () => ({}),
+    }),
     abortReason: () => "aborted",
     isAborted: () => false,
     immutableThinkLevel: undefined,

@@ -13,6 +13,7 @@ import {
 import type { OpenClawStateDatabaseOptions } from "../../../state/openclaw-state-db.js";
 import { findTaskByRunId, getTaskById } from "../../../tasks/runtime-internal.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
+import type { RuntimeContextFragment } from "../../internal-runtime-context.js";
 import { ensureDeliveryState } from "../registry/subagent-delivery-state.js";
 import {
   ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
@@ -29,12 +30,12 @@ import {
   settleSubagentCompletionDelivery,
   SUSPENDED_RETENTION_MS,
 } from "./subagent-completion-admission.store.js";
+import { SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION } from "./subagent-completion-instructions.js";
 import { resolveSubagentCompletionResultText } from "./subagent-completion-result.js";
 
 const CLAIM_LEASE_MS = 125_000;
 const MAX_DELIVERY_GENERATION = 10;
-const CANONICAL_RESULT_PROMPT =
-  "A completed subagent task is ready for parent review. The canonical result follows.";
+const CANONICAL_RESULT_PROMPT = `A completed subagent task is ready for parent review. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} The canonical result follows.`;
 type CompletionDeliveryRecoveryResult = {
   ok: boolean;
   reason?: string;
@@ -135,14 +136,9 @@ export function admitCorrelatedSubagentSessionDelivery(params: {
   return { id: queueEntry.id, claimed: admission.claimed, status: status ?? "pending" };
 }
 
-function canonicalResultMessage(entry: SubagentRunRecord): string {
-  const result = resolveSubagentCompletionResultText(entry) ?? "(no output)";
-  return `${CANONICAL_RESULT_PROMPT}\n\n${result}`;
-}
-
 export function resolveCorrelatedSubagentDelivery(
   queued: QueuedSessionDelivery,
-): QueuedSessionDelivery {
+): QueuedSessionDelivery & { runtimeContextFragments?: RuntimeContextFragment[] } {
   if (queued.kind !== "agentTurn" || queued.owner?.kind !== "subagent_completion") {
     return queued;
   }
@@ -160,7 +156,15 @@ export function resolveCorrelatedSubagentDelivery(
   ) {
     throw new SessionDeliveryDeferredError("correlated subagent delivery owner mismatch");
   }
-  return { ...queued, message: canonicalResultMessage(entry) };
+  const result = resolveSubagentCompletionResultText(entry) ?? "(no output)";
+  return {
+    ...queued,
+    message: `${CANONICAL_RESULT_PROMPT}\n\n${result}`,
+    runtimeContextFragments: [
+      { kind: "runtime-instruction", text: CANONICAL_RESULT_PROMPT },
+      { kind: "conversation-data", text: result },
+    ],
+  };
 }
 
 export async function settleCorrelatedSubagentDelivery(

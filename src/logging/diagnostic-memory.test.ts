@@ -10,7 +10,7 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { emitDiagnosticMemorySample, resetDiagnosticMemoryForTest } from "./diagnostic-memory.js";
 import {
   readLatestDiagnosticStabilityBundleSync,
-  resetDiagnosticStabilityBundleForTest,
+  uninstallDiagnosticStabilityFatalHook,
 } from "./diagnostic-stability-bundle.js";
 import {
   resetDiagnosticStabilityRecorderForTest,
@@ -40,7 +40,7 @@ describe("diagnostic memory", () => {
     vi.setSystemTime(new Date("2026-04-22T12:00:00.000Z"));
     resetDiagnosticEventsForTest();
     resetDiagnosticMemoryForTest();
-    resetDiagnosticStabilityBundleForTest();
+    uninstallDiagnosticStabilityFatalHook();
     resetDiagnosticStabilityRecorderForTest();
     resetLogger();
   });
@@ -50,7 +50,7 @@ describe("diagnostic memory", () => {
     vi.useRealTimers();
     resetDiagnosticEventsForTest();
     resetDiagnosticMemoryForTest();
-    resetDiagnosticStabilityBundleForTest();
+    uninstallDiagnosticStabilityFatalHook();
     resetDiagnosticStabilityRecorderForTest();
     setLoggerOverride(null);
     resetLogger();
@@ -203,6 +203,60 @@ describe("diagnostic memory", () => {
 
   it.each([
     {
+      name: "a 768 MiB default Node heap",
+      isBunRuntime: false,
+      heapSizeLimitBytes: 432 * 1024 ** 2,
+      processMemoryLimitBytes: 768 * 1024 ** 2,
+      physicalMemoryBytes: 64 * 1024 ** 3,
+      samples: [{ rssGiB: 330 / 1024 }, { rssGiB: 385 / 1024 }, { rssGiB: 577 / 1024 }],
+      expectedThresholdsGiB: { warning: 384 / 1024, critical: 576 / 1024 },
+    },
+    {
+      name: "a 768 MiB managed Node heap",
+      isBunRuntime: false,
+      heapSizeLimitBytes: 624 * 1024 ** 2,
+      processMemoryLimitBytes: 768 * 1024 ** 2,
+      physicalMemoryBytes: 64 * 1024 ** 3,
+      samples: [{ rssGiB: 330 / 1024 }, { rssGiB: 385 / 1024 }, { rssGiB: 577 / 1024 }],
+      expectedThresholdsGiB: { warning: 384 / 1024, critical: 576 / 1024 },
+    },
+    {
+      name: "a 1 GiB default Node heap",
+      isBunRuntime: false,
+      heapSizeLimitBytes: 560 * 1024 ** 2,
+      processMemoryLimitBytes: 1024 ** 3,
+      physicalMemoryBytes: 64 * 1024 ** 3,
+      samples: [{ rssGiB: 421 / 1024 }, { rssGiB: 513 / 1024 }, { rssGiB: 769 / 1024 }],
+      expectedThresholdsGiB: { warning: 0.5, critical: 0.75 },
+    },
+    {
+      name: "a 1 GiB managed Node heap",
+      isBunRuntime: false,
+      heapSizeLimitBytes: 816 * 1024 ** 2,
+      processMemoryLimitBytes: 1024 ** 3,
+      physicalMemoryBytes: 64 * 1024 ** 3,
+      samples: [{ rssGiB: 424 / 1024 }, { rssGiB: 513 / 1024 }, { rssGiB: 769 / 1024 }],
+      expectedThresholdsGiB: { warning: 0.5, critical: 0.75 },
+    },
+    {
+      name: "a 2 GiB managed Node heap",
+      isBunRuntime: false,
+      heapSizeLimitBytes: 1584 * 1024 ** 2,
+      processMemoryLimitBytes: 2 * 1024 ** 3,
+      physicalMemoryBytes: 64 * 1024 ** 3,
+      samples: [{ rssGiB: 833 / 1024 }, { rssGiB: 1025 / 1024 }, { rssGiB: 1537 / 1024 }],
+      expectedThresholdsGiB: { warning: 1, critical: 1.5 },
+    },
+    {
+      name: "unknown capacity with a small V8 limit",
+      isBunRuntime: false,
+      heapSizeLimitBytes: 432 * 1024 ** 2,
+      processMemoryLimitBytes: 0,
+      physicalMemoryBytes: 0,
+      samples: [{ rssGiB: 330 / 1024 }, { rssGiB: 1537 / 1024 }, { rssGiB: 3073 / 1024 }],
+      expectedThresholdsGiB: { warning: 1.5, critical: 3 },
+    },
+    {
       name: "an enlarged V8 limit",
       isBunRuntime: false,
       heapSizeLimitBytes: 8 * 1024 ** 3,
@@ -235,7 +289,7 @@ describe("diagnostic memory", () => {
       heapSizeLimitBytes: 16 * 1024 ** 3,
       processMemoryLimitBytes: 4 * 1024 ** 3,
       physicalMemoryBytes: 64 * 1024 ** 3,
-      samples: [{ rssGiB: 2.1 }, { rssGiB: 3.1 }],
+      samples: [{ rssGiB: 1.9 }, { rssGiB: 2.1 }, { rssGiB: 3.1 }],
       expectedThresholdsGiB: { warning: 2, critical: 3 },
     },
     ...[0, -1, Number.NaN, Number.POSITIVE_INFINITY].map((processMemoryLimitBytes) => ({
@@ -253,7 +307,7 @@ describe("diagnostic memory", () => {
       heapSizeLimitBytes: 16 * 1024 ** 3,
       processMemoryLimitBytes: 4 * 1024 ** 3,
       physicalMemoryBytes: Number.NaN,
-      samples: [{ rssGiB: 2.1 }, { rssGiB: 3.1 }],
+      samples: [{ rssGiB: 1.9 }, { rssGiB: 2.1 }, { rssGiB: 3.1 }],
       expectedThresholdsGiB: { warning: 2, critical: 3 },
     },
     {
@@ -271,9 +325,18 @@ describe("diagnostic memory", () => {
       heapSizeLimitBytes: 16 * 1024 ** 3,
       processMemoryLimitBytes: Number.MAX_SAFE_INTEGER,
       physicalMemoryBytes: 4 * 1024 ** 3,
-      samples: [{ rssGiB: 2.1 }, { rssGiB: 3.1 }],
+      samples: [{ rssGiB: 1.9 }, { rssGiB: 2.1 }, { rssGiB: 3.1 }],
       expectedThresholdsGiB: { warning: 2, critical: 3 },
     },
+    ...[0, -1, Number.NaN, Number.POSITIVE_INFINITY].map((heapSizeLimitBytes) => ({
+      name: `unknown capacity with a ${heapSizeLimitBytes} V8 limit`,
+      isBunRuntime: false,
+      heapSizeLimitBytes,
+      processMemoryLimitBytes: 0,
+      physicalMemoryBytes: 0,
+      samples: [{ rssGiB: 1.4 }, { rssGiB: 1.6 }, { rssGiB: 3.1 }],
+      expectedThresholdsGiB: { warning: 1.5, critical: 3 },
+    })),
     {
       name: "Bun compatibility heap statistics",
       isBunRuntime: true,
@@ -337,6 +400,46 @@ describe("diagnostic memory", () => {
       },
     ]);
   });
+
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "keeps default heap pressure thresholds with an invalid V8 limit of %s",
+    (heapSizeLimitBytes) => {
+      const events: DiagnosticEventPayload[] = [];
+      const stop = onDiagnosticEvent((event) => events.push(event));
+      const gb = 1024 ** 3;
+
+      emitDiagnosticMemorySample({
+        now: 11 * 60 * 1000,
+        isBunRuntime: false,
+        heapSizeLimitBytes,
+        processMemoryLimitBytes: 0,
+        physicalMemoryBytes: 0,
+        memoryUsage: memoryUsage({ rss: 100, heapUsed: 1.1 * gb }),
+      });
+      emitDiagnosticMemorySample({
+        now: 22 * 60 * 1000,
+        isBunRuntime: false,
+        heapSizeLimitBytes,
+        processMemoryLimitBytes: 0,
+        physicalMemoryBytes: 0,
+        memoryUsage: memoryUsage({ rss: 100, heapUsed: 2.1 * gb }),
+      });
+      stop();
+
+      expect(
+        events
+          .filter((event) => event.type === "diagnostic.memory.pressure")
+          .map((event) => ({
+            level: event.level,
+            reason: event.reason,
+            threshold: event.thresholdBytes,
+          })),
+      ).toEqual([
+        { level: "warning", reason: "heap_threshold", threshold: gb },
+        { level: "critical", reason: "heap_threshold", threshold: 2 * gb },
+      ]);
+    },
+  );
 
   it("emits pressure when RSS grows quickly", () => {
     const events: DiagnosticEventPayload[] = [];

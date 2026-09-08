@@ -2,6 +2,7 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import {
   extractAssistantTextForSilentCheck,
@@ -368,9 +369,9 @@ function buildMessageToolVisibleReplyMirror(
   const deliveryMirror = [pending.deliveryMirrorAnchor, pending.completionAnchor].find((message) =>
     isOpenClawDeliveryMirrorAssistantMessage(message),
   );
-  const content = Array.isArray(deliveryMirror?.content)
-    ? deliveryMirror.content
-    : [{ type: "text", text: pending.text }];
+  const displayContent = readAssistantDisplayContent(deliveryMirror);
+  const content =
+    displayContent.length > 0 ? displayContent : [{ type: "text", text: pending.text }];
   const mirror: Record<string, unknown> = {
     role: "assistant",
     content,

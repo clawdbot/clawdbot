@@ -1,4 +1,5 @@
-/** Canonical predicate for message-tool-owned visible replies. */
+/** Visible-reply ownership and presentation guidance shared with agent harnesses. */
+import { buildUiPresentationPrompt } from "../agents/ui-presentation-prompt.js";
 
 /**
  * True when the visible source reply must flow through the message tool, either
@@ -14,14 +15,34 @@ export function messageToolOwnsVisibleReply(params: {
   return params.forceMessageTool === true || params.sourceReplyDeliveryMode === "message_tool_only";
 }
 
+export function buildMessageToolTargetGuidance(requireExplicitMessageTarget: boolean): string {
+  return requireExplicitMessageTarget
+    ? "`send`: `target` + `message`; target required this turn."
+    : "`send`: `message`; current source is default target. Set `target` only elsewhere.";
+}
+
 export function buildHarnessVisibleReplyGuidance(params: {
   sourceReplyDeliveryMode?: string;
   messageToolAvailable: boolean;
+  requireExplicitMessageTarget?: boolean;
+  uiPresentation?: Parameters<typeof buildUiPresentationPrompt>[0];
 }): string {
-  if (messageToolOwnsVisibleReply(params) && params.messageToolAvailable) {
-    return "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer.";
-  }
-  return params.messageToolAvailable
-    ? "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation. Use `message` for supported non-text actions in the current conversation, such as reacting to its current message. Reserve other `message` actions for explicit out-of-band sends or media/file delivery. Reactions are not delivered automatically."
-    : "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation.";
+  const deliveryGuidance = messageToolOwnsVisibleReply(params)
+    ? params.messageToolAvailable
+      ? "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer."
+      : "No source-conversation reply can be sent from this turn. Final assistant text remains private and returns to the invoking workflow; it is not automatically delivered to the source conversation."
+    : params.messageToolAvailable
+      ? "You can participate in the conversation throughout your work. Use `message` when you have something worth saying; you don’t need to wait until you’re finished, and sending a message doesn’t end your task. OpenClaw delivers your final response automatically."
+      : "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation.";
+  const targetGuidance =
+    params.messageToolAvailable && params.requireExplicitMessageTarget !== undefined
+      ? buildMessageToolTargetGuidance(params.requireExplicitMessageTarget)
+      : undefined;
+  return [
+    deliveryGuidance,
+    targetGuidance,
+    params.uiPresentation ? buildUiPresentationPrompt(params.uiPresentation) : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }

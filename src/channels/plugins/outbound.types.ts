@@ -40,6 +40,8 @@ export type ChannelOutboundContext = {
   identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
   silent?: boolean;
+  /** Live cancellation signal; check before each physical send and after awaited preparation. */
+  signal?: AbortSignal;
   gatewayClientScopes?: readonly string[];
   /** @internal Opaque durable intent id for exact provider-side send reconciliation. */
   deliveryQueueId?: string;
@@ -207,6 +209,11 @@ export type ChannelOutboundAdapter = {
     params: ChannelOutboundNormalizePayloadBatchParams,
   ) => ReadonlyArray<ReplyPayload | null>;
   sendTextOnlyErrorPayloads?: boolean;
+  /**
+   * Route ordinary multi-media payloads intact to sendPayload for native grouping.
+   * The adapter must check cancellation and revalidate authority before every physical send.
+   */
+  sendPayloadGroupsMedia?: boolean;
   shouldSkipPlainTextSanitization?: (params: { payload: ReplyPayload }) => boolean;
   resolveEffectiveTextChunkLimit?: (params: {
     cfg: OpenClawConfig;
@@ -256,6 +263,8 @@ export type ChannelOutboundAdapter = {
   renderPresentation?: (params: {
     payload: ReplyPayload;
     presentation: MessagePresentation;
+    /** Normalized original for readable fallbacks; native rendering uses presentation. */
+    sourcePresentation?: MessagePresentation;
     ctx: ChannelOutboundPayloadContext;
   }) => Promise<ReplyPayload | null> | ReplyPayload | null;
   pinDeliveredMessage?: (params: {

@@ -120,12 +120,10 @@ export function matchRealtimeVoiceActivationName(
     ...leadingActivationNameCandidates(text, maxWords),
     ...trailingActivationNameCandidates(text, maxWords),
   ]
-    .map(
-      (candidate): PreparedEdgeActivationNameCandidate => ({
-        candidate,
-        compact: compactActivationName(candidate.heardName),
-      }),
-    )
+    .map((candidate): PreparedEdgeActivationNameCandidate => ({
+      candidate,
+      compact: compactActivationName(candidate.heardName),
+    }))
     .toSorted((left, right) => right.compact.length - left.compact.length);
 
   for (const { candidate, compact: heardCompact } of candidates) {
@@ -308,13 +306,13 @@ function isFuzzyActivationNameMatch(
   if (heardCompact[0] !== activationCompact[0]) {
     return false;
   }
-  const distance = levenshteinDistance(heardCompact, activationCompact);
   if (candidate.edge === "trailing") {
     return (
       heardCompact.length === activationCompact.length &&
       hasOnlyPhoneticSubstitutions(heardCompact, activationCompact)
     );
   }
+  const distance = levenshteinDistance(heardCompact, activationCompact);
   if (distance <= 1) {
     return true;
   }

@@ -1,5 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import {
+  describeImageWithModel,
+  describeImagesWithModel,
+} from "../media-understanding/image-runtime.js";
+import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
+import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
 import { runPluginRegisterSyncInRegistry } from "./loader-module-runtime.js";
 import { createPluginRecord } from "./loader-records.js";
 import { createPluginRegistry } from "./registry.js";
@@ -150,6 +156,71 @@ describe("plugin registration diagnostics", () => {
       })),
     ).toEqual([{ pluginId: "alpha", provider: "shared-speech", kinds: ["voice"] }]);
   });
+
+  const hookModes = ["absent", "undefined", "custom"] as const;
+  it.each(
+    (
+      [
+        ["google", "gemini"],
+        ["minimax", "minimax-cn"],
+        ["minimax-portal", "minimax-portal-cn"],
+      ] as const
+    ).flatMap(([id, alias]) =>
+      hookModes.flatMap((single) => hookModes.map((multiple) => ({ id, alias, single, multiple }))),
+    ),
+  )(
+    "preserves $id/$alias hook ownership (single=$single, multiple=$multiple)",
+    ({ id, alias, single, multiple }) => {
+      const { builder, createRecord } = createDiagnosticFixture();
+      const inheritedImage = async () => ({ text: "inherited image" });
+      const inheritedImages = async () => ({ text: "inherited images" });
+      const customImage = async () => ({ text: "custom image" });
+      const customImages = async () => ({ text: "custom images" });
+      const later: MediaUnderstandingProvider = {
+        id: alias,
+        capabilities: ["image"],
+        ...(single === "absent"
+          ? {}
+          : { describeImage: single === "custom" ? customImage : undefined }),
+        ...(multiple === "absent"
+          ? {}
+          : { describeImages: multiple === "custom" ? customImages : undefined }),
+      };
+      builder
+        .createApi(createRecord("earlier"), { config: {} })
+        .registerMediaUnderstandingProvider({
+          id,
+          capabilities: ["image"],
+          describeImage: inheritedImage,
+          describeImages: inheritedImages,
+        });
+      builder
+        .createApi(createRecord("later"), { config: {} })
+        .registerMediaUnderstandingProvider(later);
+
+      const providers = builder.registry.mediaUnderstandingProviders.map((entry) => entry.provider);
+      expect(builder.registry.diagnostics).toEqual([]);
+      expect(providers.map((provider) => provider.id)).toEqual([id, alias]);
+      const provider = expectDefined(
+        buildMediaUnderstandingRegistry(undefined, undefined, providers).get(id),
+        "merged media provider",
+      );
+      expect(provider.describeImage).toBe(
+        single === "absent"
+          ? inheritedImage
+          : single === "custom"
+            ? customImage
+            : describeImageWithModel,
+      );
+      expect(provider.describeImages).toBe(
+        multiple === "absent"
+          ? inheritedImages
+          : multiple === "custom"
+            ? customImages
+            : describeImagesWithModel,
+      );
+    },
+  );
 
   it.each([false, true])(
     "keeps reentrant diagnostics host-owned and stops coercion after register closes (throws=%s)",

@@ -2,11 +2,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
-import {
-  createOllamaNodeHostCommands,
-  createOllamaNodeInferenceTool,
-  createOllamaNodeInvokePolicy,
-} from "./node-inference.js";
+import { createOllamaNodeInvokePolicy } from "./node-inference-registration.js";
+import { createOllamaNodeHostCommands, createOllamaNodeInferenceTool } from "./node-inference.js";
 
 const [OLLAMA_MODELS_COMMAND, OLLAMA_CHAT_COMMAND] = createOllamaNodeInvokePolicy().commands;
 if (!OLLAMA_MODELS_COMMAND || !OLLAMA_CHAT_COMMAND) {

@@ -13,6 +13,7 @@ import type {
   PluginManifestRegistry,
 } from "../../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { buildDeclaredProviderOwnerIndex } from "../../plugins/provider-owner-index.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { writeSkill, writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
 import {
@@ -21,7 +22,12 @@ import {
   type SkillsHomeEnvSnapshot,
 } from "../test-support/home-env.test-support.js";
 import { writePluginWithSkill } from "../test-support/skill-plugin-fixtures.test-support.js";
-import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
+import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
+import {
+  loadBundledSkillEntryByName,
+  loadVisibleSkills,
+  loadWorkspaceSkills,
+} from "./workspace-skill-loader.js";
 
 vi.mock("../../plugins/manifest-registry.js", async () => {
   const fsLocal = await import("node:fs");
@@ -111,6 +117,7 @@ function createWorkspacePluginMetadataSnapshot(params: {
     setupProviders: new Map(),
     commandAliases: new Map(),
     contracts: new Map(),
+    modelIdNormalizationPolicies: new Map(),
   };
   const index: PluginMetadataSnapshot["index"] = {
     version: 1,
@@ -134,6 +141,7 @@ function createWorkspacePluginMetadataSnapshot(params: {
     diagnostics: params.manifestRegistry.diagnostics,
     byPluginId: new Map(params.manifestRegistry.plugins.map((plugin) => [plugin.id, plugin])),
     normalizePluginId: (pluginId) => pluginId,
+    declaredProviderOwners: buildDeclaredProviderOwnerIndex(params.manifestRegistry.plugins),
     owners: ownerMaps,
     metrics: {
       registrySnapshotMs: 0,
@@ -229,6 +237,79 @@ async function setupWorkspaceSkillPlugin() {
 }
 
 describe("loadWorkspaceSkills", () => {
+  it("keeps an eligible bundled skill addressable across a workspace collision", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const bundledSkillsDir = path.join(workspaceDir, ".bundled");
+    await writeSkill({
+      dir: path.join(bundledSkillsDir, "control-ui"),
+      name: "control-ui",
+      description: "Bundled Control UI",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "control-ui"),
+      name: "control-ui",
+      description: "Workspace replacement",
+    });
+
+    const visible = loadVisibleSkills(workspaceDir, {
+      config: {},
+      bundledSkillsDir,
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+    });
+    const mergedControlUi = visible.find((entry) => entry.skill.name === "control-ui");
+    const bundledControlUi = loadBundledSkillEntryByName("control-ui", {
+      config: {},
+      bundledSkillsDir,
+    });
+
+    expect(mergedControlUi?.skill.source).toBe("openclaw-workspace");
+    expect(bundledControlUi?.skill.source).toBe("openclaw-bundled");
+    expect(bundledControlUi?.skill.filePath).toBe(
+      path.join(bundledSkillsDir, "control-ui", "SKILL.md"),
+    );
+  });
+
+  it("loads each agent's Workshop directory without leaking the other agent's skill", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-workshop-isolation-"));
+    const alphaDir = path.join(root, "alpha");
+    const betaDir = path.join(root, "beta");
+    const workspaceDir = path.join(root, "workspace");
+    const config = {
+      agents: {
+        entries: {
+          alpha: { agentDir: alphaDir, workspace: workspaceDir },
+          beta: { agentDir: betaDir, workspace: workspaceDir },
+        },
+      },
+    } satisfies OpenClawConfig;
+    try {
+      const agentSkills: ReadonlyArray<readonly [string, string]> = [
+        ["alpha", "alpha-only"],
+        ["beta", "beta-only"],
+      ];
+      for (const [agentId, name] of agentSkills) {
+        await writeSkill({
+          dir: path.join(resolveWorkshopSkillsDir(config, agentId), name),
+          name,
+          description: `${agentId} skill`,
+        });
+      }
+      const alpha = loadWorkspaceSkills(workspaceDir, {
+        config,
+        agentId: "alpha",
+      });
+      const beta = loadWorkspaceSkills(workspaceDir, {
+        config,
+        agentId: "beta",
+      });
+      expect(alpha.map((entry) => entry.skill.name)).toContain("alpha-only");
+      expect(alpha.map((entry) => entry.skill.name)).not.toContain("beta-only");
+      expect(beta.map((entry) => entry.skill.name)).toContain("beta-only");
+      expect(beta.map((entry) => entry.skill.name)).not.toContain("alpha-only");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
   it("reuses unfiltered skill discovery until the workspace snapshot version changes", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     await writeSkill({

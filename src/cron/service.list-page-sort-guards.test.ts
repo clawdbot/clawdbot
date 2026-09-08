@@ -2,8 +2,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
+import { isMainThread, threadId } from "node:worker_threads";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createMockCronStateForJobs } from "./service.test-harness.js";
+import { locked } from "./service/locked.js";
 import { list, listPage } from "./service/ops-read.js";
 import type { CronJob } from "./types.js";
 
@@ -100,6 +104,7 @@ describe("cron listPage sort guards", () => {
 
     expect(unpaginated.map((job) => job.id)).toEqual(["earlier", "later", "paused-a", "paused-z"]);
     expect(unpaginated.map((job) => job.id)).toEqual(page.jobs.map((job) => job.id));
+    expect(jobs.map((job) => job.id)).toEqual(["paused-z", "later", "paused-a", "earlier"]);
   });
 
   it("applies the same stable id tiebreaker to unpaginated cron jobs", async () => {
@@ -325,6 +330,183 @@ describe("cron listPage sort guards", () => {
       expect(page.hasMore).toBe(false);
     } finally {
       await fs.rm(storeDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("cron listPage slow diagnostics", () => {
+  it.each([999, 1_000])(
+    "warns only once elapsed reaches the threshold (%i ms)",
+    async (duration) => {
+      let now = 0;
+      const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+      const state = createMockCronStateForJobs({ jobs: [createBaseJob()] });
+      const warn = vi.fn();
+      state.deps.log.warn = warn;
+      state.deps.resolveDefaultAgentId = () => {
+        now = duration;
+        return "main";
+      };
+      try {
+        const page = await listPage(state, { agentId: "main" });
+        expect(page.jobs).toHaveLength(1);
+        expect(warn).toHaveBeenCalledTimes(duration < 1_000 ? 0 : 1);
+        if (duration >= 1_000) {
+          expect(warn).toHaveBeenCalledWith(
+            {
+              operation: "cron.listPage",
+              pid: process.pid,
+              threadId,
+              isMainThread,
+              elapsedMs: 1_000,
+              waitToCallbackMs: 0,
+              callbackMs: 1_000,
+              completionDelayMs: 0,
+              sourceCount: 1,
+              matchedCount: 1,
+              returnedCount: 1,
+              outcome: "ok",
+              thresholdMs: 1_000,
+            },
+            "cron: slow list page",
+          );
+        }
+      } finally {
+        await state.op;
+        clock.mockRestore();
+      }
+    },
+  );
+
+  it("separates a held predecessor from callback work without delaying another partition", async () => {
+    let now = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    const state = createMockCronStateForJobs({
+      jobs: [createBaseJob(), createBaseJob({ id: "disabled", enabled: false })],
+    });
+    const other = createMockCronStateForJobs({ jobs: [] });
+    other.deps.storePath = "/mock/other-partition";
+    const warn = vi.fn();
+    state.deps.log.warn = warn;
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const order: string[] = [];
+    const predecessor = locked(state, async () => {
+      order.push("predecessor");
+      entered.resolve();
+      await release.promise;
+    });
+    await entered.promise;
+    state.deps.resolveDefaultAgentId = () => {
+      order.push("list");
+      now = 1_750;
+      return "main";
+    };
+    const pagePromise = listPage(state, { agentId: "main", limit: 1 });
+    const successor = locked(state, async () => {
+      order.push("successor");
+    });
+    try {
+      expect((await listPage(other)).jobs).toEqual([]);
+      expect(order).toEqual(["predecessor"]);
+      expect(warn).not.toHaveBeenCalled();
+      now = 1_400;
+      release.resolve();
+      const page = await pagePromise;
+      await successor;
+      expect(order).toEqual(["predecessor", "list", "successor"]);
+      expect(page.jobs.map((job) => job.id)).toEqual(["job-1"]);
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        {
+          operation: "cron.listPage",
+          pid: process.pid,
+          threadId,
+          isMainThread,
+          elapsedMs: 1_750,
+          waitToCallbackMs: 1_400,
+          callbackMs: 350,
+          completionDelayMs: 0,
+          sourceCount: 2,
+          matchedCount: 1,
+          returnedCount: 1,
+          outcome: "ok",
+          thresholdMs: 1_000,
+        },
+        "cron: slow list page",
+      );
+    } finally {
+      release.resolve();
+      await Promise.allSettled([predecessor, pagePromise, successor, other.op]);
+      clock.mockRestore();
+    }
+  });
+
+  it.each([false, true])(
+    "preserves callback failure and subsequent reads when logger throws=%s",
+    async (loggerThrows) => {
+      let now = 0;
+      const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+      const state = createMockCronStateForJobs({ jobs: [createBaseJob()] });
+      const failure = new Error("synthetic selected-row failure");
+      const warn = vi.fn(() => {
+        if (loggerThrows) {
+          throw new Error("synthetic logger failure");
+        }
+      });
+      state.deps.log.warn = warn;
+      state.deps.resolveDefaultAgentId = () => {
+        now = 1_200;
+        throw failure;
+      };
+      try {
+        await expect(listPage(state, { agentId: "main" })).rejects.toBe(failure);
+        expect(warn).toHaveBeenCalledExactlyOnceWith(
+          {
+            operation: "cron.listPage",
+            pid: process.pid,
+            threadId,
+            isMainThread,
+            elapsedMs: 1_200,
+            waitToCallbackMs: 0,
+            callbackMs: 1_200,
+            completionDelayMs: 0,
+            sourceCount: 1,
+            matchedCount: undefined,
+            returnedCount: undefined,
+            outcome: "error",
+            thresholdMs: 1_000,
+          },
+          "cron: slow list page",
+        );
+        expect((await listPage(state)).jobs.map((job) => job.id)).toEqual(["job-1"]);
+        expect(warn).toHaveBeenCalledTimes(1);
+      } finally {
+        await state.op;
+        clock.mockRestore();
+      }
+    },
+  );
+
+  it("preserves the detached page when the slow warning logger throws", async () => {
+    let now = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    const job = createBaseJob();
+    const state = createMockCronStateForJobs({ jobs: [job] });
+    state.deps.log.warn = () => {
+      throw new Error("synthetic logger failure");
+    };
+    state.deps.resolveDefaultAgentId = () => {
+      now = 1_100;
+      return "main";
+    };
+    try {
+      const page = await listPage(state, { agentId: "main" });
+      expect(page.jobs).toEqual([job]);
+      expect(page.jobs[0]).not.toBe(job);
+      expect((await listPage(state)).snapshotRevision).toBe(page.snapshotRevision);
+    } finally {
+      await state.op;
+      clock.mockRestore();
     }
   });
 });

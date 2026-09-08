@@ -1,6 +1,8 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { projectChatDisplayMessages } from "../../../src/gateway/chat-display-projection.js";
+import { createNestedToolActivity } from "../../../src/sessions/nested-tool-activity.js";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -25,6 +27,94 @@ function transcriptMessage(
 }
 
 suite.define(() => {
+  it("collapses nested tool activity after commentary across history reload", async () => {
+    const context = await suite.browser.newContext({
+      colorScheme: "light",
+      viewport: { height: 900, width: 1200 },
+    });
+    const page = await context.newPage();
+    const runId = "nested-run";
+    const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("nested-tool-collapse", artifactRoot)
+      : undefined;
+    const calls = ["read", "exec", "sessions_history"].flatMap((name, index) => {
+      const seq = 3 + index * 2;
+      const parentId = `parent-${index}`;
+      const childId = `child-${index}`;
+      const idempotencyKey = `attempt:${childId}`;
+      return [
+        transcriptMessage(
+          "assistant",
+          [
+            { type: "toolCall", id: parentId, name: "exec", arguments: {} },
+            { type: "toolResult", toolCallId: parentId, name: "exec", content: "Done" },
+          ],
+          runId,
+          parentId,
+          seq,
+        ),
+        {
+          ...createNestedToolActivity({
+            runId,
+            scopeId: "attempt",
+            afterEntryId: parentId,
+            startOrder: index,
+            parentToolCallId: parentId,
+            toolCallId: childId,
+            toolName: name,
+            input: {},
+            result: { content: [{ type: "text", text: "Done" }] },
+            isError: false,
+            startedAt: Date.UTC(2026, 7, 19, 12, 0, seq + 1),
+            timestamp: Date.UTC(2026, 7, 19, 12, 0, seq + 1),
+          }),
+          idempotencyKey,
+          __openclaw: { id: childId, seq: seq + 1, idempotencyKey },
+        },
+      ];
+    });
+    try {
+      await installMockGateway(page, {
+        historyMessages: [
+          transcriptMessage("user", "Inspect the workspace.", `${runId}:user`, "user", 1),
+          transcriptMessage(
+            "assistant",
+            "I’ll inspect the workspace first.",
+            runId,
+            "commentary",
+            2,
+          ),
+          ...projectChatDisplayMessages(calls),
+        ],
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.getByText("I’ll inspect the workspace first.", { exact: true }).waitFor();
+      if (artifactDir) {
+        await page.screenshot({ path: path.join(artifactDir, "collapsed.png") });
+      }
+      const activity = page.locator(".chat-activity-group:not(.chat-work-group)");
+      await expect.poll(() => activity.count()).toBe(1);
+      const summary = activity.locator(".chat-activity-group__summary");
+      expect(await summary.getAttribute("aria-expanded")).toBe("false");
+      expect(await activity.locator(".chat-activity-group__body").isVisible()).toBe(false);
+      await summary.click();
+      expect(await summary.getAttribute("aria-expanded")).toBe("true");
+      expect(await activity.locator(".chat-activity-group__body").isVisible()).toBe(true);
+      if (artifactDir) {
+        await page.screenshot({ path: path.join(artifactDir, "expanded.png") });
+      }
+      await page.reload();
+      await expect.poll(() => activity.count()).toBe(1);
+      expect(await summary.getAttribute("aria-expanded")).toBe("false");
+      expect(
+        await page.getByText("I’ll inspect the workspace first.", { exact: true }).count(),
+      ).toBe(1);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps restart-recovered live tool batches in one transcript row", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 900, width: 1200 } });
     const page = await context.newPage();
@@ -84,9 +174,11 @@ suite.define(() => {
 
     expect(rowKeys[0]).toMatch(/^agent-run:/u);
     expect(rowKeys).toEqual([rowKeys[0], rowKeys[0], rowKeys[0]]);
-    const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("chat-agent-run-transcript", artifactRoot)
+      : undefined;
     if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
       await page.locator(".chat-thread-inner").screenshot({
         path: path.join(artifactDir, "restart-recovery-run-frame.png"),
       });
@@ -249,9 +341,11 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const transcript = page.locator(".chat-thread-inner");
       await transcript.getByText("Caption ready for the second run.", { exact: true }).waitFor();
-      const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactRoot
+        ? createControlUiE2eArtifactDir("chat-agent-run-transcript", artifactRoot)
+        : undefined;
       if (artifactDir) {
-        await fs.mkdir(artifactDir, { recursive: true });
         const firstNarration = transcript.getByText(
           "I’ll create the launch card and check the existing style first.",
           { exact: true },
@@ -445,9 +539,11 @@ suite.define(() => {
     });
     expect(overlappingRows).toEqual([]);
 
-    const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("chat-agent-run-transcript", artifactRoot)
+      : undefined;
     if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
       await page.screenshot({
         path: path.join(artifactDir, "cross-session-run-isolation.png"),
         fullPage: true,

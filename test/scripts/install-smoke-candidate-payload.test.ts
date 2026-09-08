@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   sealInstallSmokeCandidatePayload,
   verifyInstallSmokeCandidatePayload,
@@ -31,8 +31,10 @@ function createTarball(archivePath: string, sourceDir: string, entries: string[]
   });
 }
 
-function createFixture(options: { symlinkInstaller?: boolean; symlinkPackage?: boolean } = {}) {
-  const root = tempDirs.make("install-smoke-candidate-payload-");
+function createFixture(
+  options: { symlinkInstaller?: boolean; symlinkPackage?: boolean } = {},
+  root = tempDirs.make("install-smoke-candidate-payload-"),
+) {
   const archiveRoot = path.join(root, "candidate-root");
   const scriptsDir = path.join(archiveRoot, "scripts");
   const packageRoot = path.join(root, "package-root");
@@ -68,8 +70,11 @@ function createFixture(options: { symlinkInstaller?: boolean; symlinkPackage?: b
   return { archivePath, packageDir, packagePath, packageContents, payloadDir, root };
 }
 
-async function sealFixture(options: { symlinkInstaller?: boolean; symlinkPackage?: boolean } = {}) {
-  const fixture = createFixture(options);
+async function sealFixture(
+  options: { symlinkInstaller?: boolean; symlinkPackage?: boolean } = {},
+  root?: string,
+) {
+  const fixture = createFixture(options, root);
   const manifest = await sealInstallSmokeCandidatePayload({
     ...IDENTITY,
     archivePath: fixture.archivePath,
@@ -138,23 +143,36 @@ describe("install smoke candidate payload", () => {
     );
   });
 
-  it.each(["candidate.tgz", "candidate-pack.json", "install.sh", "install-cli.sh"])(
-    "rejects tampering with %s after sealing",
-    async (filename) => {
-      const fixture = await sealFixture();
-      writeFileSync(path.join(fixture.payloadDir, filename), "tampered\n");
+  describe("sealed payload corruption", () => {
+    const sharedTempDirs = useAutoCleanupTempDirTracker(afterAll);
+    let fixture: Awaited<ReturnType<typeof sealFixture>>;
 
-      await expect(
-        verifyInstallSmokeCandidatePayload(
-          verifyOptions(
-            fixture.payloadDir,
-            fixture.manifestSha256,
-            fixture.manifest.sourceArchiveSha256,
-          ),
-        ),
-      ).rejects.toThrow(`candidate payload digest does not match for ${filename}`);
-    },
-  );
+    beforeAll(async () => {
+      fixture = await sealFixture({}, sharedTempDirs.make("install-smoke-sealed-payload-"));
+    });
+
+    it.each(["candidate.tgz", "candidate-pack.json", "install.sh", "install-cli.sh"])(
+      "rejects tampering with %s after sealing",
+      async (filename) => {
+        const filePath = path.join(fixture.payloadDir, filename);
+        const original = readFileSync(filePath);
+        try {
+          writeFileSync(filePath, "tampered\n");
+          await expect(
+            verifyInstallSmokeCandidatePayload(
+              verifyOptions(
+                fixture.payloadDir,
+                fixture.manifestSha256,
+                fixture.manifest.sourceArchiveSha256,
+              ),
+            ),
+          ).rejects.toThrow(`candidate payload digest does not match for ${filename}`);
+        } finally {
+          writeFileSync(filePath, original);
+        }
+      },
+    );
+  });
 
   it("rejects manifest tampering before trusting its file inventory", async () => {
     const fixture = await sealFixture();

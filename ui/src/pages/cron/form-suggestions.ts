@@ -44,9 +44,9 @@ export function buildCronSuggestions(params: {
         : "";
     }),
   ]);
-  const jobTargets = params.cron.cronJobs
-    .map((job) => (typeof job.delivery?.to === "string" ? job.delivery.to.trim() : ""))
-    .filter(Boolean);
+  const deliveryTargets = normalizeSortedUniqueTrimmedStringList(
+    params.cron.cronJobs.map((job) => job.delivery?.to),
+  );
   const accountTargets = (
     channel === "last"
       ? Object.values(params.channels.channelsSnapshot?.channelAccounts ?? {}).flat()
@@ -56,10 +56,6 @@ export function buildCronSuggestions(params: {
     .filter((value): value is string => typeof value === "string")
     .map((value) => value.trim())
     .filter(Boolean);
-  const deliveryTargets = normalizeSortedUniqueTrimmedStringList([
-    ...jobTargets,
-    ...accountTargets,
-  ]);
   return {
     agentSuggestions,
     modelSuggestions,

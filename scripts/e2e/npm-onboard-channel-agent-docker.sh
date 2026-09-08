@@ -21,7 +21,6 @@ STATUS_TEXT_MAX_BYTES="$(
   docker_e2e_read_positive_int_env OPENCLAW_NPM_ONBOARD_STATUS_TEXT_MAX_BYTES 1048576
 )"
 run_log=""
-OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS=()
 
 cleanup() {
   if [ -n "${PACKAGE_TGZ:-}" ]; then
@@ -57,11 +56,6 @@ prepare_package_tgz() {
 
 prepare_package_tgz
 
-if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
-  openclaw_prepublish_plugin_registry_configure_docker_args \
-    "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR"
-fi
-
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
 run_log="$(docker_e2e_run_log npm-onboard-channel-agent)"
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 npm-onboard-channel-agent empty)"
@@ -75,7 +69,6 @@ if ! docker_e2e_run_with_harness \
   -e "OPENCLAW_NPM_ONBOARD_STATUS_TEXT_MAX_BYTES=$STATUS_TEXT_MAX_BYTES" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
-  "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]}" \
   -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'; then
 set -Eeuo pipefail
 

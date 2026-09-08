@@ -18,17 +18,19 @@ export function renderCronJobsPagination(params: {
           total: String(Math.max(params.jobsTotal, params.jobsShown)),
         })}
       </span>
-      ${params.hasMore
-        ? html`
-            <button
-              class="btn btn--sm cron-load-more"
-              ?disabled=${params.loading || params.loadingMore}
-              @click=${params.onLoadMore}
-            >
-              ${params.loadingMore ? t("cron.list.loading") : t("cron.list.loadMore")}
-            </button>
-          `
-        : nothing}
+      ${
+        params.hasMore
+          ? html`
+              <button
+                class="btn btn--sm cron-load-more"
+                ?disabled=${params.loading || params.loadingMore}
+                @click=${params.onLoadMore}
+              >
+                ${params.loadingMore ? t("cron.list.loading") : t("cron.list.loadMore")}
+              </button>
+            `
+          : nothing
+      }
     </div>
   `;
 }

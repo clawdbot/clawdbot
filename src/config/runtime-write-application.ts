@@ -41,7 +41,15 @@ export function createRuntimeConfigWriteApplication(
         return null;
       }
       claimed = true;
-      return { settle: result.resolve, ...(runTransaction ? { runTransaction } : {}) };
+      const claim: RuntimeConfigWriteApplicationClaim = {
+        settle: (status) => {
+          // Reply settlement releases the RPC root; retained watcher intent must reacquire admission.
+          delete claim.runTransaction;
+          result.resolve(status);
+        },
+        ...(runTransaction ? { runTransaction } : {}),
+      };
+      return claim;
     },
   };
 }

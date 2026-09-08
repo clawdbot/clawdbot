@@ -254,6 +254,17 @@ is always emitted at `info` level regardless of
 `OPENCLAW_DEBUG_MODEL_TRANSPORT`, so basic model transport hygiene is visible
 without debug flags.
 
+`[anthropic] replayed thinking dropped: N block(s)` is a warning when Anthropic
+reports dropping invalidated thinking from replay. It includes the mismatch
+reasons and up to five affected message paths, not the thinking content. No
+debug flag is required.
+
+`[anthropic] server-side context edit: cleared N tool results (M input tokens)`
+is an info-level line when Anthropic reports applying server-side tool-result
+clearing. It contains counts only, without tool arguments or result content, and
+requires no debug flag. See [Session pruning](/concepts/session-pruning#direct-anthropic-api-key-requests)
+for the routes and thresholds that enable clearing.
+
 ### Trace correlation
 
 File logs are JSONL. When a log call carries a valid diagnostic trace context,
@@ -272,6 +283,69 @@ Talk lifecycle log records also flow to diagnostics-otel log export when
 OpenTelemetry log export is enabled, using the same bounded attributes as file
 logs. Configure `diagnostics.otel.logsExporter` to choose OTLP, stdout JSONL, or
 both sinks.
+
+### Slow agent database opens
+
+The `slow OpenClaw agent database open` warning includes `phaseDurationsMs` when
+a persistent database open takes at least one second:
+
+| Phase           | Work included                                                                                           |
+| --------------- | ------------------------------------------------------------------------------------------------------- |
+| `open`          | Permissions, handle eviction, and opening the connection.                                               |
+| `validation`    | Integrity, version, and owner checks, including Worker waiting and revalidation during async admission. |
+| `configuration` | Connection and WAL settings.                                                                            |
+| `schema`        | Schema initialization or convergence when needed.                                                       |
+| `registration`  | Post-validation eviction and permissions, cleanup setup, and shared-state registration.                 |
+
+The integer millisecond durations partition `elapsedMs`, measured with a
+monotonic clock after lease acquisition. Live cache hits remain quiet. These
+are elapsed durations, including asynchronous waits, rather than CPU time or
+proof that the main event loop was blocked for the whole interval.
+
+The structured warning also includes `pid`, Node's `threadId`, and `isMainThread`
+for the opener emitting it. Inspect each `openclaw logs --json` event's original
+`raw` record; ordinary console text omits structured metadata.
+An opener on the main thread may have awaited an integrity Worker, so these
+fields do not identify the thread performing every phase. `admissionMode` records
+the actual `sync` or `async` open driver. Async admission offloads its initial
+integrity check; resumed validation and repair can still run on the opener.
+Correlate the process ID with the log timestamp and current process; PIDs can be
+reused after exit.
+
+### Slow reply preparation
+
+When a reply spends a long time preparing, inspect the normal Gateway logs:
+
+```bash
+openclaw logs --follow --plain | rg 'timings|agent turn milestone|liveness warning'
+```
+
+Reply resolver, dispatch, and agent-turn preparation milestones include stage
+durations, elapsed time, and available run/session identifiers. Without profiler
+flags, they warn at 10 seconds elapsed or 5 seconds in one preparation stage. Codex preparation also
+logs each completed slow stage immediately, including failures, and emits a
+`native-turn-handoff` summary before submitting the native turn. Timing records
+contain stage names and identifiers, not prompts or tool arguments.
+
+Embedded-run startup, prep, core-plugin-tool and auth stage summaries include
+`pid`, `threadId` and `isMainThread` in the message to distinguish emitters sharing
+a log file. These identify the summary emitter, not where every timed operation
+ran. Elapsed stage time can include asynchronous waits and is not CPU time.
+
+Use the first `turn_accepted`, `model_call_started`, `tool_execution_started`, and
+`assistant_output_started` milestones to separate startup from later activity.
+Delayed first assistant/tool activity is logged once at `info` by default,
+because provider and tool latency is not itself a preparation warning.
+These are runtime observations: native turn acceptance does not prove that a
+provider request has started. Whole-turn summaries remain profiler-only because
+their totals include model and tool time. Compare the individual preparation
+stages before attributing a long turn to Gateway startup. A simultaneous
+`liveness warning` with high event-loop delay
+can explain delays across several sessions.
+
+For shorter delays, [profiler flags](/diagnostics/flags#profiler-flags) lower the
+warning thresholds. They are not required to diagnose a multi-second startup
+stall.
 
 ### Model call size and timing
 
@@ -347,6 +421,11 @@ replace logs — they feed metrics, traces, and exporters. Events are emitted
 in-process by default (set `diagnostics.enabled: false` to turn them off);
 exporting them is separate.
 
+When a session directive rejects a turn before model execution, its existing
+`message.processed` event reports `outcome: "skipped"` with a closed `reason`
+code and the usual channel, message, and session correlation. The rejection
+does not add the user's message, model token, or error reply to that event.
+
 Two adjacent surfaces:
 
 - **OpenTelemetry export** — send metrics, traces, and logs over OTLP/HTTP to
@@ -374,4 +453,4 @@ For OTLP export to a collector, see [OpenTelemetry export](/gateway/opentelemetr
 - [OpenTelemetry export](/gateway/opentelemetry) — OTLP/HTTP export, metric/span catalog, privacy model
 - [Diagnostics flags](/diagnostics/flags) — targeted debug-log flags
 - [Gateway logging internals](/gateway/logging) — WS log styles, subsystem prefixes, and console capture
-- [Configuration reference](/gateway/configuration-reference#diagnostics) — full `diagnostics.*` field reference
+- [Configuration reference](/gateway/config-observability#diagnostics) — full `diagnostics.*` field reference

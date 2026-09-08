@@ -10,7 +10,6 @@ import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { delay, stopChild, type StopChildResult } from "./lib/gateway-bench-child.ts";
 import {
   getFreePort,
-  parseProcessRssKb,
   readProcessRssMb,
   readProcessTreeCpuMs,
   requestProbeStatus,
@@ -1294,28 +1293,21 @@ async function main() {
 }
 
 export const testing = {
-  collectOutputLines,
-  collectTraceLine,
   countLsofFileDescriptors,
   createRestartIteration,
   ensureSupportedRestartPlatform,
   finalizeRestartIteration,
-  flushOutputLineBuffers,
   collectBenchmarkEvidenceFailures,
   hasInitialReadyLogs,
   hasBenchmarkFailures,
   hasInvalidBenchmarkEvidence,
-  parseNonNegativeInt,
   parseOptions,
-  parsePositiveInt,
-  parseProcessRssKb,
   resolveRestartDeadlineFailure,
   resolveEntry,
   resolvePhaseDeadlineAt,
   resolveSampleExitFailure,
   sanitizedEnv,
   shouldFailBenchmark,
-  stopChild,
   summarizeCase,
   waitForRestartProbe,
   writeConfig,

@@ -4,9 +4,9 @@ import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.j
 import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { captureEnv } from "../test-utils/env.js";
+import { createInMemoryTaskFlowRegistryStore } from "../test-utils/task-registry-store.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import { getDetachedTaskLifecycleRuntime } from "./detached-task-runtime.js";
-import { setCanonicalTaskBackingDetail } from "./task-backing-authority-write.js";
 import { createSubagentTaskBackingDetail } from "./task-backing-authority.js";
 import { createAcpTaskBackingDetailForTest } from "./task-backing-authority.test-support.js";
 import {
@@ -29,6 +29,7 @@ import {
   requestFlowCancel,
 } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import { updateTask } from "./task-registry-mutation.js";
 import {
   getTaskById,
   findTaskByRunId,
@@ -229,6 +230,7 @@ function expectCancelledAcpChildTask(
   expect(hoisted.cancelSessionMock).toHaveBeenCalledWith({
     cfg: {} as never,
     sessionKey: "agent:codex:acp:child",
+    agentId: "codex",
     reason: "task-cancel",
     expectedRunId: child.runId,
   });
@@ -393,8 +395,8 @@ describe("task-executor", () => {
       });
       configureTaskFlowRegistryRuntime({
         store: {
+          ...createInMemoryTaskFlowRegistryStore(),
           loadSnapshot,
-          saveSnapshot: () => {},
         },
       });
 
@@ -933,10 +935,10 @@ describe("task-executor", () => {
       resetTaskFlowRegistryForTests({ persist: false });
       configureTaskFlowRegistryRuntime({
         store: {
+          ...createInMemoryTaskFlowRegistryStore(),
           loadSnapshot: () => {
             throw new Error("SQLITE_IOERR: cancellation flow restore failed");
           },
-          saveSnapshot: () => {},
         },
       });
 
@@ -1105,10 +1107,10 @@ describe("task-executor", () => {
       resetTaskFlowRegistryForTests({ persist: false });
       configureTaskFlowRegistryRuntime({
         store: {
+          ...createInMemoryTaskFlowRegistryStore(),
           loadSnapshot: () => {
             throw new Error("SQLITE_IOERR: provisional cancellation restore failed");
           },
-          saveSnapshot: () => {},
         },
       });
 
@@ -1159,7 +1161,9 @@ describe("task-executor", () => {
       expect(hoisted.killSubagentRunAdminMock).toHaveBeenCalledWith({
         cfg: {} as never,
         sessionKey: "agent:codex:subagent:child",
-        expectedRunId: "run-subagent-cancel",
+        expectedTaskRunId: "run-subagent-cancel",
+        expectedGeneration: 1,
+        expectedOwnerKey: "agent:main:main",
         onResult: expect.any(Function),
       });
     });
@@ -1345,7 +1349,7 @@ describe("task-executor", () => {
     });
   });
 
-  it("applies agent lifecycle events to an owner-matched managed projection", async () => {
+  it("keeps an owner-matched subagent projection pending until its canonical owner settles", async () => {
     await withTaskExecutorStateDir(async () => {
       createRunningTaskRun({
         runtime: "subagent",
@@ -1381,6 +1385,15 @@ describe("task-executor", () => {
         data: { phase: "end", endedAt: 40 },
       });
 
+      expect(getTaskById(projection.taskId)?.status).toBe("running");
+      completeTaskRunByRunId({
+        runId: "run-agent-event-owned-child",
+        runtime: "subagent",
+        sessionKey: "agent:main:subagent:owned-child",
+        endedAt: 40,
+        lastEventAt: 40,
+      });
+
       expect(getTaskById(projection.taskId)).toMatchObject({
         status: "succeeded",
         endedAt: 40,
@@ -1390,7 +1403,7 @@ describe("task-executor", () => {
 
   it("revokes a managed projection when its backing generation is replaced", async () => {
     await withTaskExecutorStateDir(async () => {
-      createRunningTaskRun({
+      const canonical = createRunningTaskRun({
         runtime: "subagent",
         ownerKey: "agent:main:main",
         scopeKind: "session",
@@ -1416,13 +1429,8 @@ describe("task-executor", () => {
       );
 
       expect(
-        setCanonicalTaskBackingDetail({
-          runtime: "subagent",
-          childSessionKey: "agent:main:subagent:replaced-child",
-          runId: "run-reused-after-recovery",
-          detail: createSubagentTaskBackingDetail(2),
-        }),
-      ).toBe("updated");
+        updateTask(canonical.taskId, { detail: createSubagentTaskBackingDetail(2) }),
+      ).not.toBeNull();
 
       const cancelled = await cancelFlowById({ cfg: {} as never, flowId: flow.flowId });
       emitAgentEvent({

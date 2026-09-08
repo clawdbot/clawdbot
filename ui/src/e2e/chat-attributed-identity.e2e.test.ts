@@ -1,9 +1,13 @@
-// Control UI E2E tests cover attributed chat identity placement.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, type Locator, type Page } from "playwright/test";
-import { it } from "vitest";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { beforeEach, it } from "vitest";
+// Control UI E2E tests cover attributed chat identity placement.
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -11,16 +15,19 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
-function resolveArtifactDir(): string | undefined {
-  return process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim() || undefined;
-}
+let proofArtifactDir: string | undefined;
+beforeEach(() => {
+  const parent = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+  proofArtifactDir = parent
+    ? createControlUiE2eArtifactDir("chat-attributed-identity", parent)
+    : undefined;
+});
 
 async function captureProof(page: Page, name: string) {
-  const artifactDir = resolveArtifactDir();
+  const artifactDir = proofArtifactDir;
   if (!artifactDir) {
     return;
   }
-  await fs.mkdir(artifactDir, { recursive: true });
   await page.screenshot({
     animations: "disabled",
     path: path.join(artifactDir, name),
@@ -65,11 +72,209 @@ function expectStableNamePosition(
 }
 
 suite.define(() => {
+  it.each(["none", "min-content", "max-content", "48rem", "82%", "min(768px, 82%)"])(
+    "keeps restored message width %s inside the mobile safe area",
+    async (messageWidth) => {
+      await suite.withPage({ viewport: { width: 932, height: 430 } }, async ({ page, context }) => {
+        const protocol = await context.newCDPSession(page);
+        await protocol.send("Emulation.setSafeAreaInsetsOverride", {
+          insets: { left: 44, right: 0, top: 0, bottom: 0 },
+        });
+        await installMockGateway(page, {
+          presenceUsers: [
+            {
+              self: true,
+              id: "profile-morgan",
+              identity: { type: "profile", id: "profile-morgan" },
+              name: "Morgan",
+            },
+          ],
+          historyMessages: [
+            { role: "assistant", content: "Keep the restored reading column clear of the notch." },
+          ],
+        });
+        await page.goto(`${suite.server.baseUrl}settings/appearance#settings-appearance-chat`);
+        const widthInput = page.locator("[data-settings-chat-message-width]");
+        await widthInput.fill(messageWidth);
+        await widthInput.press("Tab");
+        await expect
+          .poll(() =>
+            page.evaluate(
+              (key) => JSON.parse(localStorage.getItem(key) ?? "{}").chatMessageMaxWidth,
+              controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+            ),
+          )
+          .toBe(messageWidth);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
+        const transcript = page.locator(".chat-thread-inner");
+        await transcript
+          .getByText("Keep the restored reading column clear of the notch.")
+          .waitFor({ state: "attached" });
+        for (const direction of ["ltr", "rtl"]) {
+          await page.evaluate((dir) => {
+            document.documentElement.dir = dir;
+          }, direction);
+          await captureProof(page, `restored-width-${direction}.png`);
+          for (const frame of [transcript, page.locator(".agent-chat__composer-shell")]) {
+            const bounds = await frame.evaluate((element) => {
+              const rect = element.getBoundingClientRect();
+              return { left: rect.left, right: rect.right };
+            });
+            expect(bounds.left).toBeGreaterThanOrEqual(48);
+            expect(bounds.right).toBeLessThanOrEqual(924);
+            expect(bounds.left - 48).toBeCloseTo(924 - bounds.right, 0);
+          }
+        }
+      });
+    },
+  );
+
+  it.each([
+    { width: 320, height: 860, profiled: true, safeAreaLeft: 0 },
+    { width: 328, height: 860, profiled: true, safeAreaLeft: 0 },
+    { width: 390, height: 860, profiled: true, safeAreaLeft: 0 },
+    { width: 430, height: 860, profiled: true, safeAreaLeft: 0 },
+    { width: 932, height: 430, profiled: true, safeAreaLeft: 0 },
+    { width: 800, height: 430, profiled: true, safeAreaLeft: 44 },
+    { width: 390, height: 860, profiled: false, safeAreaLeft: 0 },
+    { width: 320, height: 860, profiled: false, safeAreaLeft: 0 },
+    { width: 328, height: 860, profiled: false, safeAreaLeft: 0 },
+    { width: 430, height: 860, profiled: false, safeAreaLeft: 0 },
+    { width: 932, height: 430, profiled: false, safeAreaLeft: 0 },
+    { width: 800, height: 430, profiled: false, safeAreaLeft: 44 },
+  ])(
+    "keeps attributed mobile content in one usable column at $width px (profile: $profiled)",
+    async ({ width, height, profiled, safeAreaLeft }) => {
+      await suite.withPage(
+        { viewport: { width, height }, hasTouch: true },
+        async ({ page, context }) => {
+          const protocol = await context.newCDPSession(page);
+          await protocol.send("Emulation.setSafeAreaInsetsOverride", {
+            insets: { left: safeAreaLeft, right: 0, top: 0, bottom: 0 },
+          });
+          const sessionKey = "agent:main:main";
+          const identity = { type: "profile" as const, id: "profile-morgan" };
+          const gateway = await installMockGateway(page, {
+            presenceUsers: profiled
+              ? [{ self: true, id: identity.id, identity, name: "Morgan" }]
+              : [],
+            historyMessages: [
+              {
+                role: "user",
+                content: "Keep the phone transcript readable.",
+                timestamp: Date.now() - 20_000,
+                __openclaw: {
+                  senderId: identity.id,
+                  senderIdentity: identity,
+                  senderName: "Morgan",
+                },
+              },
+              {
+                role: "assistant",
+                content:
+                  "The response uses the available transcript width.\n\n```ts\nconsole.log('readable code');\n```",
+                timestamp: Date.now() - 10_000,
+              },
+            ],
+          });
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          const transcript = page.locator(".chat-thread-inner");
+          await transcript.getByText("The response uses the available transcript width.").waitFor();
+          const expectColumn = async (content: Locator) => {
+            const frame = await transcript.boundingBox();
+            const bounds = await content.boundingBox();
+            expect(frame).not.toBeNull();
+            expect(bounds).not.toBeNull();
+            expect(bounds!.x).toBeCloseTo(frame!.x, 0);
+            expect(bounds!.width).toBeCloseTo(frame!.width, 0);
+          };
+          for (const direction of ["ltr", "rtl"]) {
+            await page.evaluate((dir) => {
+              document.documentElement.dir = dir;
+            }, direction);
+            await expectColumn(page.locator(".agent-chat__composer-shell"));
+            const frame = await transcript.boundingBox();
+            expect(frame!.x - Math.max(4, safeAreaLeft)).toBeCloseTo(
+              width - 4 - frame!.x - frame!.width,
+              0,
+            );
+            await expectColumn(page.locator(".chat-group.assistant > .chat-group-messages"));
+            await expect(page.locator(".chat-group .chat-avatar:visible")).toHaveCount(0);
+          }
+          await page
+            .locator(".agent-chat__composer-combobox textarea")
+            .fill("Read the example file.");
+          await page.getByRole("button", { name: "Send message" }).click();
+          const request = await gateway.waitForRequest("chat.send");
+          const params = request.params;
+          if (
+            !params ||
+            typeof params !== "object" ||
+            !("idempotencyKey" in params) ||
+            typeof params.idempotencyKey !== "string"
+          ) {
+            throw new Error("Expected the chat.send run ID");
+          }
+          const runId = params.idempotencyKey;
+          await page.locator(".chat-working-indicator").waitFor();
+          const working = page.locator(".chat-group--working > .chat-group-messages");
+          await expectColumn(working);
+          await expect(working).toHaveCSS("padding-inline-start", "0px");
+          await gateway.emitGatewayEvent("agent", {
+            runId,
+            sessionKey,
+            stream: "tool",
+            seq: 1,
+            ts: Date.now(),
+            data: {
+              name: "read",
+              phase: "start",
+              toolCallId: "mobile-read",
+              args: { path: "example.txt" },
+            },
+          });
+          const tool = page.locator('[data-message-id^="tool:assistant:mobile-read"]');
+          await tool.waitFor();
+          await expectColumn(page.locator(".chat-group.assistant > .chat-group-messages").last());
+          await gateway.emitChatFinal({ runId, text: "The example file is readable." });
+          await transcript.getByText("The example file is readable.").waitFor();
+          await gateway.emitGatewayEvent("session.message", {
+            sessionKey,
+            messageId: "mobile-peer-message",
+            messageSeq: 5,
+            message: {
+              role: "user",
+              content: "Riley joined this conversation.",
+              timestamp: Date.now(),
+              __openclaw: {
+                senderId: "profile-riley",
+                senderIdentity: { type: "profile", id: "profile-riley" },
+                senderName: "Riley",
+              },
+            },
+          });
+          const peer = page.locator(".chat-group--peer", {
+            hasText: "Riley joined this conversation.",
+          });
+          await expect(peer.locator(".chat-sender-name")).toHaveText("Riley");
+          await expect(peer.locator(".chat-group-footer")).toHaveCSS("opacity", "1");
+          if (height === 430) {
+            const thread = page.locator(".chat-thread");
+            await thread.focus();
+            await thread.press("Home");
+            await thread.press("End");
+            await expect
+              .poll(() => thread.evaluate((element) => element.scrollTop))
+              .toBeGreaterThan(0);
+            await expectColumn(page.locator(".agent-chat__composer-shell"));
+          }
+        },
+      );
+    },
+  );
+
   it("uses one avatar placement and keeps shared-thread authors readable", async () => {
-    const artifactDir = resolveArtifactDir();
-    if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
-    }
+    const artifactDir = proofArtifactDir;
     const context = await suite.browser.newContext({
       viewport: { height: 760, width: 1180 },
       ...(artifactDir
@@ -446,10 +651,10 @@ suite.define(() => {
   });
 
   it("keeps an attributed failed send in the transcript with one-line retry metadata", async () => {
-    const artifactDir = process.env.OPENCLAW_BUBBLE_DELIVERY_ARTIFACT_DIR?.trim();
-    if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
-    }
+    const artifactRoot = process.env.OPENCLAW_BUBBLE_DELIVERY_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("bubble-delivery", artifactRoot)
+      : undefined;
     const context = await suite.browser.newContext({ viewport: { height: 760, width: 1180 } });
     const page = await context.newPage();
     const sender = {
@@ -554,10 +759,7 @@ suite.define(() => {
   });
 
   it("keeps missing local-viewer avatar initials through a live rerender", async () => {
-    const artifactDir = resolveArtifactDir();
-    if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
-    }
+    const artifactDir = proofArtifactDir;
     const context = await suite.browser.newContext({
       viewport: { height: 760, width: 1180 },
       ...(artifactDir
@@ -571,38 +773,17 @@ suite.define(() => {
       name: "Hannah",
       avatarUrl: "/api/users/dd7c98e2-f51d-4590-b588-fa0682e165b7/avatar?v=7",
     };
-    let avatarRequestCount = 0;
     const avatarRequests: Array<{ resourceType: string; url: string }> = [];
-    let releaseRetry: () => void = () => undefined;
-    const retryGate = new Promise<void>((resolve) => {
-      releaseRetry = resolve;
-    });
-    let markRetryStarted: () => void = () => undefined;
-    const retryStarted = new Promise<void>((resolve) => {
-      markRetryStarted = resolve;
-    });
-    let markRetrySettled: () => void = () => undefined;
-    const retrySettled = new Promise<void>((resolve) => {
-      markRetrySettled = resolve;
-    });
     await page.route(`**/api/users/${viewer.id}/avatar*`, async (route) => {
       avatarRequests.push({
         resourceType: route.request().resourceType(),
         url: route.request().url(),
       });
-      const requestIndex = ++avatarRequestCount;
-      if (requestIndex === 2) {
-        markRetryStarted();
-        await retryGate;
-      }
       await route.fulfill({
         body: JSON.stringify({ ok: false, error: { type: "not_found" } }),
         contentType: "application/json",
         status: 404,
       });
-      if (requestIndex === 2) {
-        markRetrySettled();
-      }
     });
     await installMockGateway(page, {
       presenceUsers: [
@@ -629,7 +810,15 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
+      const avatarResponse = page.waitForResponse((response) =>
+        response.url().endsWith(viewer.avatarUrl),
+      );
+      const [response] = await Promise.all([
+        avatarResponse,
+        page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main")),
+      ]);
+      expect(response.status()).toBe(404);
+      expect(await response.finished()).toBeNull();
       await page.getByText("Please keep my fallback avatar readable.").waitFor();
 
       const userGroup = page.locator(".chat-group.user", {
@@ -638,17 +827,13 @@ suite.define(() => {
       const slot = userGroup.locator(".chat-avatar-slot");
       const image = slot.locator("img.chat-avatar.user");
       const initials = slot.locator(".chat-avatar--sender-initials");
-      await retryStarted;
-      expect(avatarRequestCount).toBe(2);
+      expect(avatarRequests).toHaveLength(1);
       expect(
         avatarRequests.map((request) => ({
           resourceType: request.resourceType,
           url: new URL(request.url).pathname + new URL(request.url).search,
         })),
-      ).toEqual([
-        { resourceType: "fetch", url: viewer.avatarUrl },
-        { resourceType: "fetch", url: viewer.avatarUrl },
-      ]);
+      ).toEqual([{ resourceType: "fetch", url: viewer.avatarUrl }]);
       await expect(slot).toHaveClass(/\bis-fallback\b/u);
       await expect(slot.locator("img.chat-avatar.user[src]")).toHaveCount(0);
       await expect(initials).toBeVisible();
@@ -669,20 +854,15 @@ suite.define(() => {
           }),
       );
 
-      expect(avatarRequestCount).toBe(2);
+      expect(avatarRequests).toHaveLength(1);
       await expect(slot).toHaveClass(/\bis-fallback\b/u);
       await expect(slot.locator("img.chat-avatar.user[src]")).toHaveCount(0);
       await expect(initials).toBeVisible();
       await expect(initials).toHaveText("H");
       await captureProof(page, "missing-local-avatar-after-rerender.png");
 
-      releaseRetry();
-      await retrySettled;
       await expect.poll(() => image.getAttribute("src")).toBeNull();
-      await expect(slot).toHaveClass(/\bis-fallback\b/u);
-      await expect(initials).toBeVisible();
     } finally {
-      releaseRetry();
       await context.close();
     }
   });

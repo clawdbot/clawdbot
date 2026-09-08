@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   parseSidebarEntry,
   serializeSidebarEntry,
@@ -193,11 +192,11 @@ export class SessionOrganizerController {
     this.host.requestUpdate();
   }
 
-  startSidebarWorkboardDrag(event: DragEvent, boardId: string) {
+  startSidebarPluginDrag(event: DragEvent, key: string) {
     if (!event.dataTransfer) {
       return;
     }
-    const entry = serializeSidebarEntry({ type: "workboard", boardId });
+    const entry = serializeSidebarEntry({ type: "plugin", key });
     writeSidebarRouteDragData(event.dataTransfer, entry);
     this.draggingSidebarEntry = entry;
     this.host.requestUpdate();
@@ -246,7 +245,7 @@ export class SessionOrganizerController {
       return serializeSidebarEntry(routeEntry);
     }
     const dynamicEntry = parseSidebarEntry(route);
-    if (dynamicEntry?.type === "workboard") {
+    if (dynamicEntry?.type === "plugin") {
       return serializeSidebarEntry(dynamicEntry);
     }
     const sessionKey = readSessionDragData(dataTransfer);
@@ -316,6 +315,10 @@ export class SessionOrganizerController {
     const position = this.sidebarZoneDropTarget?.position;
     const sessionKey = readSessionDragData(event.dataTransfer);
     const session = sessionKey ? this.host.findSidebarSessionByKey(sessionKey) : undefined;
+    if (session && !session.pinnable) {
+      this.finishSidebarEntryDrag();
+      return;
+    }
     if (session && !session.pinned) {
       // Persist the dropped slot only once the pin lands, and recompute
       // against the then-current order: a failed patch must not leave an
@@ -369,7 +372,7 @@ export class SessionOrganizerController {
     const entry =
       routeEntry?.type === "route"
         ? routeEntry
-        : dynamicEntry?.type === "workboard"
+        : dynamicEntry?.type === "plugin"
           ? dynamicEntry
           : null;
     if (entry) {
@@ -402,24 +405,12 @@ export class SessionOrganizerController {
   }
 
   async renameSession(session: SidebarRecentSession): Promise<void> {
-    const showInputDialog = await this.loadInputDialog();
-    const nextLabel =
-      (await showInputDialog?.({
-        title: t("sessionsView.renameSessionPrompt"),
-        // The stored label, not the resolved display name: pre-filling the
-        // derived string persists it on submit and it then outranks every
-        // later derivation. Matches the Sessions page rename.
-        defaultValue: normalizeOptionalString(session.userLabel) ?? "",
-      })) ?? null;
-    if (nextLabel === null) {
-      return;
-    }
     const scope = this.host.sessionData.beginSessionMutation();
     if (!scope) {
       return;
     }
     const operations = await this.loadOperations(scope);
-    await operations?.renameSession(this.host, session, nextLabel, scope);
+    await operations?.renameSession(this.host, session, scope);
   }
 
   async createSessionGroup(sessions: readonly SidebarRecentSession[] = []): Promise<void> {
@@ -702,7 +693,7 @@ export class SessionOrganizerController {
           : "before";
       void this.reorderSidebarSection(sourceSectionId, sectionId, position);
     } else if (session && sectionId === "pinned") {
-      if (!session.pinned) {
+      if (session.pinnable && !session.pinned) {
         void this.patchSession(session, { pinned: true });
       }
     } else if (session) {

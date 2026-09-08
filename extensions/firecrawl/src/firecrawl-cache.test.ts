@@ -2,8 +2,10 @@ import { createServer, type Server } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createFirecrawlFreeWebSearchProvider } from "./firecrawl-free-search-provider.js";
-import { createFirecrawlWebSearchProvider } from "./firecrawl-search-provider.js";
+import {
+  createFirecrawlFreeWebSearchProvider,
+  createFirecrawlWebSearchProvider,
+} from "./firecrawl-search-provider.js";
 import { createFirecrawlSearchTool } from "./firecrawl-search-tool.js";
 
 describe.each(["keyed", "free", "standalone"] as const)("Firecrawl %s search cache", (kind) => {

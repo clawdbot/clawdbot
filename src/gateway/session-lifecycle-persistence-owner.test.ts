@@ -231,14 +231,20 @@ describe("session lifecycle persistence owner", () => {
     expect(sessionStatus).toBe("running");
   });
 
-  it("does not restart a terminal write after its prepared promise expires", async () => {
+  it.each([
+    { name: "end", data: { phase: "end" } },
+    { name: "native cancellation", data: { phase: "error", aborted: true, stopReason: "aborted" } },
+    { name: "fallback exhaustion", data: { phase: "error", fallbackExhaustedFailure: true } },
+    { name: "settled execution failure", data: { phase: "error", executionSettled: true } },
+  ])("does not restart $name after its prepared promise expires", async ({ data }) => {
     vi.useFakeTimers();
     persistLifecycle.mockResolvedValue(undefined);
     const owner = createSessionLifecyclePersistenceOwner();
-    await owner.observe(terminal);
+    const event = { ...terminal, event: { ...terminal.event, data } };
+    await owner.observe(event);
     await vi.advanceTimersByTimeAsync(60_000);
 
-    await expect(owner.persist(terminal)).rejects.toMatchObject({
+    await expect(owner.persist(event)).rejects.toMatchObject({
       code: "ERR_STALE_GATEWAY_LIFECYCLE",
     });
     expect(persistLifecycle).toHaveBeenCalledOnce();

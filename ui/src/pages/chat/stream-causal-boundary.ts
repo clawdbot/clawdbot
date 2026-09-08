@@ -348,6 +348,7 @@ type TerminalStreamBoundaryReconciliation =
   | {
       kind: "split";
       afterBoundaryRunId: string;
+      afterSequence: number | null;
       replacedSegmentIndexes: number[];
       tailMessage: Record<string, unknown> | null;
     };
@@ -406,6 +407,12 @@ export function reconcileTerminalStreamBoundary(
   return {
     kind: "split",
     afterBoundaryRunId: selectedBoundary.boundaryRunId,
+    afterSequence:
+      readSessionMessageIdentity(
+        state.chatMessages?.find(
+          (entry) => userTurnRunId(entry) === selectedBoundary.boundaryRunId,
+        ),
+      )?.sequence ?? null,
     replacedSegmentIndexes:
       selectedBoundary === persistedBoundary && liveBoundary ? liveBoundary.segmentIndexes : [],
     tailMessage: tail ? replaceTerminalText(message, tail) : null,

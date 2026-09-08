@@ -121,13 +121,17 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       const project = page.locator("#new-session-project-trigger");
-      const detail = page.locator("#new-session-detail-trigger");
+      const checkout = page.locator("#new-session-checkout-trigger");
       await expect.poll(() => project.getAttribute("data-project-id")).toBe("registered");
       await pollLocatorText(project.locator(".new-session-page__trigger-label")).toBe("Registered");
-      await expect.poll(() => detail.getAttribute("data-worktree")).toBe("true");
-      await detail.click();
-      await expect.poll(() => page.getByLabel("Base branch").inputValue()).toBe("release/local");
-      await expect.poll(() => page.getByLabel("Worktree name").inputValue()).toBe("browser-task");
+      await expect.poll(() => checkout.getAttribute("data-worktree")).toBe("true");
+      await checkout.click();
+      await expect
+        .poll(() => page.getByLabel("From", { exact: true }).inputValue())
+        .toBe("release/local");
+      await expect
+        .poll(() => page.getByLabel("Name", { exact: true }).inputValue())
+        .toBe("browser-task");
       expect(await gateway.getRequests("users.prefs.get")).toHaveLength(0);
       expect(await gateway.getRequests("users.prefs.set")).toHaveLength(0);
     } finally {
@@ -135,7 +139,7 @@ suite.define(() => {
     }
   });
 
-  it("restores identity-scoped Where, What, and Detail defaults after discovery", async () => {
+  it("restores identity-scoped Where, What, and Checkout defaults after discovery", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -183,20 +187,17 @@ suite.define(() => {
       await gateway.waitForRequest("users.prefs.get");
       const where = page.locator("#new-session-where-trigger");
       const project = page.locator("#new-session-project-trigger");
-      const detail = page.locator("#new-session-detail-trigger");
+      const checkout = page.locator("#new-session-checkout-trigger");
       await expect.poll(() => where.getAttribute("data-cloud-profile")).toBe("aws");
       await pollLocatorText(where.locator(".new-session-page__trigger-label")).toBe("aws");
       await expect.poll(() => project.getAttribute("data-project-id")).toBe("registered");
       await pollLocatorText(project.locator(".new-session-page__trigger-label")).toBe("Registered");
-      expect(await detail.count()).toBe(0);
-      await project.click();
-      const projectPopover = page.locator("wa-popover.new-session-page__project-popover");
-      await projectPopover.getByText("Advanced", { exact: true }).click();
+      await expect.poll(() => checkout.getAttribute("data-worktree")).toBe("true");
+      await checkout.click();
+      const checkoutPopover = page.locator("wa-popover.new-session-page__checkout-popover");
+      await expect.poll(() => checkoutPopover.getByLabel("From").inputValue()).toBe("release/next");
       await expect
-        .poll(() => projectPopover.getByLabel("Base branch").inputValue())
-        .toBe("release/next");
-      await expect
-        .poll(() => projectPopover.getByLabel("Checkout name").inputValue())
+        .poll(() => checkoutPopover.getByLabel("Name", { exact: true }).inputValue())
         .toBe("identity-task");
     } finally {
       await context.close();

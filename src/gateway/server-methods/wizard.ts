@@ -206,7 +206,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
     if (cancelled) {
       const purge = () => context.purgeWizardSession(sessionId);
       void whenAdmittedWizardSessionSettled(session).then(purge, purge);
-    } else {
+    } else if (status.status !== "running") {
       context.purgeWizardSession(sessionId);
     }
     respond(true, status, undefined);

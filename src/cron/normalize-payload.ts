@@ -77,8 +77,6 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
     next.kind = "command";
   } else if (kindRaw === "script") {
     next.kind = "script";
-  } else if (kindRaw === "skillcollectionreview") {
-    next.kind = "skillCollectionReview";
   } else if (kindRaw) {
     next.kind = kindRaw;
   }

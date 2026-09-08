@@ -29,7 +29,7 @@ describe("chat.send deleted-agent guard", () => {
       req: { id: "req-1" } as never,
       params: { sessionKey: orphanKey, message: "hi", idempotencyKey: "run-1" },
       respond,
-      context: {} as never,
+      context: { getRuntimeConfig: () => ({}) } as never,
       client: null,
       isWebchatConnect: () => false,
     });

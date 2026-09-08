@@ -63,7 +63,7 @@ const whatsappApproval = createApproverRestrictedNativeApprovalCapabilityFromFor
   },
   createNativeRuntime: (routing) =>
     createLazyChannelApprovalNativeRuntimeAdapter({
-      eventKinds: ["exec", "plugin"],
+      eventKinds: ["exec", "plugin", "system-agent"],
       isConfigured: ({ cfg, accountId, context }) =>
         Boolean(context) &&
         routing.canAnyApprovalPotentiallyRouteToChannel({

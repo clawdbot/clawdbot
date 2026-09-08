@@ -272,8 +272,8 @@ function expectMockLogNotContains(mock: ReturnType<typeof vi.fn>, expected: stri
 }
 
 // Minimal WebSocket mock for connection-log assertions.
-vi.mock("ws", () => ({
-  default: class MockWebSocket {
+vi.mock("./ws-runtime.js", () => ({
+  WebSocket: class MockWebSocket {
     private handlers = new Map<string, Array<(...args: unknown[]) => void>>();
     private bufferedMessageFlushed = false;
 
@@ -595,9 +595,7 @@ describe("containerRestRequest", () => {
   });
 
   it("caps oversized REST request timeouts before arming abort timers", async () => {
-    const timeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockReturnValue(0 as unknown as ReturnType<typeof setTimeout>);
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       mockFetch.mockResolvedValue({
         ok: true,

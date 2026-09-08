@@ -193,21 +193,29 @@ describe("normalizeAttachments", () => {
     expect(selectAttachments({ capability: "image", attachments }).selected).toEqual([]);
   });
 
-  it("prefers the source extension over a conflicting display filename", () => {
-    const attachments = normalizeAttachments({
-      media: [
-        {
-          path: "/tmp/opaque",
-          url: "https://cdn.example.test/download/voice.ogg",
-          fileName: "photo.png",
-          contentType: "application/octet-stream",
-        },
-      ],
-    });
+  it.each([
+    ["audio", "ogg", undefined],
+    ["audio", "ogg", "photo.png"],
+    ["video", "mp4", undefined],
+    ["video", "mp4", "photo.png"],
+  ] as const)(
+    "selects the %s .%s URL with display filename %s",
+    (capability, extension, fileName) => {
+      const attachments = normalizeAttachments({
+        media: [
+          {
+            path: "/tmp/opaque",
+            url: `https://cdn.example.test/download/media.${extension}`,
+            fileName,
+            contentType: "application/octet-stream",
+          },
+        ],
+      });
 
-    expect(selectAttachments({ capability: "audio", attachments }).selected).toEqual(attachments);
-    expect(selectAttachments({ capability: "image", attachments }).selected).toEqual([]);
-  });
+      expect(selectAttachments({ capability, attachments }).selected).toEqual(attachments);
+      expect(selectAttachments({ capability: "image", attachments }).selected).toEqual([]);
+    },
+  );
 });
 
 describe("resolveAttachmentKind", () => {

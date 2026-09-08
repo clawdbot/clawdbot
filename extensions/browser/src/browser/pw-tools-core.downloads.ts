@@ -3,17 +3,16 @@
  * tools.
  */
 import path from "node:path";
-import type { FileChooser, Page } from "playwright-core";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { Page } from "playwright-core";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS } from "./constants.js";
 import type { BrowserDownloadResult } from "./download-types.js";
-import type { BrowserNavigationPolicyOptions } from "./navigation-guard.js";
 import { resolveStrictExistingUploadPaths } from "./paths.js";
 import { createDownloadCaptureForPage } from "./pw-download-capture.js";
 import {
   armObservedDialogResponseOnPage,
   ensurePageState,
-  forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
   refLocator,
   respondToObservedDialogOnPage,
@@ -23,6 +22,11 @@ import {
   clickViaPlaywright,
   setFileChooserFilesViaPlaywright,
 } from "./pw-tools-core.interactions.js";
+import {
+  awaitActionWithAbort,
+  createAbortPromiseWithListener,
+  type NavigationTargetOptions,
+} from "./pw-tools-core.interactions.navigation.js";
 import {
   bumpDownloadArmId,
   bumpUploadArmId,
@@ -35,13 +39,12 @@ async function dismissFileChooser(page: Page): Promise<void> {
   await page.keyboard.press("Escape").catch(() => {});
 }
 
-type ActiveAtomicUpload = {
+type ActiveUpload = {
   controller: AbortController;
   settled: Promise<void>;
 };
 
-const activeAtomicUploads = new Map<string, ActiveAtomicUpload>();
-const pendingUploadClaims = new Map<string, number>();
+const activeUploads = new WeakMap<Page, ActiveUpload>();
 
 function createExplicitDownloadCapture(params: {
   page: Page;
@@ -70,270 +73,156 @@ function resolveImplicitDownloadRoot(): string {
   return path.join(resolvePreferredOpenClawTmpDir(), "downloads");
 }
 
-/** Arms the next page file chooser and fills it with strict existing paths. */
-export async function armFileUploadViaPlaywright(
-  opts: {
-    cdpUrl: string;
-    browserFilesystemLocal?: boolean;
-    targetId?: string;
-    paths?: string[];
-    timeoutMs?: number;
-  } & BrowserNavigationPolicyOptions,
-): Promise<void> {
-  const key = opts.cdpUrl;
-  const armId = bumpUploadArmId();
-  pendingUploadClaims.set(key, armId);
-  try {
-    const active = activeAtomicUploads.get(key);
-    if (active) {
-      active.controller.abort(new Error("File upload was superseded by another waiter"));
-      await active.settled;
-    }
-    if (pendingUploadClaims.get(key) !== armId) {
-      return;
-    }
-    const page = await getPageForTargetId(opts);
-    if (pendingUploadClaims.get(key) !== armId) {
-      return;
-    }
-    const state = ensurePageState(page);
-    const timeout = normalizeTimeoutMs(opts.timeoutMs, DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS);
-    state.armIdUpload = armId;
+type UploadOptions = NavigationTargetOptions & {
+  ref?: string;
+  paths?: string[];
+  timeoutMs?: number;
+  signal?: AbortSignal;
+};
 
-    // The waiter is intentionally detached: the tool call arms future browser UI,
-    // while the later user click opens the chooser.
-    void page
-      .waitForEvent("filechooser", { timeout })
-      .then(async (fileChooser) => {
-        if (state.armIdUpload !== armId) {
-          return;
+async function runFileUpload(opts: UploadOptions): Promise<void> {
+  opts.signal?.throwIfAborted();
+  const atomic = opts.ref !== undefined;
+  const armId = bumpUploadArmId();
+  const timeout = normalizeTimeoutMs(opts.timeoutMs, DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS);
+  const controller = new AbortController();
+  const signal = opts.signal
+    ? AbortSignal.any([opts.signal, controller.signal])
+    : controller.signal;
+  const { abortPromise, cleanup } = createAbortPromiseWithListener(signal);
+  const armed = createDeferred<void>();
+  let started = false;
+  let deadline = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const startDeadline = () => {
+    deadline = Date.now() + timeout;
+    timer = setTimeout(
+      () =>
+        controller.abort(new Error(`Timeout ${timeout}ms exceeded while completing file upload`)),
+      timeout,
+    );
+  };
+  if (atomic) {
+    startDeadline();
+  }
+  const completion = (async () => {
+    const page = await awaitActionWithAbort(getPageForTargetId(opts), abortPromise);
+    signal.throwIfAborted();
+    const state = ensurePageState(page);
+    // Page lookup may finish out of order. Only a newer request can replace
+    // this page's owner; unrelated tabs share no chooser or cleanup queue.
+    if (state.armIdUpload > armId) {
+      throw new Error("File upload was superseded by another waiter");
+    }
+    state.armIdUpload = armId;
+    const previous = activeUploads.get(page);
+    const execution = Promise.resolve().then(async () => {
+      // A cancelled queued caller may return early, but its successor must
+      // still join every older native action before installing a new waiter.
+      await previous?.settled;
+      signal.throwIfAborted();
+      started = true;
+      if (!atomic) {
+        startDeadline();
+      }
+      const chooser = page.waitForEvent("filechooser", { timeout: 0, signal });
+      void chooser.catch(() => {});
+      armed.resolve();
+      try {
+        if (atomic) {
+          await clickViaPlaywright({
+            ...opts,
+            ref: opts.ref!,
+            timeoutMs: Math.max(1, deadline - Date.now()),
+            resolvedPage: page,
+            signal,
+          });
         }
-        if (!opts.paths?.length) {
-          // Playwright removed `FileChooser.cancel()`; best-effort close the chooser instead.
-          await dismissFileChooser(page);
-          return;
-        }
-        const uploadPathsResult = await resolveStrictExistingUploadPaths({
-          requestedPaths: opts.paths,
-        });
-        if (!uploadPathsResult.ok) {
-          await dismissFileChooser(page);
-          return;
+        const fileChooser = await chooser;
+        signal.throwIfAborted();
+        let paths = opts.paths ?? [];
+        if (!atomic) {
+          const resolved = await awaitActionWithAbort(
+            resolveStrictExistingUploadPaths({ requestedPaths: paths }),
+            abortPromise,
+          );
+          signal.throwIfAborted();
+          if (!paths.length || !resolved.ok) {
+            await dismissFileChooser(page);
+            return;
+          }
+          paths = resolved.paths;
         }
         await setFileChooserFilesViaPlaywright({
-          cdpUrl: opts.cdpUrl,
-          targetId: opts.targetId,
+          ...opts,
           page,
           fileChooser,
-          paths: uploadPathsResult.paths,
-          timeoutMs: timeout,
-          browserFilesystemLocal: opts.browserFilesystemLocal,
-          ssrfPolicy: opts.ssrfPolicy,
-          browserProxyMode: opts.browserProxyMode,
+          paths,
+          timeoutMs: Math.max(1, deadline - Date.now()),
+          signal,
         });
-      })
-      .catch(() => {
-        // Ignore timeouts; the chooser may never appear.
-      });
-  } finally {
-    if (pendingUploadClaims.get(key) === armId) {
-      pendingUploadClaims.delete(key);
+        signal.throwIfAborted();
+      } catch (error) {
+        controller.abort(error);
+        if (
+          error instanceof Error &&
+          error.name === "AbortError" &&
+          error.cause === signal.reason
+        ) {
+          signal.throwIfAborted();
+        }
+        throw error;
+      } finally {
+        await chooser.catch(() => {});
+      }
+    });
+    const active = {
+      controller,
+      settled: execution.then(
+        () => {},
+        () => {},
+      ),
+    };
+    activeUploads.set(page, active);
+    previous?.controller.abort(new Error("File upload was superseded by another waiter"));
+    try {
+      await execution;
+    } finally {
+      if (activeUploads.get(page) === active) {
+        activeUploads.delete(page);
+      }
     }
+  })().finally(() => {
+    clearTimeout(timer);
+    cleanup();
+  });
+  // Passive arming intentionally outlives this call; its errors are contained.
+  void completion.catch(() => {});
+  try {
+    await awaitActionWithAbort(
+      atomic ? completion : Promise.race([armed.promise, completion]),
+      abortPromise,
+    );
+  } catch (error) {
+    if (atomic && started) {
+      await completion;
+    }
+    throw error;
   }
+}
+
+/** Arms the next page file chooser and fills it with strict existing paths. */
+export async function armFileUploadViaPlaywright(
+  opts: Omit<UploadOptions, "ref" | "signal">,
+): Promise<void> {
+  await runFileUpload(opts);
 }
 
 /** Clicks a ref and completes its file chooser as one request-owned operation. */
 export async function uploadViaPlaywright(
-  opts: {
-    cdpUrl: string;
-    browserFilesystemLocal?: boolean;
-    targetId?: string;
-    ref: string;
-    paths: string[];
-    timeoutMs?: number;
-    signal?: AbortSignal;
-  } & BrowserNavigationPolicyOptions,
+  opts: UploadOptions & { ref: string; paths: string[] },
 ): Promise<void> {
-  opts.signal?.throwIfAborted();
-  // Abort cleanup disconnects the shared Playwright connection, so ownership
-  // must cover every target on that connection before a successor reconnects.
-  const key = opts.cdpUrl;
-  const timeout = normalizeTimeoutMs(opts.timeoutMs, DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS);
-  const armId = bumpUploadArmId();
-  pendingUploadClaims.set(key, armId);
-  const previous = activeAtomicUploads.get(key);
-  const controller = new AbortController();
-  const abortFromCaller = () =>
-    controller.abort(opts.signal?.reason ?? new Error("File upload aborted"));
-  opts.signal?.addEventListener("abort", abortFromCaller, { once: true });
-  if (opts.signal?.aborted) {
-    abortFromCaller();
-  }
-  const deadline = Date.now() + timeout;
-  const timer = setTimeout(
-    () => controller.abort(new Error(`Timeout ${timeout}ms exceeded while completing file upload`)),
-    timeout,
-  );
-  let rejectAborted!: (reason: unknown) => void;
-  const aborted = new Promise<never>((_resolve, reject) => {
-    rejectAborted = reject;
-  });
-  void aborted.catch(() => {});
-  let started = false;
-  let rejectQueuedAbort!: (reason: unknown) => void;
-  const queuedAbort = new Promise<never>((_resolve, reject) => {
-    rejectQueuedAbort = reject;
-  });
-  void queuedAbort.catch(() => {});
-  const rejectOnAbort = () => {
-    const reason = controller.signal.reason ?? new Error("File upload aborted");
-    rejectAborted(reason);
-    if (!started) {
-      rejectQueuedAbort(reason);
-    }
-  };
-  controller.signal.addEventListener("abort", rejectOnAbort, { once: true });
-  if (controller.signal.aborted) {
-    rejectOnAbort();
-  }
-  const execution = Promise.resolve().then(async () => {
-    // Preserve the full predecessor cleanup chain even when this caller aborts
-    // while queued; later owners must never skip an older in-flight click.
-    await previous?.settled;
-    if (activeAtomicUploads.get(key) !== active || pendingUploadClaims.get(key) !== armId) {
-      throw controller.signal.reason ?? new Error("File upload was superseded by another waiter");
-    }
-    controller.signal.throwIfAborted();
-    const page = await Promise.race([getPageForTargetId(opts), aborted]);
-    if (activeAtomicUploads.get(key) !== active || pendingUploadClaims.get(key) !== armId) {
-      throw controller.signal.reason ?? new Error("File upload was superseded by another waiter");
-    }
-    controller.signal.throwIfAborted();
-    started = true;
-    const state = ensurePageState(page);
-    state.armIdUpload = armId;
-
-    let resolveChooser!: (chooser: FileChooser) => void;
-    let rejectChooser!: (reason: unknown) => void;
-    const chooserPromise = new Promise<FileChooser>((resolve, reject) => {
-      resolveChooser = resolve;
-      rejectChooser = reject;
-    });
-    void chooserPromise.catch(() => {});
-    let chooser: FileChooser | undefined;
-    let chooserListening = true;
-    const onChooser = (observed: FileChooser) => {
-      if (chooser) {
-        return;
-      }
-      chooser = observed;
-      page.off("filechooser", onChooser);
-      chooserListening = false;
-      resolveChooser(observed);
-    };
-    page.on("filechooser", onChooser);
-
-    let phase: "idle" | "click" | "chooser" | "validation" | "setFiles" = "idle";
-    let abortCleanup: Promise<void> | undefined;
-    const onAbort = () => {
-      const reason = controller.signal.reason ?? new Error("File upload aborted");
-      rejectChooser(reason);
-      if (phase === "click" || phase === "setFiles") {
-        // Playwright actions do not consume our AbortSignal. Disconnect so a
-        // successor cannot start until the raw operation has actually settled.
-        abortCleanup ??= forceDisconnectPlaywrightForTarget({
-          cdpUrl: opts.cdpUrl,
-          targetId: opts.targetId,
-          ssrfPolicy: opts.ssrfPolicy,
-          reason: "file upload aborted",
-        }).catch(() => {});
-      }
-    };
-    controller.signal.addEventListener("abort", onAbort, { once: true });
-    if (controller.signal.aborted) {
-      onAbort();
-    }
-
-    try {
-      controller.signal.throwIfAborted();
-      phase = "click";
-      await clickViaPlaywright({
-        cdpUrl: opts.cdpUrl,
-        targetId: opts.targetId,
-        ref: opts.ref,
-        timeoutMs: Math.max(1, deadline - Date.now()),
-        ssrfPolicy: opts.ssrfPolicy,
-        browserProxyMode: opts.browserProxyMode,
-        resolvedPage: page,
-      });
-      phase = "chooser";
-      chooser = await chooserPromise;
-      if (state.armIdUpload !== armId) {
-        throw new Error("File upload was superseded by another waiter");
-      }
-      controller.signal.throwIfAborted();
-      phase = "validation";
-      const uploadPathsResult = await Promise.race([
-        resolveStrictExistingUploadPaths({ requestedPaths: opts.paths }),
-        aborted,
-      ]);
-      if (!uploadPathsResult.ok) {
-        throw new Error(uploadPathsResult.error);
-      }
-      controller.signal.throwIfAborted();
-      phase = "setFiles";
-      try {
-        await setFileChooserFilesViaPlaywright({
-          cdpUrl: opts.cdpUrl,
-          targetId: opts.targetId,
-          page,
-          fileChooser: chooser,
-          paths: uploadPathsResult.paths,
-          timeoutMs: Math.max(1, deadline - Date.now()),
-          browserFilesystemLocal: opts.browserFilesystemLocal,
-          ssrfPolicy: opts.ssrfPolicy,
-          browserProxyMode: opts.browserProxyMode,
-        });
-      } finally {
-        phase = "idle";
-      }
-      controller.signal.throwIfAborted();
-    } catch (error) {
-      throw controller.signal.aborted ? controller.signal.reason : error;
-    } finally {
-      controller.signal.removeEventListener("abort", onAbort);
-      if (chooserListening) {
-        page.off("filechooser", onChooser);
-      }
-      if (state.armIdUpload === armId) {
-        state.armIdUpload = bumpUploadArmId();
-      }
-      await abortCleanup;
-    }
-  });
-
-  const settled = execution.then(
-    () => {},
-    () => {},
-  );
-  const active = { controller, settled };
-  activeAtomicUploads.set(key, active);
-  previous?.controller.abort(new Error("File upload was superseded by another waiter"));
-  void settled.then(() => {
-    controller.signal.removeEventListener("abort", rejectOnAbort);
-    if (activeAtomicUploads.get(key) === active) {
-      activeAtomicUploads.delete(key);
-    }
-    if (pendingUploadClaims.get(key) === armId) {
-      pendingUploadClaims.delete(key);
-    }
-  });
-  try {
-    await Promise.race([execution, queuedAbort]);
-  } finally {
-    clearTimeout(timer);
-    opts.signal?.removeEventListener("abort", abortFromCaller);
-  }
+  await runFileUpload(opts);
 }
 
 /** Accepts or dismisses a pending dialog, or arms the next matching dialog response. */

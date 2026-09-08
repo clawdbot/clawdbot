@@ -1,5 +1,6 @@
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { createModelCatalogRegistrationHandlers } from "./model-catalog-registration.js";
+import { createNativeSessionCatalogGate } from "./native-session-catalog-registration.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { bindPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import type { PluginRecord, PluginRegistryParams } from "./registry-types.js";
@@ -58,14 +59,31 @@ export function resolveTypedHookTimeoutMs(params: {
 
 export function createPluginRegistryState(registryParams: PluginRegistryParams) {
   const registry = createEmptyPluginRegistry();
+  const nativeCatalogGates = new WeakMap<
+    PluginRecord,
+    ReturnType<typeof createNativeSessionCatalogGate>
+  >();
+  const getNativeCatalogGate = (record: PluginRecord) => {
+    if (!record.nativeSessionCatalog) {
+      return undefined;
+    }
+    let gate = nativeCatalogGates.get(record);
+    if (!gate) {
+      gate = createNativeSessionCatalogGate({
+        pluginId: record.id,
+        getConfig: () => registryParams.runtime.config.current(),
+      });
+      nativeCatalogGates.set(record, gate);
+    }
+    return gate;
+  };
   bindPluginRegistryRuntime(registry, registryParams.runtime);
-  const coreGatewayMethodNames = Array.from(
-    new Set([
-      ...(registryParams.coreGatewayMethodNames ?? []),
-      ...Object.keys(registryParams.coreGatewayHandlers ?? {}),
-    ]),
-  ).toSorted();
-  registry.coreGatewayMethodNames = coreGatewayMethodNames;
+  const coreGatewayMethods = new Set(registryParams.coreGatewayMethodNames);
+  for (const name of Object.keys(registryParams.coreGatewayHandlers ?? {})) {
+    coreGatewayMethods.add(name);
+  }
+  // oxlint-disable-next-line unicorn/no-array-sort -- This array is separate from the membership index.
+  registry.coreGatewayMethodNames = Array.from(coreGatewayMethods).sort();
 
   const pushDiagnostic = (diagnostic: PluginDiagnostic) => {
     registry.diagnostics.push(diagnostic);
@@ -84,8 +102,9 @@ export function createPluginRegistryState(registryParams: PluginRegistryParams) 
   return {
     registry,
     registryParams,
+    getNativeCatalogGate,
     allowProcessHomeSessionCatalogs: registryParams.allowProcessHomeSessionCatalogs ?? true,
-    coreGatewayMethods: new Set(coreGatewayMethodNames),
+    coreGatewayMethods,
     getHostCronService: () => registryParams.hostServices?.cron,
     pluginsWithChannelRegistrationConflict: new Set<string>(),
     pluginSideEffectGuards: new Map<string, Set<PluginSideEffectGuard>>(),

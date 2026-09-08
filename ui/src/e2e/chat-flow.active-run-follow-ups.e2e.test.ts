@@ -1,6 +1,6 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReconnecting } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   chatSessionListResponse,
@@ -11,16 +11,13 @@ import {
   requireString,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
   it("preserves a non-steer server default for active-run follow-ups", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const runtimeConfig = {
       messages: { queue: { byChannel: { webchat: "followup" }, mode: "steer" } },
@@ -102,11 +99,7 @@ suite.define(() => {
   });
 
   it("keeps the active run across a live steer operation", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const runId = "run-a";
     const gateway = await installMockGateway(page, {
@@ -187,8 +180,7 @@ suite.define(() => {
       });
       const startupIndicator = page.locator('.chat-working-indicator[role="status"]');
       if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-        const startupProofDir = path.resolve(".artifacts/control-ui-e2e/duplicate-session-naming");
-        await mkdir(startupProofDir, { recursive: true });
+        const startupProofDir = path.join(suite.artifactDir, "duplicate-session-naming");
         await page.screenshot({ path: path.join(startupProofDir, "steer.png"), fullPage: true });
       }
       await expect.poll(() => startupIndicator.textContent()).not.toContain("Naming worktree…");
@@ -391,11 +383,7 @@ suite.define(() => {
   it.each(["before", "after"] as const)(
     "keeps cumulative stream text ordered when history resolves %s the live steer event",
     async (historyOrder) => {
-      const context = await suite.newBrowserContext({
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      });
+      const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
       const page = await context.newPage();
       const runId = "run-steer-order";
       const steerRunId = "steer-order";
@@ -483,9 +471,11 @@ suite.define(() => {
             )
             .toEqual([initialText, beforeText, steerText, afterText]);
         } finally {
-          const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+          const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+          const artifactDir = artifactDirParent
+            ? createControlUiE2eArtifactDir("chat-flow.active-run-follow-ups", artifactDirParent)
+            : undefined;
           if (artifactDir) {
-            await mkdir(artifactDir, { recursive: true });
             await page.screenshot({
               fullPage: true,
               path: path.join(artifactDir, `steer-history-${historyOrder}-live-event.png`),
@@ -499,11 +489,7 @@ suite.define(() => {
   );
 
   it("replaces a retained cumulative steer prefix with split history around keyed commentary", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const runId = "run-steer-split";
     const steerRunId = "steer-split";
@@ -544,9 +530,11 @@ suite.define(() => {
         state: "delta",
       });
     const capture = async (name: string) => {
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactDirParent
+        ? createControlUiE2eArtifactDir("chat-flow.active-run-follow-ups", artifactDirParent)
+        : undefined;
       if (artifactDir) {
-        await mkdir(artifactDir, { recursive: true });
         await page.screenshot({
           fullPage: true,
           path: path.join(artifactDir, `steer-split-commentary-${name}.png`),
@@ -632,11 +620,7 @@ suite.define(() => {
   });
 
   it("keeps modified Enter queued in modifier-enter shortcut mode", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
 
@@ -665,11 +649,7 @@ suite.define(() => {
   });
 
   it("projects one disconnected state for an offline steer follow-up", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
 
@@ -726,11 +706,7 @@ suite.define(() => {
   });
 
   it("sends a queued follow-up after an exact terminal session publication", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       sessionInfo: { hasActiveRun: false, status: "done" },
@@ -808,11 +784,7 @@ suite.define(() => {
   });
 
   it("honors a session interrupt override ahead of the webchat config default", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const sessionKey = "agent:main:main";
     const runtimeConfig = {
@@ -873,11 +845,7 @@ suite.define(() => {
   });
 
   it("routes /redirect through one interrupt-mode chat.send", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
 
@@ -903,11 +871,7 @@ suite.define(() => {
   });
 
   it("steers a restored queued message when only the session row reports the active run", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
 
@@ -927,8 +891,7 @@ suite.define(() => {
       await page.getByRole("button", { name: "Queue message" }).click();
       await page.locator(".chat-queue").getByText(queuedPrompt).waitFor({ timeout: 10_000 });
 
-      await gateway.setMethodResponse(
-        "sessions.list",
+      await gateway.setSessionsListResponse(
         chatSessionListResponse([
           {
             activeLeafEntryId: "leaf-active",
@@ -937,6 +900,8 @@ suite.define(() => {
             key: "global",
             kind: "global",
             label: "Global",
+            sessionId: "global-active-run",
+            status: "running",
             updatedAt: Date.now(),
           },
           {
@@ -946,6 +911,8 @@ suite.define(() => {
             key: "agent:main:main",
             kind: "direct",
             label: "Main",
+            sessionId: "main-active-run",
+            status: "running",
             updatedAt: Date.now(),
           },
         ]),

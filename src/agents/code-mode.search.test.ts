@@ -1,6 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
-import { consumeRepairableCodeModeFailure } from "./code-mode-repair-provenance.js";
+import { runBridgeRequest } from "./code-mode-bridge.js";
+import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
+import { createCodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
+import { CodeModeProgramDataInbox } from "./code-mode-program-data.js";
+import { resolveCodeModeConfig, toToolSearchConfig } from "./code-mode-runtime.js";
 import {
   applyCodeModeCatalog,
   createCodeModeTools,
@@ -12,7 +16,8 @@ import {
   runUntilCompleted,
   testing,
 } from "./code-mode.test-support.js";
-import { createToolSearchCatalogRef } from "./tool-search.js";
+import { ToolSearchRuntime } from "./tool-search-runtime.js";
+import { createToolSearchCatalogRef, registerHeadlessToolSearchCatalog } from "./tool-search.js";
 
 describe.each(["interactive", "headless"] as const)("Code Mode %s search", (mode) => {
   afterEach(resetCodeModeTestState);
@@ -40,20 +45,17 @@ describe.each(["interactive", "headless"] as const)("Code Mode %s search", (mode
     return { run, targets };
   }
 
-  it("rejects overflowing search results and leaves narrowed discovery callable", async () => {
+  it("keeps discovery intact beyond the display budget and leaves narrowed discovery callable", async () => {
     const { run, targets } = setup();
     const overflow = await run(
-      'return (await catalog.search("shipment", { limit: 50 })).map(tool => tool.callableName);',
+      'const matches = await catalog.search("shipment", { limit: 50 }); return { count: matches.length, callable: matches.every(tool => typeof tool === "function") };',
     );
     expect(overflow, JSON.stringify(overflow)).toMatchObject({
-      status: "failed",
-      error: expect.stringMatching(/search.*narrow.*limit/i),
+      status: "completed",
+      value: { count: 50, callable: true },
     });
     for (const target of targets) {
       expect(target.execute).not.toHaveBeenCalled();
-    }
-    if (mode === "interactive") {
-      expect(consumeRepairableCodeModeFailure(overflow)).toBe(true);
     }
 
     const narrowed = await run(`
@@ -120,4 +122,51 @@ describe.each(["interactive", "headless"] as const)("Code Mode %s search", (mode
       expect(target.execute).not.toHaveBeenCalled();
     }
   });
+});
+
+it("refuses oversized discovery as a catchable bridge error and accepts a narrower query", async () => {
+  const catalogRef = createToolSearchCatalogRef();
+  const targets = Array.from({ length: 50 }, (_, i) =>
+    pluginTool("shipment_" + i + "_".repeat(50), "Find shipment"),
+  );
+  registerHeadlessToolSearchCatalog({ catalogRef, tools: targets });
+  const config = {
+    tools: { codeMode: { enabled: true, maxSearchLimit: 50, maxSnapshotBytes: 1024 } },
+  };
+  const ctx = { config, catalogRef };
+  const limits = resolveCodeModeConfig(config);
+  const runtime = new ToolSearchRuntime(ctx, toToolSearchConfig(limits));
+  const inbox = new CodeModeProgramDataInbox(limits);
+  try {
+    for (const limit of [50, 1]) {
+      const reply = inbox.createReply(String(limit));
+      expect(
+        await runBridgeRequest({
+          runtime,
+          catalogProjection: createCodeModeCatalogProjection(runtime.all({ includeMcp: false })),
+          namespaceRuntime: createCodeModeNamespaceRuntime(),
+          parentToolCallId: "search-admission",
+          codeModeRunId: "search-admission",
+          remainingMs: 10000,
+          ctx,
+          reply,
+          request: { id: String(limit), method: "search", args: ["shipment", { limit }] },
+        }),
+      ).toBeUndefined();
+      const settled = reply.take();
+      expect(settled.ok).toBe(limit === 1);
+      const value = JSON.parse(settled.json);
+      if (limit === 50) {
+        expect(value).toMatch(/program-data budget exceeded/);
+      } else {
+        expect(value).toEqual([targets[0]!.name]);
+      }
+      reply.release();
+    }
+    for (const target of targets) {
+      expect(target.execute).not.toHaveBeenCalled();
+    }
+  } finally {
+    inbox.close();
+  }
 });

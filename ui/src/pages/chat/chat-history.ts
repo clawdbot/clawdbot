@@ -1,3 +1,4 @@
+import type { ChatEvent } from "../../../../packages/gateway-protocol/src/schema/logs-chat.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import {
@@ -10,7 +11,12 @@ import { loadChatBranches } from "./chat-history-branches.ts";
 import { hydrateChatHistory } from "./chat-history-hydration.ts";
 import { CHAT_HISTORY_REQUEST_LIMIT } from "./chat-history-request.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
-import { chatHistoryRequests, getChatHistoryLoadState } from "./chat-history-state.ts";
+import {
+  chatHistoryRequests,
+  getChatHistoryLoadState,
+  setChatHistoryLoad,
+  waitForInitialChatSnapshot,
+} from "./chat-history-state.ts";
 import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 import type { ChatRunStartupPhase } from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
@@ -22,18 +28,20 @@ type LoadChatHistoryOptions = {
   startup?: boolean;
 };
 
+type ChatErrorDetail = Extract<ChatEvent, { state: "error" }>["errorDetail"];
+
 export async function loadChatHistory(
   state: ChatState,
   opts: LoadChatHistoryOptions = {},
 ): Promise<ChatHistoryResult | undefined> {
-  const sessionKey = state.sessionKey;
+  let sessionKey = state.sessionKey;
   const requestAgentId = isUiSelectedGlobalSessionKey(state, sessionKey)
     ? resolveUiSelectedSessionAgentId(state)
     : undefined;
   const startup = opts.startup === true;
   const requests = chatHistoryRequests(state);
   if (!state.client || !state.connected) {
-    requests.historyLoad = { phase: "pending-connection", sessionKey, requestAgentId, startup };
+    setChatHistoryLoad(state, { phase: "pending-connection", sessionKey, requestAgentId, startup });
     state.chatLoading = true;
     state.requestUpdate?.();
     return undefined;
@@ -41,6 +49,42 @@ export async function loadChatHistory(
   const method = startup ? "chat.startup" : "chat.history";
   const client = state.client;
   const connectionEpoch = state.connectionEpoch;
+  const hydration = startup ? waitForInitialChatSnapshot(state) : undefined;
+  if (hydration) {
+    const version = requests.historyVersion;
+    state.chatLoading = true;
+    state.requestUpdate?.();
+    const current = await hydration;
+    if (
+      !current ||
+      !state.connected ||
+      state.client !== client ||
+      state.connectionEpoch !== connectionEpoch ||
+      !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
+      (isUiSelectedGlobalSessionKey(state, sessionKey) &&
+        resolveUiSelectedSessionAgentId(state) !== requestAgentId)
+    ) {
+      return undefined;
+    }
+    sessionKey = state.sessionKey;
+    if (requests.historyVersion !== version) {
+      const active = requests.historyLoad;
+      if (active.phase === "idle") {
+        return undefined;
+      }
+      if (
+        active.phase === "in-flight" &&
+        opts.supersedeInFlight !== true &&
+        active.startup &&
+        active.client === client &&
+        active.connectionEpoch === connectionEpoch &&
+        active.sessionKey === sessionKey &&
+        active.requestAgentId === requestAgentId
+      ) {
+        return active.promise;
+      }
+    }
+  }
   const deltaCursor = state.chatMessagesBySession
     ? readChatSessionSnapshot(state.chatMessagesBySession, state, {
         sessionKey,
@@ -91,10 +135,14 @@ export async function loadChatHistory(
     const current = requests.historyLoad;
     if (current.phase === "in-flight" && current.promise === promise) {
       if (result) {
-        requests.historyLoad = {
+        setChatHistoryLoad(state, {
           phase: "committed",
-          key: `${sessionKey}\u0000${requestAgentId ?? ""}`,
-        };
+          client,
+          connectionEpoch,
+          sessionKey,
+          requestAgentId,
+          sessionInfo: result.sessionInfo,
+        });
       } else if (
         state.sessionKey === sessionKey &&
         (!isUiSelectedGlobalSessionKey(state, sessionKey) ||
@@ -103,22 +151,22 @@ export async function loadChatHistory(
           current.client !== state.client ||
           current.connectionEpoch !== state.connectionEpoch)
       ) {
-        requests.historyLoad = {
+        setChatHistoryLoad(state, {
           phase: "pending-connection",
           sessionKey,
           requestAgentId,
           startup,
-        };
+        });
         state.chatLoading = true;
       } else {
-        requests.historyLoad = { phase: "idle" };
+        setChatHistoryLoad(state, { phase: "idle" });
         state.chatLoading = false;
       }
       state.requestUpdate?.();
     }
     return result;
   });
-  requests.historyLoad = {
+  setChatHistoryLoad(state, {
     phase: "in-flight",
     client,
     connectionEpoch,
@@ -127,7 +175,7 @@ export async function loadChatHistory(
     sessionKey,
     requestAgentId,
     startup,
-  };
+  });
   return promise;
 }
 
@@ -183,10 +231,12 @@ export type ChatEventPayload = {
   agentId?: string;
   state: "status" | "delta" | "final" | "aborted" | "error";
   phase?: ChatRunStartupPhase;
+  retry?: NonNullable<Extract<ChatEvent, { state: "status" }>["retry"]>;
   message?: unknown;
   deltaText?: string;
   replace?: boolean;
   errorMessage?: string;
+  errorDetail?: ChatErrorDetail;
   stopReason?: string;
   yielded?: true;
 };

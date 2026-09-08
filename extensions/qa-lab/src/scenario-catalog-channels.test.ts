@@ -70,6 +70,25 @@ function runTelegramStreamingFinalScenario(params: {
 describe("qa scenario catalog channel contracts", () => {
   const agentRuntime = "agent-runtime";
 
+  it("runs the Telegram RTT exact-marker scenario through an isolated direct message", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("telegram-reply-chain-exact-marker"));
+    expect(scenario.execution.transportPolicy).toEqual({ directMessageOnly: true });
+    expect(scenario.execution.flow?.steps[0]?.actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sendInbound: expect.objectContaining({
+            conversation: { id: "telegram-reply-chain-dm", kind: "direct" },
+          }),
+        }),
+        expect.objectContaining({
+          waitForOutbound: expect.objectContaining({
+            conversation: { id: "telegram-reply-chain-dm", kind: "direct" },
+          }),
+        }),
+      ]),
+    );
+  });
+
   it("routes native command session targeting through Crabline Telegram", () => {
     const scenario = readQaScenarioById("native-command-session-target");
     const config = readQaScenarioExecutionConfig("native-command-session-target") as
@@ -298,15 +317,29 @@ describe("qa scenario catalog channel contracts", () => {
     expect(flow).toContain("env.gateway.call('tasks.list'");
     expect(flow).toContain("task.title === `qa-terminal-${caseName}`");
     expect(flow).toContain("terminalTask.status === 'completed'");
-    expect(flow).toContain("emptyTask.status === 'completed'");
-    expect(flow).toContain("emptyTask.terminalOutcome === 'blocked'");
     expect(flow).toContain("task.deliveryStatus === 'delivered'");
     expect(flow).toContain("readSettledTerminalTask('restart')");
-    expect(flow).toContain("readSettledTerminalTask('empty')");
     expect(flow).toContain("postRestartUnexpectedPayloads.length === 0");
     expect(flow).toContain("env.providerMode === config.requiredProviderMode");
     expect(flow).not.toContain("interrupted by a gateway restart");
-    expect(flow).toContain("verdicts.length === 5");
+    expect(flow).toContain("verdicts.length === 4");
+    expect(flow).not.toContain('"call":"sleep"');
+  });
+
+  it("proves empty subagent completion from durable non-delivery state", () => {
+    const scenario = requireFlowScenario(
+      readQaScenarioById("subagent-empty-completion-non-delivery"),
+    );
+    const flow = JSON.stringify(scenario.execution.flow);
+
+    expect(scenario.execution.providerMode).toBe("mock-openai");
+    expect(flow).toContain("task.deliveryStatus === 'not_applicable'");
+    expect(flow).toContain("task.terminalOutcome === 'succeeded'");
+    expect(flow).toContain("emptyTerminalOutbound.length === 0");
+    expect(flow).toContain('"saveAs":"requesterAcknowledgements"');
+    expect(flow).toContain("requesterAcknowledgements.length === 1");
+    expect(flow).toContain("request.plannedToolName === 'write'");
+    expect(flow).toContain("postRestartCompletionRequests.length === 0");
     expect(flow).not.toContain('"call":"sleep"');
   });
 

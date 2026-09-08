@@ -9,6 +9,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SessionManager } from "../../sessions/index.js";
 import { log } from "../logger.js";
+import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   resolveLiveToolResultMaxChars,
   truncateOversizedToolResultsInSessionManager,
@@ -59,6 +60,7 @@ export function handleEmbeddedAttemptMidTurnPrecheck(input: {
   request: MidTurnPrecheckRequest;
   sessionAgentId: string;
   sessionManager: SessionManager;
+  toolResultPromptProjectionState: ToolResultPromptProjectionState;
   prePromptMessageCount: number;
   replaceSessionMessages: (messages: AgentMessage[]) => void;
 }): {
@@ -88,6 +90,7 @@ export function handleEmbeddedAttemptMidTurnPrecheck(input: {
     });
     const truncationResult = truncateOversizedToolResultsInSessionManager({
       sessionManager: input.sessionManager,
+      projectionState: input.toolResultPromptProjectionState,
       contextWindowTokens: contextTokenBudget,
       maxCharsOverride: toolResultMaxChars,
       sessionFile: attempt.sessionFile,
@@ -159,6 +162,7 @@ export function handleEmbeddedAttemptMidTurnPrecheck(input: {
 }
 
 export async function prepareEmbeddedAttemptPromptPreflight(input: {
+  appendOnlyRuntimeContext?: boolean;
   attempt: AttemptPromptPreflightParams &
     Pick<EmbeddedRunAttemptParams, "model" | "runtimePlan" | "authProfileId">;
   activeContextEngine?: Pick<AttemptContextEngine, "info">;
@@ -180,13 +184,11 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
   const { attempt } = input;
   let contextBudgetStatus = input.state.contextBudgetStatus;
   const { skipPromptSubmission } = input.state;
-  const boundaryOptions =
-    input.timezone || !input.includeBoundaryTimestamp
-      ? {
-          ...(input.timezone ? { timezone: input.timezone } : {}),
-          ...(input.includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
-        }
-      : undefined;
+  const boundaryOptions = {
+    appendOnlyRuntimeContext: input.appendOnlyRuntimeContext,
+    ...(input.timezone ? { timezone: input.timezone } : {}),
+    ...(input.includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
+  };
   const unwindowedLlmBoundaryMessagesForPrecheck =
     input.contextEnginePromptAuthority === "preassembly_may_overflow" &&
     input.unwindowedContextEngineMessagesForPrecheck

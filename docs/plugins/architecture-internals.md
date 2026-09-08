@@ -129,6 +129,59 @@ hashing. Activation and runtime service generations can change while their
 package metadata stays fixed. Account health and authentication state are not
 part of the immutable package inventory.
 
+The same cache generation prepares installed-index scope lookups, compiled model
+matching patterns, parsed install-record projections, and manifest fingerprints
+once per immutable index. Mutable management indexes remain uncached. Lookup
+methods and install-record results remain caller-owned; enablement and trust are
+evaluated from the current operation's policy rather than stored in these facts.
+
+Outside a retained generation, reusing a loaded plugin requires the
+selected ID, origin, root, entry point, and artifact-selection inputs to agree.
+The loader records source/build selection and any executed setup entry on the loaded owner. Explicit manifest
+and discovery source selections, including admitted sidecars, also participate in the loader cache key. Raw
+discovery additionally needs matching load identity before active reuse because
+its manifest winners have not been established. Retained generations remain
+authoritative, including empty selections. Source/build views may share an owner
+only when the loader resolves them to the same execution root and entry under
+the retained preference. Path names or matching
+entry stems alone do not establish ownership. Runtime reuse and loading share
+the existing lifecycle-owned artifact facts and final execution step, including
+executed setup entries. Discovery and artifact identity retain their selected paths.
+
+Bounded loaded-owner lookups retain the owner's artifact policy when no preference
+is specified. An explicit preference is checked; exact loader requests apply the
+full cache identity and cold-load defaults.
+
+Provider lookup uses an explicit caller workspace first, then the workspace
+recorded by its metadata snapshot, including an explicitly shared-root scope.
+Only narrowed metadata views without a workspace field inherit the active
+workspace. The registry's existing load context retains its workspace so a request or active
+registry from another workspace cannot replace a prepared selection.
+
+Provider hooks share the canonical provider registry selection. Declared providers
+reserve their names, while provider-triggered helpers still activate beside them.
+Required load owners and eligible hook receivers are captured separately in that
+selection. Declared provider owners need matching physical records and provider
+registrations before reuse; activation-only helpers may have no provider rows,
+but need a successfully completed runtime registration pass. A setup-only pass
+cannot prove their runtime contributions are complete. References without a
+static owner select only their matching runtime aliases within the requested scope.
+Loaded aliases can identify owners to reload, but only the selected registry's
+current registrations determine alias receivers.
+Loaded-only failover inspection never discovers or activates plugins. When it uses
+registry-owned metadata, the caller's discovery and policy inputs must match the
+recorded fingerprint. The loader captures normalized registration inputs, including
+paired source config, once; later metadata updates preserve that record. Ordinary
+lookups reuse callbacks only when those inputs match; retained generations stay
+authoritative. Model-reference parsing reads the same declared-owner facts
+from the registry or retained request scope, so a failed declared provider cannot
+be replaced by another provider's hook alias.
+
+Provider auth aliases are normalized and indexed with the snapshot. Lookups
+select among those prepared candidates using the current workspace trust config;
+they do not cache trust decisions or credentials. Callers supplying a partial
+manifest view keep fresh per-call projection rather than sharing mutable metadata.
+
 Explicit install, update, registry refresh, and doctor operations use isolated
 generations of the same cache type, acquired after their lifecycle lease. They may inspect changed files and rebuild the persisted
 installed index, but cannot clear or replace the running Gateway's inventory.
@@ -244,6 +297,12 @@ OpenClaw still owns the generic agent loop, failover, transcript handling, and
 tool policy. These hooks are the extension surface for provider-specific
 behavior without needing a whole custom inference transport.
 
+Hook lookup uses the prepared generation or a matching loaded registry first.
+On a miss, provider/model-scoped discovery reuses the loader's registry cache;
+explicit runtime-discovery invalidation clears that lookup rather than leaving
+another provider cache holding old hooks. Attempt-prepared provider handles
+retain their selected plugin, while each hook receives the current call context.
+
 Use manifest `setup.providers[].envVars` when the provider has env-based
 credentials that generic auth/status/model-picker paths should see without
 loading plugin runtime. Use manifest `providerAuthAliases`
@@ -288,6 +347,7 @@ listed here.
 | `prepareExtraParams`              | Request-param normalization before generic stream option wrappers                                              | Provider needs default request params or per-provider param cleanup                                                                           |
 | `createStreamFn`                  | Fully replace the normal stream path with a custom transport                                                   | Provider needs a custom wire protocol, not just a wrapper                                                                                     |
 | `wrapStreamFn`                    | Stream wrapper after generic wrappers are applied                                                              | Provider needs request headers/body/model compat wrappers without a custom transport                                                          |
+| `reconcileLocalService`           | Reconcile provider-owned state after local-service health and before every request                             | A managed local router must reload durable provider state without moving provider policy into core                                            |
 | `resolveTransportTurnState`       | Attach native per-turn headers, metadata, or WebSocket policy                                                  | Provider wants generic transports to send provider-native turn identity or tune WebSocket headers and fallback cool-down                      |
 | `resolveWebSocketSessionPolicy`   | Deprecated compatibility hook for WebSocket policy                                                             | Existing plugins migrate WebSocket fields into `resolveTransportTurnState`                                                                    |
 | `formatApiKey`                    | Auth-profile formatter: stored profile becomes the runtime `apiKey` string                                     | Provider stores extra auth metadata and needs a custom runtime token shape                                                                    |
@@ -312,11 +372,23 @@ listed here.
 | `validateReplayTurns`             | Final replay-turn validation or reshaping before the embedded runner                                           | Provider transport needs stricter turn validation after generic sanitation                                                                    |
 | `onModelSelected`                 | Run provider-owned post-selection side effects                                                                 | Provider needs telemetry or provider-owned state when a model becomes active                                                                  |
 
+`reconcileLocalService` runs only for configured local services, including a
+healthy process reused from outside the current Gateway process. Keep it cheap,
+idempotent, and abort-aware. A rejection blocks the provider request and
+releases its lease without classifying the healthy process as a startup failure.
+
 Normalization dispatch is hook-specific:
 
-- `normalizeModelId` uses the matched provider hook's non-empty result. If none
-  is returned, OpenClaw applies manifest-declared model-ID normalization; it does
-  not try other providers' normalization hooks.
+- Model references apply manifest-declared model-ID normalization once before
+  `normalizeModelId` dispatch. The matched provider hook can refine that prepared
+  model ID; an empty result keeps it unchanged. OpenClaw does not try other
+  providers' normalization hooks or reapply manifest rules afterward.
+  Reference parsing reads the selected runtime registry without activating
+  plugins. Executable normalization requires a prepared runtime owner; reads
+  without one use static manifest policies only.
+  A directly registered provider owns its ID; compatibility aliases match only
+  when no literal provider exists, preserving alias-only routes and explicit
+  API-owner eligibility.
 - `normalizeTransport` tries the matched provider first. Only if that does not
   change `api` or `baseUrl` and the provider has no `models.providers.<id>` entry
   does it try other transport hooks, stopping at the first change.
@@ -683,6 +755,8 @@ Notes:
 - Canonically equivalent paths with the same `match` mode occupy one route. Static `api.registerHttpRoute(...)` calls from the same plugin replace that route; another plugin cannot replace it.
 - Overlapping routes with different `auth` levels are rejected. Keep `exact`/`prefix` fallthrough chains on the same auth level only.
 - Dynamic lifecycle code using `registerPluginHttpRoute(...)` from `openclaw/plugin-sdk/webhook-ingress` must set `replaceExisting: true` to refresh its own canonical route. Named registrations can replace only the same nonempty `pluginId`; when either side sets a route `source`, both must set the same nonempty source. Same-plugin source-less-to-source-less refresh and anonymous-to-anonymous refresh remain supported for shipped SDK callers, but named and anonymous routes cannot replace each other.
+- Set `reuseExistingSameOwner: true` to share a canonical route with the same nonempty `pluginId` and `source`. A dynamically created route remains until its last holder releases it; reusing a static `api.registerHttpRoute(...)` route leaves its lifetime with the plugin registry.
+- Channel lifecycle callbacks use their Gateway's route registry. Startup routes expire when their task settles or recovery abandons it; `stopAccount` routes expire when that stop attempt settles or times out. Recovery revokes abandoned task routes before replacement startup, even if startup fails. Expired callbacks cannot dynamically register or replace routes.
 - Treat route `source` as a stable same-plugin sub-owner, not a diagnostic label. Existing source-less callers may keep omitting it; source-aware callers must keep it unchanged across refreshes.
 - Dynamic lifecycle registration logs and returns a no-op unregister callback on rejection by default. Set `throwOnFailure: true` when readiness depends on that route; required bundled webhook transports use strict registration so they cannot report ready without live ingress.
 - `auth: "plugin"` routes do **not** receive operator runtime scopes automatically. They are for plugin-managed webhooks/signature verification, not privileged Gateway helper calls.
@@ -1036,6 +1110,13 @@ Official external npm entries should prefer an exact `npmSpec` plus
 `expectedIntegrity`. Bare package names and dist-tags still work for
 compatibility, but they surface source-plane warnings so the catalog can move
 toward pinned, integrity-checked installs without breaking existing plugins.
+When an official package is renamed, the catalog entry may declare
+`legacyNpmPackageNames` with the former package names. Trusted update rewrites
+matching npm records to the current `npmSpec`, and migrates a catalog lookup
+alias such as a channel id to the canonical plugin id. Duplicate alias+canonical
+records drop only when the canonical install is also trusted official.
+`legacyPluginIds` remains the contract for plugin-id cutovers that are not lookup
+aliases.
 When onboarding installs from a local catalog path, it records a managed plugin
 plugin index entry with `source: "path"` and a workspace-relative
 `sourcePath` when possible. The absolute operational load path stays in

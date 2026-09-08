@@ -300,7 +300,7 @@ describe("AppSidebar session ownership filtering", () => {
     expect(sidebar.querySelector(`[data-session-key="${unloadedSessionKey}"]`)).not.toBeNull();
   });
 
-  it("keeps the owner avatar leading while unread trails the row", async () => {
+  it("badges the owner avatar and announces unread once", async () => {
     const key = "agent:main:unread";
     const harness = createSessionsHarness("main", ["agent:main:main", key, "agent:main:other"]);
     const result = harness.sessions.state.result;
@@ -331,8 +331,20 @@ describe("AppSidebar session ownership filtering", () => {
 
     const row = sidebar.querySelector(`[data-session-key="${key}"]`);
     expect(row?.querySelector(".session-glyph openclaw-session-owner-chip")).not.toBeNull();
-    expect(row?.querySelector('.session-glyph__badge[aria-label="Unread"]')).toBeNull();
-    expect(row?.querySelector(".session-row-state .sidebar-recent-session__unread")).not.toBeNull();
+    const badge = row?.querySelector(".sidebar-session-indicator .session-glyph__badge--unread");
+    expect(badge).not.toBeNull();
+    expect(badge?.getAttribute("role")).toBe("img");
+    expect(row?.querySelector(".session-row-state")).toBeNull();
+    const link = row!.querySelector("a")!;
+    const description = (link.getAttribute("aria-describedby") ?? "")
+      .split(/\s+/u)
+      .map((id) => document.getElementById(id)?.textContent ?? "")
+      .join(" ");
+    const name = [...link.querySelectorAll('[role="img"]')]
+      .filter((image) => !image.closest('[aria-hidden="true"]'))
+      .map((image) => image.getAttribute("aria-label") ?? "")
+      .join(" ");
+    expect(`${link.textContent} ${name} ${description}`.match(/Unread/g)).toHaveLength(1);
   });
 
   it("keeps owner avatars off child rows", async () => {

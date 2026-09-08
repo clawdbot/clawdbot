@@ -1,5 +1,6 @@
 import {
   bootstrapHarnessContextEngine,
+  buildAgentHookContextChannelFields,
   buildHarnessContextEngineRuntimeContext,
   CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
   embeddedAgentLog,
@@ -71,10 +72,14 @@ export async function prepareCodexAttemptContext(
   };
   const readFencedHistory = async () => {
     const transcriptReadFence = params.userTurnTranscriptRecorder?.getAdmissionReceipt();
-    return await readMirroredSessionHistoryMessages({
+    const messages = await readMirroredSessionHistoryMessages({
       ...activeTranscriptTarget,
+      signal: connection.runAbortController.signal,
       ...(transcriptReadFence ? { admission: transcriptReadFence } : {}),
     });
+    connection.runAbortController.signal.throwIfAborted();
+    connection.assertCurrent();
+    return messages;
   };
   const historyState = {
     messages:
@@ -102,9 +107,23 @@ export async function prepareCodexAttemptContext(
     sessionKey: contextSessionKey,
     sessionId: params.sessionId,
     workspaceDir: params.workspaceDir,
-    messageProvider: params.messageProvider ?? undefined,
+    // Native-owned models are confirmed after startup; hooks must not publish
+    // stale bindings or private transport overrides as the selected model.
+    ...(!usesSupervisionConnection &&
+    connection.mutable.startupBinding?.preserveNativeModel !== true
+      ? { modelProviderId: params.provider, modelId: params.modelId }
+      : {}),
     trigger: params.trigger,
-    channelId: hookChannelId,
+    ...buildAgentHookContextChannelFields({
+      sessionKey: contextSessionKey,
+      messageChannel: params.messageChannel,
+      messageProvider: params.messageProvider,
+      currentChannelId: hookChannelId,
+      messageTo: params.messageTo,
+      senderId: params.senderId,
+      agentAccountId: params.agentAccountId,
+    }),
+    channelContext: params.channelContext,
     ...hookContextWindowFields,
   };
   const hookRunner = getAgentHarnessHookRunner();
@@ -166,16 +185,20 @@ export async function prepareCodexAttemptContext(
     }),
     agentWorkspaceDeveloperInstructions,
   );
-  const openClawPromptContext = buildCodexOpenClawPromptContext({
-    params: runtimeParams,
-    workspacePromptContext: workspaceBootstrapContext.promptContext,
-    watchedSessionsContext: buildCodexWatchedSessionsContext({
-      attempt: runtimeParams,
-      dynamicTools: toolBridge.availableSpecs,
-      sessionKey: contextSessionKey,
-      sandboxed: sandbox?.enabled === true,
-    }),
+  const watchedSessionsContext = buildCodexWatchedSessionsContext({
+    attempt: runtimeParams,
+    dynamicTools: toolBridge.availableSpecs,
+    sessionKey: contextSessionKey,
+    sandboxed: sandbox?.enabled === true,
   });
+  const buildOpenClawPromptContext = (includeWorkspaceReferences: boolean) =>
+    buildCodexOpenClawPromptContext({
+      params: runtimeParams,
+      workspacePromptContext: includeWorkspaceReferences
+        ? workspaceBootstrapContext.promptContext
+        : undefined,
+      watchedSessionsContext,
+    });
   const skillsCollaborationInstructions = renderCodexSkillsCollaborationInstructions({
     attempt: runtimeParams,
     skillsPrompt: params.skillsSnapshot?.prompt,
@@ -215,7 +238,7 @@ export async function prepareCodexAttemptContext(
     workspaceBootstrapContext,
     agentWorkspaceDeveloperInstructions,
     baseDeveloperInstructions,
-    openClawPromptContext,
+    buildOpenClawPromptContext,
     skillsCollaborationInstructions,
     promptState,
     codexContextProjectionMaxChars,

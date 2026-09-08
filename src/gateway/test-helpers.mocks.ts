@@ -27,6 +27,8 @@ function createEmbeddedRunMockExports() {
     isEmbeddedAgentRunInProgress: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
     resolveEmbeddedAgentRunProgressState: (sessionId: string) =>
       embeddedRunMock.activeIds.has(sessionId) ? "running" : undefined,
+    resolveEmbeddedAgentSessionProgressState: (sessionId: string) =>
+      embeddedRunMock.activeIds.has(sessionId) ? "running" : undefined,
     abortEmbeddedAgentRun: (sessionId: string) => {
       embeddedRunMock.abortCalls.push(sessionId);
       return embeddedRunMock.activeIds.has(sessionId);
@@ -188,7 +190,14 @@ vi.mock("../infra/tailscale.js", async () => {
     await vi.importActual<typeof import("../infra/tailscale.js")>("../infra/tailscale.js");
   return {
     ...actual,
-    readTailscaleWhoisIdentity: async () => testTailscaleWhois.value,
+    readTailscaleWhoisIdentity: async (
+      ip: string,
+      _exec: unknown,
+      opts?: { timeoutMs?: number; cacheTtlMs?: number; errorTtlMs?: number },
+    ) => {
+      testTailscaleWhois.calls.push({ ip, opts });
+      return testTailscaleWhois.value;
+    },
   };
 });
 
@@ -294,15 +303,6 @@ vi.mock("/src/auto-reply/dispatch.js", async () => {
   );
   return createDispatchInboundMessageMockExports(actual);
 });
-vi.mock("../auto-reply/reply.js", () => ({
-  getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
-    gatewayTestHoisted.getReplyFromConfig(...args),
-}));
-
-vi.mock("/src/auto-reply/reply.js", () => ({
-  getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
-    gatewayTestHoisted.getReplyFromConfig(...args),
-}));
 vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", () => ({
   getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
     gatewayTestHoisted.getReplyFromConfig(...args),

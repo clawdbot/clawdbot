@@ -35,6 +35,8 @@ export async function downloadGeneratedVideoAsset(params: {
   index?: number;
   maxBytes?: number;
   validateBinaryResponse?: boolean;
+  /** Zero preserves deadline-only downloads without adding an idle timeout. */
+  chunkTimeoutMs?: number;
   metadata?: Record<string, unknown>;
   fetchResponse?: GeneratedVideoResponseFactory;
 }): Promise<GeneratedVideoAsset> {
@@ -64,6 +66,7 @@ export async function downloadGeneratedVideoAsset(params: {
     const maxBytes = params.maxBytes ?? maxBytesForKind("video");
     const readOptions = {
       maxBytes,
+      chunkTimeoutMs: params.chunkTimeoutMs,
       timeoutMs,
       onTimeout: ({ timeoutMs: bodyTimeoutMs }: { timeoutMs: number }) =>
         new Error(`${params.label} timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`),
@@ -71,9 +74,7 @@ export async function downloadGeneratedVideoAsset(params: {
         new Error(`${params.label} exceeds ${maxBytesLocal} bytes`),
     };
     const buffer = params.validateBinaryResponse
-      ? Buffer.from(
-          await readProviderBinaryResponse(handle.response, params.label, "video", readOptions),
-        )
+      ? await readProviderBinaryResponse(handle.response, params.label, "video", readOptions)
       : await readResponseWithLimit(handle.response, maxBytes, readOptions);
     const ext = extensionForMime(mimeType)?.replace(/^\./u, "") ?? "mp4";
     return {

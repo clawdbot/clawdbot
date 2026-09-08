@@ -1,6 +1,7 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -455,11 +456,16 @@ describe("managed diagnostics-otel install runtime", () => {
       const preloadRoot = path.join(scratch, `otel-preload-${randomUUID()}`);
       const preloadModules = path.join(preloadRoot, "node_modules", "@opentelemetry");
       await mkdir(preloadModules, { recursive: true });
-      // The otherwise-empty preload root resolves the exact root-owned test SDK.
+      const requireFromSdk = createRequire(
+        createRequire(path.join(repoRoot, "package.json")).resolve(
+          "@opentelemetry/sdk-node/package.json",
+        ),
+      );
+      // Resolve through the root-owned SDK without relying on dependency hoisting.
       // The installed plugin remains independently packed without sdk-node.
       for (const packageName of ["sdk-node", "exporter-trace-otlp-proto"]) {
         await symlink(
-          path.join(repoRoot, "node_modules", "@opentelemetry", packageName),
+          path.dirname(requireFromSdk.resolve(`@opentelemetry/${packageName}/package.json`)),
           path.join(preloadModules, packageName),
           process.platform === "win32" ? "junction" : "dir",
         );

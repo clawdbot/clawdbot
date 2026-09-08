@@ -80,6 +80,13 @@ export const SessionsPatchParamsSchema = closedObject({
   /** Reject the mutation if the session was reset or replaced before it commits. */
   expectedSessionId: Type.Optional(NonEmptyString),
   expectedLifecycleRevision: Type.Optional(NonEmptyString),
+  expectedPermissionMode: Type.Optional(Type.Union([SessionPermissionModeSchema, Type.Null()])),
+  expectedToolOverrides: Type.Optional(
+    Type.Union([SessionToolOverridesSchema, Type.Null()], {
+      description:
+        "Replace toolOverrides only when the current sparse overlay still matches this value; null asserts no overlay.",
+    }),
+  ),
   expectedMarkedUnreadAt: ExpectedMarkedUnreadAt,
   ...SessionsPatchMutationProperties,
 });

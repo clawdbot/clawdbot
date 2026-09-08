@@ -1,28 +1,17 @@
+// Transport helpers for the GPT-Live browser offer endpoint.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveAcceptedBrowserOrigin } from "openclaw/plugin-sdk/webhook-request-guards";
+import {
+  isRequestBodyLimitError,
+  requestBodyErrorToText,
+  resolveAcceptedBrowserOrigin,
+  sendHttpRequestRejection,
+} from "openclaw/plugin-sdk/webhook-request-guards";
 
 type ResponseDeliveryWaiter = {
   result: Promise<boolean>;
   cancel: () => void;
 };
-
-export function applyRealtimeOfferCorsHeaders(
-  req: IncomingMessage,
-  res: ServerResponse,
-  cfg: OpenClawConfig | undefined,
-): boolean {
-  if (!req.headers.origin) {
-    return true;
-  }
-  const origin = resolveAcceptedBrowserOrigin({ req, cfg });
-  if (!origin) {
-    return false;
-  }
-  res.setHeader("Access-Control-Allow-Origin", origin);
-  res.setHeader("Vary", "Origin");
-  return true;
-}
 
 export function createResponseDeliveryWaiter(
   res: ServerResponse,
@@ -46,15 +35,70 @@ export function createResponseDeliveryWaiter(
   return { result, cancel: () => settle(false) };
 }
 
+const OFFER_TEXT_CONTENT_TYPE = "text/plain; charset=utf-8";
+
+/**
+ * The one writer for every offer-endpoint response, error text and SDP answer
+ * alike, so no caller sets the security headers by hand and forgets one.
+ */
 export function respondRealtimeOffer(
   res: ServerResponse,
   statusCode: number,
   body: string,
-  contentType = "text/plain; charset=utf-8",
+  contentType = OFFER_TEXT_CONTENT_TYPE,
 ): void {
   res.statusCode = statusCode;
   res.setHeader("cache-control", "no-store");
   res.setHeader("content-type", contentType);
   res.setHeader("x-content-type-options", "nosniff");
   res.end(body);
+}
+
+export function applyRealtimeOfferCorsHeaders(
+  req: IncomingMessage,
+  res: ServerResponse,
+  cfg: OpenClawConfig | undefined,
+): boolean {
+  if (!req.headers.origin) {
+    return true;
+  }
+  const origin = resolveAcceptedBrowserOrigin({ req, cfg });
+  if (!origin) {
+    return false;
+  }
+  res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader("Vary", "Origin");
+  return true;
+}
+
+export function readOfferBearerToken(req: IncomingMessage): string | undefined {
+  const authorization = req.headers.authorization?.trim();
+  return authorization?.match(/^Bearer\s+([^\s]+)$/i)?.[1];
+}
+
+/**
+ * Answer an over-limit or stalled offer through the connection owner.
+ *
+ * The reader defers destruction for those two codes, so the connection is already fenced
+ * and only the owner can still write; responding directly would race the teardown and the
+ * browser would see a reset instead of the status.
+ */
+export async function rejectOversizedOffer(
+  req: IncomingMessage,
+  res: ServerResponse,
+  error: unknown,
+): Promise<boolean> {
+  if (!isRequestBodyLimitError(error)) {
+    return false;
+  }
+  res.setHeader("cache-control", "no-store");
+  res.setHeader("x-content-type-options", "nosniff");
+  await sendHttpRequestRejection(
+    req,
+    res,
+    error.statusCode,
+    requestBodyErrorToText(error.code),
+    OFFER_TEXT_CONTENT_TYPE,
+  );
+  return true;
 }

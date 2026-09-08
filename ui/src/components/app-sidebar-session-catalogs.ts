@@ -12,7 +12,7 @@ import type {
   CatalogSessionContinuedDetail,
   CatalogSessionKey,
 } from "../lib/sessions/catalog-key.ts";
-import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
+import { buildCatalogSessionKey, parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 
 export function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
@@ -40,6 +40,7 @@ export function findCatalogSessionHovercardRow(params: {
   sessionKey: string;
   liveRow?: SidebarSessionHovercardRow;
 }): SidebarSessionHovercardRow | undefined {
+  const catalogKey = parseCatalogSessionKey(params.sessionKey);
   for (const catalog of params.catalogs) {
     for (const host of catalog.hosts) {
       for (const session of host.sessions) {
@@ -50,7 +51,12 @@ export function findCatalogSessionHovercardRow(params: {
             hostId: host.hostId,
             threadId: session.threadId,
           });
-        if (key !== params.sessionKey) {
+        const matchesCatalogKey =
+          // Routed catalog keys keep agent ownership; source lookup ignores only that prefix.
+          catalogKey?.catalogId === catalog.id &&
+          catalogKey.hostId === host.hostId &&
+          catalogKey.threadId === session.threadId;
+        if (key !== params.sessionKey && !matchesCatalogKey) {
           continue;
         }
         const cwd = normalizeOptionalString(session.cwd);
@@ -59,6 +65,7 @@ export function findCatalogSessionHovercardRow(params: {
         // itself prove repository identity; only projected Git facts do that.
         return {
           ...params.liveRow,
+          hasActiveRun: params.liveRow?.hasActiveRun === true,
           hasAutomation: params.liveRow?.hasAutomation === true,
           label: params.liveRow?.label ?? (session.name || session.threadId),
           // Once adopted, even an unset live color overrides stale catalog metadata.
@@ -149,6 +156,8 @@ export type CatalogSessionMenuRequest = {
   routeId: "chat" | "new-session";
   navigation: ApplicationNavigationOptions;
   canOpenTerminal: boolean;
+  canDelete: boolean;
+  name: string;
   meta: string;
 };
 

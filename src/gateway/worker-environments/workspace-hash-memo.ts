@@ -80,6 +80,7 @@ export function replaceWorkerWorkspaceHashMemoEntries(
 type WorkspaceHashContext = {
   memo: WorkspaceHashMemo;
   metrics?: WorkspaceHashMetrics;
+  owner: "gateway" | "worker";
 };
 
 const workspaceHashContext = new AsyncLocalStorage<WorkspaceHashContext>();
@@ -116,7 +117,18 @@ export async function withWorkspaceHashMemo<T>(
   if (active?.memo === memo && active.metrics === inheritedMetrics) {
     return await operation();
   }
-  return await workspaceHashContext.run({ memo, metrics: inheritedMetrics }, operation);
+  return await workspaceHashContext.run(
+    { memo, metrics: inheritedMetrics, owner: active?.owner ?? "gateway" },
+    operation,
+  );
+}
+
+/** Shares hashes validated on the node with its final manifest capture. */
+export async function withWorkerWorkspaceHashMemo<T>(
+  memo: WorkspaceHashMemo,
+  operation: () => Promise<T>,
+): Promise<T> {
+  return await workspaceHashContext.run({ memo, owner: "worker" }, operation);
 }
 
 export async function withWorkspaceHashContext<T>(operation: () => Promise<T>): Promise<T> {
@@ -151,16 +163,41 @@ export function takeWorkspaceHashMemo(
   return memo;
 }
 
-export function serializeRemoteWorkspaceHashMemo(memo: WorkspaceHashMemo): string {
-  const serialized = JSON.stringify(
-    [...memo]
-      .filter(([identity]) => identity.startsWith("worker:"))
-      .toSorted(([left], [right]) => left.localeCompare(right)),
-  );
-  if (Buffer.byteLength(serialized) > MAX_WORKSPACE_HASH_MEMO_BYTES) {
-    throw new Error("Workspace hash memo exceeds its byte limit");
+/** Self-contained for the node script; preserve the largest hashes within both wire limits. */
+export function selectWorkerWorkspaceHashMemoEntries(
+  memo: ReadonlyMap<string, string>,
+  maxEntries: number,
+  maxBytes: number,
+): Array<[string, string]> {
+  const compareIdentity = ([left]: [string, string], [right]: [string, string]) =>
+    left < right ? -1 : left > right ? 1 : 0;
+  const candidates = [...memo]
+    .filter(([identity]) => identity.startsWith("worker:"))
+    .map((entry) => ({ entry, size: Number(entry[0].split(":")[3]) }))
+    .toSorted((left, right) => right.size - left.size || compareIdentity(left.entry, right.entry));
+  const selected: Array<[string, string]> = [];
+  let bytes = 2;
+  for (const { entry } of candidates) {
+    if (selected.length === maxEntries) {
+      break;
+    }
+    const entryBytes = Buffer.byteLength(JSON.stringify(entry)) + (selected.length > 0 ? 1 : 0);
+    if (bytes + entryBytes <= maxBytes) {
+      selected.push(entry);
+      bytes += entryBytes;
+    }
   }
-  return serialized;
+  return selected.toSorted(compareIdentity);
+}
+
+export function serializeRemoteWorkspaceHashMemo(memo: WorkspaceHashMemo): string {
+  return JSON.stringify(
+    selectWorkerWorkspaceHashMemoEntries(
+      memo,
+      MAX_RECONCILIATION_ENTRIES,
+      MAX_WORKSPACE_HASH_MEMO_BYTES,
+    ),
+  );
 }
 
 export function recordRemoteWorkspaceHashMetrics(

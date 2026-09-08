@@ -1,6 +1,7 @@
 // Feishu plugin module implements pins behavior.
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import { assertFeishuApiSuccess } from "./api-response.js";
 import { createFeishuClient } from "./client.js";
 
 type FeishuPin = {
@@ -10,12 +11,6 @@ type FeishuPin = {
   operatorIdType?: string;
   createTime?: string;
 };
-
-function assertFeishuPinApiSuccess(response: { code?: number; msg?: string }, action: string) {
-  if (response.code !== 0) {
-    throw new Error(`Feishu ${action} failed: ${response.msg || `code ${response.code}`}`);
-  }
-}
 
 function normalizePin(pin: {
   message_id: string;
@@ -49,7 +44,7 @@ export async function createPinFeishu(params: {
       message_id: params.messageId,
     },
   });
-  assertFeishuPinApiSuccess(response, "pin create");
+  assertFeishuApiSuccess(response, "Feishu pin create failed");
   return response.data?.pin ? normalizePin(response.data.pin) : null;
 }
 
@@ -69,7 +64,7 @@ export async function removePinFeishu(params: {
       message_id: params.messageId,
     },
   });
-  assertFeishuPinApiSuccess(response, "pin delete");
+  assertFeishuApiSuccess(response, "Feishu pin delete failed");
 }
 
 export async function listPinsFeishu(params: {
@@ -98,7 +93,7 @@ export async function listPinsFeishu(params: {
       ...(params.pageToken ? { page_token: params.pageToken } : {}),
     },
   });
-  assertFeishuPinApiSuccess(response, "pin list");
+  assertFeishuApiSuccess(response, "Feishu pin list failed");
 
   return {
     chatId: params.chatId,

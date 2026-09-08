@@ -13,6 +13,7 @@ import {
 import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
+  SystemAgentApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type {
   ChannelApprovalCapability,
@@ -36,7 +37,7 @@ import {
 } from "./approval-auth.js";
 import { isGoogleChatSpaceTarget, normalizeGoogleChatTarget } from "./targets.js";
 
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
 type GoogleChatApprovalTarget = {
   to: string;
   accountId?: string | null;
@@ -235,7 +236,7 @@ export const googleChatApprovalCapability: ChannelApprovalCapability =
     resolveOriginTarget: resolveGoogleChatOriginTarget,
     resolveApproverDmTargets: resolveGoogleChatApproverDmTargets,
     nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
-      eventKinds: ["exec", "plugin"],
+      eventKinds: ["exec", "plugin", "system-agent"],
       isConfigured: ({ cfg, accountId }) =>
         isGoogleChatNativeApprovalClientEnabled({ cfg, accountId }),
       shouldHandle: ({ cfg, accountId, approvalKind, request }) =>

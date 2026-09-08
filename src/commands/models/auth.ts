@@ -270,17 +270,13 @@ async function resolveModelsAuthContext(params?: {
   const providerRef = requestedProvider
     ? normalizeManualAuthProvider(requestedProvider)
     : undefined;
+  // Auth setup also runs inside the Gateway; discovery must not replace its live registry.
   const providers = resolvePluginProvidersCore({
     config,
     workspaceDir,
     mode: "setup",
     includeUntrustedWorkspacePlugins: false,
-    ...(providerRef
-      ? {
-          providerRefs: [providerRef],
-          activate: true,
-        }
-      : {}),
+    ...(providerRef ? { providerRefs: [providerRef] } : {}),
   });
   const authProviders = preferSetupAuthProviders({
     providers,
@@ -452,13 +448,18 @@ async function persistProviderAuthResult(params: {
       throw error;
     }
     persistedProfiles.push(profile);
-    await promoteAuthProfileInOrder({
+    const promotion = await promoteAuthProfileInOrder({
       agentDir: params.agentDir,
       provider: profile.credential.provider,
       profileId: profile.profileId,
       createIfMissing: configuredSelection.createIfMissing,
       ...(configuredSelection.order ? { createFromOrder: configuredSelection.order } : {}),
     });
+    if (!promotion.ok) {
+      throw new Error(
+        "The auth profile was saved, but its order could not be updated because the auth store is busy. Wait a moment, then retry the login.",
+      );
+    }
   }
 
   // Auth login owns the credential store. Keep openclaw.json untouched unless
@@ -1013,6 +1014,15 @@ export async function runModelsAuthLoginFlowCore(
   } else if (requestedProviderId && !requestedProvider) {
     requestedProvider = resolveRequestedLoginProviderOrThrow(authProviders, requestedProviderId);
   }
+  await prompter.note(
+    [
+      "Scope: System / agent",
+      `Agent: ${context.agentId}`,
+      "Location: the machine running OpenClaw",
+      `For personal model accounts on a Gateway, run ${formatCliCommand("openclaw models accounts login --help")}.`,
+    ].join("\n"),
+    "Provider sign-in",
+  );
   const selectedProvider =
     requestedProvider ??
     (await prompter
@@ -1059,7 +1069,9 @@ export async function runModelsAuthLoginFlowCore(
         agentDir: context.agentDir,
       });
       if (!clearedStore) {
-        throw new Error("profile store update failed");
+        throw new Error(
+          "auth store is busy; close other OpenClaw commands using this state directory and retry",
+        );
       }
       opts.runtime.log(
         `Removed cached auth profiles for provider "${selectedProvider.id}" (--force). Running fresh auth flow.`,

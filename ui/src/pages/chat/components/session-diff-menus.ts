@@ -142,29 +142,33 @@ class SessionDiffMenu extends OpenClawLightDomElement {
         <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.fileText}</span>
         <span class="session-menu__text">${t("chat.sessionDiff.openFile")}</span>
       </wa-dropdown-item>
-      ${menu.canReveal
-        ? html`<wa-dropdown-item class="session-menu__item" value="reveal-file">
-            <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.folder}</span>
-            <span class="session-menu__text">${t("chat.sessionDiff.revealInFileTree")}</span>
-          </wa-dropdown-item>`
-        : nothing}
-      ${menu.absolutePath
-        ? html`<wa-dropdown-item class="session-menu__item">
-            <span slot="icon" class="session-menu__icon" aria-hidden="true"
-              >${icons.externalLink}</span
-            >
-            <span class="session-menu__text">${t("chat.sessionDiff.openInEditor")}</span>
-            ${EDITOR_IDS.map(
-              (editor) => html`<wa-dropdown-item
-                slot="submenu"
-                class="session-menu__item"
-                value=${`open-editor:${editor}`}
+      ${
+        menu.canReveal
+          ? html`<wa-dropdown-item class="session-menu__item" value="reveal-file">
+              <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.folder}</span>
+              <span class="session-menu__text">${t("chat.sessionDiff.revealInFileTree")}</span>
+            </wa-dropdown-item>`
+          : nothing
+      }
+      ${
+        menu.absolutePath
+          ? html`<wa-dropdown-item class="session-menu__item">
+              <span slot="icon" class="session-menu__icon" aria-hidden="true"
+                >${icons.externalLink}</span
               >
-                <span class="session-menu__text">${EDITOR_LABELS[editor]}</span>
-              </wa-dropdown-item>`,
-            )}
-          </wa-dropdown-item>`
-        : nothing}
+              <span class="session-menu__text">${t("chat.sessionDiff.openInEditor")}</span>
+              ${EDITOR_IDS.map(
+                (editor) => html`<wa-dropdown-item
+                  slot="submenu"
+                  class="session-menu__item"
+                  value=${`open-editor:${editor}`}
+                >
+                  <span class="session-menu__text">${EDITOR_LABELS[editor]}</span>
+                </wa-dropdown-item>`,
+              )}
+            </wa-dropdown-item>`
+          : nothing
+      }
     `;
   }
 
@@ -207,30 +211,36 @@ class SessionDiffMenu extends OpenClawLightDomElement {
         t("chat.sessionDiff.uncommitted"),
         menu.active.scope === "uncommitted",
       )}
-      ${menu.result.commits?.length
-        ? html`<div class="session-menu__separator" role="separator"></div>
-            ${menu.result.commits.map((commit, index) =>
-              this.renderScopeItem(
-                `scope:commit:${commit.sha}`,
-                html`<span class="session-diff-menu__sha">${commit.sha}</span>
-                  <span class="session-diff-menu__subject">${commit.subject}</span>
-                  ${index === 0
-                    ? html`<span class="session-diff-menu__head"
-                        >${t("chat.sessionDiff.head")}</span
-                      >`
-                    : nothing}`,
-                activeCommit === commit.sha,
-              ),
-            )}`
-        : nothing}
-      ${menu.result.mergeBase
-        ? html`<div class="session-menu__separator" role="separator"></div>
-            <div class="session-diff-menu__merge-base">
-              <span>${t("chat.sessionDiff.mergeBase")}</span>
-              <span class="session-diff-menu__sha">${menu.result.mergeBase.sha}</span>
-              <span class="session-diff-menu__subject">${menu.result.mergeBase.subject}</span>
-            </div>`
-        : nothing}
+      ${
+        menu.result.commits?.length
+          ? html`<div class="session-menu__separator" role="separator"></div>
+              ${menu.result.commits.map((commit, index) =>
+                this.renderScopeItem(
+                  `scope:commit:${commit.sha}`,
+                  html`<span class="session-diff-menu__sha">${commit.sha}</span>
+                    <span class="session-diff-menu__subject">${commit.subject}</span>
+                    ${
+                      index === 0
+                        ? html`<span class="session-diff-menu__head"
+                            >${t("chat.sessionDiff.head")}</span
+                          >`
+                        : nothing
+                    }`,
+                  activeCommit === commit.sha,
+                ),
+              )}`
+          : nothing
+      }
+      ${
+        menu.result.mergeBase
+          ? html`<div class="session-menu__separator" role="separator"></div>
+              <div class="session-diff-menu__merge-base">
+                <span>${t("chat.sessionDiff.mergeBase")}</span>
+                <span class="session-diff-menu__sha">${menu.result.mergeBase.sha}</span>
+                <span class="session-diff-menu__subject">${menu.result.mergeBase.subject}</span>
+              </div>`
+          : nothing
+      }
     `;
   }
 
@@ -242,11 +252,13 @@ class SessionDiffMenu extends OpenClawLightDomElement {
       aria-checked=${String(checked)}
     >
       <span class="session-menu__text">${label}</span>
-      ${checked
-        ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
-            >${icons.check}</span
-          >`
-        : nothing}
+      ${
+        checked
+          ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
+              >${icons.check}</span
+            >`
+          : nothing
+      }
     </wa-dropdown-item>`;
   }
 
@@ -303,13 +315,15 @@ class SessionDiffMenu extends OpenClawLightDomElement {
         aria-hidden="true"
         style="position:fixed;left:${clampedX}px;top:${clampedY}px;width:1px;height:1px;opacity:0;pointer-events:none"
       ></button>
-      ${menu.kind === "file"
-        ? this.renderFileMenu(menu)
-        : menu.kind === "scope"
-          ? this.renderScopeMenu(menu)
-          : menu.kind === "sync"
-            ? this.renderSyncMenu(menu)
-            : this.renderViewMenu(menu)}
+      ${
+        menu.kind === "file"
+          ? this.renderFileMenu(menu)
+          : menu.kind === "scope"
+            ? this.renderScopeMenu(menu)
+            : menu.kind === "sync"
+              ? this.renderSyncMenu(menu)
+              : this.renderViewMenu(menu)
+      }
     </wa-dropdown>`;
   }
 }

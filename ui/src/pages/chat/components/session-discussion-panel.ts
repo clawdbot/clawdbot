@@ -214,26 +214,28 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
     const openUrl = resolveDiscussionUrl(info.openUrl);
     return html`
       <div class="session-discussion__open">
-        ${embedUrl
-          ? html`
-              <iframe
-                class="session-discussion__frame"
-                src=${embedUrl}
-                title=${t("chat.sessionDiscussion.frameTitle")}
-                sandbox="allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
-                @load=${this.handleDiscussionFrameLoad}
-              ></iframe>
-            `
-          : renderPanelEmptyState({
-              icon: icons.messageSquare,
-              heading: t("chat.sidePanel.discussion"),
-              description: t("chat.sessionDiscussion.unavailable"),
-              action: openUrl
-                ? html`<a class="session-link" href=${openUrl} target="_blank" rel="noopener">
-                    ${t("chat.sessionDiscussion.openExternal")}
-                  </a>`
-                : nothing,
-            })}
+        ${
+          embedUrl
+            ? html`
+                <iframe
+                  class="session-discussion__frame"
+                  src=${embedUrl}
+                  title=${t("chat.sessionDiscussion.frameTitle")}
+                  sandbox="allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
+                  @load=${this.handleDiscussionFrameLoad}
+                ></iframe>
+              `
+            : renderPanelEmptyState({
+                icon: icons.messageSquare,
+                heading: t("chat.sidePanel.discussion"),
+                description: t("chat.sessionDiscussion.unavailable"),
+                action: openUrl
+                  ? html`<a class="session-link" href=${openUrl} target="_blank" rel="noopener">
+                      ${t("chat.sessionDiscussion.openExternal")}
+                    </a>`
+                  : nothing,
+              })
+        }
       </div>
     `;
   }

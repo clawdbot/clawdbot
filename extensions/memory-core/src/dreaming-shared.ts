@@ -1,38 +1,7 @@
 // Memory Core plugin module implements dreaming shared behavior.
-import {
-  asNullableRecord,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-
-export function extractAssistantText(messages: unknown[]): string | null {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = asNullableRecord(messages[index]);
-    if (message?.role !== "assistant") {
-      continue;
-    }
-    if (typeof message.content === "string" && message.content.trim()) {
-      return message.content.trim();
-    }
-    if (Array.isArray(message.content)) {
-      const text = message.content
-        .flatMap((part) => {
-          const item = asNullableRecord(part);
-          return (item?.type === "text" || item?.type === "output_text") &&
-            typeof item.text === "string"
-            ? [item.text]
-            : [];
-        })
-        .join("\n")
-        .trim();
-      if (text) {
-        return text;
-      }
-    }
-  }
-  return null;
-}
 
 export function includesSystemEventToken(cleanedBody: string, eventText: string): boolean {
   const normalizedBody = normalizeOptionalString(cleanedBody);

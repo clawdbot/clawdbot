@@ -7,10 +7,8 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
-import {
-  buildPluginCapabilityConsentReview,
-  type PluginCapabilityConsentHandler,
-} from "../plugins/capability-consent.js";
+import type { PluginCapabilityConsentHandler } from "../plugins/capability-consent.js";
+import { buildPluginCapabilityConsentReview } from "../plugins/capability-summary.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
@@ -821,13 +819,6 @@ vi.mock("./doctor/shared/active-tool-schema-warnings.js", () => ({
   collectActiveToolSchemaProjectionWarnings: vi.fn(async () => []),
 }));
 
-vi.mock("./doctor/shared/plugin-dependency-cleanup.js", () => ({
-  cleanupLegacyPluginDependencyState: vi.fn(async () => ({
-    changes: [],
-    warnings: [],
-  })),
-}));
-
 vi.mock("./doctor/shared/stale-oauth-profile-shadows.js", () => ({
   repairStaleOAuthProfileShadows: vi.fn(async () => ({
     changes: [],
@@ -1417,6 +1408,9 @@ vi.mock("./doctor-config-preflight.js", async () => {
             path: configPath,
             parsed,
             agentRosterIncludeOwned: injected?.agentRosterIncludeOwned === true,
+            ...(injected?.includeProvenance
+              ? { includeProvenance: injected.includeProvenance }
+              : {}),
             sourceConfigBeforeMigrations,
             config: injectedEffectiveConfig,
             sourceConfig: injectedEffectiveConfig,
@@ -1441,6 +1435,7 @@ vi.mock("./doctor-config-preflight.js", async () => {
           path: configPath,
           parsed,
           agentRosterIncludeOwned: injected?.agentRosterIncludeOwned === true,
+          ...(injected?.includeProvenance ? { includeProvenance: injected.includeProvenance } : {}),
           sourceConfigBeforeMigrations,
           config: injectedEffectiveConfig,
           sourceConfig: injectedEffectiveConfig,
@@ -1675,7 +1670,8 @@ describe("doctor config flow", () => {
     });
 
     expect(result.shouldWriteConfig).toBe(true);
-    expect(result.explicitSetPaths).toEqual([["agents", "entries"]]);
+    expect(result.persistCanonicalAgentRoster).toBe(true);
+    expect(result.explicitSetPaths).toBeUndefined();
     expect(result.cfg.agents?.entries).toEqual({
       main: { workspace: "/tmp/migrated-main" },
     });
@@ -1762,6 +1758,7 @@ describe("doctor config flow", () => {
     });
 
     expect(result.shouldWriteConfig).toBe(false);
+    expect(result.persistCanonicalAgentRoster).toBeUndefined();
     expect(result.explicitSetPaths).toBeUndefined();
   });
 
@@ -1782,10 +1779,8 @@ describe("doctor config flow", () => {
     });
 
     expect(result.shouldWriteConfig).toBe(true);
-    expect(result.explicitSetPaths).toEqual([
-      ["agents", "entries"],
-      ["agents", "ownership"],
-    ]);
+    expect(result.persistCanonicalAgentRoster).toBe(true);
+    expect(result.explicitSetPaths).toEqual([["agents", "ownership"]]);
     expect(result.cfg.agents?.entries).toEqual({
       ops: { workspace: "/srv/ops" },
       research: { model: "openai/research" },
@@ -1795,9 +1790,58 @@ describe("doctor config flow", () => {
     expect(result.cfg.agents).not.toHaveProperty("list");
   });
 
+  it("skips root wizard metadata when an include boundary owns the repair", async () => {
+    // A retired tuning knob inside an include-owned section is a Doctor repair
+    // whose only changed path lives in that include file. The root already
+    // carries a canonical roster, so Doctor has no root roster write to make.
+    const result = await runDoctorConfigWithInput({
+      config: {
+        agents: { entries: { main: {} } },
+        browser: { enabled: true, actionTimeoutMs: 5000 },
+      },
+      parsedConfig: { agents: { entries: { main: {} } }, browser: { $include: "./browser.json5" } },
+      includeProvenance: [
+        {
+          path: ["browser"],
+          kind: "single",
+          hasSiblingOverrides: false,
+          hasArrayAncestor: false,
+          targetPath: "/virtual/.openclaw/browser.json5",
+        },
+      ],
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.cfg.browser).toEqual({ enabled: true });
+    expect(result.skipWizardMetadataForIncludeWrite).toBe(true);
+  });
+
+  it("keeps root wizard metadata when no include boundary owns the repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: {
+        agents: { entries: { main: {} } },
+        browser: { enabled: true, actionTimeoutMs: 5000 },
+      },
+      parsedConfig: {
+        agents: { entries: { main: {} } },
+        browser: { enabled: true, actionTimeoutMs: 5000 },
+      },
+      includeProvenance: [],
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.cfg.browser).toEqual({ enabled: true });
+    expect(result.skipWizardMetadataForIncludeWrite).toBeUndefined();
+  });
+
   it("stamps explicit ownership when Doctor migrates a markerless multi-agent list", async () => {
     const rawConfig = {
       agents: {
+        defaults: { workspace: "/srv/legacy-shared" },
         list: [{ id: "ops" }, { id: "research", model: "openai/research" }],
       },
     };
@@ -1809,14 +1853,13 @@ describe("doctor config flow", () => {
     });
 
     expect(result.shouldWriteConfig).toBe(true);
-    expect(result.explicitSetPaths).toEqual([
-      ["agents", "entries"],
-      ["agents", "ownership"],
-    ]);
+    expect(result.persistCanonicalAgentRoster).toBe(true);
+    expect(result.explicitSetPaths).toEqual([["agents", "ownership"]]);
     expect(result.cfg.agents).toEqual({
+      defaults: { workspace: "/srv/legacy-shared" },
       ownership: "explicit",
       entries: {
-        ops: {},
+        ops: { workspace: "/srv/legacy-shared" },
         research: { model: "openai/research" },
       },
     });
@@ -1909,7 +1952,9 @@ describe("doctor config flow", () => {
     });
 
     expect(secondRun.shouldWriteConfig).toBe(false);
+    expect(secondRun.persistCanonicalAgentRoster).toBeUndefined();
     expect(singleAgent.shouldWriteConfig).toBe(false);
+    expect(singleAgent.persistCanonicalAgentRoster).toBeUndefined();
   });
 
   it("preserves malformed keyed entries for schema validation during repair", async () => {

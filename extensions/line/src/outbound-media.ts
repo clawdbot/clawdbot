@@ -1,7 +1,7 @@
-// Line plugin module implements outbound media behavior.
 import type { messagingApi } from "@line/bot-sdk";
 import { getFileExtension, mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
 import { resolvePinnedHostnameWithPolicy, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { isHttpsUrl } from "./media-url.js";
 import type { LineOutboundMediaKind } from "./types.js";
 
 // LINE accepts a tracking id on a video sent to a user, but the SDK type omits it.
@@ -44,14 +44,6 @@ async function validateLineMediaUrl(url: string): Promise<void> {
   await resolvePinnedHostnameWithPolicy(parsed.hostname, {
     policy: LINE_OUTBOUND_MEDIA_SSRF_POLICY,
   });
-}
-
-function isHttpsUrl(url: string): boolean {
-  try {
-    return new URL(url).protocol === "https:";
-  } catch {
-    return false;
-  }
 }
 
 const LINE_MEDIA_KIND_BY_MIME: Readonly<Record<string, LineOutboundMediaKind | undefined>> = {

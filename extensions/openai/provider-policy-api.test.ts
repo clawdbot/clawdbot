@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isResponseModelEquivalent,
   normalizeModelCatalogId,
+  projectRealtimeVoicePublicProjection,
   resolveModelRoutes,
   resolveThinkingProfile,
 } from "./provider-policy-api.js";
@@ -14,6 +15,34 @@ describe("OpenAI provider policy artifact", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it("projects private realtime model routing without exposing the model", () => {
+    const config = { model: "gpt-live-test-canary", voice: "marin" };
+
+    expect(projectRealtimeVoicePublicProjection({ providerConfig: config, config })).toEqual({
+      config: { voice: "marin" },
+      clientHints: {
+        modelSource: "gateway",
+        gatewayRelaySupported: false,
+      },
+    });
+  });
+
+  it("does not add routing hints for public realtime models", () => {
+    const config = { model: "gpt-realtime", voice: "marin" };
+
+    expect(projectRealtimeVoicePublicProjection({ providerConfig: config, config })).toEqual({
+      config,
+    });
+  });
+
+  it("preserves the released realtime route without routing hints", () => {
+    const config = { model: "gpt-live-1-codex", voice: "spruce" };
+
+    expect(projectRealtimeVoicePublicProjection({ providerConfig: config, config })).toEqual({
+      config,
+    });
   });
 
   it.each([
@@ -92,6 +121,9 @@ describe("OpenAI provider policy artifact", () => {
   });
 
   it.each([
+    ["gpt-6-astra", "codex", "low"],
+    ["gpt-6-astra", "openclaw", "low"],
+    ["gpt-6-astra", "auto", "low"],
     ["gpt-5.6-sol", "codex", "medium"],
     ["gpt-5.6-sol", "openclaw", "medium"],
     ["gpt-5.6-terra", "codex", "medium"],
@@ -108,7 +140,7 @@ describe("OpenAI provider policy artifact", () => {
     expect(profile?.defaultLevel).toBe(expected);
   });
 
-  it.each(["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])(
+  it.each(["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra"])(
     "exposes logical Ultra for %s on the OpenClaw runtime",
     (modelId) => {
       const levels = resolveThinkingProfile({
@@ -121,7 +153,7 @@ describe("OpenAI provider policy artifact", () => {
     },
   );
 
-  it.each(["gpt-5.6-sol", "gpt-5.6-terra"])(
+  it.each(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra"])(
     "uses native Ultra fallback for %s when model/list metadata is unavailable",
     (modelId) => {
       const levels = resolveThinkingProfile({
@@ -134,7 +166,7 @@ describe("OpenAI provider policy artifact", () => {
     },
   );
 
-  it.each(["gpt-5.6-sol", "gpt-5.6-terra"])(
+  it.each(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra"])(
     "keeps native Ultra fallback for %s with direct OpenAI API metadata",
     (modelId) => {
       const levels = resolveThinkingProfile({

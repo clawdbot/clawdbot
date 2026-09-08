@@ -211,6 +211,22 @@ describe("memory vector KNN subprocess boundary", () => {
   });
 
   it("queries the real source child across WAL writer visibility and source filters", async () => {
+    // The read-only native query must not boot schema/query-builder runtimes
+    // through broad SDK barrels on every search (including packaged children).
+    const importGuard = `import { registerHooks } from "node:module";
+      registerHooks({ resolve(specifier, context, nextResolve) {
+        if (/^(?:kysely|typebox)(?:\\/|$)/u.test(specifier)) {
+          throw new Error("KNN child loaded unrelated runtime: " + specifier);
+        }
+        return nextResolve(specifier, context);
+      } });`;
+    vi.mocked(childProcess.spawn).mockImplementation((command, args, options) =>
+      spawn(
+        command,
+        ["--import", `data:text/javascript,${encodeURIComponent(importGuard)}`, ...args],
+        options,
+      ),
+    );
     const fixture = await createFileBackedVectorDatabase();
     try {
       insertVectorRow(fixture.db, { id: "committed", source: "memory", vector: [1, 0] });
@@ -303,7 +319,18 @@ describe("memory vector KNN subprocess boundary", () => {
         databasePath: "fixture:early-exit",
         request: request(1),
       }),
-    ).rejects.toThrow("exited before returning a result");
+    ).rejects.toThrow(
+      "exited before returning a result (code 7, signal none): fixture KNN failure",
+    );
+    await expect(
+      runVectorKnnInSubprocess({
+        databasePath: "fixture:oversized-stderr",
+        request: request(1),
+      }),
+    ).rejects.toMatchObject({
+      code: "protocol",
+      message: "memory vector KNN child stderr exceeded its limit",
+    });
   });
 
   it("fails vector recall closed when the subprocess is unavailable", async () => {

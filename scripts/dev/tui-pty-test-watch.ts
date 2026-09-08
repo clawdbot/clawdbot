@@ -5,6 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { terminateManagedChild } from "../lib/managed-child-process.mts";
 import { sleep as delay } from "../lib/sleep.mjs";
+import { resolveVitestHomeSelection } from "../lib/vitest-home-selection.mts";
 import { spawnOwnedVitestProcess } from "../lib/vitest-process.mts";
 
 type Options = {
@@ -245,6 +246,10 @@ async function main(): Promise<void> {
   await createMirrorFile(options.mirrorPath);
 
   const { child, completion } = spawnOwnedVitestProcess({
+    homeMode: resolveVitestHomeSelection(
+      ["--config", "test/vitest/vitest.tui-pty.config.ts", ...options.vitestArgs],
+      { env: process.env },
+    ),
     command: process.execPath,
     args: [
       "--no-maglev",

@@ -6,7 +6,12 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: shared-openclawkit-periphery-${{ github.event.pull_request.number || github.sha }}
+  # Admission precedes scope skips: isolate passive drafts before they can cancel useful work.
+  # Keep conversion events in the PR group as an intentional cancellation signal.
+  group: >-
+    ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.action != 'converted_to_draft'
+      && format('{0}-passive-draft-{1}', github.workflow, github.run_id)
+      || format('shared-openclawkit-periphery-{0}', github.event.pull_request.number || github.sha) }}
   cancel-in-progress: true
 
 env:
@@ -74,7 +79,7 @@ jobs:
     name: Scan shared kit from iOS
     needs: scope
     if: ${{ needs.scope.outputs.should-scan == 'true' }}
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
+    runs-on: macos-26
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -107,6 +112,14 @@ jobs:
         with:
           cache-mode: restore
           install-bun: "false"
+
+      - name: Install Watch Rust toolchain
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:$PATH"
+          watch_toolchain="$(awk -F '"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"
+          test -n "$watch_toolchain"
+          rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
 
       - name: Install iOS scan tooling
         run: |
@@ -171,7 +184,7 @@ jobs:
     name: Scan shared kit from macOS
     needs: scope
     if: ${{ needs.scope.outputs.should-scan == 'true' }}
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
+    runs-on: macos-26
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -198,6 +211,15 @@ jobs:
             exit 1
           fi
           swift --version
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "false"
+
+      - name: Prepare Apple Mermaid assets
+        run: node scripts/prepare-apple-mermaid.mjs
 
       - name: Install Periphery
         run: |

@@ -8,7 +8,7 @@ import {
 import { WORKER_INFERENCE_MAX_CONTEXT_MESSAGES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
-import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
+import type { WorkerGitHubLaunchBinding, WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { buildWorkerConnectParams, parseWorkerLaunchDescriptor } from "./launch-descriptor.js";
 
 function launchDescriptor(): WorkerLaunchDescriptor {
@@ -104,6 +104,87 @@ describe("worker launch descriptor", () => {
       client: { id: "openclaw-worker", mode: "worker", version: "2026.7.12" },
       admission: { ...descriptor.admission, runId: descriptor.assignment.runId },
     });
+  });
+
+  it("round-trips turn-bound GitHub identity without adding it to worker admission", () => {
+    const descriptor = launchDescriptor();
+    const identity = {
+      token: "worker-github-token",
+      login: "worker-bot",
+      branch: "session/worker-1",
+    };
+    for (const github of [
+      identity,
+      {
+        ...identity,
+        remoteUrl: "https://github.com/openclaw/openclaw.git",
+        gitAuthor: { name: "Worker Bot", email: "worker@example.test" },
+      },
+    ]) {
+      descriptor.assignment.github = github;
+      const parsed = parseWorkerLaunchDescriptor(structuredClone(descriptor));
+      expect(parsed.assignment.github).toEqual(github);
+      expect(buildWorkerConnectParams(parsed)).not.toHaveProperty("github");
+      expect(JSON.stringify(buildWorkerConnectParams(parsed))).not.toContain(github.token);
+    }
+  });
+
+  it("rejects malformed or open GitHub launch bindings", () => {
+    const descriptor = launchDescriptor();
+    const github: WorkerGitHubLaunchBinding = {
+      token: "worker-github-token",
+      login: "worker-bot",
+      branch: "session/worker-1",
+    };
+    const withBinding = (overrides: Record<string, unknown>) =>
+      Object.assign({}, github, overrides);
+    const invalidBindings: unknown[] = [
+      null,
+      withBinding({ unexpected: true }),
+      { login: github.login, branch: github.branch },
+      { token: github.token, branch: github.branch },
+      { token: github.token, login: github.login },
+      ...["", "token with space", "token\n", "token\u0001", "x".repeat(2049)].map((token) =>
+        withBinding({ token }),
+      ),
+      ...["", "worker_bot", "worker.bot", "worker\n", "x".repeat(40)].map((login) =>
+        withBinding({ login }),
+      ),
+      ...[
+        "",
+        "-branch",
+        "branch with space",
+        "branch\u0000",
+        "x".repeat(257),
+        ...["..", "~", "^", ":", "?", "*", "[", "\\", "@{"].map((part) => `branch${part}name`),
+      ].map((branch) => withBinding({ branch })),
+      ...[
+        "http://github.com/openclaw/openclaw.git",
+        "https://example.com/openclaw/openclaw.git",
+        "git@github.com:openclaw/openclaw.git",
+        "https://github.com/openclaw/openclaw.git?token=x",
+        "https://github.com/openclaw/openclaw.git\n",
+      ].map((remoteUrl) => withBinding({ remoteUrl })),
+      withBinding({ gitAuthor: { unexpected: true } }),
+      ...["name", "email"].flatMap((key) =>
+        ["", " ", "author\nvalue", "author\rvalue", "author\u0000value", "x".repeat(257)].map(
+          (value) => withBinding({ gitAuthor: { [key]: value } }),
+        ),
+      ),
+      Object.assign(Object.create({ token: github.token }), {
+        login: github.login,
+        branch: github.branch,
+      }),
+      { ...github, gitAuthor: Object.create({ email: "inherited@example.test" }) },
+    ];
+    for (const binding of invalidBindings) {
+      expect(() =>
+        parseWorkerLaunchDescriptor({
+          ...descriptor,
+          assignment: { ...descriptor.assignment, github: binding },
+        }),
+      ).toThrow("invalid worker launch descriptor");
+    }
   });
 
   it("rejects a launch version inherited from the prototype", () => {
@@ -293,10 +374,8 @@ describe("worker launch descriptor", () => {
     descriptor.assignment.toolAuthority.allowedToolNames = [];
     expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
 
-    descriptor.assignment.toolAuthority.allowedToolNames = ["browser", "github_publish"];
+    descriptor.assignment.toolAuthority.allowedToolNames = ["browser"];
     expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
-    expect(JSON.stringify(descriptor.assignment)).not.toContain("GH_CONFIG_DIR");
-    expect(JSON.stringify(descriptor.assignment)).not.toContain("GITHUB_TOKEN");
   });
 
   it("accepts only a closed absolute loopback browser attachment descriptor", () => {

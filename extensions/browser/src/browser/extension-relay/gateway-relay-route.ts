@@ -1,7 +1,9 @@
 /** Direct Gateway extension relay with in-band Browser Relay Authentication v2. */
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
+import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { rejectWebSocketUpgrade } from "openclaw/plugin-sdk/websocket-runtime";
 import { WebSocketServer, type WebSocket } from "ws";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
@@ -39,14 +41,6 @@ let wss: WebSocketServer | null = null;
 function getWss(): WebSocketServer {
   wss ??= new WebSocketServer({ noServer: true, maxPayload: EXTENSION_RELAY_MAX_PAYLOAD_BYTES });
   return wss;
-}
-
-function destroy(socket: Duplex, statusLine: string): void {
-  try {
-    socket.write(`HTTP/1.1 ${statusLine}\r\nConnection: close\r\n\r\n`);
-  } finally {
-    socket.destroy();
-  }
 }
 
 function requestedProfileName(resource: string, fallback: string): string {
@@ -131,19 +125,25 @@ export async function handleGatewayExtensionUpgrade(
   const resource = parseExtensionRelayResource(req.url ?? "/", GATEWAY_EXTENSION_RELAY_PATH);
   if (!resource) {
     return (req.url ?? "/").split("?")[0] === GATEWAY_EXTENSION_RELAY_PATH
-      ? (destroy(socket, "400 Bad Request"), true)
+      ? (rejectWebSocketUpgrade(socket, { status: 400 }), true)
       : false;
   }
   if (!isAllowedExtensionOrigin(req)) {
-    destroy(socket, "403 Forbidden");
+    rejectWebSocketUpgrade(socket, { status: 403 });
     return true;
   }
 
   const protocols = requestProtocols(req);
+  // Gateway resolves trusted-proxy attribution before plugin dispatch. The raw
+  // peer is only a fallback for direct harnesses outside that request scope.
+  const source =
+    getPluginRuntimeGatewayRequestScope()?.client?.clientIp ??
+    req.socket?.remoteAddress ??
+    "unknown";
   const token = readExtensionRelayToken();
   if (!token) {
     invalidateBrowserRelayAuthV2Authority();
-    destroy(socket, "401 Unauthorized");
+    rejectWebSocketUpgrade(socket, { status: 401 });
     return true;
   }
 
@@ -159,6 +159,7 @@ export async function handleGatewayExtensionUpgrade(
           authenticateExtensionWebSocket({
             ws,
             authority,
+            source,
             resource,
             removePreAuthGuard,
             prepareAuthenticated: async () => {
@@ -179,13 +180,13 @@ export async function handleGatewayExtensionUpgrade(
         },
       })
     ) {
-      destroy(socket, "400 Bad Request");
+      rejectWebSocketUpgrade(socket, { status: 400 });
     }
     return true;
   }
 
   if (protocols.includes(BROWSER_RELAY_EXTENSION_SUBPROTOCOL)) {
-    destroy(socket, "400 Bad Request");
+    rejectWebSocketUpgrade(socket, { status: 400 });
     return true;
   }
 
@@ -198,7 +199,7 @@ export async function handleGatewayExtensionUpgrade(
     legacyToken.length === 0 ||
     !safeEqualSecret(token, legacyToken)
   ) {
-    destroy(socket, "401 Unauthorized");
+    rejectWebSocketUpgrade(socket, { status: 401 });
     return true;
   }
 
@@ -207,7 +208,7 @@ export async function handleGatewayExtensionUpgrade(
     resolved = await resolveGatewayRelay(resource);
   } catch (err) {
     log.warn(`failed to start Browser control for legacy extension relay: ${String(err)}`);
-    destroy(socket, "503 Service Unavailable");
+    rejectWebSocketUpgrade(socket, { status: 503 });
     return true;
   }
   const authority = getBrowserRelayAuthV2Authority(token);

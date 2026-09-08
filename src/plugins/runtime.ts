@@ -19,7 +19,9 @@ import { markPluginRegistryActive, markPluginRegistryRetired } from "./registry-
 import type { PluginRegistry } from "./registry-types.js";
 import { getActivePluginChannelRegistrySnapshotFromState } from "./runtime-channel-state.js";
 import { PLUGIN_REGISTRY_STATE, type RegistryState } from "./runtime-state.js";
-import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+import { getPluginRegistryForContext } from "./runtime/gateway-request-scope.js";
+
+export { getPluginRegistryForContext };
 
 const log = createSubsystemLogger("plugins/runtime");
 
@@ -264,15 +266,6 @@ export function getActivePluginRegistryWorkspaceDir(): string | undefined {
   return state.workspaceDir ?? undefined;
 }
 
-/** Reads registration/request/active registry precedence without initializing a cold runtime. */
-export function getPluginRegistryForContext(): PluginRegistry | null {
-  return (
-    state.registrationContext?.registry ??
-    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ??
-    getActivePluginRegistry()
-  );
-}
-
 export function requireActivePluginRegistry(): PluginRegistry {
   const registry = getPluginRegistryForContext();
   if (registry) {
@@ -291,9 +284,10 @@ export function withPluginRegistrationContext<T>(
   registry: PluginRegistry,
   pluginId: string,
   run: () => T,
+  handlers?: Pick<NonNullable<RegistryState["registrationContext"]>, "registerMemoryCapability">,
 ): T {
   const previous = state.registrationContext;
-  state.registrationContext = { registry, pluginId };
+  state.registrationContext = { registry, pluginId, ...handlers };
   try {
     return run();
   } finally {
@@ -346,10 +340,6 @@ export function getActivePluginChannelRegistryVersion(): number {
 }
 
 export function getActivePluginGatewayCommandRegistry(): PluginRegistry | null {
-  return asPluginRegistry(state.activeRegistry);
-}
-
-export function getActivePluginGatewayNodePolicyRegistry(): PluginRegistry | null {
   return asPluginRegistry(state.activeRegistry);
 }
 

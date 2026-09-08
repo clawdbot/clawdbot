@@ -16,7 +16,6 @@ import {
   resolveMemorySlotStartupPluginId,
 } from "./gateway-startup-plugin-config.js";
 import { sortUniquePluginIds } from "./gateway-startup-plugin-contracts.js";
-import { hashJson } from "./installed-plugin-index-hash.js";
 import { createInstalledPluginIndexScopeLookup } from "./installed-plugin-index-scope-lookup.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import type { PluginMetadataSnapshotPluginIdScope } from "./plugin-metadata-snapshot.types.js";
@@ -171,24 +170,8 @@ export function createGatewayStartupMetadataPluginIdScope(params: {
   platform?: NodeJS.Platform;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): PluginMetadataSnapshotPluginIdScope {
-  const configuredChannelIds = collectConfiguredStartupChannelIds({
-    config: params.config,
-    activationSourceConfig: params.activationSourceConfig ?? params.config,
-    env: params.env,
-    ambientEnvTriggers: params.ambientEnvTriggers,
-    includePersistedAuthState: false,
-  });
   const workerProviderIds = normalizeWorkerProviderIds(params.workerProviderIds ?? []);
   return {
-    key: hashJson({
-      kind: "gateway-startup",
-      config: params.config,
-      activationSourceConfig: params.activationSourceConfig ?? null,
-      configuredChannelIds,
-      workerProviderIds,
-      platform: params.platform ?? null,
-      ambientEnvTriggers: params.ambientEnvTriggers ?? "allow",
-    }),
     resolve: ({ index }) =>
       resolveGatewayStartupMetadataPluginIds({
         config: params.config,

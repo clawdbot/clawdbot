@@ -1,10 +1,6 @@
 // Screen-recording payload helpers for node media commands.
 import * as path from "node:path";
 import { extnameFromAnyPath } from "@openclaw/media-core/file-name";
-import {
-  parseScreenSnapshotResult,
-  type ScreenSnapshotResult,
-} from "../plugins/computer-use-contract.js";
 import { asRecord, readStringValue, resolveTempPathParts } from "./nodes-media-utils.js";
 
 export {
@@ -44,12 +40,6 @@ export function parseScreenRecordPayload(value: unknown): ScreenRecordPayload {
 export function screenRecordTempPath(opts: { ext: string; tmpDir?: string; id?: string }) {
   const { tmpDir, id, ext } = resolveTempPathParts(opts);
   return path.join(tmpDir, `openclaw-screen-record-${id}${ext}`);
-}
-
-/** Validated payload returned by `nodes screen snapshot` RPC calls. */
-/** Validate and normalize an unknown screen-snapshot payload. */
-export function parseScreenSnapshotPayload(value: unknown): ScreenSnapshotResult {
-  return parseScreenSnapshotResult(value);
 }
 
 /**

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { type FSWatcher, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -15,6 +15,8 @@ vi.mock("../../logging/subsystem.js", () => ({
 
 const capturedWatchers = vi.hoisted(() => [] as Array<ReturnType<typeof import("node:fs").watch>>);
 const capturedWatchChanges = vi.hoisted(() => [] as Array<() => void>);
+const watcherOperations = vi.hoisted(() => [] as Array<["watch", unknown] | ["close", FSWatcher]>);
+const closedWatchers = vi.hoisted(() => new Set<FSWatcher>());
 
 vi.mock("node:fs", async (importOriginal) => {
   const orig = await importOriginal<typeof import("node:fs")>();
@@ -22,7 +24,16 @@ vi.mock("node:fs", async (importOriginal) => {
   return {
     ...orig,
     watch: ((path: unknown, opts: unknown, cb: unknown) => {
+      watcherOperations.push(["watch", path]);
       const w = origWatch(path as never, opts as never, cb as never);
+      const close = w.close.bind(w);
+      w.close = () => {
+        close();
+        watcherOperations.push(["close", w]);
+      };
+      w.once("close", () => {
+        closedWatchers.add(w);
+      });
       capturedWatchers.push(w);
       capturedWatchChanges.push(() => {
         (cb as (eventType: string, filename: null) => void)("change", null);
@@ -37,13 +48,26 @@ const tplB = { output: { default: [{ text: "B" }] } };
 
 const cleanups: Array<() => void> = [];
 
-afterEach(() => {
-  clearUsageBarTemplateCacheForTest();
-  warnSpy.mockClear();
-  capturedWatchers.splice(0);
-  capturedWatchChanges.splice(0);
-  for (const fn of cleanups.splice(0)) {
-    fn();
+afterEach(async () => {
+  try {
+    clearUsageBarTemplateCacheForTest();
+  } finally {
+    // Also close evicted watchers when a failed assertion exposes missing owner cleanup.
+    for (const watcher of capturedWatchers) {
+      watcher.close();
+    }
+    // Normal close events run on nextTick; settle them before removing watched files.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    warnSpy.mockClear();
+    capturedWatchers.splice(0);
+    capturedWatchChanges.splice(0);
+    watcherOperations.splice(0);
+    closedWatchers.clear();
+    for (const fn of cleanups.splice(0)) {
+      fn();
+    }
   }
 });
 
@@ -164,7 +188,7 @@ describe("loadUsageBarTemplate", () => {
   });
 
   describe("cache eviction", () => {
-    it("evicts the oldest entry and closes its watcher when inserting a new key over the limit", () => {
+    it("evicts the oldest entry and closes its watcher when inserting a new key over the limit", async () => {
       const dir = tmpDir();
       const paths: string[] = [];
       // Create 65 template files — one more than MAX_CACHED_TEMPLATE_FILES (64).
@@ -180,25 +204,32 @@ describe("loadUsageBarTemplate", () => {
           segments: [{ text: `v1-${i}` }],
         });
       }
+      expect(capturedWatchers).toHaveLength(64);
+      expect(watcherOperations).toHaveLength(64);
+      expect(closedWatchers.size).toBe(0);
+      watcherOperations.splice(0);
 
       // Insert the 65th file — should evict the oldest (paths[0]) and close
       // its watcher before allocating a watcher for paths[64].
       expect(loadUsageBarTemplate(paths[64])).toMatchObject({
         segments: [{ text: "v1-64" }],
       });
+      expect(capturedWatchers).toHaveLength(65);
+      expect(watcherOperations.map(([kind]) => kind)).toEqual(["close", "watch"]);
+      expect(watcherOperations[0]?.[1]).toBe(capturedWatchers[0]);
+      expect(watcherOperations[1]?.[1]).toBe(paths[64]);
+      watcherOperations.splice(0);
 
-      // paths[1] was NOT evicted: it still returns the cached value.
-      // Must check BEFORE re-accessing paths[0], because re-inserting the
-      // evicted path into a full cache would evict the next-oldest entry.
-      expect(loadUsageBarTemplate(paths[1])).toMatchObject({
-        segments: [{ text: "v1-1" }],
-      });
+      // Check every survivor before re-inserting the evicted path causes another eviction.
+      for (let i = 1; i < 64; i++) {
+        expect(loadUsageBarTemplate(paths[i])).toMatchObject({
+          segments: [{ text: `v1-${i}` }],
+        });
+      }
+      expect(capturedWatchers).toHaveLength(65);
+      expect(watcherOperations).toEqual([]);
 
-      // Modify the evicted file on disk then re-access it. Because the entry
-      // was evicted and its watcher closed, the next access must re-read from
-      // disk — not return stale in-memory data. This proves both eviction and
-      // watcher closure. Re-accessing paths[0] may evict another entry, but
-      // the non-evicted check above has already completed.
+      // Re-reading changed content proves cache eviction; lifecycle assertions prove closure.
       writeFileSync(
         expectDefined(paths[0], "paths[0] test invariant"),
         JSON.stringify({ segments: [{ text: "v2-0" }] }),
@@ -206,6 +237,26 @@ describe("loadUsageBarTemplate", () => {
       expect(loadUsageBarTemplate(paths[0])).toMatchObject({
         segments: [{ text: "v2-0" }],
       });
+      expect(capturedWatchers).toHaveLength(66);
+      expect(watcherOperations.map(([kind]) => kind)).toEqual(["close", "watch"]);
+      expect(watcherOperations[0]?.[1]).toBe(capturedWatchers[1]);
+      expect(watcherOperations[1]?.[1]).toBe(paths[0]);
+      watcherOperations.splice(0);
+
+      clearUsageBarTemplateCacheForTest();
+      expect(watcherOperations).toHaveLength(64);
+      for (const watcher of capturedWatchers.slice(2)) {
+        expect(
+          watcherOperations.some(([kind, closed]) => kind === "close" && closed === watcher),
+        ).toBe(true);
+      }
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(closedWatchers.size).toBe(capturedWatchers.length);
+      for (const watcher of capturedWatchers) {
+        expect(closedWatchers.has(watcher)).toBe(true);
+      }
     });
 
     it("recovers after watcher error by clearing the dead watcher reference", () => {

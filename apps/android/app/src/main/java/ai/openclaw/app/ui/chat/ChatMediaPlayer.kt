@@ -718,7 +718,8 @@ private suspend fun prepareMediaSource(
         retryPreparingPlayback = false,
       )
     }
-    is GatewayLoadedMedia.Streaming ->
+
+    is GatewayLoadedMedia.Streaming -> {
       PreparedMediaSource(
         uri = loaded.url,
         mimeType = loaded.mimeType,
@@ -727,6 +728,7 @@ private suspend fun prepareMediaSource(
         tempFile = null,
         retryPreparingPlayback = loaded.retryPreparingPlayback,
       )
+    }
   }
 }
 

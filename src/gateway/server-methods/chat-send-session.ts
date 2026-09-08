@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
@@ -6,29 +7,75 @@ import {
   resolveAgentMainSessionKey,
   resolveSessionRoutingContract,
 } from "../../config/sessions/main-session.js";
+import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpanSync } from "../../infra/diagnostics-timeline.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
+import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
-import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
+import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
   loadSessionEntry,
   resolveDeletedAgentIdFromSessionKey,
   resolveSessionModelRef,
 } from "../session-utils.js";
+import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import {
   hasGatewayAdminScope,
   resolveChatSendActiveScopeKey,
-  resolveRequestedChatAgentId,
   validateChatSelectedAgent,
 } from "./chat-origin-routing.js";
 import { createRestartSafeChatRequest } from "./chat-restart-recovery.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import { roundedChatSendTimingMs } from "./chat-server-timing.js";
 import { normalizeOptionalChatText } from "./chat-text-normalization.js";
+import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+
+// Admission's writer barrier owns preparation. Keep the seed in memory until the
+// input, Goal, run claim, and receipt commit together.
+export function prepareGoalChatSendSession(params: {
+  cfg: OpenClawConfig;
+  client: GatewayRequestHandlerOptions["client"];
+  agentId: string;
+  getRuntimeConfig: () => OpenClawConfig;
+}): { entry: SessionEntry; assertSkillSelection: () => void } {
+  const { cfg, client, agentId, getRuntimeConfig } = params;
+  const creationError = authorizeGatewaySessionCreation({ cfg, client, agentId });
+  if (creationError) {
+    throw new Error(creationError.message);
+  }
+  const creation = prepareSkillLibrarySessionCreation(
+    client,
+    getRuntimeConfig,
+    resolveOperatorSessionCreation(client),
+  );
+  const assertSkillSelection = () =>
+    assertPreparedSkillLibrarySelection(creation.skillLibrarySelections);
+  const createdAt = Date.now();
+  // A caller's retry ID must never revive a retained transcript window.
+  const sessionId = randomUUID();
+  return {
+    entry: {
+      ...buildSessionCreationStamp({
+        ...creation,
+        sandbox: resolveCreatorSandbox(cfg, creation),
+        now: createdAt,
+      }),
+      sessionId,
+      lifecycleRevision: randomUUID(),
+      updatedAt: createdAt,
+      sessionStartedAt: createdAt,
+      lastInteractionAt: createdAt,
+      chatType: "direct",
+    },
+    assertSkillSelection,
+  };
+}
 
 function loadChatSendSessionContext(params: {
   request: NormalizedChatSendRequest;
@@ -40,12 +87,12 @@ function loadChatSendSessionContext(params: {
   const agentIdOverride = normalizeOptionalChatText(p.agentId);
   const clientRunId = p.idempotencyKey;
   const pendingChatSendKey = pendingChatSendDedupeKey(clientRunId);
-  const runtimeConfig = context.getRuntimeConfig?.();
-  const requestedAgent = resolveRequestedChatAgentId({
-    cfg: runtimeConfig,
-    requestedSessionKey: rawSessionKey,
-    agentId: agentIdOverride,
-  });
+  const runtimeConfig = context.getRuntimeConfig();
+  const requestedAgent = resolveRequestedSessionAgentId(
+    runtimeConfig,
+    rawSessionKey,
+    agentIdOverride,
+  );
   if (!requestedAgent.ok) {
     return { ok: false as const, error: requestedAgent.error };
   }
@@ -54,13 +101,10 @@ function loadChatSendSessionContext(params: {
   // alias for that agent's main thread. Resolve it before every store lookup so
   // reconnect replay cannot create a parallel literal `global` transcript.
   const sessionLoadKey =
-    runtimeConfig &&
-    runtimeConfig.session?.scope !== "global" &&
-    rawSessionKey.trim().toLowerCase() === "global" &&
-    requestedAgentId
+    runtimeConfig.session?.scope !== "global" && rawSessionKey.trim().toLowerCase() === "global"
       ? resolveAgentMainSessionKey({ cfg: runtimeConfig, agentId: requestedAgentId })
       : rawSessionKey;
-  const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
+  const sessionLoadOptions = { agentId: requestedAgentId };
   const sessionLoadStartedAtMs = performance.now();
   const sessionLoadResult = measureDiagnosticsTimelineSpanSync(
     "gateway.chat_send.load_session",
@@ -192,6 +236,7 @@ export function prepareChatSendSession(params: {
       request.systemProvenanceReceipt === undefined &&
       !request.suppressCommandInterpretation,
     message: rawMessage,
+    mentions: p.mentions,
     senderIsOwner: hasGatewayAdminScope(client),
   });
 

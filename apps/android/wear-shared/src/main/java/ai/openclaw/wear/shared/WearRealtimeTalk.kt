@@ -115,6 +115,7 @@ object WearRealtimeAudioFraming {
       WearRealtimeAudioFrameType.INPUT_PCM,
       WearRealtimeAudioFrameType.OUTPUT_PCM,
       -> require(payload.isNotEmpty() && payload.size % 2 == 0)
+
       WearRealtimeAudioFrameType.CLEAR_OUTPUT -> require(payload.isEmpty())
     }
   }

@@ -221,59 +221,81 @@ const QUERY_KEYS = new Set([
 ]);
 const MULTI_VALUE_QUERY_KEYS = new Set(["channel", "provider", "model", "tool"]);
 
-const matchesUsageQuery = (session: UsageSessionQueryTarget, term: UsageQueryTerm): boolean => {
-  const value = normalizeQueryText(term.value ?? "");
-  if (!value) {
-    return true;
+const matchesEverySession: UsageQueryPredicate = () => true;
+
+const prepareUsageQuery = (
+  term: UsageQueryTerm,
+  key: string,
+  warnings: string[],
+): UsageQueryPredicate => {
+  if (term.key && !QUERY_KEYS.has(key)) {
+    warnings.push(`Unknown filter: ${term.key}`);
+    return matchesEverySession;
   }
-  if (!term.key) {
-    return getSessionText(session).some((text) => text.includes(value));
+  if (term.key && term.value === "") {
+    warnings.push(`Missing value for ${term.key}`);
   }
 
-  const key = normalizeQueryText(term.key);
+  const value = normalizeQueryText(term.value ?? "");
+  const numericSpec = Object.hasOwn(NUMERIC_QUERY_SPECS, key)
+    ? NUMERIC_QUERY_SPECS[key]
+    : undefined;
+  const threshold = numericSpec && term.value ? parseQueryNumber(term.value) : null;
+  if (numericSpec && term.value && threshold === null) {
+    warnings.push(`Invalid number for ${term.key}`);
+  }
+  if (key === "has") {
+    const predicate = Object.hasOwn(HAS_PREDICATES, value) ? HAS_PREDICATES[value] : undefined;
+    if (term.value && !predicate) {
+      warnings.push(`Unknown has:${term.value}`);
+    }
+    return predicate ?? matchesEverySession;
+  }
+  if (!value) {
+    return matchesEverySession;
+  }
+  if (!term.key) {
+    return (session) => getSessionText(session).some((text) => text.includes(value));
+  }
+
   switch (key) {
     case "agent":
-      return normalizeLowercaseStringOrEmpty(session.agentId).includes(value);
+      return (session) => normalizeLowercaseStringOrEmpty(session.agentId).includes(value);
     case "channel":
-      return normalizeLowercaseStringOrEmpty(session.channel).includes(value);
+      return (session) => normalizeLowercaseStringOrEmpty(session.channel).includes(value);
     case "chat":
-      return normalizeLowercaseStringOrEmpty(session.chatType).includes(value);
+      return (session) => normalizeLowercaseStringOrEmpty(session.chatType).includes(value);
     case "provider":
-      return getSessionProviders(session).some((provider) => provider.includes(value));
+      return (session) => getSessionProviders(session).some((provider) => provider.includes(value));
     case "model":
-      return getSessionModels(session).some((model) => model.includes(value));
+      return (session) => getSessionModels(session).some((model) => model.includes(value));
     case "tool":
-      return getSessionTools(session).some((tool) => tool.includes(value));
+      return (session) => getSessionTools(session).some((tool) => tool.includes(value));
     case "label":
-      return normalizeLowercaseStringOrEmpty(session.label).includes(value);
+      return (session) => normalizeLowercaseStringOrEmpty(session.label).includes(value);
     case "key":
     case "session":
     case "id":
       if (value.includes("*") || value.includes("?")) {
-        const regex = globToRegex(value);
-        return (
-          regex.test(session.key) || (session.sessionId ? regex.test(session.sessionId) : false)
-        );
+        let regex: RegExp | undefined;
+        return (session) => {
+          // Preserve lazy construction after earlier predicates, then reuse this call's matcher.
+          regex ??= globToRegex(value);
+          return (
+            regex.test(session.key) || (session.sessionId ? regex.test(session.sessionId) : false)
+          );
+        };
       }
-      return (
+      return (session) =>
         normalizeLowercaseStringOrEmpty(session.key).includes(value) ||
-        normalizeLowercaseStringOrEmpty(session.sessionId).includes(value)
-      );
-    case "has": {
-      const predicate = Object.hasOwn(HAS_PREDICATES, value) ? HAS_PREDICATES[value] : undefined;
-      return predicate?.(session) ?? true;
-    }
+        normalizeLowercaseStringOrEmpty(session.sessionId).includes(value);
   }
 
-  const numericSpec = Object.hasOwn(NUMERIC_QUERY_SPECS, key)
-    ? NUMERIC_QUERY_SPECS[key]
-    : undefined;
-  if (!numericSpec) {
-    return true;
+  if (!numericSpec || threshold === null) {
+    return matchesEverySession;
   }
-  const threshold = parseQueryNumber(value);
   const [getValue, matches] = numericSpec;
-  return threshold === null || matches(getValue(session), threshold);
+  return (session) => matches(getValue(session), threshold);
 };
 
 export const filterSessionsByQuery = <TSession extends UsageSessionQueryTarget>(
@@ -286,50 +308,24 @@ export const filterSessionsByQuery = <TSession extends UsageSessionQueryTarget>(
   }
 
   const warnings: string[] = [];
-  const categoricalTerms = new Map<string, UsageQueryTerm[]>();
-  for (const term of terms) {
-    if (!term.key) {
-      continue;
+  const categoricalTerms = new Map<string, UsageQueryPredicate[]>();
+  const predicates = terms.map((term) => {
+    const key = normalizeQueryText(term.key ?? "");
+    const predicate = prepareUsageQuery(term, key, warnings);
+    if (!MULTI_VALUE_QUERY_KEYS.has(key)) {
+      return predicate;
     }
-    const normalizedKey = normalizeQueryText(term.key);
-    if (!QUERY_KEYS.has(normalizedKey)) {
-      warnings.push(`Unknown filter: ${term.key}`);
-      continue;
+    const alternatives = categoricalTerms.get(key) ?? [];
+    if (term.value) {
+      alternatives.push(predicate);
     }
-    if (term.value && MULTI_VALUE_QUERY_KEYS.has(normalizedKey)) {
-      const alternatives = categoricalTerms.get(normalizedKey) ?? [];
-      alternatives.push(term);
-      categoricalTerms.set(normalizedKey, alternatives);
-    }
-    if (term.value === "") {
-      warnings.push(`Missing value for ${term.key}`);
-    }
-    if (
-      normalizedKey === "has" &&
-      term.value &&
-      !Object.hasOwn(HAS_PREDICATES, normalizeQueryText(term.value))
-    ) {
-      warnings.push(`Unknown has:${term.value}`);
-    }
-    if (
-      Object.hasOwn(NUMERIC_QUERY_SPECS, normalizedKey) &&
-      term.value &&
-      parseQueryNumber(term.value) === null
-    ) {
-      warnings.push(`Invalid number for ${term.key}`);
-    }
-  }
+    categoricalTerms.set(key, alternatives);
+    // Every original term still revisits its completed OR group, including empty terms.
+    return (session: UsageSessionQueryTarget) =>
+      alternatives.length === 0 || alternatives.some((match) => match(session));
+  });
 
-  const filtered = sessions.filter((session) =>
-    terms.every((term) => {
-      const alternatives = term.key
-        ? categoricalTerms.get(normalizeQueryText(term.key))
-        : undefined;
-      return alternatives
-        ? alternatives.some((alternative) => matchesUsageQuery(session, alternative))
-        : matchesUsageQuery(session, term);
-    }),
-  );
+  const filtered = sessions.filter((session) => predicates.every((match) => match(session)));
   return { sessions: filtered, warnings };
 };
 

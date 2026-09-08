@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 346777,
-  "reason": "Sender-agent avatars on forwarded cross-session messages (PR #133439): agent-avatar resolution, attribution label rules, and direct-thread identity chrome measured 346777 B, +592 B over the prior baseline; below the 358400 B ceiling; hard cap and allowances unchanged",
-  "updatedAt": "2026-08-30"
+  "startupJsGzipBytes": 351659,
+  "reason": "PR #141121 (Control UI warm reload) measures 351659 B startup gzip in Linux CI at 491b8bf880a (+1282 B, 0.37% over the 350377 B baseline; current main measures about 350640 B in the same CI). The boot record, roster-cache lifecycle, and transcript prewarm join the boot path after deferring the roster and snapshot readers. Fixed 358400 B cap and existing growth allowance retained.",
+  "updatedAt": "2026-09-08"
 }

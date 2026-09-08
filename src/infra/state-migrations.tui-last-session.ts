@@ -12,6 +12,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { assertAllowedJsonFields } from "./state-migrations.json-fields.js";
 import {
   assertLegacyMigrationSourceUnchanged,
   claimAndRemoveLegacyMigrationSource,
@@ -81,12 +82,11 @@ function parseLegacyTuiLastSessions(raw: string): LegacyTuiLastSession[] {
     if (!isObjectRecord(value)) {
       throw new Error(`legacy TUI last-session record ${scopeKey} must be an object`);
     }
-    const unexpectedKey = Object.keys(value).find((key) => !LEGACY_RECORD_KEYS.has(key));
-    if (unexpectedKey) {
-      throw new Error(
-        `legacy TUI last-session record ${scopeKey} has unexpected field ${unexpectedKey}`,
-      );
-    }
+    assertAllowedJsonFields(
+      value,
+      LEGACY_RECORD_KEYS,
+      `legacy TUI last-session record ${scopeKey}`,
+    );
     const sessionKey = value.sessionKey;
     const updatedAt = value.updatedAt;
     if (

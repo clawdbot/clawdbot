@@ -20,7 +20,7 @@ type ShellNavigationState = {
   handleNativeHistoryState: (event: Event) => void;
   nativeHistoryState: { canGoBack: boolean; canGoForward: boolean };
   onboarding: boolean;
-  updated: () => void;
+  updated: (changedProperties: Map<string, unknown>) => void;
 };
 
 type ShellSettingsEscapeState = ShellKeyboardState & {
@@ -72,6 +72,43 @@ afterEach(() => {
 });
 
 describe("OpenClaw native shell", () => {
+  it("reports readiness only while the native command listener owner is connected", () => {
+    const shell = document.createElement("openclaw-app-shell") as HTMLElement & {
+      connectedCallback(): void;
+      disconnectedCallback(): void;
+      nativeHistoryState: { canGoBack: boolean; canGoForward: boolean };
+    };
+    const nativeWindow = window as Window & { __OPENCLAW_NATIVE_COMMANDS_READY__?: boolean };
+    const states: boolean[] = [];
+    const recordState = () =>
+      states.push(nativeWindow["__OPENCLAW_NATIVE_COMMANDS_READY__"] === true);
+    window.addEventListener("openclaw:native-commands-state", recordState);
+    try {
+      shell.connectedCallback();
+      window.dispatchEvent(
+        new CustomEvent("openclaw:native-history-state", {
+          detail: { canGoBack: true, canGoForward: false },
+        }),
+      );
+      expect(shell.nativeHistoryState.canGoBack).toBe(true);
+      expect(states).toEqual([true]);
+
+      shell.disconnectedCallback();
+      shell.nativeHistoryState = { canGoBack: false, canGoForward: false };
+      window.dispatchEvent(
+        new CustomEvent("openclaw:native-history-state", {
+          detail: { canGoBack: true, canGoForward: false },
+        }),
+      );
+      expect(shell.nativeHistoryState.canGoBack).toBe(false);
+      expect(states).toEqual([true, false]);
+    } finally {
+      shell.disconnectedCallback();
+      window.removeEventListener("openclaw:native-commands-state", recordState);
+      Reflect.deleteProperty(nativeWindow, "__OPENCLAW_NATIVE_COMMANDS_READY__");
+    }
+  });
+
   it("opens Settings with Shift-Command-Comma", () => {
     const navigate = vi.fn();
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState;
@@ -335,43 +372,43 @@ describe("OpenClaw native shell", () => {
     }
   });
 
-  it("navigates valid native Dashboard paths and acknowledges them", () => {
-    const navigate = vi.fn();
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
-    shell.runtime = {
-      context: {
-        navigate,
-      } as unknown as ApplicationContext,
-    };
-    const event = new CustomEvent("openclaw:native-navigate", {
-      cancelable: true,
-      detail: { path: "/settings/channels" },
-    });
+  it.each(
+    [
+      { path: "/settings/channels", routeId: "channels" },
+      { path: "/custodian", routeId: "custodian", search: "?onboarding=1" },
+      {
+        path: "/chat/main/dashboard/12345678-90ab-cdef-1234-567890abcdef",
+        routeId: "chat",
+        search: "?nav=collapsed",
+      },
+      { path: "/dashboard/main/tasks/review", routeId: "dashboard" },
+      { path: "/settings/agents/main/overview", routeId: "agents" },
+      { path: "/settings/memory/dreams", routeId: "memory" },
+    ].flatMap(({ path, routeId, search }) =>
+      ["", "/gateway"].map((basePath) => ({ path, routeId, search, basePath })),
+    ),
+  )(
+    "preserves native destination $basePath$path and acknowledges it",
+    ({ path, routeId, search, basePath }) => {
+      const navigate = vi.fn();
+      const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+      shell.runtime = {
+        context: { navigate, basePath } as unknown as ApplicationContext,
+      };
+      const event = new CustomEvent("openclaw:native-navigate", {
+        cancelable: true,
+        detail: { path, search },
+      });
 
-    shell.handleNativeNavigate(event);
+      shell.handleNativeNavigate(event);
 
-    expect(event.defaultPrevented).toBe(true);
-    expect(navigate).toHaveBeenCalledExactlyOnceWith("channels", undefined);
-  });
-
-  it("carries a native same-app search into navigation", () => {
-    const navigate = vi.fn();
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
-    shell.runtime = {
-      context: {
-        navigate,
-      } as unknown as ApplicationContext,
-    };
-    const event = new CustomEvent("openclaw:native-navigate", {
-      cancelable: true,
-      detail: { path: "/custodian", search: "?onboarding=1" },
-    });
-
-    shell.handleNativeNavigate(event);
-
-    expect(event.defaultPrevented).toBe(true);
-    expect(navigate).toHaveBeenCalledExactlyOnceWith("custodian", { search: "?onboarding=1" });
-  });
+      expect(event.defaultPrevented).toBe(true);
+      expect(navigate).toHaveBeenCalledExactlyOnceWith(routeId, {
+        pathname: `${basePath}${path}`,
+        ...(search ? { search } : {}),
+      });
+    },
+  );
 
   it.each(["#frag-only", "onboarding=1", "?onboarding=1#x"])(
     "ignores malformed native search %s and keeps the plain route",
@@ -381,6 +418,7 @@ describe("OpenClaw native shell", () => {
       shell.runtime = {
         context: {
           navigate,
+          basePath: "",
         } as unknown as ApplicationContext,
       };
       const event = new CustomEvent("openclaw:native-navigate", {
@@ -391,7 +429,7 @@ describe("OpenClaw native shell", () => {
       shell.handleNativeNavigate(event);
 
       expect(event.defaultPrevented).toBe(true);
-      expect(navigate).toHaveBeenCalledExactlyOnceWith("custodian", undefined);
+      expect(navigate).toHaveBeenCalledExactlyOnceWith("custodian", { pathname: "/custodian" });
     },
   );
 
@@ -457,10 +495,10 @@ describe("OpenClaw native shell", () => {
       } as unknown as ApplicationContext,
     };
 
-    shell.updated();
-    shell.updated();
+    shell.updated(new Map());
+    shell.updated(new Map());
     snapshot.navCollapsed = true;
-    shell.updated();
+    shell.updated(new Map());
 
     expect(postMessage.mock.calls).toEqual([
       [{ type: "nav-state", collapsed: false, width: 280 }],
@@ -625,8 +663,8 @@ describe("OpenClaw shell update affordance", () => {
     for (const navigationSurfaceHidden of [false, true]) {
       render(renderFloatingUpdateCard({ ...shared, navigationSurfaceHidden }), container);
       expect(
-        container.querySelector("openclaw-sidebar-attention.sidebar-attention--floating") !== null,
-      ).toBe(navigationSurfaceHidden);
+        container.querySelector("openclaw-sidebar-attention.sidebar-attention--floating"),
+      ).toBeNull();
       const cards = container.querySelectorAll<HTMLElement & { refreshRequired: boolean }>(
         "openclaw-sidebar-update-card",
       );

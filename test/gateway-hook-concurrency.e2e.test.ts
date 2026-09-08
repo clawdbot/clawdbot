@@ -2,6 +2,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
+import { writeOpenAiResponsesSse } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -30,6 +31,7 @@ type HeldModelServer = {
   close: () => Promise<void>;
   hold: () => void;
   peak: () => number;
+  queueReply: (text: string) => void;
   release: (index: number) => void;
   releaseAll: () => void;
   requestBody: (index: number) => string | undefined;
@@ -46,6 +48,50 @@ afterEach(async () => {
 });
 
 describe("Gateway hook concurrency", () => {
+  it(
+    "returns bounded reply disposition from real stub-model hook turns",
+    { timeout: TEST_TIMEOUT_MS },
+    async () => {
+      const modelServer = await startHeldModelServer();
+      modelServers.push(modelServer);
+      const instance = await createOpenClawTestInstance({
+        name: "gateway-hook-completion",
+        config: createTestConfig(modelServer.url),
+        env: { OPENCLAW_SKIP_CRON: undefined, OPENCLAW_SKIP_PROVIDERS: undefined },
+      });
+      instances.push(instance);
+      await instance.startGateway();
+      await warmGatewayHook(instance, modelServer);
+
+      const privateVisibleReply = "private visible hook completion";
+      modelServer.queueReply(privateVisibleReply);
+      const visible = await postObservedHook(instance, "visible");
+      expect(visible.status, visible.body).toBe(200);
+      expect(JSON.parse(visible.body)).toMatchObject({
+        ok: true,
+        runId: expect.any(String),
+        completion: {
+          status: "ok",
+          replyDisposition: "visible",
+        },
+      });
+      expect(visible.body).not.toContain(privateVisibleReply);
+
+      modelServer.queueReply("NO_REPLY");
+      const silent = await postObservedHook(instance, "silent");
+      expect(silent.status, silent.body).toBe(200);
+      expect(JSON.parse(silent.body)).toMatchObject({
+        ok: true,
+        runId: expect.any(String),
+        completion: {
+          status: "ok",
+          replyDisposition: "silent",
+        },
+      });
+      expect(silent.body).not.toContain("NO_REPLY");
+    },
+  );
+
   it(
     "bounds hooks and admits an older cron turn before a later hook",
     { timeout: TEST_TIMEOUT_MS },
@@ -307,9 +353,33 @@ async function postHook(instance: OpenClawTestInstance, index: number): Promise<
   };
 }
 
+async function postObservedHook(instance: OpenClawTestInstance, id: string): Promise<HookResponse> {
+  const response = await fetch(`http://127.0.0.1:${instance.port}/hooks/agent`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${instance.hookToken}`,
+      "Content-Type": "application/json",
+      "Idempotency-Key": `hook-completion-${id}`,
+    },
+    body: JSON.stringify({
+      message: `hook completion request ${id}`,
+      name: `Hook completion ${id}`,
+      sessionKey: `hook:completion:${id}`,
+      sessionMode: "persistent",
+      deliver: false,
+      waitForCompletion: true,
+    }),
+  });
+  return {
+    body: await response.text(),
+    status: response.status,
+  };
+}
+
 async function startHeldModelServer(): Promise<HeldModelServer> {
   const releases: Deferred[] = [];
   const requestBodies: string[] = [];
+  const replyTexts = new Map<number, string>();
   let holdRequests = false;
   let active = 0;
   let peak = 0;
@@ -353,7 +423,7 @@ async function startHeldModelServer(): Promise<HeldModelServer> {
     try {
       await release.promise;
       if (!response.destroyed) {
-        writeModelResponse(response, index);
+        writeModelResponse(response, index, replyTexts.get(index));
       }
     } finally {
       active -= 1;
@@ -381,6 +451,9 @@ async function startHeldModelServer(): Promise<HeldModelServer> {
       holdRequests = true;
     },
     peak: () => peak,
+    queueReply: (text) => {
+      replyTexts.set(requestCount, text);
+    },
     release: (index) => {
       releases[index]?.resolve();
     },
@@ -438,8 +511,8 @@ async function delay(ms: number): Promise<void> {
   });
 }
 
-function writeModelResponse(response: ServerResponse, sequence: number): void {
-  const text = `hook concurrency response ${sequence}`;
+function writeModelResponse(response: ServerResponse, sequence: number, replyText?: string): void {
+  const text = replyText ?? `hook concurrency response ${sequence}`;
   const message = {
     type: "message",
     id: `hook-concurrency-message-${sequence}`,
@@ -478,12 +551,5 @@ function writeModelResponse(response: ServerResponse, sequence: number): void {
       },
     },
   ];
-  response.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  response.end(
-    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
-  );
+  writeOpenAiResponsesSse(response, events);
 }

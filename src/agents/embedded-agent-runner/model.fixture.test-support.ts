@@ -1,7 +1,7 @@
 import { expect, vi } from "vitest";
 import { isPathInside } from "../../infra/path-guards.js";
 import * as pluginDiscovery from "../../plugins/discovery.js";
-import * as authProfileStore from "../auth-profiles/store.js";
+import * as authProfileStore from "../auth-profiles/store-runtime.js";
 
 export function guardModelFixtureAuth(root: string) {
   const violations: Array<string | undefined> = [];
@@ -9,7 +9,7 @@ export function guardModelFixtureAuth(root: string) {
   const spy = vi
     .spyOn(authProfileStore, "ensureAuthProfileStore")
     .mockImplementation((dir, options) => {
-      // Discovery stores and prepared metadata do not bypass native auth reads.
+      // Any necessary native auth reads must remain inside the fixture's owned state.
       // Record even swallowed violations before the owner can inspect the path.
       if (!dir || !isPathInside(root, dir)) {
         violations.push(dir);

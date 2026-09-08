@@ -292,7 +292,7 @@ function isExistingProviderSelfContained(entry: ExistingProviderConfig): boolean
   if (!Array.isArray(entry.models) || entry.models.length === 0) {
     return true;
   }
-  return Boolean(entry.baseUrl?.trim() && entry.apiKey);
+  return Boolean(entry.baseUrl?.trim() && (entry.apiKey === undefined || entry.apiKey));
 }
 
 /** Merges generated provider config with existing secrets safe to preserve. */

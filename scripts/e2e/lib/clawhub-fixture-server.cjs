@@ -88,7 +88,7 @@ function startPrepublishArtifactServer() {
     throw new Error("prepublish artifact manifest must contain packages");
   }
   const artifacts = new Map(
-    manifest.packages.map((entry) => {
+    manifest.packages.flatMap((entry) => {
       if (
         typeof entry.name !== "string" ||
         typeof entry.version !== "string" ||
@@ -105,29 +105,37 @@ function startPrepublishArtifactServer() {
           encoding: "utf8",
         }),
       );
+      if (
+        sha256 !== entry.sha256 ||
+        packedPackage.name !== entry.name ||
+        packedPackage.version !== entry.version
+      ) {
+        throw new Error(`prepublish artifact metadata mismatch for ${entry.name}`);
+      }
+      // The shared npm set also carries root and core packages; only declared
+      // plugin entrypoints belong in the ClawHub install fixture.
+      if (!Array.isArray(packedPackage.openclaw?.extensions)) {
+        return [];
+      }
       const packedPlugin = JSON.parse(
         execFileSync("tar", ["-xOf", tarballPath, "package/openclaw.plugin.json"], {
           encoding: "utf8",
         }),
       );
-      if (
-        sha256 !== entry.sha256 ||
-        packedPackage.name !== entry.name ||
-        packedPackage.version !== entry.version ||
-        typeof packedPlugin.id !== "string" ||
-        packedPlugin.id.length === 0
-      ) {
+      if (typeof packedPlugin.id !== "string" || packedPlugin.id.length === 0) {
         throw new Error(`prepublish artifact metadata mismatch for ${entry.name}`);
       }
       return [
-        entry.name,
-        {
-          ...entry,
-          archive,
-          runtimeId: packedPlugin.id,
-          npmIntegrity: `sha512-${crypto.createHash("sha512").update(archive).digest("base64")}`,
-          npmShasum: crypto.createHash("sha1").update(archive).digest("hex"),
-        },
+        [
+          entry.name,
+          {
+            ...entry,
+            archive,
+            runtimeId: packedPlugin.id,
+            npmIntegrity: `sha512-${crypto.createHash("sha512").update(archive).digest("base64")}`,
+            npmShasum: crypto.createHash("sha1").update(archive).digest("hex"),
+          },
+        ],
       ];
     }),
   );

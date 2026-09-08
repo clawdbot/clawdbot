@@ -1,7 +1,16 @@
 import type { IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { buildMcpAppSandboxPath } from "../agents/mcp-app-sandbox.js";
+import { createPluginBoardWidgetContentKindRegistrar } from "../plugins/board-widget-content-kinds.js";
+import { createPluginRecord } from "../plugins/loader-records.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  markPluginRegistryActive,
+  markPluginRegistryRetired,
+} from "../plugins/registry-lifecycle.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import { createSandboxHostHttpServer } from "./mcp-app-sandbox-http.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
@@ -13,8 +22,11 @@ function request(url: string, method: "GET" | "HEAD" | "POST" = "GET") {
   return { res, end, setHeader };
 }
 
-async function withSandboxHost(run: (origin: string) => Promise<void>): Promise<void> {
-  const server = createSandboxHostHttpServer();
+async function withSandboxHost(
+  run: (origin: string) => Promise<void>,
+  resolvePluginRegistry?: () => PluginRegistry,
+): Promise<void> {
+  const server = createSandboxHostHttpServer(undefined, resolvePluginRegistry);
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", () => {
@@ -32,7 +44,125 @@ async function withSandboxHost(run: (origin: string) => Promise<void>): Promise<
   }
 }
 
+function publicResourceRegistry(
+  readPublicResource: (
+    resourcePath: string,
+  ) => Promise<{ body: Uint8Array; contentType: string } | undefined>,
+) {
+  const registry = createEmptyPluginRegistry();
+  const record = createPluginRecord({
+    id: "renderer",
+    source: "fixture",
+    origin: "bundled",
+    enabled: true,
+    configSchema: false,
+  });
+  createPluginBoardWidgetContentKindRegistrar(registry)(record, {
+    kind: "diagram",
+    label: "Diagram",
+    resources: {
+      surface: "renderer",
+      paths: ["/__openclaw__/renderer/app.js"],
+      readPublicResource,
+    },
+    validateSource() {},
+    composeDocument: () => "",
+  });
+  markPluginRegistryActive(registry);
+  return registry;
+}
+
 describe("MCP App sandbox HTTP origin", () => {
+  it("serves only explicitly public registered assets without Gateway credentials", async () => {
+    const read = vi.fn(async () => ({
+      body: Buffer.from("window.rendererReady=true"),
+      contentType: "application/javascript",
+    }));
+    const registry = publicResourceRegistry(read);
+    await withSandboxHost(
+      async (origin) => {
+        const url = `${origin}/__openclaw__/renderer/app.js`;
+        const get = await fetch(url);
+        const head = await fetch(url, { method: "HEAD" });
+        expect(get.status).toBe(200);
+        expect(await get.text()).toBe("window.rendererReady=true");
+        expect(head.status).toBe(200);
+        expect(await head.text()).toBe("");
+        expect(head.headers.get("content-length")).toBe(get.headers.get("content-length"));
+        expect(get.headers.get("set-cookie")).toBeNull();
+        expect(read).toHaveBeenCalledWith("/__openclaw__/renderer/app.js");
+        expect((await fetch(url, { method: "POST" })).status).toBe(404);
+        for (const deniedPath of [
+          "/",
+          "/__openclaw__/renderer/private.js",
+          "/__openclaw__/canvas/documents/private/index.html",
+        ]) {
+          expect((await fetch(`${origin}${deniedPath}`)).status).toBe(404);
+        }
+        expect(read).toHaveBeenCalledTimes(2);
+      },
+      () => registry,
+    );
+  });
+
+  it("does not expose registered assets without the public-reader opt-in", async () => {
+    const registry = publicResourceRegistry(async () => undefined);
+    registry.boardWidgetContentKinds.get("diagram")!.definition.resources.readPublicResource =
+      undefined;
+    await withSandboxHost(
+      async (origin) => {
+        expect((await fetch(`${origin}/__openclaw__/renderer/app.js`)).status).toBe(404);
+      },
+      () => registry,
+    );
+  });
+
+  it("rebuilds public routes when the same registry is reactivated", async () => {
+    const registry = publicResourceRegistry(async () => ({
+      body: Buffer.from("old renderer"),
+      contentType: "application/javascript",
+    }));
+    await withSandboxHost(
+      async (origin) => {
+        const url = `${origin}/__openclaw__/renderer/app.js`;
+        expect((await fetch(url)).status).toBe(200);
+        markPluginRegistryRetired(registry);
+        registry.boardWidgetContentKinds.clear();
+        markPluginRegistryActive(registry);
+        expect((await fetch(url)).status).toBe(404);
+      },
+      () => registry,
+    );
+  });
+
+  it.each(["replacement", "retirement"] as const)(
+    "rejects an awaited public asset after registry %s",
+    async (change) => {
+      const started = createDeferred();
+      const result = createDeferred<{ body: Uint8Array; contentType: string }>();
+      let registry = publicResourceRegistry(async () => {
+        started.resolve();
+        return await result.promise;
+      });
+      await withSandboxHost(
+        async (origin) => {
+          const response = fetch(`${origin}/__openclaw__/renderer/app.js`);
+          await started.promise;
+          if (change === "replacement") {
+            registry = publicResourceRegistry(async () => undefined);
+          } else {
+            markPluginRegistryRetired(registry);
+          }
+          result.resolve({ body: Buffer.from("stale"), contentType: "application/javascript" });
+          const denied = await response;
+          expect(denied.status).toBe(404);
+          expect(await denied.text()).not.toContain("stale");
+        },
+        () => registry,
+      );
+    },
+  );
+
   it("serves only the proxy endpoint with metadata-derived CSP", () => {
     const result = request(
       buildMcpAppSandboxPath({
@@ -63,7 +193,9 @@ describe("MCP App sandbox HTTP origin", () => {
     expect(result.end).toHaveBeenCalledWith(
       expect.stringContaining("openclaw:widget-bridge-port-offer"),
     );
-    expect(result.end).toHaveBeenCalledWith(expect.stringContaining("widgetBridgePortOffered"));
+    expect(result.end).toHaveBeenCalledWith(
+      expect.stringContaining("openclaw:widget-prompt-offer"),
+    );
     const proxyHtml = String(result.end.mock.calls.at(-1)?.[0]);
     expect(proxyHtml).not.toContain("allow-popups");
     expect(proxyHtml).toContain("const guardedHtml = guardDocument(params.html)");

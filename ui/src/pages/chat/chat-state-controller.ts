@@ -71,6 +71,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       stopChatRealtimeTalk(this.stateValue);
     }
     this.stateValue = state;
+    state.canRestoreComposer = () => this.stateValue === state && this.composerPersistence.active;
     this.previousChatLoading = state.chatLoading;
     this.previousChatMessages = state.chatMessages;
     this.previousChatToolMessages = state.chatToolMessages;
@@ -91,8 +92,8 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       }
     };
     const commitDraftChange = state.handleChatDraftChange;
-    state.handleChatDraftChange = (next) => {
-      commitDraftChange(next);
+    state.handleChatDraftChange = (next, mentions) => {
+      commitDraftChange(next, mentions);
       this.composerPersistence.schedule();
     };
     const navigateInputHistory = state.handleChatInputHistoryKey;
@@ -271,6 +272,10 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     this.composerPersistence.start();
   }
 
+  pauseComposerPersistence() {
+    this.composerPersistence.stop();
+  }
+
   persistComposerForEviction(): ChatComposerPersistResult {
     return this.composerPersistence.persistForRouteSwitchResult();
   }
@@ -290,6 +295,9 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       cancelChatStreamRenderFrame(state);
       cancelChatScroll(state);
       invalidateImageLightbox(state);
+      if (state.sidebarContent?.kind === "loading") {
+        state.sidebarContent = null;
+      }
       clearSessionWorkspaceTimers(state);
       stopChatRealtimeTalk(state);
       state.resetToolStream?.();

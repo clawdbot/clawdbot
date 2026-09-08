@@ -134,9 +134,10 @@ export function driver(
   };
 }
 
-export async function execution(session: CuaDriverSession) {
+export async function execution(session: CuaDriverSession, platform: NodeJS.Platform = "linux") {
   return await createCuaComputerProvider({
-    platform: "linux",
+    platform,
+    env: macOsEndpoint(),
     driver: session,
     imageProcessor: {
       encode: vi.fn(async () => ({ data: Buffer.from("jpeg"), width: 100, height: 50 })),

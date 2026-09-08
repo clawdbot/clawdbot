@@ -61,6 +61,8 @@ function descriptorForSession(
     startedAt: session.createdAt,
     metadata: {
       agentId: session.agentId,
+      // The meeting owner supplies this transcript ID.
+      sessionIdOrigin: "supplied",
       meetingSessionId: session.id,
       mode: session.mode,
       participantIdentity: session.participantIdentity,

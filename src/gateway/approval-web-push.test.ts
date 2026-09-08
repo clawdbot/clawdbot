@@ -2,7 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { BoundWebPushSubscription } from "../infra/push-web.js";
-import { ExecApprovalManager } from "./exec-approval-manager.js";
+import { createTestApprovalManager } from "./exec-approval-manager.test-support.js";
 
 const listDevicePairingMock = vi.fn();
 const listBoundWebPushSubscriptionsMock = vi.fn();
@@ -159,10 +159,10 @@ describe("approval Web Push delivery", () => {
     });
   });
 
-  it("sends a generic approval link only to currently authorized visible bindings", async () => {
+  it("sends a generic approval link only to currently authorized visible bindings", async (testContext) => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    const manager = new ExecApprovalManager();
+    const manager = createTestApprovalManager(testContext);
     const record = manager.create({ command: "sensitive command" }, 60_000, "exec:approval.1");
     record.requestedByDeviceId = "allowed-device";
     const allowed = boundSubscription("allowed-device", "profile-allowed");
@@ -221,13 +221,16 @@ describe("approval Web Push delivery", () => {
     expect(JSON.stringify(preparedWebPushSendMock.mock.calls)).not.toContain("sensitive command");
   });
 
-  it.each([
+  it.for([
     { detailLevel: "identified" as const, agentId: "agent\n\u202E", label: "agent\\u{A}\\u{202E}" },
     { detailLevel: "detailed" as const, agentId: "🦞".repeat(50), label: "🦞".repeat(40) },
   ])(
     "bounds and sanitizes $detailLevel approval labels without changing agent filters",
-    async ({ detailLevel, agentId, label }) => {
-      const record = new ExecApprovalManager().create({ command: "echo ok", agentId }, 60_000);
+    async ({ detailLevel, agentId, label }, testContext) => {
+      const record = createTestApprovalManager(testContext).create(
+        { command: "echo ok", agentId },
+        60_000,
+      );
       const subscription = boundSubscription("browser-device", null);
       subscription.devicePreferences = {
         enabled: true,
@@ -260,8 +263,8 @@ describe("approval Web Push delivery", () => {
     },
   );
 
-  it("rechecks the profile role and excludes unbound role-based subscriptions", async () => {
-    const manager = new ExecApprovalManager();
+  it("rechecks the profile role and excludes unbound role-based subscriptions", async (testContext) => {
+    const manager = createTestApprovalManager(testContext);
     const record = manager.create({ command: "echo ok" }, 60_000, "exec:role-check");
     const current = boundSubscription("current-device", "profile-current");
     const downgraded = boundSubscription("downgraded-device", "profile-downgraded");
@@ -320,7 +323,7 @@ describe("approval Web Push delivery", () => {
     );
   });
 
-  it.each([
+  it.for([
     {
       label: "device admin and granular profile",
       tokenScopes: ["operator.admin"],
@@ -331,8 +334,8 @@ describe("approval Web Push delivery", () => {
       tokenScopes: ["operator.read", "operator.approvals"],
       profileScopes: ["operator.admin"],
     },
-  ])("honors implied scopes across $label", async ({ tokenScopes, profileScopes }) => {
-    const record = new ExecApprovalManager().create(
+  ])("honors implied scopes across $label", async ({ tokenScopes, profileScopes }, testContext) => {
+    const record = createTestApprovalManager(testContext).create(
       { command: "echo ok" },
       60_000,
       "exec:implied-role-scopes",
@@ -364,8 +367,8 @@ describe("approval Web Push delivery", () => {
     );
   });
 
-  it("prepares the transport before rereading current approval authority", async () => {
-    const manager = new ExecApprovalManager();
+  it("prepares the transport before rereading current approval authority", async (testContext) => {
+    const manager = createTestApprovalManager(testContext);
     const record = manager.create({ command: "echo ok" }, 60_000, "exec:authority-race");
     const stale = boundSubscription("stale-device", "profile-stale");
     const current = boundSubscription("current-device", "profile-current");
@@ -397,8 +400,8 @@ describe("approval Web Push delivery", () => {
     );
   });
 
-  it("reads runtime role policy after transport preparation", async () => {
-    const manager = new ExecApprovalManager();
+  it("reads runtime role policy after transport preparation", async (testContext) => {
+    const manager = createTestApprovalManager(testContext);
     const record = manager.create({ command: "echo ok" }, 60_000, "exec:config-race");
     const current = boundSubscription("current-device", "profile-current");
     const preparation = createDeferred<typeof preparedWebPushSendMock>();
@@ -430,10 +433,10 @@ describe("approval Web Push delivery", () => {
     expect(preparedWebPushSendMock).not.toHaveBeenCalled();
   });
 
-  it.each(["resolved", "expired"] as const)(
+  it.for(["resolved", "expired"] as const)(
     "does not send after the approval becomes %s during transport preparation",
-    async (terminalState) => {
-      const manager = new ExecApprovalManager();
+    async (terminalState, testContext) => {
+      const manager = createTestApprovalManager(testContext);
       const record = manager.create(
         { command: "echo ok" },
         60_000,
@@ -469,10 +472,10 @@ describe("approval Web Push delivery", () => {
     },
   );
 
-  it("recomputes the remaining TTL after transport preparation", async () => {
+  it("recomputes the remaining TTL after transport preparation", async (testContext) => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    const manager = new ExecApprovalManager();
+    const manager = createTestApprovalManager(testContext);
     const record = manager.create({ command: "echo ok" }, 60_000, "exec:ttl-after-preparation");
     const current = boundSubscription("current-device", "profile-current");
     listBoundWebPushSubscriptionsMock.mockReturnValue([current]);
@@ -513,8 +516,8 @@ describe("approval Web Push delivery", () => {
     );
   });
 
-  it("retains ambiguous request targets for terminal replacement and prunes definite failures", async () => {
-    const manager = new ExecApprovalManager();
+  it("retains ambiguous request targets for terminal replacement and prunes definite failures", async (testContext) => {
+    const manager = createTestApprovalManager(testContext);
     const record = manager.create({ command: "echo ok" }, 60_000, "exec:ambiguous-request");
     const ambiguous = boundSubscription("ambiguous-device", "profile-ambiguous");
     const gone = boundSubscription("gone-device", "profile-gone");
@@ -557,10 +560,10 @@ describe("approval Web Push delivery", () => {
     );
   });
 
-  it.each(["resolved", "expired"] as const)(
+  it.for(["resolved", "expired"] as const)(
     "replaces successful request alerts after the approval becomes %s",
-    async (terminalState) => {
-      const manager = new ExecApprovalManager();
+    async (terminalState, testContext) => {
+      const manager = createTestApprovalManager(testContext);
       const record = manager.create(
         { command: "sensitive command" },
         60_000,
@@ -661,8 +664,8 @@ describe("approval Web Push delivery", () => {
     expect(listWebPushApprovalDeliveryTargetsMock).toHaveBeenCalledTimes(1_025);
   });
 
-  it("recovers a terminal replacement from durable targets after process restart", async () => {
-    const manager = new ExecApprovalManager();
+  it("recovers a terminal replacement from durable targets after process restart", async (testContext) => {
+    const manager = createTestApprovalManager(testContext);
     const record = manager.create(
       { command: "sensitive command" },
       60_000,
@@ -708,10 +711,10 @@ describe("approval Web Push delivery", () => {
     expect(approvalDeliveryTargets.get(record.id)?.size).toBe(0);
   });
 
-  it.each(["same-process", "restart"] as const)(
+  it.for(["same-process", "restart"] as const)(
     "does not send a terminal approval link to a rebound subscription after %s resolution",
-    async (mode) => {
-      const manager = new ExecApprovalManager();
+    async (mode, testContext) => {
+      const manager = createTestApprovalManager(testContext);
       const record = manager.create(
         { command: "sensitive command" },
         60_000,
@@ -750,10 +753,10 @@ describe("approval Web Push delivery", () => {
     },
   );
 
-  it.each(["same-process", "restart"] as const)(
+  it.for(["same-process", "restart"] as const)(
     "does not send a terminal approval link after device authority is revoked in %s delivery",
-    async (mode) => {
-      const manager = new ExecApprovalManager();
+    async (mode, testContext) => {
+      const manager = createTestApprovalManager(testContext);
       const record = manager.create(
         { command: "sensitive command" },
         60_000,
@@ -799,8 +802,8 @@ describe("approval Web Push delivery", () => {
     },
   );
 
-  it("does not send a terminal approval link after profile policy is tightened", async () => {
-    const manager = new ExecApprovalManager();
+  it("does not send a terminal approval link after profile policy is tightened", async (testContext) => {
+    const manager = createTestApprovalManager(testContext);
     const record = manager.create(
       { command: "sensitive command" },
       60_000,

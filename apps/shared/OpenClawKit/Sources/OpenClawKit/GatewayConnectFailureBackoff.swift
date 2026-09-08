@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawProtocol
 
 struct GatewayConnectFailureBackoff {
     private var milliseconds: Double = 500
@@ -14,8 +15,20 @@ struct GatewayConnectFailureBackoff {
         }
     }
 
-    mutating func record(error: Error, pendingDeviceTokenRetry: Bool) {
+    mutating func record(
+        error: Error,
+        pendingDeviceTokenRetry: Bool,
+        supportedProtocols: ClosedRange<Int>)
+    {
         guard !Self.isCancellation(error) else { return }
+        if let rejection = error as? GatewayConnectAuthError,
+           rejection.isProtocolMismatch(supportedProtocols: supportedProtocols)
+        {
+            // A subsequent setup probe must receive the rejection, not time out
+            // behind a transport backoff left by an incompatible handshake.
+            self.reset()
+            return
+        }
         let delayMs = pendingDeviceTokenRetry ? min(self.milliseconds, 250) : self.milliseconds
         let clock = ContinuousClock()
         self.retryNotBefore = clock.now.advanced(by: .milliseconds(Int64(delayMs.rounded(.up))))
@@ -36,6 +49,14 @@ struct GatewayConnectFailureBackoff {
 }
 
 extension GatewayChannelActor {
+    nonisolated static func minimumProtocolVersion(role: String, clientMode: String) -> Int {
+        // Node RPC frames stayed compatible across v3/v4. Operator chat surfaces require v4.
+        if role == "node", clientMode == "node" {
+            return GATEWAY_MIN_NODE_PROTOCOL_VERSION
+        }
+        return GATEWAY_MIN_PROTOCOL_VERSION
+    }
+
     func waitForConnectFailureBackoff() async throws {
         guard let deadline = self.connectFailureBackoff.deadline else { return }
         // Delay inside the shared connect attempt so callers coalesce before a

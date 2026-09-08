@@ -381,12 +381,7 @@ describe("buildXiaomiSpeechProvider", () => {
 
     it("caps oversized TTS request timeouts before scheduling or fetching", async () => {
       const audio = Buffer.from("fake-mp3-audio").toString("base64");
-      const timeoutSpy = vi
-        .spyOn(globalThis, "setTimeout")
-        .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
-      const clearTimeoutSpy = vi
-        .spyOn(globalThis, "clearTimeout")
-        .mockImplementation(() => undefined);
+      const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
       vi.mocked(globalThis.fetch).mockResolvedValueOnce(
         new Response(JSON.stringify({ choices: [{ message: { audio: { data: audio } } }] }), {
           status: 200,
@@ -406,7 +401,6 @@ describe("buildXiaomiSpeechProvider", () => {
         expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
       } finally {
         timeoutSpy.mockRestore();
-        clearTimeoutSpy.mockRestore();
       }
     });
 

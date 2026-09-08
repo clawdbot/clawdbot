@@ -1,8 +1,9 @@
-import { mkdir } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionPath,
   controlUiSessionUrl,
@@ -18,12 +19,6 @@ export { controlUiSessionPath, controlUiSessionUrl, installMockGateway, waitForC
 
 export const collapsedSessionSectionsStorageKey = "openclaw:sidebar:sessions:collapsed-sections";
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-export const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "thread-management",
-);
 
 export function createSessionManagementE2eSuite(source = false) {
   return createControlUiE2eSuite({
@@ -173,16 +168,27 @@ export async function submitInputDialog(page: Page, value: string): Promise<void
   await field.waitFor({ state: "detached" });
 }
 
-export async function captureUiProof(page: Page, fileName: string) {
+export async function captureUiProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  fileName: string,
+  surface: Locator = page.locator(".shell"),
+  content: readonly Locator[] = [surface],
+) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(uiProofArtifactDir, { recursive: true });
-  // Dialogs and menus fade in, so an undisabled capture can land mid-transition
-  // and prove nothing about the state it was taken for.
+  if (page.video()) {
+    await writeFile(
+      path.join(owner.artifactDir, fileName),
+      await takeControlUiViewportScreenshot(page, surface, content),
+    );
+    return;
+  }
+  // Nonrecording proof keeps its existing full-document framing.
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
-    path: path.join(uiProofArtifactDir, fileName),
+    path: path.join(owner.artifactDir, fileName),
   });
 }

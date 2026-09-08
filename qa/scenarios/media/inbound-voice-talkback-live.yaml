@@ -123,7 +123,7 @@ flow:
             expr: "visibleConversationOutbound.filter((message) => String(message.text ?? '').toUpperCase().replace(/[^A-Z0-9]+/g, '') === config.expectedMarkerNormalized)"
         - set: gatewayLog
           value:
-            expr: "String(readGatewayLogs() ?? '').slice(logCursor)"
+            expr: "String(readGatewayLogs(logCursor) ?? '')"
         - assert:
             expr: visibleConversationOutbound.length === 1 && matchingOutbound.length === 1
             message:

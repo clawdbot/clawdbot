@@ -1,11 +1,14 @@
 // Delivery lookup recovers routable channel context from persisted session stores.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
-  resolveSessionStoreAgentId,
+  resolveSessionStoreIdentity,
   resolveSessionStoreKey,
 } from "../../gateway/session-store-key.js";
 import { requiresFoldedSessionKeyAliasProof } from "../../sessions/session-key-utils.js";
-import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
+import {
+  deliveryContextFromSession,
+  hasDeliveryTargetFields,
+} from "../../utils/delivery-context.shared.js";
 import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveSessionStorePathCore } from "./paths.js";
@@ -19,20 +22,6 @@ import {
 import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import type { SessionEntry } from "./types.js";
-
-function hasRoutableDeliveryContext(context?: {
-  channel?: string;
-  to?: string;
-  accountId?: string;
-  threadId?: string | number;
-}): context is {
-  channel: string;
-  to: string;
-  accountId?: string;
-  threadId?: string | number;
-} {
-  return Boolean(context?.channel && context?.to);
-}
 
 /**
  * Extracts the routable delivery context and thread id for a persisted session key.
@@ -62,11 +51,11 @@ export function extractDeliveryInfo(
     const lookup = loadDeliverySessionEntry({ cfg, sessionKey, baseSessionKey });
     let entry = lookup.entry;
     let storedDeliveryContext = deliveryContextFromSession(entry);
-    if (!hasRoutableDeliveryContext(storedDeliveryContext) && baseSessionKey !== sessionKey) {
+    if (!hasDeliveryTargetFields(storedDeliveryContext) && baseSessionKey !== sessionKey) {
       entry = lookup.baseEntry;
       storedDeliveryContext = deliveryContextFromSession(entry);
     }
-    if (hasRoutableDeliveryContext(storedDeliveryContext)) {
+    if (hasDeliveryTargetFields(storedDeliveryContext)) {
       deliveryContext = {
         channel: storedDeliveryContext.channel,
         to: storedDeliveryContext.to,
@@ -106,7 +95,7 @@ function findSessionEntryInStore(store: SessionEntryReadView, keys: readonly str
     if (!entry) {
       return;
     }
-    const candidateRoutable = hasRoutableDeliveryContext(deliveryContextFromSession(entry));
+    const candidateRoutable = hasDeliveryTargetFields(deliveryContextFromSession(entry));
     const candidateUpdatedAt = entry.updatedAt ?? 0;
     if (
       !bestEntry ||
@@ -131,7 +120,7 @@ function findSessionEntryInStore(store: SessionEntryReadView, keys: readonly str
     // Exact and alias probes are raw keyed reads; the store is never enumerated here.
     const exactEntry = store.get(normalized);
     if (exactEntry && !hasMismatchedCaseSensitiveDeliveryProof(exactEntry, normalized)) {
-      foundRoutableCandidate ||= hasRoutableDeliveryContext(deliveryContextFromSession(exactEntry));
+      foundRoutableCandidate ||= hasDeliveryTargetFields(deliveryContextFromSession(exactEntry));
       acceptCandidate(exactEntry, exactKeyWins);
     }
     for (const foldedLegacyKey of foldedLegacyKeys) {
@@ -139,16 +128,14 @@ function findSessionEntryInStore(store: SessionEntryReadView, keys: readonly str
       if (!foldedLegacyEntry || !isConfirmedLowercasedLegacyAlias(foldedLegacyEntry, normalized)) {
         continue;
       }
-      foundRoutableCandidate ||= hasRoutableDeliveryContext(
+      foundRoutableCandidate ||= hasDeliveryTargetFields(
         deliveryContextFromSession(foldedLegacyEntry),
       );
       acceptCandidate(foldedLegacyEntry);
     }
     const trimmedEntry = trimmed !== normalized ? store.get(trimmed) : undefined;
     if (trimmedEntry && !hasMismatchedCaseSensitiveDeliveryProof(trimmedEntry, normalized)) {
-      foundRoutableCandidate ||= hasRoutableDeliveryContext(
-        deliveryContextFromSession(trimmedEntry),
-      );
+      foundRoutableCandidate ||= hasDeliveryTargetFields(deliveryContextFromSession(trimmedEntry));
       acceptCandidate(trimmedEntry);
     }
     if (trimmed !== normalized || !foundRoutableCandidate) {
@@ -178,8 +165,8 @@ function buildFreshestSessionEntryIndex(store: SessionEntryReadView): Map<string
     }
     const normalized = normalizeStoreSessionKey(key);
     const existing = index.get(normalized);
-    const entryRoutable = hasRoutableDeliveryContext(deliveryContextFromSession(entry));
-    const existingRoutable = hasRoutableDeliveryContext(deliveryContextFromSession(existing));
+    const entryRoutable = hasDeliveryTargetFields(deliveryContextFromSession(entry));
+    const existingRoutable = hasDeliveryTargetFields(deliveryContextFromSession(existing));
     if (
       !existing ||
       (entryRoutable && !existingRoutable) ||
@@ -194,7 +181,7 @@ function buildFreshestSessionEntryIndex(store: SessionEntryReadView): Map<string
       continue;
     }
     const foldedExisting = index.get(foldedLegacyKey);
-    const foldedExistingRoutable = hasRoutableDeliveryContext(
+    const foldedExistingRoutable = hasDeliveryTargetFields(
       deliveryContextFromSession(foldedExisting),
     );
     if (
@@ -214,15 +201,15 @@ function loadDeliverySessionEntry(params: {
   sessionKey: string;
   baseSessionKey: string;
 }) {
-  const canonicalKey = resolveSessionStoreKey({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-  });
-  const canonicalBaseKey = resolveSessionStoreKey({
+  const { agentId, canonicalKey: canonicalBaseKey } = resolveSessionStoreIdentity({
     cfg: params.cfg,
     sessionKey: params.baseSessionKey,
   });
-  const agentId = resolveSessionStoreAgentId(params.cfg, canonicalKey);
+  const canonicalKey = resolveSessionStoreKey({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    storeAgentId: agentId,
+  });
   const sessionKeys = [params.sessionKey, canonicalKey];
   const baseKeys = [params.baseSessionKey, canonicalBaseKey];
   let fallback:
@@ -244,8 +231,8 @@ function loadDeliverySessionEntry(params: {
     // Prefer the first store that can actually route delivery; keep a non-routable fallback only
     // so callers can still inspect thread ids when no target-bearing session exists.
     if (
-      hasRoutableDeliveryContext(deliveryContextFromSession(entry)) ||
-      hasRoutableDeliveryContext(deliveryContextFromSession(baseEntry))
+      hasDeliveryTargetFields(deliveryContextFromSession(entry)) ||
+      hasDeliveryTargetFields(deliveryContextFromSession(baseEntry))
     ) {
       return { entry, baseEntry };
     }

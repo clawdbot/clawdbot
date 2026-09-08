@@ -139,6 +139,17 @@ describe("attempt trajectory status", () => {
     ).toEqual({ status: "success" });
   });
 
+  it("keeps media-only committed delivery as terminal progress", () => {
+    expect(
+      resolveAttemptTrajectoryTerminal(
+        baseParams({
+          messagingToolSentMediaUrls: ["file:///tmp/render.png"],
+          lastAssistantStopReason: "toolUse",
+        }),
+      ),
+    ).toEqual({ status: "success" });
+  });
+
   it("keeps accepted session spawns as terminal progress", () => {
     expect(
       resolveAttemptTrajectoryTerminal(

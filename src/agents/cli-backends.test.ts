@@ -151,21 +151,23 @@ describe("resolveCliBackendConfig", () => {
 
   it("preserves the plugin-owned JSONL parser through runtime resolution", () => {
     const parseJsonlEvent = vi.fn();
+    const parseJsonlLifecycleEvent = vi.fn();
     cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [runtimeEntry({ parseJsonlEvent })],
+      resolveRuntimeCliBackends: () => [
+        runtimeEntry({ parseJsonlEvent, parseJsonlLifecycleEvent }),
+      ],
       resolvePluginSetupCliBackend: () => undefined,
     });
 
     expect(requireBackend().parseJsonlEvent).toBe(parseJsonlEvent);
+    expect(requireBackend().parseJsonlLifecycleEvent).toBe(parseJsonlLifecycleEvent);
   });
 
   it("normalizes the registered adapter with agent and runtime config context", () => {
-    const normalizeConfig = vi.fn(
-      (config: CliBackendConfig): CliBackendConfig => ({
-        ...config,
-        args: [...(config.args ?? []), "--normalized"],
-      }),
-    );
+    const normalizeConfig = vi.fn((config: CliBackendConfig): CliBackendConfig => ({
+      ...config,
+      args: [...(config.args ?? []), "--normalized"],
+    }));
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [runtimeEntry({ normalizeConfig })],
       resolvePluginSetupCliBackend: () => undefined,
@@ -213,6 +215,7 @@ describe("resolveCliBackendConfig", () => {
       config: { command: "setup-acme", args: ["run"] },
       parseJsonlEvent,
       resolveModelId,
+      isolatesInstructionsWithExactTools: true,
     });
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [],
@@ -228,6 +231,7 @@ describe("resolveCliBackendConfig", () => {
     expect(resolved.resolveModelId?.({ modelId: "acme-large", contextWindow: "1m" })).toBe(
       "acme-large[1m]",
     );
+    expect(resolved.isolatesInstructionsWithExactTools).toBe(true);
   });
 
   it("returns null when no plugin owns the backend", () => {
@@ -260,6 +264,7 @@ describe("resolveCliBackendConfig", () => {
           manualCompaction,
           nativeToolMode: "selectable",
           toolAvailabilityEnforcement: "execution-args",
+          isolatesInstructionsWithExactTools: true,
           sideQuestionToolMode: "disabled",
         }),
       ],
@@ -274,6 +279,7 @@ describe("resolveCliBackendConfig", () => {
     expect(resolved.manualCompaction).toBe(manualCompaction);
     expect(resolved.nativeToolMode).toBe("selectable");
     expect(resolved.toolAvailabilityEnforcement).toBe("execution-args");
+    expect(resolved.isolatesInstructionsWithExactTools).toBe(true);
     expect(resolved.sideQuestionToolMode).toBe("disabled");
   });
 
@@ -290,6 +296,7 @@ describe("resolveCliBackendConfig", () => {
     });
 
     expect(requireBackend().toolAvailabilityEnforcement).toBeUndefined();
+    expect(requireBackend().isolatesInstructionsWithExactTools).toBeUndefined();
   });
 });
 

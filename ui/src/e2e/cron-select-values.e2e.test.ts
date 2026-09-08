@@ -52,7 +52,7 @@ suite.define(() => {
         await sortMenu.locator('wa-dropdown-item[value="asc"]').click();
         await page.getByRole("button", { name: "Sort Oldest first", exact: true }).waitFor();
         // Switching tabs recreates the dropdown with the persisted non-first value.
-        await page.locator('[data-test-id="cron-list-tab-tasks"]').click();
+        await page.locator('[data-test-id="cron-tab-all"]').click();
         await page.locator('[data-test-id="cron-list-tab-activity"]').click();
         await page.getByRole("button", { name: "Sort Oldest first", exact: true }).waitFor();
         expect(

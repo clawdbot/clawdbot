@@ -1,4 +1,6 @@
 // Shares plugin config normalization helpers across control-plane paths.
+import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -47,7 +49,7 @@ export type NormalizedPluginsConfig = {
 export type NormalizePluginId = (id: string) => string;
 
 /** Default plugin id normalizer for already-canonical ids. */
-export const identityNormalizePluginId: NormalizePluginId = (id) => id.trim();
+const identityNormalizePluginId: NormalizePluginId = (id) => id.trim();
 
 function normalizeList(value: unknown, normalizePluginId: NormalizePluginId): string[] {
   if (!Array.isArray(value)) {
@@ -59,20 +61,11 @@ function normalizeList(value: unknown, normalizePluginId: NormalizePluginId): st
 }
 
 function normalizeHookTimeoutMs(value: unknown): number | undefined {
-  if (
-    typeof value !== "number" ||
-    !Number.isInteger(value) ||
-    !Number.isFinite(value) ||
-    value <= 0 ||
-    value > 600_000
-  ) {
-    return undefined;
-  }
-  return value;
+  return asSafeIntegerInRange(value, { min: 1, max: 600_000 });
 }
 
 function normalizeHookTimeouts(value: unknown): Record<string, number> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return undefined;
   }
   const normalized: Record<string, number> = {};
@@ -89,7 +82,7 @@ function normalizePluginEntries(
   entries: unknown,
   normalizePluginId: NormalizePluginId,
 ): NormalizedPluginsConfig["entries"] {
-  if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
+  if (!isRecord(entries)) {
     return {};
   }
   const normalized: NormalizedPluginsConfig["entries"] = {};
@@ -98,23 +91,20 @@ function normalizePluginEntries(
     if (!normalizedKey) {
       continue;
     }
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
+    if (!isRecord(value)) {
       normalized[normalizedKey] = {};
       continue;
     }
-    const entry = value as Record<string, unknown>;
+    const entry = value;
     const hooksRaw = entry.hooks;
-    const hooks =
-      hooksRaw && typeof hooksRaw === "object" && !Array.isArray(hooksRaw)
-        ? {
-            allowPromptInjection: (hooksRaw as { allowPromptInjection?: unknown })
-              .allowPromptInjection,
-            allowConversationAccess: (hooksRaw as { allowConversationAccess?: unknown })
-              .allowConversationAccess,
-            timeoutMs: normalizeHookTimeoutMs((hooksRaw as { timeoutMs?: unknown }).timeoutMs),
-            timeouts: normalizeHookTimeouts((hooksRaw as { timeouts?: unknown }).timeouts),
-          }
-        : undefined;
+    const hooks = isRecord(hooksRaw)
+      ? {
+          allowPromptInjection: hooksRaw.allowPromptInjection,
+          allowConversationAccess: hooksRaw.allowConversationAccess,
+          timeoutMs: normalizeHookTimeoutMs(hooksRaw.timeoutMs),
+          timeouts: normalizeHookTimeouts(hooksRaw.timeouts),
+        }
+      : undefined;
     const normalizedHooks =
       hooks &&
       (typeof hooks.allowPromptInjection === "boolean" ||
@@ -133,21 +123,15 @@ function normalizePluginEntries(
           }
         : undefined;
     const subagentRaw = entry.subagent;
-    const subagent =
-      subagentRaw && typeof subagentRaw === "object" && !Array.isArray(subagentRaw)
-        ? {
-            allowModelOverride: (subagentRaw as { allowModelOverride?: unknown })
-              .allowModelOverride,
-            hasAllowedModelsConfig: Array.isArray(
-              (subagentRaw as { allowedModels?: unknown }).allowedModels,
-            ),
-            allowedModels: Array.isArray((subagentRaw as { allowedModels?: unknown }).allowedModels)
-              ? normalizeArrayBackedTrimmedStringList(
-                  (subagentRaw as { allowedModels?: unknown }).allowedModels,
-                )
-              : undefined,
-          }
-        : undefined;
+    const subagent = isRecord(subagentRaw)
+      ? {
+          allowModelOverride: subagentRaw.allowModelOverride,
+          hasAllowedModelsConfig: Array.isArray(subagentRaw.allowedModels),
+          allowedModels: Array.isArray(subagentRaw.allowedModels)
+            ? normalizeArrayBackedTrimmedStringList(subagentRaw.allowedModels)
+            : undefined,
+        }
+      : undefined;
     const normalizedSubagent =
       subagent &&
       (typeof subagent.allowModelOverride === "boolean" ||
@@ -164,34 +148,21 @@ function normalizePluginEntries(
           }
         : undefined;
     const llmRaw = entry.llm;
-    const llm =
-      llmRaw && typeof llmRaw === "object" && !Array.isArray(llmRaw)
-        ? {
-            allowModelOverride: (llmRaw as { allowModelOverride?: unknown }).allowModelOverride,
-            hasAllowedModelsConfig: Array.isArray(
-              (llmRaw as { allowedModels?: unknown }).allowedModels,
-            ),
-            allowedModels: Array.isArray((llmRaw as { allowedModels?: unknown }).allowedModels)
-              ? normalizeArrayBackedTrimmedStringList(
-                  (llmRaw as { allowedModels?: unknown }).allowedModels,
-                )
-              : undefined,
-            hasAllowedCompletionModelsConfig: Array.isArray(
-              (llmRaw as { allowedCompletionModels?: unknown }).allowedCompletionModels,
-            ),
-            allowedCompletionModels: Array.isArray(
-              (llmRaw as { allowedCompletionModels?: unknown }).allowedCompletionModels,
-            )
-              ? normalizeArrayBackedTrimmedStringList(
-                  (llmRaw as { allowedCompletionModels?: unknown }).allowedCompletionModels,
-                )
-              : undefined,
-            allowAuthProfileOverride: (llmRaw as { allowAuthProfileOverride?: unknown })
-              .allowAuthProfileOverride,
-            allowAgentIdOverride: (llmRaw as { allowAgentIdOverride?: unknown })
-              .allowAgentIdOverride,
-          }
-        : undefined;
+    const llm = isRecord(llmRaw)
+      ? {
+          allowModelOverride: llmRaw.allowModelOverride,
+          hasAllowedModelsConfig: Array.isArray(llmRaw.allowedModels),
+          allowedModels: Array.isArray(llmRaw.allowedModels)
+            ? normalizeArrayBackedTrimmedStringList(llmRaw.allowedModels)
+            : undefined,
+          hasAllowedCompletionModelsConfig: Array.isArray(llmRaw.allowedCompletionModels),
+          allowedCompletionModels: Array.isArray(llmRaw.allowedCompletionModels)
+            ? normalizeArrayBackedTrimmedStringList(llmRaw.allowedCompletionModels)
+            : undefined,
+          allowAuthProfileOverride: llmRaw.allowAuthProfileOverride,
+          allowAgentIdOverride: llmRaw.allowAgentIdOverride,
+        }
+      : undefined;
     const normalizedLlm =
       llm &&
       (typeof llm.allowModelOverride === "boolean" ||
@@ -255,21 +226,29 @@ export function normalizePluginsConfigWithResolverCore(
   };
 }
 
-export function isBundledChannelEnabledByChannelConfig(
+/**
+ * Enables an owner for any enabled channel; disables it only when all channels are off.
+ * Unspecified channels leave the plugin's own activation policy in control.
+ */
+export function resolveChannelConfigEnablement(
   cfg: OpenClawConfig | undefined,
   pluginId: string,
-): boolean {
+  channelIds: readonly string[] = [],
+): boolean | undefined {
   const channels = cfg?.channels as Record<string, unknown> | undefined;
   if (!channels) {
-    return false;
+    return undefined;
   }
-  const channelId = normalizeChatChannelId(pluginId);
-  if (!channelId) {
-    return false;
+  // Declared ownership is authoritative; infer from the plugin id only when absent.
+  const candidateIds = channelIds.length
+    ? channelIds.map((channelId) => normalizeChatChannelId(channelId) ?? channelId)
+    : [normalizeChatChannelId(pluginId)];
+  const enablement = candidateIds.map((channelId) => {
+    const entry = channelId ? channels[channelId] : undefined;
+    return isRecord(entry) ? entry.enabled : undefined;
+  });
+  if (enablement.includes(true)) {
+    return true;
   }
-  const entry = channels[channelId];
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-    return false;
-  }
-  return (entry as Record<string, unknown>).enabled === true;
+  return enablement.every((enabled) => enabled === false) ? false : undefined;
 }

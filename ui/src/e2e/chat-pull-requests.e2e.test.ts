@@ -1,10 +1,12 @@
 // Control UI tests cover session pull request chips above the chat composer.
-import { mkdir } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
   controlUiSessionUrl,
@@ -14,24 +16,28 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import {
+  sharedPublisher,
+  waitForWatchedSessionKey,
+} from "./chat-github-publication.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const publicationProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "github-publication",
-);
-const stackingProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "pr-chip-stacking",
-);
+let publicationProofDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    publicationProofDir = createControlUiE2eArtifactDir("github-publication");
+  }
+});
+let stackingProofDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    stackingProofDir = createControlUiE2eArtifactDir("pr-chip-stacking");
+  }
+});
 
 let server: ControlUiE2eServer;
 // Browser contexts preserve test isolation; keep one process warm for this file.
@@ -91,30 +97,6 @@ async function overlapLastTranscriptRowWithPullRequestChip(page: Page): Promise<
         requestAnimationFrame(() => resolve());
       }),
   );
-}
-
-async function waitForWatchedSessionKey(
-  gateway: Awaited<ReturnType<typeof installMockGateway>>,
-): Promise<string> {
-  let watchedKey = "";
-  await expect
-    .poll(async () => {
-      const requests = await gateway.getRequests(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD);
-      for (const request of requests.toReversed()) {
-        const params = request.params;
-        if (!params || typeof params !== "object" || !("sessionKeys" in params)) {
-          continue;
-        }
-        const keys = (params as { sessionKeys?: unknown }).sessionKeys;
-        if (Array.isArray(keys) && typeof keys[0] === "string") {
-          watchedKey = keys[0];
-          break;
-        }
-      }
-      return watchedKey;
-    })
-    .not.toBe("");
-  return watchedKey;
 }
 
 function publicationRequestKey(params: unknown): string {
@@ -317,7 +299,6 @@ describeControlUiE2e("session pull request chips", () => {
 
       await overlapLastTranscriptRowWithPullRequestChip(page);
       if (captureUiProof) {
-        await mkdir(stackingProofDir, { recursive: true });
         await page.screenshot({
           animations: "disabled",
           path: path.join(stackingProofDir, `${label}.png`),
@@ -373,7 +354,7 @@ describeControlUiE2e("session pull request chips", () => {
     await expect.poll(() => row.locator(".chat-pr__deletions").textContent()).toBe("−205");
     // While rate limited "no PR found" is unreliable, so the warning shows.
     await expect.poll(() => row.locator(".chat-pr__warning").count()).toBe(1);
-    const create = row.locator(".chat-pr__create");
+    const create = row.getByRole("button", { name: "Publish PR" });
     await expect.poll(() => create.textContent()).toContain("Publish PR");
     await expect.poll(() => create.getAttribute("href")).toBeNull();
     // No dismiss control: the row reflects the checkout itself.
@@ -391,9 +372,6 @@ describeControlUiE2e("session pull request chips", () => {
   });
 
   it("publishes through the Gateway and renders the terminal pull request URL", async () => {
-    if (captureUiProof) {
-      await mkdir(publicationProofDir, { recursive: true });
-    }
     const context = await browser.newContext({
       colorScheme: "light",
       locale: "en-US",
@@ -442,7 +420,14 @@ describeControlUiE2e("session pull request chips", () => {
     const request = await gateway.waitForRequest("sessions.github.publish");
     expect(request.params).toMatchObject({
       sessionKey: "agent:main:main",
+      selection: { source: "shared", expected: sharedPublisher },
     });
+    await expect
+      .poll(() => page.locator("[data-publication-account]").textContent())
+      .toContain("Publish as @system-bot");
+    await expect
+      .poll(() => page.getByRole("combobox", { name: "Publication account" }).count())
+      .toBe(0);
     expect(request.params).not.toHaveProperty("title");
     expect(JSON.stringify(request.params)).not.toContain("token");
     expect(request.params).not.toHaveProperty("repository");
@@ -450,15 +435,17 @@ describeControlUiE2e("session pull request chips", () => {
       .poll(() => page.getByRole("button", { name: "Publishing…" }).isDisabled())
       .toBe(true);
     if (captureUiProof) {
-      await page.screenshot({
-        animations: "disabled",
-        fullPage: true,
-        path: path.join(publicationProofDir, "01-publication-pending.png"),
-      });
+      await writeFile(
+        path.join(publicationProofDir, "01-publication-pending.png"),
+        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+          page.getByRole("button", { name: "Publishing…" }),
+        ]),
+      );
     }
 
     await gateway.resolveDeferred("sessions.github.publish", {
       requestId: "publication-1",
+      publisher: sharedPublisher,
       status: "published",
       url: "https://github.com/openclaw/openclaw/pull/125200",
       repository: "openclaw/openclaw",
@@ -471,11 +458,10 @@ describeControlUiE2e("session pull request chips", () => {
       .poll(() => open.getAttribute("href"))
       .toBe("https://github.com/openclaw/openclaw/pull/125200");
     if (captureUiProof) {
-      await page.screenshot({
-        animations: "disabled",
-        fullPage: true,
-        path: path.join(publicationProofDir, "02-publication-published.png"),
-      });
+      await writeFile(
+        path.join(publicationProofDir, "02-publication-published.png"),
+        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [open]),
+      );
     }
 
     await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
@@ -629,6 +615,7 @@ describeControlUiE2e("session pull request chips", () => {
         [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
         "sessions.github.publish": {
           requestId: "publication-failed",
+          publisher: sharedPublisher,
           status: "failed",
           code: "push_rejected",
           message: "GitHub publication failed.",
@@ -662,17 +649,17 @@ describeControlUiE2e("session pull request chips", () => {
     await expect.poll(() => failure.textContent()).toContain("GitHub publication failed.");
     await expect.poll(() => failure.textContent()).toContain("Check repository write access");
     await expect
-      .poll(() => page.getByRole("button", { name: "Retry publication" }).count())
+      .poll(() => page.getByRole("button", { name: "Choose a new publication" }).count())
       .toBe(1);
     await expect
-      .poll(() =>
-        page
-          .getByRole("link", { name: "Create a pull request for openclaw/rejected-publication" })
-          .getAttribute("href"),
-      )
-      .toBe("https://github.com/openclaw/openclaw/pull/new/openclaw/rejected-publication");
+      .poll(() => page.locator("[data-publication-account]").textContent())
+      .toContain("Publish as @system-bot");
+    expect(
+      await page
+        .getByRole("link", { name: "Create a pull request for openclaw/rejected-publication" })
+        .count(),
+    ).toBe(0);
     if (captureUiProof) {
-      await mkdir(publicationProofDir, { recursive: true });
       await page.screenshot({
         animations: "disabled",
         fullPage: true,
@@ -686,6 +673,7 @@ describeControlUiE2e("session pull request chips", () => {
     const page = await context.newPage();
     const terminalFailure = {
       requestId: "publication-failed",
+      publisher: sharedPublisher,
       status: "failed",
       code: "push_rejected",
       message: "GitHub publication failed.",
@@ -743,18 +731,19 @@ describeControlUiE2e("session pull request chips", () => {
     });
     expect(publicationRequestKey(second.params)).toBe(publicationRequestKey(first.params));
     await expect
-      .poll(() => page.getByRole("button", { name: "Retry publication" }).count())
+      .poll(() => page.getByRole("button", { name: "Choose a new publication" }).count())
       .toBe(1);
 
     requestCount = (await gateway.getRequests("sessions.github.publish")).length;
-    await page.getByRole("button", { name: "Retry publication" }).click();
+    await page.getByRole("button", { name: "Choose a new publication" }).click();
+    await page.getByRole("button", { name: "Publish PR" }).click();
     const third = await gateway.waitForRequest("sessions.github.publish", {
       after: requestCount,
     });
     expect(publicationRequestKey(third.params)).not.toBe(publicationRequestKey(second.params));
   });
 
-  it("routes a cloud-idle publication request through the next live turn", async () => {
+  it("preserves explicit shared publication on a cloud-idle workspace", async () => {
     const context = await newBrowserContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -766,6 +755,12 @@ describeControlUiE2e("session pull request chips", () => {
       ],
       methodResponses: {
         [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
+        "sessions.github.publish": {
+          requestId: "cloud-publication",
+          status: "requested",
+          publisher: sharedPublisher,
+          message: "Publication requested after workspace reconciliation.",
+        },
         "sessions.list": {
           count: 1,
           defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
@@ -809,13 +804,23 @@ describeControlUiE2e("session pull request chips", () => {
       },
     });
 
-    await expect.poll(() => page.getByRole("button", { name: "Publish PR" }).count()).toBe(0);
+    await expect
+      .poll(() => page.getByRole("button", { name: "Publish PR" }).isEnabled())
+      .toBe(true);
+    await page.getByRole("button", { name: "Publication account" }).click();
+    await expect
+      .poll(() => page.locator("wa-popover").textContent())
+      .toContain("My GitHub requires an idle, reconciled local workspace");
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Publish PR" }).click();
+    const request = await gateway.waitForRequest("sessions.github.publish");
+    expect(request.params).toMatchObject({
+      selection: { source: "shared", expected: sharedPublisher },
+    });
     await expect
       .poll(() => page.locator(".chat-pr__publication-outcome").textContent())
-      .toContain("Start a live agent turn");
-    expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
+      .toContain("Publication requested after workspace reconciliation.");
     if (captureUiProof) {
-      await mkdir(publicationProofDir, { recursive: true });
       await page.screenshot({
         animations: "disabled",
         fullPage: true,

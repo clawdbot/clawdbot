@@ -1,8 +1,6 @@
 // Moonshot provider module implements model/runtime integration.
 import {
   describeOpenAiCompatibleVideo,
-  describeImageWithModel,
-  describeImagesWithModel,
   type MediaUnderstandingProvider,
   type VideoDescriptionRequest,
 } from "openclaw/plugin-sdk/media-understanding";
@@ -37,7 +35,7 @@ export const moonshotMediaUnderstandingProvider: MediaUnderstandingProvider = {
     video: DEFAULT_MOONSHOT_VIDEO_MODEL,
   },
   autoPriority: { video: 20 },
-  describeImage: describeImageWithModel,
-  describeImages: describeImagesWithModel,
+  describeImage: undefined,
+  describeImages: undefined,
   describeVideo: describeMoonshotVideo,
 };

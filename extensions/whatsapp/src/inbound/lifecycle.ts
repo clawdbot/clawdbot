@@ -1,11 +1,12 @@
 // Whatsapp plugin module implements lifecycle behavior.
-type Listener = (...args: unknown[]) => void;
+import type { BaileysEventEmitter, BaileysEventMap } from "baileys";
 
-type OffCapableEmitter = {
-  on: (event: string, listener: Listener) => void;
-  off?: (event: string, listener: Listener) => void;
-  removeListener?: (event: string, listener: Listener) => void;
-};
+type BaileysListener<Event extends keyof BaileysEventMap> = (arg: BaileysEventMap[Event]) => void;
+
+export type WhatsAppSocketListen = <Event extends keyof BaileysEventMap>(
+  event: Event,
+  listener: BaileysListener<Event>,
+) => () => void;
 
 type ClosableSocket = {
   end?: (error: Error | undefined) => void;
@@ -14,21 +15,13 @@ type ClosableSocket = {
   };
 };
 
-export function attachEmitterListener(
-  emitter: OffCapableEmitter,
-  event: string,
-  listener: Listener,
+export function attachEmitterListener<Event extends keyof BaileysEventMap>(
+  emitter: BaileysEventEmitter,
+  event: Event,
+  listener: BaileysListener<Event>,
 ): () => void {
   emitter.on(event, listener);
-  return () => {
-    if (typeof emitter.off === "function") {
-      emitter.off(event, listener);
-      return;
-    }
-    if (typeof emitter.removeListener === "function") {
-      emitter.removeListener(event, listener);
-    }
-  };
+  return () => emitter.off(event, listener);
 }
 
 export function closeInboundMonitorSocket(sock: ClosableSocket): void {

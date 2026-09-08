@@ -46,10 +46,7 @@ export function createDiscordSupplementalContextAccessChecker(params: {
 export function buildDiscordGroupSystemPrompt(
   channelConfig?: DiscordChannelConfigResolved | null,
 ): string | undefined {
-  const systemPromptParts = [channelConfig?.systemPrompt?.trim() || null].filter(
-    (entry): entry is string => Boolean(entry),
-  );
-  return systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
+  return channelConfig?.systemPrompt?.trim() || undefined;
 }
 
 function buildDiscordChannelStructuredContext(params: {

@@ -3,7 +3,7 @@ import { deriveContextPromptTokens, type NormalizedUsage } from "../../agents/us
 import type { OpenClawConfig } from "../../config/config.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { PluginHookReplyUsageState } from "../../plugins/hook-types.js";
-import { estimateAggregateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
 
 const TTL_MS = 5 * 60_000;
 const MAX_REPLY_USAGE_STATE_ENTRIES = 1_024;
@@ -57,12 +57,10 @@ export function buildReplyUsageState(params: {
         : undefined,
     turnUsd: estimateAggregateUsageCost({
       usage: params.usage,
-      cost: resolveModelCostConfig({
-        provider: params.provider,
-        model: params.model,
-        config: params.config,
-        agentDir: params.agentDir,
-      }),
+      provider: params.provider,
+      model: params.model,
+      config: params.config,
+      agentDir: params.agentDir,
     }),
     durationMs: params.durationMs,
     identity: resolveAgentIdentity(params.config, params.agentId),

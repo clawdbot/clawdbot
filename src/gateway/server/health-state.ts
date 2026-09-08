@@ -7,6 +7,7 @@ import { getRuntimeConfigAppliedHash } from "../../config/runtime-snapshot.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import { getUpdateAvailable, getUpdateSchedule } from "../../infra/update-startup.js";
+import { getGatewaySuspendAdmissionPhase } from "../../process/gateway-work-admission.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveGatewayAgentSelectionState } from "../agent-list.js";
 import { resolveGatewayAuth } from "../auth.js";
@@ -75,6 +76,7 @@ export function buildGatewaySnapshot(opts: {
   // Health is async; the caller replaces this with the collected snapshot.
   const emptyHealth: Snapshot["health"] = {};
   const snapshot: Snapshot = {
+    suspension: { phase: getGatewaySuspendAdmissionPhase() },
     presence,
     health: emptyHealth,
     stateVersion: { presence: presenceVersion, health: healthVersion },

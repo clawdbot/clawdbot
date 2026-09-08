@@ -36,6 +36,51 @@ function createShortId(prefix: string) {
   return `${prefix}${crypto.randomBytes(6).toString("base64url")}`;
 }
 
+type DiscordSelectMenuByType = {
+  string: StringSelectMenu;
+  user: UserSelectMenu;
+  role: RoleSelectMenu;
+  mentionable: MentionableSelectMenu;
+  channel: ChannelSelectMenu;
+};
+type DiscordSelectMenu = DiscordSelectMenuByType[DiscordComponentSelectType];
+
+const selectMenuConstructors = {
+  string: class extends StringSelectMenu {
+    customId = "";
+    override options: NonNullable<DiscordComponentSelectSpec["options"]> = [];
+  },
+  user: class extends UserSelectMenu {
+    customId = "";
+  },
+  role: class extends RoleSelectMenu {
+    customId = "";
+  },
+  mentionable: class extends MentionableSelectMenu {
+    customId = "";
+  },
+  channel: class extends ChannelSelectMenu {
+    customId = "";
+  },
+} satisfies {
+  [Type in DiscordComponentSelectType]: new () => DiscordSelectMenuByType[Type];
+};
+
+export function createDiscordSelectMenu<Type extends DiscordComponentSelectType>(
+  type: Type,
+  customId: string,
+  options?: DiscordComponentSelectSpec["options"],
+): DiscordSelectMenuByType[Type] {
+  // SAFETY: the constructor map satisfies the same Type-to-select-class relationship.
+  const SelectMenu = selectMenuConstructors[type] as new () => DiscordSelectMenuByType[Type];
+  const select = new SelectMenu();
+  select.customId = customId;
+  if (select instanceof StringSelectMenu) {
+    select.options = options ?? [];
+  }
+  return select;
+}
+
 function buildTextDisplays(text?: string, texts?: string[]): TextDisplay[] {
   if (texts && texts.length > 0) {
     return texts.map((entry) => new TextDisplay(entry));
@@ -109,12 +154,7 @@ function createSelectComponent(params: {
   spec: DiscordComponentSelectSpec;
   componentId?: string;
 }): {
-  component:
-    | StringSelectMenu
-    | UserSelectMenu
-    | RoleSelectMenu
-    | MentionableSelectMenu
-    | ChannelSelectMenu;
+  component: DiscordSelectMenu;
   entry: DiscordComponentEntry;
 } {
   const type = normalizeLowercaseStringOrEmpty(
@@ -122,105 +162,42 @@ function createSelectComponent(params: {
   ) as DiscordComponentSelectType;
   const componentId = params.componentId ?? createShortId("sel_");
   const customId = buildDiscordComponentCustomIdImpl({ componentId });
-  const createEntry = (
-    selectType: DiscordComponentSelectType,
-    label: string,
-    options?: DiscordComponentEntry["options"],
-  ): DiscordComponentEntry => ({
-    id: componentId,
-    kind: "select",
-    label,
-    ...(params.spec.callbackData !== undefined ? { callbackData: params.spec.callbackData } : {}),
-    ...(params.spec.callbackDataKind !== undefined
-      ? { callbackDataKind: params.spec.callbackDataKind }
-      : {}),
-    selectType,
-    ...(options ? { options } : {}),
-    ...(params.spec.allowedUsers !== undefined ? { allowedUsers: params.spec.allowedUsers } : {}),
-  });
-
-  if (type === "string") {
-    const options = params.spec.options ?? [];
-    if (options.length === 0) {
-      throw new Error("String select menus require options");
-    }
-    class DynamicStringSelect extends StringSelectMenu {
-      customId = customId;
-      override options = options;
-      override minValues = params.spec.minValues;
-      override maxValues = params.spec.maxValues;
-      override placeholder = params.spec.placeholder;
-      override disabled = false;
-    }
-    return {
-      component: new DynamicStringSelect(),
-      entry: createEntry(
-        "string",
-        params.spec.placeholder ?? "select",
-        options.map((option) => ({ value: option.value, label: option.label })),
-      ),
-    };
+  const options = params.spec.options ?? [];
+  if (type === "string" && options.length === 0) {
+    throw new Error("String select menus require options");
   }
-  if (type === "user") {
-    class DynamicUserSelect extends UserSelectMenu {
-      customId = customId;
-      override minValues = params.spec.minValues;
-      override maxValues = params.spec.maxValues;
-      override placeholder = params.spec.placeholder;
-      override disabled = false;
-    }
-    return {
-      component: new DynamicUserSelect(),
-      entry: createEntry("user", params.spec.placeholder ?? "user select"),
-    };
-  }
-  if (type === "role") {
-    class DynamicRoleSelect extends RoleSelectMenu {
-      customId = customId;
-      override minValues = params.spec.minValues;
-      override maxValues = params.spec.maxValues;
-      override placeholder = params.spec.placeholder;
-      override disabled = false;
-    }
-    return {
-      component: new DynamicRoleSelect(),
-      entry: createEntry("role", params.spec.placeholder ?? "role select"),
-    };
-  }
-  if (type === "mentionable") {
-    class DynamicMentionableSelect extends MentionableSelectMenu {
-      customId = customId;
-      override minValues = params.spec.minValues;
-      override maxValues = params.spec.maxValues;
-      override placeholder = params.spec.placeholder;
-      override disabled = false;
-    }
-    return {
-      component: new DynamicMentionableSelect(),
-      entry: createEntry("mentionable", params.spec.placeholder ?? "mentionable select"),
-    };
-  }
-  class DynamicChannelSelect extends ChannelSelectMenu {
-    customId = customId;
-    override minValues = params.spec.minValues;
-    override maxValues = params.spec.maxValues;
-    override placeholder = params.spec.placeholder;
-    override disabled = false;
-  }
+  const select = createDiscordSelectMenu(type, customId, options);
+  select.minValues = params.spec.minValues;
+  select.maxValues = params.spec.maxValues;
+  select.placeholder = params.spec.placeholder;
+  select.disabled = false;
+  const labels: Record<DiscordComponentSelectType, string> = {
+    string: "select",
+    user: "user select",
+    role: "role select",
+    mentionable: "mentionable select",
+    channel: "channel select",
+  };
   return {
-    component: new DynamicChannelSelect(),
-    entry: createEntry("channel", params.spec.placeholder ?? "channel select"),
+    component: select,
+    entry: {
+      id: componentId,
+      kind: "select",
+      label: params.spec.placeholder ?? labels[type],
+      ...(params.spec.callbackData !== undefined ? { callbackData: params.spec.callbackData } : {}),
+      ...(params.spec.callbackDataKind !== undefined
+        ? { callbackDataKind: params.spec.callbackDataKind }
+        : {}),
+      selectType: type,
+      ...(type === "string"
+        ? { options: options.map((option) => ({ value: option.value, label: option.label })) }
+        : {}),
+      ...(params.spec.allowedUsers !== undefined ? { allowedUsers: params.spec.allowedUsers } : {}),
+    },
   };
 }
 
-function isSelectComponent(
-  component: unknown,
-): component is
-  | StringSelectMenu
-  | UserSelectMenu
-  | RoleSelectMenu
-  | MentionableSelectMenu
-  | ChannelSelectMenu {
+function isSelectComponent(component: unknown): component is DiscordSelectMenu {
   return (
     component instanceof StringSelectMenu ||
     component instanceof UserSelectMenu ||

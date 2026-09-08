@@ -666,6 +666,7 @@ struct OnboardingView: View {
     @State var cliInstallLocation: String?
     @State var showAdvancedConnection = false
     @State var showRemoteChoices = false
+    @State var showBrowserGateway = false
     @State var preferredGatewayID: String?
     @State var remoteProbeState: RemoteOnboardingProbeState = .idle
     @State var remoteProbeAttemptID: UUID?

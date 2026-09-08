@@ -55,9 +55,7 @@ describe("normalizeInitialApplicationLocation", () => {
     let runtime: ReturnType<typeof bootstrapApplication> | undefined;
 
     try {
-      runtime = bootstrapApplication({
-        sessionPathBuilderReady: new Promise<void>(() => {}),
-      });
+      runtime = bootstrapApplication();
       expect(runtime.context.navigation.snapshot.navCollapsed).toBe(testCase.navCollapsed);
       expect(`${window.location.pathname}${window.location.search}${window.location.hash}`).toBe(
         testCase.expectedUrl,
@@ -76,9 +74,7 @@ describe("normalizeInitialApplicationLocation", () => {
     let runtime: ReturnType<typeof bootstrapApplication> | undefined;
 
     try {
-      runtime = bootstrapApplication({
-        sessionPathBuilderReady: new Promise<void>(() => {}),
-      });
+      runtime = bootstrapApplication();
       expect(runtime.context.navigation.snapshot.navCollapsed).toBe(false);
     } finally {
       runtime?.stop();
@@ -93,9 +89,7 @@ describe("normalizeInitialApplicationLocation", () => {
     const onPersistedSettingsChanged = vi.fn();
 
     try {
-      runtime = bootstrapApplication({
-        sessionPathBuilderReady: new Promise<void>(() => {}),
-      });
+      runtime = bootstrapApplication();
       setSettingsChangeListener(onPersistedSettingsChanged);
 
       runtime.context.navigation.update({ navCollapsed: true });

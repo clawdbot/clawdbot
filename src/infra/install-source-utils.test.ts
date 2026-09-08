@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { npmCommandFailureCases } from "../test-utils/npm-spec-install-test-helpers.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   packNpmSpecToArchive,
@@ -130,6 +131,40 @@ beforeEach(() => {
 
 afterEach(async () => {
   await tempDirs.cleanup();
+});
+
+describe.each([
+  {
+    owner: "registry metadata",
+    prefix: "npm view failed: ",
+    category: "metadata-env",
+    run: async () => await resolveNpmSpecMetadata({ spec: "example-plugin@1.0.0" }),
+  },
+  {
+    owner: "registry archive packing",
+    prefix: "npm pack failed: ",
+    category: undefined,
+    run: async () => await runPack("example-plugin@1.0.0", await createFixtureDir()),
+  },
+  {
+    owner: "local archive metadata",
+    prefix: "npm pack metadata read failed: ",
+    category: undefined,
+    run: async () => {
+      const { filePath } = await createFixtureFile({ fileName: "plugin.tgz", contents: "fixture" });
+      return await resolveNpmPackArchiveMetadata({ archivePath: filePath });
+    },
+  },
+])("npm failure diagnostics: $owner", ({ prefix, category, run }) => {
+  it.each(npmCommandFailureCases)("preserves $label", async ({ npmResult, expectedDetail }) => {
+    runCommandWithTimeoutMock.mockResolvedValue(npmResult);
+
+    await expect(run()).resolves.toEqual({
+      ok: false,
+      error: `${prefix}${expectedDetail}`,
+      ...(category ? { category } : {}),
+    });
+  });
 });
 
 describe("withInstallWorkspace", () => {
@@ -398,7 +433,15 @@ describe("packNpmSpecToArchive", () => {
       },
     });
     expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
-      ["npm", "pack", "openclaw-plugin@1.2.3", "--ignore-scripts", "--json"],
+      [
+        "npm",
+        "pack",
+        "openclaw-plugin@1.2.3",
+        "--ignore-scripts",
+        "--json",
+        "--dry-run=false",
+        `--pack-destination=${cwd}`,
+      ],
       {
         cwd,
         timeoutMs: 300_000,
@@ -450,7 +493,7 @@ describe("packNpmSpecToArchive", () => {
     });
   });
 
-  it("falls back to parsing final stdout line when npm json output is unavailable", async () => {
+  it("uses the workspace archive when npm prints notices without JSON", async () => {
     const cwd = await createFixtureDir();
     const expectedArchivePath = path.join(cwd, "openclaw-plugin-1.2.3.tgz");
     await fs.writeFile(expectedArchivePath, "", "utf-8");

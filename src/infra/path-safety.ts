@@ -5,6 +5,7 @@ import "./fs-safe-defaults.js";
 export {
   isPathInside,
   isPathInsideWithRealpath,
+  isPathRelativeEscape,
   isWithinDir,
   safeRealpathSync,
   safeStatSync,

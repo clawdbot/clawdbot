@@ -127,10 +127,21 @@ async function runSlackMessageScenario(params: {
     });
     const responseObservedAt = new Date(reply.observedAt);
     const rttMs = responseObservedAt.getTime() - requestStartedAt.getTime();
+    const requestStartedAtIso = requestStartedAt.toISOString();
+    const responseObservedAtIso = responseObservedAt.toISOString();
     return {
       details: [`reply matched in ${rttMs}ms`, beforeRunDetails, observedDetails, afterReplyDetails]
         .filter(Boolean)
         .join("; "),
+      requestStartedAt: requestStartedAtIso,
+      responseObservedAt: responseObservedAtIso,
+      rttMs,
+      rttMeasurement: {
+        finalMatchedReplyRttMs: rttMs,
+        requestStartedAt: requestStartedAtIso,
+        responseObservedAt: responseObservedAtIso,
+        source: "request-to-observed-message" as const,
+      },
     };
   } finally {
     await params.run.cleanup?.(scenarioContext);
@@ -184,6 +195,15 @@ export async function runSlackScenario(
     return {
       details: `${run.approvalKind} approval resolved ${run.decision} in ${approval.rttMs}ms`,
       artifacts: { approval: approval.artifact },
+      requestStartedAt: approval.requestStartedAt.toISOString(),
+      responseObservedAt: approval.responseObservedAt.toISOString(),
+      rttMs: approval.rttMs,
+      rttMeasurement: {
+        finalMatchedReplyRttMs: approval.rttMs,
+        requestStartedAt: approval.requestStartedAt.toISOString(),
+        responseObservedAt: approval.responseObservedAt.toISOString(),
+        source: "approval-request-to-resolution" as const,
+      },
     };
   }
   if (run.kind === "codex-approval") {
@@ -200,6 +220,15 @@ export async function runSlackScenario(
     return {
       details: `Codex ${run.appServerMethod} approval resolved ${run.decision} in ${approval.rttMs}ms`,
       artifacts: { approval: approval.artifact },
+      requestStartedAt: approval.requestStartedAt.toISOString(),
+      responseObservedAt: approval.responseObservedAt.toISOString(),
+      rttMs: approval.rttMs,
+      rttMeasurement: {
+        finalMatchedReplyRttMs: approval.rttMs,
+        requestStartedAt: approval.requestStartedAt.toISOString(),
+        responseObservedAt: approval.responseObservedAt.toISOString(),
+        source: "approval-request-to-resolution" as const,
+      },
     };
   }
   return await runSlackMessageScenario({

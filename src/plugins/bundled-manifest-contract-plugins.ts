@@ -72,6 +72,7 @@ export function resolveEnabledBundledManifestContractPlugins(params: {
     return resolveEffectivePluginActivationState({
       id: plugin.id,
       origin: plugin.origin,
+      channelIds: plugin.channels,
       config: activation.normalized,
       rootConfig: activation.config,
       enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),

@@ -1,4 +1,6 @@
 // Discord plugin module implements send.emojis stickers behavior.
+import type { RESTGetAPIGuildEmojisResult } from "discord-api-types/v10";
+import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
 import {
   normalizeOptionalLowercaseString,
   normalizeStringEntries,
@@ -6,17 +8,38 @@ import {
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { createGuildEmoji, createGuildSticker, listGuildEmojis } from "./internal/discord.js";
 import { normalizeEmojiName, resolveDiscordRest } from "./send.shared.js";
-import type { DiscordEmojiUpload, DiscordReactOpts, DiscordStickerUpload } from "./send.types.js";
+import type {
+  DiscordAssetUploadOpts,
+  DiscordEmojiUpload,
+  DiscordReactOpts,
+  DiscordStickerUpload,
+} from "./send.types.js";
 import { DISCORD_MAX_EMOJI_BYTES, DISCORD_MAX_STICKER_BYTES } from "./send.types.js";
 
-export async function listGuildEmojisDiscord(guildId: string, opts: DiscordReactOpts) {
+export async function listGuildEmojisDiscord(
+  guildId: string,
+  opts: DiscordReactOpts,
+): Promise<RESTGetAPIGuildEmojisResult> {
   const rest = resolveDiscordRest(opts);
   return await listGuildEmojis(rest, guildId);
 }
 
-export async function uploadEmojiDiscord(payload: DiscordEmojiUpload, opts: DiscordReactOpts) {
+export async function uploadEmojiDiscord(
+  payload: DiscordEmojiUpload,
+  opts: DiscordAssetUploadOpts,
+) {
   const rest = resolveDiscordRest(opts);
-  const media = await loadWebMediaRaw(payload.mediaUrl, DISCORD_MAX_EMOJI_BYTES);
+  // Security: the sender-scoped read policy must reach the loader, or a permitted sender could
+  // upload host-local bytes from outside their allowed media roots.
+  const media = await loadWebMediaRaw(
+    payload.mediaUrl,
+    buildOutboundMediaLoadOptions({
+      maxBytes: DISCORD_MAX_EMOJI_BYTES,
+      mediaAccess: opts.mediaAccess,
+      mediaLocalRoots: opts.mediaLocalRoots,
+      mediaReadFile: opts.mediaReadFile,
+    }),
+  );
   const contentType = normalizeOptionalLowercaseString(media.contentType);
   if (
     !contentType ||
@@ -35,9 +58,21 @@ export async function uploadEmojiDiscord(payload: DiscordEmojiUpload, opts: Disc
   });
 }
 
-export async function uploadStickerDiscord(payload: DiscordStickerUpload, opts: DiscordReactOpts) {
+export async function uploadStickerDiscord(
+  payload: DiscordStickerUpload,
+  opts: DiscordAssetUploadOpts,
+) {
   const rest = resolveDiscordRest(opts);
-  const media = await loadWebMediaRaw(payload.mediaUrl, DISCORD_MAX_STICKER_BYTES);
+  // Security: same sender-scoped media boundary as emoji uploads.
+  const media = await loadWebMediaRaw(
+    payload.mediaUrl,
+    buildOutboundMediaLoadOptions({
+      maxBytes: DISCORD_MAX_STICKER_BYTES,
+      mediaAccess: opts.mediaAccess,
+      mediaLocalRoots: opts.mediaLocalRoots,
+      mediaReadFile: opts.mediaReadFile,
+    }),
+  );
   const contentType = normalizeOptionalLowercaseString(media.contentType);
   if (!contentType || !["image/png", "image/apng", "application/json"].includes(contentType)) {
     throw new Error("Discord sticker uploads require a PNG, APNG, or Lottie JSON file");

@@ -1,52 +1,89 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  appendTranscriptEventSync,
-  appendTranscriptMessageSync,
   ensureSessionEntrySync,
   type TranscriptEntryAnchor,
 } from "../../config/sessions/session-accessor.js";
+import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
+import {
+  appendTranscriptEventSnapshotSync,
+  appendTranscriptMessageSnapshotSync,
+  replaceTranscriptEventsSnapshotSync,
+} from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import {
   getOwnedSessionTranscriptInitialWriter,
+  getOwnedSessionTranscriptWriterFence,
   SessionTranscriptWriterClaimReboundError,
   type InitialSessionTranscriptWriter,
 } from "../../config/sessions/transcript-write-context.js";
 import { copyCodeModeSourceAppendOptions } from "../transcript-code-mode-source.js";
 import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
 import { SessionManagerCore } from "./session-manager-core.js";
-import type { AppendPersistenceOptions, SessionEntry } from "./session-manager-types.js";
+import type { AppendPersistenceOptions, FileEntry, SessionEntry } from "./session-manager-types.js";
 
 type PersistRecordResult =
-  | string
-  | null
   | undefined
   | {
       anchor?: TranscriptEntryAnchor;
+      appended: boolean;
       adoptedMessageId?: string;
       effectiveParentId: string | null;
     };
 
-function requireTranscriptEventAppend(
-  result: ReturnType<typeof appendTranscriptEventSync>,
-  message: string,
-): void {
-  if (result.ok && result.value) {
-    return;
-  }
-  const cause = result.ok ? { code: "transcript-event-not-appended" as const } : result.error;
-  throw new Error(`${message}: ${cause.code}`, { cause });
-}
-
 export class SessionManagerPersistence extends SessionManagerCore {
   #initialWriter: InitialSessionTranscriptWriter | undefined;
+
+  protected retainTranscriptWriter(): void {
+    const sessionTarget = this.persistenceTarget;
+    if (sessionTarget && getOwnedSessionTranscriptWriterFence({ sessionTarget })) {
+      this.#initialWriter ??= getOwnedSessionTranscriptInitialWriter({ sessionTarget });
+    }
+  }
+
+  private recordTranscriptWrite(snapshot: {
+    before: SessionTranscriptContextVersion;
+    after: SessionTranscriptContextVersion;
+  }): void {
+    const current = this.transcriptVersion;
+    // Never certify stale memory with a version observed only after someone else wrote.
+    this.transcriptVersion =
+      current &&
+      current.generation === snapshot.before.generation &&
+      current.rawSeq === snapshot.before.rawSeq
+        ? snapshot.after
+        : undefined;
+  }
+
+  private requireTranscriptEventAppend(
+    result: ReturnType<typeof appendTranscriptEventSnapshotSync>,
+    message: string,
+  ): void {
+    if (result.ok && result.value.result) {
+      this.recordTranscriptWrite(result.value);
+      return;
+    }
+    const cause = result.ok ? { code: "transcript-event-not-appended" as const } : result.error;
+    throw new Error(`${message}: ${cause.code}`, { cause });
+  }
 
   removeTrailingEntries(
     predicate: (entry: SessionEntry) => boolean,
     options?: { preserveTrailing?: (entry: SessionEntry) => boolean },
   ): number {
-    this.ensureCompletePersistedHistory();
-    let preservedStart = this.fileEntries.length;
+    this.assertTranscriptWriteActive();
+    // Recovery can fail after SQLite rolls back. Prepare even bounded hydration on
+    // a detached tree so readers and retries keep the last committed live state.
+    const prepared = new SessionManagerPersistence(
+      this.cwd,
+      this.persistenceTarget,
+      this.fileEntries,
+    );
+    prepared.transcriptVersion = this.transcriptVersion;
+    prepared.opaqueFileEntries = this.opaqueFileEntries.map((entry) => ({ ...entry }));
+    prepared.boundedContextIncomplete = this.boundedContextIncomplete;
+    prepared.ensureCompletePersistedHistory();
+    let preservedStart = prepared.fileEntries.length;
     while (preservedStart > 1) {
-      const entry = this.fileEntries[preservedStart - 1];
+      const entry = prepared.fileEntries[preservedStart - 1];
       if (!isIndexedSessionEntry(entry) || !options?.preserveTrailing?.(entry)) {
         break;
       }
@@ -55,7 +92,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
 
     let removeStart = preservedStart;
     while (removeStart > 1) {
-      const entry = this.fileEntries[removeStart - 1];
+      const entry = prepared.fileEntries[removeStart - 1];
       if (!isIndexedSessionEntry(entry) || !predicate(entry)) {
         break;
       }
@@ -66,19 +103,19 @@ export class SessionManagerPersistence extends SessionManagerCore {
     }
 
     const shiftOpaqueIndexesAfterRemoval = (start: number, count: number): void => {
-      for (const opaqueEntry of this.opaqueFileEntries) {
+      for (const opaqueEntry of prepared.opaqueFileEntries) {
         const removedBeforeOpaque = Math.max(0, Math.min(count, opaqueEntry.index - start));
         opaqueEntry.index -= removedBeforeOpaque;
       }
     };
     const removedCount = preservedStart - removeStart;
     shiftOpaqueIndexesAfterRemoval(removeStart, removedCount);
-    const removedEntries = this.fileEntries.splice(removeStart, removedCount) as SessionEntry[];
+    const removedEntries = prepared.fileEntries.splice(removeStart, removedCount) as SessionEntry[];
     const removedParentById = new Map(
       removedEntries.map((entry) => [entry.id, entry.parentId] as const),
     );
-    for (let index = removeStart; index < this.fileEntries.length;) {
-      const entry = this.fileEntries[index];
+    for (let index = removeStart; index < prepared.fileEntries.length;) {
+      const entry = prepared.fileEntries[index];
       if (
         isIndexedSessionEntry(entry) &&
         entry.type === "label" &&
@@ -86,7 +123,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
       ) {
         removedParentById.set(entry.id, entry.parentId);
         shiftOpaqueIndexesAfterRemoval(index, 1);
-        this.fileEntries.splice(index, 1);
+        prepared.fileEntries.splice(index, 1);
         continue;
       }
       index += 1;
@@ -102,14 +139,14 @@ export class SessionManagerPersistence extends SessionManagerCore {
       return currentId;
     };
     const replacementParentId = resolveRetainedParentId(removedEntries[0]?.parentId ?? null);
-    this.fileEntries = this.fileEntries.map((entry) => {
+    prepared.fileEntries = prepared.fileEntries.map((entry) => {
       if (!isIndexedSessionEntry(entry)) {
         return entry;
       }
       const parentId = resolveRetainedParentId(entry.parentId);
       return parentId === entry.parentId ? entry : ({ ...entry, parentId } as SessionEntry);
     });
-    this.opaqueFileEntries = this.opaqueFileEntries.map((opaqueEntry) => {
+    prepared.opaqueFileEntries = prepared.opaqueFileEntries.map((opaqueEntry) => {
       if (!isRecord(opaqueEntry.record)) {
         return opaqueEntry;
       }
@@ -142,11 +179,32 @@ export class SessionManagerPersistence extends SessionManagerCore {
       };
     });
 
-    this.clampOpaqueFileEntryIndexes();
-    this.buildIndex();
-    this.leafId = this.resolveCanonicalParentId(replacementParentId);
-    this.appendParentId = replacementParentId;
-    this.replacePersistedTranscript();
+    prepared.clampOpaqueFileEntryIndexes();
+    prepared.buildIndex();
+    prepared.leafId = prepared.resolveCanonicalParentId(replacementParentId);
+    prepared.appendParentId = replacementParentId;
+    const events = prepared.getPersistedFileEntries(prepared.appendParentId, prepared.appendMode);
+    let version: SessionTranscriptContextVersion | undefined;
+    if (this.persistenceTarget) {
+      if (!prepared.transcriptVersion) {
+        throw new Error("Session transcript changed; reload it before replacing history");
+      }
+      const written = replaceTranscriptEventsSnapshotSync(
+        this.persistenceTarget,
+        events,
+        prepared.transcriptVersion,
+        () => this.assertTranscriptWriteActive(),
+      );
+      if (!written) {
+        throw new Error("Session transcript replacement was not persisted");
+      }
+      version = written.after;
+    }
+    // SAFETY: The reload codec partitions opaque records from canonical entries.
+    const loaded = events as FileEntry[];
+    this.setLoadedSessionTarget(this.persistenceTarget, loaded, undefined, version);
+    this.boundedContextIncomplete = false;
+    this.persistedBoundaryCount = undefined;
     return removedEntries.length;
   }
 
@@ -161,12 +219,9 @@ export class SessionManagerPersistence extends SessionManagerCore {
     return this.persistRecord(entry, options);
   }
 
-  private persistSqliteRecord(
-    entry: unknown,
-    options?: AppendPersistenceOptions,
-  ): PersistRecordResult {
+  protected assertTranscriptWriteActive(): void {
     if (!this.persistenceTarget) {
-      return undefined;
+      return;
     }
     const scope = this.persistenceTarget;
     const inheritedWriter = getOwnedSessionTranscriptInitialWriter({ sessionTarget: scope });
@@ -186,6 +241,18 @@ export class SessionManagerPersistence extends SessionManagerCore {
         },
       );
     }
+  }
+
+  private persistSqliteRecord(
+    entry: unknown,
+    options?: AppendPersistenceOptions,
+  ): PersistRecordResult {
+    if (!this.persistenceTarget) {
+      return undefined;
+    }
+    this.assertTranscriptWriteActive();
+    const scope = this.persistenceTarget;
+    const initialWriter = this.#initialWriter;
     if (this.persistenceHeaderPending || (initialWriter && !initialWriter.committedFence)) {
       if (
         !ensureSessionEntrySync(scope, {
@@ -205,16 +272,16 @@ export class SessionManagerPersistence extends SessionManagerCore {
       if (!header || header.type !== "session") {
         throw new Error("Session transcript header was not persisted");
       }
-      requireTranscriptEventAppend(
-        appendTranscriptEventSync(scope, header),
+      this.requireTranscriptEventAppend(
+        appendTranscriptEventSnapshotSync(scope, header),
         "Session transcript header was not persisted",
       );
       this.persistenceHeaderPending = false;
     }
     const leafEntry = parseOpaqueLeafEntry(entry);
     if (leafEntry) {
-      requireTranscriptEventAppend(
-        appendTranscriptEventSync(scope, entry),
+      this.requireTranscriptEventAppend(
+        appendTranscriptEventSnapshotSync(scope, entry),
         `Session transcript leaf control was not persisted: ${leafEntry.id}`,
       );
       return undefined;
@@ -223,8 +290,8 @@ export class SessionManagerPersistence extends SessionManagerCore {
       return undefined;
     }
     if (entry.type !== "message") {
-      requireTranscriptEventAppend(
-        appendTranscriptEventSync(
+      this.requireTranscriptEventAppend(
+        appendTranscriptEventSnapshotSync(
           scope,
           entry,
           options?.appendIntent === "active-branch"
@@ -244,17 +311,21 @@ export class SessionManagerPersistence extends SessionManagerCore {
       now: Date.parse(entry.timestamp),
       parentId: entry.parentId,
       ...(options?.appendIntent === "active-branch" ? { appendIntent: options.appendIntent } : {}),
-    } satisfies Parameters<typeof appendTranscriptMessageSync>[1]);
-    const outcome = appendTranscriptMessageSync(scope, appendOptions);
+    } satisfies Parameters<typeof appendTranscriptMessageSnapshotSync>[1]);
+    const outcome = appendTranscriptMessageSnapshotSync(scope, appendOptions);
     if (!outcome.ok) {
       throw new Error(`Session transcript message was not persisted: ${entry.id}`, {
         cause: outcome.error,
       });
     }
-    const result = outcome.value;
+    const snapshot = outcome.value;
+    const result = snapshot.result;
     if (!result) {
       throw new Error(`Session transcript message was not persisted: ${entry.id}`);
     }
+    this.recordTranscriptWrite(snapshot);
+    // Carry the canonical storage bytes even when adopting a context-excluded row.
+    entry.message = result.message;
     if (result.messageId !== entry.id) {
       const idempotencyKey =
         entry.message.role === "user" &&
@@ -272,6 +343,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
         return {
           adoptedMessageId: result.messageId,
           anchor: result.anchor,
+          appended: result.appended,
           effectiveParentId: result.effectiveParentId ?? null,
         };
       }
@@ -286,11 +358,9 @@ export class SessionManagerPersistence extends SessionManagerCore {
     if (result.effectiveParentId === undefined) {
       throw new Error(`Session transcript append parent was not returned: ${entry.id}`);
     }
-    // appendEntry owns this JSON copy. Cache the final storage projection: a
-    // second credential mask can differ from the guard's diagnostic hint.
-    entry.message = result.message;
     return {
       ...(result.anchor ? { anchor: result.anchor } : {}),
+      appended: result.appended,
       effectiveParentId: result.effectiveParentId,
     };
   }

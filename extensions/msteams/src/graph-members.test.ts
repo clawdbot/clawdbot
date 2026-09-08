@@ -2,14 +2,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { getMemberInfoMSTeams } from "./graph-members.js";
+import { createGraphPageGuard } from "./graph-pagination.test-support.js";
 
 const mockState = vi.hoisted(() => ({
   resolveGraphToken: vi.fn(),
   fetchGraphJson: vi.fn(),
+  fetchWithSsrFGuard: vi.fn(),
 }));
 
-vi.mock("./graph.js", () => {
+vi.mock("../runtime-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime-api.js")>();
+  return { ...actual, fetchWithSsrFGuard: mockState.fetchWithSsrFGuard };
+});
+
+vi.mock("./graph.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./graph.js")>();
   return {
+    ...actual,
     resolveGraphToken: mockState.resolveGraphToken,
     fetchGraphJson: mockState.fetchGraphJson,
   };
@@ -21,6 +30,7 @@ describe("getMemberInfoMSTeams", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockState.resolveGraphToken.mockResolvedValue(TOKEN);
+    mockState.fetchWithSsrFGuard.mockImplementation(createGraphPageGuard(mockState.fetchGraphJson));
   });
 
   it("returns verified standard-channel roster fields", async () => {
@@ -152,6 +162,47 @@ describe("getMemberInfoMSTeams", () => {
       path: "/teams/team-1/members",
     });
     expect(mockState.fetchGraphJson).toHaveBeenCalledTimes(2);
+  });
+
+  it("accepts a normalized match on the final allowed team page", async () => {
+    let page = 0;
+    mockState.fetchGraphJson.mockImplementation(async () => {
+      page += 1;
+      if (page === 1) {
+        return { membershipType: "standard" };
+      }
+      return {
+        value: page === 101 ? [{ userId: "aad-final", email: " Alice@Contoso.com " }] : [],
+        "@odata.nextLink": "https://graph.microsoft.com/v1.0/teams/team-1/members?$skip=next",
+      };
+    });
+
+    await expect(
+      getMemberInfoMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: "team-1/channel-1",
+        userId: "teams:Alice@Contoso.com ",
+      }),
+    ).resolves.toMatchObject({ user: { id: "aad-final" } });
+    expect(mockState.fetchGraphJson).toHaveBeenCalledTimes(101);
+  });
+
+  it("preserves the exact team pagination-limit failure", async () => {
+    mockState.fetchGraphJson
+      .mockResolvedValueOnce({ membershipType: "standard" })
+      .mockResolvedValue({
+        value: [],
+        "@odata.nextLink": "https://graph.microsoft.com/v1.0/teams/team-1/members?$skip=next",
+      });
+
+    await expect(
+      getMemberInfoMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: "team-1/channel-1",
+        userId: "missing",
+      }),
+    ).rejects.toThrow("Microsoft Teams team member pagination limit exceeded");
+    expect(mockState.fetchGraphJson).toHaveBeenCalledTimes(101);
   });
 
   it("propagates Graph API errors", async () => {

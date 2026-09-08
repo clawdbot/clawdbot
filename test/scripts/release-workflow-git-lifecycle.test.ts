@@ -23,9 +23,9 @@ const releases: Record<
     workflow: {
       file: ".github/workflows/linux-app-release.yml",
       job: "validate_release",
-      step: "Ensure tag commit is reachable from main",
+      step: "Ensure tag commit is reachable from its release branch",
     },
-    env: { RELEASE_TAG: releaseTag },
+    env: { RELEASE_TAG: releaseTag, WORKFLOW_SHA: otherSha },
     revisions: { [`refs/tags/${releaseTag}^{commit}`]: sha },
   },
   macos: {
@@ -66,11 +66,35 @@ function gitCommands(report: Awaited<ReturnType<typeof releaseRun>>) {
   return report.commands.filter(({ tool }) => tool === "git").map(({ args }) => args);
 }
 
+posixIt.each([releaseTag, `${releaseTag}-2`])(
+  "Linux admits a stable tag from its matching release branch: %s",
+  async (tag) => {
+    const report = await releaseRun("linux", {
+      env: { RELEASE_TAG: tag },
+      revisions: { [`refs/tags/${tag}^{commit}`]: sha },
+      commandResults: {
+        [`merge-base --is-ancestor ${sha} origin/main`]: { code: 1 },
+        [`merge-base --is-ancestor ${sha} refs/remotes/origin/release/2026.8.1`]: { code: 0 },
+      },
+    });
+    expect(report.code, report.output).toBe(0);
+    expect(report.githubOutput).toBe(`tag_sha=${sha}\n`);
+    expect(gitCommands(report)).toContainEqual([
+      "fetch",
+      "--no-tags",
+      "origin",
+      "+refs/heads/release/2026.8.1:refs/remotes/origin/release/2026.8.1",
+    ]);
+  },
+  55_000,
+);
+
 posixIt.each([
   {
     mode: "linux" as const,
     commands: [
-      ["fetch", "--quiet", "origin", "main"],
+      ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"],
+      ["merge-base", "--is-ancestor", otherSha, "origin/main"],
       ["rev-parse", `refs/tags/${releaseTag}^{commit}`],
       ["merge-base", "--is-ancestor", sha, "origin/main"],
     ],
@@ -205,16 +229,62 @@ posixIt.each(
   55_000,
 );
 
-posixIt.each([1, 23, 124, 125, 143])(
-  "Linux ordinary merge-base status %s retains the release rejection",
+posixIt.each([23, 124, 125, 143])(
+  "Linux ordinary merge-base status %s is terminal without trying another branch",
   async (code) => {
     const report = await releaseRun("linux", {
       gitFault: { match: "^merge-base ", code },
     });
+    expect(report.code, report.output).toBe(code);
+    expect(gitCommands(report).at(-1)?.[0]).toBe("merge-base");
+    expect(report.githubOutput).toBe("");
+  },
+  55_000,
+);
+
+posixIt(
+  "Linux rejects a tag outside main and its matching release branch",
+  async () => {
+    const report = await releaseRun("linux", {
+      commandResults: {
+        [`merge-base --is-ancestor ${sha} origin/main`]: { code: 1 },
+        [`merge-base --is-ancestor ${sha} refs/remotes/origin/release/2026.8.1`]: { code: 1 },
+      },
+    });
     expect(report.code, report.output).toBe(1);
     expect(report.output).toContain(
-      `Tag ${releaseTag} (${sha}) is not reachable from main; Linux bundles ship for main-based releases only.`,
+      `Tag ${releaseTag} (${sha}) is not reachable from main or release/2026.8.1.`,
     );
+    expect(report.githubOutput).toBe("");
+  },
+  55_000,
+);
+
+posixIt(
+  "Linux rejects tooling outside main before inspecting the candidate",
+  async () => {
+    const report = await releaseRun("linux", {
+      commandResults: { [`merge-base --is-ancestor ${otherSha} origin/main`]: { code: 1 } },
+    });
+    expect(report.code, report.output).toBe(1);
+    expect(report.output).toContain("Linux release tooling must be reachable from current main.");
+    expect(gitCommands(report).some(([operation]) => operation === "rev-parse")).toBe(false);
+    expect(report.githubOutput).toBe("");
+  },
+  55_000,
+);
+
+posixIt.each([128, "cleanup-failure", "cancel"] as const)(
+  "Linux matching release branch fetch failure %s cannot admit a stale ref",
+  async (failure) => {
+    const report = await releaseRun("linux", {
+      commandResults: { [`merge-base --is-ancestor ${sha} origin/main`]: { code: 1 } },
+      gitFault: { match: "^fetch ", occurrence: 2, code: failure },
+    });
+    expect(report.code, report.output).toBe(
+      failure === "cancel" ? 143 : failure === "cleanup-failure" ? 125 : failure,
+    );
+    expect(gitCommands(report).at(-1)?.[0]).toBe("fetch");
     expect(report.githubOutput).toBe("");
   },
   55_000,

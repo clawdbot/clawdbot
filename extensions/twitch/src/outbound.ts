@@ -8,6 +8,7 @@
 import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import { getClientManager } from "./client-manager-registry.js";
 import { resolveTwitchAccountContext } from "./config.js";
 import { TWITCH_CHAT_MESSAGE_LIMIT } from "./constants.js";
 import { sendMessageTwitchInternal } from "./send.js";
@@ -101,7 +102,7 @@ export const twitchOutbound: ChannelOutboundAdapter = {
   /**
    * Send a text message to a Twitch channel.
    *
-   * Strips markdown if enabled, validates account configuration,
+   * Strips Markdown, validates account configuration,
    * and sends the message via the Twitch client.
    *
    * @param params - Send parameters including target, text, and config
@@ -124,7 +125,12 @@ export const twitchOutbound: ChannelOutboundAdapter = {
     }
 
     const resolvedAccountId = accountId ?? resolveTwitchAccountContext(cfg).accountId;
-    const { account, availableAccountIds } = resolveTwitchAccountContext(cfg, resolvedAccountId);
+    const {
+      account,
+      accountId: normalizedAccountId,
+      availableAccountIds,
+      configured,
+    } = resolveTwitchAccountContext(cfg, resolvedAccountId);
     if (!account) {
       throw new Error(
         `Twitch account not found: ${resolvedAccountId}. ` +
@@ -137,18 +143,25 @@ export const twitchOutbound: ChannelOutboundAdapter = {
       throw new Error("No channel specified and no default channel in account config");
     }
 
-    const result = await sendMessageTwitchInternal(
-      normalizeTwitchChannel(channel),
+    if (!configured) {
+      throw new Error(
+        `Account ${normalizedAccountId} is not properly configured. ` +
+          "Required: username, clientId, and accessToken (config or env for default account).",
+      );
+    }
+    // A target that normalizes to empty still uses the account's default channel.
+    const deliveryChannel = normalizeTwitchChannel(channel) || account.channel;
+    if (!deliveryChannel) {
+      throw new Error("No channel specified and no default channel in account config");
+    }
+    const result = await sendMessageTwitchInternal({
+      channel: normalizeTwitchChannel(deliveryChannel),
       text,
       cfg,
-      resolvedAccountId,
-      true, // stripMarkdown
-      console,
-    );
-
-    if (!result.ok) {
-      throw new Error(result.error ?? "Send failed");
-    }
+      account,
+      accountId: normalizedAccountId,
+      clientManager: getClientManager(normalizedAccountId),
+    });
 
     return {
       channel: "twitch",

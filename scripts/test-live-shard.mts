@@ -30,6 +30,8 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
   ["src/agents/embedded-agent-runner.cache.live.test.ts", ["OPENCLAW_LIVE_CACHE_TEST"]],
   ["src/agents/live-cache-regression.live.test.ts", ["OPENCLAW_LIVE_CACHE_TEST"]],
   ["src/agents/provider-headers.live.test.ts", ["OPENCLAW_LIVE_CACHE_TEST"]],
+  // Frozen release candidates before the announce-family move retain this path.
+  ["src/agents/subagent-announce.live.test.ts", ["OPENCLAW_LIVE_SUBAGENT_E2E"]],
   [
     "src/agents/sessions/agent-session.openai-compaction.live.test.ts",
     ["OPENCLAW_LIVE_OPENAI_COMPACTION"],
@@ -59,7 +61,6 @@ const SKIPPED_ASSERTION_STATUSES = new Set(["disabled", "pending", "skipped", "t
 const QA_RUNTIME_LIVE_TEST = "extensions/qa-lab/src/matrix-channel-driver.lifecycle.live.test.ts";
 const QA_RUNTIME_ARTIFACT = "dist/extensions/qa-lab/runtime-api.js";
 const SOURCE_PERFORMANCE_ARTIFACT = `dist/${RUNTIME_POSTBUILD_STAMP_FILE}`;
-type ProcessSignal = `SIG${string}`;
 type LiveShardPreparation = {
   env: NodeJS.ProcessEnv;
   profile: string;
@@ -404,10 +405,11 @@ export function buildLiveShardPnpmArgs(files: string[], passthroughArgs: string[
  */
 export function resolveLiveShardPreparation(files: string[]): LiveShardPreparation | null {
   const gatewayProfiles = files.some(isGatewayProfilesLiveTest);
-  // Source gateways and vision requests load provider and agent runtime plugins.
-  // Compile them before Vitest so cold transforms do not consume live deadlines.
+  // Gateway/worker fixtures and vision requests load compiled runtime plugins.
+  // Build before Vitest; direct CLI launches cannot bootstrap a cold checkout.
   if (
     files.some(isSourceGatewayLiveTest) ||
+    files.some((file) => file.startsWith("test/e2e/qa-lab/runtime/")) ||
     files.includes("src/agents/tools/image-tool.providers.live.test.ts") ||
     files.includes("extensions/openai/openai.live.test.ts")
   ) {
@@ -838,19 +840,16 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     pnpmArgs: buildLiveShardPnpmArgs(files, addLiveShardReportArgs(passthroughArgs, reportPath)),
     ...spawnParams,
   });
-  let forwardedSignal: ProcessSignal | null = null;
-  const teardown = installVitestProcessGroupCleanup({
+  const cleanup = installVitestProcessGroupCleanup({
     child,
     forceSignal: "SIGKILL",
     forceSignalDelayMs: 100,
-    onSignal: (signal) => {
-      forwardedSignal ??= signal;
-    },
   });
   createVitestProcessCompletion({ child, detached: spawnParams.detached })
-    .finally(teardown)
+    .finally(cleanup.teardown)
     .then(
       ({ code, signal }) => {
+        const forwardedSignal = cleanup.getForwardedSignal();
         if (forwardedSignal) {
           process.kill(process.pid, forwardedSignal);
           return;

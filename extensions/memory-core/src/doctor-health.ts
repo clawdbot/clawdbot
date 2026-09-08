@@ -38,10 +38,14 @@ type MemoryCoreDoctorRegistrationState = Pick<
   "inspectEmbeddingProviderSetup" | "memoryCoreActive"
 >;
 
+type MemoryCoreDoctorCheck = HealthCheck & {
+  readonly defaultEnabled: false;
+};
+
 const registrationsByHost = new WeakMap<
   MemoryCoreDoctorRegistrationHost["registerHealthCheck"],
   {
-    readonly check: HealthCheck & { readonly defaultEnabled: false };
+    readonly check: MemoryCoreDoctorCheck;
     readonly state: MemoryCoreDoctorRegistrationState;
   }
 >();
@@ -64,7 +68,7 @@ function resolveSelectedMemoryProvider(
 
 function createManagedLocalEmbeddingSetupCheck(
   state: MemoryCoreDoctorRegistrationState,
-): HealthCheck & { readonly defaultEnabled: false } {
+): MemoryCoreDoctorCheck {
   return {
     id: MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID,
     kind: "plugin",

@@ -164,6 +164,16 @@ describe("branch summarization", () => {
     ]);
     const entries: SessionTreeEntry[] = [
       createMessageEntry({ role: "user", content: "inspect files", timestamp: 1 }, 0),
+      {
+        type: "custom_message",
+        id: "entry-1",
+        parentId: "entry-0",
+        timestamp: new Date(1).toISOString(),
+        customType: "openclaw.runtime-context",
+        content: "PRIVATE_RUNTIME_CONTEXT",
+        display: false,
+        details: { runtimeContextCarrier: true },
+      },
       createMessageEntry(
         createResponse(model, [
           { type: "thinking", thinking: "PRIVATE_BRANCH_REASONING" },
@@ -176,7 +186,7 @@ describe("branch summarization", () => {
             arguments: { path: "src/write.ts" },
           },
         ]),
-        1,
+        2,
       ),
     ];
 
@@ -212,6 +222,7 @@ src/write.ts
       '[Assistant tool calls]: read(path="src/read.ts"); write(path="src/write.ts")',
     );
     expect(capture.readCapture().prompt).not.toContain("PRIVATE_BRANCH_REASONING");
+    expect(capture.readCapture().prompt).not.toContain("PRIVATE_RUNTIME_CONTEXT");
   });
 
   it("retains failed tool results when preparing a branch", () => {

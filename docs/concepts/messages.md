@@ -54,6 +54,13 @@ Rapid consecutive text messages from the same sender can be batched into one age
 - Disabled by default: `messages.inbound.debounceMs` has no built-in default, so debouncing only activates once you set it (globally or per channel).
 - iMessage follows the same generic debounce policy. `imsg` 0.13.1 and newer coalesces Apple URL-preview split-sends before OpenClaw receives them, so no iMessage-specific debounce setting is needed.
 
+Changes to `messages.inbound.debounceMs` and `messages.inbound.byChannel` apply without
+reconnecting Discord, Feishu, iMessage, Mattermost, Microsoft Teams, Signal, Slack,
+Telegram, or WhatsApp. Newly admitted inbound work uses the committed delay. A config change alone does not reschedule a pending batch;
+later messages can update its idle delay within the original maximum deadline.
+Explicit transport timing overrides remain fixed. Telegram's forwarded-message
+collection window remains separate.
+
 ## Sessions and devices
 
 Sessions are owned by the gateway, not by clients.
@@ -96,6 +103,8 @@ Tool result `content` is the model-visible result; `details` is runtime metadata
 - `toolResult.details` is stripped before provider replay and before compaction input.
 - Persisted session transcripts keep only bounded `details`; oversized metadata is replaced with a compact summary marked `persistedDetailsTruncated: true`.
 - Plugins and tools should put text the model must read in `content`, not only in `details`.
+
+When a tool-error warning is the agent's only reply, WebChat displays and retains it. The warning does not by itself change a completed agent run into a runtime failure; the failed tool result remains recorded separately.
 
 ## Queueing and followups
 
@@ -145,7 +154,7 @@ Details: [Thinking + reasoning directives](/tools/thinking) and [Token use](/ref
 - Explicit `message` tool and CLI text sends also apply the resolved prefix, without duplicating a prefix already present. They resolve identity placeholders but do not select a model; a prefix containing unresolved model, provider, or thinking-level placeholders is omitted entirely.
 - Reply threading via `replyToMode` and per-channel defaults.
 
-Details: [Configuration](/gateway/config-agents#messages) and channel docs.
+Details: [Configuration](/gateway/config-agents/messages-and-talk#messages) and channel docs.
 
 ## Silent replies
 

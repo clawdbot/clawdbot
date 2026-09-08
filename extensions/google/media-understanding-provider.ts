@@ -1,12 +1,10 @@
 // Google provider module implements model/runtime integration.
-import {
-  describeImageWithModel,
-  describeImagesWithModel,
-  type AudioTranscriptionRequest,
-  type AudioTranscriptionResult,
-  type MediaUnderstandingProvider,
-  type VideoDescriptionRequest,
-  type VideoDescriptionResult,
+import type {
+  AudioTranscriptionRequest,
+  AudioTranscriptionResult,
+  MediaUnderstandingProvider,
+  VideoDescriptionRequest,
+  VideoDescriptionResult,
 } from "openclaw/plugin-sdk/media-understanding";
 import {
   assertOkOrThrowProviderError,
@@ -159,8 +157,8 @@ export const googleMediaUnderstandingProvider: MediaUnderstandingProvider = {
   },
   autoPriority: { image: 30, audio: 40, video: 10 },
   nativeDocumentInputs: ["pdf"],
-  describeImage: describeImageWithModel,
-  describeImages: describeImagesWithModel,
+  describeImage: undefined,
+  describeImages: undefined,
   transcribeAudio: transcribeGeminiAudio,
   describeVideo: describeGeminiVideo,
 };

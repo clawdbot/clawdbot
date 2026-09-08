@@ -23,7 +23,7 @@ describe("new-session CLI-agent model targets", () => {
                 {
                   id: "anthropic",
                   label: "Claude Code",
-                  capabilities: { createSession: { model: "anthropic/claude-sonnet-4-6" } },
+                  capabilities: { startTerminal: true },
                   hosts: [],
                 },
               ],
@@ -125,7 +125,7 @@ describe("new-session CLI-agent model targets", () => {
               {
                 id: "new-owner",
                 label: "New owner",
-                capabilities: { createSession: { model: "openai/gpt-5.6-luna" } },
+                capabilities: { startTerminal: true },
                 hosts: [],
               },
             ],
@@ -149,7 +149,7 @@ describe("new-session CLI-agent model targets", () => {
         {
           id: "stale-owner",
           label: "Stale owner",
-          capabilities: { createSession: { model: "anthropic/claude-sonnet-4-6" } },
+          capabilities: { startTerminal: true },
           hosts: [],
         },
       ],
@@ -184,7 +184,7 @@ describe("new-session CLI-agent model targets", () => {
         {
           id: "research-owner",
           label: "Research owner",
-          capabilities: { createSession: { model: "openai/gpt-5.6-luna" } },
+          capabilities: { startTerminal: true },
           hosts: [],
         },
       ],
@@ -200,7 +200,7 @@ describe("new-session CLI-agent model targets", () => {
         {
           id: "main-owner",
           label: "Main owner",
-          capabilities: { createSession: { model: "anthropic/claude-sonnet-4-6" } },
+          capabilities: { startTerminal: true },
           hosts: [],
         },
       ],

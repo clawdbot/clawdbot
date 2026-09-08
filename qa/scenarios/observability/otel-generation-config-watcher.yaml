@@ -11,7 +11,7 @@ scenario:
     secondary:
       - gateway.restart-and-stop-gateway-restart
       - observability.trace-correlation-fields
-  objective: Prove a watched OTEL endpoint change replaces one private provider generation with another inside the same Gateway PID.
+  objective: Prove a mixed watched OTEL endpoint and restart-owned Control UI path edit replaces one private provider generation with another inside the same Gateway PID.
   successCriteria:
     - Collector A receives correlated traces, metrics, and logs before the watched config mutation.
     - The config watcher performs an OPENCLAW_NO_RESPAWN in-process restart without changing the Gateway PID.
@@ -41,4 +41,4 @@ scenario:
       - --output-dir
       - ${outputDir}
     timeoutMs: 300000
-    summary: Same-PID watched endpoint replacement with isolated trace, metric, and log exports.
+    summary: Same-PID mixed restart-required edit with isolated trace, metric, and log exports.

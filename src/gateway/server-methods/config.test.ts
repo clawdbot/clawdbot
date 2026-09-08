@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -204,21 +205,31 @@ afterEach(() => {
 });
 
 describe("config application settlement", () => {
-  it("does not acknowledge a persisted write before its runtime application", async () => {
+  it.each(
+    (["config.patch", "config.apply"] as const).flatMap((method) =>
+      [
+        { name: "hooks", config: { hooks: { enabled: true } } },
+        {
+          name: "new Gateway HTTP settings",
+          config: { gateway: { http: { endpoints: { responses: { enabled: true } } } } },
+        },
+      ].map(({ name, config }) => ({ method, name, config })),
+    ),
+  )("waits for $method application of $name before acknowledging", async ({ method, config }) => {
     let settleApplication!: (status: "applied") => void;
     const application = new Promise<"applied">((resolve) => {
       settleApplication = resolve;
     });
-    configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(async () => ({
+    configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(async (params) => ({
       path: "/tmp/openclaw.json",
-      config: { hooks: { enabled: true } },
+      config,
       hash: "settled-hash",
-      application,
+      application: params.awaitRuntimeApplication ? application : undefined,
       queueFollowUp: vi.fn(),
     }));
 
-    const { harness, operation } = startConfigWrite("config.patch", {
-      raw: { hooks: { enabled: true } },
+    const { harness, operation } = startConfigWrite(method, {
+      raw: config,
       baseHash: "base-hash",
     });
     await vi.waitFor(() =>
@@ -354,7 +365,7 @@ describe("config.openFile", () => {
 
   it("returns a detailed error and logs details when the opener fails", async () => {
     await withEnvAsync({ OPENCLAW_CONFIG_PATH: "/tmp/config.json" }, async () => {
-      mockOpenPathError(Object.assign(new Error("spawn xdg-open ENOENT"), { code: "ENOENT" }));
+      mockOpenPathError(Object.assign(new Error("spawn xdg-open EACCES"), { code: "EACCES" }));
 
       const { respond, logGateway } = await invokeConfigOpenFile();
 
@@ -363,15 +374,40 @@ describe("config.openFile", () => {
         {
           ok: false,
           path: "/tmp/config.json",
-          error: "Failed to open config file: spawn xdg-open ENOENT",
+          error: "Failed to open config file: spawn xdg-open EACCES",
         },
         undefined,
       );
       expect(logGateway.warn).toHaveBeenCalledWith(
-        "config.openFile failed path=/tmp/config.json: spawn xdg-open ENOENT",
+        "config.openFile failed path=/tmp/config.json: spawn xdg-open EACCES",
       );
     });
   });
+
+  it.runIf(process.platform === "linux")(
+    "returns actionable headless environment error when xdg-open is missing",
+    async () => {
+      await withEnvAsync({ OPENCLAW_CONFIG_PATH: "/tmp/config.json" }, async () => {
+        mockOpenPathError(Object.assign(new Error("spawn xdg-open ENOENT"), { code: "ENOENT" }));
+
+        const { respond, logGateway } = await invokeConfigOpenFile();
+
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          {
+            ok: false,
+            path: "/tmp/config.json",
+            error:
+              "Cannot open file in headless environment. File path: /tmp/config.json. This environment appears to lack a graphical or terminal browser handler.",
+          },
+          undefined,
+        );
+        expect(logGateway.warn).toHaveBeenCalledWith(
+          "config.openFile failed path=/tmp/config.json: spawn xdg-open ENOENT",
+        );
+      });
+    },
+  );
 
   it("does not split surrogate pairs when truncating the failed config path", async () => {
     const pathPrefix = `/tmp/${"a".repeat(111)}`;
@@ -457,6 +493,106 @@ describe("config schema response cache", () => {
 
     expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(2);
   });
+});
+
+describe("config write source preparation", () => {
+  it.each(["config.set", "config.apply", "config.patch"] as const)(
+    "%s distinguishes literal nulls from omitted values at its write boundary",
+    async (method) => {
+      const source: OpenClawConfig = {
+        gateway: { port: 18789 },
+        agents: { defaults: { params: { temperature: 0.2, topP: 0.8 } } },
+      };
+      const runtime: OpenClawConfig = {
+        ...source,
+        agents: { defaults: { ...source.agents?.defaults, maxConcurrent: 4 } },
+      };
+      storedConfig = source;
+      configWriteMocks.readConfigFileSnapshotForWrite.mockImplementationOnce(async () => {
+        const result = createConfigWriteSnapshot(source);
+        result.snapshot.config = runtime;
+        result.snapshot.runtimeConfig = runtime;
+        return result;
+      });
+      const params = { temperature: null, nested: { value: null } };
+      const harness = createConfigHandlerHarness({
+        method,
+        params: {
+          raw: JSON.stringify(
+            method === "config.patch"
+              ? { agents: { defaults: { params: { temperature: null, topP: null } } } }
+              : { ...runtime, agents: { defaults: { ...runtime.agents?.defaults, params } } },
+          ),
+          baseHash: storedHash,
+        },
+      });
+
+      await expectDefined(configHandlers[method], "config write handler")(harness.options);
+
+      expect(harness.respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
+      expect(storedConfig).toStrictEqual({
+        ...source,
+        agents: { defaults: { params: method === "config.patch" ? {} : params } },
+      });
+    },
+  );
+
+  it.each([
+    ...(["config.set", "config.apply", "config.patch"] as const).flatMap((method) =>
+      [false, true].map((authored) => ({
+        method,
+        authored,
+        explicitDefault: false,
+        changePort: true,
+      })),
+    ),
+    ...[false, true].map((changePort) => ({
+      method: "config.patch" as const,
+      authored: false,
+      explicitDefault: true,
+      changePort,
+    })),
+  ])(
+    "$method preserves source intent (authored: $authored, explicit default: $explicitDefault, port edit: $changePort)",
+    async ({ method, authored, explicitDefault, changePort }) => {
+      const source: OpenClawConfig = {
+        gateway: { port: 18789 },
+        ...(authored ? { agents: { defaults: { maxConcurrent: 4 } } } : {}),
+      };
+      const runtime: OpenClawConfig = {
+        ...source,
+        agents: { defaults: { maxConcurrent: 4 } },
+      };
+      storedConfig = source;
+      configWriteMocks.readConfigFileSnapshotForWrite.mockImplementationOnce(async () => {
+        const result = createConfigWriteSnapshot(source);
+        result.snapshot.config = runtime;
+        result.snapshot.runtimeConfig = runtime;
+        return result;
+      });
+      const harness = createConfigHandlerHarness({
+        method,
+        params: {
+          raw: JSON.stringify({
+            ...(method === "config.patch" ? {} : runtime),
+            ...(explicitDefault ? { agents: runtime.agents } : {}),
+            ...(changePort ? { gateway: { port: 18790 } } : {}),
+          }),
+          baseHash: storedHash,
+        },
+      });
+
+      await expectDefined(configHandlers[method], "config write handler")(harness.options);
+
+      expect(harness.respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
+      expect(storedConfig).toEqual({
+        ...source,
+        ...(explicitDefault ? { agents: runtime.agents } : {}),
+        gateway: { port: changePort ? 18790 : 18789 },
+      });
+      expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledOnce();
+    },
+  );
 });
 
 describe("config.patch hash-free ui.prefs LWW", () => {
@@ -735,9 +871,10 @@ describe("config.patch ID-keyed arrays", () => {
 
 describe("config.patch model input normalization", () => {
   it("uses write-snapshot policies before merging manifest-backed model IDs", async () => {
-    modelNormalizationPluginMetadata = {
+    modelNormalizationPluginMetadata = createPluginMetadataSnapshotFixture({
       plugins: [
         {
+          id: "myproxy-normalizer",
           modelIdNormalization: {
             providers: {
               myproxy: { aliases: { latest: "modern-model" }, prefixWhenBare: "vendor" },
@@ -745,7 +882,7 @@ describe("config.patch model input normalization", () => {
           },
         },
       ],
-    } as unknown as PluginMetadataSnapshot;
+    });
     storedConfig = {
       models: {
         providers: {

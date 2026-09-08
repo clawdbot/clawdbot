@@ -1,7 +1,8 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { CURRENT_SESSION_VERSION, SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -40,6 +41,44 @@ async function withBoundedContextScope(
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     await run(scope);
   });
+}
+
+function countAcquiredTranscriptPayloadBytes(
+  db: ReturnType<typeof openOpenClawAgentDatabase>["db"],
+  marker: string,
+  read: () => void,
+): number {
+  clearNodeSqliteKyselyCacheForDatabase(db);
+  const prepare = db.prepare.bind(db);
+  const restoreStatements: Array<() => void> = [];
+  let acquiredBytes = 0;
+  const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((query) => {
+    const statement = prepare(query);
+    const iterate = statement.iterate.bind(statement);
+    // Observe SQLite result acquisition, including payloads rejected before JSON.parse.
+    const iterateSpy = vi.spyOn(statement, "iterate").mockImplementation(function* (...params) {
+      for (const row of iterate(...params)) {
+        for (const value of Object.values(row)) {
+          if (typeof value === "string" && value.includes(marker)) {
+            acquiredBytes += Buffer.byteLength(value);
+          }
+        }
+        yield row;
+      }
+      return undefined;
+    });
+    restoreStatements.push(() => iterateSpy.mockRestore());
+    return statement;
+  });
+  try {
+    read();
+  } finally {
+    prepareSpy.mockRestore();
+    for (const restore of restoreStatements) {
+      restore();
+    }
+  }
+  return acquiredBytes;
 }
 
 it("reads only the newest bounded active context and accounts for its header", async () => {
@@ -98,6 +137,70 @@ it("reserves the transcript header inside the exact byte limit", async () => {
     expect(context.truncated).toBe(true);
   });
 });
+
+it("rejects an oversized header before acquiring its payload", async () => {
+  await withBoundedContextScope(async (scope) => {
+    const marker = "synthetic-oversized-header:";
+    await appendTranscriptEvent(scope, {
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: scope.sessionId,
+      cwd: marker + "x".repeat(4096),
+    });
+    const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+    const acquiredBytes = countAcquiredTranscriptPayloadBytes(db, marker, () => {
+      expect(() =>
+        readSessionTranscriptBoundedActiveContextCore(scope, { maxBytes: 1024, maxEvents: 10 }),
+      ).toThrow("Session transcript header exceeds the active-context byte limit");
+    });
+    expect(acquiredBytes).toBe(0);
+  });
+});
+
+it.each(["compaction", "reset"] as const)(
+  "omits an oversized latest %s boundary before acquiring its payload",
+  async (type) => {
+    await withBoundedContextScope(async (scope) => {
+      const manager = SessionManager.open(scope);
+      const kept = manager.appendMessage({ role: "user", content: "retained", timestamp: 1 });
+      const marker = "synthetic-oversized-boundary:";
+      await appendTranscriptEvent(scope, {
+        type,
+        id: "oversized-boundary",
+        parentId: kept,
+        timestamp: "2026-08-30T00:00:00.000Z",
+        firstKeptEntryId: kept,
+        ...(type === "compaction" ? { summary: "summary", tokensBefore: 100 } : { reason: "new" }),
+        details: { payload: marker + "x".repeat(4096) },
+      });
+      await appendTranscriptMessage(scope, {
+        eventId: "tail",
+        message: { role: "user", content: "latest", timestamp: 2 },
+      });
+      await waitForSessionTranscriptProjection(scope);
+      const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+      const acquiredBytes = countAcquiredTranscriptPayloadBytes(db, marker, () => {
+        const context = readSessionTranscriptBoundedActiveContextCore(scope, {
+          maxBytes: 1024,
+          maxEvents: 1,
+        });
+        expect(context.events.map((event) => (event as { id: string }).id)).toEqual([
+          scope.sessionId,
+          "tail",
+        ]);
+        expect(context.truncated).toBe(true);
+        expect(context.boundaryCount).toBe(1);
+        expect(context.serializedBytes).toBe(
+          context.events.reduce<number>(
+            (bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event)) + 1,
+            0,
+          ),
+        );
+      });
+      expect(acquiredBytes).toBe(0);
+    });
+  },
+);
 
 it("selects the session header by type when a mirror row precedes it", async () => {
   await withBoundedContextScope(async (scope) => {
@@ -207,16 +310,23 @@ it("selects the session header when an exact migrated transcript has no identity
   });
 });
 
-it("retains the latest compaction boundary before a truncated tail", async () => {
+it("retains the latest boundary and counts earlier resets before a truncated tail", async () => {
   await withBoundedContextScope(async (scope) => {
     await persistSessionTranscriptTurn(scope, {
       messages: [{ eventId: "old", parentId: null, message: { role: "user", content: "old" } }],
       touchSessionEntry: false,
     });
     await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "prior-reset",
+      parentId: "old",
+      timestamp: "2026-08-24T00:00:00.000Z",
+      reason: "new",
+    });
+    await appendTranscriptEvent(scope, {
       type: "compaction",
       id: "summary",
-      parentId: "old",
+      parentId: "prior-reset",
       timestamp: "2026-08-25T00:00:00.000Z",
       summary: "earlier work",
       firstKeptEntryId: "old",
@@ -242,7 +352,7 @@ it("retains the latest compaction boundary before a truncated tail", async () =>
     ]);
     expect(context.events.at(-1)).toMatchObject({ parentId: "middle" });
     expect(context.opaqueParents.get("middle")).toBe("summary");
-    expect(context.boundaryCount).toBe(1);
+    expect(context.boundaryCount).toBe(2);
   });
 });
 
@@ -510,6 +620,40 @@ it("counts paired reset tool results without counting discarded orphan results",
       "second-post-reset",
     ]);
     expect(readSessionTranscriptActiveStats(scope).eventCount).toBe(3);
+  });
+});
+
+it("resolves reset history and raw-byte stats without acquiring unrelated reset fields", async () => {
+  await withBoundedContextScope(async (scope) => {
+    const manager = SessionManager.open(scope);
+    manager.appendMessage({ role: "user", content: "discarded", timestamp: 1 });
+    const kept = manager.appendMessage({ role: "user", content: "retained", timestamp: 2 });
+    const marker = "synthetic-reset-only-payload:";
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "reset-with-extra-fields",
+      parentId: kept,
+      timestamp: "2026-08-30T00:00:00.000Z",
+      reason: "new",
+      firstKeptEntryId: kept,
+      details: { payload: marker + "x".repeat(4096) },
+    });
+    await waitForSessionTranscriptProjection(scope);
+    const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+    const acquiredBytes = countAcquiredTranscriptPayloadBytes(db, marker, () => {
+      const history = readSessionTranscriptBoundedMessageTailPage(scope, {
+        maxBytes: 1024,
+        maxMessages: 100,
+        offset: 0,
+      });
+      expect(history.totalMessages).toBe(1);
+      expect(history.events.map(({ event }) => (event as { id: string }).id)).toEqual([kept]);
+      expect(readSessionTranscriptActiveStats(scope)).toEqual({
+        eventCount: 1,
+        sizeBytes: history.serializedBytes,
+      });
+    });
+    expect(acquiredBytes).toBe(0);
   });
 });
 

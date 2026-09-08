@@ -408,11 +408,3 @@ export async function executeXaiWebSearchProviderTool(
     });
   }
 }
-
-export const testing = {
-  buildXaiWebSearchPayload,
-  resolveXaiToolSearchConfig,
-  resolveXaiInlineCitations,
-  resolveXaiWebSearchModel,
-  resolveXaiWebSearchTimeoutSeconds,
-};

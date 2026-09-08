@@ -18,6 +18,7 @@ import {
 } from "../../media/media-reference.js";
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { resolveModelAsync } from "../embedded-agent-runner/model.js";
@@ -149,7 +150,7 @@ async function runPdfPrompt(params: {
   pdfModelConfig: ImageModelConfig;
   modelOverride?: string;
   prompt: string;
-  pdfBuffers: Array<{ base64: string; filename: string }>;
+  pdfBuffers: Array<{ buffer: Buffer; filename: string }>;
   password?: string;
   pageNumbers?: number[];
   getExtractions: () => Promise<PdfExtractedContent[]>;
@@ -209,6 +210,7 @@ async function runPdfPrompt(params: {
       preparedRuntime.config,
       committedPdfModelConfig,
     );
+    let nativePdfs: Array<{ base64: string; filename: string }> | undefined;
     let extractionCache: PdfExtractedContent[] | null = null;
     const getExtractions = async (): Promise<PdfExtractedContent[]> => {
       if (!extractionCache) {
@@ -257,14 +259,14 @@ async function runPdfPrompt(params: {
             );
           }
 
-          const pdfs = params.pdfBuffers.map((p) => ({
-            base64: p.base64,
-            filename: p.filename,
-          }));
+          // Encode only native requests, once across retries, after checking cancellation.
+          params.signal?.throwIfAborted();
+          const pdfs = (nativePdfs ??= params.pdfBuffers.map(({ buffer, filename }) => ({
+            base64: buffer.toString("base64"),
+            filename,
+          })));
 
           if (provider === "anthropic") {
-            // A run cancelled mid-dispatch must not buy another provider call.
-            params.signal?.throwIfAborted();
             const text = await anthropicAnalyzePdf({
               apiKey,
               modelId,
@@ -282,8 +284,6 @@ async function runPdfPrompt(params: {
           }
 
           if (provider === "google") {
-            // A run cancelled mid-dispatch must not buy another provider call.
-            params.signal?.throwIfAborted();
             const text = await geminiAnalyzePdf({
               apiKey,
               modelId,
@@ -300,17 +300,33 @@ async function runPdfPrompt(params: {
           }
         }
 
-        // PDF-only model selections may not have loaded their provider plugin yet.
-        // Register before complete() so plugin-owned APIs resolve on first use.
-        registerProviderStreamForModel({
-          model,
-          cfg: effectiveCfg,
-          agentDir: runtimeAgentDir,
-          apiRegistry: modelRuntime.apiRegistry,
-          ...(runtimeWorkspaceDir ? { workspaceDir: runtimeWorkspaceDir } : {}),
-        });
+        // Provider hooks may own request preparation such as managed preset reloads.
+        // Registration alone is insufficient when a built-in API already owns dispatch.
+        const providerStreamFn = withPluginRuntimeGenerationScope(preparedRuntime, () =>
+          registerProviderStreamForModel({
+            model,
+            cfg: effectiveCfg,
+            agentDir: runtimeAgentDir,
+            wrapProviderStream: true,
+            apiRegistry: modelRuntime.apiRegistry,
+            ...(runtimeWorkspaceDir ? { workspaceDir: runtimeWorkspaceDir } : {}),
+          }),
+        );
 
         const extractions = await getExtractions();
+        const completeExtraction = async (context: Context) => {
+          // A run cancelled mid-dispatch must not buy another provider call.
+          params.signal?.throwIfAborted();
+          const streamOptions = {
+            apiKey,
+            maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
+            signal: params.signal,
+          };
+          const completion = providerStreamFn
+            ? (async () => await (await providerStreamFn(model, context, streamOptions)).result())()
+            : complete(model, context, streamOptions);
+          return params.signal ? await abortable(params.signal, completion) : await completion;
+        };
         const hasImages = extractions.some((e) => e.images.length > 0);
         if (hasImages && !model.input?.includes("image")) {
           const hasText = extractions.some((e) => e.text.trim().length > 0);
@@ -324,31 +340,13 @@ async function runPdfPrompt(params: {
             images: [],
           }));
           const context = buildPdfExtractionContext(params.prompt, textOnlyExtractions, model);
-          // A run cancelled mid-dispatch must not buy another provider call.
-          params.signal?.throwIfAborted();
-          const completion = complete(model, context, {
-            apiKey,
-            maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
-            signal: params.signal,
-          });
-          const message = params.signal
-            ? await abortable(params.signal, completion)
-            : await completion;
+          const message = await completeExtraction(context);
           const text = coercePdfAssistantText({ message, provider, model: modelId });
           return { text, provider, model: modelId, native: false };
         }
 
         const context = buildPdfExtractionContext(params.prompt, extractions, model);
-        // A run cancelled mid-dispatch must not buy another provider call.
-        params.signal?.throwIfAborted();
-        const completion = complete(model, context, {
-          apiKey,
-          maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
-          signal: params.signal,
-        });
-        const message = params.signal
-          ? await abortable(params.signal, completion)
-          : await completion;
+        const message = await completeExtraction(context);
         const text = coercePdfAssistantText({ message, provider, model: modelId });
         return { text, provider, model: modelId, native: false };
       },
@@ -490,7 +488,6 @@ export function createPdfTool(options?: {
 
       // MARK: - Load each PDF
       const loadedPdfs: Array<{
-        base64: string;
         buffer: Buffer;
         filename: string;
         resolvedPath: string;
@@ -569,7 +566,6 @@ export function createPdfTool(options?: {
           }
         }
 
-        const base64 = media.buffer.toString("base64");
         const filename =
           media.fileName ??
           (isHttpUrl
@@ -577,7 +573,6 @@ export function createPdfTool(options?: {
             : "document.pdf");
 
         loadedPdfs.push({
-          base64,
           buffer: media.buffer,
           filename,
           resolvedPath,
@@ -619,7 +614,7 @@ export function createPdfTool(options?: {
         pdfModelConfig,
         modelOverride,
         prompt: promptRaw,
-        pdfBuffers: loadedPdfs.map((p) => ({ base64: p.base64, filename: p.filename })),
+        pdfBuffers: loadedPdfs,
         ...(password ? { password } : {}),
         pageNumbers,
         getExtractions,

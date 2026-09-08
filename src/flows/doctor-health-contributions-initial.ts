@@ -170,19 +170,22 @@ export function resolveInitialDoctorHealthContributions(params: {
       run: runLegacyPluginManifestHealth,
     }),
     createDoctorHealthContribution({
+      // Stable v2026.8.1 exposed this --only selector. Retain its public identity,
+      // not the unsupported shared-root scan or its destructive repair advice.
       id: "doctor:legacy-plugin-dependencies",
       label: "Legacy plugin dependencies",
       healthChecks: {
-        description: "Legacy plugin dependency state roots are represented as findings.",
+        description: "Deprecated shared plugin dependency cleanup check.",
         defaultEnabled: false,
         async detect() {
-          const {
-            detectLegacyPluginDependencyStateIssues,
-            legacyPluginDependencyStateIssueToHealthFinding,
-          } = await import("../commands/doctor/shared/plugin-dependency-cleanup.js");
-          return (await detectLegacyPluginDependencyStateIssues({ env: process.env })).map(
-            legacyPluginDependencyStateIssueToHealthFinding,
-          );
+          return [
+            {
+              checkId: "core/doctor/legacy-plugin-dependencies",
+              severity: "info",
+              message:
+                "Deprecated check: Doctor preserves shared plugin runtime caches and no longer scans them for removal.",
+            },
+          ];
         },
       },
       run: async () => {},

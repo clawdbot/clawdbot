@@ -80,7 +80,7 @@ describe("remote-exec placement sandbox", () => {
 
     const sandbox = await createRemoteExecPlacementSandbox({
       environments: { get: () => environment, resolveSshIdentity },
-      localWorkspaceDir: "/local/managed-worktree",
+      workspaceDir: "/local/managed-worktree",
       placement,
     });
 
@@ -129,7 +129,7 @@ describe("remote-exec placement sandbox", () => {
 
       const sandbox = await createRemoteExecPlacementSandbox({
         environments: { get: () => environment, resolveSshIdentity },
-        localWorkspaceDir: "/local/managed-worktree",
+        workspaceDir: "/local/managed-worktree",
         placement,
       });
 
@@ -172,7 +172,7 @@ describe("remote-exec placement sandbox", () => {
     await expect(
       createRemoteExecPlacementSandbox({
         environments: { get: () => environment },
-        localWorkspaceDir: "/local/managed-worktree",
+        workspaceDir: "/local/managed-worktree",
         placement: { ...remoteExecPlacement(), remoteWorkspaceDir: workspaceDir },
       }),
     ).rejects.toThrow("invalid managed workspace path");
@@ -185,7 +185,7 @@ describe("remote-exec placement sandbox", () => {
     await expect(
       createRemoteExecPlacementSandbox({
         environments: { get: () => environment, resolveSshIdentity },
-        localWorkspaceDir: "/local/managed-worktree",
+        workspaceDir: "/local/managed-worktree",
         placement: {
           ...remoteExecPlacement(),
           remoteWorkspaceDir: String.raw`C:\Users\Node\workspace`,
@@ -228,7 +228,7 @@ describe("remote-exec placement sandbox", () => {
     await expect(
       createRemoteExecPlacementSandbox({
         environments: { get: () => environment, resolveSshIdentity },
-        localWorkspaceDir: "/local/managed-worktree",
+        workspaceDir: "/local/managed-worktree",
         placement,
       }),
     ).rejects.toThrow("lost its exact environment");
@@ -268,7 +268,7 @@ describe("remote-exec placement sandbox", () => {
       await expect(
         createRemoteExecPlacementSandbox({
           environments: { get },
-          localWorkspaceDir: "/local/managed-worktree",
+          workspaceDir: "/local/managed-worktree",
           placement,
         }),
       ).rejects.toThrow("lost its exact environment");

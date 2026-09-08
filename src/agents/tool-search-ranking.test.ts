@@ -142,6 +142,22 @@ describe("tokenizeQuery", () => {
 });
 
 describe("scoreLexical", () => {
+  it("includes empty documents in length normalization without creating search hits", () => {
+    const value = { id: "match" };
+    const index = buildLexicalIndex([
+      { value, terms: ["needle", "needle"] },
+      { value: { id: "empty" }, terms: [] },
+    ]);
+
+    expect(index.documentCount).toBe(2);
+    expect(index.averageLength).toBe(1);
+    const hits = scoreLexical(index, [{ term: "needle", weight: 1 }]);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.value).toBe(value);
+    expect(hits[0]?.matchedLiteral).toBe(true);
+    expect(hits[0]?.score).toBeCloseTo((Math.log(2) * 2 * 2.2) / (2 + 1.2 * 1.75));
+  });
+
   it("returns nothing for a query with no usable terms", () => {
     const index = buildLexicalIndex([{ value: "a", terms: tokenizeDocument("search the web") }]);
 
@@ -314,7 +330,9 @@ describe("ToolSearchRuntime.search", () => {
 
   it("returns a tool named exactly like a stopword", async () => {
     const catalog = [
-      entry({ name: "do", description: "Run a stored action" }),
+      entry({ id: "z-local", name: "do", description: "Run a stored action" }),
+      entry({ id: "a-remote", source: "mcp", name: "DO", description: "Run a remote action" }),
+      entry({ id: "m-local", name: "do", description: "Run another stored action" }),
       entry({ id: "other", name: "other", description: "Unrelated" }),
     ];
     const ctx = {
@@ -336,9 +354,29 @@ describe("ToolSearchRuntime.search", () => {
       maxSearchLimit: 50,
     });
 
-    // "do" tokenizes to nothing, so it never reaches the ranking; naming it
-    // exactly is still an unambiguous request for it.
-    expect((await search.search("do")).map((hit) => hit.name)).toEqual(["do"]);
+    // "do" tokenizes to nothing; exact matches still retain catalog order,
+    // with visibility applied before the result limit.
+    expect((await search.search(" DO ")).map((hit) => hit.id)).toEqual([
+      "z-local",
+      "a-remote",
+      "m-local",
+    ]);
+    expect((await search.search("do", { limit: 2 })).map((hit) => hit.id)).toEqual([
+      "z-local",
+      "a-remote",
+    ]);
+    expect(
+      (await search.search("do", { includeMcp: false, limit: 1 })).map((hit) => hit.id),
+    ).toEqual(["z-local"]);
+    expect(
+      (
+        await search.search("do", {
+          allowedIds: new Set(["a-remote", "m-local"]),
+          includeMcp: false,
+          limit: 1,
+        })
+      ).map((hit) => hit.id),
+    ).toEqual(["m-local"]);
   });
 
   it("does not match a term that only appears inside another word", async () => {

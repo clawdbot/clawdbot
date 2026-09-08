@@ -96,7 +96,6 @@ async function persistAssistantThreadMetadata(params: {
     token: ctx.botToken,
     channel: assistantThread.assistantChannelId,
     ts: assistantThread.threadTs,
-    oldest: assistantThread.threadTs,
     include_all_metadata: true,
     limit: 4,
   })) as {

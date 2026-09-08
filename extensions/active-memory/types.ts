@@ -128,42 +128,10 @@ const RECALLED_CONTEXT_LINE_PATTERNS = [
   /^active memory:/i,
 ];
 
-type ActiveRecallPluginConfig = {
-  enabled?: boolean;
-  mode?: ActiveMemoryMode;
-  agents?: string[];
-  model?: string;
-  modelFallback?: string;
+type ActiveRecallPluginConfig = Partial<
+  Omit<ResolvedActiveRecallPluginConfig, "timeoutMsIsDefault">
+> & {
   modelFallbackPolicy?: "default-remote" | "resolved-only";
-  allowedChatTypes?: Array<"direct" | "group" | "channel" | "explicit">;
-  allowedChatIds?: string[];
-  deniedChatIds?: string[];
-  thinking?: ActiveMemoryThinkingLevel;
-  fastMode?: ActiveMemoryFastMode;
-  promptStyle?:
-    | "balanced"
-    | "strict"
-    | "contextual"
-    | "recall-heavy"
-    | "precision-heavy"
-    | "preference-only";
-  toolsAllow?: string[];
-  promptOverride?: string;
-  promptAppend?: string;
-  timeoutMs?: number;
-  setupGraceTimeoutMs?: number;
-  queryMode?: "message" | "recent" | "full";
-  maxSummaryChars?: number;
-  recentUserTurns?: number;
-  recentAssistantTurns?: number;
-  recentUserChars?: number;
-  recentAssistantChars?: number;
-  logging?: boolean;
-  cacheTtlMs?: number;
-  circuitBreakerMaxTimeouts?: number;
-  circuitBreakerCooldownMs?: number;
-  persistTranscripts?: boolean;
-  transcriptDir?: string;
 };
 
 type ResolvedActiveRecallPluginConfig = {
@@ -172,7 +140,6 @@ type ResolvedActiveRecallPluginConfig = {
   agents: string[];
   model?: string;
   modelFallback?: string;
-  modelFallbackPolicy: "default-remote" | "resolved-only";
   allowedChatTypes: Array<"direct" | "group" | "channel" | "explicit">;
   allowedChatIds: string[];
   deniedChatIds: string[];
@@ -263,15 +230,7 @@ type TranscriptReadLimits = {
   maxBytes?: number;
 };
 
-type ActiveMemoryTranscriptSource =
-  | {
-      kind: "runtime";
-      target: SessionTranscriptTargetParams;
-    }
-  | {
-      kind: "file";
-      sessionFile: string;
-    };
+type ActiveMemoryTranscriptSource = SessionTranscriptTargetParams;
 
 type RecallSubagentResult = {
   rawReply: string;

@@ -6,6 +6,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/schema/plugin-declared-surface-groups.js";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
+import { renderReasonedDisabledControl } from "../../components/reasoned-disabled-control.ts";
 import { renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { registerPluginConsentEnglish } from "../../i18n/locales/en-plugin-consent.ts";
@@ -139,19 +140,25 @@ export function renderPluginDeclaredCapabilities(declared: PluginDeclaredSurface
     <section class="plugins-consent__section">
       <h3>${t("pluginConsent.declaredTitle")}</h3>
       <p class="plugins-consent__description">${t("pluginConsent.declaredDescription")}</p>
-      ${rows.length > 0
-        ? html`<div class="plugins-consent__rows">${rows}</div>`
-        : html`<p class="plugins-consent__hint">${t("pluginConsent.declaredEmpty")}</p>`}
-      ${declared.hooks.length === 0
-        ? renderPluginMetaRow(t("pluginConsent.hooks"), t("pluginConsent.runtimeHooks"))
-        : nothing}
-      ${declared.dangerousConfigFlags.length > 0
-        ? renderPluginMetaRow(
-            t("pluginConsent.dangerousFlags"),
-            renderCapabilityItems(declared.dangerousConfigFlags),
-            true,
-          )
-        : nothing}
+      ${
+        rows.length > 0
+          ? html`<div class="plugins-consent__rows">${rows}</div>`
+          : html`<p class="plugins-consent__hint">${t("pluginConsent.declaredEmpty")}</p>`
+      }
+      ${
+        declared.hooks.length === 0
+          ? renderPluginMetaRow(t("pluginConsent.hooks"), t("pluginConsent.runtimeHooks"))
+          : nothing
+      }
+      ${
+        declared.dangerousConfigFlags.length > 0
+          ? renderPluginMetaRow(
+              t("pluginConsent.dangerousFlags"),
+              renderCapabilityItems(declared.dangerousConfigFlags),
+              true,
+            )
+          : nothing
+      }
     </section>
   `;
 }
@@ -169,9 +176,11 @@ function renderWidenedCapabilities(details: CapabilityConsentErrorDetails) {
       <h3>${t("pluginConsent.widenedTitle")}</h3>
       <p class="plugins-consent__description">
         ${t("pluginConsent.widenedDescription")}
-        ${details.acceptedAt
-          ? t("pluginConsent.previouslyAccepted", { date: details.acceptedAt })
-          : nothing}
+        ${
+          details.acceptedAt
+            ? t("pluginConsent.previouslyAccepted", { date: details.acceptedAt })
+            : nothing
+        }
       </p>
       <div class="plugins-consent__rows">${rows}</div>
     </section>
@@ -232,24 +241,33 @@ export function renderPluginGrants(grants: PluginOperatorGrants, origin?: string
           t("pluginConsent.conversationAccess"),
           html`
             ${grantValue(conversation, "pluginConsent.on", "pluginConsent.off")}
-            ${!conversation.effective &&
-            conversation.configured === undefined &&
-            origin !== "bundled"
-              ? html`<span class="plugins-consent__hint">
-                  ${t("pluginConsent.externalAccessHint")}
-                </span>`
-              : nothing}
+            ${
+              !conversation.effective &&
+              conversation.configured === undefined &&
+              origin !== "bundled"
+                ? html`<span class="plugins-consent__hint">
+                    ${t("pluginConsent.externalAccessHint")}
+                  </span>`
+                : nothing
+            }
           `,
         )}
-        ${grants.llm
-          ? renderPluginMetaRow(t("pluginConsent.modelOverrides"), modelOverrideSummary(grants.llm))
-          : nothing}
-        ${grants.subagent
-          ? renderPluginMetaRow(
-              t("pluginConsent.subagentModelOverrides"),
-              modelOverrideSummary(grants.subagent),
-            )
-          : nothing}
+        ${
+          grants.llm
+            ? renderPluginMetaRow(
+                t("pluginConsent.modelOverrides"),
+                modelOverrideSummary(grants.llm),
+              )
+            : nothing
+        }
+        ${
+          grants.subagent
+            ? renderPluginMetaRow(
+                t("pluginConsent.subagentModelOverrides"),
+                modelOverrideSummary(grants.subagent),
+              )
+            : nothing
+        }
       </div>
     </section>
   `;
@@ -308,15 +326,19 @@ function renderProvenance(source: PluginInspectSource | undefined) {
           .filter(Boolean)
           .join(" · ")}</span
       >
-      ${source.integrity
-        ? html`<span title=${source.integrity}>
-            ${integrityLabel}: <code>${source.integrity.slice(0, 20)}…</code>
-          </span>`
-        : nothing}
+      ${
+        source.integrity
+          ? html`<span title=${source.integrity}>
+              ${integrityLabel}: <code>${source.integrity.slice(0, 20)}…</code>
+            </span>`
+          : nothing
+      }
     </div>
-    ${source.integrity
-      ? html`<p class="plugins-consent__hint">${t("pluginConsent.pinnedArtifact")}</p>`
-      : nothing}
+    ${
+      source.integrity
+        ? html`<p class="plugins-consent__hint">${t("pluginConsent.pinnedArtifact")}</p>`
+        : nothing
+    }
   `;
 }
 
@@ -338,16 +360,20 @@ function renderTrust(trust: PluginsInspectResult["trust"]) {
   return html`
     <section class="plugins-consent__trust">
       ${renderSettingsStatus({ kind, label })}
-      ${trust.reasons?.length
-        ? html`<ul>
-            ${trust.reasons.map((reason) => html`<li>${reason}</li>`)}
-          </ul>`
-        : nothing}
-      ${trust.checkedAt
-        ? html`<p class="plugins-consent__hint">
-            ${t("pluginConsent.scanDate", { date: trust.checkedAt })}
-          </p>`
-        : nothing}
+      ${
+        trust.reasons?.length
+          ? html`<ul>
+              ${trust.reasons.map((reason) => html`<li>${reason}</li>`)}
+            </ul>`
+          : nothing
+      }
+      ${
+        trust.checkedAt
+          ? html`<p class="plugins-consent__hint">
+              ${t("pluginConsent.scanDate", { date: trust.checkedAt })}
+            </p>`
+          : nothing
+      }
     </section>
   `;
 }
@@ -375,6 +401,24 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): Temp
       : props.busy
         ? t("pluginsPage.working")
         : t("pluginConsent.enableNamed", { name });
+  const confirmUnavailable =
+    !props.canMutate || props.busy || props.loading || Boolean(props.error) || !inspection;
+  const confirm = html`
+    <button
+      type="button"
+      class="btn primary"
+      ?disabled=${confirmUnavailable && !props.mutationBlockedReason}
+      aria-disabled=${!props.canMutate ? "true" : nothing}
+      @click=${() => {
+        if (confirmUnavailable) {
+          return;
+        }
+        props.onConfirm();
+      }}
+    >
+      ${action}
+    </button>
+  `;
   return html`
     <openclaw-modal-dialog
       label=${name}
@@ -392,40 +436,30 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): Temp
             ${meta ? html`<p class="plugins-consent__description">${meta}</p>` : nothing}
           </div>
         </header>
-        ${props.loading
-          ? html`<p class="plugins-consent__hint" role="status">${t("pluginConsent.loading")}</p>`
-          : props.error
-            ? html`<div class="plugins-consent__error" role="alert">
-                <span>${props.error}</span>
-                <button type="button" class="btn btn--sm" @click=${props.onRetry}>
-                  ${t("pluginsPage.tryAgain")}
-                </button>
-              </div>`
-            : inspection
-              ? html`
-                  ${renderProvenance(inspection.source)} ${renderTrust(inspection.trust)}
-                  ${details ? renderWidenedCapabilities(details) : nothing}
-                  ${renderPluginDeclaredCapabilities(inspection.declared)}
-                  ${renderPluginGrants(inspection.grants, plugin?.origin)}
-                `
-              : html`<p class="plugins-consent__description">${t("pluginConsent.fallback")}</p>`}
+        ${
+          props.loading
+            ? html`<p class="plugins-consent__hint" role="status">${t("pluginConsent.loading")}</p>`
+            : props.error
+              ? html`<div class="plugins-consent__error" role="alert">
+                  <span>${props.error}</span>
+                  <button type="button" class="btn btn--sm" @click=${props.onRetry}>
+                    ${t("pluginsPage.tryAgain")}
+                  </button>
+                </div>`
+              : inspection
+                ? html`
+                    ${renderProvenance(inspection.source)} ${renderTrust(inspection.trust)}
+                    ${details ? renderWidenedCapabilities(details) : nothing}
+                    ${renderPluginDeclaredCapabilities(inspection.declared)}
+                    ${renderPluginGrants(inspection.grants, plugin?.origin)}
+                  `
+                : html`<p class="plugins-consent__description">${t("pluginConsent.fallback")}</p>`
+        }
         <footer class="plugins-consent__actions">
           <button type="button" class="btn" @click=${props.onCancel}>
             ${t("pluginsPage.cancel")}
           </button>
-          <button
-            type="button"
-            class="btn primary"
-            title=${props.mutationBlockedReason ?? ""}
-            ?disabled=${!props.canMutate ||
-            props.busy ||
-            props.loading ||
-            Boolean(props.error) ||
-            !inspection}
-            @click=${props.onConfirm}
-          >
-            ${action}
-          </button>
+          ${renderReasonedDisabledControl(props.mutationBlockedReason, confirm)}
         </footer>
       </section>
     </openclaw-modal-dialog>

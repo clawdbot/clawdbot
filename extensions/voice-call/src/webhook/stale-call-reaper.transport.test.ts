@@ -1,21 +1,12 @@
 // Voice Call tests cover stale-call reaping through a real provider HTTP boundary.
 import type { ServerResponse } from "node:http";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withFetchPreconnect, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { endCall } from "../manager/outbound.js";
 import { TelnyxProvider } from "../providers/telnyx.js";
 import type { CallRecord } from "../types.js";
 import { startStaleCallReaper } from "./stale-call-reaper.js";
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((settle, fail) => {
-    resolve = settle;
-    reject = fail;
-  });
-  return { promise, reject, resolve };
-}
 
 async function waitForProofEvent<T>(promise: Promise<T>, label: string): Promise<T> {
   // AbortSignal.timeout stays real while this suite fakes the global timer functions.
@@ -50,9 +41,9 @@ describe("stale-call reaper provider transport", () => {
     });
     vi.setSystemTime(new Date("2026-07-15T12:00:00.000Z"));
 
-    const firstRequestStarted = deferred<void>();
-    const firstResponseClosed = deferred<void>();
-    const secondRequestStarted = deferred<void>();
+    const firstRequestStarted = createDeferred<void>();
+    const firstResponseClosed = createDeferred<void>();
+    const secondRequestStarted = createDeferred<void>();
     let requestCount = 0;
     let firstResponse: ServerResponse | undefined;
 

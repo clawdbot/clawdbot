@@ -1,6 +1,7 @@
 import type { LlmRuntime } from "@openclaw/ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getModelProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveProviderTextTransforms } from "../../plugins/provider-runtime.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
@@ -9,7 +10,7 @@ import { applyExtraParamsToAgent } from "./extra-params.js";
 import {
   resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentBaseStreamFn,
-  resolveEmbeddedAgentStreamFn,
+  resolveEmbeddedAgentStream,
 } from "./stream-resolution.js";
 import { mapThinkingLevelForProvider } from "./utils.js";
 
@@ -59,7 +60,7 @@ export async function prepareCompactionSessionAgent(params: {
         authStorage,
       })
     : params.resolvedApiKey;
-  params.session.agent.streamFn = resolveEmbeddedAgentStreamFn({
+  params.session.agent.streamFn = resolveEmbeddedAgentStream({
     llmRuntime: params.llmRuntime,
     currentStreamFn: resolveEmbeddedAgentBaseStreamFn({ session: params.session as never }),
     providerStreamFn: params.providerStreamFn as never,
@@ -70,11 +71,12 @@ export async function prepareCompactionSessionAgent(params: {
     transportAuthAvailable: Boolean(transportApiKey?.trim()),
     authProfileId: params.runtimePlan?.auth.forwardedAuthProfileId,
     authStorage: params.authStorage as never,
-  });
+  }).streamFn;
   const providerTextTransforms = resolveProviderTextTransforms({
     provider: params.provider,
     config: params.config,
     workspaceDir: params.effectiveWorkspace,
+    runtimeHandle: getModelProviderRuntimePluginHandle(params.effectiveModel),
   });
   if (providerTextTransforms) {
     params.session.agent.streamFn = wrapStreamFnTextTransforms({

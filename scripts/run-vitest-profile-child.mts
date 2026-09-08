@@ -1,3 +1,4 @@
+import { getHashes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type { ViteUserConfig } from "vitest/config";
 import { isVitestProfileError, startVitestProfile } from "./lib/vitest-profiler.mts";
@@ -9,13 +10,15 @@ if ((mode !== "main" && mode !== "runner") || !outputDir) {
 // Start before importing Vitest so main capture includes Vite/Vitest startup.
 const finishMain = mode === "main" ? await startVitestProfile(outputDir, false) : undefined;
 try {
+  // Node 24's background CA loader can deadlock with Undici's first hash enumeration.
+  // Populate that cached result before TLS loads, inside main's startup capture.
+  // Remove when supported Node/OpenSSL versions make concurrent initialization safe.
+  getHashes();
   const { parseCLI, startVitest } = await import("vitest/node");
   const { normalizePath } = await import("vite");
-  const { z } = await import("zod");
   const { filter, options } = parseCLI(["vitest", ...args]);
-  // parseCLI prints help but does not exit, and its type omits that control flag.
-  const controls = z.object({ help: z.boolean().optional() }).parse(options);
-  if (controls.help) {
+  // Match native help truthiness (including repeated-flag arrays); parseCLI's type omits help.
+  if ("help" in options && options.help) {
     await finishMain?.();
     process.exit(0);
   }

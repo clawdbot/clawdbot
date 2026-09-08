@@ -9,11 +9,15 @@ import {
 // callers can tell a lost exclusive-create race from a real failure. Any other
 // nonzero exit stays an error.
 export const SANDBOX_CREATE_EXISTS_EXIT_CODE = 17;
+// Preserve missing-read identity across the shell boundary without parsing stderr.
+export const SANDBOX_READ_NOT_FOUND_EXIT_CODE = 2;
 
 export const SANDBOX_PINNED_MUTATION_PYTHON = [
   `SANDBOX_CREATE_EXISTS_EXIT_CODE = ${SANDBOX_CREATE_EXISTS_EXIT_CODE}`,
+  `SANDBOX_READ_NOT_FOUND_EXIT_CODE = ${SANDBOX_READ_NOT_FOUND_EXIT_CODE}`,
   "import ctypes",
   "import errno",
+  "import json",
   "import os",
   "import secrets",
   "import stat",
@@ -452,9 +456,22 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "            read_file_bounded(parent_fd, sys.argv[4], int(sys.argv[5]))",
   "        else:",
   "            read_file(parent_fd, sys.argv[4])",
+  "    except FileNotFoundError:",
+  "        sys.exit(SANDBOX_READ_NOT_FOUND_EXIT_CODE)",
   "    finally:",
   "        if parent_fd is not None:",
   "            os.close(parent_fd)",
+  "        os.close(root_fd)",
+  "elif operation == 'readdir':",
+  "    root_fd = open_dir(sys.argv[2])",
+  "    target_fd = None",
+  "    try:",
+  "        target_fd = walk_dir(root_fd, sys.argv[3], False)",
+  "        with os.scandir(target_fd) as entries:",
+  "            print(json.dumps([{'name': entry.name, 'isDirectory': entry.is_dir(follow_symlinks=False)} for entry in entries]))",
+  "    finally:",
+  "        if target_fd is not None:",
+  "            os.close(target_fd)",
   "        os.close(root_fd)",
   "elif operation == 'mkdirp':",
   "    root_fd = open_dir(sys.argv[2])",

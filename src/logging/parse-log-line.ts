@@ -1,8 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-// Log line parsing helpers convert text log entries into structured records.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 
-// Parser for JSON LogTape lines emitted by the OpenClaw logger.
 export type ParsedLogLine = {
   time?: string;
   level?: string;
@@ -31,7 +29,7 @@ function extractMessage(value: Record<string, unknown>): string {
 }
 
 function parseMetaName(raw?: unknown): LogContext {
-  if (typeof raw !== "string") {
+  if (typeof raw !== "string" || !raw.trimStart().startsWith("{")) {
     return {};
   }
   try {
@@ -51,6 +49,9 @@ function resolveContext(
   meta: Record<string, unknown> | undefined,
 ): LogContext {
   const metadataContext = parseMetaName(meta?.name);
+  if (meta?.name === value["0"]) {
+    return metadataContext;
+  }
   const positionalContext = parseMetaName(value["0"]);
   return {
     subsystem: metadataContext.subsystem ?? positionalContext.subsystem,

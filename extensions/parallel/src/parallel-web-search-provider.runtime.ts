@@ -16,14 +16,8 @@ import {
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  buildParallelCacheKey,
   executeParallelSearchRequest,
-  normalizeParallelClientModel,
-  normalizeParallelObjective,
-  normalizeParallelResults,
-  normalizeParallelSearchQueries,
   type ParallelSearchResponse,
-  resolveParallelSearchCount,
 } from "./parallel-search-normalize.js";
 
 const PARALLEL_BASE_URL = "https://api.parallel.ai";
@@ -209,16 +203,3 @@ export async function executeParallelWebSearchProviderTool(
       }),
   });
 }
-
-export const testing = {
-  buildParallelCacheKey,
-  missingParallelKeyPayload,
-  normalizeParallelClientModel,
-  normalizeParallelObjective,
-  normalizeParallelResults,
-  normalizeParallelSearchQueries,
-  resolveParallelApiKey,
-  resolveParallelSearchCount,
-  resolveParallelSearchEndpoint,
-  PARALLEL_SEARCH_RESPONSE_LIMIT_BYTES,
-} as const;

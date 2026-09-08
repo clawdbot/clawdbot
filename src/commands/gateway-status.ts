@@ -1,4 +1,4 @@
-/** CLI entrypoint for `openclaw gateway status`. */
+/** CLI entrypoint for `openclaw gateway probe`. */
 import { isRich } from "../../packages/terminal-core/src/theme.js";
 import { parseGatewayPortOption } from "../cli/gateway-port-option.js";
 import { parseTimeoutMsWithFallback } from "../cli/parse-timeout.js";
@@ -59,7 +59,9 @@ export async function gatewayStatusCommand(
   const cfg = await readBestEffortConfig();
   const rich = isRich() && opts.json !== true;
   const defaultTimeoutMs = 3000;
-  const overallTimeoutMs = parseTimeoutMsWithFallback(opts.timeout, defaultTimeoutMs);
+  const overallTimeoutMs = parseTimeoutMsWithFallback(opts.timeout, defaultTimeoutMs, {
+    invalidType: "error",
+  });
   const portOverride = parseGatewayPortOption(opts.port);
   const wideAreaDomain = resolveWideAreaDiscoveryDomain({
     configDomain: cfg.discovery?.wideArea?.domain,
@@ -100,36 +102,64 @@ export async function gatewayStatusCommand(
     }
   }
 
-  const localTlsRuntime =
+  const localCertificate =
     cfg.gateway?.tls?.enabled === true
-      ? await loadGatewayTlsModule().then(({ loadGatewayTlsRuntime }) =>
-          loadGatewayTlsRuntime(cfg.gateway?.tls),
+      ? await loadGatewayTlsModule().then(({ inspectGatewayTlsCertificate }) =>
+          inspectGatewayTlsCertificate(cfg.gateway?.tls),
         )
       : undefined;
 
-  const probePass = await withProgress(
-    {
-      label: "Inspecting gateways…",
-      indeterminate: true,
-      enabled: opts.json !== true,
-    },
-    async () =>
-      await runGatewayStatusProbePass({
-        cfg,
-        opts,
-        overallTimeoutMs,
-        discoveryTimeoutMs,
-        wideAreaDomain,
-        baseTargets,
-        remotePort,
-        sshTarget,
-        sshIdentity,
-        loadSshTunnelModule,
-        localTlsFingerprint: localTlsRuntime?.enabled
-          ? localTlsRuntime.fingerprintSha256
-          : undefined,
-      }),
-  );
+  const controller = new AbortController();
+  let abortSignal: "SIGINT" | "SIGTERM" | undefined;
+  const onSigInt = () => {
+    if (!abortSignal) {
+      abortSignal = "SIGINT";
+      controller.abort();
+    }
+  };
+  const onSigTerm = () => {
+    if (!abortSignal) {
+      abortSignal = "SIGTERM";
+      controller.abort();
+    }
+  };
+  process.on("SIGINT", onSigInt);
+  process.on("SIGTERM", onSigTerm);
+  const probePass = await (async () => {
+    try {
+      return await withProgress(
+        {
+          label: "Inspecting gateways…",
+          indeterminate: true,
+          enabled: opts.json !== true,
+        },
+        async () =>
+          await runGatewayStatusProbePass({
+            cfg,
+            opts,
+            overallTimeoutMs,
+            discoveryTimeoutMs,
+            wideAreaDomain,
+            baseTargets,
+            remotePort,
+            sshTarget,
+            sshIdentity,
+            loadSshTunnelModule,
+            localTlsFingerprint: localCertificate?.ok
+              ? localCertificate.value.fingerprintSha256
+              : undefined,
+            signal: controller.signal,
+          }),
+      );
+    } finally {
+      process.off("SIGINT", onSigInt);
+      process.off("SIGTERM", onSigTerm);
+    }
+  })();
+  if (abortSignal) {
+    runtime.exit(abortSignal === "SIGINT" ? 130 : 143);
+    return;
+  }
 
   const warnings = buildGatewayStatusWarnings({
     probed: probePass.probed,
@@ -137,10 +167,7 @@ export async function gatewayStatusCommand(
     sshTunnelStarted: probePass.sshTunnelStarted,
     sshTunnelError: probePass.sshTunnelError,
     discoveryCount: probePass.discovery.length,
-    localTlsLoadError:
-      localTlsRuntime && !localTlsRuntime.enabled && localTlsRuntime.required
-        ? (localTlsRuntime.error ?? "gateway tls is enabled but local TLS runtime could not load")
-        : null,
+    localTlsLoadError: localCertificate && !localCertificate.ok ? localCertificate.error : null,
   });
   const primary = pickPrimaryProbedTarget(probePass.probed);
 

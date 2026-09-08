@@ -27,6 +27,41 @@ resolve_pr_author_access_at_prepare() {
   fi
 }
 
+retire_prep_evidence() {
+  local archive="" artifact
+  for artifact in \
+    .local/prep-context.env \
+    .local/prep.env \
+    .local/gates.env \
+    .local/prepare-push-result.env \
+    .local/prepare-sync-result.env \
+    .local/prep.md \
+    .local/gates-*.log; do
+    if [ ! -e "$artifact" ] && [ ! -L "$artifact" ]; then
+      continue
+    fi
+    if [ ! -f "$artifact" ] || [ -L "$artifact" ]; then
+      echo "Cannot retain preparation evidence at $artifact: expected a regular file." >&2
+      return 1
+    fi
+    if [ -z "$archive" ]; then
+      archive=$(mktemp -d .local/prep-evidence.XXXXXX) || return 1
+    fi
+    cp -p "$artifact" "$archive/" || return 1
+  done
+  [ -n "$archive" ] || return 0
+
+  # Retire active authority only after every prior artifact has been retained.
+  # The caller replaces prep-context.env with its validated preparation source.
+  rm -f \
+    .local/gates.env \
+    .local/prep.env \
+    .local/prepare-push-result.env \
+    .local/prepare-sync-result.env || return 1
+  printf '%s\n' "- Prior preparation evidence retained at $archive." >> .local/prep.md || return 1
+  echo "Prior preparation evidence retained at $archive."
+}
+
 refresh_prep_branch_for_reviewed_head() {
   local pr="$1"
   require_artifact .local/pr-meta.env
@@ -72,12 +107,8 @@ refresh_prep_branch_for_reviewed_head() {
   prior_prep_head=$(git rev-parse "refs/heads/$prep_branch")
   echo "Prep source head changed from $recorded_source_head to reviewed head $reviewed_head_sha."
   echo "Rebuilding $prep_branch from the reviewed PR head and invalidating stale prepare evidence."
-  git checkout -B "$prep_branch" "$reviewed_head_sha"
-  rm -f \
-    .local/gates.env \
-    .local/prep.env \
-    .local/prepare-push-result.env \
-    .local/prepare-sync-result.env
+  git checkout -B "$prep_branch" "$reviewed_head_sha" || return 1
+  retire_prep_evidence || return 1
 
   # Security: shell-escape values before sourcing this context later.
   printf '%s=%q\n' \
@@ -143,7 +174,7 @@ prepare_init() {
   review_validate_artifacts "$pr" || return 1
   require_ready_review_recommendation || return 1
   mark_pr_operation_side_effects_started
-  enter_worktree "$pr" true || return 1
+  enter_worktree "$pr" false || return 1
 
   require_artifact .local/pr-meta.env
   require_artifact .local/review.md
@@ -166,6 +197,9 @@ prepare_init() {
     echo "Prepare init failed: missing PR_HEAD_SHA in .local/pr-meta.env. Re-run review-init."
     exit 1
   fi
+  # Keep clean-state admission and recoverable detachment without visiting main.
+  # Fetch cannot update pr-$pr while that branch is checked out.
+  checkout_pr_worktree_target "$pr" "$reviewed_head_sha" || return 1
 
   local json
   json=$(pr_meta_json "$pr")
@@ -193,7 +227,8 @@ prepare_init() {
     echo "PR head changed while prepare-init fetched it (reviewed $reviewed_head_sha, fetched $fetched_head_sha). Re-run review-init."
     exit 1
   fi
-  git checkout -B "pr-$pr-prep" "$reviewed_head_sha"
+  git checkout -B "pr-$pr-prep" "$reviewed_head_sha" || return 1
+  retire_prep_evidence || return 1
 
   # Security: shell-escape values to prevent command injection via malicious branch names.
   printf '%s=%q\n' \
@@ -252,6 +287,46 @@ prepare_validate_commit() {
   echo "prep commit subject validated: $subject"
 }
 
+resolve_prep_publication_target() {
+  local pr="$1" local_head="$2"
+  local source_head="${PR_HEAD_SHA_BEFORE:-}" head_ref="${PR_HEAD:-}"
+  if [ "${PR_NUMBER:-}" != "$pr" ] || ! [[ "$source_head" =~ ^[0-9a-f]{40}$ ]] || [ -z "$head_ref" ]; then
+    echo "Missing or mismatched prepare context. Re-run review-init and prepare-init." >&2
+    return 1
+  fi
+  PREP_PUBLICATION_LEASE_SHA="$source_head"
+  PREP_PUBLICATION_HEAD_SHA="$local_head"
+  if [ ! -e .local/prep.env ]; then
+    return 0
+  fi
+
+  # A previous publication can advance authority only for this PR, branch,
+  # and prepared source. Do not let sourced receipt fields replace context.
+  local PR_NUMBER="" PR_HEAD="" PR_HEAD_SHA_BEFORE=""
+  local PREP_HEAD_SHA="" LOCAL_PREP_HEAD_SHA=""
+  # shellcheck disable=SC1091
+  source .local/prep.env || return 1
+  if [ "$PR_NUMBER" != "$pr" ] || [ "$PR_HEAD" != "$head_ref" ] ||
+    ! [[ "$PR_HEAD_SHA_BEFORE" =~ ^[0-9a-f]{40}$ ]] ||
+    ! [[ "$PREP_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+    ! [[ "$LOCAL_PREP_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+    ! git merge-base --is-ancestor "$source_head" "$PR_HEAD_SHA_BEFORE" ||
+    ! git merge-base --is-ancestor "$PR_HEAD_SHA_BEFORE" "$PREP_HEAD_SHA" ||
+    ! git merge-base --is-ancestor "$source_head" "$LOCAL_PREP_HEAD_SHA" ||
+    [ "$(git rev-parse "$LOCAL_PREP_HEAD_SHA^{tree}")" != "$(git rev-parse "$PREP_HEAD_SHA^{tree}")" ]; then
+    echo "Publication receipt does not match this preparation. Retain artifacts and re-run review-init and prepare-init." >&2
+    return 1
+  fi
+  PREP_PUBLICATION_LEASE_SHA="$PREP_HEAD_SHA"
+  if [ "$local_head" = "$LOCAL_PREP_HEAD_SHA" ]; then
+    # GraphQL can return a different verified OID for this exact local commit.
+    # Only that recorded pair permits a no-op; new fixups must extend the OID.
+    PREP_PUBLICATION_HEAD_SHA="$PREP_HEAD_SHA"
+  else
+    verify_prep_head_extends_hosted_head "$PREP_HEAD_SHA" || return 1
+  fi
+}
+
 prepare_push() {
   local pr="$1"
   PR_MAIN_SHA=""
@@ -283,18 +358,15 @@ prepare_push() {
   prep_head_sha=$(git rev-parse HEAD)
   local local_prep_head_sha
 
-  local lease_sha
-  lease_sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+  resolve_prep_publication_target "$pr" "$prep_head_sha" || return 1
+  local lease_sha="$PREP_PUBLICATION_LEASE_SHA"
+  prep_head_sha="$PREP_PUBLICATION_HEAD_SHA"
   local push_result_env=".local/prepare-push-result.env"
 
   verify_pr_head_branch_matches_expected "$pr" "$PR_HEAD"
-  push_prep_head_to_pr_branch "$pr" "$PR_HEAD" "$prep_head_sha" "$lease_sha" true "${DOCS_ONLY:-false}" "$push_result_env"
+  push_prep_head_to_pr_branch "$pr" "$PR_HEAD" "$prep_head_sha" "$lease_sha" "$push_result_env" || return $?
   # shellcheck disable=SC1090
   source "$push_result_env"
-  # A lease retry reruns gates for the rebased head and rewrites gates.env;
-  # re-source so prep.md/prep.env carry the stamp for the head actually pushed.
-  # shellcheck disable=SC1091
-  source .local/gates.env
   prep_head_sha="$PUSH_PREP_HEAD_SHA"
   local_prep_head_sha="$PUSH_LOCAL_PREP_HEAD_SHA"
   local mainline_base_sha
@@ -379,13 +451,13 @@ prepare_sync_head() {
   prep_head_sha=$(git rev-parse HEAD)
   local local_prep_head_sha
 
-  local lease_sha
-  lease_sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
-  verify_prep_head_extends_hosted_head "$lease_sha" || exit 1
+  resolve_prep_publication_target "$pr" "$prep_head_sha" || return 1
+  local lease_sha="$PREP_PUBLICATION_LEASE_SHA"
+  prep_head_sha="$PREP_PUBLICATION_HEAD_SHA"
   local push_result_env=".local/prepare-sync-result.env"
 
   verify_pr_head_branch_matches_expected "$pr" "$PR_HEAD"
-  push_prep_head_to_pr_branch "$pr" "$PR_HEAD" "$prep_head_sha" "$lease_sha" false false "$push_result_env"
+  push_prep_head_to_pr_branch "$pr" "$PR_HEAD" "$prep_head_sha" "$lease_sha" "$push_result_env" || return $?
   # shellcheck disable=SC1090
   source "$push_result_env"
   prep_head_sha="$PUSH_PREP_HEAD_SHA"

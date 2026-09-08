@@ -10,6 +10,7 @@ import { toSafeImportPath } from "../shared/import-specifier.js";
 import {
   clearPluginModuleRequireCache,
   tryNativeRequireJavaScriptModule,
+  tryNativeRequireModule,
 } from "./native-module-require.js";
 import {
   bindPluginCacheRoot,
@@ -23,6 +24,7 @@ import {
   buildPluginLoaderJitiOptions,
   createPluginLoaderModuleCacheKey,
   preparePluginLoaderAliases,
+  isPluginSdkAliasSpecifier,
   resolvePluginLoaderTryNative,
   type PluginSdkResolutionPreference,
 } from "./sdk-alias.js";
@@ -211,6 +213,34 @@ function createLazySourceTransformLoader(params: {
       params.loaderFilename,
       {
         ...jitiOptions,
+        // Source SDK aliases resolve outside node_modules, so Jiti's nativeModules
+        // matcher misses them. Keep host state native while plugin source remains
+        // transformable and reloadable within its cache generation.
+        virtualModules: params.transformOpenClawDependencies
+          ? undefined
+          : new Proxy<Record<string, unknown>>(
+              {},
+              {
+                has(_target, key) {
+                  return (
+                    typeof key === "string" &&
+                    isPluginSdkAliasSpecifier(key) &&
+                    Boolean(params.resolveAlias(key))
+                  );
+                },
+                get(_target, key) {
+                  const target = typeof key === "string" ? params.resolveAlias(key) : undefined;
+                  if (!target) {
+                    return undefined;
+                  }
+                  const native = tryNativeRequireModule(target, {
+                    allowWindows: true,
+                    fallbackOnMissingDependency: true,
+                  });
+                  return native.ok ? native.moduleExport : jitiLoader(target);
+                },
+              },
+            ),
         nativeModules: params.transformOpenClawDependencies
           ? jitiOptions.nativeModules.filter((moduleName) => moduleName !== "openclaw")
           : jitiOptions.nativeModules,
@@ -321,7 +351,7 @@ export function getCachedPluginModuleLoader(
   return loader;
 }
 
-type PublicSurfaceModuleLoadParams = {
+type PluginModuleBoundaryParams = {
   modulePath: string;
   boundaryRoot: string;
   boundaryLabel: string;
@@ -329,7 +359,8 @@ type PublicSurfaceModuleLoadParams = {
   surfaceLabel: string;
 };
 
-function preparePublicSurfaceModule(params: PublicSurfaceModuleLoadParams) {
+/** Validates an entry once per generation without changing its module export shape. */
+export function preparePluginModule(params: PluginModuleBoundaryParams) {
   const cache = getPluginCache();
   let source = getPluginCacheSource(params.modulePath, cache);
   const boundaryKey = `${getPluginCacheRoot(params.boundaryRoot).rootDir}\0${params.rejectHardlinks}`;
@@ -366,11 +397,11 @@ function preparePublicSurfaceModule(params: PublicSurfaceModuleLoadParams) {
 
 /** Public artifacts and SDK facades share one validated module, including circular imports. */
 export function loadPluginPublicSurfaceModuleSync(
-  params: PublicSurfaceModuleLoadParams & {
+  params: PluginModuleBoundaryParams & {
     loadModule: (modulePath: string) => unknown;
   },
 ): object {
-  const { source, modulePath } = preparePublicSurfaceModule(params);
+  const { source, modulePath } = preparePluginModule(params);
   const cached = source.publicSurface?.exports;
   if (cached) {
     return cached;
@@ -389,11 +420,11 @@ export function loadPluginPublicSurfaceModuleSync(
 }
 
 export async function loadPluginPublicSurfaceModule(
-  params: PublicSurfaceModuleLoadParams & {
+  params: PluginModuleBoundaryParams & {
     loadModule: (modulePath: string) => Promise<object>;
   },
 ): Promise<object> {
-  const { source, modulePath } = preparePublicSurfaceModule(params);
+  const { source, modulePath } = preparePluginModule(params);
   const cached = source.publicSurface;
   if (cached?.exports) {
     return cached.exports;

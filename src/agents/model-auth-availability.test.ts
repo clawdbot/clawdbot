@@ -128,6 +128,28 @@ describe("createModelAuthAvailabilityResolver", () => {
     expect(resolver.evaluateModelAuth("anthropic").availability).not.toBe(true);
   });
 
+  it("keeps configured local providers independent from native-auth probe completion", () => {
+    const resolver = createModelAuthAvailabilityResolver({
+      cfg: {
+        models: {
+          providers: {
+            "local-openai": {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:8080/v1",
+              models: [],
+            },
+          },
+        },
+      },
+      authStore: authStore(),
+      env: {},
+      preparedSyntheticAuthComplete: true,
+    });
+
+    const evaluation = resolver.evaluateModelAuth("local-openai");
+    expect(evaluation).toMatchObject({ availability: undefined });
+  });
+
   it.each([
     { mode: "api_key" as const, selectedRoute: platformRoute },
     { mode: "oauth" as const, selectedRoute: subscriptionRoute },
@@ -578,7 +600,7 @@ describe("createModelAuthAvailabilityResolver", () => {
     });
   });
 
-  it("treats preferred and locked profiles as distinct source-order facts", () => {
+  it("treats automatic preferences and user pins as distinct source-order facts", () => {
     const store = authStore(
       {
         "openai:platform": { type: "api_key", provider: "openai", key: "platform-key" },
@@ -602,7 +624,7 @@ describe("createModelAuthAvailabilityResolver", () => {
         store,
         ref: {
           preferredProfileId: "openai:chatgpt",
-          lockedProfileId: "openai:platform",
+          pinnedProfileId: "openai:platform",
         },
       }),
     ).toMatchObject({
@@ -798,7 +820,7 @@ describe("createModelAuthAvailabilityResolver", () => {
 
     expect(
       resolver.resolveProviderAuthAvailability("claude-cli", {
-        lockedProfileId: manualProfileId,
+        requiredProfileId: manualProfileId,
       }),
     ).toBeUndefined();
   });

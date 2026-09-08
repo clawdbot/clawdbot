@@ -16,6 +16,6 @@ function collectPluginNpmReleasePlan(argv: string[]) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  const plan = collectPluginNpmReleasePlan(process.argv.slice(2));
+  const plan = await collectPluginNpmReleasePlan(process.argv.slice(2));
   console.log(JSON.stringify(plan, null, 2));
 }

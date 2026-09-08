@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, test } from "vitest";
+import { contextBudgetStatusFixture } from "../../../../src/config/sessions/context-budget.test-support.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { resolveChatThinkingSelectState } from "../chat/thinking.ts";
 import {
@@ -133,6 +134,7 @@ test("sessions.changed deletes every nested null tombstone, not a hand-kept list
         kind: "direct",
         updatedAt: 1,
         toolOverrides: { profile: "coding" },
+        contextBudgetStatus: contextBudgetStatusFixture(),
         agentStatus: { state: "needs_attention", message: "Reply requested" },
         observerDigest: {
           agentId: "main",
@@ -158,6 +160,7 @@ test("sessions.changed deletes every nested null tombstone, not a hand-kept list
       kind: "direct",
       updatedAt: 2,
       toolOverrides: null,
+      contextBudgetStatus: null,
       agentStatus: null,
       observerDigest: null,
       controlOwnerSessionKey: null,
@@ -171,6 +174,7 @@ test("sessions.changed deletes every nested null tombstone, not a hand-kept list
   const row = reconciled.result?.sessions[0] as Record<string, unknown> | undefined;
   for (const field of [
     "toolOverrides",
+    "contextBudgetStatus",
     "agentStatus",
     "observerDigest",
     "controlOwnerSessionKey",
@@ -710,6 +714,7 @@ describe("reconcileSessionChanged", () => {
         archived: true,
         archivedAt: 1,
         archivedBy: { type: "human", id: "profile-ada", label: "Ada" },
+        archiveReason: "manual",
       },
     ]);
 
@@ -724,12 +729,15 @@ describe("reconcileSessionChanged", () => {
         archived: false,
         archivedAt: null,
         archivedBy: null,
+        archiveReason: null,
       },
       { archivedFilter: "all" },
     );
 
     expect(next.row?.archivedBy).toBeUndefined();
+    expect(next.row?.archiveReason).toBeUndefined();
     expect(next.result?.sessions[0]?.archivedBy).toBeUndefined();
+    expect(next.result?.sessions[0]?.archiveReason).toBeUndefined();
   });
 });
 

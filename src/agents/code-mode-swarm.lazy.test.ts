@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { PendingBridgeRequest, SettledBridgeRequest } from "./code-mode-worker-types.js";
+import type { PendingBridgeRequest } from "./code-mode-worker-types.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 import type { ToolSearchToolContext } from "./tool-search-types.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -11,7 +11,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
   vi.resetModules();
   const entered = createDeferred();
   const release = createDeferred();
-  const bridgeCalls: Promise<SettledBridgeRequest>[] = [];
+  const bridgeCalls: Promise<void>[] = [];
   const cleanups: Array<() => void> = [];
   const lookup =
     vi.fn<
@@ -36,8 +36,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
     },
   );
   vi.doMock("./code-mode-swarm.runtime.js", load);
-  vi.doMock("./subagents/registry/subagent-registry.js", async (importOriginal) => ({
-    ...(await importOriginal<typeof import("./subagents/registry/subagent-registry.js")>()),
+  vi.doMock("./subagents/registry/subagent-registry.js", () => ({
     getSwarmRunByLaunchReplayKey: lookup,
     initSubagentRegistry: initialize,
     getSubagentRunsByRunIds: readCollectors,
@@ -141,7 +140,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
         execute: spawn,
       };
       applyCodeModeCatalog({ ...ctx, tools: [...createCodeModeTools(ctx), spawnTool] });
-      const owner = createCodeModeRunOwner(ctx);
+      const owner = createCodeModeRunOwner(ctx, resolveCodeModeConfig(config));
       cleanups.push(() => {
         owner.close();
         clearToolSearchCatalog(ctx);
@@ -153,9 +152,9 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
         config,
         owner,
         dispatch: (pendingRequests = requests) =>
-          createPendingBridgeStates({
-            pendingRequests,
+          createPendingBridgeStates(pendingRequests, {
             config: limits,
+            inbox: owner.inbox,
             runtime,
             ctx,
             catalogProjection: createCodeModeCatalogProjection(runtime.all({ includeMcp: false })),
@@ -177,8 +176,9 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
       } else {
         run.ctx.toolExecutionAllow = ["skill_workshop"];
       }
-      const settled = await Promise.all(run.dispatch().map((entry) => entry.promise));
-      expect(settled.every((entry) => !entry.ok)).toBe(true);
+      const pending = run.dispatch();
+      await Promise.all(pending.map((entry) => entry.promise));
+      expect(pending.every((entry) => !entry.reply.take().ok)).toBe(true);
       expect(load).not.toHaveBeenCalled();
     }
 
@@ -204,25 +204,30 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
       if (kind === "owner" || kind === "catalog") {
         expect(run.owner.signal.aborted).toBe(true);
         for (const entry of pending) {
-          expect(await entry.promise).toMatchObject({ ok: false });
+          expect(await entry.promise).toBeUndefined();
+          expect(() => entry.reply.take()).toThrow("unavailable");
         }
       }
     }
     release.resolve();
     // The cancellation race settles first; join the original work before checking effects.
-    for (const { pending } of closedRuns) {
+    for (const { kind, pending } of closedRuns) {
       for (const entry of pending) {
-        expect(await entry.promise).toMatchObject({ ok: false });
+        await entry.promise;
+        if (kind === "owner" || kind === "catalog") {
+          expect(() => entry.reply.take()).toThrow("unavailable");
+        } else {
+          expect(entry.reply.take().ok).toBe(false);
+        }
       }
     }
-    expect(await Promise.all(live.map((entry) => entry.promise))).toEqual([
-      { id: "live-note", ok: true, value: { ok: true } },
+    await Promise.all(live.map((entry) => entry.promise));
+    expect(live.map((entry) => entry.reply.take())).toEqual([
+      { id: "live-note", ok: true, json: JSON.stringify({ ok: true }) },
     ]);
     const originals = await Promise.all(bridgeCalls);
     expect(originals).toHaveLength(requests.length * (2 + closedRuns.length) + live.length);
-    expect(originals.filter((entry) => entry.id !== "live-note").every((entry) => !entry.ok)).toBe(
-      true,
-    );
+    expect(originals.every((entry) => entry === undefined)).toBe(true);
     expect(load).toHaveBeenCalledOnce();
     expect(lookup).not.toHaveBeenCalled();
     expect(initialize).not.toHaveBeenCalled();

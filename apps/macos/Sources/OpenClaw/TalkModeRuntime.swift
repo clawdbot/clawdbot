@@ -50,7 +50,7 @@ actor TalkModeRuntime {
         }
     }
 
-    private var recognizer: SFSpeechRecognizer?
+    private var recognizerCache = SpeechRecognizerCache()
     private var audioEngine: AVAudioEngine?
     private var audioInputObserver: AudioInputDeviceObserver?
     private var activeInputResolution: AudioInputDeviceResolution?
@@ -319,9 +319,7 @@ actor TalkModeRuntime {
                 Locale.autoupdatingCurrent.identifier,
             ],
             supportedLocaleIDs: supportedLocaleIDs)
-        let recognizer = localeID
-            .map { SFSpeechRecognizer(locale: Locale(identifier: $0)) }
-            ?? SFSpeechRecognizer()
+        let recognizer = self.recognizerCache.recognizer(localeID: localeID)
         guard let recognizer, recognizer.isAvailable else {
             self.logger.error("talk recognizer unavailable")
             return false
@@ -355,7 +353,6 @@ actor TalkModeRuntime {
             },
             discard: { $0.discard() },
             publish: { preparedCapture in
-                self.recognizer = recognizer
                 self.recognitionRequest = preparedCapture.request
                 self.audioEngine = preparedCapture.engine
                 self.activeInputResolution = preparedCapture.activeInputResolution
@@ -418,7 +415,6 @@ actor TalkModeRuntime {
         self.audioEngine?.stop()
         self.audioEngine = nil
         self.activeInputResolution = nil
-        self.recognizer = nil
         self.rmsTask?.cancel()
         self.rmsTask = nil
     }
@@ -729,11 +725,11 @@ extension TalkModeRuntime {
         return await withTaskGroup(of: String?.self) { group in
             group.addTask { [runId, sessionKey] in
                 var latestText: String?
-                for await push in stream {
+                for await delivery in stream {
                     if Task.isCancelled {
                         return latestText
                     }
-                    guard case let .event(evt) = push else { continue }
+                    guard delivery.isCurrent, case let .event(evt) = delivery.push else { continue }
                     guard evt.event == "chat", let payload = evt.payload else { continue }
                     guard let chatEvent = try? GatewayPayloadDecoding.decode(
                         payload,
@@ -950,7 +946,7 @@ extension TalkModeRuntime {
         }
 
         let requestedVoice = directive?.voiceId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedVoice = self.resolveVoiceAlias(requestedVoice)
+        let resolvedVoice = TalkVoiceAliases.resolve(requestedVoice, aliases: self.voiceAliases)
         if let requestedVoice, !requestedVoice.isEmpty, resolvedVoice == nil {
             self.logger.warning("talk unknown voice alias \(requestedVoice, privacy: .public)")
         }
@@ -1039,21 +1035,10 @@ extension TalkModeRuntime {
         func makeRequest(outputFormat: String?) -> ElevenLabsTTSRequest {
             ElevenLabsTTSRequest(
                 text: input.cleanedText,
+                directive: input.directive,
                 modelId: modelId,
                 outputFormat: outputFormat,
-                speed: TalkTTSValidation.resolveSpeed(
-                    speed: input.directive?.speed,
-                    rateWPM: input.directive?.rateWPM),
-                stability: TalkTTSValidation.validatedStability(
-                    input.directive?.stability,
-                    modelId: modelId),
-                similarity: TalkTTSValidation.validatedUnit(input.directive?.similarity),
-                style: TalkTTSValidation.validatedUnit(input.directive?.style),
-                speakerBoost: input.directive?.speakerBoost,
-                seed: TalkTTSValidation.validatedSeed(input.directive?.seed),
-                normalize: ElevenLabsTTSClient.validatedNormalize(input.directive?.normalize),
-                language: input.language,
-                latencyTier: TalkTTSValidation.validatedLatencyTier(input.directive?.latencyTier))
+                language: input.language)
         }
 
         let request = makeRequest(outputFormat: outputFormat)
@@ -1187,7 +1172,7 @@ extension TalkModeRuntime {
                     TalkMLXSpeechSynthesizer.SynthesizeError.timedOut
                 },
                 operation: { [self] in
-                    return try await self.streamMLXVoice(
+                    try await self.streamMLXVoice(
                         text: input.cleanedText,
                         modelRepo: modelRepo,
                         language: input.language,
@@ -1219,7 +1204,7 @@ extension TalkModeRuntime {
     private func resolveVoiceId(preferred: String?, apiKey: String) async -> String? {
         let trimmed = preferred?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmed.isEmpty {
-            if let resolved = resolveVoiceAlias(trimmed) {
+            if let resolved = TalkVoiceAliases.resolve(trimmed, aliases: self.voiceAliases) {
                 return resolved
             }
             self.ttsLogger.warning("talk unknown voice alias \(trimmed, privacy: .public)")
@@ -1249,24 +1234,6 @@ extension TalkModeRuntime {
             self.ttsLogger.error("elevenlabs list voices failed: \(error.localizedDescription, privacy: .public)")
             return nil
         }
-    }
-
-    private func resolveVoiceAlias(_ value: String?) -> String? {
-        let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        let normalized = trimmed.lowercased()
-        if let mapped = voiceAliases[normalized] {
-            return mapped
-        }
-        if self.voiceAliases.values.contains(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) {
-            return trimmed
-        }
-        return Self.isLikelyVoiceId(trimmed) ? trimmed : nil
-    }
-
-    private static func isLikelyVoiceId(_ value: String) -> Bool {
-        guard value.count >= 10 else { return false }
-        return value.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
     }
 
     func stopSpeaking(
@@ -1468,21 +1435,21 @@ extension TalkModeRuntime {
             envVoice: envVoice,
             sagVoice: sagVoice,
             envApiKey: envApiKey)
-        if parsed.missingResolvedPayload {
+        if parsed.snapshot.missingResolvedPayload {
             self.ttsLogger.info("talk config ignored: normalized payload missing talk.resolved")
         }
-        if parsed.activeProvider == Self.defaultTalkProvider {
+        if parsed.snapshot.activeProvider == Self.defaultTalkProvider {
             self.ttsLogger.info("talk config provider from talk.resolved")
-        } else if parsed.activeProvider == Self.mlxTalkProvider ||
-            parsed.activeProvider == Self.systemTalkProvider
+        } else if parsed.snapshot.activeProvider == Self.mlxTalkProvider ||
+            parsed.snapshot.activeProvider == Self.systemTalkProvider
         {
             self.ttsLogger.info(
-                "talk provider \(parsed.activeProvider, privacy: .public) active")
+                "talk provider \(parsed.snapshot.activeProvider, privacy: .public) active")
         } else {
             self.ttsLogger
                 .info(
                     """
-                    talk provider \(parsed.activeProvider, privacy: .public) uses gateway talk.speak \
+                    talk provider \(parsed.snapshot.activeProvider, privacy: .public) uses gateway talk.speak \
                     with system voice fallback
                     """)
         }
@@ -1521,7 +1488,7 @@ extension TalkModeRuntime {
 
     func commitTalkConfig(_ cfg: TalkModeGatewayConfigState, locale: String) {
         self.defaultVoiceId = cfg.voiceId
-        self.voiceAliases = cfg.voiceAliases
+        self.voiceAliases = cfg.snapshot.voiceAliases
         if !self.voiceOverrideActive {
             self.currentVoiceId = cfg.voiceId
         }
@@ -1531,15 +1498,15 @@ extension TalkModeRuntime {
         }
         self.defaultOutputFormat = cfg.outputFormat
         self.interruptOnSpeech = cfg.interruptOnSpeech
-        self.activeTalkProvider = cfg.activeProvider
-        self.realtimeProvider = cfg.realtimeProvider
-        self.realtimeModelId = cfg.realtimeModelId
-        self.realtimeSpeakerVoice = cfg.realtimeSpeakerVoice
-        self.realtimeMode = cfg.realtimeMode
-        self.realtimeTransport = cfg.realtimeTransport
-        self.realtimeBrain = cfg.realtimeBrain
+        self.activeTalkProvider = cfg.snapshot.activeProvider
+        self.realtimeProvider = cfg.snapshot.realtime.provider
+        self.realtimeModelId = cfg.snapshot.realtime.modelId
+        self.realtimeSpeakerVoice = cfg.snapshot.realtime.speakerVoice
+        self.realtimeMode = cfg.snapshot.realtime.mode
+        self.realtimeTransport = cfg.snapshot.realtime.transport
+        self.realtimeBrain = cfg.snapshot.realtime.brain
         self.hasGatewayRealtimeRelayTuple = cfg.hasGatewayRealtimeRelayTuple
-        let configuredSilenceMs = cfg.silenceTimeoutMs
+        let configuredSilenceMs = cfg.snapshot.silenceTimeoutMs
         let isCJKLocale = locale.hasPrefix("ko") || locale.hasPrefix("ja") || locale.hasPrefix("zh")
         let effectiveSilenceMs = isCJKLocale ? max(configuredSilenceMs, 2000) : configuredSilenceMs
         if isCJKLocale, configuredSilenceMs < 2000 {
@@ -1549,7 +1516,7 @@ extension TalkModeRuntime {
                         "\(configuredSilenceMs, privacy: .public)ms -> 2000ms")
         }
         self.silenceWindow = TimeInterval(effectiveSilenceMs) / 1000
-        self.speechLocaleID = cfg.speechLocaleID
+        self.speechLocaleID = cfg.snapshot.speechLocaleID
         self.apiKey = cfg.apiKey
         self.mlxReferenceAudioPath = cfg.referenceAudioPath
         self.mlxReferenceText = cfg.referenceText
@@ -1558,17 +1525,17 @@ extension TalkModeRuntime {
         let modelLabel = cfg.modelId.flatMap { $0.isEmpty ? nil : $0 } ?? "none"
         self.logger
             .info(
-                "talk config provider=\(cfg.activeProvider, privacy: .public) " +
+                "talk config provider=\(cfg.snapshot.activeProvider, privacy: .public) " +
                     "talk config voiceId=\(voiceLabel, privacy: .public) " +
                     "modelId=\(modelLabel, privacy: .public) " +
                     "referenceAudio=\(cfg.referenceAudioPath != nil, privacy: .public) " +
                     "apiKey=\(hasApiKey, privacy: .public) " +
                     "interrupt=\(cfg.interruptOnSpeech, privacy: .public) " +
-                    "silenceTimeoutMs=\(cfg.silenceTimeoutMs, privacy: .public) " +
-                    "speechLocale=\(cfg.speechLocaleID ?? "device", privacy: .public) " +
-                    "realtimeMode=\(cfg.realtimeMode ?? "off", privacy: .public) " +
-                    "realtimeTransport=\(cfg.realtimeTransport ?? "default", privacy: .public) " +
-                    "realtimeBrain=\(cfg.realtimeBrain ?? "default", privacy: .public) " +
+                    "silenceTimeoutMs=\(cfg.snapshot.silenceTimeoutMs, privacy: .public) " +
+                    "speechLocale=\(cfg.snapshot.speechLocaleID ?? "device", privacy: .public) " +
+                    "realtimeMode=\(cfg.snapshot.realtime.mode ?? "off", privacy: .public) " +
+                    "realtimeTransport=\(cfg.snapshot.realtime.transport ?? "default", privacy: .public) " +
+                    "realtimeBrain=\(cfg.snapshot.realtime.brain ?? "default", privacy: .public) " +
                     "macOSRealtimeOptIn=\(self.macOSRealtimeRelayOptIn, privacy: .public)")
     }
 

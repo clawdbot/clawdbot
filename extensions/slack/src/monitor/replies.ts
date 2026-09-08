@@ -40,7 +40,9 @@ import {
   hasSlackReplyStructuredContent,
   resolveSlackReplyBlockResolution,
   resolveSlackReplyBlocks,
+  type PreparedSlackReply,
 } from "../reply-blocks.js";
+import { resolveSlackReplyThreadTs } from "../thread-ts.js";
 import type { SlackEventScope } from "./event-scope.js";
 import {
   createSlackResponseUrlBudget,
@@ -118,20 +120,9 @@ function resolveSlackMediaHookSpokenText(payload: ReplyPayload): string | undefi
   return spokenText?.trim() || undefined;
 }
 
-export function resolveDeliveredSlackReplyThreadTs(params: {
-  replyToMode: "off" | "first" | "all" | "batched";
-  payloadReplyToId?: string;
-  replyThreadTs?: string;
-}): string | undefined {
-  // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
-  // must not force threading.
-  const inlineReplyToId = params.replyToMode === "off" ? undefined : params.payloadReplyToId;
-  return inlineReplyToId ?? params.replyThreadTs;
-}
-
 export async function deliverReplies(params: {
   cfg: OpenClawConfig;
-  replies: ReplyPayload[];
+  replies: PreparedSlackReply[];
   target: string;
   token: string;
   accountId?: string;
@@ -163,24 +154,23 @@ export async function deliverReplies(params: {
   eventScope?: SlackEventScope;
 }) {
   let latestResult: SlackSendResult | undefined;
-  for (const payload of params.replies) {
+  for (const prepared of params.replies) {
+    const { payload } = prepared;
     if (payload.isReasoning === true) {
       continue;
     }
-    const threadTs = resolveDeliveredSlackReplyThreadTs({
+    const threadTs = resolveSlackReplyThreadTs({
       replyToMode: params.replyToMode,
-      payloadReplyToId: payload.replyToId,
-      replyThreadTs: params.replyThreadTs,
+      replyToId: payload.replyToId,
+      threadId: params.replyThreadTs,
+      replyToCurrent: payload.replyToCurrent,
     });
     const reply = resolveSendableOutboundReplyParts(payload);
     const textRaw =
       reply.hasText && !isSilentReplyText(reply.trimmedText, SILENT_REPLY_TOKEN)
         ? reply.trimmedText
         : undefined;
-    const materializeAuthoredText = !reply.hasMedia && hasSlackReplyStructuredContent(payload);
-    const { authoredTextPlacement, segments } = resolveSlackReplyBlockResolution(payload, {
-      materializeAuthoredText,
-    });
+    const { authoredTextPlacement, segments } = prepared.resolveDelivery();
     if (!textRaw && !reply.hasMedia && segments.length === 0) {
       continue;
     }
@@ -522,11 +512,9 @@ export async function deliverSlackSlashReplies(params: {
         if (text) {
           hookParts.push(text);
           messages.push(
-            ...chunkSlackTextAtHardLimit(text).map(
-              (chunk): PlannedSlashReplyMessage => ({
-                message: { text: chunk, mrkdwn: false },
-              }),
-            ),
+            ...chunkSlackTextAtHardLimit(text).map((chunk): PlannedSlashReplyMessage => ({
+              message: { text: chunk, mrkdwn: false },
+            })),
           );
         }
         continue;
@@ -561,9 +549,9 @@ export async function deliverSlackSlashReplies(params: {
       const trailingText = [outsideText, ...reply.mediaUrls].filter(Boolean).join("\n");
       if (trailingText) {
         messages.push(
-          ...chunkSlackTextAtHardLimit(trailingText).map(
-            (text): PlannedSlashReplyMessage => ({ message: { text, mrkdwn: false } }),
-          ),
+          ...chunkSlackTextAtHardLimit(trailingText).map((text): PlannedSlashReplyMessage => ({
+            message: { text, mrkdwn: false },
+          })),
         );
       }
       if (messages.length > 0) {

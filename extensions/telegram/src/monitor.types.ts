@@ -25,9 +25,6 @@ export type MonitorTelegramOpts = {
   webhookCertPath?: string;
   botInfo?: TelegramBotInfo;
   setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
-  isolatedIngress?: {
-    enabled?: boolean;
-  };
 };
 
 export type TelegramMonitorFn = (opts?: MonitorTelegramOpts) => Promise<void>;

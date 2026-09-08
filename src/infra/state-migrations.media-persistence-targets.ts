@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveAgentSessionDirsFromAgentsDirSync } from "../agents/session-dirs.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isSessionArchiveArtifactName } from "../config/sessions/artifacts.js";
@@ -49,6 +50,7 @@ export function discoverAgentDatabaseMigrationTargets(params: {
   env: NodeJS.ProcessEnv;
 }) {
   const warnings: string[] = [];
+  const externalWarnings: string[] = [];
   const failures: Array<{ path: string; reason: string }> = [];
   const registryRemovals: Array<{ agentId: string; path: string; change?: string }> = [];
   const failure = (pathname: string, reason: string) => {
@@ -128,9 +130,9 @@ export function discoverAgentDatabaseMigrationTargets(params: {
     );
     if (realPath && !isInsideActiveStateDir && !isConfiguredPath) {
       discard(candidate);
-      warnings.push(
-        `Skipped foreign agent database ${pathname}; it is outside the active state directory and is not a configured session store.`,
-      );
+      const warning = `Skipped foreign agent database ${sanitizeForLog(pathname)}; it is outside the active state directory and is not a configured session store.`;
+      warnings.push(warning);
+      externalWarnings.push(warning);
       continue;
     }
     let stat: fs.Stats | undefined;
@@ -154,7 +156,10 @@ export function discoverAgentDatabaseMigrationTargets(params: {
     }
     if (!realPath) {
       discard(candidate);
-      warnings.push(`Skipped agent database ${pathname}; its filesystem boundary is unresolved.`);
+      failure(
+        pathname,
+        `Skipped agent database ${pathname}; its filesystem boundary is unresolved.`,
+      );
       continue;
     }
     if (seenRealPaths.has(realPath)) {
@@ -164,7 +169,7 @@ export function discoverAgentDatabaseMigrationTargets(params: {
     seenRealPaths.add(realPath);
     targets.push({ ...candidate, path: pathname, realPath });
   }
-  return { targets, registryRemovals, warnings, failures };
+  return { targets, registryRemovals, warnings, externalWarnings, failures };
 }
 
 /** Migration alone owns cleanup of stale registry entries discovered above. */
@@ -173,14 +178,16 @@ export function resolveAgentDatabaseMigrationTargets(params: {
   configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[];
   env: NodeJS.ProcessEnv;
   warnings: string[];
-}): AgentDatabaseMigrationTarget[] {
+}): { targets: AgentDatabaseMigrationTarget[]; recoverableWarningCount: number } {
   let registeredAgentDatabases: ReturnType<typeof listOpenClawRegisteredAgentDatabases> = [];
+  let registryReadFailed = false;
   try {
     registeredAgentDatabases = listOpenClawRegisteredAgentDatabases({
       env: params.env,
       includeIncompatibleSchemaVersions: true,
     });
   } catch (error) {
+    registryReadFailed = true;
     params.warnings.push(
       `Failed enumerating registered agent databases for state migration: ${String(error)}`,
     );
@@ -193,7 +200,13 @@ export function resolveAgentDatabaseMigrationTargets(params: {
     }
   }
   params.warnings.push(...discovery.warnings);
-  return discovery.targets;
+  // Deliberate registry omissions are reported without blocking authorized stores.
+  // Failed discovery never grants that disposition, even if it also omitted a foreign entry.
+  return {
+    targets: discovery.targets,
+    recoverableWarningCount:
+      registryReadFailed || discovery.failures.length > 0 ? 0 : discovery.warnings.length,
+  };
 }
 
 export function listTranscriptArchives(directory: string): string[] {

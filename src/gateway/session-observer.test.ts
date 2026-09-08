@@ -375,11 +375,11 @@ describe("session observer", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     let firstCall = true;
-    const completeModel = vi.fn(async (params: { options: { signal: AbortSignal } }) => {
+    const completeModel = vi.fn(async (params: { abortSignal: AbortSignal }) => {
       if (firstCall) {
         firstCall = false;
         return await new Promise<ReturnType<typeof modelMessage>>((_resolve, reject) => {
-          params.options.signal.addEventListener("abort", () => reject(new Error("aborted")), {
+          params.abortSignal.addEventListener("abort", () => reject(new Error("aborted")), {
             once: true,
           });
         });
@@ -502,9 +502,7 @@ describe("session observer", () => {
 
     await vi.advanceTimersByTimeAsync(12_000);
     await flushObserver();
-    const prompt = String(
-      harness.completeModel.mock.calls[0]?.[0]?.context?.messages?.[0]?.content,
-    );
+    const prompt = String(harness.completeModel.mock.calls[0]?.[0]?.prompt);
     expect(prompt).not.toContain("test-token");
     expect(prompt).not.toContain(runtimeDetail);
     expect(prompt).not.toContain(commandOutput);
@@ -820,7 +818,7 @@ describe("session observer", () => {
     vi.setSystemTime(0);
     const completeModel = vi
       .fn()
-      .mockResolvedValueOnce({ stopReason: "stop", content: [{ type: "text", text: "nope" }] })
+      .mockResolvedValueOnce({ ...modelMessage({}), text: "nope" })
       .mockResolvedValueOnce(
         modelMessage({ headline: "Continuing after a retry", health: "on-track" }),
       );

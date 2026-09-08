@@ -1,3 +1,4 @@
+import { isSubagentSpawnDepthAllowed } from "../config/agent-limits.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 
 export type ChildAdmissionCap =
@@ -75,7 +76,7 @@ const rejectChildAdmission = (
 ): ChildAdmissionResult => ({ ok: false, governingCap, error });
 
 export function resolveChildAdmission(params: ChildAdmissionParams): ChildAdmissionResult {
-  if (params.callerDepth >= params.maxSpawnDepth) {
+  if (!isSubagentSpawnDepthAllowed(params.callerDepth, params.maxSpawnDepth)) {
     return rejectChildAdmission(
       "subagents.maxSpawnDepth",
       `sessions_spawn is not allowed at this depth (current depth: ${params.callerDepth}, max: ${params.maxSpawnDepth}; agents.defaults.subagents.maxSpawnDepth).`,

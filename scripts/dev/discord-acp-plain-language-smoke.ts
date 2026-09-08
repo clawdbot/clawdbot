@@ -1093,14 +1093,12 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
     writeStdoutLine(usage());
     return 0;
   }
-  const result = await run(argv).catch(
-    (err: unknown): FailureResult => ({
-      ok: false,
-      stage: "unexpected",
-      smokeId: "n/a",
-      error: safeErrorMessage(err),
-    }),
-  );
+  const result = await run(argv).catch((err: unknown): FailureResult => ({
+    ok: false,
+    stage: "unexpected",
+    smokeId: "n/a",
+    error: safeErrorMessage(err),
+  }));
   printOutput({
     json: hasFlag("--json", argv),
     payload: result,

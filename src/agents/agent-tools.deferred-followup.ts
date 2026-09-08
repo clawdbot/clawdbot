@@ -1,3 +1,4 @@
+import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 /** Adjusts cross-tool guidance from the final authorized tool set. */
 import type { AnyAgentTool } from "./agent-tools.types.js";
@@ -11,7 +12,12 @@ function replaceDescription(tool: AnyAgentTool, description: string): AnyAgentTo
 }
 
 const TOOL_FOLLOWUPS = [
-  ["gateway", "openclaw", " unavailable; ask human.", ": use openclaw tool."],
+  [
+    "gateway",
+    "openclaw",
+    "Never via shell.",
+    "Never via shell. Other system changes: use openclaw tool.",
+  ],
   [
     "sessions_search",
     "sessions_history",
@@ -26,10 +32,10 @@ const TOOL_FOLLOWUPS = [
   ],
   ["sessions_spawn", "agents_list", "configured agent;", "configured agent (see agents_list);"],
   [
-    "sessions_spawn",
+    "sessions_yield",
     "agents_wait",
-    "`groupId` groups a batch.",
-    "`groupId` groups a batch; await with agents_wait.",
+    "Collector runs require explicit collection instead.",
+    "Collector runs require agents_wait instead.",
   ],
 ] as const;
 
@@ -69,20 +75,15 @@ function describeAvailableTool(tool: AnyAgentTool, availableTools: ReadonlySet<s
 }
 
 /** Return tools with cross-tool guidance adjusted for the tools that survived filtering. */
-export function applyToolAvailabilityDescriptions(
-  tools: AnyAgentTool[],
-  params?: { agentId?: string },
-): AnyAgentTool[] {
+export function applyToolAvailabilityDescriptions(tools: AnyAgentTool[]): AnyAgentTool[] {
+  finalizeAgentToolAvailability(tools);
   const availableTools = new Set(tools.map((tool) => tool.name));
   const hasCronTool = tools.some((tool) => isAutomationsToolName(tool.name));
   const hasProcessTool = availableTools.has("process");
   const hasSessionsSpawnTool = availableTools.has("sessions_spawn");
   return tools.map((tool) => {
     if (tool.name === "exec") {
-      return replaceDescription(
-        tool,
-        describeExecTool({ agentId: params?.agentId, hasCronTool, hasProcessTool }),
-      );
+      return replaceDescription(tool, describeExecTool({ hasCronTool, hasProcessTool }));
     }
     if (tool.name === "process") {
       return replaceDescription(tool, describeProcessTool({ hasCronTool }));

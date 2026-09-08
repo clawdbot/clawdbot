@@ -43,6 +43,24 @@ describe("ports-format", () => {
     [{ commandLine: "/opt/fast-ssh/server --listen 127.0.0.1:18789" }, "non_gateway"],
     [{ commandLine: "ssh -N -L 9999:remote:22 host" }, "ssh"],
     [{ commandLine: "node /Users/me/Projects/openclaw/dist/entry.js gateway" }, "gateway"],
+    [{ command: "node", commandLine: "node /tmp/socat/openclaw/dist/index.js gateway" }, "gateway"],
+    [{ command: "socat" }, "non_gateway"],
+    [{ command: "socat1" }, "non_gateway"],
+    [{ command: "socat.exe" }, "non_gateway"],
+    [
+      {
+        command: "socat",
+        commandLine: "socat -lpopenclaw TCP-LISTEN:18789,fork TCP:127.0.0.1:18789",
+      },
+      "non_gateway",
+    ],
+    [
+      {
+        command: "node",
+        commandLine: "node /Users/me/Projects/openclaw/dist/index.js gateway --profile socat",
+      },
+      "gateway",
+    ],
     [{ commandLine: "python -m http.server 18789" }, "unknown"],
   ] as const)("classifies port listener %j", (listener, expected) => {
     expect(classifyPortListener(listener, 18789)).toBe(expected);
@@ -99,6 +117,48 @@ describe("ports-format", () => {
       false,
     );
     expect(buildPortHints(listeners, 18789)).toEqual([]);
+  });
+
+  it.each([
+    { addresses: ["[::ffff:127.0.0.1]:18789"], expected: true, dual: false, specific: false },
+    {
+      addresses: ["[::ffff:127.0.0.1]:18789", "[::1]:18789"],
+      expected: true,
+      dual: true,
+      specific: false,
+    },
+    {
+      addresses: ["127.0.0.1:18789", "[::ffff:127.0.0.1]:18789"],
+      expected: false,
+      dual: false,
+      specific: false,
+    },
+    {
+      addresses: ["192.0.2.1:18789", "[::ffff:127.0.0.1]:18789"],
+      expected: true,
+      dual: false,
+      specific: true,
+    },
+  ])("preserves mapped listener classification for $addresses", (entry) => {
+    const orders =
+      entry.addresses.length === 1
+        ? [entry.addresses]
+        : [entry.addresses, entry.addresses.toReversed()];
+    for (const addresses of orders) {
+      const listeners = addresses.map((address) => ({
+        pid: 4242,
+        commandLine: "openclaw-gateway",
+        address,
+      }));
+      expect(isExpectedGatewayListeners(listeners, 18789)).toBe(entry.expected);
+      expect(isDualStackLoopbackGatewayListeners(listeners, 18789)).toBe(entry.dual);
+      expect(isSameProcessSpecificIpv4WithLoopbackListeners(listeners, 18789, "192.0.2.1")).toBe(
+        entry.specific,
+      );
+      expect(buildPortHints(listeners, 18789)).toEqual(
+        entry.expected ? [] : [gatewayAlreadyRunningHint, multipleListenersHint],
+      );
+    }
   });
 
   it("checks exact alias ownership without relying on process display metadata", () => {

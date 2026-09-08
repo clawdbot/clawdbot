@@ -98,7 +98,11 @@ describe("Codex app-server model catalog", () => {
         },
       },
     ]);
-    expect(listModelsMock).toHaveBeenCalledExactlyOnceWith({ request: rpc.request, limit: 100 });
+    expect(listModelsMock).toHaveBeenCalledExactlyOnceWith({
+      request: rpc.request,
+      limit: 100,
+      includeHidden: true,
+    });
   });
 
   it("returns no rows without a live call when discovery is disabled", async () => {
@@ -106,6 +110,45 @@ describe("Codex app-server model catalog", () => {
       await loadCodexAppServerModelCatalog(catalogParams, { discovery: { enabled: false } }),
     ).toEqual([]);
     expect(listModelsMock).not.toHaveBeenCalled();
+  });
+
+  it("discovers configured hidden models without exposing other hidden models or readiness", async () => {
+    const models = ["visible", "configured", "other-agent", "unconfigured", "other-provider"].map(
+      (name) => ({
+        id: `synthetic-${name}`,
+        model: `synthetic-${name}`,
+        hidden: name !== "visible",
+        inputModalities: ["text"],
+        supportedReasoningEfforts: ["high", "ultra"],
+      }),
+    );
+    listModelsMock.mockImplementation(async (options) => ({
+      models: models.filter((model) => options?.includeHidden || !model.hidden),
+    }));
+    const params = {
+      ...catalogParams,
+      configuredModelRefs: [
+        { provider: "openai", model: "synthetic-configured" },
+        { provider: "another", model: "synthetic-other-provider" },
+      ],
+    };
+    const catalog = await owner.load(params, undefined);
+    expect(catalog.map((model) => model.id)).toEqual(["synthetic-visible", "synthetic-configured"]);
+    expect(catalog[1]).toMatchObject({
+      nativeRuntime: "codex",
+      reasoning: true,
+      compat: { supportedReasoningEfforts: ["high", "ultra"] },
+    });
+    expect(catalog[1]?.api).toBeUndefined();
+    for (const model of models) {
+      expect(read({ modelId: model.id })).toEqual(
+        model.id === "synthetic-visible" || model.id === "synthetic-configured"
+          ? { accountType: "apiKey" }
+          : undefined,
+      );
+    }
+    await owner.load({ ...params, configuredModelRefs: [] }, undefined);
+    expect(read({ modelId: "synthetic-configured" })).toBeUndefined();
   });
 
   it("bounds the live call with the configured discovery timeout", async () => {

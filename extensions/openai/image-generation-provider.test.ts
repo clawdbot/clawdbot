@@ -81,20 +81,20 @@ vi.mock("openclaw/plugin-sdk/logging-core", () => ({
   })),
 }));
 
+const noopRelease = async () => {};
+const generatedPngPayload = {
+  data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
+};
+const generatedPngRequest = {
+  response: {
+    json: async () => generatedPngPayload,
+  },
+  release: noopRelease,
+};
+
 function mockGeneratedPngResponse() {
-  const response = {
-    json: async () => ({
-      data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
-    }),
-  };
-  postJsonRequestMock.mockResolvedValue({
-    response,
-    release: vi.fn(async () => {}),
-  });
-  postMultipartRequestMock.mockResolvedValue({
-    response,
-    release: vi.fn(async () => {}),
-  });
+  postJsonRequestMock.mockResolvedValue(generatedPngRequest);
+  postMultipartRequestMock.mockResolvedValue(generatedPngRequest);
 }
 
 function mockCodexImageStream(params: { imageData?: string; revisedPrompt?: string } = {}) {
@@ -119,7 +119,7 @@ function mockCodexImageStream(params: { imageData?: string; revisedPrompt?: stri
   const body = events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
   postJsonRequestMock.mockImplementation(async () => ({
     response: new Response(body),
-    release: vi.fn(async () => {}),
+    release: noopRelease,
   }));
 }
 
@@ -148,14 +148,14 @@ function mockCodexCompletedImageStream(
   const body = events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
   postJsonRequestMock.mockImplementation(async () => ({
     response: new Response(body),
-    release: vi.fn(async () => {}),
+    release: noopRelease,
   }));
 }
 
 function mockCodexRawStream(body: string) {
   postJsonRequestMock.mockImplementation(async () => ({
     response: new Response(body),
-    release: vi.fn(async () => {}),
+    release: noopRelease,
   }));
 }
 
@@ -324,6 +324,25 @@ function expectNoJsonRequestUrlContaining(expectedFragment: string) {
 }
 
 describe("openai image generation provider", () => {
+  const provider = buildOpenAIImageGenerationProvider({
+    ensureAuthProfileStore: ensureAuthProfileStoreMock,
+    listProfilesForProvider: listProfilesForProviderMock,
+    isProviderApiKeyConfigured: isProviderApiKeyConfiguredMock,
+  });
+  const emptyConfig: OpenClawConfig = {};
+  type OpenAIImageRequest = Parameters<typeof provider.generateImage>[0];
+  const generateOpenAIImage = (
+    prompt: string,
+    request: Omit<Partial<OpenAIImageRequest>, "prompt" | "provider"> = {},
+  ) =>
+    provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt,
+      cfg: emptyConfig,
+      ...request,
+    });
+
   afterEach(() => {
     ensureAuthProfileStoreMock.mockReset();
     ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
@@ -342,8 +361,6 @@ describe("openai image generation provider", () => {
   });
 
   it("advertises the current OpenAI image model and 2K/4K size hints", () => {
-    const provider = buildOpenAIImageGenerationProvider();
-
     expect(provider.defaultModel).toBe("gpt-image-2");
     expect(provider.models).toEqual([
       "gpt-image-2",
@@ -366,8 +383,6 @@ describe("openai image generation provider", () => {
   });
 
   it("reports configured when either OpenAI API key auth or Codex OAuth auth is available", () => {
-    const provider = buildOpenAIImageGenerationProvider();
-
     isProviderApiKeyConfiguredMock.mockReturnValue(true);
     expect(provider.isConfigured?.({ agentDir: "/tmp/agent" })).toBe(true);
     expect(isProviderApiKeyConfiguredMock).toHaveBeenCalledWith({
@@ -383,10 +398,6 @@ describe("openai image generation provider", () => {
       provider: "openai",
       agentDir: "/tmp/agent",
     });
-    expect(isProviderApiKeyConfiguredMock).toHaveBeenCalledWith({
-      provider: "openai",
-      agentDir: "/tmp/agent",
-    });
 
     isProviderApiKeyConfiguredMock.mockReturnValue(false);
     ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
@@ -394,8 +405,6 @@ describe("openai image generation provider", () => {
   });
 
   it("does not report Codex OAuth image auth as configured for custom OpenAI endpoints", () => {
-    const provider = buildOpenAIImageGenerationProvider();
-
     isProviderApiKeyConfiguredMock.mockReturnValue(false);
 
     expect(
@@ -416,8 +425,6 @@ describe("openai image generation provider", () => {
   });
 
   it("reports configured from a config apiKey (gateway-routed openai) with no env/profile creds", () => {
-    const provider = buildOpenAIImageGenerationProvider();
-
     // Config-only auth: a provider apiKey in config, with no env var and no
     // auth profile.
     isProviderApiKeyConfiguredMock.mockReturnValue(false);
@@ -445,8 +452,6 @@ describe("openai image generation provider", () => {
     ["empty", ""],
     ["whitespace-only", "   "],
   ])("treats a %s config apiKey as not configured", (_label, apiKey) => {
-    const provider = buildOpenAIImageGenerationProvider();
-
     // Blank placeholders resolve to no usable credential in the generate
     // path, so readiness must not count them either.
     isProviderApiKeyConfiguredMock.mockReturnValue(false);
@@ -471,8 +476,6 @@ describe("openai image generation provider", () => {
   });
 
   it("reports ChatGPT OAuth image auth as configured for ChatGPT routes", () => {
-    const provider = buildOpenAIImageGenerationProvider();
-
     isProviderApiKeyConfiguredMock.mockReturnValue(false);
     ensureAuthProfileStoreMock.mockReturnValue(createCodexOAuthAuthStore());
 
@@ -511,7 +514,6 @@ describe("openai image generation provider", () => {
   });
 
   it("does not report OpenAI OAuth image auth as configured for custom OpenAI endpoints", () => {
-    const provider = buildOpenAIImageGenerationProvider();
     vi.stubEnv("OPENAI_API_KEY", "");
     isProviderApiKeyConfiguredMock.mockReturnValue(false);
     ensureAuthProfileStoreMock.mockReturnValue({
@@ -545,8 +547,6 @@ describe("openai image generation provider", () => {
   });
 
   it("does not report Codex OAuth image auth as configured for non-exact public OpenAI URLs", () => {
-    const provider = buildOpenAIImageGenerationProvider();
-
     isProviderApiKeyConfiguredMock.mockReturnValue(false);
 
     expect(
@@ -569,11 +569,7 @@ describe("openai image generation provider", () => {
   it("does not auto-allow local baseUrl overrides for image requests", async () => {
     mockGeneratedPngResponse();
 
-    const provider = buildOpenAIImageGenerationProvider();
-    const result = await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Draw a QA lighthouse",
+    const result = await generateOpenAIImage("Draw a QA lighthouse", {
       cfg: {
         models: {
           providers: {
@@ -595,28 +591,28 @@ describe("openai image generation provider", () => {
   it("allows OpenAI-compatible private image endpoints when browser SSRF policy opts in", async () => {
     mockGeneratedPngResponse();
 
-    const provider = buildOpenAIImageGenerationProvider();
-    const result = await provider.generateImage({
-      provider: "openai",
-      model: "flux2-klein",
-      prompt: "A simple, clean illustration of a red apple with a green leaf",
-      cfg: {
-        browser: {
-          ssrfPolicy: {
-            dangerouslyAllowPrivateNetwork: true,
+    const result = await generateOpenAIImage(
+      "A simple, clean illustration of a red apple with a green leaf",
+      {
+        model: "flux2-klein",
+        cfg: {
+          browser: {
+            ssrfPolicy: {
+              dangerouslyAllowPrivateNetwork: true,
+            },
           },
-        },
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "http://192.168.1.15:8082/v1",
-              apiKey: "local-noauth",
-              models: [],
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "http://192.168.1.15:8082/v1",
+                apiKey: "local-noauth",
+                models: [],
+              },
             },
           },
         },
       },
-    });
+    );
 
     expect(httpConfigCall().baseUrl).toBe("http://192.168.1.15:8082/v1");
     expect(httpConfigCall().allowPrivateNetwork).toBe(true);
@@ -628,12 +624,7 @@ describe("openai image generation provider", () => {
   it("propagates request SSRF policy to JSON image requests", async () => {
     mockGeneratedPngResponse();
 
-    const provider = buildOpenAIImageGenerationProvider();
-    await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "test",
-      cfg: {},
+    await generateOpenAIImage("test", {
       ssrfPolicy: { allowRfc2544BenchmarkRange: true },
     });
 
@@ -646,26 +637,15 @@ describe("openai image generation provider", () => {
       release: vi.fn(async () => {}),
     });
 
-    const provider = buildOpenAIImageGenerationProvider();
-    await expect(
-      provider.generateImage({
-        provider: "openai",
-        model: "gpt-image-2",
-        prompt: "bad shape",
-        cfg: {},
-      }),
-    ).rejects.toThrow("OpenAI image generation response malformed");
+    await expect(generateOpenAIImage("bad shape")).rejects.toThrow(
+      "OpenAI image generation response malformed",
+    );
   });
 
   it("forwards generation count and custom size overrides", async () => {
     mockGeneratedPngResponse();
 
-    const provider = buildOpenAIImageGenerationProvider();
-    const result = await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Create two landscape campaign variants",
-      cfg: {},
+    const result = await generateOpenAIImage("Create two landscape campaign variants", {
       count: 2,
       size: "3840x2160",
     });
@@ -692,12 +672,8 @@ describe("openai image generation provider", () => {
   ])("preserves flexible $model generation dimensions $size", async ({ model, size }) => {
     mockGeneratedPngResponse();
 
-    const provider = buildOpenAIImageGenerationProvider();
-    const result = await provider.generateImage({
-      provider: "openai",
+    const result = await generateOpenAIImage("Preserve the requested image dimensions", {
       model,
-      prompt: "Preserve the requested image dimensions",
-      cfg: {},
       size,
     });
 
@@ -715,12 +691,7 @@ describe("openai image generation provider", () => {
     async (size) => {
       mockGeneratedPngResponse();
 
-      const provider = buildOpenAIImageGenerationProvider();
-      const result = await provider.generateImage({
-        provider: "openai",
-        model: "gpt-image-2",
-        prompt: "Normalize unsupported image dimensions",
-        cfg: {},
+      const result = await generateOpenAIImage("Normalize unsupported image dimensions", {
         size,
       });
 
@@ -734,12 +705,8 @@ describe("openai image generation provider", () => {
   it("normalizes legacy gpt-image-1 sizes before native OpenAI generation", async () => {
     mockGeneratedPngResponse();
 
-    const provider = buildOpenAIImageGenerationProvider();
-    const result = await provider.generateImage({
-      provider: "openai",
+    const result = await generateOpenAIImage("Create a wide Matrix QA image", {
       model: "gpt-image-1",
-      prompt: "Create a wide Matrix QA image",
-      cfg: {},
       size: "2048x1152",
     });
 
@@ -757,11 +724,8 @@ describe("openai image generation provider", () => {
   it("does not normalize model-specific sizes for custom OpenAI-compatible endpoints", async () => {
     mockGeneratedPngResponse();
 
-    const provider = buildOpenAIImageGenerationProvider();
-    const result = await provider.generateImage({
-      provider: "openai",
+    const result = await generateOpenAIImage("Create a wide local-provider image", {
       model: "gpt-image-1",
-      prompt: "Create a wide local-provider image",
       cfg: {
         models: {
           providers: {
@@ -786,7 +750,6 @@ describe("openai image generation provider", () => {
   it("falls back to the provider baseUrl when the model catalog is omitted", async () => {
     mockGeneratedPngResponse();
 
-    const provider = buildOpenAIImageGenerationProvider();
     // Plugin-scoped runtime snapshots can carry a built-in provider overlay
     // before its model catalog is present.
     const cfg = {
@@ -798,10 +761,7 @@ describe("openai image generation provider", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    const result = await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Create an image through a provider overlay",
+    const result = await generateOpenAIImage("Create an image through a provider overlay", {
       cfg,
     });
 
@@ -815,12 +775,7 @@ describe("openai image generation provider", () => {
   it("forwards output and OpenAI-only options on direct generations", async () => {
     mockGeneratedPngResponse();
 
-    const provider = buildOpenAIImageGenerationProvider();
-    const result = await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Cheap JPEG preview",
-      cfg: {},
+    const result = await generateOpenAIImage("Cheap JPEG preview", {
       quality: "low",
       outputFormat: "jpeg",
       providerOptions: {
@@ -854,12 +809,7 @@ describe("openai image generation provider", () => {
   it("omits output compression for PNG direct generations", async () => {
     mockGeneratedPngResponse();
 
-    const provider = buildOpenAIImageGenerationProvider();
-    await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Transparent PNG",
-      cfg: {},
+    await generateOpenAIImage("Transparent PNG", {
       outputFormat: "png",
       providerOptions: {
         openai: {
@@ -876,12 +826,7 @@ describe("openai image generation provider", () => {
   it("routes transparent default-model requests to the OpenAI image model that supports alpha", async () => {
     mockGeneratedPngResponse();
 
-    const provider = buildOpenAIImageGenerationProvider();
-    const result = await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Transparent sticker",
-      cfg: {},
+    const result = await generateOpenAIImage("Transparent sticker", {
       outputFormat: "png",
       background: "transparent",
     });
@@ -898,11 +843,7 @@ describe("openai image generation provider", () => {
   it("does not reroute transparent requests for custom OpenAI-compatible endpoints", async () => {
     mockGeneratedPngResponse();
 
-    const provider = buildOpenAIImageGenerationProvider();
-    await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Transparent custom endpoint sticker",
+    await generateOpenAIImage("Transparent custom endpoint sticker", {
       cfg: {
         models: {
           providers: {
@@ -932,7 +873,6 @@ describe("openai image generation provider", () => {
   it("allows loopback image requests for the synthetic mock-openai provider", async () => {
     mockGeneratedPngResponse();
 
-    const provider = buildOpenAIImageGenerationProvider();
     const result = await provider.generateImage({
       provider: "mock-openai",
       model: "gpt-image-2",
@@ -959,11 +899,7 @@ describe("openai image generation provider", () => {
     mockGeneratedPngResponse();
     vi.stubEnv("OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER", "1");
 
-    const provider = buildOpenAIImageGenerationProvider();
-    const result = await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Draw a QA lighthouse",
+    const result = await generateOpenAIImage("Draw a QA lighthouse", {
       cfg: {
         models: {
           providers: {
@@ -985,11 +921,8 @@ describe("openai image generation provider", () => {
     mockGeneratedPngResponse();
     vi.stubEnv("OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER", "1");
 
-    const provider = buildOpenAIImageGenerationProvider();
-    await provider.generateImage({
-      provider: "openai",
+    await generateOpenAIImage("Draw a QA lighthouse", {
       model: "gpt-image-1",
-      prompt: "Draw a QA lighthouse",
       cfg: {
         models: {
           providers: {
@@ -1022,12 +955,7 @@ describe("openai image generation provider", () => {
   it("forwards edit count, custom size, and multiple input images", async () => {
     mockGeneratedPngResponse();
 
-    const provider = buildOpenAIImageGenerationProvider();
-    const result = await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Change only the background to pale blue",
-      cfg: {},
+    const result = await generateOpenAIImage("Change only the background to pale blue", {
       count: 2,
       size: "1024x1536",
       inputImages: [
@@ -1075,12 +1003,8 @@ describe("openai image generation provider", () => {
   ])("preserves flexible $model multipart-edit dimensions $size", async ({ model, size }) => {
     mockGeneratedPngResponse();
 
-    const provider = buildOpenAIImageGenerationProvider();
-    const result = await provider.generateImage({
-      provider: "openai",
+    const result = await generateOpenAIImage("Preserve the requested edited image dimensions", {
       model,
-      prompt: "Preserve the requested edited image dimensions",
-      cfg: {},
       size,
       inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
     });
@@ -1095,12 +1019,7 @@ describe("openai image generation provider", () => {
   it("forwards supported OpenAI options on multipart edits", async () => {
     mockGeneratedPngResponse();
 
-    const provider = buildOpenAIImageGenerationProvider();
-    const result = await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Edit as WebP",
-      cfg: {},
+    const result = await generateOpenAIImage("Edit as WebP", {
       inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
       quality: "high",
       outputFormat: "webp",
@@ -1132,12 +1051,7 @@ describe("openai image generation provider", () => {
     async (moderation) => {
       mockGeneratedPngResponse();
 
-      const provider = buildOpenAIImageGenerationProvider();
-      const result = await provider.generateImage({
-        provider: "openai",
-        model: "gpt-image-2",
-        prompt: "Edit with supported moderation",
-        cfg: {},
+      const result = await generateOpenAIImage("Edit with supported moderation", {
         inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
         providerOptions: {
           openai: { moderation },
@@ -1161,13 +1075,8 @@ describe("openai image generation provider", () => {
     mockCodexAuthOnly();
     mockCodexImageStream({ imageData: "codex-image", revisedPrompt: "revised codex prompt" });
 
-    const provider = buildOpenAIImageGenerationProvider();
     const authStore = { version: 1, profiles: {} };
-    const result = await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Draw a Codex lighthouse",
-      cfg: {},
+    const result = await generateOpenAIImage("Draw a Codex lighthouse", {
       authStore,
       count: 1,
       size: "1024x1536",
@@ -1256,13 +1165,8 @@ describe("openai image generation provider", () => {
       release,
     });
 
-    const provider = buildOpenAIImageGenerationProvider();
     await expect(
-      provider.generateImage({
-        provider: "openai",
-        model: "gpt-image-2",
-        prompt: "Draw an oversized Codex lighthouse",
-        cfg: {},
+      generateOpenAIImage("Draw an oversized Codex lighthouse", {
         authStore: createCodexOAuthAuthStore(),
       }),
     ).rejects.toThrow("OpenAI Codex image generation response exceeded size limit");
@@ -1279,12 +1183,7 @@ describe("openai image generation provider", () => {
       throw new Error(`Unexpected auth provider ${params?.provider ?? ""}`);
     });
 
-    const provider = buildOpenAIImageGenerationProvider();
-    await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Draw with OpenAI auth despite a Codex API key profile",
-      cfg: {},
+    await generateOpenAIImage("Draw with OpenAI auth despite a Codex API key profile", {
       authStore: createCodexApiKeyAuthStore(),
     });
 
@@ -1310,12 +1209,7 @@ describe("openai image generation provider", () => {
       return {};
     });
 
-    const provider = buildOpenAIImageGenerationProvider();
-    await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Draw through Codex API key auth",
-      cfg: {},
+    await generateOpenAIImage("Draw through Codex API key auth", {
       authStore: createCodexApiKeyAuthStore(),
     });
 
@@ -1348,12 +1242,7 @@ describe("openai image generation provider", () => {
       throw new Error(`Unexpected auth provider ${params?.provider ?? ""}`);
     });
 
-    const provider = buildOpenAIImageGenerationProvider();
-    await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Draw through resolved Codex API key auth",
-      cfg: {},
+    await generateOpenAIImage("Draw through resolved Codex API key auth", {
       authStore: createMixedCodexAuthStore(),
     });
 
@@ -1383,12 +1272,7 @@ describe("openai image generation provider", () => {
       return {};
     });
 
-    const provider = buildOpenAIImageGenerationProvider();
-    const result = await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Draw through Codex token auth",
-      cfg: {},
+    const result = await generateOpenAIImage("Draw through Codex token auth", {
       authStore: createCodexTokenAuthStore(),
     });
 
@@ -1415,12 +1299,7 @@ describe("openai image generation provider", () => {
       return {};
     });
 
-    const provider = buildOpenAIImageGenerationProvider();
-    await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Draw using configured Codex token auth",
-      cfg: {},
+    await generateOpenAIImage("Draw using configured Codex token auth", {
       authStore: createCodexTokenAuthStore(),
     });
 
@@ -1433,12 +1312,7 @@ describe("openai image generation provider", () => {
     mockCodexAuthOnly();
     mockCodexImageStream({ imageData: "codex-transparent-image" });
 
-    const provider = buildOpenAIImageGenerationProvider();
-    const result = await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Draw a transparent Codex sticker",
-      cfg: {},
+    const result = await generateOpenAIImage("Draw a transparent Codex sticker", {
       authStore: { version: 1, profiles: {} },
       outputFormat: "png",
       providerOptions: {
@@ -1462,12 +1336,7 @@ describe("openai image generation provider", () => {
     mockCodexAuthOnly();
     mockCodexImageStream({ imageData: "codex-moderated-image" });
 
-    const provider = buildOpenAIImageGenerationProvider();
-    await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Draw a low-moderation Codex preview",
-      cfg: {},
+    await generateOpenAIImage("Draw a low-moderation Codex preview", {
       authStore: { version: 1, profiles: {} },
       providerOptions: {
         openai: {
@@ -1487,12 +1356,7 @@ describe("openai image generation provider", () => {
     mockCodexAuthOnly();
     mockCodexImageStream({ imageData: "codex-png-image" });
 
-    const provider = buildOpenAIImageGenerationProvider();
-    await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Draw a transparent Codex badge",
-      cfg: {},
+    await generateOpenAIImage("Draw a transparent Codex badge", {
       authStore: { version: 1, profiles: {} },
       outputFormat: "png",
       providerOptions: {
@@ -1516,13 +1380,8 @@ describe("openai image generation provider", () => {
     });
     mockCodexImageStream({ imageData: "codex-image" });
 
-    const provider = buildOpenAIImageGenerationProvider();
     const authStore = createCodexOAuthAuthStore();
-    const result = await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Draw using configured Codex auth",
-      cfg: {},
+    const result = await generateOpenAIImage("Draw using configured Codex auth", {
       authStore,
     });
 
@@ -1545,12 +1404,8 @@ describe("openai image generation provider", () => {
     });
     mockGeneratedPngResponse();
 
-    const provider = buildOpenAIImageGenerationProvider();
     const authStore = createMixedOpenAIAuthStore();
-    await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Draw using configured OpenAI image auth",
+    await generateOpenAIImage("Draw using configured OpenAI image auth", {
       cfg: {
         models: {
           providers: {
@@ -1582,12 +1437,8 @@ describe("openai image generation provider", () => {
     mockCodexAuthOnly();
     mockCodexImageStream({ imageData: "codex-image" });
 
-    const provider = buildOpenAIImageGenerationProvider();
     await expect(
-      provider.generateImage({
-        provider: "openai",
-        model: "gpt-image-2",
-        prompt: "Draw through a custom endpoint",
+      generateOpenAIImage("Draw through a custom endpoint", {
         cfg: {
           models: {
             providers: {
@@ -1610,12 +1461,8 @@ describe("openai image generation provider", () => {
     mockCodexAuthOnly();
     mockCodexImageStream({ imageData: "codex-image" });
 
-    const provider = buildOpenAIImageGenerationProvider();
     await expect(
-      provider.generateImage({
-        provider: "openai",
-        model: "gpt-image-2",
-        prompt: "Draw through public OpenAI with query params",
+      generateOpenAIImage("Draw through public OpenAI with query params", {
         cfg: {
           models: {
             providers: {
@@ -1643,15 +1490,9 @@ describe("openai image generation provider", () => {
     });
     mockCodexImageStream({ imageData: "codex-image" });
 
-    const provider = buildOpenAIImageGenerationProvider();
-    await expect(
-      provider.generateImage({
-        provider: "openai",
-        model: "gpt-image-2",
-        prompt: "Draw after an auth error",
-        cfg: {},
-      }),
-    ).rejects.toThrow("Keychain unavailable");
+    await expect(generateOpenAIImage("Draw after an auth error")).rejects.toThrow(
+      "Keychain unavailable",
+    );
 
     expect(resolveApiKeyForProviderMock).toHaveBeenCalledTimes(1);
     expect(authResolutionCall().provider).toBe("openai");
@@ -1671,12 +1512,8 @@ describe("openai image generation provider", () => {
     });
     mockCodexImageStream({ imageData: "codex-image" });
 
-    const provider = buildOpenAIImageGenerationProvider();
-    await provider.generateImage({
-      provider: "openai",
+    await generateOpenAIImage("Draw using configured Codex auth", {
       model: "gpt-image-2\r\nforged=true\u2028next",
-      prompt: "Draw using configured Codex auth",
-      cfg: {},
       authStore: createCodexOAuthAuthStore(),
     });
 
@@ -1689,12 +1526,8 @@ describe("openai image generation provider", () => {
     mockCodexAuthOnly();
     mockCodexImageStream({ imageData: "codex-image" });
 
-    const provider = buildOpenAIImageGenerationProvider();
-    await provider.generateImage({
-      provider: "openai",
+    await generateOpenAIImage("Draw using configured Codex auth", {
       model: `${"a".repeat(255)}😀tail`,
-      prompt: "Draw using configured Codex auth",
-      cfg: {},
       authStore: createCodexOAuthAuthStore(),
     });
 
@@ -1710,13 +1543,7 @@ describe("openai image generation provider", () => {
       revisedPrompt: "completed prompt",
     });
 
-    const provider = buildOpenAIImageGenerationProvider();
-    const result = await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Draw from completed output",
-      cfg: {},
-    });
+    const result = await generateOpenAIImage("Draw from completed output");
 
     expect(result.images).toEqual([
       {
@@ -1757,12 +1584,7 @@ describe("openai image generation provider", () => {
     const completed = JSON.stringify({ type: "response.completed", response: { output: [] } });
     mockCodexRawStream(`${frame(item)}data:${completed}\n\n`);
 
-    const result = await buildOpenAIImageGenerationProvider().generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Draw an image from a standards-compliant SSE frame",
-      cfg: {},
-    });
+    const result = await generateOpenAIImage("Draw an image from a standards-compliant SSE frame");
 
     expect(result.images[0]?.buffer).toEqual(Buffer.from("framed-image"));
   });
@@ -1780,12 +1602,7 @@ describe("openai image generation provider", () => {
     );
 
     await expect(
-      buildOpenAIImageGenerationProvider().generateImage({
-        provider: "openai",
-        model: "gpt-image-2",
-        prompt: "Draw an image after the provider rejects the turn",
-        cfg: {},
-      }),
+      generateOpenAIImage("Draw an image after the provider rejects the turn"),
     ).rejects.toThrow("quota was exhausted");
   });
 
@@ -1799,12 +1616,7 @@ describe("openai image generation provider", () => {
     );
 
     await expect(
-      buildOpenAIImageGenerationProvider().generateImage({
-        provider: "openai",
-        model: "gpt-image-2",
-        prompt: "Draw an image before the model runs out of output tokens",
-        cfg: {},
-      }),
+      generateOpenAIImage("Draw an image before the model runs out of output tokens"),
     ).rejects.toThrow(/incomplete.*max_output_tokens/i);
   });
 
@@ -1820,14 +1632,9 @@ describe("openai image generation provider", () => {
       })}\n\n`,
     );
 
-    await expect(
-      buildOpenAIImageGenerationProvider().generateImage({
-        provider: "openai",
-        model: "gpt-image-2",
-        prompt: "Draw an image on an interrupted stream",
-        cfg: {},
-      }),
-    ).rejects.toThrow(/closed before response\.completed/i);
+    await expect(generateOpenAIImage("Draw an image on an interrupted stream")).rejects.toThrow(
+      /closed before response\.completed/i,
+    );
   });
 
   it("rejects completed Codex turns that contain no generated image", async () => {
@@ -1837,12 +1644,7 @@ describe("openai image generation provider", () => {
     );
 
     await expect(
-      buildOpenAIImageGenerationProvider().generateImage({
-        provider: "openai",
-        model: "gpt-image-2",
-        prompt: "Draw an image instead of silently returning no assets",
-        cfg: {},
-      }),
+      generateOpenAIImage("Draw an image instead of silently returning no assets"),
     ).rejects.toThrow(/did not produce an image/i);
   });
 
@@ -1873,12 +1675,9 @@ describe("openai image generation provider", () => {
         .join(""),
     );
 
-    const result = await buildOpenAIImageGenerationProvider().generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Draw an image from the final provider-owned snapshot",
-      cfg: {},
-    });
+    const result = await generateOpenAIImage(
+      "Draw an image from the final provider-owned snapshot",
+    );
 
     expect(result.images[0]?.buffer).toEqual(Buffer.from("final-image"));
   });
@@ -1925,12 +1724,9 @@ describe("openai image generation provider", () => {
     );
 
     await expect(
-      buildOpenAIImageGenerationProvider().generateImage({
-        provider: "openai",
-        model: "gpt-image-2",
-        prompt: "Honor the authoritative completed image status instead of a stale interim image",
-        cfg: {},
-      }),
+      generateOpenAIImage(
+        "Honor the authoritative completed image status instead of a stale interim image",
+      ),
     ).rejects.toThrow(/did not produce an image|image call did not complete/i);
   });
 
@@ -1953,12 +1749,7 @@ describe("openai image generation provider", () => {
     );
 
     await expect(
-      buildOpenAIImageGenerationProvider().generateImage({
-        provider: "openai",
-        model: "gpt-image-2",
-        prompt: "Reject a failed compatibility image instead of returning it",
-        cfg: {},
-      }),
+      generateOpenAIImage("Reject a failed compatibility image instead of returning it"),
     ).rejects.toThrow(/image call did not complete/i);
   });
 
@@ -1986,12 +1777,9 @@ describe("openai image generation provider", () => {
         .join(""),
     );
 
-    const result = await buildOpenAIImageGenerationProvider().generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Use the completed image instead of an invalid interim snapshot",
-      cfg: {},
-    });
+    const result = await generateOpenAIImage(
+      "Use the completed image instead of an invalid interim snapshot",
+    );
 
     expect(result.images[0]?.buffer).toEqual(Buffer.from("final-image"));
   });
@@ -2014,12 +1802,7 @@ describe("openai image generation provider", () => {
     );
 
     await expect(
-      buildOpenAIImageGenerationProvider().generateImage({
-        provider: "openai",
-        model: "gpt-image-2",
-        prompt: "Return the real provider failure instead of an interim decoding error",
-        cfg: {},
-      }),
+      generateOpenAIImage("Return the real provider failure instead of an interim decoding error"),
     ).rejects.toThrow("provider account is over quota");
   });
 
@@ -2069,15 +1852,9 @@ describe("openai image generation provider", () => {
         : `data: ${JSON.stringify({ type: "response.completed", response: { output: [] } })}\n\n`;
     mockCodexRawStream(`data: ${JSON.stringify(event)}\n\n${terminal}`);
 
-    const provider = buildOpenAIImageGenerationProvider();
-    await expect(
-      provider.generateImage({
-        provider: "openai",
-        model: "gpt-image-2",
-        prompt: "Draw from malformed image data",
-        cfg: {},
-      }),
-    ).rejects.toThrow("OpenAI Codex image generation returned malformed base64 image data");
+    await expect(generateOpenAIImage("Draw from malformed image data")).rejects.toThrow(
+      "OpenAI Codex image generation returned malformed base64 image data",
+    );
   });
 
   it("accepts Codex-compatible surrounding Unicode whitespace", async () => {
@@ -2089,13 +1866,7 @@ describe("openai image generation provider", () => {
       })}\n\ndata: ${JSON.stringify({ type: "response.completed", response: { output: [] } })}\n\n`,
     );
 
-    const provider = buildOpenAIImageGenerationProvider();
-    const result = await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Draw from valid image data",
-      cfg: {},
-    });
+    const result = await generateOpenAIImage("Draw from valid image data");
 
     expect(result.images[0]?.buffer).toEqual(Buffer.from("hello"));
   });
@@ -2104,12 +1875,8 @@ describe("openai image generation provider", () => {
     mockCodexAuthOnly();
     mockCodexImageStream({ imageData: "codex-image" });
 
-    const provider = buildOpenAIImageGenerationProvider();
     const authStore = createCodexOAuthAuthStore();
-    const result = await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Draw through a configured Codex endpoint",
+    const result = await generateOpenAIImage("Draw through a configured Codex endpoint", {
       cfg: {
         models: {
           providers: {
@@ -2146,11 +1913,7 @@ describe("openai image generation provider", () => {
     mockCodexAuthOnly();
     mockCodexImageStream({ imageData: "codex-image" });
 
-    const provider = buildOpenAIImageGenerationProvider();
-    await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Draw through a legacy configured Codex endpoint",
+    await generateOpenAIImage("Draw through a legacy configured Codex endpoint", {
       cfg: {
         models: {
           providers: {
@@ -2178,18 +1941,11 @@ describe("openai image generation provider", () => {
       if (params?.provider === "openai") {
         return { apiKey: "openai-key", source: "models.json", mode: "api-key" };
       }
-      if (params?.provider === "openai") {
-        return { apiKey: "codex-key", source: "profile:openai:default", mode: "oauth" };
-      }
       return {};
     });
 
-    const provider = buildOpenAIImageGenerationProvider();
     const authStore = createCodexOAuthAuthStore();
-    await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Draw using explicit direct config",
+    await generateOpenAIImage("Draw using explicit direct config", {
       cfg: {
         models: {
           providers: {
@@ -2216,17 +1972,10 @@ describe("openai image generation provider", () => {
       if (params?.provider === "openai") {
         return { apiKey: "openai-key", source: "models.json", mode: "api-key" };
       }
-      if (params?.provider === "openai") {
-        return { apiKey: "codex-key", source: "profile:openai:default", mode: "oauth" };
-      }
       return {};
     });
 
-    const provider = buildOpenAIImageGenerationProvider();
-    await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Draw using explicit request settings",
+    await generateOpenAIImage("Draw using explicit request settings", {
       cfg: {
         models: {
           providers: {
@@ -2260,11 +2009,7 @@ describe("openai image generation provider", () => {
       mode: "oauth",
     });
 
-    const provider = buildOpenAIImageGenerationProvider();
-    await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Draw using the selected ChatGPT profile",
+    await generateOpenAIImage("Draw using the selected ChatGPT profile", {
       cfg: {
         auth: {
           profiles: {
@@ -2296,12 +2041,7 @@ describe("openai image generation provider", () => {
     mockCodexAuthOnly();
     mockCodexImageStream();
 
-    const provider = buildOpenAIImageGenerationProvider();
-    await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Use the reference image",
-      cfg: {},
+    await generateOpenAIImage("Use the reference image", {
       inputImages: [
         { buffer: Buffer.from("png-bytes"), mimeType: "image/png", fileName: "ref.png" },
       ],
@@ -2326,12 +2066,7 @@ describe("openai image generation provider", () => {
     mockCodexAuthOnly();
     mockCodexImageStream({ imageData: "codex-image" });
 
-    const provider = buildOpenAIImageGenerationProvider();
-    const result = await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Draw two Codex icons",
-      cfg: {},
+    const result = await generateOpenAIImage("Draw two Codex icons", {
       count: 2,
     });
 
@@ -2351,12 +2086,7 @@ describe("openai image generation provider", () => {
     mockCodexAuthOnly();
     mockCodexImageStream({ imageData: "codex-image" });
 
-    const provider = buildOpenAIImageGenerationProvider();
-    const result = await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Draw many Codex icons",
-      cfg: {},
+    const result = await generateOpenAIImage("Draw many Codex icons", {
       count: 12,
     });
 
@@ -2378,25 +2108,15 @@ describe("openai image generation provider", () => {
     ).join("");
     mockCodexRawStream(body);
 
-    const provider = buildOpenAIImageGenerationProvider();
-    await expect(
-      provider.generateImage({
-        provider: "openai",
-        model: "gpt-image-2",
-        prompt: "Draw after noisy SSE",
-        cfg: {},
-      }),
-    ).rejects.toThrow("OpenAI Codex image generation response exceeded event limit");
+    await expect(generateOpenAIImage("Draw after noisy SSE")).rejects.toThrow(
+      "OpenAI Codex image generation response exceeded event limit",
+    );
   });
 
   it("forwards SSRF guard fields to multipart edit requests", async () => {
     mockGeneratedPngResponse();
 
-    const provider = buildOpenAIImageGenerationProvider();
-    await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Edit cat",
+    await generateOpenAIImage("Edit cat", {
       cfg: {
         models: {
           providers: {
@@ -2418,19 +2138,28 @@ describe("openai image generation provider", () => {
   });
 
   describe("azure openai support", () => {
-    it("uses api-key header and deployment-scoped URL for Azure .openai.azure.com hosts", async () => {
+    it.each([
+      {
+        label: "Azure .openai.azure.com",
+        baseUrl: "https://myresource.openai.azure.com",
+      },
+      {
+        label: ".cognitiveservices.azure.com",
+        baseUrl: "https://myresource.cognitiveservices.azure.com",
+      },
+      {
+        label: ".services.ai.azure.com",
+        baseUrl: "https://my-resource.services.ai.azure.com",
+      },
+    ])("uses api-key header and deployment-scoped URL for $label hosts", async ({ baseUrl }) => {
       mockGeneratedPngResponse();
 
-      const provider = buildOpenAIImageGenerationProvider();
-      await provider.generateImage({
-        provider: "openai",
-        model: "gpt-image-2",
-        prompt: "Azure cat",
+      await generateOpenAIImage("Azure cat", {
         cfg: {
           models: {
             providers: {
               openai: {
-                baseUrl: "https://myresource.openai.azure.com",
+                baseUrl,
                 models: [],
               },
             },
@@ -2440,18 +2169,15 @@ describe("openai image generation provider", () => {
 
       expect(httpConfigCall().defaultHeaders).toEqual({ "api-key": "openai-key" });
       expect(jsonRequestCall().url).toBe(
-        "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2024-12-01-preview",
+        `${baseUrl}/openai/deployments/gpt-image-2/images/generations?api-version=2024-12-01-preview`,
       );
     });
 
     it("omits model from Azure generation body because deployment is URL-scoped", async () => {
       mockGeneratedPngResponse();
 
-      const provider = buildOpenAIImageGenerationProvider();
-      await provider.generateImage({
-        provider: "openai",
+      await generateOpenAIImage("Azure cat", {
         model: "gpt-image-2-1",
-        prompt: "Azure cat",
         cfg: {
           models: {
             providers: {
@@ -2478,11 +2204,8 @@ describe("openai image generation provider", () => {
     it("lets explicit timeoutMs override the Azure image default", async () => {
       mockGeneratedPngResponse();
 
-      const provider = buildOpenAIImageGenerationProvider();
-      await provider.generateImage({
-        provider: "openai",
+      await generateOpenAIImage("Azure cat", {
         model: "gpt-image-2-1",
-        prompt: "Azure cat",
         cfg: {
           models: {
             providers: {
@@ -2502,11 +2225,7 @@ describe("openai image generation provider", () => {
     it("does not reroute transparent background requests for Azure deployment names", async () => {
       mockGeneratedPngResponse();
 
-      const provider = buildOpenAIImageGenerationProvider();
-      await provider.generateImage({
-        provider: "openai",
-        model: "gpt-image-2",
-        prompt: "Transparent Azure sticker",
+      await generateOpenAIImage("Transparent Azure sticker", {
         cfg: {
           models: {
             providers: {
@@ -2537,67 +2256,11 @@ describe("openai image generation provider", () => {
       });
     });
 
-    it("uses api-key header and deployment-scoped URL for .cognitiveservices.azure.com hosts", async () => {
-      mockGeneratedPngResponse();
-
-      const provider = buildOpenAIImageGenerationProvider();
-      await provider.generateImage({
-        provider: "openai",
-        model: "gpt-image-2",
-        prompt: "Azure cat",
-        cfg: {
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://myresource.cognitiveservices.azure.com",
-                models: [],
-              },
-            },
-          },
-        },
-      });
-
-      expect(httpConfigCall().defaultHeaders).toEqual({ "api-key": "openai-key" });
-      expect(jsonRequestCall().url).toBe(
-        "https://myresource.cognitiveservices.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2024-12-01-preview",
-      );
-    });
-
-    it("uses api-key header and deployment-scoped URL for .services.ai.azure.com hosts", async () => {
-      mockGeneratedPngResponse();
-
-      const provider = buildOpenAIImageGenerationProvider();
-      await provider.generateImage({
-        provider: "openai",
-        model: "gpt-image-2",
-        prompt: "Azure cat",
-        cfg: {
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://my-resource.services.ai.azure.com",
-                models: [],
-              },
-            },
-          },
-        },
-      });
-
-      expect(httpConfigCall().defaultHeaders).toEqual({ "api-key": "openai-key" });
-      expect(jsonRequestCall().url).toBe(
-        "https://my-resource.services.ai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2024-12-01-preview",
-      );
-    });
-
     it("respects AZURE_OPENAI_API_VERSION env override", async () => {
       mockGeneratedPngResponse();
       vi.stubEnv("AZURE_OPENAI_API_VERSION", "2025-01-01");
 
-      const provider = buildOpenAIImageGenerationProvider();
-      await provider.generateImage({
-        provider: "openai",
-        model: "gpt-image-2",
-        prompt: "Azure cat",
+      await generateOpenAIImage("Azure cat", {
         cfg: {
           models: {
             providers: {
@@ -2618,11 +2281,7 @@ describe("openai image generation provider", () => {
     it("builds Azure edit URL with deployment and api-version", async () => {
       mockGeneratedPngResponse();
 
-      const provider = buildOpenAIImageGenerationProvider();
-      await provider.generateImage({
-        provider: "openai",
-        model: "gpt-image-2",
-        prompt: "Change background",
+      await generateOpenAIImage("Change background", {
         cfg: {
           models: {
             providers: {
@@ -2651,11 +2310,8 @@ describe("openai image generation provider", () => {
     it("omits model from Azure edit form because deployment is URL-scoped", async () => {
       mockGeneratedPngResponse();
 
-      const provider = buildOpenAIImageGenerationProvider();
-      await provider.generateImage({
-        provider: "openai",
+      await generateOpenAIImage("Change background", {
         model: "gpt-image-2-1",
-        prompt: "Change background",
         cfg: {
           models: {
             providers: {
@@ -2683,44 +2339,18 @@ describe("openai image generation provider", () => {
       expect(editCallArgs.body.get("size")).toBe("1024x1024");
     });
 
-    it("strips trailing /v1 from Azure base URL", async () => {
+    it.each([
+      ["/v1", "https://myresource.openai.azure.com/v1"],
+      ["/openai/v1", "https://myresource.openai.azure.com/openai/v1"],
+    ])("strips trailing %s from Azure base URL", async (_suffix, baseUrl) => {
       mockGeneratedPngResponse();
 
-      const provider = buildOpenAIImageGenerationProvider();
-      await provider.generateImage({
-        provider: "openai",
-        model: "gpt-image-2",
-        prompt: "Azure cat",
+      await generateOpenAIImage("Azure cat", {
         cfg: {
           models: {
             providers: {
               openai: {
-                baseUrl: "https://myresource.openai.azure.com/v1",
-                models: [],
-              },
-            },
-          },
-        },
-      });
-
-      expect(jsonRequestCall().url).toBe(
-        "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2024-12-01-preview",
-      );
-    });
-
-    it("strips trailing /openai/v1 from Azure base URL", async () => {
-      mockGeneratedPngResponse();
-
-      const provider = buildOpenAIImageGenerationProvider();
-      await provider.generateImage({
-        provider: "openai",
-        model: "gpt-image-2",
-        prompt: "Azure cat",
-        cfg: {
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://myresource.openai.azure.com/openai/v1",
+                baseUrl,
                 models: [],
               },
             },
@@ -2736,13 +2366,7 @@ describe("openai image generation provider", () => {
     it("still uses Bearer auth for public OpenAI hosts", async () => {
       mockGeneratedPngResponse();
 
-      const provider = buildOpenAIImageGenerationProvider();
-      await provider.generateImage({
-        provider: "openai",
-        model: "gpt-image-2",
-        prompt: "Public cat",
-        cfg: {},
-      });
+      await generateOpenAIImage("Public cat");
 
       expect(httpConfigCall().defaultHeaders).toEqual({ Authorization: "Bearer openai-key" });
       expect(jsonRequestCall().url).toBe("https://api.openai.com/v1/images/generations");

@@ -63,7 +63,11 @@ export function applyMattermostSetupConfigPatch(params: {
   });
 }
 
+const accountCredentialKeys = ["botToken", "baseUrl"];
+
 export const mattermostSetupAdapter: ChannelSetupAdapter = {
+  singleAccountKeysToMove: accountCredentialKeys,
+  namedAccountPromotionKeys: accountCredentialKeys,
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
   applyAccountName: ({ cfg, accountId, name }) =>
     applyAccountNameToChannelSection({

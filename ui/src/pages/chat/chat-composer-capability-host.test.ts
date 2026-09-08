@@ -1,5 +1,6 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import type { SkillsLibraryListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot, GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -506,7 +507,28 @@ describe("ChatComposerCapabilityHost", () => {
     const context = createContext({ runtimeConfig: {} });
     const first = deferred<unknown>();
     const current = deferred<unknown>();
-    const request = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(current.promise);
+    const statusRequest = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(current.promise);
+    const library: SkillsLibraryListResult = {
+      entries: [],
+      profileId: null,
+      multipleProfiles: false,
+      defaultTarget: "workspace",
+      canManageWorkspace: true,
+      defaultSelectionLimit: 64,
+      session: { sessionKey: "main", selections: [], attachable: [] },
+    };
+    const request = vi.fn((method: string) => {
+      if (method === "skills.status") {
+        return statusRequest();
+      }
+      if (method === "skills.library.list") {
+        return Promise.resolve(library);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
     const state = createState();
     state.client = { request } as unknown as GatewayBrowserClient;
     state.connectionEpoch = 1;
@@ -525,7 +547,13 @@ describe("ChatComposerCapabilityHost", () => {
     expect(reconnected.skills).toBeNull();
     expect(reconnected.skillsLoading).toBe(false);
     reconnected.onLoadSkills?.();
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(statusRequest).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls).toEqual([
+      ["skills.status", { agentId: "main" }],
+      ["skills.library.list", { sessionKey: "main" }],
+      ["skills.status", { agentId: "main" }],
+      ["skills.library.list", { sessionKey: "main" }],
+    ]);
 
     first.resolve({ skills: [skill("retired")] });
     await Promise.resolve();

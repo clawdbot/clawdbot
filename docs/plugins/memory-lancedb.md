@@ -211,10 +211,9 @@ local server returns context-length errors.
 
 `recallMaxChars` bounds the `before_prompt_build` auto-recall query, the
 `memory_recall` tool, the `memory_forget` query path, and `openclaw ltm search`.
-Auto-recall embeds the latest user message from the turn and falls back to the
-full prompt only when no user message is present, keeping channel metadata and
-large prompt blocks out of the embedding request. It also bounds each recalled
-item after prompt escaping before that text reaches the model.
+Auto-recall embeds the current turn's prompt after removing media attachment
+notes and normalizing whitespace. The same limit bounds each recalled item
+after prompt escaping before that text reaches the model.
 
 `captureMaxChars` gates whether a user message from the turn's `agent_end`
 event is short enough to be considered for auto-capture. `memory_store` rejects
@@ -228,6 +227,19 @@ phrases (`remember`, `prefer`, `记住`, `覚えて`, `기억해`, and similar).
 Auto-capture also rejects text that looks like envelope/transport metadata,
 prompt-injection payloads, or already-injected `<relevant-memories>` context,
 and caps at 3 captured memories per agent turn.
+
+Completed message occurrences are not processed again while they remain in the
+conversation transcript, including after compaction. The last 60 completed text
+blocks also stay deduplicated after their messages leave the transcript. This
+history includes text that matched an existing memory and successful blocks from
+a partially failed message. A later message can still capture text that an
+earlier occurrence skipped because of the per-turn limit. Identical replacements
+without a distinct timestamp or retained context can be indistinguishable from
+an unchanged replay. Resetting or ending
+the conversation clears that progress. Overlapping completions in one conversation
+share capture progress; other conversations can proceed independently. On shutdown,
+the plugin stops new capture work and waits for pending captures before closing
+its storage.
 
 Every memory is owned by one agent. Recall, duplicate detection, capture,
 listing, raw queries, and deletion all enforce that owner before returning or
@@ -337,8 +349,9 @@ completed; other agents never inherit the old shared rows.
 
 ## Runtime dependencies and platform support
 
-`memory-lancedb` depends on the native `@lancedb/lancedb` package, owned by the
-plugin package (not the OpenClaw core dist). Gateway startup does not repair
+`memory-lancedb` bundles LanceDB's JavaScript. Its plugin package declares native
+`@lancedb/lancedb-*` packages as optional dependencies, so installation selects
+the matching binary for the host platform. Gateway startup does not repair
 plugin dependencies; if the native dependency is missing or fails to load,
 reinstall or update the plugin package and restart the Gateway.
 

@@ -6,7 +6,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ProviderCatalogResult } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   QWEN_36_FLASH_MODEL_ID,
   QWEN_36_PLUS_MODEL_ID,
@@ -40,6 +40,14 @@ async function registerQwenProvider() {
 }
 
 describe("qwen provider plugin", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ data: [{ id: "qwen3.8-max" }, { id: "qwen3.8-flash" }] })),
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
   it("keeps Standard-only models out of Coding Plan normalized catalogs", async () => {
     const provider = await registerQwenProvider();
 
@@ -254,7 +262,7 @@ describe("qwen provider plugin", () => {
   });
 
   it("switches Token Plan regions without replacing custom catalog rows", () => {
-    const initialGlobal = applyQwenTokenPlanConfig({}, "global");
+    const initialGlobal = applyQwenTokenPlanConfig({ models: { mode: "replace" } }, "global");
     const globalProvider = initialGlobal.models?.providers?.[QWEN_TOKEN_PLAN_PROVIDER_ID];
     if (!globalProvider) {
       throw new Error("Token Plan provider missing after onboarding");
@@ -279,6 +287,7 @@ describe("qwen provider plugin", () => {
       ...initialGlobal,
       models: {
         ...initialGlobal.models,
+        mode: "merge",
         providers: {
           ...initialGlobal.models?.providers,
           [QWEN_TOKEN_PLAN_PROVIDER_ID]: {

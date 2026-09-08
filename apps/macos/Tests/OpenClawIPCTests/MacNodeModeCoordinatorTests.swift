@@ -184,22 +184,54 @@ private struct CoordinatorWaitTimeout: Error, CustomStringConvertible {
     }
 }
 
+struct MacNodeModeCoordinatorDeviceAuthTests {
+    @Test
+    @MainActor
+    func `unproven legacy token failure exposes gateway re-pair action`() throws {
+        let failure = MacNodeModeCoordinator.nodeGatewayConnectionFailure(
+            GatewayConnectAuthError(
+                message: "pairing required",
+                detailCode: GatewayConnectAuthDetailCode.pairingRequired.rawValue,
+                canRetryWithDeviceToken: false))
+
+        #expect(failure.reason == "This device is not approved yet — Approve on gateway")
+        let status = try #require(MacNodeChannelState.unavailable(
+            reason: failure.reason,
+            diagnostic: failure.diagnostic).operatorStatusLine)
+        #expect(status.label == "Mac node unavailable — This device is not approved yet — Approve on gateway")
+        #expect(status.diagnostic == "The gateway received the connection request, "
+            + "but this device must be approved first.")
+    }
+}
+
 struct MacNodeModeCoordinatorTests {
+    private func nodeDeviceAuthBinding(
+        deviceAuthGatewayID: String?) throws -> (allowStoredDeviceAuth: Bool, gatewayID: String?)
+    {
+        let endpoint = try GatewayConnection.EndpointSnapshot(
+            config: (
+                url: #require(URL(string: "wss://gateway.example.invalid")),
+                token: nil,
+                password: nil),
+            routeAuthority: nil,
+            deviceAuthGatewayID: deviceAuthGatewayID)
+        return MacNodeModeCoordinator.nodeDeviceAuthBinding(for: endpoint)
+    }
+
     private func waitUntil(
         _ description: String,
-        timeout: Duration = .seconds(2),
         condition: @escaping @Sendable () async -> Bool) async throws
     {
         let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: timeout)
+        let deadline = clock.now.advanced(by: .seconds(2))
         while clock.now < deadline {
-            if await condition() {
-                return
-            }
+            if await condition() { return }
             // Some callers run on MainActor; a real suspension lets the
             // notification task make progress instead of polling it out.
             try await Task.sleep(for: .milliseconds(10))
         }
+        // Completion can arrive during the final suspension.
+        if await condition() { return }
         throw CoordinatorWaitTimeout(operation: description)
     }
 
@@ -219,6 +251,24 @@ struct MacNodeModeCoordinatorTests {
         }
         await gateway.disconnect()
         await coordinator.stopAndWait()
+    }
+
+    @Test func `waiter rechecks a completed async snapshot after its deadline`() async throws {
+        let probe = CoordinatorDrainSnapshotProbe()
+
+        try await self.waitUntil("completed async snapshot") {
+            let captured = await probe.hasCaptured()
+            if captured { return captured }
+            do {
+                try await Task.sleep(for: .seconds(2))
+            } catch {
+                return captured
+            }
+            await probe.recordCapture()
+            return captured
+        }
+
+        #expect(await probe.hasCaptured())
     }
 
     @Test func `stale endpoint attempt is rejected after a suspended permission query`() {
@@ -498,6 +548,27 @@ struct MacNodeModeCoordinatorTests {
         #expect(!MacNodeModeCoordinator.endpointState(replacement, matches: first))
     }
 
+    @Test func `node device auth binding uses the endpoint owner`() throws {
+        let binding = try self.nodeDeviceAuthBinding(deviceAuthGatewayID: "gateway-a")
+
+        #expect(binding.allowStoredDeviceAuth)
+        #expect(binding.gatewayID == "gateway-a")
+    }
+
+    @Test func `node device auth binding rejects unscoped storage`() throws {
+        let binding = try self.nodeDeviceAuthBinding(deviceAuthGatewayID: nil)
+
+        #expect(!binding.allowStoredDeviceAuth)
+        #expect(binding.gatewayID == nil)
+    }
+
+    @Test func `node device auth binding keeps gateway owners distinct`() throws {
+        let first = try self.nodeDeviceAuthBinding(deviceAuthGatewayID: "gateway-a")
+        let second = try self.nodeDeviceAuthBinding(deviceAuthGatewayID: "gateway-b")
+
+        #expect(first.gatewayID != second.gatewayID)
+    }
+
     @Test func `stop pause and endpoint changes revoke final connect admission`() throws {
         let first = try GatewayConnection.EndpointSnapshot(
             config: GatewayConnection.Config(
@@ -628,7 +699,7 @@ struct MacNodeModeCoordinatorTests {
                     "timeoutMs": 0,
                 ],
             ])
-            task.emitReceiveSuccessOnce(.data(invokeEvent))
+            task.emitReceiveSuccess(.data(invokeEvent))
             try await self.waitUntil("computer invoke start") {
                 await lifecycle.state().started
             }

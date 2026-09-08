@@ -499,8 +499,8 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         self.model.phase = .complete
         self.model.title = String(localized: "Welcome back")
         self.model.message = connectionMode == .local
-            ? String(localized: "OpenClaw \(receipt.toVersion) and its Gateway are ready.")
-            : String(localized: "OpenClaw \(receipt.toVersion) and its Mac node runtime are ready.")
+            ? String(format: String(localized: "OpenClaw %@ and its Gateway are ready."), receipt.toVersion)
+            : String(format: String(localized: "OpenClaw %@ and its Mac node runtime are ready."), receipt.toVersion)
         self.model.details = switch (notification, notificationRetryScheduled) {
         case (.retryLater, true):
             String(localized: "Your agent could not be notified yet. OpenClaw will retry after the next app launch.")

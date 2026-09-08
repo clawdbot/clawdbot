@@ -38,20 +38,21 @@ export function createKeyedFifoLeaseRegistry(globalKey: symbol): KeyedFifoLeaseR
       }
 
       const { promise: completed, resolve: complete } = createDeferredCore();
-      const predecessors = keys.map((key) => state.tails.get(key) ?? Promise.resolve());
-      const owned = keys.map((key, index) => {
-        const tail = predecessors[index]!.then(() => completed);
+      const predecessors: Promise<void>[] = [];
+      const owned = keys.map((key) => {
+        const predecessor = state.tails.get(key);
+        if (predecessor) {
+          predecessors.push(predecessor);
+        }
+        // Early release must not couple an idle key to another key's busy predecessor.
+        const tail = predecessor?.then(() => completed) ?? completed;
         state.tails.set(key, tail);
         return { key, tail };
       });
-      let released = false;
-
       const release = () => {
-        if (released) {
+        if (!state.releases.delete(release)) {
           return;
         }
-        released = true;
-        state.releases.delete(release);
         complete();
         for (const { key, tail } of owned) {
           void tail.then(() => state.tails.get(key) === tail && state.tails.delete(key));

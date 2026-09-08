@@ -42,7 +42,16 @@ export async function startGatewaySecretEgressProxy(params: {
       caDir: proxyDir,
       ...(params.allowedHosts !== undefined ? { allowedHosts: params.allowedHosts } : {}),
       ...(params.bypassHosts ? { bypassHosts: params.bypassHosts } : {}),
-      onAudit: (event) => log.info("secret egress request", event),
+      onAudit: (event) => {
+        if (event.reason === "certificate-error") {
+          log.warn(
+            "secret egress TLS certificate unavailable; check OpenSSL and the system clock, then retry",
+            event,
+          );
+        } else {
+          log.info("secret egress request", event);
+        }
+      },
     });
     const ownedProxy = proxy;
     const cleanupOnProcessExit = () => removeProxyDirBestEffort(proxyDir);

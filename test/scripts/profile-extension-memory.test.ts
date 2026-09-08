@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { PassThrough, Transform } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
@@ -150,29 +151,32 @@ describe("scripts/profile-extension-memory", () => {
     ] as const;
 
     for (const [flag, value] of cases) {
-      const result = runProfileExtensionMemory([flag, value]);
-
-      expect(result.status).toBe(1);
-      expect(result.stdout).toBe("");
-      expect(result.stderr).toContain(`[extension-memory] ${flag} must be a positive integer`);
-      expect(result.stderr).not.toContain("dist/extensions");
-      expect(result.stderr).not.toContain("at ");
+      expect(() => parseArgs([flag, value])).toThrow(`${flag} must be a positive integer`);
     }
+
+    const result = runProfileExtensionMemory([...cases[0]]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(`[extension-memory] ${cases[0][0]} must be a positive integer`);
+    expect(result.stderr).not.toContain("dist/extensions");
+    expect(result.stderr).not.toContain("at ");
   });
 
   it("rejects option-looking string flag values before scanning built plugin artifacts", () => {
-    for (const args of [
+    const cases = [
       ["--extension", "-h"],
       ["--json", "-h"],
-    ]) {
-      const result = runProfileExtensionMemory(args);
-
-      expect(result.status).toBe(1);
-      expect(result.stdout).toBe("");
-      expect(result.stderr).toContain(`[extension-memory] ${args[0]} requires a value`);
-      expect(result.stderr).not.toContain("dist/extensions");
-      expect(result.stderr).not.toContain("at ");
+    ] as const;
+    for (const [flag, value] of cases) {
+      expect(() => parseArgs([flag, value])).toThrow(`${flag} requires a value`);
     }
+
+    const result = runProfileExtensionMemory([...cases[0]]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(`[extension-memory] ${cases[0][0]} requires a value`);
+    expect(result.stderr).not.toContain("dist/extensions");
+    expect(result.stderr).not.toContain("at ");
   });
 
   it.each([
@@ -301,6 +305,53 @@ describe("scripts/profile-extension-memory", () => {
     }
   });
 
+  it("preserves split UTF-8 child output through EOF and RSS accounting", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-utf8-"));
+    const hookPath = path.join(root, "hook.mjs");
+    const stdout = "stdout: café 🦞";
+    const stderr = "stderr: 東京\n__OPENCLAW_MAX_RSS_KB__=2048\nfin: é";
+    const splitBytes = () =>
+      new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          for (const byte of chunk) {
+            this.push(Buffer.from([byte]));
+          }
+          callback();
+        },
+      });
+    try {
+      writeFileSync(hookPath, "", "utf8");
+      const result = await runCase({
+        repoRoot: root,
+        env: process.env,
+        hookPath,
+        name: "utf8-output",
+        body: `process.stdout.write(${JSON.stringify(stdout)}); process.stderr.write(${JSON.stringify(stderr)});`,
+        timeoutMs: 30_000,
+        spawnImpl(command, args, options) {
+          const child = spawn(command, args, options);
+          // Preserve actual pipe bytes while forcing character boundaries apart.
+          child.stdout = child.stdout.pipe(splitBytes());
+          child.stderr = child.stderr.pipe(splitBytes());
+          return child;
+        },
+      });
+
+      expect(result).toEqual({
+        name: "utf8-output",
+        code: 0,
+        signal: null,
+        timedOut: false,
+        error: null,
+        stdout,
+        stderr,
+        maxRssMb: 2,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("creates parent directories for nested JSON report paths", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-test-"));
     try {
@@ -399,11 +450,11 @@ describe("scripts/profile-extension-memory", () => {
       spawnImpl: (() => {
         const child = new EventEmitter() as EventEmitter & {
           kill: () => boolean;
-          stderr: EventEmitter;
-          stdout: EventEmitter;
+          stderr: PassThrough;
+          stdout: PassThrough;
         };
-        child.stderr = new EventEmitter();
-        child.stdout = new EventEmitter();
+        child.stderr = new PassThrough();
+        child.stdout = new PassThrough();
         child.kill = () => true;
         queueMicrotask(() => child.emit("error", new Error("spawn denied")));
         return child;

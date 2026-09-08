@@ -276,7 +276,6 @@ describe("Moonshot registered transport boundary", () => {
       const caller = vi.fn((payload: unknown) => (callerPayload = payload));
       const stream = await wrapped(normalized, context as never, {
         apiKey: "test-key",
-        maxRetries: 0,
         onPayload: caller,
       });
       let streamError: unknown;

@@ -44,10 +44,16 @@ describe("legacy migrate provider-shaped config", () => {
       expected: voiceAndEnabledMigrations,
     },
     {
-      name: "agent defaults and keyed entries",
+      name: "agent defaults",
       path: "agents",
-      value: { defaults: { tts: legacyTts }, entries: { main: { tts: legacyTts } } },
+      value: { defaults: { tts: legacyTts } },
       expected: [],
+    },
+    {
+      name: "keyed agent entries",
+      path: "agents",
+      value: { entries: { main: { tts: legacyTts } } },
+      expected: voiceAndEnabledMigrations,
     },
     {
       name: "channel root",

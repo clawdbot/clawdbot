@@ -4,6 +4,7 @@ import { logError } from "openclaw/plugin-sdk/logging-core";
 import { resolveRequestClientIp } from "openclaw/plugin-sdk/webhook-ingress";
 import {
   readJsonBodyWithLimit,
+  sendHttpRequestRejection,
   WEBHOOK_BODY_READ_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-request-guards";
 import { parseDiscordActivityCustomId } from "../component-custom-id.js";
@@ -26,6 +27,7 @@ import {
 } from "./shell.js";
 
 const BODY_MAX_BYTES = 8 * 1024;
+const JSON_CONTENT_TYPE = "application/json; charset=utf-8";
 const WIDGET_ID_PATTERN = /^[A-Za-z0-9_-]{22}$/;
 const DOC_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
@@ -69,8 +71,12 @@ function respond(
   return true;
 }
 
+function jsonBody(body: unknown): string {
+  return `${JSON.stringify(body)}\n`;
+}
+
 function respondJson(res: ServerResponse, statusCode: number, body: unknown): true {
-  return respond(res, statusCode, `${JSON.stringify(body)}\n`, "application/json; charset=utf-8");
+  return respond(res, statusCode, jsonBody(body), JSON_CONTENT_TYPE);
 }
 
 function notFound(res: ServerResponse, widgetDocument = false): true {
@@ -158,9 +164,28 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
       maxBytes: BODY_MAX_BYTES,
       timeoutMs: bodyTimeoutMs,
       emptyObjectOnEmpty: true,
+      // Defer destruction so the rejections below reach the client before the close.
+      destroyOnLimit: false,
     });
     if (!bodyResult.ok && bodyResult.code === "REQUEST_BODY_TIMEOUT") {
-      return respondJson(res, 408, { error: "request body timeout" });
+      await sendHttpRequestRejection(
+        req,
+        res,
+        408,
+        jsonBody({ error: "request body timeout" }),
+        JSON_CONTENT_TYPE,
+      );
+      return true;
+    }
+    if (!bodyResult.ok && bodyResult.code === "PAYLOAD_TOO_LARGE") {
+      await sendHttpRequestRejection(
+        req,
+        res,
+        413,
+        jsonBody({ error: "request body too large" }),
+        JSON_CONTENT_TYPE,
+      );
+      return true;
     }
     const body =
       bodyResult.ok &&

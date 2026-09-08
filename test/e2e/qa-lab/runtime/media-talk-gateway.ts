@@ -1,5 +1,6 @@
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-// QA Lab producer exercises WebChat media delivery and Talk run control through a real Gateway.
+// QA Lab producer exercises speech delivery and Talk run control through a real Gateway.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,15 +8,18 @@ import { pathToFileURL } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
-  QA_EVIDENCE_FILENAME,
-  type QaEvidenceSummaryJson,
-} from "../../../../extensions/qa-lab/src/evidence-summary.js";
-import {
+  createQaBusState,
+  createQaChannelTransport,
   createQaGatewayChild,
+  QA_EVIDENCE_FILENAME,
+  startQaBusServer,
+  startQaMockOpenAiServer,
+  type MockOpenAiRequestSnapshot,
+  type QaEvidenceSummaryJson,
   type QaGatewayChild,
-} from "../../../../extensions/qa-lab/src/gateway-child.js";
-import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
+} from "../../../../extensions/qa-lab/api.js";
 import { GatewayClient, type GatewayClientOptions } from "../../../../src/gateway/client.js";
+import type { SessionsListResult } from "../../../../src/gateway/session-utils.types.js";
 import type { DiagnosticStabilitySnapshot } from "../../../../src/logging/diagnostic-stability.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -23,7 +27,7 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../../../../src/utils/message-channel.js";
-import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
 
 const FIXTURE_PLUGIN_ID = "qa-media-talk-runtime";
@@ -32,8 +36,9 @@ const FIXTURE_REALTIME_PROVIDER_ID = "qa-realtime";
 const FIXTURE_WAV_BASE64 =
   "UklGRsQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/media-talk-gateway.ts";
+const CODEX_TTS_MODEL_REF = "openai/gpt-5.6-luna";
 
-type ScenarioId = "webchat-auto-tts" | "active-talk-agent-run-status";
+type ScenarioId = keyof typeof SCENARIOS;
 
 type ProducerOptions = {
   artifactBase: string;
@@ -50,6 +55,7 @@ type ProofResult = {
 const SCENARIOS = {
   "webchat-auto-tts": {
     title: "WebChat auto TTS delivery",
+    run: runWebchatAutoTtsProof,
     sourcePath: "qa/scenarios/media/webchat-auto-tts.yaml",
     docsRefs: ["docs/tools/tts.md", "docs/tools/media-overview.md"],
     codeRefs: [
@@ -59,8 +65,21 @@ const SCENARIOS = {
       "src/gateway/server-methods/artifacts.ts",
     ],
   },
+  "codex-inbound-message-auto-tts": {
+    title: "Codex inbound-audio message TTS delivery",
+    run: runCodexInboundMessageAutoTtsProof,
+    sourcePath: "qa/scenarios/media/codex-inbound-message-auto-tts.yaml",
+    docsRefs: ["docs/tools/tts.md", "docs/channels/qa-channel.md"],
+    codeRefs: [
+      SOURCE_PATH,
+      "src/agents/embedded-agent-runner/run/attempt-tool-run-context.ts",
+      "extensions/codex/src/app-server/dynamic-tool-build.ts",
+      "src/infra/outbound/message-action-tts.ts",
+    ],
+  },
   "active-talk-agent-run-status": {
     title: "Active Talk agent-run control boundaries",
+    run: runActiveTalkAgentRunProof,
     sourcePath: "qa/scenarios/runtime/active-talk-agent-run-status.yaml",
     docsRefs: ["docs/nodes/talk.md", "docs/web/control-ui.md"],
     codeRefs: [
@@ -411,6 +430,172 @@ async function runWebchatAutoTtsProof(options: ProducerOptions): Promise<string>
   }
 }
 
+async function runCodexInboundMessageAutoTtsProof(options: ProducerOptions): Promise<string> {
+  const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-inbound-tts-"));
+  const state = createQaBusState();
+  const transport = createQaChannelTransport(state);
+  const gatewayOwner = createQaGatewayChild();
+  let bus: Awaited<ReturnType<typeof startQaBusServer>> | undefined;
+  let mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
+  let details = "";
+  await runQaGatewayFixture(
+    async () => {
+      const fixture = await createFixturePlugin(fixtureRoot);
+      bus = await startQaBusServer({ state });
+      mock = await startQaMockOpenAiServer({ modelRefs: [CODEX_TTS_MODEL_REF] });
+      const mockBaseUrl = mock.baseUrl;
+      const providerBaseUrl = `${mockBaseUrl}/v1`;
+      const gateway = await gatewayOwner.start({
+        repoRoot: options.repoRoot,
+        forcedRuntime: "codex",
+        providerMode: "mock-openai",
+        providerBaseUrl,
+        primaryModel: CODEX_TTS_MODEL_REF,
+        alternateModel: CODEX_TTS_MODEL_REF,
+        transport,
+        transportBaseUrl: bus.baseUrl,
+        controlUiEnabled: false,
+        runtimeEnvPatch: {
+          OPENCLAW_QA_SPEECH_CALLS_PATH: fixture.speechCallsPath,
+          OPENCLAW_TTS_PREFS: path.join(fixtureRoot, "tts-prefs.json"),
+        },
+        mutateConfig: (config) => {
+          const withPlugin = withFixturePlugin(config, fixture.pluginDir);
+          return {
+            ...withPlugin,
+            messages: { ...withPlugin.messages, visibleReplies: "message_tool" },
+            tools: {
+              ...withPlugin.tools,
+              alsoAllow: ["message"],
+              // The ingress media fact must survive without an STT request.
+              media: { audio: { enabled: false } },
+            },
+            tts: {
+              auto: "inbound",
+              mode: "final",
+              provider: FIXTURE_SPEECH_PROVIDER_ID,
+              // A broken fixture must never fall back to an external speech endpoint.
+              providers: { openai: { baseUrl: providerBaseUrl } },
+            },
+          };
+        },
+      });
+      await transport.waitReady({ gateway });
+      const readRequests = async () => {
+        const response = await fetch(`${mockBaseUrl}/debug/requests`);
+        assert.equal(response.status, 200, "mock request evidence must remain available");
+        return (await response.json()) as MockOpenAiRequestSnapshot[];
+      };
+      const conversation = { id: "codex-inbound-tts", kind: "direct" as const };
+      const expectedText = "QA-MESSAGE-DELIVERY-OK";
+      // The audit fixture authors both message text and additive presentation text.
+      const expectedBody = `${expectedText}\n\n${expectedText}`;
+      let previousRunId: string | undefined;
+      for (const inboundAudio of [true, false]) {
+        const beforeRequests = await readRequests();
+        const requestCursor = beforeRequests.at(-1)?.cursor ?? 0;
+        const sinceIndex = state
+          .getSnapshot()
+          .messages.filter((m) => m.direction === "outbound").length;
+        const beforeSpeech = (await readJsonLines(fixture.speechCallsPath)).length;
+        await transport.sendInbound({
+          conversation,
+          senderId: conversation.id,
+          text: `message delivery decision send qa check: ${inboundAudio ? "audio" : "text"} turn`,
+          ...(inboundAudio
+            ? {
+                attachments: [
+                  {
+                    id: "synthetic-voice-note",
+                    kind: "audio" as const,
+                    mimeType: "audio/wav",
+                    fileName: "voice-note.wav",
+                    contentBase64: FIXTURE_WAV_BASE64,
+                  },
+                ],
+              }
+            : {}),
+        });
+        const outbound = await transport.waitForOutbound({
+          conversation,
+          sinceIndex,
+          textIncludes: expectedText,
+          timeoutMs: 60_000,
+        });
+        // Wait for this admitted turn to finish before testing the next ingress.
+        // Sending on message delivery alone could accidentally exercise steering.
+        const session = await transport.waitForCondition(async () => {
+          const result = (await gateway.call("sessions.list", { limit: 20 })) as SessionsListResult;
+          const row = result.sessions.find((entry) => entry.lastChannel === transport.id);
+          return row &&
+            !row.hasActiveRun &&
+            row.status === "done" &&
+            row.lastRunId &&
+            row.lastRunId !== previousRunId
+            ? row
+            : undefined;
+        }, 60_000);
+        assert.equal(session.agentRuntime?.id, "codex", "the real Codex runtime must own the turn");
+        assert.equal(session.status, "done");
+        assert.ok(session.lastRunId, "the completed turn must have an owner-recorded run ID");
+        assert.notEqual(session.lastRunId, previousRunId, "each ingress must complete a fresh run");
+        assert.ok(!session.lastRunError);
+        assert.notEqual(session.abortedLastRun, true);
+        previousRunId = session.lastRunId;
+        const requests = (await readRequests()).filter((request) => request.cursor > requestCursor);
+        const sends = requests.filter((request) => request.plannedToolName === "message");
+        assert.equal(sends.length, 1, "one dynamic message tool must deliver the reply");
+        const send = sends[0];
+        assert.ok(send?.plannedToolCallId, "the mock must record the dynamic call identity");
+        assert.equal(send.plannedToolArgs?.action, "send");
+        assert.equal(send.plannedToolArgs?.final, true);
+        assert.equal(send.plannedToolArgs?.voiceText, undefined, "speech must be automatic");
+        assert.equal(send.plannedToolArgs?.asVoice, undefined, "speech must not be forced");
+        // Final source delivery closes the native turn after its tool response;
+        // it does not require another provider request carrying that result.
+        const history = await gateway.call("chat.history", { sessionKey: session.key, limit: 20 });
+        assert.ok(
+          collectRecords(history).some(
+            (record) =>
+              record.role === "toolResult" &&
+              record.toolCallId === send.plannedToolCallId &&
+              record.toolName === "message" &&
+              record.isError === false,
+          ),
+          "the Gateway must record the successful dynamic message tool result",
+        );
+        assert.equal(
+          state.getSnapshot().messages.filter((message) => message.direction === "outbound")
+            .length - sinceIndex,
+          1,
+          "the admitted turn must deliver exactly one visible reply",
+        );
+        assert.equal(outbound.text, expectedBody);
+        const attachments = outbound.attachments ?? [];
+        assert.equal(
+          attachments.length,
+          inboundAudio ? 1 : 0,
+          `${inboundAudio ? "audio" : "text"} ingress must control automatic speech delivery`,
+        );
+        const speechCalls = await readJsonLines(fixture.speechCallsPath);
+        assert.equal(speechCalls.length - beforeSpeech, inboundAudio ? 1 : 0);
+        if (inboundAudio) {
+          assert.equal(attachments[0]?.kind, "audio");
+          assert.equal(attachments[0]?.mimeType, "audio/wav");
+          assert.equal(attachments[0]?.contentBase64, FIXTURE_WAV_BASE64);
+          assert.equal(speechCalls.at(-1)?.text, expectedText);
+        }
+      }
+      details = `real Codex app-server and Gateway pid=${gateway.pid ?? "unknown"}; two final message tool replies; audio ingress synthesized and delivered exact WAV bytes; subsequent text ingress stayed text-only; syntheses=1`;
+    },
+    () => stopQaGatewayFixture(gatewayOwner),
+    () => mock?.stop(),
+    () => bus?.stop(),
+    () => fs.rm(fixtureRoot, { force: true, recursive: true }),
+  );
+  return details;
+}
+
 function assertControlResult(
   value: unknown,
   expected: { mode: string; active?: boolean; queued?: boolean; aborted?: boolean },
@@ -606,10 +791,7 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
 async function produceProof(options: ProducerOptions): Promise<ProofResult> {
   const startedAt = Date.now();
   try {
-    const details =
-      options.scenarioId === "webchat-auto-tts"
-        ? await runWebchatAutoTtsProof(options)
-        : await runActiveTalkAgentRunProof(options);
+    const details = await SCENARIOS[options.scenarioId].run(options);
     return { details, durationMs: Math.max(1, Date.now() - startedAt), status: "pass" };
   } catch (error) {
     return {
@@ -627,7 +809,10 @@ async function runMediaTalkGatewayProducer(
   const writer = createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
     logFileName: `${options.scenarioId}.log`,
-    primaryModel: "mock-openai/gpt-5.6-luna",
+    primaryModel:
+      options.scenarioId === "codex-inbound-message-auto-tts"
+        ? CODEX_TTS_MODEL_REF
+        : "mock-openai/gpt-5.6-luna",
     providerMode: "mock-openai",
     repoRoot: options.repoRoot,
     target: {

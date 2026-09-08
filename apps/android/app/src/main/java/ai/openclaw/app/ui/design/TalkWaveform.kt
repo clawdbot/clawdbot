@@ -208,14 +208,21 @@ internal object TalkWaveformMath {
     time: Double,
   ): Double =
     when (phase) {
-      TalkWaveformPhase.Idle -> 0.05
-      TalkWaveformPhase.Thinking -> 0.16 + 0.10 * (0.5 + 0.5 * sin(time * 1.6))
+      TalkWaveformPhase.Idle -> {
+        0.05
+      }
+
+      TalkWaveformPhase.Thinking -> {
+        0.16 + 0.10 * (0.5 + 0.5 * sin(time * 1.6))
+      }
+
       is TalkWaveformPhase.Listening -> {
         val clamped = phase.level.toDouble().coerceIn(0.0, 1.0)
         // Detected speech lifts the floor so the wave visibly commits to the
         // user even when the mic level dips between words.
         if (phase.speechActive) 0.55 + 0.45 * clamped else 0.30 + 0.65 * clamped
       }
+
       is TalkWaveformPhase.Speaking -> {
         val level = phase.level
         if (level == null) {

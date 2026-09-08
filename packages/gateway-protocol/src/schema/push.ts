@@ -44,6 +44,7 @@ export const WebPushNotificationCategorySchema = Type.String({
     "approval-requested",
     "agent-finished",
     "agent-question",
+    "human-mentioned",
     "scheduled-task-failed",
     "background-task-failed",
   ],
@@ -57,6 +58,7 @@ const WebPushCategoryPreferencesSchema = closedObject({
   approvalRequested: Type.Boolean(),
   agentFinished: Type.Boolean(),
   agentQuestion: Type.Boolean(),
+  humanMentioned: Type.Optional(Type.Boolean()),
   scheduledTaskFailed: Type.Boolean(),
   backgroundTaskFailed: Type.Boolean(),
 });
@@ -83,6 +85,7 @@ export const WebPushDevicePreferencesSchema = closedObject({
       approvalRequested: Type.Optional(Type.Boolean()),
       agentFinished: Type.Optional(Type.Boolean()),
       agentQuestion: Type.Optional(Type.Boolean()),
+      humanMentioned: Type.Optional(Type.Boolean()),
       scheduledTaskFailed: Type.Optional(Type.Boolean()),
       backgroundTaskFailed: Type.Optional(Type.Boolean()),
     }),

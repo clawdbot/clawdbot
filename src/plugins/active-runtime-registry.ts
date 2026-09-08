@@ -3,6 +3,7 @@ import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { matchesPluginRuntimeArtifactSelection } from "./plugin-runtime-artifact-selection.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import {
   getActivePluginRegistry,
@@ -100,27 +101,27 @@ export function registryContainsRuntimePluginIds(
   return pluginIds.length === 0;
 }
 
-export function registryMatchesManifestPluginIds(
+/** Indexes selected owners; omitted artifact preference retains the loaded owner's policy. */
+export function createRuntimePluginManifestLookup(
   registry: PluginRegistry,
-  manifestPlugins: readonly PluginManifestRecord[] | undefined,
-  pluginIds: readonly string[],
-): boolean {
-  if (!manifestPlugins) {
-    return false;
-  }
-  const records = new Map(registry.plugins.map((plugin) => [plugin.id, plugin]));
-  const manifests = new Map(manifestPlugins.map((plugin) => [plugin.id, plugin]));
-  return pluginIds.every((pluginId) => {
+  manifestPlugins: readonly PluginManifestRecord[],
+  preferBuiltPluginArtifacts?: boolean,
+): (pluginId: string) => PluginRecord | undefined {
+  // Loader order chooses the owner; later disabled duplicates are diagnostics only.
+  const records = new Map(
+    registry.plugins.filter(isRuntimePluginRecordLoaded).map((plugin) => [plugin.id, plugin]),
+  );
+  const manifests = new Map(manifestPlugins.toReversed().map((plugin) => [plugin.id, plugin]));
+  return (pluginId) => {
     const record = records.get(pluginId);
     const manifest = manifests.get(pluginId);
-    return Boolean(
-      record &&
+    return record &&
       manifest &&
       record.origin === manifest.origin &&
-      (record.origin === "bundled" ||
-        (record.rootDir === manifest.rootDir && record.source === manifest.source)),
-    );
-  });
+      matchesPluginRuntimeArtifactSelection(record, manifest, preferBuiltPluginArtifacts)
+      ? record
+      : undefined;
+  };
 }
 
 export function getLoadedRuntimePluginRegistry(
@@ -134,33 +135,44 @@ export function getLoadedRuntimePluginRegistry(
   const requiredPluginIds = normalizeRequiredPluginIds(
     params.requiredPluginIds ?? params.loadOptions?.onlyPluginIds,
   );
-  if (params.loadOptions && requiredPluginIds?.length !== 0) {
-    const compatible = resolveCompatibleRuntimePluginRegistry(params.loadOptions);
-    if (compatible && registryContainsRuntimePluginIds(compatible, requiredPluginIds)) {
-      return compatible;
-    }
-    // Exact cache-key reuse fails for every caller whose options differ from the
-    // composition root's load (scoped ids, derived config, no gateway bindings),
-    // which used to force a cold scoped load even when the active registry already
-    // holds the requested runtime plugins. An explicit id list proves what the
-    // caller needs, so fall through to the containment check below; unscoped
-    // requests keep exact-key semantics because no id list bounds their intent.
-    if (requiredPluginIds === undefined) {
-      return undefined;
-    }
+  if (params.loadOptions && requiredPluginIds === undefined) {
+    // Unscoped requests need the full load identity. Bounded manifest scopes
+    // can compare their prepared ownership facts below.
+    return resolveCompatibleRuntimePluginRegistry(params.loadOptions);
   }
 
   const activeWorkspaceDir = getActivePluginRegistryWorkspaceDir();
   const requestedWorkspaceDir = params.workspaceDir ?? params.loadOptions?.workspaceDir;
-  if (requestedWorkspaceDir !== undefined && activeWorkspaceDir !== requestedWorkspaceDir) {
+  if (
+    (Object.hasOwn(params, "workspaceDir") ||
+      params.loadOptions ||
+      requestedWorkspaceDir !== undefined) &&
+    activeWorkspaceDir !== requestedWorkspaceDir
+  ) {
     return undefined;
   }
   const registry = getActivePluginRegistry();
   if (!registry) {
     return undefined;
   }
-  if (!registryContainsRuntimePluginIds(registry, requiredPluginIds)) {
+  if (
+    !registryContainsRuntimePluginIds(registry, requiredPluginIds) ||
+    (params.loadOptions?.manifestRegistry &&
+      requiredPluginIds !== undefined &&
+      !requiredPluginIds.every(
+        createRuntimePluginManifestLookup(
+          registry,
+          params.loadOptions.manifestRegistry.plugins,
+          params.loadOptions.preferBuiltPluginArtifacts,
+        ),
+      ))
+  ) {
     return undefined;
+  }
+  // Raw discovery has not established manifest winners, so ID containment alone
+  // cannot prove which candidate would load. Prepared manifests keep the fast path.
+  if (params.loadOptions?.discovery && !params.loadOptions.manifestRegistry) {
+    return resolveCompatibleRuntimePluginRegistry(params.loadOptions);
   }
   return registry;
 }

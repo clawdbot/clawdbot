@@ -50,7 +50,7 @@ it.each(["work", "dashboard:incognito-work"])(
           { sessionId: "unrelated-session", updatedAt: Date.now() },
         );
       }
-      const list = vi.spyOn(sessionAccessor, "listSessionEntriesCore");
+      const list = vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly");
       try {
         const resolved = resolveSession({ cfg, sessionKey });
         expect(resolved).toMatchObject({

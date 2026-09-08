@@ -1,16 +1,7 @@
-import {
-  readCodexCliCredentialsCached,
-  resolveOpenAICodexAuthIdentity,
-} from "openclaw/plugin-sdk/provider-auth";
 import { describe, expect, it } from "vitest";
-import type { OpenAIQuicksilverPendingAudio } from "./realtime-quicksilver-audio-buffer.js";
+import { openAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
-import {
-  OpenAIQuicksilverAudioPeer,
-  type OpenAIQuicksilverAudioPeerContract,
-} from "./realtime-quicksilver-peer.runtime.js";
-import { resolveOpenAIChatGptSubscriptionAuth } from "./realtime-quicksilver-session.js";
-import type { OpenAIQuicksilverAuth } from "./realtime-quicksilver-wire.js";
+import { resolveConfiguredLiveQuicksilverModel } from "./realtime-quicksilver-live-test-support.js";
 import { buildOpenAISpeechProvider } from "./speech-provider.js";
 
 const LIVE_ENABLED =
@@ -18,10 +9,6 @@ const LIVE_ENABLED =
 const describeLive = LIVE_ENABLED ? describe : describe.skip;
 const LIVE_TIMEOUT_MS = 60_000;
 const MAX_PENDING_AUDIO_BYTES = 240_000;
-
-type TestableGatewayBridge = {
-  pendingAudio: OpenAIQuicksilverPendingAudio;
-};
 
 async function waitForLiveCondition(
   predicate: () => boolean,
@@ -40,89 +27,18 @@ async function waitForLiveCondition(
   throw new Error(describeFailure());
 }
 
-async function resolveLiveOAuthProfile(): Promise<
-  Extract<OpenAIQuicksilverAuth, { type: "oauth" }> | undefined
-> {
-  try {
-    const profile = await resolveOpenAIChatGptSubscriptionAuth({});
-    if (profile) {
-      return profile;
-    }
-  } catch (error) {
-    if (!(error instanceof Error) || error.name !== "AuthProfileMigrationRequiredError") {
-      throw error;
-    }
-  }
-  const credential = readCodexCliCredentialsCached({ allowKeychainPrompt: false, ttlMs: 0 });
-  if (!credential) {
-    return undefined;
-  }
-  const accountId =
-    credential.accountId ?? resolveOpenAICodexAuthIdentity({ access: credential.access }).accountId;
-  return accountId ? { type: "oauth", token: credential.access, accountId } : undefined;
-}
-
-describeLive("OpenAI GPT-Live gateway WebRTC peer", () => {
+describeLive("OpenAI private realtime gateway direct transport", () => {
   it(
-    "creates a real call, joins sideband, and receives audio",
-    async ({ skip }) => {
-      const auth = await resolveLiveOAuthProfile();
-      if (!auth) {
-        skip("No ChatGPT OAuth profile is available");
-        return;
-      }
-
-      let ready!: () => void;
-      let audioObserved!: (source: string) => void;
-      let fail!: (error: Error) => void;
-      const eventTypes: string[] = [];
-      const readyResult = new Promise<void>((resolve) => {
-        ready = resolve;
-      });
-      const audioResult = new Promise<string>((resolve) => {
-        audioObserved = resolve;
-      });
-      const failureResult = new Promise<never>((_resolve, reject) => {
-        fail = (error) => reject(new Error(`${error.message}; events=${eventTypes.join(",")}`));
-      });
-      const bridge = new OpenAIQuicksilverGatewayBridge({
-        providerConfig: {},
-        model: "gpt-live-1-codex",
-        voice: "spruce",
-        instructions:
-          "This is a live transport check. Immediately say: OpenClaw gateway relay test OK.",
-        audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
-        onAudio: (audio) => {
-          if (audio.length > 0) {
-            audioObserved("decoded-pcm");
-          }
-        },
-        onClearAudio: () => undefined,
-        onEvent: (event) => eventTypes.push(event.type),
-        onReady: ready,
-        onError: fail,
-        runAgentConsult: async () => ({ text: "The live transport check is complete." }),
-        logger: { debug: () => undefined, warn: () => undefined },
-        resolveAuth: async () => auth,
-      });
-
-      try {
-        await bridge.connect();
-        await expect(Promise.race([readyResult, failureResult])).resolves.toBeUndefined();
-        await expect(Promise.race([audioResult, failureResult])).resolves.toBe("decoded-pcm");
-      } finally {
-        bridge.close();
-      }
-    },
-    LIVE_TIMEOUT_MS,
-  );
-
-  it(
-    "delivers microphone speech queued before the real media peer is adopted",
+    "delivers microphone speech queued before the direct session is ready",
     async ({ skip }) => {
       const apiKey = process.env.OPENAI_API_KEY?.trim();
       if (!apiKey) {
         skip("No OpenAI Platform API key is available for the speech fixture");
+        return;
+      }
+      const liveModel = resolveConfiguredLiveQuicksilverModel();
+      if (!liveModel) {
+        skip("No configured private realtime model is available");
         return;
       }
 
@@ -147,70 +63,58 @@ describeLive("OpenAI GPT-Live gateway WebRTC peer", () => {
       const inputAudio = Buffer.concat([synthesized.audioBuffer, Buffer.alloc(24_000 * 2)]);
       expect(inputAudio.byteLength).toBeLessThanOrEqual(MAX_PENDING_AUDIO_BYTES);
 
-      let releasePeerAdoption!: () => void;
-      let peerCreated!: () => void;
-      const peerAdoption = new Promise<void>((resolve) => {
-        releasePeerAdoption = resolve;
-      });
-      const peerCreation = new Promise<void>((resolve) => {
-        peerCreated = resolve;
+      let ready!: () => void;
+      const readyResult = new Promise<void>((resolve) => {
+        ready = resolve;
       });
       const eventTypes: string[] = [];
       const finalUserTranscripts: string[] = [];
       const errors: Error[] = [];
       let closeNotifications = 0;
+      let createPeerCalls = 0;
       let closed = false;
       let lateAudioBytes = 0;
-      const bridge = new OpenAIQuicksilverGatewayBridge({
-        providerConfig: {},
-        model: "gpt-live-1-boulder-alpha",
-        voice: "spruce",
-        instructions: "Listen to the user. Do not speak or delegate.",
-        audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
-        onAudio: (audio) => {
-          if (closed) {
-            lateAudioBytes += audio.length;
-          }
+      const bridge = new OpenAIQuicksilverGatewayBridge(
+        {
+          providerConfig: {},
+          model: liveModel,
+          voice: "marin",
+          instructions: "Listen to the user. Do not speak or delegate.",
+          audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
+          onAudio: (audio) => {
+            if (closed) {
+              lateAudioBytes += audio.length;
+            }
+          },
+          onClearAudio: () => undefined,
+          onEvent: (event) => eventTypes.push(event.type),
+          onReady: ready,
+          onTranscript: (role, text, final) => {
+            if (role === "user" && final) {
+              finalUserTranscripts.push(text);
+            }
+          },
+          onClose: () => {
+            closeNotifications += 1;
+          },
+          onError: (error) => errors.push(error),
+          runAgentConsult: async () => ({ text: "Unexpected delegation." }),
+          logger: { debug: () => undefined, warn: () => undefined },
+          resolveAuth: async () => ({ type: "api-key", token: apiKey }),
+          createPeer: async () => {
+            createPeerCalls += 1;
+            throw new Error("Direct transport must not create a media peer");
+          },
         },
-        onClearAudio: () => undefined,
-        onEvent: (event) => eventTypes.push(event.type),
-        onReady: () => undefined,
-        onTranscript: (role, text, final) => {
-          if (role === "user" && final) {
-            finalUserTranscripts.push(text);
-          }
-        },
-        onClose: () => {
-          closeNotifications += 1;
-        },
-        onError: (error) => errors.push(error),
-        runAgentConsult: async () => ({ text: "Unexpected delegation." }),
-        logger: { debug: () => undefined, warn: () => undefined },
-        resolveAuth: async () => ({ type: "api-key", token: apiKey }),
-        createPeer: async (callbacks, signal): Promise<OpenAIQuicksilverAudioPeerContract> => {
-          const peer = await OpenAIQuicksilverAudioPeer.create({ callbacks, signal });
-          peerCreated();
-          await peerAdoption;
-          return peer;
-        },
-      });
-      const testBridge = bridge as unknown as TestableGatewayBridge;
-
+        openAIRealtimeHost,
+      );
       try {
         const connection = bridge.connect();
-        await Promise.race([
-          peerCreation,
-          connection.then(() => {
-            throw new Error("Gateway bridge connected before the media peer adoption gate");
-          }),
-        ]);
         for (let offset = 0; offset < inputAudio.length; offset += 8_192) {
           bridge.sendAudio(Buffer.from(inputAudio.subarray(offset, offset + 8_192)));
         }
-        const prePeerPendingBytes = testBridge.pendingAudio.length;
-        expect(prePeerPendingBytes).toBe(inputAudio.length);
 
-        releasePeerAdoption();
+        await readyResult;
         await connection;
         await waitForLiveCondition(
           () => finalUserTranscripts.some((text) => text.toLowerCase().includes("glacier")),
@@ -219,8 +123,7 @@ describeLive("OpenAI GPT-Live gateway WebRTC peer", () => {
           30_000,
         );
 
-        const postAdoptionPendingBytes = testBridge.pendingAudio.length;
-        expect(postAdoptionPendingBytes).toBe(0);
+        expect(createPeerCalls).toBe(0);
         expect(eventTypes).toContain("turn.done");
         expect(bridge.isConnected()).toBe(true);
         expect(errors).toStrictEqual([]);
@@ -237,9 +140,8 @@ describeLive("OpenAI GPT-Live gateway WebRTC peer", () => {
         expect(errors).toStrictEqual([]);
         console.log(
           JSON.stringify({
-            proof: "gpt-live-gateway-pre-peer-transcription",
-            prePeerPendingBytes,
-            postAdoptionPendingBytes,
+            proof: "private-realtime-gateway-pre-ready-transcription",
+            createPeerCalls,
             userTranscriptMarker: true,
             closeNotifications,
             lateAudioBytes,
@@ -248,7 +150,6 @@ describeLive("OpenAI GPT-Live gateway WebRTC peer", () => {
           }),
         );
       } finally {
-        releasePeerAdoption();
         bridge.close();
       }
     },

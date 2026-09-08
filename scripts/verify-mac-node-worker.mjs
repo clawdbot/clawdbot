@@ -129,6 +129,9 @@ try {
         PATH: `${path.dirname(node)}:/usr/bin:/bin:/usr/sbin:/sbin`,
         OPENCLAW_NODE_EXEC_HOST: "app",
         OPENCLAW_NODE_EXEC_FALLBACK: "0",
+        // Same launch shape as MacNodeHostWorker: the worker must stay in the owned
+        // process group, or requireProcessTreeExit only proves the respawn wrapper died.
+        OPENCLAW_NO_RESPAWN: "1",
       },
       stdio: ["pipe", "pipe", "pipe"],
       timeoutMs: 300_000,

@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { nullChannelDirectorySelf } from "../channels/plugins/directory-adapters.js";
 import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
+import { mockCall } from "../test-utils/mock-call-assertions.js";
 import { registerDirectoryCli } from "./directory-cli.js";
 
 const runtimeState = await vi.hoisted(async () => {
@@ -37,6 +38,13 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.loadConfig,
   loadConfig: mocks.loadConfig,
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+  readConfigFileSnapshotForWrite: async () => {
+    const snapshot = await mocks.readConfigFileSnapshot();
+    return {
+      snapshot: { ...snapshot, sourceConfig: snapshot.sourceConfig ?? snapshot.config },
+      writeOptions: {},
+    };
+  },
   replaceConfigFile: mocks.replaceConfigFile,
 }));
 
@@ -69,16 +77,8 @@ function requireRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function firstMockArg(mockFn: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }): unknown {
-  const call = mockFn.mock.calls[0];
-  if (!call) {
-    throw new Error("expected mock to be called");
-  }
-  return call[0];
-}
-
 function firstRecordArg(mockFn: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }) {
-  return requireRecord(firstMockArg(mockFn));
+  return requireRecord(mockCall(mockFn)[0]);
 }
 
 function runtimeErrors(): string[] {
@@ -153,9 +153,9 @@ describe("registerDirectoryCli", () => {
       configChanged: true,
       pluginInstalled: true,
     }));
-    mocks.replaceConfigFile.mockImplementation(async ({ nextConfig }) => {
+    mocks.replaceConfigFile.mockImplementation(async ({ sourceConfig: writtenSource }) => {
       postWriteRuntimeConfig = {
-        ...nextConfig,
+        ...writtenSource,
         messages: { responsePrefix: "runtime-default" },
       };
       runtimeConfig = postWriteRuntimeConfig;
@@ -176,11 +176,11 @@ describe("registerDirectoryCli", () => {
     expect(installArgs.cfg).toEqual(sourceConfig);
     expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);
     const replaceArgs = firstRecordArg(mocks.replaceConfigFile);
-    expect(replaceArgs.nextConfig).toEqual({
+    expect(replaceArgs.sourceConfig).toEqual({
       channels: { slack: { botToken: tokenRef } },
       plugins: { entries: { slack: { enabled: true } } },
     });
-    expect(replaceArgs.nextConfig).not.toHaveProperty("messages");
+    expect(replaceArgs.sourceConfig).not.toHaveProperty("messages");
     expect(replaceArgs.baseHash).toBe("config-1");
     expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalledOnce();
     expect(firstRecordArg(mocks.resolveCommandSecretRefsViaGateway)).toMatchObject({
@@ -286,8 +286,9 @@ describe("registerDirectoryCli", () => {
     expect(self).toHaveBeenCalledTimes(1);
     expect(firstRecordArg(self).cfg).toBe(autoEnabledConfig);
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
-      nextConfig: autoEnabledConfig,
+      sourceConfig: autoEnabledConfig,
       baseHash: "config-1",
+      writeOptions: {},
     });
   });
 

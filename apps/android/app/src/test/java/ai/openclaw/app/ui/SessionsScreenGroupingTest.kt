@@ -36,6 +36,10 @@ class SessionsScreenGroupingTest {
       "Main thread",
       sessionPresentationTitle(ChatSessionEntry(key = "agent:main:main", updatedAtMs = null)) { "Main thread" },
     )
+    assertEquals(
+      "New chat",
+      sessionPresentationTitle(ChatSessionEntry(key = "agent:main:main", updatedAtMs = null)) { "New chat" },
+    )
   }
 
   @Test

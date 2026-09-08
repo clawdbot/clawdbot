@@ -10,14 +10,31 @@ import {
   type MemoryFlushPlanResolver,
 } from "../../plugins/memory-state.test-fixtures.js";
 import { runSessionCompactionIfNeeded as runSessionCompactionIfNeededRaw } from "./agent-runner-memory.js";
-import { setAgentRunnerMemoryTestDeps } from "./agent-runner-memory.test-support.js";
 import {
   createTestFollowupRun,
   withTestModelContextTokens,
   writeTestSessionStore,
 } from "./agent-runner.test-fixtures.js";
 
-const compactEmbeddedAgentSessionMock = vi.fn();
+const { compactEmbeddedAgentSessionMock, incrementCompactionCountMock } = vi.hoisted(() => ({
+  compactEmbeddedAgentSessionMock: vi.fn(),
+  incrementCompactionCountMock: vi.fn(),
+}));
+
+vi.mock("../../agents/embedded-agent-runner/run-entry.js", () => ({
+  runEmbeddedAgentEntry: vi.fn(),
+}));
+vi.mock("../../agents/embedded-agent.js", () => ({
+  compactEmbeddedAgentSession: compactEmbeddedAgentSessionMock,
+}));
+vi.mock("./session-updates.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-updates.js")>()),
+  incrementCompactionCount: incrementCompactionCountMock,
+}));
+vi.mock("./queue.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./queue.js")>()),
+  refreshQueuedFollowupSession: vi.fn(),
+}));
 
 type PreflightCompactionTestParams = Parameters<typeof runSessionCompactionIfNeededRaw>[0] & {
   modelContextTokens?: number;
@@ -58,16 +75,10 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
       compacted: true,
       result: { tokensAfter: 42 },
     });
-    setAgentRunnerMemoryTestDeps({
-      compactEmbeddedAgentSession: compactEmbeddedAgentSessionMock as never,
-      incrementCompactionCount: vi.fn().mockResolvedValue(1) as never,
-      refreshQueuedFollowupSession: vi.fn() as never,
-      registerAgentRunContext: vi.fn() as never,
-    });
+    incrementCompactionCountMock.mockReset().mockResolvedValue(1);
   });
 
   afterEach(async () => {
-    setAgentRunnerMemoryTestDeps();
     cliBackendsTesting.resetDepsForTest();
     clearMemoryPluginState();
     await fs.rm(rootDir, { recursive: true, force: true });

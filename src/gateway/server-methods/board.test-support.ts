@@ -87,6 +87,7 @@ export function createBoardHarness(
   const context = {
     broadcast,
     getMcpAppSandboxPort: () => 18790,
+    getSessionEventSubscriberConnIds: () => [],
     getRuntimeConfig: () => ({
       agents: { list: [{ id: "main" }] },
       mcp: { apps: { enabled: true } },

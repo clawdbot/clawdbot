@@ -8,46 +8,6 @@
    chrome (tabs, actions, diff, raw editor) plus genuinely form-specific
    pieces layered on top of the settings primitives. */
 
-/* Mode Toggle */
-.config-mode-toggle {
-  display: flex;
-  padding: 3px;
-  background: var(--bg-elevated);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border);
-  gap: 1px;
-}
-
-:root[data-theme-mode="light"] .config-mode-toggle {
-  background: white;
-}
-
-.config-mode-toggle__btn {
-  flex: 1;
-  padding: 6px 12px;
-  border: none;
-  border-radius: calc(var(--radius-md) - 3px);
-  background: transparent;
-  color: var(--muted);
-  font-size: 12px; /* was 11px */
-  font-weight: 600;
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease,
-    box-shadow var(--duration-fast) ease;
-}
-
-.config-mode-toggle__btn:hover:not(.active) {
-  color: var(--text);
-  background: var(--bg-hover);
-}
-
-.config-mode-toggle__btn.active {
-  background: var(--primary);
-  color: var(--primary-foreground);
-  box-shadow: 0 1px 3px var(--accent-subtle);
-}
-
 /* ===========================================
    Lead column (toolbar / banner / nav above the form)
    =========================================== */
@@ -583,6 +543,18 @@
   height: 15px;
 }
 
+.settings-accent-swatch__reset {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  color: var(--theme-chip-bg);
+}
+
+.settings-accent-swatch__reset svg {
+  width: 16px;
+  height: 16px;
+}
+
 @media (forced-colors: active) {
   .settings-accent-swatch__picker {
     color: CanvasText;
@@ -1056,12 +1028,6 @@
 .mcp-server-message--error {
   background: var(--danger-subtle);
   color: var(--danger);
-}
-
-.mcp-server-loading {
-  padding: var(--space-4);
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
 }
 
 /* Advanced Settings accordion navigation, rendered by view.ts. */

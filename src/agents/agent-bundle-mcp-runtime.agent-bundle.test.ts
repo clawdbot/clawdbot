@@ -10,9 +10,9 @@ import { loadEnabledBundleMcpConfig } from "../plugins/bundle-mcp.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { getOrCreateSessionMcpRuntime } from "./agent-bundle-mcp-manager.test-support.js";
 import {
   disposeAllSessionMcpRuntimes,
-  getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
 } from "./agent-bundle-mcp-tools.js";
 

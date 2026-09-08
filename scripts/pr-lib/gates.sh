@@ -3,8 +3,10 @@ run_hosted_prepare_gates() {
   local current_head="$2"
   local changelog_only="$3"
   local recent_sha=""
-  local remote_record remote_head remote_head_ref remote_is_cross_repository
-  remote_record=$(read_pr_view_json "$pr" "headRefName,headRefOid,isCrossRepository") || return 1
+  local remote_record="${4:-}" remote_head remote_head_ref remote_is_cross_repository
+  if [ -z "$remote_record" ]; then
+    remote_record=$(read_pr_view_json "$pr" "headRefName,headRefOid,isCrossRepository") || return 1
+  fi
   remote_head=$(pr_view_string_field "$remote_record" "headRefOid" "$pr" "Re-run prepare-init.") || return 1
   remote_head_ref=$(printf '%s\n' "$remote_record" | jq -r .headRefName)
   remote_is_cross_repository=$(printf '%s\n' "$remote_record" | jq -r .isCrossRepository)
@@ -152,7 +154,7 @@ run_remote_testbox_full_test_gate() {
     --ttl 240m \
     --timing-json \
     --label "$lease_label" \
-    -- env CI=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=install corepack pnpm test
+    -- env CI=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false corepack pnpm test
 }
 
 read_remote_testbox_gate_stamp() {
@@ -334,92 +336,6 @@ derive_prepare_gate_change_plan() {
   fi
 }
 
-run_prepare_push_retry_gates() {
-  local docs_only="${1:-false}"
-
-  if [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
-    echo "A lease retry changed the prepared head after gate selection."
-    echo "Stop here, wait for hosted evidence on the pushed branch, then re-run prepare-run."
-    return 1
-  fi
-
-  local gates_remote_mode
-  gates_remote_mode=$(resolve_pr_gates_remote_mode)
-
-  if [ "$gates_remote_mode" = "crabbox-aws" ]; then
-    local retry_head
-    retry_head=$(git rev-parse HEAD)
-    write_gates_env_stamp \
-      "${PR_NUMBER:-}" \
-      "$docs_only" \
-      "${CHANGELOG_REQUIRED:-false}" \
-      "remote_crabbox_aws_pending" \
-      "$retry_head" \
-      "" \
-      "" \
-      "aws" \
-      "" \
-      "" \
-      ""
-    echo "Crabbox AWS proof is deferred until the exact retried prep head is pushed."
-    return 0
-  fi
-
-  prepare_local_gate_workspace
-  run_quiet_logged "pnpm build (lease-retry)" ".local/lease-retry-build.log" pnpm build
-  run_quiet_logged "pnpm check (lease-retry)" ".local/lease-retry-check.log" pnpm check
-
-  # The retry rebased the prep head, so the pre-push gates.env stamp no longer
-  # describes what these gates just verified; rewrite it for the new head so
-  # prep.md and prep.env do not attribute stale evidence to the pushed commit.
-  local retry_head
-  retry_head=$(git rev-parse HEAD)
-  local gates_mode="full"
-  local full_gates_head="$retry_head"
-  local remote_gates_provider=""
-  local remote_gates_run_id=""
-  local remote_gates_lease_id=""
-  local remote_gates_run_url=""
-
-  if [ "$docs_only" = "true" ]; then
-    gates_mode="docs_only"
-    # No test ran: carry the prior full-gates proof and how it was produced.
-    full_gates_head="${FULL_GATES_HEAD_SHA:-}"
-    remote_gates_provider="${REMOTE_GATES_PROVIDER:-}"
-    remote_gates_run_id="${REMOTE_GATES_RUN_ID:-}"
-    remote_gates_lease_id="${REMOTE_GATES_LEASE_ID:-}"
-    remote_gates_run_url="${REMOTE_GATES_RUN_URL:-}"
-  elif [ "$gates_remote_mode" = "testbox" ]; then
-    gates_mode="remote_testbox"
-    run_remote_testbox_full_test_gate \
-      "pnpm test (lease-retry, blacksmith-testbox)" \
-      ".local/lease-retry-test.log" \
-      "pr-${PR_NUMBER:-unknown}-gates-lease-retry"
-    local retry_stamp
-    retry_stamp=$(require_remote_testbox_gate_stamp ".local/lease-retry-test.log")
-    remote_gates_provider="blacksmith-testbox"
-    remote_gates_run_id=""
-    remote_gates_lease_id=$(printf '%s\n' "$retry_stamp" | jq -r '.leaseId')
-    remote_gates_run_url=$(printf '%s\n' "$retry_stamp" | jq -r '.actionsRunUrl // ""')
-    echo "Remote testbox lease-retry gate stamp: $remote_gates_lease_id${remote_gates_run_url:+ ($remote_gates_run_url)}"
-  else
-    run_quiet_logged "pnpm test (lease-retry)" ".local/lease-retry-test.log" pnpm test
-  fi
-
-  write_gates_env_stamp \
-    "${PR_NUMBER:-}" \
-    "$docs_only" \
-    "${CHANGELOG_REQUIRED:-false}" \
-    "$gates_mode" \
-    "$retry_head" \
-    "$full_gates_head" \
-    "" \
-    "$remote_gates_provider" \
-    "$remote_gates_run_id" \
-    "$remote_gates_lease_id" \
-    "$remote_gates_run_url"
-}
-
 prepare_gates() {
   local pr="$1"
   local gates_remote_mode
@@ -472,13 +388,17 @@ prepare_gates() {
     exit 1
   fi
 
+  local remote_record="" changelog_mode
   if [ "$has_changelog_update" = "true" ]; then
-    if ! root_changelog_update_allowed_for_pr; then
+    remote_record=$(read_pr_view_json "$pr" "headRefName,headRefOid,isCrossRepository,title,baseRefName") || return 1
+    if ! changelog_mode=$(root_changelog_update_allowed_for_pr "$remote_record"); then
       echo "CHANGELOG.md is release-owned; normal PRs should put release-note context in the PR body or commit message."
-      echo "Set OPENCLAW_ALLOW_ROOT_CHANGELOG_PR=1 only for explicit release automation or maintainer release closeout."
+      echo "Use release/<version>-main-closeout with the documented title and only that origin-tagged version section, or set OPENCLAW_ALLOW_ROOT_CHANGELOG_PR=1 for explicit release automation."
       exit 1
     fi
-    normalize_pr_changelog_entries "$pr"
+    # Published closeout text is immutable; normalizing PR references can move it
+    # into an Unreleased section and invalidate the tagged release copy.
+    if [ "$changelog_mode" = "override" ]; then normalize_pr_changelog_entries "$pr"; fi
     validate_changelog_attribution_policy
   fi
 
@@ -531,7 +451,7 @@ prepare_gates() {
     if [ "$changelog_only" = "true" ]; then
       run_quiet_logged "git diff --check" ".local/gates-diff-check.log" git diff --check "$PR_MAIN_SHA...HEAD"
     fi
-    run_hosted_prepare_gates "$pr" "$current_head" "$changelog_only"
+    run_hosted_prepare_gates "$pr" "$current_head" "$changelog_only" "$remote_record"
     hosted_gates_head="$current_head"
   elif [ "$reuse_gates" = "true" ]; then
     gates_mode="reused_docs_only"

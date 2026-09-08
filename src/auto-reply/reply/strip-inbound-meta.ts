@@ -9,6 +9,12 @@ const CHANNEL_CONTEXT_HEADER = `Context: ${INBOUND_CONTEXT_MARKER}`;
 const ACTIVE_MEMORY_CONTEXT_HEADER = "Context:";
 const ACTIVE_MEMORY_OPEN_TAG = "<active_memory_plugin>";
 const ACTIVE_MEMORY_CLOSE_TAG = "</active_memory_plugin>";
+export const INBOUND_METADATA_MARKERS = [
+  "[",
+  INBOUND_CONTEXT_MARKER,
+  ...MESSAGE_TOOL_DELIVERY_HINTS,
+  ACTIVE_MEMORY_CONTEXT_HEADER,
+];
 const METADATA_TOKENS_RE = new RegExp(
   [INBOUND_CONTEXT_MARKER, ...MESSAGE_TOOL_DELIVERY_HINTS].map(escapeRegExp).join("|"),
   "g",

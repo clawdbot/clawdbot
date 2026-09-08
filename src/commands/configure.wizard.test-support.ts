@@ -42,12 +42,10 @@ const wizardTestMocks = vi.hoisted(() => {
     maybeInstallDaemon: vi.fn<typeof import("./configure.daemon.js").maybeInstallDaemon>(),
     promptAuthConfig: vi.fn(),
     promptGatewayConfig: vi.fn(),
-    promptRemoteGatewayConfig: vi.fn(
-      async (cfg: OpenClawConfig): Promise<OpenClawConfig> => ({
-        ...cfg,
-        gateway: { mode: "remote", remote: { url: "wss://gateway.example.test" } },
-      }),
-    ),
+    promptRemoteGatewayConfig: vi.fn(async (cfg: OpenClawConfig): Promise<OpenClawConfig> => ({
+      ...cfg,
+      gateway: { mode: "remote", remote: { url: "wss://gateway.example.test" } },
+    })),
     isCodexNativeWebSearchRelevant: vi.fn(({ config }: { config: OpenClawConfig }) =>
       Boolean(config.auth?.profiles?.["openai:default"]),
     ),
@@ -101,7 +99,7 @@ vi.mock("../config/config.js", () => ({
           ? (snapshot.runtimeConfig ?? snapshot.config)
           : (snapshot.sourceConfig ?? snapshot.config);
       try {
-        const transformed = await params.transform(config, { snapshot, previousHash, attempt });
+        const transformed = await params.transform(config, { snapshot, previousHash, attempt }, {});
         const committed = await params.commit!({
           nextConfig: transformed.nextConfig,
           snapshot,

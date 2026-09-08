@@ -24,6 +24,10 @@ function buildConfig(
 }
 
 describe("matrix approval capability", () => {
+  it("subscribes the native runtime to system-agent approval events", () => {
+    expect(matrixApprovalCapability.nativeRuntime?.eventKinds).toContain("system-agent");
+  });
+
   it("describes the correct Matrix exec-approval setup path", () => {
     const text = matrixApprovalCapability.describeExecApprovalSetup?.({
       channel: "matrix",

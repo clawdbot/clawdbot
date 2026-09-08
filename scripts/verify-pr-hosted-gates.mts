@@ -2,9 +2,10 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { isRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { minimatch } from "minimatch";
 import { parse } from "yaml";
+// Materialized PR wrappers must use the verified source, not the caller's tsconfig aliases.
+import { isRecord, readStringField } from "../packages/normalization-core/src/record-coerce.ts";
 import {
   booleanFlag,
   classifyBoundedUnsignedDecimal,
@@ -966,22 +967,20 @@ function loadCiReuseCandidateRuns(repo: string, headBranch: string) {
   }
   // The workflow selector above supplies the path identity that the REST
   // release-gate matcher normally reads from each full workflow-run object.
-  return runs.map(
-    (run): WorkflowRun => ({
-      id: optionalNumber(run, "databaseId"),
-      name: readStringField(run, "workflowName"),
-      event: readStringField(run, "event"),
-      status: readStringField(run, "status"),
-      conclusion: optionalNullableString(run, "conclusion"),
-      head_sha: readStringField(run, "headSha"),
-      head_branch: readStringField(run, "headBranch"),
-      path: CI_WORKFLOW_PATH,
-      created_at: readStringField(run, "createdAt"),
-      updated_at: readStringField(run, "updatedAt"),
-      html_url: readStringField(run, "url"),
-      display_title: readStringField(run, "displayTitle"),
-    }),
-  );
+  return runs.map((run): WorkflowRun => ({
+    id: optionalNumber(run, "databaseId"),
+    name: readStringField(run, "workflowName"),
+    event: readStringField(run, "event"),
+    status: readStringField(run, "status"),
+    conclusion: optionalNullableString(run, "conclusion"),
+    head_sha: readStringField(run, "headSha"),
+    head_branch: readStringField(run, "headBranch"),
+    path: CI_WORKFLOW_PATH,
+    created_at: readStringField(run, "createdAt"),
+    updated_at: readStringField(run, "updatedAt"),
+    html_url: readStringField(run, "url"),
+    display_title: readStringField(run, "displayTitle"),
+  }));
 }
 
 export function loadPullRequestCommitShas(

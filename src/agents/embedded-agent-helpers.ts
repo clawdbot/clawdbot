@@ -39,10 +39,8 @@ export {
   isCloudCodeAssistFormatError,
   isContextOverflowError,
   isFailoverErrorMessage,
-  isGenericUnknownStreamErrorMessage,
   isLikelyContextOverflowError,
   isProviderRequestSizeCeilingError,
-  isTransientHttpError,
   isTimeoutErrorMessage,
 } from "./failover/classify.js";
 export type { FailoverReason } from "./failover/signal.js";
@@ -50,7 +48,7 @@ export { sanitizeGoogleTurnOrdering } from "./embedded-agent-helpers/google.js";
 
 export {
   downgradeOpenAIFunctionCallReasoningPairs,
-  downgradeOpenAIReasoningBlocks,
+  dropStaleOpenAIReasoning,
   normalizeOpenAIResponsesToolCallIds,
 } from "./embedded-agent-helpers/openai.js";
 export { sanitizeSessionMessagesImages } from "./embedded-agent-helpers/images.js";

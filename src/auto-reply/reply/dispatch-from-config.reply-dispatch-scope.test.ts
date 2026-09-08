@@ -182,4 +182,56 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
       scenario.expectedKind === "acp" ? "accepted user turn" : "source user turn",
     );
   });
+
+  it("refuses restricted ACP takeover before invoking reply hooks", async () => {
+    const sessionKey = "agent:test:restricted-acp";
+    const entry = {
+      sessionId: "restricted-acp-session",
+      updatedAt: Date.now(),
+      acp: { backend: "acpx" },
+    };
+    sessionStoreMocks.entriesBySessionKey.set(sessionKey, entry);
+    const readEntry = () => entry;
+    sessionStoreMocks.loadSessionStoreEntry.mockImplementation(readEntry);
+    sessionStoreMocks.loadSessionEntry.mockImplementation(readEntry);
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    hookMocks.runner.runReplyDispatch.mockResolvedValue({
+      handled: true,
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn<InternalGetReplyFromConfig>();
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Body: "hello",
+        BodyForAgent: "hello",
+        SessionKey: sessionKey,
+        Provider: "discord",
+        Surface: "discord",
+        To: "C1",
+        AccountId: "default",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        admittedSessionSettings: {
+          permissionMode: "guarded",
+          toolOverrides: { webSearch: false },
+        },
+      },
+    });
+
+    expect(hookMocks.runner.runReplyDispatch).not.toHaveBeenCalled();
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isError: true,
+        text: expect.stringContaining("cannot enforce its permission or tool policy"),
+      }),
+    );
+    expect(result.queuedFinal).toBe(true);
+  });
 });

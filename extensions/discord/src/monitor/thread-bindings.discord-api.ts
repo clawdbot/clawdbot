@@ -1,11 +1,12 @@
 // Discord API module exposes the plugin public contract.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isDiscordThreadChannelType } from "../channel-type.js";
 import { createDiscordRestClient } from "../client.js";
 import { createChannelWebhook, getChannel } from "../internal/discord.js";
+import { canFallbackDiscordWebhookSend } from "../retry.js";
 import { sendMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
 import { createThreadDiscord } from "../send.messages.js";
 import { resolveDiscordChannelId } from "../target-parsing.js";
@@ -21,6 +22,8 @@ import {
   DISCORD_UNKNOWN_CHANNEL_ERROR_CODE,
   type ThreadBindingRecord,
 } from "./thread-bindings.types.js";
+
+const log = createSubsystemLogger("discord/thread-bindings");
 
 function buildThreadTarget(threadId: string): string {
   return /^(channel:|user:)/i.test(threadId) ? threadId : `channel:${threadId}`;
@@ -149,7 +152,14 @@ export async function maybeSendBindingMessage(params: {
       });
       return;
     } catch (err) {
-      logVerbose(`discord thread binding webhook send failed: ${summarizeDiscordError(err)}`);
+      const fallbackToBot = canFallbackDiscordWebhookSend(err);
+      log.warn("discord thread binding webhook send failed", {
+        error: summarizeDiscordError(err),
+        fallbackToBot,
+      });
+      if (!fallbackToBot) {
+        return;
+      }
     }
   }
   try {

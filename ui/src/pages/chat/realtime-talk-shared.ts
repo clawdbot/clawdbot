@@ -1,3 +1,4 @@
+import type { TalkClientToolCallResult } from "../../../../packages/gateway-protocol/src/schema/channels.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../../../src/talk/agent-consult-tool.js";
 import {
   buildRealtimeVoiceAgentCancelProviderResult,
@@ -585,7 +586,7 @@ export async function submitRealtimeTalkConsult(params: {
 }): Promise<void> {
   const { ctx, callId, submit } = params;
   ctx.callbacks.onStatus?.("thinking");
-  let runId: string | undefined;
+  let run: TalkClientToolCallResult | undefined;
   let aborted = false;
   let submitted = false;
   let submissionCompleted = false;
@@ -604,8 +605,12 @@ export async function submitRealtimeTalkConsult(params: {
   };
   const abortRun = () => {
     aborted = true;
-    if (runId) {
-      void ctx.client.request("chat.abort", { sessionKey: ctx.sessionKey, runId });
+    if (run) {
+      void ctx.client.request("chat.abort", {
+        sessionKey: run.agentSessionKey,
+        agentId: run.agentId,
+        runId: run.runId,
+      });
     }
   };
   if (params.signal?.aborted) {
@@ -623,21 +628,14 @@ export async function submitRealtimeTalkConsult(params: {
     }
     // Cancellation must not hide the acknowledgement that owns the Gateway run.
     // Once the run id arrives, abortRun() can cancel the exact started consult.
-    const response = await ctx.client.request<{ runId?: string; idempotencyKey?: string }>(
-      "talk.client.toolCall",
-      {
-        sessionKey: ctx.sessionKey,
-        ...(ctx.voiceSessionId ? { voiceSessionId: ctx.voiceSessionId } : {}),
-        callId,
-        name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-        args,
-        ...(params.relaySessionId ? { relaySessionId: params.relaySessionId } : {}),
-      },
-    );
-    runId = response.runId ?? response.idempotencyKey;
-    if (!runId) {
-      throw new Error("OpenClaw realtime tool call did not return a run id");
-    }
+    run = await ctx.client.request<TalkClientToolCallResult>("talk.client.toolCall", {
+      sessionKey: ctx.sessionKey,
+      ...(ctx.voiceSessionId ? { voiceSessionId: ctx.voiceSessionId } : {}),
+      callId,
+      name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+      args,
+      ...(params.relaySessionId ? { relaySessionId: params.relaySessionId } : {}),
+    });
     if (params.signal?.aborted) {
       abortRun();
       await submitAbortResult();
@@ -645,7 +643,7 @@ export async function submitRealtimeTalkConsult(params: {
     }
     const result = await waitForChatResult({
       client: ctx.client,
-      runId,
+      runId: run.runId,
       timeoutMs: 120_000,
       emitTalkEvent: params.emitTalkEvent,
       signal: params.signal,

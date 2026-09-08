@@ -3,6 +3,7 @@ import { createServer, type ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const MODEL_REF = "mock-openai/gpt-5.6-luna";
@@ -63,17 +64,6 @@ afterEach(async () => {
   }
 });
 
-function writeResponsesEvents(response: ServerResponse, events: unknown[]): void {
-  response.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  response.end(
-    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
-  );
-}
-
 function writeAssistantResponse(response: ServerResponse): void {
   const message = {
     type: "message",
@@ -82,7 +72,7 @@ function writeAssistantResponse(response: ServerResponse): void {
     status: "completed",
     content: [{ type: "output_text", text: RESPONSE_MARKER, annotations: [] }],
   };
-  writeResponsesEvents(response, [
+  writeOpenAiResponsesSse(response, [
     {
       type: "response.output_item.added",
       output_index: 0,
@@ -203,17 +193,17 @@ describe.runIf(process.env.OPENCLAW_PROVIDER_TIMEOUT_RECOVERY_PROOF === "1")(
           transportBaseUrl: "http://127.0.0.1",
           controlUiEnabled: false,
           runtimeEnvPatch: {
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
             OPENCLAW_SKIP_CHANNELS: "1",
             OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
           },
-          mutateConfig: ({ plugins: _plugins, ...config }) => {
+          mutateConfig: (config) => {
             const providerConfig = config.models?.providers?.["mock-openai"];
             if (!providerConfig) {
               throw new Error("mock-openai provider is missing from QA gateway config");
             }
             return {
               ...config,
+              plugins: { enabled: false },
               diagnostics: { enabled: true },
               agents: {
                 ...config.agents,

@@ -188,81 +188,41 @@ function resolveAmbientCommentTarget(context: FeishuDriveToolContext | undefined
   return parseFeishuCommentTarget(deliveryContext?.to);
 }
 
-function applyAmbientCommentDefaults<
+function resolveDriveCommentParams<
   T extends {
     file_token?: string;
     file_type?: CommentFileType;
     comment_id?: string;
   },
->(params: T, context: FeishuDriveToolContext | undefined): T {
-  const ambient = resolveAmbientCommentTarget(context);
-  if (!ambient) {
-    return params;
-  }
-  return {
-    ...params,
-    file_token: params.file_token?.trim() || ambient.fileToken,
-    file_type: params.file_type ?? ambient.fileType,
-    comment_id: params.comment_id?.trim() || ambient.commentId,
-  };
-}
-
-function applyAddCommentAmbientDefaults<
-  T extends {
-    file_token?: string;
-    file_type?: "doc" | "docx";
-  },
->(params: T, context: FeishuDriveToolContext | undefined): T {
-  const ambient = resolveAmbientCommentTarget(context);
-  if (!ambient || (ambient.fileType !== "doc" && ambient.fileType !== "docx")) {
-    return params;
-  }
-  return {
-    ...params,
-    file_token: params.file_token?.trim() || ambient.fileToken,
-    file_type: params.file_type ?? ambient.fileType,
-  };
-}
-
-function applyAddCommentDefaults<
-  T extends {
-    file_token?: string;
-    file_type?: "doc" | "docx";
-  },
->(params: T): T & { file_type: "doc" | "docx" } {
-  const fileType = params.file_type ?? "docx";
-  if (!params.file_type) {
-    console.info(
-      `[feishu_drive] add_comment missing file_type; defaulting to docx ` +
-        `file_token=${params.file_token ?? "unknown"}`,
-    );
-  }
-  return {
-    ...params,
-    file_type: fileType,
-  };
-}
-
-function applyCommentFileTypeDefault<
-  T extends {
-    file_token?: string;
-    file_type?: CommentFileType;
-  },
 >(
   params: T,
-  action: "list_comments" | "list_comment_replies" | "reply_comment",
-): T & {
-  file_type: CommentFileType;
-} {
-  const fileType = params.file_type ?? "docx";
-  if (!params.file_type) {
+  context: FeishuDriveToolContext | undefined,
+  action: "list_comments" | "list_comment_replies" | "add_comment" | "reply_comment",
+): T & { file_type: CommentFileType } {
+  const ambient = resolveAmbientCommentTarget(context);
+  let resolved = params;
+  if (
+    ambient &&
+    (action !== "add_comment" || ambient.fileType === "doc" || ambient.fileType === "docx")
+  ) {
+    resolved = {
+      ...params,
+      file_token: params.file_token?.trim() || ambient.fileToken,
+      file_type: params.file_type ?? ambient.fileType,
+      ...(action !== "add_comment" && {
+        comment_id: params.comment_id?.trim() || ambient.commentId,
+      }),
+    };
+  }
+  const fileType = resolved.file_type ?? "docx";
+  if (!resolved.file_type) {
     console.info(
       `[feishu_drive] ${action} missing file_type; defaulting to docx ` +
-        `file_token=${params.file_token ?? "unknown"}`,
+        `file_token=${resolved.file_token ?? "unknown"}`,
     );
   }
   return {
-    ...params,
+    ...resolved,
     file_type: fileType,
   };
 }
@@ -519,21 +479,21 @@ async function deleteFile(client: Lark.Client, fileToken: string, type: string) 
   };
 }
 
-async function listComments(
+async function listDriveCommentPage(
   client: Lark.Client,
-  params: {
-    file_token: string;
+  params: Extract<FeishuDriveParams, { action: "list_comments" | "list_comment_replies" }> & {
     file_type: CommentFileType;
-    page_size?: number;
-    page_token?: string;
   },
 ) {
+  const filePath = `/open-apis/drive/v1/files/${encodeURIComponent(params.file_token)}/comments`;
+  const isReplies = params.action === "list_comment_replies";
+  const url = isReplies ? `${filePath}/${encodeURIComponent(params.comment_id)}/replies` : filePath;
   const response = assertDriveApiSuccess(
-    await requestDriveApi<FeishuDriveListCommentsResponse>({
+    await requestDriveApi<FeishuDriveListCommentsResponse | FeishuDriveListRepliesResponse>({
       client,
       method: "GET",
       url:
-        `/open-apis/drive/v1/files/${encodeURIComponent(params.file_token)}/comments` +
+        url +
         encodeQuery({
           file_type: params.file_type,
           page_size: normalizeCommentPageSize(params.page_size),
@@ -545,40 +505,9 @@ async function listComments(
   return {
     has_more: response.data?.has_more ?? false,
     page_token: response.data?.page_token,
-    comments: (response.data?.items ?? []).map(normalizeCommentCard),
-  };
-}
-
-async function listCommentReplies(
-  client: Lark.Client,
-  params: {
-    file_token: string;
-    file_type: CommentFileType;
-    comment_id: string;
-    page_size?: number;
-    page_token?: string;
-  },
-) {
-  const response = assertDriveApiSuccess(
-    await requestDriveApi<FeishuDriveListRepliesResponse>({
-      client,
-      method: "GET",
-      url:
-        `/open-apis/drive/v1/files/${encodeURIComponent(params.file_token)}/comments/${encodeURIComponent(
-          params.comment_id,
-        )}/replies` +
-        encodeQuery({
-          file_type: params.file_type,
-          page_size: normalizeCommentPageSize(params.page_size),
-          page_token: params.page_token,
-          user_id_type: "open_id",
-        }),
-    }),
-  );
-  return {
-    has_more: response.data?.has_more ?? false,
-    page_token: response.data?.page_token,
-    replies: (response.data?.items ?? []).map(normalizeCommentReply),
+    ...(isReplies
+      ? { replies: (response.data?.items ?? []).map(normalizeCommentReply) }
+      : { comments: (response.data?.items ?? []).map(normalizeCommentCard) }),
   };
 }
 
@@ -840,39 +769,22 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
                 return jsonResult(await moveFile(client, p.file_token, p.type, p.folder_token));
               case "delete":
                 return jsonResult(await deleteFile(client, p.file_token, p.type));
-              case "list_comments": {
-                const resolved = applyCommentFileTypeDefault(
-                  applyAmbientCommentDefaults(p, ctx),
-                  "list_comments",
-                );
-                return jsonResult(await listComments(client, resolved));
-              }
+              case "list_comments":
               case "list_comment_replies": {
-                const resolved = applyCommentFileTypeDefault(
-                  applyAmbientCommentDefaults(p, ctx),
-                  "list_comment_replies",
-                );
-                return jsonResult(await listCommentReplies(client, resolved));
+                const resolved = resolveDriveCommentParams(p, ctx, p.action);
+                return jsonResult(await listDriveCommentPage(client, resolved));
               }
-              case "add_comment": {
-                const resolved = applyAddCommentDefaults(applyAddCommentAmbientDefaults(p, ctx));
-                try {
-                  return jsonResult(await addComment(client, resolved));
-                } finally {
-                  void cleanupAmbientCommentTypingReaction({
-                    client: getDriveInternalClient(client),
-                    deliveryContext: ctx.deliveryContext,
-                  });
-                }
-              }
+              case "add_comment":
               case "reply_comment": {
-                const resolved = applyCommentFileTypeDefault(
-                  applyAmbientCommentDefaults(p, ctx),
-                  "reply_comment",
-                );
+                const resolved = resolveDriveCommentParams(p, ctx, p.action);
                 try {
-                  return jsonResult(await deliverCommentThreadText(client, resolved));
+                  return jsonResult(
+                    await (resolved.action === "add_comment"
+                      ? addComment(client, resolved)
+                      : deliverCommentThreadText(client, resolved)),
+                  );
                 } finally {
+                  // Typing cleanup must not delay the visible write result.
                   void cleanupAmbientCommentTypingReaction({
                     client: getDriveInternalClient(client),
                     deliveryContext: ctx.deliveryContext,

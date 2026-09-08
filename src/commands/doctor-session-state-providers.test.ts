@@ -25,6 +25,12 @@ const codexOwner = {
   cliSessionKeys: ["codex-cli"],
   authProfilePrefixes: ["codex:", "codex-cli:", "openai-codex:"],
 };
+const openAIOwner = {
+  id: "openai",
+  label: "OpenAI",
+  providerIds: ["openai"],
+  authProfilePrefixes: ["openai:"],
+};
 const anthropicOwner = {
   id: "anthropic",
   label: "Anthropic",
@@ -95,7 +101,7 @@ function entry(patch: Record<string, unknown>): SessionEntry {
 
 describe("doctor session state provider routes", () => {
   beforeEach(() => {
-    ownerState.owners = [codexOwner];
+    ownerState.owners = [codexOwner, openAIOwner];
   });
 
   it("skips unrelated recovery metadata and valid locked harness rows", async () => {
@@ -112,9 +118,9 @@ describe("doctor session state provider routes", () => {
       "agent:main:ordinary-locked": entry({
         modelSelectionLocked: true,
         agentHarnessId: "codex",
-        modelProvider: "openai-codex",
+        modelProvider: "openai",
         model: "gpt-5.5",
-        providerOverride: "openai-codex",
+        providerOverride: "openai",
         modelOverride: "gpt-5.5",
         modelOverrideSource: "auto",
         cliSessionBindings: { "codex-cli": { sessionId: "native-codex-session" } },
@@ -229,6 +235,57 @@ describe("doctor session state provider routes", () => {
     expect(repaired.cliSessionBindings).toEqual({
       "claude-cli": { sessionId: "claude-session" },
     });
+  });
+
+  it("clears stale automatic OpenAI route state and fallback provenance", async () => {
+    const sessionKey = "agent:main:telegram:direct:openai";
+    const store = {
+      [sessionKey]: entry({
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: "anthropic",
+        modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
+        modelOverrideRouteResolution: "resolved",
+        modelProvider: "openai",
+        model: "gpt-5.4",
+        contextTokens: 1_050_000,
+        systemPromptReport: { source: "run" },
+        fallbackNotice: { activeModel: "openai/gpt-5.4", reason: "rate-limit" },
+        authProfileOverride: "openai:default",
+        authProfileOverrideSource: "auto",
+        authProfileOverrideCompactionCount: 2,
+      }),
+    };
+    const cfg = {
+      agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+    } satisfies OpenClawConfig;
+
+    const result = await runDoctor({ cfg, store });
+    const repaired = result.store[sessionKey];
+
+    expect(result.warnings.join("\n")).toContain("stale OpenAI session routing state");
+    expect(result.changes.join("\n")).toContain("Cleared stale OpenAI session routing state");
+    expect(repaired?.sessionId).toBe("session-1");
+    expect(repaired?.updatedAt).toBeGreaterThan(1);
+    for (const key of [
+      "providerOverride",
+      "modelOverride",
+      "modelOverrideSource",
+      "modelOverrideFallbackOriginProvider",
+      "modelOverrideFallbackOriginModel",
+      "modelOverrideRouteResolution",
+      "modelProvider",
+      "model",
+      "contextTokens",
+      "systemPromptReport",
+      "fallbackNotice",
+      "authProfileOverride",
+      "authProfileOverrideSource",
+      "authProfileOverrideCompactionCount",
+    ]) {
+      expect(repaired).not.toHaveProperty(key);
+    }
   });
 
   it("repairs a non-default SQLite row without creating a legacy store", async () => {

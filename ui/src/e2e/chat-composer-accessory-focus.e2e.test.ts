@@ -1,6 +1,6 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -70,9 +70,11 @@ suite.define(() => {
         await outside.focus();
         await trigger.click();
         expect(await outside.evaluate((element) => document.activeElement === element)).toBe(true);
-        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        const artifactDir = artifactRoot
+          ? createControlUiE2eArtifactDir("chat-composer-accessory-focus", artifactRoot)
+          : undefined;
         if (artifactDir && triggerSelector.startsWith(".context-usage")) {
-          await fs.mkdir(artifactDir, { recursive: true });
           const composerBox = await composer.boundingBox();
           const popoverBox = await composer.locator(".context-usage__popover").boundingBox();
           if (!composerBox || !popoverBox) {

@@ -15,7 +15,7 @@ export const agentChip = {
 };
 
 export const agentScope = {
-  label: "Agent scope",
+  label: "Agent",
   allAgents: "All agents",
 };
 

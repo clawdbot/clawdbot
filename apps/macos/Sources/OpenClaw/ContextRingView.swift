@@ -66,13 +66,14 @@ struct ContextRingView: View {
             .frame(width: 16, height: 16)
 
             if style.showsLabel {
-                Text("\(style.percent)%")
+                Text(String(format: String(localized: "%lld%%"), style.percent))
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(fillColor)
             }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(String(localized: "Context usage"))
-        .accessibilityValue(String(localized: "\(style.percent) percent used"))
+        .accessibilityValue(Text(verbatim: String(
+            format: String(localized: "%lld percent used"), style.percent)))
     }
 }

@@ -1,6 +1,7 @@
 /**
  * Upload an image from a URL to Tlon storage.
  */
+import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { MAX_IMAGE_BYTES, readRemoteMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { TLON_MEDIA_FETCH_TIMEOUTS } from "../media-fetch-timeouts.js";
 import { uploadFile } from "../tlon-api.js";
@@ -30,7 +31,7 @@ export async function uploadImageFromUrl(imageUrl: string, maxBytes?: number): P
     sourceSizeVerified = true;
 
     const contentType = fetched.contentType || "image/png";
-    const blob = new Blob([new Uint8Array(fetched.buffer)], { type: contentType });
+    const blob = new Blob([bufferToBlobPart(fetched.buffer)], { type: contentType });
 
     // Extract filename from URL or use a default
     const urlPath = new URL(imageUrl).pathname;

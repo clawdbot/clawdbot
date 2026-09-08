@@ -274,7 +274,16 @@ test.each([
   { name: "starting", state: "starting" as const },
   { name: "draining", state: "draining" as const },
   { name: "reconciling", state: "reconciling" as const },
-  { name: "failed with a live environment", state: "failed" as const, live: true },
+  {
+    name: "failed with a live environment",
+    state: "failed" as const,
+    environmentState: "attached",
+  },
+  {
+    name: "failed with cleanup still pending",
+    state: "failed" as const,
+    environmentState: "destroying",
+  },
   { name: "failed with an unknown environment", state: "failed" as const },
 ])("sessions.patch rejects $name before cancellation or reclaim", async (testCase) => {
   const { storePath } = await createSessionStoreDir();
@@ -291,8 +300,12 @@ test.each([
     { key: sessionKey, archived: true, expectedSessionId: sessionId },
     {
       context: {
-        ...(testCase.live
-          ? { workerEnvironmentService: { get: () => ({ state: "attached", leaseId: "lease" }) } }
+        ...(testCase.environmentState
+          ? {
+              workerEnvironmentService: {
+                get: () => ({ state: testCase.environmentState, leaseId: "lease" }),
+              },
+            }
           : {}),
         workerSessionPlacementService: placementReader(() => placement),
         workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
@@ -302,8 +315,16 @@ test.each([
 
   expect(archived).toMatchObject({
     ok: false,
-    error: { code: "UNAVAILABLE", retryable: true },
+    error: {
+      code: "UNAVAILABLE",
+      retryable: testCase.state !== "failed",
+      message: expect.stringContaining(`cloud worker placement is ${testCase.state}`),
+    },
   });
+  if (testCase.state === "failed") {
+    expect(archived.error?.message).toContain("Stop cloud worker");
+    expect(archived.error?.message).toContain("provider error");
+  }
   expect(reclaim).not.toHaveBeenCalled();
   expect(embeddedRunMock.abortCalls).toEqual([]);
   expectNoSessionQueueCleanup();

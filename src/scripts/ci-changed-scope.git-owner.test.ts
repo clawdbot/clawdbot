@@ -35,12 +35,15 @@ describe("detectChangedScope Git-owner routing", () => {
     "test/scripts/ci-git-owner.test-support.ts",
     "test/scripts/ci-linux-git.test.ts",
     "test/scripts/ci-platform-checkout.test.ts",
+    "test/scripts/ci-windows-process-census.test-support.ts",
     "test/scripts/openclaw-performance-git-lifecycle.test.ts",
     "test/scripts/openclaw-performance-workflow.test-support.ts",
     "test/scripts/openclaw-performance-workflow.test.ts",
     "test/scripts/plugin-release-git-lifecycle.test.ts",
     "test/scripts/release-workflow-git-lifecycle.test.ts",
     "test/scripts/fixtures/ci-platform-checkout.mjs",
+    "test/scripts/fixtures/ci-windows-process-census.mjs",
+    "test/scripts/fixtures/ci-windows-process-census.py",
   ])("routes native proof for %s without selecting app builds", (changedPath) => {
     expect(detectChangedScope([changedPath])).toMatchObject({
       runNode: true,

@@ -1,24 +1,9 @@
 // Qa Lab plugin module implements scenario flow runner behavior.
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { QaEvidenceRttMeasurement } from "./evidence-summary.js";
 import type { QaTransportState } from "./qa-transport.js";
 import type { QaScenarioFlow, QaSeedScenarioWithSource } from "./scenario-catalog.js";
-
-type QaSuiteStep = {
-  name: string;
-  run: () => Promise<string | void>;
-};
-
-type QaSuiteScenarioResult = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  steps: Array<{
-    name: string;
-    status: "pass" | "fail" | "skip";
-    details?: string;
-  }>;
-  details?: string;
-  modelSwitchEvidence?: Record<string, unknown>;
-};
+import type { QaSuiteScenarioResult, QaSuiteStep, QaSuiteStepOutcome } from "./suite-types.js";
 
 type QaFlowApi = Record<string, unknown> & {
   signal?: AbortSignal;
@@ -96,6 +81,50 @@ function formatFlowDetails(details: unknown) {
     return String(details);
   }
   return JSON.stringify(details, null, 2);
+}
+
+function resolveFlowRttMeasurement(value: unknown): QaEvidenceRttMeasurement | undefined {
+  if (!isPlainObject(value)) {
+    return undefined;
+  }
+  const { finalMatchedReplyRttMs, requestStartedAt, responseObservedAt, source } = value;
+  if (
+    typeof finalMatchedReplyRttMs !== "number" ||
+    !Number.isFinite(finalMatchedReplyRttMs) ||
+    finalMatchedReplyRttMs <= 0 ||
+    typeof requestStartedAt !== "string" ||
+    !requestStartedAt.trim() ||
+    typeof responseObservedAt !== "string" ||
+    !responseObservedAt.trim() ||
+    typeof source !== "string" ||
+    !source.trim()
+  ) {
+    return undefined;
+  }
+  return {
+    finalMatchedReplyRttMs,
+    requestStartedAt: requestStartedAt.trim(),
+    responseObservedAt: responseObservedAt.trim(),
+    source: source.trim(),
+  };
+}
+
+function resolveFlowResultRtt(result: unknown) {
+  if (!isPlainObject(result)) {
+    return undefined;
+  }
+  const timing = isPlainObject(result.timing) ? result.timing : undefined;
+  const measurement = resolveFlowRttMeasurement(result.rttMeasurement);
+  const rawMeasurement = isPlainObject(result.rttMeasurement) ? result.rttMeasurement : undefined;
+  const fallbackRttMs = timing?.rttMs ?? rawMeasurement?.finalMatchedReplyRttMs ?? result.rttMs;
+  const rttMs = measurement?.finalMatchedReplyRttMs ?? fallbackRttMs;
+  if (typeof rttMs !== "number" || !Number.isFinite(rttMs) || rttMs <= 0) {
+    return undefined;
+  }
+  return {
+    timing: { rttMs },
+    ...(measurement ? { rttMeasurement: measurement } : {}),
+  } satisfies Pick<QaSuiteStepOutcome, "timing" | "rttMeasurement">;
 }
 
 function getPathWithParent(
@@ -396,12 +425,24 @@ export async function runScenarioFlow(params: {
       for (const action of step.actions) {
         await runFlowAction(action, params.api, vars);
       }
-      if (!step.detailsExpr) {
+      if (!step.detailsExpr && !step.resultExpr) {
         return undefined;
       }
       throwIfFlowAborted(params.api);
       try {
-        return formatFlowDetails(await evalExpr(step.detailsExpr, params.api, vars));
+        const details = step.detailsExpr
+          ? formatFlowDetails(await evalExpr(step.detailsExpr, params.api, vars))
+          : undefined;
+        const rtt = step.resultExpr
+          ? resolveFlowResultRtt(await evalExpr(step.resultExpr, params.api, vars))
+          : undefined;
+        if (!rtt) {
+          return details === undefined ? undefined : { details };
+        }
+        return {
+          ...(details === undefined ? {} : { details }),
+          ...rtt,
+        } satisfies QaSuiteStepOutcome;
       } finally {
         throwIfFlowAborted(params.api);
       }

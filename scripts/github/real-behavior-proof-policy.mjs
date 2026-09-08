@@ -1,6 +1,7 @@
 // Shared PR context and evidence policy for GitHub checks and label decisions.
 import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 import { escapeRegExp } from "../lib/regexp.mjs";
+import { createTimeoutError } from "../lib/timeout-error.mjs";
 
 /** @typedef {Record<string, unknown>} PullRequest */
 /** @typedef {Record<string, unknown>} Comment */
@@ -64,12 +65,6 @@ const legacyProofFieldNames = [
 
 const missingValueRegex =
   /^(?:n\/?a|none|not applicable|tbd|todo|unknown|unsure|none provided|no evidence|not tested|untested|did not test|didn't test|could not test|couldn't test|-|(?:-{3,}|\*{3,}|_{3,})|\[[^\]]*\])\.?$/i;
-
-function createTimeoutError(label, timeoutMs) {
-  const error = new Error(`${label} timed out after ${timeoutMs}ms`);
-  error.code = "ETIMEDOUT";
-  return error;
-}
 
 function createTooLargeGitHubApiBodyError(label, maxBytes) {
   const error = new Error(`${label} response body exceeded ${maxBytes} bytes`);

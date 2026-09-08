@@ -6,10 +6,18 @@ import {
 import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../config/sessions/lifecycle.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { SessionWorktreeLifecycleError } from "../../sessions/session-worktree-lifecycle.js";
+import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { sessionLog } from "./sessions-shared.js";
 
+export function invalidSessionPatchOutcome(message: string) {
+  return { ok: false as const, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
+}
+
 export function unexpectedPatchError(key: string, error: unknown): ErrorShape {
+  if (error instanceof ModelAccountConnectAuthorityError) {
+    return errorShape(ErrorCodes.FORBIDDEN, error.message);
+  }
   if (error instanceof SessionMutationAuthorizationChangedError) {
     return error.error;
   }

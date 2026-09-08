@@ -6,6 +6,7 @@ import type {
   ProviderNormalizeModelCatalogIdContext,
   ProviderResponseModelEquivalenceContext,
   ProviderResolveModelRoutesContext,
+  ProviderToolSearchPolicyContext,
 } from "../plugin-sdk/provider-model-types.js";
 import type {
   ProviderApplyConfigDefaultsContext,
@@ -33,6 +34,21 @@ type ProviderProjectConfiguredModelRowContext = {
   model: ProviderRuntimeModel;
 };
 
+type ProviderProjectRealtimeVoicePublicConfigContext = {
+  providerConfig: Record<string, unknown>;
+  config: Record<string, unknown>;
+};
+
+export type RealtimeVoicePublicClientHints = {
+  modelSource?: "gateway";
+  gatewayRelaySupported?: boolean;
+};
+
+export type RealtimeVoicePublicProjection = {
+  config: Record<string, unknown>;
+  clientHints?: RealtimeVoicePublicClientHints;
+};
+
 type EmbeddingProviderSetupInspection = {
   provider: string;
   reason: string;
@@ -58,6 +74,8 @@ export type ProviderPolicySurface = {
   resolveThinkingProfile?: (
     ctx: ProviderDefaultThinkingPolicyContext,
   ) => ProviderThinkingProfile | null | undefined;
+  /** Prefer compact tool discovery, or veto a managed-service default for a hosted route. */
+  resolveToolSearchMode?: (ctx: ProviderToolSearchPolicyContext) => "tools" | false | undefined;
   resolveModelRoutes?: (
     ctx: ProviderResolveModelRoutesContext,
   ) => ProviderModelRouteResolution | null | undefined;
@@ -75,6 +93,9 @@ export type BundledProviderPolicySurface = ProviderPolicySurface & {
   projectConfiguredModelRow?: (
     ctx: ProviderProjectConfiguredModelRowContext,
   ) => ProviderRuntimeModel | null | undefined;
+  projectRealtimeVoicePublicProjection?: (
+    ctx: ProviderProjectRealtimeVoicePublicConfigContext,
+  ) => RealtimeVoicePublicProjection | null | undefined;
 };
 
 const PROVIDER_POLICY_HOOK_KEYS = [
@@ -82,6 +103,7 @@ const PROVIDER_POLICY_HOOK_KEYS = [
   "applyConfigDefaults",
   "resolveConfigApiKey",
   "resolveThinkingProfile",
+  "resolveToolSearchMode",
   "resolveModelRoutes",
   "normalizeModelCatalogId",
   "isResponseModelEquivalent",
@@ -112,6 +134,11 @@ function extractBundledProviderPolicySurface(
   if (typeof mod.projectConfiguredModelRow === "function") {
     surface.projectConfiguredModelRow =
       mod.projectConfiguredModelRow as BundledProviderPolicySurface["projectConfiguredModelRow"];
+  }
+  if (typeof mod.projectRealtimeVoicePublicProjection === "function") {
+    Object.assign(surface, {
+      projectRealtimeVoicePublicProjection: mod.projectRealtimeVoicePublicProjection,
+    });
   }
   return Object.keys(surface).length > 0 ? surface : null;
 }

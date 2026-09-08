@@ -38,6 +38,8 @@ describe("clickViaPlaywright (hold-delay abort)", () => {
       expect(hover).toHaveBeenCalledTimes(1);
       ctrl.abort(new Error("aborted by test"));
 
+      // Join the aborted hold and navigation grace without waiting out the hold.
+      await vi.advanceTimersByTimeAsync(1_000);
       const outcome = await settled;
       expect(outcome.status).toBe("rejected");
       if (outcome.status === "rejected") {
@@ -45,17 +47,9 @@ describe("clickViaPlaywright (hold-delay abort)", () => {
         expect((outcome.reason as Error).message).toContain("aborted by test");
       }
       expect(click).not.toHaveBeenCalled();
-      expect(getPwToolsCoreSessionMocks().forceDisconnectPlaywrightForTarget).toHaveBeenCalledWith({
-        cdpUrl: "http://127.0.0.1:18792",
-        targetId: "T1",
-        ssrfPolicy: { allowPrivateNetwork: false },
-        reason: "click aborted",
-      });
-
-      // The aborted action chain must unwind right away: the post-action
-      // navigation recheck runs after the 250ms delayed-navigation observation
-      // plus the 250ms grace, not after the remaining 4900ms of the hold.
-      await vi.advanceTimersByTimeAsync(1_000);
+      expect(
+        getPwToolsCoreSessionMocks().forceDisconnectPlaywrightForTarget,
+      ).not.toHaveBeenCalled();
       expect(
         getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely,
       ).toHaveBeenCalledTimes(1);

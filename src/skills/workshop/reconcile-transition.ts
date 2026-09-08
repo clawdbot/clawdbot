@@ -1,22 +1,19 @@
 import path from "node:path";
-import { createConfigIO } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  assertInsideSkillsRoot,
   normalizeWorkspaceSkillSupportPath,
   prepareWorkspaceSkillRestoration,
   readWorkspaceSkillFile,
   readWorkspaceSupportFile,
   restoreWorkspaceSkillMutation,
 } from "../lifecycle/workspace-skill-write.js";
-import { resolveAllowedSkillSymlinkTargetRealPaths } from "../loading/symlink-targets.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
-import { resolveSkillWorkshopConfig } from "./config.js";
 import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
 import { createSkillProposalEvent } from "./plugin-hooks.js";
 import { hashSkillProposalContent } from "./proposal-hash.js";
 import { readStoredProposal } from "./store-sqlite-record.js";
 import { clearSkillProposalRollback, readSkillProposalRollback } from "./store-sqlite-rollback.js";
-import type { SkillWorkshopStoreOptions } from "./store-sqlite-schema.js";
+import type { SkillWorkshopDirectoryStoreOptions } from "./store-sqlite-schema.js";
 import { commitPendingSkillProposalTransition } from "./store-sqlite-transition.js";
 import { withSkillProposalCommitLock } from "./target-lock.js";
 import type { SkillProposalRecord, SkillProposalRollback } from "./types.js";
@@ -25,12 +22,10 @@ export async function reconcileInterruptedSkillProposalApply(params: {
   record: SkillProposalRecord;
   expectedRecordJson: string;
   draftContent: string;
-  workspaceDir: string;
-  config?: OpenClawConfig;
-  store?: SkillWorkshopStoreOptions;
+  skillsRoot: string;
+  store: SkillWorkshopDirectoryStoreOptions;
 }): Promise<boolean> {
   return await withSkillProposalCommitLock(
-    params.workspaceDir,
     params.record,
     async () => {
       const stored = readStoredProposal(params.record.id, params.store);
@@ -41,6 +36,8 @@ export async function reconcileInterruptedSkillProposalApply(params: {
       ) {
         return false;
       }
+      assertInsideSkillsRoot(params.skillsRoot, stored.record.target.skillDir, "skill directory");
+      assertInsideSkillsRoot(params.skillsRoot, stored.record.target.skillFile, "skill file");
       const rollback = await readSkillProposalRollback(params.record.id, params.store);
       if (!rollback || !resolveRecoveryRollback(stored.record, rollback)) {
         return false;
@@ -86,34 +83,20 @@ export async function reconcileInterruptedSkillProposalApply(params: {
           return false;
         }
         bumpSkillsSnapshotVersion({
-          workspaceDir: params.workspaceDir,
           reason: "workshop",
           changedPath: stored.record.target.skillFile,
         });
         return true;
       }
       if (recovery.state === "partial") {
-        const config =
-          params.config ??
-          (await createConfigIO({
-            ...(params.store?.env ? { env: params.store.env } : {}),
-            pluginValidation: "skip",
-          }).readBestEffortConfig());
-        const workshopConfig = resolveSkillWorkshopConfig(config);
         const restoration = await prepareWorkspaceSkillRestoration({
-          workspaceDir: params.workspaceDir,
+          skillsRoot: params.skillsRoot,
           skillDir: stored.record.target.skillDir,
           skillFile: stored.record.target.skillFile,
           previousContent: rollback.previousContent ?? null,
           proposedContentHash: hashSkillProposalContent(proposedContent),
           supportFiles: recovery.supportFiles,
           mode: stored.record.kind,
-          symlinkPolicy: {
-            allowWrites: workshopConfig.allowSymlinkTargetWrites,
-            allowedTargetRealPaths: workshopConfig.allowSymlinkTargetWrites
-              ? resolveAllowedSkillSymlinkTargetRealPaths(config)
-              : [],
-          },
         });
         try {
           await restoreWorkspaceSkillMutation(restoration);
@@ -121,7 +104,6 @@ export async function reconcileInterruptedSkillProposalApply(params: {
           // Restoration attempts can partially succeed before reporting an
           // aggregate error, so invalidate readers even on a failed recovery.
           bumpSkillsSnapshotVersion({
-            workspaceDir: params.workspaceDir,
             reason: "workshop",
             changedPath: stored.record.target.skillFile,
           });

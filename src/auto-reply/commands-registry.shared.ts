@@ -166,6 +166,19 @@ export function buildBuiltinChatCommands(
       ],
     }),
     defineBuiltinCommand(
+      "dashboard",
+      "Create or update this session's dashboard.",
+      "tools",
+      "standard",
+      {
+        args: [
+          defineCommandArgument("request", "Dashboard requirements", {
+            captureRemaining: true,
+          }),
+        ],
+      },
+    ),
+    defineBuiltinCommand(
       "learn",
       "Draft a reusable skill from recent work or named sources.",
       "tools",
@@ -462,6 +475,7 @@ export function buildBuiltinChatCommands(
       activeRunSafe: true,
     }),
     defineBuiltinCommand("restart", "Restart OpenClaw.", "tools", "power"),
+    defineBuiltinCommand("update", "Update OpenClaw and restart.", "tools", "power"),
     defineBuiltinCommand("activation", "Set group activation mode.", "management", "power", {
       args: [
         defineCommandArgument("mode", "mention or always", { choices: ["mention", "always"] }),
@@ -510,6 +524,7 @@ export function buildBuiltinChatCommands(
     defineBuiltinCommand("verbose", "Toggle verbose mode.", "options", "standard", {
       textAliases: ["/verbose", "/v"],
       args: [defineCommandArgument("mode", "on, off, or full", { choices: ["on", "off", "full"] })],
+      argsMenu: "auto",
     }),
     defineBuiltinCommand("trace", "Toggle plugin trace lines.", "options", "power", {
       args: [defineCommandArgument("mode", "on, off, or raw", { choices: ["on", "off", "raw"] })],

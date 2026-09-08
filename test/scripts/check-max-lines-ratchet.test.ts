@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectCurrentSuppressionState,
+  collectLintDisableDirectives,
   hasAllRuleDisable,
   hasMaxLinesDisable,
   isGovernedSourcePath,
@@ -42,17 +43,15 @@ function git(cwd: string, args: string[]): void {
   for (const key of nestedGitEnvKeys) {
     delete env[key];
   }
-  execFileSync("git", args, { cwd, env, stdio: "ignore" });
+  execFileSync("git", ["-c", "user.email=test@example.com", "-c", "user.name=Test", ...args], {
+    cwd,
+    env,
+    stdio: "ignore",
+  });
 }
 
 function commitFixture(root: string, message = "base"): void {
-  for (const args of [
-    ["init"],
-    ["config", "user.email", "test@example.com"],
-    ["config", "user.name", "Test"],
-    ["add", "."],
-    ["commit", "-m", message],
-  ]) {
+  for (const args of [["init"], ["add", "."], ["commit", "-m", message]]) {
     git(root, args);
   }
 }
@@ -63,6 +62,28 @@ afterEach(() => {
 });
 
 describe("check-max-lines-ratchet", () => {
+  it.each(["\n", "\r\n"])("preserves directive discovery with %j line endings", (newline) => {
+    const source = [
+      'const text = "\u{1f680} /* oxlint-disable max-lines */";',
+      "const template = `// eslint-disable max-lines`;",
+      "function example() {",
+      "  /* oxlint-disable no-console */",
+      "} // eslint-disable no-debugger",
+      "consume(",
+      "  1",
+      "  // oxlint-disable no-console",
+      ");",
+      "// eslint-disable max-lines, eqeqeq",
+    ].join(newline);
+
+    expect(collectLintDisableDirectives(source)).toEqual([
+      ["no-debugger"],
+      ["no-console"],
+      ["no-console"],
+      ["max-lines", "eqeqeq"],
+    ]);
+  });
+
   it("recognizes suppressions without matching reason prose", () => {
     expect(hasMaxLinesDisable("/* oxlint-disable max-lines -- TODO: split. */\n")).toBe(true);
     expect(hasMaxLinesDisable("// eslint-disable-next-line no-console, max-lines\n")).toBe(true);

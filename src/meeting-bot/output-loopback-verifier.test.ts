@@ -69,6 +69,49 @@ describe("meeting output loopback verifier", () => {
     expect(verifier.getHealth().outputLoopbackSignalBytes).toBeGreaterThan(verifiedBytes);
   });
 
+  it.each(["pcm16-24khz", "g711-ulaw-8khz"] as const)(
+    "keeps the rolling deadline after verification and starts fresh after expiry (%s)",
+    (audioFormat) => {
+      let nowMs = 0;
+      const verifier = createMeetingOutputLoopbackVerifier({
+        audioFormat,
+        now: () => nowMs,
+      });
+      const output =
+        audioFormat === "pcm16-24khz"
+          ? pcmEnergyFrames(outputEnvelope)
+          : Buffer.concat(outputEnvelope.map((_, index) => Buffer.alloc(80, (index * 37) % 220)));
+      verifier.beginOutput();
+      verifier.recordOutput(output);
+      verifier.recordInput(output);
+      const verified = verifier.getHealth();
+      expect(verified.verifiedOutputGeneration).toBe(1);
+
+      // Six seconds queued after the match keep the same generation past its original deadline.
+      verifier.recordOutput(Buffer.concat(Array<Buffer>(7).fill(output)));
+      verifier.recordOutput(output.subarray(0, output.byteLength / 2));
+      nowMs = 6_000;
+      verifier.recordOutput(output);
+      verifier.recordInput(output);
+      expect(verifier.getHealth()).toEqual(verified);
+      nowMs = 12_600;
+      verifier.recordOutput(Buffer.alloc(0));
+      expect(verifier.getHealth()).toEqual(verified);
+
+      nowMs += 1;
+      verifier.recordOutput(output);
+      expect(verifier.getHealth().outputGeneration).toBe(2);
+      expect(verifier.getHealth().verifiedOutputGeneration).toBe(1);
+      verifier.recordInput(output);
+      expect(verifier.getHealth().verifiedOutputGeneration).toBe(2);
+      expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(output.byteLength * 2);
+      const nextVerified = verifier.getHealth();
+      verifier.cancelOutput();
+      verifier.recordInput(output);
+      expect(verifier.getHealth()).toEqual(nextVerified);
+    },
+  );
+
   it("uses a stricter full-envelope match for short output generations", () => {
     const verifier = createMeetingOutputLoopbackVerifier({ audioFormat: "pcm16-24khz" });
     const shortOutput = pcmEnergyFrames(outputEnvelope.slice(0, 20));

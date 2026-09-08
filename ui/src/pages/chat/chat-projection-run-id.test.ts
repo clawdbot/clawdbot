@@ -62,6 +62,7 @@ describe("transcript run identity", () => {
         },
       },
       {
+        expandedAssistantMessages: new Map(),
         setContentReady: vi.fn(),
         syncMessageRows: vi.fn(),
       } as unknown as Parameters<typeof projectChatTranscript>[1],

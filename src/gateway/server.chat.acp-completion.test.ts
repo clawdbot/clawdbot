@@ -8,13 +8,16 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
+import { createDispatchReplyOperationCoordinator } from "../auto-reply/reply/dispatch-from-config.lifecycle.js";
 import { createAcpSessionMeta } from "../auto-reply/reply/test-fixtures/acp-runtime.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import {
   loadSessionEntryReadOnly,
   loadTranscriptEventsSync,
 } from "../config/sessions/session-accessor.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import { tryDispatchAcpReplyHook } from "../plugin-sdk/acpx.js";
+import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import {
   dispatchInboundMessageMock,
@@ -92,6 +95,7 @@ describe("Gateway ACP completion ownership", () => {
     text?: string;
     transform?: (payload: ReplyPayload) => ReplyPayload | null;
     live?: boolean;
+    lifecycle?: boolean;
     bound?: boolean;
     media?: boolean;
     cancel?: boolean;
@@ -101,6 +105,7 @@ describe("Gateway ACP completion ownership", () => {
     timeout?: boolean;
     persistFail?: boolean;
     suppressed?: boolean;
+    widget?: boolean;
   }> = [
     { name: "cold and warm turns" },
     {
@@ -113,6 +118,8 @@ describe("Gateway ACP completion ownership", () => {
       transform: (payload) => ({ ...payload, isError: true }),
     },
     { name: "post-hook suppression", suppressed: true, transform: () => null },
+    { name: "widget tool progress", widget: true },
+    { name: "post-hook widget suppression", widget: true, suppressed: true, transform: () => null },
     { name: "live block replies", live: true },
     {
       name: "media on the owned row",
@@ -131,6 +138,7 @@ describe("Gateway ACP completion ownership", () => {
     { name: "suppressed runtime timeout", timeout: true, transform: () => null },
     { name: "persistence errors", persistFail: true },
     { name: "native cancellation", cancel: true },
+    { name: "native cancellation through lifecycle", cancel: true, live: true, lifecycle: true },
     { name: "explicit abort", cancel: true, rpcAbort: true },
     {
       name: "persistence failure after explicit abort",
@@ -160,6 +168,7 @@ describe("Gateway ACP completion ownership", () => {
     expect((await rpcReq(ws, "sessions.subscribe", {})).ok).toBe(true);
     let turnStarted = createDeferred();
     let releaseTurn = createDeferred();
+    let activeRunId = "";
     await writeSessionStore({
       entries: {
         [sessionKey]: {
@@ -186,6 +195,36 @@ describe("Gateway ACP completion ownership", () => {
         if (scenario.timeout) {
           throw new AcpRuntimeError("ACP_TURN_FAILED", "ACP turn timed out", {
             detailCode: "TURN_TIMEOUT",
+          });
+        }
+        if (scenario.widget) {
+          emitAgentEvent({
+            runId: activeRunId,
+            sessionKey,
+            stream: "tool",
+            data: {
+              phase: "result",
+              name: "show_widget",
+              result: {
+                content: [
+                  {
+                    type: "text",
+                    text: JSON.stringify({
+                      kind: "canvas",
+                      presentation: {
+                        target: "assistant_message",
+                        title: "Status",
+                        sandbox: "scripts",
+                      },
+                      view: {
+                        id: activeRunId,
+                        url: `/__openclaw__/canvas/documents/${activeRunId}/index.html`,
+                      },
+                    }),
+                  },
+                ],
+              },
+            },
           });
         }
         await onEvent({ type: "text_delta", text: "same accepted reply" });
@@ -225,6 +264,17 @@ describe("Gateway ACP completion ownership", () => {
         dispatcher,
         replyOptions: inboundReplyOptions,
         dispatchReplyFromConfig: async ({ ctx: finalized, replyOptions }) => {
+          const hookDispatcher = scenario.lifecycle
+            ? createDispatchReplyOperationCoordinator({
+                agentId: "main",
+                cfg,
+                ctx: finalized,
+                dispatcher,
+                operationSessionStoreEntry: { storePath },
+                replyOptions,
+                resolveOperationExpectedSessionId: () => sessionId,
+              }).dispatchHookDispatcher
+            : dispatcher;
           if (scenario.media) {
             dispatcher.appendBeforeDeliver?.((payload) => ({
               ...payload,
@@ -255,7 +305,7 @@ describe("Gateway ACP completion ownership", () => {
                   ...(scenario.live ? { stream: { deliveryMode: "live" } } : {}),
                 },
               },
-              dispatcher,
+              dispatcher: hookDispatcher,
               recordProcessed: () => {},
               markIdle: () => {},
             },
@@ -284,6 +334,7 @@ describe("Gateway ACP completion ownership", () => {
       // reply through the now-loaded lifecycle subscriber.
       for (const [index, temperature] of ["cold", "warm"].entries()) {
         const runId = `acp-completion-${suffix}-${temperature}`;
+        activeRunId = runId;
         turnStarted = createDeferred();
         releaseTurn = createDeferred();
         const expectedState = scenario.rpcAbort
@@ -371,6 +422,29 @@ describe("Gateway ACP completion ownership", () => {
             .soft(extractFirstTextBlock(finals[0]?.payload?.message), temperature)
             .toBe(scenario.suppressed ? undefined : (scenario.text ?? "same accepted reply"));
         }
+        if (scenario.widget) {
+          const content = asOptionalRecord(finals[0]?.payload?.message)?.content;
+          if (scenario.suppressed) {
+            expect.soft(content).toBeUndefined();
+          } else {
+            expect.soft(content).toEqual([
+              { type: "text", text: "same accepted reply" },
+              {
+                type: "canvas",
+                preview: {
+                  kind: "canvas",
+                  surface: "assistant_message",
+                  render: "url",
+                  title: "Status",
+                  sandbox: "scripts",
+                  viewId: runId,
+                  url: `/__openclaw__/canvas/documents/${runId}/index.html`,
+                },
+                rawText: null,
+              },
+            ]);
+          }
+        }
         const lifecycle = frames.filter(
           (frame) =>
             frame.event === "agent" &&
@@ -398,31 +472,49 @@ describe("Gateway ACP completion ownership", () => {
           sessionKey: targetSessionKey,
           storePath,
         }).filter((message) => message.role === "user" || message.role === "assistant");
+        if (scenario.widget) {
+          const persisted = messages.findLast((message) => message.role === "assistant");
+          expect
+            .soft(asOptionalRecord(persisted)?.content)
+            .toEqual([{ type: "text", text: "same accepted reply" }]);
+        }
         expect
           .soft(
             messages.map((message) => message.role),
             temperature,
           )
           .toEqual(
-            scenario.rebound || (scenario.rpcAbort && scenario.persistFail)
+            scenario.rebound
               ? []
               : Array.from({ length: index + 1 }, () =>
                   scenario.persistFail ? ["user"] : ["user", "assistant"],
                 ).flat(),
           );
+        if (scenario.cancel && !scenario.rpcAbort) {
+          const assistant = messages.findLast((message) => message.role === "assistant");
+          expect.soft(assistant, temperature).toMatchObject({
+            idempotencyKey: runId,
+            model: "acp-runtime",
+            stopReason: "aborted",
+          });
+          expect.soft(extractFirstTextBlock(assistant), temperature).toBe("same accepted reply");
+          expect.soft(finals[0]?.payload?.message, temperature).toMatchObject({
+            stopReason: "aborted",
+          });
+        }
         if (scenario.media) {
           const assistant = messages.findLast((message) => message.role === "assistant");
           expect
             .soft(
-              Array.isArray(assistant?.content) &&
-                assistant.content.some((block: unknown) => {
-                  const content = asOptionalRecord(block);
-                  return content !== undefined && content.type !== "text";
-                }),
+              readAssistantDisplayContent(assistant).some((block: unknown) => {
+                const content = asOptionalRecord(block);
+                return content !== undefined && content.type !== "text";
+              }),
             )
             .toBe(true);
         }
         if (scenario.bound) {
+          // Source custody precedes ACP effects; the bound transcript owns the reply.
           expect
             .soft(
               readTranscriptMessages({
@@ -432,7 +524,13 @@ describe("Gateway ACP completion ownership", () => {
                 storePath,
               }),
             )
-            .toEqual([]);
+            .toMatchObject(
+              ["cold", "warm"].slice(0, index + 1).map((turn) => ({
+                role: "user",
+                content: `request ${turn}`,
+                idempotencyKey: `acp-completion-${suffix}-${turn}:user`,
+              })),
+            );
         }
       }
     } finally {

@@ -49,7 +49,7 @@ describe("loadCodexEffectiveMcpCatalog", () => {
       });
     sharedClientMocks.retainById.mockReturnValueOnce({ client: { request }, release });
     const bindingStore = {
-      read: vi.fn().mockResolvedValue({
+      read: vi.fn().mockReturnValue({
         threadId: "thread-1",
         clientId: "client-1",
         cwd: "/workspace",
@@ -116,7 +116,7 @@ describe("loadCodexEffectiveMcpCatalog", () => {
         });
       sharedClientMocks.retainById.mockReturnValueOnce({ client: { request }, release });
       const bindingStore = {
-        read: vi.fn().mockResolvedValue({ threadId: "thread-1", clientId: "client-1" }),
+        read: vi.fn().mockReturnValue({ threadId: "thread-1", clientId: "client-1" }),
       };
 
       const catalog = loadCodexEffectiveMcpCatalog(
@@ -148,7 +148,7 @@ describe("loadCodexEffectiveMcpCatalog", () => {
 
   it("does not start a new Codex process when the binding has no live client", async () => {
     const bindingStore = {
-      read: vi.fn().mockResolvedValue({ threadId: "thread-1", cwd: "/workspace" }),
+      read: vi.fn().mockReturnValue({ threadId: "thread-1", cwd: "/workspace" }),
     };
 
     await expect(

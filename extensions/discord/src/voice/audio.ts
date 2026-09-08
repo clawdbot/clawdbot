@@ -1,6 +1,4 @@
-// Discord plugin module implements audio behavior.
 import { spawn } from "node:child_process";
-import fs from "node:fs/promises";
 import { Transform, type Readable, type TransformCallback } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import {
@@ -19,6 +17,7 @@ import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-s
 const SAMPLE_RATE = 48_000;
 const CHANNELS = 2;
 const BIT_DEPTH = 16;
+export const VOICE_WAV_HEADER_BYTES = 44;
 const FFMPEG_ERROR_OUTPUT_BYTES = 8_192;
 const DISCORD_OPUS_FRAME_SIZE = 960;
 const DISCORD_OPUS_FRAME_BYTES = DISCORD_OPUS_FRAME_SIZE * CHANNELS * (BIT_DEPTH / 8);
@@ -49,7 +48,7 @@ let warnedOpusMissing = false;
 function buildWavBuffer(pcm: Buffer): Buffer {
   const blockAlign = (CHANNELS * BIT_DEPTH) / 8;
   const byteRate = SAMPLE_RATE * blockAlign;
-  const header = Buffer.alloc(44);
+  const header = Buffer.alloc(VOICE_WAV_HEADER_BYTES);
   header.write("RIFF", 0);
   header.writeUInt32LE(36 + pcm.length, 4);
   header.write("WAVE", 8);
@@ -66,7 +65,7 @@ function buildWavBuffer(pcm: Buffer): Buffer {
   return Buffer.concat([header, pcm]);
 }
 
-export function createDiscordOpusEncodeStream(): Transform {
+export function createDiscordOpusEncodeStream(): DiscordOpusEncodeStream {
   return new DiscordOpusEncodeStream();
 }
 
@@ -144,6 +143,7 @@ export function createDiscordOpusPlaybackStream(input: Readable | string): Reada
 class DiscordOpusEncodeStream extends Transform {
   #buffer = Buffer.alloc(0);
   #encoder!: LibopusEncoder;
+  readonly #packetPcmBytes = new WeakMap<Buffer, number>();
 
   constructor() {
     super({ readableObjectMode: true });
@@ -182,16 +182,29 @@ class DiscordOpusEncodeStream extends Transform {
 
   override _flush(done: TransformCallback): void {
     try {
-      if (this.#buffer.length > 0) {
-        const frame = Buffer.alloc(DISCORD_OPUS_FRAME_BYTES);
-        this.#buffer.copy(frame);
-        this.#buffer = Buffer.alloc(0);
-        this.#encodeFrame(frame);
-      }
+      this.flushPartialFrame();
       done();
     } catch (err) {
       done(err instanceof Error ? err : new Error(formatErrorMessage(err)));
     }
+  }
+
+  flushPartialFrame(): boolean {
+    if (this.destroyed || this.#buffer.length === 0) {
+      return false;
+    }
+    const pcmBytes = this.#buffer.length;
+    const frame = Buffer.alloc(DISCORD_OPUS_FRAME_BYTES);
+    this.#buffer.copy(frame);
+    this.#buffer = Buffer.alloc(0);
+    this.#encodeFrame(frame, pcmBytes);
+    return true;
+  }
+
+  takePcmBytes(packet: Buffer): number {
+    const bytes = this.#packetPcmBytes.get(packet) ?? 0;
+    this.#packetPcmBytes.delete(packet);
+    return bytes;
   }
 
   override _destroy(err: Error | null, done: (error?: Error | null) => void): void {
@@ -200,8 +213,10 @@ class DiscordOpusEncodeStream extends Transform {
     done(err);
   }
 
-  #encodeFrame(frame: Buffer): void {
-    this.push(Buffer.from(this.#encoder.encode(frame, { frameSize: DISCORD_OPUS_FRAME_SIZE })));
+  #encodeFrame(frame: Buffer, pcmBytes = frame.length): void {
+    const packet = Buffer.from(this.#encoder.encode(frame, { frameSize: DISCORD_OPUS_FRAME_SIZE }));
+    this.#packetPcmBytes.set(packet, pcmBytes);
+    this.push(packet);
   }
 }
 
@@ -209,21 +224,25 @@ function pcmInt16ToBuffer(pcm: Int16Array): Buffer {
   return Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength);
 }
 
-export async function decodeOpusStream(
-  stream: Readable,
-  params: OpusDecodeCallbacks,
-): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  await decodeOpusStreamChunks(stream, { ...params, onChunk: (chunk) => chunks.push(chunk) });
-  return Buffer.concat(chunks);
-}
-
 export async function decodeOpusStreamChunks(
   stream: Readable,
   params: OpusDecodeCallbacks & {
-    onChunk: (pcm48kStereo: Buffer) => void;
+    onChunk: (pcm48kStereo: Buffer, packet: Buffer) => void | Promise<void>;
   },
 ): Promise<void> {
+  try {
+    for await (const { pcm, packet } of decodeOpusFrames(stream, params)) {
+      await params.onChunk(pcm, packet);
+    }
+  } catch (err) {
+    params.onError?.(err);
+  }
+}
+
+async function* decodeOpusFrames(
+  stream: Readable,
+  params: OpusDecodeCallbacks,
+): AsyncGenerator<{ pcm: Buffer; packet: Buffer }> {
   let decoder: LibopusDecoder;
   try {
     decoder = await createLibopusDecoder({ channels: CHANNELS, sampleRate: SAMPLE_RATE });
@@ -244,7 +263,7 @@ export async function decodeOpusStreamChunks(
       }
       const decoded = decoder.decode(chunk, { maxFrameSize: DISCORD_OPUS_FRAME_SIZE });
       if (decoded.length > 0) {
-        params.onChunk(pcmInt16ToBuffer(decoded));
+        yield { pcm: pcmInt16ToBuffer(decoded), packet: chunk };
       }
     }
   } catch (err) {
@@ -298,24 +317,20 @@ function estimateDurationSeconds(pcm: Buffer): number {
 
 export async function writeVoiceWavFile(
   pcm: Buffer,
-): Promise<{ path: string; durationSeconds: number }> {
+): Promise<{ path: string; durationSeconds: number; cleanup: () => Promise<void> }> {
   const workspace = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "discord-voice-",
   });
-  scheduleTempCleanup(workspace.dir);
-  const wav = buildWavBuffer(pcm);
-  const filePath = await workspace.write("segment.wav", wav);
-  return { path: filePath, durationSeconds: estimateDurationSeconds(pcm) };
-}
-
-function scheduleTempCleanup(tempDir: string, delayMs: number = 30 * 60 * 1000): void {
-  const timer = setTimeout(() => {
-    fs.rm(tempDir, { recursive: true, force: true }).catch((err: unknown) => {
-      if (shouldLogVerbose()) {
-        logVerbose(`discord voice: temp cleanup failed for ${tempDir}: ${formatErrorMessage(err)}`);
-      }
-    });
-  }, delayMs);
-  timer.unref();
+  try {
+    const filePath = await workspace.write("segment.wav", buildWavBuffer(pcm));
+    return {
+      path: filePath,
+      durationSeconds: estimateDurationSeconds(pcm),
+      cleanup: () => workspace[Symbol.asyncDispose](),
+    };
+  } catch (error) {
+    await workspace.cleanup();
+    throw error;
+  }
 }

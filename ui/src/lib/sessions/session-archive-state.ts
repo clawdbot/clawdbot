@@ -1,7 +1,10 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { SessionArchiveVisibility } from "./session-capability.ts";
 
-type ConfirmedArchiveState = Pick<GatewaySessionRow, "archivedAt" | "archivedBy" | "sessionId">;
+type ConfirmedArchiveState = Pick<
+  GatewaySessionRow,
+  "archivedAt" | "archivedBy" | "archiveReason" | "sessionId"
+>;
 
 export function createSessionArchiveState(
   publishedRow: (key: string) => GatewaySessionRow | undefined,
@@ -32,6 +35,7 @@ export function createSessionArchiveState(
       confirmed.set(normalizedKey, {
         archivedAt: row?.archivedAt ?? previous?.archivedAt,
         archivedBy: row?.archivedBy ?? previous?.archivedBy,
+        archiveReason: row?.archiveReason ?? previous?.archiveReason,
         sessionId: row?.sessionId || previous?.sessionId,
       });
     },
@@ -62,6 +66,7 @@ export function createSessionArchiveState(
           archived: true,
           ...(archive.archivedAt !== undefined ? { archivedAt: archive.archivedAt } : {}),
           ...(archive.archivedBy ? { archivedBy: archive.archivedBy } : {}),
+          ...(archive.archiveReason ? { archiveReason: archive.archiveReason } : {}),
         };
       });
       return changed ? { ...result, sessions } : result;

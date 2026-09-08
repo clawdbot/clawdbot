@@ -5,6 +5,7 @@ import {
   type SessionCreatedActor,
 } from "../../config/sessions/session-entry-provenance.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { markPluginRegistryActive } from "../../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import {
@@ -83,6 +84,7 @@ describe("session catalog entry snapshots", () => {
 
   beforeEach(() => {
     hoisted.activeRegistry = createEmptyPluginRegistry() as TestPluginRegistry;
+    markPluginRegistryActive(hoisted.activeRegistry as PluginRegistry);
     hoisted.listSessionEntriesReadOnly.mockReset();
   });
 

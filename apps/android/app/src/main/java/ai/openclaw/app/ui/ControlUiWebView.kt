@@ -52,6 +52,8 @@ internal fun ControlUiWebView(
       modifier = modifier,
       factory = {
         val webView = WebView(controlUiWebViewContext(context, darkAppearance))
+        // WRAP_CONTENT forces a zero-height CSS viewport even when Compose measures the view exactly.
+        webView.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         val webSettings = webView.settings
         webSettings.setAllowContentAccess(false)
         webSettings.setAllowFileAccess(false)

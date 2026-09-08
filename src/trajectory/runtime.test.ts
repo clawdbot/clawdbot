@@ -6,10 +6,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  inspectOpenClawAgentDatabaseOwner,
+} from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { TRAJECTORY_RUNTIME_EVENT_MAX_BYTES } from "./paths.js";
-import { loadSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
+import {
+  loadSqliteTrajectoryRuntimeEvents,
+  loadSqliteTrajectoryRuntimeEventRowsSync,
+} from "./runtime-store.sqlite.js";
 import { createTrajectoryRuntimeRecorder, toTrajectoryToolDefinitions } from "./runtime.js";
 
 type TrajectoryRuntimeRecorder = NonNullable<ReturnType<typeof createTrajectoryRuntimeRecorder>>;
@@ -148,6 +154,56 @@ describe("trajectory runtime", () => {
     await expect(
       loadSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }),
     ).resolves.toEqual([expect.objectContaining({ source: "runtime", type: "session.started" })]);
+  });
+
+  it("flushes and tails a logical agent's trajectory in a shared physical store", async () => {
+    const storePath = path.join(tempDirs.make("openclaw-shared-trajectory-"), "shared.sqlite");
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: "agent:main:unrelated", storePath },
+      { sessionId: "unrelated", updatedAt: 1 },
+    );
+    const target = {
+      agentId: "ops",
+      sessionKey: "agent:ops:trace",
+      sessionId: "ops-session",
+      storePath,
+    };
+    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const recorder = expectTrajectoryRuntimeRecorder(
+      createTrajectoryRuntimeRecorder({
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        sessionTarget: target,
+      }),
+    );
+    recorder.recordEvent("session.started");
+    recorder.recordEvent("session.ended", { status: "success" });
+    await recorder.flush();
+    expect((await loadSqliteTrajectoryRuntimeEvents(target)).map((event) => event.type)).toEqual([
+      "session.started",
+      "session.ended",
+    ]);
+    expect(loadSqliteTrajectoryRuntimeEventRowsSync({ ...target, tailEvents: 1 })).toEqual([
+      expect.objectContaining({
+        seq: 1,
+        event: expect.objectContaining({
+          sessionId: target.sessionId,
+          sessionKey: target.sessionKey,
+          type: "session.ended",
+        }),
+      }),
+    ]);
+    expect(inspectOpenClawAgentDatabaseOwner(storePath)).toMatchObject({
+      status: "owned",
+      agentId: "main",
+    });
+    expect(
+      await loadSqliteTrajectoryRuntimeEvents({
+        agentId: "main",
+        sessionId: "unrelated",
+        storePath,
+      }),
+    ).toEqual([]);
   });
 
   it("rejects a legacy SQLite marker for another session", () => {

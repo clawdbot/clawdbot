@@ -12,6 +12,7 @@ function parseArgs(argv: string[]) {
   let waitForClawHub: boolean | undefined;
   let forceSkipClawHub: boolean | undefined;
   let normalRunId: string | undefined;
+  let normalPublicationStaged = false;
   let bootstrapRunId: string | undefined;
   let bootstrapCompleted: boolean | undefined;
 
@@ -38,6 +39,9 @@ function parseArgs(argv: string[]) {
         break;
       case "--normal-run-id":
         normalRunId = next();
+        break;
+      case "--normal-publication-staged":
+        normalPublicationStaged = parseStrictBooleanArg(next(), "--normal-publication-staged");
         break;
       case "--bootstrap-run-id":
         bootstrapRunId = next();
@@ -68,6 +72,7 @@ function parseArgs(argv: string[]) {
     waitForClawHub,
     forceSkipClawHub,
     normalRunId,
+    normalPublicationStaged,
     bootstrapRunId,
     bootstrapCompleted,
   };

@@ -66,6 +66,20 @@ describe("cron view run history", () => {
       listTab: "activity",
       runs: [
         {
+          ts: 6,
+          jobId: "job-hour-seconds",
+          action: "finished",
+          status: "ok",
+          durationMs: 3_630_000,
+        },
+        {
+          ts: 5,
+          jobId: "job-day-minutes",
+          action: "finished",
+          status: "ok",
+          durationMs: 86_460_000,
+        },
+        {
           ts: 4,
           jobId: "job-total",
           action: "finished",
@@ -116,6 +130,13 @@ describe("cron view run history", () => {
       expect(entry).toBeInstanceOf(HTMLDivElement);
       return entry;
     };
+
+    expect(
+      entryFor("job-hour-seconds")?.querySelector(".cron-run-entry__meta")?.textContent,
+    ).toContain("1h 30s");
+    expect(
+      entryFor("job-day-minutes")?.querySelector(".cron-run-entry__meta")?.textContent,
+    ).toContain("1d 1m");
 
     const total = entryFor("job-total");
     expect(total?.querySelector(".cron-run-entry__facts")?.textContent).toContain("1.2M Tokens");

@@ -17,6 +17,7 @@ import {
   stopCrabbox,
   warmupCrabbox,
 } from "./crabbox-runtime.js";
+import { renderMantisCrabboxReport, type MantisCrabboxReportSummary } from "./report.js";
 
 export type MantisDesktopBrowserSmokeOptions = {
   browserProfileArchiveEnv?: string;
@@ -47,30 +48,10 @@ type MantisDesktopBrowserSmokeResult = {
   videoPath?: string;
 };
 
-type MantisDesktopBrowserSmokeSummary = {
-  artifacts: {
-    reportPath: string;
-    screenshotPath?: string;
-    summaryPath: string;
-    videoPath?: string;
-  };
+type MantisDesktopBrowserSmokeSummary = MantisCrabboxReportSummary & {
   browserUrl: string;
   htmlFile?: string;
-  crabbox: {
-    bin: string;
-    createdLease: boolean;
-    id: string;
-    provider: string;
-    slug?: string;
-    state?: string;
-    vncCommand: string;
-  };
-  error?: string;
-  finishedAt: string;
-  outputDir: string;
   remoteOutputDir: string;
-  startedAt: string;
-  status: "pass" | "fail";
 };
 
 const DEFAULT_BROWSER_URL = "https://openclaw.ai";
@@ -246,39 +227,20 @@ test -s "$out/desktop-browser-smoke.png"
 }
 
 function renderReport(summary: MantisDesktopBrowserSmokeSummary) {
-  const lines = [
-    "# Mantis Desktop Browser Smoke",
-    "",
-    `Status: ${summary.status}`,
-    `Browser URL: ${summary.browserUrl}`,
-    summary.htmlFile ? `HTML file: ${summary.htmlFile}` : undefined,
-    `Output: ${summary.outputDir}`,
-    `Started: ${summary.startedAt}`,
-    `Finished: ${summary.finishedAt}`,
-    "",
-    "## Crabbox",
-    "",
-    `- Provider: ${summary.crabbox.provider}`,
-    `- Lease: ${summary.crabbox.id}${summary.crabbox.slug ? ` (${summary.crabbox.slug})` : ""}`,
-    `- Created by run: ${summary.crabbox.createdLease}`,
-    `- State: ${summary.crabbox.state ?? "unknown"}`,
-    `- VNC: \`${summary.crabbox.vncCommand}\``,
-    "",
-    "## Artifacts",
-    "",
-    summary.artifacts.screenshotPath
-      ? `- Screenshot: \`${path.basename(summary.artifacts.screenshotPath)}\``
-      : "- Screenshot: missing",
-    summary.artifacts.videoPath
-      ? `- Video: \`${path.basename(summary.artifacts.videoPath)}\``
-      : "- Video: missing",
-    "- Remote metadata: `remote-metadata.json`",
-    "- FFmpeg log: `ffmpeg.log`",
-    "- Chrome log: `chrome.log`",
-    summary.error ? `- Error: ${summary.error}` : undefined,
-    "",
-  ].filter((line) => line !== undefined);
-  return `${lines.join("\n")}\n`;
+  return renderMantisCrabboxReport({
+    artifactRows: [
+      "- Remote metadata: `remote-metadata.json`",
+      "- FFmpeg log: `ffmpeg.log`",
+      "- Chrome log: `chrome.log`",
+      summary.error ? `- Error: ${summary.error}` : undefined,
+    ],
+    headerRows: [
+      `Browser URL: ${summary.browserUrl}`,
+      summary.htmlFile ? `HTML file: ${summary.htmlFile}` : undefined,
+    ],
+    summary,
+    title: "Mantis Desktop Browser Smoke",
+  });
 }
 
 export async function runMantisDesktopBrowserSmoke(

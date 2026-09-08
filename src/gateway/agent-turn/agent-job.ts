@@ -11,6 +11,7 @@ import {
   AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
   buildAgentRunTerminalOutcome,
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
+  hasExecutionSettlement,
   isStickyAgentRunTerminalOutcome,
   mergeAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
@@ -25,7 +26,9 @@ import {
   type AgentRunTerminalReplySnapshot,
 } from "../../agents/agent-run-terminal-reply.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
+import { formatErrorMessageForDisplay } from "../../infra/error-diagnostics.js";
 import { isNonTerminalAgentRunStatus } from "../../shared/agent-run-status.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
 import type { DedupeEntry } from "../server-shared.js";
@@ -310,7 +313,10 @@ function createSnapshotFromLifecycleEvent(params: {
   // agent.wait historically treats a bare abort flag as a retryable timeout.
   // Modern explicit stop reasons keep the canonical cancellation projection.
   const legacyBareAbort =
-    terminalOutcome.reason === "aborted" && data?.stopReason == null && data?.status == null;
+    !hasExecutionSettlement(data) &&
+    terminalOutcome.reason === "aborted" &&
+    data?.stopReason == null &&
+    data?.status == null;
   const terminalDelivery = normalizeAgentRunTerminalDeliverySnapshot(data?.terminalDelivery);
   const terminalReply = normalizeAgentRunTerminalReplySnapshot(data?.terminalReply);
   const normalizedTerminalReceipt = normalizeAgentRunTerminalReceipt(data?.terminalReceipt);
@@ -362,11 +368,12 @@ function ensureAgentRunListener() {
       data: evt.data,
     });
     agentRunStarts.delete(evt.runId);
-    if (phase === "error" && evt.data?.fallbackExhaustedFailure !== true) {
+    const executionSettled = hasExecutionSettlement(evt.data);
+    if (!executionSettled && phase === "error" && evt.data?.fallbackExhaustedFailure !== true) {
       schedulePendingAgentRunTerminal(pendingAgentRunErrors, snapshot);
       return;
     }
-    if (phase === "end" && snapshot.status === "timeout") {
+    if (!executionSettled && phase === "end" && snapshot.status === "timeout") {
       schedulePendingAgentRunTerminal(pendingAgentRunTimeouts, snapshot);
       return;
     }
@@ -418,16 +425,21 @@ function parseDedupeObservation(entry: DedupeEntry): DedupeObservation {
     readNonBlankString(payload?.stopReason) ?? readNonBlankString(resultMeta?.stopReason);
   const livenessState =
     readNonBlankString(payload?.livenessState) ?? readNonBlankString(resultMeta?.livenessState);
+  const errorMessage =
+    typeof payload?.error === "string"
+      ? payload.error
+      : typeof payload?.summary === "string"
+        ? payload.summary
+        : entry.error?.message;
   const terminalOutcome = buildAgentRunTerminalOutcome({
     status: terminalStatus,
     startedAt,
     endedAt,
+    // RPC errors stay native for retry policy; agent.wait is an operator-facing projection.
     error:
-      typeof payload?.error === "string"
-        ? payload.error
-        : typeof payload?.summary === "string"
-          ? payload.summary
-          : entry.error?.message,
+      errorMessage === undefined
+        ? undefined
+        : formatErrorMessageForDisplay(entry.error, errorMessage),
     stopReason,
     livenessState,
     timeoutPhase: payload?.timeoutPhase ?? resultMeta?.timeoutPhase,
@@ -490,7 +502,11 @@ export function setGatewayDedupeEntry(params: {
     return;
   }
 
-  params.dedupe.set(params.key, params.entry);
+  // Terminal writers own outcomes, not request identity; never erase the admission binding.
+  const entry = existing?.requestIdentity
+    ? { ...params.entry, requestIdentity: existing.requestIdentity }
+    : params.entry;
+  params.dedupe.set(params.key, entry);
   const key = parseDedupeKey(params.key);
   if (!key) {
     return;
@@ -602,7 +618,8 @@ export async function waitForAgentJob(params: {
   if (cached) {
     return publicSnapshot(cached);
   }
-  if (params.timeoutMs <= 0) {
+  const signal = getAsyncWorkSignal();
+  if (params.timeoutMs <= 0 || signal?.aborted) {
     return null;
   }
 
@@ -615,12 +632,16 @@ export async function waitForAgentJob(params: {
       }
       settled = true;
       clearTimeout(timeoutHandle);
+      signal?.removeEventListener("abort", onClose);
       removeWaiter();
       resolve(snapshot);
     };
+    // Closing this Gateway retires only its observation, never the run or another waiter.
+    const onClose = () => finish(null);
     const onWake = (lifecycleReset = false) => {
       if (lifecycleReset) {
-        finish(null);
+        // The lifecycle interrupted this wait; do not cache it as a terminal run outcome.
+        finish({ status: "timeout", timeoutPhase: "gateway_draining" });
         return;
       }
       const snapshot = getAgentRunSnapshot({
@@ -659,7 +680,12 @@ export async function waitForAgentJob(params: {
       finish(null);
     }, params.timeoutMs);
     timeoutHandle.unref?.();
-    onWake();
+    signal?.addEventListener("abort", onClose, { once: true });
+    if (signal?.aborted) {
+      onClose();
+    } else {
+      onWake();
+    }
   });
 }
 

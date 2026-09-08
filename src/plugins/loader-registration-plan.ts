@@ -20,8 +20,6 @@ export type PluginRegistrationPlan = {
 /** Converts loader intent into explicit entrypoint and activation behavior. */
 export function resolvePluginRegistrationPlan(params: {
   canLoadScopedSetupOnlyChannelPlugin: boolean;
-  scopedSetupOnlyChannelPluginRequested: boolean;
-  requireSetupEntryForSetupOnlyChannelPlugins: boolean;
   enableStateEnabled: boolean;
   shouldLoadModules: boolean;
   validateOnly: boolean;
@@ -40,12 +38,6 @@ export function resolvePluginRegistrationPlan(params: {
       runRuntimeCapabilityPolicy: false,
       runFullActivationOnlyRegistrations: false,
     };
-  }
-  if (
-    params.scopedSetupOnlyChannelPluginRequested &&
-    params.requireSetupEntryForSetupOnlyChannelPlugins
-  ) {
-    return null;
   }
   if (!params.enableStateEnabled) {
     return null;

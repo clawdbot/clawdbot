@@ -9,6 +9,7 @@ import type { AgentToolResult } from "./runtime/index.js";
 
 type EmbeddedMessageDeliveryFact = {
   status: "settled" | "suppressed" | "dryRun" | "failed";
+  sourceReplyDelivered?: true;
   primaryPlatformMessageId?: string;
   partialDelivery: boolean;
   createdThreadIds: string[];
@@ -251,7 +252,13 @@ function projectPoll(result: MessagePollResult): EmbeddedMessageDeliveryFact {
 
 export function projectEmbeddedMessageDeliveryFact(
   result: MessageActionResult,
+  currentSourceReply = false,
 ): EmbeddedMessageDeliveryFact | undefined {
+  if (currentSourceReply && result.handledBy === "plugin") {
+    return result.dryRun
+      ? { status: "dryRun", ...EMPTY_DELIVERY_FACT }
+      : projectPluginPayload(result.payload);
+  }
   if (result.kind === "send") {
     return result.handledBy === "core" && result.sendResult
       ? projectSend(result.sendResult)
@@ -364,6 +371,9 @@ export function readEmbeddedMessageDeliveryFact(
   }
   return {
     status: fact.status,
+    ...(fact.status === "settled" && !fact.partialDelivery && fact.sourceReplyDelivered === true
+      ? { sourceReplyDelivered: true as const }
+      : {}),
     ...(fact.primaryPlatformMessageId
       ? { primaryPlatformMessageId: fact.primaryPlatformMessageId }
       : {}),

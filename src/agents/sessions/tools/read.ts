@@ -1,7 +1,6 @@
 import { constants } from "node:fs";
 import { access as fsAccess, readdir as fsReaddir, stat as fsStat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
-import { Text } from "@earendil-works/pi-tui";
 import { hasErrnoCode, toErrorObject } from "../../../infra/errors.js";
 import { readRegularFile } from "../../../infra/regular-file.js";
 import { decodeWindowsTextFileBuffer } from "../../../infra/windows-encoding.js";
@@ -52,6 +51,7 @@ import {
   getTextOutput,
   invalidArgText,
   replaceTabs,
+  reuseTextComponent,
   shortenPath,
   str,
   trimTrailingEmptyLines,
@@ -392,7 +392,7 @@ export function createReadToolDefinition(
         path,
         offset,
         limit,
-        cursor,
+        cursor = 0,
         optional,
       }: { path: string; offset?: number; limit?: number; cursor?: number; optional?: true },
       signal?: AbortSignal,
@@ -404,7 +404,7 @@ export function createReadToolDefinition(
       if (offset !== undefined && (!Number.isSafeInteger(offset) || offset < 1)) {
         throw new Error("Offset must be an integer at least 1");
       }
-      if (cursor !== undefined && (!Number.isSafeInteger(cursor) || cursor < 0)) {
+      if (!Number.isSafeInteger(cursor) || cursor < 0) {
         throw new Error("Cursor must be an integer at least 0");
       }
       return new Promise<{
@@ -482,7 +482,7 @@ export function createReadToolDefinition(
             }
             const mimeType = await detectReadImageMimeType(ops, buffer, absolutePath);
             let content: (TextContent | ImageContent)[];
-            let truncated: Parameters<typeof createReadToolDetails>[1];
+            let textDetails: Parameters<typeof createReadToolDetails>[1];
             const modelHasVision = options?.modelHasVision ?? ctx?.model?.input.includes("image");
             const nonVisionImageNote =
               modelHasVision === false
@@ -519,14 +519,36 @@ export function createReadToolDefinition(
               const textContent = (
                 decodedText.startsWith("\uFEFF") ? decodedText.slice(1) : decodedText
               ).replaceAll("\r\n", "\n");
-              const allLines = textContent.split("\n");
-              if (allLines.at(-1) === "") {
-                allLines.pop();
-              }
-              const totalFileLines = allLines.length;
-              // Apply offset if specified. Convert from 1-indexed input to 0-indexed array access.
               const startLine = offset === undefined ? 0 : offset - 1;
               const startLineDisplay = startLine + 1;
+              const requestedLines =
+                limit === undefined ? undefined : normalizePositiveLimit(limit, DEFAULT_MAX_LINES);
+              let totalFileLines = 0;
+              let selectedStart = 0;
+              let selectedEnd = 0;
+              let selectedLineCount = 0;
+              let firstLineEnd = 0;
+              let selectedHasText = false;
+              // Count through EOF without materializing lines that the page budget may discard.
+              for (let start = 0; start < textContent.length;) {
+                const newline = textContent.indexOf("\n", start);
+                const end = newline === -1 ? textContent.length : newline;
+                if (
+                  totalFileLines >= startLine &&
+                  (requestedLines === undefined || selectedLineCount < requestedLines)
+                ) {
+                  if (selectedLineCount === 0) {
+                    selectedStart = start;
+                    firstLineEnd = end;
+                  }
+                  selectedEnd = end;
+                  selectedLineCount += 1;
+                  selectedHasText ||= end > start;
+                }
+                totalFileLines += 1;
+                start = end + 1;
+              }
+              const firstLineLength = firstLineEnd - selectedStart;
               let outputText: string;
               if (totalFileLines === 0) {
                 outputText =
@@ -535,68 +557,56 @@ export function createReadToolDefinition(
                     : `File contains no readable text (${buffer.length} bytes).`;
               } else if (startLine >= totalFileLines) {
                 outputText = `Offset ${offset} is beyond end of file (${totalFileLines} lines total). Retry with offset <= ${totalFileLines}.`;
-              } else if (cursor !== undefined && cursor >= allLines[startLine]!.length) {
+              } else if (cursor > 0 && cursor >= firstLineLength) {
                 const nextLine =
                   startLine + 1 < totalFileLines
                     ? ` Use offset=${startLineDisplay + 1} to continue.`
                     : "";
-                outputText = `Cursor ${cursor} is at or beyond the end of line ${startLineDisplay} (${allLines[startLine]!.length} characters).${nextLine}`;
+                outputText = `Cursor ${cursor} is at or beyond the end of line ${startLineDisplay} (${firstLineLength} characters).${nextLine}`;
               } else {
-                const firstLine = allLines[startLine]!;
-                if (
-                  cursor !== undefined &&
-                  cursor > 0 &&
-                  firstLine.codePointAt(cursor - 1)! > 0xffff
-                ) {
+                if (cursor > 0 && textContent.codePointAt(selectedStart + cursor - 1)! > 0xffff) {
                   throw new Error(
                     `Cursor ${cursor} splits a UTF-16 surrogate pair; retry with cursor=${cursor - 1} or cursor=${cursor + 1}.`,
                   );
                 }
-                const endLine =
-                  limit === undefined
-                    ? totalFileLines
-                    : Math.min(
-                        startLine + normalizePositiveLimit(limit, DEFAULT_MAX_LINES),
-                        totalFileLines,
-                      );
-                const selectedLines = allLines.slice(startLine, endLine);
-                if (cursor !== undefined) {
-                  selectedLines[0] = firstLine.slice(cursor);
-                }
+                const endLine = startLine + selectedLineCount;
                 const userLimitedLines = limit === undefined ? undefined : endLine - startLine;
-                if (selectedLines.every((line) => line.length === 0)) {
-                  const selectedLineCount = selectedLines.length;
+                const selectedContent = textContent.slice(
+                  selectedStart + cursor,
+                  endLine === totalFileLines ? textContent.length : selectedEnd,
+                );
+                const noteBytes = note ? Buffer.byteLength(`${note}\n`, "utf8") : 0;
+                const page = createBoundedReadTextPage({
+                  content: selectedContent,
+                  startLine: startLineDisplay,
+                  endLine,
+                  totalLines: totalFileLines,
+                  cursor,
+                  limit: userLimitedLines,
+                  maxBytes,
+                  modelBudget: options?.modelBudget,
+                  prefix: note ? `${note}\n` : undefined,
+                  pageMaxBytes: Math.min(DEFAULT_MAX_BYTES, maxBytes) - noteBytes,
+                  adaptive: options?.maxBytes !== undefined,
+                });
+                outputText = page.text;
+                textDetails = page.details;
+                if (!selectedHasText) {
                   const subject =
                     startLine === 0 && endLine === totalFileLines ? "File" : "Selected range";
                   outputText = `${subject} contains ${selectedLineCount} blank line${selectedLineCount === 1 ? "" : "s"}.`;
-                  if (userLimitedLines !== undefined && endLine < totalFileLines) {
-                    const remaining = totalFileLines - endLine;
-                    outputText += `\n\n[${remaining} more line${remaining === 1 ? "" : "s"} in file. Use offset=${endLine + 1} to continue.]`;
-                  }
-                } else {
-                  let selectedContent = selectedLines.join("\n");
-                  if (endLine === totalFileLines && textContent.endsWith("\n")) {
-                    selectedContent += "\n";
-                  }
-                  const noteBytes = note ? Buffer.byteLength(`${note}\n`, "utf8") : 0;
-                  const page = createBoundedReadTextPage({
-                    content: selectedContent,
-                    startLine: startLineDisplay,
-                    endLine,
-                    totalLines: totalFileLines,
-                    cursor,
-                    limit: userLimitedLines,
-                    maxBytes,
-                    modelBudget: options?.modelBudget,
-                    prefix: note ? `${note}\n` : undefined,
-                    pageMaxBytes: Math.min(DEFAULT_MAX_BYTES, maxBytes) - noteBytes,
-                    adaptive: options?.maxBytes !== undefined,
-                  });
-                  outputText = page.content;
-                  if (page.kind === "truncated") {
-                    truncated = page;
+                  if (textDetails.kind === "truncated") {
+                    outputText += page.text.slice(textDetails.content.length);
                   }
                 }
+              }
+              if (textDetails) {
+                // A full-fit selection can still have a continuation and borrow the decoded file.
+                // Detach both bounded channels regardless of EOF, preserving exact UTF-16 units.
+                outputText = Buffer.from(outputText, "utf16le").toString("utf16le");
+                textDetails.content = Buffer.from(textDetails.content, "utf16le").toString(
+                  "utf16le",
+                );
               }
               content = [{ type: "text", text: outputText }];
             }
@@ -612,7 +622,7 @@ export function createReadToolDefinition(
               return;
             }
             signal?.removeEventListener("abort", onAbort);
-            resolve({ content, details: createReadToolDetails(content, truncated) });
+            resolve({ content, details: createReadToolDetails(content, textDetails) });
           } catch (error: unknown) {
             signal?.removeEventListener("abort", onAbort);
             if (!aborted) {
@@ -623,31 +633,25 @@ export function createReadToolDefinition(
       });
     },
     renderCall(args, theme, context) {
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
       const classification = !context.expanded
         ? getCompactReadClassification(args, context.cwd)
         : undefined;
-      text.setText(
-        classification
-          ? formatCompactReadCall(classification, args, theme)
-          : formatReadCall(args, theme),
-      );
-      return text;
+      const content = classification
+        ? formatCompactReadCall(classification, args, theme)
+        : formatReadCall(args, theme);
+      return reuseTextComponent(context.lastComponent, content);
     },
     renderResult(result, optionsLocal, theme, context) {
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(
-        formatReadResult(
-          context.args,
-          result,
-          optionsLocal,
-          theme,
-          context.showImages,
-          context.cwd,
-          context.isError,
-        ),
+      const content = formatReadResult(
+        context.args,
+        result,
+        optionsLocal,
+        theme,
+        context.showImages,
+        context.cwd,
+        context.isError,
       );
-      return text;
+      return reuseTextComponent(context.lastComponent, content);
     },
   };
 }

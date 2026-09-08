@@ -24,10 +24,10 @@ public struct GatewayConnectOptions: Sendable {
     /// role/scoped sessions such as operator UI clients.
     public var includeDeviceIdentity: Bool
     /// Set false for an endpoint handoff whose explicit credentials (including none) must be
-    /// tried without reusing a device token issued by a different gateway.
+    /// tried without loading a previously stored device token.
     public var allowStoredDeviceAuth: Bool
-    /// Stable gateway owner for device tokens. Nil preserves legacy unscoped storage for clients
-    /// that have not adopted endpoint ownership yet.
+    /// Stable Gateway owner for device tokens. Nil preserves legacy unscoped storage only when
+    /// `allowStoredDeviceAuth` is true; false plus nil disables both lookup and persistence.
     public var deviceAuthGatewayID: String?
 
     public init(
@@ -97,6 +97,12 @@ public struct GatewayAuthBinding: Equatable, Sendable {
 }
 
 extension GatewayConnectOptions {
+    var allowsDeviceAuthPersistence: Bool {
+        // Legacy callers must rotate credentials in the same unscoped namespace they read.
+        // Fresh pairing instead supplies an owner; explicit ownerless handoffs set false/nil.
+        self.allowStoredDeviceAuth || self.deviceAuthGatewayID != nil
+    }
+
     /// Additive connect-frame fields, sent only when this node declares them.
     /// Lives here so `GatewayChannel.sendConnect` stays within its body budget.
     func applyOptionalConnectParams(to params: inout [String: OpenClawProtocol.AnyCodable]) {

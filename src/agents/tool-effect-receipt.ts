@@ -1,9 +1,66 @@
+import {
+  attachInternalToolResultProvenance,
+  getInternalToolResultProvenance,
+} from "./runtime/internal-hooks.js";
+
 /** Host-owned effect provenance for one completed tool lifecycle. */
 export type ToolEffectReceipt = Readonly<{
   state: "not_started" | "read_completed" | "failed_no_effect" | "mutation_committed" | "uncertain";
 }>;
 
-const toolEffectReceipts = new WeakMap<object, ToolEffectReceipt>();
+const NO_START_RECEIPT: ToolEffectReceipt = Object.freeze({ state: "not_started" });
+
+/** Keep effect proof private while the lifecycle copies or projects the result. */
+export function markToolExecutionNotStarted<T>(value: T): T {
+  if (typeof value === "object" && value !== null) {
+    attachInternalToolResultProvenance(value, NO_START_RECEIPT);
+  }
+  return value;
+}
+
+export function readToolEffectReceipt(value: unknown): ToolEffectReceipt | undefined {
+  return typeof value === "object" &&
+    value !== null &&
+    getInternalToolResultProvenance(value) === NO_START_RECEIPT
+    ? NO_START_RECEIPT
+    : undefined;
+}
+
+export function consumeToolExecutionNotStarted(value: unknown): boolean {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    getInternalToolResultProvenance(value) !== NO_START_RECEIPT
+  ) {
+    return false;
+  }
+  attachInternalToolResultProvenance(value, undefined);
+  return true;
+}
+
+/** The protected operation owns its first possible effect, including reservations. */
+export async function withToolEffectBoundary<T>(
+  execute: (onEffectsStart: () => void) => Promise<T>,
+): Promise<T> {
+  let effectsStarted = false;
+  const settle = <TValue>(value: TValue): TValue => {
+    if (!effectsStarted) {
+      return markToolExecutionNotStarted(value);
+    }
+    // A nested no-start failure cannot erase effects already attempted by this owner.
+    consumeToolExecutionNotStarted(value);
+    return value;
+  };
+  try {
+    return settle(
+      await execute(() => {
+        effectsStarted = true;
+      }),
+    );
+  } catch (error) {
+    throw settle(error);
+  }
+}
 
 /** Resolve the strongest effect fact available at the terminal lifecycle owner. */
 export function buildToolEffectReceipt(params: {
@@ -26,35 +83,4 @@ export function buildToolEffectReceipt(params: {
     state:
       params.mutatingAction && params.outcome === "success" ? "mutation_committed" : "uncertain",
   };
-}
-
-/** Bind provenance to the exact host-owned value crossing the next boundary. */
-export function registerToolEffectReceipt<T>(target: T, receipt: ToolEffectReceipt): T {
-  if ((typeof target === "object" && target !== null) || typeof target === "function") {
-    toolEffectReceipts.set(target, receipt);
-  }
-  return target;
-}
-
-/** Move one receipt across a host-owned projection without making it model-visible. */
-export function transferToolEffectReceipt(source: unknown, target: unknown): void {
-  const receipt = consumeToolEffectReceipt(source);
-  if (receipt) {
-    registerToolEffectReceipt(target, receipt);
-  }
-}
-
-/** Consume provenance once so copied or replayed values cannot inherit authority. */
-export function consumeToolEffectReceipt(target: unknown): ToolEffectReceipt | undefined {
-  if ((typeof target !== "object" || target === null) && typeof target !== "function") {
-    return undefined;
-  }
-  const receipt = toolEffectReceipts.get(target);
-  toolEffectReceipts.delete(target);
-  return receipt;
-}
-
-/** Return whether one recorded operation state proves that no mutation could have occurred. */
-export function toolEffectStateProvesNoEffect(state: ToolEffectReceipt["state"]): boolean {
-  return state === "not_started" || state === "read_completed" || state === "failed_no_effect";
 }

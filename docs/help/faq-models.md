@@ -55,8 +55,8 @@ troubleshooting, see the main [FAQ](/help/faq).
     - `openclaw configure --section model` (interactive)
     - edit `agents.defaults.model` in `~/.openclaw/openclaw.json` directly
 
-    Bare `/model <model>` keeps owner/admin configured-default persistence unless
-    you set the optional [model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope).
+    Bare `/model <model>` changes only the current session, including for owners/admins,
+    unless you explicitly choose a broader [model selection scope](/gateway/config-agents/models#agentsdefaultsmodelselectionscope).
 
     For RPC edits, inspect with `config.schema.lookup` first (normalized
     path, shallow schema docs, child summaries), then prefer `config.patch`
@@ -92,11 +92,11 @@ troubleshooting, see the main [FAQ](/help/faq).
 
   <Accordion title="How do I switch models on the fly (without restarting)?">
     Send `/model <name> -s` as a standalone message to switch only this session.
-    Without a scope flag, the optional [model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope)
-    applies; leaving it unset preserves owner/admin configured-default persistence. See
+    Without a scope flag, the optional [model selection scope](/gateway/config-agents/models#agentsdefaultsmodelselectionscope)
+    applies; leaving it unset keeps the change in the current session, including for owners/admins. See
     [Slash commands](/tools/slash-commands) for the
-    full command list, including the numbered picker (`/model`, `/model
-    list`, `/model 3`), `/model default -s` to clear only a session model override, and
+    full command list, including model browsing (`/model`, `/models`, `/model
+    list`), `/model default -s` to clear only a session model override, and
     `/model status` for endpoint/API-mode detail.
 
     Force a specific auth profile per session with `@profile`:
@@ -285,7 +285,7 @@ troubleshooting, see the main [FAQ](/help/faq).
 
     Then `/model sonnet -s` selects that model ID for the current session only.
     Owners/admins can use `-a` to also update the agent default or `-g` for the
-    shared global default. Bare selections follow the [model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope).
+    shared global default. Bare selections follow the [model selection scope](/gateway/config-agents/models#agentsdefaultsmodelselectionscope).
 
   </Accordion>
 
@@ -477,7 +477,8 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     sibling model on the same provider; billing/disabled windows block the
     whole profile.
 
-    Set a per-agent order override (stored in that agent's `auth-state.json`):
+    Set a per-agent order override (stored in that agent's
+    `openclaw-agent.sqlite` database):
 
     ```bash
     # Defaults to the configured default agent (omit --agent)

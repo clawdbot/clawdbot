@@ -2,11 +2,13 @@
   "id": "zalouser",
   "doctorContract": {
     "configRepair": true,
-    "stateMigrations": true
+    "stateMigrations": [
+      { "id": "zalouser-credentials-json-to-plugin-state" },
+      { "id": "zalouser-direct-session-keys" }
+    ]
   },
   "name": "Zalo Personal",
   "description": "OpenClaw Zalo Personal Account plugin via native zca-js integration.",
-  "icon": "https://cdn.simpleicons.org/zalo",
   "activation": {
     "onStartup": false
   },

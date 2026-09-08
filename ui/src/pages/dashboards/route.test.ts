@@ -57,13 +57,13 @@ describe("dashboards route", () => {
 
     expect(refreshList).toHaveBeenCalledWith({
       limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-      boardFace: "dashboard",
+      hasBoard: true,
       archivedFilter: "all",
       force: true,
     });
     expect(listSnapshot).toHaveBeenLastCalledWith({
       limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-      boardFace: "dashboard",
+      hasBoard: true,
       archivedFilter: "all",
     });
     expect(list).not.toHaveBeenCalled();

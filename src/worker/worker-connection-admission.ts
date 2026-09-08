@@ -87,17 +87,21 @@ export function connectWorkerConnectionAttempt(
     : new WebSocket(target.url, socketOptions);
   options.onSocket(socket);
   const admissionId = randomUUID();
-  let admitted = false;
+  let admission: "pending" | "accepted" | "rejected" = "pending";
   let opened = false;
-  let attemptSettled = false;
+  const isActive = () =>
+    options.isCurrentGeneration() &&
+    !options.isTerminal() &&
+    admission !== "rejected" &&
+    socket.readyState === WebSocket.OPEN;
 
   return new Promise<WorkerHelloOk>((resolve, reject) => {
     let attemptTimeout: ReturnType<typeof setTimeout> | undefined;
     const rejectAttempt = (error: Error) => {
-      if (attemptSettled) {
+      if (admission !== "pending") {
         return;
       }
-      attemptSettled = true;
+      admission = "rejected";
       if (attemptTimeout) {
         clearTimeout(attemptTimeout);
         attemptTimeout = undefined;
@@ -115,7 +119,7 @@ export function connectWorkerConnectionAttempt(
     attemptTimeout.unref?.();
 
     socket.on("error", (error) => {
-      if (!admitted) {
+      if (admission === "pending") {
         const kind = opened ? "admission interrupted" : "connect failed";
         rejectAttempt(
           error instanceof GatewayWebSocketTlsPinError
@@ -127,7 +131,7 @@ export function connectWorkerConnectionAttempt(
       }
     });
     socket.on("open", () => {
-      if (!options.isCurrentGeneration() || options.isTerminal()) {
+      if (!isActive()) {
         socket.close();
         return;
       }
@@ -153,7 +157,8 @@ export function connectWorkerConnectionAttempt(
       });
     });
     socket.on("message", (data: RawData) => {
-      if (!options.isCurrentGeneration()) {
+      // Closing sockets can still deliver buffered frames after local stop or invalid input.
+      if (!isActive()) {
         return;
       }
       const parsed = parseFrame(data);
@@ -162,7 +167,7 @@ export function connectWorkerConnectionAttempt(
         return;
       }
       const frame = parsed.frame;
-      if (!admitted) {
+      if (admission === "pending") {
         if (
           !Value.Check(WorkerAdmissionResponseFrameSchema, frame) ||
           (frame as WorkerAdmissionResponseFrame).id !== admissionId
@@ -188,8 +193,7 @@ export function connectWorkerConnectionAttempt(
           rejectAttempt(new WorkerAdmissionError("invalid-handshake", false));
           return;
         }
-        admitted = true;
-        attemptSettled = true;
+        admission = "accepted";
         if (attemptTimeout) {
           clearTimeout(attemptTimeout);
           attemptTimeout = undefined;
@@ -206,7 +210,7 @@ export function connectWorkerConnectionAttempt(
       }
       options.onSocketClosed();
       const closeReason = parseCloseReason(reason);
-      if (!admitted) {
+      if (admission !== "accepted") {
         rejectAttempt(
           closeReason
             ? new WorkerAdmissionError(closeReason, isRetryableWorkerCloseReason(closeReason))

@@ -1,16 +1,16 @@
 // Slack plugin module validates non-serializable per-event Enterprise Grid scope.
 import type { WebClient, WebClientOptions } from "@slack/web-api";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { getSlackListenerUploadCompletionClient } from "../client.js";
+import { getSlackListenerWriteClient } from "../client.js";
 import type { SlackInstallationIdentity } from "./enterprise-install.js";
 
 export type SlackEventScope = Readonly<{
   teamId: string;
-  // Keep Bolt's exact listener client for ordinary reads and writes.
+  // Keep Bolt's exact listener client for reads and native event identity.
   client: WebClient;
-  // Completion is one-shot, so uploads finalize through a team-scoped client
-  // that cannot inherit Bolt's normal request retries.
-  uploadCompletionClient?: WebClient;
+  // Writes cannot inherit Bolt's retries: Slack may accept a request before
+  // its response is lost. Preserve the listener token, transport and team scope.
+  writeClient?: WebClient;
 }>;
 
 type SlackEventScopeResolution =
@@ -80,7 +80,7 @@ export function resolveSlackEventScope(params: {
   if (!params.client) {
     return { ok: false, reason: "missing_listener_client" };
   }
-  const uploadCompletionClient = getSlackListenerUploadCompletionClient({
+  const writeClient = getSlackListenerWriteClient({
     listenerClient: params.client,
     teamId,
     clientOptions: params.clientOptions,
@@ -90,7 +90,7 @@ export function resolveSlackEventScope(params: {
     scope: {
       teamId,
       client: params.client,
-      ...(uploadCompletionClient ? { uploadCompletionClient } : {}),
+      ...(writeClient ? { writeClient } : {}),
     },
   };
 }

@@ -10,6 +10,8 @@ import type { ComputerContextEpoch } from "../agents/tools/computer-tool.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import {
@@ -67,6 +69,12 @@ export async function createWorkerRuntimeEnvironment(sessionId: string) {
   await chmod(stateDir, 0o700);
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
   const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+  const scopeKey = `worker:${sessionId}`;
+  // Worker state owns command completion and exec finalizers; its parent owns
+  // process placement. This lease does not infer remote or PTY tree extinction.
+  const cleanupScope = getProcessSupervisor().acquireScopeCleanup(scopeKey, {
+    processTree: "transport-only",
+  });
   process.env.OPENCLAW_STATE_DIR = stateDir;
   process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
   let closing: Promise<void> | undefined;
@@ -74,11 +82,17 @@ export async function createWorkerRuntimeEnvironment(sessionId: string) {
     stateDir,
     close: () =>
       (closing ??= (async () => {
-        const supervisor = getProcessSupervisor();
-        const scopeKey = `worker:${sessionId}`;
-        supervisor.cancelScope(scopeKey, "manual-cancel");
-        await supervisor.waitForScope?.(scopeKey);
-        await waitForExecScope(scopeKey);
+        // Even uncertain process cleanup must join the known finalizers before
+        // reporting failure; those callbacks still own this environment's state.
+        const settled = await Promise.allSettled([cleanupScope(), waitForExecScope(scopeKey)]);
+        const failed = settled.find((result) => result.status === "rejected");
+        if (failed?.status === "rejected") {
+          throw failed.reason;
+        }
+        // Exec finalizers can open state; release its handle before Windows removes the file.
+        closeOpenClawStateDatabaseByPath(
+          resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir }),
+        );
         // Process completion writes its task outcome into this environment's state.
         // Restore the ambient directory only after those callbacks have settled.
         if (previousStateDir === undefined) {
@@ -209,6 +223,17 @@ export async function runWorkerDescriptor(
       modelRef: descriptor.assignment.modelRef,
       computerContextEpoch,
     });
+    const github = descriptor.assignment.github
+      ? await import("./github-binding.runtime.js").then(({ prepareWorkerGitHubEnvironment }) =>
+          prepareWorkerGitHubEnvironment({
+            binding: descriptor.assignment.github!,
+            stateDir,
+            runId: descriptor.assignment.runId,
+            cwd: workspaceDir,
+            signal: abortController.signal,
+          }),
+        )
+      : undefined;
     try {
       turnStarted = true;
       await runWorkerEmbeddedTurn({
@@ -221,6 +246,7 @@ export async function runWorkerDescriptor(
           ? { permissionMode: descriptor.assignment.permissionMode }
           : {}),
         stateDir,
+        ...(github ? { github } : {}),
         sessionId: descriptor.admission.sessionId,
         sessionKey: `worker:${descriptor.admission.sessionId}`,
         runId: descriptor.assignment.runId,
@@ -228,6 +254,8 @@ export async function runWorkerDescriptor(
         suppressPromptTranscript: descriptor.assignment.suppressPromptTranscript,
         modelRef: descriptor.assignment.modelRef,
         initialMessages: descriptor.assignment.initialMessages,
+        skillResources: descriptor.assignment.skillResources,
+        skillAuthoring: descriptor.assignment.skillAuthoring,
         ...(descriptor.assignment.systemPrompt === undefined
           ? {}
           : { systemPrompt: descriptor.assignment.systemPrompt }),

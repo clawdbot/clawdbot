@@ -41,6 +41,7 @@ function createDeliveryHandler(params?: {
   const dispatchAgentHook = vi.fn((_value: HookAgentDispatchPayload) => ({
     ok: true as const,
     runId: "run-1",
+    completion: Promise.resolve({ status: "ok" as const, replyDisposition: "empty" as const }),
   }));
   const canonicalConfig = createHooksConfig();
   const hooksConfig = {

@@ -186,13 +186,12 @@ export function projectCliBackendEvent(params: {
     params.onUsage?.(event.usage, true);
   }
   const existingErrorText = state.output?.errorText;
-  const eventText = event.text?.trim() ?? "";
-  const existingText = state.output?.text.trim() ?? "";
-  const streamedText = state.assistantText.trim();
-  const delegatedText = params.texts.join("\n").trim();
-  const resultText = existingErrorText
-    ? existingText || delegatedText || streamedText
-    : eventText || existingText || delegatedText || streamedText;
+  // Stop at the authoritative winner before composing fallback transcripts.
+  const resultText =
+    (!existingErrorText && event.text?.trim()) ||
+    state.output?.text.trim() ||
+    params.texts.join("\n").trim() ||
+    state.assistantText.trim();
   const errorText = existingErrorText || event.errorText;
   state.output = {
     ...state.output,

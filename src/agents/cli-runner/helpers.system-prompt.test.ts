@@ -68,7 +68,7 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).not.toContain("pty available");
   });
 
-  it("uses cwd, not bootstrap workspace, for CLI workspace guidance", () => {
+  it("distinguishes the CLI working directory from the agent workspace", () => {
     const prompt = buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw-agent",
       cwd: "/tmp/task-repo",
@@ -76,7 +76,10 @@ describe("buildCliAgentSystemPrompt", () => {
       modelDisplay: "test/model",
     });
 
+    expect(prompt).toContain("## Directory Roles");
     expect(prompt).toContain("Working directory: /tmp/task-repo");
+    expect(prompt).toContain("Agent workspace: /tmp/openclaw-agent");
+    expect(prompt).not.toContain("## Workspace\n");
     expect(prompt).not.toContain("Working directory: /tmp/openclaw-agent");
   });
 

@@ -6,12 +6,15 @@ import {
   createBoundedResponseTooLargeError,
   readBoundedResponseText,
 } from "../../../lib/bounded-response.mjs";
+import { createTimeoutError } from "../../../lib/timeout-error.mjs";
 import { readPositiveIntEnv } from "../env-limits.mjs";
+import { resolveHomePath } from "../openclaw-state-paths.mjs";
 import {
   readPluginInstallIndex,
   readPluginInstallRecords,
   writePluginInstallIndexForE2E,
 } from "../plugin-index-sqlite.mjs";
+import { hasExpectedPluginUninstallConfigState } from "../plugin-uninstall-assertions.mjs";
 import { readTextFileTail } from "../text-file-utils.mjs";
 
 const command = process.argv[2];
@@ -29,12 +32,6 @@ function readClawHubPreflightLimits() {
     ),
     timeoutMs: readPositiveIntEnv("OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS", 30_000),
   };
-}
-
-function createTimeoutError(label, timeoutMs) {
-  const error = new Error(`${label} timed out after ${timeoutMs}ms`);
-  error.code = "ETIMEDOUT";
-  return error;
 }
 
 async function withTimeout(label, timeoutMs, run) {
@@ -55,16 +52,6 @@ async function withTimeout(label, timeoutMs, run) {
       clearTimeout(timeout);
     }
   }
-}
-
-function resolveHomePath(value) {
-  if (value === "~") {
-    return process.env.HOME;
-  }
-  if (value?.startsWith("~/") || value?.startsWith("~\\")) {
-    return path.join(process.env.HOME, value.slice(2));
-  }
-  return value;
 }
 
 function comparablePath(value) {
@@ -147,6 +134,24 @@ function readRequiredOpenClawConfig() {
   }
 }
 
+const pluginUninstallMode = process.env.OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE ?? "current";
+if (!new Set(["current", "legacy"]).has(pluginUninstallMode)) {
+  throw new Error(`invalid OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE: ${pluginUninstallMode}`);
+}
+
+function assertPluginUninstallConfigState(config, pluginId, label = pluginId) {
+  const entry = config.plugins?.entries?.[pluginId];
+  if (pluginUninstallMode === "legacy") {
+    if (entry) {
+      throw new Error(`${label} config entry still present after uninstall`);
+    }
+    return;
+  }
+  if (!hasExpectedPluginUninstallConfigState(config, pluginId)) {
+    throw new Error(`${label} exact disabled uninstall marker missing`);
+  }
+}
+
 function assertPluginRemoved(params) {
   const list = readJson(params.listFile);
   if ((list.plugins || []).some((entry) => entry.id === params.pluginId)) {
@@ -159,9 +164,7 @@ function assertPluginRemoved(params) {
   }
 
   const config = readOpenClawConfig();
-  if (config.plugins?.entries?.[params.pluginId]) {
-    throw new Error(`${params.pluginId} config entry still present after uninstall`);
-  }
+  assertPluginUninstallConfigState(config, params.pluginId);
   if ((config.plugins?.allow || []).includes(params.pluginId)) {
     throw new Error(`${params.pluginId} allowlist entry still present after uninstall`);
   }
@@ -752,7 +755,7 @@ function assertNpmPluginRemoved() {
       `npm managed dependency still exists after uninstall: ${dependencyPackagePath}`,
     );
   }
-  if (fs.existsSync(projectRoot)) {
+  if (pluginUninstallMode !== "legacy" && fs.existsSync(projectRoot)) {
     throw new Error(`npm managed project still exists after uninstall: ${projectRoot}`);
   }
 }
@@ -771,6 +774,18 @@ function assertNpmPluginRetained() {
   }
   if (!fs.existsSync(dependencyPackagePath)) {
     throw new Error(`npm managed dependency was deleted by --keep-files: ${dependencyPackagePath}`);
+  }
+}
+
+function assertNpmPluginReinstalled() {
+  if (pluginUninstallMode === "legacy") {
+    return;
+  }
+  assertPluginUninstallConfigState(readOpenClawConfig(), "demo-plugin-npm");
+  const list = readJson(scratchFile("plugins-npm-reinstalled.json"));
+  const plugin = list.plugins?.find((entry) => entry.id === "demo-plugin-npm");
+  if (plugin?.enabled !== false || plugin.status !== "disabled") {
+    throw new Error("reinstalled npm plugin must remain disabled until explicitly enabled");
   }
 }
 
@@ -1011,9 +1026,7 @@ function assertClawHubRemoved() {
   const configAfterUninstall = fs.existsSync(configAfterUninstallPath)
     ? readJson(configAfterUninstallPath)
     : {};
-  if (configAfterUninstall.plugins?.entries?.[pluginId]) {
-    throw new Error(`ClawHub config entry still present after uninstall: ${pluginId}`);
-  }
+  assertPluginUninstallConfigState(configAfterUninstall, pluginId, `ClawHub ${pluginId}`);
   if ((configAfterUninstall.plugins?.allow || []).includes(pluginId)) {
     throw new Error(`ClawHub allowlist entry still present after uninstall: ${pluginId}`);
   }
@@ -1051,6 +1064,7 @@ const commands = {
   "plugin-npm": assertNpmPlugin,
   "plugin-npm-update": assertNpmPluginUpdateUnchanged,
   "plugin-npm-retained": assertNpmPluginRetained,
+  "plugin-npm-reinstalled": assertNpmPluginReinstalled,
   "plugin-npm-removed": assertNpmPluginRemoved,
   "invalid-openclaw-extensions": assertInvalidOpenClawExtensionsRejected,
   "bundle-disabled": assertClaudeBundleDisabled,

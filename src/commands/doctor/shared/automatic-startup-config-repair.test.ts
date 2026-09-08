@@ -129,9 +129,8 @@ describe("automatic startup config repair", () => {
     ).toBe(false);
   });
 
-  it("admits a config whose only migration is plugin-owned", () => {
-    // Regression: the pre-bootstrap trust check must reach plugin doctor contracts
-    // (here the bundled Active Memory retired-QMD removal), not only core migrations.
+  it("plans a config whose only migration is plugin-owned after state admission", () => {
+    // The full planner owns plugin contracts; pre-bootstrap uses core-only selection.
     const snapshot = invalidSnapshot({
       config: {
         plugins: { entries: { "active-memory": { config: { qmd: { enabled: true } } } } },
@@ -139,7 +138,7 @@ describe("automatic startup config repair", () => {
       issuePaths: ["plugins.entries.active-memory.config.qmd"],
     });
 
-    const resolved = resolveStartupConfigSnapshot(snapshot);
+    const resolved = planAutomaticConfigRepair(snapshot)?.snapshot;
 
     expect(resolved?.valid).toBe(true);
     expect(resolved?.sourceConfig.plugins?.entries?.["active-memory"]?.config).toEqual({});
@@ -169,6 +168,13 @@ describe("automatic startup config repair", () => {
 
   it.each([
     { name: "a non-legacy type error", config: { gateway: { port: "not-a-number" } } },
+    {
+      name: "ambiguous legacy default owners",
+      config: {
+        session: { idleMinutes: 45 },
+        agents: { entries: { main: { default: true }, ops: { default: true } } },
+      },
+    },
     {
       name: "a migration with a remaining type error",
       config: { session: { idleMinutes: 45 }, gateway: { port: "not-a-number" } },

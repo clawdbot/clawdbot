@@ -137,11 +137,11 @@ export class DraftRepositoryController {
     this.clearDetails(true);
   }
 
-  toggle() {
-    if (this.read().remotePlacement) {
+  select(value: boolean) {
+    if (this.worktreeValue === value || this.read().remotePlacement) {
       return;
     }
-    this.selectWorktree(!this.worktreeValue, false);
+    this.selectWorktree(value, false);
     this.callbacks.persistPreference({
       folder: this.read().folder.trim() || this.read().workspace,
       worktree: this.worktreeValue,
@@ -232,6 +232,12 @@ export class DraftRepositoryController {
         }
         this.adoptResolvedRepository({ kind: "unavailable", repoRoot });
       });
+  }
+
+  synchronize() {
+    if (!this.matchesCurrentRepo()) {
+      this.load();
+    }
   }
 
   private adoptResolvedRepository(state: ResolvedRepository) {

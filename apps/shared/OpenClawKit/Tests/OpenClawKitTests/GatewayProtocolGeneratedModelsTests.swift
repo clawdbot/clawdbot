@@ -281,6 +281,9 @@ struct GatewayProtocolGeneratedModelsTests {
         (
             #"{"requestId":"request-1","status":"failed","code":"push_rejected","message":"Failed.","nextAction":"Check access."}"#,
             "failed"),
+        (
+            #"{"requestId":"request-1","status":"needs_confirmation","message":"Confirm publication.","publisher":{"source":"personal","accountId":42,"login":"octocat"},"effect":{"kind":"push","status":"observed","headCommit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"#,
+            "needs_confirmation"),
     ])
     func `GitHub publication results round trip as a typed union`(
         json: String,
@@ -294,11 +297,13 @@ struct GatewayProtocolGeneratedModelsTests {
         case .publishing: #expect(expectedStatus == "publishing")
         case .published: #expect(expectedStatus == "published")
         case .failed: #expect(expectedStatus == "failed")
+        case .needsConfirmation: #expect(expectedStatus == "needs_confirmation")
         }
 
         let encoded = try #require(
-            JSONSerialization.jsonObject(with: JSONEncoder().encode(result)) as? [String: Any])
-        #expect(encoded["status"] as? String == expectedStatus)
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(result)) as? NSDictionary)
+        let expected = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? NSDictionary)
+        #expect(encoded == expected)
     }
 
     @Test(arguments: [

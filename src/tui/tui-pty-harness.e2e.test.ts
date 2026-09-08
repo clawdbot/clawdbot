@@ -22,6 +22,7 @@ import {
   streamingPrefixFrame,
   toolFrame,
 } from "./tui-pty-rendering-test-support.js";
+import { exerciseStartupHistoryRendering } from "./tui-pty-startup-session-fixture-test-support.js";
 const STARTUP_TIMEOUT_MS = 20_000;
 const TEST_TIMEOUT_MS = 5_000;
 const STARTUP_TEST_TIMEOUT_MS = 25_000;
@@ -42,7 +43,7 @@ it("rejects rendering oracle false positives", () => {
   expect(toolFrame(reversedTool, false)).toBe(false);
 });
 
-describe.sequential("TUI PTY harness", () => {
+describe("TUI PTY harness", { concurrent: false }, () => {
   let fixture: Awaited<ReturnType<typeof startTuiFixture>>;
   let compactFooterFixture: Awaited<ReturnType<typeof startTuiFixture>>;
   let thinkingOverrideFixture: Awaited<ReturnType<typeof startTuiFixture>>;
@@ -71,7 +72,7 @@ describe.sequential("TUI PTY harness", () => {
         },
       }),
       startTuiFixture({
-        env: { OPENCLAW_TUI_PTY_STARTUP_DELAY_MS: "400" },
+        holdStartupHistory: true,
       }),
     ]);
     const [mainBoot, compactBoot, thinkingOverrideBoot, slowBoot] = boots;
@@ -235,14 +236,7 @@ describe.sequential("TUI PTY harness", () => {
   it(
     "shows startup activity while post-connect initialization is pending",
     async () => {
-      const output = await slowStartupFixture.run.waitForOutput(
-        "local ready | idle",
-        STARTUP_TIMEOUT_MS,
-      );
-      // PTY output is append-only, so first-occurrence order proves the startup
-      // activity frame rendered before the delayed post-connect init completed.
-      expect(output.indexOf("starting up")).toBeGreaterThanOrEqual(0);
-      expect(output.indexOf("starting up")).toBeLessThan(output.indexOf("local ready | idle"));
+      await exerciseStartupHistoryRendering(slowStartupFixture, STARTUP_TIMEOUT_MS);
     },
     STARTUP_TEST_TIMEOUT_MS,
   );
@@ -655,10 +649,10 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
-    "presents and starts a suggested task in the TUI",
+    "starts a suggested task in a new session from the TUI",
     async () => {
       await fixture.run.write("task suggestion proof\r");
-      await fixture.run.waitForOutput("Suggested follow-up: Remove stale adapter");
+      await fixture.run.waitForOutput("Start in a new session");
       await fixture.run.waitForOutput("Project: /repo/project");
       await fixture.run.waitForOutput("The adapter is unreachable and adds maintenance cost.");
 

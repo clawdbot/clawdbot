@@ -8,6 +8,7 @@ import {
   resetCommandLane,
   setCommandLaneConcurrency,
 } from "./command-queue.js";
+import { createLaneQueue, type LaneState } from "./command-queue.state.js";
 import { resetCommandQueueStateForTest } from "./command-queue.test-support.js";
 import { CommandLane } from "./lanes.js";
 
@@ -182,7 +183,6 @@ describe("scoped command lane lifecycle", () => {
       CommandLane.SystemAgent,
       CommandLane.Cron,
       CommandLane.CronNested,
-      CommandLane.SkillWorkshopReview,
       CommandLane.Subagent,
       CommandLane.Nested,
     ];
@@ -244,12 +244,12 @@ describe("scoped command lane lifecycle", () => {
     });
     const replacementState = {
       lane,
-      queue: [],
+      queue: createLaneQueue(),
       activeTaskIds: new Set<number>(),
       maxConcurrent: 1,
       draining: false,
       generation: 0,
-    };
+    } satisfies LaneState;
 
     lanes.set(lane, replacementState);
     staleGate.resolve();

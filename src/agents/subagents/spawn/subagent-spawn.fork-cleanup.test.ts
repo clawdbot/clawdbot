@@ -25,6 +25,8 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   let forkSession: ForkSession;
   let spawnSubagentDirect: SpawnSubagent;
   let createSessionsSpawnTool: typeof import("../../tools/sessions-spawn-tool.js").createSessionsSpawnTool;
+  let createAgentsWaitTool: typeof import("../../tools/agents-wait-tool.js").createAgentsWaitTool;
+  let finalizeAgentToolAvailability: typeof import("../../agent-tool-availability.js").finalizeAgentToolAvailability;
   let decisionWork: typeof import("../../../audit/execution-decision-work.js");
   let identityAdmission: typeof import("../../../audit/execution-identity-admission.js");
   let callerContext: typeof import("../../tools/gateway-caller-context.js");
@@ -124,6 +126,8 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       .mockImplementation(sessions.upsertSessionEntryCore);
     restoreUpsert = () => upsert.mockRestore();
     ({ createSessionsSpawnTool } = await import("../../tools/sessions-spawn-tool.js"));
+    ({ createAgentsWaitTool } = await import("../../tools/agents-wait-tool.js"));
+    ({ finalizeAgentToolAvailability } = await import("../../agent-tool-availability.js"));
     decisionWork = await import("../../../audit/execution-decision-work.js");
     identityAdmission = await import("../../../audit/execution-identity-admission.js");
     callerContext = await import("../../tools/gateway-caller-context.js");
@@ -351,6 +355,8 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
         agentAccountId: "default",
         agentTo: "channel:123",
       });
+      const wait = createAgentsWaitTool({ config, agentSessionKey: parentKey, agentId: "main" });
+      finalizeAgentToolAvailability([tool, wait]);
       const clearSink = decisionWork.configureExecutionDecisionWorkSink((item) => {
         work.push(decisionWork.parseExecutionDecisionWork(item));
         return true;

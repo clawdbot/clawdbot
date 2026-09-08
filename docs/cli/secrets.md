@@ -5,7 +5,7 @@ read_when:
   - Managing team-scoped values in the shared secret store
   - Auditing plaintext residues and unresolved refs
   - Configuring SecretRefs and applying one-way scrub changes
-title: "Secrets"
+title: "Secrets CLI"
 ---
 
 # `openclaw secrets`
@@ -24,7 +24,7 @@ Recommended operator loop:
 
 ```bash
 openclaw secrets audit --check
-openclaw secrets configure
+openclaw secrets configure --plan-out /tmp/openclaw-secrets-plan.json
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --dry-run
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json
 openclaw secrets audit --check
@@ -194,6 +194,8 @@ openclaw secrets configure --json
 
 Flow: provider setup first (add/edit/remove `secrets.providers` aliases), then credential mapping (select fields, assign `{source, provider, id}` refs), then preflight and optional apply.
 
+For `env` and `store` refs, no provider entry is required when `provider` matches that source's effective default: `secrets.defaults.env` or `secrets.defaults.store`, falling back to `default` when unset. Other aliases and all `file`/`exec` refs require a matching `secrets.providers` entry.
+
 Flags:
 
 - `--providers-only`: configure `secrets.providers` only, skip credential mapping
@@ -209,7 +211,7 @@ Notes:
 - Targets secret-bearing fields in `openclaw.json` plus the selected agent's auth profile store; canonical supported surface: [SecretRef Credential Surface](/reference/secretref-credential-surface).
 - Supports creating new auth profile mappings directly in the picker flow.
 - Runs preflight resolution before apply.
-- Generated plans default to scrub options enabled (`scrubEnv`, `scrubAuthProfilesForProviderTargets`, `scrubLegacyAuthJson`). Apply is one-way for scrubbed plaintext values.
+- Generated plans enable `scrubEnv` and `scrubAuthProfilesForProviderTargets`. `scrubLegacyAuthJson` stays disabled, because Doctor owns legacy `auth.json` migration. Apply is one-way for scrubbed plaintext values.
 - `--plan-out` refuses to create a plan whose UTF-8 serialized form exceeds 16 MiB (16,777,216 bytes), matching the `apply --from` input limit.
 - Without `--apply`, the CLI still prompts `Apply this plan now?` after preflight.
 - With `--apply` (and no `--yes`), the CLI prompts an extra irreversible-migration confirmation.

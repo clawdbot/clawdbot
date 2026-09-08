@@ -36,7 +36,8 @@ function expectConfiguredChannelPluginIdsParams(expected: {
     | { config?: unknown; env?: NodeJS.ProcessEnv; workspaceDir?: string }
     | undefined;
   expect(params?.config).toBe(expected.config);
-  expect(params?.env).toBe(process.env);
+  // Compare identity without exposing ambient credentials in failure output.
+  expect(params?.env === process.env).toBe(true);
   expect(params?.workspaceDir).toBe(expected.workspaceDir);
 }
 
@@ -118,7 +119,7 @@ vi.mock("../plugins/runtime/load-context.resolve.js", () => ({
 }));
 
 vi.mock("../plugins/runtime/load-context.js", () => ({
-  buildPluginRuntimeLoadOptionsFromValues: (
+  buildPluginRuntimeLoadOptions: (
     values: {
       config: unknown;
       activationSourceConfig: unknown;
@@ -135,25 +136,6 @@ vi.mock("../plugins/runtime/load-context.js", () => ({
     workspaceDir: values.workspaceDir,
     env: values.env,
     logger: values.logger,
-    ...overrides,
-  }),
-  buildPluginRuntimeLoadOptions: (
-    context: {
-      config: unknown;
-      activationSourceConfig: unknown;
-      autoEnabledReasons: Readonly<Record<string, string[]>>;
-      workspaceDir: string | undefined;
-      env: NodeJS.ProcessEnv;
-      logger: typeof logger;
-    },
-    overrides?: Record<string, unknown>,
-  ) => ({
-    config: context.config,
-    activationSourceConfig: context.activationSourceConfig,
-    autoEnabledReasons: context.autoEnabledReasons,
-    workspaceDir: context.workspaceDir,
-    env: context.env,
-    logger: context.logger,
     ...overrides,
   }),
 }));

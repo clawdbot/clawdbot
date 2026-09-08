@@ -16,7 +16,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  appendBoundedOutput,
   assertChannelAccountRunning,
   assertCommandResourceCeiling,
   assertCreatedKitchenSinkSession,
@@ -32,6 +31,7 @@ import {
   assertResourceCeiling,
   assertTtsProviderCoverage,
   cleanupKitchenSinkEnv,
+  configureKitchenSink,
   createGatewayReadyLogScanner,
   createRpcCliRunOptions,
   extractPluginCommandNames,
@@ -69,6 +69,7 @@ import {
   resolveWindowsTaskkillPath,
 } from "../../scripts/lib/windows-taskkill.mjs";
 import { formatGatewayClientRequestErrorJson } from "../../src/gateway/call.js";
+import { waitForChildClose } from "../helpers/process-wait.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
@@ -318,6 +319,27 @@ describe("kitchen-sink RPC isolated state", () => {
     await expect(cleanupKitchenSinkEnv(root)).resolves.toBe(true);
 
     expect(existsSync(root)).toBe(false);
+  });
+
+  it("uses the candidate config dialect only for an authorized frozen target", async () => {
+    const { root, env } = makeEnv();
+    try {
+      configureKitchenSink(
+        { ...env, OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT: "legacy" },
+        18888,
+      );
+      const frozenConfig = JSON.parse(readFileSync(env.OPENCLAW_CONFIG_PATH, "utf8"));
+      expect(frozenConfig.plugins.allow).toBeUndefined();
+      expect(frozenConfig.messages.tts).toMatchObject({ provider: "kitchen-sink-speech" });
+      expect(frozenConfig.tts).toBeUndefined();
+
+      configureKitchenSink(env, 18889);
+      const currentConfig = JSON.parse(readFileSync(env.OPENCLAW_CONFIG_PATH, "utf8"));
+      expect(currentConfig.plugins.allow).toContain("openclaw-kitchen-sink-fixture");
+      expect(currentConfig.tts).toMatchObject({ provider: "kitchen-sink-speech" });
+    } finally {
+      await cleanupKitchenSinkEnv(root);
+    }
   });
 
   it("can fail the walk when generated temp cleanup cannot remove the root", async () => {
@@ -580,6 +602,7 @@ describe("kitchen-sink RPC gateway teardown", () => {
   });
 
   it("requires /readyz body.ready before accepting gateway readiness", async () => {
+    vi.useFakeTimers();
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-ready-body-"));
     try {
       const logPath = path.join(root, "gateway.log");
@@ -589,13 +612,15 @@ describe("kitchen-sink RPC gateway teardown", () => {
         .mockResolvedValueOnce(new Response('{"ready":false}', { status: 200 }))
         .mockResolvedValueOnce(new Response('{"ready":true}', { status: 200 }));
 
-      await expect(
+      const readiness = expect(
         waitForGatewayReady({ exitCode: null, signalCode: null }, 9, logPath, {
           fetchImpl,
           pollDelayMs: 1,
           timeoutMs: 100,
         }),
       ).resolves.toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      await readiness;
 
       expect(fetchImpl).toHaveBeenCalledTimes(2);
     } finally {
@@ -694,14 +719,6 @@ describe("kitchen-sink RPC gateway readiness logs", () => {
 });
 
 describe("kitchen-sink RPC command output capture", () => {
-  it("keeps a bounded tail and tracks truncated output", () => {
-    const first = appendBoundedOutput({ text: "", truncatedChars: 0 }, "abcdef", 5);
-    expect(first).toEqual({ text: "bcdef", truncatedChars: 1 });
-
-    const second = appendBoundedOutput(first, "ghij", 5);
-    expect(second).toEqual({ text: "fghij", truncatedChars: 5 });
-  });
-
   it("honors the resolved command output capture limit", async () => {
     const result = await runCommand(
       process.execPath,
@@ -952,12 +969,16 @@ describe("kitchen-sink RPC caller loading", () => {
     try {
       mkdirSync(path.join(root, "dist"));
       writeFileSync(path.join(root, "dist", "call-Abc123.js"), "");
+      writeFileSync(path.join(root, "dist", "call-Abc123.mjs"), "");
       writeFileSync(path.join(root, "dist", "call.runtime-Def456.js"), "");
+      writeFileSync(path.join(root, "dist", "call.runtime-Def456.mjs"), "");
       writeFileSync(path.join(root, "dist", "index.js"), "");
 
       expect(findDistCallGatewayModuleFiles(root)).toEqual([
         "call-Abc123.js",
+        "call-Abc123.mjs",
         "call.runtime-Def456.js",
+        "call.runtime-Def456.mjs",
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -2260,20 +2281,6 @@ async function waitFor(condition: () => boolean | Promise<boolean>, timeoutMs = 
     }
     await realDelay(25);
   }
-}
-
-async function waitForChildClose(child: ReturnType<typeof spawn>, timeoutMs = 3_000) {
-  return await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error("child did not close before timeout"));
-      }, timeoutMs);
-      child.once("close", (code, signal) => {
-        clearTimeout(timeout);
-        resolve({ code, signal });
-      });
-    },
-  );
 }
 
 function isProcessAlive(pid: number) {

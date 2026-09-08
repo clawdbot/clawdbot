@@ -7,6 +7,7 @@ import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
+import { reconcileChatRunStartup } from "./chat-run-startup.ts";
 import type {
   AgentEventPayload,
   CompactionStatus,
@@ -163,7 +164,6 @@ export function reconcileWaitingApprovalsFromSnapshot(
   return changed;
 }
 
-const COMPACTION_TOAST_DURATION_MS = 5000;
 const COMPACTION_ACTIVE_STALE_TIMEOUT_MS = 5 * 60_000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
 
@@ -176,7 +176,7 @@ function clearCompactionTimer(host: ToolStreamHost) {
 
 function scheduleCompactionClear(
   host: ToolStreamHost,
-  delayMs = COMPACTION_TOAST_DURATION_MS,
+  delayMs: number,
   expected?: { phase?: CompactionStatus["phase"]; runId?: string | null },
 ) {
   host.compactionClearTimer = window.setTimeout(() => {
@@ -197,22 +197,24 @@ function setCompactionStatus(
   host: ToolStreamHost,
   runId: string,
   phase: CompactionStatus["phase"],
+  itemId?: string,
 ) {
   const completed = phase === "complete";
+  const previous = host.compactionStatus;
+  const sameOperation =
+    previous?.runId === runId && (!itemId || !previous.itemId || previous.itemId === itemId);
+  const currentItemId = itemId ?? (sameOperation ? previous?.itemId : undefined);
+  clearCompactionTimer(host);
   host.compactionStatus = {
     phase,
     runId,
-    startedAt:
-      phase === "active"
-        ? Date.now()
-        : (host.compactionStatus?.startedAt ?? (completed ? null : Date.now())),
+    ...(currentItemId ? { itemId: currentItemId } : {}),
+    startedAt: sameOperation ? previous.startedAt : Date.now(),
     completedAt: completed ? Date.now() : null,
   };
-  scheduleCompactionClear(
-    host,
-    completed ? COMPACTION_TOAST_DURATION_MS : COMPACTION_ACTIVE_STALE_TIMEOUT_MS,
-    { phase, runId },
-  );
+  if (!completed) {
+    scheduleCompactionClear(host, COMPACTION_ACTIVE_STALE_TIMEOUT_MS, { phase, runId });
+  }
 }
 
 export function handleSessionOperationEvent(
@@ -254,22 +256,23 @@ function handleCompactionEvent(host: ToolStreamHost, payload: AgentEventPayload)
   const data = payload.data ?? {};
   const phase = typeof data.phase === "string" ? data.phase : "";
   const completed = data.completed === true;
+  const itemId = toTrimmedString(data.itemId) ?? undefined;
 
   clearCompactionTimer(host);
 
   if (phase === "start") {
-    setCompactionStatus(host, payload.runId, "active");
+    setCompactionStatus(host, payload.runId, "active", itemId);
     return;
   }
   if (phase === "end") {
     if (data.willRetry === true && completed) {
       // Compaction already succeeded, but the run is still retrying.
       // Keep that distinct state until the matching lifecycle end arrives.
-      setCompactionStatus(host, payload.runId, "retrying");
+      setCompactionStatus(host, payload.runId, "retrying", itemId);
       return;
     }
     if (completed) {
-      setCompactionStatus(host, payload.runId, "complete");
+      setCompactionStatus(host, payload.runId, "complete", itemId);
       return;
     }
     host.compactionStatus = null;
@@ -403,6 +406,23 @@ function handleLifecycleApprovalEvent(host: ToolStreamHost, payload: AgentEventP
 }
 
 export function handleStreamStatus(host: ToolStreamHost, payload: AgentEventPayload): boolean {
+  if (payload.stream === "run_status" && payload.data.phase === "retrying") {
+    const message = toTrimmedString(payload.data.message);
+    if (message) {
+      reconcileChatRunStartup(host, {
+        state: "status",
+        runId: payload.runId,
+        phase: "retrying",
+        message: formatUiExternalText(message.slice(0, 256)),
+        seq: payload.seq,
+      });
+    }
+    return true;
+  }
+  if (payload.stream === "assistant") {
+    reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
+    return true;
+  }
   if (payload.stream === "compaction") {
     handleCompactionEvent(host, payload);
     return true;

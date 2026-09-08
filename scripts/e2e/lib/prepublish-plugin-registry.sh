@@ -25,6 +25,7 @@ openclaw_prepublish_plugin_registry_configure_docker_args() {
     -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION="$candidate_version"
     -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256="$manifest_sha256"
     -v "$resolved_registry_dir:/tmp/openclaw-prepublish-plugin-registry:ro"
+    --entrypoint /opt/openclaw-e2e/scripts/e2e/lib/prepublish-plugin-registry.sh
   )
 }
 
@@ -42,8 +43,10 @@ openclaw_prepublish_plugin_registry_start() {
     return 1
   fi
 
-  local artifact_script="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_SCRIPT:-scripts/prepublish-plugin-registry-artifact.mjs}"
-  local server_script="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_SERVER_SCRIPT:-scripts/e2e/lib/plugins/npm-registry-server.mjs}"
+  local helper_dir
+  helper_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local artifact_script="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_SCRIPT:-$helper_dir/../../prepublish-plugin-registry-artifact.mjs}"
+  local server_script="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_SERVER_SCRIPT:-$helper_dir/plugins/npm-registry-server.mjs}"
   local required_packages_json="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_REQUIRED_PACKAGES_JSON:-[]}" registry_args=()
 
   if [ -n "$artifact_dir" ]; then
@@ -64,6 +67,8 @@ const path = require("node:path");
 const manifestPath = process.env.PREPUBLISH_PLUGIN_REGISTRY_MANIFEST;
 const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 for (const entry of manifest.packages) {
+  // Root installs use their explicit tarball; baseline selectors stay upstream.
+  if (entry.name === "openclaw") continue;
   process.stdout.write(
     `${entry.name}\t${entry.version}\t${path.join(path.dirname(manifestPath), entry.tarball)}\n`,
   );
@@ -85,13 +90,18 @@ NODE
 
   mkdir -p "$registry_root"
   local port_file="$registry_root/port" log_file="$registry_root/server.log"
-  local dist_tags="beta=$candidate_version"
-  if [[ "$candidate_version" =~ -(alpha|beta)\.[1-9][0-9]*$ ]]; then
-    dist_tags="latest=0.0.0,$dist_tags"
+  local merge_upstream="${OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM:-versions}"
+  local dist_tags="${OPENCLAW_NPM_REGISTRY_DIST_TAGS-}"
+  if [ -z "${OPENCLAW_NPM_REGISTRY_DIST_TAGS+x}" ]; then
+    dist_tags="beta=$candidate_version"
+    if [[ "$candidate_version" =~ -(alpha|beta)\.[1-9][0-9]*$ ]]; then
+      dist_tags="latest=0.0.0,$dist_tags"
+    fi
   fi
   rm -f "$port_file"
   OPENCLAW_NPM_REGISTRY_DIST_TAGS="$dist_tags" \
-    OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org \
+    OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM="${artifact_dir:+$merge_upstream}" \
+    OPENCLAW_NPM_REGISTRY_UPSTREAM="${OPENCLAW_NPM_REGISTRY_UPSTREAM:-https://registry.npmjs.org}" \
     node "$server_script" "$port_file" "${registry_args[@]}" >"$log_file" 2>&1 &
   local server_pid="$!"
 
@@ -116,8 +126,42 @@ NODE
 
   export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$port_file")"
   export npm_config_registry="$NPM_CONFIG_REGISTRY"
+  export BUN_CONFIG_REGISTRY="$NPM_CONFIG_REGISTRY"
   printf -v "$pid_variable" "%s" "$server_pid"
 }
+
+# Keep the registry alive for the entire install command, including package
+# lifecycle scripts, then reap it before the build layer or proof exits.
+openclaw_prepublish_plugin_registry_run_mounted() (
+  set -euo pipefail
+  local registry_root registry_pid="" command_pid=""
+  registry_root="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-prepublish-registry.XXXXXX")"
+  cleanup_registry_command() {
+    if [ -n "$command_pid" ]; then
+      kill "$command_pid" >/dev/null 2>&1 || true
+      wait "$command_pid" >/dev/null 2>&1 || true
+    fi
+    if [ -n "$registry_pid" ]; then
+      kill "$registry_pid" >/dev/null 2>&1 || true
+      wait "$registry_pid" >/dev/null 2>&1 || true
+    fi
+    rm -rf "$registry_root"
+  }
+  trap cleanup_registry_command EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
+  # Before lane code selects an update target, published baseline selectors must
+  # remain published; exact candidate dependencies are already in the package set.
+  OPENCLAW_NPM_REGISTRY_DIST_TAGS="" OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM=1 \
+    openclaw_prepublish_plugin_registry_start_mounted "$registry_root" registry_pid '[]'
+  if [ -n "$registry_pid" ]; then
+    export OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL="$NPM_CONFIG_REGISTRY"
+  fi
+  "$@" <&0 &
+  command_pid="$!"
+  wait "$command_pid"
+)
 
 openclaw_prepublish_plugin_registry_start_mounted() {
   local registry_root="$1" pid_variable="$2" required_packages_json="$3"
@@ -134,3 +178,7 @@ openclaw_prepublish_plugin_registry_start_mounted() {
     "$pid_variable" \
     "$@"
 }
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  openclaw_prepublish_plugin_registry_run_mounted "$@"
+fi

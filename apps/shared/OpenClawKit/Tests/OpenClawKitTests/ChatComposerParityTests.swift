@@ -81,6 +81,44 @@ struct ChatReplyQuoteTests {
 
 @MainActor
 struct ChatComposerStateTests {
+    @Test func `model selection target describes only gateway owned values`() {
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: ComposerParityTransport())
+        let expectations: [(String?, String?)] = [
+            ("session", "Changes this session only"),
+            ("agent", "Changes this agent's default"),
+            ("global", "Changes the global default"),
+            ("future-target", nil),
+            (nil, nil),
+        ]
+
+        for (target, expected) in expectations {
+            viewModel.sessionDefaults = OpenClawChatSessionsDefaults(
+                model: nil,
+                contextTokens: nil,
+                modelSelectionTarget: target)
+            #expect(viewModel.modelSelectionTargetDescription == expected)
+        }
+    }
+
+    @Test func `model selection matches qualified choices after gateway readback`() {
+        let choices = [
+            OpenClawChatModelChoice(
+                modelID: "claude-opus-4-1",
+                name: "Claude Opus 4.1",
+                provider: "anthropic",
+                contextWindow: 200_000),
+        ]
+
+        #expect(OpenClawChatViewModel.modelSelectionMatches(
+            selectionID: "anthropic/claude-opus-4-1",
+            currentSelectionID: "claude-opus-4-1",
+            choices: choices))
+        #expect(!OpenClawChatViewModel.modelSelectionMatches(
+            selectionID: OpenClawChatViewModel.defaultModelSelectionID,
+            currentSelectionID: "claude-opus-4-1",
+            choices: choices))
+    }
+
     @Test func `file picker allows images and movie containers only`() {
         #expect(OpenClawChatPickerAttachmentMetadata.allowedFileContentTypes == [
             .image,

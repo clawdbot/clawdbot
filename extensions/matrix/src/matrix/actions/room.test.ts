@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { MatrixClient } from "../sdk.js";
 import { getMatrixMemberInfo, getMatrixRoomInfo } from "./room.js";
 
-function createRoomClient() {
+function createRoomClient(altAliases?: string[]) {
   const getRoomStateEvent = vi.fn(async (_roomId: string, eventType: string) => {
     switch (eventType) {
       case "m.room.name":
@@ -11,7 +11,7 @@ function createRoomClient() {
       case "m.room.topic":
         return { topic: "Incidents" };
       case "m.room.canonical_alias":
-        return { alias: "#ops:example.org" };
+        return { alias: "#ops:example.org", alt_aliases: altAliases };
       default:
         throw new Error(`unexpected state event ${eventType}`);
     }
@@ -36,8 +36,14 @@ function createRoomClient() {
 }
 
 describe("matrix room actions", () => {
-  it("returns room details from the resolved Matrix room id", async () => {
-    const { client, getJoinedRoomMembers, getRoomStateEvent } = createRoomClient();
+  it.each([
+    { name: "without alternative aliases", altAliases: undefined },
+    {
+      name: "with alternative aliases",
+      altAliases: ["#incidents:example.org", "#team:example.org"],
+    },
+  ])("returns room details $name", async ({ altAliases }) => {
+    const { client, getJoinedRoomMembers, getRoomStateEvent } = createRoomClient(altAliases);
 
     const result = await getMatrixRoomInfo("room:!ops:example.org", { client });
 
@@ -48,7 +54,7 @@ describe("matrix room actions", () => {
       name: "Ops Room",
       topic: "Incidents",
       canonicalAlias: "#ops:example.org",
-      altAliases: [],
+      altAliases: altAliases ?? [],
       memberCount: 2,
     });
   });

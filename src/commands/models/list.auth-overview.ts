@@ -11,7 +11,13 @@ import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persis
 import { listProfilesForProvider } from "../../agents/auth-profiles/profiles.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
-import { isNonSecretApiKeyMarker, isOAuthApiKeyMarker } from "../../agents/model-auth-markers.js";
+import {
+  isNonSecretApiKeyMarker,
+  isOAuthApiKeyMarker,
+  NON_ENV_SECRETREF_MARKER,
+} from "../../agents/model-auth-markers.js";
+import { resolveProviderConfigSecretInput } from "../../agents/model-auth-provider-config.js";
+import { resolveManagedSecretRefRuntimeProviderAuth } from "../../agents/model-auth-runtime-config.js";
 import {
   getCustomProviderApiKey,
   resolveEnvApiKey,
@@ -159,11 +165,24 @@ export function resolveProviderAuthOverview(params: {
   });
   const customKey = getCustomProviderApiKey(cfg, provider);
   const usableCustomKey = resolveUsableCustomProviderApiKey({ cfg, provider });
+  const providerApiKeyRef = resolveProviderConfigSecretInput(cfg, provider).ref;
 
   const effective: ProviderAuthOverview["effective"] = (() => {
+    if (providerApiKeyRef) {
+      if (
+        providerApiKeyRef.source !== "env" &&
+        resolveManagedSecretRefRuntimeProviderAuth({ cfg, provider })
+      ) {
+        return { kind: "models.json", detail: formatMarkerOrSecret(NON_ENV_SECRETREF_MARKER) };
+      }
+      if (!usableCustomKey) {
+        return { kind: "missing", detail: "missing" };
+      }
+      return providerApiKeyRef.source === "env"
+        ? { kind: "env", detail: maskApiKey(usableCustomKey.apiKey) }
+        : { kind: "models.json", detail: formatMarkerOrSecret(usableCustomKey.apiKey) };
+    }
     if (profiles.length > 0) {
-      // Profiles win over env/config markers because runtime auth selection uses
-      // the profile store before provider-wide fallback material.
       return {
         kind: "profiles",
         detail: shortenHomePath(

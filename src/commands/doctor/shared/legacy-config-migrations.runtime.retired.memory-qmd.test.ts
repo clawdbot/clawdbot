@@ -96,7 +96,9 @@ describe("retired QMD memory config migration", () => {
     expect(result.raw).not.toHaveProperty("memory.search.qmd");
     expect(result.raw).not.toHaveProperty("agents.defaults.memory");
     expect(result.raw).not.toHaveProperty("agents.entries.research.memory.search.qmd");
-    expect(result.raw).not.toHaveProperty("agents.list.0.memory.search.qmd");
+    expect(result.raw).toHaveProperty("agents.list.0.memory.search.qmd.extraCollections", [
+      { path: "/tmp/list" },
+    ]);
     expect(result.raw).toHaveProperty("memory.citations", "on");
     expect(result.raw).toHaveProperty("memory.search.provider", "openai");
     expect(result.raw).toHaveProperty("memory.search.experimental.sessionMemory", true);
@@ -115,7 +117,7 @@ describe("retired QMD memory config migration", () => {
       "/tmp/existing",
       { path: "/tmp/research", pattern: "*.md" },
     ]);
-    expect(result.raw).toHaveProperty("agents.list.0.memory.search.extraPaths", ["/tmp/list"]);
+    expect(result.raw).not.toHaveProperty("agents.list.0.memory.search.extraPaths");
     expect(result.changes).toContain(
       "Migrated 4 external QMD paths from memory.qmd.paths and memory.search.qmd.extraCollections → memory.search.extraPaths.",
     );

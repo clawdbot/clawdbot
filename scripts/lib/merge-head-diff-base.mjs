@@ -29,13 +29,9 @@ export function resolveMergeHeadDiffBase({
     return base;
   }
 
-  const firstParent = resolveCommit({ ref: parents[0], cwd, maxBuffer });
-  const explicitBase = resolveCommit({ ref: base, cwd, maxBuffer });
-  if (!firstParent || firstParent === explicitBase) {
-    return base;
-  }
-
-  return firstParent;
+  // The merge parent is authoritative. Resolving a stale base in a partial
+  // clone can fetch unrelated history even when its result is discarded.
+  return resolveCommit({ ref: parents[0], cwd, maxBuffer }) || base;
 }
 
 /**

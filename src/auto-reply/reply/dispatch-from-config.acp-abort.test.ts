@@ -1,6 +1,11 @@
 // Tests ACP dispatch abort behavior and emitted lifecycle hooks.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type {
+  AcpSessionResolution,
+  SessionAcpMeta,
+} from "../../acp/control-plane/manager.types.js";
+import { resolveAcpSessionTarget } from "../../acp/control-plane/manager.utils.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type {
   AcpRuntime,
@@ -32,7 +37,7 @@ let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatch
 let tryDispatchAcpReplyHook: typeof import("../../plugin-sdk/acpx.js").tryDispatchAcpReplyHook;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
-let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
+let getActiveReplyRunCount: typeof import("./reply-run-registry.registry.js").getActiveReplyRunCount;
 let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
 let replyRunTesting: typeof import("./reply-run-registry.test-support.js").testing;
 
@@ -83,19 +88,24 @@ async function raceWithTimeoutResult<T>(
 
 function createMockAcpSessionManager() {
   return {
-    resolveSession: (params: { cfg: OpenClawConfig; sessionKey: string }) => {
+    resolveSession: (params: {
+      cfg: OpenClawConfig;
+      sessionKey: string;
+      agentId?: string;
+    }): AcpSessionResolution => {
+      const target = resolveAcpSessionTarget(params);
       const entry = acpMocks.readAcpSessionEntry({
         cfg: params.cfg,
-        sessionKey: params.sessionKey,
-      }) as { acp?: Record<string, unknown> } | null;
+        ...target,
+      }) as { acp?: SessionAcpMeta } | null;
       if (entry?.acp) {
         return {
-          kind: "ready" as const,
-          sessionKey: params.sessionKey,
+          kind: "ready",
+          ...target,
           meta: entry.acp,
         };
       }
-      return { kind: "none" as const, sessionKey: params.sessionKey };
+      return { kind: "none", ...target };
     },
     getObservabilitySnapshot: () => ({
       runtimeCache: { activeSessions: 0, idleTtlMs: 0, evictedTotal: 0 },
@@ -113,6 +123,7 @@ function createMockAcpSessionManager() {
       async (params: {
         cfg: OpenClawConfig;
         sessionKey: string;
+        agentId?: string;
         text?: string;
         attachments?: unknown[];
         mode: string;
@@ -123,6 +134,7 @@ function createMockAcpSessionManager() {
         const entry = acpMocks.readAcpSessionEntry({
           cfg: params.cfg,
           sessionKey: params.sessionKey,
+          agentId: params.agentId,
         }) as {
           acp?: { agent?: string; mode?: string };
         } | null;
@@ -134,6 +146,7 @@ function createMockAcpSessionManager() {
         }
         const handle = await runtimeBackend.runtime.ensureSession({
           sessionKey: params.sessionKey,
+          agentId: params.agentId,
           mode: (entry?.acp?.mode || "persistent") as AcpRuntimeEnsureInput["mode"],
           agent: entry?.acp?.agent || "codex",
         });
@@ -158,8 +171,8 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
     ({ tryDispatchAcpReplyHook } = await import("../../plugin-sdk/acpx.js"));
     ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
-    ({ replyRunRegistry, getActiveReplyRunCount, createReplyOperation } =
-      await import("./reply-run-registry.js"));
+    ({ replyRunRegistry, createReplyOperation } = await import("./reply-run-registry.js"));
+    ({ getActiveReplyRunCount } = await import("./reply-run-registry.registry.js"));
     ({ testing: replyRunTesting } = await import("./reply-run-registry.test-support.js"));
   });
 

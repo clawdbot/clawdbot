@@ -77,6 +77,7 @@ const mocks = vi.hoisted(() => {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
     metrics: {
       registrySnapshotMs: 0,
@@ -239,6 +240,7 @@ function modelRegistryOptions(index = 0): Record<string, unknown> {
 
 let modelsListCommand: typeof import("./list.list-command.js").modelsListCommand;
 let listRowsModule: typeof import("./list.rows.js");
+let cliBackendsTesting: typeof import("../../agents/cli-backends.test-support.js").testing;
 
 function installModelsListCommandForwardCompatMocks() {
   const suppressOpenAiSpark = ({
@@ -315,8 +317,8 @@ function installModelsListCommandForwardCompatMocks() {
     },
   }));
 
-  vi.doMock("../../agents/auth-profiles/store.js", async (importOriginal) => ({
-    ...(await importOriginal<typeof import("../../agents/auth-profiles/store.js")>()),
+  vi.doMock("../../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../agents/auth-profiles/store-runtime.js")>()),
     loadAuthProfileStoreWithoutExternalProfiles: mocks.ensureAuthProfileStore,
   }));
 
@@ -388,6 +390,7 @@ function installModelsListCommandForwardCompatMocks() {
 
 beforeAll(async () => {
   installModelsListCommandForwardCompatMocks();
+  ({ testing: cliBackendsTesting } = await import("../../agents/cli-backends.test-support.js"));
   listRowsModule = await import("./list.rows.js");
   ({ modelsListCommand } = await import("./list.list-command.js"));
 });
@@ -433,9 +436,21 @@ async function buildAllOpenAiCodexRows(opts: { supplementCatalog?: boolean } = {
 beforeEach(() => {
   vi.clearAllMocks();
   resetMocks();
+  // These command cases own their backend fixture; setup loading has separate coverage.
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        modelProvider: "anthropic",
+        pluginId: "anthropic",
+        config: { command: "claude" },
+      },
+    ],
+  });
 });
 
 afterEach(() => {
+  cliBackendsTesting.resetDepsForTest();
   vi.unstubAllEnvs();
 });
 
@@ -1176,16 +1191,27 @@ describe("modelsListCommand forward-compat", () => {
       {
         authModes: { "claude-cli": "api_key" as const },
         providerApiKey: false,
+        registryAvailableKeys: new Set<string>(),
         available: true,
       },
-      { authModes: {}, providerApiKey: false, available: null },
-      { authModes: {}, providerApiKey: true, available: null },
+      {
+        authModes: {},
+        providerApiKey: false,
+        registryAvailableKeys: new Set<string>(),
+        available: null,
+      },
+      {
+        authModes: {},
+        providerApiKey: true,
+        registryAvailableKeys: new Set(["anthropic/claude-opus-5"]),
+        available: null,
+      },
     ])(
       "uses the prepared CLI runtime auth result ($available) with provider key=$providerApiKey",
-      async ({ authModes, providerApiKey, available }) => {
+      async ({ authModes, providerApiKey, registryAvailableKeys, available }) => {
         vi.stubEnv("ANTHROPIC_API_KEY", providerApiKey ? "test-key" : "");
         const config = configureClaudeRuntime();
-        primeModelRegistry([ANTHROPIC_CLI_MODEL]);
+        primeModelRegistry([ANTHROPIC_CLI_MODEL], registryAvailableKeys);
         mocks.prepareScopedReadOnlyModelAuthModes.mockResolvedValueOnce(authModes);
 
         await modelsListCommand({ provider: "anthropic", json: true }, createRuntime() as never);
@@ -1218,7 +1244,7 @@ describe("modelsListCommand forward-compat", () => {
       mocks.prepareScopedReadOnlyModelAuthModes.mockResolvedValueOnce({
         "claude-cli": "api_key",
       });
-      primeModelRegistry([ANTHROPIC_CLI_MODEL]);
+      primeModelRegistry([ANTHROPIC_CLI_MODEL], new Set(["anthropic/claude-opus-5"]));
 
       await modelsListCommand({ provider: "anthropic", json: true }, createRuntime() as never);
 

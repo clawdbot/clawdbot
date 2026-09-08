@@ -1,7 +1,9 @@
-import fs from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -98,14 +100,27 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         for (const catalogId of catalogIds) {
           await page.getByText(`${catalogId} shared transcript`, { exact: true }).click();
+          // Every catalog has the same transcript; wait for the clicked pane before reading it.
+          await page.waitForFunction(
+            (expectedSessionKey) =>
+              [
+                ...document.querySelectorAll("openclaw-chat-pane.chat-pane-cache__pane--visible"),
+              ].some(
+                (pane) =>
+                  (pane as HTMLElement & { sessionKey?: string }).sessionKey === expectedSessionKey,
+              ),
+            `agent:main:catalog:${catalogId}:gateway:shared`,
+          );
           const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
           const message = pane
             .locator(".chat-group.user")
             .filter({ hasText: "The imported author's question." });
           await message.waitFor();
-          const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+          const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+          const artifactDir = artifactRoot
+            ? createControlUiE2eArtifactDir("external-session-catalogs", artifactRoot)
+            : undefined;
           if (artifactDir && catalogId === "beam") {
-            await fs.mkdir(artifactDir, { recursive: true });
             await page.screenshot({ path: path.join(artifactDir, `beam-author-${viewer}.png`) });
           }
           expect(await message.locator(".chat-sender-name").textContent()).toBe("User");
@@ -433,8 +448,7 @@ suite.define(() => {
   );
 
   it("keeps old Beam links working and opens pretty shares under a non-main default agent", async () => {
-    const artifactDir = path.resolve(".artifacts/control-ui-e2e/beam-named-share-url");
-    await fs.mkdir(artifactDir, { recursive: true });
+    const artifactDir = createControlUiE2eArtifactDir("beam-named-share-url");
     const context = await suite.newBrowserContext({
       recordVideo: { dir: artifactDir, size: { width: 1280, height: 720 } },
       viewport: { width: 1280, height: 720 },
@@ -526,10 +540,10 @@ suite.define(() => {
       await transcript.waitFor();
       expect(new URL(page.url()).pathname + new URL(page.url()).search).toBe(queryPath);
       await assertCatalogOwner();
-      await page.screenshot({
-        path: path.join(artifactDir, "beam-query-route.png"),
-        fullPage: true,
-      });
+      await writeFile(
+        path.join(artifactDir, "beam-query-route.png"),
+        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [transcript]),
+      );
 
       const response = await page.goto(new URL(prettyPath, suite.server.baseUrl).href);
       expect(response?.status()).toBe(200);
@@ -569,10 +583,10 @@ suite.define(() => {
       expect(new URL(page.url()).pathname).toBe(prettyPath);
       expect(new URL(page.url()).search).toBe("");
 
-      await page.screenshot({
-        path: path.join(artifactDir, "beam-pretty-route.png"),
-        fullPage: true,
-      });
+      await writeFile(
+        path.join(artifactDir, "beam-pretty-route.png"),
+        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [transcript]),
+      );
 
       // Both previously shared IDs and stale names retain their transcript after a rename.
       for (const reference of ["0123456789ab", "old-title-0123456789ab"]) {
@@ -714,9 +728,11 @@ suite.define(() => {
     );
     expect(await gateway.getRequests("sessions.catalog.read")).toHaveLength(2);
 
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("external-session-catalogs", artifactRoot)
+      : undefined;
     if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
       await page.screenshot({
         path: path.join(artifactDir, "external-session-catalogs.png"),
         fullPage: true,

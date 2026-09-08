@@ -7,6 +7,7 @@ import {
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -23,10 +24,7 @@ import {
 } from "../worker-environments/placement-session-runtime.js";
 import { resolveWorkerPlacementArchiveRestoreError } from "../worker-environments/session-placement-lifecycle.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
-export {
-  resolveSessionWorkerPlacementMutationError,
-  SessionWorkerPlacementMutationError,
-} from "../worker-environments/session-placement-lifecycle.js";
+export { resolveSessionWorkerPlacementMutationError } from "../worker-environments/session-placement-lifecycle.js";
 
 export const sessionLog = createSubsystemLogger("gateway/sessions");
 
@@ -136,36 +134,16 @@ export function loadAccessorSessionEntryForGatewayTarget(params: {
   const target = resolveGatewaySessionStoreTargetWithStore({
     cfg: params.cfg,
     key: params.key,
-    clone: false,
+    exactRead: true,
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
-  let best:
-    | {
-        entry: SessionEntry;
-        sessionStoreKey: string;
-      }
-    | undefined;
-  for (const sessionStoreKey of target.storeKeys) {
-    const entry = target.store[sessionStoreKey];
-    if (entry) {
-      if (!best || (entry.updatedAt ?? 0) > (best.entry.updatedAt ?? 0)) {
-        best = { entry, sessionStoreKey };
-      }
-    }
-  }
-  if (best) {
-    return {
-      target,
-      storePath: target.storePath,
-      entry: best.entry,
-      canonicalKey: target.canonicalKey,
-      sessionStoreKey: best.sessionStoreKey,
-    };
-  }
   return {
     target,
     storePath: target.storePath,
-    entry: undefined,
+    // Exact probes include internal-effects rows that operator inventory reads hide.
+    entry: isInternalSessionEffectsKey(target.canonicalKey)
+      ? undefined
+      : resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys),
     canonicalKey: target.canonicalKey,
     sessionStoreKey: target.canonicalKey,
   };
@@ -175,15 +153,20 @@ export function loadSessionEntriesForTarget(params: {
   key: string;
   cfg: OpenClawConfig;
   agentId?: string;
+  includeStoreChildEntries?: boolean;
 }) {
   const target = resolveGatewaySessionStoreTargetWithStore({
     cfg: params.cfg,
     key: params.key,
     clone: false,
+    exactRead: true,
+    includeStoreChildEntries: params.includeStoreChildEntries,
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   const store = target.store;
-  const entry = resolveCanonicalSessionEntryFromStoreKeys(store, target.storeKeys);
+  const entry = isInternalSessionEffectsKey(target.canonicalKey)
+    ? undefined
+    : resolveCanonicalSessionEntryFromStoreKeys(store, target.storeKeys);
   return { target, storePath: target.storePath, store, entry };
 }
 

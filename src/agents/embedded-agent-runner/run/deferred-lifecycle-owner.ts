@@ -1,5 +1,10 @@
 import { formatErrorMessage } from "../../../infra/errors.js";
 import {
+  closeDiagnosticEmbeddedRunOwner,
+  createDiagnosticEmbeddedRunOwner,
+  type DiagnosticEmbeddedRunOwner,
+} from "../../../logging/diagnostic-run-activity.js";
+import {
   createAgentRunRestartAbortError,
   createAgentRunSupersededAbortError,
 } from "../../run-termination.js";
@@ -80,12 +85,13 @@ export type DeferredEmbeddedRunLifecycleManager = {
   signal: AbortSignal;
   abort: (reason?: "user_abort" | "restart" | "superseded") => void;
   adopt: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
-  handoffToCli: () => void;
+  handoffToCli: () => DiagnosticEmbeddedRunOwner;
   complete: () => Promise<void>;
 };
 
 export function createDeferredEmbeddedRunLifecycleManager(params: {
   runId: string;
+  agentId?: string;
   sessionId: string;
   sessionKey?: string;
   sessionFile?: string;
@@ -108,22 +114,11 @@ export function createDeferredEmbeddedRunLifecycleManager(params: {
           : undefined,
     );
   };
-  const cliOwner: EmbeddedAgentQueueHandle = {
-    kind: "embedded",
-    runId: params.runId,
-    queueMessage: async () => {
-      throw new Error("active run is switching runtimes");
-    },
-    isStreaming: () => false,
-    isStopped: () => signal.aborted,
-    isAborted: () => signal.aborted,
-    isAbortable: () => !signal.aborted,
-    isCompacting: () => false,
-    cancel: abort,
-    abort,
-  };
+  let cliOwner: EmbeddedAgentQueueHandle | undefined;
   const clearCliOwner = () => {
-    clearActiveEmbeddedRun(params.sessionId, cliOwner, params.sessionKey, params.sessionFile);
+    if (cliOwner) {
+      clearActiveEmbeddedRun(params.sessionId, cliOwner, params.sessionKey, params.sessionFile);
+    }
   };
   return {
     signal,
@@ -134,10 +129,36 @@ export function createDeferredEmbeddedRunLifecycleManager(params: {
       previous?.discard();
     },
     handoffToCli: () => {
-      setActiveEmbeddedRun(params.sessionId, cliOwner, params.sessionKey, params.sessionFile);
+      const diagnosticOwner = createDiagnosticEmbeddedRunOwner(params);
+      // Each handoff gets a fresh owner; retained callbacks from a prior CLI
+      // attempt must not publish progress after replacement or lifecycle rotation.
+      cliOwner = {
+        kind: "embedded",
+        runId: params.runId,
+        diagnosticOwner,
+        closeDiagnostics: () => closeDiagnosticEmbeddedRunOwner(diagnosticOwner),
+        queueMessage: async () => {
+          throw new Error("active run is switching runtimes");
+        },
+        isStreaming: () => false,
+        isStopped: () => signal.aborted,
+        isAborted: () => signal.aborted,
+        isAbortable: () => !signal.aborted,
+        isCompacting: () => false,
+        cancel: abort,
+        abort,
+      };
+      setActiveEmbeddedRun(
+        params.sessionId,
+        cliOwner,
+        params.sessionKey,
+        params.sessionFile,
+        params.agentId,
+      );
       const previous = current;
       current = undefined;
       previous?.discard();
+      return diagnosticOwner;
     },
     complete: async () => {
       const owner = current;

@@ -1,6 +1,7 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { formatCommandErrorForUser } from "../../process/command-error.js";
 import {
   extractErrorHttpStatus,
   extractLeadingHttpStatus,
@@ -301,6 +302,10 @@ export function renderSanitizedUserFacingText(
       ? formatRawAssistantErrorForUi(trimmed)
       : sanitized;
   }
+  const commandError = formatCommandErrorForUser(trimmed);
+  if (commandError) {
+    return commandError;
+  }
   const execDenied = formatExecDeniedUserMessage(trimmed);
   if (execDenied) {
     return execDenied;
@@ -357,8 +362,19 @@ export function renderSanitizedUserFacingText(
 
 export const GENERIC_EXTERNAL_RUN_FAILURE_TEXT =
   "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
-export const HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT =
-  "⚠️ Heartbeat check failed before it could produce an update. The main chat session remains available.";
+const HEARTBEAT_FAILURE_LEAD = "⚠️ Heartbeat check failed before it could produce an update";
+const HEARTBEAT_FAILURE_TAIL = "The main chat session remains available.";
+export const HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT = `${HEARTBEAT_FAILURE_LEAD}. ${HEARTBEAT_FAILURE_TAIL}`;
+
+/** `reason` is the failure-reply owner's already sanitized and capped detail. */
+export function renderHeartbeatRunFailureCopy(reason?: string): string {
+  if (!reason) {
+    return HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT;
+  }
+  const terminator = /[.!?]$/u.test(reason) ? "" : ".";
+  return `${HEARTBEAT_FAILURE_LEAD}: ${reason}${terminator} ${HEARTBEAT_FAILURE_TAIL}`;
+}
+
 export const PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE =
   "⚠️ The model provider rejected the conversation state. Please try again, or use /new to start a fresh session.";
 const PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE =
@@ -425,7 +441,6 @@ export function resolveProviderRequestFailureCopy(params: {
     code,
     userMessage,
     technicalMessage: params.technicalMessage,
-    ...(params.facet === "provider-internal-503" ? { allowTransientHttpRetry: true as const } : {}),
   };
 }
 

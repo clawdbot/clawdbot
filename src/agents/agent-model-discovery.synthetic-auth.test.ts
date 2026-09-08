@@ -28,7 +28,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveProviderSyntheticAuthWithPlugin,
 }));
 
-vi.mock("./auth-profiles/store.js", () => ({
+vi.mock("./auth-profiles/store-runtime.js", () => ({
   ensureAuthProfileStore: () => ({ version: 1, profiles: {} }),
   ensureAuthProfileStoreWithoutExternalProfiles: () => ({ version: 1, profiles: {} }),
 }));

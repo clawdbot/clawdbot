@@ -968,6 +968,34 @@ describe("plugin runtime session work admission", () => {
     await expect(work).rejects.toThrow(`Session "${sessionKey}" is archived`);
   });
 
+  it("rejects a session replaced while work waits for lifecycle admission", async () => {
+    const runtime = createRuntimeAgent();
+    const mutationStarted = createDeferred();
+    const releaseMutation = createDeferred();
+    const mutation = runExclusiveSessionLifecycleMutation({
+      scope: storePath,
+      identities: [sessionKey, sessionId],
+      prepare: async () => {
+        mutationStarted.resolve();
+        await releaseMutation.promise;
+      },
+      run: async () => {
+        await runtime.session.upsertSessionEntry({
+          storePath,
+          sessionKey,
+          entry: { sessionId: "replacement-session", updatedAt: Date.now() },
+        });
+      },
+    });
+    await mutationStarted.promise;
+
+    const work = runtime.session.runWithWorkAdmission({ storePath, sessionKey }, async () => {});
+    releaseMutation.resolve();
+    await mutation;
+
+    await expect(work).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+  });
+
   it("admits fresh work and protects session creation inside the callback", async () => {
     const runtime = createRuntimeAgent();
     const freshKey = "agent:main:voice:fresh";

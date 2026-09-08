@@ -9,13 +9,18 @@ import JSON5 from "json5";
 import { resolveEffectiveHomeDir } from "../src/infra/home-dir.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../src/infra/supervisor-markers.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
+import { readTestHomeSource, resolveTestCorepackHome } from "./test-home-context.mts";
+import {
+  isTruthyTestEnvValue as isTruthyEnvValue,
+  LIVE_TEST_TRIGGER_ENV_KEYS,
+  resolveTestHomePolicy,
+} from "./test-home-policy.mts";
 
 type RestoreEntry = { key: string; value: string | undefined };
 type InstallTestEnvOptions =
   | { mode?: "live-aware"; loadProfileEnv?: boolean }
   | { mode: "hermetic" };
 
-const LIVE_TEST_TRIGGER_ENV_KEYS = ["LIVE", "OPENCLAW_LIVE_TEST", "OPENCLAW_LIVE_GATEWAY"] as const;
 const ISOLATED_TEST_CREDENTIAL_ENV_KEYS = [
   "TELEGRAM_BOT_TOKEN",
   "DISCORD_BOT_TOKEN",
@@ -70,22 +75,6 @@ type ConfigValidationApi = typeof import("../src/config/validation.js");
 
 let cachedLegacyConfigCompatApi: LegacyConfigCompatApi | undefined;
 let cachedConfigValidationApi: ConfigValidationApi | undefined;
-
-function isTruthyEnvValue(value: string | undefined): boolean {
-  if (!value) {
-    return false;
-  }
-  switch (value.trim().toLowerCase()) {
-    case "":
-    case "0":
-    case "false":
-    case "no":
-    case "off":
-      return false;
-    default:
-      return true;
-  }
-}
 
 function restoreEnv(entries: RestoreEntry[]): void {
   for (const { key, value } of entries) {
@@ -149,10 +138,21 @@ function loadProfileEnv(homeDir = os.homedir()): void {
     return applied;
   };
   try {
+    // Skip ambient startup files, which can reset HOME or load an unselected profile.
+    // Only this reader gets the source HOME; the test process stays isolated.
     const output = execFileSync(
       "/bin/bash",
-      ["-lc", `set -a; source "${profilePath}" >/dev/null 2>&1; env -0`],
-      { encoding: "utf8" },
+      [
+        "--norc",
+        "-c",
+        'set -a; source "$1" >/dev/null 2>&1; env -0',
+        "openclaw-test-profile",
+        profilePath,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, HOME: homeDir, USERPROFILE: homeDir, BASH_ENV: undefined },
+      },
     );
     const applied = countAppliedEntries(output.split("\0").filter(Boolean));
     if (applied > 0 && !isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_QUIET)) {
@@ -238,16 +238,7 @@ function resolveRestoreEntries(): RestoreEntry[] {
 function initializeIsolatedTestEnv(tempHome: string): void {
   // Corepack's installed toolchain is independent of application state. Bind its
   // upstream cache default before isolating HOME/XDG so nested pnpm stays offline.
-  setTestEnvValue(
-    "COREPACK_HOME",
-    process.env.COREPACK_HOME ??
-      path.join(
-        process.env.XDG_CACHE_HOME ??
-          process.env.LOCALAPPDATA ??
-          path.join(os.homedir(), process.platform === "win32" ? "AppData/Local" : ".cache"),
-        "node/corepack",
-      ),
-  );
+  setTestEnvValue("COREPACK_HOME", resolveTestCorepackHome(process.env));
   setTestEnvValue("HOME", tempHome);
   setTestEnvValue("USERPROFILE", tempHome);
   setTestEnvValue("OPENCLAW_TEST_HOME", tempHome);
@@ -424,6 +415,8 @@ function copyLiveAuthProfiles(realStateDir: string, tempStateDir: string): void 
     process.execPath,
     ["--import", "tsx", liveAuthStageScript, realStateDir, tempStateDir],
     {
+      // Resolve repo-owned imports independently of an external fixture's cwd.
+      cwd: path.resolve(path.dirname(liveAuthStageScript), "../.."),
       env: { ...process.env, NODE_OPTIONS: undefined },
       stdio: "pipe",
     },
@@ -492,11 +485,22 @@ export function installTestEnv(options?: InstallTestEnvOptions): {
   cleanup: () => void;
   tempHome: string;
 } {
-  const hermetic = options?.mode === "hermetic";
-  const live = !hermetic && LIVE_TEST_TRIGGER_ENV_KEYS.some((key) => process.env[key] === "1");
-  const allowRealHome = !hermetic && isTruthyEnvValue(process.env.OPENCLAW_LIVE_USE_REAL_HOME);
-  const realHome = process.env.HOME ?? os.homedir();
-  const liveEnvSnapshot = { ...process.env };
+  const {
+    hermetic,
+    live,
+    allowRealHome,
+    loadProfileEnv: shouldLoadProfileEnv,
+  } = resolveTestHomePolicy(
+    process.env,
+    options?.mode,
+    options?.mode === "hermetic" ? false : options?.loadProfileEnv,
+  );
+  const sourceHome = live || shouldLoadProfileEnv ? readTestHomeSource(process.env) : undefined;
+  const realHome = sourceHome ?? process.env.HOME ?? os.homedir();
+  const liveEnvSnapshot = {
+    ...process.env,
+    ...(sourceHome === undefined ? {} : { HOME: sourceHome, USERPROFILE: sourceHome }),
+  };
   const rollback = captureFullEnv();
   let tempHome: string | undefined;
   const removeHome = () => {
@@ -511,8 +515,6 @@ export function installTestEnv(options?: InstallTestEnvOptions): {
   };
 
   try {
-    const requestedProfileLoad = options?.mode === "hermetic" ? false : options?.loadProfileEnv;
-    const shouldLoadProfileEnv = requestedProfileLoad ?? (live || allowRealHome);
     if (shouldLoadProfileEnv) {
       loadProfileEnv(realHome);
     }

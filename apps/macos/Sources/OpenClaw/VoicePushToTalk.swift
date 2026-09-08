@@ -109,13 +109,13 @@ final class VoicePushToTalkHotkey: @unchecked Sendable {
     }
 }
 
-/// Short-lived speech recognizer that records while the hotkey is held.
+/// Records speech while the hotkey is held.
 actor VoicePushToTalk {
     static let shared = VoicePushToTalk()
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "voicewake.ptt")
 
-    private var recognizer: SFSpeechRecognizer?
+    private var recognizerCache = SpeechRecognizerCache()
     // Lazily created on begin() to avoid creating an AVAudioEngine at app launch, which can switch Bluetooth
     // headphones into the low-quality headset profile even if push-to-talk is never used.
     private var audioEngine: AVAudioEngine?
@@ -228,8 +228,7 @@ actor VoicePushToTalk {
     // MARK: - Private
 
     private func startRecognition(localeID: String?, sessionID: UUID) async throws {
-        let locale = localeID.flatMap { Locale(identifier: $0) } ?? Locale(identifier: Locale.current.identifier)
-        self.recognizer = SFSpeechRecognizer(locale: locale)
+        let recognizer = self.recognizerCache.recognizer(localeID: localeID ?? Locale.current.identifier)
         guard let recognizer, recognizer.isAvailable else {
             throw NSError(
                 domain: "VoicePushToTalk",

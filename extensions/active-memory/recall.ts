@@ -40,6 +40,23 @@ import type {
   TerminalMemorySearchWatch,
 } from "./types.js";
 
+function buildRecallDoneLogLine(logPrefix: string, result: ActiveRecallResult): string {
+  const reason =
+    result.status === "unavailable"
+      ? result.searchDebug?.error
+        ? "search-error"
+        : "search-unavailable"
+      : undefined;
+  return [
+    logPrefix,
+    "done",
+    `status=${result.status}`,
+    ...(reason ? [`reason=${reason}`] : []),
+    `elapsedMs=${String(result.elapsedMs)}`,
+    `summaryChars=${String(result.summary?.length ?? 0)}`,
+  ].join(" ");
+}
+
 function formatActiveMemoryFastMode(fastMode: ActiveMemoryFastMode | undefined): string {
   return fastMode === undefined
     ? "inherit"
@@ -112,6 +129,27 @@ type ActiveRecallParams = {
   memorySlot?: string;
   activeProjectKeys?: string[];
 };
+
+async function recordRecallResult(
+  params: Pick<ActiveRecallParams, "abortSignal" | "agentId" | "api" | "config" | "sessionKey"> & {
+    logPrefix: string;
+    result: ActiveRecallResult;
+  },
+): Promise<void> {
+  if (params.config.logging) {
+    params.api.logger.info?.(buildRecallDoneLogLine(params.logPrefix, params.result));
+  }
+  params.abortSignal?.throwIfAborted();
+  await persistPluginStatusLines({
+    api: params.api,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    statusLine: buildPluginStatusLine({ result: params.result, config: params.config }),
+    debugSummary: buildPersistedDebugSummary(params.result),
+    searchDebug: params.result.searchDebug,
+  });
+  params.abortSignal?.throwIfAborted();
+}
 
 async function resolveActiveRecall(
   params: Omit<ActiveRecallParams, "runId"> & {
@@ -331,21 +369,7 @@ async function resolveActiveRecall(
         searchDebug: fallbackSearchDebug,
         toolsAllow: params.config.toolsAllow,
       });
-      if (params.config.logging) {
-        params.api.logger.info?.(
-          `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=${String(result.summary?.length ?? 0)}`,
-        );
-      }
-      params.abortSignal?.throwIfAborted();
-      await persistPluginStatusLines({
-        api: params.api,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        statusLine: buildPluginStatusLine({ result, config: params.config }),
-        debugSummary: buildPersistedDebugSummary(result),
-        searchDebug: result.searchDebug,
-      });
-      params.abortSignal?.throwIfAborted();
+      await recordRecallResult({ ...params, logPrefix, result });
       return result;
     }
 
@@ -357,24 +381,8 @@ async function resolveActiveRecall(
         summary: null,
         searchDebug: raceResult.searchDebug,
       };
-      if (params.config.logging) {
-        params.api.logger.info?.(
-          `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=${String(result.summary?.length ?? 0)}`,
-        );
-      }
       resetCircuitBreaker(cbKey);
-      params.abortSignal?.throwIfAborted();
-      await persistPluginStatusLines({
-        api: params.api,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        statusLine: buildPluginStatusLine({ result, config: params.config }),
-        searchDebug: result.searchDebug,
-      });
-      params.abortSignal?.throwIfAborted();
-      if (cacheKey && shouldCacheResult(result)) {
-        setCachedResult(cacheKey, result, params.config.cacheTtlMs);
-      }
+      await recordRecallResult({ ...params, logPrefix, result });
       return result;
     }
 
@@ -389,22 +397,8 @@ async function resolveActiveRecall(
       elapsedMs: Date.now() - startedAt,
       maxSummaryChars: params.config.maxSummaryChars,
     });
-    if (params.config.logging) {
-      params.api.logger.info?.(
-        `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=${String(result.summary?.length ?? 0)}`,
-      );
-    }
     resetCircuitBreaker(cbKey);
-    params.abortSignal?.throwIfAborted();
-    await persistPluginStatusLines({
-      api: params.api,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      statusLine: buildPluginStatusLine({ result, config: params.config }),
-      debugSummary: buildPersistedDebugSummary(result),
-      searchDebug: result.searchDebug,
-    });
-    params.abortSignal?.throwIfAborted();
+    await recordRecallResult({ ...params, logPrefix, result });
     if (cacheKey && shouldCacheResult(result)) {
       setCachedResult(cacheKey, result, params.config.cacheTtlMs);
     }
@@ -430,21 +424,7 @@ async function resolveActiveRecall(
         ...partialTimeoutData,
         toolsAllow: params.config.toolsAllow,
       });
-      if (params.config.logging) {
-        params.api.logger.info?.(
-          `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=${String(result.summary?.length ?? 0)}`,
-        );
-      }
-      params.abortSignal?.throwIfAborted();
-      await persistPluginStatusLines({
-        api: params.api,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        statusLine: buildPluginStatusLine({ result, config: params.config }),
-        debugSummary: buildPersistedDebugSummary(result),
-        searchDebug: result.searchDebug,
-      });
-      params.abortSignal?.throwIfAborted();
+      await recordRecallResult({ ...params, logPrefix, result });
       return result;
     }
     const message = toSingleLineErrorMessage(error);
@@ -456,14 +436,7 @@ async function resolveActiveRecall(
       elapsedMs: Date.now() - startedAt,
       summary: null,
     };
-    params.abortSignal?.throwIfAborted();
-    await persistPluginStatusLines({
-      api: params.api,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      statusLine: buildPluginStatusLine({ result, config: params.config }),
-      searchDebug: result.searchDebug,
-    });
+    await recordRecallResult({ ...params, logPrefix, result });
     return result;
   } finally {
     params.abortSignal?.removeEventListener("abort", abortFromParent);

@@ -4,7 +4,6 @@
  * Produces compact one-line summaries for verbose tool descriptions in inventory/list views.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
 function normalizeSummaryWhitespace(value: string): string {
@@ -61,13 +60,9 @@ export function summarizeToolDescriptionText(params: {
     return "Tool";
   }
 
-  const paragraphs = normalizeStringEntries(raw.split(/\n\s*\n/g));
-  for (const paragraph of paragraphs) {
-    const lines = normalizeStringEntries(paragraph.split("\n"));
-    if (lines.length === 0) {
-      continue;
-    }
-    const first = lines[0] ?? "";
+  // Prefer paragraph openings before falling back to later lines.
+  for (const paragraph of raw.split(/\n\s*\n/g)) {
+    const first = paragraph.trim().split("\n", 1)[0]?.trim() ?? "";
     if (!first || isToolDocBlockStart(first)) {
       continue;
     }
@@ -77,17 +72,16 @@ export function summarizeToolDescriptionText(params: {
     return truncateSummary(normalizeSummaryWhitespace(first), params.maxLen);
   }
 
-  const firstLine = raw
-    .split("\n")
-    .map((line) => line.trim())
-    .find(
-      (line) =>
-        line.length > 0 &&
-        !isToolDocBlockStart(line) &&
-        !line.startsWith("{") &&
-        !line.startsWith("[") &&
-        !line.startsWith("- "),
+  const firstLine = raw.split("\n").find((line) => {
+    const first = line.trim();
+    return (
+      first.length > 0 &&
+      !isToolDocBlockStart(first) &&
+      !first.startsWith("{") &&
+      !first.startsWith("[") &&
+      !first.startsWith("- ")
     );
+  });
   return firstLine ? truncateSummary(normalizeSummaryWhitespace(firstLine), params.maxLen) : "Tool";
 }
 
@@ -102,13 +96,15 @@ export function describeToolForVerbose(params: {
     return params.fallback;
   }
 
-  const lines = raw.split("\n").map((line) => line.trimEnd());
   const kept: string[] = [];
-  for (const line of lines) {
+  let keptLength = 0;
+  for (const line of raw.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed) {
       if (kept.length > 0 && kept.at(-1) !== "") {
         kept.push("");
+        // A paragraph gap contributes a separator even before the next line arrives.
+        keptLength += 1;
       }
       continue;
     }
@@ -120,16 +116,14 @@ export function describeToolForVerbose(params: {
     ) {
       break;
     }
+    keptLength += trimmed.length + (kept.length > 0 ? 1 : 0);
     kept.push(trimmed);
-    if (kept.join(" ").length >= (params.maxLen ?? 320)) {
+    if (keptLength >= (params.maxLen ?? 320)) {
       break;
     }
   }
 
-  const normalized = kept
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  const normalized = kept.join("\n").trim();
   if (!normalized) {
     return params.fallback;
   }

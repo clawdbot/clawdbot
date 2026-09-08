@@ -3,6 +3,7 @@
  * requests.
  */
 import fsPromises from "node:fs/promises";
+import { toUSVString } from "node:util";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   asNullableRecord,
@@ -85,6 +86,39 @@ const BROWSER_PROXY_STATUS_TIMEOUT_MS = 750;
 // Leave one MiB for the fixed node.invoke.result frame around payloadJSON.
 const BROWSER_PROXY_MAX_ENCODED_PAYLOAD_BYTES = 24 * 1024 * 1024;
 
+function countBrowserProxyEncodedPayloadBytes(serialized: string): number {
+  // Native JSON serialization has already escaped C0 units; raw JSON cannot contain them.
+  let bytes = Buffer.byteLength(serialized, "utf8") + 2;
+  for (const character of '"\\') {
+    const code = character.charCodeAt(0);
+    let index = serialized.indexOf(character);
+    while (index !== -1) {
+      // Skip sparse escapes natively and count dense escapes in bounded runs.
+      const end = Math.min(index + 128, serialized.length);
+      for (; index < end; index++) {
+        if (serialized.charCodeAt(index) === code) {
+          bytes++;
+        }
+      }
+      index = serialized.indexOf(character, index);
+    }
+  }
+  const wellFormed = toUSVString(serialized);
+  if (wellFormed !== serialized) {
+    // Raw JSON may preserve lone surrogates. Replacement keeps UTF-16 positions intact.
+    for (
+      let index = wellFormed.indexOf("\ufffd");
+      index !== -1;
+      index = wellFormed.indexOf("\ufffd", index + 1)
+    ) {
+      if (serialized.charCodeAt(index) !== 0xfffd) {
+        bytes += 3;
+      }
+    }
+  }
+  return bytes;
+}
+
 function normalizeProfileAllowlist(raw?: string[]): string[] {
   return Array.isArray(raw) ? normalizeStringEntries(raw) : [];
 }
@@ -98,8 +132,14 @@ function resolveBrowserProxyConfig() {
 }
 
 let browserControlReady: Promise<void> | null = null;
+let admittedBrowserControlState: ReturnType<typeof getBrowserControlState> = null;
 
 async function ensureBrowserControlService(): Promise<void> {
+  const current = getBrowserControlState();
+  // Admission survives config refresh only for this exact live runtime generation.
+  if (current && current === admittedBrowserControlState) {
+    return;
+  }
   if (browserControlReady) {
     return browserControlReady;
   }
@@ -113,13 +153,13 @@ async function ensureBrowserControlService(): Promise<void> {
     if (!started) {
       throw new Error("browser control disabled");
     }
+    admittedBrowserControlState = started;
   })();
-  const sharedStartup = startup.catch((error: unknown) => {
-    // A failed attempt must not poison later calls or clear a newer shared startup.
+  const sharedStartup = startup.finally(() => {
+    // Share pending failures, but never keep settled startup as runtime authority.
     if (browserControlReady === sharedStartup) {
       browserControlReady = null;
     }
-    throw error;
   });
   browserControlReady = sharedStartup;
   return sharedStartup;
@@ -503,7 +543,7 @@ export async function runBrowserProxyCommand(
     : { result, ...(includeRoute ? { route } : {}) };
   const serialized = JSON.stringify(payload);
   // Node results carry this JSON as a string inside a second JSON frame.
-  if (Buffer.byteLength(JSON.stringify(serialized)) > BROWSER_PROXY_MAX_ENCODED_PAYLOAD_BYTES) {
+  if (countBrowserProxyEncodedPayloadBytes(serialized) > BROWSER_PROXY_MAX_ENCODED_PAYLOAD_BYTES) {
     throw new Error("browser proxy payload exceeds 24 MiB encoded limit");
   }
   return serialized;

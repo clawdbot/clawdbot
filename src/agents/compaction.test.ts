@@ -587,4 +587,78 @@ describe("pruneHistoryForContextShare", () => {
     expect(keptToolResults).toHaveLength(0);
     expect(pruned.droppedMessages).toBe(pruned.droppedMessagesList.length);
   });
+
+  it("accounts for orphaned tool_results removed from the retained suffix", () => {
+    const messages: AgentMessage[] = [
+      makeMessage(1, 4000),
+      makeToolResult(2, "missing-call", "orphan-result ".repeat(500)),
+      makeMessage(3, 4000),
+    ];
+    const chunks = splitMessagesByTokenShare(messages, 2);
+    const retained = chunks.slice(1).flat();
+    const retainedTokens = estimateMessagesTokens(retained);
+    const totalTokens = estimateMessagesTokens(messages);
+    const pruned = pruneHistoryForContextShare({
+      messages,
+      maxContextTokens: Math.ceil(totalTokens),
+      maxHistoryShare: 0.5,
+      parts: 2,
+    });
+
+    expect(chunks[0]).toContain(messages[0]);
+    expect(retained).toContain(messages[1]);
+    expect(pruned.messages).not.toContain(messages[1]);
+    expect(pruned.droppedMessagesList).toEqual([messages[0], messages[1]]);
+    expect(pruned.droppedMessages).toBe(2);
+    expect(pruned.droppedTokens).toBe(estimateMessagesTokens([messages[0]!, messages[1]!]));
+    expect(retainedTokens).toBeGreaterThan(0);
+  });
+
+  it("accounts for synthetic results displaced across retained tool frames", () => {
+    const messages: AgentMessage[] = [
+      makeMessage(1, 4000),
+      makeAssistantToolCall(2, "call_first"),
+      {
+        ...makeToolResult(3, "call_first", "synthetic result"),
+        details: { openclawSyntheticMissingToolResult: true },
+        isError: true,
+      },
+      makeAssistantToolCall(4, "call_second"),
+      makeToolResult(5, "call_first", "real result"),
+      makeToolResult(6, "call_second", "second result"),
+    ];
+    const totalTokens = estimateMessagesTokens(messages);
+    const pruned = pruneHistoryForContextShare({
+      messages,
+      maxContextTokens: Math.ceil(totalTokens),
+      maxHistoryShare: 0.5,
+      parts: 2,
+    });
+
+    expect(pruned.messages).not.toContain(messages[2]!);
+    expect(pruned.droppedMessagesList.map((message) => message.timestamp)).toEqual([1, 2, 3, 5]);
+    expect(pruned.droppedMessages).toBe(pruned.droppedMessagesList.length);
+    expect(pruned.droppedTokens).toBe(estimateMessagesTokens(pruned.droppedMessagesList));
+  });
+
+  it("does not count normalized retained tool_results as dropped", () => {
+    const messages: AgentMessage[] = [
+      makeMessage(1, 4000),
+      makeAssistantToolCall(2, "call_read", "result"),
+      { ...makeToolResult(3, "call_read", "result"), toolName: "   " },
+    ];
+    const pruned = pruneHistoryForContextShare({
+      messages,
+      maxContextTokens: Math.ceil(estimateMessagesTokens(messages)),
+      maxHistoryShare: 0.75,
+      parts: 2,
+    });
+
+    expect(pruned.droppedMessagesList).not.toContain(messages[2]!);
+    expect(pruned.droppedMessages).toBe(pruned.droppedMessagesList.length);
+    expect(pruned.messages).not.toContain(messages[2]!);
+    expect(pruned.messages.find((message) => message.role === "toolResult")).toMatchObject({
+      toolName: "test_tool",
+    });
+  });
 });

@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "./types.js";
 
 type ControlUiLinkConfig = Pick<OpenClawConfig, "gateway"> | null | undefined;
 
-function resolveControlUiLinkLocation(
+export function resolveControlUiLinkLocation(
   cfg: ControlUiLinkConfig,
 ): { origin: string; basePath: string } | undefined {
   if (cfg?.gateway?.controlUi?.enabled === false) {

@@ -10,11 +10,13 @@ import {
   loadRatchetReference,
   loadRatchetSnapshot,
   loadRatchetSources,
+  parseRatchetArgs,
   parseRatchetPaths,
   reportRatchetFailures,
   reportRatchetSuccess,
   resolveRatchetBase,
 } from "./lib/shrink-ratchet.mts";
+import { collectTypeScriptCommentRanges } from "./lib/ts-guard-utils.mts";
 
 const BASELINE_PATH = "config/max-lines-baseline.txt";
 const GIT_MAX_BUFFER = 256 * 1024 * 1024;
@@ -57,25 +59,9 @@ export function collectLintDisableDirectives(source: string, filePath = "source.
     false,
     scriptKind,
   );
-  const comments = new Map<number, string>();
-  const addComments = (ranges: readonly ts.CommentRange[] | undefined) => {
-    for (const range of ranges ?? []) {
-      comments.set(range.pos, source.slice(range.pos, range.end));
-    }
-  };
-  const visit = (node: ts.Node) => {
-    addComments(ts.getLeadingCommentRanges(source, node.pos));
-    addComments(ts.getTrailingCommentRanges(source, node.end));
-    // getChildren includes delimiter tokens; forEachChild misses directives before closing tokens.
-    for (const child of node.getChildren(sourceFile)) {
-      visit(child);
-    }
-  };
-  visit(sourceFile);
-  addComments(ts.getLeadingCommentRanges(source, sourceFile.endOfFileToken.pos));
-
   const directives: string[][] = [];
-  for (const text of comments.values()) {
+  for (const range of collectTypeScriptCommentRanges(ts, sourceFile)) {
+    const text = source.slice(range.pos, range.end);
     const comment = text.slice(2, text.startsWith("/*") ? -2 : undefined);
     const match = directive.exec(comment.trim());
     if (!match) {
@@ -186,36 +172,14 @@ function writeBaseline(root: string, entries: string[]) {
   fs.writeFileSync(path.join(root, BASELINE_PATH), BASELINE_HEADER + entries.join("\n") + "\n");
 }
 
-function parseArgs(argv: string[]) {
-  const args: { base?: string; prune: boolean; staged: boolean } = { prune: false, staged: false };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--prune") {
-      args.prune = true;
-      continue;
-    }
-    if (arg === "--staged") {
-      args.staged = true;
-      continue;
-    }
-    if (arg === "--base" && argv[index + 1]) {
-      args.base = argv[index + 1];
-      index += 1;
-      continue;
-    }
-    throw new Error("Unknown or incomplete argument: " + arg);
-  }
-  return args;
-}
-
 function envVarCountArgs(argv: string[]) {
-  const args = parseArgs(argv);
+  const args = parseRatchetArgs(argv);
   return [...(args.staged ? ["--staged"] : []), ...(args.base ? ["--base", args.base] : [])];
 }
 
 export function main(root = process.cwd(), argv: string[] = process.argv.slice(2)) {
   try {
-    const args = parseArgs(argv);
+    const args = parseRatchetArgs(argv);
     if (args.staged && args.prune) {
       throw new Error("--prune cannot be combined with --staged");
     }

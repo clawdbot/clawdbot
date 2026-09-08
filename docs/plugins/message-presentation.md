@@ -521,7 +521,9 @@ On the canonical outbound path used by CLI and standard message actions, core:
    select option count when the adapter advertises them. Chart and table blocks
    become deterministic text unless the adapter explicitly advertises
    `charts: true` or `tables: true`, respectively.
-5. Calls `renderPresentation` when the adapter can render the payload.
+5. Calls `renderPresentation` when the adapter can render the payload. Its
+   `presentation` is adapted for native limits; `sourcePresentation` retains
+   the normalized original for channel-specific text fallbacks.
 6. Falls back to conservative text when the adapter is absent or cannot render.
 7. Sends the resulting payload through the normal channel delivery path.
 8. Applies delivery metadata such as `delivery.pin` after the first successful
@@ -532,7 +534,10 @@ must either enter that canonical path or materialize the same presentation
 fallback before projecting the payload down to plain text/media.
 
 Core owns fallback behavior so producers can stay channel-agnostic. Channel
-plugins own native rendering and interaction handling.
+plugins own native rendering and interaction handling. When a renderer falls
+back to text because its complete native card cannot fit, use
+`sourcePresentation` to preserve full labels and apply the channel's text and
+URL sanitation. Continue using `presentation` for native controls.
 
 ## Degradation rules
 

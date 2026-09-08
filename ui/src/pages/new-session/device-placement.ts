@@ -1,7 +1,10 @@
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import type { DraftEnvironment } from "./discovery.ts";
 import { environmentMenuFacts, MAX_PLACE_MENU_FACTS } from "./place-facts.ts";
 import { disambiguate } from "./place-labels.ts";
+
+registerNewSessionSetupEnglish();
 
 export type DevicePlacementOption = Readonly<
   {
@@ -41,11 +44,20 @@ function unavailableReason(
   if (environment.sessionHost !== true) {
     return t("newSession.sessionHostingDisabled");
   }
-  const unavailableCommand = requirement.requiredNodeCommands.find(
-    (command) => !environment.invocableCommands?.includes(command),
-  );
-  if (unavailableCommand) {
-    return `${t("pluginsPage.enableAction")} ${unavailableCommand}: gateway.nodes.commands.allow.`;
+  if (requirement.requiredNodeCommands.length > 0) {
+    const requiredCommand = environment.requiredNodeCommand;
+    if (!requiredCommand) {
+      return t("newSession.placementNotReady");
+    }
+    if (requiredCommand.state === "pending-approval") {
+      return t("newSession.nodeCommandPendingApproval", { command: requiredCommand.command });
+    }
+    if (requiredCommand.state === "undeclared") {
+      return t("newSession.nodeCommandUndeclared", { command: requiredCommand.command });
+    }
+    if (requiredCommand.state === "unauthorized") {
+      return t("newSession.nodeCommandUnauthorized", { command: requiredCommand.command });
+    }
   }
   if (!requirement.consumesWorkerSlot) {
     return undefined;

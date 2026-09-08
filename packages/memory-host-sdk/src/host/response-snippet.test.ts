@@ -1,9 +1,11 @@
 // Memory Host SDK tests cover response snippet behavior.
 import { describe, expect, it, vi } from "vitest";
+import { withTestTimeout } from "../../../../test/helpers/promise.js";
 import {
   readMemoryHostResponseTextSnippet,
   readResponseJsonWithLimit,
 } from "./response-snippet.js";
+import { createPendingResponse } from "./response-snippet.test-harness.js";
 
 describe("readMemoryHostResponseTextSnippet", () => {
   it.each(["prefix", "overflow", "length", "preabort"] as const)(
@@ -62,21 +64,6 @@ describe("readMemoryHostResponseTextSnippet", () => {
     },
   );
 
-  function stallingResponse(onCancel: () => void): Response {
-    const reader = {
-      read: () => new Promise<ReadableStreamReadResult<Uint8Array>>(() => {}),
-      cancel: async () => {
-        onCancel();
-      },
-      releaseLock: () => undefined,
-    } as ReadableStreamDefaultReader<Uint8Array>;
-
-    return {
-      body: { getReader: () => reader },
-      headers: new Headers(),
-    } as Response;
-  }
-
   it("does not wait for another chunk after reading the byte cap exactly", async () => {
     let canceled = false;
     const stream = new ReadableStream<Uint8Array>({
@@ -114,44 +101,65 @@ describe("readMemoryHostResponseTextSnippet", () => {
   });
 
   it("cancels snippet body reads when the caller signal aborts", async () => {
-    let canceled = false;
-    const response = stallingResponse(() => {
-      canceled = true;
-    });
+    const fixture = createPendingResponse();
     const controller = new AbortController();
-    const read = readMemoryHostResponseTextSnippet(response, {
+    const expected = new Error("snippet aborted");
+    const read = readMemoryHostResponseTextSnippet(fixture.response, {
       maxBytes: 1024,
       signal: controller.signal,
     });
+    const settled = read.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    try {
+      await withTestTimeout(fixture.readStarted, 1_000, "snippet read did not start");
+      expect(fixture.response.body?.locked).toBe(true);
+      controller.abort(expected);
 
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    controller.abort(new Error("snippet aborted"));
-
-    await expect(read).rejects.toThrow("snippet aborted");
-    expect(canceled).toBe(true);
+      await expect(withTestTimeout(settled, 1_000, "snippet abort did not settle")).resolves.toBe(
+        expected,
+      );
+      expect(fixture.cancel).toHaveBeenCalledOnce();
+      expect(fixture.response.body?.locked).toBe(false);
+    } finally {
+      controller.abort(expected);
+      fixture.dispose();
+      await withTestTimeout(settled, 1_000, "snippet cleanup did not settle");
+    }
   });
 
-  it("cancels JSON body reads when the caller signal aborts", async () => {
-    let canceled = false;
-    const response = stallingResponse(() => {
-      canceled = true;
-    });
-    const controller = new AbortController();
-    const read = readResponseJsonWithLimit(response, {
-      errorPrefix: "remote memory",
-      signal: controller.signal,
-    });
+  it.each([undefined, '{"ok":true}'])(
+    "cancels JSON body reads when the caller signal aborts (prefix: %s)",
+    async (prefix) => {
+      const fixture = createPendingResponse({ prefix });
+      const controller = new AbortController();
+      const expected = new Error("json aborted");
+      const read = readResponseJsonWithLimit(fixture.response, {
+        errorPrefix: "remote memory",
+        signal: controller.signal,
+      });
+      const settled = read.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await withTestTimeout(fixture.readStarted, 1_000, "JSON read did not start");
+        expect(fixture.response.body?.locked).toBe(true);
+        controller.abort(expected);
 
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    controller.abort(new Error("json aborted"));
-
-    await expect(read).rejects.toThrow("json aborted");
-    expect(canceled).toBe(true);
-  });
+        await expect(withTestTimeout(settled, 1_000, "JSON abort did not settle")).resolves.toBe(
+          expected,
+        );
+        expect(fixture.cancel).toHaveBeenCalledOnce();
+        expect(fixture.response.body?.locked).toBe(false);
+      } finally {
+        controller.abort(expected);
+        fixture.dispose();
+        await withTestTimeout(settled, 1_000, "JSON cleanup did not settle");
+      }
+    },
+  );
 
   it("rejects a JSON body with invalid UTF-8 bytes", async () => {
     const body = new Uint8Array([

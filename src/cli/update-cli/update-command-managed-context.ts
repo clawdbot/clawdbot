@@ -1,7 +1,10 @@
+import { isDeepStrictEqual } from "node:util";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
+import { UpdatePreMutationError } from "./shared.js";
 import {
   resolveOwnedManagedUpdateEnv,
   stripGatewayServiceMarkerEnv,
@@ -14,7 +17,52 @@ export type OwnedManagedUpdateContext = {
   pluginInstallRecords: Record<string, PluginInstallRecord>;
 };
 
-/** Run one update phase under the stopped managed Gateway's authoritative environment. */
+/** Inspection uses the same service selectors as finalization, without activating config/plugins. */
+export async function captureOwnedManagedUpdatePreflightContext(params: {
+  stopState: PreManagedServiceStop | undefined;
+  processEnv: NodeJS.ProcessEnv;
+  invocationCwd?: string;
+}) {
+  const state = params.stopState;
+  if (state?.serviceUpdateVerdict?.kind !== "owned" || !state.serviceEnv) {
+    return undefined;
+  }
+  return captureTargetDatabaseSchemaContext(
+    stripGatewayServiceMarkerEnv(
+      resolveOwnedManagedUpdateEnv({
+        processEnv: params.processEnv,
+        serviceEnv: state.serviceEnv,
+        serviceDefinitionEnv: state.serviceDefinitionEnv,
+        invocationCwd: params.invocationCwd,
+      }),
+    ),
+  );
+}
+
+export async function revalidateUpdateDatabaseContext(
+  expected: Awaited<ReturnType<typeof captureTargetDatabaseSchemaContext>>,
+) {
+  const current = await captureTargetDatabaseSchemaContext(expected.readEnv);
+  const before = expected.configSnapshot;
+  const after = current.configSnapshot;
+  if (
+    before.path !== after.path ||
+    before.exists !== after.exists ||
+    before.raw !== after.raw ||
+    before.hash !== after.hash ||
+    !isDeepStrictEqual(before.includedPaths ?? [], after.includedPaths ?? []) ||
+    !isDeepStrictEqual(before.includeProvenance ?? [], after.includeProvenance ?? []) ||
+    !isDeepStrictEqual(before.sourceConfig, after.sourceConfig)
+  ) {
+    throw new UpdatePreMutationError(
+      "database-schema-preflight",
+      `Update refused: configuration changed during database admission at ${before.path}. Retry against the current configuration.`,
+    );
+  }
+  return current;
+}
+
+/** Run one update phase under the managed Gateway's authoritative environment. */
 export async function withOwnedManagedUpdateEnv<T>(
   env: NodeJS.ProcessEnv | undefined,
   run: () => Promise<T>,
@@ -28,7 +76,8 @@ export async function withOwnedManagedUpdateEnv<T>(
   for (const key of Object.keys(process.env)) {
     delete process.env[key];
   }
-  Object.assign(process.env, env);
+  // A caller may pass process.env itself; clearing it must not erase the supplied scope.
+  Object.assign(process.env, env === process.env ? previousEnv : env);
   try {
     return await run();
   } finally {
@@ -46,7 +95,7 @@ export async function captureOwnedManagedUpdateContext(params: {
 }): Promise<OwnedManagedUpdateContext | undefined> {
   const stopState = params.stopState;
   if (
-    stopState?.stopped !== true ||
+    stopState?.inspected !== true ||
     stopState.serviceUpdateVerdict?.kind !== "owned" ||
     !stopState.serviceEnv
   ) {

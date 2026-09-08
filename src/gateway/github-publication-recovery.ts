@@ -1,8 +1,8 @@
 import { managedWorktrees } from "../agents/worktrees/service.js";
-import type { DB as StateDatabase } from "../state/openclaw-state-db.generated.js";
 import { recoverGitHubPublicationBranchAndIndex } from "./github-publication-git-index.js";
+import type { GitHubPublicationExecutionRow } from "./github-publication-store.js";
 
-type PublicationRow = StateDatabase["github_publication_requests"];
+type PublicationRow = GitHubPublicationExecutionRow;
 type GitCommandOptions = { cwd?: string; env?: NodeJS.ProcessEnv; input?: string };
 
 export async function recoverGitHubPublicationWorkspace(

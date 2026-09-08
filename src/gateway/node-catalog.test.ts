@@ -3,6 +3,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { NODE_WORKER_PRIVATE_COMMANDS } from "../infra/node-commands.js";
+import { resolveNodePairApprovalScopes } from "../infra/node-pairing-authz.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "./node-catalog.js";
 
 type CatalogInput = Parameters<typeof createKnownNodeCatalog>[0];
@@ -46,12 +47,14 @@ function pairedNode(overrides: Partial<TestPairedNode> = {}): TestPairedNode {
 }
 
 function pendingNode(overrides: Partial<TestPendingNode> = {}): TestPendingNode {
+  const commands = overrides.commands ?? ["screen.snapshot", "system.run"];
   return {
     requestId: "request-1",
     nodeId: "mac-1",
     platform: "macos",
     caps: ["camera", "screen"],
-    commands: ["screen.snapshot", "system.run"],
+    commands,
+    requiredApproveScopes: resolveNodePairApprovalScopes(commands),
     permissions: { camera: true, screen: true },
     ts: 200,
     ...overrides,

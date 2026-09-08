@@ -100,6 +100,11 @@ function normalizeOverrides(overrides: unknown): OverrideMap {
   }
   const normalized: OverrideMap = {};
   for (const [key, value] of Object.entries(overrides)) {
+    // pnpm's removal marker is not an npm version. Final lock membership checks
+    // still reject dependencies resurrected by the npm runtime graph.
+    if (value === "-") {
+      continue;
+    }
     const scopedSeparator = key.indexOf(">");
     if (scopedSeparator > 0) {
       const parentSelector = key.slice(0, scopedSeparator).trim();
@@ -1198,16 +1203,16 @@ function packageLabel(packageDir: string) {
   return relative ? relative.replaceAll(path.sep, "/") : ".";
 }
 
-function listManagedNpmLockPackageDirs() {
+export function listManagedNpmLockPackageDirs(rootDir = ROOT_DIR) {
   // npm locks are generated on demand for every publishable package, but never committed.
   return ["extensions", "packages"]
     .flatMap((parentDir) =>
-      readdirSync(path.join(ROOT_DIR, parentDir), { withFileTypes: true })
+      readdirSync(path.join(rootDir, parentDir), { withFileTypes: true })
         .filter((entry) => entry.isDirectory())
         .map((entry) => path.posix.join(parentDir, entry.name)),
     )
     .filter((packageDir) => {
-      const packageJsonPath = path.join(ROOT_DIR, packageDir, "package.json");
+      const packageJsonPath = path.join(rootDir, packageDir, "package.json");
       if (!existsSync(packageJsonPath)) {
         return false;
       }
@@ -1223,11 +1228,7 @@ function npmLockPackageDirsForChangedPaths(changedPaths: string[]) {
   let hasAmbiguousDependencyPolicyChange = false;
   let hasLockfileChange = false;
 
-  for (const rawPath of changedPaths) {
-    const changedPath = rawPath
-      .trim()
-      .replaceAll("\\", "/")
-      .replace(/^\.\/+/u, "");
+  for (const changedPath of changedPaths) {
     if (!changedPath) {
       continue;
     }
@@ -1356,11 +1357,6 @@ export function resolvePackageDirs(args: string[]) {
   };
 }
 
-function checkPackage(packageDir: string) {
-  generateNpmPackageLock(packageDir);
-  return `${packageLabel(packageDir)}: npm package lock validated.`;
-}
-
 /** @internal Directly tested script implementation detail. */
 export function resolveNpmLockJobs(
   rawValue: unknown,
@@ -1381,9 +1377,11 @@ export function resolveNpmLockJobs(
   return jobs;
 }
 
-async function runPackageWorker(packageDir: string) {
+async function runPackageWorker(packageDir: string, rootDir: string) {
   return await new Promise<string>((resolve, reject) => {
     const worker = new Worker(new URL(import.meta.url), {
+      // Each worker loads policy from the source checkout, using this checkout's tooling.
+      env: { ...process.env, OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT: rootDir },
       workerData: {
         kind: NPM_LOCK_WORKER_KIND,
         packageDir,
@@ -1394,25 +1392,35 @@ async function runPackageWorker(packageDir: string) {
         reject(new Error("npm-lock worker returned an invalid response"));
       } else if (typeof message.error === "string") {
         reject(new Error(message.error));
+      } else if (typeof message.output === "string") {
+        resolve(message.output);
       } else {
-        resolve(typeof message.output === "string" ? message.output : "");
+        reject(new Error("npm-lock worker returned an invalid response"));
       }
     });
     worker.once("error", reject);
     worker.once("exit", (code) => {
-      if (code !== 0) {
-        reject(new Error(`${packageLabel(packageDir)}: npm-lock worker exited ${code}`));
-      }
+      reject(
+        new Error(`${packageLabel(packageDir)}: npm-lock worker exited ${code} without a result`),
+      );
     });
   });
 }
 
-async function checkPackages({ jobs, packageDirs }: ReturnType<typeof resolvePackageDirs>) {
+export async function generateNpmPackageLocks({
+  jobs,
+  packageDirs,
+  rootDir: sourceRoot = ROOT_DIR,
+}: ReturnType<typeof resolvePackageDirs> & { rootDir?: string }) {
+  const rootDir = path.resolve(sourceRoot);
   const outcomes = await pMap(
     packageDirs,
     async (packageDir) => {
       try {
-        const output = jobs === 1 ? checkPackage(packageDir) : await runPackageWorker(packageDir);
+        const output =
+          jobs === 1 && rootDir === ROOT_DIR
+            ? generateNpmPackageLock(packageDir)
+            : await runPackageWorker(packageDir, rootDir);
         return { output };
       } catch (error) {
         return {
@@ -1424,16 +1432,18 @@ async function checkPackages({ jobs, packageDirs }: ReturnType<typeof resolvePac
   );
 
   const errors: string[] = [];
+  const locks: string[] = [];
   for (const outcome of outcomes) {
-    if (outcome.error) {
+    if (outcome.error !== undefined) {
       errors.push(outcome.error);
-    } else {
-      process.stdout.write(`${outcome.output}\n`);
+    } else if (outcome.output !== undefined) {
+      locks.push(outcome.output);
     }
   }
   if (errors.length > 0) {
     throw new Error(errors.join("\n"));
   }
+  return locks;
 }
 
 async function main() {
@@ -1446,13 +1456,16 @@ async function main() {
   process.stdout.write(
     `Validating ${packageDirs.length} npm package lock${packageDirs.length === 1 ? "" : "s"} with ${effectiveJobs} job${effectiveJobs === 1 ? "" : "s"}.\n`,
   );
-  await checkPackages({ jobs: effectiveJobs, packageDirs });
+  await generateNpmPackageLocks({ jobs: effectiveJobs, packageDirs });
+  for (const packageDir of packageDirs) {
+    process.stdout.write(`${packageLabel(packageDir)}: npm package lock validated.\n`);
+  }
 }
 
 if (!isMainThread && workerData?.kind === NPM_LOCK_WORKER_KIND) {
   const sendToParent = parentPort?.postMessage.bind(parentPort);
   try {
-    const output = checkPackage(workerData.packageDir);
+    const output = generateNpmPackageLock(workerData.packageDir);
     sendToParent?.({ output });
   } catch (error) {
     sendToParent?.({ error: error instanceof Error ? error.message : String(error) });

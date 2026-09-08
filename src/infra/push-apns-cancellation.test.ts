@@ -2,6 +2,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { EventEmitter } from "node:events";
 import http2 from "node:http2";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { APNS_HTTP2_CANCEL_CODE } from "./push-apns-http2.js";
 import { sendApnsBackgroundWake } from "./push-apns.js";
 
@@ -11,11 +12,12 @@ const testAuthPrivateKey = generateKeyPairSync("ec", {
 
 describe("APNs cancellation", () => {
   it("cancels the active stream when pairing ownership is revoked", async () => {
+    const requestEnded = createDeferred();
     const request = Object.assign(new EventEmitter(), {
       destroyed: false,
       setTimeout: vi.fn(),
       close: vi.fn(),
-      end: vi.fn(),
+      end: vi.fn(() => requestEnded.resolve()),
     });
     request.close.mockImplementation(() => {
       request.destroyed = true;
@@ -52,7 +54,8 @@ describe("APNs cancellation", () => {
         signal: controller.signal,
         isCurrent: vi.fn().mockResolvedValue(true),
       });
-      await vi.waitFor(() => expect(request.end).toHaveBeenCalledTimes(1));
+      await withTestTimeout(requestEnded.promise, 1_000, "APNs request.end was not called");
+      expect(request.end).toHaveBeenCalledTimes(1);
 
       controller.abort(new Error("pairing removed"));
 

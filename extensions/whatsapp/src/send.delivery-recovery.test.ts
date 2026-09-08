@@ -1,4 +1,6 @@
 // Whatsapp tests cover the durable outbound handoff across startup recovery.
+import type { AnyMessageContent, MiscMessageGenerationOptions, WAMessage } from "baileys";
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createEmptyPluginRegistry,
@@ -13,12 +15,29 @@ import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-run
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { whatsappChannelOutbound, whatsappMessageAdapter } from "./channel-outbound.js";
+import { createWebSendApi } from "./inbound/send-api.js";
 import { createAcceptedWhatsAppSendResult } from "./inbound/send-result.test-helper.js";
 import type { ActiveWebListener } from "./inbound/types.js";
+import { cacheInboundMessageMeta } from "./quoted-message.js";
 
 const runtimeContextMocks = vi.hoisted(() => ({
   controllers: new Map<string, unknown>(),
+  loadOutboundMediaFromUrl: vi.fn(),
 }));
+
+vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/channel-activity-runtime")
+  >("openclaw/plugin-sdk/channel-activity-runtime");
+  return { ...actual, recordChannelActivity: vi.fn() };
+});
+
+vi.mock("openclaw/plugin-sdk/outbound-media", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/outbound-media")>(
+    "openclaw/plugin-sdk/outbound-media",
+  );
+  return { ...actual, loadOutboundMediaFromUrl: runtimeContextMocks.loadOutboundMediaFromUrl };
+});
 
 vi.mock("./connection-controller-runtime-context.js", () => ({
   getWhatsAppConnectionController: (accountId: string) =>
@@ -54,6 +73,7 @@ async function drainDefaultWhatsAppDeliveries(stateDir: string) {
 describe("WhatsApp delivery recovery", () => {
   beforeEach(() => {
     runtimeContextMocks.controllers.clear();
+    runtimeContextMocks.loadOutboundMediaFromUrl.mockReset();
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -168,6 +188,231 @@ describe("WhatsApp delivery recovery", () => {
     expect(onPlatformSendDispatch).toHaveBeenCalledTimes(parts.length);
     expect(onDeliveryResult.mock.calls.map(([result]) => result.messageId)).toEqual(
       parts.map((_, index) => `payload-${index + 1}`),
+    );
+  });
+
+  it("preserves payloads, receipts, and callback order through the active web socket", async () => {
+    const order: string[] = [];
+    const nativeSendsToReject = new Set<number>();
+    const socketSend = vi.fn(
+      async (jid: string, content: AnyMessageContent, options?: MiscMessageGenerationOptions) => {
+        const sequence = socketSend.mock.calls.length;
+        order.push(`socket:${sequence}`);
+        if (nativeSendsToReject.delete(sequence)) {
+          throw new Error("fixture transport failed");
+        }
+        return {
+          key: { id: `native-${sequence}`, remoteJid: jid, fromMe: true },
+          message: content,
+          ...(options ? { messageStubParameters: ["quoted"] } : {}),
+        } as WAMessage;
+      },
+    );
+    const sendApi = createWebSendApi({
+      sock: {
+        sendMessage: socketSend,
+        sendPresenceUpdate: vi.fn(async () => undefined),
+      },
+      defaultAccountId: accountId,
+    });
+    runtimeContextMocks.controllers.set(accountId, {
+      getActiveListener: () => sendApi,
+    });
+    const mediaAccess = {
+      localRoots: ["/tmp/whatsapp-dispatch-fixture"],
+      readFile: vi.fn(async () => Buffer.from("host-read")),
+    };
+    const mediaLocalRoots = ["/tmp/whatsapp-dispatch-legacy"];
+    const mediaReadFile = vi.fn(async () => Buffer.from("legacy-read"));
+    const media = {
+      "fixture://captionless.pdf": {
+        buffer: Buffer.from("pdf"),
+        contentType: "application/pdf",
+        kind: "document",
+        fileName: "captionless.pdf",
+      },
+      "fixture://forced.png": {
+        buffer: Buffer.from("png"),
+        contentType: "image/png",
+        kind: "image",
+        fileName: "forced.png",
+      },
+      "fixture://voice.ogg": {
+        buffer: Buffer.from("ogg"),
+        contentType: "audio/ogg",
+        kind: "audio",
+        fileName: "voice.ogg",
+      },
+    } as const;
+    runtimeContextMocks.loadOutboundMediaFromUrl.mockImplementation(async (url: string) => {
+      const fixture = media[url as keyof typeof media];
+      if (!fixture) {
+        throw new Error(`missing fixture: ${url}`);
+      }
+      return fixture;
+    });
+    const progress: string[] = [];
+    const sendPayload = async (
+      payload: Parameters<NonNullable<typeof whatsappChannelOutbound.sendPayload>>[0]["payload"],
+      extra: Partial<Parameters<NonNullable<typeof whatsappChannelOutbound.sendPayload>>[0]> = {},
+    ) =>
+      await whatsappChannelOutbound.sendPayload!({
+        cfg,
+        to: "+1555",
+        payload,
+        text: payload.text ?? "",
+        mediaAccess,
+        mediaLocalRoots,
+        mediaReadFile,
+        onPlatformSendDispatch: async () => {
+          order.push("dispatch");
+        },
+        onDeliveryResult: async (result) => {
+          progress.push(result.messageId);
+          order.push(`progress:${result.messageId}`);
+        },
+        ...extra,
+      });
+
+    const textResult = await sendPayload({ text: "plain text" });
+    const captionlessResult = await sendPayload({
+      text: "",
+      mediaUrl: "fixture://captionless.pdf",
+    });
+    const documentResult = await sendPayload(
+      { text: "document caption", mediaUrl: "fixture://forced.png" },
+      { forceDocument: true },
+    );
+    const voiceResult = await sendPayload({
+      text: "voice caption",
+      mediaUrl: "fixture://voice.ogg",
+      audioAsVoice: false,
+    });
+    cacheInboundMessageMeta(accountId, "1555@s.whatsapp.net", "quoted-1", {
+      body: "original quote",
+      fromMe: false,
+    });
+    const quotedResult = await sendPayload(
+      { text: "quoted text" },
+      { replyToId: "quoted-1", replyToIdSource: "explicit", replyToMode: "all" },
+    );
+    nativeSendsToReject.add(socketSend.mock.calls.length + 2);
+    const failure = await sendPayload({
+      text: "caption fails after voice acceptance",
+      mediaUrl: "fixture://voice.ogg",
+    }).catch((error: unknown) => error);
+
+    expect([textResult, captionlessResult, documentResult, voiceResult, quotedResult]).toEqual([
+      { channel: "whatsapp", messageId: "native-1", toJid: "1555@s.whatsapp.net" },
+      { channel: "whatsapp", messageId: "native-2", toJid: "1555@s.whatsapp.net" },
+      { channel: "whatsapp", messageId: "native-3", toJid: "1555@s.whatsapp.net" },
+      { channel: "whatsapp", messageId: "native-4", toJid: "1555@s.whatsapp.net" },
+      { channel: "whatsapp", messageId: "native-6", toJid: "1555@s.whatsapp.net" },
+    ]);
+    expect(socketSend.mock.calls).toEqual([
+      ["1555@s.whatsapp.net", { text: "plain text" }],
+      [
+        "1555@s.whatsapp.net",
+        {
+          document: Buffer.from("pdf"),
+          fileName: "captionless.pdf",
+          caption: undefined,
+          mimetype: "application/pdf",
+        },
+      ],
+      [
+        "1555@s.whatsapp.net",
+        {
+          document: Buffer.from("png"),
+          fileName: "forced.png",
+          caption: "document caption",
+          mimetype: "image/png",
+        },
+      ],
+      [
+        "1555@s.whatsapp.net",
+        { audio: Buffer.from("ogg"), ptt: true, mimetype: "audio/ogg; codecs=opus" },
+      ],
+      ["1555@s.whatsapp.net", { text: "voice caption" }],
+      [
+        "1555@s.whatsapp.net",
+        { text: "quoted text" },
+        {
+          quoted: expect.objectContaining({
+            key: expect.objectContaining({
+              id: "quoted-1",
+              remoteJid: "1555@s.whatsapp.net",
+              fromMe: false,
+            }),
+            message: { conversation: "original quote" },
+          }),
+        },
+      ],
+      [
+        "1555@s.whatsapp.net",
+        { audio: Buffer.from("ogg"), ptt: true, mimetype: "audio/ogg; codecs=opus" },
+      ],
+      ["1555@s.whatsapp.net", { text: "caption fails after voice acceptance" }],
+    ]);
+    expect(progress).toEqual([
+      "native-1",
+      "native-2",
+      "native-3",
+      "native-4",
+      "native-5",
+      "native-6",
+      "native-7",
+    ]);
+    expect(order).toEqual([
+      "dispatch",
+      "socket:1",
+      "progress:native-1",
+      "dispatch",
+      "socket:2",
+      "progress:native-2",
+      "dispatch",
+      "socket:3",
+      "progress:native-3",
+      "dispatch",
+      "socket:4",
+      "progress:native-4",
+      "dispatch",
+      "socket:5",
+      "progress:native-5",
+      "dispatch",
+      "socket:6",
+      "progress:native-6",
+      "dispatch",
+      "socket:7",
+      "progress:native-7",
+      "dispatch",
+      "socket:8",
+    ]);
+    expect(runtimeContextMocks.loadOutboundMediaFromUrl.mock.calls).toEqual(
+      [...Object.keys(media), "fixture://voice.ogg"].map((url, index) => [
+        url,
+        {
+          maxBytes: 50 * 1024 * 1024,
+          optimizeImages: index === 1 ? false : undefined,
+          mediaAccess,
+          mediaLocalRoots,
+          mediaReadFile,
+        },
+      ]),
+    );
+    expect(isChannelPartialDeliveryError(failure)).toBe(true);
+    if (!isChannelPartialDeliveryError(failure)) {
+      throw new Error("accepted fixture voice delivery did not preserve its receipt");
+    }
+    expect(failure.deliveryResult).toMatchObject({
+      messageIds: ["native-7"],
+      receipt: { platformMessageIds: ["native-7"] },
+    });
+    expect(failure).toHaveProperty(
+      "cause",
+      expect.objectContaining({
+        message: "fixture transport failed",
+      }),
     );
   });
 

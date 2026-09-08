@@ -14,6 +14,7 @@ import type {
 } from "./node-workspace-transfer-http-contract.js";
 import {
   isNodeWorkspaceTransferLimitError,
+  nodeWorkspaceTransferInvalidReason,
   type NodeWorkspaceTransferService,
 } from "./node-workspace-transfer-service.js";
 
@@ -276,9 +277,11 @@ export function createNodeWorkspaceTransferHttpCallback(
               return;
             }
             const limit = isNodeWorkspaceTransferLimitError(error);
+            const reason = nodeWorkspaceTransferInvalidReason(error);
             const body = Buffer.from(
               JSON.stringify({
                 error: limit ? "workspace_transfer_limit" : "workspace_transfer_invalid",
+                ...(reason ? { reason } : {}),
               }),
             );
             res.writeHead(limit ? 413 : 400, {

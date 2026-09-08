@@ -33,13 +33,29 @@ import {
 } from "./status.command-sections.js";
 import type { MemoryPluginStatus, MemoryStatusSnapshot } from "./status.scan.shared.js";
 
-type StatusDegradationSummary = Pick<StatusSummary, "degradedSecretOwners" | "degradedPlugins">;
+type StatusDegradationSummary = Pick<
+  StatusSummary,
+  "degradedSecretOwners" | "degradedPlugins" | "startupMigrationWarning" | "secretEgressProxy"
+>;
 
 function buildStatusDegradationRows(
   summary: StatusDegradationSummary,
   decorate = (value: string) => value,
 ) {
   const rows: Array<{ Item: string; Value: string }> = [];
+  if (summary.startupMigrationWarning) {
+    rows.push({ Item: "Startup migrations", Value: decorate(summary.startupMigrationWarning) });
+  }
+  if (summary.secretEgressProxy) {
+    const status = summary.secretEgressProxy;
+    rows.push({
+      Item: "Secret egress proxy",
+      Value:
+        status.state === "ready"
+          ? `ready · CA expires ${status.caExpiresAt}`
+          : decorate(status.message ?? "Certificate preparation unavailable"),
+    });
+  }
   const secretOwners = summary.degradedSecretOwners ?? [];
   if (secretOwners.length > 0) {
     rows.push({
@@ -88,7 +104,7 @@ export function buildStatusCommandOverviewRows(
     formatTimeAgo: (ageMs: number) => string;
     formatKTokens: (value: number) => string;
     updateValue?: string;
-    updateRestartValue?: string | null;
+    updateRows?: Array<{ Item: string; Value: string }>;
   } & StatusMemoryStateResolvers,
 ) {
   const agentsValue = buildStatusAgentsValue({
@@ -172,9 +188,7 @@ export function buildStatusCommandOverviewRows(
     updateValue: params.updateValue,
     agentsValue,
     suffixRows: [
-      ...(params.updateRestartValue
-        ? [{ Item: "Update restart", Value: params.updateRestartValue }]
-        : []),
+      ...(params.updateRows ?? []),
       { Item: "Telemetry", Value: telemetryValue },
       { Item: "Memory", Value: memoryValue },
       { Item: "Host desktop", Value: hostDesktopValue },
@@ -213,7 +227,7 @@ export function buildStatusAllOverviewRows(params: {
   osLabel: string;
   configPath: string;
   secretDiagnosticsCount: number;
-  updateRestartValue?: string | null;
+  updateRows?: Array<{ Item: string; Value: string }>;
   agentStatus: {
     bootstrapPendingCount: number;
     totalSessions: number;
@@ -237,9 +251,7 @@ export function buildStatusAllOverviewRows(params: {
       { Item: "Config", Value: params.configPath },
     ],
     middleRows: [
-      ...(params.updateRestartValue
-        ? [{ Item: "Update restart", Value: params.updateRestartValue }]
-        : []),
+      ...(params.updateRows ?? []),
       { Item: "Security", Value: `Run: ${formatCliCommand("openclaw security audit --deep")}` },
       ...buildStatusDegradationRows(params.summary),
     ],

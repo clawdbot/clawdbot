@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { markCompleteReplyConfig } from "../../../../src/auto-reply/reply/get-reply-fast-path.test-support.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -26,6 +25,7 @@ import { peekSystemEvents, resetSystemEventsForTest } from "../../../../src/infr
 import { resetTaskRegistryForTests } from "../../../../src/tasks/task-runtime.test-helpers.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../../../src/test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../../../../src/utils/delivery-context.shared.js";
+import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
 import { waitForFile } from "../../../helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
@@ -72,17 +72,6 @@ function resetGatewayState(): void {
   resetTaskRegistryForTests({ persist: false });
 }
 
-function writeResponsesEvents(response: ServerResponse, events: unknown[]): void {
-  response.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  response.end(
-    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
-  );
-}
-
 function writeAssistantResponse(response: ServerResponse, text: string): void {
   const message = {
     type: "message",
@@ -91,7 +80,7 @@ function writeAssistantResponse(response: ServerResponse, text: string): void {
     status: "completed",
     content: [{ type: "output_text", text, annotations: [] }],
   };
-  writeResponsesEvents(response, [
+  writeOpenAiResponsesSse(response, [
     {
       type: "response.output_item.added",
       output_index: 0,
@@ -328,6 +317,7 @@ describe("Gateway heartbeat session routing", () => {
                 [provider.modelRef]: {
                   params: { transport: "sse", openaiWsWarmup: false },
                 },
+                "catalog-proof/*": {},
               },
             },
             entries: { main: { default: true } },
@@ -343,6 +333,8 @@ describe("Gateway heartbeat session routing", () => {
               },
             },
           },
+          // Full configs may contain nested nulls; heartbeat admission must not reinterpret them as patches.
+          tts: { providers: { fixture: { disabledVoice: null } } },
           gateway: { auth: { mode: "token", token } },
           plugins: {
             enabled: true,
@@ -359,11 +351,20 @@ describe("Gateway heartbeat session routing", () => {
           token,
           clientDisplayName: "vitest-gateway-heartbeat-session-routing",
         });
+        await gateway.server.startupSettled;
+        await disconnectGatewayClient(gateway.client);
+        await gateway.server.close({ reason: "heartbeat catalog-owner restart proof" });
+        gateway = await startGatewayWithClient({
+          cfg: config,
+          configPath,
+          token,
+          clientDisplayName: "vitest-gateway-heartbeat-session-routing-restarted",
+        });
+        await gateway.server.startupSettled;
         const runtimeConfig = getRuntimeConfigSnapshot();
         if (!runtimeConfig) {
           throw new Error("gateway runtime config snapshot was not initialized");
         }
-        markCompleteReplyConfig(runtimeConfig, { runtimeMode: "full" });
         const client = gateway.client;
 
         const seedSession = async (params: {

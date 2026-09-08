@@ -134,7 +134,9 @@ export function buildSystemAgentToolsMcpServerConfig(
     mcpServers: {
       openclaw: {
         command: entry.command,
-        args: entry.args,
+        args: options.agentId
+          ? [...entry.args, "--openclaw-agent-id", options.agentId]
+          : entry.args,
         env: {
           [OPENCLAW_TOOLS_MCP_TOOLS_ENV]: "openclaw" satisfies OpenClawToolsMcpToolId,
           [OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV]: options.surface,

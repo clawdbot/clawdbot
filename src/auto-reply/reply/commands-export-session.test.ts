@@ -110,7 +110,7 @@ vi.mock("node:fs/promises", async () => {
           return contents;
         }
       }
-      return actual.readFile(filePath, encoding);
+      return actual.readFile(filePath, { encoding });
     }),
   };
   return {
@@ -278,6 +278,21 @@ describe("buildExportSessionReply", () => {
   });
 
   it("injects scripts and session data through the real export template", async () => {
+    const entries = [
+      {
+        type: "message",
+        id: "hidden-input",
+        parentId: null,
+        timestamp: "2026-08-31T12:00:00.000Z",
+        message: {
+          role: "user",
+          content: "Synthetic continuation input",
+          display: false,
+          provenance: { kind: "internal_system", sourceTool: "openclaw_agent_consult" },
+        },
+      },
+    ];
+    hoisted.sessionTranscriptEvents = entries;
     await buildExportSessionReply(makeParams());
 
     const html = writtenHtml();
@@ -291,8 +306,8 @@ describe("buildExportSessionReply", () => {
       Buffer.from(
         JSON.stringify({
           header: null,
-          entries: [],
-          leafId: null,
+          entries,
+          leafId: "hidden-input",
           hasLeafControl: false,
           systemPrompt: "system prompt",
           tools: [],

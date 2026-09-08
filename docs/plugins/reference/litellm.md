@@ -2,10 +2,13 @@
 summary: "Adds LiteLLM model provider support to OpenClaw."
 read_when:
   - You are installing, configuring, or auditing the litellm plugin
-title: "LiteLLM plugin"
+title: "LiteLLM plugin reference"
 ---
 
-# LiteLLM plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 Adds LiteLLM model provider support to OpenClaw.
 
@@ -16,7 +19,8 @@ Adds LiteLLM model provider support to OpenClaw.
 
 ## Surface
 
-providers: `litellm`; contracts: `imageGenerationProviders`
+- Providers: `litellm`
+- Contracts: `imageGenerationProviders`
 
 ## Related docs
 

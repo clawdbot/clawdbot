@@ -1,19 +1,13 @@
 import type { AssistantMessage, Context, Model, ProviderReplayState } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { shortHash } from "../utils/hash.js";
+import {
+  buildProviderReplayContext,
+  providerReplayContextMatches,
+} from "./provider-replay-context.js";
 
 const ANTHROPIC_COMPACTION_REPLAY_TYPE = "anthropic-compaction";
 const ANTHROPIC_COMPACTION_SUPPRESSION_TYPE = "anthropic-compaction-suppression";
 const ANTHROPIC_COMPACTION_SUPPRESSION_DATA = "rejected";
-
-type AnthropicReplayContext = {
-  provider: string;
-  api: Model["api"];
-  model: string;
-  baseUrlHash?: string;
-  sessionHash?: string;
-  authProfileHash?: string;
-};
 
 type AnthropicCompactionReplayState = ProviderReplayState & {
   type: typeof ANTHROPIC_COMPACTION_REPLAY_TYPE;
@@ -70,22 +64,6 @@ export function createCompactionCapture(output: ReplayOut, model: Model, options
   };
 }
 
-function hashReplayValue(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized ? shortHash(normalized) : undefined;
-}
-
-function buildAnthropicReplayContext(model: Model, options?: ReplayOpts): AnthropicReplayContext {
-  return {
-    provider: model.provider,
-    api: model.api,
-    model: model.id,
-    baseUrlHash: hashReplayValue(model.baseUrl),
-    sessionHash: hashReplayValue(options?.sessionId),
-    authProfileHash: hashReplayValue(options?.authProfileId),
-  };
-}
-
 function isAnthropicCompactionState(
   state: Record<string, unknown>,
 ): state is Record<string, unknown> &
@@ -121,21 +99,6 @@ function readAnthropicCompactionState(
   return isRecord(value) && isAnthropicCompactionState(value) ? value : undefined;
 }
 
-function replayContextMatches(
-  state: AnthropicReplayContext,
-  context: AnthropicReplayContext,
-): boolean {
-  // The summary replaces a route-specific prefix and must never cross identities.
-  return (
-    state.provider === context.provider &&
-    state.api === context.api &&
-    state.model === context.model &&
-    state.baseUrlHash === context.baseUrlHash &&
-    state.sessionHash === context.sessionHash &&
-    state.authProfileHash === context.authProfileHash
-  );
-}
-
 function captureAnthropicCompaction(
   output: ReplayOut,
   summary: string,
@@ -143,7 +106,7 @@ function captureAnthropicCompaction(
   model: Model,
   options?: ReplayOpts,
 ): void {
-  const context = buildAnthropicReplayContext(model, options);
+  const context = buildProviderReplayContext(model, options);
   if (!summary || !context.baseUrlHash || !Number.isSafeInteger(replayIndex) || replayIndex < 0) {
     return;
   }
@@ -162,7 +125,7 @@ export function suppressAnthropicCompaction(
   model: Model,
   options?: ReplayOpts,
 ): void {
-  const context = buildAnthropicReplayContext(model, options);
+  const context = buildProviderReplayContext(model, options);
   if (!context.baseUrlHash) {
     return;
   }
@@ -180,7 +143,7 @@ export function resolveNewestAnthropicCompaction(
   model: Model,
   options?: ReplayOpts,
 ): { owner: AssistantMessage; replayIndex: number; summary: string } | undefined {
-  const context = buildAnthropicReplayContext(model, options);
+  const context = buildProviderReplayContext(model, options);
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message?.role !== "assistant") {
@@ -188,7 +151,7 @@ export function resolveNewestAnthropicCompaction(
     }
     const replayState = readAnthropicCompactionState(message.providerReplay);
     if (replayState?.type === ANTHROPIC_COMPACTION_SUPPRESSION_TYPE) {
-      if (replayContextMatches(replayState, context)) {
+      if (providerReplayContextMatches(replayState, context)) {
         return undefined;
       }
       continue;
@@ -199,7 +162,7 @@ export function resolveNewestAnthropicCompaction(
     if (!replayState) {
       return undefined;
     }
-    if (!replayContextMatches(replayState, context)) {
+    if (!providerReplayContextMatches(replayState, context)) {
       return undefined;
     }
     return {

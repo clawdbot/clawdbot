@@ -48,3 +48,9 @@ export function createSessionRowModelCacheKey(
 ) {
   return `${normalizeLowercaseStringOrEmpty(provider)}\0${normalizeOptionalString(model) ?? ""}`;
 }
+
+export type SessionListActiveRunProjector = (
+  key: string,
+  entry: SessionEntry,
+  agentId: string,
+) => { active: boolean; status?: "queued" };

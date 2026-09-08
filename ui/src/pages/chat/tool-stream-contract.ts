@@ -42,6 +42,7 @@ export type RunOutputUsage = { outputTokens: number; seq: number };
 export type CompactionStatus = {
   phase: "active" | "retrying" | "complete";
   runId: string | null;
+  itemId?: string;
   startedAt: number | null;
   completedAt: number | null;
 };

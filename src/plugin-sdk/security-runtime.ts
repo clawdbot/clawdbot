@@ -1,15 +1,14 @@
 /** Public security runtime helpers for plugin-side trust boundaries. */
 
-import { statRegularFileSync as inspectRegularFileSync } from "../infra/fs-safe.js";
-
-/** Return whether a path resolves to a regular file, treating filesystem errors as missing. */
-export function fileExists(filePath: string): boolean {
-  try {
-    return !inspectRegularFileSync(filePath).missing;
-  } catch {
-    return false;
-  }
-}
+export {
+  assertNoSymlinkParents,
+  assertNoSymlinkParentsSync,
+  fileExists,
+  readRegularFile,
+  readRegularFileSync,
+  statRegularFile,
+  statRegularFileSync,
+} from "./file-access-runtime.js";
 
 export {
   buildChannelMetadata,
@@ -39,12 +38,8 @@ export {
   openLocalFileSafely,
   pathExists,
   pathExistsSync,
-  readRegularFile,
   resolveLocalPathFromRootsSync,
-  readRegularFileSync,
   root,
-  statRegularFile,
-  statRegularFileSync,
   writeExternalFileWithinRoot,
   withTimeout,
 } from "../infra/fs-safe.js";
@@ -70,7 +65,6 @@ export { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 export { privateFileStoreSync } from "../infra/private-file-store.js";
 export { movePathWithCopyFallback, replaceFileAtomic } from "../infra/replace-file.js";
 
-export { assertNoSymlinkParents, assertNoSymlinkParentsSync } from "../infra/fs-safe-advanced.js";
 export { ensurePortAvailable } from "../infra/ports.js";
 
 export {

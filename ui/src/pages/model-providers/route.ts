@@ -64,7 +64,10 @@ export const page = definePage({
   component: () =>
     import("./model-providers-page.ts").then(() => ({
       header: true,
-      render: (data: ModelProvidersRouteData | undefined) =>
-        html`<openclaw-model-providers-page .routeData=${data}></openclaw-model-providers-page>`,
+      render: (data: ModelProvidersRouteData | undefined, loaderPending = false) =>
+        html`<openclaw-model-providers-page
+          .routeData=${data}
+          .loaderPending=${loaderPending}
+        ></openclaw-model-providers-page>`,
     })),
 });

@@ -3,15 +3,18 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-policy.js";
 import {
+  CRON_MANAGEMENT_METHODS,
   createCronCreatorAuthorityRunScope,
   mintCronCreatorAuthorityGrant,
   revokeCronCreatorAuthorityRunScope,
   type CronCreatorAuthorityRunScope,
 } from "../gateway/cron-creator-authority-grant.js";
+import { validateAgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
 import type {
   CronCreatorToolAuthorityMaterialization,
   CronToolOptions,
 } from "./tools/cron-tool.types.js";
+import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 type CronCreatorAuthorityResolver = NonNullable<CronToolOptions["resolveCreatorToolAuthority"]>;
 type CronCreatorAuthorityMaterializer = (options?: {
@@ -29,16 +32,49 @@ export type CronCreatorAuthorityCapability = CronCreatorAuthorityRunScope;
 export function createCronCreatorAuthorityCapability(
   runId: string,
   callerOrigin: CronScheduledToolCallerOrigin = { kind: "unknown" },
+  controlUiAdmin?: true,
 ): CronCreatorAuthorityCapability | undefined {
   const normalizedRunId = runId.trim();
   return normalizedRunId
-    ? createCronCreatorAuthorityRunScope(normalizedRunId, callerOrigin)
+    ? createCronCreatorAuthorityRunScope(normalizedRunId, callerOrigin, controlUiAdmin)
     : undefined;
 }
 
 const activeCronCreatorAuthority = new AsyncLocalStorage<CronCreatorAuthorityRunScope>();
 const activeCronCreatorAuthorityResolver =
   new AsyncLocalStorage<CronCreatorAuthorityResolverScope>();
+
+/** Bind at tool construction, never rediscover authority from model arguments or routes. */
+export function bindCronManagementGrant(runId: string | undefined) {
+  const scope = activeCronCreatorAuthority.getStore();
+  const authority = getGatewayToolCallerIdentity()?.approvalAuthority;
+  if (
+    !scope?.controlUiAdmin ||
+    !scope.active ||
+    scope.signal.aborted ||
+    scope.runId !== runId ||
+    !authority ||
+    authority.operationalRunInstance.runId !== runId ||
+    !validateAgentRunDelegatedAuthority(authority)
+  ) {
+    return undefined;
+  }
+  const managementOnly = scope.callerOrigin.kind === "unknown";
+  return {
+    managementOnly,
+    mint: (method: string, signal?: AbortSignal) => {
+      if (!CRON_MANAGEMENT_METHODS.some((allowed) => allowed === method)) {
+        if (managementOnly) {
+          throw new Error(
+            "This Control UI turn can only list, get, update, run, or remove automations. Use the Automations page for other actions.",
+          );
+        }
+        return undefined;
+      }
+      return mintCronCreatorAuthorityGrant(scope, signal, undefined, { method, authority });
+    },
+  };
+}
 
 export function shouldAdmitFreshChannelOwnerCronAuthority(params: {
   senderIsOwner: boolean;
@@ -98,7 +134,12 @@ function bindCronCreatorAuthorityResolver(params: {
 }): CronCreatorAuthorityResolver | undefined {
   const normalizedRunId = params.runId?.trim();
   const authority = params.capability;
-  if (!normalizedRunId || authority?.active !== true || authority.runId !== normalizedRunId) {
+  if (
+    !normalizedRunId ||
+    authority?.active !== true ||
+    authority.runId !== normalizedRunId ||
+    (authority.controlUiAdmin && authority.callerOrigin.kind === "unknown")
+  ) {
     return undefined;
   }
   return async (options) => {

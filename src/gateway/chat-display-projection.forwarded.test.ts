@@ -74,4 +74,28 @@ describe("forwarded session attribution", () => {
       ]);
     }
   });
+  it("retains forwarded code indentation through both history transports", () => {
+    const body = "\n    indented body\n\n";
+    const provenance = {
+      kind: "inter_session" as const,
+      sourceTool: "sessions_send",
+      sourceSessionKey: "agent:helper:main",
+    };
+    const message = {
+      role: "user",
+      provenance,
+      content: annotateInterSessionPromptText(body, provenance),
+    };
+    for (const messages of projectHistoryTransports(message)) {
+      expect(messages).toStrictEqual([
+        {
+          role: "assistant",
+          provenance,
+          content: body,
+          senderLabel: "Forwarded from helper",
+          senderSession: { sessionKey: "agent:helper:main", agentId: "helper" },
+        },
+      ]);
+    }
+  });
 });

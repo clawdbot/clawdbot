@@ -1,6 +1,7 @@
 /** In-memory plugin registry builder and mutation API for plugin runtime registration. */
 import { cleanupPluginSessionSchedulerJobs } from "./host-hook-runtime.js";
 import { createPluginApiFactory } from "./registry-api.js";
+import { getPluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import { createPluginRegistrars } from "./registry-registrars.js";
 import { createPluginRuntimeResolver } from "./registry-runtime.js";
 import { createPluginRegistryState } from "./registry-state.js";
@@ -51,6 +52,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const rollbackPluginGlobalSideEffects = (pluginId: string, record?: RegistryPluginRecord) => {
     deactivatePluginSideEffectGuards(pluginId);
     runtimeResolver.revokePluginRuntimeRecord(pluginId, record);
+    getPluginRegistryInspectionResources(state.registry)?.rollback(pluginId);
     const schedulerRecords = state.registry.sessionSchedulerJobs.filter(
       (r) => r.pluginId === pluginId,
     );
@@ -123,46 +125,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     createApi,
     rollbackPluginGlobalSideEffects,
     pushDiagnostic: state.pushDiagnostic,
-    registerTool: registrars.registerTool,
-    registerChannel: registrars.registerChannel,
-    registerHostedMediaResolver: registrars.registerHostedMediaResolver,
-    registerWidgetPresenter: registrars.registerWidgetPresenter,
-    registerMcpServerConnectionResolver: registrars.registerMcpServerConnectionResolver,
-    registerProvider: registrars.registerProvider,
-    registerWorkerProvider: registrars.registerWorkerProvider,
-    registerModelCatalogProvider: registrars.registerModelCatalogProvider,
-    registerAgentHarness: registrars.registerAgentHarness,
-    registerCliBackend: registrars.registerCliBackend,
-    registerTextTransforms: registrars.registerTextTransforms,
-    registerEmbeddingProvider: registrars.registerEmbeddingProvider,
-    registerSpeechProvider: registrars.registerSpeechProvider,
-    registerRealtimeTranscriptionProvider: registrars.registerRealtimeTranscriptionProvider,
-    registerRealtimeVoiceProvider: registrars.registerRealtimeVoiceProvider,
-    registerMediaUnderstandingProvider: registrars.registerMediaUnderstandingProvider,
-    registerTranscriptSourceProvider: registrars.registerTranscriptSourceProvider,
-    registerImageGenerationProvider: registrars.registerImageGenerationProvider,
-    registerVideoGenerationProvider: registrars.registerVideoGenerationProvider,
-    registerMusicGenerationProvider: registrars.registerMusicGenerationProvider,
-    registerWebSearchProvider: registrars.registerWebSearchProvider,
-    registerMigrationProvider: registrars.registerMigrationProvider,
-    registerGatewayMethod: registrars.registerGatewayMethod,
-    registerSessionCatalog: registrars.registerSessionCatalog,
-    registerCli: registrars.registerCli,
-    registerReload: registrars.registerReload,
-    registerNodeHostCommand: registrars.registerNodeHostCommand,
-    registerSecurityAuditCollector: registrars.registerSecurityAuditCollector,
-    registerService: registrars.registerService,
-    registerCommand: registrars.registerCommand,
-    registerSessionExtension: registrars.registerSessionExtension,
-    registerTrustedToolPolicy: registrars.registerTrustedToolPolicy,
-    registerToolMetadata: registrars.registerToolMetadata,
-    registerControlUiDescriptor: registrars.registerControlUiDescriptor,
-    registerBoardWidgetContentKind: registrars.registerBoardWidgetContentKind,
-    registerRuntimeLifecycle: registrars.registerRuntimeLifecycle,
-    registerAgentEventSubscription: registrars.registerAgentEventSubscription,
-    registerSessionSchedulerJob: registrars.registerSessionSchedulerJob,
-    registerSessionAction: registrars.registerSessionAction,
-    registerHook: registrars.registerHook,
-    registerTypedHook: registrars.registerTypedHook,
+    ...registrars,
   };
 }

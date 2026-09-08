@@ -7,55 +7,65 @@ final class VoiceWakeGlobalSettingsSync {
     static let shared = VoiceWakeGlobalSettingsSync()
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "voicewake.sync")
+    private let gateway: GatewayConnection
     private var task: Task<Void, Never>?
+    private var refreshTask: Task<Void, Never>?
 
     private struct VoiceWakePayload: Codable, Equatable {
         let triggers: [String]
     }
 
+    init(gateway: GatewayConnection = .shared) {
+        self.gateway = gateway
+    }
+
     func start() {
-        SimpleTaskSupport.start(task: &self.task) { [weak self] in
+        SimpleTaskSupport.start(task: &self.task) { @MainActor [weak self] in
             guard let self else { return }
-            while !Task.isCancelled {
-                do {
-                    try await GatewayConnection.shared.refresh()
-                } catch {
-                    // Not configured / not reachable yet.
+            _ = try? await self.gateway.acquireServerLease()
+            await GatewayPushSubscription
+                .consume(connection: self.gateway, bufferingNewest: 200) { [weak self] delivery in
+                    guard let self, delivery.isCurrent, let push = delivery.push else { return }
+                    switch push {
+                    case .snapshot, .seqGap:
+                        self.refreshTask?.cancel()
+                        self.refreshTask = Task { await self.refreshFromGateway(delivery: delivery) }
+                    case let .event(event) where event.event == "voicewake.changed":
+                        self.handle(push: push)
+                    default:
+                        break
+                    }
                 }
-
-                await self.refreshFromGateway()
-
-                let stream = await GatewayConnection.shared.subscribe(bufferingNewest: 200)
-                for await push in stream {
-                    if Task.isCancelled { return }
-                    await self.handle(push: push)
-                }
-
-                // If the stream finishes (gateway shutdown / reconnect), loop and resubscribe.
-                try? await Task.sleep(nanoseconds: 600_000_000)
-            }
         }
     }
 
     func stop() {
         SimpleTaskSupport.stop(task: &self.task)
+        SimpleTaskSupport.stop(task: &self.refreshTask)
     }
 
-    private func refreshFromGateway() async {
+    private func refreshFromGateway(delivery: GatewayConnection.PushDelivery) async {
         do {
-            let triggers = try await GatewayConnection.shared.voiceWakeGetTriggers()
-            AppStateStore.shared.applyGlobalVoiceWakeTriggers(triggers)
+            let data = try await self.gateway.request(
+                method: GatewayConnection.Method.voicewakeGet.rawValue,
+                params: nil,
+                ifCurrentServerLease: delivery.serverLease)
+            guard !Task.isCancelled, delivery.isCurrent else { return }
+            let payload = try JSONDecoder().decode(VoiceWakePayload.self, from: data)
+            AppStateStore.shared.applyGlobalVoiceWakeTriggers(payload.triggers)
         } catch {
             // Best-effort only.
         }
     }
 
-    func handle(push: GatewayPush) async {
+    func handle(push: GatewayPush) {
         guard case let .event(evt) = push else { return }
         guard evt.event == "voicewake.changed" else { return }
         guard let payload = evt.payload else { return }
         do {
             let decoded = try GatewayPayloadDecoding.decode(payload, as: VoiceWakePayload.self)
+            // A valid live update is newer than any snapshot read already in flight.
+            self.refreshTask?.cancel()
             AppStateStore.shared.applyGlobalVoiceWakeTriggers(decoded.triggers)
         } catch {
             self.logger.error("failed to decode voicewake.changed: \(error.localizedDescription, privacy: .public)")

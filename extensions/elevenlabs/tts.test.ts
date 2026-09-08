@@ -1,6 +1,8 @@
 // Elevenlabs tests cover tts plugin behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { MAX_AUDIO_BYTES } from "openclaw/plugin-sdk/media-runtime";
 import { synthesizeElevenLabsLiveSpeech } from "openclaw/plugin-sdk/provider-test-contracts";
+import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStreamingErrorResponse } from "../test-support/streaming-error-response.js";
 import { elevenLabsTTS, elevenLabsTTSStream } from "./tts.js";
@@ -27,28 +29,6 @@ describe("elevenlabs tts diagnostics", () => {
     };
   }
 
-  function getHeadersFromFirstFetchCall(fetchMock: ReturnType<typeof vi.fn>): Headers {
-    return new Headers(getInitFromFirstFetchCall(fetchMock).headers);
-  }
-
-  function requireFirstFetchCall(fetchMock: ReturnType<typeof vi.fn>): [string | URL, RequestInit] {
-    const [call] = fetchMock.mock.calls;
-    if (!call) {
-      throw new Error("expected ElevenLabs fetch call");
-    }
-    return call as [string | URL, RequestInit];
-  }
-
-  function getInitFromFirstFetchCall(fetchMock: ReturnType<typeof vi.fn>): RequestInit {
-    const [, init] = requireFirstFetchCall(fetchMock);
-    return init;
-  }
-
-  function getUrlFromFirstFetchCall(fetchMock: ReturnType<typeof vi.fn>): URL {
-    const [url] = requireFirstFetchCall(fetchMock);
-    return new URL(url.toString());
-  }
-
   async function expectDefaultTtsRequestToThrow(message: string | RegExp) {
     await expect(elevenLabsTTS(createDefaultTtsRequest())).rejects.toThrow(message);
   }
@@ -59,7 +39,7 @@ describe("elevenlabs tts diagnostics", () => {
   });
 
   it("includes parsed provider detail and request id for JSON API errors", async () => {
-    const fetchMock = vi.fn(
+    const fetchMock = vi.fn<typeof fetch>(
       async () =>
         new Response(
           JSON.stringify({
@@ -77,7 +57,7 @@ describe("elevenlabs tts diagnostics", () => {
           },
         ),
     );
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    globalThis.fetch = fetchMock;
 
     await expectDefaultTtsRequestToThrow(
       "ElevenLabs API error (429): Quota exceeded [code=quota_exceeded] [request_id=el_req_456]",
@@ -85,8 +65,10 @@ describe("elevenlabs tts diagnostics", () => {
   });
 
   it("falls back to raw body text when the error body is non-JSON", async () => {
-    const fetchMock = vi.fn(async () => new Response("service unavailable", { status: 503 }));
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const fetchMock = vi.fn<typeof fetch>(
+      async () => new Response("service unavailable", { status: 503 }),
+    );
+    globalThis.fetch = fetchMock;
 
     await expectDefaultTtsRequestToThrow("ElevenLabs API error (503): service unavailable");
   });
@@ -98,8 +80,8 @@ describe("elevenlabs tts diagnostics", () => {
       chunkSize: 1024,
       byte: 121,
     });
-    const fetchMock = vi.fn(async () => streamed.response);
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const fetchMock = vi.fn<typeof fetch>(async () => streamed.response);
+    globalThis.fetch = fetchMock;
 
     await expectDefaultTtsRequestToThrow("ElevenLabs API error (503)");
 
@@ -107,65 +89,70 @@ describe("elevenlabs tts diagnostics", () => {
   });
 
   it("keeps the MPEG Accept header for MP3 output", async () => {
-    const fetchMock = vi.fn(async () => new Response(Buffer.from("mp3")));
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(Buffer.from("mp3")));
+    globalThis.fetch = fetchMock;
 
     await elevenLabsTTS(createDefaultTtsRequest());
 
-    expect(getHeadersFromFirstFetchCall(fetchMock).get("accept")).toBe("audio/mpeg");
+    const [, init] = expectDefined(fetchMock.mock.calls[0], "ElevenLabs fetch call");
+    const headers = new Headers(expectDefined(init, "ElevenLabs request init").headers);
+    expect(headers.get("accept")).toBe("audio/mpeg");
   });
 
   it("rejects JSON success bodies as malformed audio", async () => {
-    const fetchMock = vi.fn(
+    const fetchMock = vi.fn<typeof fetch>(
       async () =>
         new Response(JSON.stringify({ error: "not audio" }), {
           headers: { "content-type": "application/json" },
         }),
     );
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    globalThis.fetch = fetchMock;
 
     await expectDefaultTtsRequestToThrow("ElevenLabs API error: malformed audio response");
   });
 
   it("rejects empty successful audio bodies as malformed audio", async () => {
-    const fetchMock = vi.fn(async () => new Response(new Uint8Array()));
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(new Uint8Array()));
+    globalThis.fetch = fetchMock;
 
     await expectDefaultTtsRequestToThrow("ElevenLabs API error: malformed audio response");
   });
 
   it("omits the MPEG Accept header for PCM telephony output", async () => {
-    const fetchMock = vi.fn(async () => new Response(Buffer.from("pcm")));
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(Buffer.from("pcm")));
+    globalThis.fetch = fetchMock;
 
     await elevenLabsTTS({
       ...createDefaultTtsRequest(),
       outputFormat: "pcm_22050",
     });
 
-    expect(getHeadersFromFirstFetchCall(fetchMock).has("accept")).toBe(false);
+    const [, init] = expectDefined(fetchMock.mock.calls[0], "ElevenLabs fetch call");
+    const headers = new Headers(expectDefined(init, "ElevenLabs request init").headers);
+    expect(headers.has("accept")).toBe(false);
   });
 
   it("sends latency optimization as an ElevenLabs query parameter", async () => {
-    const fetchMock = vi.fn(async () => new Response(Buffer.from("mp3")));
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(Buffer.from("mp3")));
+    globalThis.fetch = fetchMock;
 
     await elevenLabsTTS({
       ...createDefaultTtsRequest(),
       latencyTier: 3,
     });
 
-    const url = getUrlFromFirstFetchCall(fetchMock);
+    const [requestUrl, init] = expectDefined(fetchMock.mock.calls[0], "ElevenLabs fetch call");
+    const url = new URL(resolveRequestUrl(requestUrl));
     expect(url.searchParams.get("optimize_streaming_latency")).toBe("3");
-    const body = JSON.parse(getInitFromFirstFetchCall(fetchMock).body as string) as {
+    const body = JSON.parse(expectDefined(init, "ElevenLabs request init").body as string) as {
       latency_optimization_level?: number;
     };
     expect(body.latency_optimization_level).toBeUndefined();
   });
 
   it("rejects fractional latency optimization instead of truncating it", async () => {
-    const fetchMock = vi.fn(async () => new Response(Buffer.from("mp3")));
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(Buffer.from("mp3")));
+    globalThis.fetch = fetchMock;
 
     await expect(
       elevenLabsTTS({
@@ -178,8 +165,8 @@ describe("elevenlabs tts diagnostics", () => {
   });
 
   it("omits latency optimization for eleven_v3 because the API rejects it", async () => {
-    const fetchMock = vi.fn(async () => new Response(Buffer.from("mp3")));
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(Buffer.from("mp3")));
+    globalThis.fetch = fetchMock;
 
     await elevenLabsTTS({
       ...createDefaultTtsRequest(),
@@ -187,7 +174,8 @@ describe("elevenlabs tts diagnostics", () => {
       latencyTier: 3,
     });
 
-    const url = getUrlFromFirstFetchCall(fetchMock);
+    const [requestUrl] = expectDefined(fetchMock.mock.calls[0], "ElevenLabs fetch call");
+    const url = new URL(resolveRequestUrl(requestUrl));
     expect(url.searchParams.has("optimize_streaming_latency")).toBe(false);
   });
 
@@ -198,15 +186,16 @@ describe("elevenlabs tts diagnostics", () => {
         controller.close();
       },
     });
-    const fetchMock = vi.fn(async () => new Response(audioStream));
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(audioStream));
+    globalThis.fetch = fetchMock;
 
     const result = await elevenLabsTTSStream({
       ...createDefaultTtsRequest(),
       latencyTier: 2,
     });
     try {
-      const url = getUrlFromFirstFetchCall(fetchMock);
+      const [requestUrl] = expectDefined(fetchMock.mock.calls[0], "ElevenLabs fetch call");
+      const url = new URL(resolveRequestUrl(requestUrl));
       expect(url.pathname).toBe("/v1/text-to-speech/pMsXgVXv3BLzUgSXRplE/stream");
       expect(url.searchParams.get("optimize_streaming_latency")).toBe("2");
       const reader = result.audioStream.getReader();
@@ -229,10 +218,10 @@ describe("elevenlabs tts diagnostics", () => {
       },
       cancel,
     });
-    const fetchMock = vi.fn(
+    const fetchMock = vi.fn<typeof fetch>(
       async () => new Response(audioStream, { headers: { "content-type": "audio/mpeg" } }),
     );
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    globalThis.fetch = fetchMock;
 
     const result = await elevenLabsTTSStream(createDefaultTtsRequest());
     try {
@@ -257,10 +246,10 @@ describe("elevenlabs tts diagnostics", () => {
       },
       cancel,
     });
-    const fetchMock = vi.fn(
+    const fetchMock = vi.fn<typeof fetch>(
       async () => new Response(audioStream, { headers: { "content-type": "audio/mpeg" } }),
     );
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    globalThis.fetch = fetchMock;
 
     const result = await elevenLabsTTSStream(createDefaultTtsRequest());
     const reader = result.audioStream.getReader();
@@ -291,10 +280,10 @@ describe("elevenlabs tts diagnostics", () => {
       },
       cancel,
     });
-    const fetchMock = vi.fn(
+    const fetchMock = vi.fn<typeof fetch>(
       async () => new Response(audioStream, { headers: { "content-type": "audio/mpeg" } }),
     );
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    globalThis.fetch = fetchMock;
 
     const result = await elevenLabsTTSStream(createDefaultTtsRequest());
     try {
@@ -314,13 +303,13 @@ describe("elevenlabs tts diagnostics", () => {
   });
 
   it("rejects JSON success stream responses as malformed audio", async () => {
-    const fetchMock = vi.fn(
+    const fetchMock = vi.fn<typeof fetch>(
       async () =>
         new Response(JSON.stringify({ error: "not audio" }), {
           headers: { "content-type": "application/json" },
         }),
     );
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    globalThis.fetch = fetchMock;
 
     await expect(elevenLabsTTSStream(createDefaultTtsRequest())).rejects.toThrow(
       "ElevenLabs API error: malformed audio response",
@@ -346,7 +335,7 @@ describe("elevenlabs live audio helper error-path body release", () => {
       }),
       { status: 401 },
     );
-    globalThis.fetch = vi.fn(async () => response) as typeof fetch;
+    globalThis.fetch = vi.fn<typeof fetch>(async () => response);
 
     await expect(
       synthesizeElevenLabsLiveSpeech({

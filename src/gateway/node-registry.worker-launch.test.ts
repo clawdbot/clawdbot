@@ -5,12 +5,18 @@ import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-i
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND } from "../infra/node-commands.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
-import { testWorkerLaunchInput } from "../node-host/node-worker-supervisor.test-support.js";
+import {
+  testNodeWorkerLaunchIdentity,
+  testWorkerLaunchInput,
+} from "../node-host/node-worker-supervisor.test-support.js";
 import { parseNodeWorkerLaunchInput } from "../worker/node-supervisor-protocol.js";
 import { buildNodeInvokeRequest, serializeNodeEvent } from "./node-invoke-request.js";
 import { createNodeRegistryRuntime, updateNodeRunnerInventory } from "./node-registry-private.js";
 import { NodeRegistry } from "./node-registry.js";
-import { measureNodeWorkerLaunchBytes } from "./worker-environments/node-launch-adapter.js";
+import {
+  createNodeWorkerLaunchAdapter,
+  measureNodeWorkerLaunchBytes,
+} from "./worker-environments/node-launch-adapter.js";
 
 describe("private worker launch wire", () => {
   // Exercise the real node/client message limit without starting a Gateway or a worker.
@@ -158,4 +164,121 @@ describe("private worker launch wire", () => {
       sent.mockRestore();
     }
   });
+
+  it("keeps the first dispatched launch alive beyond the availability grace", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const controller = new AbortController();
+    const input = testWorkerLaunchInput("/tmp/workspace", "delayed-receipt-turn");
+    const terminal = {
+      ...testNodeWorkerLaunchIdentity(input),
+      state: "completed",
+      resultJson: JSON.stringify({
+        status: "completed",
+        transcriptLeafId: "leaf-1",
+        transcriptNextSeq: 2,
+      }),
+    };
+    const sent = vi.spyOn(socket, "send");
+    const received = once(client, "message");
+    const dispatched = vi.fn();
+    const adapter = createNodeWorkerLaunchAdapter({
+      getTransport: () => nodeWorkerSupervisorTransport,
+    });
+    const outcome = adapter
+      .launch({
+        deviceId: nodeId,
+        input,
+        isDispatchAuthorized: () => true,
+        isCancellationAuthorized: () => true,
+        timeoutMs: 60_000,
+        signal: controller.signal,
+        onDispatchReady: dispatched,
+      })
+      .catch((error: unknown) => error);
+    try {
+      const [data] = await received;
+      const request = JSON.parse(Buffer.from(data).toString("utf8"));
+      expect(request.event).toBe("node.invoke.request");
+      expect(request.payload.command).toBe(NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND);
+      expect(dispatched).toHaveBeenCalledOnce();
+
+      await vi.advanceTimersByTimeAsync(11_000);
+
+      // A timeout at the old availability boundary sends cancellation or a duplicate launch.
+      expect(sent).toHaveBeenCalledOnce();
+      expect(
+        nodeRegistry.handleInvokeResult({
+          id: request.payload.id,
+          nodeId,
+          connId,
+          ok: true,
+          payloadJSON: JSON.stringify(terminal),
+        }),
+      ).toBe(true);
+      expect(await outcome).toEqual(terminal);
+      expect(sent).toHaveBeenCalledOnce();
+    } finally {
+      controller.abort();
+      await vi.runAllTimersAsync();
+      await outcome;
+      sent.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { timeoutMs: 30_000, expected: { code: "runner-offline" } },
+    { timeoutMs: 5_000, expected: { message: "node worker launch timed out" } },
+    { timeoutMs: 10_000, expected: { message: "node worker launch timed out" } },
+  ])(
+    "rejects clock expiry during discovery before dispatch with a $timeoutMs ms launch budget",
+    async ({ timeoutMs, expected }) => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      const controller = new AbortController();
+      const startedAt = Date.now();
+      const listCurrentNodes = nodeWorkerSupervisorTransport.listCurrentNodes.bind(
+        nodeWorkerSupervisorTransport,
+      );
+      const discovery = vi
+        .spyOn(nodeWorkerSupervisorTransport, "listCurrentNodes")
+        .mockImplementationOnce(async () => {
+          const nodes = await listCurrentNodes();
+          vi.setSystemTime(startedAt + 10_000);
+          return nodes;
+        });
+      const sent = vi.spyOn(socket, "send");
+      const unhandledRejection = vi.fn();
+      process.on("unhandledRejection", unhandledRejection);
+      const adapter = createNodeWorkerLaunchAdapter({
+        getTransport: () => nodeWorkerSupervisorTransport,
+      });
+      const outcome = adapter
+        .launch({
+          deviceId: nodeId,
+          input: testWorkerLaunchInput("/tmp/workspace", "discovery-expiry-turn"),
+          isDispatchAuthorized: () => true,
+          isCancellationAuthorized: () => true,
+          timeoutMs,
+          signal: controller.signal,
+        })
+        .catch((error: unknown) => error);
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(sent).not.toHaveBeenCalled();
+        expect(await outcome).toMatchObject(expected);
+        expect(unhandledRejection).not.toHaveBeenCalled();
+      } finally {
+        controller.abort();
+        await vi.runAllTimersAsync();
+        await outcome;
+        process.off("unhandledRejection", unhandledRejection);
+        discovery.mockRestore();
+        sent.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
 });

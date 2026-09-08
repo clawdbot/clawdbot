@@ -1,0 +1,33 @@
+name: Dependency Audit
+
+on:
+  schedule:
+    - cron: "23 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-audit-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        run: |
+          source .github/actions/setup-pnpm-store-cache/ensure-node.sh
+          openclaw_ensure_node "24.x"
+
+      - name: Audit production dependencies
+        run: |
+          echo 'Triage owner: @steipete. Investigate failures and rerun this strict audit to confirm recovery.' >> "$GITHUB_STEP_SUMMARY"
+          node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high

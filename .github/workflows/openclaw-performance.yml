@@ -7,8 +7,21 @@ on:
     - cron: "11 5 * * *"
   workflow_dispatch:
     inputs:
+      mode:
+        description: Performance mode
+        required: false
+        default: kova
+        type: choice
+        options:
+          - kova
+          - vitest-pair
       target_ref:
         description: OpenClaw ref to benchmark; defaults to the workflow ref
+        required: false
+        default: ""
+        type: string
+      baseline_ref:
+        description: Exact baseline SHA for vitest-pair mode
         required: false
         default: ""
         type: string
@@ -75,9 +88,9 @@ env:
   OCM_VERSION: v0.2.33
   OCM_LINUX_X64_SHA256: 06b0e46791e750eb044e4a898b6643ad5e7b20224fe0c64f160e35a42f08d00a
   KOVA_REPOSITORY: openclaw/Kova
-  KOVA_CANONICAL_CONFIG_REF: 81919463ef9620722373c813192c688573f2b533
-  KOVA_LEGACY_LIST_CONFIG_REF: 81919463ef9620722373c813192c688573f2b533
-  KOVA_TRUSTED_LIVE_REF: 81919463ef9620722373c813192c688573f2b533
+  KOVA_CANONICAL_CONFIG_REF: e4d865f55f655a77df169a7be01877608c3260b9
+  KOVA_LEGACY_LIST_CONFIG_REF: e4d865f55f655a77df169a7be01877608c3260b9
+  KOVA_TRUSTED_LIVE_REF: e4d865f55f655a77df169a7be01877608c3260b9
   PERFORMANCE_MODEL_ID: gpt-5.6-luna
   # Release matrices cold-build the candidate runtime before measurement.
   KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}
@@ -85,6 +98,7 @@ env:
 jobs:
   resolve_target:
     name: Resolve target ref
+    if: ${{ github.event_name == 'schedule' || inputs.mode != 'vitest-pair' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -98,7 +112,7 @@ jobs:
       cache_write_allowed: ${{ steps.candidate_trust.outputs.cache_write_allowed }}
     steps:
       - name: Prepare Git owner
-        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+        uses: openclaw/openclaw/.github/actions/git-owner@a379bbd73e30b84a89aca4d54744ab9ca19082e7
 
       - name: Checkout target metadata
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -214,7 +228,10 @@ jobs:
   kova:
     name: ${{ matrix.title }}
     needs: resolve_target
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    if: ${{ github.event_name == 'schedule' || inputs.mode != 'vitest-pair' }}
+    permissions:
+      contents: read
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 240
     strategy:
       fail-fast: false
@@ -300,7 +317,7 @@ jobs:
 
       - name: Prepare Git owner
         if: steps.lane.outputs.run == 'true'
-        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+        uses: openclaw/openclaw/.github/actions/git-owner@a379bbd73e30b84a89aca4d54744ab9ca19082e7
 
       - name: Checkout OpenClaw
         if: steps.lane.outputs.run == 'true'
@@ -400,6 +417,8 @@ jobs:
 
       - name: Install OCM and Kova
         if: steps.lane.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
@@ -419,10 +438,27 @@ jobs:
           tar -xzf "$ocm_archive" -C "${RUNNER_TEMP}/ocm-install"
           install -m 0755 "${RUNNER_TEMP}/ocm-install/ocm" "$HOME/.local/bin/ocm"
 
-          python3 -I -S "$CI_GIT_OWNER" --git 0 init -b main "$KOVA_SRC"
-          python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$KOVA_SRC" remote add origin "https://github.com/${KOVA_REPOSITORY}.git"
-          python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$KOVA_SRC" fetch --filter=blob:none --depth 1 origin "$KOVA_REF"
-          python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$KOVA_SRC" checkout --detach FETCH_HEAD
+          python3 -I -S "$CI_GIT_OWNER" --policy - "$KOVA_SRC" <<'PYTHON'
+          import base64
+          import os
+          import sys
+          from ci_git_owner import checkout_environment, fetch, fetch_timeout_seconds, git_auth_environment, run_git
+
+          remote = f"https://github.com/{os.environ['KOVA_REPOSITORY']}.git"
+          token = os.environ.pop("GH_TOKEN")
+          print("::add-mask::" + base64.b64encode(f"x-access-token:{token}".encode()).decode(), flush=True)
+          checkout_environment.update(git_auth_environment(remote, token))
+          del token
+          source = sys.argv[3]
+          os.makedirs(source, exist_ok=True)
+          run_git(source, "init", "-b", "main")
+          run_git(source, "remote", "add", "origin", remote)
+          fetch(source, os.environ["KOVA_REF"], blobless=True, max_attempts=3, retry_failures=True)
+          # Filtered checkout can fetch promised blobs; retain process-only auth
+          # and the network deadline until the complete worktree is available.
+          run_git(source, "checkout", "--detach", "FETCH_HEAD", timeout=fetch_timeout_seconds)
+          PYTHON
+          unset GH_TOKEN
           npm --prefix "$KOVA_SRC" ci --ignore-scripts --no-audit --no-fund
           node - "$KOVA_SRC" <<'NODE'
           const fs = require("node:fs");
@@ -692,7 +728,8 @@ jobs:
   source_performance:
     name: OpenClaw source performance probes
     needs: resolve_target
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    if: ${{ github.event_name == 'schedule' || inputs.mode != 'vitest-pair' }}
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 120
     env:
       PERFORMANCE_HELPER_DIR: ${{ github.workspace }}/.artifacts/performance-workflow
@@ -704,7 +741,7 @@ jobs:
       REQUESTED_REPEAT: ${{ inputs.repeat || '3' }}
     steps:
       - name: Prepare Git owner
-        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+        uses: openclaw/openclaw/.github/actions/git-owner@a379bbd73e30b84a89aca4d54744ab9ca19082e7
 
       - name: Checkout OpenClaw source target
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -748,28 +785,36 @@ jobs:
           install-bun: "false"
 
       - name: Fetch previous source performance baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
+          import base64
           import os
           import re
           import subprocess
           from pathlib import Path
-          from ci_git_owner import run_git, git_output, GitFailure, check_cancelled
+          from ci_git_owner import run_git, git_output, GitFailure, FetchTimeout, check_cancelled, checkout_environment, fetch, git_auth_environment
 
           reports = ".artifacts/clawgrit-baseline"
           Path(reports).mkdir(parents=True, exist_ok=True)
+          remote = "https://github.com/openclaw/clawgrit-reports.git"
+          token = os.environ.pop("GH_TOKEN")
+          print("::add-mask::" + base64.b64encode(f"x-access-token:{token}".encode()).decode(), flush=True)
+          checkout_environment.update(git_auth_environment(remote, token))
+          del token
           def summary(message):
               check_cancelled()
               with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
                   output.write(message + "\n")
 
           run_git(reports, "init", "-b", "main")
-          run_git(reports, "remote", "add", "origin", "https://github.com/openclaw/clawgrit-reports.git")
+          run_git(reports, "remote", "add", "origin", remote)
           try:
-              run_git(reports, "fetch", "--filter=blob:none", "--depth=1", "origin", "main", reclaim_locks=True)
-          except GitFailure:
+              fetch(reports, "main", blobless=True, max_attempts=3, retry_failures=True)
+          except (GitFailure, FetchTimeout):
               summary("No previous source performance baseline could be fetched.")
               raise SystemExit(0)
           ref_slug = re.sub(rb"[^A-Za-z0-9._-]", b"-", os.environ["TESTED_REF"].encode()).decode()
@@ -1020,7 +1065,7 @@ jobs:
   publish:
     name: Publish ${{ matrix.title }} report
     needs: [resolve_target, kova, source_performance]
-    if: ${{ always() && needs.resolve_target.outputs.secret_eligible == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' && needs.source_performance.result != 'cancelled' }}
+    if: ${{ always() && (github.event_name == 'schedule' || inputs.mode != 'vitest-pair') && needs.resolve_target.outputs.secret_eligible == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' && needs.source_performance.result != 'cancelled' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -1059,7 +1104,7 @@ jobs:
 
       - name: Prepare Git owner
         if: steps.lane.outputs.run == 'true'
-        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+        uses: openclaw/openclaw/.github/actions/git-owner@a379bbd73e30b84a89aca4d54744ab9ca19082e7
 
       - name: Checkout performance publisher helper
         if: steps.lane.outputs.run == 'true'
@@ -1159,6 +1204,7 @@ jobs:
         if: steps.download.outcome == 'success'
         continue-on-error: ${{ env.REPORT_PUBLISH_REQUIRED != 'true' }}
         env:
+          GH_TOKEN: ${{ github.token }}
           ARTIFACT_ID: ${{ steps.artifact.outputs.id }}
           INPUT_ROOT: ${{ steps.paths.outputs.input_root }}
           REPORTS_ROOT: ${{ steps.paths.outputs.reports_root }}
@@ -1257,14 +1303,21 @@ jobs:
           python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$reports_root" config core.hooksPath /dev/null
           python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$reports_root" remote add origin "https://github.com/openclaw/clawgrit-reports.git"
           python3 -I -S "$CI_GIT_OWNER" --policy - "$reports_root" "$annotation" <<'PYTHON'
+          import base64
+          import os
           import sys
-          from ci_git_owner import run_git, GitFailure, FetchTimeout
+          from ci_git_owner import checkout_environment, fetch, git_auth_environment, GitFailure, FetchTimeout
+          token = os.environ.pop("GH_TOKEN")
+          print("::add-mask::" + base64.b64encode(f"x-access-token:{token}".encode()).decode(), flush=True)
+          checkout_environment.update(git_auth_environment("https://github.com/openclaw/clawgrit-reports.git", token))
+          del token
           try:
-              run_git(sys.argv[3], "fetch", "--depth=1", "origin", "main", timeout=120, reclaim_locks=True)
+              fetch(sys.argv[3], "main", max_attempts=3, retry_failures=True)
           except (GitFailure, FetchTimeout):
               print(f"::{sys.argv[4]}::Unable to fetch openclaw/clawgrit-reports before publishing.")
               raise SystemExit(1)
           PYTHON
+          unset GH_TOKEN
           python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$reports_root" checkout -B main FETCH_HEAD
 
           ref_slug="$(printf '%s' "$TESTED_REF" | tr -c 'A-Za-z0-9._-' '-')"
@@ -1386,7 +1439,7 @@ jobs:
           import os
           import re
           from pathlib import Path
-          from ci_git_owner import run_git, git_output, GitFailure, FetchTimeout, backoff, check_cancelled
+          from ci_git_owner import run_git, git_output, GitFailure, FetchTimeout, backoff, check_cancelled, checkout_environment, git_auth_environment
 
           annotation = "error" if os.environ["REPORT_PUBLISH_REQUIRED"] == "true" else "warning"
           def summary(text):
@@ -1406,6 +1459,7 @@ jobs:
               summary("### Clawgrit report publish unavailable\n\nThe repository-scoped ClawSweeper GitHub App token could not be created.")
               fail("ClawSweeper GitHub App token is unavailable; Kova artifacts were uploaded, but the report cannot be published.")
           auth_header = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+          auth_environment = git_auth_environment("https://github.com/openclaw/clawgrit-reports.git", token)
           del token
           print(f"::add-mask::{auth_header}", flush=True)
           reports = str(Path(os.environ["REPORTS_ROOT"]).resolve(strict=True))
@@ -1419,14 +1473,10 @@ jobs:
           if git_output(reports, *local, "config", "--local", "--get", "core.hooksPath").rstrip("\n") != "/dev/null" or git_output(reports, *local, "remote", "get-url", "origin").rstrip("\n") != "https://github.com/openclaw/clawgrit-reports.git":
               fail("Prepared reports checkout failed integrity validation.")
           run_git(reports, *local, "cat-file", "-e", f"{report_commit}^{{commit}}")
+          checkout_environment.update(auth_environment)
           for attempt in range(1, 6):
               try:
-                  run_git(reports, "push", "origin", "HEAD:main", timeout=120, reclaim_locks=True, env={
-                      "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_COUNT": "2",
-                      "GIT_CONFIG_KEY_0": "core.hooksPath", "GIT_CONFIG_VALUE_0": "/dev/null",
-                      "GIT_CONFIG_KEY_1": "http.https://github.com/.extraheader",
-                      "GIT_CONFIG_VALUE_1": f"AUTHORIZATION: basic {auth_header}",
-                  })
+                  run_git(reports, *local, "push", "origin", "HEAD:main", timeout=120, reclaim_locks=True)
               except (GitFailure, FetchTimeout):
                   # Only ordinary failures after verified extinction authorize reconciliation.
                   # The fifth ambiguous push still gets its backoff, fetch and duplicate check.
@@ -1434,6 +1484,8 @@ jobs:
               else:
                   success()
               try:
+                  # The outer publish loop already retries reconciliation within
+                  # this job's deadline; do not multiply its network budget.
                   run_git(reports, *local, "fetch", "--depth=1", "origin", "main", timeout=120, reclaim_locks=True)
               except (GitFailure, FetchTimeout):
                   check_cancelled()
@@ -1463,7 +1515,7 @@ jobs:
   artifact_only_guard:
     name: Verify artifact-only report mode
     needs: [resolve_target, kova, publish]
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.publish_reports != true }}
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.mode != 'vitest-pair' && inputs.publish_reports != true }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -1484,3 +1536,158 @@ jobs:
             echo
             echo "Clawgrit report publication stayed disabled; Kova evidence is available only as workflow artifacts."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  vitest_pair:
+    name: Vitest paired benchmark
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'vitest-pair' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    env:
+      VITEST_PAIR_ROOT: ${{ github.workspace }}/.artifacts/vitest-pair
+      VITEST_PAIR_OUTPUT: ${{ github.workspace }}/.artifacts/vitest-pair/results
+    steps:
+      - name: Initialize Vitest pair artifact
+        shell: bash
+        run: mkdir -p "$VITEST_PAIR_OUTPUT"
+
+      - name: Validate Vitest pair request
+        env:
+          BASELINE_REF: ${{ inputs.baseline_ref }}
+          TARGET_REF: ${{ inputs.target_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          fail() {
+            printf '{"version":1,"status":"failure","phase":"input-validation","error":"%s"}\n' "$1" \
+              > "$VITEST_PAIR_OUTPUT/terminal-manifest.json"
+            echo "::error::$1"
+            exit 1
+          }
+          [[ "$RUN_ATTEMPT" == "1" ]] ||
+            fail "vitest-pair refuses workflow reruns; dispatch a fresh run"
+          [[ "$BASELINE_REF" =~ ^[0-9a-f]{40}$ ]] ||
+            fail "baseline_ref must be an exact lowercase 40-character SHA"
+          [[ "$TARGET_REF" =~ ^[0-9a-f]{40}$ ]] ||
+            fail "target_ref must be an exact lowercase 40-character SHA"
+          [[ "$TARGET_REF" == "$WORKFLOW_SHA" ]] ||
+            fail "target_ref must equal github.workflow_sha for vitest-pair mode"
+
+      - name: Checkout Vitest pair helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .artifacts/vitest-pair/helper
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout Vitest pair candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .artifacts/vitest-pair/candidate
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout Vitest pair baseline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.baseline_ref }}
+          path: .artifacts/vitest-pair/baseline
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up benchmark Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+          check-latest: false
+
+      - name: Install benchmark pnpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm_prefix="$RUNNER_TEMP/vitest-pair-pnpm"
+          npm_config_cache="$RUNNER_TEMP/vitest-pair-npm-cache" \
+            npm install --global --prefix "$pnpm_prefix" pnpm@12.3.4
+          pnpm_bin="$pnpm_prefix/bin/pnpm"
+          [[ "$("$pnpm_bin" --version)" == "12.3.4" ]]
+          echo "VITEST_PAIR_PNPM_BIN=$pnpm_bin" >> "$GITHUB_ENV"
+
+      - name: Run Vitest pair benchmark
+        env:
+          BASELINE_REF: ${{ inputs.baseline_ref }}
+          TARGET_REF: ${{ inputs.target_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node "$VITEST_PAIR_ROOT/helper/scripts/vitest-pair-benchmark.mts" \
+            --baseline "$VITEST_PAIR_ROOT/baseline" \
+            --baseline-sha "$BASELINE_REF" \
+            --candidate "$VITEST_PAIR_ROOT/candidate" \
+            --candidate-sha "$TARGET_REF" \
+            --manifest "$VITEST_PAIR_ROOT/helper/scripts/vitest-pair-benchmark-lanes.json" \
+            --output "$VITEST_PAIR_OUTPUT" \
+            --pnpm-bin "$VITEST_PAIR_PNPM_BIN" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --scratch "$VITEST_PAIR_ROOT/scratch"
+
+      - name: Finalize Vitest pair artifact
+        if: ${{ always() }}
+        env:
+          JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -f "$VITEST_PAIR_OUTPUT/terminal-manifest.json" ]]; then
+            printf '{"version":1,"status":"failure","phase":"workflow","jobStatus":"%s"}\n' \
+              "$JOB_STATUS" > "$VITEST_PAIR_OUTPUT/terminal-manifest.json"
+          fi
+
+      - name: Upload Vitest pair artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vitest-pair-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/vitest-pair/results
+          if-no-files-found: error
+          retention-days: 30
+
+  vitest_pair_guard:
+    name: Verify Vitest pair isolation
+    needs: [resolve_target, kova, source_performance, publish, artifact_only_guard, vitest_pair]
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.mode == 'vitest-pair' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Verify isolated Vitest pair result
+        env:
+          RESOLVE_RESULT: ${{ needs.resolve_target.result }}
+          KOVA_RESULT: ${{ needs.kova.result }}
+          SOURCE_RESULT: ${{ needs.source_performance.result }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          ARTIFACT_ONLY_RESULT: ${{ needs.artifact_only_guard.result }}
+          VITEST_PAIR_RESULT: ${{ needs.vitest_pair.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for result in \
+            "$RESOLVE_RESULT" \
+            "$KOVA_RESULT" \
+            "$SOURCE_RESULT" \
+            "$PUBLISH_RESULT" \
+            "$ARTIFACT_ONLY_RESULT"; do
+            if [[ "$result" != "skipped" ]]; then
+              echo "::error::vitest-pair requires every Kova/report job to stay skipped; got ${result}."
+              exit 1
+            fi
+          done
+          if [[ "$VITEST_PAIR_RESULT" != "success" ]]; then
+            echo "::error::vitest-pair benchmark did not succeed; got ${VITEST_PAIR_RESULT}. Inspect its uploaded terminal artifact."
+            exit 1
+          fi

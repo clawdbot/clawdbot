@@ -26,6 +26,7 @@ type CatalogEntry = Partial<Record<"version" | "description" | "source" | "kind"
     channelHostConfig?: Record<string, unknown>;
     channelConfigs?: Record<string, { schema?: unknown; label?: string }>;
     providerEndpoints?: Array<Record<string, unknown>>;
+    legacyNpmPackageNames?: string[];
     install: CatalogInstall;
   };
 };

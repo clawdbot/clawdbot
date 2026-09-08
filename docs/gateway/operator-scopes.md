@@ -40,6 +40,15 @@ require the `node` role.
 | `operator.talk`         | Creating, steering, and closing Talk sessions without general Gateway write access. `operator.write` also satisfies this scope.                               |
 | `operator.talk.secrets` | Reading Talk configuration with secrets included.                                                                                                             |
 
+Personal GitHub connection management is a narrowly self-scoped exception to
+read-only behavior: `users.github.*` requires `operator.read` plus the exact
+authenticated durable profile. An identified reader can connect, poll, cancel,
+reconnect, or disconnect only their own account. These methods do not expose
+team secrets, mutate shared configuration, or grant OpenClaw write/admin scopes. System
+and per-agent GitHub changes remain `operator.admin`; publication remains
+`operator.write` plus current session authorization. See
+[GitHub connections](/concepts/user-model#github-connections).
+
 Unknown future `operator.*` scopes require an exact match unless the caller
 already holds `operator.admin`.
 

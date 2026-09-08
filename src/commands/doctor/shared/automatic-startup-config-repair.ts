@@ -3,15 +3,17 @@ import {
   applyUnsetPathsForWrite,
   resolveManagedUnsetPathsForWrite,
 } from "../../../config/config-path-mutation.js";
-import { replaceConfigFile } from "../../../config/config.js";
+import { resolveConfigSnapshotHash, transformConfigFile } from "../../../config/config.js";
 import { stampConfigWriteMetadata } from "../../../config/io.meta.js";
 import { containsConfigIncludeDirective } from "../../../config/io.read-helpers.js";
+import { prepareConfigWriteTopology } from "../../../config/io.write-topology.js";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
 import {
   validateConfigObjectRaw,
   validateConfigObjectWithPlugins,
 } from "../../../config/validation.js";
+import { restoreDoctorConfigEnvRefs } from "./config-flow-steps.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { findDoctorLegacyConfigIssues } from "./legacy-config-issues.js";
 
@@ -31,11 +33,50 @@ function admitAutomaticConfigRepairSnapshot(snapshot: ConfigFileSnapshot): boole
   );
 }
 
-function buildAutomaticConfigRepairPlan(
+function prepareAutomaticConfigRepairWrite(snapshot: ConfigFileSnapshot, config: OpenClawConfig) {
+  const unsetPaths = resolveManagedUnsetPathsForWrite(undefined);
+  return stampConfigWriteMetadata(
+    applyUnsetPathsForWrite(
+      prepareConfigWriteTopology({
+        snapshot,
+        nextConfig: config,
+        options: { persistCanonicalAgentRoster: true },
+        unsetPaths,
+        env: process.env,
+      }).nextConfig,
+      unsetPaths,
+    ),
+    undefined,
+    undefined,
+    snapshot.parsed,
+  );
+}
+
+function planConfigRepair(
   snapshot: ConfigFileSnapshot,
-  config: OpenClawConfig,
-  changes: string[],
-): AutomaticConfigRepairPlan {
+  pluginContracts: boolean,
+): AutomaticConfigRepairPlan | null {
+  if (!admitAutomaticConfigRepairSnapshot(snapshot)) {
+    return null;
+  }
+  const { next: config, changes } = applyLegacyDoctorMigrations(
+    snapshot.sourceConfig,
+    { authoredRaw: snapshot.parsed, resolvedRaw: snapshot.sourceConfig },
+    { pluginContracts },
+  );
+  if (!config || isDeepStrictEqual(config, snapshot.sourceConfig)) {
+    return null;
+  }
+  const valid = pluginContracts
+    ? validateConfigObjectWithPlugins(prepareAutomaticConfigRepairWrite(snapshot, config)).ok
+    : validateConfigObjectRaw(config).ok;
+  const issues = (pluginContracts ? findDoctorLegacyConfigIssues : findLegacyConfigIssues)(
+    config,
+    config,
+  );
+  if (!valid || issues.length > 0) {
+    return null;
+  }
   return {
     config,
     changes,
@@ -56,74 +97,18 @@ function buildAutomaticConfigRepairPlan(
 export function planAutomaticConfigRepair(
   snapshot: ConfigFileSnapshot,
 ): AutomaticConfigRepairPlan | null {
-  if (!admitAutomaticConfigRepairSnapshot(snapshot)) {
-    return null;
-  }
-
-  const { next: config, changes } = applyLegacyDoctorMigrations(snapshot.sourceConfig, {
-    authoredRaw: snapshot.parsed,
-    resolvedRaw: snapshot.sourceConfig,
-  });
-  if (
-    !config ||
-    isDeepStrictEqual(config, snapshot.sourceConfig) ||
-    !validateConfigObjectWithPlugins(config).ok ||
-    findDoctorLegacyConfigIssues(config, config).length > 0
-  ) {
-    return null;
-  }
-
-  return buildAutomaticConfigRepairPlan(snapshot, config, changes);
+  return planConfigRepair(snapshot, true);
 }
 
 /**
- * State-free repairable preview for callers that run before the shared state database
- * may be touched (gateway pre-bootstrap selection, backup discovery). It skips plugin
- * doctor contracts and plugin validation, so it can admit a snapshot the full planner
- * later refuses — the preflight committer and canonical-write matcher stay authoritative,
- * and a refused commit keeps today's fail-closed startup refusal.
- */
-function planStartupConfigRepairPreview(
-  snapshot: ConfigFileSnapshot,
-): AutomaticConfigRepairPlan | null {
-  if (!admitAutomaticConfigRepairSnapshot(snapshot)) {
-    return null;
-  }
-
-  const { next: config, changes } = applyLegacyDoctorMigrations(
-    snapshot.sourceConfig,
-    { authoredRaw: snapshot.parsed, resolvedRaw: snapshot.sourceConfig },
-    { pluginContracts: false },
-  );
-  if (
-    !config ||
-    isDeepStrictEqual(config, snapshot.sourceConfig) ||
-    !validateConfigObjectRaw(config).ok ||
-    findLegacyConfigIssues(config, config).length > 0
-  ) {
-    return null;
-  }
-
-  return buildAutomaticConfigRepairPlan(snapshot, config, changes);
-}
-
-/**
- * Repairable-snapshot trust check for callers that run before startup state admission
- * (gateway pre-bootstrap selection, backup discovery). The full planner covers
- * plugin-contract migrations but reads the installed-plugin registry from the shared
- * state database; when that store is unreachable, fall back to the state-free preview
- * so core-key repairs stay reachable and everything else keeps today's fail-closed
- * refusal. The preflight committer and canonical-write matcher stay authoritative.
+ * Pre-bootstrap selection must not open state while deciding whether startup is safe.
+ * Full plugin-contract validation belongs to the admitted preflight's repair plan.
  */
 export function resolveStartupConfigSnapshot(snapshot: ConfigFileSnapshot) {
   if (snapshot.valid) {
     return snapshot;
   }
-  try {
-    return planAutomaticConfigRepair(snapshot)?.snapshot;
-  } catch {
-    return planStartupConfigRepairPreview(snapshot)?.snapshot;
-  }
+  return planConfigRepair(snapshot, false)?.snapshot;
 }
 
 /** Matches only the canonical writer result for a previously admitted startup repair. */
@@ -132,14 +117,7 @@ export function isStartupConfigRepairResult(
   after: ConfigFileSnapshot,
 ): boolean {
   const plan = planAutomaticConfigRepair(before);
-  const expected = plan
-    ? stampConfigWriteMetadata(
-        applyUnsetPathsForWrite(plan.config, resolveManagedUnsetPathsForWrite(undefined)),
-        undefined,
-        undefined,
-        before.parsed,
-      )
-    : null;
+  const expected = plan ? prepareAutomaticConfigRepairWrite(before, plan.config) : null;
   return Boolean(
     expected &&
     after.valid &&
@@ -153,14 +131,22 @@ export async function commitAutomaticConfigRepair(
   plan: AutomaticConfigRepairPlan,
   snapshot: ConfigFileSnapshot,
 ): Promise<void> {
-  await replaceConfigFile({
-    nextConfig: plan.config,
-    snapshot,
+  await transformConfigFile({
+    baseHash: resolveConfigSnapshotHash(snapshot) ?? undefined,
+    // Preflight can commit before the later Doctor health write. Preserve moved
+    // references here, under the same snapshot/hash and read-time environment.
+    transform: (_current, { snapshot: currentSnapshot }, { envSnapshotForRestore }) => ({
+      nextConfig: restoreDoctorConfigEnvRefs(plan.config, currentSnapshot, envSnapshotForRestore),
+    }),
     afterWrite: { mode: "none", reason: "automatic migration" },
     writeOptions: {
+      expectedConfigPath: snapshot.path,
       auditOrigin: "doctor",
       skipOutputLogs: true,
       skipRuntimeSnapshotRefresh: true,
+      // The reader retired legacy markers; persist their canonical owners in this write.
+      // Startup verification above uses the same writer topology preparation.
+      persistCanonicalAgentRoster: true,
     },
   });
 }

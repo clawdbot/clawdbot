@@ -378,9 +378,13 @@ Those saved definitions are for runtimes that OpenClaw launches or configures la
     - embedded OpenClaw exposes configured MCP tools in normal `coding` and `messaging` tool profiles; `minimal` still hides them, and `tools.deny: ["bundle-mcp"]` disables them explicitly
     - per-server `toolFilter.include` and `toolFilter.exclude` filter discovered MCP tools before they become OpenClaw tools
     - servers that advertise resources or prompts also expose utility tools for listing/reading resources and listing/fetching prompts; those generated utility names (`resources_list`, `resources_read`, `prompts_list`, `prompts_get`) use the same include/exclude filter
+    - fetched prompts present their description and role-labeled messages to the agent, including native image blocks for vision-capable models; Code Mode keeps the original prompt JSON shape
     - dynamic MCP tool-list changes invalidate the cached catalog for that session; the next discovery/use refreshes from the server
     - repeated MCP tool request/protocol failures pause that server briefly so one broken server does not consume the whole turn
-    - session-scoped bundled MCP runtimes are reaped after 10 minutes of idle time and one-shot embedded runs clean them up at run end
+    - session-scoped MCP runtimes stay alive between turns until session reset/deletion or compaction ID rollover, explicit Stop, a relevant server config change, or Gateway shutdown; owned stdio children terminate during cleanup
+    - detached one-shot runs without a surviving runtime session retire their MCP runtimes at run end; a retained transcript does not extend that lifetime
+    - `mcp.sessionIdleTtlMs` is an opt-in idle timeout in milliseconds: unset or `0` keeps runtimes alive, and positive finite values enable idle eviction (fractions round down)
+    - a Gateway admits at most 256 OpenClaw-managed runtimes with server connections across sessions and requester partitions; sessions without available servers and sign-in-only catalogs do not consume this limit. Reaching the limit rejects new admissions until you stop or reset unused sessions. See [MCP configuration](/gateway/config-extensions#mcp) for details
 
   </Accordion>
 </AccordionGroup>
@@ -389,9 +393,14 @@ Runtime adapters may normalize this shared registry into the shape their downstr
 
 ### Codex tool approvals
 
-Codex app-server approval-gates tools that have no MCP safety annotations when
-the server uses the default `auto` mode. Interactive turns can approve those
-calls in the Control UI. For a server you trust, set the mode while adding it:
+MCP tool approvals follow the effective Codex session permission posture unless
+you explicitly override the server's approval mode. The default full-permission
+posture does not prompt, including for tools without MCP safety annotations.
+Stricter postures retain approval checks: `workspace` can use automatic review,
+while `guarded` and `read-only` can prompt the operator for unannotated tools.
+Interactive turns can approve those calls in the Control UI.
+
+For a server you trust, set the mode while adding it:
 
 ```bash
 openclaw mcp add memory \
@@ -407,11 +416,42 @@ For an existing saved server, update only its approval mode:
 openclaw mcp configure memory --approval approve
 ```
 
-The flag writes `codex.defaultToolsApprovalMode`, which accepts `auto`,
-`prompt`, or `approve`. `approve` bypasses per-call approval for every tool on
-that server, so use it only for trusted servers. `mcp probe` and `mcp doctor
---probe` warn when a server remains in `auto` mode and none of its tools has
-safety annotations.
+The flag writes `codex.defaultToolsApprovalMode`. An explicit
+`openclaw mcp configure <server> --approval approve|prompt|auto` overrides the
+posture-derived default for that server: `approve` bypasses per-call approval,
+`prompt` asks for every call, and `auto` uses the tool's safety annotations.
+Use `approve` only for trusted servers. `mcp probe` and `mcp doctor --probe`
+warn when a server uses `auto` and none of its tools has safety annotations;
+that warning describes calls under prompting postures.
+
+When offered, **Allow Always** approves the tool, not just the current arguments.
+For Gateway-hosted Codex runs on servers configured in `mcp.servers`, OpenClaw
+saves a durable, per-agent server/tool grant in the host approvals document
+when durable persistence is offered and the approval matches one live Gateway-owned
+tool call unambiguously. Missing or ambiguous matches and requests
+that permit only session persistence retain Codex's native/session behavior.
+Codex apps, native plugin servers, and computer-use servers are excluded.
+
+Stored grants apply under `auto` or an unspecified server mode. Explicit
+`prompt` keeps asking, even with a grant; explicit `approve` already bypasses
+approval. A new grant is picked up at the next thread configuration and hook
+registration, such as a new session or restart. The current session continues
+on Codex's remembered decision.
+
+Use `openclaw approvals get --gateway` to inspect grants and
+`openclaw approvals set --gateway --file <file>` to revoke them by editing
+`agents.<agentId>.mcpTools`. Revocation also takes effect on the next
+preparation/registration. Codex can additionally persist its own approval
+when the server is saved in native config; revoke that separately if present.
+See [MCP tool grants](/tools/exec-approvals#mcp-tool-grants) for the document
+shape and export/edit workflow.
+
+For approval delivery through Slack buttons, see
+[Native approvals in Slack](/channels/slack/rich-messages#native-approvals-in-slack).
+
+When an operator denies an MCP tool approval, Codex reports only its generic
+"user rejected MCP tool call" to the model; the remedy is shown on the operator
+card, not to the model.
 
 The optional `codex` block is OpenClaw projection metadata for Codex app-server
 threads only; it does not change ACP sessions, generic Codex harness config, or
@@ -551,6 +591,8 @@ These examples save server definitions only. Run `openclaw mcp doctor --probe` a
 
 Use `--json` for scripts and dashboards. Field sets can grow over time, so consumers should ignore unknown keys.
 
+Read commands report invalid config, unknown servers, and disabled named probes as `{ "ok": false, "error": { "type": "cli_error", "message": "..." } }` with a nonzero exit. Once `doctor` or `probe` produces a report, errors remain in that report rather than producing a second JSON document.
+
 <AccordionGroup>
   <Accordion title="status --json">
     ```json
@@ -618,7 +660,7 @@ Use `--json` for scripts and dashboards. Field sets can grow over time, so consu
           "launch": "streamable-http https://mcp.example.com/mcp",
           "tools": 2,
           "codexApprovalMode": "auto",
-          "approvalHint": "tools have no safety annotations; calls will require interactive approval",
+          "approvalHint": "tools have no safety annotations; calls require approval in prompting session postures",
           "resources": true,
           "listChanged": {
             "tools": true,
@@ -632,7 +674,7 @@ Use `--json` for scripts and dashboards. Field sets can grow over time, so consu
     }
     ```
 
-    `probe --json` opens a live MCP client session and prints its result directly; unlike `status`/`doctor`, the output has no top-level `path` field. Each server includes its effective `codexApprovalMode`; `approvalHint` appears when that mode is `auto` and the discovered tools have no safety annotations. `resources` and `prompts` keys are present only when the server actually advertises that capability (a server without prompts omits the `prompts` key rather than reporting `false`). The command prints the complete result before exiting nonzero when diagnostics are present or a selected enabled server did not connect, so automation can inspect partial successes. Use `probe` for reachability and capability proof, not for static config audits.
+    `probe --json` opens a live MCP client session and prints its result directly; unlike `status`/`doctor`, the output has no top-level `path` field. Each server includes its effective `codexApprovalMode`; `approvalHint` appears when that mode is `auto` and the discovered tools have no safety annotations. The hint describes approval requirements under prompting postures, not the default full-permission posture. `resources` and `prompts` keys are present only when the server actually advertises that capability (a server without prompts omits the `prompts` key rather than reporting `false`). The command prints the complete result before exiting nonzero when diagnostics are present or a selected enabled server did not connect, so automation can inspect partial successes. Use `probe` for reachability and capability proof, not for static config audits.
 
   </Accordion>
 </AccordionGroup>

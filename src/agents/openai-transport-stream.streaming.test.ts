@@ -109,7 +109,7 @@ describe("openai transport stream", () => {
             messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
             tools: [],
           },
-          { apiKey: "test-key", timeoutMs: 1_234, maxRetries: 0 },
+          { apiKey: "test-key", timeoutMs: 1_234 },
         );
 
         const eventTypes: string[] = [];

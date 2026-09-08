@@ -8,12 +8,17 @@
 // failure in place. It is mounted on `document.body`, outside the shell, so the
 // Gateway restart that tears down the connection cannot unmount it.
 import { html, nothing, render } from "lit";
+import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
+import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
 import "../components/modal-dialog.ts";
+import "../components/update-run-view.ts";
 import { postNativeUpdate } from "./native-link-routing.ts";
 import type { ConfirmAndStartUpdateParams, UpdateProgress } from "./update-confirmation.ts";
-import { formatUpdateTargetLabel } from "./update-overlay-helpers.ts";
+import { formatUpdateTargetLabel } from "./update-schedule-projection.ts";
+
+registerUpdateActionsEnglish();
 
 /** Bounds the wait for the request to be accepted before calling it a no-start. */
 const UPDATE_ACCEPT_GRACE_MS = 4_000;
@@ -22,9 +27,10 @@ const UPDATE_DIALOG_OPEN_CLASS = "update-dialog-open";
 type DialogPhase =
   | { kind: "confirm" }
   | { kind: "working"; connected: boolean }
+  | { kind: "run"; run: UpdateRunRecord; connected: boolean; readError?: string | null }
   | { kind: "failed"; message: string };
 
-let updateDialogActive = false;
+let updateDialogOpen = false;
 
 function formatInstalledAndAvailable(
   updateAvailable: UpdateAvailable | null,
@@ -49,9 +55,9 @@ function formatInstalledAndAvailable(
 }
 
 function workingMessage(connected: boolean): string {
-  // The restart is the loud part of the wait; name it while it is happening
-  // instead of leaving the operator to interpret a frozen page.
-  return connected ? t("updates.dialog.installing") : t("updates.dialog.restarting");
+  // A disconnect alone does not prove a restart. Keep update recovery guidance
+  // separate from flows that have an explicit restart result.
+  return connected ? t("updates.dialog.installing") : t("updates.dialog.disconnected");
 }
 
 export async function confirmAndStartUpdateRuntime(
@@ -59,10 +65,9 @@ export async function confirmAndStartUpdateRuntime(
 ): Promise<void> {
   // Native confirms block reentrancy; refuse a second request rather than
   // stacking a dialog over an update that is already being reported.
-  if (updateDialogActive) {
+  if (updateDialogOpen) {
     return;
   }
-  updateDialogActive = true;
   const host = document.createElement("div");
   document.body.append(host);
   // One surface owns the outcome at a time: the ambient copy stays hidden while
@@ -81,13 +86,15 @@ export async function confirmAndStartUpdateRuntime(
       };
   const details = formatInstalledAndAvailable(params.updateAvailable, params.updateSchedule);
   await new Promise<void>((resolve) => {
-    let phase: DialogPhase = { kind: "confirm" };
+    let phase: DialogPhase = params.existingRun
+      ? { kind: "run", run: params.existingRun, connected: true }
+      : { kind: "confirm" };
     let settled = false;
     let stopWatching: (() => void) | undefined;
     let acceptTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
     let sawBusy = false;
 
-    const finish = () => {
+    const close = () => {
       if (settled) {
         return;
       }
@@ -99,58 +106,138 @@ export async function confirmAndStartUpdateRuntime(
       render(nothing, host);
       host.remove();
       document.body.classList.remove(UPDATE_DIALOG_OPEN_CLASS);
-      updateDialogActive = false;
+      updateDialogOpen = false;
       resolve();
     };
+    const finish = () => {
+      if (!settled && phase.kind === "run" && phase.run.status !== "running") {
+        params.onAcknowledge?.();
+      }
+      close();
+    };
+    const watchProgress = (
+      watch: NonNullable<ConfirmAndStartUpdateParams["watchUpdateProgress"]>,
+      listener: (progress: UpdateProgress) => void,
+    ) => {
+      const stop = watch((progress) => {
+        if (settled) {
+          return;
+        }
+        // Restart retains the scoped row; its removal retires permission to display it.
+        if (phase.kind === "run" && !progress.run) {
+          close();
+          return;
+        }
+        listener(progress);
+      });
+      // Subscribe may synchronously retire an existing row before returning its disposer.
+      if (settled) {
+        stop();
+      } else {
+        stopWatching = stop;
+      }
+    };
+    updateDialogOpen = true;
 
     const draw = () => {
       if (settled) {
         return;
       }
       const current = phase;
-      const working = current.kind === "working";
-      const failed = current.kind === "failed";
+      const run = current.kind === "run" ? current.run : null;
+      const readError = current.kind === "run" ? current.readError : null;
+      const working = current.kind === "working" || run?.status === "running";
+      const failed =
+        current.kind === "failed" ||
+        (run !== null && run.status !== "running" && run.status !== "succeeded");
+      const finished = run !== null && run.status !== "running";
       const body =
-        current.kind === "failed"
-          ? current.message
-          : current.kind === "working"
-            ? workingMessage(current.connected)
-            : `${route.message} ${t("updates.confirm.impact")}`;
+        current.kind === "run"
+          ? (readError ?? "")
+          : current.kind === "failed"
+            ? current.message
+            : current.kind === "working"
+              ? workingMessage(current.connected)
+              : `${route.message} ${t("updates.confirm.impact")}`;
       render(
         html`
           <openclaw-modal-dialog label=${route.title} description=${body} @modal-cancel=${finish}>
-            <div class="exec-approval-card">
+            <div class="exec-approval-card update-run-dialog">
               <div class="exec-approval-header">
                 <div>
                   <div class="exec-approval-title">${route.title}</div>
                   <div class="exec-approval-sub" style="white-space: pre-line">${body}</div>
                 </div>
               </div>
-              ${details && !failed
-                ? html`<div class="exec-approval-command mono">${details}</div>`
-                : nothing}
+              ${
+                details && current.kind === "confirm"
+                  ? html`<div class="exec-approval-command mono">${details}</div>`
+                  : nothing
+              }
+              ${
+                current.kind === "run"
+                  ? html`<openclaw-update-run-view
+                      .run=${current.run}
+                      .connected=${current.connected}
+                    ></openclaw-update-run-view>`
+                  : nothing
+              }
               <div class="exec-approval-actions">
-                ${failed
-                  ? html`<button type="button" class="btn" autofocus @click=${finish}>
-                      ${t("common.close")}
-                    </button>`
-                  : html`
-                      <button
-                        type="button"
-                        class="btn danger ${working ? "btn--busy" : ""}"
-                        ?disabled=${working}
-                        @click=${confirm}
-                      >
-                        ${working
-                          ? html`<span class="btn__spinner" aria-hidden="true"></span>${t(
-                                "chat.updating",
-                              )}`
-                          : route.confirmLabel}
-                      </button>
-                      <button type="button" class="btn" autofocus @click=${finish}>
-                        ${working ? t("common.close") : t("common.cancel")}
-                      </button>
-                    `}
+                ${
+                  failed || finished || readError
+                    ? html` ${(failed || readError) && params.onCheckStatus ? html`<button type="button" class="btn" @click=${() => void params.onCheckStatus?.()}>${t("updates.dialog.checkStatus")}</button>` : nothing}
+                        ${
+                          failed
+                            ? html`<button
+                                type="button"
+                                class="btn primary"
+                                @click=${() => {
+                                  phase = { kind: "confirm" };
+                                  stopWatching?.();
+                                  draw();
+                                }}
+                              >
+                                ${t("updates.dialog.retryUpdate")}
+                              </button>`
+                            : nothing
+                        }
+                        ${
+                          failed && params.onReviewUpdate
+                            ? html`<button
+                                type="button"
+                                class="btn"
+                                @click=${() => {
+                                  finish();
+                                  params.onReviewUpdate?.();
+                                }}
+                              >
+                                ${t("updates.reviewUpdate")}
+                              </button>`
+                            : nothing
+                        }
+                        <button type="button" class="btn" autofocus @click=${finish}>
+                          ${t("common.close")}
+                        </button>`
+                    : html`
+                        <button
+                          type="button"
+                          class="btn danger ${working ? "btn--busy" : ""}"
+                          ?disabled=${working}
+                          @click=${confirm}
+                        >
+                          ${
+                            working
+                              ? html`<span class="btn__spinner" aria-hidden="true"></span>${t(
+                                    "chat.updating",
+                                  )}`
+                              : route.confirmLabel
+                          }
+                        </button>
+                        <button type="button" class="btn" autofocus @click=${finish}>
+                          ${working ? t("common.close") : t("common.cancel")}
+                        </button>
+                      `
+                }
               </div>
             </div>
           </openclaw-modal-dialog>
@@ -173,6 +260,10 @@ export async function confirmAndStartUpdateRuntime(
         finish();
         return;
       }
+      sawBusy = false;
+      if (acceptTimer !== undefined) {
+        globalThis.clearTimeout(acceptTimer);
+      }
       phase = { kind: "working", connected: true };
       draw();
       // Start before subscribing: an accepted run clears the retained banner
@@ -182,28 +273,36 @@ export async function confirmAndStartUpdateRuntime(
       // a refused request is reported by the accept timer below instead.
       params.startGatewayUpdate();
       let retainedEmit = true;
-      stopWatching = watch((progress: UpdateProgress) => {
+      watchProgress(watch, (progress) => {
         const staleFailure = retainedEmit;
         retainedEmit = false;
-        if (settled || phase.kind === "confirm") {
+        if (phase.kind === "confirm") {
           return;
         }
-        if (progress.failure && !staleFailure) {
-          phase = { kind: "failed", message: progress.failure };
+        if (progress.run && (!staleFailure || progress.run.status === "running")) {
+          sawBusy = true;
+          phase = {
+            kind: "run",
+            run: progress.run,
+            connected: progress.connected,
+            readError: progress.readError,
+          };
           draw();
           return;
         }
-        if (progress.busy) {
-          sawBusy = true;
-        } else if (sawBusy) {
-          // Finished without a failure: the outcome is a toast, or a reload
-          // that replays it. Nothing left for the dialog to say.
-          finish();
+        const failure = progress.failure ?? progress.readError;
+        if (failure && !staleFailure) {
+          phase = { kind: "failed", message: failure };
+          draw();
           return;
         }
+        sawBusy ||= progress.busy;
         phase = { kind: "working", connected: progress.connected };
         draw();
       });
+      if (settled) {
+        return;
+      }
       acceptTimer = globalThis.setTimeout(() => {
         if (settled || sawBusy || phase.kind !== "working") {
           return;
@@ -213,6 +312,19 @@ export async function confirmAndStartUpdateRuntime(
       }, UPDATE_ACCEPT_GRACE_MS);
     }
 
+    if (params.existingRun && params.watchUpdateProgress) {
+      watchProgress(params.watchUpdateProgress, (progress) => {
+        if (progress.run) {
+          phase = {
+            kind: "run",
+            run: progress.run,
+            connected: progress.connected,
+            readError: progress.readError,
+          };
+          draw();
+        }
+      });
+    }
     draw();
   });
 }

@@ -96,44 +96,54 @@ function renderTaskHeader(
     <div class="sidebar-header chat-task-detail__header">
       <div class="chat-task-detail__heading">
         <div class="sidebar-title" title=${title}>${title}</div>
-        ${task
-          ? html`<div class="chat-task-detail__meta">
-              ${task.status === "running"
-                ? html`<span class="chat-tasks-rail__task-pulse" aria-hidden="true"></span>`
-                : nothing}
-              <span
-                class="chat-tasks-rail__task-status chat-tasks-rail__task-status--${STATUS_TONES[
-                  task.status
-                ]}"
-                >${backgroundTaskStatusLabel(task)}</span
-              >
-              <span aria-hidden="true">·</span>
-              <span>${taskRuntimeLabel(task)}</span>
-              ${active && startedMs > 0
-                ? html`<span aria-hidden="true">·</span>
-                    <openclaw-elapsed-time .startMs=${startedMs}></openclaw-elapsed-time>`
-                : nothing}
-              ${task.lastToolName
-                ? html`<span aria-hidden="true">·</span>
-                    <span class="chat-task-detail__tool">${task.lastToolName}</span>`
-                : nothing}
-              ${task.diffStat ? renderDiffStatChips(task.diffStat) : nothing}
-            </div>`
-          : nothing}
+        ${
+          task
+            ? html`<div class="chat-task-detail__meta">
+                ${
+                  task.status === "running"
+                    ? html`<span class="chat-tasks-rail__task-pulse" aria-hidden="true"></span>`
+                    : nothing
+                }
+                <span
+                  class="chat-tasks-rail__task-status chat-tasks-rail__task-status--${
+                    STATUS_TONES[task.status]
+                  }"
+                  >${backgroundTaskStatusLabel(task)}</span
+                >
+                <span aria-hidden="true">·</span>
+                <span>${taskRuntimeLabel(task)}</span>
+                ${
+                  active && startedMs > 0
+                    ? html`<span aria-hidden="true">·</span>
+                        <openclaw-elapsed-time .startMs=${startedMs}></openclaw-elapsed-time>`
+                    : nothing
+                }
+                ${
+                  task.lastToolName
+                    ? html`<span aria-hidden="true">·</span>
+                        <span class="chat-task-detail__tool">${task.lastToolName}</span>`
+                    : nothing
+                }
+                ${task.diffStat ? renderDiffStatChips(task.diffStat) : nothing}
+              </div>`
+            : nothing
+        }
       </div>
-      ${task && active && backgroundTasks?.canCancel
-        ? html`<div class="sidebar-header__actions">
-            <button
-              class="btn btn--ghost btn--sm"
-              type="button"
-              aria-label=${t("chat.backgroundTasks.stopTask", { title })}
-              ?disabled=${cancelling || !backgroundTasks.connected}
-              @click=${() => backgroundTasks.onCancel(task.id)}
-            >
-              ${cancelling ? icons.loader : icons.stop} ${t("chat.runControls.stop")}
-            </button>
-          </div>`
-        : nothing}
+      ${
+        task && active && backgroundTasks?.canCancel
+          ? html`<div class="sidebar-header__actions">
+              <button
+                class="btn btn--ghost btn--sm"
+                type="button"
+                aria-label=${t("chat.backgroundTasks.stopTask", { title })}
+                ?disabled=${cancelling || !backgroundTasks.connected}
+                @click=${() => backgroundTasks.onCancel(task.id)}
+              >
+                ${cancelling ? icons.loader : icons.stop} ${t("chat.runControls.stop")}
+              </button>
+            </div>`
+          : nothing
+      }
     </div>
   `;
 }
@@ -173,7 +183,11 @@ function renderTaskTranscript(params: {
   return html`<div class="sidebar-content chat-task-detail__content">
     <div class="chat-task-detail__transcript">
       ${renderReadOnlyTranscript({
-        chat: { ...params.chat, selectedSession },
+        chat: {
+          ...params.chat,
+          selectedSession,
+          avatarPlacement: params.task.runtime === "subagent" ? "none" : undefined,
+        },
         messages: load.messages,
         paneId: `${params.chat.paneId}:task-sidebar`,
         sessionKey: params.sessionKey,
@@ -211,24 +225,26 @@ function renderTaskInspector(task: TaskSummary, props: BackgroundTasksProps): Te
     return renderPanelLoadingSkeleton("review", t("chat.backgroundTasks.detailLoading"));
   }
   return html`
-    ${detailError
-      ? html`<div
-          class="chat-tasks-rail__task-inspector-state chat-tasks-rail__task-inspector-state--error"
-        >
-          ${detailError}
-          <!-- The render-driven load skips errored tasks to avoid a per-paint
+    ${
+      detailError
+        ? html`<div
+            class="chat-tasks-rail__task-inspector-state chat-tasks-rail__task-inspector-state--error"
+          >
+            ${detailError}
+            <!-- The render-driven load skips errored tasks to avoid a per-paint
                retry loop, so without this the panel dead-ends whenever the task
                row that could re-open it is not on screen. -->
-          <button
-            class="chat-tasks-rail__task-inspector-retry"
-            type="button"
-            ?disabled=${detailLoading}
-            @click=${() => props.onLoadDetail?.(task)}
-          >
-            ${t("chat.backgroundTasks.detailRetry")}
-          </button>
-        </div>`
-      : nothing}
+            <button
+              class="chat-tasks-rail__task-inspector-retry"
+              type="button"
+              ?disabled=${detailLoading}
+              @click=${() => props.onLoadDetail?.(task)}
+            >
+              ${t("chat.backgroundTasks.detailRetry")}
+            </button>
+          </div>`
+        : nothing
+    }
     <div class="chat-tasks-rail__detail-blocks">
       <section class="chat-tasks-rail__task-inspector-block">
         <div class="chat-tasks-rail__task-inspector-label">${t("chat.backgroundTasks.prompt")}</div>

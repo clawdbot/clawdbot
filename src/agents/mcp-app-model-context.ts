@@ -1,8 +1,7 @@
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import {
   escapeInternalRuntimeContextDelimiters,
-  INTERNAL_RUNTIME_CONTEXT_BEGIN,
-  INTERNAL_RUNTIME_CONTEXT_END,
+  type RuntimeContextFragment,
 } from "./internal-runtime-context.js";
 
 const MCP_APP_MODEL_CONTEXT_MAX_BYTES = 16 * 1024;
@@ -12,12 +11,8 @@ type UpdateModelContextParams = {
   structuredContent?: unknown;
 };
 
-function clearMcpAppModelContext(runtime: SessionMcpRuntime): void {
-  runtime.pendingMcpAppModelContext = undefined;
-}
-
 export function revokeMcpAppModelContext(runtime: SessionMcpRuntime): void {
-  clearMcpAppModelContext(runtime);
+  runtime.pendingMcpAppModelContext = undefined;
   runtime.mcpAppModelContextRevoked = true;
 }
 
@@ -27,7 +22,7 @@ export function allowMcpAppModelContext(runtime: SessionMcpRuntime): void {
 
 export function clearMcpAppModelContextForView(runtime: SessionMcpRuntime, view: object): void {
   if (runtime.pendingMcpAppModelContext?.owner === view) {
-    clearMcpAppModelContext(runtime);
+    runtime.pendingMcpAppModelContext = undefined;
   }
 }
 
@@ -46,7 +41,7 @@ export function updateMcpAppModelContext(
     params.content === undefined ||
     (Array.isArray(params.content) && params.content.length === 0)
   ) {
-    clearMcpAppModelContext(runtime);
+    runtime.pendingMcpAppModelContext = undefined;
     return;
   }
   if (!Array.isArray(params.content) || params.content.length !== 1) {
@@ -61,7 +56,7 @@ export function updateMcpAppModelContext(
     throw new Error("MCP App model context must contain exactly one text block");
   }
   if (text.length === 0) {
-    clearMcpAppModelContext(runtime);
+    runtime.pendingMcpAppModelContext = undefined;
     return;
   }
   if (Buffer.byteLength(text, "utf8") > MCP_APP_MODEL_CONTEXT_MAX_BYTES) {
@@ -70,14 +65,10 @@ export function updateMcpAppModelContext(
   runtime.pendingMcpAppModelContext = { owner: view, text };
 }
 
-export function leaseMcpAppModelContextForTurn(params: {
-  runtime: SessionMcpRuntime;
-  prompt: string;
-  transcriptPrompt?: string;
-}):
+export function leaseMcpAppModelContextForTurn(params: { runtime: SessionMcpRuntime }):
   | {
-      prompt: string;
-      transcriptPrompt: string;
+      context: RuntimeContextFragment;
+      legacyText: string;
       commit: () => void;
       rollback: () => void;
     }
@@ -87,24 +78,15 @@ export function leaseMcpAppModelContextForTurn(params: {
     return undefined;
   }
   snapshot.leased = true;
-  const encodedSnapshot = escapeInternalRuntimeContextDelimiters(
-    JSON.stringify({ text: snapshot.text }),
-  );
+  const text = `MCP App context snapshot:\n${JSON.stringify({ text: snapshot.text })}`;
   let committed = false;
   return {
-    prompt: [
-      INTERNAL_RUNTIME_CONTEXT_BEGIN,
-      "MCP App context snapshot:",
-      encodedSnapshot,
-      INTERNAL_RUNTIME_CONTEXT_END,
-      "",
-      params.prompt,
-    ].join("\n"),
-    transcriptPrompt: params.transcriptPrompt ?? params.prompt,
+    context: { kind: "conversation-data", text },
+    legacyText: escapeInternalRuntimeContextDelimiters(text),
     commit: () => {
       committed = true;
       if (params.runtime.pendingMcpAppModelContext === snapshot) {
-        clearMcpAppModelContext(params.runtime);
+        params.runtime.pendingMcpAppModelContext = undefined;
       }
     },
     rollback: () => {

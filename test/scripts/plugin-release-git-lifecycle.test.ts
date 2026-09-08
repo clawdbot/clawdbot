@@ -180,7 +180,7 @@ posixIt.each(["npm-preflight-read", "npm-publish-read"] as const)(
     });
     expect(report.code, report.output).toBe(0);
     expect(gitCommands(report)).toEqual([
-      ["fetch", "--no-tags", "--depth=1", "origin", sha],
+      ["fetch", "--no-tags", "--depth=1", "--filter=blob:none", "origin", sha],
       ["show", `${sha}:${packageDir}/package.json`],
     ]);
     expect(report.pluginSourcePackage).toBe(packageJson);

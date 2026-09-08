@@ -55,9 +55,11 @@ type AttachmentSidebarSource = {
 };
 
 export type AttachmentSidebarRuntime = {
+  sessionKey?: string;
+  agentId?: string;
+  policyKey?: string;
   connectionEpoch?: number;
   authToken?: string | null;
-  localMediaPreviewRoots: readonly string[];
   resourceBasePath?: string;
   resolveArtifactDownload?: ArtifactDownloadResolver;
 };
@@ -127,3 +129,5 @@ export type SidebarContent =
   | FileSidebarContent
   | SessionDiffSidebarContent
   | { kind: "task"; taskId: string };
+
+export type SidebarSelection = SidebarContent | { kind: "loading" };

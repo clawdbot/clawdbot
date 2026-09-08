@@ -17,6 +17,37 @@ struct ExecApprovalPromptLayoutTests {
         #expect(ExecApprovalsPromptPresenter.pendingPromptCountForTesting == 0)
     }
 
+    @Test func `active prompt expiry releases presentation for the next request`() async throws {
+        for command in ["/usr/bin/printf first", "/usr/bin/printf second"] {
+            let decision = await ExecApprovalsPromptPresenter.prompt(
+                ExecApprovalPromptRequest(command: command),
+                timeoutMs: 20)
+
+            #expect(decision == nil)
+            let reservation = try #require(ExecApprovalsPromptPresenter.reservePromptForTesting())
+            ExecApprovalsPromptPresenter.releasePromptForTesting(id: reservation)
+        }
+    }
+
+    @Test func `cancelling an active prompt releases presentation for the next request`() async throws {
+        let prompt = Task {
+            await ExecApprovalsPromptPresenter.prompt(
+                ExecApprovalPromptRequest(command: "/usr/bin/printf cancelled"))
+        }
+        defer { prompt.cancel() }
+        await Task.yield()
+        try await Task.sleep(for: .milliseconds(20))
+        prompt.cancel()
+
+        #expect(await prompt.value == nil)
+        let reservation = try #require(ExecApprovalsPromptPresenter.reservePromptForTesting())
+        ExecApprovalsPromptPresenter.releasePromptForTesting(id: reservation)
+        let nextDecision = await ExecApprovalsPromptPresenter.prompt(
+            ExecApprovalPromptRequest(command: "/usr/bin/printf next"),
+            timeoutMs: 20)
+        #expect(nextDecision == nil)
+    }
+
     @Test func `allowed decisions omit durable approval even when ask allows it`() {
         let decisions = ExecApprovalsPromptPresenter.allowedPromptDecisions(
             ExecApprovalPromptRequest(
@@ -93,7 +124,7 @@ struct ExecApprovalPromptLayoutTests {
                 allowlistAuthorizationSatisfied: false,
                 allowlistSatisfied: false,
                 allowlistMatch: nil,
-                skillAllow: false,
+                skillTrust: nil,
                 policySnapshot: ExecApprovalPolicySnapshot(
                     security: security,
                     ask: .onMiss,
@@ -163,42 +194,43 @@ struct ExecApprovalPromptLayoutTests {
         #expect(ExecApprovalsPromptPresenter.allowedPromptDecisions(request) == [.allowOnce, .deny])
     }
 
-    @Test func `modal close does not synthesize deny when deny is unavailable`() {
-        let closeResponse = NSApplication.ModalResponse(rawValue: 0)
-
-        let withoutDeny = ExecApprovalsPromptPresenter.decision(
-            forModalResponse: closeResponse,
-            decisions: [.allowOnce])
-        let withDeny = ExecApprovalsPromptPresenter.decision(
-            forModalResponse: closeResponse,
-            decisions: [.allowOnce, .deny])
-
-        #expect(withoutDeny == nil)
-        #expect(withDeny == .deny)
-    }
-
-    @Test func `accessory view reserves nonzero alert layout space`() {
-        let accessory = ExecApprovalsPromptPresenter.buildAccessoryView(
+    @Test func `long commands remain scrollable in a bounded approval panel`() throws {
+        let command = String(repeating: "printf 'review this command'; ", count: 100) + "echo safe\u{202E}\nnext"
+        let panel = ExecApprovalsPromptPresenter.buildPanel(
             ExecApprovalPromptRequest(
-                command: "/bin/sh -lc \"hostname; uptime; echo '---'\"",
-                cwd: "/Users/example/projects/openclaw",
+                command: command,
+                cwd: "/Users/example/" + String(repeating: "long-project-directory/", count: 40),
                 host: "node",
                 security: "allowlist",
                 ask: "on-miss",
                 agentId: "main",
                 resolvedPath: "/bin/sh",
-                sessionKey: "session-1"))
+                sessionKey: "session-1"),
+            onDecision: { _ in })
+        defer { panel.close() }
+        let content = try #require(panel.contentView)
+        content.layoutSubtreeIfNeeded()
+        let visibleFrame = try #require(NSScreen.main?.visibleFrame)
 
-        #expect(accessory.frame.width >= 380)
-        #expect(accessory.frame.height >= 160)
+        #expect(panel.frame.width > 0)
+        #expect(panel.frame.height > 0)
+        #expect(panel.frame.width <= visibleFrame.width)
+        #expect(panel.frame.height <= visibleFrame.height)
 
-        let alert = NSAlert()
-        alert.messageText = "Allow this command?"
-        alert.informativeText = "Review the command details before allowing."
-        alert.accessoryView = accessory
+        let shortPanel = ExecApprovalsPromptPresenter.buildPanel(
+            ExecApprovalPromptRequest(command: "/usr/bin/printf ok", ask: "on-miss"),
+            onDecision: { _ in })
+        defer { shortPanel.close() }
+        #expect(shortPanel.frame.height < panel.frame.height)
 
-        #expect(alert.accessoryView?.frame.width == accessory.frame.width)
-        #expect(alert.accessoryView?.frame.height == accessory.frame.height)
+        let commandView = try #require(self.descendants(of: content).compactMap { $0 as? NSTextView }.first)
+        let scrollView = try #require(commandView.enclosingScrollView)
+        #expect(commandView.string == ExecApprovalCommandDisplaySanitizer.sanitize(command))
+        #expect(!commandView.isEditable)
+        #expect(commandView.isSelectable)
+        #expect(commandView.isVerticallyResizable)
+        #expect(scrollView.hasVerticalScroller)
+        #expect(commandView.accessibilityLabel()?.isEmpty == false)
     }
 
     @Test func `prompt context values escape bidi and control characters`() {
@@ -208,5 +240,9 @@ struct ExecApprovalPromptLayoutTests {
             ExecApprovalsPromptPresenter.sanitizedContextValue(spoofed) ==
                 "safe\\u{202E}txt\\u{A}next")
         #expect(ExecApprovalsPromptPresenter.sanitizedContextValue(" \n\t ") == nil)
+    }
+
+    private func descendants(of view: NSView) -> [NSView] {
+        view.subviews.flatMap { [$0] + self.descendants(of: $0) }
     }
 }

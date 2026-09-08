@@ -16,7 +16,12 @@ import type {
 } from "../../state/openclaw-state-db.generated.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import { drainWorkerSessionPlacement } from "./placement-drain.js";
-import { normalizeEpoch, required, type WorkerSessionPlacementRecord } from "./placement-record.js";
+import {
+  isForceAbandonedWorkerPlacement,
+  normalizeEpoch,
+  required,
+  type WorkerSessionPlacementRecord,
+} from "./placement-record.js";
 import { getRequired, query, transitionValues } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import { boundedWorkerError } from "./worker-error.js";
@@ -275,27 +280,25 @@ function requireExactMove(
   return fromRow(row);
 }
 
-function deleteExactMove(db: DatabaseSync, intent: WorkerPlacementMoveIntent): void {
+function exactMoveValues(intent: WorkerPlacementMoveIntent) {
   const values = targetValues(intent.target);
-  let statement = moveQuery(db)
+  return {
+    operation_id: intent.operationId,
+    session_id: intent.sessionId,
+    source_generation: intent.source.generation,
+    source_environment_id: intent.source.environmentId,
+    source_owner_epoch: intent.source.ownerEpoch,
+    target_kind: values.target_kind,
+    abandon_source: abandonSourceValue(intent.abandonSource),
+    target_id: values.target_id,
+    target_machine_class: values.target_machine_class,
+  };
+}
+
+function deleteExactMove(db: DatabaseSync, intent: WorkerPlacementMoveIntent): void {
+  const statement = moveQuery(db)
     .deleteFrom("worker_session_placement_moves")
-    .where("operation_id", "=", intent.operationId)
-    .where("session_id", "=", intent.sessionId)
-    .where("source_generation", "=", intent.source.generation)
-    .where("source_environment_id", "=", intent.source.environmentId)
-    .where("source_owner_epoch", "=", intent.source.ownerEpoch)
-    .where("target_kind", "=", values.target_kind);
-  statement = intent.abandonSource
-    ? statement.where("abandon_source", "=", 1)
-    : statement.where("abandon_source", "is", null);
-  statement =
-    values.target_id === null
-      ? statement.where("target_id", "is", null)
-      : statement.where("target_id", "=", values.target_id);
-  statement =
-    values.target_machine_class === null
-      ? statement.where("target_machine_class", "is", null)
-      : statement.where("target_machine_class", "=", values.target_machine_class);
+    .where((eb) => eb.and(exactMoveValues(intent)));
   const result = executeSqliteQuerySync(db, statement);
   if (result.numAffectedRows !== 1n) {
     throw new Error(`Session ${intent.sessionId} placement move changed before completion`);
@@ -420,14 +423,17 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
         }
         const current = getRequired(db, sessionId);
         if (
-          current.state !== "active" ||
+          (current.state !== "active" &&
+            !(abandonSource && isForceAbandonedWorkerPlacement(current))) ||
           current.generation !== source.generation ||
           current.environmentId !== source.environmentId ||
           current.activeOwnerEpoch !== source.ownerEpoch
         ) {
           throw new Error(`Cannot move stale worker placement for session ${sessionId}`);
         }
-        requireExactAttachedEnvironment(db, { sessionId, ...source });
+        if (current.state === "active") {
+          requireExactAttachedEnvironment(db, { sessionId, ...source });
+        }
         ensureWorkerPlacementMoveSchema(db);
         const timestamp = now();
         const row: MoveRow = {
@@ -446,35 +452,20 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
           db,
           moveQuery(db).insertInto("worker_session_placement_moves").values(row),
         );
-        const placement = drainWorkerSessionPlacement(
-          db,
-          {
-            sessionId,
-            environmentId: source.environmentId,
-            ownerEpoch: source.ownerEpoch,
-            expectedGeneration: source.generation,
-          },
-          timestamp,
-        );
+        const placement =
+          current.state === "failed"
+            ? current
+            : drainWorkerSessionPlacement(
+                db,
+                {
+                  sessionId,
+                  ...source,
+                  expectedGeneration: source.generation,
+                },
+                timestamp,
+              );
         return { intent: fromRow(row), placement, joined: false };
       });
-    },
-
-    async preparePlacementMove(
-      input: {
-        sessionId: string;
-        source: WorkerPlacementMoveSource;
-        target: WorkerPlacementMoveTarget;
-        abandonSource?: true;
-      },
-      prepareNew: () => Promise<void>,
-    ) {
-      // Existing durable decisions own retries; asynchronous preparation is
-      // only for minting a new intent and must never run in a SQLite transaction.
-      if (!findMoveRowBySession(read(), required(input.sessionId, "move session id"))) {
-        await prepareNew();
-      }
-      return this.beginPlacementMove(input);
     },
 
     recordPlacementMoveError(input: {
@@ -488,27 +479,10 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
           return false;
         }
         const intent = fromRow(row);
-        const values = targetValues(intent.target);
-        let statement = moveQuery(db)
+        const statement = moveQuery(db)
           .updateTable("worker_session_placement_moves")
           .set({ last_error: boundedWorkerError(input.error), updated_at_ms: now() })
-          .where("operation_id", "=", intent.operationId)
-          .where("session_id", "=", intent.sessionId)
-          .where("source_generation", "=", intent.source.generation)
-          .where("source_environment_id", "=", intent.source.environmentId)
-          .where("source_owner_epoch", "=", intent.source.ownerEpoch)
-          .where("target_kind", "=", values.target_kind);
-        statement = intent.abandonSource
-          ? statement.where("abandon_source", "=", 1)
-          : statement.where("abandon_source", "is", null);
-        statement =
-          values.target_id === null
-            ? statement.where("target_id", "is", null)
-            : statement.where("target_id", "=", values.target_id);
-        statement =
-          values.target_machine_class === null
-            ? statement.where("target_machine_class", "is", null)
-            : statement.where("target_machine_class", "=", values.target_machine_class);
+          .where((eb) => eb.and(exactMoveValues(intent)));
         return executeSqliteQuerySync(db, statement).numAffectedRows === 1n;
       });
     },

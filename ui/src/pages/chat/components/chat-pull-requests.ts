@@ -1,15 +1,19 @@
 // Chat UI chips for pull requests detected on the session's working branch.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
-import type { SessionGitHubPublicationResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
 } from "../../../../../src/gateway/control-ui-contract.js";
 import { icons } from "../../../components/icons.ts";
-import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-controller.ts";
+import "../../../components/tooltip.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
+import {
+  renderGitHubPublicationAction,
+  renderGitHubPublicationDetails,
+} from "./chat-github-publication.ts";
 
 const DISMISSED_STORAGE_KEY = "openclaw.chat.dismissedPullRequests";
 // Bounds localStorage growth: dismissals for the oldest sessions fall off
@@ -250,13 +254,7 @@ function renderBranchRow(
   branch: ControlUiSessionBranch,
   rateLimited: boolean,
   onOpenSessionDiff?: () => void,
-  publication?: {
-    busy: boolean;
-    result?: SessionGitHubPublicationResult | null;
-    error?: string | null;
-    guidance?: string;
-    onPublish?: () => void;
-  },
+  publication?: GitHubPublicationView,
 ) {
   return html`
     <article class="chat-pr" data-state="branch">
@@ -270,54 +268,13 @@ function renderBranchRow(
       <span class="chat-pr__meta">
         ${renderDiffStats(branch, onOpenSessionDiff)}
         ${rateLimited ? renderRateLimitWarning() : nothing}
-        ${publication?.result?.status === "published"
-          ? html`
-              <a
-                class="chat-pr__create"
-                href=${publication.result.url}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                ${t("chat.pullRequests.openPublishedPr")}
-              </a>
-            `
-          : publication?.onPublish
-            ? html`
-                <button
-                  class="chat-pr__create"
-                  type="button"
-                  ?disabled=${publication.busy}
-                  title=${publication.error ?? ""}
-                  @click=${publication.onPublish}
-                >
-                  ${publication.busy
-                    ? t("chat.pullRequests.publishing")
-                    : publication.result?.status === "requested"
-                      ? t("chat.pullRequests.publicationRequested")
-                      : publication.error || publication.result?.status === "failed"
-                        ? t("chat.pullRequests.retryPublication")
-                        : t("chat.pullRequests.publishPr")}
-                </button>
-                ${publication.error || publication.result?.status === "failed"
-                  ? renderCreatePullRequestLink(branch)
-                  : nothing}
-              `
-            : renderCreatePullRequestLink(branch)}
+        ${
+          publication
+            ? renderGitHubPublicationAction(publication)
+            : renderCreatePullRequestLink(branch)
+        }
       </span>
-      ${publication?.result?.status === "failed"
-        ? html`<div class="chat-pr__publication-outcome" data-state="failed" role="status">
-            <span>${publication.result.message}</span>
-            <span>${publication.result.nextAction}</span>
-          </div>`
-        : publication?.error
-          ? html`<div class="chat-pr__publication-outcome" data-state="failed" role="status">
-              ${publication.error}
-            </div>`
-          : publication?.guidance
-            ? html`<div class="chat-pr__publication-outcome" data-state="guidance">
-                ${publication.guidance}
-              </div>`
-            : nothing}
+      ${publication ? renderGitHubPublicationDetails(publication) : nothing}
     </article>
   `;
 }
@@ -330,27 +287,33 @@ export function renderChatPullRequests(props: {
   onExpand: () => void;
   onDismiss: (pullRequest: ControlUiSessionPullRequest) => void;
   onOpenSessionDiff?: () => void;
-  publicationBusy?: boolean;
-  publicationResult?: SessionGitHubPublicationResult | null;
-  publicationError?: string | null;
-  publicationGuidance?: string;
-  onPublish?: () => void;
+  publication?: GitHubPublicationView;
 }) {
-  if (props.pullRequests.length === 0 && !props.branch) {
+  const retainedPublication = props.publication?.result || props.publication?.locked;
+  if (props.pullRequests.length === 0 && !props.branch && !retainedPublication) {
     return nothing;
   }
   const { visible, hiddenCount } = visibleChatPullRequests(props.pullRequests, props.expanded);
   return html`
     <div class="chat-prs" aria-live="polite">
-      ${props.branch
-        ? renderBranchRow(props.branch, props.rateLimited, props.onOpenSessionDiff, {
-            busy: props.publicationBusy === true,
-            result: props.publicationResult,
-            error: props.publicationError,
-            guidance: props.publicationGuidance,
-            onPublish: props.onPublish,
-          })
-        : nothing}
+      ${
+        props.branch
+          ? renderBranchRow(
+              props.branch,
+              props.rateLimited,
+              props.onOpenSessionDiff,
+              props.publication,
+            )
+          : nothing
+      }
+      ${
+        !props.branch && retainedPublication && props.publication
+          ? html` <article class="chat-pr" data-state="publication">
+              <span class="chat-pr__meta">${renderGitHubPublicationAction(props.publication)}</span>
+              ${renderGitHubPublicationDetails(props.publication)}
+            </article>`
+          : nothing
+      }
       ${visible.map((pullRequest) => {
         const merged = pullRequest.state === "merged";
         return html`
@@ -376,9 +339,11 @@ export function renderChatPullRequests(props: {
             </a>
             <span class="chat-pr__meta">
               ${renderDiffStats(pullRequest)} ${renderChecks(pullRequest)}
-              ${pullRequest.state === "open"
-                ? nothing
-                : html`<span class="chat-pr__state">${stateLabel(pullRequest.state)}</span>`}
+              ${
+                pullRequest.state === "open"
+                  ? nothing
+                  : html`<span class="chat-pr__state">${stateLabel(pullRequest.state)}</span>`
+              }
               ${props.rateLimited && !merged ? renderRateLimitWarning() : nothing}
               <button
                 class="chat-pr__dismiss"
@@ -394,13 +359,15 @@ export function renderChatPullRequests(props: {
           </article>
         `;
       })}
-      ${hiddenCount > 0
-        ? html`
-            <button class="chat-prs__more" type="button" @click=${props.onExpand}>
-              ${t("chat.pullRequests.showMore", { count: String(hiddenCount) })}
-            </button>
-          `
-        : nothing}
+      ${
+        hiddenCount > 0
+          ? html`
+              <button class="chat-prs__more" type="button" @click=${props.onExpand}>
+                ${t("chat.pullRequests.showMore", { count: String(hiddenCount) })}
+              </button>
+            `
+          : nothing
+      }
     </div>
   `;
 }

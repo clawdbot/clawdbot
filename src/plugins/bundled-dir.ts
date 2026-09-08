@@ -49,7 +49,7 @@ function isSourceCheckoutRoot(packageRoot: string): boolean {
   );
 }
 
-function shouldTrustTestBundledPluginsDirOverride(env: NodeJS.ProcessEnv): boolean {
+export function shouldTrustTestBundledPluginsDirOverride(env: NodeJS.ProcessEnv): boolean {
   const isVitestProcess = isVitestRuntimeEnv(env) || isVitestRuntimeEnv(process.env);
   return (
     isVitestProcess &&

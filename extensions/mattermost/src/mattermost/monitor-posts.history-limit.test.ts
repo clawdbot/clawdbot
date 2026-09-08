@@ -18,6 +18,7 @@ describe("Mattermost pending history limit", () => {
     { account: 0, expected: 0 },
   ])("passes the effective $expected limit into the pending-history owner", async (testCase) => {
     recordHistory.mockClear();
+    const log = vi.fn();
     buildEventPlan.mockResolvedValue({
       channelDisplay: "General",
       kind: "group",
@@ -28,7 +29,11 @@ describe("Mattermost pending history limit", () => {
     });
 
     const monitor = {
-      account: { accountId: "work", config: { historyLimit: testCase.account } },
+      account: {
+        accountId: `work-${testCase.expected}`,
+        config: { historyLimit: testCase.account },
+      },
+      runtime: { log },
       botUserId: "bot",
       botUsername: "bot",
       cfg: { messages: { groupChat: { historyLimit: 7 } } },
@@ -67,5 +72,11 @@ describe("Mattermost pending history limit", () => {
     );
 
     expect(recordHistory.mock.calls[0]?.[0]?.limit).toBe(testCase.expected);
+    expect(log).toHaveBeenCalledOnce();
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("mattermost: drop no mention target=chan-1"),
+    );
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("requireMention=false"));
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("sender"));
   });
 });

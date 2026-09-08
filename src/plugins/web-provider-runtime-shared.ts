@@ -9,7 +9,7 @@ import { hasExplicitPluginIdScope, normalizePluginIdScope } from "./plugin-scope
 import type { PluginRegistry } from "./registry.js";
 import { getActivePluginRegistryWorkspaceDir } from "./runtime.js";
 import {
-  buildPluginRuntimeLoadOptionsFromValues,
+  buildPluginRuntimeLoadOptions,
   createPluginRuntimeLoaderLogger,
 } from "./runtime/load-context.js";
 
@@ -27,7 +27,7 @@ type ResolvePluginWebProvidersParams = {
   manifestRecords?: readonly PluginManifestRecord[];
 };
 
-type ResolveWebProviderRuntimeDeps<TEntry> = {
+export type WebProviderRuntimeResolution<TEntry> = {
   resolveBundledResolutionConfig: (params: {
     config?: PluginLoadOptions["config"];
     workspaceDir?: string;
@@ -82,7 +82,7 @@ type WebProviderRuntimeContext = {
 
 function resolveWebProviderRuntimeContext<TEntry>(
   params: ResolvePluginWebProvidersParams,
-  deps: ResolveWebProviderRuntimeDeps<TEntry>,
+  deps: WebProviderRuntimeResolution<TEntry>,
 ): WebProviderRuntimeContext {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
@@ -137,7 +137,7 @@ function resolveWebProviderLoadOptions(
   context: WebProviderRuntimeContext,
   params: ResolvePluginWebProvidersParams,
 ) {
-  return buildPluginRuntimeLoadOptionsFromValues(
+  return buildPluginRuntimeLoadOptions(
     {
       env: context.env,
       config: context.config,
@@ -162,7 +162,7 @@ function resolveWebProviderLoadOptions(
 /** Resolves plugin web providers from setup, active runtime, or a scoped load. */
 export function resolvePluginWebProviders<TEntry>(
   params: ResolvePluginWebProvidersParams,
-  deps: ResolveWebProviderRuntimeDeps<TEntry>,
+  deps: WebProviderRuntimeResolution<TEntry>,
 ): TEntry[] {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
@@ -193,7 +193,7 @@ export function resolvePluginWebProviders<TEntry>(
       }
     }
     const registry = loadOpenClawPlugins(
-      buildPluginRuntimeLoadOptionsFromValues(
+      buildPluginRuntimeLoadOptions(
         {
           config: withActivatedPluginIds({
             config: params.config,

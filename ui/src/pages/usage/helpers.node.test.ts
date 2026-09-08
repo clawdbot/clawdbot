@@ -110,7 +110,7 @@ describe("usage-helpers", () => {
   it("supports numeric filters like minTokens/maxTokens", () => {
     const a = {
       key: "a",
-      usage: { totalTokens: 100, totalCost: 20, messageCounts: { total: 30 } },
+      usage: { totalTokens: 1_000, totalCost: 20, messageCounts: { total: 30 } },
     };
     const b = {
       key: "b",
@@ -118,6 +118,7 @@ describe("usage-helpers", () => {
     };
     const filters = [
       "minTokens:10",
+      "minTokens:1k",
       "minCost:10",
       "minMessages:10",
       "maxTokens:10",
@@ -125,12 +126,12 @@ describe("usage-helpers", () => {
       "maxMessages:10",
     ];
 
-    for (const filter of filters.slice(0, 3)) {
+    for (const filter of filters.slice(0, 4)) {
       const result = filterSessionsByQuery([a, b], filter);
       expect(result.sessions).toEqual([a]);
       expect(result.warnings).toEqual([]);
     }
-    for (const filter of filters.slice(3)) {
+    for (const filter of filters.slice(4)) {
       const result = filterSessionsByQuery([a, b], filter);
       expect(result.sessions).toEqual([b]);
       expect(result.warnings).toEqual([]);
@@ -164,7 +165,6 @@ describe("usage-helpers", () => {
   it("rejects non-decimal numeric filter values", () => {
     const session = { key: "a", usage: { totalTokens: 10_000, totalCost: 0 } };
 
-    expect(filterSessionsByQuery([session], "minTokens:1k").sessions).toEqual([session]);
     expect(filterSessionsByQuery([session], "minTokens:1e3").warnings).toEqual([
       "Invalid number for minTokens",
     ]);

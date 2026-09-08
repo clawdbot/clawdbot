@@ -8,6 +8,7 @@ import {
   setConfigResolutionFacts,
 } from "./resolution-facts.js";
 import {
+  createRuntimeConfigReader,
   finalizeRuntimeSnapshotWrite,
   getRuntimeConfigAppliedHash,
   hashRuntimeConfigValue,
@@ -141,7 +142,7 @@ describe("runtime snapshot state", () => {
   });
 
   it.each([false, true])(
-    "selects only matching runtime sources (resolution facts: %s)",
+    "selects and retains only matching runtime sources (resolution facts: %s)",
     (withFacts) => {
       const sourceConfig = createProviderConfigFixture();
       if (withFacts) {
@@ -154,6 +155,8 @@ describe("runtime snapshot state", () => {
           updatePlan: true,
         },
       };
+
+      const readUnbound = createRuntimeConfigReader(scopedResolvedConfig);
 
       expect(
         selectApplicableRuntimeConfig({
@@ -184,6 +187,62 @@ describe("runtime snapshot state", () => {
           runtimeSourceConfig: sourceConfig,
         }),
       ).toBe(foreignConfig);
+      setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+      const readRuntime = createRuntimeConfigReader(cloneConfigWithResolutionFacts(sourceConfig));
+      const readScoped = createRuntimeConfigReader(scopedResolvedConfig);
+      const readForeign = createRuntimeConfigReader(foreignConfig);
+      const nextConfig = { ...runtimeConfig, messages: { ackReactionScope: "all" as const } };
+      setRuntimeConfigSnapshot(nextConfig, nextConfig);
+      expect(readRuntime()).toBe(nextConfig);
+      expect(readScoped()).toBe(scopedResolvedConfig);
+      expect(readForeign()).toBe(foreignConfig);
+      expect(readUnbound()).toBe(scopedResolvedConfig);
+    },
+  );
+
+  it("matches independently loaded config with equivalent resolution facts", () => {
+    const source = createProviderConfigFixture();
+    const freshRead = structuredClone(source);
+    const facts = () =>
+      createConfigResolutionFacts(
+        [],
+        new Map([["models.providers.openai.apiKey", "PROVIDER_KEY"]]),
+      );
+    setConfigResolutionFacts(source, facts());
+    setConfigResolutionFacts(freshRead, facts());
+    const runtime = createProviderConfigFixture("synthetic-runtime-key");
+    setRuntimeConfigSnapshot(runtime, source);
+
+    expect(getConfigResolutionFacts(freshRead)).not.toBe(getConfigResolutionFacts(source));
+    expect(createRuntimeConfigReader(freshRead)()).toBe(runtime);
+  });
+
+  it.each(["absent", "empty", "different-ref", "different-provider", "resolved", "unresolved"])(
+    "does not reuse runtime for same-byte config with %s resolution facts",
+    (kind) => {
+      const source = createProviderConfigFixture();
+      const input = structuredClone(source);
+      const refs = new Map([["models.providers.openai.apiKey", "PROVIDER_KEY"]]);
+      setConfigResolutionFacts(source, createConfigResolutionFacts([], refs));
+      if (kind !== "absent") {
+        setConfigResolutionFacts(
+          input,
+          createConfigResolutionFacts(
+            kind === "unresolved"
+              ? [{ configPath: "models.providers.openai.apiKey", varName: "PROVIDER_KEY" }]
+              : [],
+            kind === "resolved" || kind === "empty"
+              ? new Map()
+              : kind === "different-ref"
+                ? new Map([["models.providers.openai.apiKey", "OTHER_KEY"]])
+                : refs,
+            kind === "different-provider" ? "other" : "default",
+            kind === "resolved" ? refs : new Map(),
+          ),
+        );
+      }
+      setRuntimeConfigSnapshot(createProviderConfigFixture("synthetic-runtime-key"), source);
+      expect(createRuntimeConfigReader(input)()).toBe(input);
     },
   );
 
