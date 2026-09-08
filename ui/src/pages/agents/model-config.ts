@@ -2,15 +2,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 // Agent model selection staged against the runtime config form, split out of
 // agents-page.ts to keep that page inside the TS LOC ratchet.
 import type { ApplicationContext } from "../../app/context.ts";
-import {
-  resolveAgentConfig,
-  resolveEffectiveModelFallbacks,
-  resolveModelPrimary,
-} from "../../lib/agents/display.ts";
-import {
-  currentConfigObject,
-  type AgentConfigEntryTarget,
-} from "../../lib/config/config-state-model.ts";
+import type { AgentConfigEntryTarget } from "../../lib/config/config-state-model.ts";
 
 type RuntimeConfig = ApplicationContext["runtimeConfig"];
 
@@ -75,29 +67,21 @@ export function stageAgentPrimaryModel(
   stageModelShape(runtimeConfig, entry.path, modelId, existingModelParts(entry.existing).fallbacks);
 }
 
-/** Stage fallback-list edits, preserving the effective primary model shape. */
+/** Stage an explicit fallback chain without changing primary inheritance. */
 export function stageAgentModelFallbacks(
   runtimeConfig: RuntimeConfig,
   agentId: string,
   fallbacks: string[],
 ) {
-  const config = currentConfigObject(runtimeConfig.state);
-  const normalized = normalizeStringEntries(fallbacks);
-  const resolved = resolveAgentConfig(config, agentId);
-  const effective = resolveEffectiveModelFallbacks(resolved.entry?.model, resolved.defaults?.model);
-  const existingTarget = runtimeConfig.agentEntry(agentId);
-  const mustWrite = normalized.length > 0 || (effective?.length ?? 0) > 0 || existingTarget;
-  const target = mustWrite
-    ? (existingTarget ?? runtimeConfig.agentEntry(agentId, { ensure: true }))
-    : null;
+  const target = runtimeConfig.agentEntry(agentId, { ensure: true });
   if (!target) {
     return;
   }
   const entry = modelEntry(target);
-  const primary =
-    existingModelParts(entry.existing).primary ??
-    resolveModelPrimary(resolved.entry?.model) ??
-    resolveModelPrimary(resolved.defaults?.model) ??
-    null;
-  stageModelShape(runtimeConfig, entry.path, primary, normalized.length > 0 ? normalized : null);
+  stageModelShape(
+    runtimeConfig,
+    entry.path,
+    existingModelParts(entry.existing).primary,
+    normalizeStringEntries(fallbacks),
+  );
 }
