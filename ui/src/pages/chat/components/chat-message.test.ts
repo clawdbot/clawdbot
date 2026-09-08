@@ -5075,6 +5075,51 @@ describe("grouped chat rendering", () => {
     );
   });
 
+  it("shows a visible fallback for inline images omitted from stored history", () => {
+    const redactedBlocks = [
+      { type: "input_image", omitted: true, bytes: 26 },
+      {
+        type: "input_image",
+        omitted: true,
+        bytes: 27,
+        image_url: { detail: "high" },
+      },
+      {
+        type: "input_image",
+        omitted: true,
+        bytes: 16,
+        source: { media_type: "image/png" },
+      },
+    ];
+
+    for (const block of redactedBlocks) {
+      const container = document.createElement("div");
+      renderAssistantMessage(container, createAssistantMessage([block]));
+
+      expect(container.querySelector(".chat-assistant-attachment-card")).not.toBeNull();
+      expect(container.textContent).toContain("Image");
+      expect(container.textContent).toContain("History");
+      expect(container.textContent).toContain("Omitted from history");
+    }
+  });
+
+  it("shows the omitted image fallback for nested tool results when tool cards are hidden", () => {
+    const container = document.createElement("div");
+    const message = createAssistantMessage([
+      createToolCall("nested-image-call", "image", {}),
+      {
+        type: "toolResult",
+        id: "nested-image-call",
+        content: [{ type: "input_image", omitted: true, bytes: 26 }],
+      },
+    ]);
+
+    renderAssistantMessage(container, message, { showToolCalls: false });
+
+    expect(container.querySelector(".chat-assistant-attachment-card")).not.toBeNull();
+    expect(container.textContent).toContain("Omitted from history");
+  });
+
   it("expires pairing QR images and requests a refresh at the expiry boundary", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-30T05:45:00Z"));

@@ -318,6 +318,7 @@ export async function readChatHistoryPage(params: {
       projectChatDisplayMessagesWithState(messages, {
         includeCommentaryFallbacks: true,
         maxChars: effectiveMaxChars,
+        redactInlineMedia: true,
         resolveCurrentUserProfileDisplay,
         turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage),
       });
@@ -433,6 +434,7 @@ export async function readChatHistoryPage(params: {
     const displayMessages = projectChatDisplayMessages(mergedMessages, {
       includeCommentaryFallbacks: true,
       maxChars: effectiveMaxChars,
+      redactInlineMedia: true,
       resolveCurrentUserProfileDisplay,
     });
     // Import snapshots are terminal, but a missing display anchor is not a tail request.

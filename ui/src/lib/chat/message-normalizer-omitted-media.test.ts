@@ -68,4 +68,57 @@ describe("message-normalizer omitted historical media", () => {
 
     expect(result.content).not.toContainEqual(expect.objectContaining({ type: "omitted_media" }));
   });
+
+  it.each([
+    { type: "input_image", omitted: true, bytes: 26 },
+    { type: "input_image", omitted: true, bytes: 27, image_url: { detail: "high" } },
+    {
+      type: "input_image",
+      omitted: true,
+      bytes: 16,
+      source: { media_type: "image/png" },
+    },
+    { type: "input_image", omitted: true, bytes: 26, file_id: "file-image" },
+  ])("normalizes omitted Responses images into the shared placeholder", (block) => {
+    const result = normalizeMessage({ role: "assistant", content: [block] });
+
+    expect(result.content).toEqual([
+      {
+        type: "omitted_media",
+        media: { kind: "image", sizeBytes: block.bytes },
+      },
+    ]);
+  });
+
+  it.each([
+    { image_url: "https://files.example/history-image.png" },
+    { image_url: { url: "https://files.example/history-image.png" } },
+    { source: { url: "https://files.example/history-image.png" } },
+    { source: { data: "remaining-inline-data", media_type: "image/png" } },
+  ])("does not add a placeholder when a Responses image source remains", (source) => {
+    const result = normalizeMessage({
+      role: "assistant",
+      content: [{ type: "input_image", omitted: true, bytes: 26, ...source }],
+    });
+
+    expect(result.content).not.toContainEqual(expect.objectContaining({ type: "omitted_media" }));
+  });
+
+  it("normalizes omitted Responses images nested in tool results", () => {
+    const result = normalizeMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "toolResult",
+          id: "image-call",
+          content: [{ type: "input_image", omitted: true, bytes: 26 }],
+        },
+      ],
+    });
+
+    expect(result.content).toContainEqual({
+      type: "omitted_media",
+      media: { kind: "image", sizeBytes: 26 },
+    });
+  });
 });

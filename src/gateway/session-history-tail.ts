@@ -209,6 +209,7 @@ export async function readIncrementalChatHistoryTail(params: {
       {
         includeCommentaryFallbacks: true,
         maxChars: params.effectiveMaxChars,
+        redactInlineMedia: true,
         ...(resolveProfileDisplay ? { resolveCurrentUserProfileDisplay } : {}),
         turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(contextMessage),
       },

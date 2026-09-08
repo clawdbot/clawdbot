@@ -17,6 +17,7 @@ const PENDING_INPUT_CORRELATION_MAX_CHARS = 256;
 export function projectPendingInputMessage(input: SessionPendingInput, maxChars: number) {
   const message = projectChatDisplayMessage(input.message, {
     maxChars,
+    redactInlineMedia: true,
     resolveCurrentUserProfileDisplay,
   });
   if (!message) {

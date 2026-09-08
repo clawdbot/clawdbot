@@ -80,11 +80,27 @@ export function readMessageSenderSession(value: unknown): NormalizedMessage["sen
 function normalizeOmittedMediaContentBlock(
   item: Record<string, unknown>,
 ): Extract<MessageContentItem, { type: "omitted_media" }> | null {
-  if (
-    item.type !== "image" ||
-    item.omitted !== true ||
-    normalizeOptionalString(item.url) !== undefined
-  ) {
+  if (item.omitted !== true) {
+    return null;
+  }
+  if (item.type === "image") {
+    if (normalizeOptionalString(item.url) !== undefined) {
+      return null;
+    }
+  } else if (item.type === "input_image") {
+    const imageUrl = asOptionalRecord(item.image_url);
+    const source = asOptionalRecord(item.source);
+    // Provider-side file ids are not browser-renderable. Keep the history
+    // placeholder unless an actual URL or inline source survives projection.
+    if (
+      normalizeOptionalString(item.image_url) !== undefined ||
+      normalizeOptionalString(imageUrl?.url) !== undefined ||
+      normalizeOptionalString(source?.url) !== undefined ||
+      normalizeOptionalString(source?.data) !== undefined
+    ) {
+      return null;
+    }
+  } else {
     return null;
   }
   const sizeBytes = asNonNegativeFiniteNumber(item.bytes);
@@ -95,6 +111,19 @@ function normalizeOmittedMediaContentBlock(
       ...(sizeBytes !== undefined ? { sizeBytes } : {}),
     },
   };
+}
+
+function normalizeNestedOmittedMediaContentBlocks(
+  item: Record<string, unknown>,
+): Extract<MessageContentItem, { type: "omitted_media" }>[] {
+  if (!isToolResultContentType(item.type) || !Array.isArray(item.content)) {
+    return [];
+  }
+  return item.content.flatMap((value) => {
+    const nested = asOptionalRecord(value);
+    const omittedMedia = nested ? normalizeOmittedMediaContentBlock(nested) : null;
+    return omittedMedia ? [omittedMedia] : [];
+  });
 }
 
 export function normalizeRoleForGrouping(role: string): string {
@@ -477,6 +506,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
         return [omittedMedia];
       }
       const type = item.type;
+      const nestedOmittedMedia = normalizeNestedOmittedMediaContentBlocks(item);
       const text = readStringField(item, "text");
       if (type === "thinking") {
         const thinking = readStringField(item, "thinking");
@@ -535,7 +565,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
           },
         ];
       }
-      return [
+      const normalizedItems: MessageContentItem[] = [
         {
           type:
             (type as Extract<
@@ -547,6 +577,10 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
           args: resolveToolBlockArgs(item),
         },
       ];
+      for (const nestedItem of nestedOmittedMedia) {
+        normalizedItems.push(nestedItem);
+      }
+      return normalizedItems;
     });
   } else if (typeof m.text === "string") {
     if (isAssistantMessage) {
