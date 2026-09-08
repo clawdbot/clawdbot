@@ -6,7 +6,7 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeSecretInputString } from "../../config/types.secrets.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
@@ -91,17 +91,18 @@ type ResolvedOAuthAccess = {
 const oauthRefreshCleanupAggregates = new WeakSet<AggregateError>();
 const oauthRefreshRecoveryBuildFailures = new WeakSet<Error>();
 
-function appendOAuthRefreshCleanupErrors(
-  error: unknown,
-  cleanupErrors: readonly unknown[],
-): unknown {
+function appendOAuthRefreshCleanupErrors(error: unknown, cleanupErrors: readonly unknown[]): Error {
+  const primaryError = toErrorObject(error, "OAuth refresh failed");
   if (cleanupErrors.length === 0) {
-    return error;
+    return primaryError;
   }
+  const normalizedCleanupErrors = cleanupErrors.map((cleanupError) =>
+    toErrorObject(cleanupError, "OAuth refresh cleanup failed"),
+  );
   const errors =
-    error instanceof AggregateError && oauthRefreshCleanupAggregates.has(error)
-      ? [...error.errors, ...cleanupErrors]
-      : [error, ...cleanupErrors];
+    primaryError instanceof AggregateError && oauthRefreshCleanupAggregates.has(primaryError)
+      ? [...primaryError.errors, ...normalizedCleanupErrors]
+      : [primaryError, ...normalizedCleanupErrors];
   const aggregate = new AggregateError(
     errors,
     "OAuth refresh failed and cleanup could not be completed.",
@@ -1070,9 +1071,12 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       }
     };
 
-    const settleFailure = async (
-      initiatingError?: unknown,
-    ): Promise<ResolvedOAuthAccess | null> => {
+    const settleFailure = async (failure?: {
+      error: unknown;
+    }): Promise<ResolvedOAuthAccess | null> => {
+      const initiatingError = failure
+        ? toErrorObject(failure.error, "OAuth refresh failed")
+        : undefined;
       const { supersedingOwner, cleanupErrors } = await failClaim();
       if (supersedingOwner) {
         try {
@@ -1084,14 +1088,12 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             credential: supersedingOwner,
           };
         } catch (error) {
-          const failure =
+          const combinedFailure =
             initiatingError !== undefined
               ? appendOAuthRefreshCleanupErrors(initiatingError, [...cleanupErrors, error])
               : appendOAuthRefreshCleanupErrors(error, cleanupErrors);
-          if (failure instanceof Error) {
-            oauthRefreshRecoveryBuildFailures.add(failure);
-          }
-          throw failure;
+          oauthRefreshRecoveryBuildFailures.add(combinedFailure);
+          throw combinedFailure;
         }
       }
       if (initiatingError !== undefined) {
@@ -1111,7 +1113,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           agentDir: params.agentDir,
         });
       } catch (error) {
-        return await settleFailure(error);
+        return await settleFailure({ error });
       }
       if (!refreshed) {
         return await settleFailure();
@@ -1205,7 +1207,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           credential: settled.credential,
         };
       } catch (error) {
-        return await settleFailure(error);
+        return await settleFailure({ error });
       }
     })();
     // The caller deadline observes the owner; it never cancels durable settlement.

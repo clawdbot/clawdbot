@@ -896,7 +896,7 @@ describe("createOAuthManager", () => {
     });
   });
 
-  it("fails closed after managed refresh failure", async () => {
+  it("fails closed after an undefined managed refresh rejection", async () => {
     await withOAuthAgentDirs("oauth-manager-refresh-fail-closed-", async ({ agentDir }) => {
       const profileId = "openai:user@example.com";
       const managedCredential = createCredential({
@@ -919,9 +919,8 @@ describe("createOAuthManager", () => {
       const manager = createOAuthManager({
         buildApiKey: async (_provider, credential) => credential.access,
         canRefreshCredential: async () => true,
-        refreshCredential: vi.fn(async () => {
-          throw new Error("refresh rejected managed profile");
-        }),
+        // oxlint-disable-next-line prefer-promise-reject-errors -- providers can reject with unknown non-Error values.
+        refreshCredential: vi.fn(() => Promise.reject(undefined)),
         readBootstrapCredential: () => null,
       });
 
