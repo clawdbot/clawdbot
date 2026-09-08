@@ -4,6 +4,7 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
@@ -42,6 +43,39 @@ export type FeishuCardActionEvent = {
 
 const FEISHU_APPROVAL_CARD_TTL_MS = 5 * 60_000;
 const FEISHU_CARD_ACTION_TOKEN_TTL_MS = 15 * 60_000;
+
+/** Card action dispatched when an ask_user option button is tapped. */
+export const FEISHU_QUESTION_ANSWER_ACTION = "feishu.question.answer";
+const FEISHU_QUESTION_OPTION_MAX_LENGTH = 512;
+const FEISHU_QUESTION_ANSWER_DEDUPE_TTL_MS = 60 * 1000;
+
+// A resolved question is terminal; tapping the same card again must not resolve the
+// same option twice. Remember (account, question, tapUser) for a short window so only
+// the first tap reaches the gateway question-resolution path.
+const dispatchedFeishuQuestionAnswers = new Map<string, number>();
+function pruneDispatchedFeishuQuestionAnswers(now: number): void {
+  for (const [key, expiresAt] of dispatchedFeishuQuestionAnswers) {
+    if (expiresAt <= now) {
+      dispatchedFeishuQuestionAnswers.delete(key);
+    }
+  }
+}
+function claimFeishuQuestionAnswerDispatch(params: {
+  accountId: string;
+  questionId: string;
+  operatorOpenId: string;
+}): boolean {
+  const now = Date.now();
+  pruneDispatchedFeishuQuestionAnswers(now);
+  const key = `${params.accountId}:${params.questionId}:${params.operatorOpenId}`;
+  const existing = dispatchedFeishuQuestionAnswers.get(key);
+  if (existing !== undefined && existing > now) {
+    return false;
+  }
+  dispatchedFeishuQuestionAnswers.set(key, now + FEISHU_QUESTION_ANSWER_DEDUPE_TTL_MS);
+  return true;
+}
+
 function pruneProcessedCardActionTokens(now: number): void {
   const validNow = asDateTimestampMs(now);
   if (validNow === undefined) {
@@ -101,6 +135,70 @@ function completeFeishuCardAction(actionId: string, accountId: string, now = Dat
     status: "completed",
     expiresAt,
   });
+}
+
+type FeishuQuestionAnswerResolveStatus = Awaited<
+  ReturnType<typeof questionGatewayRuntime.resolveOption>
+>["status"];
+
+/**
+ * Resolves one Feishu ask_user button answer through the Gateway question runtime
+ * (question.get + question.resolve). A synthetic text message would start a brand-new
+ * agent run and never wake the pending question.waitAnswer owned by the original
+ * ask_user call, so the agent only continued after the wait timed out. Gateway-backed
+ * resolution wakes the pending ask_user immediately.
+ */
+async function resolveFeishuQuestionAnswerOption(params: {
+  cfg: ClawdbotConfig;
+  questionId: string;
+  optionValue: string;
+  operatorOpenId: string;
+}): Promise<FeishuQuestionAnswerResolveStatus> {
+  const result = await questionGatewayRuntime.resolveOption({
+    cfg: params.cfg,
+    questionId: params.questionId,
+    senderId: params.operatorOpenId,
+    optionValue: params.optionValue,
+  });
+  return result?.status ?? "already-terminal";
+}
+
+// Click acknowledgement: once the answer is accepted via the gateway, react on the
+// original question card message so the user instantly sees the bot received their
+// button choice. Strictly best-effort: failures are logged and swallowed so answering
+// is never blocked by the ack, and missing or temporary message ids (e.g. card-action-*)
+// are skipped. Uses the same im.messageReaction.create surface as the typing indicator,
+// i.e. the app's existing reaction scope, no extra permission needed.
+const FEISHU_QUESTION_ANSWER_ACK_EMOJI = "OK";
+async function ackFeishuQuestionAnswerReaction(params: {
+  cfg: ClawdbotConfig;
+  event: FeishuCardActionEvent;
+  accountId: string;
+  log: (message: string) => void;
+}): Promise<void> {
+  const messageId = params.event.context?.open_message_id ?? params.event.open_message_id;
+  const normalizedMessageId = typeof messageId === "string" ? messageId.trim() : "";
+  if (!normalizedMessageId || normalizedMessageId.startsWith("card-action-")) {
+    return;
+  }
+  const account = resolveFeishuRuntimeAccount({ cfg: params.cfg, accountId: params.accountId });
+  if (!account.configured) {
+    return;
+  }
+  try {
+    await createFeishuClient(account).im.messageReaction.create({
+      path: { message_id: normalizedMessageId },
+      data: { reaction_type: { emoji_type: FEISHU_QUESTION_ANSWER_ACK_EMOJI } },
+    });
+    params.log(
+      `feishu[${params.accountId}]: question ack reaction ${FEISHU_QUESTION_ANSWER_ACK_EMOJI} added on message ${normalizedMessageId}`,
+    );
+  } catch (err) {
+    const reactionError = err instanceof Error ? err.message : "unknown";
+    params.log(
+      `feishu[${params.accountId}]: question ack reaction skipped (non-fatal): ${sanitizeLogValue(reactionError)}`,
+    );
+  }
 }
 
 function buildSyntheticMessageEvent(
@@ -424,6 +522,74 @@ export async function handleFeishuCardAction(params: {
           text: "Cancelled.",
           accountId,
         });
+        completeFeishuCardAction(event.token, account.accountId);
+        return;
+      }
+
+      if (envelope.a === FEISHU_QUESTION_ANSWER_ACTION) {
+        const questionId = envelope.q?.trim();
+        const optionValue =
+          typeof envelope.m?.o === "string" ? envelope.m.o.trim() : "";
+        if (
+          !questionId ||
+          !optionValue ||
+          optionValue.length > FEISHU_QUESTION_OPTION_MAX_LENGTH
+        ) {
+          await sendInvalidInteractionNotice({
+            cfg,
+            event,
+            reason: "malformed",
+            accountId,
+          });
+          completeFeishuCardAction(event.token, account.accountId);
+          return;
+        }
+        if (
+          !claimFeishuQuestionAnswerDispatch({
+            accountId: account.accountId,
+            questionId,
+            operatorOpenId: event.operator.open_id,
+          })
+        ) {
+          log(
+            `feishu[${account.accountId}]: skipping repeated question button answer ${questionId} from ${event.operator.open_id}`,
+          );
+          completeFeishuCardAction(event.token, account.accountId);
+          return;
+        }
+        log(
+          `feishu[${account.accountId}]: answering question ${questionId} from ${event.operator.open_id}`,
+        );
+        let answerAccepted = false;
+        try {
+          const status = await resolveFeishuQuestionAnswerOption({
+            cfg,
+            questionId,
+            optionValue,
+            operatorOpenId: event.operator.open_id,
+          });
+          if (status === "answered") {
+            log(`feishu[${account.accountId}]: question ${questionId} answered via gateway`);
+            answerAccepted = true;
+          } else {
+            log(
+              `feishu[${account.accountId}]: question ${questionId} resolve terminal (${status}); button answer ignored`,
+            );
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "unknown";
+          log(
+            `feishu[${account.accountId}]: question ${questionId} answer failed: ${sanitizeLogValue(message)}`,
+          );
+        }
+        if (answerAccepted) {
+          await ackFeishuQuestionAnswerReaction({
+            cfg,
+            event,
+            accountId: account.accountId,
+            log,
+          });
+        }
         completeFeishuCardAction(event.token, account.accountId);
         return;
       }
