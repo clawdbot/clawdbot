@@ -69,6 +69,64 @@ afterAll(() => {
 });
 
 describe("Google Chat reply delivery", () => {
+  it("formats Markdown for typing updates and subsequent sends", async () => {
+    const core = createCore({ chunks: ["**first**", "**second**"] });
+
+    await deliverGoogleChatReply({
+      payload: { text: "**first**\n\n**second**", replyToId: "spaces/AAA/threads/root" },
+      account,
+      spaceId: "spaces/AAA",
+      runtime: createRuntime(),
+      core,
+      config,
+      typingMessage: createGoogleChatTypingMessage({
+        messageName: "spaces/AAA/messages/typing",
+        requestedThreadName: "spaces/AAA/threads/root",
+        deliveredThreadName: "spaces/AAA/threads/root",
+      }),
+    });
+
+    expect(mocks.updateGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      messageName: "spaces/AAA/messages/typing",
+      text: "*first*",
+    });
+    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      space: "spaces/AAA",
+      text: "*second*",
+      thread: "spaces/AAA/threads/root",
+    });
+  });
+
+  it("cleans up typing and rejects text removed by formatting", async () => {
+    await expect(
+      deliverGoogleChatReply({
+        payload: { text: "<div></div>" },
+        account,
+        spaceId: "spaces/AAA",
+        runtime: createRuntime(),
+        core: createCore(),
+        config,
+        typingMessage: createGoogleChatTypingMessage({
+          messageName: "spaces/AAA/messages/typing",
+        }),
+      }),
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof PlatformMessageNotDispatchedError &&
+        !error.retryable &&
+        error.message === "Google Chat reply has no visible text after formatting.",
+    );
+
+    expect(mocks.deleteGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      messageName: "spaces/AAA/messages/typing",
+    });
+    expect(mocks.updateGoogleChatMessage).not.toHaveBeenCalled();
+    expect(mocks.sendGoogleChatMessage).not.toHaveBeenCalled();
+  });
+
   it("does not resend the first chunk when the typing update result is ambiguous", async () => {
     const core = createCore({ chunks: ["first chunk", "second chunk"] });
     const runtime = createRuntime();

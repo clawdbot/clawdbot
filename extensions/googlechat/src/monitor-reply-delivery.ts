@@ -10,6 +10,7 @@ import {
   sendGoogleChatMessage,
   updateGoogleChatMessage,
 } from "./api.js";
+import { formatGoogleChatTextChunks } from "./format.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
 
 export type GoogleChatTypingMessage =
@@ -145,7 +146,22 @@ export async function deliverGoogleChatReply(params: {
       deliveryThreadName = sent?.threadName?.trim() || deliveryThreadName;
     }
   };
-  const chunks = core.channel.text.chunkMarkdownTextWithMode(reply.text, chunkLimit, chunkMode);
+  const chunks = core.channel.text
+    .chunkMarkdownTextWithMode(reply.text, chunkLimit, chunkMode)
+    .flatMap((chunk) => formatGoogleChatTextChunks(chunk, chunkLimit));
+  if (reply.hasText && !chunks.some((chunk) => chunk)) {
+    try {
+      if (typingMessage) {
+        await deleteGoogleChatMessage({ account, messageName: typingMessage.name });
+      }
+    } catch (err) {
+      runtime.error?.(`Google Chat typing cleanup failed: ${String(err)}`);
+    }
+    throw new PlatformMessageNotDispatchedError(
+      "Google Chat reply has no visible text after formatting.",
+      { cause: undefined, retryable: false },
+    );
+  }
   for (const chunk of chunks) {
     if (!chunk) {
       continue;
