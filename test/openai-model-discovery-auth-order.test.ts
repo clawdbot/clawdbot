@@ -5,6 +5,10 @@ import chutesPlugin from "../extensions/chutes/index.js";
 import { buildOpenAIProvider } from "../extensions/openai/api.js";
 import xaiPlugin from "../extensions/xai/index.js";
 import {
+  isOAuthRefreshFence,
+  isPendingOAuthRefreshFence,
+} from "../src/agents/auth-profiles/oauth-refresh-marker.js";
+import {
   createExpiredOauthStore,
   readAuthProfileStoreForTest,
 } from "../src/agents/auth-profiles/oauth-test-utils.js";
@@ -539,11 +543,6 @@ describe("Provider model discovery auth preparation", () => {
       config.auth = { order: { chutes: [profileId, fallbackProfileId] } };
       store.profiles[fallbackProfileId] = fallbackCredential;
       await state.writeAuthProfiles(store);
-      const persistedBefore = readAuthProfileStoreForTest(agentDir);
-      const persistedFirstProfile = persistedBefore.profiles[profileId];
-      if (!persistedFirstProfile) {
-        throw new Error("missing persisted first-profile fixture");
-      }
       const refreshStarted = createDeferredCore();
       const refreshResult =
         createDeferredCore<
@@ -615,9 +614,17 @@ describe("Provider model discovery auth preparation", () => {
         timedOut ? [capturedCredential] : [capturedCredential, fallbackCredential],
       );
       const persisted = readAuthProfileStoreForTest(agentDir);
-      expect(persisted.profiles[profileId]).toMatchObject(
-        completion === "success" ? refreshedCredential : persistedFirstProfile,
-      );
+      const persistedProfile = persisted.profiles[profileId];
+      if (completion === "success") {
+        expect(persistedProfile).toMatchObject(refreshedCredential);
+      } else {
+        expect(persistedProfile?.type === "oauth" && isOAuthRefreshFence(persistedProfile)).toBe(
+          true,
+        );
+        expect(
+          persistedProfile?.type === "oauth" && isPendingOAuthRefreshFence(persistedProfile),
+        ).toBe(false);
+      }
       expect(persisted.profiles[fallbackProfileId]).toMatchObject(
         timedOut ? fallbackCredential : refreshedFallback,
       );

@@ -2654,10 +2654,12 @@ describe("doctor health contributions", () => {
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({ nextConfig: repairedCfg }),
     );
-    expect(mocks.removeAuthProfilesAcrossOwnerStores).toHaveBeenCalledWith({
-      agentDir: "/tmp/openclaw/agents/main",
-      profileIds: ["anthropic:claude-cli"],
-    });
+    expect(mocks.removeAuthProfilesAcrossOwnerStores).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: "/tmp/openclaw/agents/main",
+        profileIds: ["anthropic:claude-cli"],
+      }),
+    );
     expect(mocks.replaceConfigFile.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.removeAuthProfilesAcrossOwnerStores.mock.invocationCallOrder[0]!,
     );
