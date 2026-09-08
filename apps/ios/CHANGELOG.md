@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 2026.9.20
+
 - Adds richer mobile chat controls, remote desktop viewing, live subagent progress, session organization, easier agent switching, and reply notifications.
 - Improves queued-message and offline-history recovery, shared attachments, Talk playback, photo orientation, notification consent, and Gateway proxy connections.
 
