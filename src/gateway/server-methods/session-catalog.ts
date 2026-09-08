@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   ErrorCodes,
   errorShape,
@@ -49,7 +48,7 @@ import {
   createSessionCatalogRequestNodeSnapshot,
   listSessionCatalogProvider,
   catalogRegistrationSnapshot,
-  catalogError,
+  normalizeSessionCatalogSearch,
   type CatalogRegistrationSnapshot,
 } from "./session-catalog-provider-access.js";
 import { catalogStartHandler } from "./session-catalog-terminal-start.js";
@@ -65,15 +64,18 @@ import type {
 } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-const SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS = 500;
 const SESSION_CATALOG_SHARE_WINDOW_MS = 3_000;
 const SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES = 128;
 
-function normalizeSessionCatalogSearch(search: string | undefined): string | undefined {
-  const normalized = normalizeOptionalString(search);
-  return normalized
-    ? truncateUtf16Safe(normalized, SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS)
-    : undefined;
+function catalogError(error: unknown): { code: string; message: string } {
+  const record =
+    error && typeof error === "object" ? (error as Record<string, unknown>) : undefined;
+  const recordMessage = typeof record?.message === "string" ? record.message.trim() : "";
+  const fallbackMessage = typeof error === "string" ? error.trim() : "";
+  return {
+    code: typeof record?.code === "string" && record.code ? record.code : "catalog_error",
+    message: recordMessage || fallbackMessage || "session catalog provider failed",
+  };
 }
 
 export function resolveSessionCatalogProvider(

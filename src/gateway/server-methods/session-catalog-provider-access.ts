@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isControlUiReservedRouteSegment } from "@openclaw/session-url-contract";
 import {
   validateSessionCatalogShareRoute,
@@ -18,20 +20,17 @@ import type { GatewayClient } from "./types.js";
 
 const MAX_CONCURRENT_SESSION_CATALOG_LISTS = 4;
 const MAX_QUEUED_SESSION_CATALOG_LISTS = 32;
+const SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS = 500;
 const PROCESS_HOME_CATALOG_SKIP_MESSAGE =
   "external session catalog HOME fallback skipped: isolated state; configure an explicit root to enable";
 
 let reportedProcessHomeCatalogSkip = false;
 
-export function catalogError(error: unknown): { code: string; message: string } {
-  const record =
-    error && typeof error === "object" ? (error as Record<string, unknown>) : undefined;
-  const recordMessage = typeof record?.message === "string" ? record.message.trim() : "";
-  const fallbackMessage = typeof error === "string" ? error.trim() : "";
-  return {
-    code: typeof record?.code === "string" && record.code ? record.code : "catalog_error",
-    message: recordMessage || fallbackMessage || "session catalog provider failed",
-  };
+export function normalizeSessionCatalogSearch(search: string | undefined): string | undefined {
+  const normalized = normalizeOptionalString(search);
+  return normalized
+    ? truncateUtf16Safe(normalized, SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS)
+    : undefined;
 }
 
 export function allowProcessHomeFallback(
