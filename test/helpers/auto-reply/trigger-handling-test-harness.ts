@@ -338,12 +338,12 @@ export function makeCfg(home: string): OpenClawConfig {
 }
 
 async function loadGetReplyFromConfig() {
-  return (await import("../../../src/auto-reply/reply.js")).getReplyFromConfig;
+  return (await import("../../../src/auto-reply/reply/get-reply.js")).getReplyFromConfig;
 }
 
 export function installTriggerHandlingReplyHarness(
   setGetReplyFromConfig: (
-    getReplyFromConfig: typeof import("../../../src/auto-reply/reply.js").getReplyFromConfig,
+    getReplyFromConfig: typeof import("../../../src/auto-reply/reply/get-reply.js").getReplyFromConfig,
   ) => void,
 ): void {
   beforeAll(async () => {
@@ -362,7 +362,7 @@ export function requireSessionStorePath(cfg: { session?: { store?: string } }): 
 
 export async function expectInlineCommandHandledAndStripped(params: {
   home: string;
-  getReplyFromConfig: typeof import("../../../src/auto-reply/reply.js").getReplyFromConfig;
+  getReplyFromConfig: typeof import("../../../src/auto-reply/reply/get-reply.js").getReplyFromConfig;
   body: string;
   stripToken: string;
   blockReplyContains: string;
@@ -396,7 +396,7 @@ export async function expectInlineCommandHandledAndStripped(params: {
 export async function expectBareNewOrResetAcknowledged(params: {
   home: string;
   body: "/new" | "/reset";
-  getReplyFromConfig: typeof import("../../../src/auto-reply/reply.js").getReplyFromConfig;
+  getReplyFromConfig: typeof import("../../../src/auto-reply/reply/get-reply.js").getReplyFromConfig;
 }) {
   const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
   runEmbeddedAgentMock.mockClear();

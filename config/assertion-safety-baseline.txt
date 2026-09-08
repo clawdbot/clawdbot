@@ -50,7 +50,7 @@ extensions/browser/src/browser-tool-session-tabs.ts	3
 extensions/browser/src/browser-tool.actions.ts	14
 extensions/browser/src/browser-tool.snapshot.ts	2
 extensions/browser/src/browser-tool.ts	6
-extensions/browser/src/browser/bridge-server.ts	3
+extensions/browser/src/browser/bridge-server.ts	2
 extensions/browser/src/browser/cdp-page-session.ts	3
 extensions/browser/src/browser/cdp-proxy-bypass.ts	1
 extensions/browser/src/browser/cdp-websocket.ts	2
@@ -117,7 +117,6 @@ extensions/browser/src/cli/browser-cli-shared.ts	1
 extensions/browser/src/cli/browser-cli-state.ts	1
 extensions/browser/src/gateway/browser-request.ts	4
 extensions/browser/src/node-host/invoke-browser.ts	5
-extensions/browser/src/server.ts	1
 extensions/browser/test-fetch.ts	2
 extensions/buzz/src/directory-state.ts	1
 extensions/buzz/src/gateway.ts	1
@@ -1934,7 +1933,6 @@ src/agents/sessions/model-resolver.ts	1
 src/agents/sessions/package-manager.ts	3
 src/agents/sessions/resolve-config-value.ts	1
 src/agents/sessions/sdk.ts	3
-src/agents/sessions/session-manager-branching.ts	1
 src/agents/sessions/session-manager-codec.ts	5
 src/agents/sessions/session-manager-core.ts	1
 src/agents/sessions/session-manager-entries.ts	3
@@ -2102,7 +2100,7 @@ src/auto-reply/reply/commands-reset.ts	1
 src/auto-reply/reply/commands-setunset-standard.ts	3
 src/auto-reply/reply/commands-subagents/action-log.ts	1
 src/auto-reply/reply/commands-system-prompt.ts	2
-src/auto-reply/reply/config-mutations.ts	3
+src/auto-reply/reply/config-mutations.ts	1
 src/auto-reply/reply/conversation-turn-capture.ts	2
 src/auto-reply/reply/directive-handling.impl.ts	2
 src/auto-reply/reply/directive-handling.levels.ts	9
@@ -2256,7 +2254,7 @@ src/cli/capability-cli/model.ts	4
 src/cli/capability-cli/shared.ts	4
 src/cli/capability-cli/tts.ts	6
 src/cli/capability-cli/video.ts	7
-src/cli/capability-cli/web.ts	6
+src/cli/capability-cli/web.ts	5
 src/cli/channel-auth.ts	4
 src/cli/channel-options.ts	1
 src/cli/channels-cli.ts	5
@@ -2297,7 +2295,6 @@ src/cli/gateway-cli/qa-parent-watchdog.ts	3
 src/cli/gateway-cli/register.ts	4
 src/cli/gateway-cli/run.ts	12
 src/cli/gateway-cli/suspend-cli.ts	2
-src/cli/hooks-cli.ts	1
 src/cli/logs-cli.ts	1
 src/cli/mcp-cli.ts	1
 src/cli/models-cli.ts	19
@@ -2375,8 +2372,8 @@ src/commands/backup-verify.ts	2
 src/commands/channel-setup/config-compatibility.ts	2
 src/commands/channel-setup/discovery.ts	10
 src/commands/channel-test-registry.ts	2
-src/commands/channels/add-wizard.ts	2
-src/commands/channels/add.ts	3
+src/commands/channels/add-wizard.ts	1
+src/commands/channels/add.ts	2
 src/commands/channels/capabilities.ts	4
 src/commands/channels/list.ts	1
 src/commands/channels/status.runtime.ts	9
@@ -2399,7 +2396,7 @@ src/commands/doctor-config-preflight.cron.ts	4
 src/commands/doctor-db-bloat.ts	1
 src/commands/doctor-gateway-services.ts	1
 src/commands/doctor-heartbeat-main-session-repair.ts	1
-src/commands/doctor-heartbeat-scratch-migration.ts	6
+src/commands/doctor-heartbeat-scratch-migration.ts	5
 src/commands/doctor-main-session-recovery.ts	1
 src/commands/doctor-model-catalog-credentials.ts	1
 src/commands/doctor-plugin-model-catalog.ts	1
@@ -2566,7 +2563,7 @@ src/config/plugins-allowlist.ts	1
 src/config/redact-snapshot.ts	4
 src/config/runtime-overrides.ts	2
 src/config/runtime-snapshot.ts	1
-src/config/runtime-source-projection.ts	4
+src/config/runtime-source-projection.ts	3
 src/config/schema.ts	1
 src/config/sessions/archive-compression.ts	1
 src/config/sessions/cleanup-service.ts	3
@@ -3318,7 +3315,7 @@ src/plugins/config-normalization-shared.ts	1
 src/plugins/config-schema.ts	6
 src/plugins/contracts/inventory/bundled-capability-metadata.ts	3
 src/plugins/contracts/registry.ts	1
-src/plugins/contracts/tts-contract-suites.ts	31
+src/plugins/contracts/tts-contract-suites.ts	19
 src/plugins/conversation-binding.ts	1
 src/plugins/current-plugin-metadata-snapshot.ts	1
 src/plugins/dashboard-capabilities.ts	1
@@ -3563,7 +3560,6 @@ src/state/backup-run-records.ts	1
 src/state/config-machine-state.ts	1
 src/state/local-onboarding-state.ts	1
 src/state/openclaw-agent-board-schema.ts	1
-src/state/openclaw-agent-db-migration-required.ts	1
 src/state/openclaw-agent-db-permissions.ts	1
 src/state/openclaw-agent-db-readonly.ts	1
 src/state/openclaw-agent-db-registry-listing.ts	3
@@ -3586,7 +3582,6 @@ src/state/openclaw-state-db-operator-approval-migration.ts	1
 src/state/openclaw-state-db-readonly.ts	1
 src/state/openclaw-state-db-schema-additive.ts	1
 src/state/openclaw-state-db-schema-helpers.ts	4
-src/state/openclaw-state-db-schema-migration-required.ts	2
 src/state/openclaw-state-db-schema-repair.ts	2
 src/state/openclaw-state-ownership.ts	1
 src/state/openclaw-state-snapshot-sanitizer.ts	1
@@ -3687,7 +3682,7 @@ src/wizard/clack-navigation-prompts.ts	11
 src/wizard/clack-prompter.ts	2
 src/wizard/navigation-prompter.ts	5
 src/wizard/session.ts	3
-src/wizard/setup.gateway-config.ts	5
+src/wizard/setup.gateway-config.ts	4
 src/wizard/setup.migration-canonical.ts	1
 src/wizard/setup.migration-finalize.ts	1
 src/wizard/setup.migration-snapshot.ts	5
@@ -3847,7 +3842,7 @@ ui/src/pages/agents/agents-page.ts	1
 ui/src/pages/agents/memory/memory-panel.ts	2
 ui/src/pages/agents/memory/view.ts	1
 ui/src/pages/agents/model-config.ts	3
-ui/src/pages/agents/panels-overview.ts	6
+ui/src/pages/agents/panels-overview.ts	3
 ui/src/pages/agents/panels-status-files.ts	10
 ui/src/pages/agents/panels-tools-skills.ts	1
 ui/src/pages/channels/nostr-profile-ops.ts	1

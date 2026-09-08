@@ -269,6 +269,7 @@ RUN chown node:node /app
 COPY --from=runtime-assets --chown=node:node /app/dist ./dist
 COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules
 COPY --from=runtime-assets --chown=node:node /app/package.json .
+COPY --from=runtime-assets --chown=node:node /app/pnpm-lock.yaml .
 COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .
 COPY --from=runtime-assets --chown=node:node /app/patches ./patches
 COPY --from=runtime-assets --chown=node:node /app/node-version.mjs .

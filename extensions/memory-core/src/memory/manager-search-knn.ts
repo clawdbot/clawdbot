@@ -77,7 +77,7 @@ function buildModelFilter(column: string, models: string[]): string {
     : `${column} IN (${models.map(() => "?").join(", ")})`;
 }
 
-function validateRequest(request: VectorKnnRequest): void {
+export function validateVectorKnnRequest(request: VectorKnnRequest): void {
   if (!SQL_IDENTIFIER_RE.test(request.vectorTable)) {
     throw new Error("invalid memory vector table identifier");
   }
@@ -113,7 +113,7 @@ export function runVectorKnnQuery(
   db: Pick<DatabaseSync, "prepare">,
   request: VectorKnnRequest,
 ): VectorKnnResponse {
-  validateRequest(request);
+  validateVectorKnnRequest(request);
   const vectorModelFilter = buildModelFilter("c.model", request.providerModels);
   const qBlob = vectorToBlob(request.queryVec);
   const runVectorQuery = (candidateLimit: number) => {

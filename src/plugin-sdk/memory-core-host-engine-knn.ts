@@ -2,4 +2,7 @@
 // schema migrations, or agent configuration exported by the broader host barrels.
 export { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 export { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/host/sqlite-vec.js";
-export { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+export {
+  openNodeSqliteDatabase,
+  supportsNodeSqliteExtensionLoading,
+} from "../infra/node-sqlite.js";

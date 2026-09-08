@@ -104,7 +104,7 @@ describe("LM Studio embedding request headers", () => {
 });
 
 it.each(["single", "documents", "queries", "cancelled"] as const)(
-  "reloads evicted embedding models before %s requests while holding the service lease",
+  "routes %s embeddings to sufficient-context instances across eviction while holding the service lease",
   async (kind) => {
     vi.stubEnv("NO_PROXY", "127.0.0.1");
     vi.stubEnv("no_proxy", "127.0.0.1");
@@ -113,7 +113,8 @@ it.each(["single", "documents", "queries", "cancelled"] as const)(
     const loadStarted = new Promise<void>((resolve) => {
       signalLoadStarted = resolve;
     });
-    let loaded = false;
+    let loaded = true;
+    let instanceNumber = 2;
     let leases = 0;
     const requests: string[] = [];
     const server = createServer((request, response) => {
@@ -137,7 +138,13 @@ it.each(["single", "documents", "queries", "cancelled"] as const)(
                   type: "embedding",
                   max_context_length: 2048,
                   loaded_instances: loaded
-                    ? [{ id: "embedding-model", config: { context_length: 2048 } }]
+                    ? [
+                        { id: "embedding-model", config: { context_length: 1024 } },
+                        {
+                          id: `embedding-model:${instanceNumber}`,
+                          config: { context_length: 2048 },
+                        },
+                      ]
                     : [],
                 },
               ],
@@ -149,7 +156,10 @@ it.each(["single", "documents", "queries", "cancelled"] as const)(
             return;
           }
           loaded = true;
-          response.end(JSON.stringify({ status: "loaded", instance_id: "embedding-model" }));
+          instanceNumber++;
+          response.end(
+            JSON.stringify({ status: "loaded", instance_id: `embedding-model:${instanceNumber}` }),
+          );
         } else if (request.url === "/v1/embeddings" && loaded) {
           const body: unknown = JSON.parse(text);
           if (
@@ -161,9 +171,9 @@ it.each(["single", "documents", "queries", "cancelled"] as const)(
           ) {
             throw new Error("Invalid embedding request");
           }
-          expect(body.model).toBe("embedding-model");
+          const embedding = body.model === `embedding-model:${instanceNumber}` ? [1, 0] : [0, 1];
           response.end(
-            JSON.stringify({ data: body.input.map((_, index) => ({ index, embedding: [1, 0] })) }),
+            JSON.stringify({ data: body.input.map((_, index) => ({ index, embedding })) }),
           );
         } else {
           response.statusCode = 400;
@@ -190,7 +200,17 @@ it.each(["single", "documents", "queries", "cancelled"] as const)(
                 baseUrl: `http://127.0.0.1:${address.port}/v1`,
                 apiKey: "lmstudio-local",
                 localService: { command: "/usr/bin/lms" },
-                models: [],
+                models: [
+                  {
+                    id: "embedding-model",
+                    name: "Embedding model",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    maxTokens: 0,
+                    contextTokens: 2048,
+                  },
+                ],
               },
             },
           },
@@ -206,6 +226,7 @@ it.each(["single", "documents", "queries", "cancelled"] as const)(
       });
       expect(leases).toBe(0);
       await expect(provider.embed("first")).resolves.toEqual([1, 0]);
+      expect(requests).not.toContain("/api/v1/models/load");
       loaded = false;
       requests.length = 0;
       if (kind === "cancelled") {

@@ -340,7 +340,6 @@ export function resolveSessionStorePathCore(
       throw new SessionStoreAgentIdRequiredError();
     }
     const agentId = normalizeAgentId(opts.agentId);
-    // Template expansion is the only supported way to share one config path across agent stores.
     const expanded = store.replaceAll("{agentId}", agentId);
     if (expanded.startsWith("~")) {
       return path.resolve(

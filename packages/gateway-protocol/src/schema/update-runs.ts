@@ -1,5 +1,6 @@
 import { Type, type Static } from "typebox";
 import {
+  UPDATE_RUN_DRIVER_LIMIT,
   UPDATE_RUN_PHASES,
   UPDATE_RUN_STATUSES,
   UPDATE_RUN_STEP_STATUSES,
@@ -21,6 +22,11 @@ const version = closedObject({
   sha: Type.Optional(Type.Union([text, Type.Null()])),
   buildId: Type.Optional(Type.Union([text, Type.Null()])),
 });
+const driver = closedObject({
+  host: Type.String({ minLength: 1, maxLength: 255 }),
+  pid: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+  startIdentity: Type.String({ pattern: "^\\d+$", maxLength: 128 }),
+});
 
 /** Wire projection of the canonical update ledger record. */
 export const UpdateRunRecordSchema = closedObject({
@@ -32,6 +38,8 @@ export const UpdateRunRecordSchema = closedObject({
   status,
   reason: Type.Union([text, Type.Null()]),
   origin: closedObject({
+    driver: Type.Optional(driver),
+    previousDrivers: Type.Optional(Type.Array(driver, { maxItems: UPDATE_RUN_DRIVER_LIMIT - 1 })),
     requester: Type.Optional(
       closedObject({
         channel: Type.Optional(text),

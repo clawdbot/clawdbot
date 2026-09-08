@@ -1321,6 +1321,11 @@ extension GatewayConnection {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    func connectionSummary() -> (connected: Bool, gatewayVersion: String?) {
+        guard case .connected = self.connectionPublication.value else { return (false, nil) }
+        return (true, self.cachedGatewayVersion())
+    }
+
     func cachedGatewayVersion(ifCurrentServerLease lease: ServerLease) async -> String? {
         guard await self.isCurrentServerLease(lease) else { return nil }
         return self.cachedGatewayVersion()

@@ -28,6 +28,14 @@ Context is _not the same thing_ as "memory": memory can be stored on disk and re
 
 See also: [Slash commands](/tools/slash-commands), [Token use & costs](/reference/token-use), [Compaction](/concepts/compaction).
 
+The Control UI context meter uses the last run's prompt budget when it still
+matches the selected model and effective context cap. This budget leaves room
+for the runtime's compaction reserve. Its label is **Prompt budget (last run)**:
+it is an estimate, and crossing it can trigger tool-result reduction or compaction.
+After a model or context-cap change, the meter shows **Context window** until a
+new run supplies a matching estimate. Stale token totals remain approximate and
+do not trigger the context warning.
+
 ## Example output
 
 Values vary by model, provider, tool policy, and what's in your workspace.

@@ -2014,11 +2014,11 @@ describe("gateway run option collisions", () => {
         );
         await withEnvAsync({ CODEX_THREAD_ID: undefined }, async () => {
           await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
-            "__exit__:1",
+            "__exit__:78",
           );
         });
         expect(triageAfterFailure).not.toHaveBeenCalled();
-        expect(parkCurrentLaunchAgentForMaintenance).not.toHaveBeenCalled();
+        expect(parkCurrentLaunchAgentForMaintenance).toHaveBeenCalledOnce();
         expect(runtimeErrors.join("\n")).toContain(message);
         expect(await fs.readFile(storePath, "utf8")).toBe(original);
       } finally {
@@ -2026,6 +2026,30 @@ describe("gateway run option collisions", () => {
       }
     },
   );
+
+  it("exits 78 when the only startup blocker is legacy workspace setup state", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-workspace-refusal-"));
+    const source = path.join(workspaceDir, "openclaw-workspace-state.json");
+    const original = JSON.stringify({ version: 1, setupCompletedAt: new Date().toISOString() });
+    await fs.writeFile(source, original);
+    try {
+      const { assertWorkspaceStateMigrationReady } =
+        await import("../../agents/workspace-legacy-state.js");
+      startGatewayServer.mockImplementationOnce(async () => {
+        assertWorkspaceStateMigrationReady({ workspaceDirs: [workspaceDir] });
+        throw new Error("Legacy workspace setup state was unexpectedly accepted");
+      });
+      await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
+        "__exit__:78",
+      );
+      expect(parkCurrentLaunchAgentForMaintenance).toHaveBeenCalledOnce();
+      expect(triageAfterFailure).not.toHaveBeenCalled();
+      expect(runtimeErrors.join("\n")).toMatch(/gateway stop.*doctor --fix.*gateway start/s);
+      expect(await fs.readFile(source, "utf8")).toBe(original);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
 
   it("skips failure bundles but exits nonzero for unconfirmed gateway lock conflicts", async () => {
     const port = await getFreePort();
@@ -2105,6 +2129,7 @@ describe("gateway run option collisions", () => {
     { phase: "server", kind: "state" },
     { phase: "server", kind: "agent" },
     { phase: "server", kind: "wrapped-reader" },
+    { phase: "server", kind: "mixed-maintenance" },
     { phase: "bootstrap", kind: "reader" },
     { phase: "configuration", kind: "wrapped-reader" },
   ] as const)("stops newer-schema retries from $phase ($kind)", async ({ phase, kind }) => {
@@ -2121,7 +2146,18 @@ describe("gateway run option collisions", () => {
           ])
         : kind === "reader"
           ? readerError
-          : new Error("Failed to open plugin state", { cause: readerError });
+          : kind === "mixed-maintenance"
+            ? new AggregateError(
+                [
+                  new OpenClawStateDatabaseSchemaMigrationRequiredError(
+                    "audit-events-v2",
+                    "/tmp/state.sqlite",
+                  ),
+                  readerError,
+                ],
+                "Multiple maintenance failures",
+              )
+            : new Error("Failed to open plugin state", { cause: readerError });
     if (phase === "bootstrap") {
       beforeRun.mockRejectedValueOnce(error);
     } else if (phase === "configuration") {
@@ -2142,8 +2178,10 @@ describe("gateway run option collisions", () => {
     expect(parkCurrentLaunchAgentForMaintenance).toHaveBeenCalledOnce();
     expect(offerInvalidConfigRecovery).not.toHaveBeenCalled();
     expect(runtimeErrors.join("\n")).toContain("newer");
-    expect(runtimeErrors.join("\n")).toContain("build that supports");
-    expect(runtimeErrors.join("\n")).not.toContain("doctor --fix");
+    expect(runtimeErrors.join("\n")).toContain("restore your pre-update backup");
+    expect(runtimeErrors.join("\n")).toMatch(
+      /Stop the service.*then restore your pre-update backup.*then start it again/s,
+    );
     expect(triageAfterFailure).not.toHaveBeenCalled();
     expect(startGatewayServer).toHaveBeenCalledTimes(phase === "server" ? 1 : 0);
   });

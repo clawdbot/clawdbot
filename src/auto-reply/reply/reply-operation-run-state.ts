@@ -1,4 +1,6 @@
+import type { ReplyPayload } from "../../shared/reply-payload.types.js";
 import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status.js";
+import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatch-outcome.js";
 import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 
@@ -27,6 +29,15 @@ export type ReplyPreRunRejectionCode =
   | "session-directive-rejected";
 
 export type ReplyOperationRunState = {
+  heartbeat?: {
+    prepareReply: (
+      replyResult: ReplyPayload | ReplyPayload[] | undefined,
+      runState: ReplyOperationRunState,
+    ) => Promise<{
+      reply?: ReplyPayload;
+      settle?: (outcome: ReplyDispatchDeliveryOutcome) => Promise<void>;
+    }>;
+  };
   admission?: ReplyOperationAdmissionSnapshot;
   messageInjectionAborted?: true;
   agentTurn?: ReturnType<typeof resolveAgentTurnExecutionStatus>;

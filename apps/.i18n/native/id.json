@@ -1693,6 +1693,7 @@
     "native.apple.05f711cec069ec47": "Pemasangan diperlukan. Di klien OpenClaw yang sudah dipasangkan, jalankan /pair approve, lalu periksa koneksi lagi.",
     "native.apple.0603402116243f9e": "Obrolan baru di worktree",
     "native.apple.060e3947436fa930": "Tidak dapat memproses %1$@: %2$@",
+    "native.apple.0644a7702bb80de1": "Sesi masuk browser telah kedaluwarsa. Hubungkan kembali Gateway ini.",
     "native.apple.067bbf8e4b7d1837": "Terdengar: %@",
     "native.apple.06aa02b192d6a1b3": "Meninjau",
     "native.apple.06ced75261e8a242": "PID Aplikasi",

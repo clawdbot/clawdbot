@@ -19,7 +19,10 @@ import {
 } from "./openclaw-state-db-contract.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { migrateJsonCanonicalWideRowsV13 } from "./openclaw-state-db-schema-v13-widerow.js";
-import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
+import {
+  assertSupportedStateSchemaVersion,
+  readStateSchemaContentVersion,
+} from "./openclaw-state-db-schema-version.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { OpenClawStateOwnershipError } from "./openclaw-state-ownership.js";
@@ -28,7 +31,6 @@ import {
   OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
 } from "./openclaw-state-schema-compatibility.js";
 import {
-  readStateSchemaContentVersion,
   readStateSchemaPublicationBlocker,
   resolveStateSchemaVersionToPublish,
 } from "./openclaw-state-schema-publication.js";

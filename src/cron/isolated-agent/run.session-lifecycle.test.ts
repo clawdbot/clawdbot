@@ -8,6 +8,7 @@ import {
   drainPendingContextEngineTurnsBeforeRun,
   type ContextEngineTurnAttemptFacts,
 } from "../../agents/harness/context-engine-turn-attempt.js";
+import { runInitialModelFallbackAttempt } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { ContextEngine } from "../../context-engine/types.js";
@@ -34,6 +35,7 @@ import {
   removeCronRunContinuationSessionIfIdleMock,
   resetRunCronIsolatedAgentTurnHarness,
   resolveCronSessionMock,
+  resolveConfiguredModelRefMock,
   resolveAllowedModelRefMock,
   resolveCronDeliveryPlanMock,
   resolveCronPayloadOutcomeMock,
@@ -72,154 +74,180 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
     mockRunCronFallbackPassthrough();
   });
 
-  it.each(["completed", "exhausted", "aborted", "mismatched physical session"] as const)(
-    "advances the actual cron candidate only when accepted: %s",
-    async (outcome) => {
-      const accessor = await vi.importActual<
-        typeof import("../../config/sessions/session-accessor.js")
-      >("../../config/sessions/session-accessor.js");
-      const dir = tempDirs.make("openclaw-cron-turn-candidate-");
-      const target = {
-        agentId: "main",
-        sessionId: "cron-candidate",
-        sessionKey: "agent:main:cron:candidate",
-        storePath: path.join(dir, "openclaw-agent.sqlite"),
-      };
-      await accessor.replaceSessionEntry(target, {
-        sessionId: target.sessionId,
+  it.each([
+    "completed",
+    "CLI completed",
+    "exhausted",
+    "aborted",
+    "mismatched physical session",
+  ] as const)("advances the actual cron candidate only when accepted: %s", async (outcome) => {
+    const accessor = await vi.importActual<
+      typeof import("../../config/sessions/session-accessor.js")
+    >("../../config/sessions/session-accessor.js");
+    const dir = tempDirs.make("openclaw-cron-turn-candidate-");
+    const target = {
+      agentId: "main",
+      sessionId: "cron-candidate",
+      sessionKey: "agent:main:cron:candidate",
+      storePath: path.join(dir, "openclaw-agent.sqlite"),
+    };
+    await accessor.replaceSessionEntry(target, {
+      sessionId: target.sessionId,
+      lifecycleRevision: "candidate-revision",
+      updatedAt: 1,
+      systemSent: false,
+    });
+    const initialSessionEntry = accessor.loadSessionEntry(target);
+    if (!initialSessionEntry) {
+      throw new Error("Expected the persisted cron session before admission");
+    }
+    patchSessionEntryMock.mockImplementation(accessor.patchSessionEntryCore);
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        storePath: target.storePath,
+        store: { [target.sessionKey]: { ...initialSessionEntry } },
+        initialSessionEntry,
+        isNewSession: false,
         lifecycleRevision: "candidate-revision",
-        updatedAt: 1,
-        systemSent: false,
+        sessionEntry: { ...initialSessionEntry },
+      }),
+    );
+    loadSessionEntryMock.mockImplementation(() => accessor.loadSessionEntry(target));
+    const commitTurn = vi.fn<NonNullable<ContextEngine["commitTurn"]>>(async () => ({
+      status: "committed",
+    }));
+    const afterTurn = vi.fn<NonNullable<ContextEngine["afterTurn"]>>(async () => {});
+    const engine: ContextEngine = {
+      info: {
+        id: "cron-candidate-engine",
+        name: "Cron candidate engine",
+        transcriptSemantics: {
+          currentTurnFence: "before-current-turn-entry-v1",
+          turnAdvancementIdempotency: "atomic-idempotent-v1",
+        },
+      },
+      ingest: async () => ({ ingested: true }),
+      assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+      compact: async () => ({ ok: true, compacted: false }),
+      commitTurn,
+      afterTurn,
+    };
+    const effective = { engine, registeredId: engine.info.id, mode: "configured" as const };
+    const dispose = vi.fn(async () => {});
+    const lease: logicalTurn.ContextEngineLogicalTurnLease = {
+      engine,
+      effectiveEngine: engine,
+      effectiveEngineId: engine.info.id,
+      degraded: false,
+      selectForHost: vi.fn(() => effective),
+      begin: () => effective,
+      degradeBeforeStart: vi.fn(() => effective),
+      deferDisposalUntil: () => {},
+      dispose,
+    };
+    const createLease = vi
+      .spyOn(logicalTurn, "createContextEngineLogicalTurnLease")
+      .mockResolvedValue(lease);
+    const candidates: ContextEngineTurnAttemptFacts[] = [];
+    const cli = outcome === "CLI completed";
+    isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
+    if (cli) {
+      resolveConfiguredModelRefMock.mockReturnValue({
+        provider: "claude-cli",
+        model: "claude-sonnet-4-6",
       });
-      const initialSessionEntry = accessor.loadSessionEntry(target);
-      if (!initialSessionEntry) {
-        throw new Error("Expected the persisted cron session before admission");
+    }
+    (cli ? runCliAgentMock : runEmbeddedAgentMock).mockImplementationOnce(
+      async (runParams: {
+        onContextEngineTurnCandidate: (facts: ContextEngineTurnAttemptFacts) => void;
+        userTurnTranscriptRecorder: UserTurnTranscriptRecorder;
+      }) => {
+        // Keep cron's recorder and durable finalizer real while the backend
+        // emits a deterministic candidate for the outer acceptance decision.
+        await drainPendingContextEngineTurnsBeforeRun({
+          admission: runParams.userTurnTranscriptRecorder.getAdmissionReceipt(),
+          lease,
+          recorder: runParams.userTurnTranscriptRecorder,
+          sessionTarget: target,
+        });
+        await runParams.userTurnTranscriptRecorder.persistApproved({ cwd: dir });
+        const admission = runParams.userTurnTranscriptRecorder.getAdmissionReceipt();
+        const terminal = await accessor.appendTranscriptMessage(target, {
+          message: { role: "assistant", content: "Cron answer", timestamp: 2 },
+          parentId: admission?.entryId,
+        });
+        if (!admission || !terminal?.anchor) {
+          throw new Error("Expected cron's persisted admission and terminal anchors");
+        }
+        const facts: ContextEngineTurnAttemptFacts = {
+          boundary: { admission, terminal: terminal.anchor },
+          sessionIdUsed:
+            outcome === "mismatched physical session" ? "other-session" : target.sessionId,
+          sessionKey: target.sessionKey,
+          sessionTarget: target,
+          promptError: false,
+          aborted: false,
+          yieldAborted: false,
+          isHeartbeat: false,
+        };
+        runParams.onContextEngineTurnCandidate(facts);
+        candidates.push(facts);
+        return {
+          payloads: [{ text: "Cron answer" }],
+          meta: { agentMeta: {}, ...(outcome === "aborted" ? { aborted: true } : {}) },
+        };
+      },
+    );
+    runWithModelFallbackMock.mockImplementationOnce(async (params) => {
+      if (cli) {
+        await params.prepareCandidateChain([{ provider: params.provider, model: params.model }]);
       }
-      patchSessionEntryMock.mockImplementation(accessor.patchSessionEntryCore);
-      resolveCronSessionMock.mockReturnValue(
-        makeCronSession({
-          storePath: target.storePath,
-          store: { [target.sessionKey]: { ...initialSessionEntry } },
-          initialSessionEntry,
-          isNewSession: false,
-          lifecycleRevision: "candidate-revision",
-          sessionEntry: { ...initialSessionEntry },
-        }),
-      );
-      loadSessionEntryMock.mockImplementation(() => accessor.loadSessionEntry(target));
-      const commitTurn = vi.fn<NonNullable<ContextEngine["commitTurn"]>>(async () => ({
-        status: "committed",
-      }));
-      const afterTurn = vi.fn<NonNullable<ContextEngine["afterTurn"]>>(async () => {});
-      const engine: ContextEngine = {
-        info: {
-          id: "cron-candidate-engine",
-          name: "Cron candidate engine",
-          transcriptSemantics: {
-            currentTurnFence: "before-current-turn-entry-v1",
-            turnAdvancementIdempotency: "atomic-idempotent-v1",
-          },
-        },
-        ingest: async () => ({ ingested: true }),
-        assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
-        compact: async () => ({ ok: true, compacted: false }),
-        commitTurn,
-        afterTurn,
-      };
-      const effective = { engine, registeredId: engine.info.id, mode: "configured" as const };
-      const dispose = vi.fn(async () => {});
-      const lease: logicalTurn.ContextEngineLogicalTurnLease = {
-        engine,
-        effectiveEngine: engine,
-        effectiveEngineId: engine.info.id,
-        degraded: false,
-        selectForHost: () => effective,
-        begin: () => effective,
-        degradeBeforeStart: vi.fn(() => effective),
-        deferDisposalUntil: () => {},
-        dispose,
-      };
-      const createLease = vi
-        .spyOn(logicalTurn, "createContextEngineLogicalTurnLease")
-        .mockResolvedValue(lease);
-      const candidates: ContextEngineTurnAttemptFacts[] = [];
-      runEmbeddedAgentMock.mockImplementationOnce(
-        async (runParams: {
-          onContextEngineTurnCandidate: (facts: ContextEngineTurnAttemptFacts) => void;
-          userTurnTranscriptRecorder: UserTurnTranscriptRecorder;
-        }) => {
-          // Keep cron's recorder and durable finalizer real while the backend
-          // emits a deterministic candidate for the outer acceptance decision.
-          await drainPendingContextEngineTurnsBeforeRun({
-            admission: runParams.userTurnTranscriptRecorder.getAdmissionReceipt(),
-            lease,
-            recorder: runParams.userTurnTranscriptRecorder,
-            sessionTarget: target,
-          });
-          await runParams.userTurnTranscriptRecorder.persistApproved({ cwd: dir });
-          const admission = runParams.userTurnTranscriptRecorder.getAdmissionReceipt();
-          const terminal = await accessor.appendTranscriptMessage(target, {
-            message: { role: "assistant", content: "Cron answer", timestamp: 2 },
-            parentId: admission?.entryId,
-          });
-          if (!admission || !terminal?.anchor) {
-            throw new Error("Expected cron's persisted admission and terminal anchors");
-          }
-          const facts: ContextEngineTurnAttemptFacts = {
-            boundary: { admission, terminal: terminal.anchor },
-            sessionIdUsed:
-              outcome === "mismatched physical session" ? "other-session" : target.sessionId,
-            sessionKey: target.sessionKey,
-            sessionTarget: target,
-            promptError: false,
-            aborted: false,
-            yieldAborted: false,
-            isHeartbeat: false,
-          };
-          runParams.onContextEngineTurnCandidate(facts);
-          candidates.push(facts);
-          return {
-            payloads: [{ text: "Cron answer" }],
-            meta: { agentMeta: {}, ...(outcome === "aborted" ? { aborted: true } : {}) },
-          };
-        },
-      );
-      runWithModelFallbackMock.mockImplementationOnce(async ({ provider, model, run }) => ({
-        result: await run(provider, model),
-        provider,
-        model,
+      return {
+        result: await runInitialModelFallbackAttempt(params),
+        provider: params.provider,
+        model: params.model,
         attempts: [],
         outcome: outcome === "exhausted" ? "exhausted" : "completed",
-      }));
-      try {
-        const result = await runCronIsolatedAgentTurn(makePersistentCronParams(target.sessionKey));
-        expect(candidates, JSON.stringify(result)).toHaveLength(1);
-        expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
-        if (outcome === "completed") {
-          expect(commitTurn).toHaveBeenCalledExactlyOnceWith(
-            expect.objectContaining({
-              admission: candidates[0]?.boundary.admission,
-              terminal: candidates[0]?.boundary.terminal,
-              messages: [
-                expect.objectContaining({ role: "user" }),
-                expect.objectContaining({ role: "assistant", content: "Cron answer" }),
-              ],
-              isHeartbeat: false,
+      };
+    });
+    try {
+      const result = await runCronIsolatedAgentTurn(makePersistentCronParams(target.sessionKey));
+      expect(candidates, JSON.stringify(result)).toHaveLength(1);
+      if (cli) {
+        expect(lease.selectForHost).toHaveBeenCalledWith(
+          expect.objectContaining({
+            host: expect.objectContaining({
+              id: "cli:claude-cli",
+              capabilities: ["bootstrap", "after-turn", "maintain"],
             }),
-          );
-        } else {
-          expect(commitTurn).not.toHaveBeenCalled();
-        }
-        expect(afterTurn).not.toHaveBeenCalled();
-        expect(dispose).toHaveBeenCalledOnce();
-        expect(
-          isSessionWorkAdmissionActive(target.storePath, [target.sessionKey, target.sessionId]),
-        ).toBe(false);
-      } finally {
-        createLease.mockRestore();
+          }),
+        );
       }
-    },
-  );
+      expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
+      if (outcome === "completed" || cli) {
+        expect(commitTurn).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            admission: candidates[0]?.boundary.admission,
+            terminal: candidates[0]?.boundary.terminal,
+            messages: [
+              expect.objectContaining({ role: "user" }),
+              expect.objectContaining({ role: "assistant", content: "Cron answer" }),
+            ],
+            isHeartbeat: false,
+          }),
+        );
+      } else {
+        expect(commitTurn).not.toHaveBeenCalled();
+      }
+      expect(afterTurn).not.toHaveBeenCalled();
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(
+        isSessionWorkAdmissionActive(target.storePath, [target.sessionKey, target.sessionId]),
+      ).toBe(false);
+    } finally {
+      createLease.mockRestore();
+    }
+  });
 
   it.each(["base", "continuation", "aborted clear", "interrupted clear"] as const)(
     "seals only accepted CLI continuity at %s settlement",

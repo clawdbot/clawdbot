@@ -407,10 +407,11 @@ run_update_smoke() {
 
   assert_update_smoke_offline
   # The idle container owns no Gateway service; exercise the baseline updater
-  # before checking the candidate's default restart policy independently.
-  run_update_candidate "$UPDATE_BASELINE_VERSION" --no-restart
-  echo "==> Verify candidate default update without a Gateway service"
-  run_update_candidate "$UPDATE_EXPECT_VERSION"
+  # before checking the candidate's already-current idle behavior independently.
+  run_update_candidate "$UPDATE_BASELINE_VERSION" applied --no-restart
+  echo "==> Verify candidate already-current no-op without a Gateway service"
+  run_update_candidate "$UPDATE_EXPECT_VERSION" already-current
+  assert_update_smoke_offline
   verify_candidate_ai_runtime
   echo "OK"
 }
@@ -418,7 +419,8 @@ run_update_smoke() {
 
 run_update_candidate() {
   local UPDATE_BASELINE_VERSION="$1"
-  shift
+  local expected_outcome="$2"
+  shift 2
   echo "==> Run openclaw update from host-served tgz (from $UPDATE_BASELINE_VERSION)"
   local update_status
   local update_stderr_file
@@ -465,6 +467,7 @@ run_update_candidate() {
   UPDATE_JSON="$UPDATE_JSON" \
     UPDATE_EXPECT_VERSION="$UPDATE_EXPECT_VERSION" \
     UPDATE_BASELINE_VERSION="$UPDATE_BASELINE_VERSION" \
+    UPDATE_EXPECT_OUTCOME="$expected_outcome" \
     UPDATE_TAG_URL="$UPDATE_TAG_URL" \
     node - <<'NODE'
 function parseFirstJsonObject(raw) {
@@ -505,8 +508,14 @@ const payload = parseFirstJsonObject(process.env.UPDATE_JSON || "{}");
 const expectedVersion = String(process.env.UPDATE_EXPECT_VERSION || "");
 const baselineVersion = String(process.env.UPDATE_BASELINE_VERSION || "");
 const expectedUrl = String(process.env.UPDATE_TAG_URL || "");
-if (payload.status !== "ok") {
-  throw new Error(`expected update status ok, got ${JSON.stringify(payload.status)}`);
+const expectedOutcome = process.env.UPDATE_EXPECT_OUTCOME || "applied";
+if (!["applied", "already-current"].includes(expectedOutcome)) {
+  throw new Error(`unknown expected update outcome ${expectedOutcome}`);
+}
+const noOp = expectedOutcome === "already-current";
+const expectedStatus = noOp ? "skipped" : "ok";
+if (payload.status !== expectedStatus) {
+  throw new Error(`expected update status ${expectedStatus}, got ${JSON.stringify(payload.status)}`);
 }
 if ((payload.before?.version ?? null) !== baselineVersion) {
   throw new Error(
@@ -518,8 +527,8 @@ if ((payload.after?.version ?? null) !== expectedVersion) {
     `expected after.version ${expectedVersion}, got ${JSON.stringify(payload.after?.version)}`,
   );
 }
-if (payload.reason != null) {
-  throw new Error(`expected no failure reason, got ${JSON.stringify(payload.reason)}`);
+if (noOp ? payload.reason !== "already-current" : payload.reason != null) {
+  throw new Error(`unexpected update reason ${JSON.stringify(payload.reason)}`);
 }
 const steps = Array.isArray(payload.steps) ? payload.steps : [];
 const updateStep = steps.find((step) => step?.name === "global update");
@@ -531,6 +540,17 @@ if (Number(updateStep.exitCode ?? 1) !== 0) {
 }
 if (typeof updateStep.command !== "string" || !updateStep.command.includes(expectedUrl)) {
   throw new Error(`global update step missing expected tgz URL: ${JSON.stringify(updateStep)}`);
+}
+if (noOp) {
+  if (baselineVersion !== expectedVersion || typeof payload.before?.buildId !== "string" ||
+      !payload.before.buildId || payload.after?.buildId !== payload.before.buildId) {
+    throw new Error("already-current update changed or omitted installed build identity");
+  }
+  if (steps.length !== 1) {
+    throw new Error("already-current update performed unexpected activation or maintenance steps");
+  }
+  console.log("Verified already-current no-op: package staged, installed build unchanged, no activation");
+  process.exit(0);
 }
 const doctorStep = steps.find((step) => step?.name === "openclaw doctor");
 // Every baseline that passes verify_installed_cli implements this contract;

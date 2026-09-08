@@ -222,9 +222,9 @@ catalogSuite.define(() => {
             .fill("Keep this identity draft");
           await picker.click();
           await picker.locator('wa-option[value="fixture/selected"]').click();
-          const fallbacks = editor.locator(".agent-chip-input input");
-          await fallbacks.fill("fixture/anchor");
-          await fallbacks.press("Enter");
+          const fallbackInput = editor.locator("openclaw-multi-select.agent-fallbacks input");
+          await fallbackInput.fill("fixture/anchor");
+          await fallbackInput.press("Enter");
           const selected = () => picker.evaluate((element) => (element as WaSelect).value);
           await expect.poll(selected).toBe("fixture/selected");
           await expect.poll(() => mutations.length).toBeGreaterThan(0);
@@ -303,9 +303,11 @@ catalogSuite.define(() => {
               .locator(".agent-identity-editor__fields input[maxlength='64']")
               .inputValue(),
           ).toBe("Keep this identity draft");
-          expect(await editor.locator(".agent-chip-input .chip").textContent()).toContain(
-            "fixture/anchor",
-          );
+          expect(
+            await editor
+              .locator(".multi-select__chip")
+              .evaluateAll((chips) => chips.map((chip) => chip.getAttribute("data-value"))),
+          ).toContain("fixture/anchor");
           expect(mutations).toEqual(writesBeforePublication);
           const persistedModel = await owner.cli([
             "config",

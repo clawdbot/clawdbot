@@ -41,7 +41,6 @@ function createCronServiceForSummary(params: {
     log: logger,
     enqueueSystemEvent: params.enqueueSystemEvent,
     requestHeartbeat: params.requestHeartbeat,
-    runHeartbeatOnce: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({
       status: "ok" as const,
       summary: params.summary,

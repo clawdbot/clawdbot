@@ -64,9 +64,12 @@ struct DashboardBrowserSessionTests {
         #expect(cookie.isHTTPOnly)
         #expect(cookie.domain == "gateway.example")
         #expect(controller._testUserScripts.allSatisfy { !$0.source.contains("first-session") })
-        #expect(controller._testLinkBrowserDataStore !== store.dataStore)
-        #expect(!controller._testLinkBrowserDataStore.isPersistent)
-        #expect(await controller._testLinkBrowserDataStore.httpCookieStore.allCookies().isEmpty)
+        try controller.nativeBrowser.open(tabId: "mac-private", url: #require(URL(string: "about:blank")))
+        let readingStore = try #require(controller.nativeBrowser.webView(for: "mac-private"))
+            .configuration.websiteDataStore
+        #expect(readingStore !== store.dataStore)
+        #expect(!readingStore.isPersistent)
+        #expect(await readingStore.httpCookieStore.allCookies().isEmpty)
     }
 
     @Test(arguments: [false, true])

@@ -136,6 +136,88 @@ describe("Team Reports storage", () => {
     expect(store.listPersonDays("alice")).toHaveLength(1);
   });
 
+  it("lists stored totals for each period kind and reflects regenerated documents", () => {
+    const { store } = openStore();
+    for (const [period, key] of [
+      ["day", "2026-08-20"],
+      ["week", "2026-W34"],
+      ["month", "2026-08"],
+    ] as const) {
+      const document = report();
+      document.period = { ...document.period, period, key };
+      document.activeMembers = 1;
+      document.totals.github = {
+        ...counts(21),
+        commits: 3,
+        prsOpened: 4,
+        prsMerged: 5,
+        securityAdvisories: 6,
+      };
+      document.totals.discord.messages = 7;
+      store.upsertPeriod({ report: document, markdown: key });
+      expect(store.listPeriods({ period })).toEqual([
+        {
+          period,
+          key,
+          sinceMs: Date.parse("2026-08-20T00:00:00Z"),
+          untilMs: Date.parse("2026-08-21T00:00:00Z"),
+          generatedAtMs: Date.parse("2026-08-21T00:00:00Z"),
+          status: "closed",
+          activeMembers: 1,
+          memberCount: 2,
+          githubTotal: 21,
+          discordMessages: 7,
+          commits: 3,
+          prsOpened: 4,
+          prsMerged: 5,
+          securityAdvisories: 6,
+        },
+      ]);
+    }
+    store.upsertPeriod({ report: report("2026-08-20", []), markdown: "refreshed" });
+    expect(store.listPeriods({ period: "day" })[0]).toMatchObject({
+      activeMembers: 0,
+      memberCount: 0,
+      githubTotal: 0,
+      discordMessages: 0,
+      commits: 0,
+      prsOpened: 0,
+      prsMerged: 0,
+      securityAdvisories: 0,
+    });
+  });
+
+  it("lists all logins since an inclusive day without the individual timeline limit", () => {
+    const { store } = openStore();
+    const logins = Array.from(
+      { length: 30 },
+      (_, index) => `member-${String(index).padStart(2, "0")}`,
+    );
+    store.upsertPeriod({ report: report("2026-08-18", ["older"]), markdown: "older" });
+    store.upsertPeriod({ report: report("2026-08-19", logins), markdown: "boundary" });
+    store.upsertPeriod({ report: report("2026-08-20", ["latest"]), markdown: "latest" });
+    const days = store.listPersonDaysSince("2026-08-19");
+    expect(days.map(({ dayKey, login }) => [dayKey, login])).toEqual([
+      ["2026-08-20", "latest"],
+      ...logins.map((login) => ["2026-08-19", login]),
+    ]);
+    expect(days[1]).toEqual({
+      dayKey: "2026-08-19",
+      login: "member-00",
+      githubTotal: 1,
+      commits: 1,
+      prsOpened: 0,
+      prsMerged: 0,
+      prsClosed: 0,
+      issuesOpened: 0,
+      issuesClosed: 0,
+      issueComments: 0,
+      reviewComments: 0,
+      discordMessages: 2,
+    });
+    expect(store.listPersonDaysSince("2026-08-21")).toEqual([]);
+  });
+
   it("reads half-open day ranges and indexes newest first without projecting week rows onto people", () => {
     const { store } = openStore();
     for (const key of ["2026-08-18", "2026-08-19", "2026-08-20"]) {

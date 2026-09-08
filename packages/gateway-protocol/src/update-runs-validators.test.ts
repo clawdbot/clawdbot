@@ -10,6 +10,7 @@ import {
   validateUpdateRunsListResult,
   validateUpdateStatusResult,
 } from "./index.js";
+import { UPDATE_RUN_DRIVER_LIMIT } from "./update-run-vocabulary.js";
 
 const run = LedgerRecordSchema.parse({
   runId: "27d967ef-0485-4f98-a93a-229d50c75111",
@@ -20,6 +21,8 @@ const run = LedgerRecordSchema.parse({
   status: "succeeded",
   reason: null,
   origin: {
+    driver: { host: "gateway.test", pid: 1234, startIdentity: "98765" },
+    previousDrivers: [{ host: "gateway.test", pid: 1200, startIdentity: "98700" }],
     requester: { channel: "telegram", accountId: "primary", senderId: "operator" },
     sessionKey: "agent:main:main",
     deliveryContext: { channel: "telegram", to: "chat", accountId: "default", threadId: "1" },
@@ -91,6 +94,22 @@ describe("update run wire contract", () => {
     ["oversized steps", { steps: Array.from({ length: 129 }, () => run.steps[0]) }],
     ["oversized repairs", { repair: Array.from({ length: 17 }, () => run.repair[0]) }],
     ["invalid service port", { verification: { port: 65536 } }],
+    [
+      "oversized driver host",
+      { origin: { driver: { ...run.origin.driver, host: "x".repeat(256) } } },
+    ],
+    [
+      "oversized driver start identity",
+      { origin: { driver: { ...run.origin.driver, startIdentity: "1".repeat(129) } } },
+    ],
+    [
+      "too many previous drivers",
+      {
+        origin: {
+          previousDrivers: Array.from({ length: UPDATE_RUN_DRIVER_LIMIT }, () => run.origin.driver),
+        },
+      },
+    ],
     [
       "oversized plugin errors",
       { verification: { pluginErrors: Array.from({ length: 33 }, () => "failed") } },

@@ -1,11 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { RuntimeEnv } from "../runtime.js";
 import type { BundledPluginSource } from "./bundled-sources.js";
-import {
-  persistPluginInstall,
-  prepareConfigForDisabledInstall,
-  type ConfigSnapshotForInstallPersist,
-} from "./install-persistence.js";
+import type { ConfigSnapshotForInstallPersist } from "./install-config-mutation.js";
+import { persistPluginInstall, prepareConfigForDisabledInstall } from "./install-persistence.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 
 type BundledPluginConfigEnablement =

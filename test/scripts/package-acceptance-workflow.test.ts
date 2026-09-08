@@ -6022,6 +6022,10 @@ describe("package artifact reuse", () => {
     ).toContain("steps.prepublish_plugin_registry.outputs.manifest_sha256 != ''");
     for (const jobId of ["validate_docker_e2e", "validate_docker_lanes"]) {
       const job = workflowJob(LIVE_E2E_WORKFLOW, jobId);
+      expect(job.env).toMatchObject({
+        OPENCLAW_SELECTED_SHA: "${{ needs.validate_selected_ref.outputs.selected_sha }}",
+        OPENCLAW_TOOLING_SHA: "${{ needs.validate_selected_ref.outputs.workflow_sha }}",
+      });
       const registrySteps = (job.steps ?? []).filter((step) =>
         /^(Validate|Download) .*prerelease plugin registry/u.test(step.name ?? ""),
       );

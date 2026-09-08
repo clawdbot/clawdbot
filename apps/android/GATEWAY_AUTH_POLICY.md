@@ -76,6 +76,12 @@ write result. The session records the final write result for each role in this
 hello; receipt alone and preexisting tokens do not establish fresh handoff.
 Both node and operator writes must succeed before bootstrap retirement.
 
+`DeviceAuthStore` admits a write derived from a stored token only while the
+slot still holds that token. Freshly issued grants write unconditionally.
+A stale hello keeps its socket, but its persistence is refused; mismatch clears
+and recovery recommits follow the same stored-token rule. The wire regression is
+`bootstrapHandoff_staleStoredOperatorHelloCannotOverwriteFreshOperatorToken`.
+
 [`SecurePrefs.kt`](app/src/main/java/ai/openclaw/app/SecurePrefs.kt) then commits
 the existing credential bundle with only the consumed bootstrap removed. Token
 and password fields are preserved. A failed commit restores the previous
@@ -130,8 +136,9 @@ would change other Android authentication paths, outside this fix's scope:
   Gateway reports `not-paired` and explicitly advises waiting. Swift's channel
   classifies pairing-required as nonrecoverable.
 - Android may start an operator session using an old stored operator token
-  while bootstrap is present. iOS waits for the bootstrap handoff before
-  starting stored-only operator access.
+  while bootstrap is present. The store fence prevents a delayed old operator
+  hello from replacing the handoff-issued token. iOS avoids the race by waiting
+  for the bootstrap handoff before starting stored-only operator access.
 
 ## Required implementation proof
 

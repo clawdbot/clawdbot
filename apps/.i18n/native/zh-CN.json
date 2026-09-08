@@ -1693,6 +1693,7 @@
     "native.apple.05f711cec069ec47": "需要配对。在已配对的 OpenClaw 客户端中运行 /pair approve，然后再次检查连接。",
     "native.apple.0603402116243f9e": "在工作树中新建聊天",
     "native.apple.060e3947436fa930": "无法处理 %1$@: %2$@",
+    "native.apple.0644a7702bb80de1": "浏览器登录已过期。请重新连接此 Gateway。",
     "native.apple.067bbf8e4b7d1837": "听到: %@",
     "native.apple.06aa02b192d6a1b3": "正在审查",
     "native.apple.06ced75261e8a242": "应用 PID",

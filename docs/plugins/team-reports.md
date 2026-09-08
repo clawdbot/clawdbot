@@ -120,13 +120,28 @@ page includes **Open in a new window** with that page's own URL. If the browser
 blocks that action too, copy the link into a new tab. Gateway authentication
 still applies there.
 
-Pages render on the server and work without JavaScript. They use the Carapace
-visual contract, with a dark default and a light palette when your operating
-system prefers light mode. The embedded page follows that preference independently
-of the Control UI theme. The index shows recent reports and a 28-day activity
-trend; people pages show each member's recent daily history. Closed and partial
-periods have distinct status badges, and coverage and summary warnings remain
-visible alongside the report.
+Pages mirror the maintainer report site layout: a banner and activity dateline,
+latest-period quick cards, day/week/month history, people timelines, and a
+per-person calendar. The generation panel shows scheduler and source health.
+Closed and partial periods remain distinct, with coverage and summary warnings
+alongside the report.
+
+The theme choice follows you through in-tab navigation via the page fragment
+(`#theme=light` or `#theme=dark`). Inside the sandboxed Reports tab, it lasts for
+that visit. It persists per browser only where storage is available, such as in
+a separate window. Pages choose the theme from the fragment first, then browser
+storage when available, then the operating system's light or dark preference,
+independently of the Control UI theme.
+
+Relative times and open-day countdowns refresh with a small
+inline script that the Content Security Policy allows by nonce. The same script
+enables history toggles, member filtering, and the quiet-member switch. Pages
+still work without JavaScript: all history rows and members remain available,
+and timestamps have server-rendered fallbacks.
+
+The crab artwork and icon are served from the plugin's own `assets` route under
+the same authentication and scope checks as report pages. Those assets use a
+private one-day cache; report pages and exports remain uncached.
 
 Roster members and other GitHub actors show GitHub avatars from
 `avatars.githubusercontent.com`, using the primary GitHub login. Images load
@@ -352,11 +367,11 @@ With the default `basePath`, authenticated readers can use:
 | `/reports/day/<key>/report.md` | Markdown export; also available for weeks and months.                   |
 | `/reports/day/<key>/data.json` | Structured report; also available for weeks and months.                 |
 | `/reports/people/`             | Roster index.                                                           |
-| `/reports/people/<login>/`     | Per-person history and 28-day trend.                                    |
+| `/reports/people/<login>/`     | Per-person history, calendar, and 30-day trend.                         |
 | `/reports/index.json`          | Latest keys and stored-period index.                                    |
 | `/reports/status`              | Run status, schedule, and source warnings as JSON.                      |
 
-These routes accept only `GET` and `HEAD` and send `Cache-Control: private,
+Report and export routes accept only `GET` and `HEAD` and send `Cache-Control: private,
 no-store`. Use the CLI or authenticated Gateway method to generate reports;
 reading a report page does not trigger collection.
 

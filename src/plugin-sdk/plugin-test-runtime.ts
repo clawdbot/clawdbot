@@ -143,6 +143,9 @@ export { createAdmittedHostCapabilityTestFixture } from "../agents/harness/host-
 export async function loadWebFetchToolFactoryForTest() {
   return (await import("../agents/tools/web-fetch.js")).createWebFetchTool;
 }
+export async function loadUserTurnTranscriptRecorderFactoryForTest() {
+  return (await import("../sessions/user-turn-transcript.js")).createUserTurnTranscriptRecorder;
+}
 export { buildPluginApi } from "../plugins/api-builder.js";
 export {
   createCapturedPluginRegistration,

@@ -12,6 +12,8 @@ import {
   hasActiveStartupMigrationLease,
   readMigrationCheckpointStatus,
 } from "../infra/startup-migration-checkpoint.js";
+import { createUpdateRun, getUpdateRun } from "../infra/update-run-ledger.js";
+import { ABANDONED_UPDATE_RUN_MS } from "../infra/update-run-timeouts.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
@@ -115,6 +117,23 @@ async function seedLastKnownGood(
 }
 
 describe("runDoctorConfigPreflight", () => {
+  it("reports stale legacy update recovery without modifying the run", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await writeOpenClawConfig(home, { gateway: { mode: "local" } });
+      const now = Date.now();
+      const inactiveAt = now - ABANDONED_UPDATE_RUN_MS - 10;
+      const clock = vi.spyOn(Date, "now").mockReturnValue(inactiveAt);
+      const run = createUpdateRun({ trigger: "control-ui", before: { version: "2026.9.2" } });
+      clock.mockReturnValue(now);
+      await runDoctorConfigPreflight({ migrateState: false, migrateLegacyConfig: false });
+      expect(noteMock).toHaveBeenCalledWith(
+        `Update ${run.runId}: no activity since ${new Date(inactiveAt).toISOString()}; if no update is running, run \`openclaw update repair\` or start a new \`openclaw update\``,
+        "Update history",
+      );
+      expect(getUpdateRun(run.runId)).toEqual(run);
+    });
+  });
+
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
     resetLogger();

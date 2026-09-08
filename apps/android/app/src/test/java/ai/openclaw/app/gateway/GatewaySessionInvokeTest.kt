@@ -64,13 +64,14 @@ private const val CONNECT_CHALLENGE_FRAME =
 
 private class InMemoryDeviceAuthStore : DeviceAuthTokenStore {
   private val tokens = mutableMapOf<String, DeviceAuthEntry>()
+  private val lock = Any()
   var saveResult: (String, String) -> Boolean = { _, _ -> true }
 
   override fun loadEntry(
     gatewayId: String,
     deviceId: String,
     role: String,
-  ): DeviceAuthEntry? = tokens["${gatewayId.trim()}|${deviceId.trim()}|${role.trim()}"]
+  ): DeviceAuthEntry? = synchronized(lock) { tokens["${gatewayId.trim()}|${deviceId.trim()}|${role.trim()}"] }
 
   override fun saveToken(
     gatewayId: String,
@@ -78,24 +79,33 @@ private class InMemoryDeviceAuthStore : DeviceAuthTokenStore {
     role: String,
     token: String,
     scopes: List<String>,
-  ): Boolean {
-    if (!saveResult(role, token)) return false
-    tokens["${gatewayId.trim()}|${deviceId.trim()}|${role.trim()}"] =
-      DeviceAuthEntry(
-        token = token.trim(),
-        role = role.trim(),
-        scopes = scopes,
-        updatedAtMs = System.currentTimeMillis(),
-      )
-    return true
-  }
+    replacesStoredToken: String?,
+  ): Boolean =
+    synchronized(lock) {
+      if (replacesStoredToken != null && loadEntry(gatewayId, deviceId, role)?.token != replacesStoredToken.trim()) {
+        return@synchronized false
+      }
+      if (!saveResult(role, token)) return@synchronized false
+      tokens["${gatewayId.trim()}|${deviceId.trim()}|${role.trim()}"] =
+        DeviceAuthEntry(
+          token = token.trim(),
+          role = role.trim(),
+          scopes = scopes,
+          updatedAtMs = System.currentTimeMillis(),
+        )
+      true
+    }
 
   override fun clearToken(
     gatewayId: String,
     deviceId: String,
     role: String,
+    onlyIfToken: String?,
   ) {
-    tokens.remove("${gatewayId.trim()}|${deviceId.trim()}|${role.trim()}")
+    synchronized(lock) {
+      if (onlyIfToken != null && loadEntry(gatewayId, deviceId, role)?.token != onlyIfToken.trim()) return
+      tokens.remove("${gatewayId.trim()}|${deviceId.trim()}|${role.trim()}")
+    }
   }
 }
 
@@ -1136,6 +1146,160 @@ class GatewaySessionInvokeTest {
     }
 
   @Test
+  fun bootstrapHandoff_staleStoredOperatorHelloCannotOverwriteFreshOperatorToken() =
+    runBlocking {
+      for (operatorHelloToken in listOf("old-operator", "rotated-operator")) {
+        val prefs = testPrefs(RuntimeEnvironment.getApplication())
+        val store = DeviceAuthStore(prefs)
+        val operatorConnect = CompletableDeferred<JsonObject>()
+        val releaseOperatorHello = CountDownLatch(1)
+        val operatorConnected = CompletableDeferred<Unit>()
+        val operatorDisconnected = AtomicReference("")
+        val nodeConnected = CompletableDeferred<Unit>()
+        val nodeDisconnected = AtomicReference("")
+        val server =
+          startGatewayServer(testJson()) { socket, id, method, frame ->
+            if (method == "connect") {
+              val params = frame["params"]!!.jsonObject
+              if (params["role"]?.jsonPrimitive?.content == "operator") {
+                operatorConnect.complete(params)
+                releaseOperatorHello.await()
+                socket.send(
+                  connectResponseFrame(
+                    id,
+                    authJson = """{"deviceToken":"$operatorHelloToken","role":"operator","scopes":["operator.read"]}""",
+                  ),
+                )
+              } else {
+                socket.send(
+                  connectResponseFrame(
+                    id,
+                    authJson =
+                      """{"deviceToken":"new-node","role":"node","scopes":[],"deviceTokens":[{"deviceToken":"new-operator","role":"operator","scopes":["operator.read"]}]}""",
+                  ),
+                )
+              }
+            }
+          }
+        val gatewayId = gatewayIdForPort(server.port)
+        val deviceId = testDeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
+        assertTrue(operatorHelloToken, store.saveToken(gatewayId, deviceId, "operator", "old-operator", listOf("operator.read")))
+        prefs.saveGatewayCredentials(gatewayId, bootstrapToken = "setup")
+        val handoff = prefs.prepareGatewayBootstrapHandoff(gatewayId, "setup", false)
+        val operator = createNodeHarness(operatorConnected, operatorDisconnected, deviceAuthStore = store) { GatewaySession.InvokeResult.ok(null) }
+        val node = createNodeHarness(nodeConnected, nodeDisconnected, deviceAuthStore = store) { GatewaySession.InvokeResult.ok(null) }
+        try {
+          connectNodeSession(operator.session, server.port, token = null, role = "operator", scopes = listOf("operator.read"))
+          val params = withTimeout(TEST_TIMEOUT_MS) { operatorConnect.await() }
+          assertEquals(operatorHelloToken, "old-operator", params["auth"]!!.jsonObject["token"]?.jsonPrimitive?.content)
+
+          connectNodeSession(node.session, server.port, token = null, bootstrapToken = "setup", bootstrapHandoff = handoff)
+          awaitConnectedOrThrow(nodeConnected, nodeDisconnected, server)
+          assertEquals(operatorHelloToken, "new-operator", store.loadEntry(gatewayId, deviceId, "operator")?.token)
+          assertEquals(operatorHelloToken, "new-node", store.loadEntry(gatewayId, deviceId, "node")?.token)
+          assertTrue(operatorHelloToken, handoff.completed)
+          assertNull(operatorHelloToken, prefs.loadGatewayCredentials(gatewayId).bootstrapToken)
+
+          releaseOperatorHello.countDown()
+          awaitConnectedOrThrow(operatorConnected, operatorDisconnected, server)
+          assertEquals(operatorHelloToken, "new-operator", store.loadEntry(gatewayId, deviceId, "operator")?.token)
+          assertEquals(operatorHelloToken, "new-node", store.loadEntry(gatewayId, deviceId, "node")?.token)
+          assertTrue(operatorHelloToken, operator.session.isReady())
+        } finally {
+          releaseOperatorHello.countDown()
+          operator.session.disconnectAndJoin()
+          operator.sessionJob.cancelAndJoin()
+          node.session.disconnectAndJoin()
+          node.sessionJob.cancelAndJoin()
+          server.shutdown()
+        }
+      }
+    }
+
+  @Test
+  fun bootstrapHandoff_staleOperatorRetryMismatchCannotClearFreshOperatorToken() =
+    runBlocking {
+      val prefs = testPrefs(RuntimeEnvironment.getApplication())
+      val store = DeviceAuthStore(prefs)
+      val operatorAuthFrames = Channel<JsonObject>(Channel.UNLIMITED)
+      val releaseMismatch = CountDownLatch(1)
+      val retryRejected = CompletableDeferred<Unit>()
+      val nodeConnected = CompletableDeferred<Unit>()
+      val nodeDisconnected = AtomicReference("")
+      val server =
+        startGatewayServer(testJson()) { socket, id, method, frame ->
+          if (method == "connect") {
+            val params = frame["params"]!!.jsonObject
+            if (params["role"]?.jsonPrimitive?.content == "operator") {
+              val auth = params["auth"]!!.jsonObject
+              operatorAuthFrames.trySend(auth)
+              if (auth["deviceToken"] == null) {
+                socket.send(
+                  """{"type":"res","id":"$id","ok":false,"error":{"code":"UNAUTHORIZED","message":"shared token mismatch","details":{"code":"AUTH_TOKEN_MISMATCH","canRetryWithDeviceToken":true}}}""",
+                )
+              } else {
+                releaseMismatch.await()
+                socket.send(
+                  """{"type":"res","id":"$id","ok":false,"error":{"code":"UNAUTHORIZED","message":"device token mismatch","details":{"code":"AUTH_DEVICE_TOKEN_MISMATCH"}}}""",
+                )
+              }
+            } else {
+              socket.send(
+                connectResponseFrame(
+                  id,
+                  authJson =
+                    """{"deviceToken":"new-node","role":"node","scopes":[],"deviceTokens":[{"deviceToken":"new-operator","role":"operator","scopes":["operator.read"]}]}""",
+                ),
+              )
+            }
+          }
+        }
+      val gatewayId = gatewayIdForPort(server.port)
+      val deviceId = testDeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
+      assertTrue(store.saveToken(gatewayId, deviceId, "operator", "old-operator", listOf("operator.read")))
+      prefs.saveGatewayCredentials(gatewayId, bootstrapToken = "setup")
+      val handoff = prefs.prepareGatewayBootstrapHandoff(gatewayId, "setup", false)
+      val operator =
+        createNodeHarness(
+          CompletableDeferred(),
+          AtomicReference(""),
+          deviceAuthStore = store,
+          onConnectFailure = { error, _ ->
+            if (error.details?.code == "AUTH_DEVICE_TOKEN_MISMATCH") retryRejected.complete(Unit)
+          },
+        ) { GatewaySession.InvokeResult.ok(null) }
+      val node = createNodeHarness(nodeConnected, nodeDisconnected, deviceAuthStore = store) { GatewaySession.InvokeResult.ok(null) }
+      try {
+        connectNodeSession(operator.session, server.port, token = "shared-token", role = "operator", scopes = listOf("operator.read"))
+        val firstAuth = withTimeout(TEST_TIMEOUT_MS) { operatorAuthFrames.receive() }
+        assertEquals("shared-token", firstAuth["token"]?.jsonPrimitive?.content)
+        assertNull(firstAuth["deviceToken"])
+        val retryAuth = withTimeout(TEST_TIMEOUT_MS) { operatorAuthFrames.receive() }
+        assertEquals("shared-token", retryAuth["token"]?.jsonPrimitive?.content)
+        assertEquals("old-operator", retryAuth["deviceToken"]?.jsonPrimitive?.content)
+
+        connectNodeSession(node.session, server.port, token = null, bootstrapToken = "setup", bootstrapHandoff = handoff)
+        awaitConnectedOrThrow(nodeConnected, nodeDisconnected, server)
+        val freshOperatorEntry = store.loadEntry(gatewayId, deviceId, "operator")
+        assertEquals("new-operator", freshOperatorEntry?.token)
+        assertTrue(handoff.completed)
+        assertNull(prefs.loadGatewayCredentials(gatewayId).bootstrapToken)
+
+        releaseMismatch.countDown()
+        withTimeout(TEST_TIMEOUT_MS) { retryRejected.await() }
+        assertEquals(freshOperatorEntry, store.loadEntry(gatewayId, deviceId, "operator"))
+        assertEquals("new-node", store.loadEntry(gatewayId, deviceId, "node")?.token)
+      } finally {
+        releaseMismatch.countDown()
+        operator.session.disconnectAndJoin()
+        operator.sessionJob.cancelAndJoin()
+        node.session.disconnectAndJoin()
+        node.sessionJob.cancelAndJoin()
+        server.shutdown()
+      }
+    }
+
+  @Test
   fun bootstrapHandoff_reconnectsAndRelaunchesOnlyAfterDurableRoles() =
     runBlocking {
       val prefs = testPrefs(RuntimeEnvironment.getApplication())
@@ -1984,6 +2148,7 @@ class GatewaySessionInvokeTest {
     onEvent: (event: String, payloadJson: String?) -> Unit = { _, _ -> },
     extraContext: CoroutineContext = EmptyCoroutineContext,
     deviceAuthStore: DeviceAuthTokenStore = InMemoryDeviceAuthStore(),
+    onConnectFailure: (GatewaySession.ErrorShape, Boolean) -> Unit = { _, _ -> },
     onInvoke: suspend (GatewaySession.InvokeRequest) -> GatewaySession.InvokeResult,
   ): NodeHarness {
     val app = RuntimeEnvironment.getApplication()
@@ -1999,6 +2164,7 @@ class GatewaySessionInvokeTest {
         onDisconnected = { message ->
           lastDisconnect.set(message)
         },
+        onConnectFailure = onConnectFailure,
         onEvent = onEvent,
         onInvoke = onInvoke,
       )

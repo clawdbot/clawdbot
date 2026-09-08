@@ -1346,6 +1346,7 @@ describe("deliverReplies", () => {
   });
 
   it("uses single-photo document recovery after a definite album photo-limit rejection", async () => {
+    const runtime = createRuntime();
     const mediaUrls = mockPhotoMedia();
     const failure = createChunkRejection("PHOTO_INVALID_DIMENSIONS");
     const sendMediaGroup = vi.fn().mockRejectedValue(failure);
@@ -1358,7 +1359,7 @@ describe("deliverReplies", () => {
     await expect(
       deliverWith({
         replies: [{ text: "Caption", mediaUrls }],
-        runtime: createRuntime(),
+        runtime,
         bot: createBot({ sendMediaGroup, sendPhoto, sendDocument }),
       }),
     ).resolves.toEqual({ delivered: true });
@@ -1375,9 +1376,11 @@ describe("deliverReplies", () => {
     );
     expect(mockCallArg(sendPhoto, 1, 1)).toMatchObject({ filename: "photo-1.jpg" });
     expect(recordSentMessage.mock.calls.map((call) => call[1])).toEqual([101, 102]);
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 
   it("does not replay an album after an ambiguous upload failure", async () => {
+    const runtime = createRuntime();
     const mediaUrls = mockPhotoMedia();
     const failure = createPlainHttpError("sendMediaGroup");
     const sendMediaGroup = vi.fn().mockRejectedValue(failure);
@@ -1387,7 +1390,7 @@ describe("deliverReplies", () => {
     await expect(
       deliverWith({
         replies: [{ mediaUrls }],
-        runtime: createRuntime(),
+        runtime,
         bot: createBot({ sendMediaGroup, sendPhoto, sendDocument }),
       }),
     ).rejects.toBe(failure);
@@ -1395,6 +1398,7 @@ describe("deliverReplies", () => {
     expect(sendPhoto).not.toHaveBeenCalled();
     expect(sendDocument).not.toHaveBeenCalled();
     expect(recordSentMessage).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("sendMediaGroup failed"));
   });
 
   it("stops a media follow-up when the provider returns the wrong topic", async () => {

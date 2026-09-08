@@ -161,7 +161,15 @@ The `legacy-operator-state` scenario uses the published baseline's own CLI to
 create a second agent, allowlist exec approvals, and two command cron jobs: one
 without an explicit agent and one owned by `ops`. It leaves `systemAgent`
 unset, installs one version-matched npm plugin through the local registry, and
-preserves a workspace skill. A mock OpenAI server verifies a real agent turn
+preserves a workspace skill. It also configures DuckDuckGo without an install
+record: bundled baselines use their own CLI web-search settings; newer baselines
+receive the retained configuration of an already-broken upgrade. The local
+registry supplies the candidate's official external DuckDuckGo package. Before
+standalone Doctor or consent repair, assertions require the npm install record,
+candidate package version and integrity, `plugins list` entry, and clean
+`config validate --json`. A separate isolated missing-plugin state exercises
+`doctor --fix --non-interactive` without an update or capability acceptance.
+A mock OpenAI server verifies a real agent turn
 before and after the update without provider credentials. After the update,
 the lane checks approvals and legacy-file retirement, effective cron owners,
 the candidate plugin artifact, the candidate state schema, an idempotent update,
