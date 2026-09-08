@@ -1,5 +1,6 @@
-import type { Selectable } from "kysely";
+import { sql, type Selectable } from "kysely";
 import {
+  decodeSqliteTextBytes,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
@@ -9,8 +10,10 @@ import type { SqliteSessionOwnerRow } from "./session-accessor.sqlite-owner-proj
 import { projectSqliteSessionParticipants } from "./session-accessor.sqlite-participant-projection.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
+  decodeLosslessSessionEntryRow,
   parseSessionEntryJson as parseSessionEntryRow,
-  selectSessionEntryRows,
+  selectLosslessFullSessionEntryRows,
+  selectLosslessSessionEntryRows,
 } from "./session-accessor.sqlite-status.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,
@@ -77,21 +80,19 @@ function readSessionEntryRowUnchecked(
   database: OpenClawAgentDatabaseReader,
   sessionKey: string,
 ): ResolvedSessionEntryRow | undefined {
-  const db = getSessionKysely(database.db);
   const lookupKeys = collectSessionEntryLookupKeys(database, sessionKey);
   if (lookupKeys.length === 0) {
     return undefined;
   }
   const rows = executeSqliteQuerySync(
     database.db,
-    db
-      .selectFrom("session_nodes")
-      .selectAll()
+    selectLosslessFullSessionEntryRows(database)
       .where("session_key", "in", lookupKeys)
       .orderBy("session_key", "asc"),
   ).rows;
   let selected: ResolvedSessionEntryRow | undefined;
-  for (const row of rows) {
+  for (const rawRow of rows) {
+    const row = decodeLosslessSessionEntryRow(database, rawRow);
     const entry = parseReadableSqliteSessionEntryRow(database, row);
     if (!entry || row.session_key !== sessionKey.trim()) {
       continue;
@@ -106,18 +107,22 @@ export function readExactSessionEntryRow(
   sessionKey: string,
   projection: "full" | "list" = "full",
 ): ResolvedSessionEntryRow | undefined {
-  const db = getSessionKysely(database.db);
-  const query =
+  const rawRow =
     projection === "list"
-      ? selectSessionEntryRows(database, projection).select(["current_session_id", "updated_at"])
-      : db.selectFrom("session_nodes").selectAll();
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    query.where("session_key", "=", sessionKey),
-  );
-  if (!row) {
+      ? executeSqliteQueryTakeFirstSync(
+          database.db,
+          selectLosslessSessionEntryRows(database, projection)
+            .select("updated_at")
+            .where("session_key", "=", sessionKey),
+        )
+      : executeSqliteQueryTakeFirstSync(
+          database.db,
+          selectLosslessFullSessionEntryRows(database).where("session_key", "=", sessionKey),
+        );
+  if (!rawRow) {
     return undefined;
   }
+  const row = decodeLosslessSessionEntryRow(database, rawRow);
   const entry = parseReadableSqliteSessionEntryRow(database, row, projection);
   return entry ? { entry, row } : undefined;
 }
@@ -127,10 +132,18 @@ export function readExactSessionEntryJson(
   sessionKey: string,
 ): string | undefined {
   const db = getSessionKysely(database.db);
-  return executeSqliteQueryTakeFirstSync(
+  const row = executeSqliteQueryTakeFirstSync(
     database.db,
-    db.selectFrom("session_nodes").select("entry_json").where("session_key", "=", sessionKey),
-  )?.entry_json;
+    db
+      .selectFrom("session_nodes")
+      .select(
+        /* kysely-allow-raw: preserve exact session JSON bytes on affected node:sqlite builds. */ sql<Uint8Array>`CAST(entry_json AS BLOB)`.as(
+          "entry_json_bytes",
+        ),
+      )
+      .where("session_key", "=", sessionKey),
+  );
+  return row ? decodeSqliteTextBytes(database.db, row.entry_json_bytes) : undefined;
 }
 
 export function readExactSessionEntryRowValidated(

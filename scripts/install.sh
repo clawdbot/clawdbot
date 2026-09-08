@@ -23,11 +23,14 @@ NODE_BREW_FORMULA="node"
 # Linux package repositories can publish builds ahead of the Node release line.
 # Provision the supported LTS line there so a fresh install never receives a prerelease runtime.
 NODE_LINUX_DEFAULT_MAJOR=24
-NODE_24_MIN_MINOR=16
+NODE_MIN_MAJOR=22
+NODE_22_MIN_MINOR=22
+NODE_22_MIN_PATCH=3
+NODE_24_MIN_MINOR=15
 NODE_24_MIN_PATCH=0
-NODE_26_MIN_MINOR=1
-NODE_26_MIN_PATCH=0
-NODE_SUPPORTED_VERSION_LABEL="24.16.0+ or 26.1.0+"
+NODE_25_MIN_MINOR=9
+NODE_25_MIN_PATCH=0
+NODE_SUPPORTED_VERSION_LABEL="22.22.3+, 24.15.0+, or 25.9.0+"
 
 ORIGINAL_PATH="${PATH:-}"
 
@@ -1745,16 +1748,20 @@ node_version_components_are_supported() {
     local patch="$3"
 
     case "$major" in
+        "$NODE_MIN_MAJOR")
+            ((minor > NODE_22_MIN_MINOR)) ||
+                ((minor == NODE_22_MIN_MINOR && patch >= NODE_22_MIN_PATCH))
+            ;;
         24)
             ((minor > NODE_24_MIN_MINOR)) ||
                 ((minor == NODE_24_MIN_MINOR && patch >= NODE_24_MIN_PATCH))
             ;;
-        26)
-            ((minor > NODE_26_MIN_MINOR)) ||
-                ((minor == NODE_26_MIN_MINOR && patch >= NODE_26_MIN_PATCH))
+        25)
+            ((minor > NODE_25_MIN_MINOR)) ||
+                ((minor == NODE_25_MIN_MINOR && patch >= NODE_25_MIN_PATCH))
             ;;
         *)
-            ((major > 26))
+            ((major > 25))
             ;;
     esac
 }

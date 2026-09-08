@@ -1,6 +1,6 @@
 // Adapts node:sqlite sync database calls for Kysely-style query execution.
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
-import { toUSVString } from "node:util";
+import { TextDecoder, toUSVString } from "node:util";
 import type { Compilable, CompiledQuery, Kysely, QueryResult, RawBuilder } from "kysely";
 import {
   InsertQueryNode,
@@ -54,6 +54,31 @@ export function sqliteStringSet(values: readonly string[]): RawBuilder<string> {
   );
   /* kysely-allow-raw: JSON table-valued selection keeps one read snapshot and outer query ordering. */
   return kyselySql<string>`(SELECT value FROM json_each(${encoded}))`;
+}
+
+const sqliteTextDecoders = new WeakMap<DatabaseSync, TextDecoder>();
+
+/** Decode TEXT projected as BLOB so affected node:sqlite builds cannot stop at embedded NUL. */
+export function decodeSqliteTextBytes(database: DatabaseSync, value: Uint8Array): string {
+  let decoder = sqliteTextDecoders.get(database);
+  if (!decoder) {
+    const row = database.prepare("PRAGMA encoding").get();
+    const encoding = typeof row?.encoding === "string" ? row.encoding.toLowerCase() : "";
+    const label =
+      encoding === "utf-8"
+        ? "utf-8"
+        : encoding === "utf-16le"
+          ? "utf-16le"
+          : encoding === "utf-16be"
+            ? "utf-16be"
+            : undefined;
+    if (!label) {
+      throw new Error(`unsupported SQLite text encoding: ${encoding || "unknown"}`);
+    }
+    decoder = new TextDecoder(label);
+    sqliteTextDecoders.set(database, decoder);
+  }
+  return decoder.decode(value);
 }
 
 function reportNodeSqliteKyselyQueryError(db: DatabaseSync, error: unknown): void {

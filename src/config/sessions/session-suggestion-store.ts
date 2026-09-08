@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { sql } from "kysely";
 import {
+  decodeSqliteTextBytes,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -142,14 +144,24 @@ export function addSessionSuggestion(
       database.db,
       db
         .selectFrom("session_suggestions")
-        .select((eb) => ["author_id", eb.fn.countAll<number>().as("count")])
+        // Keep author identity lossless on node:sqlite builds that truncate TEXT at NUL.
+        .select((eb) => [
+          /* kysely-allow-raw: preserve exact suggestion-author bytes on affected node:sqlite builds. */ sql<Uint8Array>`CAST(author_id AS BLOB)`.as(
+            "author_id_bytes",
+          ),
+          eb.fn.countAll<number>().as("count"),
+        ])
         .where("session_key", "=", sessionKey)
         .where("state", "=", "pending")
         .groupBy("author_id"),
     ).rows.reduce(
       (counts, row) => ({
         session: counts.session + row.count,
-        author: counts.author + (row.author_id === suggestion.authorId ? row.count : 0),
+        author:
+          counts.author +
+          (decodeSqliteTextBytes(database.db, row.author_id_bytes) === suggestion.authorId
+            ? row.count
+            : 0),
       }),
       { session: 0, author: 0 },
     );

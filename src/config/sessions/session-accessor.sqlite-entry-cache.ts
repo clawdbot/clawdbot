@@ -11,7 +11,11 @@ import {
   projectSqliteSessionParticipantsBatch,
 } from "./session-accessor.sqlite-participant-projection.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import { parseSessionEntryJson, selectSessionEntryRows } from "./session-accessor.sqlite-status.js";
+import {
+  decodeLosslessSessionEntryRow,
+  parseSessionEntryJson,
+  selectLosslessSessionEntryRows,
+} from "./session-accessor.sqlite-status.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,
   type ValidatedSessionMetadata,
@@ -139,13 +143,13 @@ function loadSessionEntrySnapshot(
   if (!metadata) {
     for (const row of iterateSqliteQuerySync(
       database.db,
-      selectSessionEntryRows(database, projection, fullEntryKeys ? [...fullEntryKeys] : [])
+      selectLosslessSessionEntryRows(database, projection, fullEntryKeys ? [...fullEntryKeys] : [])
         .select("updated_at")
         .orderBy("session_key"),
     )) {
       keys.push(row.session_key);
       const entry = parseSessionEntryJson(
-        row,
+        decodeLosslessSessionEntryRow(database, row),
         fullEntryKeys?.has(row.session_key) ? "full" : projection,
       );
       if (entry) {

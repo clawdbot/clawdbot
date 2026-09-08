@@ -9,7 +9,7 @@ import {
 } from "./runtime-guard.js";
 
 const state = vi.hoisted(() => ({
-  version: "24.16.0",
+  version: "22.22.3",
   error: vi.fn(),
   run: vi.fn(),
 }));
@@ -49,33 +49,29 @@ describe("runtime-guard", () => {
   });
 
   it("checks node versions against the supported engine range", () => {
-    const engine = ">=24.16.0 <25 || >=26.1.0";
-    expect(nodeVersionSatisfiesEngine("22.23.2", engine)).toBe(false);
+    const engine = ">=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0";
+    expect(nodeVersionSatisfiesEngine("22.22.3", engine)).toBe(true);
     expect(nodeVersionSatisfiesEngine("22.22.2", engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("23.11.0", engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("24.14.1", engine)).toBe(false);
-    expect(nodeVersionSatisfiesEngine("24.15.0", engine)).toBe(false);
-    expect(nodeVersionSatisfiesEngine("24.16.0", engine)).toBe(true);
+    expect(nodeVersionSatisfiesEngine("24.15.0", engine)).toBe(true);
     expect(nodeVersionSatisfiesEngine("25.8.1", engine)).toBe(false);
-    expect(nodeVersionSatisfiesEngine("25.9.0", engine)).toBe(false);
-    expect(nodeVersionSatisfiesEngine("26.0.0", engine)).toBe(false);
-    expect(nodeVersionSatisfiesEngine("26.1.0", engine)).toBe(true);
+    expect(nodeVersionSatisfiesEngine("25.9.0", engine)).toBe(true);
+    expect(nodeVersionSatisfiesEngine("26.0.0", engine)).toBe(true);
     expect(nodeVersionSatisfiesEngine(null, engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("unknown", engine)).toBe(false);
   });
 
   it.each([
-    ["22.23.2", false],
+    ["22.22.3", true],
     ["22.22.2", false],
     ["23.11.0", false],
     ["24.14.1", false],
-    ["24.15.0", false],
-    ["24.16.0", true],
+    ["24.15.0", true],
     ["25.8.1", false],
-    ["25.9.0", false],
-    ["26.0.0", false],
-    ["26.1.0", true],
-    ["24.16.0+local.1", true],
+    ["25.9.0", true],
+    ["26.0.0", true],
+    ["24.15.0+local.1", true],
     ["24.15.0-rc.1", false],
     ["25.9.1-nightly.20260714", false],
     ["24.15", false],
@@ -116,7 +112,7 @@ describe("runtime-guard", () => {
     expect(runtime.error).toHaveBeenCalledOnce();
     expect(runtime.error).toHaveBeenCalledWith(
       [
-        "openclaw requires Node >=24.16.0 <25, or >=26.1.0.",
+        "openclaw requires Node >=22.22.3 <23, >=24.15.0 <25, or >=25.9.0.",
         "Detected: node 20.0.0 (exec: /usr/bin/node).",
         "PATH searched: /usr/bin",
         "Install Node: https://nodejs.org/en/download",
@@ -134,7 +130,7 @@ describe("runtime-guard", () => {
     };
     const details = {
       kind: "node" as const,
-      version: "24.16.0",
+      version: "22.22.3",
       execPath: "/usr/bin/node",
       pathEnv: "/usr/bin",
       hasNodeSqlite: true,
@@ -257,7 +253,7 @@ describe("runtime-guard", () => {
     expect(runtime.error).toHaveBeenCalledOnce();
     expect(runtime.error).toHaveBeenCalledWith(
       [
-        "openclaw requires Node >=24.16.0 <25, or >=26.1.0.",
+        "openclaw requires Node >=22.22.3 <23, >=24.15.0 <25, or >=25.9.0.",
         "Detected: unknown runtime (exec: unknown).",
         "PATH searched: (not set)",
         "Install Node: https://nodejs.org/en/download",
@@ -280,7 +276,7 @@ describe("sealed worker runtime", () => {
     process.argv = originalArgv;
   });
 
-  it.each(["22.23.2", "26.0.0"])(
+  it.each(["22.22.2", "23.11.0"])(
     "rejects an explicitly configured worker runtime %s before starting work",
     async (version) => {
       state.version = version;
@@ -290,10 +286,13 @@ describe("sealed worker runtime", () => {
     },
   );
 
-  it.each(["24.16.0", "26.1.0"])("starts the worker on supported runtime %s", async (version) => {
-    state.version = version;
-    await import("../worker/worker-deploy-entry.js");
-    expect(state.run).toHaveBeenCalledOnce();
-    expect(state.error).not.toHaveBeenCalled();
-  });
+  it.each(["22.22.3", "24.15.0", "25.9.0", "26.0.0"])(
+    "starts the worker on supported runtime %s",
+    async (version) => {
+      state.version = version;
+      await import("../worker/worker-deploy-entry.js");
+      expect(state.run).toHaveBeenCalledOnce();
+      expect(state.error).not.toHaveBeenCalled();
+    },
+  );
 });
