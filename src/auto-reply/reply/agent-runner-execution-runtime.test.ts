@@ -295,7 +295,6 @@ describe("executeAgentTurn: runtime selection", () => {
     expect(result.kind).toBe("success");
     expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded run params", {
       agentId: "worker",
-      githubPublicationAvailable: false,
       agentHarnessId: undefined,
       agentHarnessRuntimeOverride: undefined,
       agentHarnessRuntimePreparationHint: "codex",

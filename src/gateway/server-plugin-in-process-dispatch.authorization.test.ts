@@ -189,13 +189,19 @@ describe("typed in-process agent authorization", () => {
     },
   );
 
-  it.each(["operator", "system"] as const)(
-    "preserves %s attribution and never widens a synthetic tool caller's scopes",
-    async (actorKind) => {
+  it.each([
+    { actorKind: "operator", callerScope: "operator.read", requestedScope: "operator.read" },
+    { actorKind: "system", callerScope: "operator.read", requestedScope: "operator.read" },
+    { actorKind: "operator", callerScope: "operator.write", requestedScope: "operator.read" },
+    { actorKind: "system", callerScope: "operator.write", requestedScope: "operator.read" },
+    { actorKind: "operator", callerScope: "operator.write", requestedScope: "operator.talk" },
+  ] as const)(
+    "preserves $actorKind attribution and $callerScope implication for $requestedScope without widening authority",
+    async ({ actorKind, callerScope, requestedScope }) => {
       const operatorRoleActor = actorKind === "system" ? { kind: "system" as const } : undefined;
       const owner = createOperatorClient({
         profileId: "tool-owner",
-        scopes: ["operator.read"],
+        scopes: [callerScope],
       });
       let dispatched: GatewayRequestOptions["client"] = null;
       const context = createContext();
@@ -203,7 +209,7 @@ describe("typed in-process agent authorization", () => {
         createGatewayMethodRegistry([
           {
             name: "sessions.list",
-            scope: "operator.read",
+            scope: requestedScope,
             owner: { kind: "core", area: "sessions" },
             handler: ({ client, respond }: GatewayRequestHandlerOptions) => {
               dispatched = client;
@@ -224,7 +230,7 @@ describe("typed in-process agent authorization", () => {
             {},
             {
               forceSyntheticClient: true,
-              syntheticScopes: ["operator.read", "operator.admin"],
+              syntheticScopes: [requestedScope, "operator.admin", "operator.approvals"],
               resolveGatewayContext: () => context,
             },
           ),
@@ -232,7 +238,7 @@ describe("typed in-process agent authorization", () => {
 
       expect(dispatched).toMatchObject({
         authenticatedUserProfile: { profileId: "tool-owner" },
-        connect: { scopes: ["operator.read"] },
+        connect: { scopes: [requestedScope] },
         internal: { syntheticClient: true, ...(operatorRoleActor ? { operatorRoleActor } : {}) },
       });
     },
@@ -587,7 +593,7 @@ describe("typed in-process agent authorization", () => {
         createGatewayMethodRegistry([
           {
             name: "sessions.list",
-            scope: "operator.write",
+            scope: "operator.read",
             owner: { kind: "core", area: "sessions" },
             handler: ({ client, respond }: GatewayRequestHandlerOptions) => {
               autonomousClient = client;
@@ -603,7 +609,11 @@ describe("typed in-process agent authorization", () => {
         await dispatchGatewayMethodInProcess(
           "sessions.list",
           {},
-          { forceSyntheticClient: true, resolveGatewayContext: () => context },
+          {
+            forceSyntheticClient: true,
+            syntheticScopes: ["operator.read"],
+            resolveGatewayContext: () => context,
+          },
         );
         io.emitAcceptance([true, { runId: "autonomous-run", status: "accepted" }, undefined]);
       });
@@ -628,7 +638,7 @@ describe("typed in-process agent authorization", () => {
       );
 
       expect(autonomousClient).toMatchObject({
-        connect: { scopes: ["operator.write"] },
+        connect: { scopes: ["operator.read"] },
         internal: {
           operatorRoleActor: operatorRoleActor ?? { kind: "operator", profileId: "spawn-owner" },
         },

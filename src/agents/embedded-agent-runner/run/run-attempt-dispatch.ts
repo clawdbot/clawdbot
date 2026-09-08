@@ -7,6 +7,7 @@ import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provide
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
 import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
+import { getAdmittedRunDelegatedAuthority } from "../../admitted-run-context.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
 import { resolveDelegationCapability } from "../../delegation-capability.js";
 import { agentHarnessBuildsOpenClawTools } from "../../harness/selection.js";
@@ -370,6 +371,32 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       }
     },
   });
+  let githubPublicationAvailable = params.githubPublicationAvailable;
+  const resolveGatewayContext = getGatewayContextResolver(admittedRunContext);
+  const gatewayContext = resolveGatewayContext?.();
+  if (
+    githubPublicationAvailable === undefined &&
+    gatewayContext &&
+    !gatewayContext.localEmbedded &&
+    resolvedSessionKey &&
+    !params.disableTools &&
+    !params.modelRun &&
+    params.promptMode !== "none"
+  ) {
+    // Chat and background agent entries share this preparation owner. A standalone
+    // runner must not discover a nearby Gateway or revive a retired run.
+    const { prepareGitHubPublicationAvailability } =
+      await import("../../../gateway/github-publication-availability.js");
+    githubPublicationAvailable = await prepareGitHubPublicationAvailability({
+      agentId: workspaceResolution.agentId,
+      sessionId,
+      sessionKey: resolvedSessionKey,
+      assertCurrent: () =>
+        resolveGatewayContext?.() === gatewayContext &&
+        getAdmittedRunDelegatedAuthority(admittedRunContext) !== undefined &&
+        !attemptControls.abortSignal.aborted,
+    });
+  }
   const attemptParams: EmbeddedRunAttemptInternalParams = {
     permissionChange: input.permissionChange,
     admittedRunContext: params.admittedRunContext,
@@ -390,8 +417,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     clientCaps: params.clientCaps,
     pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
     toolBindings: params.toolBindings,
-    // Preserve the Gateway's tri-state capability; undefined hides both GitHub tools.
-    githubPublicationAvailable: params.githubPublicationAvailable,
+    githubPublicationAvailable,
     chatType: params.chatType,
     agentAccountId: params.agentAccountId,
     conversationRoutePeerId: params.conversationRoutePeerId,

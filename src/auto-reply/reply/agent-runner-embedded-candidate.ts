@@ -47,7 +47,6 @@ export async function runEmbeddedFallbackCandidate(
     allowTransientCooldownProbe?: boolean;
     notifyUserAboutCompaction: boolean;
     messageToolDeliveryState: MessageToolDeliveryState;
-    githubPublicationAvailable: boolean;
     onCompactionFacts: (facts: {
       accounting?: CompactionAccountingFact;
       postCompactionModelAttempted: boolean;
@@ -163,7 +162,6 @@ export async function runEmbeddedFallbackCandidate(
     const result = await params.timing.measure("embedded_run", () => {
       const embeddedRunParams: RunEmbeddedAgentInternalParams = {
         preparedRunAdmission: params.preparedRunAdmission,
-        githubPublicationAvailable: params.githubPublicationAvailable,
         ...embeddedContext,
         messageActionTurnCapability,
         lifecycleGeneration: params.getLifecycleGeneration(),
