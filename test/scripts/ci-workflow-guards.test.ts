@@ -16346,6 +16346,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const validateManifestStep = publishJob.steps.find(
       (step: WorkflowStep) => step.name === "Validate QA evidence manifest",
     );
+    expect(validateManifestStep.id).toBe("validate_evidence");
     expect(validateManifestStep.run).toContain("qa-profile-evidence-manifest.json");
     expect(validateManifestStep.run).toContain("qa-evidence.json profile must be all");
     expect(validateManifestStep.run).toContain("QA evidence manifest profile must be all");
@@ -16355,6 +16356,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(validateManifestStep.run).toContain("profilePlanSha256");
     expect(validateManifestStep.run).toContain("rerun the QA Profile Evidence workflow");
+    expect(validateManifestStep.run).toContain("counts.fail === 0 && counts.blocked === 0");
+    expect(validateManifestStep.run).toContain("scorecard_passed=");
+    expect(validateManifestStep.run).toContain("### Maturity scorecard result");
+    expect(publishJob.outputs).toEqual({
+      scorecard_passed: "${{ steps.validate_evidence.outputs.scorecard_passed }}",
+    });
 
     expect(qaAggregateJob.outputs.artifact_name).toBe(
       "${{ steps.evidence.outputs.artifact_name }}",
@@ -16399,7 +16406,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(renderCheckoutStep.with["fetch-depth"]).toBe(0);
     expect(generatedPrUploadStep).toMatchObject({
-      if: "${{ inputs.publish_pull_request }}",
+      if: "${{ inputs.publish_pull_request && steps.validate_evidence.outputs.scorecard_passed == 'true' }}",
       uses: UPLOAD_ARTIFACT_V7,
       with: {
         name: "maturity-scorecard-pr-${{ github.run_id }}-${{ github.run_attempt }}",
@@ -16435,12 +16442,24 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(renderArtifactStep.run).toContain("QA failures allowed:");
 
+    const resultGateStep = publishJob.steps.find(
+      (step: WorkflowStep) => step.name === "Require zero failed or blocked scenarios",
+    );
+    expect(resultGateStep.env).toEqual({
+      BLOCKED_COUNT: "${{ steps.validate_evidence.outputs.blocked_count }}",
+      FAILED_COUNT: "${{ steps.validate_evidence.outputs.failed_count }}",
+      SCORECARD_PASSED: "${{ steps.validate_evidence.outputs.scorecard_passed }}",
+    });
+    expect(resultGateStep.run).toContain('[[ "$SCORECARD_PASSED" != "true" ]]');
+    expect(resultGateStep.run).toContain("Generated PR publication was blocked.");
+
     expect(publishPrJob.needs).toEqual(["validate_selected_ref", "publisher_preflight", "publish"]);
     expect(publishPrJob["runs-on"]).toBe("ubuntu-24.04");
     expect(publishPrJob.permissions).toEqual({ actions: "read", contents: "read" });
     for (const fragment of [
       "needs.publisher_preflight.result == 'success'",
       "needs.publish.result == 'success'",
+      "needs.publish.outputs.scorecard_passed == 'true'",
       `github.workflow_ref == '${MATURITY_SCORECARD_WORKFLOW_REF}'`,
       `needs.validate_selected_ref.outputs.workflow_ref == '${MATURITY_SCORECARD_WORKFLOW_REF}'`,
     ]) {
@@ -16577,7 +16596,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         ],
       };
 
-      const writeEvidence = () => {
+      const writeEvidence = (status: "pass" | "fail" = "pass") => {
         writeFileSync(
           evidencePath,
           `${JSON.stringify({
@@ -16585,7 +16604,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
             schemaVersion: 2,
             generatedAt: "2026-08-05T00:00:00.000Z",
             evidenceMode: "full",
-            entries: [],
+            entries: [
+              {
+                test: { kind: "scenario", id: "scenario-one", title: "Scenario one" },
+                coverage: [],
+                result: { status },
+              },
+            ],
             profile: "all",
             profilePlan: {
               profile: "all",
@@ -16630,6 +16655,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         runWorkflowShellScript(consumerScript, {
           env: {
             ...process.env,
+            GITHUB_OUTPUT: path.join(root, "consumer-output"),
+            GITHUB_STEP_SUMMARY: path.join(root, "consumer-summary"),
             QA_EVIDENCE_PATH: evidencePath,
             TARGET_SHA: targetSha,
           },
@@ -16647,6 +16674,29 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           protocolBaseSha,
           targetSha,
         });
+        const completeConsumer = runConsumer();
+        expect(
+          completeConsumer.status,
+          `${completeConsumer.stdout}${completeConsumer.stderr}`,
+        ).toBe(0);
+        expect(readFileSync(path.join(root, "consumer-output"), "utf8")).toContain(
+          "scorecard_passed=true",
+        );
+
+        writeEvidence("fail");
+        writeFileSync(path.join(root, "consumer-output"), "", "utf8");
+        const failedEvidenceConsumer = runConsumer();
+        expect(
+          failedEvidenceConsumer.status,
+          `${failedEvidenceConsumer.stdout}${failedEvidenceConsumer.stderr}`,
+        ).toBe(0);
+        expect(readFileSync(path.join(root, "consumer-output"), "utf8")).toContain(
+          "scorecard_passed=false",
+        );
+        expect(readFileSync(path.join(root, "consumer-output"), "utf8")).toContain(
+          "failed_count=1",
+        );
+
         const manifest = JSON.parse(completeManifest) as Record<string, unknown>;
         manifest.profilePlanSha256 = "0".repeat(64);
         writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, "utf8");
@@ -16658,6 +16708,39 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       } finally {
         rmSync(root, { force: true, recursive: true });
       }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "fails the maturity workflow result gate when evidence is not passing",
+    () => {
+      const maturityWorkflow = readMaturityScorecardWorkflow();
+      const gateStep = maturityWorkflow.jobs.publish.steps.find(
+        (step: WorkflowStep) => step.name === "Require zero failed or blocked scenarios",
+      );
+      const gateScript = expectDefined(gateStep?.run, "maturity result gate");
+      const failed = runWorkflowShellScript(gateScript, {
+        env: {
+          ...process.env,
+          BLOCKED_COUNT: "51",
+          FAILED_COUNT: "28",
+          SCORECARD_PASSED: "false",
+        },
+      });
+      expect(failed.status).toBe(1);
+      expect(`${failed.stdout}${failed.stderr}`).toContain(
+        "28 failed and 51 blocked scenarios. Generated PR publication was blocked.",
+      );
+
+      const passed = runWorkflowShellScript(gateScript, {
+        env: {
+          ...process.env,
+          BLOCKED_COUNT: "0",
+          FAILED_COUNT: "0",
+          SCORECARD_PASSED: "true",
+        },
+      });
+      expect(passed.status).toBe(0);
     },
   );
 
