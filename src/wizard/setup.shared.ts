@@ -1,11 +1,14 @@
 // Shared setup-wizard steps used by the classic wizard and the bootstrap onboarding flow.
 import type { GatewayAuthChoice, OnboardOptions } from "../commands/onboard-types.js";
+import { setConfigValueAtPath } from "../config/config-paths.js";
 import { createConfigIO, resolveGatewayPort } from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
 import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { applyMergePatch, createMergePatch } from "../config/merge-patch.js";
+import { isMergePatchObjectKeyAllowed } from "../config/patch-replace-paths.js";
 import type { ConfigWriteAfterWrite } from "../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import { isPlainObject } from "../infra/plain-object.js";
 import { transformConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import { t } from "./i18n/index.js";
@@ -77,6 +80,33 @@ export function formatQuickstartGatewaySummary(
   ].join("\n");
 }
 
+function collectChangedWizardNullPaths(
+  base: unknown,
+  target: unknown,
+  path: string[] = [],
+  paths: string[][] = [],
+): string[][] {
+  if (!isPlainObject(target)) {
+    return paths;
+  }
+  const baseRecord = isPlainObject(base) ? base : {};
+  const parentPath = path.length > 0 ? path.join(".") : undefined;
+  for (const [key, targetValue] of Object.entries(target)) {
+    if (!isMergePatchObjectKeyAllowed(key, parentPath)) {
+      continue;
+    }
+    const childPath = [...path, key];
+    if (targetValue === null) {
+      if (baseRecord[key] !== null) {
+        paths.push(childPath);
+      }
+      continue;
+    }
+    collectChangedWizardNullPaths(baseRecord[key], targetValue, childPath, paths);
+  }
+  return paths;
+}
+
 /**
  * Config writes go through the pending-plugin-install commit helper so wizard
  * flows never drop install records that a concurrent migration already staged.
@@ -96,6 +126,18 @@ export async function writeWizardConfigFile(
     afterWrite?: ConfigWriteAfterWrite;
   } = {},
 ): Promise<OpenClawConfig> {
+  const explicitNullPaths = opts.mergeBase
+    ? collectChangedWizardNullPaths(opts.mergeBase, config)
+    : [];
+  const explicitSetValueSource =
+    explicitNullPaths.length > 0
+      ? structuredClone(opts.writeOptions?.explicitSetValueSource ?? config)
+      : undefined;
+  if (explicitSetValueSource) {
+    for (const path of explicitNullPaths) {
+      setConfigValueAtPath(explicitSetValueSource, path, null);
+    }
+  }
   const committed = await transformConfigWithPendingPluginInstalls({
     ...(opts.baseHash !== undefined ? { baseHash: opts.baseHash } : {}),
     // Caller-owned snapshots are one-shot CAS preconditions, not retry baselines.
@@ -103,16 +145,29 @@ export async function writeWizardConfigFile(
     ...(opts.afterWrite ? { afterWrite: opts.afterWrite } : {}),
     writeOptions: {
       ...opts.writeOptions,
+      ...(explicitNullPaths.length > 0
+        ? {
+            explicitSetPaths: [
+              ...(opts.writeOptions?.explicitSetPaths ?? []),
+              ...explicitNullPaths,
+            ],
+            explicitSetValueSource,
+          }
+        : {}),
       ...(opts.allowConfigSizeDrop !== undefined
         ? { allowConfigSizeDrop: opts.allowConfigSizeDrop }
         : {}),
       ...(opts.baseSnapshot ? { baseSnapshot: opts.baseSnapshot } : {}),
     },
-    transform: (current) => ({
-      nextConfig: opts.mergeBase
+    transform: (current) => {
+      const nextConfig = opts.mergeBase
         ? (applyMergePatch(current, createMergePatch(opts.mergeBase, config)) as OpenClawConfig)
-        : config,
-    }),
+        : config;
+      for (const path of explicitNullPaths) {
+        setConfigValueAtPath(nextConfig, path, null);
+      }
+      return { nextConfig };
+    },
   });
   return committed.nextConfig;
 }

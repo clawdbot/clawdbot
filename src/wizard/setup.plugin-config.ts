@@ -241,9 +241,9 @@ async function promptPluginFields(params: {
 
     // Handle enum fields with select
     if (schemaProp?.enum && Array.isArray(schemaProp.enum)) {
-      const options = schemaProp.enum.map((v) => ({
-        value: String(v),
-        label: String(v),
+      const options = schemaProp.enum.map((configValue, index) => ({
+        value: String(index),
+        label: JSON.stringify(configValue) ?? String(configValue),
       }));
       if (hasValue) {
         options.unshift({
@@ -257,7 +257,8 @@ async function promptPluginFields(params: {
         initialValue: hasValue ? "__keep__" : undefined,
       });
       if (selected !== "__keep__") {
-        setPathCreateStrict(updatedConfig, pathSegments, selected);
+        const selectedValue = schemaProp.enum[Number(selected)];
+        setPathCreateStrict(updatedConfig, pathSegments, structuredClone(selectedValue));
         changed = true;
       }
       continue;
