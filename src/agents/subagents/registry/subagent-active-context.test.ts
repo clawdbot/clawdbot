@@ -11,6 +11,7 @@ import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "./subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 beforeEach(() => {
   resetSubagentRegistryForTests();

@@ -5,9 +5,9 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   listSubagentRunsForRequester,
   registerSubagentRun,
@@ -41,6 +41,7 @@ const ENV_KEYS = [
 const RUN_ID = "run-gw-prompt-recent";
 const CHILD_SESSION_KEY = "agent:main:subagent:gw-prompt-recent";
 const PARENT_SESSION_KEY = "agent:main:main";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function resetGatewayState(): void {
   resetConfigOverrides();
@@ -84,7 +85,7 @@ async function runParentAgentTurn(
 describe("Recently Completed Subagents on a real parent-agent turn", () => {
   test("later parent model request includes the completed child", { timeout: 90_000 }, async () => {
     const env = captureEnv([...ENV_KEYS]);
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-subagent-prompt-recent-"));
+    const home = tempDirs.make("openclaw-gw-subagent-prompt-recent-");
     const stateDir = path.join(home, ".openclaw");
     const workspace = path.join(home, "workspace");
     const bundledPluginsDir = path.join(home, "empty-bundled-plugins");
@@ -251,7 +252,6 @@ describe("Recently Completed Subagents on a real parent-agent turn", () => {
       await new Promise<void>((resolve) => {
         providerServer.close(() => resolve());
       });
-      await fs.rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
       env.restore();
     }
   });
