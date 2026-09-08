@@ -455,7 +455,12 @@ async function command() {
         options.env.PERFORMANCE_REPORT_SELECTOR,
         options.env.PERFORMANCE_PUBLISHER_HELPER,
       ];
-      if (allowed.includes(args[0]) || args[0] === "-e") {
+      const readsTargetVersion =
+        args.length === 3 &&
+        args[0] === "-p" &&
+        args[1] === "require(process.argv[1]).version" &&
+        path.resolve(args[2]) === path.resolve(options.env.TARGET_CHECKOUT_DIR, "package.json");
+      if (allowed.includes(args[0]) || args[0] === "-e" || readsTargetVersion) {
         const result = spawnSync(process.execPath, args, { stdio: "inherit" });
         process.exit(result.status ?? 1);
       }

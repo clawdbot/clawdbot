@@ -243,6 +243,7 @@ describe("OpenClaw performance workflow", () => {
     const canonicalKovaRef = "065d2ffd535f12fd0f3a15c412a08a456f580260";
     const legacyKovaRef = "065d2ffd535f12fd0f3a15c412a08a456f580260";
     const trustedLiveKovaRef = "065d2ffd535f12fd0f3a15c412a08a456f580260";
+    const v2026_7_33CompatKovaRef = "70ea2c5a3bdd206937b4a0bd7460a19a69d8c52a";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
     const targetCheckout = findStep("Checkout target metadata", "resolve_target");
@@ -251,6 +252,7 @@ describe("OpenClaw performance workflow", () => {
     expect(workflow).toContain(`KOVA_CANONICAL_CONFIG_REF: ${canonicalKovaRef}`);
     expect(workflow).toContain(`KOVA_LEGACY_LIST_CONFIG_REF: ${legacyKovaRef}`);
     expect(workflow).toContain(`KOVA_TRUSTED_LIVE_REF: ${trustedLiveKovaRef}`);
+    expect(workflow).toContain(`KOVA_2026_7_33_COMPAT_REF: ${v2026_7_33CompatKovaRef}`);
     expect(workflow).toContain("kova_config_contract:");
     expect(workflow).toContain("Optional fixture-contract override for a custom Kova ref");
     expect(readWorkflow().jobs?.resolve_target?.outputs?.kova_ref).toBe(
@@ -267,7 +269,7 @@ describe("OpenClaw performance workflow", () => {
       "${{ inputs.kova_config_contract }}",
     );
     expect(targetCheckout.with?.["sparse-checkout"]).toBe(
-      "src/config/zod-schema.agent-defaults.ts",
+      "package.json\nsrc/config/zod-schema.agent-defaults.ts\n",
     );
     expect(resolveTarget.run).toContain(
       'schema_path="${TARGET_CHECKOUT_DIR}/src/config/zod-schema.agent-defaults.ts"',
@@ -277,6 +279,8 @@ describe("OpenClaw performance workflow", () => {
     expect(resolveTarget.run).toContain('detected_kova_config_contract="canonical"');
     expect(resolveTarget.run).toContain('detected_kova_config_contract="legacy-list"');
     expect(resolveTarget.run).toContain('kova_ref="${KOVA_REF_INPUT:-}"');
+    expect(resolveTarget.run).toContain('"$target_version" == "2026.7.33"');
+    expect(resolveTarget.run).toContain('kova_ref="$KOVA_2026_7_33_COMPAT_REF"');
     expect(resolveTarget.run).toContain('kova_ref="${kova_ref:-$default_kova_ref}"');
     expect(resolveTarget.run).toContain(
       'if [[ -z "$kova_ref" || -z "$kova_config_contract" ]]; then',

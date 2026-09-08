@@ -96,8 +96,9 @@ export function preparePerformanceFixture(root: string, options: PerformanceFixt
     run(seed, "commit", "--allow-empty", "-m", "fixture seed");
     run(seed, "push", remote, "HEAD:main");
     run(workspace, "init", "--initial-branch=main");
+    write(path.join(workspace, "package.json"), JSON.stringify({ version: "2026.9.0" }));
     write(path.join(workspace, "src/config/zod-schema.agent-defaults.ts"), "    mediaModels: z\n");
-    run(workspace, "add", "src");
+    run(workspace, "add", "package.json", "src");
     run(workspace, "commit", "-m", "fixture target");
     mkdirSync(reports);
     if (options.mode === "publish") {

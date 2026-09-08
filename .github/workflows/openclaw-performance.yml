@@ -91,6 +91,7 @@ env:
   KOVA_CANONICAL_CONFIG_REF: 065d2ffd535f12fd0f3a15c412a08a456f580260
   KOVA_LEGACY_LIST_CONFIG_REF: 065d2ffd535f12fd0f3a15c412a08a456f580260
   KOVA_TRUSTED_LIVE_REF: 065d2ffd535f12fd0f3a15c412a08a456f580260
+  KOVA_2026_7_33_COMPAT_REF: 70ea2c5a3bdd206937b4a0bd7460a19a69d8c52a
   PERFORMANCE_MODEL_ID: gpt-5.6-luna
   # Release matrices cold-build the candidate runtime before measurement.
   KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}
@@ -119,7 +120,9 @@ jobs:
         with:
           ref: ${{ inputs.target_ref || github.sha }}
           path: .artifacts/performance-target
-          sparse-checkout: src/config/zod-schema.agent-defaults.ts
+          sparse-checkout: |
+            package.json
+            src/config/zod-schema.agent-defaults.ts
           sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
@@ -148,6 +151,10 @@ jobs:
 
           kova_ref="${KOVA_REF_INPUT:-}"
           kova_config_contract="${KOVA_CONFIG_CONTRACT_INPUT:-}"
+          target_version="$(node -p "require(process.argv[1]).version" "$TARGET_CHECKOUT_DIR/package.json")"
+          if [[ -z "$kova_ref" && "$target_version" == "2026.7.33" ]]; then
+            kova_ref="$KOVA_2026_7_33_COMPAT_REF"
+          fi
           if [[ "$kova_ref" == *$'\n'* || "$kova_ref" == *$'\r'* ]]; then
             echo "::error::kova_ref must be a single line."
             exit 1
