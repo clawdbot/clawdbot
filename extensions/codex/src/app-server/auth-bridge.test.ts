@@ -1064,6 +1064,50 @@ describe("bridgeCodexAppServerStartOptions", () => {
     },
   );
 
+  it.each([
+    { platform: "linux" as const, name: " CODEX_API_KEY " },
+    { platform: "linux" as const, name: "codex_api_key" },
+    { platform: "win32" as const, name: "codex_api_key" },
+    { platform: "win32" as const, name: " CoDeX_ApI_KeY " },
+  ])("retains the prepared key with $platform clearEnv $name", async ({ platform, name }) => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+    try {
+      await withTempDir("openclaw-codex-prepared-env-", async (agentDir) => {
+        const startOptions = createStartOptions({ clearEnv: [name, "FOO"] });
+        const bridged = await bridgeCodexAppServerStartOptions({
+          startOptions,
+          agentDir,
+          preparedAuth: {
+            kind: "api-key",
+            apiKey: "synthetic-prepared-key",
+            customProvider: { provider: "custom-provider", baseUrl: "https://proxy.example/v1" },
+          },
+        });
+        const env = resolveCodexAppServerSpawnEnv(
+          bridged,
+          {
+            CODEX_API_KEY: "ambient-key",
+            ...(name === "codex_api_key" ? { codex_api_key: "ambient-lowercase-key" } : {}),
+            OPENAI_API_KEY: "ambient-openai-key",
+            CODEX_ACCESS_TOKEN: "ambient-token",
+            FOO: "clear-me",
+          },
+          platform,
+        );
+        expect(env.CODEX_API_KEY).toBe("synthetic-prepared-key");
+        expect(env.OPENAI_API_KEY).toBeUndefined();
+        expect(env.CODEX_ACCESS_TOKEN).toBeUndefined();
+        expect(env.FOO).toBeUndefined();
+        if (platform === "linux" && name === "codex_api_key") {
+          expect(env.codex_api_key).toBeUndefined();
+        }
+        expect(startOptions.clearEnv).toEqual([name, "FOO"]);
+      });
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
   it("maps a prepared API-key route to one closed auth handoff", async () => {
     await expect(
       resolveCodexAppServerPreparedAuthHandoff({
