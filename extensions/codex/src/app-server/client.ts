@@ -11,6 +11,11 @@ import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-util
 import { parse as parseSemver } from "semver";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
+import {
+  CodexCustomProviderClientBinding,
+  type CodexRejectedCustomProviderSession,
+} from "./custom-provider-client.js";
+import type { CodexCustomProviderBinding } from "./custom-provider.js";
 import { resolveDynamicToolServerRequestTimeoutMs } from "./dynamic-tool-execution.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { readCodexDynamicToolCallParams } from "./protocol-validators.js";
@@ -28,7 +33,12 @@ import {
   type RpcRequest,
   type RpcResponse,
 } from "./protocol.js";
+import {
+  CodexAppServerScopedRequestRejectedError,
+  CodexAppServerUnsafeSubscriptionError,
+} from "./request-errors.js";
 import { CodexAppServerRpcError } from "./rpc-error.js";
+import { isCodexAppServerStartSelectionChangedError } from "./start-selection-error.js";
 import { createStdioTransport } from "./transport-stdio.js";
 import { createWebSocketTransport } from "./transport-websocket.js";
 import {
@@ -97,8 +107,9 @@ class CodexAppServerLocalRequestCancellationError extends Error {
     method: string,
     readonly reason: "aborted" | "timed out",
     readonly mayHaveWritten: boolean,
+    options?: ErrorOptions,
   ) {
-    super(`${method} ${reason}`);
+    super(`${method} ${reason}`, options);
     this.name = "CodexAppServerLocalRequestCancellationError";
   }
 }
@@ -220,6 +231,7 @@ export class CodexAppServerClient {
   private readonly pendingStartupWarnings: CodexServerNotification[] = [];
   private readonly closeHandlers = new Set<(client: CodexAppServerClient) => void>();
   private nextId = 1;
+  private customProviderBinding: CodexCustomProviderClientBinding | undefined;
   private initialized = false;
   private modelCatalogRevision = 0;
   private closed = false;
@@ -405,6 +417,63 @@ export class CodexAppServerClient {
     return this.child.pid;
   }
 
+  bindCustomProvider(binding: CodexCustomProviderBinding, cwd: string): void {
+    if (this.customProviderBinding) {
+      const current = this.customProviderBinding.binding;
+      if (current.provider !== binding.provider || current.baseUrl !== binding.baseUrl) {
+        throw new Error("A Codex process cannot replace its prepared provider binding");
+      }
+      return;
+    }
+    this.customProviderBinding = new CodexCustomProviderClientBinding(binding, cwd, (session) =>
+      this.cleanupRejectedCustomProviderSession(session),
+    );
+  }
+
+  private async cleanupRejectedCustomProviderSession(
+    session: CodexRejectedCustomProviderSession,
+  ): Promise<void> {
+    const thread = isJsonObject(session.response) ? session.response.thread : undefined;
+    const threadId = isJsonObject(thread) && typeof thread.id === "string" ? thread.id : undefined;
+    const input = isJsonObject(session.input) ? session.input : undefined;
+    const identifiable =
+      Boolean(threadId?.trim()) &&
+      (session.method !== "thread/resume" || threadId === input?.threadId) &&
+      (session.method !== "thread/fork" || threadId !== input?.threadId);
+    let cleanupConfirmed = false;
+    let cause = session.cause;
+    try {
+      if (identifiable && threadId) {
+        const { discardUnattestedCodexPluginThread } =
+          await import("./plugin-thread-attestation.js");
+        cleanupConfirmed = await discardUnattestedCodexPluginThread({
+          client: this,
+          threadId,
+          ephemeral: session.method === "thread/resume" || input?.ephemeral === true,
+        });
+      }
+    } catch (error) {
+      cause = new AggregateError([cause, error], "Codex rejected session cleanup failed", {
+        cause,
+      });
+    }
+    if (!cleanupConfirmed) {
+      try {
+        await this.closeAndWait();
+      } catch (error) {
+        cause = new AggregateError(
+          [cause, error],
+          "Codex rejected session client shutdown failed",
+          { cause },
+        );
+      }
+      throw new CodexAppServerUnsafeSubscriptionError(
+        "Codex rejected provider thread cleanup could not be confirmed",
+        { cause },
+      );
+    }
+  }
+
   request<M extends CodexAppServerRequestMethod>(
     method: M,
     params: CodexAppServerRequestParams<M>,
@@ -533,6 +602,43 @@ export class CodexAppServerClient {
         throw new CodexAppServerLocalRequestCancellationError(method, "timed out", false);
       }
       try {
+        if (this.customProviderBinding?.handles(method)) {
+          return await this.customProviderBinding.request<T>({
+            method,
+            input: params,
+            options: {
+              ...options,
+              ...(remainingTimeoutMs === undefined ? {} : { timeoutMs: remainingTimeoutMs }),
+            },
+            read: (readMethod, readParams, readOptions) =>
+              this.requestOnce(readMethod, readParams, readOptions),
+            send: (input, sendOptions) =>
+              this.requestOnce<T>(method, input, sendOptions, onWriteStateChange),
+            errors: {
+              cancellation: (reason, cause) =>
+                new CodexAppServerLocalRequestCancellationError(method, reason, false, { cause }),
+              rejection: (error) => {
+                if (error instanceof CodexAppServerLocalRequestCancellationError) {
+                  return new CodexAppServerLocalRequestCancellationError(
+                    method,
+                    error.reason,
+                    false,
+                    { cause: error },
+                  );
+                }
+                if (
+                  isCodexAppServerOverloadError(error) ||
+                  isCodexAppServerStartSelectionChangedError(error)
+                ) {
+                  return error;
+                }
+                return new CodexAppServerScopedRequestRejectedError(coerceErrorMessage(error), {
+                  cause: error,
+                });
+              },
+            },
+          });
+        }
         return await this.requestOnce<T>(
           method,
           params,
@@ -1000,6 +1106,7 @@ export class CodexAppServerClient {
   }
 
   private handleNotification(notification: CodexServerNotification): void {
+    this.customProviderBinding?.handleNotification(notification);
     const params = notification.params;
     if (
       notification.method === "item/commandExecution/outputDelta" ||

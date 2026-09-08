@@ -4037,6 +4037,121 @@ describe("Codex app-server thread lifecycle bindings", () => {
     ]);
   });
 
+  it.each(["missing", "wrong-thread", "storage-failure", "config-read"] as const)(
+    "recovers only a missing thread during custom-provider resume preflight: %s",
+    async (failure) => {
+      const sessionFile = path.join(tempDir, "custom-preflight.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const agentDir = path.join(tempDir, "agent");
+      const params = { ...createParams(sessionFile, workspaceDir), agentDir, provider: "proxy" };
+      const provider = { provider: "proxy", baseUrl: "https://proxy.example/v1" };
+      let threadReads = 0;
+      const wire = await createLeasedLifecycleWireClient(agentDir, ({ method }) => {
+        if (method === "config/read") {
+          if (failure === "config-read" && threadReads === 2) {
+            throw new CodexAppServerRpcError(
+              { code: -32_600, message: "invalid config request" },
+              method,
+            );
+          }
+          return {
+            config: {
+              allow_login_shell: false,
+              features: { shell_snapshot: false },
+              shell_environment_policy: {
+                experimental_use_profile: false,
+                set: { CODEX_API_KEY: "" },
+              },
+              model_providers: {
+                proxy: { base_url: provider.baseUrl, env_key: "CODEX_API_KEY" },
+              },
+            },
+            origins: {},
+            layers: [],
+          };
+        }
+        if (method === "configRequirements/read") {
+          return { requirements: null };
+        }
+        if (method === "thread/read") {
+          threadReads += 1;
+          if (threadReads === 2 && failure !== "config-read") {
+            throw new CodexAppServerRpcError(
+              {
+                code: failure === "storage-failure" ? -32_603 : -32_600,
+                message:
+                  failure === "storage-failure"
+                    ? "failed to read thread: store unavailable"
+                    : `thread not loaded: ${failure === "wrong-thread" ? "thread-other" : "thread-existing"}`,
+              },
+              method,
+            );
+          }
+          return {
+            thread: {
+              ...threadStartResult("thread-existing").thread,
+              cwd: workspaceDir,
+              modelProvider: "proxy",
+              status: { type: "notLoaded" },
+            },
+          };
+        }
+        if (method === "thread/start") {
+          const response = threadStartResult("thread-new");
+          response.modelProvider = "proxy";
+          response.thread.modelProvider = "proxy";
+          return response;
+        }
+        throw new Error(`Unexpected custom-provider preflight request: ${method}`);
+      });
+      const abandonClient = vi.fn(async () => undefined);
+      try {
+        wire.client.bindCustomProvider(provider, workspaceDir);
+        await writeCodexAppServerBinding(sessionFile, {
+          threadId: "thread-existing",
+          cwd: workspaceDir,
+          model: params.modelId,
+          modelProvider: "proxy",
+        });
+        const before = await readCodexAppServerBinding(sessionFile);
+        const attempt = startOrResumeThread({
+          client: wire.client,
+          params,
+          cwd: workspaceDir,
+          dynamicTools: [],
+          appServer: createThreadLifecycleAppServerOptions(),
+          userMcpServersEnabled: false,
+          abandonClient,
+        });
+        if (failure === "missing") {
+          await expect(attempt).resolves.toMatchObject({
+            threadId: "thread-new",
+            modelProvider: "proxy",
+          });
+          await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+            threadId: "thread-new",
+            modelProvider: "proxy",
+          });
+        } else {
+          await expect(attempt).rejects.toThrow();
+          await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(before);
+        }
+        const writes = wire.writes.map((message) => (JSON.parse(message) as RpcRequest).method);
+        expect(threadReads).toBe(2);
+        expect(writes).not.toContain("thread/resume");
+        expect(writes).not.toContain("thread/unsubscribe");
+        expect(writes.filter((method) => method === "thread/start")).toHaveLength(
+          failure === "missing" ? 1 : 0,
+        );
+        expect(abandonClient).not.toHaveBeenCalled();
+        expect(wire.client.getCloseError()).toBeUndefined();
+      } finally {
+        releaseLeasedSharedCodexAppServerClient(wire.client);
+        await wire.client.closeAndWait();
+      }
+    },
+  );
+
   it.each(["thread/read", "thread/resume"])(
     "keeps the bound local provider when %s fails before resume admission",
     async (failureMethod) => {

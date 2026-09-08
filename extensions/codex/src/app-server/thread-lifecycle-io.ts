@@ -27,6 +27,7 @@ import {
   assertCodexThreadStartResponse,
 } from "./protocol-validators.js";
 import type { CodexThread } from "./protocol.js";
+import { CodexAppServerScopedRequestRejectedError } from "./request-errors.js";
 import { isCodexThreadReadMissingError } from "./rpc-error.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import {
@@ -329,13 +330,17 @@ export async function resumeExistingCodexThread(
     };
   } catch (error) {
     resumeReservation?.release();
+    const missingThread = isCodexThreadReadMissingError(
+      error instanceof CodexAppServerScopedRequestRejectedError ? error.cause : error,
+      resumeBinding.threadId,
+    );
     // Pre-write ownership conflicts and unsafe helper outcomes cannot rotate
     // the binding. Overload is an exact pre-enqueue rejection, not a stale thread.
     if (
       !acceptedConfiguration &&
+      !missingThread &&
       (!(error instanceof CodexAppServerRpcError) ||
-        (error.method === "thread/read" &&
-          !isCodexThreadReadMissingError(error, resumeBinding.threadId)) ||
+        error.method === "thread/read" ||
         isCodexAppServerOverloadError(error))
     ) {
       throw error;

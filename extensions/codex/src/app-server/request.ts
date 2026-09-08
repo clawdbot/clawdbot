@@ -11,8 +11,11 @@ import type {
   CodexAppServerRequestResult,
   JsonValue,
 } from "./protocol.js";
+import { CodexAppServerScopedRequestRejectedError } from "./request-errors.js";
 import type { CodexAppServerClientOptions } from "./shared-client.js";
 import { withTimeout } from "./timeout.js";
+
+export { CodexAppServerScopedRequestRejectedError } from "./request-errors.js";
 
 type CodexAppServerClientRequestParams = {
   client: CodexAppServerClient;
@@ -110,14 +113,6 @@ export type CodexAppServerScopedRequest = <T = JsonValue | undefined>(request: {
   method: string;
   requestParams?: unknown;
 }) => Promise<T>;
-
-/** A scoped guard rejected the request before a physical write. */
-export class CodexAppServerScopedRequestRejectedError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "CodexAppServerScopedRequestRejectedError";
-  }
-}
 
 // Preserve pre-write rejection identity so callers do not retire a healthy shared client.
 function assertRequestOwnerCurrent(assertCurrent?: () => void): void {
