@@ -198,8 +198,6 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     },
   );
   readonly catalogMenu: SidebarCatalogMenuController;
-  // Switcher tiles are plain <img> elements on the authenticated /avatar
-  // route, which only the shared identity avatar loader can fetch.
   readonly agentMenuAvatars: IdentityAvatarController;
   pluginActionLifetime = new AbortController();
 

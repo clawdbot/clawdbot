@@ -182,8 +182,8 @@ type SidebarAgentMenuParams = {
   identities: ReadonlyMap<string, AgentIdentityResult>;
   pinnedAgentIds: readonly string[];
   connected: boolean;
-  /** Resolves roster avatar routes through the authenticated identity loader. */
   resolveAvatarUrl: (url: string) => string | null;
+  avatarErrorHandler: (url: string) => () => void;
   openMode: "hover" | "click";
   agentUnreadCount: (agentId: string) => number;
   onPointerEnter: () => void;
@@ -238,8 +238,6 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
   const active = agentId === params.activeId;
   const unread = active ? 0 : params.agentUnreadCount(agentId);
   const option = { value: agentId, label, agent };
-  // Tiles are <img> elements: the authenticated /avatar route must go through
-  // the loader, never straight into img.src where it cannot carry credentials.
   const avatarUrl = resolveAgentAvatarUrl(agent, identity);
   const resolvedAvatarUrl = avatarUrl ? params.resolveAvatarUrl(avatarUrl) : null;
   return html`
@@ -255,7 +253,12 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
     >
       <span class="sidebar-agent-menu__agent-tile">
         <span class="sidebar-agent-menu__agent-avatar">
-          ${renderAgentSelectAvatar(option, identity, resolvedAvatarUrl)}
+          ${renderAgentSelectAvatar(
+            option,
+            identity,
+            resolvedAvatarUrl,
+            avatarUrl ? params.avatarErrorHandler(avatarUrl) : undefined,
+          )}
         </span>
         ${renderAgentSelectCopy(option)}
         <span class="sidebar-agent-menu__agent-status">

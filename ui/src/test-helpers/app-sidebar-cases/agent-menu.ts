@@ -622,10 +622,6 @@ describe("AppSidebar agent chip", () => {
   });
 
   it("loads switcher avatar tiles through the authenticated avatar loader", async () => {
-    // The roster advertises the authenticated /avatar/<id> route for
-    // workspace-relative avatars. An <img> element cannot send the
-    // Authorization header, so menu tiles must resolve through the shared
-    // identity avatar loader instead of binding that route to img.src.
     const avatarRoute = "/avatar/research?v=140879";
     const createObjectURL = vi.fn(() => "blob:agent-avatar");
     vi.stubGlobal(
@@ -639,7 +635,7 @@ describe("AppSidebar agent chip", () => {
       ok: true,
       blob: async () => new Blob(["avatar"], { type: "image/png" }),
     });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    vi.stubGlobal("fetch", fetchMock);
     setAvatarGatewayOrigin(globalThis.location.origin, ["secret-token"]);
     try {
       const { sidebar } = await mountSidebar(
