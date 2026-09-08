@@ -99,6 +99,8 @@ const CHANNEL_MESSAGE_ACTION_READ_POLICIES = {
   "category-create": NO_CONVERSATION_READ,
   "category-edit": NO_CONVERSATION_READ,
   "category-delete": NO_CONVERSATION_READ,
+  "channel-permission-set": NO_CONVERSATION_READ,
+  "channel-permission-remove": NO_CONVERSATION_READ,
   "topic-create": NO_CONVERSATION_READ,
   "topic-edit": NO_CONVERSATION_READ,
   "voice-status": CONVERSATION_READ,

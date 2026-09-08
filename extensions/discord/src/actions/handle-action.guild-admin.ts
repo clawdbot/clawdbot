@@ -255,6 +255,40 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     );
   }
 
+  if (action === "channel-permission-set" || action === "channel-permission-remove") {
+    const channelId = readStringParam(actionParams, "channelId", {
+      required: true,
+    });
+    const targetId = readStringParam(actionParams, "targetId", {
+      required: true,
+    });
+    if (action === "channel-permission-remove") {
+      return await handleDiscordAction(
+        {
+          action: "channelPermissionRemove",
+          accountId: accountId ?? undefined,
+          channelId,
+          targetId,
+          ...senderParam(senderUserId),
+        },
+        cfg,
+      );
+    }
+    return await handleDiscordAction(
+      {
+        action: "channelPermissionSet",
+        accountId: accountId ?? undefined,
+        channelId,
+        targetId,
+        targetType: readStringParam(actionParams, "targetType", { required: true }),
+        allow: readStringParam(actionParams, "allow"),
+        deny: readStringParam(actionParams, "deny"),
+        ...senderParam(senderUserId),
+      },
+      cfg,
+    );
+  }
+
   if (action === "category-create") {
     const guildId = readStringParam(actionParams, "guildId", {
       required: true,

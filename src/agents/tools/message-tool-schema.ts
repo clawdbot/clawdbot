@@ -448,6 +448,12 @@ function buildChannelManagementSchema() {
         description: "Clear parent/category when supported.",
       }),
     ),
+    targetId: Type.Optional(Type.String({ description: "channel-permission role/member id." })),
+    targetType: Type.Optional(
+      Type.String({ description: "channel-permission kind: role or member." }),
+    ),
+    allow: Type.Optional(Type.String({ description: "channel-permission-set allow bitfield." })),
+    deny: Type.Optional(Type.String({ description: "channel-permission-set deny bitfield." })),
   };
 }
 

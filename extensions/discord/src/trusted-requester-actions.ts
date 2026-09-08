@@ -13,6 +13,8 @@ const trustedRequesterGuildAdminActions = new Set<ChannelMessageActionName>([
   "category-create",
   "category-edit",
   "category-delete",
+  "channel-permission-set",
+  "channel-permission-remove",
   "event-create",
   "timeout",
   "kick",

@@ -311,6 +311,12 @@ export async function handleDiscordGuildAction(
     throw new Error("Discord guild actions require a resolved runtime config.");
   }
   assertGuildAdminActionEnabled(action, isActionEnabled);
+  if (action === "channelPermissionSet") {
+    const targetType = readStringParam(params, "targetType", { required: true });
+    if (targetType !== "role" && targetType !== "member") {
+      throw new Error(`Unsupported channel permission target type: ${targetType}`);
+    }
+  }
   await verifySenderGuildAdminPermission({ action, values: params, accountId, cfg });
   const readTargetGate = createDiscordMessagingActionContext({
     action,

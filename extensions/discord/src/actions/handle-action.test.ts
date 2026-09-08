@@ -163,6 +163,40 @@ describe("handleDiscordMessageAction", () => {
     expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
 
+  it("dispatches channel-permission-set and channel-permission-remove", async () => {
+    const cfg = discordConfig({ channels: true });
+    const target = { channelId: "channel-1", targetId: "role-1" };
+    await handleDiscordMessageAction({
+      action: "channel-permission-set",
+      params: { ...target, targetType: "role", allow: "1024" },
+      cfg,
+      senderIsOwner: true,
+    });
+    expectDiscordActionCall({
+      payload: {
+        action: "channelPermissionSet",
+        accountId: undefined,
+        ...target,
+        targetType: "role",
+        allow: "1024",
+        deny: undefined,
+      },
+      cfg,
+    });
+
+    handleDiscordActionMock.mockClear();
+    await handleDiscordMessageAction({
+      action: "channel-permission-remove",
+      params: target,
+      cfg,
+      senderIsOwner: true,
+    });
+    expectDiscordActionCall({
+      payload: { action: "channelPermissionRemove", accountId: undefined, ...target },
+      cfg,
+    });
+  });
+
   it("rejects non-Discord requester ids for Discord moderation actions", async () => {
     const cfg = discordConfig({ moderation: true });
     await expect(

@@ -67,6 +67,8 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     "category-create": "none",
     "category-edit": "none",
     "category-delete": "none",
+    "channel-permission-set": "channelId",
+    "channel-permission-remove": "channelId",
     "topic-create": "to",
     "topic-edit": "to",
     "voice-status": "none",

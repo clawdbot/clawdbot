@@ -197,6 +197,8 @@ function describeDiscordMessageTool({
     actions.add("category-create");
     actions.add("category-edit");
     actions.add("category-delete");
+    actions.add("channel-permission-set");
+    actions.add("channel-permission-remove");
   }
   if (discovery.isEnabled("voiceStatus")) {
     actions.add("voice-status");
