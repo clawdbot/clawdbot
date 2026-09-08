@@ -19,6 +19,7 @@ import {
   withTrustedExplicitProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
+import { parseRetryAfterHeaderSeconds } from "../infra/retry-after.js";
 import { retryAsync, type RetryOptions } from "../infra/retry.js";
 import { isTransientNetworkError } from "../infra/retryable-network-errors.js";
 import { redactSensitiveText } from "../logging/redact.js";
@@ -32,6 +33,10 @@ const DEFAULT_FETCH_MEDIA_MAX_BYTES = MAX_DOCUMENT_BYTES;
 // Large media endpoints get a generous header-only deadline. The timer is
 // cleared once headers arrive, so healthy streaming bodies keep their own limits.
 const DEFAULT_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 15 * 60_000;
+
+// A rate-limited origin's Retry-After is honored up to this cap so a misbehaving
+// header cannot stall a media download past the caller's own retry budget.
+const MAX_MEDIA_RETRY_AFTER_MS = 60_000;
 
 /** Remote media bytes plus metadata before they are persisted to the media store. */
 type FetchMediaResult = {
@@ -55,15 +60,18 @@ export type MediaFetchRetryOptions = RetryOptions;
 export class MediaFetchError extends Error {
   readonly code: MediaFetchErrorCode;
   readonly status?: number;
+  /** Bounded Retry-After delay from the response, when present (ms). */
+  readonly retryAfterMs?: number;
 
   constructor(
     code: MediaFetchErrorCode,
     message: string,
-    options?: { cause?: unknown; status?: number },
+    options?: { cause?: unknown; status?: number; retryAfterMs?: number },
   ) {
     super(message, options);
     this.code = code;
     this.status = options?.status;
+    this.retryAfterMs = options?.retryAfterMs;
     this.name = "MediaFetchError";
   }
 }
@@ -425,8 +433,18 @@ async function assertMediaResponseOk(params: {
   throw new MediaFetchError(
     "http_error",
     `Failed to fetch media from ${sourceUrl}${redirected}: ${redactSensitiveText(detail)}`,
-    { status: res.status },
+    { status: res.status, retryAfterMs: parseRetryAfterMs(res) },
   );
+}
+
+/** Parses a bounded Retry-After delay (ms) from a response, when present. */
+function parseRetryAfterMs(res: Response): number | undefined {
+  const seconds = parseRetryAfterHeaderSeconds(res.headers.get("retry-after"));
+  if (seconds === undefined) {
+    return undefined;
+  }
+  const delayMs = seconds * 1_000;
+  return delayMs <= MAX_MEDIA_RETRY_AFTER_MS ? delayMs : undefined;
 }
 
 // Caller-provided responses may already be partially read; discard their remaining bytes too.
@@ -601,7 +619,12 @@ function shouldRetryMediaFetch(err: unknown): boolean {
       return false;
     }
     if (err.code === "http_error") {
-      return typeof err.status === "number" && (err.status === 408 || err.status >= 500);
+      // 429 is retryable to match channel extensions (LINE/SMS/Telegram treat
+      // rate-limited media as transient); Retry-After is honored via retryAfterMs.
+      return (
+        typeof err.status === "number" &&
+        (err.status === 408 || err.status === 429 || err.status >= 500)
+      );
     }
     if (err.code === "fetch_failed") {
       if (isAbortError(err) || isAbortError(err.cause)) {
@@ -627,6 +650,11 @@ async function withMediaFetchRetry<T>(
     ...retry,
     shouldRetry: (err, attempt) =>
       retry.shouldRetry ? retry.shouldRetry(err, attempt) : shouldRetryMediaFetch(err),
+    // Honor a rate-limited origin's Retry-After before the generic backoff so a
+    // 429 is not re-requested before the server's requested wait. The scheduler
+    // caps the honored delay at the caller's own maxDelayMs (e.g. the attachment
+    // cache's 3s budget), so a hostile header cannot stall a download.
+    retryAfterMs: (err) => (err instanceof MediaFetchError ? err.retryAfterMs : undefined),
     sleep:
       retry.sleep ??
       ((delay) =>
