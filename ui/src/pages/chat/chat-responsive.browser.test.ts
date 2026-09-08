@@ -5448,7 +5448,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           <form class="agent-chat__input chat-session-rail__composer">
             <div class="agent-chat__composer-input-row">
               <label class="agent-chat__composer-combobox chat-session-rail__prompt">
-                <input class="chat-session-rail__input" type="text" placeholder="Ask a question" />
+                <textarea class="chat-session-rail__input" rows="1" placeholder="Ask a question"></textarea>
               </label>
             </div>
             <div class="agent-chat__composer-footer">
