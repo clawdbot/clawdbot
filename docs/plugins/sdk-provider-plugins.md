@@ -1228,6 +1228,31 @@ catalog, API-key auth, and dynamic model resolution.
         model in its result. `transcribeAudio` remains available for providers
         using host-owned API-key resolution and rotation.
 
+        Bundled media providers can use `openProviderWebSocket(...)` from the
+        private-local `openclaw/plugin-sdk/provider-http` entrypoint. Resolve
+        request settings with `resolveProviderHttpRequestConfigWithOriginTrust(...)`
+        first, then pass its `baseUrl`, `headers`, `dispatcherPolicy`,
+        `allowPrivateNetwork`, and `trustConfiguredBaseUrlOrigin` alongside the
+        WebSocket `url`.
+
+        Configured proxy routes retain resolved target-address checks.
+        Applicable ambient HTTP(S) proxies and OpenClaw-managed proxies retain
+        their existing DNS delegation; `NO_PROXY` bypasses and `ALL_PROXY` alone
+        do not disable target-address checks.
+
+        - The promise resolves after network-policy and agent preparation,
+          while the returned socket is still connecting. Attach `error`,
+          `close`, and `open` handlers immediately; send frames after `open`.
+        - `timeoutMs` covers DNS preparation, proxy CONNECT, and the WebSocket
+          handshake as one connection deadline. The connection timer stops on
+          `open`; the provider owns the remaining transcription deadline.
+        - `signal` cancels preparation and remains active for the socket's
+          lifetime. Closing or terminating the socket also cancels a pending
+          proxy connection. Release the socket in the operation's cleanup path.
+        - `maxPayloadBytes` limits each incoming message and defaults to 16 MiB.
+          Compression is disabled. The provider owns audio buffering, frame
+          pacing, protocol parsing, and transcript-size limits.
+
         ```typescript
         api.registerMediaUnderstandingProvider({
           id: "acme-ai",

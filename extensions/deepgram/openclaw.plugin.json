@@ -1,5 +1,6 @@
 {
   "id": "deepgram",
+  "description": "Deepgram audio transcription with Nova and Flux models, plus realtime speech recognition.",
   "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
