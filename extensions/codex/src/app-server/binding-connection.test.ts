@@ -82,6 +82,7 @@ describe("Codex binding app-server connection", () => {
       } as OpenClawConfig;
       const env = { ...process.env, CODEX_HOME: processCodexHome };
       const source = createCodexCatalogHomeResolver({
+        resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
         config,
         getRuntimeConfig: () => config,
         getPluginConfig: () => ({ supervision: { enabled: true } }),
@@ -140,6 +141,7 @@ describe("Codex binding app-server connection", () => {
       appServer: { transport: "websocket", url: "ws://127.0.0.1:4500" },
     };
     createCodexCatalogHomeResolver({
+      resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
       config,
       getRuntimeConfig: () => config,
       getPluginConfig: () => pluginConfig,

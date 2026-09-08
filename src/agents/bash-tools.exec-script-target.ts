@@ -3,7 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import { splitShellArgs } from "../utils/shell-argv.js";
+import { splitCommandArgs, splitShellArgs } from "../utils/shell-argv.js";
 
 const PREFLIGHT_ENV_OPTIONS_WITH_VALUES = new Set([
   "-C",
@@ -226,71 +226,14 @@ export function extractScriptTargetFromCommand(
   command: string,
 ): { kind: "python"; relOrAbsPaths: string[] } | { kind: "node"; relOrAbsPaths: string[] } | null {
   const raw = command.trim();
-  const splitShellArgsPreservingBackslashes = (value: string): string[] | null => {
-    const tokens: string[] = [];
-    let buf = "";
-    let inSingle = false;
-    let inDouble = false;
-
-    const pushToken = () => {
-      if (buf.length > 0) {
-        tokens.push(buf);
-        buf = "";
-      }
-    };
-
-    for (const ch of value) {
-      if (inSingle) {
-        if (ch === "'") {
-          inSingle = false;
-        } else {
-          buf += ch;
-        }
-        continue;
-      }
-      if (inDouble) {
-        if (ch === '"') {
-          inDouble = false;
-        } else {
-          buf += ch;
-        }
-        continue;
-      }
-      if (ch === "'") {
-        inSingle = true;
-        continue;
-      }
-      if (ch === '"') {
-        inDouble = true;
-        continue;
-      }
-      if (/\s/.test(ch)) {
-        pushToken();
-        continue;
-      }
-      buf += ch;
-    }
-
-    if (inSingle || inDouble) {
-      return null;
-    }
-    pushToken();
-    return tokens;
-  };
   const shouldUseWindowsPathTokenizer =
     process.platform === "win32" &&
     /(?:^|[\s"'`])(?:[A-Za-z]:\\|\\\\|[^\s"'`|&;()<>]+\\[^\s"'`|&;()<>]+)/.test(raw);
-  const candidateArgv = shouldUseWindowsPathTokenizer
-    ? [splitShellArgsPreservingBackslashes(raw)]
-    : [splitShellArgs(raw)];
-
-  for (const argv of candidateArgv) {
-    const attempts = [argv, argv ? stripPreflightEnvPrefix(argv) : null];
-    for (const attempt of attempts) {
-      const target = extractInterpreterScriptTargetFromArgv(attempt);
-      if (target) {
-        return target;
-      }
+  const argv = shouldUseWindowsPathTokenizer ? splitCommandArgs(raw) : splitShellArgs(raw);
+  for (const attempt of [argv, argv ? stripPreflightEnvPrefix(argv) : null]) {
+    const target = extractInterpreterScriptTargetFromArgv(attempt);
+    if (target) {
+      return target;
     }
   }
   return null;

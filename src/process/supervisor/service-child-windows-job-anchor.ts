@@ -1,3 +1,4 @@
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveEnvironmentValue } from "../../infra/process-env.js";
 import { createWindowsOutputDecoder } from "../../infra/windows-encoding.js";
@@ -32,6 +33,8 @@ const STARTF_USESTDHANDLES = 0x0000_0100;
 const CREATE_NEW_PROCESS_GROUP = 0x0000_0200;
 const CREATE_UNICODE_ENVIRONMENT = 0x0000_0400;
 const EXTENDED_STARTUPINFO_PRESENT = 0x0008_0000;
+// Keep the noninteractive command console-free even when its anchor is detached.
+const CREATE_NO_WINDOW = 0x0800_0000;
 const WAIT_OBJECT_0 = 0;
 const WAIT_TIMEOUT = 258;
 const WAIT_FAILED = 0xffff_ffff;
@@ -39,10 +42,6 @@ const ERROR_BROKEN_PIPE = 109;
 const IDLE_OBSERVATION_MS = 10;
 const OUTPUT_BUFFER_BYTES = 64 * 1024;
 const OUTPUT_ROUNDS_PER_TURN = 2;
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function sendProcessMessage(message: ServiceChildAnchorMessage): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -147,7 +146,7 @@ export function runServiceChildWindowsJobAnchor(): void {
       try {
         closeOutputHandle(stream);
       } catch (error) {
-        closeError ??= error instanceof Error ? error : new Error(errorMessage(error));
+        closeError ??= error instanceof Error ? error : new Error(coerceErrorMessage(error));
       }
     }
     for (const handle of [processHandle, job]) {
@@ -195,7 +194,7 @@ export function runServiceChildWindowsJobAnchor(): void {
     stopLifecycle();
     try {
       if (process.connected && start) {
-        await send({ type: "result-error", error: errorMessage(error) }).catch(() => {});
+        await send({ type: "result-error", error: coerceErrorMessage(error) }).catch(() => {});
       }
       closeNativeHandles();
     } catch {
@@ -431,7 +430,7 @@ export function runServiceChildWindowsJobAnchor(): void {
     if (!process.connected) {
       return;
     }
-    await send({ type: "startup-error", error: errorMessage(error) });
+    await send({ type: "startup-error", error: coerceErrorMessage(error) });
     await startupErrorAcknowledged.promise;
   };
 
@@ -482,7 +481,10 @@ export function runServiceChildWindowsJobAnchor(): void {
             null,
             null,
             1,
-            CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
+            CREATE_NEW_PROCESS_GROUP |
+              CREATE_UNICODE_ENVIRONMENT |
+              EXTENDED_STARTUPINFO_PRESENT |
+              CREATE_NO_WINDOW,
             // NULL inherits; an explicitly empty environment must remain an empty block.
             next.env === undefined ? null : buildWindowsJobEnvironmentBlock(next.env),
             next.cwd ?? null,
@@ -522,8 +524,6 @@ export function runServiceChildWindowsJobAnchor(): void {
       for (const stream of outputStreams) {
         stream.decoder = createWindowsOutputDecoder();
       }
-      commandStdio.close();
-      pendingCommandStdio = undefined;
 
       state = "active";
       const readyDelivery = send({ type: "ready", commandPid, anchorPid: process.pid });

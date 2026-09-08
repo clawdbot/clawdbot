@@ -14,6 +14,11 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import {
+  createHeartbeatToolResponsePayload,
+  resolveHeartbeatScratchProposalFromReplyResult,
+  resolveHeartbeatToolResponseFromReplyResult,
+} from "../heartbeat-tool-response.js";
+import {
   getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
@@ -61,6 +66,33 @@ type DirectBlockDedupeCase = {
 function buildTestReplyPayloads(overrides: TestReplyPayloadParams) {
   return buildReplyPayloads({ ...baseParams, ...overrides });
 }
+
+describe("heartbeat reply scratch", () => {
+  it.each([
+    { proposals: ["private replacement"], expected: "private replacement" },
+    { proposals: ["old proposal", "new proposal"], expected: "new proposal" },
+    { proposals: ["old proposal", undefined], expected: undefined },
+  ])(
+    "preserves the latest decision through final reply construction: $proposals",
+    async ({ proposals, expected }) => {
+      const response = { outcome: "done" as const, notify: false, summary: "Monitor checked." };
+      const { replyPayloads } = await buildTestReplyPayloads({
+        isHeartbeat: true,
+        payloads: proposals.map((scratch) =>
+          createHeartbeatToolResponsePayload({ ...response, scratch }),
+        ),
+      });
+
+      expect(resolveHeartbeatScratchProposalFromReplyResult(replyPayloads)).toBe(expected);
+      expect(resolveHeartbeatToolResponseFromReplyResult(replyPayloads)).toEqual(response);
+      for (const scratch of proposals) {
+        if (scratch !== undefined) {
+          expect(JSON.stringify(replyPayloads)).not.toContain(scratch);
+        }
+      }
+    },
+  );
+});
 
 type ResolveReplyTransportParams = Parameters<
   NonNullable<ChannelThreadingAdapter["resolveReplyTransport"]>

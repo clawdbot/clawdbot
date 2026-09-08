@@ -100,7 +100,11 @@ export async function loadChatHistory(
       if (result) {
         setChatHistoryLoad(state, {
           phase: "committed",
-          key: `${sessionKey}\u0000${requestAgentId ?? ""}`,
+          client,
+          connectionEpoch,
+          sessionKey,
+          requestAgentId,
+          sessionInfo: result.sessionInfo,
         });
       } else if (
         state.sessionKey === sessionKey &&
@@ -190,6 +194,7 @@ export type ChatEventPayload = {
   agentId?: string;
   state: "status" | "delta" | "final" | "aborted" | "error";
   phase?: ChatRunStartupPhase;
+  retry?: NonNullable<Extract<ChatEvent, { state: "status" }>["retry"]>;
   message?: unknown;
   deltaText?: string;
   replace?: boolean;

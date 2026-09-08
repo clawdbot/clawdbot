@@ -420,49 +420,79 @@ describe("cdp internal", () => {
       });
     });
 
-    it("expands one level of iframe snapshots with frame metadata", async () => {
+    it("expands frames in capture order after their first rendered occurrence", async () => {
+      const frameRequests: string[] = [];
+      const frameIds = new Map([
+        [44, "FIRST"],
+        [45, "SECOND"],
+        [46, "EMPTY"],
+        [47, "FAILED"],
+        [48, "NESTED"],
+      ]);
+      const mainNodes: RawAXNode[] = [
+        {
+          nodeId: "root",
+          role: { value: "RootWebArea" },
+          childIds: ["group", "empty", "failed", "after"],
+        },
+        {
+          nodeId: "second",
+          role: { value: "Iframe" },
+          name: { value: "Second" },
+          backendDOMNodeId: 45,
+        },
+        { nodeId: "group", role: { value: "generic" }, childIds: ["first", "second", "first"] },
+        {
+          nodeId: "first",
+          role: { value: "Iframe" },
+          name: { value: "First" },
+          backendDOMNodeId: 44,
+        },
+        {
+          nodeId: "empty",
+          role: { value: "Iframe" },
+          name: { value: "Empty" },
+          backendDOMNodeId: 46,
+        },
+        {
+          nodeId: "failed",
+          role: { value: "Iframe" },
+          name: { value: "Failed" },
+          backendDOMNodeId: 47,
+        },
+        { nodeId: "after", role: { value: "button" }, name: { value: "After" } },
+      ];
       const server = await startMockWsServer((msg) => {
         if (msg.method === "Runtime.evaluate") {
           return runtimeValueResult([]);
         }
         if (msg.method === "Accessibility.getFullAXTree") {
           const frameId = msg.params?.frameId;
-          return axTreeResult(
-            frameId
-              ? [
-                  {
-                    nodeId: "c1",
-                    role: { value: "RootWebArea" },
-                    name: { value: "" },
-                    childIds: ["c2"],
-                  },
-                  {
-                    nodeId: "c2",
-                    role: { value: "button" },
-                    name: { value: "Inside" },
-                    backendDOMNodeId: 55,
-                    childIds: [],
-                  },
-                ]
-              : [
-                  {
-                    nodeId: "1",
-                    role: { value: "RootWebArea" },
-                    name: { value: "" },
-                    childIds: ["2"],
-                  },
-                  {
-                    nodeId: "2",
-                    role: { value: "Iframe" },
-                    name: { value: "Child" },
-                    backendDOMNodeId: 44,
-                    childIds: [],
-                  },
-                ],
-          );
+          if (!frameId) {
+            return axTreeResult(mainNodes);
+          }
+          if (typeof frameId !== "string") {
+            return cdpError("Expected a frame ID string");
+          }
+          frameRequests.push(frameId);
+          if (frameId === "EMPTY") {
+            return axTreeResult([]);
+          }
+          if (frameId === "FAILED") {
+            return cdpError("Frame detached");
+          }
+          return axTreeResult([
+            { nodeId: "child-root", role: { value: "RootWebArea" }, childIds: ["child", "nested"] },
+            { nodeId: "child", role: { value: "button" }, name: { value: `${frameId} child` } },
+            ...(frameId === "SECOND"
+              ? [{ nodeId: "nested", role: { value: "Iframe" }, backendDOMNodeId: 48 }]
+              : []),
+          ]);
         }
         if (msg.method === "DOM.describeNode") {
-          return cdpResult({ node: { contentDocument: { frameId: "FRAME_1" } } });
+          return cdpResult({
+            node: { contentDocument: { frameId: frameIds.get(Number(msg.params?.backendNodeId)) } },
+          });
         }
         return undefined;
       });
@@ -473,10 +503,22 @@ describe("cdp internal", () => {
         options: { interactive: true },
       });
 
-      expect(snap.snapshot).toContain('- Iframe "Child" [ref=e1]');
-      expect(snap.snapshot).toContain('  - button "Inside" [ref=e2]');
-      expect(snap.refs.e1?.frameId).toBe("FRAME_1");
-      expect(snap.refs.e2?.frameId).toBe("FRAME_1");
+      expect(frameRequests).toEqual(["SECOND", "FIRST", "EMPTY", "FAILED"]);
+      expect(snap.snapshot.split("\n")).toEqual([
+        '- Iframe "First" [ref=e2]',
+        '    - button "FIRST child" [ref=e8]',
+        '    - Iframe "Second" [ref=e1]',
+        '    - button "SECOND child" [ref=e6]',
+        "    - Iframe [ref=e7]",
+        '    - Iframe "First" [ref=e2]',
+        '  - Iframe "Empty" [ref=e3]',
+        '  - Iframe "Failed" [ref=e4]',
+        '  - button "After" [ref=e5]',
+      ]);
+      expect(Object.keys(snap.refs)).toEqual(["e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8"]);
+      expect(snap.refs.e6).toEqual({ role: "button", name: "SECOND child", frameId: "SECOND" });
+      expect(snap.refs.e7).toEqual({ role: "iframe", backendDOMNodeId: 48, frameId: "NESTED" });
+      expect(snap.refs.e8).toEqual({ role: "button", name: "FIRST child", frameId: "FIRST" });
 
       const mainFrameOnly = await snapshotRoleViaCdp({
         wsUrl: server.wsUrl,
@@ -484,9 +526,10 @@ describe("cdp internal", () => {
         recurseIframes: false,
       });
 
-      expect(mainFrameOnly.snapshot).toContain('- Iframe "Child" [ref=e1]');
-      expect(mainFrameOnly.snapshot).not.toContain('button "Inside"');
-      expect(mainFrameOnly.refs.e2).toBeUndefined();
+      expect(frameRequests).toEqual(["SECOND", "FIRST", "EMPTY", "FAILED"]);
+      expect(mainFrameOnly.snapshot).toContain('- Iframe "First" [ref=e2]');
+      expect(mainFrameOnly.snapshot).not.toContain("child");
+      expect(mainFrameOnly.refs.e6).toBeUndefined();
     });
   });
 

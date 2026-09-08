@@ -437,6 +437,17 @@ type DiagnosticRunExecutionPhaseEvent = DiagnosticBaseEvent & {
   firstModelCallStarted?: boolean;
 };
 
+type DiagnosticGatewayEventLoopSampleEvent = DiagnosticBaseEvent & {
+  type: "gateway.event_loop.sample";
+  intervalMs: number;
+  delayMaxMs: number;
+};
+
+type DiagnosticGcEvent = DiagnosticBaseEvent & {
+  type: "diagnostic.gc";
+  durationMs: number;
+};
+
 export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
   type: "diagnostic.heartbeat";
   webhooks: {
@@ -852,6 +863,8 @@ export type DiagnosticEventPayload =
   | DiagnosticRunAttemptEvent
   | DiagnosticRunProgressEvent
   | DiagnosticRunExecutionPhaseEvent
+  | DiagnosticGatewayEventLoopSampleEvent
+  | DiagnosticGcEvent
   | DiagnosticHeartbeatEvent
   | DiagnosticLivenessWarningEvent
   | DiagnosticPhaseCompletedEvent
@@ -999,6 +1012,8 @@ const MAX_ASYNC_DIAGNOSTIC_EVENTS = 10_000;
 const MAX_ASYNC_DIAGNOSTIC_EVENTS_PER_TURN = 100;
 const DIAGNOSTIC_EVENTS_STATE_KEY = Symbol.for("openclaw.diagnosticEvents.state.v1");
 const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
+  "diagnostic.gc",
+  "gateway.event_loop.sample",
   "gateway.rpc",
   "tool.execution.started",
   "tool.execution.completed",
@@ -1651,7 +1666,7 @@ export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => voi
       }
       listener(event);
     },
-    { exclude: ["log.record", "gateway.rpc"] },
+    { exclude: ["log.record", "gateway.rpc", "gateway.event_loop.sample", "diagnostic.gc"] },
   );
 }
 

@@ -17,6 +17,7 @@ import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import * as agentEvents from "../infra/agent-events.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
+import { runAgentLoop, type AgentEvent } from "../plugin-sdk/agent-core.js";
 import {
   THINKING_TAG_CASES,
   createSubscribedSessionHarness,
@@ -31,7 +32,6 @@ import {
   createOpenAiResponsesTextBlock,
   createOpenAiResponsesTextEvent,
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
-import { runAgentLoop, type AgentEvent } from "./runtime/index.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { recordSessionModelUsage } from "./sessions/session-model-usage.js";
 import { markCoreTtsToolResult } from "./tools/tts-tool-result-provenance.js";

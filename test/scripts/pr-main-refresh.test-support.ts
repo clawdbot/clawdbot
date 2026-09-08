@@ -347,8 +347,10 @@ if (args[0] === 'pr' && args[1] === 'view') {
   }
   const parent = runGit(['-C', origin, 'rev-parse', 'refs/heads/main']);
   const tree = runGit(['-C', origin, 'merge-tree', '--write-tree', parent, control.metadata.headRefOid]);
+  const bodyIndex = args.indexOf('--body-file');
+  const body = bodyIndex < 0 ? '' : readFileSync(args[bodyIndex + 1], 'utf8');
   const landed = runGit(['-C', origin, '-c', 'user.name=Fixture', '-c',
-    'user.email=fixture@example.invalid', 'commit-tree', tree, '-p', parent], 'Fixture squash\\n');
+    'user.email=fixture@example.invalid', 'commit-tree', tree, '-p', parent], 'Fixture squash\\n\\n' + body);
   runGit(['-C', origin, 'update-ref', 'refs/heads/main', landed, parent]);
   control.metadata.state = 'MERGED';
   control.metadata.mergeCommit = { oid: landed };
@@ -392,6 +394,12 @@ if (args[0] === 'pr' && args[1] === 'view') {
         process.exit(1);
       }
       value = { data: { viewer: { login: 'fixture' } } };
+    } else if (args.some(arg => arg.includes('viewerMergeBodyText'))) {
+      value = { data: { repository: { pullRequest: {
+        headRefOid: control.metadata.headRefOid,
+        isMergeQueueEnabled: control.metadata.isMergeQueueEnabled,
+        viewerMergeBodyText: 'Reviewed fixture body',
+      } } } };
     } else if (args.some(arg => arg.includes('ref(qualifiedName:'))) {
       value = { data: { repository: {
         id: 'fixture-repo', nameWithOwner: 'fixture/repo', url: 'https://github.com/fixture/repo',

@@ -1,9 +1,7 @@
-import { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { PassThrough } from "node:stream";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { terminateCodexAppServerOrphan } from "./transport-process-containment.js";
@@ -11,6 +9,7 @@ import {
   createCodexAppServerProcessReaperService,
   prepareCodexAppServerProcessRegistration,
 } from "./transport-process-registration.js";
+import { RegistrationTestChildProcess } from "./transport-process-registration.test-support.js";
 import {
   ProcessInspectionError,
   readCodexAppServerProcessCommand,
@@ -126,7 +125,7 @@ describe("Codex process registration", () => {
     },
   );
 
-  it.for(["live", "unknown"])(
+  it.for(["live", "unknown", "threaded zombie"])(
     "retains an unreadable-command registration when the child is %s",
     async (mode) => {
       const registration = { parent, child: { ...child, commandFingerprint } };
@@ -138,10 +137,15 @@ describe("Codex process registration", () => {
         vi.mocked(readCodexAppServerProcessSnapshot)
           .mockResolvedValueOnce([observer, liveChild])
           .mockRejectedValue(new ProcessInspectionError("unavailable"));
+      } else if (mode === "threaded zombie") {
+        vi.mocked(readCodexAppServerProcessSnapshot).mockResolvedValue([
+          observer,
+          { ...liveChild, state: "Zl" },
+        ]);
       }
 
       await expect(prepareCodexAppServerProcessRegistration()).rejects.toMatchObject({
-        reason: mode === "live" ? "permission" : "unavailable",
+        reason: mode === "unknown" ? "unavailable" : "permission",
       });
 
       expect(store.lookup("orphan")).toEqual(registration);
@@ -190,24 +194,7 @@ describe("Codex process registration", () => {
       if (mode === "windows") {
         vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       }
-      const stdin = new PassThrough();
-      const stdout = new PassThrough();
-      const stderr = new PassThrough();
-      // The typed stdio tuple makes this fixture structurally a
-      // ChildProcessWithoutNullStreams without widening casts.
-      const spawned = Object.assign(new ChildProcess(), {
-        pid: child.pid,
-        stdin,
-        stdout,
-        stderr,
-        stdio: [stdin, stdout, stderr, null, null] as [
-          PassThrough,
-          PassThrough,
-          PassThrough,
-          null,
-          null,
-        ],
-      });
+      const spawned = new RegistrationTestChildProcess(child.pid);
       ctx.onTestFinished(() => {
         spawned.stdin.destroy();
         spawned.stdout.destroy();

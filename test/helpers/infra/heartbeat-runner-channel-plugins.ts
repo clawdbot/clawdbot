@@ -10,6 +10,7 @@ import {
   type OutboundSendDeps,
 } from "../../../src/infra/outbound/send-deps.js";
 import { createOutboundTestPlugin } from "../../../src/test-utils/channel-plugins.js";
+import { parseTelegramTargetForTest } from "./telegram-targets.js";
 
 // Channel plugin fixtures used by heartbeat runner tests.
 
@@ -100,6 +101,10 @@ export const heartbeatRunnerTelegramPlugin = createHeartbeatChannelPlugin({
   label: "Telegram",
   docsPath: "/channels/telegram",
   messaging: {
+    inferTargetChatType: ({ to }) => {
+      const target = parseTelegramTargetForTest(to);
+      return target.chatType === "unknown" ? undefined : target.chatType;
+    },
     preserveHeartbeatThreadIdForGroupRoute: true,
   },
 });

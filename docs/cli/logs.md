@@ -32,6 +32,8 @@ Tail Gateway file logs over RPC. Works in remote mode.
 
 Passing `--url` skips auto-applied config credentials; include `--token` explicitly if the target Gateway requires auth.
 
+`--port` requires an integer from `1` to `65535`; empty or whitespace-only values are invalid. Omit the option to use the configured or environment target.
+
 ## Examples
 
 ```bash

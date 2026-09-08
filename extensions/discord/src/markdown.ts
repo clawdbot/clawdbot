@@ -1,37 +1,6 @@
-// Discord plugin module implements source-preserving Markdown normalization.
 import { fromMarkdown } from "mdast-util-from-markdown";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
-import {
-  convertMarkdownTables,
-  FormatCapabilityProfile,
-  renderMarkdownWithMarkers,
-} from "openclaw/plugin-sdk/text-chunking";
-
-const DISCORD_FORMAT_PROFILE = FormatCapabilityProfile.define({
-  mechanism: "markdown",
-  constructs: { table: "fallback" },
-  chunk: { limit: 2_000, unit: "utf16" },
-});
-
-const DISCORD_BOLD_PROBE_TEXT = "openclaw-discord-bold";
-const DISCORD_BOLD_PROBE = renderMarkdownWithMarkers(
-  {
-    text: DISCORD_BOLD_PROBE_TEXT,
-    styles: [{ start: 0, end: DISCORD_BOLD_PROBE_TEXT.length, style: "bold" }],
-    links: [],
-  },
-  {
-    styleMarkers: { bold: { open: "**", close: "**" } },
-    escapeText: (value) => value,
-  },
-  DISCORD_FORMAT_PROFILE,
-);
-const DISCORD_BOLD_MARKERS = {
-  open: DISCORD_BOLD_PROBE.slice(0, DISCORD_BOLD_PROBE.indexOf(DISCORD_BOLD_PROBE_TEXT)),
-  close: DISCORD_BOLD_PROBE.slice(
-    DISCORD_BOLD_PROBE.indexOf(DISCORD_BOLD_PROBE_TEXT) + DISCORD_BOLD_PROBE_TEXT.length,
-  ),
-};
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 
 type PositionedMarkdownNode = {
   type: string;
@@ -113,6 +82,9 @@ function markdownSemanticSignature(root: PositionedMarkdownNode): string {
 
 function normalizeDiscordBold(markdown: string): string {
   // This outbound contract is CommonMark: `__x__` is bold, never Discord-native underline.
+  if (!markdown.includes("__")) {
+    return markdown;
+  }
   const spans: Array<{ start: number; end: number }> = [];
   const contentEdits: Array<{
     spanId: number;
@@ -255,16 +227,15 @@ function normalizeDiscordBold(markdown: string): string {
       return { start, end };
     });
   const edits = [
-    ...spans.flatMap((span, spanId) => [
-      { spanId, start: span.start, marker: DISCORD_BOLD_MARKERS.open, consume: 2, delimiter: true },
-      {
+    ...spans.flatMap((span, spanId) =>
+      [span.start, span.end - 2].map((start) => ({
         spanId,
-        start: span.end - 2,
-        marker: DISCORD_BOLD_MARKERS.close,
+        start,
+        marker: "**",
         consume: 2,
         delimiter: true,
-      },
-    ]),
+      })),
+    ),
     ...contentEdits,
   ].toSorted((left, right) => left.start - right.start);
   const editsBySpan = new Map<number, Array<(typeof edits)[number]>>();

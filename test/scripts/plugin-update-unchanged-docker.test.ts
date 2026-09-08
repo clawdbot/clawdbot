@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { loadInstalledPluginIndex } from "../../src/plugins/installed-plugin-index.js";
-import { resolveInstalledPluginPackageOwnership } from "../../src/plugins/installed-plugin-package-ownership.js";
+import { createInstalledPluginOwnershipResolver } from "../../src/plugins/installed-plugin-package-ownership.js";
 import {
   closeOpenClawStateDatabaseByPath,
   openOpenClawStateDatabase,
@@ -206,7 +206,7 @@ describe("plugin update unchanged Docker E2E", () => {
           stateDir,
         });
         expect(
-          resolveInstalledPluginPackageOwnership(liveIndex, "lossless-claw", env),
+          createInstalledPluginOwnershipResolver(liveIndex, env).resolvePackage("lossless-claw"),
         ).toMatchObject({
           ok: true,
           value: {

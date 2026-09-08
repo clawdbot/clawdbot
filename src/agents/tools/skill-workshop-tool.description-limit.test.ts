@@ -1,7 +1,6 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -27,7 +26,12 @@ afterEach(async () => {
 describe("skill_workshop description validation", () => {
   it("lets the proposal service explain overlong descriptions", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-description-limit-");
-    const tool = createSkillWorkshopTool({ workspaceDir, env: testState.env });
+    const tool = createSkillWorkshopTool({
+      config: {} satisfies OpenClawConfig,
+      workspaceDir,
+      agentId: "main",
+      env: testState.env,
+    });
     const args = {
       action: "create" as const,
       name: "Long Description",
@@ -45,37 +49,5 @@ describe("skill_workshop description validation", () => {
     await expect(tool.execute(call.id, args)).rejects.toThrow(
       "Skill proposal description is too large (161 bytes, max 160).",
     );
-  });
-
-  it("lets the proposal service explain overlong collection descriptions", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-skill-collection-description-limit-");
-    const collectionReconcile = {};
-    const tool = createSkillWorkshopTool({ workspaceDir, env: testState.env, collectionReconcile });
-    const args = {
-      action: "reconcile" as const,
-      collection: [
-        {
-          action: "write" as const,
-          name: "long-description",
-          description: "x".repeat(161),
-          content: "# Long Description\n",
-        },
-      ],
-    };
-    const call = {
-      type: "toolCall" as const,
-      id: "call-long-collection-description",
-      name: "skill_workshop",
-      arguments: args,
-    };
-    expect(validateToolArguments(tool, call)).toEqual(args);
-
-    await expect(tool.execute(call.id, args)).rejects.toThrow(
-      "Skill proposal description is too large (161 bytes, max 160).",
-    );
-    await expect(
-      fs.access(path.join(workspaceDir, "skills", "long-description", "SKILL.md")),
-    ).rejects.toThrow();
-    expect(collectionReconcile).not.toHaveProperty("result");
   });
 });

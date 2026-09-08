@@ -17,6 +17,7 @@ export function createGatewayWorkerDispatchAdmission(
         key: request.sessionKey,
         agentId: request.agentId,
         clone: false,
+        exactRead: true,
       });
     const target = resolve();
     const entry = runtime.resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);

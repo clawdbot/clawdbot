@@ -9,7 +9,9 @@ title: "Voice wake (macOS)"
 
 ## Requirements
 
-Voice Wake and push-to-talk require macOS 26 or newer. On older macOS the controls are hidden from the Voice settings page, which shows the macOS 26 requirement instead.
+Voice Wake and push-to-talk require macOS 26 or newer. Their device controls
+appear in **Dashboard → Settings → Talk → This Mac**, which reports when voice
+features are unavailable on this Mac.
 
 Voice Wake requires Apple Speech to support on-device recognition for the selected language. The app refuses to start passive wake-word listening when that local-only contract is unavailable; it never falls back to network recognition. Push-to-talk, Talk Mode, and Quick Chat dictation are explicit user actions and may use Apple Speech network services for broader language coverage.
 
@@ -43,13 +45,19 @@ Voice Wake requires Apple Speech to support on-device recognition for the select
 
 ## User-facing settings
 
+Open **Dashboard → Settings → Talk → This Mac** in the macOS app for device
+voice settings. Microphone and speech permissions are under
+**Dashboard → Settings → This Mac → Permissions**.
+
 - **Voice Wake** toggle: enables the wake-word runtime.
 - **Hold Right Option to talk**: enables the push-to-talk monitor.
-- If the selected language lacks on-device recognition on this Mac, Voice Wake stays disabled while push-to-talk and Talk Mode remain available.
-- Language and mic pickers, a live level meter, a trigger-word table, and a tester (local-only, never forwards).
-- Trigger words follow the Primary Gateway and refresh when it reconnects or you select a different Primary. Opening a saved Gateway chat does not change them.
-- The mic picker preserves the last selection if a device disconnects, shows a disconnected hint, and temporarily falls back to the system default until it returns.
-- **Sounds**: chimes on trigger detect and on send, defaulting to the macOS "Glass" system sound. Pick any `NSSound`-loadable file (e.g. MP3/WAV/AIFF) per event, or choose **No Sound**.
+- If the selected language lacks on-device recognition on this Mac, the page explains why Voice Wake cannot be enabled. An already-enabled Voice Wake setting can still be turned off; push-to-talk and Talk Mode remain available.
+- Language and microphone pickers select this Mac's input. **System Default** uses the system microphone.
+- The primary language includes the current system locale marked **(System)**. Selecting it saves its concrete locale identifier (for example, `en_US`), as the native picker did; it does not save an empty string or `system` marker. Existing system markers resolve to this option for display without rewriting the saved preference. Unavailable additional languages are omitted from the displayed selection.
+- The microphone test opens a native panel with a live level meter and a local tester that never forwards speech. Choose **Done** to close it and release the microphone.
+- Trigger words are Gateway settings on the **Talk** page and remain editable in a regular browser. The Mac's wake runtime uses the Primary Gateway's trigger words; opening another Gateway window does not retarget that runtime.
+- If a selected microphone disconnects, the voice runtime temporarily uses the system default and retains the selection for when it returns.
+- Trigger and send chime toggles turn each sound on or off. The page also controls whether wake starts Talk Mode, push-to-talk, Talk phase sounds, Shift-to-stop, and realtime relay.
 
 ## Forwarding behavior
 

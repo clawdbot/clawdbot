@@ -232,6 +232,19 @@ function requireMaintenanceCall(mock: MockCallSource, name: string, index = 0) {
   return call;
 }
 
+type PreflightParams = Parameters<
+  typeof import("./agent-runner-memory.js").runSessionCompactionIfNeeded
+>[0];
+
+async function runRequiredCheckpoint(params: PreflightParams) {
+  if (!params.beforeCompaction) {
+    throw new Error("Expected the required preflight checkpoint");
+  }
+  return params.beforeCompaction(
+    params.sessionEntry ?? { sessionId: params.followupRun.run.sessionId, updatedAt: 1 },
+  );
+}
+
 describe("runReplyAgent runtime config", () => {
   beforeEach(() => {
     resolveQueuedReplyExecutionConfigMock.mockReset();
@@ -250,7 +263,10 @@ describe("runReplyAgent runtime config", () => {
     resolveReplyToModeMock.mockReturnValue("all");
     createReplyToModeFilterForChannelMock.mockReturnValue((payload: unknown) => payload);
     createReplyMediaPathNormalizerMock.mockReturnValue((payload: unknown) => payload);
-    runSessionCompactionIfNeededMock.mockRejectedValue(sentinelError);
+    runSessionCompactionIfNeededMock.mockImplementation(async (params: PreflightParams) => {
+      await runRequiredCheckpoint(params);
+      throw sentinelError;
+    });
     runMemoryFlushIfNeededMock.mockResolvedValue({ sessionEntry: undefined, outcome: "skipped" });
     executeAgentTurnMock.mockResolvedValue({
       runId: "runtime-config-test",
@@ -292,8 +308,8 @@ describe("runReplyAgent runtime config", () => {
     });
     expect(runSessionCompactionIfNeededMock).toHaveBeenCalledTimes(1);
     expect(runMemoryFlushIfNeededMock).toHaveBeenCalledTimes(1);
-    expect(runMemoryFlushIfNeededMock.mock.invocationCallOrder[0]).toBeLessThan(
-      runSessionCompactionIfNeededMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    expect(runSessionCompactionIfNeededMock.mock.invocationCallOrder[0]).toBeLessThan(
+      runMemoryFlushIfNeededMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
     const memoryCall = requireMaintenanceCall(runMemoryFlushIfNeededMock, "runMemoryFlushIfNeeded");
     expect(memoryCall.cfg).toBe(freshCfg);
@@ -407,7 +423,7 @@ describe("runReplyAgent runtime config", () => {
       ...freshCfg,
       agents: { defaults: { compaction: { notifyUser: true } } },
     });
-    runSessionCompactionIfNeededMock.mockResolvedValue(undefined);
+    runSessionCompactionIfNeededMock.mockImplementation(runRequiredCheckpoint);
     runMemoryFlushIfNeededMock.mockImplementation(
       async (params: {
         replyOperation: ReplyOperation;
@@ -429,7 +445,7 @@ describe("runReplyAgent runtime config", () => {
     expect(replyOperation.setPhase).toHaveBeenLastCalledWith("running");
   });
 
-  it("preserves conversation after byte-forced memory exhaustion and unnecessary preflight", async () => {
+  it("preserves conversation without running byte-forced optional memory work before reply", async () => {
     const memory = await vi.importActual<typeof import("./agent-runner-memory.js")>(
       "./agent-runner-memory.js",
     );
@@ -525,26 +541,16 @@ describe("runReplyAgent runtime config", () => {
           compactionCount: 4,
           totalTokens: 100,
           totalTokensFresh: true,
-          memoryFlush: { kind: "succeeded", compactionCount: 4 },
+          memoryFlush: { kind: "failed", failureCount: 2 },
         });
         expect(sessionStore[sessionKey]).toMatchObject({
           lifecycleRevision: sessionEntry.lifecycleRevision,
           compactionCount: 4,
           totalTokens: 100,
         });
-        expect(runMemoryFlushIfNeededMock).toHaveBeenCalledOnce();
-        await expect(runMemoryFlushIfNeededMock.mock.results[0]?.value).resolves.toMatchObject({
-          outcome: "exhausted",
-        });
+        expect(runMemoryFlushIfNeededMock).not.toHaveBeenCalled();
         expect(runSessionCompactionIfNeededMock).toHaveBeenCalledOnce();
-        expect(runMemoryFlushIfNeededMock.mock.invocationCallOrder[0]).toBeLessThan(
-          runSessionCompactionIfNeededMock.mock.invocationCallOrder[0]!,
-        );
-        expect(onBlockReply).toHaveBeenCalledWith(
-          expect.objectContaining({
-            text: "⚠️ Memory maintenance temporarily failed; continuing your reply.",
-          }),
-        );
+        expect(onBlockReply).not.toHaveBeenCalled();
         expect(executeAgentTurnMock).toHaveBeenCalledOnce();
       });
     } finally {
@@ -567,12 +573,11 @@ describe("runReplyAgent runtime config", () => {
       sessionEntry,
       outcome: "exhausted",
     });
-    runSessionCompactionIfNeededMock.mockImplementation(
-      async (params: { sessionEntry?: typeof sessionEntry }) => {
-        expect(params.sessionEntry?.sessionId).toBe("session-1");
-        return { ...params.sessionEntry, compactionCount: 5 };
-      },
-    );
+    runSessionCompactionIfNeededMock.mockImplementation(async (params: PreflightParams) => {
+      expect(params.sessionEntry?.sessionId).toBe("session-1");
+      const checkpointed = await runRequiredCheckpoint(params);
+      return { ...checkpointed, compactionCount: 5 };
+    });
 
     await expect(runReplyAgent(replyParams)).resolves.toEqual({ text: "main reply" });
 
@@ -591,9 +596,10 @@ describe("runReplyAgent runtime config", () => {
         sessionEntry: { sessionId: "session-1", updatedAt: 1, compactionCount: 4 },
         outcome: "exhausted",
       });
-      runSessionCompactionIfNeededMock.mockRejectedValue(
-        new Error(`Preflight compaction required but failed: ${reason}`),
-      );
+      runSessionCompactionIfNeededMock.mockImplementation(async (params: PreflightParams) => {
+        await runRequiredCheckpoint(params);
+        throw new Error(`Preflight compaction required but failed: ${reason}`);
+      });
 
       const result = await runReplyAgent(replyParams);
 
@@ -616,7 +622,7 @@ describe("runReplyAgent runtime config", () => {
       });
       const runState: ReplyOperationRunState = {};
       replyParams.opts = { [REPLY_OPERATION_RUN_STATE]: runState };
-      runSessionCompactionIfNeededMock.mockResolvedValue(undefined);
+      runSessionCompactionIfNeededMock.mockImplementation(runRequiredCheckpoint);
       runMemoryFlushIfNeededMock.mockImplementation(
         async (params: { replyOperation: ReplyOperation }) => {
           expect(params.replyOperation[abortMethod]()).toBe(true);

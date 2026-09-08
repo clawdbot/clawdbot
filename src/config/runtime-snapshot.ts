@@ -325,6 +325,15 @@ export function selectApplicableRuntimeConfig(params: {
   return inputConfig;
 }
 
+/** Bind a retained consumer to its current runtime owner while preserving scoped configs. */
+export function createRuntimeConfigReader(inputConfig: OpenClawConfig): () => OpenClawConfig {
+  const followsRuntimeConfig =
+    runtimeConfigSnapshot === inputConfig ||
+    (runtimeConfigSourceSnapshot !== null &&
+      configSnapshotsMatch(inputConfig, runtimeConfigSourceSnapshot));
+  return () => (followsRuntimeConfig ? runtimeConfigSnapshot : null) ?? inputConfig;
+}
+
 export function setRuntimeConfigSnapshotRefreshHandler(
   refreshHandler: RuntimeConfigSnapshotRefreshHandler | null,
 ): void {

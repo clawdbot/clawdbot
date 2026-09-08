@@ -1,6 +1,7 @@
 import pLimit from "p-limit";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../packages/gateway-protocol/src/schema/primitives.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type {
   ControlUiSessionPullRequestSnapshot,
   ControlUiSessionPullRequests,
@@ -18,9 +19,13 @@ const CONTROL_UI_SESSION_PR_LOAD_CONCURRENCY = 4;
 
 type LoadSessionPullRequests = (
   params: ControlUiSessionPullRequestsParams,
+  cacheSignal?: AbortSignal,
 ) => Promise<ControlUiSessionPullRequests>;
 
 type WatchedKeyState = {
+  connIds: Set<string>;
+  // Retire cache pins with the shared key, without cancelling another watcher's load.
+  cacheLifetime: AbortController;
   hash?: string;
   snapshot?: ControlUiSessionPullRequestSnapshot;
 };
@@ -41,14 +46,15 @@ type ControlUiSessionPullRequestSubscriptions = {
   ) => Promise<void>;
   unsubscribe: (connId: string) => void;
   pollNow: () => Promise<void>;
-  stop: () => void;
+  stop: () => Promise<void>;
 };
 
 async function loadSessionPullRequests(
   params: ControlUiSessionPullRequestsParams,
+  cacheSignal?: AbortSignal,
 ): Promise<ControlUiSessionPullRequests> {
   const { loadControlUiSessionPullRequests } = await import("./control-ui-session-prs.js");
-  return await loadControlUiSessionPullRequests(params);
+  return await loadControlUiSessionPullRequests(params, { cacheSignal });
 }
 
 function pushedSnapshot(result: ControlUiSessionPullRequests): ControlUiSessionPullRequestSnapshot {
@@ -140,26 +146,24 @@ export function createControlUiSessionPullRequestSubscriptions(
   const load = deps.load ?? loadSessionPullRequests;
   const limit = pLimit(CONTROL_UI_SESSION_PR_LOAD_CONCURRENCY);
   let timer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  let stopped = false;
+  const scope = new AsyncWorkScope();
+  let stopPromise: Promise<void> | undefined;
 
-  const subscribersForKey = (sessionKey: string): Set<string> => {
-    const connIds = new Set<string>();
-    for (const [connId, keys] of subscriptions) {
-      if (keys.has(sessionKey)) {
-        connIds.add(connId);
+  const removeMemberships = (
+    connId: string,
+    previous: ReadonlyMap<string, unknown> | undefined,
+    retained?: ReadonlyMap<string, unknown>,
+  ) => {
+    for (const key of previous?.keys() ?? []) {
+      if (!retained?.has(key)) {
+        const state = keyStates.get(key);
+        state?.connIds.delete(connId);
+        if (state?.connIds.size === 0) {
+          state.cacheLifetime.abort(null);
+          keyStates.delete(key);
+        }
       }
     }
-    return connIds;
-  };
-
-  const watchedKeys = (): Set<string> => {
-    const keys = new Set<string>();
-    for (const watched of subscriptions.values()) {
-      for (const key of watched.keys()) {
-        keys.add(key);
-      }
-    }
-    return keys;
   };
 
   const loadSnapshot = (
@@ -168,7 +172,7 @@ export function createControlUiSessionPullRequestSubscriptions(
     refresh = false,
   ): Promise<ControlUiSessionPullRequestSnapshot> => {
     const state = keyStates.get(sessionKey);
-    if (!state || !isCurrent()) {
+    if (scope.isClosing || !state || !isCurrent()) {
       return Promise.resolve(UNAVAILABLE_SNAPSHOT);
     }
     const pending = inflight.get(sessionKey);
@@ -182,31 +186,34 @@ export function createControlUiSessionPullRequestSubscriptions(
       return pending.promise.then(() => loadSnapshot(sessionKey, isCurrent, refresh));
     }
     const demands = new Set([isCurrent]);
-    const promise = limit(async () => {
-      // Joiners retain their own watched-key lifetimes. A later force-only
-      // watcher must not revive normal work retired while waiting for a slot.
-      if (!Array.from(demands).some((current) => current())) {
-        return UNAVAILABLE_SNAPSHOT;
-      }
-      // Fresh result identity acknowledges forced loads even when the failure is unchanged.
-      const snapshot = await load(loaderParams(sessionKey, refresh))
-        .then(pushedSnapshot)
-        .catch(() => ({ ...UNAVAILABLE_SNAPSHOT }));
-      if (keyStates.get(sessionKey) === state) {
-        const hash = JSON.stringify(snapshot);
-        const changed = state.hash !== hash;
-        Object.assign(state, { hash, snapshot });
-        // Publish once at the shared owner, using the latest snapshot and watcher union.
-        if (changed) {
-          push(subscribersForKey(sessionKey), sessionKey, snapshot);
+    const promise = scope.track(() =>
+      limit(async () => {
+        // Joiners retain their own watched-key lifetimes. A later force-only
+        // watcher must not revive normal work retired while waiting for a slot.
+        if (!Array.from(demands).some((current) => current())) {
+          return UNAVAILABLE_SNAPSHOT;
         }
-      }
-      return snapshot;
-    }).finally(() => {
-      if (inflight.get(sessionKey)?.promise === promise) {
-        inflight.delete(sessionKey);
-      }
-    });
+        // Fresh result identity acknowledges forced loads even when the failure is unchanged.
+        const snapshot = await load(loaderParams(sessionKey, refresh), state.cacheLifetime.signal)
+          .then(pushedSnapshot)
+          .catch(() => ({ ...UNAVAILABLE_SNAPSHOT }));
+        if (keyStates.get(sessionKey) === state) {
+          const hash = JSON.stringify(snapshot);
+          const changed = state.hash !== hash;
+          Object.assign(state, { hash, snapshot });
+          // Publish once at the shared owner, using the latest snapshot and watcher union.
+          if (changed) {
+            // A send can synchronously retire a watcher; delivery acknowledges this snapshot only.
+            push(new Set(state.connIds), sessionKey, snapshot);
+          }
+        }
+        return snapshot;
+      }).finally(() => {
+        if (inflight.get(sessionKey)?.promise === promise) {
+          inflight.delete(sessionKey);
+        }
+      }),
+    );
     inflight.set(sessionKey, { promise, refresh, state, demands });
     return promise;
   };
@@ -230,17 +237,8 @@ export function createControlUiSessionPullRequestSubscriptions(
     }
   };
 
-  const pruneOrphans = () => {
-    const watched = watchedKeys();
-    for (const key of keyStates.keys()) {
-      if (!watched.has(key)) {
-        keyStates.delete(key);
-      }
-    }
-  };
-
   const schedulePoll = () => {
-    if (stopped || timer !== null || subscriptions.size === 0) {
+    if (scope.isClosing || timer !== null || subscriptions.size === 0) {
       return;
     }
     timer = setTimer(() => {
@@ -250,66 +248,81 @@ export function createControlUiSessionPullRequestSubscriptions(
     timer.unref?.();
   };
 
-  const pollNow = async () => {
-    if (stopped) {
-      return;
+  const pollNow = (): Promise<void> => {
+    if (scope.isClosing) {
+      return Promise.resolve();
     }
-    // One union pass owns each key once; the loader retains its failure and
-    // rate-limit cache, so the poller never creates a second quota policy.
-    await Promise.all(
-      Array.from(keyStates, ([sessionKey, state]) =>
-        loadSnapshot(sessionKey, () => keyStates.get(sessionKey) === state),
-      ),
-    );
+    return scope.track(async () => {
+      // One union pass owns each key once; the loader retains its failure and
+      // rate-limit cache, so the poller never creates a second quota policy.
+      await Promise.all(
+        Array.from(keyStates, ([sessionKey, state]) =>
+          loadSnapshot(sessionKey, () => keyStates.get(sessionKey) === state),
+        ),
+      );
+    });
   };
 
-  const replace = async (
+  const replace = (
     connId: string,
     sessionKeys: readonly string[],
     refreshSessionKeys: ReadonlySet<string> = new Set(),
   ) => {
-    if (stopped) {
-      return;
+    if (scope.isClosing) {
+      return Promise.resolve();
     }
-    const normalizedConnId = connId.trim();
-    if (!normalizedConnId || deps.isConnectionActive?.(normalizedConnId) === false) {
-      return;
-    }
-    const previousSubscription = subscriptions.get(normalizedConnId);
-    const subscription = new Map(
-      sessionKeys.map((key) => [key, previousSubscription?.get(key) ?? {}]),
-    );
-    if (subscription.size === 0) {
-      unsubscribe(normalizedConnId);
-      return;
-    }
-    subscriptions.set(normalizedConnId, subscription);
-    pruneOrphans();
-    schedulePoll();
-
-    await Promise.all(
-      Array.from(subscription, async ([sessionKey, watched]) => {
-        let state = keyStates.get(sessionKey);
+    return scope.track(async () => {
+      const normalizedConnId = connId.trim();
+      if (!normalizedConnId || deps.isConnectionActive?.(normalizedConnId) === false) {
+        return;
+      }
+      const previousSubscription = subscriptions.get(normalizedConnId);
+      const subscription = new Map(
+        sessionKeys.map((key) => [key, previousSubscription?.get(key) ?? {}]),
+      );
+      if (subscription.size === 0) {
+        unsubscribe(normalizedConnId);
+        return;
+      }
+      subscriptions.set(normalizedConnId, subscription);
+      removeMemberships(normalizedConnId, previousSubscription, subscription);
+      // Publish the whole replacement before cached hydration can send synchronously.
+      for (const key of subscription.keys()) {
+        let state = keyStates.get(key);
         if (!state) {
-          keyStates.set(sessionKey, (state = {}));
+          keyStates.set(
+            key,
+            (state = { connIds: new Set(), cacheLifetime: new AbortController() }),
+          );
         }
-        const isCurrent = () => subscriptions.get(normalizedConnId)?.get(sessionKey) === watched;
-        const refresh = refreshSessionKeys.has(sessionKey);
-        const cached = refresh ? undefined : state.snapshot;
-        // A shared cached snapshot does not prove this connection received it.
-        if (cached) {
-          if (!watched.delivered) {
-            push(new Set([normalizedConnId]), sessionKey, cached);
+        state.connIds.add(normalizedConnId);
+      }
+      schedulePoll();
+
+      await Promise.all(
+        Array.from(subscription, async ([sessionKey, watched]) => {
+          const state = keyStates.get(sessionKey);
+          if (!state) {
+            return;
           }
-          return;
-        }
-        const snapshot = await loadSnapshot(sessionKey, isCurrent, refresh);
-        // A removed/re-added key has a new cell; retained keys still need their result.
-        if (isCurrent() && (refresh ? watched.delivered !== snapshot : !watched.delivered)) {
-          push(new Set([normalizedConnId]), sessionKey, snapshot);
-        }
-      }),
-    );
+          const isCurrent = () => subscriptions.get(normalizedConnId)?.get(sessionKey) === watched;
+          const refresh = refreshSessionKeys.has(sessionKey);
+          const cached = refresh ? undefined : state.snapshot;
+          // A shared cached snapshot does not prove this connection received it.
+          if (cached) {
+            if (!watched.delivered) {
+              push(new Set([normalizedConnId]), sessionKey, cached);
+            }
+            return;
+          }
+          const snapshot = await loadSnapshot(sessionKey, isCurrent, refresh);
+          // A removed/re-added key has a new cell; retained keys still need their result.
+          if (isCurrent() && (refresh ? watched.delivered !== snapshot : !watched.delivered)) {
+            push(new Set([normalizedConnId]), sessionKey, snapshot);
+          }
+        }),
+      );
+    });
   };
 
   const unsubscribe = (connId: string) => {
@@ -317,23 +330,32 @@ export function createControlUiSessionPullRequestSubscriptions(
     if (!normalizedConnId) {
       return;
     }
+    removeMemberships(normalizedConnId, subscriptions.get(normalizedConnId));
     subscriptions.delete(normalizedConnId);
-    pruneOrphans();
     if (subscriptions.size === 0 && timer !== null) {
       clearTimer(timer);
       timer = null;
     }
   };
 
-  const stop = () => {
-    stopped = true;
+  const stop = (): Promise<void> => {
+    if (stopPromise) {
+      return stopPromise;
+    }
+    scope.beginClose();
     if (timer !== null) {
       clearTimer(timer);
       timer = null;
     }
     subscriptions.clear();
+    for (const state of keyStates.values()) {
+      state.cacheLifetime.abort(null);
+    }
     keyStates.clear();
-    inflight.clear();
+    stopPromise = scope.drain().then(() => {
+      inflight.clear();
+    });
+    return stopPromise;
   };
 
   return { replace, unsubscribe, pollNow, stop };

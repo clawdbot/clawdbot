@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose } from "../globals.js";
+import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js";
 import { getActivePluginRegistryVersion } from "../plugins/runtime.js";
 import type {
   PluginWebFetchProviderEntry,
@@ -12,7 +13,6 @@ import {
   resolvePluginWebFetchProviders,
   resolveRuntimeWebFetchProviders,
 } from "../plugins/web-fetch-providers.runtime.js";
-import { sortWebFetchProvidersForAutoDetect } from "../plugins/web-fetch-providers.shared.js";
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebFetchMetadata } from "../secrets/runtime-web-tools.types.js";
 import {
@@ -211,7 +211,7 @@ function resolveWebFetchProvidersForOptions(
   options?: ResolveWebFetchDefinitionParams,
 ): PluginWebFetchProviderEntry[] {
   const load = () =>
-    sortWebFetchProvidersForAutoDetect(
+    sortPluginEntriesForAutoDetect(
       options?.sandboxed
         ? resolvePluginWebFetchProviders({
             config: options?.config,

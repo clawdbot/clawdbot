@@ -25,19 +25,6 @@ struct WorkActivityStoreTests {
             store.handleTool(sessionKey: "main", phase: "result", name: "read", meta: "old-tool", args: nil)
 
             // The heartbeat acknowledges that the primary consumer processed the preceding hello.
-            let acknowledgement = WorkActivityAcknowledgement()
-            let observer = NotificationCenter.default.addObserver(
-                forName: .controlHeartbeat,
-                object: nil,
-                queue: .main)
-            { notification in
-                guard let data = notification.object as? Data,
-                      let heartbeat = try? JSONDecoder().decode(ControlHeartbeatEvent.self, from: data),
-                      heartbeat.status == "work-lifetime-proof"
-                else { return }
-                Task { @MainActor in acknowledgement.received = true }
-            }
-            defer { NotificationCenter.default.removeObserver(observer) }
             await connection.shutdown()
             _ = try await connection.request(method: "health", params: nil, retryTransportFailures: false)
             let snapshot = try #require(await connection.lastSnapshot)
@@ -48,7 +35,7 @@ struct WorkActivityStoreTests {
                     event: "heartbeat",
                     payload: AnyCodable(["ts": 1, "status": "work-lifetime-proof"]))),
                 socketGeneration: 1)
-            #expect(await self.eventually { acknowledgement.received })
+            #expect(await self.eventually { control.lastHeartbeatEvent?.status == "work-lifetime-proof" })
             #expect(store.current == nil)
             #expect(store.iconState == .idle)
             #expect(store.lastToolUpdatedAt == nil)
@@ -163,11 +150,6 @@ struct WorkActivityStoreTests {
         store.resolveIconState(override: .otherEdit)
         #expect(store.iconState == .overridden(.tool(.edit)))
     }
-}
-
-@MainActor
-private final class WorkActivityAcknowledgement {
-    var received = false
 }
 
 func makeActivityGatewayConnection(mainSessionKey: String) -> GatewayConnection {

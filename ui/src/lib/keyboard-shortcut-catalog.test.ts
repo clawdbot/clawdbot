@@ -53,6 +53,27 @@ describe("keyboard shortcut catalog matching", () => {
     expect(matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.keyboardShortcuts, zoomOut)).toBe(false);
   });
 
+  it.each([
+    { name: "a dead key", keyboard: { key: "Dead" } },
+    { name: "active composition", keyboard: { key: "U", isComposing: true } },
+    { name: "an IME key event", keyboard: { key: "U", keyCode: 229 } },
+  ])("does not match $name for either primary modifier", ({ keyboard }) => {
+    for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
+      expect(
+        matchesShortcutCombo(
+          KEYBOARD_SHORTCUT_COMBOS.browserPanel,
+          new KeyboardEvent("keydown", {
+            code: "KeyU",
+            altKey: true,
+            shiftKey: true,
+            ...modifier,
+            ...keyboard,
+          }),
+        ),
+      ).toBe(false);
+    }
+  });
+
   it("matches physical Backquote and Comma keys independently of their produced characters", () => {
     const terminal = new KeyboardEvent("keydown", {
       key: "ö",
@@ -141,6 +162,51 @@ describe("keyboard shortcut catalog presentation", () => {
 
     expect(sendEntry("enter")?.combos).toEqual([KEYBOARD_SHORTCUT_COMBOS.sendMessage]);
     expect(sendEntry("modifier-enter")?.combos).toEqual([KEYBOARD_SHORTCUT_COMBOS.modifiedEnter]);
+  });
+
+  it("lists every built-in panel with a unique chord", () => {
+    const panels = resolveKeyboardShortcutSections().find((section) => section.id === "panels")!;
+    const expected = {
+      terminalPanel: "⌃`",
+      homePanel: "⌘⇧H",
+      workspaceFiles: "⌘⇧B",
+      sideChat: "⌘⇧S",
+      browserPanel: "⌘⌥⇧U",
+      tasksPanel: "⌘⌥⇧K",
+      desktopPanel: "⌘⌥⇧D",
+      discussionPanel: "⌘⌥⇧J",
+      dashboardPanel: "⌘⌥⇧G",
+      reviewPanel: "⌘⌥⇧E",
+    };
+    expect(
+      Object.fromEntries(
+        panels.entries.map((entry) => [
+          entry.id,
+          entry.combos.map((combo) => formatKeyboardShortcutCombo(combo, true)).join(" / "),
+        ]),
+      ),
+    ).toEqual(expected);
+    const combos = Object.values(KEYBOARD_SHORTCUT_COMBOS).map((combo) =>
+      formatKeyboardShortcutCombo(combo, true),
+    );
+    expect(new Set(combos).size).toBe(combos.length);
+    for (const entry of panels.entries) {
+      for (const combo of entry.combos.filter((candidate) => candidate.modifiers.includes("alt"))) {
+        expect(
+          matchesShortcutCombo(
+            combo,
+            new KeyboardEvent("keydown", {
+              key: "¨",
+              code: `Key${combo.key.toUpperCase()}`,
+              metaKey: true,
+              altKey: true,
+              shiftKey: true,
+            }),
+          ),
+          entry.id,
+        ).toBe(true);
+      }
+    }
   });
 
   it("gives every section and shortcut a resolvable label and at least one real chord", () => {

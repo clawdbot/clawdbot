@@ -148,6 +148,7 @@ export async function forkSessionEntryFromParentTarget(
 
       if (params.skipForkWhen?.(cloneSessionEntry(base))) {
         const sessionEntry = persistSqliteParentForkSkipPatch({
+          commitGuard: params.commitGuard,
           entry: base,
           sessionKey: sessionTarget.canonicalKey,
           patch: params.skipPatch?.(cloneSessionEntry(base)),
@@ -179,6 +180,7 @@ export async function forkSessionEntryFromParentTarget(
           parentEntry: cloneSessionEntry(parent.entry),
         });
         const sessionEntry = persistSqliteParentForkSkipPatch({
+          commitGuard: params.commitGuard,
           entry: base,
           sessionKey: sessionTarget.canonicalKey,
           patch,
@@ -197,6 +199,8 @@ export async function forkSessionEntryFromParentTarget(
       let previousIdentity = new Map<string, SessionEntry>();
       let currentIdentity = new Map<string, SessionEntry>();
       runOpenClawAgentWriteTransaction((writeDatabase) => {
+        // Parent authority can close while this fork waits behind another writer.
+        params.commitGuard?.();
         const freshParent = resolveLifecyclePrimaryEntry(writeDatabase, parentTarget)?.entry;
         if (!freshParent?.sessionId) {
           result = { status: "missing-parent" };
@@ -257,13 +261,14 @@ export async function forkSessionEntryFromParentTarget(
           sessionEntry: cloneSessionEntry(next),
         };
       }, toDatabaseOptions(resolved));
-      emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
+      emitCommittedSessionIdentityDiff(resolved.agentId, previousIdentity, currentIdentity);
       return result;
     },
   );
 }
 
 function persistSqliteParentForkSkipPatch(params: {
+  commitGuard?: () => void;
   entry: SessionEntry;
   sessionKey: string;
   patch: Partial<SessionEntry> | null | undefined;
@@ -281,13 +286,14 @@ function persistSqliteParentForkSkipPatch(params: {
   let previousIdentity = new Map<string, SessionEntry>();
   let currentIdentity = new Map<string, SessionEntry>();
   runOpenClawAgentWriteTransaction((database) => {
+    params.commitGuard?.();
     previousIdentity = readSessionIdentitySnapshot(database, [params.sessionKey]);
     writeSessionEntry(database, params.sessionKey, next, {
       previousEntry: params.entry,
     });
     currentIdentity = readSessionIdentitySnapshot(database, [params.sessionKey]);
   }, toDatabaseOptions(params.resolved));
-  emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
+  emitCommittedSessionIdentityDiff(params.resolved.agentId, previousIdentity, currentIdentity);
   return cloneSessionEntry(next);
 }
 

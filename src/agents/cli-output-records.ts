@@ -1,4 +1,4 @@
-import { extractBalancedJsonFragments } from "@openclaw/normalization-core";
+import { extractBalancedJsonFragments, safeParseJsonRecord } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -75,36 +75,26 @@ export function isClaudeSyntheticNoResponse(parsed: Record<string, unknown>): bo
   );
 }
 
-function extractJsonObjectCandidates(raw: string): string[] {
-  return extractBalancedJsonFragments(raw, { openers: ["{"] }).map((fragment) => fragment.json);
-}
-
 export function decodeCliRecords(raw: string): Record<string, unknown>[] {
-  const parsedRecords: Record<string, unknown>[] = [];
   const trimmed = raw.trim();
   if (!trimmed) {
-    return parsedRecords;
+    return [];
   }
 
-  try {
-    const parsed = JSON.parse(trimmed);
-    if (isRecord(parsed)) {
-      parsedRecords.push(parsed);
-      return parsedRecords;
-    }
-  } catch {
-    // Fall back to scanning for top-level JSON objects embedded in mixed output.
+  const fullRecord = safeParseJsonRecord(trimmed);
+  if (fullRecord) {
+    return [fullRecord];
   }
 
+  const parsedRecords: Record<string, unknown>[] = [];
   // Some CLIs prefix JSON with banners/logs; balanced scanning recovers structured records.
-  for (const candidate of extractJsonObjectCandidates(trimmed)) {
-    try {
-      const parsed = JSON.parse(candidate);
-      if (isRecord(parsed)) {
-        parsedRecords.push(parsed);
-      }
-    } catch {
-      // Ignore malformed fragments and keep scanning remaining objects.
+  for (const { json } of extractBalancedJsonFragments(trimmed, {
+    openers: ["{"],
+    skipQuotedOpeners: true,
+  })) {
+    const parsed = safeParseJsonRecord(json);
+    if (parsed) {
+      parsedRecords.push(parsed);
     }
   }
 
@@ -606,8 +596,8 @@ export function missingMessageBoundarySeparator(previousText: string, nextDelta:
   if (!previousText) {
     return "";
   }
-  const trailing = previousText.match(/\n*$/u)?.[0].length ?? 0;
-  const leading = nextDelta.match(/^\n*/u)?.[0].length ?? 0;
+  const trailing = previousText.slice(-2).match(/\n*$/u)?.[0].length ?? 0;
+  const leading = nextDelta.slice(0, 2).match(/^\n*/u)?.[0].length ?? 0;
   return "\n".repeat(Math.max(0, 2 - trailing - leading));
 }
 
@@ -681,6 +671,3 @@ export function readGeminiCliStreamJsonError(parsed: Record<string, unknown>): s
   }
   return undefined;
 }
-
-// A possible leading block stays buffered until visible prose or the message
-// boundary proves where private reasoning ends. Later tags remain literal.

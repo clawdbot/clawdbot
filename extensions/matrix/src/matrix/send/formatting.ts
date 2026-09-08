@@ -12,14 +12,11 @@ import {
 import type { MatrixClient } from "../sdk.js";
 import {
   MsgType,
-  RelationType,
   type MatrixFormattedContent,
   type MatrixMediaMsgType,
   type MatrixRelation,
-  type MatrixReplyRelation,
   type MatrixTextContent,
   type MatrixTextMsgType,
-  type MatrixThreadRelation,
 } from "./types.js";
 
 async function renderMatrixFormattedContent(params: {
@@ -142,28 +139,6 @@ export function diffMatrixMentions(
     delta.room = true;
   }
   return delta;
-}
-
-export function buildReplyRelation(replyToId?: string): MatrixReplyRelation | undefined {
-  const trimmed = replyToId?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return { "m.in_reply_to": { event_id: trimmed } };
-}
-
-export function buildThreadRelation(threadId: string, replyToId?: string): MatrixThreadRelation {
-  const trimmed = threadId.trim();
-  const relation: MatrixThreadRelation = {
-    rel_type: RelationType.Thread,
-    event_id: trimmed,
-  };
-  const fallbackReplyToId = replyToId?.trim();
-  if (fallbackReplyToId) {
-    relation.is_falling_back = true;
-    relation["m.in_reply_to"] = { event_id: fallbackReplyToId };
-  }
-  return relation;
 }
 
 export function resolveMatrixMsgType(contentType?: string, _fileName?: string): MatrixMediaMsgType {

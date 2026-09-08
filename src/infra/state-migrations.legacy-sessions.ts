@@ -30,7 +30,7 @@ import {
   unresolvedSessionStoreIdentityWarning,
 } from "./state-migrations.session-store.js";
 import type { PreparedLegacySessionSurfaces } from "./state-migrations.session-surfaces.js";
-import type { LegacyStateDetection } from "./state-migrations.types.js";
+import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
 
 const LEGACY_AGENT_DATABASE_BASENAME = "openclaw-agent.sqlite";
 
@@ -143,9 +143,10 @@ export async function migrateLegacySessions(
     recoverCorruptTargetStore?: boolean;
     legacySessionSurfaces: PreparedLegacySessionSurfaces;
   },
-): Promise<{ changes: string[]; warnings: string[] }> {
+): Promise<MigrationMessages> {
   const changes: string[] = [];
   const warnings: string[] = [];
+  const recoverableWarnings: string[] = [];
   if (!detected.sessions.hasLegacy) {
     return { changes, warnings };
   }
@@ -318,7 +319,7 @@ export async function migrateLegacySessions(
     }
     changes.push(`Merged sessions store → ${detected.sessions.targetStorePath}`);
     if (preservedLegacyForeignMainAliasCount > 0) {
-      warnings.push(
+      recoverableWarnings.push(
         `Preserved ${preservedLegacyForeignMainAliasCount} ambiguous session key(s) while importing legacy sessions into ${detected.sessions.targetStorePath}`,
       );
     }
@@ -378,7 +379,13 @@ export async function migrateLegacySessions(
     }
   }
 
-  return { changes, warnings };
+  return {
+    changes,
+    warnings: [...warnings, ...recoverableWarnings],
+    ...(warnings.length === 0 && recoverableWarnings.length > 0 && changes.length > 0
+      ? { warningDisposition: "recoverable" as const }
+      : {}),
+  };
 }
 
 export async function migrateLegacyAgentDir(

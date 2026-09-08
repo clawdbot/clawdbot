@@ -2,6 +2,7 @@
 // profile rotation, fallback model escalation, and user-visible errors.
 import { describe, expect, it } from "vitest";
 import { classifyAssistantFailoverReason } from "../../embedded-agent-helpers.js";
+import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./failover-policy.js";
 
 describe("resolveRunFailoverDecision", () => {
@@ -65,7 +66,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: false,
         externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -82,7 +82,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: false,
         externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -99,7 +98,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: false,
         externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -118,7 +116,6 @@ describe("resolveRunFailoverDecision", () => {
       expect(
         resolveRunFailoverDecision({
           stage: "prompt",
-          aborted: false,
           externalAbort: false,
           fallbackConfigured: true,
           failoverCode,
@@ -137,7 +134,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: true,
         externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -156,7 +152,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: true,
         externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -174,7 +169,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: false,
         externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -192,7 +186,6 @@ describe("resolveRunFailoverDecision", () => {
       resolveRunFailoverDecision({
         stage: "prompt",
         allowFormatRetry: true,
-        aborted: false,
         externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -321,7 +314,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: true,
         externalAbort: true,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -371,14 +363,7 @@ describe("resolveRunFailoverDecision", () => {
       api: "openai-completions" as const,
       provider: "opencode-go",
       model: "deepseek-v4-flash",
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createZeroUsageFixture(),
       stopReason: "error" as const,
       errorMessage: "opencode-go stream timed out after provider-owned SSE boundary stalled",
       content: [],
@@ -615,7 +600,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: false,
         externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -633,7 +617,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: false,
         externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
@@ -652,7 +635,6 @@ describe("resolveRunFailoverDecision", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
-        aborted: false,
         externalAbort: false,
         fallbackConfigured: false,
         failoverFailure: true,

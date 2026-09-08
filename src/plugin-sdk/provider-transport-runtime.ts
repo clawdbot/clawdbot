@@ -17,6 +17,11 @@ export {
 } from "@openclaw/ai/internal/shared";
 export {
   coerceTransportToolCallArguments,
+  consumeGoogleGenerateContentStream,
+  convertGoogleTools,
+  projectGoogleMessages,
+  requiresGoogleToolCallId,
+  type GoogleStreamChunk,
   copyProviderAcceptanceObserver,
   createEmptyTransportUsage,
   createWritableTransportEventStream,

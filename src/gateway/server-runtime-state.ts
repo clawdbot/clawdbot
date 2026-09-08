@@ -106,7 +106,7 @@ export async function createGatewayHttpTransport(params: {
   getRuntimeConfig?: () => import("../config/config.js").OpenClawConfig;
   bindHost: string;
   port: number;
-  controlUiEnabled: boolean;
+  controlUiEnabled?: boolean;
   controlUiBasePath: string;
   controlUiRoot?: ControlUiRootState;
   openAiChatCompletionsEnabled?: boolean;
@@ -426,6 +426,7 @@ export async function createGatewayHttpTransport(params: {
       const sandboxServers = bindHosts.map(() =>
         createSandboxHostHttpServer(
           params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
+          resolvePluginRouteRegistry,
         ),
       );
       // Register before binding so normal runtime cleanup closes a partially

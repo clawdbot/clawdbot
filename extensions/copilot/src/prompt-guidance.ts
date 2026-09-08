@@ -20,6 +20,7 @@ export function buildCopilotPromptGuidance(params: {
   attempt: AttemptParamsLike;
   callableToolNames: Iterable<string>;
   workspaceBootstrapInstructions?: string;
+  requireExplicitMessageTarget?: boolean;
 }): string | undefined {
   if (isRawCopilotModelRun(params.attempt)) {
     return undefined;
@@ -53,6 +54,7 @@ export function buildCopilotPromptGuidance(params: {
     buildHarnessVisibleReplyGuidance({
       sourceReplyDeliveryMode: params.attempt.sourceReplyDeliveryMode,
       messageToolAvailable: callableTools.has("message"),
+      requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     }),
     buildCredentialSafetyPrompt(
       params.attempt.disableTools !== true && callableTools.has("secrets") ? "secrets" : undefined,

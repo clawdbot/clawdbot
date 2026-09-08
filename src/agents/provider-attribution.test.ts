@@ -137,9 +137,10 @@ const loadPluginMetadataSnapshot = vi.hoisted(() =>
   })),
 );
 
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
-  getCurrentPluginMetadataSnapshot: (params?: {
+vi.mock("../plugins/plugin-metadata-snapshot-required.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot-required.js")>()),
+  loadPluginMetadataSnapshotRuntime: loadPluginMetadataSnapshot,
+  getCurrentPluginMetadataSnapshotRequiredRuntime: (params?: {
     allowScopedSnapshot?: boolean;
     requireDefaultDiscoveryContext?: boolean;
   }) =>
@@ -167,10 +168,6 @@ vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal)
             ),
           },
         }),
-}));
-
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot,
 }));
 
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";

@@ -1,10 +1,5 @@
 // Xiaomi provider module implements model/runtime integration.
-import { canonicalizeBase64, transcodeAudioBufferToOpus } from "openclaw/plugin-sdk/media-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import {
-  assertOkOrThrowProviderError,
-  readProviderJsonResponse,
-} from "openclaw/plugin-sdk/provider-http";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -12,12 +7,11 @@ import type {
   SpeechProviderOverrides,
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech-core";
-import { resolveSpeechProviderApiKey, trimToUndefined } from "openclaw/plugin-sdk/speech-core";
+import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-provider";
 import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
-} from "openclaw/plugin-sdk/ssrf-runtime";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+  asOptionalRecord,
+  normalizeOptionalString as trimToUndefined,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const DEFAULT_XIAOMI_TTS_BASE_URL = "https://api.xiaomimimo.com/v1";
 const DEFAULT_XIAOMI_TTS_MODEL = "mimo-v2.5-tts";
@@ -236,23 +230,6 @@ function buildXiaomiTtsAudio(params: { model: string; voice: string; format: Xia
   return { format: params.format, voice: params.voice };
 }
 
-function decodeXiaomiAudioData(body: unknown): Buffer {
-  const root = asOptionalRecord(body);
-  const choices = Array.isArray(root?.choices) ? root.choices : [];
-  const firstChoice = asOptionalRecord(choices[0]);
-  const message = asOptionalRecord(firstChoice?.message);
-  const audio = asOptionalRecord(message?.audio);
-  const audioData = trimToUndefined(audio?.data);
-  if (!audioData) {
-    throw new Error("Xiaomi TTS API returned no audio data");
-  }
-  const canonicalAudio = canonicalizeBase64(audioData);
-  if (!canonicalAudio) {
-    throw new Error("Xiaomi TTS API returned malformed base64 audio data");
-  }
-  return Buffer.from(canonicalAudio, "base64");
-}
-
 async function xiaomiTTS(params: {
   text: string;
   apiKey: string;
@@ -265,6 +242,11 @@ async function xiaomiTTS(params: {
 }): Promise<Buffer> {
   const { text, apiKey, baseUrl, model, voice, format, style, timeoutMs } = params;
   const requestTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
+  const { canonicalizeBase64 } = await import("openclaw/plugin-sdk/media-runtime");
+  const { assertOkOrThrowProviderError, readProviderJsonResponse } =
+    await import("openclaw/plugin-sdk/provider-http");
+  const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
+    await import("openclaw/plugin-sdk/ssrf-runtime");
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
   const resolvedStyle = isXiaomiVoiceDesignModel(model)
@@ -294,7 +276,20 @@ async function xiaomiTTS(params: {
     try {
       await assertOkOrThrowProviderError(response, "Xiaomi TTS API error");
       const body = await readProviderJsonResponse<unknown>(response, "Xiaomi TTS API");
-      return decodeXiaomiAudioData(body);
+      const root = asOptionalRecord(body);
+      const choices = Array.isArray(root?.choices) ? root.choices : [];
+      const firstChoice = asOptionalRecord(choices[0]);
+      const message = asOptionalRecord(firstChoice?.message);
+      const audio = asOptionalRecord(message?.audio);
+      const audioData = trimToUndefined(audio?.data);
+      if (!audioData) {
+        throw new Error("Xiaomi TTS API returned no audio data");
+      }
+      const canonicalAudio = canonicalizeBase64(audioData);
+      if (!canonicalAudio) {
+        throw new Error("Xiaomi TTS API returned malformed base64 audio data");
+      }
+      return Buffer.from(canonicalAudio, "base64");
     } finally {
       await release();
     }
@@ -335,6 +330,7 @@ export function buildXiaomiSpeechProvider(): SpeechProviderPlugin {
         timeoutMs: req.timeoutMs,
       });
       if (req.target === "voice-note") {
+        const { transcodeAudioBufferToOpus } = await import("openclaw/plugin-sdk/media-runtime");
         const opusBuffer = await transcodeAudioBufferToOpus({
           audioBuffer,
           inputExtension: outputFormat,

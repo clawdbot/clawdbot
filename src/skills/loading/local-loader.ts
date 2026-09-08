@@ -17,9 +17,11 @@ import {
 export type LoadedLocalSkill = {
   skill: Skill;
   frontmatter: ParsedSkillFrontmatter;
+  content: string;
 };
 
 export type LocalSkillLoadDiagnostic = {
+  kind: "read" | "invalid";
   path: string;
   message: string;
 };
@@ -48,7 +50,11 @@ function readSkillFileSync(params: {
         opened.error instanceof Error
           ? opened.error.message
           : `failed to open skill file (${opened.reason})`;
-      params.onDiagnostic?.({ path: params.filePath, message });
+      params.onDiagnostic?.({
+        kind: opened.reason === "validation" ? "invalid" : "read",
+        path: params.filePath,
+        message,
+      });
     }
     return null;
   }
@@ -58,7 +64,11 @@ function readSkillFileSync(params: {
       : readFileDescriptorBoundedSync(opened.fd, params.maxBytes).toString("utf8");
   } catch (error) {
     const message = error instanceof Error ? error.message : "failed to read skill file";
-    params.onDiagnostic?.({ path: params.filePath, message });
+    params.onDiagnostic?.({
+      kind: error instanceof RangeError ? "invalid" : "read",
+      path: params.filePath,
+      message,
+    });
     return null;
   } finally {
     fs.closeSync(opened.fd);
@@ -90,7 +100,7 @@ export function loadSingleSkillDirectory(params: {
     frontmatter = parseSkillFrontmatter(raw);
   } catch (error) {
     const message = error instanceof Error ? error.message : "failed to parse skill frontmatter";
-    params.onDiagnostic?.({ path: skillFilePath, message });
+    params.onDiagnostic?.({ kind: "invalid", path: skillFilePath, message });
     return null;
   }
 
@@ -99,6 +109,7 @@ export function loadSingleSkillDirectory(params: {
   const description = frontmatter.description?.trim();
   if (!name || !description) {
     params.onDiagnostic?.({
+      kind: "invalid",
       path: skillFilePath,
       message: !name ? "name is required" : "description is required",
     });
@@ -125,78 +136,7 @@ export function loadSingleSkillDirectory(params: {
       disableModelInvocation: invocation.disableModelInvocation,
     },
     frontmatter,
-  };
-}
-
-function listCandidateSkillDirs(dir: string): string[] {
-  try {
-    return fs
-      .readdirSync(dir, { withFileTypes: true })
-      .filter(
-        (entry) =>
-          entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "node_modules",
-      )
-      .map((entry) => path.join(dir, entry.name))
-      .toSorted((left, right) => left.localeCompare(right));
-  } catch {
-    return [];
-  }
-}
-
-/** Loads skills from a local directory while turning read/parse failures into diagnostics. */
-export function loadSkillsFromDirSafe(params: {
-  dir: string;
-  source: string;
-  maxBytes?: number;
-  rejectHardlinks?: boolean;
-  onDiagnostic?: (diagnostic: LocalSkillLoadDiagnostic) => void;
-}): {
-  skills: Skill[];
-  frontmatterByFilePath: ReadonlyMap<string, ParsedSkillFrontmatter>;
-} {
-  const rootDir = path.resolve(params.dir);
-  let rootRealPath: string;
-  try {
-    rootRealPath = fs.realpathSync(rootDir);
-  } catch {
-    return { skills: [], frontmatterByFilePath: new Map() };
-  }
-
-  const rootSkill = loadSingleSkillDirectory({
-    skillDir: rootDir,
-    source: params.source,
-    rootRealPath,
-    maxBytes: params.maxBytes,
-    rejectHardlinks: params.rejectHardlinks,
-    onDiagnostic: params.onDiagnostic,
-  });
-  if (rootSkill) {
-    return {
-      skills: [rootSkill.skill],
-      frontmatterByFilePath: new Map([[rootSkill.skill.filePath, rootSkill.frontmatter]]),
-    };
-  }
-
-  const loadedSkills = listCandidateSkillDirs(rootDir)
-    .map((skillDir) =>
-      loadSingleSkillDirectory({
-        skillDir,
-        source: params.source,
-        rootRealPath,
-        maxBytes: params.maxBytes,
-        rejectHardlinks: params.rejectHardlinks,
-        onDiagnostic: params.onDiagnostic,
-      }),
-    )
-    .filter((skill): skill is LoadedLocalSkill => skill !== null);
-  const frontmatterByFilePath = new Map<string, ParsedSkillFrontmatter>();
-  for (const loaded of loadedSkills) {
-    frontmatterByFilePath.set(loaded.skill.filePath, loaded.frontmatter);
-  }
-
-  return {
-    skills: loadedSkills.map((loaded) => loaded.skill),
-    frontmatterByFilePath,
+    content: raw,
   };
 }
 

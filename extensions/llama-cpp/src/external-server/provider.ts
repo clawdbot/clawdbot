@@ -1,9 +1,14 @@
 import type {
   ProviderCatalogContext,
+  ProviderCatalogResult,
   ProviderPrepareDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
+import {
+  LiveModelCatalogHttpError,
+  runLiveProviderCatalog,
+} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { LLAMA_CPP_PROVIDER_ID } from "../defaults.js";
 import {
   hasLlamaServerAuthorizationHeader,
@@ -17,7 +22,7 @@ import { buildLlamaServerProviderConfig } from "./models.js";
 /** Discovers external llama-server models for provider runtime resolution. */
 export async function discoverLlamaServerProvider(
   ctx: ProviderCatalogContext,
-): Promise<{ provider: ModelProviderConfig } | null> {
+): Promise<ProviderCatalogResult> {
   const configured = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
   const auth = ctx.resolveProviderApiKey(LLAMA_CPP_PROVIDER_ID);
   const headers = await resolveLlamaServerProviderHeaders({
@@ -25,33 +30,38 @@ export async function discoverLlamaServerProvider(
     env: ctx.env,
     headers: configured?.headers,
   });
-  const discovery = await discoverLlamaServer({
-    baseUrl: configured?.baseUrl,
-    apiKey: hasLlamaServerAuthorizationHeader(headers)
+  const authApiKey = auth.discoveryApiKey ?? auth.apiKey;
+  const apiKey =
+    hasLlamaServerAuthorizationHeader(headers) ||
+    (authApiKey && isNonSecretApiKeyMarker(authApiKey))
       ? undefined
-      : (auth.discoveryApiKey ?? auth.apiKey),
-    headers,
-  });
-  if (discovery.kind !== "success") {
-    return configured
-      ? {
-          provider: buildLlamaServerProviderConfig({
-            configured,
-            discoveredModels: [],
-          }),
+      : authApiKey;
+  return await runLiveProviderCatalog({
+    providerId: LLAMA_CPP_PROVIDER_ID,
+    profileId: apiKey ? auth.profileId : undefined,
+    run: async () => {
+      const discovery = await discoverLlamaServer({
+        baseUrl: configured?.baseUrl,
+        apiKey,
+        headers,
+        cacheTtlMs: 0,
+      });
+      if (discovery.kind !== "success") {
+        if (!configured && !apiKey && !headers) {
+          return null;
         }
-      : null;
-  }
-  return {
-    provider: buildLlamaServerProviderConfig({
-      configured: {
-        ...configured,
-        baseUrl: discovery.endpoint.inferenceBaseUrl,
-        models: configured?.models ?? [],
-      },
-      discoveredModels: discovery.models,
-    }),
-  };
+        throw discovery.kind === "http-error"
+          ? new LiveModelCatalogHttpError(LLAMA_CPP_PROVIDER_ID, discovery.status)
+          : discovery.error;
+      }
+      return {
+        provider: buildLlamaServerProviderConfig({
+          configured,
+          discoveredModels: discovery.models,
+        }),
+      };
+    },
+  });
 }
 
 export async function prepareLlamaServerDynamicModel(

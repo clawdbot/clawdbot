@@ -5,7 +5,7 @@ read_when:
   - Managing team-scoped values in the shared secret store
   - Auditing plaintext residues and unresolved refs
   - Configuring SecretRefs and applying one-way scrub changes
-title: "Secrets"
+title: "Secrets CLI"
 ---
 
 # `openclaw secrets`
@@ -211,7 +211,7 @@ Notes:
 - Targets secret-bearing fields in `openclaw.json` plus the selected agent's auth profile store; canonical supported surface: [SecretRef Credential Surface](/reference/secretref-credential-surface).
 - Supports creating new auth profile mappings directly in the picker flow.
 - Runs preflight resolution before apply.
-- Generated plans default to scrub options enabled (`scrubEnv`, `scrubAuthProfilesForProviderTargets`, `scrubLegacyAuthJson`). Apply is one-way for scrubbed plaintext values.
+- Generated plans enable `scrubEnv` and `scrubAuthProfilesForProviderTargets`. `scrubLegacyAuthJson` stays disabled, because Doctor owns legacy `auth.json` migration. Apply is one-way for scrubbed plaintext values.
 - `--plan-out` refuses to create a plan whose UTF-8 serialized form exceeds 16 MiB (16,777,216 bytes), matching the `apply --from` input limit.
 - Without `--apply`, the CLI still prompts `Apply this plan now?` after preflight.
 - With `--apply` (and no `--yes`), the CLI prompts an extra irreversible-migration confirmation.

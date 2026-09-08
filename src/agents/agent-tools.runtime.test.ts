@@ -108,9 +108,9 @@ describe("wrapToolWithAbortSignal", () => {
       runAbort.signal,
     );
 
-    await expect(wrapped.execute("call-yield", {})).resolves.toMatchObject({
-      details: { status: "yielded", message: "Turn yielded." },
-    });
+    const result = await wrapped.execute("call-yield", {});
+    expect(result).toMatchObject({ details: { status: "yielded" } });
+    expect(result).not.toHaveProperty("details.message");
     expect(beforeYield).toHaveBeenCalledOnce();
     expect(runAbort.signal.reason).toBe(handoffReason);
   });

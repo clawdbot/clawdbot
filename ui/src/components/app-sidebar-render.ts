@@ -8,7 +8,6 @@ import {
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
 import { isRouteId, isSessionRouteId } from "../app-route-paths.ts";
-import { resolveControlUiAuthToken } from "../app/control-ui-auth.ts";
 import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
 import { isHomePanelAvailable } from "../app/panel-availability.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
@@ -42,7 +41,6 @@ import { renderSidebarPluginTab } from "./app-sidebar-nav-menus.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import { renderSidebarSessionSectionHeader } from "./app-sidebar-session-section-header.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
 import { icons } from "./icons.ts";
 import { renderNewSessionLink } from "./new-session-link.ts";
 import { HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
@@ -61,7 +59,6 @@ import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
 
 type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   activePluginTabId: string;
-  activeWorkboardBoardId: string;
   offline: boolean;
   getRouteSessionKey(): string;
   renderPinnedSidebarSession(session: SidebarRecentSession): unknown;
@@ -108,13 +105,6 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
   });
   const cardName = normalizeAgentLabel(cardAgent ?? { id: cardAgentId }, cardIdentity);
   const gateway = host.sessionDataContext?.gateway;
-  const avatarAuthToken = gateway
-    ? resolveControlUiAuthToken({
-        hello: gateway.snapshot.hello,
-        settings: { token: gateway.connection.token },
-        password: gateway.connection.password,
-      })
-    : null;
   const avatarAuthReady = Boolean(
     gateway &&
     (gateway.snapshot.hello ||
@@ -133,7 +123,6 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
         .avatarUrl=${
           cardAgent ? resolveAgentAvatarUrl(cardAgent, cardIdentity) : cardIdentity?.avatar
         }
-        .authToken=${avatarAuthToken}
         .avatarAuthReady=${avatarAuthReady}
         .avatarText=${cardAvatarText}
         .environment=${host.sessionDataContext?.config?.current?.environment ?? null}
@@ -464,12 +453,8 @@ export function renderAppSidebarZoneEntry(
   host: AppSidebarRenderHost,
   entry: SidebarZoneEntry,
   sessionRows: ReadonlyMap<string, SidebarRecentSession>,
-  workboardRows: ReadonlyMap<string, SidebarWorkboardBoard>,
 ) {
-  if (
-    (entry.type === "route" && !host.sidebarMenus.isRouteEnabled(entry.route)) ||
-    (entry.type === "workboard" && !host.sidebarMenus.isRouteEnabled("workboard"))
-  ) {
+  if (entry.type === "route" && !host.sidebarMenus.isRouteEnabled(entry.route)) {
     return nothing;
   }
   const serialized = serializeSidebarEntry(entry);
@@ -480,12 +465,15 @@ export function renderAppSidebarZoneEntry(
   const content =
     entry.type === "route"
       ? host.sidebarMenus.renderRoute(entry.route)
-      : entry.type === "workboard"
-        ? renderWorkboardBoard(host, workboardRows.get(entry.boardId))
+      : entry.type === "plugin"
+        ? html`<openclaw-plugin-contributions
+            .kind=${"navigation"}
+            .navigationKey=${entry.key}
+          ></openclaw-plugin-contributions>`
         : sessionRows.has(entry.key)
           ? host.renderPinnedSidebarSession(sessionRows.get(entry.key)!)
           : nothing;
-  const draggable = entry.type === "route" || entry.type === "workboard";
+  const draggable = entry.type === "route" || entry.type === "plugin";
   return html`
     <div
       class="sidebar-zone-entry ${dropPosition ? `sidebar-zone-entry--drop-${dropPosition}` : ""} ${
@@ -498,9 +486,8 @@ export function renderAppSidebarZoneEntry(
       @dragstart=${
         entry.type === "route"
           ? (event: DragEvent) => host.sessionOrganizer.startSidebarRouteDrag(event, entry.route)
-          : entry.type === "workboard"
-            ? (event: DragEvent) =>
-                host.sessionOrganizer.startSidebarWorkboardDrag(event, entry.boardId)
+          : entry.type === "plugin"
+            ? (event: DragEvent) => host.sessionOrganizer.startSidebarPluginDrag(event, entry.key)
             : nothing
       }
       @dragend=${draggable ? () => host.sessionOrganizer.finishSidebarEntryDrag() : nothing}
@@ -537,24 +524,6 @@ export function renderAppSidebarPluginTabEntry(
       }
     </div>
   `;
-}
-
-function renderWorkboardBoard(
-  host: AppSidebarRenderHost,
-  board: SidebarWorkboardBoard | undefined,
-) {
-  if (!board) {
-    return nothing;
-  }
-  const active = host.activeRouteId === "workboard" && host.activeWorkboardBoardId === board.id;
-  return (
-    host.workboardRenderers?.renderEntry({
-      board,
-      basePath: host.basePath,
-      active,
-      onNavigate: (pathname) => host.onNavigate?.("workboard", { pathname }),
-    }) ?? nothing
-  );
 }
 
 function renderAppSidebarAttention(host: AppSidebarRenderHost) {

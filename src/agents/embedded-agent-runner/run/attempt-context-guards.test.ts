@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession } from "../../sessions/index.js";
@@ -225,16 +226,15 @@ describe("installEmbeddedAttemptContextGuards", () => {
         // from the transcript marker) must keep replaying under server clearing.
         const key = "tool:old-tool:1";
         input.toolResultPromptProjectionState.replacements.set(key, {
-          message: {
-            role: "toolResult",
-            toolCallId: "old-tool",
-            toolName: "read",
-            content: [{ type: "text", text: earlierProjection }],
-            timestamp: 1,
-          } as AgentMessage,
+          content: [{ type: "text", text: earlierProjection }],
           cacheTtl: "soft",
         });
-        input.toolResultPromptProjectionState.sourceTextByKey.set(key, ["x".repeat(5_000)]);
+        input.toolResultPromptProjectionState.sourceHashByKey.set(
+          key,
+          createHash("sha256")
+            .update(JSON.stringify(["x".repeat(5_000)]))
+            .digest("base64url"),
+        );
         input.toolResultPromptProjectionState.frozen.add(key);
       }
       input.attempt = {

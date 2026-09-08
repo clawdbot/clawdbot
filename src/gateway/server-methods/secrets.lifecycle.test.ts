@@ -197,7 +197,7 @@ describe("secret store mutation lifecycle", () => {
         expect(JSON.stringify(result)).not.toContain("test-secret-operator-only");
         expect(methods).toEqual(["question.request", "question.waitAnswer", "secrets.store.list"]);
       } finally {
-        manager.reset();
+        manager.close();
         releaseAgentRunDelegatedAuthority(authority);
         clearAgentRunContext("tool-run");
       }

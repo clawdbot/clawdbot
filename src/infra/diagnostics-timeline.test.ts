@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -38,14 +39,6 @@ async function readTimeline(path: string) {
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line) as Record<string, unknown>);
-}
-
-function eventRecord(events: Record<string, unknown>[], index: number): Record<string, unknown> {
-  const event = events[index];
-  if (!event) {
-    throw new Error(`Expected diagnostics event at index ${index}`);
-  }
-  return event;
 }
 
 function attributesRecord(event: Record<string, unknown>): Record<string, unknown> {
@@ -133,7 +126,8 @@ describe("diagnostics timeline", () => {
     expect(chunks().filter((content) => content.byteLength > 64 * 1024)).toHaveLength(1);
     const events = await readTimeline(path);
     expect(events.map((event) => event.name)).toEqual([...names, "oversized", "last"]);
-    expect(attributesRecord(eventRecord(events, names.length)).text).toBe(oversized);
+    const oversizedEvent = expectDefined(events[names.length], "oversized timeline event");
+    expect(attributesRecord(oversizedEvent).text).toBe(oversized);
   });
 
   it.each(["natural", "immediate", "first-event-at-exit"])(
@@ -350,8 +344,8 @@ describe("diagnostics timeline", () => {
 
     const events = await readTimeline(path);
     expect(events).toHaveLength(2);
-    const start = eventRecord(events, 0);
-    const end = eventRecord(events, 1);
+    const start = expectDefined(events[0], "span start");
+    const end = expectDefined(events[1], "span end");
     expect(start.type).toBe("span.start");
     expect(start.name).toBe("runtimeDeps.stage");
     expect(start.phase).toBe("startup");
@@ -379,7 +373,7 @@ describe("diagnostics timeline", () => {
 
     const events = await readTimeline(path);
     expect(events).toHaveLength(2);
-    const errorEvent = eventRecord(events, 1);
+    const errorEvent = expectDefined(events[1], "span error");
     expect(errorEvent.type).toBe("span.error");
     expect(errorEvent.name).toBe("plugins.load");
     expect(errorEvent.phase).toBe("startup");
@@ -402,7 +396,7 @@ describe("diagnostics timeline", () => {
 
     const events = await readTimeline(path);
     expect(events).toHaveLength(2);
-    const errorEvent = eventRecord(events, 1);
+    const errorEvent = expectDefined(events[1], "span error");
     expect(errorEvent.type).toBe("span.error");
     expect(errorEvent.name).toBe("secrets.prepare");
     expect(errorEvent.errorName).toBe("Error");
@@ -422,8 +416,8 @@ describe("diagnostics timeline", () => {
     expect(result).toBe(42);
     const events = await readTimeline(path);
     expect(events).toHaveLength(2);
-    const start = eventRecord(events, 0);
-    const end = eventRecord(events, 1);
+    const start = expectDefined(events[0], "span start");
+    const end = expectDefined(events[1], "span end");
     expect(start.type).toBe("span.start");
     expect(start.name).toBe("plugins.metadata.scan");
     expect(end.type).toBe("span.end");

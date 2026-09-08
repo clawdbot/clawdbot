@@ -4,7 +4,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const LEGACY_UPDATE_COMPAT_CHUNKS = ["shared-DTaQo6Hi.js", "shared-Y6bNiw2w.js"];
+export const LEGACY_UPDATE_COMPAT_CHUNKS = [
+  "shared-DTaQo6Hi.js",
+  "shared-Y6bNiw2w.js",
+  "shared-DFJEouXv.js",
+];
 export const FUTURE_FIXTURE_VERSION = "2026.9.99-first-hop.0";
 
 function readJson(filePath) {

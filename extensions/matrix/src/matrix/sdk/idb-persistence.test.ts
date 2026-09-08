@@ -5,11 +5,21 @@ import os from "node:os";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetFileLockStateForTest } from "openclaw/plugin-sdk/file-lock";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  openOpenClawStateDatabase,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getMatrixRuntime } from "../../runtime.js";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
-import { readMatrixIdbSnapshotJson, writeMatrixIdbSnapshotJson } from "../crypto-state-store.js";
+import {
+  openMatrixIdbSnapshotStoreOptions,
+  readMatrixIdbSnapshotJson,
+  readMatrixIdbSnapshotJsonFromStore,
+  writeMatrixIdbSnapshotJson,
+  type MatrixIdbSnapshotRecord,
+} from "../crypto-state-store.js";
 import { persistIdbToDisk, restoreIdbFromDisk } from "./idb-persistence.js";
 import {
   clearAllIndexedDbState,
@@ -81,6 +91,60 @@ describe("Matrix IndexedDB persistence", () => {
     const dbs = await indexedDB.databases();
     expect(dbs.map((entry) => entry.name)).not.toContain(otherCryptoDatabaseName);
   });
+
+  it.each(["bulk", "legacy"])(
+    "reassembles exact snapshot bytes beyond chunk 9 with %s stores",
+    async (mode) => {
+      const snapshotJson = JSON.stringify({
+        records: Array.from({ length: 24 }, (_, index) => `${index}:🦞${"x".repeat(15_000)}`),
+      });
+      writeMatrixIdbSnapshotJson({ storageRootDir: tmpDir, snapshotJson, databaseCount: 1 });
+      const store = createPluginStateKeyedStoreForTests<MatrixIdbSnapshotRecord>(
+        "matrix",
+        openMatrixIdbSnapshotStoreOptions(tmpDir),
+      );
+      const reader = mode === "bulk" ? store : { lookup: (key: string) => store.lookup(key) };
+      expect(readMatrixIdbSnapshotJson(tmpDir)).toBe(snapshotJson);
+      await expect(readMatrixIdbSnapshotJsonFromStore({ store: reader })).resolves.toBe(
+        snapshotJson,
+      );
+      const chunk = (await store.entries()).find(
+        (row) => row.value.kind === "snapshot-chunk" && row.value.index === 10,
+      );
+      expect(chunk).toBeDefined();
+      if (!chunk || chunk.value.kind !== "snapshot-chunk") {
+        throw new Error("expected snapshot chunk 10");
+      }
+      await store.register(chunk.key, { ...chunk.value, data: "modified" });
+      await expect(readMatrixIdbSnapshotJsonFromStore({ store: reader })).resolves.toBeNull();
+      const laterChunk = (await store.entries()).find(
+        (row) => row.value.kind === "snapshot-chunk" && row.value.index === 11,
+      );
+      if (!laterChunk) {
+        throw new Error("expected snapshot chunk 11");
+      }
+      const { db } = openOpenClawStateDatabase({
+        env: openMatrixIdbSnapshotStoreOptions(tmpDir).env,
+      });
+      db.prepare("UPDATE plugin_state_entries SET value_json = ? WHERE entry_key = ?").run(
+        "invalid JSON",
+        laterChunk.key,
+      );
+      await store.register(chunk.key, { ...chunk.value, index: -1 });
+      expect(readMatrixIdbSnapshotJson(tmpDir)).toBeNull();
+      await expect(readMatrixIdbSnapshotJsonFromStore({ store: reader })).resolves.toBeNull();
+      await store.delete(chunk.key);
+      expect(readMatrixIdbSnapshotJson(tmpDir)).toBeNull();
+      await expect(readMatrixIdbSnapshotJsonFromStore({ store: reader })).resolves.toBeNull();
+      await store.register(chunk.key, chunk.value);
+      expect(() => readMatrixIdbSnapshotJson(tmpDir)).toThrowError(
+        expect.objectContaining({ code: "PLUGIN_STATE_CORRUPT" }),
+      );
+      await expect(readMatrixIdbSnapshotJsonFromStore({ store: reader })).rejects.toMatchObject({
+        code: "PLUGIN_STATE_CORRUPT",
+      });
+    },
+  );
 
   it("blocks runtime restore and persistence until doctor migrates the legacy snapshot", async () => {
     const snapshotPath = path.join(tmpDir, "crypto-idb-snapshot.json");

@@ -254,8 +254,11 @@ struct MacNodeClaudeSessionCatalogTests {
             (cliId, "Interactive CLI prompt", "cli", "/work/cli", "2.1.216"),
             (sdkCLIId, "Headless CLI prompt", "sdk-cli", "/work/sdk", "2.1.204"),
         ] {
+            var meta = fixture.message(
+                id, "<local-command-caveat>CLI metadata</local-command-caveat>", entrypoint: entrypoint)
+            meta["isMeta"] = true
             try fixture.writeTranscript(
-                [fixture.message(
+                [meta, fixture.message(
                     id,
                     text,
                     entrypoint: entrypoint,

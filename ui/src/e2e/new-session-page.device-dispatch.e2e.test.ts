@@ -232,6 +232,10 @@ suite.define(() => {
           suite,
           page,
           `failed-topology-${value.replace(":", "-")}.png`,
+          {
+            surface: page.locator('.new-session-page__where-popover wa-popup [part="popup"]'),
+            content: [selectedDevice, automaticDevice],
+          },
         );
         expect(await start.isDisabled()).toBe(true);
         expect(await selectedDevice.isDisabled()).toBe(true);

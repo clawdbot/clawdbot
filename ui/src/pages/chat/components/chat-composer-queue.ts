@@ -479,7 +479,7 @@ function renderChatQueueItem(
           : html`<span class="chat-queue__copy">
               <span class="chat-queue__text" title=${text}>${text}</span>
               ${
-                steered
+                steered && !canSteer
                   ? html`<span class="chat-queue__badge chat-queue__badge--steered"
                       >${t("chat.queue.steer")}</span
                     >`

@@ -1,6 +1,5 @@
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { chunkDiscordTextWithMode } from "./chunk.js";
 import { maybeSendBindingMessage } from "./monitor/thread-bindings.discord-api.js";
@@ -23,42 +22,38 @@ async function withWebhookServer(
   run: (contents: string[]) => Promise<void>,
 ) {
   const contents: string[] = [];
-  const server = createServer((request, response) => {
-    let body = "";
-    request.setEncoding("utf8");
-    request.on("data", (part: string) => {
-      body += part;
-    });
-    request.on("end", () => {
-      const { content } = JSON.parse(body) as { content: string };
-      contents.push(content);
-      const next = reply(content, contents.length);
-      response.writeHead(next.status ?? 200, { "content-type": "application/json" });
-      response.end(JSON.stringify(next.body));
-    });
-  });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address() as AddressInfo;
-  const realFetch = globalThis.fetch.bind(globalThis);
-  const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
-    const original =
-      typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    const target = new URL(original);
-    target.protocol = "http:";
-    target.host = `127.0.0.1:${address.port}`;
-    return realFetch(target, init);
-  });
-  try {
-    await run(contents);
-  } finally {
-    fetchSpy.mockRestore();
-    server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
+  await withServer(
+    (request, response) => {
+      let body = "";
+      request.setEncoding("utf8");
+      request.on("data", (part: string) => {
+        body += part;
+      });
+      request.on("end", () => {
+        const { content } = JSON.parse(body) as { content: string };
+        contents.push(content);
+        const next = reply(content, contents.length);
+        response.writeHead(next.status ?? 200, { "content-type": "application/json" });
+        response.end(JSON.stringify(next.body));
+      });
+    },
+    async (baseUrl) => {
+      const realFetch = globalThis.fetch.bind(globalThis);
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+        const original =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        const target = new URL(original);
+        target.protocol = "http:";
+        target.host = new URL(baseUrl).host;
+        return realFetch(target, init);
+      });
+      try {
+        await run(contents);
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    },
+  );
 }
 
 const cfg: OpenClawConfig = { channels: { discord: { token: "Bot test-token" } } };

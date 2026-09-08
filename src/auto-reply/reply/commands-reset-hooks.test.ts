@@ -263,7 +263,7 @@ describe("handleCommands reset hooks", () => {
     });
     expect(result).toEqual({
       shouldContinue: false,
-      reply: { text: "✅ ACP session reset in place." },
+      reply: { text: "✅ ACP session reset in place.", isStatusNotice: true },
     });
     expect(triggerInternalHookMock).not.toHaveBeenCalled();
     expect(params.command.resetHookTriggered).toBe(true);
@@ -272,6 +272,28 @@ describe("handleCommands reset hooks", () => {
       sessionId: "session-after-acp-reset",
       storePath: "/tmp/claude-sessions.json",
     });
+  });
+
+  it("keeps a failed ACP reset as a failure status notice", async () => {
+    resetMocks.resetConfiguredBindingTargetInPlace.mockResolvedValueOnce({
+      ok: false,
+      error: "reset rejected",
+    });
+    resetMocks.resolveBoundAcpThreadSessionKey.mockReturnValue("agent:main:acp:bound");
+    const params = buildResetParams("/reset", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+
+    expect(await maybeHandleResetCommand(params)).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "⚠️ ACP session reset failed. Check /acp status and try again.",
+        isStatusNotice: true,
+      },
+    });
+    expect(params.command.resetHookTriggered).not.toBe(true);
+    expect(triggerInternalHookMock).not.toHaveBeenCalled();
   });
 
   it("keeps tail dispatch after a bound ACP reset", async () => {
@@ -357,7 +379,7 @@ describe("handleCommands reset hooks", () => {
       expect(onObservedReplyDelivery).not.toHaveBeenCalled();
       expect(result).toEqual({
         shouldContinue: false,
-        reply: { text: "✅ New session started." },
+        reply: { text: "✅ New session started.", isStatusNotice: true },
       });
     },
   );
@@ -716,7 +738,7 @@ describe("handleCommands reset hooks", () => {
 
     expect(result).toEqual({
       shouldContinue: false,
-      reply: { text: "✅ Session reset." },
+      reply: { text: "✅ Session reset.", isStatusNotice: true },
     });
     expectObjectFields(firstHookEvent(), { type: "command", action: "reset" }, "hook event");
   });
@@ -731,7 +753,7 @@ describe("handleCommands reset hooks", () => {
 
     expect(result).toEqual({
       shouldContinue: false,
-      reply: { text: "✅ New session started." },
+      reply: { text: "✅ New session started.", isStatusNotice: true },
     });
     expectObjectFields(firstHookEvent(), { type: "command", action: "new" }, "hook event");
   });

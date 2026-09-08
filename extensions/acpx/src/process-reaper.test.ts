@@ -17,9 +17,9 @@ import {
   reapStaleOpenClawOwnedAcpxOrphans,
 } from "./process-reaper.js";
 
-const WRAPPER_ROOT = "/tmp/openclaw-state/acpx";
+const WRAPPER_ROOT = "/tmp/owner's state/acpx";
 const CODEX_WRAPPER_COMMAND = `node ${WRAPPER_ROOT}/codex-acp-wrapper.mjs`;
-const CODEX_WRAPPER_COMMAND_WITH_LEASE = `${CODEX_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-1 ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-1`;
+const CODEX_WRAPPER_COMMAND_WITH_LEASE = `${CODEX_WRAPPER_COMMAND} --label owner's-choice ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-1 ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-1`;
 const CLAUDE_WRAPPER_COMMAND = `node ${WRAPPER_ROOT}/claude-agent-acp-wrapper.mjs`;
 const PLUGIN_DEPS_CODEX_COMMAND =
   "node /tmp/openclaw/plugin-runtime-deps/node_modules/@agentclientprotocol/codex-acp/dist/index.js";
@@ -197,6 +197,7 @@ describe("process reaper", () => {
 
   it("recovers a pending lease only from its exact wrapper and gateway identity", async () => {
     const { deps, killed } = cleanupDeps([
+      { pid: 119, ppid: 1, command: "node /tmp/owner's-unrelated-script.mjs" },
       { pid: 120, ppid: 1, command: CODEX_WRAPPER_COMMAND_WITH_LEASE },
       {
         pid: 121,
@@ -398,6 +399,7 @@ describe("process reaper", () => {
       { pid: 405, ppid: 1, command: PLUGIN_DEPS_CODEX_COMMAND },
       { pid: 406, ppid: 1, command: "node /tmp/other/codex-acp-wrapper.mjs" },
       { pid: 407, ppid: 1, command: CODEX_WRAPPER_COMMAND_WITH_LEASE },
+      { pid: 408, ppid: 1, command: "node /tmp/owner's-unrelated-script.mjs" },
     ]);
 
     const result = await reapStaleOpenClawOwnedAcpxOrphans({

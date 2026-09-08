@@ -37,11 +37,18 @@ export function runBuiltRuntime(
   env: NodeJS.ProcessEnv,
   args: string[],
   timeout: number,
+  maxBuffer?: number,
 ) {
   return spawnSync(
     process.execPath,
     [...ISOLATED_RUNTIME_NODE_ARGS, path.join(runtimeRoot, "dist", "entry.js"), ...args],
-    { cwd: runtimeRoot, encoding: "utf8", env, timeout },
+    {
+      cwd: runtimeRoot,
+      encoding: "utf8",
+      env,
+      timeout,
+      ...(maxBuffer === undefined ? {} : { maxBuffer }),
+    },
   );
 }
 
@@ -50,12 +57,14 @@ export function runSourceRuntime(
   env: NodeJS.ProcessEnv,
   args: string[],
   timeout: number,
+  maxBuffer?: number,
 ) {
   return spawnSync(process.execPath, [...ISOLATED_RUNTIME_NODE_ARGS, "--import", "tsx", ...args], {
     cwd: runtimeRoot,
     encoding: "utf8",
     env,
     timeout,
+    ...(maxBuffer === undefined ? {} : { maxBuffer }),
   });
 }
 
@@ -107,9 +116,8 @@ export function createSourceRuntime(root: string): string {
   return runtimeRoot;
 }
 
-export function createBuiltRuntime(root: string): string {
+export function createBuiltRuntime(root: string, sourceDist = path.resolve("dist")): string {
   const runtimeRoot = createSourceRuntime(root);
-  const sourceDist = path.resolve("dist");
   // The pretest owner supplies immutable built modules once; mutable package
   // metadata and Control UI assets remain private to each fixture.
   for (const entry of fs.readdirSync(sourceDist, { withFileTypes: true })) {

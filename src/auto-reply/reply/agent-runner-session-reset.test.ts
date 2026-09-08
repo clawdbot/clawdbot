@@ -294,6 +294,94 @@ describe("resetReplyRunSession", () => {
     expect(filtered.files.map((file) => file.path)).toEqual(["after-reset.txt"]);
   });
 
+  it("keeps a custom session workspace in the header when a reset lands on an empty window", async () => {
+    const workspace = await initializeGitWorkspace(rootDir);
+    const customWorkspace = path.join(rootDir, "custom-session-workspace");
+    await fs.mkdir(customWorkspace, { recursive: true });
+    const storePath = path.join(rootDir, "sessions.json");
+    // The stored row runs somewhere other than the run's configured workspace.
+    const sessionEntry: SessionEntry = {
+      lifecycleRevision: "before-reset",
+      sessionId: "session",
+      spawnedCwd: customWorkspace,
+      updatedAt: 1,
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
+
+    await expect(
+      resetReplyRunSession({
+        options: {
+          failureLabel: "memory flush exhaustion",
+          buildLogMessage: (next) => `reset ${next}`,
+        },
+        sessionKey,
+        queueKey: "main",
+        activeSessionEntry: sessionEntry,
+        activeSessionStore: sessionStore,
+        storePath,
+        followupRun: createTestFollowupRun({ workspaceDir: workspace }),
+        onActiveSessionEntry: () => {},
+        onNewSession: () => {},
+      }),
+    ).resolves.toBe(true);
+
+    const events = await loadTranscriptEvents({
+      agentId: "main",
+      sessionId: "session",
+      sessionKey,
+      storePath,
+    });
+    // The prior row's own workspace wins over the run's configured workspace.
+    expect(events[0]).toMatchObject({ type: "session", version: 3, cwd: customWorkspace });
+    expect(events[1]).toMatchObject({ type: "reset", reason: "reset" });
+  });
+
+  it("records the runner workspace in the header when a reset lands on an empty window", async () => {
+    const workspace = await initializeGitWorkspace(rootDir);
+    const storePath = path.join(rootDir, "sessions.json");
+    // A window created moments earlier, before its first message: no transcript rows yet.
+    const sessionEntry: SessionEntry = {
+      lifecycleRevision: "before-reset",
+      sessionId: "session",
+      updatedAt: 1,
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
+
+    await expect(
+      resetReplyRunSession({
+        options: {
+          failureLabel: "memory flush exhaustion",
+          buildLogMessage: (next) => `reset ${next}`,
+        },
+        sessionKey,
+        queueKey: "main",
+        activeSessionEntry: sessionEntry,
+        activeSessionStore: sessionStore,
+        storePath,
+        followupRun: createTestFollowupRun({ workspaceDir: workspace }),
+        onActiveSessionEntry: () => {},
+        onNewSession: () => {},
+      }),
+    ).resolves.toBe(true);
+
+    const events = await loadTranscriptEvents({
+      agentId: "main",
+      sessionId: "session",
+      sessionKey,
+      storePath,
+    });
+    // The header must take seq 0 (never the reset boundary) and must record the
+    // runner's effective workspace, not the service process cwd.
+    expect(events[0]).toMatchObject({ type: "session", version: 3, cwd: workspace });
+    expect(events[0]).not.toMatchObject({ cwd: process.cwd() });
+    expect(events[1]).toMatchObject({ type: "reset", reason: "reset" });
+    expect(events.filter((event) => (event as { type?: unknown }).type === "session")).toHaveLength(
+      1,
+    );
+  });
+
   it("continues with the authoritative unavailable marker after capture failure", async () => {
     const storePath = path.join(rootDir, "sessions.json");
     const sessionEntry: SessionEntry = {

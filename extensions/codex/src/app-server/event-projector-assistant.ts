@@ -127,6 +127,7 @@ export class CodexAssistantProjection {
     this.emitAgentEvent({
       stream: "assistant",
       data: {
+        itemId,
         ...streamPayload,
         ...(replaceable ? { replaceable: true as const } : {}),
       },

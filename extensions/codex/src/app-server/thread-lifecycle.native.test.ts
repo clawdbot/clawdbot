@@ -138,7 +138,9 @@ describe("native Codex cold thread recovery", () => {
         config: {},
         timeoutMs: 20_000,
       });
-      context.onTestFinished(async () => expect(await client.closeAndWait()).toBe(true));
+      context.onTestFinished(async () =>
+        expect(await client.closeAndWait()).toMatchObject({ exited: true }),
+      );
       expect(client.getRuntimeIdentity()?.serverVersion).toBe(CODEX_APP_SERVER_VERSION);
       const params = {
         ...createParams(path.join(root, "session.jsonl"), native.cwd),

@@ -459,6 +459,47 @@ describe("devices inventory rendering", () => {
     ]);
   });
 
+  it("routes the Edit alias menu item to the device with its current alias", () => {
+    const renamed: Array<{ id: string; name: string; operatorLabel?: string }> = [];
+    const container = renderDevicesContainer({
+      devicesList: {
+        pending: [],
+        paired: [
+          {
+            deviceId: "alias-device",
+            displayName: "LIN-5F196050F5D",
+            operatorLabel: "Office node",
+            roles: ["operator"],
+          },
+          {
+            deviceId: "unaliased-device",
+            displayName: "Fresh laptop",
+            roles: ["operator"],
+          },
+        ],
+      },
+      onDeviceRename: (device) => renamed.push(device),
+    });
+
+    selectMenuItem(getSettingsRow(container, "Office node"), "editAlias");
+    selectMenuItem(getSettingsRow(container, "Fresh laptop"), "editAlias");
+
+    expect(renamed).toEqual([
+      { id: "alias-device", name: "Office node", operatorLabel: "Office node" },
+      { id: "unaliased-device", name: "Fresh laptop", operatorLabel: undefined },
+    ]);
+  });
+
+  it("offers no Edit alias menu item for rows without a paired device record", () => {
+    const container = renderDevicesContainer({
+      nodes: [{ nodeId: "node-only", displayName: "Bare node", paired: true, connected: true }],
+    });
+
+    const row = getSettingsRow(container, "Bare node");
+    expect(row.querySelector('wa-dropdown-item[value="copy"]')).toBeInstanceOf(Element);
+    expect(row.querySelector('wa-dropdown-item[value="editAlias"]')).toBeNull();
+  });
+
   it.each([true, false])(
     "reports the device ID copy outcome when clipboard succeeds: %s",
     async (succeeds) => {
@@ -888,10 +929,12 @@ describe("devices access gating", () => {
     const onInventoryRemove = vi.fn();
     const onNodeApprove = vi.fn();
     const onNodeReject = vi.fn();
+    const onDeviceRename = vi.fn();
     const container = renderDevicesContainer({
       onInventoryRemove,
       onNodeApprove,
       onNodeReject,
+      onDeviceRename,
       nodes: [
         {
           nodeId: "node-pending",
@@ -937,13 +980,20 @@ describe("devices access gating", () => {
     );
     expect(remove?.hasAttribute("disabled")).toBe(true);
     expect(remove?.getAttribute("title")).toContain("operator.pairing");
+    const editAlias = getSettingsRow(container, "Device One").querySelector(
+      'wa-dropdown-item[value="editAlias"]',
+    );
+    expect(editAlias?.hasAttribute("disabled")).toBe(true);
+    expect(editAlias?.getAttribute("title")).toContain("operator.pairing");
     selectMenuItem(getSettingsRow(container, "Device One"), "remove");
+    selectMenuItem(getSettingsRow(container, "Device One"), "editAlias");
     for (const action of ["approve", "reject"]) {
       expect(
         selectMenuItem(getSettingsRow(container, "Pending node"), action).hasAttribute("disabled"),
       ).toBe(true);
     }
     expect(onInventoryRemove).not.toHaveBeenCalled();
+    expect(onDeviceRename).not.toHaveBeenCalled();
     expect(onNodeApprove).not.toHaveBeenCalled();
     expect(onNodeReject).not.toHaveBeenCalled();
     expect(container.textContent).toContain(

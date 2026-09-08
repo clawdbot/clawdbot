@@ -50,7 +50,7 @@ private actor DashboardWindowOwnershipEndpointGate {
 }
 
 actor DashboardWindowOwnershipPresentationGate {
-    private var requested = false
+    private var requested = AsyncTestGate()
     private var released = false
     private var requestCount = 0
     private var continuations: [CheckedContinuation<Void, Never>] = []
@@ -60,13 +60,14 @@ actor DashboardWindowOwnershipPresentationGate {
     }
 
     func hold() {
-        self.requested = false
+        // Reset between request cycles, after prior observers have returned.
+        self.requested = AsyncTestGate()
         self.released = false
     }
 
     @discardableResult
     func waitForRelease() async -> Int {
-        self.requested = true
+        self.requested.open()
         self.requestCount += 1
         let request = self.requestCount
         if !self.released {
@@ -78,9 +79,7 @@ actor DashboardWindowOwnershipPresentationGate {
     }
 
     func waitUntilRequested() async {
-        while !self.requested {
-            await Task.yield()
-        }
+        await self.requested.wait()
     }
 
     func numberOfRequests() -> Int {
@@ -541,6 +540,75 @@ struct DashboardWindowOwnershipTests {
         #expect(originalWindow.frame == originalFrame)
     }
 
+    @Test(arguments: ["closed-success", "closed-failure", "reopened", "auxiliary"])
+    func `window close retires only its pending browser identity presentation`(_ scenario: String) async throws {
+        try await TestIsolation.withIsolatedState {
+            let server = try await DashboardHTTPFixture.start()
+            defer { server.stop() }
+            let state = AppStateStore.shared
+            let previousMode = state.connectionMode
+            state.connectionMode = .remote
+            defer { state.connectionMode = previousMode }
+            let requests = DashboardWindowOwnershipPresentationGate(released: true)
+            let staleLookup = DashboardWindowOwnershipPresentationGate()
+            let endpointURL = server.websocketURL()
+            let identityURL = server.url("/identity")
+            let manager = DashboardManager._testMake(
+                browserIdentityURLProvider: { _, _ in
+                    if await requests.waitForRelease() == 2 {
+                        await staleLookup.waitForRelease()
+                        if scenario == "closed-failure" || scenario == "reopened" {
+                            throw DashboardWindowOwnershipEndpointFailure()
+                        }
+                        return identityURL
+                    }
+                    return nil
+                },
+                primaryEndpointProvider: { _ in
+                    GatewayConnection.EndpointSnapshot(
+                        config: (url: endpointURL, token: "synthetic", password: nil), routeAuthority: nil)
+                },
+                gatewayEntriesProvider: { [Self.primaryGateway] })
+            defer { manager.close() }
+            try await manager.show()
+            let original = try #require(manager._testController())
+            let window = try #require(original.window)
+            let pending = Task { @MainActor in try await manager.show() }
+            await staleLookup.waitUntilRequested()
+
+            do {
+                if scenario == "auxiliary" {
+                    await manager._testOpenWindow(for: .primary)
+                    let auxiliary = try #require(manager._testAuxiliaryWindows().first?.controller)
+                    auxiliary.window?.performClose(nil)
+                } else {
+                    window.performClose(nil)
+                }
+                let reopened = scenario == "reopened" ? Task { @MainActor in try await manager.show() } : nil
+                if reopened != nil {
+                    let deadline = ContinuousClock.now + .seconds(5)
+                    while await requests.numberOfRequests() < 3, ContinuousClock.now < deadline {
+                        try await Task.sleep(for: .milliseconds(10))
+                    }
+                    #expect(await requests.numberOfRequests() == 3)
+                }
+                await staleLookup.release()
+                try await pending.value
+                try await reopened?.value
+            } catch {
+                await staleLookup.release()
+                _ = try? await pending.value
+                Issue.record("A closed presentation reported a stale lookup failure: \(error)")
+            }
+
+            #expect(manager._testController()?.window === window)
+            #expect(window.isVisible == (scenario == "reopened" || scenario == "auxiliary"))
+            if scenario == "auxiliary" {
+                #expect(manager._testController()?.currentURL == identityURL)
+            }
+        }
+    }
+
     @Test func `concurrent explicit opens share one presentation owner`() async throws {
         let server = try await DashboardHTTPFixture.start()
         defer { server.stop() }
@@ -605,23 +673,26 @@ struct DashboardWindowOwnershipTests {
         #expect(recovered._testLinkBrowserDataStore === dataStore)
     }
 
-    @Test func `configured presentation uses its owned health probe`() async throws {
+    @Test(arguments: [AppState.ConnectionMode.local, .remote])
+    func `configured presentation uses its owned health probe`(_ mode: AppState.ConnectionMode) async throws {
         let server = try await DashboardHTTPFixture.start()
         defer { server.stop() }
         let configPath = TestIsolation.tempConfigPath()
         defer { try? FileManager.default.removeItem(atPath: configPath) }
         let config = """
-        {"gateway":{"remote":{"transport":"direct","url":"\(server.websocketURL())","token":"configured"}}}
+        {"gateway":{"port":\(server.port),"auth":{"token":"configured"},
+        "remote":{"transport":"direct","url":"\(server.websocketURL())","token":"configured"}}}
         """
         try Data(config.utf8).write(to: URL(fileURLWithPath: configPath))
         try await TestIsolation.withEnvValues([
             "OPENCLAW_CONFIG_PATH": configPath,
+            "OPENCLAW_GATEWAY_PORT": nil,
             "OPENCLAW_GATEWAY_TOKEN": nil,
             "OPENCLAW_GATEWAY_PASSWORD": nil,
         ]) {
             let state = AppStateStore.shared
             let originalMode = state.connectionMode
-            state.connectionMode = .remote
+            state.connectionMode = mode
             defer { state.connectionMode = originalMode }
             let probes = AsyncStream<DashboardRouteProbePurpose>.makeStream()
             defer { probes.continuation.finish() }
@@ -630,7 +701,12 @@ struct DashboardWindowOwnershipTests {
                 gatewayEntriesProvider: { [Self.primaryGateway] })
             defer { manager.close() }
 
-            #expect(manager.showConfiguredWindowIfPossible())
+            if mode == .local {
+                #expect(manager.showConfiguredWindowIfPossible())
+            } else {
+                #expect(!manager.showConfiguredWindowIfPossible())
+                try await manager.show()
+            }
             let controller = try #require(manager._testController())
             #expect(controller.isWindowOpen)
             #expect(controller.currentURL.absoluteString ==

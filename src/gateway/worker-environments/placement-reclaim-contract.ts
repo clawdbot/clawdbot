@@ -3,6 +3,7 @@ import type {
   WorkerPlacementAuthorization,
   WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
+import type { WorkerSessionWorkspace } from "./session-workspace.js";
 
 type WorkerReclaimStartPlacement = Extract<
   WorkerSessionPlacementRecord,
@@ -52,7 +53,7 @@ export type WorkerPlacementReclaimBarriers = {
       beforeDrain?: WorkerPlacementAuthorization;
       begin: () => WorkerReclaimStartPlacement;
       reclaim: (
-        localPath: string,
+        workspace: WorkerSessionWorkspace,
         placement: WorkerReclaimStartPlacement,
         authorize?: WorkerPlacementAuthorization,
       ) => Promise<WorkerReclaimPlacement>;

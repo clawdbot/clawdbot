@@ -560,7 +560,7 @@ describe("gateway lock", () => {
     expect(acquired).toHaveLength(1);
     expect(rejected).toHaveLength(1);
     expect(rejected[0]?.reason).toBeInstanceOf(GatewayLockError);
-    await expect(fs.access(stateLockPath)).resolves.toBeUndefined();
+    await fs.access(stateLockPath);
 
     const acquiredResult = acquired[0];
     if (!acquiredResult) {
@@ -902,7 +902,7 @@ describe("gateway lock", () => {
 
     try {
       expect(lock.lockPath).toBe(stateLockPath);
-      await expect(fs.access(stateLockPath)).resolves.toBeUndefined();
+      await fs.access(stateLockPath);
       await expect(fs.access(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(
         acquireGatewayLock({

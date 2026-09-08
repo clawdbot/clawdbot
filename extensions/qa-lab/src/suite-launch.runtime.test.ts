@@ -725,7 +725,7 @@ describe("qa suite runtime launcher", () => {
         }),
       ]),
     );
-    await expect(fs.access(result.result.reportPath)).resolves.toBeUndefined();
+    await fs.access(result.result.reportPath);
   });
 
   it("preserves completed partitions when a retryable channel fails twice", async () => {
@@ -788,7 +788,7 @@ describe("qa suite runtime launcher", () => {
         }),
       ]),
     );
-    await expect(fs.access(result.result.reportPath)).resolves.toBeUndefined();
+    await fs.access(result.result.reportPath);
   });
 
   it("records an exhausted fail-fast partition without starting later partitions", async () => {
@@ -844,7 +844,7 @@ describe("qa suite runtime launcher", () => {
       { test: { id: "whatsapp-status-command" }, result: { status: "fail" } },
     ]);
     expect(result.observedCells).toEqual([]);
-    await expect(fs.access(result.result.reportPath)).resolves.toBeUndefined();
+    await fs.access(result.result.reportPath);
   });
 
   it("attributes an exhausted fail-fast retry to the later scenario that actually started", async () => {
@@ -913,7 +913,7 @@ describe("qa suite runtime launcher", () => {
         },
       },
     ]);
-    await expect(fs.access(result.result.reportPath)).resolves.toBeUndefined();
+    await fs.access(result.result.reportPath);
   });
 
   it("runs distinct pluggable-driver channels within the global concurrency budget", async () => {
@@ -1357,8 +1357,8 @@ describe("qa suite runtime launcher", () => {
         writeEvidenceFile: false,
       }),
     );
-    await expect(fs.access(path.join(outputDir, "qa-suite-summary.json"))).resolves.toBeUndefined();
-    await expect(fs.access(path.join(outputDir, "qa-evidence.json"))).resolves.toBeUndefined();
+    await fs.access(path.join(outputDir, "qa-suite-summary.json"));
+    await fs.access(path.join(outputDir, "qa-evidence.json"));
     await expect(fs.access(path.join(outputDir, "flow", "qa-evidence.json"))).rejects.toMatchObject(
       {
         code: "ENOENT",
@@ -2560,8 +2560,8 @@ describe("qa suite runtime launcher", () => {
       counts: { failed: number; passed: number; total: number };
     };
     expect(summary.counts).toMatchObject({ total: 2, passed: 1, failed: 1 });
-    await expect(fs.access(result.result.evidencePath)).resolves.toBeUndefined();
-    await expect(fs.access(result.result.reportPath)).resolves.toBeUndefined();
+    await fs.access(result.result.evidencePath);
+    await fs.access(result.result.reportPath);
   });
 
   it("reuses unavailable channel credential evidence across serial partitions", async () => {

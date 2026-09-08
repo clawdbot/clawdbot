@@ -32,7 +32,6 @@ import {
   readNostrProfileState,
   writeNostrProfileState,
 } from "./nostr-state-store.js";
-import { publishNostrEventToRelay } from "./relay-publish.js";
 
 // ============================================================================
 // Constants
@@ -783,7 +782,7 @@ async function sendEncryptedDm(
 
     const startTime = Date.now();
     try {
-      await publishNostrEventToRelay(pool, relay, reply);
+      await pool.publish([relay], reply)[0];
       const latency = Date.now() - startTime;
 
       // Record success

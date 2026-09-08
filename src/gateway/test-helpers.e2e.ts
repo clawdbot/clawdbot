@@ -270,6 +270,7 @@ export async function connectDeviceAuthReq(params: { url: string; token?: string
 }
 
 export async function startGatewayWithClient(params: {
+  port?: number;
   cfg: unknown;
   configPath: string;
   token: string;
@@ -289,7 +290,7 @@ export async function startGatewayWithClient(params: {
     clearConfigCache();
     clearSessionStoreCacheForTest();
 
-    const port = await getGatewayE2ePortBlock();
+    const port = params.port ?? (await getGatewayE2ePortBlock());
     const startedServer = await startGatewayServer(port, {
       bind: "loopback",
       auth: { mode: "token", token: params.token },

@@ -882,19 +882,27 @@ describe("Bedrock Fable contract", () => {
     ]);
   });
 
-  it("discards partial output when the Fable stream ends without messageStop", async () => {
-    vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
-      $metadata: { httpStatusCode: 200 },
-      stream: streamEvents([
-        { messageStart: { role: ConversationRole.ASSISTANT } },
-        {
-          contentBlockDelta: {
-            contentBlockIndex: 0,
-            delta: { text: "unsafe partial output" },
-          },
+  it.each([
+    { label: "ends without messageStop", transportDrop: false },
+    { label: "loses its connection", transportDrop: true },
+  ])("discards partial output when the Fable stream $label", async ({ transportDrop }) => {
+    async function* incompleteStream() {
+      yield { messageStart: { role: ConversationRole.ASSISTANT } };
+      yield {
+        contentBlockDelta: {
+          contentBlockIndex: 0,
+          delta: { text: "unsafe partial output" },
         },
-      ]),
+      };
+      if (transportDrop) {
+        throw Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+      }
+    }
+    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: incompleteStream(),
     } as never);
+    const destroy = vi.spyOn(BedrockRuntimeClient.prototype, "destroy");
 
     const stream = streamSimpleBedrock(fableModel(), context());
     const eventTypes: string[] = [];
@@ -904,8 +912,18 @@ describe("Bedrock Fable contract", () => {
     const result = await stream.result();
 
     expect(eventTypes).toEqual(["error"]);
+    expect(result.stopReason).toBe("error");
     expect(result.content).toEqual([]);
-    expect(result.errorMessage).toContain("ended before messageStop");
+    expect(result.diagnostics).toBeUndefined();
+    if (transportDrop) {
+      expect(result.errorMessage).toBe("socket hang up");
+      expect(result.errorCode).toBe("ECONNRESET");
+    } else {
+      expect(result.errorMessage).toContain("ended before messageStop");
+    }
+    expect(send).toHaveBeenCalledOnce();
+    expect(destroy).toHaveBeenCalledOnce();
+    expect(destroy.mock.contexts[0]).toBe(send.mock.contexts[0]);
   });
 
   it("reports activity while Fable events are buffered", async () => {

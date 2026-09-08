@@ -115,8 +115,18 @@ describe("show_widget prompt", () => {
     expect(pinDescription).toContain("explicit dashboard request");
     expect(pinDescription).toContain("multiple non-code visualizations");
     expect(properties?.name?.description).toMatch(/same name.*pin=true.*widget_code/i);
-    expect(properties?.widget_code?.description).toMatch(/fit.*iframe width/i);
-    expect(properties?.widget_code?.description).toMatch(/avoid fixed.*width/i);
+    expect(properties?.widget_code?.description).toContain("fluid widths");
     expect(properties?.widget_code?.description).toMatch(/wrap or stack.*narrow/i);
+  });
+
+  it("offers native reports for a session dashboard with a bounded data contract", () => {
+    const tool = createShowWidgetTool({ agentSessionKey: "agent:main:report" });
+    const description = tool.description;
+    expect(description).toContain("Prefer the report argument with pin=true");
+    expect(description).toContain("dashboard-only");
+    const schema = JSON.stringify(tool.parameters);
+    expect(schema).toContain("Maximum 8KB JSON");
+    expect(schema).toContain("Metric values and table cells are strings");
+    expect(createShowWidgetTool().description).not.toContain("Prefer the report argument");
   });
 });

@@ -1,20 +1,10 @@
-import { configureFsSafeNative } from "../infra/fs-safe-defaults.js";
-import { registerSealedRuntimeProcessEntrypoint } from "../infra/runtime-worker-url.js";
-import { resolveSecureTempRoot } from "../infra/secure-temp-root.js";
+import "../infra/sealed-runtime-bootstrap.js";
+import { registerSealedRuntimeProcessEntrypoint } from "../infra/runtime-process-url.js";
 import highlightJsRuntime from "./worker-deploy-highlight-runtime.mjs";
-import json5Runtime from "./worker-deploy-json5-runtime.mjs";
-import { setWorkerDeployRuntime } from "./worker-deploy-runtime-registry.js";
+import { setWorkerDeployHighlightJs } from "./worker-deploy-runtime-registry.js";
 
-// The sealed worker has no dependency tree. Keep filesystem operations on its
-// hash-bound JavaScript rather than loading optional native code from the host.
-configureFsSafeNative({ mode: "off" });
 registerSealedRuntimeProcessEntrypoint(
   "githubExec",
   new URL("./github-exec-launcher.mjs", import.meta.url),
 );
-
-setWorkerDeployRuntime({
-  highlightJs: highlightJsRuntime,
-  json5: json5Runtime,
-  resolveSecureTempRoot,
-});
+setWorkerDeployHighlightJs(highlightJsRuntime);

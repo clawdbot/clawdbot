@@ -5,18 +5,17 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js";
 import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
   WebFetchCredentialResolutionSource,
   WebSearchCredentialResolutionSource,
 } from "../plugins/types.js";
-import { sortWebFetchProvidersForAutoDetect } from "../plugins/web-fetch-providers.shared.js";
 import {
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
 } from "../plugins/web-provider-public-artifacts.explicit.js";
-import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { secretRefKey } from "./ref-contract.js";
@@ -868,7 +867,7 @@ export async function resolveRuntimeWebTools(params: {
           configuredBundledPluginId,
           hasCustomWebSearchPluginRisk: await getHasCustomWebSearchRisk(),
         }),
-      sortProviders: sortWebSearchProvidersForAutoDetect,
+      sortProviders: sortPluginEntriesForAutoDetect,
       readConfiguredCredential: ({ provider, config, toolConfig }) =>
         readConfiguredProviderCredential({
           provider,
@@ -1012,7 +1011,7 @@ export async function resolveRuntimeWebTools(params: {
           configuredBundledPluginId,
           hasCustomWebFetchPluginRisk: await getHasCustomWebFetchRisk(),
         }),
-      sortProviders: sortWebFetchProvidersForAutoDetect,
+      sortProviders: sortPluginEntriesForAutoDetect,
       readConfiguredCredential: ({ provider, config, toolConfig }) =>
         readConfiguredFetchProviderCredential({
           provider,

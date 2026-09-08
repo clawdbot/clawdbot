@@ -8,13 +8,13 @@ import { inspectManagedProcessGroup } from "../../scripts/lib/managed-child-proc
 import type { VitestWorkerManifest } from "../../scripts/lib/vitest-worker-artifacts.mts";
 import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { createVitestProcessCompletion } from "../../scripts/vitest-process-group.mts";
-import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
+import { isProcessAlive, waitForDead, waitForFixtureFile } from "../helpers/process-wait.js";
 import { createDeferred, withTestTimeout } from "../helpers/promise.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
+import { fixturePreloadEnv } from "./fixtures/ci-fixture-runtime.cjs";
 import {
   createWorkerArtifactTest,
   preparationClient,
-  waitForFixtureFile,
   writeFixture,
 } from "./vitest-worker-artifacts.test-support.js";
 
@@ -117,7 +117,7 @@ import cp from 'node:child_process';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import {syncBuiltinESMExports} from 'node:module';
+import {syncFixtureBuiltinExports} from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
 const root=${JSON.stringify(root)}, input=${JSON.stringify(input)};
 // CI workspaces need not provide native directory notifications. Control-file
 // readiness must remain observable without that optional filesystem facility.
@@ -193,7 +193,7 @@ fs.rmSync=(filename,...args)=>{
   }
   return rmSync(filename,...args);
 };
-syncBuiltinESMExports();
+syncFixtureBuiltinExports(["node:child_process", "node:fs", "node:fs/promises"]);
 `,
       );
       const config = writeFixture(root, "vitest.config.mjs", "export default {};\n");
@@ -218,7 +218,8 @@ syncBuiltinESMExports();
             TMPDIR: root,
             TMP: root,
             TEMP: root,
-            NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
+            // The direct JavaScript shim owns a Node implementation; the serial entry uses this runtime.
+            ...fixturePreloadEnv(preload, route === "direct" ? "node" : undefined),
           },
           20_000,
           {

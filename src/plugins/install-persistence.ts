@@ -494,6 +494,7 @@ export async function persistPluginInstall(params: {
   persistenceLogger?: PluginInstallLogger;
   onCommitted?: () => void;
   beforePersistentApply?: () => void;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<OpenClawConfig> {
   const installRecords = await tracePluginLifecyclePhaseAsync(
     "install records load",
@@ -648,6 +649,7 @@ export async function persistPluginInstall(params: {
             nextInstallRecords,
             nextConfig: next,
             baseHash: params.snapshot.baseHash,
+            beforePersistentEffect: params.beforePersistentEffect,
             writeOptions: {
               ...params.snapshot.writeOptions,
               afterWrite: { mode: "restart", reason: "plugin source changed" },

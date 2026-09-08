@@ -1,8 +1,6 @@
-// Workshop policy helpers validate generated skill drafts against workspace policy.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH } from "../../infra/plugin-approvals.js";
 import { logDebug } from "../../logger.js";
@@ -16,59 +14,42 @@ const loadPendingSkillProposalResolver = createLazyRuntimeNamedExport(
   "resolvePendingSkillProposal",
 );
 
-const SKILL_WORKSHOP_LIFECYCLE_ACTIONS = new Set([
-  "apply",
-  "reject",
-  "quarantine",
-  "restore_collection",
-]);
+const SKILL_WORKSHOP_LIFECYCLE_APPROVALS = {
+  apply: {
+    title: "Apply Skill Workshop proposal",
+    description: "Apply a pending proposal inside your agent's Workshop directory.",
+    severity: "warning",
+  },
+  reject: {
+    title: "Reject Skill Workshop proposal",
+    description: "Reject a pending Skill Workshop proposal.",
+    severity: "info",
+  },
+  quarantine: {
+    title: "Quarantine Skill Workshop proposal",
+    description: "Quarantine a pending Skill Workshop proposal.",
+    severity: "info",
+  },
+  restore_collection: {
+    title: "Restore previous skill collection",
+    description:
+      "Replace current Workshop-generated skills with the previous collection backup. Later Workshop changes may be removed.",
+    severity: "warning",
+  },
+} as const;
 // Codex dynamic tools have a 90s watchdog. Approval RPCs reserve another 10s
 // for Gateway cleanup, leaving 10s for proposal lookup and tool-call overhead.
 const SKILL_WORKSHOP_APPROVAL_TIMEOUT_MS = 70_000;
 
-type SkillWorkshopLifecycleAction = "apply" | "reject" | "quarantine" | "restore_collection";
+type SkillWorkshopLifecycleAction = keyof typeof SKILL_WORKSHOP_LIFECYCLE_APPROVALS;
 
 // Lifecycle actions mutate proposals or live skills and therefore require approval checks.
 function readLifecycleAction(params: unknown): SkillWorkshopLifecycleAction | undefined {
   const action = asNullableRecord(params)?.action;
-  if (typeof action !== "string" || !SKILL_WORKSHOP_LIFECYCLE_ACTIONS.has(action)) {
+  if (typeof action !== "string" || !Object.hasOwn(SKILL_WORKSHOP_LIFECYCLE_APPROVALS, action)) {
     return undefined;
   }
   return action as SkillWorkshopLifecycleAction;
-}
-
-function lifecycleApprovalText(action: SkillWorkshopLifecycleAction): {
-  title: string;
-  description: string;
-  severity: "info" | "warning";
-} {
-  if (action === "apply") {
-    return {
-      title: "Apply workspace skill proposal",
-      description: "Apply a pending workspace skill proposal into live workspace skills.",
-      severity: "warning",
-    };
-  }
-  if (action === "reject") {
-    return {
-      title: "Reject workspace skill proposal",
-      description: "Reject a pending workspace skill proposal.",
-      severity: "info",
-    };
-  }
-  if (action === "restore_collection") {
-    return {
-      title: "Restore previous skill collection",
-      description:
-        "Replace current workspace skills with the previous collection backup. Later skill changes may be removed.",
-      severity: "warning",
-    };
-  }
-  return {
-    title: "Quarantine workspace skill proposal",
-    description: "Quarantine a pending workspace skill proposal.",
-    severity: "info",
-  };
 }
 
 function formatBodySizeKb(content: string): string {
@@ -114,12 +95,14 @@ function buildLifecycleApprovalDescription(params: {
 async function resolveLifecycleApprovalDescription(params: {
   toolParams: unknown;
   workspaceDir?: string;
+  config: OpenClawConfig;
+  agentId?: string;
   fallback: string;
 }): Promise<{
   description: string;
   proposalId?: string;
 }> {
-  if (!params.workspaceDir) {
+  if (!params.workspaceDir || !params.agentId) {
     return { description: params.fallback };
   }
   const toolParams = asNullableRecord(params.toolParams);
@@ -129,6 +112,8 @@ async function resolveLifecycleApprovalDescription(params: {
       proposalId: normalizeOptionalString(toolParams?.proposal_id),
       name: normalizeOptionalString(toolParams?.name),
       workspaceDir: params.workspaceDir,
+      config: params.config,
+      agentId: params.agentId,
     });
     const record = proposal.record;
     return {
@@ -158,7 +143,7 @@ function lifecycleApprovalTimeoutReason(params: {
   if (params.action === "restore_collection") {
     return [
       "The Skill Workshop approval request expired without a decision.",
-      "This restore call left workspace skills unchanged.",
+      "This restore call left Workshop-generated skills unchanged.",
       "Review the current skills, then request the restore again if it is still wanted.",
       "Do not retry this tool call in a loop.",
     ].join(" ");
@@ -172,25 +157,13 @@ function lifecycleApprovalTimeoutReason(params: {
   ].join(" ");
 }
 
-function resolveApprovalConfig(config?: OpenClawConfig): OpenClawConfig | undefined {
-  if (config) {
-    return config;
-  }
-  // Explicit hook config wins. Missing hook config may happen on agent paths;
-  // unreadable runtime config cannot supply an explicit pending override.
-  try {
-    return getRuntimeConfig();
-  } catch {
-    return undefined;
-  }
-}
-
 /** Returns approval policy for skill workshop lifecycle tool calls. */
 export async function resolveSkillWorkshopToolApproval(params: {
   toolName: string;
   toolParams: unknown;
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
   workspaceDir?: string;
+  agentId?: string;
 }): Promise<PluginHookBeforeToolCallResult | undefined> {
   if (params.toolName !== "skill_workshop") {
     return undefined;
@@ -199,21 +172,24 @@ export async function resolveSkillWorkshopToolApproval(params: {
   if (!action) {
     return undefined;
   }
-  const config = resolveSkillWorkshopConfig(resolveApprovalConfig(params.config));
+  const config = resolveSkillWorkshopConfig(params.config);
   if (config.approvalPolicy === "auto") {
     return undefined;
   }
-  const text = lifecycleApprovalText(action);
+  const text = SKILL_WORKSHOP_LIFECYCLE_APPROVALS[action];
   const approvalDescription =
     action === "restore_collection"
       ? { description: text.description }
       : await resolveLifecycleApprovalDescription({
           toolParams: params.toolParams,
           workspaceDir: params.workspaceDir,
+          config: params.config,
+          agentId: params.agentId,
           fallback: text.description,
         });
   return {
     requireApproval: {
+      pluginId: "workspace-skills",
       ...text,
       description: approvalDescription.description,
       timeoutMs: SKILL_WORKSHOP_APPROVAL_TIMEOUT_MS,

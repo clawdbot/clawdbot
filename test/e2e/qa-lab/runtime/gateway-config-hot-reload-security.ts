@@ -82,7 +82,7 @@ export async function proveHotReloadSecurity({
       assert(pid);
       const identity = (name: string) =>
         loadOrCreateDeviceIdentity({
-          path: path.join(active.tempRoot, "proof-identities.sqlite"),
+          env: active.runtimeEnv,
           identityKey: name,
         });
       const connect = async (options: Partial<GatewayClientOptions> = {}): Promise<Connection> =>

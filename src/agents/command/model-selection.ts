@@ -34,7 +34,7 @@ import {
 } from "../agent-scope.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "../auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "../auth-profiles/session-override.js";
-import { ensureAuthProfileStore } from "../auth-profiles/store.js";
+import { ensureAuthProfileStore } from "../auth-profiles/store-runtime.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { loadManifestModelCatalog } from "../model-catalog.js";

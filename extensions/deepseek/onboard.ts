@@ -7,11 +7,11 @@ const DEEPSEEK_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(manifest,
 
 export const { applyConfig: applyDeepSeekConfig } = createModelCatalogPresetAppliers<[]>({
   primaryModelRef: DEEPSEEK_DEFAULT_MODEL_REF,
-  resolveParams: () => ({
+  resolveParams: (cfg) => ({
     providerId: "deepseek",
     api: "openai-completions",
     baseUrl: DEEPSEEK_BASE_URL,
-    catalogModels: structuredClone(DEEPSEEK_MODEL_CATALOG),
+    catalogModels: cfg.models?.mode === "replace" ? structuredClone(DEEPSEEK_MODEL_CATALOG) : [],
     aliases: [{ modelRef: DEEPSEEK_DEFAULT_MODEL_REF, alias: "DeepSeek" }],
   }),
 });

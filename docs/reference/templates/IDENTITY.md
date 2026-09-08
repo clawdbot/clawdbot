@@ -29,6 +29,7 @@ Notes:
 - Save this file at the workspace root as `IDENTITY.md`.
 - For avatars, use a workspace-relative path like `avatars/openclaw.png`, an `http(s)` URL, or a data URI.
 - Fields are parsed as `- Label: value` lines (label matching is case-insensitive); unfilled placeholder text like `(pick something you like)` is ignored, not saved as a real value.
+- The form above has no `Theme` line, and you do not need to add one. Tooling writes `Theme` into this file when it syncs.
 - `Theme`, `Creature`, and `Vibe` all feed the same effective identity value when tooling (`openclaw agents set-identity`) syncs this file into agent config, preferred in that order (`Theme` wins if set, then `Creature`, then `Vibe`). Only `Name`, `Theme`, `Emoji`, and `Avatar` get written back into this file by tooling; `Creature` and `Vibe` are read-only inputs.
 
 ## Related

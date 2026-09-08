@@ -11,6 +11,13 @@ import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(path.join(repoRoot, "ui/package.json"));
+const COMPARISON_BUILD_ENV = {
+  GIT_BRANCH: "ci/control-ui-performance",
+  GIT_COMMIT: "0123456789abcdef0123456789abcdef01234567",
+  OPENCLAW_BUILD_TIMESTAMP: "2026-09-01T00:00:00.000Z",
+  OPENCLAW_CONTROL_UI_BUILD_ID: "control-ui-performance-comparison",
+  OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1",
+} satisfies NodeJS.ProcessEnv;
 
 function run(command: string, args: string[], cwd = repoRoot, env = process.env): void {
   const result = spawnSync(command, args, { cwd, env, stdio: "inherit" });
@@ -77,21 +84,20 @@ function main(): void {
   try {
     const baseRoot = path.join(temporaryRoot, "source");
     const archive = path.join(temporaryRoot, "source.tar");
+    const buildEnv = {
+      ...process.env,
+      ...COMPARISON_BUILD_ENV,
+      GIT_DIR: path.join(temporaryRoot, "git-disabled"),
+    };
     fs.mkdirSync(baseRoot);
     run("git", ["archive", "--format=tar", "--output", archive, base]);
     run("tar", ["-xf", archive, "-C", baseRoot]);
     linkDependencies(baseRoot);
 
     // Both builds use the candidate's dependency installation. Calling Vite
-    // directly keeps the base's historical budget policy out of the comparison.
-    for (const [root, commit] of [
-      [repoRoot, head],
-      [baseRoot, base],
-    ] as const) {
-      run(process.execPath, [viteBin, "build"], path.join(root, "ui"), {
-        ...process.env,
-        GIT_COMMIT: commit,
-      });
+    // directly keeps historical policy out; one identity isolates source bytes.
+    for (const root of [repoRoot, baseRoot]) {
+      run(process.execPath, [viteBin, "build"], path.join(root, "ui"), buildEnv);
     }
     const loader = path.join(repoRoot, "scripts/tsx.mjs");
     run(process.execPath, [

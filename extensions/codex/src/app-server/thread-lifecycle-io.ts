@@ -180,6 +180,11 @@ export async function resumeExistingCodexThread(
     acceptedConfiguration = configuration;
     assertCodexThreadAcceptsDirectInput(response.thread);
     configuration.assertConfigured();
+    if (requestModelProvider && response.modelProvider !== requestModelProvider) {
+      throw new Error(
+        "Codex resumed a different model provider than the one selected for this turn",
+      );
+    }
     // Current-policy denial must release this subscription and stop, not retry
     // as a fresh thread. A confirmed config change still follows normal rotation.
     const loadedPluginThreadConfig = await context.buildLoadedPluginThreadConfig?.(resumeBinding);
@@ -224,7 +229,8 @@ export async function resumeExistingCodexThread(
       cwd: params.cwd,
       rolloutPath: resolveCodexThreadRolloutPath(response.thread) ?? resumeBinding.rolloutPath,
       authProfileId,
-      model: response.model ?? resumeParams.model ?? params.params.modelId,
+      // Loaded native threads can ignore resume overrides; keep the prepared model for turn/start.
+      model: resumeParams.model ?? response.model ?? params.params.modelId,
       preserveNativeModel: resumeBinding.preserveNativeModel === true ? true : undefined,
       modelProvider: normalizeBindingModelProvider(
         authProfileId,
@@ -476,9 +482,18 @@ export async function startFreshCodexThread(
     typeof startParams.modelProvider === "string" && startParams.modelProvider.trim()
       ? startParams.modelProvider
       : undefined;
+  const assertCurrent = () => {
+    throwIfAborted();
+    params.params.hostCapabilities.assertActive();
+    params.assertCurrent?.();
+  };
   const threadStartResponse = await lifecycleTiming.measure("thread-start-request", async () => {
     try {
-      return await params.client.request("thread/start", startParams, { signal: params.signal });
+      assertCurrent();
+      return await params.client.request("thread/start", startParams, {
+        signal: params.signal,
+        assertCurrent,
+      });
     } catch (error) {
       if (error instanceof CodexAppServerRpcError) {
         throw new CodexThreadStartRequestError(error);
@@ -488,10 +503,6 @@ export async function startFreshCodexThread(
   });
   const response = assertCodexThreadStartResponse(threadStartResponse);
   const provisionalAppIds = pluginThreadConfig?.provisionalAppIds;
-  const assertCurrent = () => {
-    throwIfAborted();
-    params.params.hostCapabilities.assertActive();
-  };
   const rejectUncommittedThread = async (cause: unknown): Promise<never> => {
     const cleanupConfirmed = await discardUnattestedCodexPluginThread({
       client: params.client,

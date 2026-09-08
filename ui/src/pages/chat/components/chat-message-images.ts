@@ -22,6 +22,7 @@ import { openResolvedImage } from "./chat-message-image-open.ts";
 import {
   buildAssistantAttachmentUrl,
   isCanonicalInboundMediaSource,
+  isLocalAssistantAttachmentSource,
 } from "./chat-message-local-media.ts";
 import {
   cacheManagedImageBlobUrl,
@@ -138,13 +139,7 @@ class MessageImageResourceDirective extends AsyncDirective {
     const subscriptionOptions = onRequestUpdate
       ? { ...options, onRequestUpdate: this.requestUpdate }
       : options;
-    const availability = resolveAssistantAttachmentAvailability(
-      image.url,
-      options?.localMediaPreviewRoots ?? [],
-      options?.resourceBasePath,
-      options?.authToken,
-      subscriptionOptions?.onRequestUpdate,
-    );
+    const availability = resolveAssistantAttachmentAvailability(image.url, subscriptionOptions);
     const decodeFailed = this.retained?.status === "unavailable";
     // Tickets authorize new reads, not already decoded pixels. Only this
     // mounted image can survive an unconfirmed renewal; denial still clears it.
@@ -157,6 +152,7 @@ class MessageImageResourceDirective extends AsyncDirective {
             image.url,
             options?.resourceBasePath,
             availability.mediaTicket,
+            options,
           )
         : unconfirmed
           ? this.element?.getAttribute("src")
@@ -176,15 +172,14 @@ class MessageImageResourceDirective extends AsyncDirective {
         label: image.fileName ?? image.alt ?? t("chat.imageLightbox.untitled"),
         badge: reason === undefined ? "" : t("chat.attachments.unavailable"),
         reason,
+        path: isLocalAssistantAttachmentSource(image.url) ? image.url : undefined,
+        onAllow:
+          !decodeFailed && availability.status === "unavailable" && availability.canAllow
+            ? () => retryAssistantAttachmentAvailability(image.url, subscriptionOptions, true)
+            : undefined,
         onRetry:
           !decodeFailed && availability.status === "unavailable" && availability.recoverable
-            ? () =>
-                retryAssistantAttachmentAvailability(
-                  image.url,
-                  options?.resourceBasePath,
-                  options?.authToken,
-                  subscriptionOptions?.onRequestUpdate,
-                )
+            ? () => retryAssistantAttachmentAvailability(image.url, subscriptionOptions)
             : undefined,
       });
     }
@@ -354,6 +349,7 @@ function openMessageImage(
 class MessageImagesDirective extends Directive {
   private slots: { image: ImageBlock; key: symbol }[] = [];
   private scope = "";
+  private policyKey: string | undefined;
   private canonicalMessageKey: string | undefined;
   private localSubmission = false;
 
@@ -362,6 +358,8 @@ class MessageImagesDirective extends Directive {
       opts?.connectionEpoch,
       opts?.authToken?.trim(),
       opts?.resourceBasePath,
+      opts?.sessionKey,
+      opts?.agentId,
     ]);
     // Custody keeps local ownership; imported history must end it even when
     // the outer row reuses the same submission key.
@@ -393,9 +391,19 @@ class MessageImagesDirective extends Directive {
           : slot?.image.factIndex === undefined
             ? slot?.key
             : undefined;
-      return { image, key: (continuing && previous) || Symbol("image-slot") };
+      // Workspace hydration does not replace uploaded pixels. Their resource
+      // still rechecks access; filesystem images discard the old presentation.
+      const preservePresentation =
+        this.policyKey === opts?.policyKey ||
+        isInlineImageSource(image.url) ||
+        isCanonicalInboundMediaSource(image.url);
+      return {
+        image,
+        key: (continuing && preservePresentation && previous) || Symbol("image-slot"),
+      };
     });
     this.scope = scope;
+    this.policyKey = opts?.policyKey;
     this.canonicalMessageKey = opts?.canonicalMessageKey;
     this.localSubmission =
       localSubmission &&

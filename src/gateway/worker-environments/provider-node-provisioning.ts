@@ -226,6 +226,8 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       nodeBuild = await options.ensureNodeWorkerBundle({
         deviceId: lease.node.deviceId,
         artifact,
+        // Remote execution uses its harness runtime; unspecified mode retains worker prewarming.
+        prewarm: record.profileSnapshot.executionMode !== "remote-exec",
         signal: cancellation?.signal,
       });
       cancellation?.assertActive();

@@ -8,10 +8,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { parseCLI } from "vitest/node";
 import {
-  resolveTestProjectsRunnerEnv,
-  resolveTestProjectsRunnerSpawnParams,
-} from "../../scripts/lib/test-projects-delegation.mts";
-import {
   resolveVitestCliEntry,
   resolveMissingVitestDependencyMessage,
 } from "../../scripts/lib/vitest-build-prerequisites.mts";
@@ -127,7 +123,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
       // The JS shim creates another Node process; inject at the inherited dependency
       // boundary, and retain a bounded empty selection even if injection regresses.
       const result = spawnSync(
-        process.execPath,
+        process.versions.bun ? "node" : process.execPath,
         [
           nodePath.resolve(`scripts/run-vitest.${extension}`),
           "run",
@@ -579,6 +575,11 @@ registerHooks({resolve(specifier, context, nextResolve) {
       ]),
     ).toBeNull();
     expect(resolveTestProjectsDelegationArgs(["--watch", directory])).toBeNull();
+  });
+
+  it("delegates a plugin browser directory to its Control UI project owner", () => {
+    const directory = "extensions/workboard/browser";
+    expect(resolveTestProjectsDelegationArgs([directory])).toEqual([directory]);
   });
 
   it("delegates owned agent directories with separate Vitest option values", () => {
@@ -1038,34 +1039,6 @@ registerHooks({resolve(specifier, context, nextResolve) {
     });
   });
 
-  it("does not force the stall watchdog into delegated runner environments", () => {
-    expect(resolveTestProjectsRunnerEnv({ PATH: "/usr/bin" })).toEqual({
-      PATH: "/usr/bin",
-    });
-    expect(
-      resolveTestProjectsRunnerEnv({
-        OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "2500",
-        PATH: "/usr/bin",
-      }),
-    ).toEqual({
-      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "2500",
-      PATH: "/usr/bin",
-    });
-  });
-
-  it("spawns delegated test-project runs in a cleanup-friendly process group", () => {
-    expect(resolveTestProjectsRunnerSpawnParams({ PATH: "/usr/bin" }, "darwin")).toEqual({
-      env: { PATH: "/usr/bin" },
-      detached: true,
-      stdio: "inherit",
-    });
-    expect(resolveTestProjectsRunnerSpawnParams({ PATH: "/usr/bin" }, "win32")).toEqual({
-      env: { PATH: "/usr/bin" },
-      detached: false,
-      stdio: "inherit",
-    });
-  });
-
   it("spawns vitest in a detached process group on Unix hosts", () => {
     expect(resolveVitestSpawnParams({ PATH: "/usr/bin" }, "darwin")).toEqual({
       env: { PATH: "/usr/bin" },
@@ -1181,7 +1154,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
       expect(snapshot).toEqual({
         groupStopped: true,
         noOutputTimedOut: false,
-        result: { code: 0, signal: null },
+        result: { code: 0, signal: null, groupJoined: true },
       });
     } finally {
       lines.close();

@@ -119,6 +119,10 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   },
                   onSessionMetadataChanges: notifySessionMetadataChanges,
                   onSessionPrepared: state.notePreparedSession,
+                  onRunVerbosityResolved: (settings) => {
+                    state.noteRunVerbosity(settings);
+                    params.replyOptions?.onRunVerbosityResolved?.(settings);
+                  },
                 } satisfies InternalReplyResolverOptions),
                 onObservedReplyDelivery: state.markObservedReplyDelivery,
                 typingPolicy: typing.typingPolicy,

@@ -313,7 +313,7 @@ function validateTurnsWithConsecutiveMerge<TRole extends "assistant" | "user">(p
     lastRole = msgRole;
   }
 
-  return result;
+  return result.length === messages.length ? messages : result;
 }
 
 function mergeConsecutiveAssistantTurns(
@@ -375,6 +375,9 @@ function normalizeUserContentForMerge(content: unknown): UserContentBlock[] {
   return [];
 }
 
+export const mergeConsecutiveUserMessages = (messages: AgentMessage[]): AgentMessage[] =>
+  validateTurnsWithConsecutiveMerge({ messages, role: "user", merge: mergeConsecutiveUserTurns });
+
 /**
  * Validates and fixes conversation turn sequences for Anthropic API.
  * Anthropic requires strict alternating user→assistant pattern.
@@ -402,9 +405,5 @@ export function validateAnthropicTurns(
   if (options.mergeConsecutiveUserTurns === false) {
     return stripped;
   }
-  return validateTurnsWithConsecutiveMerge({
-    messages: stripped,
-    role: "user",
-    merge: mergeConsecutiveUserTurns,
-  });
+  return mergeConsecutiveUserMessages(stripped);
 }

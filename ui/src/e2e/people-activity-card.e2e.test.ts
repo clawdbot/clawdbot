@@ -1,7 +1,9 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProofEnabled,
@@ -155,7 +157,14 @@ suite.define(() => {
           );
         expect(await card.innerHTML()).not.toContain("agent:private:hidden");
         await expectInlineLastActivity(card);
-        await capturePeopleCard(page, "desktop-light-open.png");
+        if (captureUiProofEnabled) {
+          await writeFile(
+            path.join(proofDirectory, "desktop-light-open.png"),
+            await takeControlUiViewportScreenshot(page, card, [
+              card.getByRole("link", { name: "View activity", exact: true }),
+            ]),
+          );
+        }
         const bounds = await row.boundingBox();
         const cardBounds = await card.boundingBox();
         if (!bounds || !cardBounds) {

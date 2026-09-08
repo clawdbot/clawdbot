@@ -4,7 +4,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,

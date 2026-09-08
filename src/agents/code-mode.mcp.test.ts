@@ -150,6 +150,7 @@ describe("Code Mode MCP namespace", () => {
     expect(value.apiHeader).toContain("@param title Issue title Shown in tracker");
     expect(value.apiHeader).not.toContain("@param title Issue title\n");
     expect(value.apiHeader).toContain("title: string;");
+    expect(value.apiHeader).toContain('@param body? Default: "".');
     expect(value.apiHeader).toContain('labels?: Array<"red" | "blue">;');
     expect(value.serverFileContent).toContain('labels?: Array<"red" | "blue">;');
     expect(githubCreate.execute).toHaveBeenCalledTimes(1);

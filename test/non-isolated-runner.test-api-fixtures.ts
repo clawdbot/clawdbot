@@ -13,27 +13,24 @@ export function testApiLifecycleFixtureFiles(repoRoot: string): Record<string, s
 // Check during collection before imports can overwrite the previous generation.
 const remainingKeys = [
   "openclaw.beforeToolCallBlockedErrorTestApi",
-  "openclaw.backupPlanTestApi",
   "openclaw.staleAuthOrderTestApi",
   "openclaw.bashProcessRegistryTestApi",
   "openclaw.diagnosticRunActivityTestApi",
 ].filter((key) => Object.hasOwn(globalThis, Symbol.for(key)));
 expect(remainingKeys, "completed-file test API publications").toEqual([]);
 expect(Object.hasOwn(globalThis, "openclawOpenAIResponsesTransportTestApi")).toBe(false);
-for (const key of [Symbol.for("fixture.foreignTestApi"), Symbol.for("openclaw.google.vertexAdcTestApi"), "openclaw.backupPlanTestApi"]) {
+for (const key of [Symbol.for("fixture.foreignTestApi"), Symbol.for("openclaw.google.vertexAdcTestApi"), "openclaw.staleAuthOrderTestApi"]) {
   expect(Reflect.get(globalThis, key)).toBe("foreign");
   Reflect.deleteProperty(globalThis, key);
 }
 `
         : "";
     files[`${prefix}-test-api-${generation}.test.ts`] = `
-import path from "node:path";
 import { createRequire } from "node:module";
 import { afterAll, describe, expect, it } from "vitest";
 ${observeCleanup}
 const { createBeforeToolCallBlockedError } = await import(${sourcePath("agents/agent-tools.before-tool-call.test-support.ts")});
 const { isBeforeToolCallBlockedError } = await import(${sourcePath("agents/agent-tools.before-tool-call.wrapper.ts")});
-const { resolveBackupPlanFromPaths } = await import(${sourcePath("commands/backup.test-support.ts")});
 const { repairStaleConfiguredAuthOrders } = await import(${sourcePath("commands/doctor/shared/stale-auth-order.test-support.ts")});
 const { testing: responses } = await import(${sourcePath("agents/openai-transport-stream.test-support.ts")});
 const registry = await import(${sourcePath("agents/bash-process-registry.ts")});
@@ -51,8 +48,6 @@ expect(nativeCron.registerActiveCronTaskRun).toBe(native.register);
 const { resetDiagnosticRunActivityForTest, getDiagnosticSessionActivitySnapshot } = await import(${sourcePath("logging/diagnostic-run-activity.ts")});
 const { markDiagnosticToolStartedForTest } = await import(${sourcePath("logging/diagnostic-run-activity.test-support.ts")});
 const { resolveGlobalSingleton } = await import(${sourcePath("shared/global-singleton.ts")});
-const stateDir = path.join(import.meta.dirname, "test-api-state");
-const configPath = path.join(stateDir, "missing-openclaw.json");
 describe("${generation} test API consumers", () => {
   async function verifyConsumers(message: string): Promise<void> {
     const blocked = createBeforeToolCallBlockedError(message);
@@ -76,17 +71,6 @@ describe("${generation} test API consumers", () => {
     native.api.resetActiveCronTaskRunsForTests();
     expect(nativeCron.cancelActiveCronTaskRun({ runId: "native-fixture" })).toBe(false);
     expect(controller.signal.aborted).toBe(false);
-    const plan = await resolveBackupPlanFromPaths({
-      stateDir,
-      configPath,
-      oauthDir: path.join(stateDir, "credentials"),
-      onlyConfig: true,
-    });
-    expect(plan).toMatchObject({
-      included: [],
-      workspaceDirs: [],
-      skipped: [{ kind: "config", sourcePath: configPath, reason: "missing" }],
-    });
     const cfg = { auth: { order: { "fixture-provider": [] } } };
     expect(repairStaleConfiguredAuthOrders({ cfg, stores: [] })).toEqual({
       config: cfg,
@@ -126,7 +110,7 @@ const cron = require(${sourcePath("cron/service/active-run-cancellation.ts")});
 module.exports = { register: cron.registerActiveCronTaskRun, api: globalThis[Symbol.for("openclaw.activeCronTaskRunTestApi")] };
 `;
   files["foreign/extensions/google/vertex-adc.ts"] = `
-for (const key of [Symbol.for("fixture.foreignTestApi"), Symbol.for("openclaw.google.vertexAdcTestApi"), "openclaw.backupPlanTestApi"]) {
+for (const key of [Symbol.for("fixture.foreignTestApi"), Symbol.for("openclaw.google.vertexAdcTestApi"), "openclaw.staleAuthOrderTestApi"]) {
   Reflect.set(globalThis, key, "foreign");
 }
 `;

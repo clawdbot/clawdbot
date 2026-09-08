@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import { sessionRefFromPath } from "../../../app-session-route-paths.ts";
+import { formatFencedCodeBlock } from "../../../../../src/shared/markdown-code.js";
 import { isStaleChunkImportError } from "../../../app/stale-chunk-reload.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
@@ -13,7 +13,6 @@ import {
   markdownFileLinkFromKeyboardEvent,
 } from "../../../components/markdown-file-links.ts";
 import {
-  markdownSessionHref,
   markdownSessionLinkFromEvent,
   markdownSessionLinkFromKeyboardEvent,
   type SessionLinkTarget,
@@ -124,10 +123,6 @@ function renderSidebarAttachment(
     downloadHref: src,
   });
 }
-function toPlainTextCodeFence(value: string, language = ""): string {
-  const fenceHeader = language ? `\`\`\`${language}` : "```";
-  return `${fenceHeader}\n${value}\n\`\`\``;
-}
 
 export function buildRawContent(
   content: ChatDetailPanelContent | null | undefined,
@@ -139,7 +134,7 @@ export function buildRawContent(
     const rawText = content.rawText ?? content.content;
     return {
       kind: "markdown",
-      content: toPlainTextCodeFence(rawText),
+      content: formatFencedCodeBlock(rawText),
       rawText,
     };
   }
@@ -147,14 +142,14 @@ export function buildRawContent(
     const rawText = content.rawText ?? content.content;
     return {
       kind: "markdown",
-      content: toPlainTextCodeFence(rawText, content.language),
+      content: formatFencedCodeBlock(rawText, content.language),
       rawText,
     };
   }
   if (content.rawText?.trim()) {
     return {
       kind: "markdown",
-      content: toPlainTextCodeFence(content.rawText, "json"),
+      content: formatFencedCodeBlock(content.rawText, "json"),
       rawText: content.rawText,
     };
   }
@@ -450,9 +445,7 @@ export function handleSidebarClick(event: MouseEvent, callbacks: SidebarNavigati
     callbacks.onOpenWorkspaceFile?.(target);
     return;
   }
-  const sessionTarget =
-    markdownSessionLinkFromEvent(event) ??
-    markdownSessionHref(event, sessionRefFromPath, callbacks.basePath);
+  const sessionTarget = markdownSessionLinkFromEvent(event, callbacks.basePath);
   if (sessionTarget && shouldHandleNavigationClick(event)) {
     event.preventDefault();
     callbacks.onOpenSessionLink?.(sessionTarget);
@@ -465,13 +458,8 @@ export function handleSidebarKeydown(event: KeyboardEvent, callbacks: SidebarNav
     callbacks.onOpenWorkspaceFile?.(target);
     return;
   }
-  const sessionTarget =
-    markdownSessionLinkFromKeyboardEvent(event) ??
-    (event.key === "Enter"
-      ? markdownSessionHref(event, sessionRefFromPath, callbacks.basePath)
-      : null);
+  const sessionTarget = markdownSessionLinkFromKeyboardEvent(event, callbacks.basePath);
   if (sessionTarget) {
-    event.preventDefault();
     callbacks.onOpenSessionLink?.(sessionTarget);
   }
 }

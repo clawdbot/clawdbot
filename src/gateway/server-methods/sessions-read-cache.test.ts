@@ -7,6 +7,7 @@ import {
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   loadSessionEntry,
   persistSessionTranscriptTurn,
@@ -1009,6 +1010,7 @@ describe("sessions.list single-flight", () => {
           reason: "sharing",
           sessionKey: "agent:main:page-first",
         });
+        const listEntries = vi.spyOn(sessionAccessor, "listSessionEntriesCore");
         releaseRows();
 
         const repaired = await firstPage;
@@ -1016,6 +1018,8 @@ describe("sessions.list single-flight", () => {
         expect(repaired).toMatchObject({ count: 1, nextOffset: 1 });
         expect(loader.calls).toHaveBeenCalledTimes(1);
         expect(loader.rowCalls).toHaveBeenCalledTimes(2);
+        // Fresh visibility checks only need selected rows, including the replacement page.
+        expect(listEntries).not.toHaveBeenCalled();
 
         loader.rowGate = undefined;
         const next = await listSessions({

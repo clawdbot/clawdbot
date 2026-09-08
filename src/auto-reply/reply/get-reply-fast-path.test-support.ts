@@ -1,3 +1,4 @@
+import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { markReplyConfigRuntimeMode } from "./reply-config-runtime-mode.js";
 
@@ -10,4 +11,8 @@ export function markCompleteReplyConfig<T extends OpenClawConfig>(
 
 export function withFastReplyConfig<T extends OpenClawConfig>(config: T): T {
   return markCompleteReplyConfig(config);
+}
+
+export function emptyAliasIndex(): ModelAliasIndex {
+  return { byAlias: new Map(), byKey: new Map() };
 }

@@ -5,8 +5,10 @@ import path from "node:path";
 import process from "node:process";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import manifest from "../openclaw.plugin.json" with { type: "json" };
 import {
   createCodexCliSessionNodeHostCommands,
+  createCodexCliSessionNodeInvokePolicies,
   listCodexCliSessionsOnNode,
 } from "./node-cli-sessions.js";
 
@@ -41,6 +43,7 @@ describe("codex cli node sessions", () => {
       process.env.CODEX_HOME = previousCodexHome;
     }
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
@@ -89,7 +92,7 @@ describe("codex cli node sessions", () => {
     ]);
   });
 
-  it("resumes through the bounded process owner without changing the Codex CLI contract", async () => {
+  it("keeps authorized resume execution available while native discovery is disabled", async () => {
     processRuntimeMocks.runCommandBuffered.mockImplementation(async (argv) => {
       const outputFlag = argv.indexOf("--output-last-message");
       const outputPath = argv[outputFlag + 1];
@@ -107,10 +110,47 @@ describe("codex cli node sessions", () => {
       };
     });
 
-    const command = createCodexCliSessionNodeHostCommands().find(
-      (entry) => entry.command === "codex.cli.session.resume",
-    );
-    const raw = await command?.handle(
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(tempDir, "openclaw.json"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
+    const { createPluginRegistry, createPluginRecord, createPluginRuntimeMock } =
+      await import("openclaw/plugin-sdk/plugin-test-runtime");
+    const config = {
+      plugins: {
+        entries: { codex: { enabled: true, config: { sessionCatalog: { enabled: false } } } },
+      },
+    };
+    const registry = createPluginRegistry({
+      runtime: createPluginRuntimeMock({ config: { current: () => config } }),
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+      activateGlobalSideEffects: false,
+    });
+    const record = createPluginRecord({
+      id: manifest.id,
+      source: path.join(tempDir, "index.js"),
+      nativeSessionCatalog: manifest.setup.nativeSessionCatalog,
+    });
+    registry.registry.plugins.push(record);
+    const api = registry.createApi(record, { config });
+    for (const nodeCommand of createCodexCliSessionNodeHostCommands()) {
+      api.registerNodeHostCommand(nodeCommand);
+    }
+    for (const policy of createCodexCliSessionNodeInvokePolicies()) {
+      api.registerNodeInvokePolicy(policy);
+    }
+    const commands = registry.registry.nodeHostCommands.map((entry) => entry.command);
+    const list = commands.find((entry) => entry.command === CODEX_CLI_SESSIONS_LIST_COMMAND);
+    const command = commands.find((entry) => entry.command === "codex.cli.session.resume");
+    if (!list || !command) {
+      throw new Error("Codex node commands did not register");
+    }
+    await expect(list.handle()).rejects.toThrow("discovery is disabled");
+    expect(command.dangerous).toBe(true);
+    expect(
+      registry.registry.nodeInvokePolicies.find((entry) =>
+        entry.policy.commands.includes(command.command),
+      )?.policy.dangerous,
+    ).toBe(true);
+    const raw = await command.handle(
       JSON.stringify({
         sessionId: "session-123",
         prompt: "continue this task",

@@ -18,7 +18,7 @@ import {
 } from "./crabbox-runtime.js";
 import { renderMantisCrabboxReport, type MantisCrabboxReportSummary } from "./report.js";
 
-export type MantisVisualTaskVisionMode = "image-describe" | "metadata";
+type MantisVisualTaskVisionMode = "image-describe" | "metadata";
 
 export type MantisVisualTaskOptions = {
   browserUrl?: string;

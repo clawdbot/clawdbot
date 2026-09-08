@@ -65,6 +65,8 @@ export type OpenClawToolsOptions = {
   webSearchEnabled?: boolean;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
+  /** Host-admitted dashboard authoring without an originating inline renderer. */
+  pinnedWidgetAuthoring?: boolean;
   pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
   runtimeToolAllowlist?: string[];

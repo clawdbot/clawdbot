@@ -7,6 +7,7 @@ import { isHarnessOwnedSubagentTask } from "./harness-owned-subagent-task.js";
 import {
   getManagedTaskBackingInstance,
   hasAuthoritativeTaskBacking,
+  readTaskBackingInstance,
 } from "./task-backing-authority.js";
 import { isProvisionalSubagentKillTask } from "./task-cancellation-state.js";
 import { isTerminalTaskStatus } from "./task-executor-policy.js";
@@ -22,6 +23,7 @@ import {
   tasks,
 } from "./task-registry-state.js";
 import type { TaskRecord } from "./task-registry.types.js";
+import { getTaskRunOwner } from "./task-run-owner.js";
 
 function ensureTaskCancellationReady(task: TaskRecord): void {
   const runId = task.runId?.trim();
@@ -113,6 +115,7 @@ export async function cancelTaskById(params: {
       return notCancelled("Task backing ownership could not be verified.");
     }
     const managedBacking = getManagedTaskBackingInstance(task);
+    const subagentBacking = managedBacking ?? readTaskBackingInstance(task.detail);
     ensureTaskCancellationReady(task);
     // A direct kill is only a provisional terminal projection. Re-read the
     // owning subagent run before promotion so its canonical completion can win.
@@ -122,7 +125,18 @@ export async function cancelTaskById(params: {
       if (!processSessionId || !cancelBackgroundExecSession?.(processSessionId)) {
         return notCancelled("Background command has no active cancellation handle.");
       }
-    } else if (task.runtime !== "cli") {
+    } else if (task.runtime === "cli") {
+      const owner = getTaskRunOwner(task);
+      if (!owner) {
+        return notCancelled(
+          "Task has no live run owner. Use openclaw tasks audit to inspect its state.",
+        );
+      }
+      const result = await owner.cancel(cancellationError);
+      return result.ok
+        ? { found: true, cancelled: true, task: result.value }
+        : notCancelled(result.error);
+    } else {
       if (task.runtime === "cron") {
         const { cancelActiveCronTaskRun } = await loadTaskRegistryControlRuntime();
         if (
@@ -225,9 +239,10 @@ export async function cancelTaskById(params: {
         await killSubagentRunAdmin({
           cfg: params.cfg,
           sessionKey: childSessionKey,
-          expectedRunId: task.runId,
-          ...(managedBacking?.runtime === "subagent"
-            ? { expectedGeneration: managedBacking.generation, expectedOwnerKey: task.ownerKey }
+          expectedTaskRunId: task.runId,
+          expectedOwnerKey: task.ownerKey,
+          ...(subagentBacking?.runtime === "subagent"
+            ? { expectedGeneration: subagentBacking.generation }
             : {}),
           onResult: (result) => {
             cancellation = reconcile(result);

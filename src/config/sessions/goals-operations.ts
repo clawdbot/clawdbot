@@ -345,7 +345,11 @@ export async function mutateSessionGoal(
       return { result, replayed: false, previousIdentity, currentIdentity, next };
     }, databaseOptions);
     if (committed.next) {
-      emitCommittedSessionIdentityDiff(committed.previousIdentity, committed.currentIdentity);
+      emitCommittedSessionIdentityDiff(
+        resolved.agentId,
+        committed.previousIdentity,
+        committed.currentIdentity,
+      );
     }
     return { result: committed.result, replayed: committed.replayed, sessionEntry: committed.next };
   });

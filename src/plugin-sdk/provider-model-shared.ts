@@ -1,9 +1,4 @@
 // Provider model helpers normalize model catalog entries shared by provider plugins.
-import { normalizeProviderId as normalizeProviderIdCore } from "@openclaw/model-catalog-core/provider-id";
-import {
-  normalizeAntigravityPreviewModelId as normalizeAntigravityPreviewModelIdCore,
-  normalizeGooglePreviewModelId as normalizeGooglePreviewModelIdCore,
-} from "@openclaw/model-catalog-core/provider-model-id-normalize";
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   buildAnthropicReplayPolicyForModel,
@@ -24,6 +19,12 @@ import type {
   ProviderRuntimeModel,
   ProviderSanitizeReplayHistoryContext,
 } from "./plugin-entry.js";
+
+export { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+export {
+  normalizeAntigravityPreviewModelId,
+  normalizeGooglePreviewModelId,
+} from "@openclaw/model-catalog-core/provider-model-id-normalize";
 
 type SelfHostedOpenAICompatibleProviderOverrides = Partial<
   Omit<ProviderPlugin, "id" | "label" | "docsPath" | "envVars" | "auth" | "catalog" | "wizard">
@@ -206,16 +207,6 @@ export {
   buildStrictAnthropicReplayPolicy,
 };
 
-/**
- * Normalizes provider ids for config, catalog, and plugin-registry matching.
- */
-export function normalizeProviderId(
-  /** Provider id from config, catalog, or plugin metadata. */
-  provider: string,
-): string {
-  return normalizeProviderIdCore(provider);
-}
-
 /** Compare canonical flat rates without assuming display-only models include cost metadata. */
 export function modelCostsEqual(
   current: ProviderRuntimeModel["cost"] | undefined,
@@ -313,26 +304,6 @@ export function isProxyReasoningUnsupportedModelHint(
   modelId: string,
 ): boolean {
   return getModelProviderHint(modelId) === "x-ai";
-}
-
-/**
- * Normalizes Antigravity preview model ids to the canonical provider catalog form.
- */
-export function normalizeAntigravityPreviewModelId(
-  /** Antigravity preview model id from config or catalog data. */
-  id: string,
-): string {
-  return normalizeAntigravityPreviewModelIdCore(id);
-}
-
-/**
- * Normalizes Google preview model ids to the canonical provider catalog form.
- */
-export function normalizeGooglePreviewModelId(
-  /** Google preview model id from config or catalog data. */
-  id: string,
-): string {
-  return normalizeGooglePreviewModelIdCore(id);
 }
 
 /**

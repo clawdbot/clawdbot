@@ -9,7 +9,7 @@ import {
   type DraftLaneState,
   type LaneDeliveryResult,
   type LaneName,
-} from "./lane-delivery.js";
+} from "./lane-delivery-text-deliverer.js";
 import {
   createTelegramPromptContextProjectionSequence,
   type TelegramPromptContextProjectionSequence,

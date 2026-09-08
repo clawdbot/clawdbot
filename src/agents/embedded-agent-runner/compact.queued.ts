@@ -7,7 +7,6 @@ import {
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
-import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
@@ -24,7 +23,6 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
-import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
@@ -38,13 +36,17 @@ import {
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-model.js";
 import type { SandboxContext } from "../sandbox/types.js";
+import { beginForegroundSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { resolveSessionPlacementSandbox } from "../session-placement-admission.js";
 import { DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON } from "./compact-reasons.js";
 import { compactNativeCliSession } from "./compact.js";
 import {
+  createQueuedCompactionAbortedResult,
   projectQueuedCompactionSessionTarget,
   executeQueuedContextEngineCompaction,
+  runPrimaryNativeCompactionInLanes,
   type QueuedCompactionHostOptions,
+  withQueuedCompactionCancellationResult,
 } from "./compact.queued-execution.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import {
@@ -53,12 +55,12 @@ import {
 } from "./compaction-runtime-context.js";
 import {
   prepareCompactionHarnessAuth,
+  projectCodexHostTranscriptBytePreflightConfig,
   resolveCompactionRuntimeSelection,
 } from "./compaction-runtime-preparation.js";
 import type { acceptCompactionSuccessor } from "./compaction-successor.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
-import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveTieredModel } from "./model-resolution.js";
 import { resolveModelAsync } from "./model.js";
@@ -70,10 +72,12 @@ import {
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
   setActiveEmbeddedRun,
 } from "./runs.js";
+import { resolveTranscriptBytePreflightAuthority } from "./transcript-byte-preflight-authority.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
 type QueuedCompactionParams = CompactEmbeddedAgentSessionParams & {
   sessionTarget: SessionTranscriptRuntimeTarget;
+  sandbox?: SandboxContext | null;
 };
 
 function lockedCompactionRuntimeFailure(runtime?: string): EmbeddedAgentCompactResult {
@@ -91,14 +95,15 @@ const DEFERRED_CONTEXT_ENGINE_COMPACTION_SCHEDULE_FAILURE_REASON =
   "failed to schedule background context-engine maintenance";
 const MANUAL_COMPACTION_ACTIVE_RUN_REASON =
   "manual compaction unavailable while another embedded run is active";
-const COMPACTION_ABORTED_REASON = "compaction aborted";
 
-function createCompactionAbortedResult(): EmbeddedAgentCompactResult {
-  return {
-    ok: false,
-    compacted: false,
-    reason: COMPACTION_ABORTED_REASON,
-  };
+function assertQueuedCompactionPreparationActive(
+  params: CompactEmbeddedAgentSessionParams,
+  host: QueuedCompactionHostOptions,
+): void {
+  // Preparation runs outside the execution queue. Revalidate after each await
+  // so a cancelled or replaced owner cannot continue expensive setup.
+  params.abortSignal?.throwIfAborted();
+  host.assertActive?.();
 }
 
 function resolveManualCompactionActiveRunSessionId(
@@ -108,23 +113,6 @@ function resolveManualCompactionActiveRunSessionId(
     (isEmbeddedAgentRunHandleActive(params.sessionId) ? params.sessionId : undefined) ??
     (params.sessionKey ? resolveActiveEmbeddedRunHandleSessionId(params.sessionKey) : undefined) ??
     resolveActiveEmbeddedRunHandleSessionIdBySessionFile(params.sessionFile)
-  );
-}
-
-function shouldDeferOwningContextEngineBudgetCompaction(params: {
-  compactParams: CompactEmbeddedAgentSessionParams;
-  contextEngine: ContextEngine;
-}): boolean {
-  // Request-time budget compaction for context-engine-owned transcripts can
-  // spend the whole reply preflight budget. Only defer engines that explicitly
-  // advertise background turn maintenance, leaving native/current-session
-  // harness compaction synchronous.
-  return (
-    params.compactParams.deferOwningContextEngineCompaction === true &&
-    params.compactParams.trigger === "budget" &&
-    params.contextEngine.info.ownsCompaction === true &&
-    params.contextEngine.info.turnMaintenanceMode === "background" &&
-    typeof params.contextEngine.maintain === "function"
   );
 }
 
@@ -208,6 +196,10 @@ export async function compactEmbeddedAgentSession(
   params: CompactEmbeddedAgentSessionParams,
   host: QueuedCompactionHostOptions = {},
 ): Promise<EmbeddedAgentCompactResult> {
+  const projectedConfig = projectCodexHostTranscriptBytePreflightConfig(
+    params.config,
+    Boolean(host.transcriptBytePreflightHarness),
+  );
   const contextEngineAgentId =
     normalizeOptionalString(params.contextEngineAgentId) ?? normalizeOptionalString(params.agentId);
   const contextEngineSessionKey =
@@ -217,112 +209,88 @@ export async function compactEmbeddedAgentSession(
     ...params,
     missingSessionKey: "resolve-existing",
   });
-  // Resolve the storage address first, then freeze its owner before runtime/plugin awaits.
-  const entry = loadSessionEntryReadOnly({ ...runtimeTarget, readConsistency: "latest" });
-  const expectedEntry = {
-    sessionId: runtimeTarget.sessionId,
-    lifecycleRevision: entry?.lifecycleRevision,
-    activeWriterRunId: entry?.activeWriterRunId,
-  };
-  const resolvedParams = {
-    ...params,
-    sessionEntry: entry ? projectPublicSessionEntry(entry) : undefined,
-    agentHarnessId: resolveSessionPinnedHarnessId(entry) ?? params.agentHarnessId,
-    modelSelectionLocked: entry?.modelSelectionLocked ?? params.modelSelectionLocked,
-    agentId: runtimeTarget.agentId,
-    sessionId: runtimeTarget.sessionId,
-    sessionKey: runtimeTarget.sessionKey,
-    sessionTarget: runtimeTarget,
-    sessionFile: runtimeTarget.sessionKey,
-    contextEngineAgentId,
-  };
-  if (resolvedParams.trigger !== "manual") {
-    return await compactEmbeddedAgentSessionImpl(
-      resolvedParams,
-      expectedEntry,
-      host,
-      contextEngineSessionKey,
-    );
-  }
-  // Reply operations and embedded handles are separate lifecycle owners. A
-  // /compact reply may coexist with this handle, but another embedded writer may not.
-  if (resolveManualCompactionActiveRunSessionId(resolvedParams)) {
-    return {
-      ok: false,
-      compacted: false,
-      reason: MANUAL_COMPACTION_ACTIVE_RUN_REASON,
-      failure: { reason: "active_run" },
-    };
-  }
-
-  const controller = new AbortController();
-  const abortSignal = resolvedParams.abortSignal
-    ? AbortSignal.any([resolvedParams.abortSignal, controller.signal])
-    : controller.signal;
-  const handle: EmbeddedAgentQueueHandle = {
-    kind: "embedded",
-    queueMessage: async () => {},
-    isStreaming: () => true,
-    isAborted: () => abortSignal.aborted,
-    isCompacting: () => true,
-    abort: (reason) => controller.abort(reason ?? "user_abort"),
-    cancel: (reason) => controller.abort(reason ?? "user_abort"),
-  };
-  setActiveEmbeddedRun(
-    resolvedParams.sessionId,
-    handle,
-    resolvedParams.sessionKey,
-    resolvedParams.sessionFile,
-    resolvedParams.agentId,
-  );
+  const releaseForeground =
+    params.trigger === "manual"
+      ? await beginForegroundSessionMaintenance(runtimeTarget.sessionKey)
+      : undefined;
   try {
-    return await compactEmbeddedAgentSessionImpl(
-      {
-        ...resolvedParams,
-        abortSignal,
-      },
-      expectedEntry,
-      host,
-      contextEngineSessionKey,
-    );
-  } finally {
-    clearActiveEmbeddedRun(
+    // Resolve the storage address first, then freeze its owner before runtime/plugin awaits.
+    const entry = loadSessionEntryReadOnly({ ...runtimeTarget, readConsistency: "latest" });
+    const expectedEntry = {
+      sessionId: runtimeTarget.sessionId,
+      lifecycleRevision: entry?.lifecycleRevision,
+      activeWriterRunId: entry?.activeWriterRunId,
+    };
+    const resolvedParams = {
+      ...params,
+      config: projectedConfig,
+      sessionEntry: entry ? projectPublicSessionEntry(entry) : undefined,
+      agentHarnessId: resolveSessionPinnedHarnessId(entry) ?? params.agentHarnessId,
+      modelSelectionLocked: entry?.modelSelectionLocked ?? params.modelSelectionLocked,
+      agentId: runtimeTarget.agentId,
+      sessionId: runtimeTarget.sessionId,
+      sessionKey: runtimeTarget.sessionKey,
+      sessionTarget: runtimeTarget,
+      sessionFile: runtimeTarget.sessionKey,
+      contextEngineAgentId,
+    };
+    if (resolvedParams.trigger !== "manual") {
+      return await withQueuedCompactionCancellationResult(resolvedParams, () =>
+        compactEmbeddedAgentSessionImpl(
+          resolvedParams,
+          expectedEntry,
+          host,
+          contextEngineSessionKey,
+        ),
+      );
+    }
+    // Reply operations and embedded handles are separate lifecycle owners. A
+    // /compact reply may coexist with this handle, but another embedded writer may not.
+    if (resolveManualCompactionActiveRunSessionId(resolvedParams)) {
+      return {
+        ok: false,
+        compacted: false,
+        reason: MANUAL_COMPACTION_ACTIVE_RUN_REASON,
+        failure: { reason: "active_run" },
+      };
+    }
+
+    const controller = new AbortController();
+    const abortSignal = resolvedParams.abortSignal
+      ? AbortSignal.any([resolvedParams.abortSignal, controller.signal])
+      : controller.signal;
+    const handle: EmbeddedAgentQueueHandle = {
+      kind: "embedded",
+      queueMessage: async () => {},
+      isStreaming: () => true,
+      isAborted: () => abortSignal.aborted,
+      isCompacting: () => true,
+      abort: (reason) => controller.abort(reason ?? "user_abort"),
+      cancel: (reason) => controller.abort(reason ?? "user_abort"),
+    };
+    const activeParams = { ...resolvedParams, abortSignal };
+    setActiveEmbeddedRun(
       resolvedParams.sessionId,
       handle,
       resolvedParams.sessionKey,
       resolvedParams.sessionFile,
+      resolvedParams.agentId,
     );
+    try {
+      return await withQueuedCompactionCancellationResult(activeParams, () =>
+        compactEmbeddedAgentSessionImpl(activeParams, expectedEntry, host, contextEngineSessionKey),
+      );
+    } finally {
+      clearActiveEmbeddedRun(
+        resolvedParams.sessionId,
+        handle,
+        resolvedParams.sessionKey,
+        resolvedParams.sessionFile,
+      );
+    }
+  } finally {
+    releaseForeground?.();
   }
-}
-
-async function runPrimaryNativeCompactionInLanes<T>(
-  params: QueuedCompactionParams,
-  expectedEntry: Parameters<typeof acceptCompactionSuccessor>[0]["expectedEntry"],
-  host: QueuedCompactionHostOptions,
-  run: () => Promise<T>,
-): Promise<T> {
-  const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
-  const globalLane = resolveGlobalLane(params.lane);
-  const enqueueGlobal =
-    params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
-  return await enqueueCommandInLane(sessionLane, () =>
-    enqueueGlobal(() => {
-      host.assertActive?.();
-      const currentEntry = loadSessionEntryReadOnly({
-        ...params.sessionTarget,
-        readConsistency: "latest",
-      });
-      if (
-        !currentEntry ||
-        currentEntry.sessionId !== expectedEntry.sessionId ||
-        currentEntry.lifecycleRevision !== expectedEntry.lifecycleRevision ||
-        currentEntry.activeWriterRunId !== expectedEntry.activeWriterRunId
-      ) {
-        throw new SessionTranscriptWriterClaimReboundError();
-      }
-      return run();
-    }),
-  );
 }
 
 async function compactEmbeddedAgentSessionImpl(
@@ -332,7 +300,7 @@ async function compactEmbeddedAgentSessionImpl(
   contextEngineSessionKey?: string,
 ): Promise<EmbeddedAgentCompactResult> {
   if (params.abortSignal?.aborted) {
-    return createCompactionAbortedResult();
+    return createQueuedCompactionAbortedResult();
   }
   host.assertActive?.();
   const runtimeTarget = params.sessionTarget;
@@ -343,11 +311,8 @@ async function compactEmbeddedAgentSessionImpl(
   });
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, agentIds.sessionAgentId);
   const resolvedWorkspaceDir = resolveUserPath(params.workspaceDir);
-  const placementParams = params as CompactEmbeddedAgentSessionParams & {
-    sandbox?: SandboxContext | null;
-  };
   const placementSandbox =
-    placementParams.sandbox === undefined
+    params.sandbox === undefined
       ? await resolveSessionPlacementSandbox({
           agentId: runtimeTarget.agentId,
           config: params.config,
@@ -356,18 +321,15 @@ async function compactEmbeddedAgentSessionImpl(
           workspaceDir: resolvedWorkspaceDir,
         })
       : null;
-  const preparedParams = placementSandbox ? { ...params, sandbox: placementSandbox } : params;
-  const runtimeSelection = resolveCompactionRuntimeSelection({
-    ...preparedParams,
-    modelId: preparedParams.model,
-    boundHarnessRuntime: preparedParams.agentHarnessId,
-    preparedRuntimePlan: preparedParams.runtimePlan,
-    selectedHarnessRuntime: resolveSessionPinnedHarnessId(preparedParams.sessionEntry),
-  });
-  if (params.abortSignal?.aborted) {
-    return createCompactionAbortedResult();
-  }
-  host.assertActive?.();
+  assertQueuedCompactionPreparationActive(params, host);
+  const requestedSelection = {
+    ...params,
+    modelId: params.model,
+    boundHarnessRuntime: params.agentHarnessId,
+    preparedRuntimePlan: params.runtimePlan,
+    selectedHarnessRuntime: resolveSessionPinnedHarnessId(params.sessionEntry),
+  };
+  const runtimeSelection = resolveCompactionRuntimeSelection(requestedSelection);
   // Native control operations reuse the backend's existing authenticated session.
   // Run them before generic model preparation so subscription-only CLI sessions do
   // not incorrectly require an OpenClaw model API credential.
@@ -384,31 +346,57 @@ async function compactEmbeddedAgentSessionImpl(
   if (nativeCliResult) {
     return nativeCliResult;
   }
-  const lease = await acquireAgentRunPreparedModelRuntime({
-    config: params.config ?? {},
-    agentId: agentIds.sessionAgentId,
-    agentDir,
-    workspaceDir: resolvedWorkspaceDir,
-    ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
-    runtimePluginSelections: [
-      {
-        provider: runtimeSelection.provider,
-        modelId: runtimeSelection.modelId,
-        ...(runtimeSelection.selectedHarnessRuntime
-          ? { runtime: runtimeSelection.selectedHarnessRuntime }
-          : {}),
-        agentId: agentIds.sessionAgentId,
+  assertQueuedCompactionPreparationActive(params, host);
+  const lease = await acquireAgentRunPreparedModelRuntime(
+    {
+      config: params.config ?? {},
+      agentId: agentIds.sessionAgentId,
+      agentDir,
+      workspaceDir: resolvedWorkspaceDir,
+      ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
+    },
+    {
+      abortSignal: params.abortSignal,
+      deriveRuntimePluginSelections: ({ config, metadataSnapshot }) => {
+        const selected = resolveCompactionRuntimeSelection({
+          ...requestedSelection,
+          config: projectCodexHostTranscriptBytePreflightConfig(
+            config,
+            Boolean(host.transcriptBytePreflightHarness),
+          ),
+          manifestPlugins: metadataSnapshot,
+          allowPluginNormalization: false,
+        });
+        return [
+          {
+            provider: selected.provider,
+            modelId: selected.modelId,
+            runtime: selected.selectedHarnessRuntime,
+            agentId: agentIds.sessionAgentId,
+          },
+        ];
       },
-    ],
-  });
+    },
+  );
+  // Admission can replace config and agent storage while preserving the requested workspace.
+  const preparedParams = {
+    ...params,
+    ...(placementSandbox ? { sandbox: placementSandbox } : {}),
+    config: projectCodexHostTranscriptBytePreflightConfig(
+      lease.snapshot.config,
+      Boolean(host.transcriptBytePreflightHarness),
+    ),
+    agentDir: lease.snapshot.agentDir,
+  };
   const run = async () => {
     ensureContextEnginesInitialized();
-    const contextEngine = await resolveContextEngine(params.config, {
-      agentDir,
+    const contextEngine = await resolveContextEngine(preparedParams.config, {
+      agentDir: preparedParams.agentDir,
       workspaceDir: resolvedWorkspaceDir,
     });
     let disposeContextEngineOnExit = true;
     try {
+      assertQueuedCompactionPreparationActive(params, host);
       // Foreground disposal belongs to this finally. Only accepted background
       // maintenance transfers engine ownership away from this call.
       return await compactResolvedContextEngine(
@@ -416,7 +404,7 @@ async function compactEmbeddedAgentSessionImpl(
         expectedEntry,
         host,
         contextEngine,
-        agentDir,
+        preparedParams.agentDir,
         resolvedWorkspaceDir,
         lease.snapshot,
         contextEngineSessionKey,
@@ -431,6 +419,7 @@ async function compactEmbeddedAgentSessionImpl(
     }
   };
   try {
+    assertQueuedCompactionPreparationActive(params, host);
     return await withPluginRuntimeGenerationScope(lease.snapshot, run);
   } finally {
     lease.release();
@@ -486,6 +475,7 @@ async function compactResolvedContextEngine(
     workspaceDir: resolvedWorkspaceDir,
     pluginRegistry: requireActivePluginRegistry(),
   });
+  assertQueuedCompactionPreparationActive(params, host);
   const { resolution: modelResolution } = await resolveTieredModel({
     provider: ceRuntimeProvider,
     modelId: ceModelId,
@@ -495,6 +485,7 @@ async function compactResolvedContextEngine(
     ...initialModelAuth,
     preparedModelRuntime,
   });
+  assertQueuedCompactionPreparationActive(params, host);
   const { model: ceModel, authStorage, modelRegistry } = modelResolution;
   const ceRuntimeModel = ceModel as ProviderRuntimeModel | undefined;
   // Overrides stay unset when no bound/planned/explicit harness resolved so auth-aware
@@ -518,7 +509,15 @@ async function compactResolvedContextEngine(
     agentHarnessRuntimeOverride: selectedHarnessRuntime,
     convergenceErrorPrefix: "Prepared queued compaction",
   });
+  assertQueuedCompactionPreparationActive(params, host);
   const preparedHarnessRuntime = selectedPreparedHarness.id;
+  const transcriptBytePreflightAuthority =
+    host.transcriptBytePreflightHarness === preparedHarnessRuntime
+      ? resolveTranscriptBytePreflightAuthority(selectedPreparedHarness)
+      : undefined;
+  if (host.transcriptBytePreflightHarness && !transcriptBytePreflightAuthority) {
+    return lockedCompactionRuntimeFailure(host.transcriptBytePreflightHarness);
+  }
   const attemptNativeHarnessCompaction =
     selectedNativeHarnessCompaction && preparedHarnessRuntime !== "openclaw";
   const runtimeAuthPlan = runtimeAuthPreparation.plan;
@@ -527,6 +526,8 @@ async function compactResolvedContextEngine(
     provider: ceProvider,
     modelId: ceModelId,
     config: params.config,
+    workspaceDir: resolvedWorkspaceDir,
+    metadataSnapshot: preparedModelRuntime.metadataSnapshot,
     model: ceRuntimeModel,
     forceResolve:
       providerUsesProfileScopedModelMetadata && Boolean(runtimeAuthPlan.selectedAuthMode),
@@ -542,9 +543,11 @@ async function compactResolvedContextEngine(
         authProfileId,
         authProfileMode,
       });
+      assertQueuedCompactionPreparationActive(params, host);
       return { ...resolved, model: resolved.model as ProviderRuntimeModel | undefined };
     },
   });
+  assertQueuedCompactionPreparationActive(params, host);
   const preparedParams: QueuedCompactionParams = {
     ...params,
     provider: ceProvider,
@@ -593,17 +596,15 @@ async function compactResolvedContextEngine(
     contextEngineSelectionSource: contextEngine.info.id === "legacy" ? "default" : "configured",
     promptTokenBudget: contextTokenBudget,
   });
-  if (params.abortSignal?.aborted) {
-    return createCompactionAbortedResult();
-  }
-  host.assertActive?.();
   const contextEngineOwnsCompaction = contextEngine.info.ownsCompaction === true;
   let requiredPreflightNativeCapabilityUsed = false;
   const harnessResult =
-    attemptNativeHarnessCompaction && (!contextEngineOwnsCompaction || lockedNativeHarness)
+    attemptNativeHarnessCompaction &&
+    !transcriptBytePreflightAuthority &&
+    (!contextEngineOwnsCompaction || lockedNativeHarness)
       ? await runPrimaryNativeCompactionInLanes(preparedParams, expectedEntry, host, async () => {
           if (params.abortSignal?.aborted) {
-            return createCompactionAbortedResult();
+            return createQueuedCompactionAbortedResult();
           }
           return await maybeCompactAgentHarnessSession(
             {
@@ -631,6 +632,7 @@ async function compactResolvedContextEngine(
   // fallback for a locked harness; public result fields cannot escape the lock.
   if (
     lockedNativeHarness &&
+    !transcriptBytePreflightAuthority &&
     !(
       preparedParams.preflightRequired === true &&
       requiredPreflightNativeCapabilityUsed &&
@@ -648,14 +650,17 @@ async function compactResolvedContextEngine(
     );
   }
   if (params.abortSignal?.aborted) {
-    return createCompactionAbortedResult();
+    return createQueuedCompactionAbortedResult();
   }
   host.assertActive?.();
+  // Budget maintenance may outlive reply preflight only when its engine owns
+  // the transcript and explicitly supports background turn maintenance.
   if (
-    shouldDeferOwningContextEngineBudgetCompaction({
-      compactParams: preparedParams,
-      contextEngine,
-    })
+    preparedParams.deferOwningContextEngineCompaction === true &&
+    preparedParams.trigger === "budget" &&
+    contextEngineOwnsCompaction &&
+    contextEngine.info.turnMaintenanceMode === "background" &&
+    typeof contextEngine.maintain === "function"
   ) {
     const deferredResult = await deferOwningContextEngineBudgetCompaction({
       compactParams: preparedParams,
@@ -685,6 +690,7 @@ async function compactResolvedContextEngine(
     preparedHarnessRuntime,
     contextTokenBudget,
     attemptNativeHarnessCompaction,
+    transcriptBytePreflightAuthority,
   });
 }
 

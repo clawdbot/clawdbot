@@ -47,6 +47,72 @@ describe("core/doctor/bootstrap-size", () => {
     });
   });
 
+  it("counts files added by the bundled bootstrap-extra-files hook without the hook runtime", async () => {
+    tmp = await fs.realpath(await fs.mkdtemp(join(tmpdir(), "openclaw-health-bootstrap-extra-")));
+    await fs.writeFile(join(tmp, "AGENTS.md"), "bootstrap", "utf-8");
+    await fs.mkdir(join(tmp, "packages", "core"), { recursive: true });
+    await fs.writeFile(join(tmp, "packages", "core", "SOUL.md"), "a".repeat(15_000), "utf-8");
+
+    const findings = await getBootstrapSizeCheck().detect({
+      mode: "lint",
+      runtime,
+      cfg: {
+        agents: { defaults: { workspace: tmp, bootstrapMaxChars: 10_000 } },
+        hooks: {
+          internal: {
+            entries: {
+              "bootstrap-extra-files": { enabled: true, paths: ["packages/*/SOUL.md"] },
+            },
+          },
+        },
+      },
+      cwd: tmp,
+    });
+
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/bootstrap-size",
+        severity: "warning",
+        message: expect.stringContaining("SOUL.md"),
+        path: join(tmp, "packages", "core", "SOUL.md"),
+      }),
+    );
+  });
+
+  it("reports a hook-added extra file the total bootstrap budget dropped", async () => {
+    // The extra repeats the root basename, so only source-path identity can tell
+    // the doctor that this file received no injected bytes at all.
+    tmp = await fs.realpath(await fs.mkdtemp(join(tmpdir(), "openclaw-health-bootstrap-drop-")));
+    await fs.writeFile(join(tmp, "AGENTS.md"), "a".repeat(1_000), "utf-8");
+    await fs.mkdir(join(tmp, "packages", "core"), { recursive: true });
+    await fs.writeFile(join(tmp, "packages", "core", "AGENTS.md"), "b".repeat(500), "utf-8");
+
+    const findings = await getBootstrapSizeCheck().detect({
+      mode: "lint",
+      runtime,
+      cfg: {
+        agents: { defaults: { workspace: tmp, bootstrapTotalMaxChars: 1_000 } },
+        hooks: {
+          internal: {
+            entries: {
+              "bootstrap-extra-files": { enabled: true, paths: ["packages/*/AGENTS.md"] },
+            },
+          },
+        },
+      },
+      cwd: tmp,
+    });
+
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/bootstrap-size",
+        severity: "warning",
+        message: expect.stringContaining("AGENTS.md"),
+        path: join(tmp, "packages", "core", "AGENTS.md"),
+      }),
+    );
+  });
+
   it("honors the per-agent bootstrapMaxChars override in health findings", async () => {
     tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-bootstrap-"));
     await fs.writeFile(join(tmp, "AGENTS.md"), "a".repeat(15_000), "utf-8");

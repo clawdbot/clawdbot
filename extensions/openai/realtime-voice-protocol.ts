@@ -8,7 +8,8 @@ import type {
 import {
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   realtimeVoiceAudioDurationMs,
-} from "openclaw/plugin-sdk/realtime-voice";
+} from "openclaw/plugin-sdk/realtime-voice-provider";
+import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import {
   AZURE_OPENAI_REALTIME_TOOL_NAME_MAX_LENGTH,
   OPENAI_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS,
@@ -81,7 +82,10 @@ export abstract class OpenAIRealtimeProtocol {
 
   private readonly audioFormat: RealtimeVoiceAudioFormat;
 
-  constructor(protected readonly config: OpenAIRealtimeVoiceBridgeConfig) {
+  constructor(
+    protected readonly config: OpenAIRealtimeVoiceBridgeConfig,
+    protected readonly runtime: OpenAIRealtimeHost,
+  ) {
     this.audioFormat = config.audioFormat ?? REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ;
   }
 
@@ -140,7 +144,7 @@ export abstract class OpenAIRealtimeProtocol {
           prefixPaddingMs: cfg.prefixPaddingMs,
           reasoningEffort: cfg.reasoningEffort,
           silenceDurationMs: cfg.silenceDurationMs,
-          tools: normalizeOpenAIRealtimeTools(cfg.tools),
+          tools: normalizeOpenAIRealtimeTools(cfg.tools, this.runtime.warn),
           vadThreshold: cfg.vadThreshold,
           voice: cfg.voice ?? "alloy",
         }),
@@ -156,6 +160,7 @@ export abstract class OpenAIRealtimeProtocol {
     const format = this.resolveLegacyRealtimeAudioFormat();
     const tools = normalizeOpenAIRealtimeTools(
       cfg.tools,
+      this.runtime.warn,
       AZURE_OPENAI_REALTIME_TOOL_NAME_MAX_LENGTH,
     );
     return {

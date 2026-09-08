@@ -4,7 +4,12 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { markClawMcpServerIndependentlyOwned } from "../state/claw-mcp-adoption.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { buildClawAddPlan } from "./lifecycle.js";
-import { deleteClawMcpServerRef, installClawMcpServers, planClawMcpServerRemoval } from "./mcp.js";
+import {
+  deleteClawMcpServerRef,
+  installClawMcpServers,
+  planClawMcpServerRemoval,
+  readClawMcpServerRefs,
+} from "./mcp.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
 
@@ -343,17 +348,20 @@ describe("installClawMcpServers", () => {
 
   it("retains a managed server after an ordinary MCP owner adopts it", async () => {
     const current = await fixture();
-    const refs = await installClawMcpServers(current.plan, {
+    await installClawMcpServers(current.plan, {
       env: current.env,
       setMcpServer: vi.fn().mockResolvedValue(listedMcpServers()),
       listMcpServers: vi.fn().mockResolvedValue(listedMcpServers()),
     });
 
     expect(markClawMcpServerIndependentlyOwned("docs", { env: current.env, nowMs: 50 })).toBe(1);
-    const status = planClawMcpServerRemoval(
-      { ...refs[0]!, independentOwner: true },
-      { env: current.env },
-    );
+    expect(markClawMcpServerIndependentlyOwned("docs", { env: current.env, nowMs: 60 })).toBe(0);
+    const refs = readClawMcpServerRefs("worker", { env: current.env });
+    expect(refs).toMatchObject([
+      { name: "docs", independentOwner: true, updatedAtMs: 50 },
+      { name: "linear", independentOwner: false },
+    ]);
+    const status = planClawMcpServerRemoval(refs[0]!, { env: current.env });
     expect(status).toMatchObject({ action: "release", blocked: false });
   });
 

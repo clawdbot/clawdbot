@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
   profiles: {} as Record<string, AuthProfileCredential>,
 }));
 
-vi.mock("./auth-profiles/store.js", () => ({
+vi.mock("./auth-profiles/store-runtime.js", () => ({
   loadAuthProfileStoreForRuntime: () => ({ version: 1, profiles: mocks.profiles }),
 }));
 

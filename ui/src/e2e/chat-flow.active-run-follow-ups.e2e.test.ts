@@ -11,16 +11,13 @@ import {
   requireString,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
   it("preserves a non-steer server default for active-run follow-ups", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const runtimeConfig = {
       messages: { queue: { byChannel: { webchat: "followup" }, mode: "steer" } },
@@ -102,11 +99,7 @@ suite.define(() => {
   });
 
   it("keeps the active run across a live steer operation", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const runId = "run-a";
     const gateway = await installMockGateway(page, {
@@ -390,11 +383,7 @@ suite.define(() => {
   it.each(["before", "after"] as const)(
     "keeps cumulative stream text ordered when history resolves %s the live steer event",
     async (historyOrder) => {
-      const context = await suite.newBrowserContext({
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      });
+      const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
       const page = await context.newPage();
       const runId = "run-steer-order";
       const steerRunId = "steer-order";
@@ -500,11 +489,7 @@ suite.define(() => {
   );
 
   it("replaces a retained cumulative steer prefix with split history around keyed commentary", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const runId = "run-steer-split";
     const steerRunId = "steer-split";
@@ -635,11 +620,7 @@ suite.define(() => {
   });
 
   it("keeps modified Enter queued in modifier-enter shortcut mode", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
 
@@ -668,11 +649,7 @@ suite.define(() => {
   });
 
   it("projects one disconnected state for an offline steer follow-up", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
 
@@ -729,11 +706,7 @@ suite.define(() => {
   });
 
   it("sends a queued follow-up after an exact terminal session publication", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       sessionInfo: { hasActiveRun: false, status: "done" },
@@ -811,11 +784,7 @@ suite.define(() => {
   });
 
   it("honors a session interrupt override ahead of the webchat config default", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const sessionKey = "agent:main:main";
     const runtimeConfig = {
@@ -876,11 +845,7 @@ suite.define(() => {
   });
 
   it("routes /redirect through one interrupt-mode chat.send", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
 
@@ -906,11 +871,7 @@ suite.define(() => {
   });
 
   it("steers a restored queued message when only the session row reports the active run", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
 

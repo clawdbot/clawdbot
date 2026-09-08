@@ -294,7 +294,11 @@ export function setupGuidedCustodianTestSuite() {
       .mockReset()
       .mockImplementation(async (effect) => await effect(localOnboarding.persisted.config ?? {}));
     restoreTerminalState.mockClear();
-    promptAuthChoiceGrouped.mockReset();
+    promptAuthChoiceGrouped
+      .mockReset()
+      .mockImplementation(
+        async ({ additionalGroups }) => additionalGroups?.[0]?.options[0]?.value ?? "skip",
+      );
     ensureAuthProfileStore.mockClear();
     detectAvailableSetupProviderIds.mockReset();
     detectAvailableSetupProviderIds.mockResolvedValue(new Set());
@@ -323,6 +327,7 @@ export function setupGuidedCustodianTestSuite() {
     candidate,
     detection,
     existingModelCandidate,
+    ensureAuthProfileStore,
     localOnboarding,
     makeRuntime,
     pendingLocalSetup,

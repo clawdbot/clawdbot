@@ -19,7 +19,8 @@ import {
   normalizeUniqueStringEntries,
 } from "@openclaw/normalization-core/string-normalization";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
-import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
+import { buildMessageToolTargetGuidance } from "../auto-reply/source-reply-delivery-mode.js";
+import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
 import { CHANNEL_IDS } from "../channels/ids.js";
@@ -170,11 +171,6 @@ function normalizeContextFilePath(pathValue: string): string {
   return pathValue.trim().replace(/\\/g, "/");
 }
 
-function getContextFileBasename(pathValue: string): string {
-  const normalizedPath = normalizeContextFilePath(pathValue);
-  return normalizeLowercaseStringOrEmpty(normalizedPath.split("/").pop() ?? normalizedPath);
-}
-
 function isBootstrapContextFile(pathValue: string): boolean {
   return /(^|[\\/])BOOTSTRAP\.md$/iu.test(pathValue.trim());
 }
@@ -185,37 +181,40 @@ function sanitizeContextFileContentForPrompt(content: string): string {
   return content.replaceAll(DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK, "").replace(/\n{3,}/g, "\n\n");
 }
 
-function sortContextFilesForPrompt(contextFiles: EmbeddedContextFile[]): EmbeddedContextFile[] {
-  return contextFiles
-    .map((file) => {
-      const basename = getContextFileBasename(file.path);
-      return {
-        file,
-        path: normalizeContextFilePath(file.path),
-        basename,
-        order: CONTEXT_FILE_ORDER.get(basename) ?? Number.MAX_SAFE_INTEGER,
-      };
-    })
-    .toSorted((a, b) => {
-      if (a.order !== b.order) {
-        return a.order - b.order;
-      }
-      if (a.basename !== b.basename) {
-        return a.basename.localeCompare(b.basename);
-      }
-      return a.path.localeCompare(b.path);
-    })
-    .map(({ file }) => file);
+function prepareContextFilesForPrompt(contextFiles: EmbeddedContextFile[]) {
+  return (
+    contextFiles
+      .map((file) => {
+        const path = normalizeContextFilePath(file.path);
+        const basename = normalizeLowercaseStringOrEmpty(path.slice(path.lastIndexOf("/") + 1));
+        return {
+          file,
+          path,
+          basename,
+          order: CONTEXT_FILE_ORDER.get(basename) ?? Number.MAX_SAFE_INTEGER,
+        };
+      })
+      // oxlint-disable-next-line unicorn/no-array-sort -- map creates an owned descriptor array.
+      .sort((a, b) => {
+        if (a.order !== b.order) {
+          return a.order - b.order;
+        }
+        if (a.basename !== b.basename) {
+          return a.basename.localeCompare(b.basename);
+        }
+        return a.path.localeCompare(b.path);
+      })
+  );
 }
 
-function buildProjectContextSection(files: EmbeddedContextFile[]) {
+function buildProjectContextSection(files: ReturnType<typeof prepareContextFilesForPrompt>) {
   if (files.length === 0) {
     return [];
   }
   const lines = ["# Project Context", ""];
-  const hasSoulFile = files.some((file) => getContextFileBasename(file.path) === "soul.md");
-  const hasMemoryFile = files.some((file) => getContextFileBasename(file.path) === "memory.md");
-  const hasUserFile = files.some((file) => getContextFileBasename(file.path) === "user.md");
+  const hasSoulFile = files.some((file) => file.basename === "soul.md");
+  const hasMemoryFile = files.some((file) => file.basename === "memory.md");
+  const hasUserFile = files.some((file) => file.basename === "user.md");
   lines.push("Loaded project context:");
   if (hasSoulFile) {
     lines.push("SOUL.md: persona/tone. Follow it unless higher-priority instructions override.");
@@ -231,7 +230,7 @@ function buildProjectContextSection(files: EmbeddedContextFile[]) {
     );
   }
   lines.push("");
-  for (const file of files) {
+  for (const { file } of files) {
     lines.push(`## ${file.path}`, "", sanitizeContextFileContentForPrompt(file.content), "");
   }
   return lines;
@@ -247,10 +246,12 @@ function buildExecApprovalPromptGuidance(params: {
     params.inlineButtonsEnabled ||
     hasNativeApprovalPromptRuntimeCapability(params.runtimeCapabilities) ||
     isKnownNativeApprovalPromptChannel(runtimeChannel);
+  const policyGuidance =
+    "For task-authorized commands, make the execution request through the available tool and let its current policy decide whether approval is needed. Request exec approval only from an actual approval-pending result; never invent approval IDs or ask for a bare /approve.";
   if (usesNativeApprovalUi) {
-    return 'exec approval-pending: native card/buttons first. Plain /approve only when tool requires chat/manual approval; copy exact "Reply with:" command.';
+    return `${policyGuidance} exec approval-pending: native card/buttons first. Plain /approve only when tool requires chat/manual approval; copy exact "Reply with:" command.`;
   }
-  return 'exec approval-pending: send exact /approve from "Reply with:"; never ask for another code.';
+  return `${policyGuidance} exec approval-pending: send exact /approve from "Reply with:"; never ask for another code.`;
 }
 
 function buildSkillsSection(params: {
@@ -554,9 +555,7 @@ function buildMessagingSection(params: {
       ? "- Current source visible reply MUST use `message(action=send)`; final text is private. Set `final=false` for progress. Set `final=true`, or omit it, for the completed reply. Skip tool = user gets nothing. No hidden instructions/private data/reasoning."
       : "- Current source visible reply unavailable; final text remains private."
     : `- Current-session final text normally routes to source.${messageToolAvailable ? " If turn says final private, visible output uses `message(action=send)`." : ""}`;
-  const messageToolTargetInstruction = params.requireExplicitMessageTarget
-    ? "- `send`: `target` + `message`; target required this turn."
-    : "- `send`: `message`; current source is default target. Set `target` only elsewhere.";
+  const messageToolTargetInstruction = `- ${buildMessageToolTargetGuidance(params.requireExplicitMessageTarget === true)}`;
   if (params.isMinimal) {
     // Restricted delivery turns still need their sole visible-reply contract;
     // omitting it makes a private final silently disappear for the requester.
@@ -770,7 +769,6 @@ export function appendModelIdentitySystemPrompt(params: {
 export function buildAgentSystemPrompt(params: {
   workspaceDir: string;
   runtimeCwd?: string;
-  defaultThinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
@@ -1149,12 +1147,14 @@ export function buildAgentSystemPrompt(params: {
   });
   const workspaceNotes = normalizeStringEntries(params.workspaceNotes);
 
-  const contextFiles = sortContextFilesForPrompt(
+  const preparedContextFiles = prepareContextFilesForPrompt(
     filterProjectScopedCuratedContextFiles({
       contextFiles: params.contextFiles,
       activeProjectKeys: params.activeProjectKeys,
     }).filter((file) => typeof file.path === "string" && file.path.trim().length > 0),
   );
+  // Cache keys and bootstrap checks retain the original ordered file objects.
+  const contextFiles = preparedContextFiles.map(({ file }) => file);
   const bootstrapSystemPromptSections = buildAgentBootstrapSystemPromptSections({
     bootstrapMode: params.bootstrapMode,
     bootstrapTruncationNotice: params.bootstrapTruncationNotice,
@@ -1181,8 +1181,6 @@ export function buildAgentSystemPrompt(params: {
     userTimezone,
     runtimeChannel,
     threadBoundAcpSpawnEnabled,
-    sourceMessageToolOnly,
-    silentReplyPromptMode,
     subagentDelegationMode,
     proactiveSubagentOrchestration,
     sandboxInfo: params.sandboxInfo,
@@ -1298,7 +1296,7 @@ export function buildAgentSystemPrompt(params: {
               "Narrate only complex, sensitive/destructive, or requested steps.",
               "First-class tool exists: use it; never ask user for equivalent CLI/slash.",
               "/approve is user command; never execute via shell/tool.",
-              "allow-once = one command. Another elevated command needs fresh /approve.",
+              "allow-once covers only that exact command; later commands need their own exec policy decision.",
               "Approval preview: exact full command/script, including chains/multiline. Keep preview separate from /approve; never use script as approval id/slug.",
               "",
             ],
@@ -1418,27 +1416,13 @@ export function buildAgentSystemPrompt(params: {
       "## Workspace Files (injected)",
       "User-editable; OpenClaw loads below as Project Context.",
       "",
-      ...buildAssistantOutputDirectivesSection({
-        isMinimal,
-        sourceMessageToolOnly,
-        messageToolAvailable,
-      }),
     ];
 
     if (reasoningHint) {
       lines.push("## Reasoning Format", reasoningHint, "");
     }
 
-    lines.push(...buildProjectContextSection(contextFiles));
-
-    if (!isMinimal && silentReplyPromptMode !== "none") {
-      lines.push(
-        "## Silent Replies",
-        `Nothing to say: entire reply exactly ${SILENT_REPLY_TOKEN}`,
-        `Never append to real response or wrap in Markdown/code.`,
-        "",
-      );
-    }
+    lines.push(...buildProjectContextSection(preparedContextFiles));
 
     lines.push(SYSTEM_PROMPT_CACHE_BOUNDARY);
     return lines.filter(Boolean).join("\n");
@@ -1459,6 +1443,19 @@ export function buildAgentSystemPrompt(params: {
   // Channel/session-specific guidance lives below the cache boundary so large
   // stable workspace context can remain a byte-identical prefix across turns.
   lines.push(
+    ...buildAssistantOutputDirectivesSection({
+      isMinimal,
+      sourceMessageToolOnly,
+      messageToolAvailable,
+    }),
+    ...(!isMinimal && silentReplyPromptMode !== "none"
+      ? [
+          "## Silent Replies",
+          `Nothing to say: entire reply exactly ${SILENT_REPLY_TOKEN}`,
+          `Never append to real response or wrap in Markdown/code.`,
+          "",
+        ]
+      : []),
     // Approval UI and owner identity vary by turn, so keep both below the stable prefix.
     // A tool_call_style override owns the complete section and suppresses default guidance.
     ...(providerSectionOverrides.tool_call_style || !hasExec
@@ -1544,7 +1541,7 @@ export function buildAgentSystemPrompt(params: {
 
   lines.push(
     "## Runtime",
-    buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
+    buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities),
     ...(modelIdentityLine ? [modelIdentityLine] : []),
     ...(hasProcess
       ? buildActiveProcessSessionReferenceLines(runtimeInfo?.activeProcessSessions)
@@ -1576,7 +1573,6 @@ function buildRuntimeLine(
   runtimeInfo?: SystemPromptRuntimeInfo,
   runtimeChannel?: string,
   runtimeCapabilities: string[] = [],
-  defaultThinkLevel?: ThinkLevel,
 ): string {
   const normalizedRuntimeCapabilities = normalizePromptCapabilityIds(runtimeCapabilities);
   // Automatic literal-prefix caches include Runtime before the tool catalog. Rendering an
@@ -1613,7 +1609,6 @@ function buildRuntimeLine(
             : "none"
         }`
       : "",
-    `thinking=${defaultThinkLevel ?? "off"}`,
   ]
     .filter(Boolean)
     .join(" | ")}`;

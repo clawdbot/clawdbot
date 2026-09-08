@@ -214,6 +214,9 @@ Override with a custom `baseUrl` in config.
 
 ## Built-in catalog
 
+Setup keeps connection settings and model aliases, including `modelstudio` aliases, without copying generated catalog rows into your config.
+Explicit `models.mode: "replace"` keeps catalog seeding enabled; custom model rows stay intact.
+
 OpenClaw discovers models from the configured endpoint's authenticated `/models`
 API. The plugin keeps the following seed metadata for offline discovery and for
 endpoints that return only model IDs. Coding Plan configs omit models that are

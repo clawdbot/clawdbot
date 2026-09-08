@@ -49,10 +49,14 @@ const TEST_PHYSICAL_MEMORY_BYTES = 16 * 1024 * 1024 * 1024;
 // fixtures prove only their declared hierarchy instead of inheriting the runner's RAM.
 vi.spyOn(os, "totalmem").mockReturnValue(TEST_PHYSICAL_MEMORY_BYTES);
 const readFileSync = fs.readFileSync.bind(fs);
-vi.spyOn(fs, "readFileSync").mockImplementation((filePath, options) =>
-  filePath === "/proc/meminfo" && options === "utf8"
-    ? "MemTotal:       16777216 kB\nMemAvailable:   16777216 kB\n"
-    : readFileSync(filePath, options),
+vi.spyOn(fs, "readFileSync").mockImplementation(
+  (filePath, options?: BufferEncoding | fs.ReadFileSyncOptions | null) =>
+    filePath === "/proc/meminfo" && options === "utf8"
+      ? "MemTotal:       16777216 kB\nMemAvailable:   16777216 kB\n"
+      : readFileSync(
+          filePath,
+          typeof options === "string" ? { encoding: options } : (options ?? {}),
+        ),
 );
 const NO_MEMORY_LIMIT = {
   availableMemoryBytes: TEST_PHYSICAL_MEMORY_BYTES,
@@ -2352,10 +2356,10 @@ describe("runTsdownBuildInvocation", () => {
               clears.mockRestore();
               timers.mockRestore();
               clock.mockRestore();
-              if (abortFailure) {
-                throw abortFailure;
-              }
             }
+          }
+          if (abortFailure) {
+            throw abortFailure;
           }
         });
       },

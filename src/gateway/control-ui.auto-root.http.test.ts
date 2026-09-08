@@ -33,7 +33,12 @@ describe("handleControlUiHttpRequest prepared root lifecycle", () => {
       await fs.link(path.join(assetsDir, "app.js"), path.join(assetsDir, "app.hl.js"));
       const { res, end } = makeMockHttpResponse();
       const handled = await handleControlUiHttpRequest(
-        { url: "/assets/app.hl.js", method: "GET" } as IncomingMessage,
+        {
+          url: "/assets/app.hl.js",
+          method: "GET",
+          headers: {},
+          headersDistinct: {},
+        } as IncomingMessage,
         res,
         { root: { kind: "bundled", path: tmp, realPath: await fs.realpath(tmp) } },
       );

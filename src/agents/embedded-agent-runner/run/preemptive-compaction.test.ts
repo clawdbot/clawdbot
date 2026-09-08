@@ -525,8 +525,8 @@ describe("preemptive-compaction", () => {
       reserveTokens: 20_000,
     });
 
-    expect(result.effectiveReserveTokens).toBe(8_000);
-    expect(result.promptBudgetBeforeReserve).toBe(8_000);
+    expect(result.effectiveReserveTokens).toBe(4_000);
+    expect(result.promptBudgetBeforeReserve).toBe(12_000);
     expect(result.shouldCompact).toBe(false);
     expect(result.route).toBe("fits");
   });
@@ -537,11 +537,11 @@ describe("preemptive-compaction", () => {
       systemPrompt: "sys",
       prompt: "hello",
       contextTokenBudget: 32_000,
-      reserveTokens: 20_000,
+      reserveTokens: 4_000,
     });
 
-    expect(result.effectiveReserveTokens).toBe(20_000);
-    expect(result.promptBudgetBeforeReserve).toBe(12_000);
+    expect(result.effectiveReserveTokens).toBe(4_000);
+    expect(result.promptBudgetBeforeReserve).toBe(28_000);
     expect(result.shouldCompact).toBe(false);
   });
 

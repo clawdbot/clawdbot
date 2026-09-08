@@ -183,7 +183,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
       media: true,
       blockStreaming: true,
     },
-    reload: { configPrefixes: ["channels.irc"] },
+    reload: { configPrefixes: ["channels.irc"], accountScopedRestart: true },
     configSchema: IrcChannelConfigSchema,
     config: {
       ...ircConfigAdapter,
@@ -329,7 +329,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
       idLabel: "ircUser",
       message: PAIRING_APPROVED_MESSAGE,
       normalizeAllowEntry: (entry) => normalizeIrcAllowEntry(entry),
-      notify: async ({ cfg, id, message }) => {
+      notify: async ({ cfg, id, message, accountId }) => {
         const target = normalizePairingTarget(id);
         if (!target) {
           throw new Error(`invalid IRC pairing id: ${id}`);
@@ -337,6 +337,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
         const { sendMessageIrc } = await loadIrcChannelRuntime();
         await sendMessageIrc(target, message, {
           cfg: cfg as CoreConfig,
+          accountId,
         });
       },
     },

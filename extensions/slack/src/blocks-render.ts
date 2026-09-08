@@ -25,6 +25,7 @@ import {
   buildSlackDataTableBlock,
   countSlackDataTableBlocksCellCharacters,
   countSlackDataTableCellCharacters,
+  resolveSlackDataTableCellCharacterCount,
   SLACK_DATA_TABLE_AGGREGATE_CELL_CHARACTERS_MAX,
 } from "./data-table.js";
 import {
@@ -442,13 +443,13 @@ function canRenderSlackPresentationTables(
     if (block.type !== "table") {
       continue;
     }
-    const rendered = buildSlackDataTableBlock(block, {
+    const tableCellCharacterCount = resolveSlackDataTableCellCharacterCount(block, {
       cellCharacterCountOffset: cellCharacterCount,
     });
-    if (!rendered) {
+    if (tableCellCharacterCount === undefined) {
       return false;
     }
-    cellCharacterCount += countSlackDataTableCellCharacters(rendered);
+    cellCharacterCount += tableCellCharacterCount;
   }
   return true;
 }

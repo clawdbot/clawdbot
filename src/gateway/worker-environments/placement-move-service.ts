@@ -74,6 +74,9 @@ export function createWorkerPlacementMoveService(options: {
     identity: MoveSessionIdentity,
     target: WorkerPlacementMoveTarget,
   ) => Promise<WorkerPlacementMoveDestination | undefined>;
+  prepareGatewayMove?: (
+    params: MoveSessionIdentity & { assertCurrent: () => void },
+  ) => Promise<void>;
 }) {
   const recordError = (intent: WorkerPlacementMoveIntent, error: unknown): void => {
     options.placements.recordPlacementMoveError({
@@ -271,6 +274,23 @@ export function createWorkerPlacementMoveService(options: {
           environment.state !== "orphaned"
         ) {
           return;
+        }
+        const source = placement;
+        const assertCurrent = () => {
+          const current = options.placements.get(intent.sessionId);
+          if (
+            !matchesWorkerPlacementTarget(current, source) ||
+            options.placements.getPlacementMove(intent.sessionId)?.operationId !==
+              intent.operationId
+          ) {
+            throw new Error(`Session ${identity.sessionKey} move recovery lost its source owner`);
+          }
+        };
+        if (intent.target.kind === "gateway") {
+          // Teardown can survive a restart before the source checkout is materialized.
+          // Publish local placement only after its accepted repository state exists locally.
+          await options.prepareGatewayMove?.({ ...identity, assertCurrent });
+          assertCurrent();
         }
         placement = options.placements.completePlacementMoveSourceToLocal({
           operationId: intent.operationId,

@@ -69,17 +69,20 @@ describe("authenticated request connection liveness", { concurrent: false }, () 
       }),
     });
 
-    await harness.dispatcher.dispatch(
+    const dispatch = harness.dispatcher.dispatch(
       { type: "req", id: testCase.method, method: testCase.method, params: testCase.params },
       client,
     );
-    await started.promise;
-    expect(runtime.beforeHandler).toHaveBeenCalledOnce();
-
-    state.clients.delete(client);
-    state.sessionEventSubscribers.unsubscribe(client.connId);
-    state.sessionMessageSubscribers.unsubscribeAll(client.connId);
-    held.resolve();
+    try {
+      await started.promise;
+      expect(runtime.beforeHandler).toHaveBeenCalledOnce();
+      state.clients.delete(client);
+      state.sessionEventSubscribers.unsubscribe(client.connId);
+      state.sessionMessageSubscribers.unsubscribeAll(client.connId);
+    } finally {
+      held.resolve();
+      await dispatch;
+    }
 
     expect(await harness.awaitResponseFrame(testCase.method)).toMatchObject({ ok: true });
     testCase.assertEmpty(state);

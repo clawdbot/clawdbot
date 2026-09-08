@@ -10,6 +10,7 @@ import {
   buildLaunchAgentPlist,
   readLaunchAgentProgramArgumentsFromFile,
 } from "../daemon/launchd-plist.js";
+import { decodeLaunchAgentPlistFixture } from "../daemon/launchd-plist.test-support.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 
@@ -35,6 +36,14 @@ const mocks = vi.hoisted(() => ({
     diagnostics: [],
     plugins: [],
   })),
+}));
+
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
+  runExec: vi.fn(
+    async (_command: string, _args: string[], options: { input: string | Uint8Array }) =>
+      decodeLaunchAgentPlistFixture(options.input),
+  ),
 }));
 
 vi.mock("./daemon-install-auth-profiles-source.runtime.js", () => ({

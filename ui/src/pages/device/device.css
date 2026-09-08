@@ -1,0 +1,30 @@
+.device-domains {
+  display: grid;
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.device-domain-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.device-extension-setup {
+  display: grid;
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.device-extension-setup__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.device-extension-setup p {
+  margin: 0;
+}

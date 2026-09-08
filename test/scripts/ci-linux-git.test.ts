@@ -914,11 +914,23 @@ const show = ["show", sourceObject];
 const rebase = ["rebase", "-X", "theirs", "origin/main"];
 const push = ["push", "origin", "HEAD:main"];
 const abort = ["rebase", "--abort"];
-const diff = ["diff", "--quiet", "--", "docs", ".openclaw-sync"];
+const diff = [
+  "diff",
+  "--quiet",
+  "--",
+  "docs",
+  ".openclaw-sync",
+  "package.json",
+  "package-lock.json",
+];
+const dependencyReads = [
+  ["show", "refs/remotes/origin/main:package.json"],
+  ["show", "refs/remotes/origin/main:package-lock.json"],
+];
 const commit = [
   ["config", "user.name", "openclaw-docs-sync[bot]"],
   ["config", "user.email", "openclaw-docs-sync[bot]@users.noreply.github.com"],
-  ["add", "docs", ".openclaw-sync"],
+  ["add", "docs", ".openclaw-sync", "package.json", "package-lock.json"],
   ["commit", "-m", `chore(sync): mirror docs from fixture/checkout@${candidate}`],
 ];
 
@@ -986,11 +998,39 @@ posixIt.each([23, 125, "hang"] satisfies FetchResult[])(
   async (failure) => {
     const report = await runDocs("Commit publish repo sync", { fetchResults: [failure, 0] });
     expect(report.code, report.output).toBe(0);
-    expect(gitArgs(report)).toEqual([diff, fetch, ...commit, fetch, show, rebase, push]);
+    expect(gitArgs(report)).toEqual([
+      diff,
+      fetch,
+      ...commit,
+      fetch,
+      show,
+      rebase,
+      ...dependencyReads,
+      push,
+    ]);
     expect(backoffs(report)).toEqual([]);
-    expect(report.commands.every(({ cwd }) => cwd === path.join(report.workspace, "publish"))).toBe(
-      true,
-    );
+    expect(
+      report.commands.every(
+        ({ tool, cwd }) =>
+          cwd === (tool === "node" ? report.workspace : path.join(report.workspace, "publish")),
+      ),
+    ).toBe(true);
+    expect(report.commands.filter(({ tool }) => tool === "node")).toHaveLength(1);
+    expect(report.boundaries.map(({ name }) => name)).toEqual([
+      "diff",
+      "fetch:1",
+      "config",
+      "config",
+      "add",
+      "commit",
+      "fetch:2",
+      `show:${sourceObject}`,
+      "rebase:1",
+      ...dependencyReads.map((args) => `show:${args[1]}`),
+      "consumer:node",
+      "push:1",
+      "exit",
+    ]);
   },
   55_000,
 );
@@ -1016,11 +1056,12 @@ posixIt.each([
       fetch,
       show,
       rebase,
-      ...(operation === "push" ? [push] : []),
+      ...(operation === "push" ? [...dependencyReads, push] : []),
       abort,
       fetch,
       show,
       rebase,
+      ...dependencyReads,
       push,
     ]);
     expect(backoffs(report)).toEqual([2]);
@@ -1030,7 +1071,7 @@ posixIt.each([
   55_000,
 );
 
-posixIt.each(["advisory fetch", "fetch", "rebase", "push"] as const)(
+posixIt.each(["advisory fetch", "fetch", "rebase", "manifest", "lock", "push"] as const)(
   "docs publication cleanup uncertainty at %s prevents abort/retry/next Git",
   async (operation) => {
     const report = await runDocs("Commit publish repo sync", {
@@ -1042,6 +1083,14 @@ posixIt.each(["advisory fetch", "fetch", "rebase", "push"] as const)(
             : [],
       rebaseResults: operation === "rebase" ? ["cleanup-failure"] : [],
       pushResults: operation === "push" ? ["cleanup-failure"] : [],
+      commandResults:
+        operation === "manifest" || operation === "lock"
+          ? {
+              [dependencyReads[operation === "manifest" ? 0 : 1]!.join(" ")]: {
+                code: "cleanup-failure",
+              },
+            }
+          : {},
     });
     expect(report.code, report.output).toBe(125);
     expect(gitArgs(report)).toEqual([
@@ -1055,7 +1104,15 @@ posixIt.each(["advisory fetch", "fetch", "rebase", "push"] as const)(
             fetch,
             ...(operation === "fetch"
               ? []
-              : [show, rebase, ...(operation === "push" ? [push] : [])]),
+              : [
+                  show,
+                  rebase,
+                  ...dependencyReads.slice(
+                    0,
+                    operation === "rebase" ? 0 : operation === "manifest" ? 1 : 2,
+                  ),
+                  ...(operation === "push" ? [push] : []),
+                ]),
           ]),
     ]);
     expect(report.rebases.some(({ args }) => args.includes("--abort"))).toBe(false);
@@ -1149,8 +1206,55 @@ posixIt.each([
       show,
       ...staleCheck,
       rebase,
+      ...dependencyReads,
       push,
     ]);
+  },
+  55_000,
+);
+
+posixIt.each([
+  {
+    label: "malformed remote manifest",
+    text: "{",
+    validates: false,
+    error: "Git ownership/setup failed (unknown); refusing reuse or retry",
+  },
+  {
+    label: "unrelated remote dependency update lost during rebase",
+    text: JSON.stringify({
+      name: "docs-fixture",
+      private: true,
+      devDependencies: { "@sindresorhus/slugify": "2.2.0", "markdown-it": "15.0.1" },
+    }),
+    validates: true,
+    error: "docs sync changed unrelated publisher dependencies",
+  },
+])(
+  "docs publication rejects $label before push without Git retries",
+  async ({ text, validates, error }) => {
+    const report = await runDocs("Commit publish repo sync", {
+      objects: {
+        [sourceObject]: { text: JSON.stringify({ sha: candidate }) },
+        [dependencyReads[0]![1]!]: { text },
+      },
+    });
+    expect(report.code, report.output).toBe(125);
+    expect(gitArgs(report)).toEqual([
+      diff,
+      fetch,
+      show,
+      ...commit,
+      fetch,
+      show,
+      rebase,
+      ...dependencyReads.slice(0, validates ? 2 : 1),
+    ]);
+    expect(report.commands.filter(({ tool }) => tool === "node")).toHaveLength(validates ? 1 : 0);
+    expect(report.output).toContain(error);
+    expect(report.pushes).toEqual([]);
+    expect(report.rebases.map(({ args }) => args)).toEqual([rebase]);
+    expect(backoffs(report)).toEqual([]);
   },
   55_000,
 );

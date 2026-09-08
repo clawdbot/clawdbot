@@ -4427,6 +4427,70 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(onPendingContinuation).toHaveBeenCalledOnce();
   });
 
+  it("prefers a yield acknowledgment over an earlier generated tool warning", async () => {
+    const toolWarning = setReplyPayloadMetadata(
+      { text: "⚠️ Bash failed", isError: true },
+      { toolErrorWarning: { toolName: "bash" } },
+    );
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [toolWarning],
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      },
+      acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:child" }],
+    });
+    const { run } = createMinimalRun();
+
+    await expect(run()).resolves.toMatchObject({
+      text: "Research started; results will follow.",
+      replyToId: "msg",
+    });
+  });
+
+  it("keeps a generated tool warning when the yield acknowledgment is not deliverable", async () => {
+    const toolWarning = setReplyPayloadMetadata(
+      { text: "⚠️ Bash failed", isError: true },
+      { toolErrorWarning: { toolName: "bash" } },
+    );
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [toolWarning],
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      },
+    });
+    const { run } = createMinimalRun({ currentInboundEventKind: "room_event" });
+
+    await expect(run()).resolves.toMatchObject({
+      text: "⚠️ Bash failed",
+      isError: true,
+      replyToId: "msg",
+    });
+  });
+
+  it("keeps a generated tool warning when the yield acknowledgment normalizes to empty", async () => {
+    const toolWarning = setReplyPayloadMetadata(
+      { text: "⚠️ Bash failed", isError: true },
+      { toolErrorWarning: { toolName: "bash" } },
+    );
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [toolWarning],
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "[[reply_to_current]]",
+      },
+      acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:child" }],
+    });
+    const { run } = createMinimalRun();
+
+    await expect(run()).resolves.toMatchObject({
+      text: "⚠️ Bash failed",
+      isError: true,
+      replyToId: "msg",
+    });
+  });
+
   it("delivers an explicit yield acknowledgment in message-tool-only mode", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [],
@@ -5836,6 +5900,6 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 });
 
-import { getReplyPayloadMetadata } from "../reply-payload.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

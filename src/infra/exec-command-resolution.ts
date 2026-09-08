@@ -275,6 +275,28 @@ export function isCwdBoundHashedArgPattern(value: string | null | undefined): bo
   return typeof value === "string" && value.startsWith(CWD_BOUND_HASHED_ARG_PATTERN_PREFIX);
 }
 
+export type ExecAllowlistScope = "command text" | "argv+cwd" | "argv" | "any args" | "inactive";
+
+export function classifyExecAllowlistScope(
+  entry: Pick<ExecAllowlistEntry, "pattern" | "source" | "argPattern">,
+): ExecAllowlistScope {
+  const pattern = entry.pattern.trim();
+  const generated = entry.source === "allow-always";
+  // Reserved command markers require generated source; manual patterns remain executable globs.
+  if (generated && (pattern.startsWith("=command:") || pattern.startsWith("=node-command:"))) {
+    return "command text";
+  }
+  // Legacy hashes never match, including on manual entries that Doctor must retain.
+  const legacyHashed = entry.argPattern?.startsWith(LEGACY_HASHED_ARG_PATTERN_PREFIX) === true;
+  if (legacyHashed || (generated && !isCwdBoundHashedArgPattern(entry.argPattern))) {
+    return "inactive";
+  }
+  if (isCwdBoundHashedArgPattern(entry.argPattern)) {
+    return "argv+cwd";
+  }
+  return entry.argPattern ? "argv" : "any args";
+}
+
 function renderGeneratedArgPatternSubject(argv: string[]): string {
   const argsSlice = argv.slice(1);
   return argsSlice.length === 0 ? "\x00\x00" : argsSlice.join("\x00") + "\x00";

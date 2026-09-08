@@ -663,6 +663,7 @@ type FailoverErrorContext = {
   authMode?: string;
   sessionId?: string;
   lane?: string;
+  timeout?: FailoverError["timeout"];
 };
 
 type ModelFallbackErrorResolution =
@@ -677,14 +678,14 @@ export function coerceToFailoverError(
   context?: FailoverErrorContext,
 ): FailoverError | null {
   if (isFailoverError(err)) {
-    if (context?.authMode && !err.authMode) {
+    if ((context?.authMode && !err.authMode) || (context?.timeout && !err.timeout)) {
       const message = typeof err.message === "string" ? err.message : String(err);
       const enriched = new FailoverError(message, {
         reason: err.reason,
         provider: err.provider,
         model: err.model,
         profileId: err.profileId,
-        authMode: context.authMode,
+        authMode: err.authMode ?? context.authMode,
         status: err.status,
         code: err.code,
         rawError: err.rawError,
@@ -694,6 +695,7 @@ export function coerceToFailoverError(
         cause: err.cause,
         suspend: err.suspend,
         cliTimeout: err.cliTimeout,
+        timeout: err.timeout ?? context.timeout,
         attempts: err.attempts,
         soonestCooldownExpiry: err.soonestCooldownExpiry,
       });
@@ -728,6 +730,7 @@ export function coerceToFailoverError(
     code,
     rawError: message,
     cause: err instanceof Error ? err : undefined,
+    timeout: context?.timeout,
     suspend: shouldSuspend,
   });
 }

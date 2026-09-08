@@ -48,7 +48,7 @@
       "appGuidedDiscovery": true,
       "appGuidedActionLabel": "Set up model",
       "choiceLabel": "Managed local server",
-      "choiceHint": "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
+      "choiceHint": "Choose a Qwen, Gemma, or Muse model for this Gateway's hardware and install llama.cpp",
       "groupId": "llama-cpp",
       "groupLabel": "Local llama.cpp",
       "groupHint": "Managed or external llama.cpp server"

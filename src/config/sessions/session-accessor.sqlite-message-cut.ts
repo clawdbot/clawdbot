@@ -256,6 +256,7 @@ async function mutateSqliteSessionAtMessage(
         creation: params.creation,
         mode,
         expectedState: preparedExpectedState,
+        repositoryWorkspaceId: params.repositoryWorkspaceId,
         sourceKey,
         targetKey,
       });
@@ -270,7 +271,7 @@ async function mutateSqliteSessionAtMessage(
         ...(result.entry.sessionId ? [result.entry.sessionId] : []),
       ]);
     }
-    emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
+    emitCommittedSessionIdentityDiff(resolved.agentId, previousIdentity, currentIdentity);
     return result;
   });
 }
@@ -284,6 +285,7 @@ function mutateSqliteSessionAtMessageInTransaction(
     entryId: string;
     expectedState: SessionEntryExpectedState | undefined;
     mode: SessionTranscriptMutationMode;
+    repositoryWorkspaceId?: string;
     sourceKey: string;
     targetKey: string;
   },
@@ -315,6 +317,14 @@ function mutateSqliteSessionAtMessageInTransaction(
     if (tipStatus) {
       return { status: tipStatus };
     }
+  }
+  if (
+    params.mode === "fork" &&
+    currentEntry.repositoryWorkspaceId &&
+    (!params.repositoryWorkspaceId ||
+      params.repositoryWorkspaceId === currentEntry.repositoryWorkspaceId)
+  ) {
+    throw new Error("Repository session fork requires its own prepared workspace");
   }
 
   const nextSessionId = randomUUID();
@@ -376,6 +386,9 @@ function mutateSqliteSessionAtMessageInTransaction(
     }),
     ...(params.mode === "fork" && params.creation
       ? buildSessionCreationStamp(params.creation)
+      : {}),
+    ...(params.mode === "fork" && params.repositoryWorkspaceId
+      ? { repositoryWorkspaceId: params.repositoryWorkspaceId }
       : {}),
     ...(currentEntry.incognito === true || isIncognitoSessionKey(params.canonicalSourceKey)
       ? { incognito: true as const }

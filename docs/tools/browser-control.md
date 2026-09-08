@@ -309,7 +309,7 @@ Snapshot flags at a glance:
 
 - `--format ai` (default with Playwright): AI snapshot with native Playwright refs, including frame-qualified refs such as `f1e12`.
 - `--format aria`: accessibility tree with `axN` refs. When Playwright is available, OpenClaw binds refs with backend DOM ids to the live page so follow-up actions can use them; otherwise treat the output as inspection-only.
-- `--efficient` (or `--mode efficient`): compact role snapshot preset. Set `browser.snapshotDefaults.mode: "efficient"` to make this the default (see [Gateway configuration](/gateway/configuration-reference#browser)).
+- `--efficient` (or `--mode efficient`): compact role snapshot preset. Set `browser.snapshotDefaults.mode: "efficient"` to make this the default (see [Gateway configuration](/gateway/config-browser-ui-desktop#browser)).
 - `--interactive`, `--compact`, `--depth`, `--selector` force a role snapshot with `ref=e12` refs. `--frame "<iframe>"` scopes role snapshots to an iframe.
 - A selector-scoped snapshot is a point-in-time observation: if no element matches when the snapshot is requested, it returns an empty snapshot immediately instead of waiting for the snapshot timeout. Use `openclaw browser wait "<selector>"` when the page is expected to add the element later.
 - `--selector` does not change the behavior of page-wide or frame-scoped transport failures; those still use the configured snapshot timeout and diagnostics.

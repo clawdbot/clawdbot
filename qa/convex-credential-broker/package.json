@@ -14,6 +14,6 @@
     "nostr-tools": "2.25.0"
   },
   "devDependencies": {
-    "@types/node": "26.3.0"
+    "@types/node": "26.4.0"
   }
 }

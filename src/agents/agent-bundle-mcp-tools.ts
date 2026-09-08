@@ -1,7 +1,8 @@
 /** Public facade for bundle MCP tool materialization and session-scoped runtime management. */
 export {
   disposeAllSessionMcpRuntimes,
-  getOrCreateSessionMcpRuntime,
+  reloadSessionMcpRuntimes,
+  acquireSessionMcpRuntime,
   peekSessionMcpRuntime,
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,

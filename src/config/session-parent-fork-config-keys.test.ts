@@ -1,6 +1,6 @@
 // Verifies parent-fork session config keys stay aligned with schema.
 import { describe, expect, it } from "vitest";
-import { validateConfigObjectRaw } from "./validation.js";
+import { validateConfigObjectRaw } from "./validation-core.js";
 
 describe("session parent fork config keys", () => {
   it("rejects legacy session.parentForkMaxTokens as an unknown session key", () => {

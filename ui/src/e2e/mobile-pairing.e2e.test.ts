@@ -7,7 +7,10 @@ import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI mobile pairing mocked Gateway E2E",
@@ -35,112 +38,105 @@ async function captureUiProof(page: Page, fileName: string) {
 
 suite.define(() => {
   it("opens pairing from a catalog command without creating a transcript turn", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
-      async ({ page }) => {
-        const baselineText = "Pairing command baseline transcript.";
-        const gateway = await installMockGateway(page, {
-          historyMessages: [
-            {
-              content: [{ text: baselineText, type: "text" }],
-              role: "assistant",
-              timestamp: Date.now(),
-            },
-          ],
-          methodResponses: {
-            "commands.list": {
-              commands: [
-                {
-                  name: "pair",
-                  textAliases: ["/pair"],
-                  description: "Generate setup codes and approve device pairing requests.",
-                  source: "plugin",
-                  scope: "both",
-                  acceptsArgs: true,
-                  clientPresentation: {
-                    when: "no-arguments",
-                    action: { kind: "device-pairing" },
-                  },
-                },
-              ],
-            },
-            "device.pair.list": { paired: [], pending: [] },
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const baselineText = "Pairing command baseline transcript.";
+      const gateway = await installMockGateway(page, {
+        historyMessages: [
+          {
+            content: [{ text: baselineText, type: "text" }],
+            role: "assistant",
+            timestamp: Date.now(),
           },
-          operatorScopes: ["operator.admin"],
-        });
+        ],
+        methodResponses: {
+          "commands.list": {
+            commands: [
+              {
+                name: "pair",
+                textAliases: ["/pair"],
+                description: "Generate setup codes and approve device pairing requests.",
+                source: "plugin",
+                scope: "both",
+                acceptsArgs: true,
+                clientPresentation: {
+                  when: "no-arguments",
+                  action: { kind: "device-pairing" },
+                },
+              },
+            ],
+          },
+          "device.pair.list": { paired: [], pending: [] },
+        },
+        operatorScopes: ["operator.admin"],
+      });
 
-        await page.goto(`${suite.server.baseUrl}chat`);
-        const baseline = page
-          .locator(".chat-group.assistant .chat-text")
-          .getByText(baselineText, { exact: true });
-        await baseline.waitFor();
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
-        await composer.fill("/pa");
-        await gateway.waitForRequest("commands.list");
-        const pairOption = page.getByRole("option").filter({ hasText: "/pair" });
-        await pairOption.waitFor();
-        await pairOption.click();
-        await expect.poll(() => composer.inputValue()).toBe("/pair ");
-        await page.getByRole("button", { name: "Send message" }).click();
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const baseline = page
+        .locator(".chat-group.assistant .chat-text")
+        .getByText(baselineText, { exact: true });
+      await baseline.waitFor();
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.fill("/pa");
+      await gateway.waitForRequest("commands.list");
+      const pairOption = page.getByRole("option").filter({ hasText: "/pair" });
+      await pairOption.waitFor();
+      await pairOption.click();
+      await expect.poll(() => composer.inputValue()).toBe("/pair ");
+      await page.getByRole("button", { name: "Send message" }).click();
 
-        const dialog = page.getByRole("dialog", { name: "Pair a device" });
-        await dialog.waitFor();
-        expect(await gateway.getRequests("chat.send")).toEqual([]);
-        expect(await gateway.getRequests("device.pair.setupCode")).toEqual([]);
-        expect(await baseline.count()).toBe(1);
-        expect(await page.locator(".chat-group.user", { hasText: "/pair" }).count()).toBe(0);
+      const dialog = page.getByRole("dialog", { name: "Pair a device" });
+      await dialog.waitFor();
+      expect(await gateway.getRequests("chat.send")).toEqual([]);
+      expect(await gateway.getRequests("device.pair.setupCode")).toEqual([]);
+      expect(await baseline.count()).toBe(1);
+      expect(await page.locator(".chat-group.user", { hasText: "/pair" }).count()).toBe(0);
 
-        await page.locator(".device-pair-setup__close").click();
-        await dialog.waitFor({ state: "hidden" });
-        await page.reload();
-        await baseline.waitFor();
-        expect(await page.locator(".chat-group.user", { hasText: "/pair" }).count()).toBe(0);
-        expect(await gateway.getRequests("chat.send")).toEqual([]);
+      await page.locator(".device-pair-setup__close").click();
+      await dialog.waitFor({ state: "hidden" });
+      await page.reload();
+      await baseline.waitFor();
+      expect(await page.locator(".chat-group.user", { hasText: "/pair" }).count()).toBe(0);
+      expect(await gateway.getRequests("chat.send")).toEqual([]);
 
-        await composer.fill("/pair status");
-        await page.getByRole("button", { name: "Send message" }).click();
-        const remote = await gateway.waitForRequest("chat.send");
-        const remoteParams = requireRecord(remote.params);
-        expect(remoteParams).toEqual(expect.objectContaining({ message: "/pair status" }));
-        const remoteReply = "Pair status completed remotely.";
-        await gateway.emitChatFinal({
-          runId: requireString(remoteParams.idempotencyKey, "pair status run id"),
-          text: remoteReply,
-        });
-        await page
-          .locator(".chat-group.assistant .chat-text")
-          .getByText(remoteReply, { exact: true })
-          .waitFor();
-        await expect.poll(() => page.locator(".chat-queue").count()).toBe(0);
+      await composer.fill("/pair status");
+      await page.getByRole("button", { name: "Send message" }).click();
+      const remote = await gateway.waitForRequest("chat.send");
+      const remoteParams = requireRecord(remote.params);
+      expect(remoteParams).toEqual(expect.objectContaining({ message: "/pair status" }));
+      const remoteReply = "Pair status completed remotely.";
+      await gateway.emitChatFinal({
+        runId: requireString(remoteParams.idempotencyKey, "pair status run id"),
+        text: remoteReply,
+      });
+      await page
+        .locator(".chat-group.assistant .chat-text")
+        .getByText(remoteReply, { exact: true })
+        .waitFor();
+      await expect.poll(() => page.locator(".chat-queue").count()).toBe(0);
 
-        await gateway.setMethodResponse("commands.list", {
-          commands: [
-            {
-              name: "pair",
-              textAliases: ["/pair"],
-              description: "Generate setup codes and approve device pairing requests.",
-              source: "plugin",
-              scope: "both",
-              acceptsArgs: true,
-            },
-          ],
-        });
-        await page.reload();
-        await baseline.waitFor();
-        await composer.fill("/pa");
-        await expect.poll(async () => (await gateway.getRequests("commands.list")).length).toBe(1);
-        await page.getByRole("option").filter({ hasText: "/pair" }).click();
-        await page.getByRole("button", { name: "Send message" }).click();
-        await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(1);
-        expect((await gateway.getRequests("chat.send")).at(-1)?.params).toEqual(
-          expect.objectContaining({ message: "/pair" }),
-        );
-      },
-    );
+      await gateway.setMethodResponse("commands.list", {
+        commands: [
+          {
+            name: "pair",
+            textAliases: ["/pair"],
+            description: "Generate setup codes and approve device pairing requests.",
+            source: "plugin",
+            scope: "both",
+            acceptsArgs: true,
+          },
+        ],
+      });
+      await page.reload();
+      await baseline.waitFor();
+      await composer.fill("/pa");
+      await expect.poll(async () => (await gateway.getRequests("commands.list")).length).toBe(1);
+      await page.getByRole("option").filter({ hasText: "/pair" }).click();
+      await page.getByRole("button", { name: "Send message" }).click();
+      await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(1);
+      expect((await gateway.getRequests("chat.send")).at(-1)?.params).toEqual(
+        expect.objectContaining({ message: "/pair" }),
+      );
+    });
   });
 
   it("retires exact setup credentials across success, expiry, regeneration, and errors", async () => {

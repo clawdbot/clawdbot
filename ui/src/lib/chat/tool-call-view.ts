@@ -8,6 +8,7 @@
 
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { resolveExecTitle } from "../../../../src/agents/tool-display-exec.js";
 import {
   buildWriteDiffLines,
   computeLineDiff,
@@ -29,8 +30,12 @@ type ToolCallViewSource = {
 
 export type ToolCallView = {
   kind: ToolCallKind;
+  /** Agent-supplied purpose for execution tools; does not describe their outcome. */
+  title?: string;
   /** Full command text for `command` rows (first line shown collapsed). */
   command?: string;
+  /** JavaScript source for code-mode execution, rendered without shell highlighting. */
+  code?: string;
   /** File basename or primary target shown bold in the row. */
   target?: string;
   /** Dimmed secondary detail (directory, query scope, URL host…). */
@@ -337,7 +342,7 @@ export function resolveToolCallView(source: ToolCallViewSource): ToolCallView {
  * Strip the `sh -lc '<command>'` wrapper harnesses add around agent commands
  * so rows show the command the model actually wrote. Display-only.
  */
-export function unwrapShellWrapperCommand(command: string): string {
+function unwrapShellWrapperCommand(command: string): string {
   const match = command.match(
     /^\s*(?:\/(?:usr\/)?bin\/)?(?:ba|z|da)?sh\s+-l?c\s+(['"])([\s\S]+)\1\s*$/,
   );
@@ -356,7 +361,12 @@ function buildToolCallView(
 
   if (kind === "command") {
     const command = args ? readNonBlankString(args.command) : undefined;
-    return { kind, command: command ? unwrapShellWrapperCommand(command) : command };
+    return {
+      kind,
+      title: COMMAND_TOOL_NAMES.has(key) ? resolveExecTitle(args) : undefined,
+      command: command ? unwrapShellWrapperCommand(command) : command,
+      code: args ? readNonBlankString(args.code) : undefined,
+    };
   }
 
   if (kind === "read") {

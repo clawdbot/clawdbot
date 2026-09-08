@@ -20,13 +20,7 @@ extension OnboardingAISetupModel {
             self.configuredGatewayBlocker != nil ||
             self.waitingForPendingActivationDeadline
         else { return }
-        // Retire stale candidates and `started` state. A later successful
-        // missing-model probe must be able to run a fresh detect/activate flow.
-        self.resetForGatewayChange(clearPendingHandoff: false)
-        self.updateConfiguredGatewayBlockerState(
-            .unavailable,
-            phase: .ready,
-            detectError: Failure(summary: summary, detail: nil))
+        self.enterConfiguredGatewayBlocker(.unavailable, failure: Failure(summary: summary, detail: nil))
     }
 
     func showConfiguredGatewayAuthIssue(_ issue: RemoteGatewayAuthIssue) {
@@ -37,19 +31,7 @@ extension OnboardingAISetupModel {
         self.enterGatewayAuthBlocker(issue)
     }
 
-    func beginConfiguredGatewayProbeRetry() {
-        guard self.configuredGatewayBlocker != nil else { return }
-        self.updateConfiguredGatewayBlockerState(
-            self.configuredGatewayBlocker,
-            phase: .detecting,
-            detectError: nil)
-    }
-
     func enterGatewayAuthBlocker(_ issue: RemoteGatewayAuthIssue) {
-        self.resetForGatewayChange(clearPendingHandoff: false)
-        self.updateConfiguredGatewayBlockerState(
-            .authentication(issue),
-            phase: .ready,
-            detectError: nil)
+        self.enterConfiguredGatewayBlocker(.authentication(issue))
     }
 }

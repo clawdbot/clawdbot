@@ -1,7 +1,10 @@
 import * as agentsModelsSkills from "./agents-models-skills.js";
 import * as board from "./board.js";
+import * as canvas from "./canvas.js";
 
 export const BoardProtocolSchemas = {
+  CanvasDocumentViewParams: canvas.CanvasDocumentViewParamsSchema,
+  CanvasDocumentViewResult: canvas.CanvasDocumentViewResultSchema,
   BoardTab: board.BoardTabSchema,
   BoardWidget: board.BoardWidgetSchema,
   BoardWidgetDeclared: board.BoardWidgetDeclaredSchema,

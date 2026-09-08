@@ -173,7 +173,7 @@ export function renderSidebarApprovalItem(params: {
 }
 
 export function renderSidebarUpdateSurface(params: {
-  context: ApplicationContext | undefined;
+  context: Pick<ApplicationContext, "gateway" | "overlays"> | undefined;
   onDismiss?: () => void;
   onNavigate: () => void;
   visible: boolean;
@@ -193,6 +193,11 @@ export function renderSidebarUpdateSurface(params: {
     .updateSchedule=${snapshot.updateSchedule}
     .heldUpdateCampaignId=${snapshot.heldUpdateCampaignId}
     .updateBusy=${snapshot.updateRunning || snapshot.updateReconciliationPending}
+    .updateRun=${snapshot.updateRun}
+    .updateRunAcknowledged=${snapshot.updateRunAcknowledged}
+    .connected=${gateway.phase === "connected"}
+    .onAcknowledge=${() => context.overlays.acknowledgeUpdateRun()}
+    .onCheckStatus=${() => context.overlays.refreshUpdateStatus()}
     .statusBanner=${snapshot.updateStatusBanner}
     .watchUpdateProgress=${params.watchUpdateProgress}
     .canUpdate=${canCallGatewayMethod(gateway, "update.run", "operator.admin")}

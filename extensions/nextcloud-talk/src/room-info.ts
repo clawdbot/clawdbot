@@ -1,9 +1,10 @@
-// Nextcloud Talk plugin module implements room info behavior.
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import { ssrfPolicyFromPrivateNetworkOptIn } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  SsrFBlockedError,
+  ssrfPolicyFromPrivateNetworkOptIn,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { fetchWithSsrFGuard, type RuntimeEnv } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { resolveNextcloudTalkApiCredentials } from "./api-credentials.js";
@@ -14,24 +15,20 @@ const ROOM_CACHE_ERROR_TTL_MS = 30 * 1000;
 const ROOM_CACHE_MAX_ENTRIES = 1000;
 const NEXTCLOUD_TALK_ROOM_INFO_TIMEOUT_MS = 30_000;
 
-const roomCache = new Map<
-  string,
-  { kind?: "direct" | "group"; fetchedAt: number; error?: string }
->();
-
-function resolveRoomCacheKey(params: { accountId: string; roomToken: string }) {
-  return `${params.accountId}:${params.roomToken}`;
-}
+type NextcloudTalkRoomKind = "direct" | "group";
+const roomCache = new Map<string, { kind: NextcloudTalkRoomKind | undefined; expiresAt: number }>();
 
 function cacheRoomInfo(
   key: string,
-  value: { kind?: "direct" | "group"; fetchedAt: number; error?: string },
-): void {
-  roomCache.set(key, value);
+  kind: NextcloudTalkRoomKind | undefined,
+  ttlMs: number,
+): NextcloudTalkRoomKind | undefined {
+  roomCache.set(key, { kind, expiresAt: Date.now() + ttlMs });
   pruneMapToMaxSize(roomCache, ROOM_CACHE_MAX_ENTRIES);
+  return kind;
 }
 
-function resolveRoomKindFromType(type: number | undefined): "direct" | "group" | undefined {
+function resolveRoomKindFromType(type: number | undefined): NextcloudTalkRoomKind | undefined {
   if (!type) {
     return undefined;
   }
@@ -46,43 +43,41 @@ export async function resolveNextcloudTalkRoomKind(params: {
   roomToken: string;
   runtime?: RuntimeEnv;
   timeoutMs?: number;
-}): Promise<"direct" | "group" | undefined> {
+}): Promise<NextcloudTalkRoomKind | undefined> {
   const { account, roomToken, runtime } = params;
-  const key = resolveRoomCacheKey({ accountId: account.accountId, roomToken });
+  const key = `${account.accountId}:${roomToken}`;
   const cached = roomCache.get(key);
-  if (cached) {
-    const age = Date.now() - cached.fetchedAt;
-    if (cached.kind && age < ROOM_CACHE_TTL_MS) {
-      return cached.kind;
-    }
-    if (cached.error && age < ROOM_CACHE_ERROR_TTL_MS) {
-      return undefined;
-    }
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.kind;
   }
+  roomCache.delete(key);
 
   const apiCredentials = resolveNextcloudTalkApiCredentials({
     apiUser: account.config.apiUser,
     apiPassword: account.config.apiPassword,
     apiPasswordFile: account.config.apiPasswordFile,
   });
-  if (!apiCredentials) {
-    return undefined;
-  }
-
   const baseUrl = account.baseUrl?.trim();
-  if (!baseUrl) {
+  if (!apiCredentials || !baseUrl) {
     return undefined;
   }
+  const fallback = (error: unknown) => {
+    runtime?.error?.(`nextcloud-talk: room lookup error: ${String(error)}`);
+    return cacheRoomInfo(key, undefined, ROOM_CACHE_ERROR_TTL_MS);
+  };
+  const parsedBaseUrl = URL.parse(baseUrl);
+  if (!parsedBaseUrl || !["http:", "https:"].includes(parsedBaseUrl.protocol)) {
+    return fallback(new Error("Nextcloud Talk room lookup requires an HTTP(S) base URL"));
+  }
 
-  const url = `${baseUrl}/ocs/v2.php/apps/spreed/api/v4/room/${roomToken}`;
   const auth = Buffer.from(
     `${apiCredentials.apiUser}:${apiCredentials.apiPassword}`,
     "utf-8",
   ).toString("base64");
-
+  let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
   try {
-    const { response, release } = await fetchWithSsrFGuard({
-      url,
+    guarded = await fetchWithSsrFGuard({
+      url: `${baseUrl}/ocs/v2.php/apps/spreed/api/v4/room/${roomToken}`,
       init: {
         method: "GET",
         headers: {
@@ -95,34 +90,35 @@ export async function resolveNextcloudTalkRoomKind(params: {
       policy: ssrfPolicyFromPrivateNetworkOptIn(account.config),
       timeoutMs: params.timeoutMs ?? NEXTCLOUD_TALK_ROOM_INFO_TIMEOUT_MS,
     });
-    try {
-      if (!response.ok) {
-        cacheRoomInfo(key, {
-          fetchedAt: Date.now(),
-          error: `status:${response.status}`,
-        });
-        runtime?.log?.(
-          `nextcloud-talk: room lookup failed (${response.status}) token=${roomToken}`,
-        );
-        return undefined;
-      }
+  } catch (error) {
+    if (error instanceof SsrFBlockedError) {
+      return fallback(error);
+    }
+    // The durable ingress drain owns retries. Do not cache transport failures or
+    // turn them into the webhook's non-authoritative group placeholder.
+    throw error;
+  }
 
+  const { response, release } = guarded;
+  try {
+    if (!response.ok) {
+      const status = response.status;
+      if (status === 408 || status === 429 || (status >= 500 && status <= 599)) {
+        throw new Error(`Nextcloud Talk room lookup failed (${status})`);
+      }
+      runtime?.log?.(`nextcloud-talk: room lookup failed (${status}) token=${roomToken}`);
+      return cacheRoomInfo(key, undefined, ROOM_CACHE_ERROR_TTL_MS);
+    }
+    try {
       const payload = await readProviderJsonResponse<{
         ocs?: { data?: { type?: number | string } };
       }>(response, "Nextcloud Talk room info failed");
-      const type = parseStrictPositiveInteger(payload.ocs?.data?.type);
-      const kind = resolveRoomKindFromType(type);
-      cacheRoomInfo(key, { fetchedAt: Date.now(), kind });
-      return kind;
-    } finally {
-      await releaseNextcloudTalkGuardedResponse({ response, release });
+      const kind = resolveRoomKindFromType(parseStrictPositiveInteger(payload.ocs?.data?.type));
+      return kind ? cacheRoomInfo(key, kind, ROOM_CACHE_TTL_MS) : undefined;
+    } catch (error) {
+      return fallback(error);
     }
-  } catch (err) {
-    cacheRoomInfo(key, {
-      fetchedAt: Date.now(),
-      error: formatErrorMessage(err),
-    });
-    runtime?.error?.(`nextcloud-talk: room lookup error: ${String(err)}`);
-    return undefined;
+  } finally {
+    await releaseNextcloudTalkGuardedResponse({ response, release });
   }
 }

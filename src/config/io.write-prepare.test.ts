@@ -264,6 +264,7 @@ const writeCases: WriteCase[] = [
     current: roster({ main: { ...main, identity: { name: "Main", emoji: "🦞" } } }),
     authored: roster({ main: { ...main, identity: { $include: "./identity.json" } } }),
     next: roster({ main: { ...main, identity: { name: "Main", emoji: "🦞" } }, worker }),
+    options: { explicitSetPaths: [["agents"]] },
     expected: roster({ main: { ...main, identity: { $include: "./identity.json" } }, worker }),
   },
   {
@@ -273,6 +274,14 @@ const writeCases: WriteCase[] = [
     authored: listRoster([{ id: "main", ...main, identity: { $include: "./identity.json" } }]),
     next: roster({ main: { ...main, identity: { name: "Main", emoji: "🦞" } }, worker }),
     expected: roster({ main: { ...main, identity: { $include: "./identity.json" } }, worker }),
+  },
+  {
+    name: "preserves included tool arrays during explicit parent writes",
+    current: roster({ main: { ...main, tools: { allow: ["read"] } } }),
+    authored: roster({ main: { ...main, tools: { $include: "./tools.json" } } }),
+    next: roster({ main: { ...main, tools: { allow: ["read"] } }, worker }),
+    options: { explicitSetPaths: [["agents"]] },
+    expected: roster({ main: { ...main, tools: { $include: "./tools.json" } }, worker }),
   },
   {
     name: "rejects a roster write when a legacy whole-entry include owns the agent id",
@@ -582,6 +591,82 @@ const writeCases: WriteCase[] = [
     next: { gateway: { mode: "remote", legacyKey: "new" } },
     error: "Config write would flatten $include-owned config at gateway",
   },
+  ...[["fixture/replacement"], []].flatMap((fallbacks) =>
+    [false, true].map((envRef) => ({
+      name: `allows root-array replacement ${JSON.stringify(fallbacks)} (env ref: ${envRef})`,
+      current: {
+        agents: {
+          defaults: {
+            model: { primary: "fixture/primary", fallbacks: ["fixture/root"] },
+            maxConcurrent: 16,
+          },
+        },
+      },
+      source: {
+        agents: {
+          defaults: { model: { primary: "fixture/primary", fallbacks: ["fixture/root"] } },
+        },
+      },
+      before: envRef
+        ? {
+            agents: {
+              defaults: { model: { primary: "fixture/primary", fallbacks: ["fixture/root"] } },
+            },
+          }
+        : undefined,
+      authored: {
+        agents: {
+          $include: "./agents.json",
+          defaults: { model: { fallbacks: [envRef ? "${FALLBACK}" : "fixture/root"] } },
+        },
+      },
+      next: {
+        agents: {
+          defaults: { model: { primary: "fixture/primary", fallbacks }, maxConcurrent: 16 },
+        },
+      },
+      expected: { agents: { $include: "./agents.json", defaults: { model: { fallbacks } } } },
+    })),
+  ),
+  {
+    name: "rejects edits to arrays composed from both root and included values",
+    current: {
+      agents: { defaults: { model: { fallbacks: ["fixture/included", "fixture/root"] } } },
+    },
+    authored: {
+      agents: {
+        $include: "./agents.json",
+        defaults: { model: { fallbacks: ["fixture/root"] } },
+      },
+    },
+    next: { agents: { defaults: { model: { fallbacks: ["fixture/root"] } } } },
+    error: "Config write would flatten $include-owned config at agents",
+  },
+  {
+    name: "does not infer array ownership from a normalized baseline that dropped included values",
+    before: {
+      agents: { defaults: { model: { fallbacks: ["fixture/included", "fixture/root"] } } },
+    },
+    current: { agents: { defaults: { model: { fallbacks: ["fixture/root"] } } } },
+    authored: {
+      agents: { $include: "./agents.json", defaults: { model: { fallbacks: ["fixture/root"] } } },
+    },
+    next: { agents: { defaults: { model: { fallbacks: [] } } } },
+    error: "Config write would flatten $include-owned config at agents",
+  },
+  {
+    name: "rejects replacing root arrays that contain nested includes",
+    before: { agents: { defaults: { model: { fallbacks: ["fixture/root"] } } } },
+    current: { agents: { defaults: { model: { fallbacks: ["fixture/root"] } } } },
+    authored: {
+      agents: {
+        $include: "./agents.json",
+        defaults: { model: { fallbacks: [{ $include: "./fallback.json" }] } },
+      },
+    },
+    next: { agents: { defaults: { model: { fallbacks: [] } } } },
+    error: "Config write would flatten $include-owned config at agents",
+  },
   {
     name: "preserves include-owned array entries across runtime-only normalization",
     current: {
@@ -718,6 +803,119 @@ describe("config io write prepare", () => {
     const persisted = resolveWriteCase(testCase);
     expect(persisted).toEqual(testCase.expected);
     testCase.verify?.(persisted);
+  });
+
+  it.each(
+    ["root", "agents"].flatMap((includeAt) =>
+      [true, false].map((authoredDefaults) => ({ includeAt, authoredDefaults })),
+    ),
+  )(
+    "preserves explicit sibling intent beside a $includeAt include (authored defaults: $authoredDefaults)",
+    ({ includeAt, authoredDefaults }) => {
+      const authoredAgents = {
+        ownership: "explicit",
+        ...(authoredDefaults ? { defaults: { workspace: "/old" } } : {}),
+        entries: { main: {}, spare: {} },
+      };
+      const rootAuthoredConfig =
+        includeAt === "root"
+          ? { $include: "./base.json", agents: authoredAgents }
+          : { agents: { $include: "./base.json", ...authoredAgents } };
+      const sourceConfig = {
+        agents: {
+          ...authoredAgents,
+          defaults: { ...authoredAgents.defaults, model: { primary: "fixture/primary" } },
+        },
+      };
+      const runtimeConfig = {
+        commands: { restart: true },
+        agents: {
+          ...sourceConfig.agents,
+          defaults: { ...sourceConfig.agents.defaults, maxConcurrent: 16 },
+        },
+      };
+      const entries = { ...authoredAgents.entries, worker: {} };
+      expect(
+        resolvePersistCandidateForWrite({
+          sourceConfig,
+          rootAuthoredConfig,
+          runtimeConfig,
+          nextConfig: { ...runtimeConfig, agents: { ...runtimeConfig.agents, entries } },
+          explicitSetPaths: [
+            ["agents", "entries"],
+            ["agents", "defaults", "maxConcurrent"],
+            ["commands", "restart"],
+          ],
+          allowIncludeAncestorExplicitSetPaths: true,
+        }),
+      ).toEqual({
+        ...rootAuthoredConfig,
+        commands: { restart: true },
+        agents: {
+          ...rootAuthoredConfig.agents,
+          entries,
+          defaults: { ...authoredAgents.defaults, maxConcurrent: 16 },
+        },
+      });
+    },
+  );
+
+  it.each(
+    [
+      { name: "included", authored: undefined, resolved: ["included"], allowed: false },
+      { name: "mixed", authored: ["root"], resolved: ["included", "root"], allowed: false },
+      { name: "root-owned", authored: ["root"], resolved: ["root"], allowed: true },
+      { name: "empty include", authored: undefined, resolved: [], allowed: true },
+    ].flatMap((testCase) =>
+      ["array", "parent", "index"]
+        .filter((kind) => kind !== "index" || testCase.resolved.length > 0)
+        .map((kind) => ({ testCase, kind })),
+    ),
+  )("checks $testCase.name array ownership for explicit $kind writes", ({ testCase, kind }) => {
+    const sourceConfig = {
+      agents: { defaults: { model: { fallbacks: testCase.resolved } }, entries: { main: {} } },
+    };
+    const rootAuthoredConfig = {
+      agents: {
+        $include: "./agents.json",
+        entries: { main: {} },
+        ...(testCase.authored ? { defaults: { model: { fallbacks: testCase.authored } } } : {}),
+      },
+    };
+    const write = () =>
+      resolvePersistCandidateForWrite({
+        sourceConfig,
+        sourceConfigBeforeMigrations: sourceConfig,
+        runtimeConfig: sourceConfig,
+        rootAuthoredConfig,
+        nextConfig: { agents: { ...sourceConfig.agents, entries: { main: {}, worker: {} } } },
+        explicitSetPaths: [
+          ["agents", "entries"],
+          kind === "parent"
+            ? ["agents", "defaults"]
+            : [
+                "agents",
+                "defaults",
+                "model",
+                "fallbacks",
+                ...(kind === "index" ? [String(testCase.resolved.length - 1)] : []),
+              ],
+        ],
+        allowIncludeAncestorExplicitSetPaths: true,
+      });
+    const persisted = write();
+    expect(persisted).toMatchObject({
+      agents: {
+        $include: "./agents.json",
+        entries: { main: {}, worker: {} },
+      },
+    });
+    const authored = testCase.allowed ? testCase.resolved : testCase.authored;
+    if (authored === undefined) {
+      expect(persisted).not.toHaveProperty("agents.defaults.model.fallbacks");
+    } else {
+      expect(persisted).toHaveProperty("agents.defaults.model.fallbacks", authored);
+    }
   });
 
   it("uses recorded facts instead of placeholder-shaped roster bytes", () => {
@@ -1001,12 +1199,13 @@ describe("config io write prepare", () => {
   it("leaves untouched retired model maps for doctor instead of normalizing unrelated writes", () => {
     const retired = "google/gemini-3-pro-preview";
     const canonical = "google/gemini-3.1-pro-preview";
+    const entry = { alias: "Gemini", params: { temperature: 0.2 } };
     const sourceConfig = {
-      agents: { defaults: { models: { [retired]: { alias: "Gemini" } } } },
+      agents: { defaults: { models: { [retired]: entry } } },
       gateway: { port: 18789 },
     };
     const runtimeConfig = {
-      agents: { defaults: { models: { [canonical]: { alias: "Gemini" } } } },
+      agents: { defaults: { models: { [canonical]: entry } } },
       gateway: { port: 18789 },
     };
 
@@ -1017,7 +1216,7 @@ describe("config io write prepare", () => {
         nextConfig: { ...runtimeConfig, gateway: { port: 18888 } },
       }),
     ).toEqual({
-      agents: { defaults: { models: { [retired]: { alias: "Gemini" } } } },
+      agents: { defaults: { models: { [retired]: entry } } },
       gateway: { port: 18888 },
     });
   });
@@ -1025,11 +1224,12 @@ describe("config io write prepare", () => {
   it("canonicalizes an explicitly persisted model-map path even when runtime values are equal", () => {
     const retired = "google/gemini-3-pro-preview";
     const canonical = "google/gemini-3.1-pro-preview";
+    const entry = { alias: "Gemini", params: { temperature: 0.2 } };
     const sourceConfig = {
-      agents: { defaults: { models: { [retired]: { alias: "Gemini" } } } },
+      agents: { defaults: { models: { [retired]: entry } } },
     };
     const runtimeConfig = {
-      agents: { defaults: { models: { [canonical]: { alias: "Gemini" } } } },
+      agents: { defaults: { models: { [canonical]: entry } } },
     };
 
     expect(
@@ -1040,6 +1240,37 @@ describe("config io write prepare", () => {
         explicitSetPaths: [["agents", "defaults", "models"]],
       }),
     ).toEqual(runtimeConfig);
+  });
+
+  it("preserves untouched model rows that share a runtime identity", () => {
+    const shorthand = "google/gemini-3.1-pro";
+    const canonical = "google/gemini-3.1-pro-preview";
+    const sourceConfig = {
+      agents: {
+        defaults: {
+          models: {
+            [shorthand]: { alias: "Shorthand", params: { temperature: 0.2 } },
+            [canonical]: { alias: "Canonical", params: { topP: 0.8 } },
+          },
+        },
+      },
+    };
+    const runtimeConfig = {
+      agents: {
+        defaults: {
+          models: {
+            [canonical]: { alias: "Canonical", params: { temperature: 0.2, topP: 0.8 } },
+          },
+        },
+      },
+    };
+    expect(
+      resolvePersistCandidateForWrite({
+        sourceConfig,
+        runtimeConfig,
+        nextConfig: { ...runtimeConfig, gateway: { port: 18888 } },
+      }),
+    ).toEqual({ ...sourceConfig, gateway: { port: 18888 } });
   });
 
   it("canonicalizes only the model identity selected by an explicit descendant path", () => {

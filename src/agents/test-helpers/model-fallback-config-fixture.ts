@@ -18,3 +18,13 @@ export function makeModelFallbackCfg(overrides: Partial<OpenClawConfig> = {}): O
     ...overrides,
   } as OpenClawConfig;
 }
+
+export function createModelFallbackConfig(primary: string, fallbacks: string[]): OpenClawConfig {
+  return {
+    agents: {
+      defaults: {
+        model: { primary, fallbacks },
+      },
+    },
+  };
+}

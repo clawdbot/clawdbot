@@ -50,6 +50,21 @@ describe("handleDiscordMessageAction upload-file caption", () => {
       params: { message: "", caption: "caption text" },
       expected: "",
     },
+    {
+      name: "preserves caption indentation and trailing newline",
+      params: { caption: "    example();\n" },
+      expected: "    example();\n",
+    },
+    {
+      name: "preserves an explicit padded message over the caption",
+      params: { message: "    example();\n", caption: "caption text" },
+      expected: "    example();\n",
+    },
+    {
+      name: "preserves the content alias over the caption",
+      params: { content: "    example();\n", caption: "caption text" },
+      expected: "    example();\n",
+    },
   ])("$name", async ({ params, expected }) => {
     const mediaReadFile = vi.fn(async () => Buffer.from("image"));
     const cfg = discordConfig();

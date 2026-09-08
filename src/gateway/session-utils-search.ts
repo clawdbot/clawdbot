@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -10,15 +11,14 @@ import {
   type InternalSessionEntry,
   type SessionEntry,
 } from "../config/sessions.js";
+import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { formatAgentRuntimeLabel } from "../shared/agent-runtime-display.js";
 import { formatGoalSummary } from "../shared/session-goal-display.js";
 import { isSessionRunActive } from "../shared/session-run-state.js";
 import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.shared.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
 import type { SessionEntryPair } from "./session-list-order.js";
-import { resolveSessionStoreAgentId } from "./session-store-key.js";
 import type {
   SessionListActiveRunProjector,
   SessionListRowContext,
@@ -102,17 +102,14 @@ export function resolveSessionListRowContext(params: {
 }
 
 function resolveSessionListSearchModelFields(params: {
-  agentId?: string;
+  agentId: string;
   cfg: OpenClawConfig;
   key: string;
   entry?: SessionEntry;
   rowContext?: SessionListRowContext;
   selectedModel?: ReturnType<typeof resolveSessionSelectedModelRef>;
 }): Array<string | undefined> {
-  const parsedAgent = parseAgentSessionKey(params.key);
-  const agentId = normalizeAgentId(
-    parsedAgent?.agentId ?? params.agentId ?? resolveSessionStoreAgentId(params.cfg, params.key),
-  );
+  const { agentId } = params;
   const subagentRun = params.rowContext
     ? params.rowContext.subagentRuns.getDisplaySubagentRun(params.key)
     : getSessionDisplaySubagentRunByChildSessionKey(params.key);
@@ -135,7 +132,6 @@ function resolveSessionListSearchModelFields(params: {
   );
   const displayModelIdentity = resolveSessionDisplayModelIdentityRefCached({
     cfg: params.cfg,
-    agentId,
     provider: selectedModel.provider,
     model: selectedModel.model,
     rowContext: params.rowContext,
@@ -154,7 +150,7 @@ function resolveSessionListSearchModelFields(params: {
 export function createSessionListSearchMatcher(params: {
   cfg: OpenClawConfig;
   search: string;
-  agentId?: string;
+  targetsBySessionKey: GatewayStoredSessionTargets;
   now: number;
   visibleEntries: readonly SessionEntryPair[];
   getRowContext?: SessionListRowContextProvider;
@@ -181,9 +177,7 @@ export function createSessionListSearchMatcher(params: {
     if (matchesSessionListSearch(fields, search)) {
       return true;
     }
-    const agentId = normalizeAgentId(
-      parseAgentSessionKey(key)?.agentId ?? params.agentId ?? resolveSessionStoreAgentId(cfg, key),
-    );
+    const agentId = expectDefined(params.targetsBySessionKey.get(key), "search row owner").agentId;
     const run = projectGatewaySessionRunState({ key, entry, now, rowContext: context() }).fields;
     const active = params.projectActiveRun?.(key, entry, agentId);
     const state = projectGatewaySessionActiveRun(active, run.status);
@@ -240,7 +234,7 @@ export function createSessionListSearchMatcher(params: {
       populateSessionListAcpMetadata({
         cfg,
         entries: params.visibleEntries,
-        opts: { agentId: params.agentId },
+        targetsBySessionKey: params.targetsBySessionKey,
         rowContext: context(),
       });
       acpPrepared = true;
@@ -264,6 +258,7 @@ type LoadGatewaySessionRowOptions = {
   includeLastMessage?: boolean;
   now?: number;
   transcriptUsageMaxBytes?: number;
+  includeSwarmSummary?: boolean;
 };
 
 function loadGatewaySessionSnapshot(
@@ -272,21 +267,25 @@ function loadGatewaySessionSnapshot(
   lightweight = false,
 ): { lifecycleRunId?: string; row: GatewaySessionRow | null } {
   const now = options?.now ?? Date.now();
-  const { cfg, storePath, store, entry, canonicalKey } = loadGatewaySessionEntryReadOnly(
+  const { cfg, agentId, storePath, store, entry, canonicalKey } = loadGatewaySessionEntryReadOnly(
     sessionKey,
     {
       clone: false,
       includeStoreChildEntries: true,
-      ...(options?.agentId ? { agentId: options.agentId } : {}),
+      agentId: options?.agentId,
     },
   );
   if (!entry) {
     return { row: null };
   }
+  const rowContext = options?.includeSwarmSummary
+    ? buildSessionListRowMetadataContext({ now })
+    : undefined;
   const storeChildSessionsByKey = buildSingleRowStoreChildSessionsByKey({
     store,
     key: canonicalKey,
     now,
+    subagentRuns: rowContext?.subagentRuns,
   });
   const lifecycleRunId = (entry as InternalSessionEntry).lifecycleRunId;
   return {
@@ -304,7 +303,9 @@ function loadGatewaySessionSnapshot(
       storeChildSessionsByKey,
       skipTranscriptUsageFallback: lightweight,
       lightweightListRow: lightweight,
-      ...(options?.agentId ? { agentId: options.agentId } : {}),
+      agentId,
+      // Event snapshots carry complete counts, while ordinary exact-row reads stay scoped.
+      rowContext,
     }),
   };
 }
@@ -329,7 +330,7 @@ export function buildGatewaySessionInfo(params: {
   store: Record<string, SessionEntry>;
   key: string;
   entry?: SessionEntry;
-  agentId?: string;
+  agentId: string;
   now?: number;
   modelCatalog?: ModelCatalogEntry[];
 }): GatewaySessionRow {

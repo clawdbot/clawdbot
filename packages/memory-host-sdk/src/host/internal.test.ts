@@ -19,6 +19,7 @@ import {
   stripMemoryAnnotationCarriers,
 } from "./internal.js";
 import { normalizeMemoryMultimodalSettings, type MemoryMultimodalSettings } from "./multimodal.js";
+import { estimateStringChars } from "./openclaw-runtime-io.js";
 import { readMemoryFile } from "./read-file.js";
 
 type FileEntry = NonNullable<Awaited<ReturnType<typeof buildFileEntry>>>;
@@ -513,6 +514,49 @@ describe("memory host SDK package internals", () => {
     expect(chunks.map((chunk) => chunk.text).join("")).toBe(text);
     for (const chunk of chunks) {
       expect(() => encodeURIComponent(chunk.text)).not.toThrow();
+    }
+  });
+
+  it("keeps chunks within budget when overlap carries a long segment", () => {
+    // A 3000-char line is sliced into 1600-char segments; without a bounded
+    // carry the emitted chunk used to reach 3001 chars (budget 1600).
+    const chunks = chunkMarkdown("a".repeat(3000), { tokens: 400, overlap: 80 });
+
+    for (const chunk of chunks) {
+      expect(chunk.text.length).toBeLessThanOrEqual(1600);
+    }
+    expect(chunks.map((chunk) => chunk.text).join("")).toContain("a".repeat(100));
+  });
+
+  it("keeps chunks within budget for mixed short and long lines", () => {
+    const content = ["intro line", "b".repeat(3000), "outro line"].join("\n");
+
+    const chunks = chunkMarkdown(content, { tokens: 400, overlap: 80 });
+
+    for (const chunk of chunks) {
+      expect(chunk.text.length).toBeLessThanOrEqual(1600);
+    }
+    expect(chunks.map((chunk) => chunk.text).join("\n")).toContain("intro line");
+    expect(chunks.map((chunk) => chunk.text).join("\n")).toContain("outro line");
+  });
+
+  it("subtracts already retained entries from the carry window", () => {
+    const content = ["a".repeat(900), "b".repeat(100), "c".repeat(1450)].join("\n");
+
+    const chunks = chunkMarkdown(content, { tokens: 400, overlap: 80 });
+
+    for (const chunk of chunks) {
+      expect(chunk.text.length).toBeLessThanOrEqual(1600);
+    }
+  });
+
+  it("measures the carried tail in weighted units for CJK content", () => {
+    const content = ["中".repeat(300), "x".repeat(1499)].join("\n");
+
+    const chunks = chunkMarkdown(content, { tokens: 400, overlap: 80 });
+
+    for (const chunk of chunks) {
+      expect(estimateStringChars(chunk.text)).toBeLessThanOrEqual(1600);
     }
   });
 

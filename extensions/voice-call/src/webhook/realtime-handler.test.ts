@@ -963,7 +963,8 @@ describe("RealtimeCallHandler path routing", () => {
       );
       await waitForRealtimeTest(() => expect(createBridge).toHaveBeenCalledTimes(1));
 
-      vi.useFakeTimers();
+      // Keep socket teardown callbacks real while controlling the reconnect grace.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const closed = waitForClose(ws);
       ws.terminate();
       expect(await closed).toEqual({ code: 1006, reason: "" });

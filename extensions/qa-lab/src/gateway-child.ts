@@ -11,7 +11,6 @@ import {
   type QaChildFailure,
 } from "./gateway-child-process.js";
 import {
-  callQaGatewayWithRetry,
   isRetryableRpcStartupError,
   QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS,
   resolveQaGatewayStartupRetry,
@@ -320,26 +319,14 @@ async function startOwnedGatewayChild(
       rpcParams?: unknown,
       opts?: { deadlineMs?: number; expectFinal?: boolean; timeoutMs?: number },
     ) {
-      const timeoutMs = opts?.timeoutMs ?? 20_000;
-      return await callQaGatewayWithRetry({
-        deadlineMs: opts?.deadlineMs,
-        logs,
-        request: async (requestOptions) =>
-          await requireRpcClient().request(method, rpcParams, {
-            ...opts,
-            ...requestOptions,
-          }),
-        throwChildFailure: throwActiveChildFailure,
-        timeoutMs,
-        waitForReady: async (readinessTimeoutMs) =>
-          await waitForGatewayReady({
-            baseUrl,
-            logs,
-            child: active.child,
-            getChildFailure,
-            timeoutMs: readinessTimeoutMs,
-          }),
-      });
+      throwActiveChildFailure();
+      try {
+        // The RPC client owns unsent reconnects; replaying a sent call can repeat committed work.
+        return await requireRpcClient().request(method, rpcParams, opts);
+      } catch (error) {
+        throwActiveChildFailure();
+        throw error;
+      }
     },
     async stop(opts?: QaGatewayStopOptions) {
       const result = await lifetime.stop(opts);

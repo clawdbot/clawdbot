@@ -8,6 +8,7 @@ import { createConfigIO } from "../config/io.js";
 import { replaceConfigFile } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { setupCommand } from "./setup.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 function createSetupDeps(home: string) {
   const configPath = path.join(home, ".openclaw", "openclaw.json");
@@ -59,11 +60,7 @@ function requireFirstWorkspaceParams(
 describe("setupCommand", () => {
   it("writes gateway.mode=local on first run", async () => {
     await withTempHome(async (home) => {
-      const runtime = {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      };
+      const runtime = createTestRuntime();
       const deps = createSetupDeps(home);
       const workspace = path.join(home, ".openclaw", "workspace");
 
@@ -98,11 +95,7 @@ describe("setupCommand", () => {
 
   it("explains that plain setup only initializes local files", async () => {
     await withTempHome(async (home) => {
-      const runtime = {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      };
+      const runtime = createTestRuntime();
       const deps = createSetupDeps(home);
 
       await setupCommand(undefined, runtime, deps);
@@ -119,11 +112,7 @@ describe("setupCommand", () => {
 
   it("emits one structured result for baseline JSON output", async () => {
     await withTempHome(async (home) => {
-      const runtime = {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      };
+      const runtime = createTestRuntime();
       const deps = createSetupDeps(home);
       const workspace = path.join(home, ".openclaw", "workspace");
 
@@ -142,7 +131,7 @@ describe("setupCommand", () => {
 
   it("updates the default entry workspace created by fresh setup", async () => {
     await withTempHome(async (home) => {
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const runtime = createTestRuntime();
       const deps = createSetupDeps(home);
       const initialWorkspace = path.join(home, "initial-workspace");
       const nextWorkspace = path.join(home, "next-workspace");
@@ -161,7 +150,7 @@ describe("setupCommand", () => {
 
   it("keeps the default entry workspace on bare setup", async () => {
     await withTempHome(async (home) => {
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const runtime = createTestRuntime();
       const configDir = path.join(home, ".openclaw");
       const configPath = path.join(configDir, "openclaw.json");
       const workspace = "/srv/ops";
@@ -189,7 +178,7 @@ describe("setupCommand", () => {
 
   it("does not copy an entry workspace into defaults during a gateway-only write", async () => {
     await withTempHome(async (home) => {
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const runtime = createTestRuntime();
       const configDir = path.join(home, ".openclaw");
       const configPath = path.join(configDir, "openclaw.json");
       const workspace = "/srv/ops";
@@ -218,11 +207,7 @@ describe("setupCommand", () => {
 
   it("adds gateway.mode=local to an existing config without overwriting workspace", async () => {
     await withTempHome(async (home) => {
-      const runtime = {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      };
+      const runtime = createTestRuntime();
       const configDir = path.join(home, ".openclaw");
       const configPath = path.join(configDir, "openclaw.json");
       const workspace = path.join(home, "custom-workspace");
@@ -254,7 +239,7 @@ describe("setupCommand", () => {
 
   it("leaves an include-owned roster in its authored file", async () => {
     await withTempHome(async (home) => {
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const runtime = createTestRuntime();
       const configDir = path.join(home, ".openclaw");
       const configPath = path.join(configDir, "openclaw.json");
       const includePath = path.join(configDir, "agents.json");
@@ -290,7 +275,7 @@ describe("setupCommand", () => {
 
   it("updates only inherited workspace defaults beside an include-owned roster", async () => {
     await withTempHome(async (home) => {
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const runtime = createTestRuntime();
       const configDir = path.join(home, ".openclaw");
       const configPath = path.join(configDir, "openclaw.json");
       const includePath = path.join(configDir, "agents.json");
@@ -327,7 +312,7 @@ describe("setupCommand", () => {
 
   it("updates inherited workspace defaults below a nested roster include", async () => {
     await withTempHome(async (home) => {
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const runtime = createTestRuntime();
       const configDir = path.join(home, ".openclaw");
       const configPath = path.join(configDir, "openclaw.json");
       const includePath = path.join(configDir, "agents.json");
@@ -369,7 +354,7 @@ describe("setupCommand", () => {
 
   it("persists a roster when existing setup settings already match", async () => {
     await withTempHome(async (home) => {
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const runtime = createTestRuntime();
       const configDir = path.join(home, ".openclaw");
       const configPath = path.join(configDir, "openclaw.json");
       const workspace = path.join(home, "workspace");
@@ -397,11 +382,7 @@ describe("setupCommand", () => {
 
   it("threads skipOptionalBootstrapFiles into workspace creation", async () => {
     await withTempHome(async (home) => {
-      const runtime = {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      };
+      const runtime = createTestRuntime();
       const configDir = path.join(home, ".openclaw");
       const configPath = path.join(configDir, "openclaw.json");
       const deps = createSetupDeps(home);
@@ -433,11 +414,7 @@ describe("setupCommand", () => {
     "rejects a foreign write before the final config commit (fresh: %s)",
     async (fresh) => {
       await withTempHome(async (home) => {
-        const runtime = {
-          log: vi.fn(),
-          error: vi.fn(),
-          exit: vi.fn(),
-        };
+        const runtime = createTestRuntime();
         const configDir = path.join(home, ".openclaw");
         const configPath = path.join(configDir, "openclaw.json");
         const workspace = path.join(home, "custom-workspace");
@@ -473,11 +450,7 @@ describe("setupCommand", () => {
     "preserves malformed config and reports failure (json: %s)",
     async (json) => {
       await withTempHome(async (home) => {
-        const runtime = {
-          log: vi.fn(),
-          error: vi.fn(),
-          exit: vi.fn(),
-        };
+        const runtime = createTestRuntime();
         const configDir = path.join(home, ".openclaw");
         const configPath = path.join(configDir, "openclaw.json");
         const deps = createSetupDeps(home);
@@ -522,11 +495,7 @@ describe("setupCommand", () => {
     "preserves an existing %s config root and stops before setup mutations",
     async (_label, raw) => {
       await withTempHome(async (home) => {
-        const runtime = {
-          log: vi.fn(),
-          error: vi.fn(),
-          exit: vi.fn(),
-        };
+        const runtime = createTestRuntime();
         const configDir = path.join(home, ".openclaw");
         const configPath = path.join(configDir, "openclaw.json");
         const deps = createSetupDeps(home);
@@ -549,11 +518,7 @@ describe("setupCommand", () => {
 
   it("uses systemAgent.agentId in multi-agent explicit mode", async () => {
     await withTempHome(async (home) => {
-      const runtime = {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      };
+      const runtime = createTestRuntime();
       const configDir = path.join(home, ".openclaw");
       const configPath = path.join(configDir, "openclaw.json");
       const deps = createSetupDeps(home);
@@ -584,7 +549,7 @@ describe("setupCommand", () => {
 
   it("gives an actionable error when baseline setup has no ambient owner", async () => {
     await withTempHome(async (home) => {
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const runtime = createTestRuntime();
       const configDir = path.join(home, ".openclaw");
       const configPath = path.join(configDir, "openclaw.json");
       const deps = createSetupDeps(home);
