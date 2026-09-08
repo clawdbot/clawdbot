@@ -75,6 +75,7 @@ if docker_e2e_run_with_harness \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   -v "$install_diagnostics_path:/tmp/openclaw-install-diagnostics.log:rw" \
+  -v "$ROOT_DIR/scripts/lib/openclaw-e2e-instance.sh:/app/scripts/lib/openclaw-e2e-instance.sh:ro" \
   -v "$ROOT_DIR/scripts/lib/openclaw-e2e-install-diagnostics.mjs:/app/scripts/lib/openclaw-e2e-install-diagnostics.mjs:ro" \
   -v "$SCENARIO_PATH:/app/scripts/e2e/lib/release-typed-onboarding/scenario.sh:ro" \
   -i "$IMAGE_NAME" bash -c '

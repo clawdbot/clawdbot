@@ -175,12 +175,15 @@ export async function load(url, context, nextLoad) {
     expect(result.stdout.match(/\[diagnostics omitted\]|OPENAI_API_KEY=/g)).toHaveLength(1);
   });
 
-  it("mounts only the host sidecar file outside frozen scenario cleanup", () => {
+  it("mounts current diagnostics support outside frozen scenario cleanup", () => {
     const wrapper = readFileSync(typedOnboardingScript, "utf8");
     const scenario = readFileSync("scripts/e2e/lib/release-typed-onboarding/scenario.sh", "utf8");
 
     expect(wrapper).toContain(
       '-v "$install_diagnostics_path:/tmp/openclaw-install-diagnostics.log:rw"',
+    );
+    expect(wrapper).toContain(
+      '-v "$ROOT_DIR/scripts/lib/openclaw-e2e-instance.sh:/app/scripts/lib/openclaw-e2e-instance.sh:ro"',
     );
     expect(wrapper).not.toContain('-v "$install_diagnostics_dir:/tmp/openclaw-install-diagnostics');
     expect(scenario).toContain('rm -rf "$scenario_tmp"');
