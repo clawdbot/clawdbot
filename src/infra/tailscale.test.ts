@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
+import { waitForTailscaleBackendReady } from "./tailscale-backend-ready.js";
 import * as tailscale from "./tailscale.js";
 
 const {
@@ -100,6 +101,11 @@ describe("tailscale helpers", () => {
   it.each([
     [new Error("Failed to connect to local Tailscale daemon; not running?")],
     [new Error("failed to connect to local Tailscale service; is Tailscale running?")],
+    [
+      new Error(
+        "failed to connect to local tailscaled; it doesn't appear to be running (sudo systemctl start tailscaled ?)",
+      ),
+    ],
     [Object.assign(new Error("Command timed out"), { timedOut: true, signal: "SIGTERM" })],
   ])("retries post-Serve status after a transient failure", async (failure) => {
     vi.useFakeTimers();
@@ -237,6 +243,115 @@ describe("tailscale helpers", () => {
     });
 
     expect(exec).toHaveBeenCalledTimes(2);
+  });
+
+  describe("waitForTailscaleBackendReady", () => {
+    const status = (BackendState: string) => ({ stdout: JSON.stringify({ BackendState }) });
+    const statusArgs = ["status", "--json"];
+    const execOptions = { timeoutMs: 5000, maxBuffer: 400_000, logOutput: false };
+
+    it("waits through boot-time backend states and announces each once", async () => {
+      const exec = vi
+        .fn()
+        .mockResolvedValueOnce(status("NoState"))
+        .mockResolvedValueOnce(status("NoState"))
+        .mockResolvedValueOnce(status("Starting"))
+        .mockResolvedValueOnce(status("Running"));
+      const info = vi.fn();
+
+      await waitForTailscaleBackendReady({ bin: tailscaleBin, info, exec, pollMs: 1 });
+
+      expect(exec).toHaveBeenCalledTimes(4);
+      expectExecCall(exec, 1, tailscaleBin, statusArgs, execOptions);
+      expect(info.mock.calls).toEqual([
+        ["waiting for the local Tailscale daemon (NoState)"],
+        ["waiting for the local Tailscale daemon (Starting)"],
+      ]);
+    });
+
+    // Connect-failure wording as emitted by the tailscale CLI (cmd/tailscale/cli/diag.go),
+    // which differs by platform and by whether a tailscaled process was found.
+    it.each([
+      ["older daemon wording", "failed to connect to local tailscale daemon"],
+      [
+        "linux 1.102 with no daemon process",
+        "failed to connect to local tailscaled; it doesn't appear to be running (sudo systemctl start tailscaled ?)",
+      ],
+      [
+        "windows 1.102 with no daemon process",
+        "failed to connect to local tailscaled process; is the Tailscale service running?",
+      ],
+      [
+        "macos 1.102 with no daemon process",
+        "failed to connect to local Tailscale service; is Tailscale running?",
+      ],
+      [
+        "daemon process found but not listening yet",
+        "failed to connect to local tailscaled (which appears to be running as /usr/sbin/tailscaled, pid 812). Got error: dial unix /var/run/tailscale/tailscaled.sock: connect: no such file or directory",
+      ],
+    ])("waits while the daemon is not accepting connections yet (%s)", async (_label, stderr) => {
+      const exec = vi
+        .fn()
+        .mockRejectedValueOnce(Object.assign(new Error("status failed"), { stderr }))
+        .mockResolvedValueOnce(status("Running"));
+      const info = vi.fn();
+
+      await waitForTailscaleBackendReady({ bin: tailscaleBin, info, exec, pollMs: 1 });
+
+      expect(exec).toHaveBeenCalledTimes(2);
+      expect(info).toHaveBeenCalledWith(
+        "waiting for the local Tailscale daemon (daemon not reachable)",
+      );
+    });
+
+    it.each(["Running", "Stopped", "NeedsLogin", "NeedsMachineAuth"])(
+      "does not wait on the settled backend state %s",
+      async (state) => {
+        const exec = vi.fn().mockResolvedValue(status(state));
+        const info = vi.fn();
+
+        await waitForTailscaleBackendReady({ bin: tailscaleBin, info, exec, pollMs: 1 });
+
+        expect(exec).toHaveBeenCalledTimes(1);
+        expect(info).not.toHaveBeenCalled();
+      },
+    );
+
+    it("does not wait on an unreadable or failed status", async () => {
+      for (const exec of [
+        vi.fn().mockResolvedValue({ stdout: "{}" }),
+        vi
+          .fn()
+          .mockRejectedValue(
+            Object.assign(new Error("exit 2"), { stderr: "unexpected arguments" }),
+          ),
+      ]) {
+        const info = vi.fn();
+
+        await waitForTailscaleBackendReady({ bin: tailscaleBin, info, exec, pollMs: 1 });
+
+        expect(exec).toHaveBeenCalledTimes(1);
+        expect(info).not.toHaveBeenCalled();
+      }
+    });
+
+    it("hands over to the route claim once the deadline passes", async () => {
+      const exec = vi.fn().mockResolvedValue(status("NoState"));
+      const info = vi.fn();
+
+      await waitForTailscaleBackendReady({
+        bin: tailscaleBin,
+        prefix: ["-n", "sudo"],
+        info,
+        exec,
+        pollMs: 1,
+        deadlineMs: 20,
+      });
+
+      expect(exec.mock.calls.length).toBeGreaterThan(1);
+      expectExecCall(exec, 1, tailscaleBin, ["-n", "sudo", ...statusArgs], execOptions);
+      expect(info).toHaveBeenCalledTimes(1);
+    });
   });
 
   it.runIf(process.platform !== "win32")(
