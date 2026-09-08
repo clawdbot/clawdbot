@@ -14,8 +14,11 @@ import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { isValidAttachmentBase64, type ChatAttachment } from "./chat-attachments.js";
 import { deriveGoalSessionTitle } from "./derive-goal-session-title.js";
+import { isPlatformAutoSessionLabel } from "./platform-session-label.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { readSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
+
+export { isPlatformAutoSessionLabel } from "./platform-session-label.js";
 
 type DashboardSessionTitleModelEntry = Pick<
   SessionEntry,
@@ -98,36 +101,6 @@ type SessionTitleAttempt =
   | { kind: "persisted" }
   | { kind: "skipped" }
   | { kind: "in-flight"; settled: Promise<boolean> };
-
-/** Android stamps this prefix on its node main session; it is not a user rename. */
-const PLATFORM_AUTO_SESSION_LABEL_RE = /^OpenClaw App(?:\s*·|$)/i;
-
-function resolveNodeDeviceId12(sessionKey?: string): string | undefined {
-  const rest = parseAgentSessionKey(sessionKey)?.rest ?? "";
-  if (!rest.startsWith("node-")) {
-    return undefined;
-  }
-  const deviceId = rest.slice("node-".length).split(":")[0];
-  return deviceId || undefined;
-}
-
-function isPlatformAutoSessionLabel(
-  value: string | null | undefined,
-  sessionKey?: string,
-): boolean {
-  const trimmed = value?.trim();
-  const deviceId = resolveNodeDeviceId12(sessionKey);
-  if (!trimmed || !deviceId) {
-    return false;
-  }
-  if (/^OpenClaw App$/i.test(trimmed)) {
-    return true;
-  }
-  if (trimmed.toLowerCase() === `openclaw app · ${deviceId}`.toLowerCase()) {
-    return true;
-  }
-  return PLATFORM_AUTO_SESSION_LABEL_RE.test(trimmed) && trimmed.endsWith(` · ${deviceId}`);
-}
 
 export function resolveExplicitSessionName(
   entry: SessionEntry | undefined,

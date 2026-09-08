@@ -2509,6 +2509,40 @@ describe("gateway session utils", () => {
     expect(titledRow.displayName).toBe("Release Planning");
   });
 
+  test("buildGatewaySessionRow prefers generated titles over Android node stamps", () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
+    const key = "agent:main:node-1234567890ab";
+    const stamp = "OpenClaw App · Pixel · 1234567890ab";
+    const entry = {
+      sessionId: "node-1",
+      updatedAt: 1,
+      label: stamp,
+      displayName: "Release Planning",
+    } as SessionEntry;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { [key]: entry },
+      key,
+      entry,
+    });
+    expect(row.label).toBe(stamp);
+    expect(row.displayName).toBe("Release Planning");
+
+    const manualPrefix = {
+      ...entry,
+      label: "OpenClaw App · Release planning",
+    } as SessionEntry;
+    const manualRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:dashboard:chat-1": manualPrefix },
+      key: "agent:main:dashboard:chat-1",
+      entry: manualPrefix,
+    });
+    expect(manualRow.displayName).toBe("OpenClaw App · Release planning");
+  });
+
   test("buildGatewaySessionRow displayName prefers the human chat title for group sessions", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
     const entry: SessionEntry = {
