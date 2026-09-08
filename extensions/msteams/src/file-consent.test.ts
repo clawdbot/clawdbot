@@ -1,4 +1,5 @@
 // Msteams tests cover file consent plugin behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { uploadToConsentUrl } from "./file-consent.js";
 import { resolveMSTeamsSharePointUploadTimeoutMs } from "./request-timeout.js";
@@ -42,14 +43,6 @@ async function isPrivateOrReservedIP(ip: string): Promise<boolean> {
     throw error;
   }
 }
-
-const firstFetchCall = (fetchFn: ReturnType<typeof vi.fn<typeof fetch>>) => {
-  const [call] = fetchFn.mock.calls;
-  if (!call) {
-    throw new Error("expected fetch call");
-  }
-  return call;
-};
 
 const responseWithCancel = (status: number, statusText?: string) => {
   const cancel = vi.fn();
@@ -317,7 +310,7 @@ describe("uploadToConsentUrl", () => {
     });
 
     expect(fetchFn).toHaveBeenCalledOnce();
-    const [url, opts] = firstFetchCall(fetchFn);
+    const [url, opts] = expectDefined(fetchFn.mock.calls[0], "fetch call");
     expect(url).toBe("https://contoso.sharepoint.com/upload");
     expect(opts?.method).toBe("PUT");
     expect(opts?.headers).toEqual({
@@ -515,7 +508,7 @@ describe("uploadToConsentUrl", () => {
     await expect(upload).resolves.toBeUndefined();
 
     expect(mockFetch).toHaveBeenCalledOnce();
-    const [url, opts] = firstFetchCall(mockFetch);
+    const [url, opts] = expectDefined(mockFetch.mock.calls[0], "fetch call");
     expect(url).toBe("https://contoso.sharepoint.com/sites/uploads/file.pdf");
     expect(opts?.method).toBe("PUT");
     expect(opts?.headers).toEqual({
