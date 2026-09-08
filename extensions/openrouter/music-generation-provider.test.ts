@@ -274,6 +274,7 @@ describe("openrouter music generation provider", () => {
 
       const operation = buildOpenRouterMusicGenerationProvider().generateMusic({
         provider: "openrouter",
+        model: "",
         prompt: "capture cleanup",
         cfg: {},
         timeoutMs: outcome === "timeout" ? 1 : 1000,
