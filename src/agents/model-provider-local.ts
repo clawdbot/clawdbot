@@ -23,3 +23,25 @@ export function isLocalProviderBaseUrl(
     return false;
   }
 }
+
+export const SELF_HOSTED_PROVIDER_ID_PREFIXES = [
+  "ollama",
+  "lmstudio",
+  "vllm",
+  "sglang",
+  "llama-cpp",
+  "local",
+];
+
+export function isSelfHostedProviderId(provider: string | undefined): boolean {
+  const normalized = provider?.trim().toLowerCase();
+  if (!normalized || normalized === "ollama-cloud") {
+    return false;
+  }
+  return SELF_HOSTED_PROVIDER_ID_PREFIXES.some(
+    (prefix) =>
+      normalized === prefix ||
+      normalized.startsWith(`${prefix}-`) ||
+      normalized.startsWith(`${prefix}_`),
+  );
+}
