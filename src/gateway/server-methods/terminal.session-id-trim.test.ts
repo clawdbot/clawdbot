@@ -1,21 +1,20 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { TerminalSessionManager } from "../terminal/session-manager.js";
-import { makeFakePty } from "../terminal/session-manager.test-helpers.js";
+import { baseOpenRequest, makeFakePty } from "../terminal/session-manager.test-helpers.js";
 import { terminalHandlers } from "./terminal.js";
 
 describe("terminal.close/attach padded sessionId", () => {
   it("closes a live connection-owned PTY when terminal.close receives a padded sessionId", async () => {
     const backend = makeFakePty();
     const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: async () => backend });
-    const opened = await manager.open({
-      owner: { kind: "conn", connId: "conn-pad" },
-      agentId: "main",
-      cwd: "/tmp",
-      shell: "/bin/sh",
-      cols: 80,
-      rows: 24,
-    });
+    const opened = await manager.open(
+      baseOpenRequest({
+        owner: { kind: "conn", connId: "conn-pad" },
+        cwd: "/tmp",
+        shell: "/bin/sh",
+      }),
+    );
     expect(opened.ok).toBe(true);
     if (!opened.ok) {
       return;
@@ -54,14 +53,13 @@ describe("terminal.close/attach padded sessionId", () => {
       spawn: async () => backend,
       detachGraceMs: 60_000,
     });
-    const opened = await manager.open({
-      owner: { kind: "conn", connId: "conn-owner" },
-      agentId: "main",
-      cwd: "/tmp",
-      shell: "/bin/sh",
-      cols: 80,
-      rows: 24,
-    });
+    const opened = await manager.open(
+      baseOpenRequest({
+        owner: { kind: "conn", connId: "conn-owner" },
+        cwd: "/tmp",
+        shell: "/bin/sh",
+      }),
+    );
     expect(opened.ok).toBe(true);
     if (!opened.ok) {
       return;
