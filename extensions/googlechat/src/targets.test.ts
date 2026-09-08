@@ -464,12 +464,7 @@ describe("downloadGoogleChatMedia", () => {
       await expect(downloadGoogleChatMedia({ account, resourceName: "media/123" })).rejects.toThrow(
         "Google Chat media exceeds max bytes (20971520)",
       );
-      await Promise.race([
-        responseClosedPromise,
-        new Promise((resolve) => {
-          setTimeout(resolve, 100);
-        }),
-      ]);
+      await responseClosedPromise;
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
@@ -485,6 +480,10 @@ describe("downloadGoogleChatMedia", () => {
     const chunk = new Uint8Array(6);
     let chunksPulled = 0;
     let canceled = false;
+    let resolveCanceled: () => void = () => {};
+    const canceledPromise = new Promise<void>((resolve) => {
+      resolveCanceled = resolve;
+    });
     const response = new Response(
       new ReadableStream<Uint8Array>({
         pull(controller) {
@@ -497,6 +496,7 @@ describe("downloadGoogleChatMedia", () => {
         },
         cancel() {
           canceled = true;
+          resolveCanceled();
         },
       }),
       { status: 200, headers: { "content-type": "application/octet-stream" } },
@@ -506,9 +506,7 @@ describe("downloadGoogleChatMedia", () => {
     await expect(
       downloadGoogleChatMedia({ account, resourceName: "media/123", maxBytes: 10 }),
     ).rejects.toThrow("Google Chat media exceeds max bytes (10)");
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await canceledPromise;
     expect(canceled).toBe(true);
     expect(chunksPulled).toBeLessThan(TOTAL_CHUNKS);
   });
