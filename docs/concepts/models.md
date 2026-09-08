@@ -106,6 +106,10 @@ with the failed outcome, even when strict discovery returns no rows.
 They cannot widen a retained successful list, including an empty list. Changes to
 provider, plugin, auth, environment, or workspace identity invalidate incompatible inventory.
 
+Automations and command-palette model search show a warning when a provider refresh
+fails, while keeping the models returned by the Gateway. Open Models to retry the
+refresh. A successful empty result clears the discovered choices and warning.
+
 A successful provider result takes precedence over retained rows, even when
 another credential reports failure. Catalog results describe one provider's model
 list; OpenClaw does not guess which old models belonged to each credential.

@@ -13,9 +13,9 @@ import type {
   ApplicationGatewaySnapshot,
 } from "../app/context.ts";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
-import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
-import { CommandPalette } from "./command-palette.ts";
+import { enterQuery, findPaletteOption, mountPalette } from "./command-palette.test-support.ts";
+import "./command-palette.ts";
 import {
   CUSTODIAN_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
@@ -117,36 +117,6 @@ function createSessionResult(key: string, displayName: string): SessionsListResu
     defaults: {},
     sessions: [{ key, kind: "direct", displayName, updatedAt: 1 }],
   } as SessionsListResult;
-}
-
-async function mountPalette(context: ApplicationContext<RouteId>) {
-  const provider = createApplicationContextProvider(context);
-  const palette = document.createElement("openclaw-command-palette") as CommandPalette;
-  palette.onNavigate = vi.fn();
-  palette.onSelectSession = vi.fn();
-  provider.append(palette);
-  document.body.append(provider);
-  await palette.updateComplete;
-  return { palette, provider };
-}
-
-async function enterQuery(palette: CommandPalette, query: string) {
-  palette.openPalette();
-  await palette.updateComplete;
-  const input = palette.querySelector<HTMLInputElement>(".cmd-palette__input");
-  if (!input) {
-    throw new Error("Expected command palette input");
-  }
-  input.value = query;
-  input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
-  await palette.updateComplete;
-}
-
-function findPaletteOption(palette: CommandPalette, label: string, exact = false) {
-  return [...palette.querySelectorAll<HTMLElement>('[role="option"]')].find((item) => {
-    const text = item.textContent?.replace(/\s+/g, " ").trim();
-    return exact ? text === label : text?.includes(label);
-  });
 }
 
 describe("CommandPalette lifecycle", () => {
@@ -496,6 +466,46 @@ describe("CommandPalette lifecycle", () => {
     await vi.advanceTimersByTimeAsync(50);
     await vi.waitFor(() => expect(palette.textContent).toContain("Nightly invoices"));
     expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(1);
+  });
+
+  it("shows a failed acquisition without appending old rows to the successful response", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        models: [
+          { provider: "ollama", id: "retained", name: "Needle retained" },
+          { provider: "ollama", id: "obsolete", name: "Needle obsolete" },
+        ],
+      })
+      .mockResolvedValueOnce({
+        models: [{ provider: "ollama", id: "retained", name: "Needle retained" }],
+        providerOutcomes: [{ provider: "ollama", status: "unavailable" }],
+      })
+      .mockResolvedValueOnce({
+        models: [],
+        providerOutcomes: [{ provider: "ollama", status: "ready" }],
+      });
+    const harness = createGateway(true, { methods: ["models.list"], request });
+    const { palette } = await mountPalette(createContext(harness.gateway, async () => null));
+    await enterQuery(palette, "needle");
+    await vi.advanceTimersByTimeAsync(50);
+    await palette.updateComplete;
+    expect(findPaletteOption(palette, "Needle obsolete")).toBeDefined();
+
+    harness.emit("chat.metadata.changed");
+    await vi.advanceTimersByTimeAsync(50);
+    await palette.updateComplete;
+    expect(findPaletteOption(palette, "Needle obsolete")).toBeUndefined();
+    expect(palette.querySelectorAll('[role="option"]')).toHaveLength(1);
+    expect(palette.querySelector('[role="status"]')?.textContent).toContain(
+      "Some models could not be refreshed. Open Models to try again.",
+    );
+
+    harness.emit("chat.metadata.changed");
+    await vi.advanceTimersByTimeAsync(50);
+    await palette.updateComplete;
+    expect(findPaletteOption(palette, "Needle retained")).toBeUndefined();
+    expect(palette.querySelector('[role="status"]')).toBeNull();
   });
 
   it("retains model results during a failed publication read and retries on input", async () => {

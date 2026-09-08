@@ -1,9 +1,29 @@
 import { describe, expect, it, vi } from "vitest";
 import { GatewayPendingRequests } from "../../../../packages/gateway-client/src/pending-request.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { loadModelProviderCost, loadModelProvidersData, loadModelProviderUsage } from "./load.ts";
 
 describe("loadModelProvidersData", () => {
+  it("keeps failed provider outcomes from a fulfilled explicit refresh", async () => {
+    const client = createTestGatewayClient(async (method) => {
+      if (method === "models.list") {
+        return {
+          models: [{ provider: "ollama", id: "retained", name: "Retained model", available: true }],
+          providerOutcomes: [{ provider: "ollama", status: "unavailable" }],
+        };
+      }
+      return method === "models.authStatus"
+        ? { ts: 1, providers: [] }
+        : { config: {}, hash: "hash" };
+    });
+    const result = await loadModelProvidersData(client, { agentId: "main", refresh: true });
+
+    expect(result.providerOutcomes).toEqual([{ provider: "ollama", status: "unavailable" }]);
+    expect(result.models).toContainEqual(expect.objectContaining({ id: "retained" }));
+    expect(result.error).toBeNull();
+  });
+
   it("keeps full catalog discovery out of the initial page load", async () => {
     const request = vi.fn(async (method: string, _params?: unknown) => {
       switch (method) {

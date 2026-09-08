@@ -3,7 +3,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type {
   AgentsListResult,
   CronJobsListResult,
-  ModelCatalogEntry,
+  ModelCatalogResult,
   SkillStatusReport,
 } from "../api/types.ts";
 import {
@@ -299,8 +299,12 @@ export async function loadCommandPaletteCatalogItems(params: {
   agentId: string;
   agents: () => Promise<AgentsListResult | null>;
   methodAvailable: (method: string) => boolean;
-}): Promise<{ items: CommandPaletteCatalogItem[]; modelSearchFailed: boolean }> {
-  let modelSearchFailed = false;
+}): Promise<{
+  items: CommandPaletteCatalogItem[];
+  modelRequestFailed: boolean;
+  modelSearchError: string | null;
+}> {
+  let modelRequestFailed = false;
   const requestIfAvailable = async <T>(
     method: string,
     requestParams: unknown,
@@ -322,13 +326,13 @@ export async function loadCommandPaletteCatalogItems(params: {
     requestIfAvailable<PluginListResult>("plugins.list", {}),
     params.methodAvailable("models.list")
       ? params.client
-          .request<{ models: ModelCatalogEntry[] }>("models.list", {
+          .request<ModelCatalogResult>("models.list", {
             view: "configured",
             agentId: params.agentId,
             preparedOnly: true,
           })
           .catch(() => {
-            modelSearchFailed = true;
+            modelRequestFailed = true;
             return null;
           })
       : null,
@@ -389,5 +393,10 @@ export async function loadCommandPaletteCatalogItems(params: {
         .join(" "),
     })),
   ];
-  return { items, modelSearchFailed };
+  const modelSearchError = modelRequestFailed
+    ? t("palette.modelSearchFailed")
+    : models?.providerOutcomes?.some((outcome) => outcome.status !== "ready")
+      ? t("chat.modelControls.modelsRefreshFailed")
+      : null;
+  return { items, modelRequestFailed, modelSearchError };
 }

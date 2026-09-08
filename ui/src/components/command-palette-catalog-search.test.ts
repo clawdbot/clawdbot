@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import {
   filterCommandPaletteItems,
   getStaticCommandPaletteCatalogItems,
@@ -7,6 +8,26 @@ import {
 } from "./command-palette-catalog-search.ts";
 
 describe("command palette catalog search", () => {
+  it("reports failed acquisition from a successful catalog read while keeping its rows", async () => {
+    const result = await loadCommandPaletteCatalogItems({
+      client: createTestGatewayClient(async () => ({
+        models: [{ provider: "ollama", id: "retained", name: "Retained model", available: true }],
+        providerOutcomes: [{ provider: "ollama", status: "unavailable" }],
+      })),
+      agentId: "main",
+      agents: async () => null,
+      methodAvailable: (method) => method === "models.list",
+    });
+
+    expect(result.items).toContainEqual(
+      expect.objectContaining({ category: "models", label: "Retained model" }),
+    );
+    expect(result.modelSearchError).toBe(
+      "Some models could not be refreshed. Open Models to try again.",
+    );
+    expect(result.modelRequestFailed).toBe(false);
+  });
+
   it("opens meeting transcripts from search without querying agent chat history", () => {
     const items = filterCommandPaletteItems({
       query: "meeting",
