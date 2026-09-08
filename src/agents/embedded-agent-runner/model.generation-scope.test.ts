@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -8,6 +10,10 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import {
+  ensureAuthProfileStore,
+  ensureAuthProfileStoreWithoutExternalProfiles,
+} from "../auth-profiles/store-runtime.js";
 import { AuthStorage, ModelRegistry } from "../sessions/index.js";
 import { resolveTieredModel } from "./model-resolution.js";
 import { guardModelFixtureAuth } from "./model.fixture.test-support.js";
@@ -21,7 +27,10 @@ import { resolveModelAsync } from "./model.js";
 let state: OpenClawTestState;
 let auth: ReturnType<typeof guardModelFixtureAuth>;
 beforeEach(async () => {
-  state = await createOpenClawTestState({ label: "model-generation" });
+  state = await createOpenClawTestState({
+    label: "model-generation",
+    env: { CODEX_HOME: undefined },
+  });
   auth = guardModelFixtureAuth(state.root);
 });
 afterEach(async () => {
@@ -55,6 +64,47 @@ async function resolveGeneration(
   );
 }
 
+async function createExternalCodexGeneration() {
+  const codexDir = path.join(state.home, ".codex");
+  const payload = Buffer.from(
+    JSON.stringify({ exp: Math.floor(Date.now() / 1_000) + 86_400 }),
+  ).toString("base64url");
+  await fs.mkdir(codexDir, { recursive: true, mode: 0o700 });
+  await fs.writeFile(
+    path.join(codexDir, "auth.json"),
+    JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: {
+        id_token: `synthetic.${payload}.signature`,
+        access_token: `synthetic.${payload}.signature`,
+        refresh_token: "synthetic-refresh-never-sent",
+        account_id: "synthetic-account",
+      },
+    }),
+    { mode: 0o600 },
+  );
+  vi.spyOn(globalThis, "fetch").mockImplementation(() => {
+    throw new Error("Model auth discovery must not contact a provider");
+  });
+  const generation = createModelGenerationFixture({
+    agentDir: state.agentDir(),
+    workspaceDir: state.workspaceDir,
+    provider: "openai",
+    requestProvider: "openai",
+    config: {},
+    label: "external-codex",
+  });
+  publishCurrentModelGeneration(generation);
+  await state.writeAuthProfiles({ version: 1, profiles: {} });
+  expect(
+    ensureAuthProfileStore(state.agentDir(), {
+      allowKeychainPrompt: false,
+      externalCliProviderIds: ["openai"],
+    }).profiles["openai:default"],
+  ).toMatchObject({ provider: "openai", type: "oauth" });
+  return generation;
+}
+
 describe("model runtime generation scope", () => {
   beforeEach(() => {
     clearPluginMetadataLifecycleCaches();
@@ -63,6 +113,50 @@ describe("model runtime generation scope", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     resetModelGenerationFixtureState();
+  });
+
+  it.each([
+    { selection: "explicit", profileId: "openai:default" },
+    { selection: "automatic", profileId: undefined },
+  ])(
+    "resolves $selection external Codex credentials without persisting them",
+    async ({ profileId }) => {
+      const generation = await createExternalCodexGeneration();
+
+      expect((await resolveGeneration(generation, profileId)).model?.id).toBe(generation.modelId);
+      expect(generation.resolveDynamicModel).toHaveBeenCalledWith(
+        expect.objectContaining({ authProfileId: "openai:default", authProfileMode: "oauth" }),
+      );
+      expect(
+        ensureAuthProfileStoreWithoutExternalProfiles(state.agentDir()).profiles["openai:default"],
+      ).toBeUndefined();
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not replace a missing managed profile with an external Codex account", async () => {
+    const generation = await createExternalCodexGeneration();
+    await state.writeAuthProfiles({
+      version: 1,
+      profiles: {
+        "openai:managed": {
+          provider: "openai",
+          type: "oauth",
+          access: "synthetic-managed-access",
+          refresh: "synthetic-managed-refresh",
+          expires: Date.now() + 86_400_000,
+          accountId: "managed-account",
+        },
+      },
+    });
+
+    await expect(resolveGeneration(generation, "openai:missing")).rejects.toMatchObject({
+      code: "selected_auth_profile_unavailable",
+      reason: "auth",
+      status: 401,
+    });
+    expect(generation.resolveDynamicModel).not.toHaveBeenCalled();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
   it("reports a removed selected credential before reusing dynamic model metadata", async () => {
