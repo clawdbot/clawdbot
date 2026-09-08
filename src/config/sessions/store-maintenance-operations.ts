@@ -183,22 +183,32 @@ async function cleanupRemovedSessionArtifacts(params: {
   }
   // null retention keeps archived transcripts: they are conversation history,
   // and the disk budget (not a wall-clock timer) is the only eviction path.
-  if (params.maintenance.resetArchiveRetentionMs == null) {
+  if (
+    params.maintenance.deletedArchiveRetentionMs == null &&
+    params.maintenance.resetArchiveRetentionMs == null
+  ) {
     return;
   }
   const targetDirs =
     archivedDirs.size > 0
       ? [...archivedDirs]
       : [path.dirname(path.resolve(params.operation.storePath))];
+  const rules = [
+    ...(params.maintenance.deletedArchiveRetentionMs == null
+      ? []
+      : [
+          { reason: "deleted" as const, olderThanMs: params.maintenance.deletedArchiveRetentionMs },
+        ]),
+    ...(params.maintenance.resetArchiveRetentionMs == null
+      ? []
+      : [{ reason: "reset" as const, olderThanMs: params.maintenance.resetArchiveRetentionMs }]),
+  ];
   // Both reasons ride one advisory cleanup call: earlier artifact moves may
   // have committed, so retention failure must not block the primary store save.
   await params.operation.artifacts
     .cleanupArchivedSessionTranscripts({
       directories: targetDirs,
-      rules: [
-        { reason: "deleted", olderThanMs: params.maintenance.resetArchiveRetentionMs },
-        { reason: "reset", olderThanMs: params.maintenance.resetArchiveRetentionMs },
-      ],
+      rules,
     })
     .catch((error: unknown) => {
       params.operation.log.warn("session transcript archive retention cleanup failed", {

@@ -252,6 +252,7 @@ describe("config help copy quality", () => {
         ["session.maintenance.archiveDashboardAfter", ["7d", /false/i, "0"]],
         ["session.maintenance.preserveRecent", ["7d", /false/i]],
         ["session.maintenance.resetArchiveRetention", [".reset.", /false/i]],
+        ["session.maintenance.deletedArchiveRetention", [".deleted.", /false/i]],
         ["session.maintenance.maxDiskBytes", ["500mb"]],
         ["session.maintenance.highWaterBytes", ["80%"]],
       ],

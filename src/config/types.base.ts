@@ -258,12 +258,10 @@ export type SessionMaintenanceConfig = {
   maxEntries?: number;
   /** Protect interactive sessions active within this duration. Default and false: disabled. */
   preserveRecent?: string | number | false;
-  /**
-   * Age-based retention for archived transcripts (`*.reset.<timestamp>` and
-   * `*.deleted.<timestamp>`). Default and `false`: keep archives until the
-   * disk budget evicts them oldest-first; a duration opts into deletion.
-   */
+  /** Age-based retention for reset transcript archives (`*.reset.<timestamp>`). */
   resetArchiveRetention?: string | number | false;
+  /** Age-based retention for deleted transcript archives; omitted inherits resetArchiveRetention. */
+  deletedArchiveRetention?: string | number | false;
   /**
    * Per-agent physical budget for SQLite main/WAL and counted session-directory artifacts. Default: "10gb".
    * Warn mode reports pressure; enforce mode applies oldest-first cleanup.

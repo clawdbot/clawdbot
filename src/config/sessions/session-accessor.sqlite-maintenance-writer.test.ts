@@ -19,6 +19,12 @@ import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target
 const archiveMaterializationHook = vi.hoisted(() => ({
   beforeMaterialize: undefined as (() => Promise<void> | void) | undefined,
 }));
+const cleanupArchivedSessionTranscriptsMock = vi.hoisted(() => vi.fn(async () => {}));
+
+vi.mock("../../gateway/session-archive.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../gateway/session-archive.runtime.js")>();
+  return { ...actual, cleanupArchivedSessionTranscripts: cleanupArchivedSessionTranscriptsMock };
+});
 
 vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-accessor.sqlite-archive.js")>();
@@ -38,6 +44,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.restoreAllMocks();
   archiveMaterializationHook.beforeMaterialize = undefined;
+  cleanupArchivedSessionTranscriptsMock.mockReset();
   closeOpenClawAgentDatabasesForTest();
 });
 
@@ -99,6 +106,40 @@ it.each([false, true])(
     expect(loadTranscriptEventsSync(retained)).toEqual(transcript);
   },
 );
+
+it("applies archive retention during ordinary SQLite maintenance without removals", async () => {
+  const tempDir = tempDirs.make("openclaw-session-retention-maintenance-");
+  const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+  const sessionKey = "agent:main:retention-maintenance";
+  replaceSessionEntrySync(
+    { sessionKey, storePath },
+    { sessionId: "retention", updatedAt: Date.now() },
+  );
+
+  await applySessionEntryLifecycleMutation({
+    storePath,
+    maintenanceOverride: {
+      mode: "enforce",
+      pruneAfterMs: Number.MAX_SAFE_INTEGER,
+      resetArchiveRetentionMs: 14 * 24 * 60 * 60 * 1000,
+      deletedArchiveRetentionMs: 3 * 24 * 60 * 60 * 1000,
+    },
+    upserts: [
+      {
+        sessionKey,
+        entry: { sessionId: "retention", updatedAt: Date.now() },
+      },
+    ],
+  });
+
+  expect(cleanupArchivedSessionTranscriptsMock).toHaveBeenCalledWith({
+    directories: [expect.stringContaining(`${path.sep}sessions`)],
+    rules: [
+      { reason: "deleted", olderThanMs: 3 * 24 * 60 * 60 * 1000 },
+      { reason: "reset", olderThanMs: 14 * 24 * 60 * 60 * 1000 },
+    ],
+  });
+});
 
 it("releases the store writer before maintenance archive sizing completes", async () => {
   const tempDir = tempDirs.make("openclaw-session-maintenance-writer-");

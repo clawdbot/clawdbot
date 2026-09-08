@@ -181,7 +181,7 @@ export async function sweepCronRunSessions(params: {
       // the reaper's cron retention decides which rows die, but archived
       // transcript files are conversation history owned by the archive
       // retention policy (null = keep until the disk budget evicts).
-      const archiveRetentionMs = resolveMaintenanceConfig().resetArchiveRetentionMs;
+      const archiveRetentionMs = resolveMaintenanceConfig().deletedArchiveRetentionMs;
       const result = await applySessionEntryLifecycleMutation({
         agentId: params.agentId,
         storePath,

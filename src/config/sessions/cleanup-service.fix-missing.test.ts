@@ -389,4 +389,23 @@ describe("sessions cleanup --fix-missing", () => {
         .get(sessionId),
     ).toBeUndefined();
   });
+
+  it("does not reopen the SQLite store after its maintenance owner is invalidated", async () => {
+    const tempDir = tempDirs.make("openclaw-session-retention-owner-");
+    const ownerStorePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+    const sqlitePath = resolveSqliteTargetFromSessionStorePath(ownerStorePath, {
+      agentId: "main",
+    }).path;
+    if (!sqlitePath) {
+      throw new Error("expected SQLite session store");
+    }
+    await expect(
+      prunePublishedSessionArchivesByRetention({
+        scope: { agentId: "main", path: sqlitePath },
+        rules: [{ reason: "deleted", olderThanMs: 0 }],
+        isCurrent: () => false,
+      }),
+    ).resolves.toBe(0);
+    expect(fs.existsSync(sqlitePath)).toBe(false);
+  });
 });

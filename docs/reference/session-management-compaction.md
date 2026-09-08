@@ -44,17 +44,18 @@ Per agent, on the Gateway host (resolved via `src/config/sessions.ts`):
 
 `session.maintenance` controls automatic maintenance for SQLite session rows, SQLite transcript rows, archive artifacts, and trajectory sidecars:
 
-| Key                     | Default               | Notes                                                                                       |
-| ----------------------- | --------------------- | ------------------------------------------------------------------------------------------- |
-| `mode`                  | `"enforce"`           | or `"warn"` (report only, no mutation)                                                      |
-| `pruneAfter`            | `"30d"`               | stale-entry age cutoff                                                                      |
-| `archiveDashboardAfter` | `"7d"`                | dashboard archiving cutoff; `false` or `0` disables only this trigger                       |
-| `maxEntries`            | `5000`                | cap on unarchived session rows when protection permits                                      |
-| `resetArchiveRetention` | keep (no age cutoff)  | age cutoff for `*.reset.*`/`*.deleted.*` transcript archives; a duration opts into deletion |
-| `maxDiskBytes`          | `10gb`                | per-agent sessions disk budget; `false`, `0`, or `"0"` disables                             |
-| `highWaterBytes`        | 80% of `maxDiskBytes` | target after cleanup; zero-resolving values use the default, and negatives are invalid      |
+| Key                       | Default                | Notes                                                                                                                      |
+| ------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `mode`                    | `"enforce"`            | or `"warn"` (report only, no mutation)                                                                                     |
+| `pruneAfter`              | `"30d"`                | stale-entry age cutoff                                                                                                     |
+| `archiveDashboardAfter`   | `"7d"`                 | dashboard archiving cutoff; `false` or `0` disables only this trigger                                                      |
+| `maxEntries`              | `5000`                 | cap on unarchived session rows when protection permits                                                                     |
+| `resetArchiveRetention`   | keep (no age cutoff)   | age cutoff for `*.reset.*` transcript archives; a duration opts into deletion                                              |
+| `deletedArchiveRetention` | inherits reset setting | age cutoff for `*.deleted.*` transcript archives; set independently or use `false` to keep them until disk-budget eviction |
+| `maxDiskBytes`            | `10gb`                 | per-agent sessions disk budget; `false`, `0`, or `"0"` disables                                                            |
+| `highWaterBytes`          | 80% of `maxDiskBytes`  | target after cleanup; zero-resolving values use the default, and negatives are invalid                                     |
 
-Reset boundaries start a fresh history window without deleting earlier transcript rows. When session rollover advances the live `sessionKey -> sessionId` mapping, the previous SQLite session, transcript, trajectory, and search rows also remain; ordinary entry and session lists show only the live mapping. Retained reset history is bounded by the disk budget, not by `resetArchiveRetention`, which only ages archive artifacts. Explicit deletion is different: it stores and verifies the compressed transcript archive in SQLite in the same transaction that removes the deleted session's rows. It then publishes, syncs, and reads back the derived `*.jsonl.deleted.<timestamp>.zst` file before reporting success when zstd is available.
+Reset boundaries start a fresh history window without deleting earlier transcript rows. When session rollover advances the live `sessionKey -> sessionId` mapping, the previous SQLite session, transcript, trajectory, and search rows also remain; ordinary entry and session lists show only the live mapping. `resetArchiveRetention` and `deletedArchiveRetention` age the corresponding archive artifacts; they do not age retained SQLite reset history or transcript rows. Deleted-session archives use `deletedArchiveRetention`, inheriting the reset setting when omitted. Explicit deletion stores and verifies the compressed transcript archive in SQLite in the same transaction that removes the deleted session's rows. Retention removes the derived archive file first and deletes its SQLite record only after the file is gone, so the database remains a recovery copy when filesystem cleanup fails.
 
 `maxDiskBytes` enforcement uses physical bytes: the per-agent SQLite main file, its `-wal` file, and counted files in the agent sessions directory. It never estimates row JSON sizes or subtracts logical row sizes from that total. This is a cleanup budget, not a guaranteed physical ceiling: protected history and database pages that cannot yet be reclaimed can keep usage above the target.
 

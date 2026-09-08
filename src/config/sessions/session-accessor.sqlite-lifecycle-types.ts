@@ -1,5 +1,6 @@
 import type { ConversationRouteContext } from "./conversation-route-context.js";
 import type {
+  SessionArchivedTranscriptCleanupRule,
   SessionLifecycleArchivedTranscript,
   SessionResetBoundaryWrite,
 } from "./session-accessor.lifecycle-types.js";
@@ -22,6 +23,10 @@ type SessionEntryMaintenanceCounts = {
   capped: number;
 };
 export type SessionEntryMaintenancePlan = SessionEntryMaintenanceCounts & {
+  archiveRetention?: {
+    archiveDirectory: string;
+    rules: SessionArchivedTranscriptCleanupRule[];
+  };
   archivedWorktrees?: Array<{ entry: SessionEntry; sessionKey: string; storePath: string }>;
   entryRemovals: SessionEntryRemovalPlan[];
   stateDeletePlans: SessionStateDeletePlan[];
