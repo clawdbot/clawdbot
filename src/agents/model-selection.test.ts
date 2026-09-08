@@ -1056,6 +1056,56 @@ describe("model-selection", () => {
   });
 
   describe("buildAllowedModelSet", () => {
+    it("retains every configured row in a large allowlist without admitting other rows", () => {
+      const catalog = Array.from({ length: 400 }, (_, index) => ({
+        provider: "custom",
+        id: `synthetic-${index}`,
+        name: `Synthetic ${index}`,
+      }));
+      const result = buildAllowedModelSet({
+        cfg: {
+          agents: {
+            defaults: {
+              modelPolicy: { allow: catalog.map((entry) => `custom/${entry.id}`) },
+            },
+          },
+        },
+        catalog: [...catalog, { provider: "other", id: "synthetic-0", name: "Other provider" }],
+        defaultProvider: "custom",
+      });
+
+      expect(result.allowAny).toBe(false);
+      expect(result.allowedCatalog).toEqual(catalog);
+      expect(result.allowedKeys.size).toBe(400);
+    });
+
+    it("keeps case-insensitive visibility inside the exact provider namespace", () => {
+      const result = buildAllowedModelSet({
+        cfg: {
+          agents: {
+            defaults: {
+              modelPolicy: { allow: ["custom/team/Reader", "custom/READER"] },
+            },
+          },
+        },
+        catalog: [
+          { provider: "custom", id: "team/Reader", name: "Nested model" },
+          { provider: "custom/team", id: "Reader", name: "Namespaced provider" },
+          { provider: "custom", id: "Reader", name: "Uppercase" },
+          { provider: "custom", id: "reader", name: "Lowercase" },
+          { provider: "other", id: "READER", name: "Other provider" },
+        ],
+        defaultProvider: "custom",
+      });
+
+      expect(result.allowedCatalog.map(({ provider, id }) => [provider, id])).toEqual([
+        ["custom", "team/Reader"],
+        ["custom", "Reader"],
+        ["custom", "reader"],
+        ["custom", "READER"],
+      ]);
+    });
+
     it("keeps explicitly allowlisted models even when missing from bundled catalog", () => {
       const result = buildAllowedModelSet({
         cfg: EXPLICIT_ALLOWLIST_CONFIG,

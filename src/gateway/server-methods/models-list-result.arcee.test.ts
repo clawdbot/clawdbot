@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { expect, it } from "vitest";
 import { resolveModelWithRegistry } from "../../agents/embedded-agent-runner/model.registry-resolution.js";
 import { resolveModelProviderAuthConfig } from "../../agents/model-auth-provider-route.js";
+import { resolveConfiguredModelCatalogOverrides } from "../../agents/model-catalog-route.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { AuthStorage } from "../../agents/sessions/auth-storage.js";
 import { ModelRegistry } from "../../agents/sessions/model-registry.js";
@@ -174,7 +175,7 @@ it("keeps exact authored identities ahead of provider-owned wire aliases", () =>
     {
       id: "trinity-large-thinking",
       name: "Exact row",
-      reasoning: false,
+      reasoning: true,
       input: ["text" as const],
       contextWindow: 65536,
       maxTokens: 4096,
@@ -182,6 +183,16 @@ it("keeps exact authored identities ahead of provider-owned wire aliases", () =>
     },
   ];
   const normalize = createProviderModelCatalogIdNormalizer("arcee");
+  const cfg: OpenClawConfig = {
+    models: {
+      providers: { arcee: { baseUrl: "https://api.arcee.ai/api/v1", models } },
+    },
+  };
+  for (const { id } of models) {
+    expect(
+      resolveConfiguredModelCatalogOverrides({ cfg, entry: { provider: "arcee", id } }),
+    ).toMatchObject({ name: "Exact row", contextWindow: 65536, reasoning: true });
+  }
   expect(
     findConfiguredProviderModel({ models }, "arcee", "trinity-large-thinking", normalize),
   ).toMatchObject({ name: "Exact row", contextWindow: 65536 });

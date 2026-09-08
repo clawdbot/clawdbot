@@ -36,6 +36,7 @@ import {
   normalizeProviderId,
 } from "./model-ref-shared.js";
 import { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
+import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 
 export { resolvePrimaryStringValue as normalizeModelSelection } from "@openclaw/normalization-core/string-coerce";
 
@@ -1121,19 +1122,24 @@ function buildAllowedModelSetFromPrepared(
   }
 
   const allowedKeys = new Set<string>();
-  const allowedRefs: ModelRef[] = [];
+  const allowedRefKeys = new Set<string>();
+  const catalogIdentities = new Set(catalog.map(resolveModelCatalogIdentityKey));
+  const allowedCatalogIdentities = new Set<string>();
+  const allowedCaseInsensitiveIdentities = new Set<string>();
+  const caseInsensitiveIdentity = (provider: string, model: string) =>
+    JSON.stringify([normalizeProviderId(provider), normalizeLowercaseStringOrEmpty(model)]);
   const syntheticCatalogEntries = new Map<string, ModelCatalogEntry>();
   for (const wildcardKey of wildcardModelKeys) {
     allowedKeys.add(wildcardKey);
   }
   const addAllowedCatalogRef = (ref: ModelRef) => {
-    if (
-      !allowedRefs.some(
-        (existing) =>
-          modelKey(existing.provider, existing.model) === modelKey(ref.provider, ref.model),
-      )
-    ) {
-      allowedRefs.push(ref);
+    const key = modelKey(ref.provider, ref.model);
+    if (!allowedRefKeys.has(key)) {
+      allowedRefKeys.add(key);
+      allowedCatalogIdentities.add(
+        resolveModelCatalogIdentityKey({ provider: ref.provider, id: ref.model }),
+      );
+      allowedCaseInsensitiveIdentities.add(caseInsensitiveIdentity(ref.provider, ref.model));
     }
   };
   for (const entry of expandModelCatalogWildcards(catalog, wildcardModelKeys)) {
@@ -1150,6 +1156,9 @@ function buildAllowedModelSetFromPrepared(
     addAllowedCatalogRef(parsed);
 
     if (
+      !catalogIdentities.has(
+        resolveModelCatalogIdentityKey({ provider: parsed.provider, id: parsed.model }),
+      ) &&
       !findModelCatalogEntry(catalog, { provider: parsed.provider, modelId: parsed.model }) &&
       !syntheticCatalogEntries.has(key)
     ) {
@@ -1175,11 +1184,10 @@ function buildAllowedModelSetFromPrepared(
   }
 
   const allowedCatalog = [
-    ...catalog.filter((entry) =>
-      allowedRefs.some(
-        (ref) =>
-          findModelCatalogEntry([entry], { provider: ref.provider, modelId: ref.model }) === entry,
-      ),
+    ...catalog.filter(
+      (entry) =>
+        allowedCatalogIdentities.has(resolveModelCatalogIdentityKey(entry)) ||
+        allowedCaseInsensitiveIdentities.has(caseInsensitiveIdentity(entry.provider, entry.id)),
     ),
     ...syntheticCatalogEntries.values(),
   ];

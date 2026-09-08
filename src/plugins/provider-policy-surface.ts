@@ -19,7 +19,7 @@ import type {
   ProviderThinkingProfile,
 } from "./provider-thinking.types.js";
 import {
-  loadBundledPluginPublicArtifactModuleSync,
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync,
   loadPluginPublicArtifactModuleSync,
 } from "./public-surface-loader.js";
 
@@ -180,15 +180,11 @@ export function resolveDirectBundledProviderPolicySurface(
   ) {
     return null;
   }
-  return resolveProviderPolicySurface({
-    loadModule: (artifactBasename) =>
-      loadBundledPluginPublicArtifactModuleSync<Record<string, unknown>>({
-        dirName: pluginId,
-        artifactBasename,
-      }),
-    missingSurfacePrefix: "Unable to resolve bundled plugin public surface ",
-    extractSurface: extractBundledProviderPolicySurface,
+  const mod = loadBundledPluginPublicArtifactModuleFromCandidatesSync<Record<string, unknown>>({
+    dirName: pluginId,
+    artifactCandidates: PROVIDER_POLICY_ARTIFACT_CANDIDATES,
   });
+  return mod ? extractBundledProviderPolicySurface(mod) : null;
 }
 
 /** Loads policy hooks from a host-verified official external plugin install. */

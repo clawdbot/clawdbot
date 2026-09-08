@@ -1,6 +1,7 @@
 /** Projects physical catalog rows for browse/presentation; never runtime execution. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
+  matchesProviderScopedModelId,
   resolveMergedModelProviderConfig,
   resolveMergedModelProviderModels,
 } from "../config/model-provider-config.js";
@@ -60,7 +61,7 @@ export function resolveConfiguredModelCatalogOverrides(params: {
 }): ModelCatalogLogicalOverrides | undefined {
   const provider = normalizeProviderId(params.entry.provider);
   const providerConfig = resolveMergedModelProviderConfig(params.cfg, provider);
-  if (!providerConfig) {
+  if (!providerConfig?.models?.length) {
     return undefined;
   }
   const surface = resolveDirectBundledProviderPolicySurface(provider);
@@ -68,10 +69,18 @@ export function resolveConfiguredModelCatalogOverrides(params: {
     params.policy?.resolveIdentity({ provider: params.entry.provider, id: modelId })?.key ??
     resolveProviderModelCatalogId({ provider, modelId, surface }) ??
     modelId.trim();
+  const modelId =
+    params.policy?.resolveIdentity(params.entry)?.id ??
+    resolveProviderModelCatalogId({ provider, modelId: params.entry.id, surface }) ??
+    params.entry.id.trim();
+  const exactModels = providerConfig.models.filter((candidate) =>
+    matchesProviderScopedModelId({ candidateId: candidate.id, provider, modelId }),
+  );
+  // Match the row group execution will use, then retain same-spelling duplicate merges.
   const model = resolveMergedModelProviderModels({
-    models: providerConfig.models,
+    models: exactModels.length > 0 ? exactModels : providerConfig.models,
     normalizeModelId: normalizeConfiguredModelId,
-  }).get(normalizeConfiguredModelId(params.entry.id));
+  }).get(normalizeConfiguredModelId(modelId));
   const overrides: ModelCatalogLogicalOverrides = {
     ...(model?.name ? { name: model.name } : {}),
     ...(model?.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
