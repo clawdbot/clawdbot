@@ -544,7 +544,7 @@ describe("sendMessageMSTeams", () => {
         text: "report",
         mediaUrl: "https://example.com/report.pdf",
       }),
-    ).rejects.toThrow("channels.msteams.sharePointSiteId is required");
+    ).rejects.toThrow("No SharePoint site ID available");
     expect(mockState.uploadAndShareSharePoint).not.toHaveBeenCalled();
   });
 });

@@ -261,6 +261,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
     },
     tokenProvider,
     sharePointSiteId: cfg.channels?.msteams?.sharePointSiteId,
+    sharePointFolder: cfg.channels?.msteams?.sharePointFolder,
   });
 
   const activityClientInfo = activity.entities?.find((entity) => entity.type === "clientInfo") as
