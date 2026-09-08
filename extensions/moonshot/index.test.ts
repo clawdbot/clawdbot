@@ -254,3 +254,33 @@ describe("moonshot provider plugin", () => {
     expect(provider.isModernModelRef?.({ provider: "moonshot", modelId: "kimi-k3" })).toBe(true);
   });
 });
+
+describe("moonshot tool schema normalization", () => {
+  it("normalizes tool schemas through the registered provider hook", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    const normalized = provider.normalizeToolSchemas?.({
+      provider: "moonshot",
+      modelId: "kimi-k2.6",
+      modelApi: "openai-completions",
+      tools: [
+        {
+          name: "apollo_tasks_bulk_create",
+          description: "create tasks",
+          parameters: {
+            type: "object",
+            anyOf: [{ required: ["contact_id"] }, { required: ["account_id"] }],
+            properties: { contact_id: { type: "string" }, account_id: { type: "string" } },
+          },
+        },
+      ],
+    } as never) as Array<{ parameters?: Record<string, unknown> }> | null | undefined;
+
+    const parameters = normalized?.[0]?.parameters;
+    expect(parameters?.type).toBeUndefined();
+    expect(parameters?.anyOf).toEqual([
+      { type: "object", required: ["contact_id"] },
+      { type: "object", required: ["account_id"] },
+    ]);
+  });
+});
