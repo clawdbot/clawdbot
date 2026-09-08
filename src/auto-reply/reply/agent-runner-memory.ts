@@ -1123,20 +1123,21 @@ export async function runSessionCompactionIfNeeded(params: {
                     },
                   }
                 : {}),
-              onHostCompactionCommitted: async (commit) => {
-                await recordCompactionAccounting(
-                  commit.entry,
-                  commit.tokensAfter,
-                  commit.compactionKind,
-                  hostAccountingCommitted ? 0 : 1,
-                );
-                hostAccountingCommitted = true;
-              },
               onHostCompactionTranscriptSettled: async (commit) => {
                 await recordCompactionAccounting(commit.entry, undefined, undefined, 0);
               },
             }
           : {}),
+        // Record every host compaction while its session lane still excludes the next writer.
+        onHostCompactionCommitted: async (commit) => {
+          await recordCompactionAccounting(
+            commit.entry,
+            commit.tokensAfter,
+            commit.compactionKind,
+            hostAccountingCommitted ? 0 : 1,
+          );
+          hostAccountingCommitted = true;
+        },
         onCommitted: (accepted) => {
           expectedSession = accepted.entry;
           entry = accepted.entry;

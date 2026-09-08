@@ -81,7 +81,7 @@ suite.define(() => {
           workspace: "/synthetic/research",
           communityInvite: false,
           sessionKey,
-          sessionScope: scope === "global" ? "global" : "agent",
+          sessionScope: scope === "global" ? "global" : "per-sender",
           operatorScopes: ["operator.read", "operator.write"],
           featureMethods: publicationMethods,
           sessions: [row],
@@ -101,7 +101,7 @@ suite.define(() => {
               ],
               defaultId: "ops",
               mainKey: "main",
-              scope: scope === "global" ? "global" : "agent",
+              scope: scope === "global" ? "global" : "per-sender",
             },
             "sessions.list": {
               ts: 1,

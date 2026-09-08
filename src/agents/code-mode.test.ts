@@ -297,6 +297,7 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(execTool.description).toContain("Enabled tools are async global functions");
     expect(execTool.description).toContain("Await dependent calls in order");
     expect(execTool.description).toContain("independent calls may run with Promise.all");
+    expect(execTool.description).toContain("Emit output with `text(value)` or `json(value)`");
     expect(execTool.description).toContain(
       "Declared output fields may feed later calls in the same program",
     );
@@ -326,23 +327,6 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(parameters.properties?.code?.description).toContain(
       "a trailing expression yields `null`",
     );
-    expect(parameters.properties?.code?.description).toContain(
-      "Call enabled async globals directly",
-    );
-    expect(parameters.properties?.code?.description).toContain(
-      "independent calls may use Promise.all",
-    );
-    expect(parameters.properties?.code?.description).toContain(
-      "Declared output fields may feed later calls in the same program",
-    );
-    expect(parameters.properties?.code?.description).toContain(
-      'const [tool] = await catalog.search("..."); return await tool({...});',
-    );
-    expect(parameters.properties?.code?.description).toContain("`catalog.search(query)`");
-    expect(parameters.properties?.code?.description).toContain(
-      "cannot feed guessed dependent logic in the same program",
-    );
-    expect(parameters.properties?.code?.description).toContain("use a later `exec`");
     expect(parameters.properties?.code?.description).not.toContain("ALL_TOOLS");
     expect(parameters.properties?.code?.description).not.toContain("tools.call");
     expect(parameters.properties?.code?.description).toContain("`require`, or `import`");

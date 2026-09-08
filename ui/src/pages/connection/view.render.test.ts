@@ -64,6 +64,23 @@ function expectStatByLabel(container: Element, text: string): HTMLElement {
 }
 
 describe("connection view rendering", () => {
+  it("shows setup-code guidance beneath the secret before connecting", () => {
+    const container = document.createElement("div");
+    const secret = btoa(
+      JSON.stringify({ url: "wss://gateway.example", bootstrapToken: "synthetic-bootstrap-token" }),
+    ).replace(/=+$/g, "");
+    render(renderConnection(createConnectionProps({ secret })), container);
+    const control = container
+      .querySelector('input[aria-label="Gateway secret"]')
+      ?.closest(".settings-row__control");
+    expect(control?.querySelector('[role="status"]')?.textContent).toContain(
+      "device setup code for the OpenClaw mobile app",
+    );
+    expect(control?.textContent).toContain("openclaw gateway auth-token --show");
+    render(renderConnection(createConnectionProps()), container);
+    expect(control?.querySelector('[role="status"]')).toBeNull();
+  });
+
   it("names the live Gateway in the summary, not the edited draft", () => {
     const props = createConnectionProps({
       connected: true,

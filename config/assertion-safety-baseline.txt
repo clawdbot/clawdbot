@@ -1887,7 +1887,6 @@ src/agents/provider-attribution.ts	14
 src/agents/provider-auth-aliases.ts	1
 src/agents/provider-http-errors.ts	1
 src/agents/provider-local-service.ts	4
-src/agents/provider-model-normalization.runtime.ts	1
 src/agents/provider-model-route.ts	1
 src/agents/provider-request-config.ts	6
 src/agents/provider-secret-egress.ts	3
@@ -2586,7 +2585,6 @@ src/config/sessions/session-accessor.sqlite-delta.ts	2
 src/config/sessions/session-accessor.sqlite-entry-availability.ts	1
 src/config/sessions/session-accessor.sqlite-entry-cache.ts	2
 src/config/sessions/session-accessor.sqlite-entry.ts	1
-src/config/sessions/session-accessor.sqlite-history-events.ts	2
 src/config/sessions/session-accessor.sqlite-message-cut.ts	1
 src/config/sessions/session-accessor.sqlite-parent-fork.ts	1
 src/config/sessions/session-accessor.sqlite-read.ts	12
@@ -3790,7 +3788,7 @@ ui/src/components/onboarding-memory-import.ts	1
 ui/src/components/panel-tab-strip.ts	4
 ui/src/components/select-picker.ts	3
 ui/src/components/sensitive-input.ts	2
-ui/src/components/session-data-controller.ts	2
+ui/src/components/session-data-controller.ts	1
 ui/src/components/session-data-scroll-controller.ts	1
 ui/src/components/session-group-defaults-dialog.ts	1
 ui/src/components/session-organizer-controller.ts	5

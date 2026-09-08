@@ -22,6 +22,7 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
     pluginIds: [],
     index: { plugins: [] },
     manifestRegistry: { plugins: [], diagnostics: [] },
+    declaredProviderOwners: new Map(),
     owners: {
       channels: new Map(),
       channelConfigs: new Map(),

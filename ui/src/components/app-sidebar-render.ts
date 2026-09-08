@@ -384,7 +384,12 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
 
 /** Zone 5: product chrome recedes to one slim footer bar. */
 export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
-  const connectionStatus = resolveSidebarConnectionStatus(host);
+  const connectionStatus = resolveSidebarConnectionStatus({
+    offline: host.offline,
+    restartPending: host.restartPending,
+    suspensionPhase: host.suspensionPhase,
+    phase: host.sessionDataContext?.gateway.snapshot.phase,
+  });
   const selfUser = resolveCurrentSelfUser({
     snapshotUser: host.sessionDataContext?.gateway.snapshot.selfUser,
     presenceEntries: readPresenceEntries(host.sessionData.presencePayload),

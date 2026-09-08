@@ -36,7 +36,7 @@ import {
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { resolveCliName } from "../cli-name.js";
+import { CLI_NAME } from "../cli-name.js";
 import { createUpdateProgress } from "./progress.js";
 import {
   DEFAULT_PACKAGE_NAME,
@@ -55,8 +55,6 @@ import {
 } from "./update-command-config-snapshot.js";
 import { resolveUpdateTargetEnv } from "./update-command-service-env.js";
 import { beginUpdateCommandStartup } from "./update-command-startup.js";
-
-const CLI_NAME = resolveCliName();
 
 /** Resolve only at the validated staged boundary, after the normal CLI acquires
  * its executor. Saved capability data alone never grants startup authority. */
