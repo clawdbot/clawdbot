@@ -7,6 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { type Api, completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { resolveThinkingProfile } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef, type SecretInput } from "../config/types.secrets.js";
 import { parseLiveCsvFilter } from "../media-generation/live-test-helpers.js";
@@ -1268,13 +1269,37 @@ function resolveTestReasoning(
   if (model.provider === "xai" && id.startsWith("grok-4")) {
     return undefined;
   }
+  let preferred: "low" | "medium" | "high" = "low";
   if (model.provider === "openai") {
     if (id.includes("pro")) {
-      return "high";
+      preferred = "high";
+    } else {
+      preferred = "medium";
     }
-    return "medium";
   }
-  return "low";
+  const profile = resolveThinkingProfile({
+    provider: model.provider,
+    model: model.id,
+    catalog: [
+      {
+        provider: model.provider,
+        id: model.id,
+        api: model.api,
+        reasoning: model.reasoning,
+      },
+    ],
+    agentRuntime: "openclaw",
+  });
+  if (profile.levels.some((level) => level.id === preferred)) {
+    return preferred;
+  }
+  return profile.defaultLevel === "minimal" ||
+    profile.defaultLevel === "low" ||
+    profile.defaultLevel === "medium" ||
+    profile.defaultLevel === "high" ||
+    profile.defaultLevel === "xhigh"
+    ? profile.defaultLevel
+    : undefined;
 }
 
 function resolveLiveSystemPrompt(model: Model): string | undefined {
@@ -1283,6 +1308,19 @@ function resolveLiveSystemPrompt(model: Model): string | undefined {
   }
   return undefined;
 }
+
+describe("resolveTestReasoning", () => {
+  it("honors the prepared OpenCode Go transport profile", () => {
+    const model = {
+      provider: "opencode-go",
+      id: "glm-5",
+      reasoning: true,
+    } as Model;
+
+    expect(resolveTestReasoning(model)).toBe("low");
+    expect(resolveTestReasoning({ ...model, api: "openai-completions" } as Model)).toBeUndefined();
+  });
+});
 
 describe("resolveLiveSystemPrompt", () => {
   it("adds instructions for openai probes", () => {
@@ -1337,10 +1375,13 @@ async function completeSimpleWithTimeout<TApi extends Api>(
       model,
       cfg: activeLiveCompletionConfig,
     });
+    const reasoning =
+      options?.reasoning === undefined ? undefined : resolveTestReasoning(completionModel);
     return await withLiveHeartbeat(
       Promise.race([
         completeSimple(completionModel, context, {
           ...options,
+          reasoning,
           signal: controller.signal,
         }),
         timeout,
