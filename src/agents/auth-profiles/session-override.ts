@@ -233,8 +233,9 @@ export function resolveUserLinkedAuthProfile(params: {
 function isProfileGloballyInCooldown(
   store: ReturnType<typeof ensureAuthProfileStore>,
   profileId: string,
+  cfg: OpenClawConfig,
 ): boolean {
-  if (!isProfileInCooldown(store, profileId)) {
+  if (!isProfileInCooldown(store, profileId, undefined, undefined, cfg)) {
     return false;
   }
   const usage = store.usageStats?.[profileId];
@@ -411,7 +412,7 @@ async function resolveSessionAuthProfileOverride(params: {
     return { profileId: undefined, store };
   }
 
-  if (order.every((profileId) => isProfileGloballyInCooldown(store, profileId))) {
+  if (order.every((profileId) => isProfileGloballyInCooldown(store, profileId, cfg))) {
     // An automatic pin must not trap later turns on an unavailable provider.
     if (current) {
       const latest = await persistSessionAuthProfileOverrideState({
@@ -447,7 +448,7 @@ async function resolveSessionAuthProfileOverride(params: {
   }
 
   const isProfileUnavailableForSessionModel = (profileId: string) =>
-    isProfileInCooldown(store, profileId, undefined, sessionEntry.model);
+    isProfileInCooldown(store, profileId, undefined, sessionEntry.model, cfg);
   const currentUnavailable = current ? isProfileUnavailableForSessionModel(current) : false;
   const compactionCount = sessionEntry.compactionCount ?? 0;
   const storedCompaction =

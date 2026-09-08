@@ -214,6 +214,48 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     ).toThrow(/temporarily unavailable/u);
   });
 
+  it("forwards a cooldowned provider-entry binding for a configured cooldown bypass provider", () => {
+    const store = authStore(
+      {
+        "xai:bound": apiKeyProfile("xai", "bound-key"),
+        "xai:backup": apiKeyProfile("xai", "backup-key"),
+      },
+      { xai: ["xai:backup", "xai:bound"] },
+    );
+    setProfileCooldown(store, "xai:bound", { disabledUntil: Date.now() + 60_000 });
+    const config = {
+      ...providerConfig("xai", { apiKey: "xai:bound" }),
+      auth: { cooldownBypassProviders: ["XAI"] },
+    } as OpenClawConfig;
+
+    const plan = prepareAgentRuntimeAuthPlan({
+      provider: "xai",
+      modelId: "grok-4",
+      config,
+      env: {},
+      authProfileStore: store,
+      sessionAuthProfileId: "xai:backup",
+      sessionAuthProfileSource: "auto",
+    });
+
+    expect(plan.forwardedAuthProfileId).toBe("xai:bound");
+    expect(
+      preparedAgentRuntimeProfileAttemptHasCandidate({
+        attempt: { kind: "profile", profileId: "xai:bound", plan },
+        store,
+        modelId: "grok-4",
+        config,
+      }),
+    ).toBe(true);
+    expect(
+      preparedAgentRuntimeProfileAttemptHasCandidate({
+        attempt: { kind: "profile", profileId: "xai:bound", plan },
+        store,
+        modelId: "grok-4",
+      }),
+    ).toBe(false);
+  });
+
   it("keeps generic AWS SDK auth ahead of provider bindings and automatic profiles", () => {
     const plan = prepareAgentRuntimeAuthPlan({
       provider: "xai",

@@ -831,8 +831,9 @@ function resolveDisabledFailureBackoffMs(params: {
 export function resolveProfileUnusableUntilForDisplay(
   store: AuthProfileStore,
   profileId: string,
+  cfg?: OpenClawConfig,
 ): number | null {
-  if (isAuthCooldownBypassedForProvider(store.profiles[profileId]?.provider)) {
+  if (isAuthCooldownBypassedForProvider(store.profiles[profileId]?.provider, cfg)) {
     return null;
   }
   const stats = store.usageStats?.[profileId];
@@ -1014,9 +1015,9 @@ export async function markAuthProfileFailure(params: {
   runId?: string;
   modelId?: string;
 }): Promise<void> {
-  const { store, profileId, reason, agentDir, runId, modelId } = params;
+  const { store, profileId, reason, cfg, agentDir, runId, modelId } = params;
   const profile = store.profiles[profileId];
-  if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
+  if (!profile || isAuthCooldownBypassedForProvider(profile.provider, cfg)) {
     return;
   }
 
@@ -1036,7 +1037,7 @@ export async function markAuthProfileFailure(params: {
     agentDir,
     updater: (freshStore) => {
       const profileValue = freshStore.profiles[profileId];
-      if (!profileValue || isAuthCooldownBypassedForProvider(profileValue.provider)) {
+      if (!profileValue || isAuthCooldownBypassedForProvider(profileValue.provider, cfg)) {
         return false;
       }
       const currentWhamResult =
@@ -1140,15 +1141,16 @@ export async function markAuthProfileBlockedUntil(params: {
   profileId: string;
   blockedUntil: number;
   source: AuthProfileBlockedSource;
+  cfg?: OpenClawConfig;
   agentDir?: string;
   runId?: string;
   modelId?: string;
 }): Promise<void> {
-  const { store, profileId, blockedUntil, agentDir, runId, modelId, source } = params;
+  const { store, profileId, blockedUntil, cfg, agentDir, runId, modelId, source } = params;
   const profile = store.profiles[profileId];
   if (
     !profile ||
-    isAuthCooldownBypassedForProvider(profile.provider) ||
+    isAuthCooldownBypassedForProvider(profile.provider, cfg) ||
     !isFutureDateTimestampMs(blockedUntil)
   ) {
     return;
@@ -1161,7 +1163,7 @@ export async function markAuthProfileBlockedUntil(params: {
     agentDir,
     updater: (freshStore) => {
       const profileLocal = freshStore.profiles[profileId];
-      if (!profileLocal || isAuthCooldownBypassedForProvider(profileLocal.provider)) {
+      if (!profileLocal || isAuthCooldownBypassedForProvider(profileLocal.provider, cfg)) {
         return false;
       }
       const now = asDateTimestampMs(Date.now());
@@ -1209,10 +1211,10 @@ export async function markInlineProviderApiKeyFailure(params: {
   runId?: string;
   modelId?: string;
 }): Promise<void> {
-  const { store, provider, reason, agentDir, runId, modelId } = params;
+  const { store, provider, reason, cfg, agentDir, runId, modelId } = params;
   if (
     (reason !== "auth" && reason !== "auth_permanent" && reason !== "billing") ||
-    isAuthCooldownBypassedForProvider(provider)
+    isAuthCooldownBypassedForProvider(provider, cfg)
   ) {
     return;
   }

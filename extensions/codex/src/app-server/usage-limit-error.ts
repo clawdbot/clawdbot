@@ -102,6 +102,7 @@ export async function markCodexAuthProfileBlockedFromRateLimits(params: {
       profileId: authProfileId,
       blockedUntil,
       source: "codex_rate_limits",
+      cfg: params.params.config,
       agentDir: params.params.agentDir,
       runId: params.params.runId,
       modelId: params.params.modelId,

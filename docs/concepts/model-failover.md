@@ -189,6 +189,18 @@ Use a user-pinned profile to make one account/key the durable first preference f
 
 When a profile fails due to auth/rate-limit errors (or a timeout that looks like rate limiting), OpenClaw marks it in cooldown and moves to the next profile.
 
+Some upstream gateways manage their own rate limiting, so OpenClaw skips cooldown bookkeeping for them entirely: failures do not mark the profile, and the profile is never treated as cooled down. OpenRouter and Kilocode are always in this set. Add your own gateway providers with `auth.cooldownBypassProviders`:
+
+```json5
+{
+  auth: {
+    cooldownBypassProviders: ["my-gateway"],
+  },
+}
+```
+
+Provider ids are matched case-insensitively and are added to the built-in set.
+
 CLI-backed runtimes settle profile health only after their resume, fork, and fresh-session recovery attempts finish. A terminal credential failure cools down the exact selected profile before model fallback; a successful run clears stale failure state. Transcript, format, context, pre-provider timeout, and ambient CLI failures without a selected profile do not change shared profile health.
 
 <AccordionGroup>

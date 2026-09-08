@@ -10,6 +10,7 @@ import {
   type ProfileUsageStats,
 } from "../../agents/auth-profiles.js";
 import { buildAuthProfileUnusableHint } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import { isAuthCooldownBypassedForProvider } from "../../agents/auth-profiles/usage-state.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
@@ -151,7 +152,10 @@ export async function modelsAuthListCommand(
         store,
         profileId,
         profile,
-        usage: store.usageStats?.[profileId],
+        // Provider-managed cooldowns are never enforced, so their markers stay hidden.
+        usage: isAuthCooldownBypassedForProvider(profile.provider, cfg)
+          ? undefined
+          : store.usageStats?.[profileId],
       }),
     )
     .filter((profile) => providerFilter.matches(profile))

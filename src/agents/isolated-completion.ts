@@ -587,6 +587,7 @@ export async function runIsolatedCompletion(
               attempt,
               store: harnessAuth.store,
               modelId: harnessAuth.model.id,
+              config,
             })
           ) {
             firstError ??= new Error(
@@ -649,6 +650,7 @@ export async function runIsolatedCompletion(
                 attempt,
                 store: harnessAuth.store,
                 modelId: harnessAuth.model.id,
+                config,
               })
             ) {
               throw new Error("Prepared runtime auth candidates are temporarily unavailable.");

@@ -1151,7 +1151,7 @@ export async function modelsStatusCommand(
           remainingMs: number;
         }> = [];
         for (const profileId of Object.keys(store.usageStats ?? {})) {
-          const unusableUntil = resolveProfileUnusableUntilForDisplay(store, profileId);
+          const unusableUntil = resolveProfileUnusableUntilForDisplay(store, profileId, cfg);
           if (!unusableUntil || now >= unusableUntil) {
             continue;
           }

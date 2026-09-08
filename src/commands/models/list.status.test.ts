@@ -583,6 +583,12 @@ describe("modelsStatusCommand auth overview", () => {
     try {
       const jsonRuntime = createRuntime();
       await modelsStatusCommand({ json: true }, jsonRuntime as never);
+      // The display resolver honors auth.cooldownBypassProviders only when status hands it the loaded config.
+      expect(mocks.resolveProfileUnusableUntilForDisplay).toHaveBeenCalledWith(
+        expect.anything(),
+        "anthropic:default",
+        mocks.loadConfig(),
+      );
       expect(parseFirstJsonLog(jsonRuntime).auth.unusableProfiles).toEqual([
         expect.objectContaining({
           profileId: "anthropic:default",

@@ -334,7 +334,7 @@ export function resolveAuthProfileOrderWithMetadata(
   const deduped = dedupeProfileIds(filtered);
   const cooldownModel = params.cooldownScope === "all-models" ? null : forModel;
   const isInCooldown = (profileId: string) =>
-    isProfileInCooldown(store, profileId, now, cooldownModel);
+    isProfileInCooldown(store, profileId, now, cooldownModel, params.cfg);
   const unusableUntil = (profileId: string) =>
     resolveProfileUnusableUntil(store.usageStats?.[profileId] ?? {}, cooldownModel);
 

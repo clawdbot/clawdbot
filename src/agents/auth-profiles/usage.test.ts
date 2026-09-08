@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setLoggerOverride } from "../../logging/logger.js";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
-import { resolveProfileUnusableUntil } from "./usage-state.js";
+import { isAuthCooldownBypassedForProvider, resolveProfileUnusableUntil } from "./usage-state.js";
 import {
   clearAuthProfileCooldown,
   clearExpiredCooldowns,
@@ -195,6 +195,61 @@ describe("account-wide auth profile cooldowns", () => {
 
     expect(isProfileInCooldown(store, "openai:api-key", now, null)).toBe(false);
     expect(isProfileInCooldown(store, "anthropic:default", now, null)).toBe(true);
+  });
+});
+
+describe("isAuthCooldownBypassedForProvider", () => {
+  it("adds normalized configured providers to the built-in set", () => {
+    const cfg = { auth: { cooldownBypassProviders: [" My-Gateway ", "", "anthropic"] } };
+
+    expect(isAuthCooldownBypassedForProvider("my-gateway", cfg)).toBe(true);
+    expect(isAuthCooldownBypassedForProvider("ANTHROPIC", cfg)).toBe(true);
+    expect(isAuthCooldownBypassedForProvider("openrouter", cfg)).toBe(true);
+    expect(isAuthCooldownBypassedForProvider("openai", cfg)).toBe(false);
+    expect(isAuthCooldownBypassedForProvider("", cfg)).toBe(false);
+  });
+
+  it("keeps the built-in set without config", () => {
+    expect(isAuthCooldownBypassedForProvider("kilocode")).toBe(true);
+    expect(isAuthCooldownBypassedForProvider("anthropic")).toBe(false);
+  });
+});
+
+describe("configured auth cooldown bypass providers", () => {
+  const cfg: OpenClawConfig = { auth: { cooldownBypassProviders: ["Anthropic"] } };
+  const now = 1_700_000_000_000;
+
+  it("treats a configured provider as never in cooldown", () => {
+    const store = makeStore({
+      "anthropic:default": { cooldownUntil: now + 60_000, disabledUntil: now + 60_000 },
+    });
+
+    expect(isProfileInCooldown(store, "anthropic:default", now, undefined, cfg)).toBe(false);
+    expect(isProfileInCooldown(store, "anthropic:default", now)).toBe(true);
+    expect(resolveProfileUnusableUntilForDisplay(store, "anthropic:default", cfg)).toBeNull();
+    expect(resolveProfileUnusableUntilForDisplay(store, "anthropic:default")).toBe(now + 60_000);
+  });
+
+  it("skips failure bookkeeping for a configured provider", async () => {
+    const store = makeStore(undefined);
+
+    await markAuthProfileFailure({
+      store,
+      profileId: "anthropic:default",
+      reason: "rate_limit",
+      cfg,
+    });
+    await markAuthProfileBlockedUntil({
+      store,
+      profileId: "anthropic:default",
+      blockedUntil: now + 60_000,
+      source: "codex_rate_limits",
+      cfg,
+    });
+    await markInlineProviderApiKeyFailure({ store, provider: "anthropic", reason: "billing", cfg });
+
+    expect(store.usageStats).toBeUndefined();
+    expect(storeMocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
   });
 });
 

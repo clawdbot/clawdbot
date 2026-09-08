@@ -332,7 +332,7 @@ export async function resolveApiKeyForProviderCore(params: {
             store: inlineStore,
           })
         ) {
-          authConfig.assertInlineProviderApiKeyUsable({ store: inlineStore, provider });
+          authConfig.assertInlineProviderApiKeyUsable({ store: inlineStore, provider, cfg });
         }
       }
       if (
@@ -382,7 +382,7 @@ export async function resolveApiKeyForProviderCore(params: {
       // credentials too, so they must honor the inline-key cooldown gate just
       // like the literal/env paths below — otherwise a 402 cooldown is recorded
       // but never enforced for these keys.
-      authConfig.assertInlineProviderApiKeyUsable({ store: getScopedStore(), provider });
+      authConfig.assertInlineProviderApiKeyUsable({ store: getScopedStore(), provider, cfg });
       return runtimeCustomKey;
     }
     const customKey = authConfig.resolveUsableCustomProviderApiKey({
@@ -391,7 +391,7 @@ export async function resolveApiKeyForProviderCore(params: {
       secretSentinels: params.secretSentinels,
     });
     if (customKey) {
-      authConfig.assertInlineProviderApiKeyUsable({ store: getScopedStore(), provider });
+      authConfig.assertInlineProviderApiKeyUsable({ store: getScopedStore(), provider, cfg });
       return {
         apiKey: customKey.apiKey,
         source: customKey.source,
@@ -558,7 +558,7 @@ export async function resolveApiKeyForProviderCore(params: {
           store: inlineStore,
         })
       ) {
-        authConfig.assertInlineProviderApiKeyUsable({ store: inlineStore, provider });
+        authConfig.assertInlineProviderApiKeyUsable({ store: inlineStore, provider, cfg });
       }
     }
     if (
@@ -605,7 +605,7 @@ export async function resolveApiKeyForProviderCore(params: {
         store: inlineStore,
       })
     ) {
-      authConfig.assertInlineProviderApiKeyUsable({ store: inlineStore, provider });
+      authConfig.assertInlineProviderApiKeyUsable({ store: inlineStore, provider, cfg });
     }
     return managedRuntimeAuth;
   }
@@ -622,7 +622,7 @@ export async function resolveApiKeyForProviderCore(params: {
       inferredMode: "api-key",
     });
     if (isAuthModeAllowedForModel({ provider, modelApi: params.modelApi, mode })) {
-      authConfig.assertInlineProviderApiKeyUsable({ store: getScopedStore(), provider });
+      authConfig.assertInlineProviderApiKeyUsable({ store: getScopedStore(), provider, cfg });
       return { apiKey: customKey.apiKey, source: customKey.source, mode };
     }
   }

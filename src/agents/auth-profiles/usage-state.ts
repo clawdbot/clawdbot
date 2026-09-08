@@ -5,6 +5,7 @@
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
 /** Clears failure windows while preserving unrelated usage history. */
@@ -31,10 +32,33 @@ export function resetAuthProfileFailureState(
   };
 }
 
+/** Providers whose upstream gateway manages rate limiting; always bypassed. */
+const DEFAULT_AUTH_COOLDOWN_BYPASS_PROVIDERS: readonly string[] = ["openrouter", "kilocode"];
+
+/** Config carrying the optional user-configured bypass list. */
+export type AuthCooldownBypassConfig = Pick<OpenClawConfig, "auth">;
+
+/**
+ * Resolves the normalized set of providers whose auth-profile cooldowns are
+ * skipped: the built-in defaults plus `auth.cooldownBypassProviders`.
+ */
+function resolveAuthCooldownBypassProviders(cfg?: AuthCooldownBypassConfig): Set<string> {
+  const bypassed = new Set(DEFAULT_AUTH_COOLDOWN_BYPASS_PROVIDERS);
+  for (const provider of cfg?.auth?.cooldownBypassProviders ?? []) {
+    const normalized = normalizeProviderId(provider);
+    if (normalized) {
+      bypassed.add(normalized);
+    }
+  }
+  return bypassed;
+}
+
 /** Returns true for providers whose auth-profile cooldowns are provider-managed. */
-export function isAuthCooldownBypassedForProvider(provider: string | undefined): boolean {
-  const normalized = normalizeProviderId(provider ?? "");
-  return normalized === "openrouter" || normalized === "kilocode";
+export function isAuthCooldownBypassedForProvider(
+  provider: string | undefined,
+  cfg?: AuthCooldownBypassConfig,
+): boolean {
+  return resolveAuthCooldownBypassProviders(cfg).has(normalizeProviderId(provider ?? ""));
 }
 
 export function resolveInlineProviderApiKeyUsageId(provider: string): string {
@@ -42,8 +66,12 @@ export function resolveInlineProviderApiKeyUsageId(provider: string): string {
 }
 
 /** Reads inline-key health using the same identity and bypass policy as its writer. */
-export function readInlineProviderApiKeyUsage(store: AuthProfileStore, provider: string) {
-  const stats = isAuthCooldownBypassedForProvider(provider)
+export function readInlineProviderApiKeyUsage(
+  store: AuthProfileStore,
+  provider: string,
+  cfg?: AuthCooldownBypassConfig,
+) {
+  const stats = isAuthCooldownBypassedForProvider(provider, cfg)
     ? undefined
     : store.usageStats?.[resolveInlineProviderApiKeyUsageId(provider)];
   return { stats, unusableUntil: stats ? resolveProfileUnusableUntil(stats) : null };
@@ -148,8 +176,9 @@ export function isProfileInCooldown(
   profileId: string,
   now?: number,
   forModel?: string | null,
+  cfg?: AuthCooldownBypassConfig,
 ): boolean {
-  if (isAuthCooldownBypassedForProvider(store.profiles[profileId]?.provider)) {
+  if (isAuthCooldownBypassedForProvider(store.profiles[profileId]?.provider, cfg)) {
     return false;
   }
   const stats = store.usageStats?.[profileId];
