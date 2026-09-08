@@ -1695,6 +1695,37 @@ describe("active-memory plugin", () => {
     },
   );
 
+  it("recognizes retrospective PT-BR recall without escalating future reminders", async () => {
+    registerPluginConfig({ mode: undefined });
+    expect(currentActiveMemoryConfig().mode).toBeUndefined();
+
+    const context = {
+      sessionKey: "agent:main:webchat:direct:operator",
+      messageProvider: "webchat",
+      channelId: "operator",
+    };
+
+    for (const prompt of [
+      "Você lembra de enviar o relatório amanhã?",
+      "Você lembra o que temos que fazer amanhã?",
+      "Você lembra o que fazer antes de amanhã?",
+      "Você lembra o que fazer semana que vem?",
+      "Sem olhar a conversa atual, escreva uma mensagem de desculpas.",
+    ]) {
+      const ordinary = await runPromptBuild({ prompt }, context);
+      expectPrependContextContains(ordinary, skippedRecallContext);
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    }
+
+    const recall = await runPromptBuild(
+      { prompt: "O que a gente discutiu ontem sobre memória?" },
+      context,
+    );
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    expectPrependContextContains(recall, "lemon pepper wings");
+    expectEmbeddedChannel("operator");
+  });
+
   it("records why default escalation skips an ordinary turn", async () => {
     registerPluginConfig({ mode: undefined });
 
