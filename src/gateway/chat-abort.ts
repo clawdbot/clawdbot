@@ -4,7 +4,6 @@ import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
   resolveDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
@@ -18,12 +17,21 @@ import {
   type AgentEventPayload,
 } from "../infra/agent-events.js";
 import {
+  registerAgentRunDeadlineRenewer,
+  unregisterAgentRunDeadlineRenewer,
+} from "../infra/agent-run-deadline.js";
+import {
   releaseAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { notifyChatAbortControllerRemoved } from "./chat-abort-lifecycle-internal.js";
 import { appendChatCanvasBlocksToMessage } from "./chat-display-projection.canvas.js";
+import {
+  renewChatRunExecutionDeadline,
+  resolveAgentRunExpiresAtMs,
+  resolveChatRunExpiresAtMs,
+} from "./chat-run-deadline.js";
 import { resolveChatRunOwnerAgentId } from "./chat-run-owner.js";
 import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
@@ -38,7 +46,7 @@ import {
   resolveSessionSubscriptionKeys,
 } from "./session-subscription-keys.js";
 
-const DEFAULT_CHAT_RUN_ABORT_GRACE_MS = 60_000;
+export { resolveAgentRunExpiresAtMs, resolveChatRunExpiresAtMs } from "./chat-run-deadline.js";
 
 export type ChatAbortControllerEntry = {
   controller: AbortController;
@@ -169,50 +177,6 @@ function createChatAbortSignalReason(stopReason: string | undefined): Error | un
   return reason;
 }
 
-export function resolveChatRunExpiresAtMs(params: {
-  now: number;
-  timeoutMs: number;
-  graceMs?: number;
-  minMs?: number;
-  maxMs?: number;
-}): number {
-  const {
-    now,
-    timeoutMs,
-    graceMs = DEFAULT_CHAT_RUN_ABORT_GRACE_MS,
-    minMs = 2 * 60_000,
-    maxMs = 24 * 60 * 60_000,
-  } = params;
-  const safeNow = asDateTimestampMs(now);
-  if (safeNow === undefined) {
-    return 0;
-  }
-  const boundedTimeoutMs = Math.max(0, timeoutMs);
-  const targetDurationMs = boundedTimeoutMs + graceMs;
-  const target = resolveExpiresAtMsFromDurationMs(targetDurationMs, { nowMs: safeNow });
-  const min = resolveExpiresAtMsFromDurationMs(minMs, { nowMs: safeNow });
-  const max = resolveExpiresAtMsFromDurationMs(maxMs, { nowMs: safeNow });
-  if (target === undefined || min === undefined || max === undefined) {
-    return 0;
-  }
-  return Math.min(max, Math.max(min, target));
-}
-
-export function resolveAgentRunExpiresAtMs(params: {
-  now: number;
-  timeoutMs: number;
-  graceMs?: number;
-}): number {
-  const graceMs = Math.max(0, params.graceMs ?? DEFAULT_CHAT_RUN_ABORT_GRACE_MS);
-  return resolveChatRunExpiresAtMs({
-    now: params.now,
-    timeoutMs: params.timeoutMs,
-    graceMs,
-    minMs: graceMs,
-    maxMs: Math.max(0, params.timeoutMs) + graceMs,
-  });
-}
-
 export function registerChatAbortController(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   runId: string;
@@ -273,6 +237,13 @@ export function registerChatAbortController(params: {
     });
     return true;
   };
+  const renewExecutionDeadline = () =>
+    renewChatRunExecutionDeadline({
+      entries: params.chatAbortControllers,
+      runId: params.runId,
+      controller,
+      timeoutMs: params.timeoutMs,
+    });
   const cleanup = () => {
     const entry = params.chatAbortControllers.get(params.runId);
     if (entry?.controller === controller) {
@@ -353,6 +324,7 @@ export function registerChatAbortController(params: {
     turnKind: params.turnKind,
   };
   params.chatAbortControllers.set(params.runId, entry);
+  registerAgentRunDeadlineRenewer(params.runId, renewExecutionDeadline);
   return {
     controller,
     registered: true,
@@ -625,6 +597,7 @@ export function removeChatAbortControllerEntry(
     return false;
   }
   entries.delete(runId);
+  unregisterAgentRunDeadlineRenewer(runId);
   try {
     entry.onRemoved?.();
   } catch {

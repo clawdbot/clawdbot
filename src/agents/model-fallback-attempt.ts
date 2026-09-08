@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE } from "../../packages/agent-core/src/errors.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronTerminalAbortReasonText } from "../cron/service/execution-errors.js";
+import { renewAgentRunDeadline } from "../infra/agent-run-deadline.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { isCommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { findAgentRunTerminalOutcome } from "./agent-run-terminal-error.js";
@@ -45,6 +46,7 @@ import {
 } from "./session-suspension.js";
 
 type FailoverAttribution = {
+  runId?: string;
   sessionId?: string;
   lane?: string;
 };
@@ -270,6 +272,10 @@ export async function runFallbackAttempt<T>(params: {
   if (params.attempt > 1) {
     params.abortSignal?.throwIfAborted();
   }
+  // The run owner sizes the whole-run deadline for a single attempt, so a
+  // candidate that follows a timed-out primary would otherwise inherit only the
+  // abort grace window and be killed by the run deadline instead of running.
+  renewAgentRunDeadline(params.attribution?.runId);
   const runResult = await runFallbackCandidate(params);
   const classification = runResult.ok
     ? await params.classifyResult?.({
