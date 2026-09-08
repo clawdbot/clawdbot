@@ -58,6 +58,69 @@ describe("dispatchReplyFromConfig owner settlement", () => {
     clearAgentHarnesses();
   });
 
+  it("waits for late resolver cleanup and real delivery after finalization expiry", async () => {
+    setNoAbort();
+    const ownerWork = createDeferred();
+    const resolverEntered = createDeferred();
+    const delivery = createDeferred();
+    const deliveryStarted = createDeferred();
+    const delivered = vi.fn();
+    const dispatcher = createReplyDispatcher({
+      deliver: async () => {
+        deliveryStarted.resolve();
+        await delivery.promise;
+        delivered();
+      },
+    });
+    const sessionKey = "agent:main:late-finalization";
+    let operation: ReturnType<typeof createReplyOperation> | undefined;
+    const dispatch = dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "discord", Surface: "discord", SessionKey: sessionKey }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async (_ctx, opts) => {
+        operation = opts?.replyOperation;
+        await opts?.onBlockReply?.({ text: "finished answer" });
+        resolverEntered.resolve();
+        await ownerWork.promise;
+        return undefined;
+      },
+    });
+    await resolverEntered.promise;
+    await deliveryStarted.promise;
+    expect(operation?.ownerSettlement).toBeDefined();
+    const settled = vi.fn();
+    void operation?.ownerSettlement?.then(settled);
+    vi.useFakeTimers();
+    try {
+      operation?.freezeAbort();
+      await vi.advanceTimersByTimeAsync(60_000);
+      await dispatch;
+      expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+      expect(settled).not.toHaveBeenCalled();
+      expect(delivered).not.toHaveBeenCalled();
+
+      ownerWork.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).not.toHaveBeenCalled();
+      expect(delivered).not.toHaveBeenCalled();
+
+      delivery.resolve();
+      await operation?.ownerSettlement;
+      expect(delivered).toHaveBeenCalledOnce();
+      expect(settled).toHaveBeenCalledOnce();
+      expect(operation?.result).toMatchObject({ kind: "failed", code: "run_stalled" });
+    } finally {
+      ownerWork.resolve();
+      delivery.resolve();
+      dispatcher.markComplete();
+      await dispatch;
+      await dispatcher.waitForIdle();
+      await operation?.ownerSettlement;
+      vi.useRealTimers();
+    }
+  });
+
   it("holds an owned lifecycle lease until abort-insensitive resolver work settles", async () => {
     setNoAbort();
     const sessionKey = "agent:main:discord:channel:owned-resolver-race";
