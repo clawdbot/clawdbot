@@ -6,6 +6,7 @@ import {
   markDiagnosticRunProgress,
   resetDiagnosticRunActivityForTest,
 } from "../../../../src/logging/diagnostic-run-activity.js";
+import { streamOpenAICompletions } from "../providers/openai-completions.js";
 import { registerBuiltInApiProviders } from "../providers/register-builtins.js";
 import { createLlmRuntime } from "../stream.js";
 import { shouldEmitOpenAICompletionsReasoning } from "./openai-completions-stream.js";
@@ -15,6 +16,97 @@ import { makeCompletionsChunk, makeCompletionsModel } from "./openai-completions
 describe("openai completions stream", () => {
   afterAll(() => {
     resetDiagnosticRunActivityForTest();
+  });
+
+  describe.each([
+    { name: "direct", createStream: streamOpenAICompletions },
+    { name: "managed", createStream: createOpenAICompletionsTransportStreamFn() },
+  ])("$name cache-creation usage", ({ createStream }) => {
+    it.each([
+      ["top-level fallback", {}, 300, 0.001075, undefined],
+      ["nested writes", { cache_write_tokens: 100 }, 100, 0.001025, undefined],
+      ["nested creation", { cache_creation_input_tokens: 100 }, 100, 0.001025, undefined],
+      ["nested write zero", { cache_write_tokens: 0 }, 0, 0.001, undefined],
+      ["nested creation zero", { cache_creation_input_tokens: 0 }, 0, 0.001, undefined],
+      ["provider-billed zero", {}, 300, 0, 0],
+    ] as const)("preserves %s over HTTP", async (_name, details, cacheWrite, cost, billedCost) => {
+      let capturedPayload: Record<string, unknown> | undefined;
+      let capturedRoute: string | undefined;
+      const server = createServer((req, res) => {
+        let body = "";
+        req.setEncoding("utf8");
+        req.on("data", (chunk: string) => {
+          body += chunk;
+        });
+        req.on("end", () => {
+          capturedRoute = `${req.method} ${req.url}`;
+          capturedPayload = JSON.parse(body) as Record<string, unknown>;
+          res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8" });
+          // TrueFoundry documents inclusive prompt tokens with a top-level write bucket:
+          // https://www.truefoundry.com/docs/ai-gateway/chat-completions-advanced
+          const usage = {
+            prompt_tokens: 1500,
+            completion_tokens: 200,
+            total_tokens: 1700,
+            prompt_tokens_details: { cached_tokens: 1200, ...details },
+            cache_read_input_tokens: 1200,
+            cache_creation_input_tokens: 300,
+            ...(billedCost === undefined ? {} : { cost: billedCost }),
+          };
+          for (const chunk of [
+            makeCompletionsChunk({ role: "assistant", content: "Usage preserved." }),
+            makeCompletionsChunk({}, "stop"),
+            makeCompletionsChunk({}, null, { choices: [], usage }),
+          ]) {
+            res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+          }
+          res.end("data: [DONE]\n\n");
+        });
+      });
+
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Missing loopback server address");
+        }
+        const model = makeCompletionsModel({
+          provider: "compatible-proxy",
+          baseUrl: `http://127.0.0.1:${address.port}/v1`,
+          reasoning: false,
+          cost: { input: 1, output: 2, cacheRead: 0.25, cacheWrite: 1.25 },
+        });
+        const stream = await createStream(
+          model,
+          { messages: [{ role: "user", content: "Explain the usage.", timestamp: 1 }] },
+          { apiKey: "synthetic-test-key" },
+        );
+        const result = await stream.result();
+
+        expect(capturedRoute).toBe("POST /v1/chat/completions");
+        expect(capturedPayload).toMatchObject({ model: model.id, stream: true });
+        expect(result.stopReason).toBe("stop");
+        expect(result.content).toEqual([expect.objectContaining({ text: "Usage preserved." })]);
+        expect(result.usage).toMatchObject({
+          input: 300 - cacheWrite,
+          output: 200,
+          cacheRead: 1200,
+          cacheWrite,
+          totalTokens: 1700,
+        });
+        expect(result.usage.cost.cacheWrite).toBeCloseTo((cacheWrite * 1.25) / 1_000_000, 10);
+        expect(result.usage.cost.total).toBeCloseTo(cost, 10);
+        if (billedCost !== undefined) {
+          expect(result.usage.cost.totalOrigin).toBe("provider-billed");
+        }
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    });
   });
 
   it("emits Qwen thinking streams when enabled without reasoning_effort support", async () => {
