@@ -2,6 +2,7 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.isSessionRunActive
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawEmptyState
 import ai.openclaw.app.ui.design.ClawLoadingState
@@ -1061,6 +1062,7 @@ internal fun sessionListSubtitle(
   session: ChatSessionEntry,
   fallback: String,
   nowMs: Long = System.currentTimeMillis(),
+  activeRunLabel: String? = null,
 ): String {
   val agentStatus =
     session.agentStatus?.takeIf { status ->
@@ -1074,7 +1076,7 @@ internal fun sessionListSubtitle(
       ?.trim()
       ?.takeIf { it.isNotEmpty() && (runStatus == "failed" || runStatus == "timeout") && (session.lastReadAt ?: 0L) < failureAt }
   val digest = session.observerDigest
-  val running = session.hasActiveRun == true || runStatus == "running"
+  val running = isSessionRunActive(session.hasActiveRun, runStatus)
   val digestMatchesActiveRun =
     digest
       ?.runId
@@ -1086,8 +1088,9 @@ internal fun sessionListSubtitle(
       (digest.health == "done" || digest.health == "failed") &&
       (session.lastReadAt ?: 0L) < digest.updatedAt
   val observer = digest?.headline?.takeIf { (running && digestMatchesActiveRun) || (!running && finalDigestUnread) }
-  val queued = nativeString("Waiting for a concurrency slot").takeIf { runStatus == "queued" }
-  return declaredAttention ?: failedAttention ?: agentStatus?.note ?: queued ?: observer ?: fallback
+  // Stored queued status can outlive its reservation; this copy describes current waiting.
+  val queued = nativeString("Waiting for a concurrency slot").takeIf { running && runStatus == "queued" }
+  return declaredAttention ?: failedAttention ?: agentStatus?.note ?: queued ?: observer ?: activeRunLabel?.takeIf { running } ?: fallback
 }
 
 internal data class SessionSection(
@@ -1256,7 +1259,7 @@ internal fun buildSessionTreeSections(
     val attention = session.agentStatus?.let { it.expiresAt > nowMs && it.attention != null } == true
     return SessionDescendantState(
       containsCurrent = session.key == currentSessionKey,
-      hasRunning = session.hasActiveRun == true || status == "running",
+      hasRunning = isSessionRunActive(session.hasActiveRun, status),
       hasUnread = session.unread == true,
       hasFailure = status == "failed" || status == "timeout" || status == "timed_out",
       hasAttention = attention,
