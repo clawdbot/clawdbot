@@ -21,6 +21,7 @@ import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { CliSessionBindingFacts } from "../cli-runner/types.js";
 import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-context.js";
+import type { RuntimeContextFragment } from "../internal-runtime-context.js";
 import type { MainSessionRecoveryOwnerLease } from "../main-session-recovery/main-session-recovery-store.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
@@ -156,6 +157,7 @@ export type AgentCommandOpts = {
   /** Run kind hint for bootstrap context behavior. */
   bootstrapContextRunKind?: BootstrapContextRunKind;
   internalEvents?: AgentInternalEvent[];
+  runtimeContextFragments?: RuntimeContextFragment[];
   inputProvenance?: InputProvenance;
   /** Internal runs can execute against a session without updating visible status/model/usage. */
   sessionEffects?: "visible" | "internal";
@@ -243,6 +245,7 @@ export type AgentCommandOpts = {
 /** Restricted option surface for external ingress callsites. */
 export type AgentCommandIngressOpts = Omit<
   AgentCommandOpts,
+  | "runtimeContextFragments"
   | "senderIsOwner"
   | "allowModelOverride"
   | "mainRestartRecoveryOwnerLease"
@@ -267,6 +270,7 @@ export type AgentCommandIngressOpts = Omit<
 export type AgentCommandGatewayIngressOpts = AgentCommandIngressOpts &
   Pick<
     AgentCommandOpts,
+    | "runtimeContextFragments"
     | "mainRestartRecoveryOwnerLease"
     | "mainRestartRecoveryAdmitted"
     | "mainRestartRecoveryAttempt"

@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
 import {
+  AgentSharedStoreOwnerError,
+  assertAgentSessionStoreDeletionSafe,
   isPathOwnedBySurvivingAgent,
   readAgentDeleteDatabaseRegistry,
   resolveSurvivingDatabaseFilePaths,
@@ -40,7 +42,7 @@ import {
 import { readClawStatus } from "./lifecycle-status.js";
 import { clawMcpRemovalSelector, planClawMcpServerRemoval } from "./mcp.js";
 import { clawMonitorSnapshotSchema } from "./monitor-cleanup-contract.js";
-import { projectClawPackageRemovePlan } from "./package-remove-plan.js";
+import { filterReferencedCleanup, projectClawPackageRemovePlan } from "./package-remove-plan.js";
 import { applyClawPackageRemovals, planClawPackageRemovals } from "./package-remove.js";
 import { CLAW_OUTPUT_STABILITY } from "./types.js";
 
@@ -107,19 +109,8 @@ export async function buildClawRemovePlan(
   }
   const actions: ClawRemovePlanAction[] = [];
   if (record) {
-    const selectedResources = options.referencedCleanup?.selected ?? [];
-    const packageCleanup = options.referencedCleanup
-      ? {
-          ...options.referencedCleanup,
-          selected: selectedResources.filter((selector) => !selector.startsWith("mcp:")),
-        }
-      : undefined;
-    const mcpCleanup = options.referencedCleanup
-      ? {
-          ...options.referencedCleanup,
-          selected: selectedResources.filter((selector) => selector.startsWith("mcp:")),
-        }
-      : undefined;
+    const packageCleanup = filterReferencedCleanup(options.referencedCleanup, "package");
+    const mcpCleanup = filterReferencedCleanup(options.referencedCleanup, "mcp");
     const packageDecisions = await planClawPackageRemovals(record.install, record.packages, {
       ...options,
       deps: options.packageDeps,
@@ -132,6 +123,14 @@ export async function buildClawRemovePlan(
     });
     blockers.push(...packagePlan.blockers);
     const config = options.config ?? getRuntimeConfig();
+    try {
+      assertAgentSessionStoreDeletionSafe(config, record.install.agentId, options);
+    } catch (error) {
+      if (!(error instanceof AgentSharedStoreOwnerError)) {
+        throw error;
+      }
+      blockers.push({ code: "shared_session_store_owner", message: error.message });
+    }
     const effects = deletionEffects(
       config,
       record.install.agentId,
@@ -465,14 +464,7 @@ export async function applyClawRemovePlan(
   const packageDecisions = await planClawPackageRemovals(record.install, record.packages, {
     ...options,
     deps: options.packageDeps,
-    referencedCleanup: options.referencedCleanup
-      ? {
-          ...options.referencedCleanup,
-          selected: (options.referencedCleanup.selected ?? []).filter(
-            (selector) => !selector.startsWith("mcp:"),
-          ),
-        }
-      : undefined,
+    referencedCleanup: filterReferencedCleanup(options.referencedCleanup, "package"),
   });
   const plannedPackages = plan.actions
     .filter((action) => action.kind === "packageRef")
@@ -526,20 +518,21 @@ export async function applyClawRemovePlan(
       expectedState: record.agentState,
       fallbackWorkspace: record.install.workspace,
       config: options.config,
-      commitConfig: options.commitConfig,
       stateDatabase: options,
-      trashPath: options.trashPath,
       onModified: () =>
         new ClawRemoveError("agent_modified", "Agent config changed during remove."),
       quiesceMonitors: (operationId) => monitorGateway.quiesce(agentId, operationId, monitors),
       drainMonitors: async (operationId) => await monitorGateway.drain(agentId, operationId),
     },
-    async (commitRemoval) => {
+    async (commitRemoval, assertCurrent) => {
+      assertCurrent();
       const mcpRemoval = await removeClawMcpServers({
         agentId,
         servers: record.mcpServers,
         options,
+        assertCurrent,
       });
+      assertCurrent();
       result.mcpServers = mcpRemoval.mcpServers;
       if (mcpRemoval.error) {
         return partial("mcp_cleanup_failed", mcpRemoval.error);
@@ -569,6 +562,7 @@ export async function applyClawRemovePlan(
                 `Cron declaration ${JSON.stringify(cron.manifestId)} changed after planning.`,
               );
             }
+            assertCurrent();
             if (live != null) {
               try {
                 await options.cronGateway!.remove(cron.schedulerJobId!);
@@ -580,6 +574,7 @@ export async function applyClawRemovePlan(
                 }
               }
             }
+            assertCurrent();
             markClawCronRefRemoved(agentId, cron.manifestId, options);
           }
           deleteClawCronRef(agentId, cron.manifestId, options);
@@ -608,20 +603,19 @@ export async function applyClawRemovePlan(
       } catch (error) {
         return partial("monitor_cleanup_failed", coerceErrorMessage(error));
       }
-      if (!options.commitConfig || options.purgeSessions) {
-        const purgeSessions =
-          options.purgeSessions ??
-          (await import("../config/sessions/cleanup-service.js")).purgeAgentSessionStoreEntries;
-        const purgeFailed = await purgeSessions(configBeforeDelete, agentId, {
-          env: options.env,
-          runDatabaseCleanup: configRemoval.runDatabaseCleanup,
-        });
-        if (purgeFailed) {
-          return partial(
-            "session_cleanup_failed",
-            "Session cleanup failed; correct the reported error and retry Claw removal.",
-          );
-        }
+      const purgeSessions =
+        options.purgeSessions ??
+        (await import("../config/sessions/cleanup-service.js")).purgeAgentSessionStoreEntries;
+      const purgeFailed = await purgeSessions(configBeforeDelete, agentId, {
+        env: options.env,
+        runDatabaseCleanup: configRemoval.runDatabaseCleanup,
+      });
+      assertCurrent();
+      if (purgeFailed) {
+        return partial(
+          "session_cleanup_failed",
+          "Session cleanup failed; correct the reported error and retry Claw removal.",
+        );
       }
       result.packages = await applyClawPackageRemovals(
         packageDecisions.toSorted(
@@ -632,26 +626,28 @@ export async function applyClawRemovePlan(
         {
           ...options,
           deps: options.packageDeps,
+          assertCurrent,
         },
       );
+      assertCurrent();
       const packageErrors = result.packages.filter((pkg) => pkg.action === "error");
       if (packageErrors.length > 0) {
         return partial("package_cleanup_failed", packageErrors.map((pkg) => pkg.reason).join("; "));
       }
       const workspaceFiles = result.workspaceFiles;
       for (const file of record.workspaceFiles) {
-        configRemoval.assertCurrent();
-        workspaceFiles.push(await removeClawWorkspaceFile(file));
+        assertCurrent();
+        workspaceFiles.push(await removeClawWorkspaceFile(file, assertCurrent));
       }
-      configRemoval.assertCurrent();
-      const bootstrap = await removeClawBootstrap(record);
+      assertCurrent();
+      const bootstrap = await removeClawBootstrap(record, assertCurrent);
       const cleanupErrors = workspaceFiles
         .filter((file) => file.action === "error")
         .map((file) => file.message ?? `Could not remove ${file.path}.`);
       if (bootstrap?.action === "error") {
         cleanupErrors.push(bootstrap.message ?? `Could not remove ${bootstrap.path}.`);
       }
-      if (cleanupErrors.length === 0 && cleanupTargets) {
+      if (cleanupErrors.length === 0) {
         const workspaceHasRemainingEntries = await workspaceContainsUntrackedEntries(
           cleanupTargets.workspaceDir,
           record.workspaceFiles.map((file) => file.path),
@@ -665,6 +661,7 @@ export async function applyClawRemovePlan(
             runtime: clawRemoveQuietRuntime,
             trashPath: options.trashPath,
             stateDatabase: options,
+            assertCurrent,
             retainWorkspace:
               workspaceHasRemainingEntries ||
               bootstrap?.action === "retainedModified" ||

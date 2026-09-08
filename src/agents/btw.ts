@@ -6,11 +6,16 @@ import { randomUUID } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
+import {
+  buildReplyUsageState,
+  recordReplyUsageState,
+} from "../auto-reply/reply/reply-usage-state.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { SessionEntry as StoredSessionEntry } from "../config/sessions.js";
 import { resolveCollapsedSessionAuthPinSource } from "../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type {
   AssistantMessageEvent,
@@ -90,6 +95,12 @@ import { stripToolResultDetails } from "./session-transcript-repair.js";
 import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { sanitizeImageBlocks } from "./tool-images.js";
+import {
+  hasBillableUsage,
+  normalizeUsage,
+  toDiagnosticUsage,
+  type NormalizedUsage,
+} from "./usage.js";
 
 function collectTextContent(content: Array<{ type?: string; text?: string }>): string {
   return content
@@ -837,6 +848,36 @@ export async function runBtwSideQuestion(
       }
       return runtimeSelection;
     };
+    const recordBtwUsage = (runtimeModel: Model, usage?: NormalizedUsage) => {
+      if (!hasBillableUsage(usage)) {
+        return;
+      }
+      const usageState = buildReplyUsageState({
+        config: params.cfg,
+        agentDir: params.agentDir,
+        agentId: sessionAgentId,
+        sessionId,
+        provider: runtimeModel.provider,
+        model: runtimeModel.id,
+        chatType: params.chatType,
+        usage,
+      });
+      // Delivery hooks use the reply correlation ID, not the side run's authority ID.
+      recordReplyUsageState(params.opts?.runId, usageState);
+      if (isDiagnosticsEnabled(params.cfg)) {
+        emitTrustedDiagnosticEvent({
+          type: "model.usage",
+          sessionKey: params.sessionKey,
+          sessionId,
+          channel: params.messageChannel,
+          agentId: sessionAgentId,
+          provider: runtimeModel.provider,
+          model: runtimeModel.id,
+          usage: toDiagnosticUsage(usage),
+          costUsd: usageState.turnUsd,
+        });
+      }
+    };
     type BtwHarnessSideQuestionDispatch =
       | { kind: "handled"; payload: ReplyPayload }
       | {
@@ -1067,6 +1108,7 @@ export async function runBtwSideQuestion(
         } finally {
           host.close();
         }
+        recordBtwUsage(runtimeModel, result.usage);
         return { kind: "handled", payload: { text: result.text } };
       } finally {
         preparedRunAdmission.close();
@@ -1408,6 +1450,8 @@ export async function runBtwSideQuestion(
     if (!answer) {
       throw new Error("No BTW response generated.");
     }
+
+    recordBtwUsage(runtimeModel, normalizeUsage(finalMessage?.usage));
 
     if (emittedBlocks > 0) {
       return undefined;

@@ -36,6 +36,8 @@ import {
 } from "../../../sessions/user-turn-transcript.js";
 import { persistUserTurnTranscript } from "../../../sessions/user-turn-transcript.test-support.js";
 import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
   relocateCurrentRuntimeContextCarrierToTail,
 } from "../../internal-runtime-context.js";
@@ -181,6 +183,38 @@ function firstTwoProviderMessages(payload: Record<string, unknown>): unknown[] {
 // ---------------------------------------------------------------------------
 
 describe("prompt-cache byte-identity (issue #3658)", () => {
+  it("rejects unknown session projection versions before submitting history", () => {
+    expect(() => normalizeMessagesForLlmBoundary([], { sessionVersion: 99 })).toThrow(
+      "Unsupported session prompt projection version",
+    );
+  });
+  it.each([
+    [INTERNAL_RUNTIME_CONTEXT_BEGIN, "[[OPENCLAW_INTERNAL_CONTEXT_BEGIN]]"],
+    [INTERNAL_RUNTIME_CONTEXT_END, "[[OPENCLAW_INTERNAL_CONTEXT_END]]"],
+  ])(
+    "projects literal marker mentions consistently without rewriting transcripts: %s",
+    (marker, escaped) => {
+      const text = `Please quote ${marker} literally.`;
+      const input: AgentMsg[] = [{ role: "user", content: text, timestamp: 123 }];
+      for (const sessionVersion of [3, 4]) {
+        const options = { sessionVersion, appendOnlyRuntimeContext: true, includeTimestamp: false };
+        const expected = sessionVersion === 4 ? `Please quote ${escaped} literally.` : text;
+        const current = normalizeMessagesForLlmBoundary(input, options);
+        const history = normalizeMessagesForLlmBoundary(
+          [...input, { role: "user", content: "Next request", timestamp: 456 }],
+          options,
+        );
+        expect(current[0]).toMatchObject({ role: "user", content: expected });
+        expect(history[0]).toMatchObject({ role: "user", content: expected });
+        expect(normalizeMessagesForLlmBoundary(current, options)[0]).toMatchObject({
+          role: "user",
+          content: expected,
+        });
+      }
+      expect(input).toEqual([{ role: "user", content: text, timestamp: 123 }]);
+    },
+  );
+
   it("bare current-turn message == same message aged to history (byte-identical, both stamped from msg.timestamp)", () => {
     // This is THE gate. It models the REAL wire asymmetry that the live capture
     // proved: turn 1 sent BARE+array when current, BARE+string when historical.

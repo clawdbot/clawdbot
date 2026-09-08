@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import OpenClawKit
 import WebKit
 
 @MainActor

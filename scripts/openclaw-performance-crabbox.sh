@@ -2,8 +2,8 @@
 set -euo pipefail
 
 readonly SUT_USER="openclaw-sut"
-readonly NODE_VERSION="24.15.0"
-readonly NODE_SHA256="472655581fb851559730c48763e0c9d3bc25975c59d518003fc0849d3e4ba0f6"
+readonly NODE_VERSION="24.19.0"
+readonly NODE_SHA256="14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b409647"
 readonly PNPM_VERSION="11.15.1"
 readonly OCM_VERSION="v0.2.32"
 readonly OCM_SHA256="5b20c21b2825f69b89eb37baa657f0f0062124517e6e6828e9857c7e9bbd3070"
@@ -132,12 +132,41 @@ prepare_sut() {
     die "SUT unexpectedly has sudo"
   fi
 
-  iptables -I OUTPUT -m owner --uid-owner "$uid" -d 169.254.169.254/32 -j REJECT
-  iptables -I OUTPUT -m owner --uid-owner "$uid" -d 169.254.170.2/32 -j REJECT
-  if as_sut curl -fsS --connect-timeout 1 --max-time 2 \
-    http://169.254.169.254/latest/meta-data/ >/dev/null 2>&1; then
-    die "SUT can reach EC2 IMDS"
-  fi
+  local firewall destination curl_bin curl_version family url http_code probe_status
+  for firewall in iptables ip6tables; do
+    command -v "$firewall" >/dev/null || die "metadata protection requires ${firewall}"
+  done
+  curl_bin="$(command -v curl)" || die "metadata protection requires curl"
+  [[ "$curl_bin" == /* && -x "$curl_bin" ]] || die "metadata curl is not an executable path"
+  curl_version="$(as_sut "$curl_bin" -q --version)" || die "metadata curl is unavailable to SUT"
+  grep -Eq '^Protocols:.*[[:space:]]http([[:space:]]|$)' <<< "$curl_version" &&
+    grep -Eq '^Features:.*[[:space:]]IPv6([[:space:]]|$)' <<< "$curl_version" ||
+    die "metadata curl requires HTTP and IPv6 support"
+
+  for destination in 169.254.169.254/32 169.254.170.2/32 fd00:ec2::254/128; do
+    firewall=iptables
+    [[ "$destination" != fd00:* ]] || firewall=ip6tables
+    "$firewall" -I OUTPUT -m owner --uid-owner "$uid" -d "$destination" -j REJECT ||
+      die "metadata reject rule insertion failed"
+    "$firewall" -C OUTPUT -m owner --uid-owner "$uid" -d "$destination" -j REJECT ||
+      die "metadata reject rule verification failed"
+  done
+  for family in 4 6; do
+    url='http://169.254.169.254/latest/meta-data/'
+    [[ "$family" != 6 ]] || url='http://[fd00:ec2::254]/latest/meta-data/'
+    probe_status=0
+    # Preserve trailing bytes: only an exact curl 000 with connection failure is evidence.
+    http_code="$(
+      status=0
+      as_sut "$curl_bin" -q "-${family}" --noproxy '*' --silent \
+        --connect-timeout 1 --max-time 2 --output /dev/null --write-out '%{http_code}' \
+        "$url" 2>/dev/null || status=$?
+      printf '.'
+      exit "$status"
+    )" || probe_status=$?
+    [[ "$probe_status" == 7 && "$http_code" == "000." ]] ||
+      die "SUT IPv${family} metadata denial was not verified"
+  done
 
   local dirty_env
   dirty_env="$(as_sut env | grep -E '^(ACTIONS_|AWS_|CRABBOX_|GITHUB_|RUNNER_)' || true)"

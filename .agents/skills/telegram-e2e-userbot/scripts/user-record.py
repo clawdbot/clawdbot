@@ -17,10 +17,12 @@ proving them needs the full update stream:
 """
 
 import argparse
+import ctypes
 from collections import Counter
 import importlib.util
 import json
 import os
+import signal
 import sys
 import time
 from pathlib import Path
@@ -375,10 +377,13 @@ class EventRecorder:
         }
 
 
-def build_driver():
+def build_driver(deadline_unix_ms=None):
     """UserDriver owns its own TdClient, so recording shares that one client."""
     config, bot_config = driver.load_config()
-    user_driver = driver.UserDriver(config, bot_config)
+    user_driver = (
+        driver.UserDriver(config, bot_config) if deadline_unix_ms is None
+        else driver.UserDriver(config, bot_config, deadline_unix_ms)
+    )
     user_driver.authorize(need_ready=True)
     return config, bot_config, user_driver
 
@@ -476,7 +481,7 @@ def run_scenario(recorder, driver_obj, sut, actions, seconds, barrier_dir=""):
     return sent_ids
 
 
-def publish_recorder_ready(path, recorder):
+def publish_recorder_ready(path, recorder, require_dm_peer=False):
     if not path:
         return
     target = Path(path)
@@ -487,6 +492,13 @@ def publish_recorder_ready(path, recorder):
         "startedAtUnixMs": int(recorder.started_at * 1000),
         "chatId": recorder.chat_id,
     }
+    if require_dm_peer:
+        chat = recorder.client.request({"@type": "getChat", "chat_id": recorder.chat_id})
+        chat_type = chat.get("type") or {}
+        if chat_type.get("@type") != "chatTypePrivate" or chat_type.get("user_id") != recorder.sut_user_id:
+            raise driver.DriverError("Proof recorder requires the selected SUT private chat")
+        payload["chatType"] = "private"
+        payload["peerUserId"] = chat_type["user_id"]
     with pending.open("w") as handle:
         json.dump(payload, handle)
         handle.write("\n")
@@ -508,6 +520,9 @@ def main():
     parser.add_argument("--record", default="/tmp/tg-user-events.ndjson")
     parser.add_argument("--output", default="")
     parser.add_argument("--sut-user-id", default="")
+    parser.add_argument("--proof-dm-peer", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--proof-parent-pid", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--proof-deadline-unix-ms", type=int, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if sum(bool(value) for value in (args.send, args.send_photo, args.scenario)) > 1:
         parser.error("use only one of --send, --send-photo, or --scenario")
@@ -516,7 +531,18 @@ def main():
     if args.barrier_dir and not args.scenario:
         parser.error("--barrier-dir requires --scenario")
 
-    config, bot_config, driver_obj = build_driver()
+    if (args.proof_parent_pid is None) != (args.proof_deadline_unix_ms is None):
+        parser.error("proof parent and deadline must be supplied together")
+    if args.proof_parent_pid is not None:
+        if sys.platform != "linux" or args.proof_parent_pid <= 1:
+            parser.error("trusted proof ownership requires a Linux controller")
+        # Arm before creating TDLib threads; then close the parent-death race.
+        if ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGKILL, 0, 0, 0) != 0:
+            raise RuntimeError("Unable to arm proof parent-death cleanup")
+        if os.getppid() != args.proof_parent_pid or time.time() * 1000 >= args.proof_deadline_unix_ms:
+            raise RuntimeError("Trusted proof owner is no longer active")
+    config, bot_config, driver_obj = (build_driver(args.proof_deadline_unix_ms)
+                                    if args.proof_deadline_unix_ms is not None else build_driver())
 
     # One resolution path for every chat form the driver accepts: numeric id,
     # @username (the DM lane passes the SUT's username), or an invite link.
@@ -525,7 +551,9 @@ def main():
     sut_user_id = args.sut_user_id or sut.get("id") or ""
 
     recorder = EventRecorder(driver_obj.client, chat_id, args.record, sut_user_id or None)
-    publish_recorder_ready(args.ready_file, recorder)
+    if args.proof_dm_peer and not args.ready_file:
+        parser.error("--proof-dm-peer requires --ready-file")
+    publish_recorder_ready(args.ready_file, recorder, args.proof_dm_peer)
 
     sent_ids = []
     try:

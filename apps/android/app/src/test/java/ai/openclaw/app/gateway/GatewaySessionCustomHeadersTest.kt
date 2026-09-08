@@ -55,12 +55,14 @@ private class NoopDeviceAuthStore : DeviceAuthTokenStore {
     role: String,
     token: String,
     scopes: List<String>,
-  ) = Unit
+    replacesStoredToken: String?,
+  ) = true
 
   override fun clearToken(
     gatewayId: String,
     deviceId: String,
     role: String,
+    onlyIfToken: String?,
   ) = Unit
 }
 

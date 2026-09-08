@@ -7,6 +7,8 @@
     "../../src/agents/command/**/*.test.ts",
     "../../src/agents/command/**/*.test.tsx",
     "../../src/commands/**/*.test.ts",
-    "../../src/commands/**/*.test.tsx"
+    "../../src/commands/**/*.test.tsx",
+    "../../src/wizard/**/*.test.ts",
+    "../../src/wizard/**/*.test.tsx"
   ]
 }

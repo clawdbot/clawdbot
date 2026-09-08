@@ -26,7 +26,6 @@ import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-ru
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
 import type { SkillEligibilityContext } from "../../skills/types.js";
-import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
@@ -237,19 +236,6 @@ export async function resolveCommandsSystemPromptBundle(
   const toolNames = tools.map((t) => t.name);
   const promptSurface = resolveAgentPromptSurfaceForSessionKey(params.sessionKey);
   const accountId = params.command.accountId ?? params.ctx.AccountId;
-  // Thread adapters own provider-specific targets. Command-only route fallbacks cover
-  // synthetic command contexts that bypass the normal inbound attempt preparation.
-  const threadingContext = buildThreadingToolContext({
-    sessionCtx: params.ctx,
-    config: params.cfg,
-    hasRepliedRef: undefined,
-  });
-  const fallbackChannelId =
-    params.ctx.NativeChannelId?.trim() ||
-    params.ctx.ChatId?.trim() ||
-    params.ctx.OriginatingTo?.trim() ||
-    params.command.to;
-  const fallbackThreadId = params.ctx.MessageThreadId ?? params.ctx.TransportThreadId;
   const { runtimeInfo, userTimezone, userDate, reactionGuidance, messageToolHints } =
     await resolveAgentRuntimePrompt({
       config: params.cfg,
@@ -262,13 +248,6 @@ export async function resolveCommandsSystemPromptBundle(
       channel: params.command.channel,
       accountId,
       chatType: normalizeChatType(params.ctx.ChatType ?? targetSessionEntry?.chatType),
-      currentChannelId: threadingContext.currentChannelId ?? fallbackChannelId,
-      currentThreadTs:
-        threadingContext.currentThreadTs ??
-        (fallbackThreadId === undefined ? undefined : String(fallbackThreadId)),
-      currentMessageId: threadingContext.currentMessageId,
-      senderId: params.ctx.SenderId ?? params.command.senderId,
-      senderIsOwner: params.command.senderIsOwner,
     });
   const fullAccessState = resolveEmbeddedFullAccessState({
     execElevated: {

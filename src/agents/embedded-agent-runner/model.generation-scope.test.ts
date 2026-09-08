@@ -65,6 +65,57 @@ describe("model runtime generation scope", () => {
     resetModelGenerationFixtureState();
   });
 
+  it("reports a removed selected credential before reusing dynamic model metadata", async () => {
+    const generation = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      config: {},
+      label: "revoked",
+    });
+    const profileId = `${generation.provider}:selected`;
+    await state.writeAuthProfiles({
+      version: 1,
+      profiles: {
+        [profileId]: { type: "api_key", provider: generation.provider, key: "synthetic-key" },
+      },
+    });
+    expect((await resolveGeneration(generation, profileId)).model?.id).toBe(generation.modelId);
+    await state.writeAuthProfiles({ version: 1, profiles: {} });
+    generation.resolveDynamicModel.mockClear();
+
+    await expect(resolveGeneration(generation, profileId)).rejects.toMatchObject({
+      code: "selected_auth_profile_unavailable",
+      reason: "auth",
+      status: 401,
+    });
+    expect(generation.resolveDynamicModel).not.toHaveBeenCalled();
+  });
+
+  it("resolves a config-only AWS SDK profile without requiring a stored credential", async () => {
+    const provider = "amazon-bedrock";
+    const profileId = `${provider}:default`;
+    const generation = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      provider,
+      requestProvider: provider,
+      config: {
+        auth: { profiles: { [profileId]: { provider, mode: "aws-sdk" } } },
+        models: {
+          providers: {
+            [provider]: { auth: "aws-sdk", baseUrl: "https://example.test", models: [] },
+          },
+        },
+      },
+      label: "aws",
+    });
+
+    expect((await resolveGeneration(generation, profileId)).model?.id).toBe(generation.modelId);
+    expect(generation.resolveDynamicModel).toHaveBeenCalledWith(
+      expect.objectContaining({ authProfileId: profileId, authProfileMode: "aws-sdk" }),
+    );
+  });
+
   it("passes the selected personal auth mode into dynamic model discovery", async () => {
     const generation = createModelGenerationFixture({
       agentDir: state.agentDir(),

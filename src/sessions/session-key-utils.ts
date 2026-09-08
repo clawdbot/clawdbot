@@ -4,13 +4,14 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import {
+  parseAgentSessionKeyParts,
+  type ParsedAgentSessionKey,
+} from "@openclaw/session-url-contract";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { escapeRegExp } from "../shared/regexp.js";
 
-export type ParsedAgentSessionKey = {
-  agentId: string;
-  rest: string;
-};
+export type { ParsedAgentSessionKey };
 
 export type ParsedThreadSessionSuffix = {
   baseSessionKey: string | undefined;
@@ -246,23 +247,7 @@ export function normalizeSessionKeyPreservingOpaquePeerIds(
 export function parseAgentSessionKey(
   sessionKey: string | undefined | null,
 ): ParsedAgentSessionKey | null {
-  const raw = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
-  if (!raw) {
-    return null;
-  }
-  if (!raw.startsWith("agent:")) {
-    return null;
-  }
-  const agentIdEnd = raw.indexOf(":", "agent:".length);
-  if (agentIdEnd === -1) {
-    return null;
-  }
-  const agentId = normalizeOptionalString(raw.slice("agent:".length, agentIdEnd));
-  const rest = raw.slice(agentIdEnd + 1);
-  if (!agentId || !rest || rest.startsWith(":")) {
-    return null;
-  }
-  return { agentId, rest };
+  return parseAgentSessionKeyParts(normalizeSessionKeyPreservingOpaquePeerIds(sessionKey));
 }
 
 export function isCronRunSessionKey(sessionKey: string | undefined | null): boolean {

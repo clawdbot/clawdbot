@@ -1,4 +1,4 @@
-import { html, nothing, render } from "lit";
+import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type {
   FsListDirResult,
@@ -12,7 +12,7 @@ import { PlaceBrowserState } from "../pages/new-session/place-browser-state.ts";
 import { renderPlaceBrowser } from "../pages/new-session/place-browser.ts";
 import "../styles/new-session.css";
 import { icons } from "./icons.ts";
-import "./modal-dialog.ts";
+import { withPromiseModalHost } from "./promise-modal-host.ts";
 import { syncDropdownItemRadio } from "./web-awesome.ts";
 import "./web-awesome-popover.ts";
 
@@ -33,9 +33,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
     return Promise.resolve();
   }
   active = true;
-  const host = document.createElement("div");
-  document.body.append(host);
-  return new Promise<void>((resolve) => {
+  return withPromiseModalHost<void>(undefined, ({ host, render, finish: settle }) => {
     let cwd = options.defaults.cwd;
     let worktree = false;
     let repositoryStatus: WorktreeRepositoryStatus | "checking" = "checking";
@@ -48,10 +46,8 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
     const finish = () => {
       browser.reset();
       repositoryRequestToken += 1;
-      render(nothing, host);
-      host.remove();
+      settle();
       active = false;
-      resolve();
     };
 
     const handleSubmit = async (event: Event) => {
@@ -199,8 +195,8 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
         },
       ] as const;
       const selectedEnvironment = environmentOptions[worktree ? 1 : 0];
-      render(
-        html`
+      render(() => {
+        return html`
           <openclaw-modal-dialog
             label=${t("sessionsView.groupDefaultsTitle", { group: options.group })}
             @modal-cancel=${(event: Event) => {
@@ -436,9 +432,8 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
               </div>
             </form>
           </openclaw-modal-dialog>
-        `,
-        host,
-      );
+        `;
+      });
     }
 
     void inspectRepository(true);

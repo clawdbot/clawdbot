@@ -169,6 +169,11 @@ async function ensureControlledPage(page: Page, pageErrors: string[], expectedBu
     await page.reload();
   }
   await page.waitForFunction(() => navigator.serviceWorker?.controller?.state === "activated");
+  // Finish startup's update check before a later build replaces the served files.
+  // Concurrent native update calls can otherwise share the old build's response.
+  await page.evaluate(async () => {
+    await (await navigator.serviceWorker.ready).update();
+  });
 }
 
 async function fetchControlledAsset(

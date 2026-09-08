@@ -177,6 +177,17 @@ export async function prepareGitRuntimePromotion(
     throw error;
   }
   return {
+    // Source fences may hide only transaction-owned staging. The same exact
+    // paths preserve pending originals while rollback cleans unrelated files.
+    sourceTreeStagingPaths: staged.flatMap(({ temporary }) => {
+      const relative = path.relative(relocation.destinationRoot, temporary);
+      return relative &&
+        relative !== ".." &&
+        !relative.startsWith(`..${path.sep}`) &&
+        !path.isAbsolute(relative)
+        ? [relative.split(path.sep).join("/")]
+        : [];
+    }),
     async activate() {
       for (const entry of staged) {
         try {

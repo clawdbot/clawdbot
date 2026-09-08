@@ -133,11 +133,17 @@ extension DashboardManager {
 }
 
 extension DashboardManager {
-    static func showGatewayError(_ error: Error, message: String) {
+    func presentGatewayError(title: String, message: String, over window: NSWindow? = nil) {
         let alert = NSAlert()
-        alert.messageText = message
-        alert.informativeText = error.localizedDescription
-        alert.runModal()
+        alert.alertStyle = .warning
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: String(localized: "OK"))
+        self.alertPresenter.present(alert, over: window ?? self.frontmostDashboard()?.controller.window)
+    }
+
+    func presentGatewayError(_ error: Error, title: String, over window: NSWindow? = nil) {
+        self.presentGatewayError(title: title, message: error.localizedDescription, over: window)
     }
 }
 
@@ -204,14 +210,16 @@ extension DashboardManager {
                         await self.refreshGatewaySnapshots()
                     }
                 } catch {
-                    Self.showGatewayError(error, message: String(localized: "Could Not Set Primary Gateway"))
+                    self.presentGatewayError(
+                        error,
+                        title: String(localized: "Could Not Set Primary Gateway"),
+                        over: source?.window)
                 }
             }
         }
-        if let window = source?.window {
-            alert.beginSheetModal(for: window, completionHandler: apply)
-        } else {
-            apply(alert.runModal())
-        }
+        self.alertPresenter.present(
+            alert,
+            over: source?.window ?? self.frontmostDashboard()?.controller.window,
+            completion: apply)
     }
 }

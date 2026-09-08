@@ -15,6 +15,8 @@ const roots: string[] = [];
 const providers: ReturnType<typeof createNodeBootstrapArtifactProvider>[] = [];
 const buildId = "fixture-source-build";
 const version = "2026.8.1";
+const longEntryPath = `dist/${"entry-".repeat(25)}.json`;
+const longEntryPayload = "payload".repeat(90);
 
 async function write(root: string, relative: string, contents: string | object) {
   const target = path.join(root, relative);
@@ -67,11 +69,13 @@ async function fixture(mode: "source" | "package" | "external-plugin" = "source"
   await write(
     packageRoot,
     "dist/entry.js",
-    'import { answer } from "./extensions/remote-runtime/index.js"; import { name } from "@fixture/ai"; console.log(`${name}:${answer}`);',
+    'import { answer } from "./extensions/remote-runtime/index.js"; import { name } from "../node_modules/@fixture/ai/dist/index.js"; console.log(`${name}:${answer}`);',
   );
   await write(packageRoot, "dist/control-ui/index.html", "<title>Gateway dashboard</title>");
   await write(packageRoot, "dist/control-ui/assets/app.js", 'console.log("gateway-ui");');
   await write(packageRoot, "dist/shared.js", 'export const answer = "cloud-ready";');
+  await write(packageRoot, "dist/empty.js", "");
+  await write(packageRoot, longEntryPath, { payload: longEntryPayload });
   await write(packageRoot, "dist/worker/worker.mjs", 'console.log("separate-worker-bundle");');
   await write(packageRoot, "dist/worker/workspace-rsync-receiver.mjs", "export {};");
   await write(packageRoot, "dist/worker/github-exec-launcher.mjs", "export {};");
@@ -206,6 +210,10 @@ describe("node bootstrap distribution", () => {
         expect(entries).not.toContain("package/dist/extensions/remote-runtime/index.js");
       }
       const target = path.join(installed, "package");
+      expect(await fs.readFile(path.join(target, "dist/empty.js"), "utf8")).toBe("");
+      expect(JSON.parse(await fs.readFile(path.join(target, longEntryPath), "utf8"))).toEqual({
+        payload: longEntryPayload,
+      });
       const manifest = JSON.parse(await fs.readFile(path.join(target, "package.json"), "utf8"));
       expect(manifest.dependencies).toEqual({ "@fixture/ai": version, "native-runtime": "1.2.3" });
       expect(manifest.bundleDependencies).toEqual(["@fixture/ai"]);
@@ -269,6 +277,25 @@ describe("node bootstrap distribution", () => {
       await expect(provider.prepare()).resolves.toMatchObject({ buildId });
     },
   );
+
+  it("joins a failed archive output and removes it before a successful retry", async () => {
+    const { provider } = await fixture();
+    const makeTemp = fs.mkdtemp.bind(fs);
+    let failedRoot: string | undefined;
+    const destination = vi.spyOn(fs, "mkdtemp").mockImplementationOnce(async (...args) => {
+      failedRoot = await makeTemp(...args);
+      await fs.mkdir(path.join(failedRoot, "node-runtime.tgz"));
+      return failedRoot;
+    });
+    try {
+      await expect(provider.prepare()).rejects.toThrow();
+      expect(failedRoot).toBeDefined();
+      await expect(fs.access(failedRoot!)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      destination.mockRestore();
+    }
+    await expect(provider.prepare()).resolves.toMatchObject({ buildId });
+  });
 
   it("does not return an artifact when its lifecycle closes during preparation", async () => {
     const { provider } = await fixture();
@@ -375,23 +402,23 @@ describe("node bootstrap distribution", () => {
     expect(left.tarballSha256).not.toBe(right.tarballSha256);
   });
 
-  it("rejects staged bytes substituted after copying the running build", async () => {
+  it("rejects streamed bytes that differ from the verified source", async () => {
     const { provider } = await fixture();
-    const writeFile = fs.writeFile.bind(fs);
+    // oxlint-disable-next-line typescript/unbound-method -- Fault injection reapplies the original ReadEntry receiver below.
+    const writeEntry = tar.ReadEntry.prototype.write;
     let substituted = false;
-    const writer = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
-      await writeFile(...args);
-      if (
-        typeof args[0] === "string" &&
-        args[0].endsWith(path.join("package", "dist", "shared.js"))
-      ) {
-        await writeFile(args[0], 'export const answer = "cloud-wrong";');
-        substituted = true;
-      }
-    });
+    const writer = vi
+      .spyOn(tar.ReadEntry.prototype, "write")
+      .mockImplementation(function (this: tar.ReadEntry, chunk) {
+        if (this.path === "package/dist/shared.js") {
+          substituted = true;
+          return writeEntry.call(this, Buffer.alloc(chunk.length, 0x20));
+        }
+        return writeEntry.call(this, chunk);
+      });
     try {
       await expect(provider.prepare()).rejects.toThrow(
-        "Node bootstrap archive does not match the staged distribution",
+        "Node bootstrap archive does not match the verified distribution",
       );
       expect(substituted).toBe(true);
     } finally {

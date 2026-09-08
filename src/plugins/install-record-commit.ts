@@ -13,6 +13,7 @@ import {
   type TransformConfigFileWithRetryParams,
 } from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
+import type { ConfigReplaceInput } from "../config/mutate.js";
 import {
   copyPluginInstallRecordMap,
   createPluginInstallRecordMap,
@@ -678,22 +679,23 @@ export async function commitConfigWriteWithPendingPluginInstalls(params: {
 }
 
 /** Replace the config file after moving pending plugin install records into the install index. */
-export async function commitConfigWithPendingPluginInstalls(params: {
-  nextConfig: OpenClawConfig;
-  baseHash?: string;
-  writeOptions?: ConfigWriteOptions;
-}): Promise<{
+export async function commitConfigWithPendingPluginInstalls(
+  params: ConfigReplaceInput & {
+    baseHash?: string;
+    writeOptions?: ConfigWriteOptions;
+  },
+): Promise<{
   config: OpenClawConfig;
   installRecords: Record<string, PluginInstallRecord>;
   movedInstallRecords: boolean;
   persistedHash: string | null;
 }> {
   return await commitConfigWriteWithPendingPluginInstalls({
-    nextConfig: params.nextConfig,
+    nextConfig: params.sourceConfig ?? params.nextConfig,
     ...(params.writeOptions ? { writeOptions: params.writeOptions } : {}),
     commit: async (nextConfig, writeOptions) => {
       return await replaceConfigFile({
-        nextConfig,
+        ...(params.sourceConfig ? { sourceConfig: nextConfig } : { nextConfig }),
         ...(params.baseHash !== undefined ? { baseHash: params.baseHash } : {}),
         ...(writeOptions ? { writeOptions } : {}),
       });

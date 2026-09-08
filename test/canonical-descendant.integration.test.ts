@@ -1,14 +1,13 @@
 import http from "node:http";
-import { fileURLToPath } from "node:url";
+import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   createPluginRuntimeMock,
   createPluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import codexPlugin from "../extensions/codex/index.js";
 import { createCanonicalForkFixtureForTest } from "../extensions/codex/test-api.js";
-import openaiPlugin from "../extensions/openai/index.js";
 import {
   prepareAgentRunAdmission,
   createOperationalRunInstanceRef,
@@ -41,8 +40,14 @@ import {
   createPluginStateSyncKeyedStore,
   type OpenKeyedStoreOptions,
 } from "../src/plugin-state/plugin-state-store.js";
+import { createRuntimePluginManifestLookup } from "../src/plugins/active-runtime-registry.js";
 import { resolvePluginCapabilityCatalogContext } from "../src/plugins/loader-runtime-load.js";
 import { resolvePluginMetadataSnapshot } from "../src/plugins/plugin-metadata-snapshot.js";
+import {
+  bindPluginRuntimeArtifactSelection,
+  resolvePluginRuntimeArtifactSelection,
+  resolvePluginRuntimeExecutionArtifact,
+} from "../src/plugins/plugin-runtime-artifact-selection.js";
 import {
   markPluginRegistryActive,
   markPluginRegistryRetired,
@@ -52,7 +57,10 @@ import { setPluginRuntimeLoadContext } from "../src/plugins/runtime/load-context
 import { resolvePluginRuntimeLoadContext } from "../src/plugins/runtime/load-context.resolve.js";
 import { createRuntimeAgent } from "../src/plugins/runtime/runtime-agent.js";
 import { createPluginRecord } from "../src/plugins/status.test-helpers.js";
-import type { OpenClawPluginMcpServerConnectionResolver } from "../src/plugins/types.js";
+import type {
+  OpenClawPluginDefinition,
+  OpenClawPluginMcpServerConnectionResolver,
+} from "../src/plugins/types.js";
 import {
   listSessionStateEventsSince,
   registerSessionStateWatch,
@@ -327,21 +335,43 @@ async function withFixture(
           workspaceDir: state.workspaceDir,
           preferPersisted: false,
         });
-        for (const plugin of [codexPlugin, openaiPlugin]) {
-          const rootDir = fileURLToPath(new URL(`../extensions/${plugin.id}/`, import.meta.url));
+        for (const pluginId of ["codex", "openai"]) {
+          const manifest = expectDefined(
+            metadataSnapshot.byPluginId.get(pluginId),
+            "plugin manifest",
+          );
+          const artifact = resolvePluginRuntimeExecutionArtifact(
+            resolvePluginRuntimeArtifactSelection({
+              ...manifest,
+              entryKind: "runtime",
+              preferBuiltPluginArtifacts: false,
+            }),
+          );
+          const plugin: OpenClawPluginDefinition = (
+            await import(pathToFileURL(artifact.source).href)
+          ).default;
+          expect(plugin.id).toBe(pluginId);
           const record = createPluginRecord({
-            id: plugin.id,
-            contracts: expectDefined(metadataSnapshot.byPluginId.get(plugin.id), "plugin manifest")
-              .contracts,
-            origin: "bundled",
-            rootDir,
-            source: `${rootDir}index.ts`,
+            id: manifest.id,
+            contracts: manifest.contracts,
+            origin: manifest.origin,
+            ...artifact,
+          });
+          // Register the selected artifact itself so retained tool ownership agrees
+          // with both source-only and built metadata discovery.
+          bindPluginRuntimeArtifactSelection(record, {
+            ...manifest,
+            preferBuiltPluginArtifacts: false,
+            runtimeEntry: artifact,
           });
           registry.plugins.push(record);
-          plugin.register(
+          expectDefined(
+            plugin.register,
+            "fixture plugin registration",
+          )(
             createApi(record, {
               config,
-              pluginConfig: config.plugins.entries?.[plugin.id]?.config,
+              pluginConfig: config.plugins.entries?.[pluginId]?.config,
             }),
           );
         }
@@ -351,6 +381,12 @@ async function withFixture(
           createApi(record, { config }).registerMcpServerConnectionResolver(options.mcpResolver);
         }
         expect(registry.diagnostics.filter((entry) => entry.level === "error")).toEqual([]);
+        const fixtureOwners = createRuntimePluginManifestLookup(registry, metadataSnapshot.plugins);
+        expect(
+          registry.plugins
+            .filter((record) => record.id === "codex" || record.id === "openai")
+            .map((record) => fixtureOwners(record.id) === record),
+        ).toEqual([true, true]);
         markPluginRegistryActive(registry);
         setPluginRuntimeLoadContext(
           registry,
@@ -1119,6 +1155,20 @@ describe("canonical descendant lifecycle through real owners", () => {
             "canonical native thread",
           );
           const currentBefore = structuredClone(current);
+          if (!Array.isArray(current.dynamicTools)) {
+            throw new Error("Expected the canonical native dynamic tool catalog");
+          }
+          expect(
+            current.dynamicTools.flatMap((spec) =>
+              isRecord(spec) && spec.type === "namespace" && Array.isArray(spec.tools)
+                ? spec.tools
+                : [spec],
+            ),
+          ).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ type: "function", name: "codex_threads" }),
+            ]),
+          );
           const entries = await fixture.readEntries(source.sessionKey);
           const users = entries.filter((entry) => entry.role === "user");
           expect(users).toHaveLength(4);

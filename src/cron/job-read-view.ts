@@ -23,8 +23,11 @@ export function cronJobReadView(job: CronJob) {
 
 // Strip only metadata added by the public read view, never unknown definition fields.
 // Stored revisions and privacy projection have separate owners and stay unchanged.
-export function cronJobDefinitionFromReadView(view: Partial<ReturnType<typeof cronJobReadView>>) {
+export function cronJobDefinitionFromReadView(
+  view: Partial<ReturnType<typeof cronJobReadView>> & { effectiveAgentId?: string | null },
+) {
   const {
+    effectiveAgentId: _effectiveAgentId,
     configRevision: _configRevision,
     nextRunAtMs: _nextRunAtMs,
     lastRunAtMs: _lastRunAtMs,

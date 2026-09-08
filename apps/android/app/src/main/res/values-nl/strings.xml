@@ -1177,6 +1177,7 @@
     <string name="native_afc56755918ad9b2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Einde van code"</string>
     <string name="native_afc798a41a0c1b60" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Code Execution"</string>
     <string name="native_afe7b1f9c558450d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Geen providergebruik"</string>
+    <string name="native_afe91c77b317d099" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"De modellen konden niet worden vernieuwd. Eerdere keuzes zijn ongewijzigd. Tik op Vernieuwen om het opnieuw te proberen."</string>
     <string name="native_aff0766a5290e117" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Beoordelen"</string>
     <string name="native_b0375de83dab3599" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Toestemming voor microfoontoegang is vereist."</string>
     <string name="native_b0eeb9e9e45398b5" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$sd"</string>

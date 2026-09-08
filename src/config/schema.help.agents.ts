@@ -210,6 +210,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "commands.allowFrom":
     "Defines elevated command allow rules by channel and sender for owner-level command surfaces. Use narrow provider-specific identities so privileged commands are not exposed to broad chat audiences.",
   mcp: "Global MCP server definitions managed by OpenClaw. Embedded OpenClaw and other runtime adapters can consume these servers without storing them inside runtime-owned project settings.",
+  "mcp.sessionIdleTtlMs":
+    "Optional idle eviction for OpenClaw session MCP runtimes in milliseconds. Unset or 0 keeps runtimes alive until session cleanup or Gateway shutdown. Positive values round down; active leases and pending acquisitions prevent eviction. Run-owned runtimes still retire when their one-shot run ends.",
   "mcp.servers":
     "Named MCP server definitions. OpenClaw stores them in its own config and runtime adapters decide which transports are supported at execution time.",
   "mcp.servers.*.codex":

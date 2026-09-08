@@ -89,9 +89,6 @@ export function resolveCachedGitContext(
         "refs/remotes/origin/HEAD",
       ]);
       const defaultBranch = defaultRef?.replace(/^origin\//, "");
-      if (defaultBranch === branch) {
-        return null;
-      }
       return { ...remote, branch, root, ...(defaultBranch ? { defaultBranch } : {}) };
     },
     deps.cacheSignal,

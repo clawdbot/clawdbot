@@ -10,107 +10,20 @@ import type {
   ModelCatalogEntry,
   ToolsEffectiveResult,
 } from "../../api/types.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { refreshVisibleToolsEffectiveForCurrentSession } from "../../lib/agents/index.ts";
-import type { AgentsPanel } from "../../lib/agents/panels.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-store.ts";
-import { loadCronJobsPage, type CronState } from "../../lib/cron/index.ts";
-import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { loadCronJobsPage } from "../../lib/cron/index.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import {
+  deferred,
+  gateway,
+  setPageGateway,
+  snapshot,
+  type TestAgentsPage,
+} from "./agents-page.test-support.ts";
 import type { AgentsRouteData } from "./route.ts";
 import "./agents-page.ts";
-
-const AGENTS_PAGE_GATEWAY_HELLO = gatewayHelloForMethods(["config.patch", "config.set"]);
-
-type TestAgentsPage = HTMLElement & {
-  context: ApplicationContext;
-  readonly client: GatewayBrowserClient | null;
-  readonly connected: boolean;
-  agentsList: unknown;
-  agentsSelectedId: string | null;
-  routeData?: AgentsRouteData;
-  agentFilesLoading: boolean;
-  agentFilesList: AgentsFilesListResult | null;
-  agentFileActive: string | null;
-  agentFileContents: Record<string, string>;
-  agentIdentityLoading: boolean;
-  agentSkillsError: string | null;
-  readonly agentsPanel: AgentsPanel;
-  readonly sessions: ApplicationContext["sessions"];
-  toolsEffectiveError: string | null;
-  toolsEffectiveLoading: boolean;
-  toolsEffectiveResult: ToolsEffectiveResult | null;
-  chatModelCatalog: ModelCatalogEntry[];
-  chatModelCatalogError: string | null;
-  cron: CronState;
-  requestGeneration: number;
-  routeDataInitialized: boolean;
-  subscriptions: {
-    hostConnected: () => void;
-    hostUpdate: () => void;
-    hostDisconnected: () => void;
-  };
-  willUpdate: (changed: Map<PropertyKey, unknown>) => void;
-  gateway: {
-    applySnapshot: (
-      snapshot: ApplicationGatewaySnapshot,
-      binding: { initial: boolean; sourceChanged: boolean },
-    ) => void;
-    invalidate: () => void;
-  };
-  ensureAgentIdentities: () => void;
-  loadActivePanelData: () => void;
-  ensureModelCatalog: (options?: { refresh?: boolean }) => void;
-  refreshCron: () => Promise<void>;
-  requestUpdate: () => void;
-  runCronTask: <T>(task: (cronState: CronState) => Promise<T>) => Promise<T>;
-  loadEffectiveToolsForAgent: (agentId: string) => void;
-  loadAgentFiles: (agentId: string, force?: boolean) => Promise<void>;
-  clearAgentSkills: (agentId: string) => void;
-  saveAgentConfig: () => void;
-  setDefaultAgent: (agentId: string) => void;
-};
-
-function setPageGateway(
-  page: TestAgentsPage,
-  client: GatewayBrowserClient | null,
-  connected = true,
-  sourceChanged = false,
-) {
-  page.gateway.applySnapshot(snapshot(client, connected), { initial: false, sourceChanged });
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
-
-function snapshot(
-  client: GatewayBrowserClient | null,
-  connected = true,
-): ApplicationGatewaySnapshot {
-  return {
-    client,
-    phase: connected ? "connected" : "stopped",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: AGENTS_PAGE_GATEWAY_HELLO,
-    assistantAgentId: null,
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
-}
-
-function gateway(current: ApplicationGatewaySnapshot): ApplicationContext["gateway"] {
-  return {
-    snapshot: current,
-    subscribe: vi.fn(() => () => undefined),
-  } as unknown as ApplicationContext["gateway"];
-}
 
 const files = (agentId: string, workspace: string) => ({ agentId, workspace, files: [] });
 
@@ -551,14 +464,14 @@ describe("AgentsPage gateway lifecycle", () => {
 
     page.loadActivePanelData();
     await waitForFast(() => {
-      expect(page.chatModelCatalogError).toBe("model catalog unavailable");
+      expect(page.chatModelCatalogStatus.error).toBe("model catalog unavailable");
     });
     expect(page.chatModelCatalog).toEqual([]);
 
     page.loadActivePanelData();
     await waitForFast(() => expect(page.chatModelCatalog).toEqual(models));
 
-    expect(page.chatModelCatalogError).toBeNull();
+    expect(page.chatModelCatalogStatus.error).toBeNull();
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenNthCalledWith(2, "chat.metadata", { agentId: "main" });
   });

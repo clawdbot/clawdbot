@@ -246,6 +246,67 @@ function enableLifecycleHooks() {
 }
 
 describe("acceptCompactionSuccessor", () => {
+  it.each(["rotation", "unchanged", "cancel-after-commit"] as const)(
+    "owns MCP predecessor cleanup after %s",
+    async (kind) => {
+      await withAcceptanceFixture({}, async (fixture) => {
+        const { getOrCreateSessionMcpRuntime } =
+          await import("../agent-bundle-mcp-manager.test-support.js");
+        const { getSessionMcpRuntimeManagerForTesting } =
+          await import("../agent-bundle-mcp-manager-api.js");
+        const manager = getSessionMcpRuntimeManagerForTesting();
+        const create = (sessionId: string) =>
+          getOrCreateSessionMcpRuntime({
+            sessionId,
+            sessionKey: fixture.target.sessionKey,
+            workspaceDir: path.dirname(fixture.target.storePath),
+            cfg: { mcp: { servers: {} } },
+            manifestRegistry: { plugins: [] },
+          });
+        try {
+          const original = await create(fixture.target.sessionId);
+          const release = original.acquireLease?.();
+          const successor = await create(fixture.successorId);
+          if (kind === "cancel-after-commit") {
+            fixture.observeIdentity(fixture.stop);
+          }
+          const accepted = await fixture.accept(
+            kind === "unchanged" ? { result: { ok: true, compacted: true } } : {},
+          );
+          if (kind !== "unchanged") {
+            await create(original.sessionId);
+          }
+          release?.();
+          await manager.completeDeferredRetirement(original.sessionId, original);
+          expect(manager.peekSession({ sessionId: original.sessionId })).toBe(
+            kind === "unchanged" ? original : undefined,
+          );
+          expect(manager.peekSession({ sessionId: successor.sessionId })).toBe(successor);
+          if (kind === "rotation") {
+            const latest = await create(randomUUID());
+            await fixture.accept({
+              currentTarget: accepted.sessionTarget,
+              expectedEntry: {
+                sessionId: accepted.entry.sessionId,
+                lifecycleRevision: accepted.entry.lifecycleRevision,
+                activeWriterRunId: accepted.entry.activeWriterRunId,
+              },
+              result: {
+                ok: true,
+                compacted: true,
+                result: { tokensBefore: 1, sessionTarget: { sessionId: latest.sessionId } },
+              },
+            });
+            expect(manager.peekSession({ sessionId: successor.sessionId })).toBeUndefined();
+            expect(manager.peekSession({ sessionId: latest.sessionId })).toBe(latest);
+          }
+        } finally {
+          await manager.disposeAll();
+        }
+      });
+    },
+  );
+
   it.each([true, false])(
     "transfers the declared identity without reclaiming its writer (claimed=%s)",
     async (claimWriter) => {

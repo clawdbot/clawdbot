@@ -197,19 +197,12 @@ function resolveGeneratedBundledChannelModulePath(params: {
   if (!packageRoot || !pluginRoot || !isPathInside(packageRoot, pluginRoot)) {
     return null;
   }
-  for (const rawEntry of [params.entry.built, params.entry.source]) {
-    if (!rawEntry) {
-      continue;
-    }
-    const candidate = path.isAbsolute(rawEntry)
-      ? path.normalize(rawEntry)
-      : path.resolve(pluginRoot, rawEntry);
-    const realCandidate = pluginCacheRealpathSync(candidate, true);
-    if (realCandidate && isPathInside(pluginRoot, realCandidate)) {
-      return realCandidate;
-    }
-  }
-  return null;
+  const rawEntry = params.entry.source;
+  const candidate = path.isAbsolute(rawEntry)
+    ? path.normalize(rawEntry)
+    : path.resolve(pluginRoot, rawEntry);
+  const realCandidate = pluginCacheRealpathSync(candidate, true);
+  return realCandidate && isPathInside(pluginRoot, realCandidate) ? realCandidate : null;
 }
 
 function loadGeneratedBundledChannelModule(params: {

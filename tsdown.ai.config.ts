@@ -25,6 +25,7 @@ const config = {
     "provider-types": "packages/ai/src/provider-types.ts",
     validation: "packages/ai/src/validation.ts",
     "internal/anthropic": "packages/ai/src/internal/anthropic.ts",
+    "internal/google-model-family": "packages/ai/src/internal/google-model-family.ts",
     "internal/openai": "packages/ai/src/internal/openai.ts",
     "internal/openai-responses-payload-policy":
       "packages/ai/src/internal/openai-responses-payload-policy.ts",

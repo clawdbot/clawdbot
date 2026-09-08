@@ -149,6 +149,29 @@ function filterSkillEntries(
   return filtered;
 }
 
+function createSkillEntry(record: LoadedSkillRecord): SkillEntry {
+  const { skill, frontmatter } = record;
+  const invocation = resolveSkillInvocationPolicy(frontmatter);
+  const entry: SkillEntry = {
+    skill,
+    frontmatter,
+    metadata: resolveSkillEntryMetadata({ frontmatter, skillDir: skill.baseDir }),
+    invocation,
+    exposure: {
+      includeInRuntimeRegistry: true,
+      includeInAvailableSkillsPrompt: !invocation.disableModelInvocation,
+      userInvocable: invocation.userInvocable ?? true,
+    },
+  };
+  if (record.syncSourceDir !== undefined) {
+    entry.syncSourceDir = record.syncSourceDir;
+  }
+  if (record.syncDirName !== undefined) {
+    entry.syncDirName = record.syncDirName;
+  }
+  return entry;
+}
+
 function loadSkillEntries(
   workspaceDir: string,
   opts?: {
@@ -309,28 +332,7 @@ function loadSkillEntries(
 
   const entries = Array.from(merged.values())
     .toSorted((a, b) => a.skill.name.localeCompare(b.skill.name, "en"))
-    .map((record) => {
-      const { skill, frontmatter } = record;
-      const invocation = resolveSkillInvocationPolicy(frontmatter);
-      const entry: SkillEntry = {
-        skill,
-        frontmatter,
-        metadata: resolveSkillEntryMetadata({ frontmatter, skillDir: skill.baseDir }),
-        invocation,
-        exposure: {
-          includeInRuntimeRegistry: true,
-          includeInAvailableSkillsPrompt: !invocation.disableModelInvocation,
-          userInvocable: invocation.userInvocable ?? true,
-        },
-      };
-      if (record.syncSourceDir !== undefined) {
-        entry.syncSourceDir = record.syncSourceDir;
-      }
-      if (record.syncDirName !== undefined) {
-        entry.syncDirName = record.syncDirName;
-      }
-      return entry;
-    });
+    .map(createSkillEntry);
   skillEntryCache.set(cacheKey, entries);
   pruneMapToMaxSize(skillEntryCache, MAX_SKILL_ENTRY_CACHE_SIZE);
   return entries;
@@ -511,23 +513,8 @@ export function loadBundledSkillEntryByName(
   if (!loaded || loaded.skill.name.trim().toLowerCase() !== normalizedName) {
     return undefined;
   }
-  const invocation = resolveSkillInvocationPolicy(loaded.frontmatter);
-  const entry: SkillEntry = {
-    skill: loaded.skill,
-    frontmatter: loaded.frontmatter,
-    metadata: resolveSkillEntryMetadata({
-      frontmatter: loaded.frontmatter,
-      skillDir: loaded.skill.baseDir,
-    }),
-    invocation,
-    exposure: {
-      includeInRuntimeRegistry: true,
-      includeInAvailableSkillsPrompt: !invocation.disableModelInvocation,
-      userInvocable: invocation.userInvocable ?? true,
-    },
-  };
   return filterSkillEntries(
-    [entry],
+    [createSkillEntry(loaded)],
     opts?.config,
     resolveEffectiveWorkspaceSkillFilter(opts),
     undefined,

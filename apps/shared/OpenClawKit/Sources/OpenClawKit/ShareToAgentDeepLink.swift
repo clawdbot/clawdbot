@@ -31,7 +31,7 @@ public enum ShareToAgentDeepLink {
         let title = self.clean(payload.title)
         let text = self.clean(payload.text)
         let urlText = payload.url?.absoluteString.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedInstruction = self.clean(instruction) ?? self.clean(ShareToAgentSettings.loadDefaultInstruction())
+        let resolvedInstruction = self.clean(instruction)
         let hasSharedContent = title != nil || text != nil || self.clean(urlText) != nil
 
         guard hasSharedContent || resolvedInstruction != nil else { return "" }

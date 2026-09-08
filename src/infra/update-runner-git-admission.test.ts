@@ -36,7 +36,7 @@ function fixture(relativeRemote = false) {
   git(source, "init", "-b", "main");
   git(source, "config", "user.name", "Update fixture");
   git(source, "config", "user.email", "fixture@example.invalid");
-  fs.writeFileSync(path.join(source, ".gitignore"), "node_modules/\ndist/\n.artifacts/\n*.tmp\n");
+  fs.writeFileSync(path.join(source, ".gitignore"), "node_modules/\ndist/\n.artifacts/\n");
   fs.writeFileSync(path.join(source, "openclaw.mjs"), "export {};\n");
   const commit = (version: string, agentSchema: number) => {
     fs.writeFileSync(

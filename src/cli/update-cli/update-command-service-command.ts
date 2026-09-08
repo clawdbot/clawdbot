@@ -44,7 +44,7 @@ export async function runUpdatedInstallGatewayCommand(
     signal?: AbortSignal;
     assertCurrent?: () => void;
   },
-  action: "install" | "restart",
+  action: "install" | "restart" | "stop",
   preserveDefinition = false,
 ): Promise<"accepted" | "unverified"> {
   params.signal?.throwIfAborted();
@@ -62,7 +62,7 @@ export async function runUpdatedInstallGatewayCommand(
     );
   }
   const args = ["gateway", action];
-  if (installing) {
+  if (installing || action === "stop") {
     args.push("--force");
   } else if (preserveDefinition) {
     args.push("--preserve-definition");
@@ -98,14 +98,15 @@ export async function runUpdatedInstallGatewayCommand(
   const complete = !res.stdoutTruncatedBytes && !res.outputLimitExceeded && !res.outputErrorStream;
   const response = complete ? safeParseJsonRecord(res.stdout) : undefined;
   if (exited && res.code === 0) {
-    return action === "restart" &&
-      response?.action === "restart" &&
+    return response?.action === action &&
       response.ok === true &&
-      (response.result === "restarted" || response.result === "scheduled")
+      ((action === "restart" &&
+        (response.result === "restarted" || response.result === "scheduled")) ||
+        (action === "stop" && (response.result === "stopped" || response.result === "not-loaded")))
       ? "accepted"
       : "unverified";
   }
-  const operation = installing ? "refresh" : "restart";
+  const operation = installing ? "refresh" : action;
   const message = `updated install ${operation} failed (${entrypoint}): ${formatCommandFailure(res.stdout, res.stderr)}`;
   if (
     exited &&

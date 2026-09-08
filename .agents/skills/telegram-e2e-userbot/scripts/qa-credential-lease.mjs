@@ -4,6 +4,7 @@ import { execFile as execFileCallback } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { promisify } from "node:util";
 
 const ENDPOINT_PREFIX = "/qa-credentials/v1";
@@ -211,7 +212,7 @@ async function resolveCredentialPayload(acquired, identity, requestOptions, limi
 }
 
 export async function acquireQaLease({
-  kind,
+  kind = "",
   ownerId = `qa-lease-${os.hostname()}-${process.pid}-${randomUUID()}`,
   leaseTtlMs = 20 * 60_000,
   heartbeatIntervalMs = 30_000,
@@ -237,8 +238,10 @@ export async function acquireQaLease({
   const requestOptions = { broker, fetchImpl, httpTimeoutMs };
   const startedAt = Date.now();
   let acquired;
+  let confirmedAt;
   for (;;) {
     try {
+      confirmedAt = { wall: Date.now(), monotonic: performance.now() };
       acquired = await callBroker(
         "acquire",
         { kind, ownerId, actorRole: "ci", leaseTtlMs, heartbeatIntervalMs },
@@ -273,15 +276,35 @@ export async function acquireQaLease({
   const whenUnhealthy = new Promise((resolve) => {
     resolveUnhealthy = resolve;
   });
+  const invalidate = (error) => {
+    if (!heartbeatError) {
+      heartbeatError = error;
+      resolveUnhealthy(error);
+    }
+  };
   const assertHealthy = () => {
+    // Anchor to request start, not response receipt. Check synchronously at use:
+    // a suspended worker must not forward before its heartbeat timer catches up.
+    const age = Math.max(Date.now() - confirmedAt.wall, performance.now() - confirmedAt.monotonic);
+    if (age >= leaseTtlMs) invalidate(new Error("Credential lease confirmation expired."));
     if (heartbeatError) throw heartbeatError;
   };
   const heartbeat = () => {
     if (heartbeatInFlight || heartbeatError) return heartbeatInFlight;
+    try {
+      assertHealthy();
+    } catch {
+      return;
+    }
+    const requestedAt = { wall: Date.now(), monotonic: performance.now() };
     heartbeatInFlight = callBroker("heartbeat", { ...identity, leaseTtlMs }, requestOptions)
+      .then(() => {
+        if (heartbeatError) return;
+        confirmedAt = requestedAt;
+        assertHealthy();
+      })
       .catch((error) => {
-        heartbeatError = error;
-        resolveUnhealthy(error);
+        invalidate(error);
       })
       .finally(() => {
         heartbeatInFlight = undefined;
@@ -329,11 +352,16 @@ export async function acquireQaLease({
     credentialId: acquired.credentialId,
     whenUnhealthy,
     assertHealthy,
+    abandon: async () => {
+      invalidate(new Error("Credential lease abandoned; waiting for existing broker expiry."));
+      await stopHeartbeat();
+    },
     release: async () => {
       if (released) return;
-      released = true;
+      invalidate(new Error("Credential lease released."));
       await stopHeartbeat();
       await callBroker("release", identity, requestOptions);
+      released = true;
     },
   };
 }

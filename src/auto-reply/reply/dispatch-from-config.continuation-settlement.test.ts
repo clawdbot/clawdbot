@@ -1,7 +1,10 @@
 // Continuation settlement tests cover status delivery and child-terminal handoff.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
-import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
+import {
+  OutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+} from "../../infra/outbound/deliver-types.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -85,6 +88,60 @@ afterEach(() => {
 });
 
 describe("accepted continuation status delivery", () => {
+  it.each([
+    { outcome: "ambiguous", initial: "prepared", expected: "unknown" },
+    { outcome: "recovery-owned", initial: "prepared", expected: undefined },
+    { outcome: "recovery-owned", initial: "queued", expected: "queued" },
+    { outcome: "recovery-owned", initial: "unknown", expected: "unknown" },
+    { outcome: "confirmed", initial: "prepared", expected: undefined },
+  ] as const)(
+    "settles duplicate-final custody after $outcome block with $initial marker",
+    async ({ outcome, initial, expected }) => {
+      const pending = {
+        ...pendingFinalDelivery("durable answer"),
+        deliveries: [{ id: "delivery-1", state: initial }],
+      };
+      sessionStoreMocks.currentEntry = {
+        sessionId: "session-1",
+        sessionKey: "agent:test:session",
+        pendingFinalDelivery: pending,
+        restartRecoverySourceIngress: "channel",
+      };
+      const error = new OutboundDeliveryError("retained for recovery", {
+        cause: new PlatformMessageNotDispatchedError("offline", { cause: new Error("offline") }),
+      });
+      error.queueCustody = "held";
+      const deliver = vi.fn(async (_payload: ReplyPayload, info: { kind: string }) => {
+        if (info.kind === "block" && outcome === "recovery-owned") {
+          throw error;
+        }
+        return outcome === "ambiguous" ? { visibleReplySent: true, ambiguous: true } : undefined;
+      });
+      const dispatcher = createReplyDispatcher({ deliver });
+      await withReplyDispatcher({
+        dispatcher,
+        run: () =>
+          dispatchReplyFromConfig({
+            ctx: createHookCtx(),
+            cfg: emptyConfig,
+            dispatcher,
+            replyResolver: async (_ctx, opts) => {
+              await opts?.onBlockReply?.({ text: "durable answer" });
+              return pendingFinalReply("durable answer");
+            },
+            replyOptions: { onBlockReplyQueued: vi.fn() },
+          }),
+      });
+      expect(deliver).toHaveBeenCalledOnce();
+      expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toEqual(
+        expected ? { ...pending, deliveries: [{ id: "delivery-1", state: expected }] } : undefined,
+      );
+      expect(sessionStoreMocks.currentEntry?.restartRecoverySourceIngress).toBe(
+        expected ? "channel" : undefined,
+      );
+    },
+  );
+
   it("clears pending final delivery after final dispatch succeeds", async () => {
     sessionStoreMocks.currentEntry = {
       sessionId: "session-1",

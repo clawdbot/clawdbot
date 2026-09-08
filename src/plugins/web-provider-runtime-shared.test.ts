@@ -12,11 +12,9 @@ const mocks = vi.hoisted(() => ({
   resolveRuntimePluginRegistry: vi.fn(),
   getActivePluginRegistry: vi.fn<() => Record<string, unknown> | null>(() => null),
   getActivePluginRegistryWorkspaceDir: vi.fn(() => undefined),
-  buildPluginRuntimeLoadOptionsFromValues: vi.fn(
-    (_values: unknown, overrides?: Record<string, unknown>) => ({
-      ...overrides,
-    }),
-  ),
+  buildPluginRuntimeLoadOptions: vi.fn((_values: unknown, overrides?: Record<string, unknown>) => ({
+    ...overrides,
+  })),
   createPluginRuntimeLoaderLogger: vi.fn(() => ({
     info: vi.fn(),
     warn: vi.fn(),
@@ -43,7 +41,7 @@ vi.mock("./runtime.js", () => ({
 }));
 
 vi.mock("./runtime/load-context.js", () => ({
-  buildPluginRuntimeLoadOptionsFromValues: mocks.buildPluginRuntimeLoadOptionsFromValues,
+  buildPluginRuntimeLoadOptions: mocks.buildPluginRuntimeLoadOptions,
   createPluginRuntimeLoaderLogger: mocks.createPluginRuntimeLoaderLogger,
 }));
 
@@ -76,8 +74,8 @@ describe("web-provider-runtime-shared", () => {
     mocks.getActivePluginRegistry.mockReturnValue(null);
     mocks.getActivePluginRegistryWorkspaceDir.mockReset();
     mocks.getActivePluginRegistryWorkspaceDir.mockReturnValue(undefined);
-    mocks.buildPluginRuntimeLoadOptionsFromValues.mockReset();
-    mocks.buildPluginRuntimeLoadOptionsFromValues.mockImplementation(
+    mocks.buildPluginRuntimeLoadOptions.mockReset();
+    mocks.buildPluginRuntimeLoadOptions.mockImplementation(
       (_values: unknown, overrides?: Record<string, unknown>) => ({
         ...overrides,
       }),
@@ -182,7 +180,7 @@ describe("web-provider-runtime-shared", () => {
       registry: activeRegistry,
       onlyPluginIds: ["brave"],
     });
-    expect(mockArg(mocks.buildPluginRuntimeLoadOptionsFromValues).manifestRegistry).toEqual({
+    expect(mockArg(mocks.buildPluginRuntimeLoadOptions).manifestRegistry).toEqual({
       plugins: manifestRecords,
       diagnostics: [],
     });

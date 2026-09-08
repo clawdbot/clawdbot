@@ -21,6 +21,7 @@ import { ASK_USER_TOOL_DISPLAY_SUMMARY, describeAskUserTool } from "../tool-desc
 import {
   AskUserToolSchema,
   DEFAULT_ASK_USER_TIMEOUT_SECONDS,
+  QUESTION_RPC_GRACE_MS,
   type NormalizedAskUserParams,
   normalizeAskUserParams,
 } from "./ask-user-tool-normalization.js";
@@ -33,7 +34,6 @@ import {
 } from "./gateway-question-lifecycle.js";
 import { type QuestionPromptDelivery, sendQuestionToolPrompt } from "./question-prompt-send.js";
 
-const ASK_USER_RPC_GRACE_MS = 10_000;
 const ASK_USER_PROMPT_RECHECK_MS = 50;
 
 type AskUserQuestionPhase =
@@ -216,7 +216,7 @@ async function readAskUserQuestionStatus(
   questionId: string,
   gatewayCall: GatewayQuestionCall,
 ): Promise<string | undefined> {
-  const result = await gatewayCall("question.list", { timeoutMs: ASK_USER_RPC_GRACE_MS }, {});
+  const result = await gatewayCall("question.list", { timeoutMs: QUESTION_RPC_GRACE_MS }, {});
   const questions =
     result && typeof result === "object" && !Array.isArray(result)
       ? (result as { questions?: unknown }).questions
@@ -629,7 +629,7 @@ export function createAskUserTool(params: {
         }
         const answerPromise = gatewayCall(
           "question.waitAnswer",
-          { timeoutMs: timeoutMs + ASK_USER_RPC_GRACE_MS },
+          { timeoutMs: timeoutMs + QUESTION_RPC_GRACE_MS },
           { id: questionId, timeoutMs, includeResolutionId: true },
           signal ? { signal } : undefined,
         ).finally(prompt.close) as Promise<QuestionWaitAnswerResult>;

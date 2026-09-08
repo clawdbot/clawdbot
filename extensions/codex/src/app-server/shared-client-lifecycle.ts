@@ -145,11 +145,8 @@ export function closeRetiredSharedClientEntryIfIdle(
   ) {
     return false;
   }
-  const client = entry.client;
   entry.closeWhenIdle = false;
-  entry.client = undefined;
-  client.close();
-  return true;
+  return closeRetiredSharedClientEntry(entry);
 }
 
 export function closeRetiredSharedClientEntry(entry: SharedCodexAppServerClientEntry): boolean {

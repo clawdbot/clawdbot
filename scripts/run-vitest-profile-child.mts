@@ -1,3 +1,4 @@
+import { getHashes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type { ViteUserConfig } from "vitest/config";
 import { isVitestProfileError, startVitestProfile } from "./lib/vitest-profiler.mts";
@@ -9,6 +10,10 @@ if ((mode !== "main" && mode !== "runner") || !outputDir) {
 // Start before importing Vitest so main capture includes Vite/Vitest startup.
 const finishMain = mode === "main" ? await startVitestProfile(outputDir, false) : undefined;
 try {
+  // Node 24's background CA loader can deadlock with Undici's first hash enumeration.
+  // Populate that cached result before TLS loads, inside main's startup capture.
+  // Remove when supported Node/OpenSSL versions make concurrent initialization safe.
+  getHashes();
   const { parseCLI, startVitest } = await import("vitest/node");
   const { normalizePath } = await import("vite");
   const { filter, options } = parseCLI(["vitest", ...args]);

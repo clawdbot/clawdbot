@@ -5,6 +5,7 @@ import * as agentEn from "./en-agents.ts";
 
 export const en: TranslationMap & {
   configPage: TranslationMap;
+  connection: TranslationMap;
   configView: TranslationMap;
   debug: TranslationMap & { overlay: TranslationMap };
   // Lazy en-devices.ts assigns into this namespace.
@@ -113,6 +114,11 @@ export const en: TranslationMap & {
     probeOk: "Probe ok",
     probeFailed: "Probe failed",
     reloadConfig: "Reload Config",
+    multiSelect: {
+      addCustom: "Add “{value}”",
+      noMatches: "No matches",
+      remove: "Remove {value}",
+    },
     loadConfig: "Load config",
     loadApprovals: "Load approvals",
     settingsSections: "Settings sections",
@@ -193,7 +199,7 @@ export const en: TranslationMap & {
   },
   nativeLinkMenu: {
     label: "Link actions",
-    openInline: "Open in Sidebar",
+    openInline: "Open in Browser Panel",
     openExternal: "Open in Default Browser",
     copy: "Copy Link",
   },
@@ -463,11 +469,6 @@ export const en: TranslationMap & {
         "Logging out of account {accountId} stops its listener and deletes its saved credentials.",
       logoutNotCleared:
         "No stored WhatsApp session was cleared. It may already be absent, or its auth directory may require manual cleanup.",
-    },
-    gatewayUrlConfirmation: {
-      title: "Change Gateway URL",
-      subtitle: "This will reconnect to a different gateway server",
-      warning: "Only confirm if you trust this URL. Malicious URLs can compromise your system.",
     },
     nostr: {
       title: "Nostr",
@@ -1028,6 +1029,8 @@ export const en: TranslationMap & {
     nativeTerminalHint:
       "Start the native CLI on the selected machine using its own account and configuration. This does not create an OpenClaw Chat.",
     chooseNativeHost: "Choose a native CLI host",
+    nativeHostsUnavailable:
+      "No native CLI is available. Install it on the Gateway or connect a machine with CLI access, then reconnect to the Gateway.",
     nativeTerminalPrompt: "Optional initial prompt for the native CLI",
     terminalNodeFolder: "Existing absolute folder on this node",
     terminalAttachmentsUnsupported:
@@ -1214,6 +1217,9 @@ export const en: TranslationMap & {
     tokensBefore: "{count} tokens before",
     tokenDeltaUnavailable: "token delta unavailable",
     contextUsage: "{percent}% of context used ({used} / {context} tokens)",
+    promptBudgetUsage: "{percent}% of last-run prompt budget used ({used} / {context} tokens)",
+    promptBudgetUsageApprox:
+      "Approximately {percent}% of last-run prompt budget used ({used} / {context} tokens)",
     contextUsageApprox: "~{percent}% of context used ({used} / {context} tokens, approximate)",
     checkpoints: "{count} Checkpoints",
     checkpoint: "{count} Checkpoint",
@@ -1292,6 +1298,7 @@ export const en: TranslationMap & {
     customEmojiHintNoShortcut: "Any emoji works.",
     removeIcon: "Remove icon",
     pinSession: "Pin session",
+    pinRootSessionsOnly: "Only root sessions can be pinned; pin the parent session instead.",
     unpinSession: "Unpin session",
     markUnread: "Mark as unread",
     markRead: "Mark as read",
@@ -1466,6 +1473,7 @@ export const en: TranslationMap & {
       inheritDefault: "Inherit default",
       inheritDefaultModel: "Inherit default ({model})",
       fallbacks: "Fallbacks",
+      addFallback: "Add fallback…",
     },
     toolCatalog: {
       groups: {
@@ -2193,6 +2201,8 @@ export const en: TranslationMap & {
     settings: "Settings",
     askOpenClaw: "Ask OpenClaw",
     settingsGroupDevice: "This Mac",
+    settingsGroupThisIPhone: "This iPhone",
+    settingsGroupThisIPad: "This iPad",
     settingsGroupThisDevice: "This device",
     settingsGroupConnections: "Connections",
     settingsGroupAgents: "Agents & Tools",
@@ -2227,6 +2237,8 @@ export const en: TranslationMap & {
     uploadProgress: "Uploading {current} of {total}",
     uploadFailed: "Upload failed",
     retryUpload: "Retry",
+    insertUploadedPaths: "Insert uploaded paths",
+    uploadExpired: "Uploaded files may have expired. Cancel this batch and choose the files again.",
     closeSession: "Close terminal session",
     sessions: "Terminal sessions",
     refreshSessions: "Refresh",
@@ -2236,6 +2248,8 @@ export const en: TranslationMap & {
     sessionAttached: "attached",
     attachSession: "Attach session",
     attachFailed: "Could not attach terminal session",
+    startCancelled: "Terminal start was cancelled. Try again.",
+    panelUnavailable: "Terminal panel is unavailable. Reconnect and try again.",
     connecting: "Connecting to session…",
     connectionTimedOut: "Session did not connect within 30 seconds.",
     refreshRequired: "Control UI updated. Reload this page to continue the terminal action.",
@@ -2244,6 +2258,7 @@ export const en: TranslationMap & {
     agentOwnedBadge: "agent",
     exited: "exited",
     exitedCode: "exited ({code})",
+    exitedSignal: "exited (signal {signal})",
     detached: "detached",
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
@@ -2257,6 +2272,9 @@ export const en: TranslationMap & {
     uploadUnsupportedShell: "Cannot safely insert an uploaded path into unsupported shell: {shell}",
   },
   browser: {
+    nativeTab: "Mac tab",
+    remoteTab: "Agent browser tab",
+    stop: "Stop loading",
     profile: "Browser profile: {profile}",
     navigationBlocked:
       "The current browser navigation rules block this address. Select another tab or enter an allowed address.",
@@ -3189,6 +3207,7 @@ export const en: TranslationMap & {
       progress: "{complete} of {total}",
       active: "{running} running · {queued} queued · {failed} failed",
       finished: "{done} completed · {failed} failed",
+      completed: "{done} completed",
       childOutcome: "Child runs finished. Check the conversation for the final response.",
       details: "Child details",
       detailsUnavailable: "Child details are unavailable. Counts include all accepted workers.",
@@ -3429,11 +3448,12 @@ export const en: TranslationMap & {
   githubConnections: {
     title: "GitHub connections",
     description:
-      "Publishing access is separate from your verified GitHub sign-in and co-author credit. Connect an account here to publish with it.",
+      "Check the accounts used for agent commands, dashboard data, and publishing. These connections are separate from your GitHub sign-in and co-author credit.",
     mine: "My GitHub",
     system: "System GitHub",
     personalDescription: "Your account for explicitly selected Publish PR actions.",
-    systemDescription: "Shared account for agents and default publication.",
+    systemDescription:
+      "Default account for agent commands, authenticated dashboards, and publishing.",
     unboundDescription:
       "Sign in with a personal Gateway profile to connect My GitHub. Administrators can still manage System GitHub.",
     signInRequired: "Personal sign-in required",
@@ -3461,6 +3481,10 @@ export const en: TranslationMap & {
       "My GitHub is used only when you explicitly select it for Gateway-brokered Publish PR on an idle, reconciled local workspace. Publication still needs write access to the session. Agent git/gh, model actions, previews, and workers keep the shared account. Finish and reclaim remote work before personal publication. Connecting My GitHub changes no defaults.",
     details: "Connection details",
     agentTitle: "GitHub account",
+    agentFor: "GitHub for {agent}",
+    agentDescription:
+      "Used for this agent's commands and authenticated dashboard data. Verified confirms the account; repository access is checked when data is requested.",
+    viewAgent: "View agent account",
     agentOverride: "Agent override",
     advancedOverride: "Advanced: agent GitHub override",
     manageCommon: "Manage connections in Profile",
@@ -3659,6 +3683,8 @@ export const en: TranslationMap & {
       supportFiles: "{count} support files",
       noSupportFiles: "0 support files",
       loading: "Loading\u2026",
+      draftMissing:
+        "This suggestion's draft is missing. Reject it and ask your agent to create a new suggestion.",
       supportFilesTitle: "Support files",
       clickToPreview: "\u00b7 click to preview",
     },
@@ -3869,6 +3895,7 @@ export const en: TranslationMap & {
   },
   connection: {
     disconnectedTitle: "Disconnected",
+    connecting: "Connecting…",
     queuedCount: "{count} queued",
     reconnecting: "Reconnecting…",
     restarting: "Restarting…",
@@ -3901,30 +3928,18 @@ export const en: TranslationMap & {
       expired: "The administrator access request expired.",
       error: "Administrator access request failed: {error}",
     },
-    access: {
-      title: "Gateway Access",
-      subtitle: "Where the dashboard connects and how it authenticates.",
-      wsUrl: "WebSocket URL",
-      token: "Gateway Token",
-      password: "Password (not stored)",
-      passwordPlaceholder: "system or shared password",
-      sessionKey: "Default Session Key",
-      connectHint: "Click Connect to apply connection changes.",
-      trustedProxy: "Authenticated via trusted proxy.",
-      showToken: "Show token",
-      hideToken: "Hide token",
-      toggleTokenVisibility: "Toggle token visibility",
-      showPassword: "Show password",
-      hidePassword: "Hide password",
-      togglePasswordVisibility: "Toggle password visibility",
-    },
-    snapshot: {
-      title: "Snapshot",
-      subtitle: "Latest gateway handshake information.",
-      status: "Status",
-      tickInterval: "Tick Interval",
-      lastChannelsRefresh: "Last Channels Refresh",
-      lastError: "Last error",
+    // Settings → Gateway copy lives in the lazy en-settings catalog; the anchor keeps its merge target.
+    access: {},
+    switchGateway: {
+      title: "Switch to a different Gateway?",
+      summary: "This link asks the browser to connect somewhere else.",
+      current: "Current",
+      next: "Link",
+      note: "Anything you enter after switching goes to that host.",
+      noteToken: "The link also carries a token for it.",
+      noteScoped: "Your saved credential for {host} stays here and is not sent.",
+      confirm: "Switch to {host}",
+      cancel: "Keep current Gateway",
     },
     help: {
       title: "How to connect",
@@ -3967,7 +3982,7 @@ export const en: TranslationMap & {
       emptyTitle: "No mentions yet",
       emptyBody: "When someone mentions you in a chat, it appears here.",
       retention:
-        "Mentions are temporary: kept for up to seven days and cleared when the Gateway restarts.",
+        "Mentions are kept for up to seven days. Gateway restarts preserve your Inbox and dismissals.",
       notifications: "Notification settings",
       loading: "Loading mentions…",
       unavailable: "Sign in and connect to the Gateway to see your mentions.",
@@ -4597,9 +4612,8 @@ export const en: TranslationMap & {
       sat: "Sat",
     },
   },
-  login: {
-    subtitle: "Gateway Dashboard",
-  },
+  // Login copy lives in the lazy en-login catalog; the anchor keeps its merge target.
+  login: {},
   chat: {
     modelAccounts: {
       label: "Account for this chat",
@@ -4752,6 +4766,7 @@ export const en: TranslationMap & {
         outputTokens: "Output: {count} tokens",
         totalTokens: "Total: {count} tokens",
         context: "Context: {percent} of {total}",
+        promptBudget: "Prompt budget (last run): {percent} of {total}",
         model: "Model: {model}",
         failed: "Failed to get usage: {error}",
       },
@@ -4892,6 +4907,9 @@ export const en: TranslationMap & {
       sessionMenu: "External session actions",
       openInOpenClaw: "Open in OpenClaw",
       openInTerminal: "Open in terminal",
+      deleteSession: "Delete",
+      deleteSessionConfirm:
+        "Delete this external session from OpenClaw? Make sure no other runner is using it. Beamed sessions are deleted permanently. Sessions kept by another tool, such as Codex, are archived there and may be restorable.",
       terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
     taskSuggestions: {
@@ -5615,6 +5633,7 @@ export const en: TranslationMap & {
         open: "Open context usage details",
         summary: "Session context usage: {used} of {limit} ({pct}%)",
         contextWindow: "Context window",
+        promptBudget: "Prompt budget (last run)",
         latestRunTokens: "Latest run tokens",
         estimatedCost: "Est. cost",
         planUsage: "Plan usage",
@@ -5705,6 +5724,8 @@ export const en: TranslationMap & {
       expand: "Open {filename} in the side panel",
       open: "Open",
       previewUnavailable: "Preview unavailable",
+      textPreviewUnavailable:
+        "Could not preview this file. Text previews require UTF-8 files up to 256 KiB. Download it to read the full file.",
       readFailed: "Could not attach: {names}{more}",
       tooLarge: "Too large to send: {names}{more}",
       showInTextField: "Show in text field",

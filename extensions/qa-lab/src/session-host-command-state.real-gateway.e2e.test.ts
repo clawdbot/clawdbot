@@ -175,7 +175,7 @@ suite.define(() => {
             await page.goto(url.toString());
             const confirmation = page.locator("openclaw-gateway-url-confirmation");
             await confirmation.waitFor();
-            await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
+            await confirmation.getByRole("button", { name: /^Switch to /u }).click();
 
             await page.locator("#new-session-where-trigger").click();
             const place = page.locator("wa-popover.new-session-page__where-popover");

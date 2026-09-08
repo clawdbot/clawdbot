@@ -3,6 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  makeExecutable,
+  makeExecApprovalsTempDir,
+} from "../../infra/exec-approvals-test-helpers.js";
+import { loadExecApprovals, saveExecApprovals } from "../../infra/exec-approvals.js";
+import {
   DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
   PLUGIN_APPROVAL_DETAIL_MAX_LENGTH,
 } from "../../infra/plugin-approvals.js";
@@ -20,6 +25,7 @@ vi.mock("../tools/gateway.js", () => ({
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   mockCallGatewayTool.mockReset();
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -43,6 +49,142 @@ describe("resolveCliNativeToolApprovalPlan", () => {
 });
 
 describe("requestCliNativeToolApproval", () => {
+  it.each(["gog calendar list", "absolute"])(
+    "auto-allows and records an allowlisted native command: %s",
+    async (input) => {
+      const dir = makeExecApprovalsTempDir();
+      vi.stubEnv("OPENCLAW_STATE_DIR", dir);
+      const binary = makeExecutable(dir, "gog");
+      saveExecApprovals({ version: 1, agents: { main: { allowlist: [{ pattern: binary }] } } });
+      const command = input === "absolute" ? `${binary} calendar list` : input;
+      const outcome = await requestCliNativeToolApproval({
+        toolName: "Bash",
+        toolInput: { command },
+        pluginId: "claude-cli",
+        agentId: "main",
+        cwd: dir,
+        env: { PATH: dir },
+        ask: "on-miss",
+      });
+      expect(outcome).toMatchObject({ kind: "allow", grantAlways: false });
+      expect(mockCallGatewayTool).not.toHaveBeenCalled();
+      expect(loadExecApprovals().agents?.main?.allowlist?.[0]).toMatchObject({
+        lastUsedCommand: command,
+        lastUsedAt: expect.any(Number),
+      });
+    },
+  );
+
+  it.each([
+    ["gog calendar list | missing-binary", "pipeline", false],
+    ["gog | gog", "pipeline", false],
+    ["gog $(date)", "command-substitution", false],
+    ["gog '", "syntax-error", false],
+    ["MODE=test gog", "MODE=test gog", true],
+    ["gog > output.txt", "redirect", false],
+    ["(gog)", "subshell", false],
+    ["exec gog", "exec", true],
+    ["gog *", "shell expansion", true],
+  ])(
+    "keeps the binding guard and explains allowlist misses for %s",
+    async (command, reason, prompts) => {
+      const dir = makeExecApprovalsTempDir();
+      vi.stubEnv("OPENCLAW_STATE_DIR", dir);
+      const binary = makeExecutable(dir, "gog");
+      saveExecApprovals({ version: 1, agents: { main: { allowlist: [{ pattern: binary }] } } });
+      mockCallGatewayTool.mockResolvedValueOnce({ id: "native-miss", decision: "deny" });
+      const outcome = await requestCliNativeToolApproval({
+        toolName: "Bash",
+        toolInput: { command },
+        pluginId: "claude-cli",
+        agentId: "main",
+        cwd: dir,
+        env: { PATH: dir },
+        ask: "on-miss",
+      });
+      if (prompts) {
+        expect(mockCallGatewayTool.mock.calls[0]?.[2]).toMatchObject({
+          description: expect.stringContaining(reason),
+          allowedDecisions: ["allow-once", "deny"],
+        });
+      } else {
+        expect(mockCallGatewayTool).not.toHaveBeenCalled();
+        expect(outcome).toMatchObject({
+          kind: "deny",
+          reason: "operand-binding",
+          message: expect.stringContaining(reason),
+        });
+      }
+      expect(loadExecApprovals().agents?.main?.allowlist?.[0]?.lastUsedAt).toBeUndefined();
+    },
+  );
+
+  it("still prompts for an allowlisted Bash command when ask is always", async () => {
+    const dir = makeExecApprovalsTempDir();
+    vi.stubEnv("OPENCLAW_STATE_DIR", dir);
+    const binary = makeExecutable(dir, "gog");
+    saveExecApprovals({ version: 1, agents: { main: { allowlist: [{ pattern: binary }] } } });
+    mockCallGatewayTool.mockResolvedValueOnce({ id: "always", decision: "allow-once" });
+    expect(
+      await requestCliNativeToolApproval({
+        toolName: "Bash",
+        toolInput: { command: `${binary} calendar list` },
+        pluginId: "claude-cli",
+        agentId: "main",
+        cwd: dir,
+        ask: "always",
+      }),
+    ).toEqual({ kind: "allow", grantAlways: false });
+    expect(mockCallGatewayTool.mock.calls[0]?.[2]).toMatchObject({
+      allowedDecisions: ["allow-once", "deny"],
+    });
+    expect(loadExecApprovals().agents?.main?.allowlist?.[0]?.lastUsedAt).toBeUndefined();
+  });
+
+  it("binds manual approval to the native PATH when exec prepends differ", async () => {
+    const dir = makeExecApprovalsTempDir();
+    const nativeDir = makeExecApprovalsTempDir();
+    vi.stubEnv("OPENCLAW_STATE_DIR", dir);
+    makeExecutable(dir, "gog");
+    const nativeBinary = makeExecutable(nativeDir, "gog");
+    saveExecApprovals({ version: 1, agents: { main: { allowlist: [] } } });
+    mockCallGatewayTool.mockImplementationOnce(async () => {
+      fs.writeFileSync(nativeBinary, "changed during approval");
+      return { id: "path-drift", decision: "allow-once" };
+    });
+    expect(
+      await requestCliNativeToolApproval({
+        toolName: "Bash",
+        toolInput: { command: "gog" },
+        pluginId: "claude-cli",
+        agentId: "main",
+        cwd: dir,
+        ask: "on-miss",
+        env: { PATH: dir },
+        bindingEnv: { PATH: nativeDir },
+      }),
+    ).toMatchObject({ kind: "deny", reason: "operand-binding" });
+  });
+
+  it("rechecks current grants before recording an auto-allow", async () => {
+    const dir = makeExecApprovalsTempDir();
+    vi.stubEnv("OPENCLAW_STATE_DIR", dir);
+    const binary = makeExecutable(dir, "gog");
+    saveExecApprovals({ version: 1, agents: { main: { allowlist: [{ pattern: binary }] } } });
+    const outcome = await requestCliNativeToolApproval({
+      toolName: "Bash",
+      toolInput: { command: binary },
+      pluginId: "claude-cli",
+      agentId: "main",
+      cwd: dir,
+      ask: "on-miss",
+      assertActive: () => saveExecApprovals({ version: 1, agents: { main: { allowlist: [] } } }),
+    });
+    expect(outcome).toEqual({ kind: "deny", reason: "unavailable" });
+    expect(loadExecApprovals().agents?.main?.allowlist).toEqual([]);
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("registers and waits for a matching approval decision", async () => {
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "approval-1", status: "pending" })
@@ -72,7 +214,7 @@ describe("requestCliNativeToolApproval", () => {
         agentId: "main",
         sessionKey: "agent:main:main",
         title: "claude-cli native tool: Bash",
-        description: '{"command":"ls"}',
+        description: '{"command":"ls"}\nExec allowlist miss: ls',
         detail: '{"command":"ls"}',
         severity: "warning",
         allowedDecisions: ["allow-once", "deny"],

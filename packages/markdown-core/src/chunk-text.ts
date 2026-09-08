@@ -1,4 +1,3 @@
-// Markdown Core module implements chunk text behavior.
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 

@@ -13,7 +13,7 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contra
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createManagedUpdateRequesterAuthority } from "./update-requester-authority.js";
-import { getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
+import { adoptUpdateRun, getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
 
 async function finalizeMigratedUpdate(): Promise<void> {
   // Validation imports this whole candidate graph before activation. The helper
@@ -46,6 +46,8 @@ async function finalizeMigratedUpdate(): Promise<void> {
     throw new Error("Candidate finalization requires its migrated update run.");
   }
   const { requesterAuthority: descriptor, ...runIdentity } = transferredRun;
+  // The candidate can outlive its parent; record both lifetimes before any awaits.
+  adoptUpdateRun(runIdentity.runId, { env: runIdentity.env });
   // Parent closures cannot cross JSON. Only the fresh installed runtime rebinds
   // the captured requester to the same current installation policy.
   const run: NonNullable<UpdateCommandOptions["run"]> = {

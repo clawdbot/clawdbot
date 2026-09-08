@@ -237,6 +237,18 @@ case-insensitive and grants use lowercase spelling. A grant for one repository
 cannot read another; granting only `https://api.github.com` network access does
 not authorize this binding.
 
+Direct browser fetches to `api.github.com` do not inherit the agent's login and
+share GitHub's anonymous IP quota. Existing widgets using `fetch` should replace
+that call with the binding and replace their GitHub `netOrigins` declaration with
+the repository-scoped tool grant. Check the effective account in **Agent settings
+→ Tools → GitHub account**; administrators can also reach it from **Settings →
+Profile → GitHub connections**.
+
+For refreshable widgets, keep the last successful data and a separate error
+element. Clear the error after a successful read, and keep result containers in
+the document so later refreshes can recover. Show a **Refresh** control for an
+immediate retry.
+
 **Approval shares Actions metadata with the widget and its session audience,
 including metadata from private repositories accessible to the selected agent
 identity.** The host selects the agent override, then the configured System
@@ -294,4 +306,4 @@ Canvas retains at most 32 widgets per session (or per agent when no session is a
 - [Control UI hosted embeds](/web/control-ui/chat#hosted-embeds)
 - [Discord Activities](/channels/discord-activities)
 - [macOS widget panel](/platforms/mac/canvas)
-- [Gateway protocol client capabilities](/gateway/protocol#client-capabilities)
+- [Gateway protocol client capabilities](/gateway/protocol/handshake#client-capabilities)

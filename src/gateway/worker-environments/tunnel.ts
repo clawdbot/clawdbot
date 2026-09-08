@@ -4,6 +4,7 @@ import type { DesktopSessionRegistry } from "../desktop/session-registry.js";
 import { createWorkerDesktopTunnels } from "./desktop-tunnel.js";
 import { prepareWorkerSsh, type PreparedWorkerSsh, type WorkerSshIdentityResolver } from "./ssh.js";
 import {
+  joinWorkerTunnelStops,
   WorkerTunnelOwnerDisconnectedError,
   type WorkerTunnelHandle,
   type WorkerTunnelRequest,
@@ -178,7 +179,7 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
   }
 
   async function stopAll(): Promise<void> {
-    await Promise.all([...[...owners].map(stopEntry), desktop.stopAll()]);
+    await joinWorkerTunnelStops([...[...owners].map(stopEntry), desktop.stopAll()]);
   }
 
   return {

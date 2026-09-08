@@ -115,8 +115,6 @@ describe("embedded attempt phase lifecycle state", () => {
       prePromptMessageCount: 0,
       nestedToolActivities: [],
       cache: {
-        observabilityEnabled: false,
-        changesForTurn: null,
         retention: undefined,
       },
       shouldFlushForContextEngine: false,
@@ -192,8 +190,6 @@ describe("embedded attempt phase lifecycle state", () => {
       prePromptMessageCount: 0,
       nestedToolActivities: [],
       cache: {
-        observabilityEnabled: false,
-        changesForTurn: null,
         retention: undefined,
       },
       shouldFlushForContextEngine: false,
@@ -300,8 +296,6 @@ describe("embedded attempt phase lifecycle state", () => {
         }),
       ],
       cache: {
-        observabilityEnabled: false,
-        changesForTurn: null,
         retention: undefined,
       },
       shouldFlushForContextEngine: false,

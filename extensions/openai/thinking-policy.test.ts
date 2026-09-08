@@ -37,16 +37,17 @@ describe("OpenAI thinking route provenance", () => {
     },
   );
 
-  it.each([{ efforts: [] }, { efforts: ["low", "high"] }])(
-    "retains Astra account efforts $efforts",
-    ({ efforts }) => {
-      expect(
-        resolveUnifiedOpenAIThinkingProfile("gpt-6-astra", "codex", {
-          supportedReasoningEfforts: efforts,
-        }).levels.map((level) => level.id),
-      ).toEqual(["off", ...efforts]);
-    },
-  );
+  it.each([
+    { efforts: [], defaultLevel: undefined },
+    { efforts: ["high"], defaultLevel: undefined },
+    { efforts: ["low", "high"], defaultLevel: "low" },
+  ])("retains Astra account efforts $efforts", ({ efforts, defaultLevel }) => {
+    const profile = resolveUnifiedOpenAIThinkingProfile("gpt-6-astra", "codex", {
+      supportedReasoningEfforts: efforts,
+    });
+    expect(profile.levels.map((level) => level.id)).toEqual(["off", ...efforts]);
+    expect(profile.defaultLevel).toBe(defaultLevel);
+  });
 
   it.each([
     { efforts: ["low", "high", "ultra"], expected: ["off", "low", "high", "ultra"] },

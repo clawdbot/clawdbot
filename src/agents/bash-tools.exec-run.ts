@@ -196,7 +196,7 @@ export function createExecTool(
     label: "exec",
     displaySummary: EXEC_TOOL_DISPLAY_SUMMARY,
     get description() {
-      return describeExecTool({ agentId, hasCronTool: defaults?.hasCronTool === true });
+      return describeExecTool({ hasCronTool: defaults?.hasCronTool === true });
     },
     parameters: execSchema,
     prepareBeforeToolCallParams: requestPreparation.prepareBeforeToolCallParams,

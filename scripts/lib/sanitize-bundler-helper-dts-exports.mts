@@ -6,6 +6,8 @@
  * consumers then fail with TS2304 when they import public SDK entrypoints that
  * resolve through those chunks (for example `openclaw/plugin-sdk/tool-plugin`).
  */
+import fs from "node:fs";
+import path from "node:path";
 import ts from "typescript";
 
 /** Runtime helpers that must never appear as undeclared declaration exports. */
@@ -166,4 +168,40 @@ export function sanitizeBundlerHelperDtsExports(sourceText: string): {
     next = `${next.slice(0, edit.start)}${next.slice(edit.end)}`;
   }
   return { sourceText: next, removed };
+}
+
+/** Removes undeclared bundler helpers from every emitted declaration below a root. */
+export function sanitizeBundlerHelperDtsExportTree(root: string): number {
+  if (!fs.existsSync(root)) {
+    return 0;
+  }
+  const queue = [root];
+  let changed = 0;
+  while (queue.length > 0) {
+    const dir = queue.pop()!;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        queue.push(fullPath);
+        continue;
+      }
+      if (
+        !entry.isFile() ||
+        !(
+          entry.name.endsWith(".d.ts") ||
+          entry.name.endsWith(".d.mts") ||
+          entry.name.endsWith(".d.cts")
+        )
+      ) {
+        continue;
+      }
+      const current = fs.readFileSync(fullPath, "utf8");
+      const sanitized = sanitizeBundlerHelperDtsExports(current).sourceText;
+      if (sanitized !== current) {
+        fs.writeFileSync(fullPath, sanitized);
+        changed += 1;
+      }
+    }
+  }
+  return changed;
 }

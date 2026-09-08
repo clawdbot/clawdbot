@@ -78,7 +78,12 @@ function contextFor(
     },
     agents: { state: { agentsList: { mainKey: "main" } } },
     agentSelection: { state: { selectedId: "roboclaw" } },
-    sessions: { state: { result: result(cachedSessions) }, canonicalListRevision: 0, list },
+    sessions: {
+      state: { result: result(cachedSessions) },
+      canonicalListRevision: 0,
+      list,
+      whenCachedRosterSettled: async () => undefined,
+    },
   } as unknown as ApplicationContext;
   return { context, list, request };
 }

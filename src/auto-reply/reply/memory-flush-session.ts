@@ -21,22 +21,16 @@ export async function prepareMemoryFlushSession(params: {
   params.signal?.throwIfAborted();
   await waitForSessionTranscriptProjection(params.source, params.signal);
   params.signal?.throwIfAborted();
-  const sessionManager = withSessionContextAdmission(params.source, params.admission, () => {
-    const source = SessionManager.openBounded(params.source, {
+  const sessionManager = withSessionContextAdmission(params.source, params.admission, () =>
+    SessionManager.openDetachedBounded(params.source, {
       cwd: params.workspaceDir,
       maxBytes: MAX_VISIBLE_MESSAGE_MAX_BYTES,
       maxEvents: MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
       onTruncated: () => {
         throw new Error("Memory flush exceeds the bounded conversation view.");
       },
-    });
-    // The navigation owner resolves opaque parents and retained compaction boundaries.
-    // Copy its projection, never discard those facts by copying raw bounded events.
-    return SessionManager.fromEntries(
-      [source.getHeader(), ...source.getBranch()],
-      params.workspaceDir,
-    );
-  });
+    }),
+  );
   const identity = resolveInternalSessionEffectsIdentity({
     agentId: params.source.agentId,
     runId: params.runId,

@@ -147,4 +147,34 @@ struct UsageCostDataTests {
     func `USD precision follows the one-cent boundary`(_ value: Double?, _ expected: String?) {
         #expect(CostUsageFormatting.formatUsd(value) == expected)
     }
+
+    @Test(arguments: [
+        ("America/Los_Angeles", "2026-09-07T01:00:00Z", "2026-09-06", "2026-09-06T07:00:00Z"),
+        ("Asia/Tokyo", "2026-09-07T23:00:00Z", "2026-09-08", "2026-09-07T15:00:00Z"),
+        ("Etc/UTC", "2026-09-07T01:00:00Z", "2026-09-07", "2026-09-07T00:00:00Z"),
+        ("America/Los_Angeles", "2026-03-08T23:00:00Z", "2026-03-08", "2026-03-08T08:00:00Z"),
+        ("America/Los_Angeles", "2026-11-01T23:00:00Z", "2026-11-01", "2026-11-01T07:00:00Z"),
+    ])
+    func `cost request and display use the same local day`(
+        zone: String, timestamp: String, day: String, midnight: String) throws
+    {
+        let dates = try CostUsageMenuDateParser(timeZone: #require(TimeZone(identifier: zone)))
+        let iso = ISO8601DateFormatter()
+        let now = try #require(iso.date(from: timestamp))
+        #expect(dates.requestParameters["mode"] == AnyHashable("specific"))
+        #expect(dates.requestParameters["timeZone"] == AnyHashable(zone))
+        #expect(dates.format(now) == day)
+        #expect(dates.parse(day) == iso.date(from: midnight))
+    }
+
+    @Test(arguments: [
+        (-720, "UTC-12:00"), (-210, "UTC-3:30"), (0, "UTC+0:00"),
+        (330, "UTC+5:30"), (345, "UTC+5:45"), (765, "UTC+12:45"), (840, "UTC+14:00"),
+    ])
+    func `cost requests include a fixed offset for older Gateway timezone data`(
+        minutes: Int, expected: String) throws
+    {
+        let dates = try CostUsageMenuDateParser(timeZone: #require(TimeZone(secondsFromGMT: minutes * 60)))
+        #expect(dates.requestParameters["utcOffset"] == AnyHashable(expected))
+    }
 }

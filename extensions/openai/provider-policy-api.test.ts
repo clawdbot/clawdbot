@@ -121,6 +121,9 @@ describe("OpenAI provider policy artifact", () => {
   });
 
   it.each([
+    ["gpt-6-astra", "codex", "low"],
+    ["gpt-6-astra", "openclaw", "low"],
+    ["gpt-6-astra", "auto", "low"],
     ["gpt-5.6-sol", "codex", "medium"],
     ["gpt-5.6-sol", "openclaw", "medium"],
     ["gpt-5.6-terra", "codex", "medium"],

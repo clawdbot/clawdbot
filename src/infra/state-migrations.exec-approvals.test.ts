@@ -457,10 +457,12 @@ describe("legacy exec approvals migration", () => {
       const result = await migrate({ env, stateDir });
 
       expect(result.changes).toEqual([]);
-      expect(result.warnings).toEqual([
-        `Preserved malformed legacy exec approvals for operator recovery. First problem: ${problem}. Repair exec-approvals.json locally, then rerun \`openclaw doctor --fix\` with the same OPENCLAW_STATE_DIR.`,
-      ]);
-      expect(result.warnings[0]?.length).toBeLessThan(400);
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0]).toContain(problem);
+      expect(result.warnings[0]).toContain(sourcePath);
+      expect(result.warnings[0]).toContain("reconcile this file");
+      expect(result.warnings[0]).not.toContain("doctor --fix");
+      expect(result.warnings[0]!.length - sourcePath.length).toBeLessThan(400);
       expect(JSON.stringify(result)).not.toContain("private-marker");
       expect(fs.readFileSync(sourcePath)).toEqual(original);
       expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
@@ -524,7 +526,9 @@ describe("legacy exec approvals migration", () => {
     const result = await migrate({ env, stateDir });
 
     expect(result.changes).toEqual([]);
-    expect(result.warnings[0]).toContain("retained conflicting legacy JSON");
+    expect(result.warnings[0]).toContain("Conflicting legacy exec approvals remain");
+    expect(result.warnings[0]).toContain(sourcePath);
+    expect(result.warnings[0]).toContain("reconcile this file");
     expect(fs.existsSync(sourcePath)).toBe(true);
     expect(readExecApprovalsConfigRow(database(env))?.raw_json).toBe(
       serializeExecApprovals(canonical),

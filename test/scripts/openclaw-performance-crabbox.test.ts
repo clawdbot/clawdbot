@@ -284,7 +284,192 @@ else if (args[0] === "run") {
   };
 }
 
+function prepareSut(
+  options: { fault?: string; family?: number; code?: number; output?: string } = {},
+) {
+  const root = tempDirs.make("performance-imds-");
+  const bin = join(root, "bin");
+  mkdirSync(bin);
+  writeFileSync(
+    join(bin, "curl"),
+    `#!${process.execPath}
+const fs = require("node:fs");
+const root = ${JSON.stringify(root)}, options = ${JSON.stringify(options)};
+const args = process.argv.slice(2);
+fs.appendFileSync(root + "/curl-calls", JSON.stringify({args, env:process.env}) + "\\n");
+if (args.includes("--version")) {
+  if (options.fault === "version") process.exit(2);
+  console.log("curl fixture\\nProtocols: " + (options.fault === "http" ? "https" : "http https"));
+  console.log("Features: " + (options.fault === "ipv6" ? "SSL" : "IPv6 SSL"));
+  process.exit(0);
+}
+const family = args.some((arg) => arg.includes("fd00:ec2::254")) ? 6 : 4;
+const selected = family === (options.family ?? 6);
+const code = selected ? (options.code ?? 7) : 7;
+const output = selected ? (options.output ?? "000") : "000";
+// Model --fail's nonzero result on reachable HTTP errors in the original probe.
+if (args.some((arg) => /^-[^-]*f/.test(arg)) && Number(output) >= 400) process.exit(22);
+if (args.includes("--write-out")) process.stdout.write(output);
+process.exit(code);
+`,
+    { mode: 0o755 },
+  );
+  const source = readFileSync(SCRIPT, "utf8");
+  const definitions = source.slice(0, source.lastIndexOf('\ncase "${1:-}" in'));
+  const prepareStart = source.indexOf("prepare_sut() {");
+  const systemdStart = source.indexOf('\n  loginctl enable-linger "$SUT_USER"', prepareStart);
+  expect(prepareStart).toBeGreaterThan(0);
+  expect(systemdStart).toBeGreaterThan(prepareStart);
+  // Execute the real preparation gates; systemd startup is outside this fixture.
+  const preparation = source.slice(prepareStart, systemdStart);
+  const result = spawnSync(
+    "/bin/bash",
+    [
+      "-c",
+      `${definitions}
+id() { [[ "\${1:-}" == -u ]] && printf '12345\\n'; }
+useradd() { :; }
+install() { :; }
+find() { :; }
+runuser() {
+  [[ "$1:$2:$3:$4:$5" == "-u:openclaw-sut:--:env:-i" ]] || exit 90
+  [[ "\${*: -3}" != "sudo -n true" ]] || return 1
+  shift 3
+  local arg args=()
+  for arg in "$@"; do
+    [[ "$arg" != curl ]] || arg="$ROOT/bin/curl"
+    args+=("$arg")
+  done
+  "\${args[@]}"
+}
+command() {
+  [[ "$1:$2" != "-v:$MISSING_TOOL" ]] || return 1
+  builtin command "$@"
+}
+rule() {
+  printf '%s\\n' "$*" >> "$ROOT/rules"
+  [[ "$FAULT" != "$1:$2" ]]
+}
+iptables() { rule 4 "$@"; }
+ip6tables() { rule 6 "$@"; }
+${preparation}
+}
+prepare_sut
+printf handoff > "$ROOT/handoff"
+`,
+    ],
+    {
+      env: {
+        HOME: root,
+        PATH: `${bin}:/usr/bin:/bin`,
+        ROOT: root,
+        FAULT: options.fault ?? "",
+        MISSING_TOOL: options.fault?.startsWith("missing:")
+          ? options.fault.slice("missing:".length)
+          : "",
+        HTTP_PROXY: "http://proxy.invalid",
+        HTTPS_PROXY: "http://proxy.invalid",
+        ALL_PROXY: "http://proxy.invalid",
+      },
+      encoding: "utf8",
+      timeout: 5000,
+      maxBuffer: 256 * 1024,
+    },
+  );
+  return {
+    result,
+    handoff: existsSync(join(root, "handoff")),
+    rules: existsSync(join(root, "rules"))
+      ? readFileSync(join(root, "rules"), "utf8").trim().split("\n")
+      : [],
+    probes: existsSync(join(root, "curl-calls"))
+      ? readFileSync(join(root, "curl-calls"), "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line) as { args: string[]; env: Record<string, string> })
+      : [],
+  };
+}
+
 describe("OpenClaw performance Crabbox boundary", () => {
+  it("requires verified dual-stack IMDS denial before candidate handoff", () => {
+    const run = prepareSut();
+    expect(run.result.status, run.result.stderr).toBe(0);
+    expect(run.handoff).toBe(true);
+    expect(run.rules).toEqual(
+      [
+        [4, "169.254.169.254/32"],
+        [4, "169.254.170.2/32"],
+        [6, "fd00:ec2::254/128"],
+      ].flatMap(([family, destination]) =>
+        ["-I", "-C"].map(
+          (operation) =>
+            `${family} ${operation} OUTPUT -m owner --uid-owner 12345 -d ${destination} -j REJECT`,
+        ),
+      ),
+    );
+    const probes = run.probes.filter(({ args }) => !args.includes("--version"));
+    expect(probes.map(({ args }) => args.at(-1))).toEqual([
+      "http://169.254.169.254/latest/meta-data/",
+      "http://[fd00:ec2::254]/latest/meta-data/",
+    ]);
+    for (const [index, probe] of probes.entries()) {
+      expect(probe.args[0]).toBe("-q");
+      expect(probe.args).toContain(index === 0 ? "-4" : "-6");
+      for (const pair of [
+        ["--noproxy", "*"],
+        ["--connect-timeout", "1"],
+        ["--max-time", "2"],
+        ["--output", "/dev/null"],
+        ["--write-out", "%{http_code}"],
+      ]) {
+        expect(
+          probe.args.slice(probe.args.indexOf(pair[0]), probe.args.indexOf(pair[0]) + 2),
+        ).toEqual(pair);
+      }
+      expect(probe.args.some((arg) => /^-[^-]*[fL]/.test(arg))).toBe(false);
+      expect(probe.args).not.toContain("--fail");
+      expect(probe.args).not.toContain("--location");
+      expect(probe.env.HOME).toBe("/home/openclaw-sut");
+      expect(Object.keys(probe.env).some((key) => /proxy/i.test(key))).toBe(false);
+    }
+  });
+
+  it.each([
+    ...["4:-I", "4:-C", "6:-I", "6:-C"].map((fault) => ({ name: fault, fault })),
+    ...["iptables", "ip6tables", "curl"].map((tool) => ({
+      name: `missing ${tool}`,
+      fault: `missing:${tool}`,
+    })),
+    ...["http", "ipv6", "version"].map((fault) => ({ name: `curl ${fault}`, fault })),
+    ...[4, 6].flatMap((family) =>
+      ["401", "404"].map((output) => ({
+        name: `IPv${family} HTTP ${output}`,
+        family,
+        output,
+        code: 0,
+      })),
+    ),
+    ...[0, 1, 2, 3, 4, 5, 6, 22, 23, 26, 28, 52, 55, 56, 126, 127, 143].map((code) => ({
+      name: `IPv6 curl exit ${code}`,
+      code,
+    })),
+    { name: "IPv4 timeout", family: 4, code: 28 },
+    { name: "HTTP response despite connection failure", output: "401", code: 7 },
+    ...["", "00", "000000", "000\n401", " 000", "000\n"].map((output) => ({
+      name: `malformed status ${JSON.stringify(output)}`,
+      output,
+    })),
+  ])("blocks IMDS preparation without candidate handoff: $name", (options) => {
+    const run = prepareSut(options);
+    expect(run.result.error).toBeUndefined();
+    expect(run.result.status, run.result.stderr).not.toBe(0);
+    expect(run.handoff).toBe(false);
+    if ("fault" in options) {
+      expect(run.probes.filter(({ args }) => !args.includes("--version"))).toEqual([]);
+    }
+  });
+
   it.each([
     { name: "success", status: 0, available: true, runs: 1, exit: 0 },
     { name: "gated failure", status: 17, available: true, runs: 2, exit: 17 },
@@ -950,7 +1135,6 @@ run_sut mock-provider "$ROOT" diagnostic 1 canonical scenario:probe - "$GATED" "
     expect(script).toContain('as_sut git -C "$destination" rev-parse HEAD');
     expect(script).toContain('as_sut git -C "$root/openclaw" rev-parse HEAD');
     expect(script).toContain('as_sut git -C "$root/kova" rev-parse HEAD');
-    expect(script).toContain("iptables -I OUTPUT -m owner --uid-owner");
     expect(script).toContain('pkill -KILL -u "$uid"');
   });
 

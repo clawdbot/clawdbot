@@ -21,6 +21,7 @@ export {
 } from "./daemon-cli/lifecycle-context.js";
 // Handoff admission uses the serving runtime; terminal writes load the installed runtime afresh.
 export {
+  adoptUpdateRun,
   finishUpdateRun,
   getUpdateRun,
   recordUpdateRunStep,

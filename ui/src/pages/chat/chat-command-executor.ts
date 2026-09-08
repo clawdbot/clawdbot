@@ -33,6 +33,7 @@ import {
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
+import { resolveSessionContextLimit } from "../../lib/sessions/context-budget.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   DEFAULT_AGENT_ID,
@@ -536,7 +537,8 @@ async function executeUsage(
       ? (session.totalTokens ?? null)
       : cumulativeTotal;
     const totalTokensFresh = session.totalTokensFresh !== false;
-    const ctx = session.contextTokens ?? 0;
+    const limit = resolveSessionContextLimit(session);
+    const ctx = limit.tokens;
     const pct =
       contextSnapshotTotal !== null && totalTokensFresh && ctx > 0
         ? Math.round((contextSnapshotTotal / ctx) * 100)
@@ -558,10 +560,15 @@ async function executeUsage(
     ];
     if (pct !== null) {
       lines.push(
-        t("chat.commandResults.usage.context", {
-          percent: `**${pct}%**`,
-          total: formatCompactTokenCount(ctx),
-        }),
+        t(
+          limit.fromLastPrompt
+            ? "chat.commandResults.usage.promptBudget"
+            : "chat.commandResults.usage.context",
+          {
+            percent: `**${pct}%**`,
+            total: formatCompactTokenCount(ctx),
+          },
+        ),
       );
     }
     if (session.model) {

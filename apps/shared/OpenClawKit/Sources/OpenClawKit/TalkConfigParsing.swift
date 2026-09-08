@@ -17,6 +17,8 @@ public enum TalkConfigParsing {
         raw?.mapValues(AnyCodable.init)
     }
 
+    /// Rem-Assistant/Rem's voice settings consume this API through its OpenClaw fork.
+    /// Keep it public until that consumer migrates.
     public static func selectProviderConfig(
         _ talk: [String: AnyCodable]?,
         defaultProvider: String,
@@ -49,13 +51,13 @@ public enum TalkConfigParsing {
         return nil
     }
 
-    public static func singleRealtimeProviderID(_ providers: [String: AnyCodable]?) -> String? {
+    static func singleRealtimeProviderID(_ providers: [String: AnyCodable]?) -> String? {
         guard let providers, providers.count == 1 else { return nil }
         let provider = providers.keys.first?.trimmingCharacters(in: .whitespacesAndNewlines)
         return provider?.isEmpty == false ? provider : nil
     }
 
-    public static func realtimeProviderConfig(
+    static func realtimeProviderConfig(
         providers: [String: AnyCodable]?,
         provider: String?) -> [String: AnyCodable]?
     {
@@ -91,7 +93,7 @@ public enum TalkConfigParsing {
         return trimmed.isEmpty ? nil : trimmed.replacingOccurrences(of: "_", with: "-")
     }
 
-    public static func resolvedSpeechLocaleID(
+    static func resolvedSpeechLocaleID(
         _ talk: [String: AnyCodable]?,
         fallback: String? = nil) -> String?
     {

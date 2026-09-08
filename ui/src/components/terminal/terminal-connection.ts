@@ -1,6 +1,10 @@
 // Typed terminal RPCs plus per-session event routing; DOM-free for focused tests.
 
-import type { TerminalOpenParams } from "@openclaw/gateway-protocol";
+import type {
+  EventFrame,
+  SessionsCatalogStartTerminalParams,
+  TerminalOpenParams,
+} from "@openclaw/gateway-protocol";
 import { BoundedBuffer } from "../../../../src/shared/bounded-buffer.ts";
 
 type TerminalRequestOptions = { timeoutMs?: number | null; signal?: AbortSignal };
@@ -12,7 +16,7 @@ export interface TerminalGatewayClient {
     params?: unknown,
     options?: TerminalRequestOptions,
   ): Promise<T>;
-  addEventListener(listener: (evt: { event: string; payload: unknown }) => void): () => void;
+  addEventListener(listener: (evt: Pick<EventFrame, "event" | "payload">) => void): () => void;
   inboundActivitySeq?: number;
   /** Recovers unreplayable output gaps and half-open terminal streams. */
   forceReconnect(reason: string): void;
@@ -123,7 +127,9 @@ function missingTerminalSessionField(result: Partial<TerminalAttachResult>): str
 function isTerminalOpenRequestTimeout(error: unknown): boolean {
   return (
     error instanceof Error &&
-    /^gateway request timed out after \d+ms: terminal\.open$/u.test(error.message)
+    /^gateway request timed out after \d+ms: (?:terminal\.open|sessions\.catalog\.startTerminal)$/u.test(
+      error.message,
+    )
   );
 }
 
@@ -222,10 +228,25 @@ export class TerminalConnection {
 
   /** Opens a session and registers its output/exit sinks before returning. */
   async open(params: TerminalOpenParams, sink: SessionSink): Promise<TerminalOpenResult> {
+    return this.openRequest("terminal.open", params, sink);
+  }
+
+  async start(
+    params: SessionsCatalogStartTerminalParams,
+    sink: SessionSink,
+  ): Promise<TerminalOpenResult> {
+    return this.openRequest("sessions.catalog.startTerminal", params, sink);
+  }
+
+  private async openRequest(
+    method: "terminal.open" | "sessions.catalog.startTerminal",
+    params: TerminalOpenParams | SessionsCatalogStartTerminalParams,
+    sink: SessionSink,
+  ): Promise<TerminalOpenResult> {
     let result: TerminalOpenResult;
     try {
       result = await this.requestWhileHoldingStream(() =>
-        this.client.request<TerminalOpenResult>("terminal.open", params, {
+        this.client.request<TerminalOpenResult>(method, params, {
           timeoutMs: TERMINAL_OPEN_WATCHDOG_MS,
         }),
       );

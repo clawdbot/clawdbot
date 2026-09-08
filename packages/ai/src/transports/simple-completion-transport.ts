@@ -209,7 +209,11 @@ function prepareProviderStreamModel<TApi extends Api>(params: {
   const api = params.apiRegistry.getApiProvider(params.model.api)
     ? resolveProviderStreamApi(params.model)
     : params.model.api;
-  if (!registerCustomApi(params.apiRegistry, api, streamFn)) {
+  // The alias selects this stream; wire policy still needs the original API.
+  const sourceApi = params.model.api;
+  const sourceStreamFn: StreamFn = (runtimeModel, context, options) =>
+    streamFn(projectModel(runtimeModel, { api: sourceApi }), context, options);
+  if (!registerCustomApi(params.apiRegistry, api, sourceStreamFn)) {
     return undefined;
   }
   return api === params.model.api ? params.model : projectModel(params.model, { api });

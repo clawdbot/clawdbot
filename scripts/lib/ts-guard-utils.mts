@@ -200,6 +200,30 @@ export function unwrapExpression(expression: ts.Expression) {
   }
 }
 
+export function collectTypeScriptCommentRanges(
+  tsImpl: typeof ts,
+  sourceFile: ts.SourceFile,
+): Iterable<ts.CommentRange> {
+  const source = sourceFile.getFullText();
+  const comments = new Map<number, ts.CommentRange>();
+  const addComments = (ranges: readonly ts.CommentRange[] | undefined): void => {
+    for (const range of ranges ?? []) {
+      comments.set(range.pos, range);
+    }
+  };
+  const visit = (node: ts.Node): void => {
+    addComments(tsImpl.getLeadingCommentRanges(source, node.pos));
+    addComments(tsImpl.getTrailingCommentRanges(source, node.end));
+    // getChildren includes delimiter tokens; forEachChild misses directives before closing tokens.
+    for (const child of node.getChildren(sourceFile)) {
+      visit(child);
+    }
+  };
+  visit(sourceFile);
+  addComments(tsImpl.getLeadingCommentRanges(source, sourceFile.endOfFileToken.pos));
+  return comments.values();
+}
+
 /**
  * Collects one-based line numbers for call expressions selected by a callback.
  */

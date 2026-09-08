@@ -396,8 +396,9 @@ describe("createPluginApprovalHandlers", () => {
 
     it("delivers requests to iOS push with the exec-equivalent visibility gate", async () => {
       const handleRequested = vi.fn(async () => true);
+      const iosPushDelivery = { handleRequested };
       const handlers = createPluginApprovalHandlers(manager, {
-        iosPushDelivery: { handleRequested },
+        iosPushDelivery,
       });
       const respond = vi.fn();
       const opts = createMockOptions(
@@ -425,6 +426,7 @@ describe("createPluginApprovalHandlers", () => {
       const approvalId = await waitForAcceptedApproval(respond);
 
       expect(handleRequested).toHaveBeenCalledTimes(1);
+      expect(handleRequested.mock.contexts).toEqual([iosPushDelivery]);
       const requestCall = mockCall(handleRequested, 0, "iOS request delivery");
       expect(requireRecord(requestCall[0], "iOS request").id).toBe(approvalId);
       const deliveryOptions = requireRecord(requestCall[1], "iOS delivery options");

@@ -78,7 +78,7 @@ describe("group runtime loading", () => {
     expect(toolOnlyContext).toContain("<https://example.com>");
     expect(toolOnlyContext).toContain("do not call message(action=send)");
     expect(toolOnlyContext).toContain(
-      "Be extremely selective: reply only when directly addressed or clearly helpful.",
+      "reply only when directly addressed or you can add clear value",
     );
     expect(toolOnlyContext).not.toContain('reply with exactly "NO_REPLY"');
     const channelToolOnlyContext = isolatedGroups.buildGroupChatContext({
@@ -88,7 +88,7 @@ describe("group runtime loading", () => {
       silentToken: "NO_REPLY",
     });
     expect(channelToolOnlyContext).toContain("visible channel response");
-    expect(channelToolOnlyContext).toContain("posted to this channel");
+    expect(channelToolOnlyContext).toContain("not automatically sent to this channel");
     expect(channelToolOnlyContext).not.toContain("visible group response");
     expect(channelToolOnlyContext).not.toContain("posted to the group");
     expect(
@@ -176,11 +176,11 @@ describe("group runtime loading", () => {
       silentReplyPolicy: "allow",
     });
     expect(allowed).toContain('reply with exactly "NO_REPLY"');
-    expect(allowed).toContain('your final answer must still be exactly "NO_REPLY"');
-    expect(allowed).toContain("Never say that you are staying quiet");
+    expect(allowed).toContain("including after a reaction or other action");
     expect(allowed).toContain(
-      "Be extremely selective: reply only when directly addressed or clearly helpful.",
+      "as the entire final answer, without commentary, punctuation, or formatting",
     );
+    expect(allowed).toContain("reply only when directly addressed or you can add clear value");
     expect(allowed).not.toContain("Otherwise stay silent.");
 
     const disallowed = groups.buildGroupChatContext({
@@ -189,7 +189,7 @@ describe("group runtime loading", () => {
       silentReplyPolicy: "disallow",
     });
     expect(disallowed).not.toContain("NO_REPLY");
-    expect(disallowed).not.toContain("Never say that you are staying quiet");
+    expect(disallowed).not.toContain("as the entire final answer");
   });
 
   it("keeps per-message mention state out of stable group context", () => {
